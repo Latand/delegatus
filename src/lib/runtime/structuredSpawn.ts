@@ -24,6 +24,7 @@ import { procBackend } from "@/lib/proc";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { signalProcessGroup } from "@/lib/processGroup";
 import { hasUserAuthoredMessage } from "@/lib/session/reader";
+import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
 import { buildImagePayload, deleteInboxImages, spawnAgentWithPrompt } from "@/lib/tmux";
 import { admitRecoveredLaunch } from "@/lib/tasks/launchMembership";
 import { hardenedRedact } from "@/lib/view/compactText";
@@ -42,6 +43,7 @@ import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { runtimeImageCapability, runtimeImageStore } from "./runtimeImageStore";
 import { publishFilesRevision } from "./filesRevision";
 import { parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "./structuredContent";
+import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH } from "./telegramConnectorEnv";
 
 export type SpawnedStructuredHost = EngineHost & {
   identity: { threadId: string; path: string | null } | { sessionId: string };
@@ -985,6 +987,20 @@ export interface StructuredSpawnInput {
   client: RuntimeHostClient;
 }
 
+function admittedStructuredLaunchInput(input: StructuredSpawnInput): StructuredSpawnInput {
+  const receipt = input.registry.readOnlySnapshot().receipts[input.receipt.launchId];
+  if (!receipt) throw new Error("structured spawn receipt is unavailable before launch");
+  if (input.spec.launchProfile?.mcpServers.includes("telegram")
+    && !receipt.launchProfile.mcpServers.includes("telegram")) {
+    throw new Error(TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH);
+  }
+  if (receipt.launchProfile.mcpServers.includes("telegram") && receipt.telegramSeatGrant
+    && !isCurrentOperatorSeat(receipt.parentConversationId ?? "", input.registry)) {
+    throw new Error("telegram MCP orchestrator seat is no longer active");
+  }
+  return { ...input, receipt, spec: { ...input.spec, launchProfile: receipt.launchProfile } };
+}
+
 interface HostBinding {
   stopPersistence(): void;
   unregister(): Promise<void>;
@@ -1591,8 +1607,12 @@ export async function defaultStartHost(
     codex?: Partial<Pick<CodexAppServerHostOptions, "spawnProcess">>;
   } = {},
 ): Promise<SpawnedStructuredHost> {
+  input = admittedStructuredLaunchInput(input);
   if (input.engine === "copilot") return await startCopilotStructuredHost(input, capability);
   const profile = input.spec.launchProfile ?? {} as LaunchProfile;
+  const validateTelegramGrant = profile.mcpServers.includes("telegram")
+    ? () => { admittedStructuredLaunchInput(input); }
+    : undefined;
   const resumeSessionId = structuredResumeSessionId(input);
   const initialEventCursor = resumeSessionId
     ? input.registry.readOnlySnapshot().entries[sessionKeyId({ engine: input.engine, sessionId: resumeSessionId })]?.structuredHost?.eventCursor
@@ -1612,6 +1632,7 @@ export async function defaultStartHost(
       effort: profile.effort ?? undefined,
       allowSubagents: profile.allowSubagents,
       mcpServers: profile.mcpServers,
+      validateTelegramGrant,
       /* Plugin grant from the durable profile (issue #687): present only for
          an operator-launched root session that did not opt out. */
       plugins: profile.plugins,
@@ -1633,6 +1654,7 @@ export async function defaultStartHost(
     ...claudeHostLaunchPaths(input.account),
     allowSubagents: profile.allowSubagents,
     mcpServers: profile.mcpServers,
+    validateTelegramGrant,
     readOnly: launchProfileEngineReadOnly(profile),
     restricted: profile.sandbox === "restricted",
     model: profile.model ?? undefined,
@@ -1973,6 +1995,7 @@ export async function spawnStructuredConversation(
     return Promise.race([work, durableSetupTimeout]);
   };
   try {
+    input = admittedStructuredLaunchInput(input);
     /* Bypass acceptance and project trust are staged in the managed home
        before runtime admission: no structured launch may ever wait at an
        interactive acceptance gate, whichever caller reached this point. */
@@ -1997,6 +2020,7 @@ export async function spawnStructuredConversation(
       parentConversationId: input.receipt.parentConversationId,
       ...(input.receipt.purpose === "resume-successor" ? { sessionId: structuredResumeSessionId(input) } : {}),
     }));
+    input = admittedStructuredLaunchInput(input);
     const capability = input.registry.rotateSpawnCapabilityForReceipt(input.receipt.launchId);
     const resumeEntry = resumeKey ? input.registry.readOnlySnapshot().entries[sessionKeyId(resumeKey)] : null;
     if (resumeEntry?.structuredHost) {

@@ -18,6 +18,8 @@ import { telegramMcpUrl } from "@/lib/telegram/packaging";
 import { executeOrchestratorSeatRequest, type SeatCommandDependencies } from "@/lib/orchestrator/seatCommand";
 import { defaultModelFor } from "@/lib/agent/models";
 import { reboundAssembledMcpGrants } from "./mcpAllowlist";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { activateDeputy, beginDeputy, endDeputy, recordDeputyFork } from "@/lib/orchestrator/deputies";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-telegram-spawn-"));
 const previous = { state: process.env.LLV_STATE_DIR, config: process.env.XDG_CONFIG_HOME,
@@ -50,6 +52,8 @@ afterAll(() => {
 const cwd = path.join(sandbox, "repo");
 fs.mkdirSync(cwd, { recursive: true });
 let registry = new AgentRegistry(path.join(sandbox, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+const seatProjects = new Map<string, string>();
+const seatLaunchIds = new Map<string, string>();
 
 async function withRegistryMode(mode: "off" | "sqlite", run: (sqlitePath: string) => Promise<void>): Promise<void> {
   const previousRegistry = registry;
@@ -95,7 +99,26 @@ function seedSeat(granted = true): string {
     artifactPath, cwd, accountId: "seat-account", status: "idle", host: null,
     claimEpoch: 0, claimOwner: null, pendingAction: null });
   if (settled.kind !== "settled") throw new Error("seat settlement failed");
+  const project = `telegram-seat-${crypto.randomUUID()}`;
+  const intent = `telegram-seat-intent-${crypto.randomUUID()}`;
+  if (beginOrchestratorSeatIntent({ project, mandate: "Own Telegram test board", clientRequestId: intent,
+    mode: "existing", conversationId: settled.conversation.id }).kind !== "begun") throw new Error("seat intent failed");
+  if (completeOrchestratorSeatIntent({ project, clientRequestId: intent,
+    conversationId: settled.conversation.id, path: artifactPath }).kind !== "activated") throw new Error("seat designation failed");
+  seatProjects.set(settled.conversation.id, project);
+  seatLaunchIds.set(settled.conversation.id, begun.receipt.launchId);
   return settled.conversation.id;
+}
+
+function rotateSeat(seatId: string): void {
+  const project = seatProjects.get(seatId);
+  if (!project) throw new Error("seat project missing");
+  const intent = `telegram-rotation-${crypto.randomUUID()}`;
+  const successor = `conversation_${crypto.randomUUID()}`;
+  if (beginOrchestratorSeatIntent({ project, mandate: "Replace Telegram test seat", clientRequestId: intent,
+    mode: "existing", conversationId: successor }).kind !== "begun") throw new Error("rotation intent failed");
+  if (completeOrchestratorSeatIntent({ project, clientRequestId: intent,
+    conversationId: successor, path: null }).kind !== "activated") throw new Error("seat rotation failed");
 }
 
 function dependencies(engine: "claude" | "codex", overrides: Partial<SpawnCommandDependencies> = {}): SpawnCommandDependencies {
@@ -120,8 +143,8 @@ function launchAccount(engine: "claude" | "codex") {
     env: { NODE_ENV: "test" as const, [TELEGRAM_CONNECTOR_TOKEN_ENV]: "untrusted-inherited-token" } };
 }
 
-async function launch(engine: "claude" | "codex", seatId: string | null, mcpServers?: string[], overrides: Partial<SpawnCommandDependencies> = {}) {
-  const clientAttemptId = `telegram_${crypto.randomUUID()}`;
+async function launch(engine: "claude" | "codex", seatId: string | null, mcpServers?: string[],
+  overrides: Partial<SpawnCommandDependencies> = {}, clientAttemptId = `telegram_${crypto.randomUUID()}`) {
   const request = new NextRequest("http://127.0.0.1/api/spawn", { method: "POST",
     headers: { origin: "http://127.0.0.1", host: "127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
     body: JSON.stringify({ clientAttemptId, title: "Seat child Telegram grant", engine, cwd, prompt: "inspect",
@@ -130,11 +153,53 @@ async function launch(engine: "claude" | "codex", seatId: string | null, mcpServ
   return { response, receipt: registry.spawnReceiptForClientAttempt(clientAttemptId) };
 }
 
+async function agentLaunch(engine: "claude" | "codex", seatId: string, overrides: Partial<SpawnCommandDependencies> = {}) {
+  const launchId = seatLaunchIds.get(seatId);
+  if (!launchId) throw new Error("seat launch missing");
+  const capability = registry.rotateSpawnCapabilityForReceipt(launchId);
+  return await launchWithAgentCapability(engine, capability, overrides);
+}
+
+async function launchWithAgentCapability(engine: "claude" | "codex", capability: string, overrides: Partial<SpawnCommandDependencies> = {}) {
+  const clientAttemptId = `telegram_agent_${crypto.randomUUID()}`;
+  const request = new NextRequest("http://127.0.0.1/api/spawn", { method: "POST",
+    headers: { host: "127.0.0.1", "content-type": "application/json", "x-llv-spawn-capability": capability },
+    body: JSON.stringify({ clientAttemptId, title: "Seat child Telegram grant", engine, model: defaultModelFor(engine), cwd, role: "builder",
+      ["prompt"]: "inspect", mcpServers: ["telegram"] }) });
+  const response = await executeSpawnRequest(request, dependencies(engine, overrides));
+  return { response, receipt: registry.spawnReceiptForClientAttempt(clientAttemptId) };
+}
+
+function endedDeputyCapability(seatId: string): string {
+  const project = seatProjects.get(seatId);
+  if (!project) throw new Error("seat project missing");
+  const begun = beginLegacySpawnFixture(registry, { engine: "claude", cwd, role: "builder",
+    origin: { kind: "operator" }, launchProfile: { mcpServers: ["viewer"] } });
+  if (begun.kind !== "created") throw new Error("deputy reservation failed");
+  const sid = crypto.randomUUID();
+  const artifactPath = path.join(sandbox, `${sid}.jsonl`);
+  fs.writeFileSync(artifactPath, "{}\n");
+  if (registry.settleSpawn(begun.receipt.launchId, { key: { engine: "claude", sessionId: sid },
+    artifactPath, cwd, accountId: "deputy-account", status: "idle", host: null,
+    claimEpoch: 0, claimOwner: null, pendingAction: null }).kind !== "settled") throw new Error("deputy settlement failed");
+  const seat = orchestratorSeatFor(project).active;
+  if (!seat) throw new Error("active seat missing");
+  const started = beginDeputy({ project, seatConversationId: seatId, seatEpoch: seat.seatEpoch,
+    seatPath: seat.path, clientRequestId: `deputy_${crypto.randomUUID()}`,
+    ask: { text: "Inspect", images: 0, sender: null } });
+  if (started.kind !== "begun") throw new Error("deputy intent failed");
+  recordDeputyFork(started.deputy.askId, { deputyConversationId: begun.receipt.conversationId,
+    artifactPath, forkRecordCount: 0 });
+  activateDeputy(started.deputy.askId);
+  endDeputy(started.deputy.askId, { outcome: "done" });
+  return registry.rotateSpawnCapabilityForReceipt(begun.receipt.launchId);
+}
+
 type LaunchEvidence = { tokenPresent: boolean; tokenMatches: boolean; telegramDefinition: unknown; reachedEngine: boolean };
 
 /** Only the external engine protocol is synthetic; admission, deferral,
     structured startup, and both host configuration builders stay real. */
-function deferredLaunch(engine: "claude" | "codex", token: string | null, codexServers?: Record<string, unknown>) {
+function deferredLaunch(engine: "claude" | "codex", token: string | null, codexServers?: Record<string, unknown>, beforeClaudeAuth?: () => void) {
   const work: Array<() => Promise<void>> = [];
   const evidence: LaunchEvidence = { tokenPresent: false, tokenMatches: false, telegramDefinition: null, reachedEngine: false };
   const client = {
@@ -143,7 +208,10 @@ function deferredLaunch(engine: "claude" | "codex", token: string | null, codexS
   } as unknown as RuntimeHostClient;
   const startHost = (hostInput: StructuredSpawnInput, capability: string) => defaultStartHost(hostInput, capability, {
         claude: {
-          readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+          readAuthStatus: () => {
+            beforeClaudeAuth?.();
+            return { loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" };
+          },
           spawnProcess: (_binary, args, options) => {
             evidence.reachedEngine = true;
             evidence.tokenPresent = Boolean(options.env?.[TELEGRAM_CONNECTOR_TOKEN_ENV]);
@@ -373,6 +441,76 @@ test("an ungranted seat cannot grant Telegram to a child", async () => {
   expect(receipt).toBeNull();
 });
 
+test("Telegram grant refuses the tmux fallback before reserving a child", async () => {
+  connected();
+  const seatId = seedSeat();
+  process.env.LLV_SPAWN_TRANSPORT = "tmux";
+  try {
+    const { response, receipt } = await launch("claude", seatId, ["telegram"]);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: "telegram MCP requires structured spawn transport" });
+    expect(receipt).toBeNull();
+  } finally {
+    process.env.LLV_SPAWN_TRANSPORT = "structured";
+  }
+});
+
+test("an ordinary tmux root keeps the Viewer baseline while Telegram is connected", async () => {
+  connected();
+  process.env.LLV_SPAWN_TRANSPORT = "tmux";
+  try {
+    const { response, receipt } = await launch("claude", null, undefined, {
+      runtimeHostClient: () => null,
+      spawnTmuxAgent: async () => { throw new Error("synthetic tmux launch stopped"); },
+    });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({ error: "synthetic tmux launch stopped" });
+    expect(receipt?.launchProfile.mcpServers).toEqual(["viewer"]);
+  } finally {
+    process.env.LLV_SPAWN_TRANSPORT = "structured";
+  }
+});
+
+for (const connectedFirst of [true, false]) test(`root replay keeps its ${connectedFirst ? "granted" : "denied"} Telegram selection across connector change`,
+  async () => withRegistryMode("sqlite", async () => {
+    if (connectedFirst) connected(); else clearTelegramConnection();
+    const attempt = `root_replay_${crypto.randomUUID()}`;
+    const first = await launch("claude", null, undefined, {}, attempt);
+    expect(first.response.status).toBe(202);
+    expect(first.receipt?.launchProfile.mcpServers).toEqual(connectedFirst ? ["viewer", "telegram"] : ["viewer"]);
+    if (connectedFirst) clearTelegramConnection(); else connected();
+    const replay = await launch("claude", null, undefined, {}, attempt);
+    expect(replay.response.status).not.toBe(409);
+    expect(replay.receipt?.launchId).toBe(first.receipt?.launchId);
+    expect(replay.receipt?.launchProfile.mcpServers).toEqual(first.receipt?.launchProfile.mcpServers);
+  }));
+
+test("an accepted explicit Telegram child replays its receipt after connector logout", async () => withRegistryMode("sqlite", async () => {
+  connected();
+  const seatId = seedSeat();
+  const attempt = `explicit_replay_${crypto.randomUUID()}`;
+  const first = await launch("claude", seatId, ["telegram"], {}, attempt);
+  expect(first.response.status).toBe(202);
+  clearTelegramConnection();
+  const replay = await launch("claude", seatId, ["telegram"], {}, attempt);
+  expect(replay.response.status).not.toBe(400);
+  expect(replay.response.status).not.toBe(409);
+  expect(replay.receipt?.launchId).toBe(first.receipt?.launchId);
+}));
+
+test("an accepted explicit Telegram child replays its receipt after seat rotation", async () => withRegistryMode("sqlite", async () => {
+  connected();
+  const seatId = seedSeat();
+  const attempt = `explicit_replay_${crypto.randomUUID()}`;
+  const first = await launch("claude", seatId, ["telegram"], {}, attempt);
+  expect(first.response.status).toBe(202);
+  rotateSeat(seatId);
+  const replay = await launch("claude", seatId, ["telegram"], {}, attempt);
+  expect(replay.response.status).not.toBe(400);
+  expect(replay.response.status).not.toBe(409);
+  expect(replay.receipt?.launchId).toBe(first.receipt?.launchId);
+}));
+
 for (const mode of ["off", "sqlite"] as const) test(`the ${mode} deferred seat children reach both production hosts with Telegram`, async () => withRegistryMode(mode, async () => {
   const token = connected();
   const seatId = seedSeat();
@@ -460,6 +598,120 @@ test("disconnect between admission and deferred host start terminalizes a grante
     connected();
   }
 });
+
+for (const engine of ["claude", "codex"] as const) test(`revoking the seat during ${engine} account resolution refuses the explicit Telegram grant`,
+  async () => withRegistryMode("sqlite", async (sqlitePath) => {
+    const token = connected();
+    const seatId = seedSeat();
+    const probe = deferredLaunch(engine, token);
+    const account = launchAccount(engine);
+    const { response, receipt } = await launch(engine, seatId, ["telegram"], {
+      ...probe.overrides,
+      resolveHealthySpawnAccount: async () => {
+        rewriteSqliteRow(sqlitePath, "conversations", seatId, row => {
+          (row.generations as { launchProfile: { mcpServers: string[] } }[]).at(-1)!.launchProfile.mcpServers = ["viewer"];
+        });
+        return account;
+      },
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: "telegram MCP grant was revoked during spawn admission" });
+    expect(receipt?.launchProfile.mcpServers).toEqual(["viewer"]);
+    await Promise.all(probe.work.map(work => work()));
+    expect(probe.evidence.reachedEngine).toBe(false);
+    expect(probe.evidence.tokenPresent).toBe(false);
+    expect(probe.evidence.telegramDefinition).toBeFalsy();
+  }));
+
+for (const engine of ["claude", "codex"] as const) test(`revoking the seat before deferred ${engine} startup refuses the explicit Telegram grant`,
+  async () => withRegistryMode("sqlite", async (sqlitePath) => {
+    const token = connected();
+    const seatId = seedSeat();
+    const probe = deferredLaunch(engine, token);
+    const { response, receipt } = await launch(engine, seatId, ["telegram"], probe.overrides);
+    expect(response.status).toBe(202);
+    expect(receipt?.launchProfile.mcpServers).toContain("telegram");
+    rewriteSqliteRow(sqlitePath, "conversations", seatId, row => {
+      (row.generations as { launchProfile: { mcpServers: string[] } }[]).at(-1)!.launchProfile.mcpServers = ["viewer"];
+    });
+    await Promise.all(probe.work.map(work => work()));
+    expect(registry.spawnReceiptForClientAttempt(receipt!.clientAttemptId!)).toMatchObject({
+      state: "failed", error: "telegram MCP grant was revoked before launch",
+    });
+    expect(probe.evidence.reachedEngine).toBe(false);
+    expect(probe.evidence.tokenPresent).toBe(false);
+    expect(probe.evidence.telegramDefinition).toBeFalsy();
+  }));
+
+test("Claude rechecks the seat grant after async auth and before token injection", async () => withRegistryMode("sqlite", async (sqlitePath) => {
+  const token = connected();
+  const seatId = seedSeat();
+  const probe = deferredLaunch("claude", token, undefined, () => {
+    rewriteSqliteRow(sqlitePath, "conversations", seatId, row => {
+      (row.generations as { launchProfile: { mcpServers: string[] } }[]).at(-1)!.launchProfile.mcpServers = ["viewer"];
+    });
+  });
+  const { response, receipt } = await launch("claude", seatId, ["telegram"], probe.overrides);
+  expect(response.status).toBe(202);
+  await Promise.all(probe.work.map(work => work()));
+  expect(registry.spawnReceiptForClientAttempt(receipt!.clientAttemptId!)).toMatchObject({
+    state: "failed", error: "telegram MCP grant was revoked before launch",
+  });
+  expect(probe.evidence.reachedEngine).toBe(false);
+  expect(probe.evidence.tokenPresent).toBe(false);
+  expect(probe.evidence.telegramDefinition).toBeFalsy();
+}));
+
+for (const engine of ["claude", "codex"] as const) test(`a rotated seat cannot delegate Telegram to a new ${engine} child`,
+  async () => withRegistryMode("sqlite", async () => {
+    const token = connected();
+    const seatId = seedSeat();
+    rotateSeat(seatId);
+    expect(registry.conversation(seatId as `conversation_${string}`)?.generations.at(-1)?.launchProfile.mcpServers)
+      .toContain("telegram");
+    const probe = deferredLaunch(engine, token);
+    const { response, receipt } = await agentLaunch(engine, seatId, probe.overrides);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: "telegram MCP orchestrator seat is no longer active" });
+    expect(receipt).toMatchObject({ state: "failed", error: "telegram MCP orchestrator seat is no longer active" });
+    await Promise.all(probe.work.map(work => work()));
+    expect(probe.evidence.reachedEngine).toBe(false);
+    expect(probe.evidence.tokenPresent).toBe(false);
+    expect(probe.evidence.telegramDefinition).toBeFalsy();
+  }));
+
+for (const engine of ["claude", "codex"] as const) test(`rotating a seat before deferred ${engine} startup revokes its Telegram child`,
+  async () => withRegistryMode("sqlite", async () => {
+    const token = connected();
+    const seatId = seedSeat();
+    const probe = deferredLaunch(engine, token);
+    const { response, receipt } = await agentLaunch(engine, seatId, probe.overrides);
+    expect(response.status).toBe(202);
+    expect(receipt?.launchProfile.mcpServers).toContain("telegram");
+    rotateSeat(seatId);
+    await Promise.all(probe.work.map(work => work()));
+    expect(registry.spawnReceiptForClientAttempt(receipt!.clientAttemptId!)).toMatchObject({
+      state: "failed", error: "telegram MCP orchestrator seat is no longer active",
+    });
+    expect(probe.evidence.reachedEngine).toBe(false);
+    expect(probe.evidence.tokenPresent).toBe(false);
+    expect(probe.evidence.telegramDefinition).toBeFalsy();
+  }));
+
+test("an ended deputy capability cannot delegate its seat's Telegram grant", async () => withRegistryMode("sqlite", async () => {
+  const token = connected();
+  const seatId = seedSeat();
+  const capability = endedDeputyCapability(seatId);
+  const probe = deferredLaunch("claude", token);
+  const { response, receipt } = await launchWithAgentCapability("claude", capability, probe.overrides);
+  expect(response.status).toBe(400);
+  expect(await response.json()).toMatchObject({ error: "telegram MCP requires the orchestrator seat's own spawn capability" });
+  expect(receipt).toBeNull();
+  await Promise.all(probe.work.map(work => work()));
+  expect(probe.evidence.reachedEngine).toBe(false);
+  expect(probe.evidence.tokenPresent).toBe(false);
+  expect(probe.evidence.telegramDefinition).toBeFalsy();
+}));
 
 test("a conflicting Codex account definition ends the granted launch with a named refusal", async () => {
   const token = connected();

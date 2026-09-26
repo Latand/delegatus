@@ -62,6 +62,7 @@ import { uk } from "@/lib/i18n/uk";
 import type { ApiError } from "@/lib/types";
 import { recordDirectOperatorWakatimeActivity } from "@/lib/wakatime/operatorActivity";
 import { readTelegramConnection, readTelegramSession } from "@/lib/telegram/sessionStore";
+import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
 
 import { sourceCwdStatus } from "@/app/api/spawn/sourceCwd";
 import { spawnSizingRefusal } from "@/lib/roles/sizing";
@@ -578,15 +579,19 @@ export async function executeSpawnRequest(
           && Boolean(session.connectorToken);
       }
       catch { /* an unreadable connector cannot supply a grant */ }
-      if (requestedTelegram && !telegramConnected) return refuse("telegram MCP connector is not connected");
+      if (requestedTelegram && !telegramConnected && !existingAttempt) return refuse("telegram MCP connector is not connected");
     }
     if (requestedTelegram) {
-      if (!seatLaunch && !seatParent && sessionOriginFor({
+      if (!existingAttempt && !seatLaunch && !seatParent && sessionOriginFor({
         origin: { kind: authenticatedCaller?.kind === "agent" ? "agent" : "operator" },
         parentConversationId, agentRole: role.value?.role ?? null,
       }) === "delegated") return refuse("telegram MCP requires an operator-owned orchestrator seat parent");
     }
     const telegramSeatGrant = requestedTelegram && seatParent;
+    if (telegramSeatGrant && authenticatedCaller?.kind === "agent"
+      && authenticatedCaller.conversationId !== parentConversationId) {
+      return refuse("telegram MCP requires the orchestrator seat's own spawn capability");
+    }
     /* Session origin, and with it every grant this launch receives: an
        operator-launched root session is one with no agent caller, no lineage
        parent and no role preset. Plugins (#687) and MCP servers (#739) read the
@@ -615,13 +620,20 @@ export async function executeSpawnRequest(
     /* A seat carries the operator's connected connector, and an explicit
        child request may receive that same grant from the seat. All other
        delegated launches keep the Viewer baseline. */
-    const grantedServers = implicitRootTelegram && (!telegramConnected || engine === "copilot")
+    const grantedServers = existingAttempt && requestedTelegram
+      ? grantedMcpServers(requestedMcpServers ?? [])
+      : existingAttempt && implicitRootTelegram && !reportClassGrant
+      ? existingAttempt.launchProfile.mcpServers
+      : implicitRootTelegram && (!telegramConnected || engine === "copilot" || transport === "tmux")
       ? ["viewer"]
       : reportClassGrant
       ? grantedMcpServers(reportClassGrant.mcpServers)
       : (seatLaunch || telegramSeatGrant) && requestedTelegram
         ? grantedMcpServers(requestedMcpServers)
       : mcpServersForSession({ origin: sessionOrigin, requested: requestedMcpServers });
+    if (transport === "tmux" && grantedServers.includes("telegram")) {
+      return refuse("telegram MCP requires structured spawn transport");
+    }
     const requestDigestForAccount = (accountId: string, preserveOperationalTitleReplay = false) => {
       const digests = spawnRequestDigests({
         engine,
@@ -935,6 +947,19 @@ export async function executeSpawnRequest(
       ));
     }, { holder: "spawn admission", caller: "spawn" });
     if (begun.kind === "conflict") return NextResponse.json({ error: "spawn attempt conflicts with its original request" }, { status: 409 });
+    if (begun.kind === "created" && requestedTelegram && !begun.receipt.launchProfile.mcpServers.includes("telegram")) {
+      const reason = "telegram MCP grant was revoked during spawn admission";
+      if (transport === "structured") registry.failStructuredSpawn(begun.receipt.launchId, reason);
+      else registry.failSpawn(begun.receipt.launchId, reason);
+      return refuse(reason);
+    }
+    if (begun.kind === "created" && requestedTelegram && begun.receipt.telegramSeatGrant
+      && !isCurrentOperatorSeat(begun.receipt.parentConversationId ?? "", registry)) {
+      const reason = "telegram MCP orchestrator seat is no longer active";
+      if (transport === "structured") registry.failStructuredSpawn(begun.receipt.launchId, reason);
+      else registry.failSpawn(begun.receipt.launchId, reason);
+      return refuse(reason);
+    }
     if (begun.kind === "created") launchId = begun.receipt.launchId;
     /* ATTRIBUTION, not a gate (#1279's rule, launch seam). The binding no
        longer refuses a launch that NAMES an account outside the project's pool,

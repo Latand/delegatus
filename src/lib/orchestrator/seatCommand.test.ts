@@ -10,7 +10,7 @@ import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { resolveSpawnRole } from "@/lib/roles/registry";
 import { saveRoleOverrides } from "@/lib/roles/store";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
-import { saveTelegramSession, writeTelegramConnection } from "@/lib/telegram/sessionStore";
+import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection } from "@/lib/telegram/sessionStore";
 
 import {
   HANDOFF_HEADING,
@@ -115,6 +115,8 @@ function seedPendingLaunchIntent(input: {
   engine?: string | null;
   model?: string | null;
   legacyRuntimeShape?: boolean;
+  legacyTelegramShape?: boolean;
+  telegramGrant?: boolean;
 }): void {
   fs.writeFileSync(path.join(sandbox, "orchestrator-seats.json"), JSON.stringify({
     schemaVersion: 1,
@@ -130,6 +132,7 @@ function seedPendingLaunchIntent(input: {
           engine: input.engine ?? null,
           model: input.model ?? null,
         }),
+        ...(input.legacyTelegramShape ? {} : { telegramGrant: input.telegramGrant ?? false }),
         mandate: "own the board",
         promptVersion: null,
         predecessorConversationId: null,
@@ -208,6 +211,36 @@ test("the production seat launch builder withholds Telegram while disconnected",
   const { deps, recorded } = dependencies();
   expect((await executeOrchestratorSeatRequest(spawnRequest(), deps)).status).toBe(200);
   expect(recorded.spawns[0]).not.toHaveProperty("mcpServers");
+});
+
+for (const connectedFirst of [true, false]) test(`pending seat replay preserves its ${connectedFirst ? "granted" : "denied"} Telegram selection`, async () => {
+  seedPendingLaunchIntent({ clientRequestId: "req_00000001", launchId: "launch_live",
+    engine: "claude", model: "opus", telegramGrant: connectedFirst });
+  if (!connectedFirst) {
+    const session = saveTelegramSession("placeholder-session-for-seat-replay-test");
+    writeTelegramConnection({ version: 1, status: "connected", credentialRef: session.credentialRef,
+      identity: null, lastHealthCheckAt: AT, errorCode: null, identityIdUpgradedAt: null });
+  } else clearTelegramConnection();
+  const { deps, recorded } = dependencies({
+    spawn: async (body) => {
+      recorded.spawns.push(body);
+      return { status: 200, body: { ok: true, conversationId: NEW_ID, path: null } };
+    },
+  });
+  expect((await executeOrchestratorSeatRequest(spawnRequest(), deps)).status).toBe(200);
+  expect(recorded.spawns).toHaveLength(1);
+  expect(recorded.spawns[0]?.mcpServers).toEqual(connectedFirst ? ["telegram"] : undefined);
+  expect(orchestratorSeatFor("proj-a").active?.telegramGrant).toBe(connectedFirst);
+});
+
+test("legacy pending seat without a saved Telegram choice refuses with a recovery reason", async () => {
+  seedPendingLaunchIntent({ clientRequestId: "req_00000001", launchId: "launch_live",
+    engine: "claude", model: "opus", legacyTelegramShape: true });
+  const { deps, recorded } = dependencies();
+  const result = await executeOrchestratorSeatRequest(spawnRequest(), deps);
+  expect(result.status).toBe(409);
+  expect(result.body).toMatchObject({ code: "legacy_telegram_selection_unavailable" });
+  expect(recorded.spawns).toHaveLength(0);
 });
 
 test("spawn mode freezes omitted runtime fields to the resolved orchestrator defaults", async () => {
@@ -1249,6 +1282,7 @@ test("a legacy pending seat recovers runtime metadata from its launch settlement
     clientRequestId: "req_legacy_pending",
     launchId: "launch_legacy_pending",
     legacyRuntimeShape: true,
+    legacyTelegramShape: true,
   });
   const { deps } = dependencies({
     launchSettlement: () => ({

@@ -2,6 +2,7 @@ import { readTelegramConnection, readTelegramSession, TELEGRAM_CONNECTOR_TOKEN_E
 import { telegramMcpUrl } from "@/lib/telegram/packaging";
 
 export const TELEGRAM_LAUNCH_UNAVAILABLE = "telegram MCP connector is not connected at launch";
+export const TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH = "telegram MCP grant was revoked before launch";
 
 /** The definition belongs to this launch; no account configuration is edited. */
 export function operatorTelegramClaudeEntry() {
@@ -25,10 +26,12 @@ export function operatorTelegramCodexEntry() {
 export function withTelegramConnectorGrant(
   environment: NodeJS.ProcessEnv,
   mcpServers: readonly string[] | undefined,
+  validateGrant?: () => void,
 ): NodeJS.ProcessEnv {
   const bounded = { ...environment };
   delete bounded[TELEGRAM_CONNECTOR_TOKEN_ENV];
   if (!mcpServers?.includes("telegram")) return bounded;
+  validateGrant?.();
   try {
     const connection = readTelegramConnection();
     const session = readTelegramSession();

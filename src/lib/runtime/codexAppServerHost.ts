@@ -188,6 +188,7 @@ export interface CodexAppServerHostOptions {
   effort?: string;
   allowSubagents?: boolean;
   mcpServers?: string[];
+  validateTelegramGrant?: () => void;
   /** Codex plugins granted to this session (issue #687). Empty or absent
       denies the plugin subsystem, which is the default for every session. */
   plugins?: readonly string[];
@@ -1416,6 +1417,7 @@ export class CodexAppServerHost implements EngineHost {
           options.forwardGitHubConfig === true,
         ),
         options.mcpServers,
+        options.validateTelegramGrant,
       );
     } catch (error) {
       options.releaseCleanup?.();

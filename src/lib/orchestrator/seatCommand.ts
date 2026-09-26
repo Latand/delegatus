@@ -984,6 +984,7 @@ async function runOrchestratorSeatRequest(
   }
   const spawnSizing = agentSeatSizingRefusal(triggeredBy, resolvedRuntime.value.config, incumbent);
   if (spawnSizing) return spawnSizing;
+  const telegramGrant = operatorTelegramConnected();
   const begun = beginOrchestratorSeatIntent({
     project,
     mandate,
@@ -992,6 +993,7 @@ async function runOrchestratorSeatRequest(
     mode: "spawn",
     engine: resolvedRuntime.value.config.engine,
     model: resolvedRuntime.value.config.model,
+    telegramGrant,
     promptVersion,
     triggeredBy,
     now: dependencies.now(),
@@ -1013,6 +1015,11 @@ async function runOrchestratorSeatRequest(
         seat: terminalized?.seat ?? null,
       },
     };
+  }
+  if (begun.kind === "replay" && typeof begun.seat.telegramGrant !== "boolean") {
+    const error = "legacy pending orchestrator Telegram selection is unavailable; retry the designation with a new clientRequestId";
+    const terminalized = failOrchestratorSeatIntent(project, clientRequestId, error, dependencies.now());
+    return { status: 409, body: { error, code: "legacy_telegram_selection_unavailable", seat: terminalized?.seat ?? null } };
   }
   /* A pending replay spawns the ORIGINAL intent's mandate and role table: the
      spawn receipt is matched by clientAttemptId AND request digest, so a
@@ -1062,7 +1069,7 @@ async function runOrchestratorSeatRequest(
     ...Object.fromEntries(spawnFields.flatMap((field) => (rawBody[field] === undefined ? [] : [[field, rawBody[field]]]))),
     ...spawnRuntime,
     role: "orchestrator",
-    ...(operatorTelegramConnected() ? { mcpServers: ["telegram"] } : {}),
+    ...(begun.seat.telegramGrant ? { mcpServers: ["telegram"] } : {}),
     roleParams: rawBody.roleParams ?? { mode: "standard" },
     project,
     cwd,

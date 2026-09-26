@@ -105,8 +105,7 @@ import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orch
 import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies, spawnParentForCaller } from "@/lib/orchestrator/deputies";
 import { recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
-import { activeSeatsByCurrentProject, seatLaunchCwd } from "@/lib/orchestrator/seatProjectIdentity";
-import { projectSuccessionFor } from "@/lib/projects/succession";
+import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
@@ -1296,6 +1295,9 @@ export function spawnDispatchBody(args: McpToolArgs, clientAttemptId: string): R
   const roleParams = defaultMcpSpawnRoleParams(args);
   return {
     ...body,
+    /* MCP callers are agents even when the control request uses the operator
+       capability. An omitted list must not inherit operator-root Telegram. */
+    ...(args.mcpServers == null ? { mcpServers: ["viewer"] } : {}),
     ...(roleParams ? { roleParams } : {}),
     clientAttemptId,
   };
@@ -1344,12 +1346,17 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
   if (Array.isArray(args.mcpServers) && args.mcpServers.includes("telegram")) {
     const caller = dependencies ? attributionOf(dependencies) : null;
     if (caller?.kind === "manager") {
+      if (caller.via?.deputy) {
+        throw new McpToolRefusal("telegram MCP requires the orchestrator seat's own spawn capability", {
+          code: "telegram_spawn_deputy_unauthorized", status: 403,
+        });
+      }
       if (!caller.conversationId || text(args.parentConversationId) !== caller.conversationId) {
         throw new McpToolRefusal("a seat granting Telegram must name its own conversationId as parentConversationId", {
           code: "telegram_spawn_parent_mismatch", status: 403,
         });
       }
-    } else if (caller?.kind !== "gateway") {
+    } else {
       throw new McpToolRefusal("Telegram MCP may be granted only by the operator or their orchestrator seat", {
         code: "telegram_spawn_caller_unauthorized", status: 403,
       });
@@ -5569,36 +5576,6 @@ function suggestReplies(args: McpToolArgs, dependencies: ViewerMcpDomainDependen
  * The manager is resolved per call rather than captured, so seating a new
  * incumbent takes effect without restarting anything.
  */
-/** Production evidence for the durable manager-authority resolver: seats and
-    revocations from their store, the legacy record, and fresh registry facts.
-    All resolved per call so replacement, revocation and supersedence take
-    effect on the next tool call. */
-function productionManagerAuthoritySources(): ManagerAuthoritySources {
-  const registry = agentRegistry();
-  return {
-    /* Each seat under the project it serves now (#1874), so a seat keyed by
-       its folder's old identity directs the project its lanes are written to. */
-    activeSeats: () => activeSeatsByCurrentProject(),
-    revocations: orchestratorRevocations,
-    conversationFacts: (conversationId) => {
-      const conversation = registry.conversation(conversationId as `conversation_${string}`);
-      if (!conversation) return null;
-      return {
-        superseded: conversation.supersededBy !== null,
-        hasGeneration: conversation.generations.length > 0,
-        /* Read the way the seat's own project is (#1874): canonical, and moved
-           with its folder, so an ownership recorded under the folder's old
-           identity does not read as a cross-project designation. */
-        project: conversation.projectOwnership?.project
-          ? canonicalOrchestratorProject(projectSuccessionFor(conversation.projectOwnership.project, seatLaunchCwd(conversationId))?.target
-            ?? conversation.projectOwnership.project)
-          : null,
-      };
-    },
-    resolveAlias: (conversationId) => registry.conversation(conversationId as `conversation_${string}`)?.id ?? conversationId,
-  };
-}
-
 export function viewerMcpToolPolicy(
   domainDependencies: ViewerMcpDomainDependencies = productionDomainDependencies,
   hostHealthProbe = false,

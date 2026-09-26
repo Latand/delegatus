@@ -208,6 +208,7 @@ export interface ClaudeStreamBrokerHostOptions {
   spawnPolicyBaseSettingsPath?: string | null;
   allowSubagents?: boolean;
   mcpServers?: string[];
+  validateTelegramGrant?: () => void;
   mcpStatePath?: string;
   readOnly?: boolean;
   /** Confine tools and network to Claude's engine-owned restricted boundary. */
@@ -750,7 +751,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     try {
       child = spawnProcess(binary, args, {
         cwd: options.cwd,
-        env: withTelegramConnectorGrant(env, options.mcpServers),
+        env: withTelegramConnectorGrant(env, options.mcpServers, options.validateTelegramGrant),
         detached: true,
       });
     } catch (error) {

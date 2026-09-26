@@ -414,6 +414,13 @@ test("Telegram spawn grants use the server-attributed seat, never a worker-suppl
   await expect(worker(args)).rejects.toThrow("only by the operator or their orchestrator seat");
   expect(dispatched).toHaveLength(0);
 
+  const gateway = viewerMcpBindings(undefined, control, { callerAttribution: () => ({
+    kind: "gateway", conversationId: "conversation_root_agent", role: null,
+  }) } as never).spawn_agent;
+  await expect(gateway({ ...args, clientRequestId: "root-agent-telegram", parentConversationId: undefined }))
+    .rejects.toThrow("only by the operator or their orchestrator seat");
+  expect(dispatched).toHaveLength(0);
+
   const seat = viewerMcpBindings(undefined, control, { callerAttribution: () => ({
     kind: "manager", conversationId: seatId, role: "orchestrator",
   }) } as never).spawn_agent;
@@ -422,6 +429,28 @@ test("Telegram spawn grants use the server-attributed seat, never a worker-suppl
   expect(dispatched).toHaveLength(0);
   await seat(args);
   expect(dispatched[0]).toMatchObject({ parentConversationId: seatId, mcpServers: ["telegram"] });
+
+  const deputy = viewerMcpBindings(undefined, control, { callerAttribution: () => ({
+    kind: "manager", conversationId: seatId, role: "orchestrator", via: { deputy: "conversation_deputy" },
+  }) } as never).spawn_agent;
+  await expect(deputy({ ...args, clientRequestId: "deputy-telegram-child" }))
+    .rejects.toThrow("seat's own spawn capability");
+  expect(dispatched).toHaveLength(1);
+});
+
+test("gateway spawn with no MCP selection sends the Viewer baseline explicitly", async () => {
+  const dispatched: Record<string, unknown>[] = [];
+  const control = { post: async (_pathname: string, body: Record<string, unknown>) => {
+    dispatched.push(body);
+    return { conversationId: "conversation_child", path: null, launchId: "launch_child",
+      state: "starting", initialMessage: "pending" };
+  } };
+  const gateway = viewerMcpBindings(undefined, control, { callerAttribution: () => ({
+    kind: "gateway", conversationId: "conversation_root_agent", role: null,
+  }) } as never).spawn_agent;
+  await gateway({ clientRequestId: "root-agent-baseline", cwd: "/repo", title: "Root child", ["prompt"]: "inspect" });
+  expect(dispatched).toHaveLength(1);
+  expect(dispatched[0]?.mcpServers).toEqual(["viewer"]);
 });
 
 test("spawn_agent coerces and clamps bounded role params before the control request", async () => {
