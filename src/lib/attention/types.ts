@@ -193,6 +193,8 @@ export interface AttentionRaisedBy {
   kind: "manager" | "agent" | "gateway" | "unidentified";
   conversationId: string | null;
   role: string | null;
+  /** The seat's parallel self, when it raised this under the seat's id. */
+  via?: { deputy: string };
 }
 
 /** The viewport captured immediately before a move, so return restores it

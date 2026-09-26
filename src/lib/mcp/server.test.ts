@@ -1756,6 +1756,7 @@ describe("MCP tool service", () => {
         "get_orchestrator",
         "create_orchestrator",
         "send_message_to_orchestrator",
+        "ask_orchestrator_in_parallel",
         "rotate_orchestrator",
         "seat_tick_settings",
         "account_project_binding",

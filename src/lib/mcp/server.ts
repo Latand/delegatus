@@ -87,6 +87,7 @@ export const MCP_TOOL_NAMES = [
   "get_orchestrator",
   "create_orchestrator",
   "send_message_to_orchestrator",
+  "ask_orchestrator_in_parallel",
   "rotate_orchestrator",
   "seat_tick_settings",
   "account_project_binding",
@@ -145,6 +146,9 @@ const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
      or deliver a second time. get_orchestrator is a read and stays bounded. */
   "create_orchestrator",
   "send_message_to_orchestrator",
+  /* Starts the seat's parallel self (docs/design/ghost-seat.md §5): a fork, a
+     host and a delivery. A replayed clientRequestId resumes the same record. */
+  "ask_orchestrator_in_parallel",
   "rotate_orchestrator",
   /* Writes a project's durable tick settings when it carries a change (#1275).
      A pure read of the same tool changes nothing, but the receipt has to
@@ -3060,6 +3064,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Deliver a message to the project's selected orchestrator, resolved server-side. A dead selected conversation is resumed; with none designated, one is created first. The recipient is frozen before the message dispatch; a later seat rotation never redirects recovery. The answer reports acceptance: ask message_receipt what became of the operationId.",
     RECOVERY_CONTRACT_DESCRIPTION,
   ].join(" "),
+  ask_orchestrator_in_parallel: "While the project's orchestrator seat is busy with a turn, start its parallel self for one side ask: a fork of the seat's conversation that answers this one message with the seat's authority (no deploy, no rotation), shows live in the seat's own feed, and queues a note to the seat when it ends. For the voice gateway (the operator's root session) relaying the operator; any other agent is refused with asker_refused and sends to the orchestrator instead. Claude seats only; refused with seat_not_busy when the seat is idle (send to it directly then) and with deputy_limit while another parallel self is running. Idempotent by clientRequestId.",
   seat_tick_settings: [
     "Read — and change — one project's seat tick: whether Delegatus wakes that project's seat at all, how often, and what your own monitor prompt tells the wake to look at.",
     "Called with no change fields it is a read. `project` defaults to your own, and naming another project's is allowed rather than refused; the answer says which of the two you did, and the record, the board card and the tick's journal all carry who changed whose tick.",
@@ -3756,6 +3761,11 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     recoveryOnly: recoveryOnlySchema,
     project: z.string().min(1).describe("Project whose selected orchestrator receives the message."),
     text: z.string().min(1).describe("The message. The recipient is resolved server-side; a dead session is resumed, a missing one created first."),
+  }).passthrough(),
+  ask_orchestrator_in_parallel: z.object({
+    clientRequestId: clientRequestIdSchema,
+    project: z.string().min(1).describe("Project whose busy orchestrator seat takes the side ask in parallel."),
+    text: z.string().min(1).describe("The side ask, exactly as the operator gave it."),
   }).passthrough(),
   rotate_orchestrator: z.object({
     clientRequestId: clientRequestIdSchema,

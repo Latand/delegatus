@@ -7,6 +7,7 @@ import { reconcileEmbeddedReviewFlows, tickPipelines } from "../pipelines/engine
 import { withPipelineMutation } from "../pipelines/store";
 import { notifyQuestion } from "../push";
 import { overlaySessionTitles, sessionProjectProjection } from "../session/titleProjection";
+import { deputyConversationRefs } from "../orchestrator/deputies";
 import { tickTaskInbox } from "../tasks/inboxScanner";
 import { admitScannedConversations } from "../tasks/membership";
 import { loadPipelinesForProjection } from "../pipelines/store";
@@ -213,6 +214,25 @@ export async function listFilesWithProjectCatalog(selectedProject?: string, opti
    archived predecessors — demoted below the whole corpus, off the board and
    out of the folded list (issue #942). */
 export function archivedTranscriptPaths(): ReadonlySet<string> {
+  return withDeputyTranscripts(archivedPredecessorPaths());
+}
+
+/* A seat's deputies (docs/design/ghost-seat.md §5) rank with the archived
+   predecessors: a week of one-ask forks must not eat the recency cap and churn
+   live conversations out of the feed. A live deputy's host keeps its card
+   through the hosted set whatever the cap says. */
+function withDeputyTranscripts(demoted: ReadonlySet<string>): ReadonlySet<string> {
+  let deputies: string[];
+  try {
+    deputies = deputyConversationRefs()?.paths ?? [];
+  } catch {
+    deputies = [];
+  }
+  if (!deputies.length) return demoted;
+  return new Set([...demoted, ...deputies]);
+}
+
+function archivedPredecessorPaths(): ReadonlySet<string> {
   const archived = sessionProjectProjection(true).archivedPaths;
   if (!archived.size) return archived;
   const canonicalize = createTranscriptPathCanonicalizer(scanRootEntries().map(([, root]) => root));

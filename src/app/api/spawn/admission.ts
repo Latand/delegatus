@@ -5,12 +5,16 @@ import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import type { AgentRegistry } from "@/lib/agent/registry";
 import { matchesOperatorSpawnCapability, OperatorSpawnCapabilityError } from "@/lib/agent/operatorCapability";
 import { VIEWER_SPAWN_CAPABILITY_HEADER, VIEWER_SPAWN_ENDPOINT } from "@/lib/agent/spawnPolicy";
+import { spawnParentForCaller } from "@/lib/orchestrator/deputies";
 
 export const AGENT_SPAWN_LIVE_CHILD_CAP = 20;
 export const AGENT_SPAWN_LINEAGE_ERROR = `Agent-initiated spawns require role; reviewer spawns also require reviews (the implementer conversation or transcript). The parent is inferred from the authenticated caller conversation; src stays optional verification. POST ${VIEWER_SPAWN_ENDPOINT} with {engine, model, cwd, prompt, role, src?, reviews?}.`;
 
 export type AuthenticatedSpawnCaller =
-  | { kind: "agent"; conversationId: ViewerConversationId; liveChildrenCap: number }
+  /** `conversationId` is the actor. `parentConversationId`, when present,
+      is the lineage parent it spawns under: a seat's deputy spawns as its
+      seat, so the seat owns the child (docs/design/ghost-seat.md §4). */
+  | { kind: "agent"; conversationId: ViewerConversationId; liveChildrenCap: number; parentConversationId?: ViewerConversationId }
   | { kind: "operator"; conversationId: null; liveChildrenCap: undefined };
 
 export type SpawnLineageSelector = {
@@ -26,7 +30,7 @@ export function spawnLineageSelectorForCaller(
   body: SpawnLineageSelector,
 ): SpawnLineageSelector {
   if (caller?.kind === "agent") {
-    return { parentConversationId: caller.conversationId, role: body.role, reviews: body.reviews };
+    return { parentConversationId: caller.parentConversationId ?? caller.conversationId, role: body.role, reviews: body.reviews };
   }
   if (caller?.kind === "operator") {
     return { src: body.src, role: body.role, reviews: body.reviews };
@@ -103,7 +107,13 @@ export function authenticatedAgentSpawnCaller(
         return { error: "src must identify the authenticated caller conversation" };
       }
     }
-    return { kind: "agent", conversationId, liveChildrenCap: AGENT_SPAWN_LIVE_CHILD_CAP };
+    const parentConversationId = spawnParentForCaller(conversationId) as ViewerConversationId;
+    return {
+      kind: "agent",
+      conversationId,
+      liveChildrenCap: AGENT_SPAWN_LIVE_CHILD_CAP,
+      ...(parentConversationId !== conversationId ? { parentConversationId } : {}),
+    };
   }
   try {
     if (matchesOperatorSpawnCapability(capability)) {

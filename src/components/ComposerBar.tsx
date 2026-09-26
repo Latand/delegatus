@@ -173,6 +173,10 @@ export interface ComposerBarProps {
    * never quietly changed for a card that has no queue.
    */
   onAlternateSubmit?: () => void;
+  /** Ctrl/⌘+Shift+Enter: «ask in parallel» on an orchestrator seat's own
+      conversation (docs/design/ghost-seat.md §6.6). Absent everywhere else,
+      where the chord does nothing. */
+  onParallelSubmit?: () => void;
 }
 
 const NO_HISTORY: readonly string[] = [];
@@ -295,6 +299,7 @@ export function ComposerBar({
   queuePanel,
   pinInput = false,
   onAlternateSubmit,
+  onParallelSubmit,
 }: ComposerBarProps) {
   const {
     displayText,
@@ -701,6 +706,13 @@ export function ComposerBar({
                  native Codex queue (#1629). It runs through the SAME admission
                  gate as Enter, so a blocked send is blocked both ways, and it is
                  checked first because Enter's own branch ignores modifiers. */
+              if (event.key === "Enter" && event.shiftKey && (event.ctrlKey || event.metaKey) && onParallelSubmit && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                if (sendBlocked || !effectiveCanSend || imageSendBlocked) return;
+                setHistoryIndex(-1);
+                onParallelSubmit();
+                return;
+              }
               if (event.key === "Enter" && event.altKey && onAlternateSubmit && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 if (sendBlocked || !effectiveCanSend || imageSendBlocked) return;

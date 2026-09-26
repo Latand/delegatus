@@ -15,6 +15,21 @@ export type McpCallLink = {
   href: string;
 };
 
+/* The chip labels `describeMcpCall` writes, and the message each one reads as
+   in the operator's language. A label outside this map is drawn as written. */
+const LINK_LABEL_KEYS: Record<string, "mcp.link.task" | "mcp.link.pipeline" | "mcp.link.conversation" | "mcp.link.agent"> = {
+  "Open task": "mcp.link.task",
+  "Open pipeline": "mcp.link.pipeline",
+  "Open conversation": "mcp.link.conversation",
+  "Open agent": "mcp.link.agent",
+};
+
+/** An entity chip's label in the interface language. */
+export function mcpLinkLabel(t: (key: (typeof LINK_LABEL_KEYS)[string]) => string, link: McpCallLink): string {
+  const key = LINK_LABEL_KEYS[link.label];
+  return key ? t(key) : link.label;
+}
+
 export type McpCallDescription = {
   icon: McpCallIcon;
   verb: string;

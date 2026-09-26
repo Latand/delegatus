@@ -81,6 +81,9 @@ export interface SeatTickSettingsActor {
       to another project's tick reads as exactly that. */
   project: string | null;
   seatEpoch: number | null;
+  /** The seat's parallel self that made the change under the seat's id
+      (docs/design/ghost-seat.md §4 rule 2); absent for anyone else. */
+  via?: { deputy: string };
 }
 
 export interface SeatTickSettings {
@@ -185,7 +188,13 @@ function normalizeActor(value: unknown): SeatTickSettingsActor | null {
     conversationId: typeof raw.conversationId === "string" && raw.conversationId ? raw.conversationId.slice(0, 200) : null,
     project: typeof raw.project === "string" && raw.project ? raw.project.slice(0, 200) : null,
     seatEpoch: typeof raw.seatEpoch === "number" && Number.isSafeInteger(raw.seatEpoch) ? raw.seatEpoch : null,
+    ...deputyVia(raw.via),
   };
+}
+
+function deputyVia(value: unknown): { via?: { deputy: string } } {
+  const deputy = value && typeof value === "object" ? (value as { deputy?: unknown }).deputy : undefined;
+  return typeof deputy === "string" && deputy ? { via: { deputy: deputy.slice(0, 200) } } : {};
 }
 
 function normalizeInterval(value: unknown): number | null {

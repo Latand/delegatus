@@ -3,6 +3,7 @@ import { indexConversationCatalog, pruneConversationSearchCache } from "@/lib/sc
 import { searchTextForTranscript } from "@/lib/scanner/describe";
 import { refreshConversationCatalog } from "@/lib/scanner/discover";
 import { overlayConversationLineage } from "@/lib/agent/lineageMarkers";
+import { deputyConversationRefs } from "@/lib/orchestrator/deputies";
 import { overlaySessionProjects, overlaySessionTitles, overlaySessionTitlesYielding, sessionProjectProjection } from "@/lib/session/titleProjection";
 import { cleanTitle } from "@/lib/title";
 
@@ -19,7 +20,15 @@ export async function GET(request: Request): Promise<Response> {
   const url = new URL(request.url);
   if (!conversationCatalogReady()) await refreshConversationCatalog();
   const query = url.searchParams.get("q")?.trim() || undefined;
-  const source = conversationCatalogSnapshot();
+  /* The orchestrator's parallel selves leave nothing in the conversation lists
+     (docs/design/ghost-seat.md §5): each is a fork of the seat in the seat's
+     own project, so the catalog holds one row per ask. They stay readable by
+     id and searchable through search_transcripts. An unreadable deputy file
+     hides nothing. */
+  const deputies = deputyConversationRefs();
+  const hiddenPaths = new Set(deputies?.paths ?? []);
+  const hiddenIds = new Set(deputies?.conversationIds ?? []);
+  const source = conversationCatalogSnapshot().filter((entry) => !hiddenPaths.has(entry.path));
   const hydrateSearchText = (entry: (typeof source)[number]) => {
     const text = searchTextForTranscript(entry.path, entry.size, entry.engine);
     return {
@@ -70,6 +79,11 @@ export async function GET(request: Request): Promise<Response> {
     // A superseded round or an archived predecessor says so here as it does in
     // the files response, so a list that continues the board drops it (#1671).
     overlayConversationLineage(page.items);
+    /* A cursor page reads the ordering frozen at its first page, and a row
+       can be addressed by another path than the one the record holds: its
+       conversation id catches both. */
+    const shown = page.items.filter((item) => !hiddenPaths.has(item.path) && !(item.conversationId && hiddenIds.has(item.conversationId)));
+    if (shown.length !== page.items.length) page = { ...page, items: shown, total: Math.max(0, page.total - (page.items.length - shown.length)) };
     return Response.json(page);
   } catch (error) {
     if (error instanceof ExpiredConversationCatalogCursorError) {

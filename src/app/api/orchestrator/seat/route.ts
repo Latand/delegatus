@@ -6,6 +6,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
 import { viewerMcpRegistered } from "@/lib/agent/spawnPolicy";
 import { executeOrchestratorSeatRequest } from "@/lib/orchestrator/seatCommand";
+import { deputiesForSeatIn, deputyConversationRefsIn, readDeputyFileOrNull, type OrchestratorDeputy, type RetiredDeputyRef } from "@/lib/orchestrator/deputies";
+import { seatDeputyView, type SeatDeputyView } from "@/lib/orchestrator/deputyView";
 import { allSeatConversationsIn, orchestratorSeatIn, previousOrchestratorSeatsIn, readOrchestratorSeatFileOrNull, seatTaskOf, type OrchestratorSeat, type PreviousOrchestratorSeat, type SeatConversations, type SeatNotesTask } from "@/lib/orchestrator/seats";
 import { loadTasks } from "@/lib/tasks/store";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
@@ -46,6 +48,9 @@ interface SeatStatus {
       seat of another project is no more a task than this project's is. Null
       when the record could not be read, which hides nothing. */
   all: SeatConversations | null;
+  /** The active seat's deputies, the live one and the newest ended ones;
+      absent when it has none, so an answer without them is unchanged. */
+  deputies?: SeatDeputyView[];
 }
 
 /** The project-less read (`?scope=all`): the Overview names no project, so it
@@ -73,7 +78,7 @@ interface SeatFailure {
 export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | SeatConversationsAnswer | ApiError>> {
   const project = req.nextUrl.searchParams.get("project")?.trim() ?? "";
   if (req.nextUrl.searchParams.get("scope")?.trim() === "all") {
-    return NextResponse.json({ all: allSeatConversationsIn(readOrchestratorSeatFileOrNull()) });
+    return NextResponse.json({ all: withDeputyRefs(allSeatConversationsIn(readOrchestratorSeatFileOrNull()), readDeputyFileOrNull()) });
   }
   if (!project) return NextResponse.json({ error: "project is required" }, { status: 400 });
   const cwd = req.nextUrl.searchParams.get("cwd")?.trim() || undefined;
@@ -84,6 +89,8 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | S
      and three readers of one document would re-read and re-parse it three
      times per tick for one answer. */
   const record = readOrchestratorSeatFileOrNull();
+  const deputyFile = readDeputyFileOrNull();
+  const deputies = deputyFile?.deputies ?? null;
   const { active, pending, history } = orchestratorSeatIn(record, project);
   const failed = [...history].reverse().find((entry) => entry.seat.intent.error !== null);
   const retired = previousOrchestratorSeatsIn(record, project);
@@ -93,6 +100,9 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | S
   if (retired.length || active) {
     try { tasks = loadTasks(); } catch { tasks = []; }
   }
+  const seatDeputies = active?.conversationId && deputies
+    ? deputiesForSeatIn(deputies, active.conversationId).map(seatDeputyView)
+    : [];
   const previous: PreviousSeatRow[] = retired.map((seat) => {
     const task = seatTaskOf(tasks, project, seat);
     return { ...seat, title: task?.title ?? null, taskId: task?.taskId ?? null, hasNotes: task?.hasNotes ?? false };
@@ -114,8 +124,21 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | S
     viewerMcpRegistered: viewerMcpRegistered(home, cwd),
     previous,
     currentTask: active ? seatTaskOf(tasks, project, active) : null,
-    all: allSeatConversationsIn(record),
+    all: withDeputyRefs(allSeatConversationsIn(record), deputyFile),
+    /* docs/design/ghost-seat.md §5: the seat's feed draws each deputy's block
+       from these, and the seat head and card point at the live one. */
+    ...(seatDeputies.length ? { deputies: seatDeputies } : {}),
   });
+}
+
+/** The seat record's conversations with every deputy's beside them (trimmed
+    ones included, from what their records left on file), so the
+    task bands and lists leave a seat's parallel self out with the seat. An
+    unreadable deputy file, or one with no deputy, adds nothing. */
+function withDeputyRefs(all: SeatConversations | null, file: { deputies: readonly OrchestratorDeputy[]; retired: readonly RetiredDeputyRef[] } | null): (SeatConversations & { deputies?: { conversationIds: string[]; paths: string[] } }) | null {
+  if (!all) return null;
+  const refs = file ? deputyConversationRefsIn(file.deputies, file.retired) : null;
+  return refs && (refs.conversationIds.length || refs.paths.length) ? { ...all, deputies: refs } : all;
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse<Record<string, unknown> | ApiError>> {

@@ -794,6 +794,10 @@ export type Pipeline = {
   stateDetail: string | null;
   srcPath: string | null;
   srcConversationId: string | null;
+  /** The seat's parallel self that created the lane on the seat's behalf
+      (docs/design/ghost-seat.md §4 rules 2-3): `srcConversationId` stays the
+      seat, which owns the lane, and this keeps the hand that made it. */
+  srcDeputyConversationId?: string | null;
   createdAt: string;
   closedAt: string | null;
   hiddenAt?: string | null;

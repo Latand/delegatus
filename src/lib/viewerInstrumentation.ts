@@ -104,6 +104,8 @@ interface CurrentReleaseControllerLoaders {
   /** Optional for the same reason. */
   loadSeatTick?: () => Promise<{ startSeatTick: () => boolean }>;
   /** Optional for the same reason. */
+  loadDeputySweep?: () => Promise<{ startDeputySweep: () => void }>;
+  /** Optional for the same reason. */
   loadTempSweep?: () => Promise<{ startTempSweep: () => void }>;
   /** Optional for the same reason. */
   loadWorktreeSweep?: () => Promise<{ startWorktreeSweep: () => void }>;
@@ -397,6 +399,7 @@ export async function startCurrentReleaseControllers(
     loadSeatTick: () => import("@/lib/monitor/seatTickController"),
     loadTempSweep: () => import("@/lib/tempSweep"),
     loadWorktreeSweep: () => import("@/lib/pipelines/worktreeSweep"),
+    loadDeputySweep: () => import("@/lib/orchestrator/deputySweep"),
     loadRoleMappingRetirements: () => import("@/lib/roles/retirements"),
     loadAsksClassifier: () => import("@/lib/asks/controller"),
   },
@@ -505,6 +508,16 @@ export async function startCurrentReleaseControllers(
     asks?.startAsksClassifier();
   } catch (error) {
     console.error("[asks you] start failed", error instanceof Error ? error.name : "unknown");
+  }
+  /* A seat's deputy that was running when the Viewer stopped still has to end
+     and tell its seat (docs/design/ghost-seat.md §5). The sweep stops itself
+     when nothing is live, so this is one small read on an install that never
+     asks in parallel. */
+  try {
+    const deputySweep = await loaders.loadDeputySweep?.();
+    deputySweep?.startDeputySweep();
+  } catch (error) {
+    console.error("[deputy] sweep start failed", error instanceof Error ? error.name : "unknown");
   }
   if (env.LLV_ACCOUNT_CONTROLLER_DISABLED === "1") return;
   const { startAccountMigrationController } = await loaders.loadAccountMigrationController();

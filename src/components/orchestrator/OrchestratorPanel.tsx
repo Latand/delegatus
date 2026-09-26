@@ -33,6 +33,7 @@ import { ProcessStatusControls } from "../TaskHeader";
 import { seatDraftReadiness, useOrchestratorDraftPrefill, useOrchestratorDraftReveal, usePendingSeatConfirm } from "./draftPrefill";
 import { IncumbentHeader } from "./IncumbentHeader";
 import { incumbentHostLive, type OrchestratorIncumbent } from "./incumbent";
+import { DeputyTwin, liveSeatDeputy, SeatDeputyChip } from "./SeatDeputyChip";
 import { OrchestratorConversation } from "./OrchestratorConversation";
 import { PreviousSeatsControl } from "./PreviousSeats";
 import { RunsOnRow } from "./RunsOnRow";
@@ -207,6 +208,7 @@ export function OrchestratorPanel({
   const { t } = useLocale();
   const ownRead = useOrchestratorSeat(seatRead ? null : project, projectCwd);
   const { status, failed, refresh } = seatRead ?? ownRead;
+  const liveDeputy = liveSeatDeputy(status?.deputies);
   const [formError, setFormError] = useState<string | null>(null);
   const [mandate, setMandateState] = useState(() => readDraftField(project, "mandate") || ORCHESTRATOR_SYSTEM_PROMPT);
   /* The conversation the open rotate draft is replacing. Non-null IS the rotate
@@ -529,13 +531,20 @@ export function OrchestratorPanel({
       ) : variant === "seat" ? (
         <header className="seat-head" data-seat-head={collapsed ? "strip" : "full"}>
           <RoleFrameMark role="orchestrator" />
-          <span className={`av ${seatEngine === "codex" ? "codex" : "claude"}`} aria-hidden>
-            <Bot />
+          {/* docs/design/ghost-seat.md §6.5: while the seat's parallel self
+              runs, the avatar gains its outline twin and a chip beside the
+              state points at the block in the feed. */}
+          <span className="relative inline-flex shrink-0">
+            <span className={`av ${seatEngine === "codex" ? "codex" : "claude"}`} aria-hidden>
+              <Bot />
+            </span>
+            {liveDeputy ? <DeputyTwin engine={seatEngine ?? "claude"} avatarPx={26} /> : null}
           </span>
           <span className="seat-title">
             <strong>{t("orchPanel.title")}</strong>
             {collapsed ? null : <span className="proj" title={projectName}>{projectName}</span>}
             <StateBadge state={state} file={file} word />
+            {liveDeputy && !collapsed ? <SeatDeputyChip deputy={liveDeputy} /> : null}
           </span>
           {state.kind === "loading" || failed ? null : (
             <PreviousSeatsControl status={status} tasks={seatTasks} compact={collapsed || placement === "side"} currentEngine={seatEngine} />
@@ -604,15 +613,19 @@ export function OrchestratorPanel({
           </button>
         </header>
       ) : (
-      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
+      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3" data-seat-head="dock">
         <RoleFrameMark role="orchestrator" />
-        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-control bg-accent-soft text-accent" aria-hidden>
-          <Bot className="h-4 w-4" />
+        <span className="relative inline-flex shrink-0">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-control bg-accent-soft text-accent" aria-hidden>
+            <Bot className="h-4 w-4" />
+          </span>
+          {liveDeputy ? <DeputyTwin engine={seatEngine ?? "claude"} avatarPx={28} /> : null}
         </span>
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="truncate text-body font-semibold text-primary">{t("orchPanel.title")}</span>
           <span className="truncate text-caption text-muted" title={projectName}>{projectName}</span>
         </span>
+        {liveDeputy ? <SeatDeputyChip deputy={liveDeputy} /> : null}
         <StateBadge state={state} file={file} />
         {reportsToggle}
         <button
