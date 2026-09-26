@@ -20,8 +20,24 @@ seat; the operator's words were in Ukrainian:
 > on the board (what it did, with links). While it runs it is shown beautifully,
 > clearly as "the orchestrator's parallel self" rather than a separate agent.
 
-Every `file:line` below is at main `b7708903d`. Nothing but this document was
-written by this stage: no code, no test, no state, no issue.
+Operator decision on the first draft, 2026-09-26, pinned to the build lane and
+paraphrased in English by the seat (the operator's words were in Ukrainian):
+
+> The ghost's work appears in the seat's own conversation feed, live: its
+> messages and its tool calls, like any turn, drawn "ghostly" (lighter, dashed,
+> clearly the orchestrator's parallel self), not in a separate transcript
+> sheet. The seat chat is becoming a team chat: several people (with the
+> signatures from the sign-in work) and possibly several orchestrators or
+> ghosts. Reply blocks from different participants can fill at the same time
+> and interleave; everything stays in one conversation. Each participant's
+> turn is its own block anchored at the message it answers, blocks stream in
+> parallel without scrambling each other, and a finished ghost block collapses
+> to a one-line result with links, expandable. Desktop and phone.
+
+Every `file:line` below is at main `b7708903d`, except the sign-in references,
+which are at the head of PR #2243 (`docs/design/sign-in-and-team.md`, in
+progress). Nothing but this document was written by this stage: no code, no
+test, no state, no issue.
 
 ## Decision in one paragraph
 
@@ -39,7 +55,8 @@ fold that already labels a caller "manager": the ghost's reports, task writes
 and lanes carry the seat's identity, the seat tick never wakes it, a rotation
 kills it, and a queued note to the seat when the ghost ends is how the main self
 learns what happened. The first slice is the explicit "ask in parallel" control
-for Claude seats, with the desktop chip and trace and the phone's in-feed card;
+for Claude seats, with the ghost's turn shown live inside the seat's own feed as
+a block of its own, anchored at the ask, and collapsing to one line when it ends;
 automatic spawning on every busy ask, Codex seats and several ghosts at once are
 deferred with reasons.
 
@@ -199,9 +216,19 @@ list beside `seats`, `revocations` and `history`
 
 ```
 { project, seatConversationId, seatEpoch, deputyConversationId,
-  askId, startedAt, expiresAt, endedAt, outcome: null | "done" | "timeout" | "host-died" | "seat-rotated",
-  touched: { taskIds: [], pipelineIds: [], conversationIds: [] }, note: null }
+  askId, ask: { text, images: [], sender: null | { memberId, name, color, initials } },
+  artifactPath, forkRecordCount,
+  startedAt, expiresAt, endedAt, outcome: null | "done" | "timeout" | "host-died" | "seat-rotated",
+  touched: { taskIds: [], pipelineIds: [], conversationIds: [] },
+  result: null | { line, finalText }, note: null }
 ```
+
+The record is also what the seat's feed draws the ghost's block from (section
+6): `ask` is the block's head (the operator's message, with the sender the
+team recorded for it, PR #2243 §6.7), `artifactPath` and `forkRecordCount`
+tell the feed which transcript to read and where the ghost's own rows begin
+(everything before that count is the seat's copied history), and `result` is
+the one line the finished block collapses to, with `touched` as its links.
 
 Rules, in the order the authority module already uses:
 
@@ -273,7 +300,11 @@ The main seat is mid-turn while the ghost works. Two mechanisms, no lock:
   offered only while the seat's turn is genuinely progressing
   (`seatTurnProgressing`, `src/lib/monitor/seatTick.ts:342-353`, the same
   verdict `agent_activity` gives). The plain send keeps the parallel-intake
-  behaviour (queue when that ships, interrupt today).
+  behaviour (queue when that ships, interrupt today). The ask never enters the
+  seat's transcript: the seat's feed shows it as the head of the ghost's
+  block, read from the deputy record (section 6), so the operator sees their
+  message where they sent it while the seat's own turn keeps streaming under
+  it.
 - *Automatic* (deferred): a per-project setting "side asks run in parallel
   while the seat is busy". Deferred because a second writer on the board
   should start from a deliberate gesture until the trace has proven itself.
@@ -287,12 +318,16 @@ designation is (`seats.ts:41-49`):
 1. Read the active seat; refuse with `seat_not_busy` when its turn is not
    progressing (the plain send is right then), with `deputy_limit` when a
    deputy is already live for this seat (slice 1: one at a time).
-2. Write the deputy record as pending (`askId`, epoch, expiry).
+2. Write the deputy record as pending (`askId`, the ask with its sender,
+   epoch, expiry). From this moment the seat's feed draws the block's head;
+   the composer's own pending row retires on the route's acknowledgement,
+   exactly as a delivered receipt retires it today.
 3. Fork: `forkClaudeHistory` from the seat's newest generation into the seat's
    project directory under a new session id; record the path as the ghost
    conversation's generation with parent = seat, role `ghost`, and membership
    in the **seat's own task** (the seat-only task of #1841), so no placeholder
-   card is minted.
+   card is minted. Write `artifactPath` and `forkRecordCount` (the source
+   line count the copy reports) into the record.
 4. Launch the structured host with `resume`, the seat's account, model,
    effort and MCP grant set (cache prefix), `allowSubagents: false`.
 5. Deliver one message: the side ask (with images) followed by the parallel
@@ -301,10 +336,12 @@ designation is (`seats.ts:41-49`):
    and the trace id.
 
 **End.** On the ghost's `end_turn`: release the host, end the record with
-`done`, compose the note, queue it to the seat, and update the trace. The
-transcript stays on disk under the seat's project directory and remains
-readable by id through `conversation_messages` and searchable through
-`search_transcripts`; that is the audit trail.
+`done`, compose the note, queue it to the seat, and write `result` (the one
+line the block collapses to, built from `touched` and the final message's
+first line) so the feed collapses the block. The transcript stays on disk
+under the seat's project directory and remains readable by id through
+`conversation_messages` and searchable through `search_transcripts`; that is
+the audit trail.
 
 **Hidden from lists, still auditable.** The ghost is added to `SeatRefs`
 (`src/lib/tasks/groupHide.ts:37-47`) as a `deputies` set, and
@@ -319,65 +356,226 @@ as it does for archived migration predecessors
 (`src/lib/scanner/discover.ts:482-490`), so a week of ghosts cannot churn
 live conversations out of the feed.
 
+**Reaching the feed.** The seat read model the panel already polls
+(`get_orchestrator` and the panel's seat state) gains `deputies`: the live
+record and the last ten ended ones for the active seat. `OrchestratorConversation`
+(`src/components/orchestrator/OrchestratorConversation.tsx:50`) and the phone's
+`BranchPane` (`src/components/BranchPane.tsx:474`) pass them to `LogFeed`; a
+feed with no deputies renders byte-identically to today.
+
 **Cleanup.** Hosts are released at end, expiry, or sweep; the record keeps
 `outcome`. Transcripts are kept 30 days, then removed by the existing
-maintenance sweep (a new rule keyed on `role: ghost` and `endedAt`).
+maintenance sweep (a new rule keyed on `role: ghost` and `endedAt`). A block
+whose transcript is gone still draws its head and its collapsed line from the
+record; only "expand" is unavailable, and says so.
 
-## 6. UI: the orchestrator's parallel self
+## 6. UI: the orchestrator's parallel self, in the seat's own feed
 
 Tokens and sizes from `docs/design/viewer-design-system.md` (`--text-label`
-11 px for chips, 600 weight for chip text, surface tokens from
-`src/styles/tokens.css`); the seat's own mark and engine tint from
-`OrchestratorPanel`'s `seat-head`. One animated element per view, 150 to
-300 ms ease-out on enter and shorter on exit, static under
-`prefers-reduced-motion`; nothing pulses forever.
+11 px for chips and captions, 600 weight for chip text, roles from §1.5,
+motion from §1.6: `--motion-base` 200 ms with `--ease-standard`, static under
+`prefers-reduced-motion`, at most one attention animation on screen). The
+seat's conversation is `LogFeed` inside `OrchestratorConversation` on the
+desktop and inside `BranchPane` on the phone (`MobileFocusView.tsx:613`);
+both mount the same feed, so everything below is one component set drawn in
+one list, and the phone differs only where §3.4 of the design system already
+makes it differ (no avatar column, 12 px gutter, full-width rows).
 
-### Desktop: the seat head
+### 6.1 The feed as a team chat: participants and blocks
 
-The seat head (`src/components/orchestrator/OrchestratorPanel.tsx:530-605`) is
-the mark, the avatar `av`, «Оркестратор», the project, the `StateBadge`,
-Previous seats, and the incumbent row. The ghost lives **inside that head**, and
-the head is its only home:
+Today the feed is one keyed list of rows in transcript record order
+(`LogFeed.tsx:1136-1262`), followed by three tail sections in a fixed order:
+launch chips, the operator's pending messages, then the seat's live turn
+(`tailOrder.ts`). Every assistant row is implicitly the seat's, every human
+row is the operator's, and the sign-in work adds a sender line above human
+rows that names the member who sent it (PR #2243, `SenderLine.tsx`: avatar dot
+in the member's colour plus the name, 11 px, above the bubble, aligned with
+it).
 
-- **While it runs.** A second avatar of the same engine tint, 70 % size,
-  overlapping the seat's avatar at its lower right by 60 %, with a 1.5 px
-  dashed ring where the seat's is solid: the same self, drawn lighter. Beside the
-  state badge a chip in `accent-soft`: a small live dot, then «паралельно ·
-  <ask, 40 chars>». Hover names the ask in full; click opens the ghost's
-  transcript in the conversation sheet (read-only composer: the ghost takes no
-  second message). The seat's own composer and badge are untouched, so the
-  operator can keep talking to the main self.
-- **When it ends.** The chip resolves in place into a trace line under the
-  head, one row, 11 px: a check mark, «Паралельно 12:41», then the outcome as
-  the note said it, with links rendered as the same PR/issue/task chips the
-  cards use («створив задачу “…”», «запустив лейн #2244»). The line stays
-  until the seat's next report, or until dismissed; its × is a 44 px target.
-  Timeout and host death use the warning tone and say so.
-- **The record.** The Previous seats popover (`PreviousSeats.tsx`, #1841)
-  gets a second section, «Паралельні запити», listing the last ten traces
-  with their links and a «Відкрити транскрипт» row each. That is the place an
-  operator reads what ghosts did last week; nothing else lists them.
+The team-chat model adds one concept, the **block**, and one rule for how
+blocks sit in the list:
 
-### Phone: the seat card and the seat conversation
+- A **participant** is whoever produced a row: a person (a team member, or
+  the anonymous operator on a solo install), the seat, or a ghost of the seat.
+  Every row already names its participant somewhere (the sender line, the
+  engine caption); the block makes the assistant side explicit too.
+- A **block** is one participant's answer to one message: the message it
+  answers (its *head*) and the rows that answer it, in that participant's
+  transcript order. The seat's own answers are blocks whose head is the
+  operator's row and whose body is what the feed renders today; nothing
+  changes for them in this slice, they stay the flat list, and a "seat block"
+  exists only in the model. A ghost's answer is a block that is *drawn*: its
+  head is the ask (from the deputy record, section 4), its body is the
+  ghost's rows.
+- **Ordering.** A block is placed once, at the position of its head, and
+  never moves: it goes after the last seat row whose instant (`transcriptInstant`,
+  `src/components/feed/transcriptOrder.ts`) is at or before the block's
+  `startedAt`, and after any undated rows immediately following that row.
+  Everything the seat writes later is dated later and lands below the block.
+  Inside a block, rows keep their own transcript's record order and are never
+  re-sorted by timestamp against the seat's rows. Two blocks started at
+  different instants sit in start order; slice 1 has at most one ghost block
+  live, but the placement rule already handles several.
+- **Growth.** A block grows only at its own end. The seat's live turn stays
+  the last tail section, so with a ghost live the reader sees the ghost's
+  block filling in the middle of the list and the seat's answer filling at
+  the bottom, each in its own place. The viewport keeps the row the reader is
+  on through the existing anchoring (`data-feed-key` on every row,
+  `LogFeed.tsx:1529-1553`, and the residual compensation in
+  `PrependViewport`); rows inside a block carry the same attribute, keyed by
+  the ghost's conversation id, so a block growing above the reader's row
+  compensates like a "show earlier" reveal and a block growing below it moves
+  nothing. The magnet (following the tail) keeps following the seat's tail;
+  the ghost's block is never the tail.
+- **Live rows.** A ghost's in-flight rows come from the runtime store the
+  feed already reads for the seat, keyed by the ghost's conversation id
+  (`useRuntimeSessionForConversation`, `src/hooks/useRuntime.ts:201`), and
+  are rendered by the same `LiveTurnRows` with the same eight-row bound and
+  the same claim handoff to canonical rows (`LIVE_TURN_VISIBLE_ROWS`,
+  `LiveTurnRows.tsx:80`). The canonical rows come from a second `useLogTail`
+  on the ghost's `artifactPath`, with everything before `forkRecordCount`
+  dropped (that prefix is the seat's own history, already on screen). One
+  block, two sources, the handoff the feed already has.
 
-The phone's seat card (`src/components/mobile/MobileSeatCard.tsx:55-125`) is
-the mark, «Оркестратор» with a state badge, a now line and the context meter.
-While a ghost runs, the mark gains the same offset lighter twin and the now
-line reads «працює · і паралельно: <ask>». A tap still opens the seat
-conversation, where the ghost appears **inside the feed** as a Viewer-authored
-card at the point of the ask (the mandate card's family,
-`docs/design/delegatus-brand.md` §2 row 6): «Паралельний двійник узяв цей
-запит» with the live dot, then, on completion, the outcome and its link chips.
-The operator sees the result where they asked, with no second screen and no
-row in any list. The trace chips are 44 px tall; the card is not swipeable.
+This is the whole model the requirement's "team chat" needs, and it is small
+on purpose: no second list, no per-participant column, no re-sorting by clock.
+Several people already fit (their rows are heads of seat blocks, each with its
+sender line); several orchestrators or ghosts fit as more drawn blocks, each
+with its participant caption; the deferrals in section 9 say what is not
+built for them yet.
 
-### Composer
+### 6.2 The ghost block, live
 
-"Ask in parallel" is a secondary action beside Send in the seat composer's
-action menu (where steer already lives, `src/components/TmuxComposer.tsx:4139`),
-enabled only while the seat is busy, with a one-line hint the first time. The
-sent bubble carries a «паралельно» chip that becomes the link to the trace.
-Keyboard: `Ctrl/⌘+Shift+Enter`.
+```
+   ┌ (seat rows continue above)
+   │  Olena ● 12:39                                             ← sender line (team only)
+   │                        ┌──────────────────────────────────────┐
+   │                        │ Add a task: reviewer for #2244 …      │  ← the ask, ordinary user bubble
+   │                        └──────────────────────────────────────┘
+   ┆ ◌ Оркестратор · паралельне я · 12:39   ● працює       ▾      ← block caption
+   ┆   ⚙ MCP · viewer  create_task «Reviewer for #2244» · task ✓   ← live tool row, unchanged shape
+   ┆   ⚙ MCP · viewer  list_pipelines · ok
+   ┆   Створив задачу і прив'язав до лейна #2244; …▍                ← streaming prose
+   │ (seat's own rows continue below; seat's live turn at the tail)
+```
+
+- **Head.** The ask is the ordinary human message row (`UserMessageRow`,
+  `--color-user` fill, `--radius-surface`, sender line in a team), drawn from
+  `record.ask`. It is the only part of the block that is not "ghostly": the
+  person really said it.
+- **Caption.** One 11 px line, `text-muted`, that names the participant the
+  way the phone's prose caption does (`FeedItem.tsx:158-162`): the seat's
+  engine mark drawn as an **outline** (the mark in `text-secondary` inside a
+  1.5 px dashed ring, `border-strong`, transparent fill) where the seat's own
+  rows carry the filled circle; then «Оркестратор · паралельне я» / "Orchestrator
+  · parallel self", the start time, and the state: a static dot plus «працює»
+  while live (green `success`; the dot does not pulse, §1.6), or the outcome
+  when ended. A chevron at the right end is the expand/collapse control,
+  44 px tall on coarse pointers. On the desktop the caption sits in the
+  `ml-9` chrome column of §3.4 so it reads as one line of quiet activity
+  beside the seat's own.
+- **Edge.** The body hangs from a 1.5 px **dashed** left edge in
+  `border-strong` running from the caption to the block's last row, in the
+  avatar column on the desktop (the seat's rows have no edge there) and at the
+  gutter on the phone. That edge is what makes the block one thing and makes
+  it read as the seat's parallel self: the same mark, the same grammar of
+  rows, drawn in outline.
+- **Rows.** Tool rows and MCP rows are the feed's own `ToolLine` and
+  `LiveMcpRow`, unchanged, with their entity chips (task, lane, conversation)
+  the same as everywhere. Prose is the feed's prose row with its avatar
+  replaced by the outline mark and its text in `text-secondary` where the
+  seat's is `text-primary`. Nothing is dimmed by opacity: `text-secondary` clears the
+  4.5:1 floor on every surface (§1.5), and a whole block at 60 % opacity
+  would not. "Lighter" is the outline mark, the secondary ink and the dashed
+  edge; "dashed" is the edge and the ring; "clearly the parallel self" is the
+  caption.
+- **Bound.** A live block shows at most `LIVE_TURN_VISIBLE_ROWS` in-flight
+  rows plus the streaming prose; older steps fold into the feed's existing
+  «N попередніх кроків» line. The canonical rows replace them as the ghost's
+  transcript flushes, as they do for the seat.
+- **No composer.** The ghost takes no second message. The block has no input;
+  the seat's composer stays the one composer, and a message typed while a
+  ghost runs goes to the seat as today (or, with «Паралельно» again, to a
+  new ghost once the first has ended, since slice 1 allows one at a time).
+
+### 6.3 The ghost block, finished
+
+When the record ends, the block collapses (200 ms, `--motion-base`) to its
+head plus one line:
+
+```
+   │                        ┌──────────────────────────────────────┐
+   │                        │ Add a task: reviewer for #2244 …      │
+   │                        └──────────────────────────────────────┘
+   ┆ ◌ Паралельно · 12:41 · ✓ створив задачу «Reviewer for #2244» [T-318] · прив'язав до [#2244]   ▸
+```
+
+- The line is `record.result.line`: the outcome as the note to the seat says
+  it, in the UI language, with `touched` rendered as the same entity chips the
+  MCP rows use (`describeMcpCall` links, `src/lib/mcp/presentation.ts`), so a
+  task, a lane or a conversation the ghost touched is one click away. When the
+  ghost only answered, the line is the first line of its final message,
+  truncated at 120 characters, and expanding shows the whole answer.
+- The chevron expands the block back to its full body (the canonical rows
+  from the ghost's transcript); the state is per block and per mount, and a
+  block the operator expanded by hand does not re-collapse. A block that
+  ends while the pointer or focus is inside it waits until they leave before
+  collapsing, so the answer is never pulled from under the reader.
+- `timeout`, `host-died` and `seat-rotated` draw the line in the `warning`
+  role with the outcome named («не встиг за 15 хв», «хост зупинився», «місце
+  змінилось»), and the expanded body shows what the ghost had done. A record
+  with no transcript on disk expands to one quiet line saying the transcript
+  was removed.
+- The collapsed line stays in the feed for as long as the head does: it is
+  the requirement's "small trace", kept where the ask was made. Nothing else
+  lists it.
+
+### 6.4 Desktop and phone
+
+Both render the same rows; the differences are the ones §3.4 already fixes.
+
+| | Desktop (1440, seat dock and conversation pane) | Phone (390) |
+| --- | --- | --- |
+| Head | user bubble at `BUBBLE_MEASURE`, sender line above at the same width | bubble at 86 % width, sender line 14 px avatar |
+| Caption | in the `ml-9` chrome column; mark 16 px in a 20 px dashed ring | full width from the 12 px gutter; mark 16 px, ring 20 px; the line is 44 px tall as the tap target |
+| Edge | 1.5 px dashed, in the avatar column, from caption to last row | 1.5 px dashed at the gutter, rows indented 12 px past it |
+| Rows | `ToolLine` and `LiveMcpRow` as today; prose at `READING_MEASURE` | same rows, full width, prose at 15 px as the phone's own prose |
+| Collapsed line | one line, chips inline, chevron at the right | wraps to two lines when chips do not fit, chevron stays on the first line; the whole line is the target |
+| Collapse motion | 200 ms height, static under reduced motion | same |
+
+Measurements the rendered evidence has to show (section 7): at 390 px the
+caption's title keeps a `basis-[10rem]` so two chips wrap under it and the
+title keeps its width (the `LiveMcpRow` rule, `LiveTurnRows.tsx:270-275`); the
+collapsed line's expand target is 44 px on the phone; no row of the block
+overlaps the seat's rows above or below while both stream; the dashed edge
+spans exactly the block.
+
+### 6.5 The seat head and the seat card
+
+The feed is the ghost's home, so the head and the card carry only a pointer
+to it. Desktop (`OrchestratorPanel.tsx:530-605`): while a ghost runs, the
+seat's avatar gains the outline twin at its lower right (70 % size, 60 %
+overlap, the same dashed ring as the caption's mark), and a chip in
+`accent-soft` beside the state badge reads «паралельно · <ask, 40 chars>» with
+a static dot; clicking it scrolls the feed to the block. When the ghost ends,
+the twin and the chip go; the block's collapsed line is the trace. Phone
+(`MobileSeatCard.tsx:55-125`): the mark gains the same twin and the now line
+reads «працює · і паралельно: <ask>»; a tap opens the seat conversation, where
+the block is. No second screen, no row in any list, no separate transcript
+sheet.
+
+### 6.6 Composer
+
+"Ask in parallel" («Запитати паралельно») is a secondary action beside Send
+in the seat composer's action menu, where steer already lives
+(`TmuxComposer.tsx:4139`), enabled only while the seat is busy, with a one-line
+hint the first time. Keyboard: `Ctrl/⌘+Shift+Enter`. The message leaves the
+composer as any message does; its pending row retires when the route
+acknowledges the record, and the block's head takes its place at the same
+list position (the pending row was in the outbox tail section; the head is
+placed by the rule in 6.1, which for a message sent "now" is the same spot).
+In a team the head carries the member's sender line because the record
+stores the sender the route resolved (PR #2243 stamps both send routes).
 
 ## 7. First slice
 
@@ -392,12 +590,20 @@ Scope, in one lane:
 3. End handling: host release, record, queued note to the seat, trace.
 4. `SeatRefs.deputies`, `isSeatConversation`, scanner demotion of ghost
    transcripts, membership in the seat task.
-5. Desktop head chip and trace line; phone seat-card twin and in-feed card;
-   composer action.
+5. The ghost block in `LogFeed`: `deputies` in the seat read model and the
+   prop path through `OrchestratorConversation` and `BranchPane`; a pure
+   placement helper (block position from `startedAt` against the seat's
+   rows, beside `tailOrder.ts`); the block component (head from the record,
+   caption, dashed edge, live rows through a second runtime-session read and
+   `LiveTurnRows`, canonical rows through a second `useLogTail` skipping
+   `forkRecordCount`, the collapsed line with entity chips, expand and
+   collapse); the outline engine mark. Desktop head twin and chip; phone
+   seat-card twin and now line; composer action.
 
 Not in slice 1: automatic trigger, Codex seats, several ghosts at once, the
 Previous-seats trace list, the primed-fresh fallback, transcript retention
-sweep (ghosts are few; add it with slice 2).
+sweep (ghosts are few; add it with slice 2), and drawn blocks for the seat's
+own answers or a second orchestrator (section 9).
 
 Tests, by path, under isolated state:
 
@@ -422,13 +628,32 @@ Tests, by path, under isolated state:
   final message reaches the next wake as a child item.
 - `src/lib/tasks/groupHide.test.ts`: a task whose live assignments are the seat
   and its deputy is still seat-only.
-- `OrchestratorPanel` and `MobileSeatCard` DOM tests for chip, trace, twin
-  mark and the in-feed card; rendered evidence as one `describe` block in
+- Block placement helper tests (pure, beside `tailOrder.test.ts`): a block
+  lands after the last seat row dated at or before `startedAt` and after the
+  undated rows that follow it; seat rows dated later stay below it; the
+  position is stable when later rows arrive; two blocks sit in start order;
+  an empty feed places the block first; a ghost whose transcript is missing
+  still yields a head and a collapsed line.
+- `LogFeed` DOM tests (the `conversationWindow` harness): with a live deputy
+  the ask row, the caption and the ghost's live rows render inside one block
+  keyed by the ghost's id while the seat's delta stays the last tail section;
+  a canonical ghost row claims its live twin; rows before `forkRecordCount`
+  never render; the block collapses on `endedAt` to `result.line` with one
+  chip per `touched` id, and not while the pointer is inside it; expand
+  restores the rows; `timeout` draws the warning tone; a feed with no
+  deputies renders the same DOM as before.
+- `OrchestratorPanel` and `MobileSeatCard` DOM tests for the twin mark, the
+  chip that scrolls to the block, and the now line.
+- Rendered evidence as one `describe` block in
   `src/components/kanban/kanbanBoard.browser.test.tsx` and one case in
-  `src/components/mobile/issue1671Evidence.browser.test.tsx`, at 1280 px and
-  390 px, measuring that the chip does not collapse the seat title
-  (`basis-[10rem]` rule from the flex-1 lesson) and that the trace line's ×
-  is 44 px.
+  `src/components/mobile/issue1671Evidence.browser.test.tsx`, at 1440 px and
+  390 px, in uk and en: a ghost running beside a main-seat turn, two
+  interleaved blocks, and a finished collapsed block. Measured: the caption's
+  title does not collapse beside two chips (`basis-[10rem]`); the collapsed
+  line's target is 44 px on the phone; no ink of the block overlaps a seat
+  row (union of text rects, clipped by overflow ancestors); the dashed edge
+  spans the block's first to last row. The PNGs go under
+  `~/Pictures/delegatus-review/ghost-seat/`, never into the repository.
 - `scripts/privacy-publication-gate.ts --base <merge-base>` before push.
 
 Rollback: the deputy branch in attribution is behind the record's existence;
@@ -447,6 +672,8 @@ with no `deputies` entries every path is byte-identical to today.
 | Seat rotates mid-ghost | Epoch check kills the deputy's authority at once; its remaining calls are refused as an unattributed agent; the trace says `seat-rotated`. |
 | Note never lands | The child ledger carries the final message to the next wake (#1881). |
 | Wrong project or wrong account | The ghost inherits the seat's account and project from the seat record; nothing is chosen by the caller. |
+| Feed cost of the block | One more tail subscription and one more runtime-session read for the seat's feed while a deputy record is on screen; both are the feed's existing primitives, bounded by their caps (`TAIL_CAP`, eight live rows). With no deputies, no extra work. |
+| Block scrambles the reader | Placement is computed once and pinned; rows carry `data-feed-key`; the block never becomes the tail. A growing block above the reader compensates like a reveal. |
 
 ## 9. Deferred, not currently justified
 
@@ -469,6 +696,19 @@ with no `deputies` entries every path is byte-identical to today.
   (`defaults.ts:58`); this design is specific to the seat.
 - **A deputy that outlives its ask** (a standing second seat). Rejected by the
   requirement ("then disappears").
+- **Drawn blocks for the seat's own answers.** The model in 6.1 treats them
+  as blocks, but drawing a caption and an edge on every seat answer adds chrome
+  to the most-read rows in the product for no decision the operator makes
+  today. Draw them when a second orchestrator shares the chat and the reader
+  needs to tell two seats apart.
+- **Several orchestrators in one conversation.** The block model and the
+  placement rule already fit them (a participant key per seat, a caption per
+  block); what is missing is the routing (which seat a message is for) and the
+  read model (a conversation with more than one seat). That is a design of its
+  own once the team work has landed.
+- **A separate transcript sheet for the ghost.** The first draft opened the
+  ghost's transcript in the conversation sheet; the operator's decision keeps
+  everything in the one feed, and the expanded block shows the same rows.
 - **ADR.** The deputy branch in attribution is the one hard-to-reverse
   decision here (a non-seat conversation speaking as the seat); record it as
   an ADR in the implementing lane, with sections 4 rules 1 to 4 as its body.
@@ -482,8 +722,20 @@ with deploy and rotate as the two named exceptions. "Receives only that side
 message, plus a note about its main self": section 5 step 5. "Does just that
 one job quickly, then disappears": one turn, host released on `end_turn`,
 15 min ceiling. "Nothing in the conversation lists; at most a small trace near
-the orchestrator": section 5's seat-ref exclusion and section 6's trace line
-and in-feed card. "Shown beautifully, clearly as the orchestrator's parallel
-self": the lighter twin of the seat's own mark inside the seat head, with no
-card of its own. Nothing here adds a second seat, a second queue, or a new
-process kind beyond the structured host that already exists.
+the orchestrator": section 5's seat-ref exclusion and the collapsed line in
+6.3, kept where the ask was made. "Shown beautifully, clearly as the
+orchestrator's parallel self": 6.2, the seat's own mark in outline, the dashed
+edge and the caption, in the seat's own feed.
+
+The operator's decision on the draft: "in the seat's own conversation feed,
+live, its messages and its tool calls": 6.1's live rows through the runtime
+store and `LiveTurnRows`, 6.2's rows. "Lighter, dashed, clearly the parallel
+self, not a separate sheet": 6.2 and the deferral in section 9. "Several
+people and possibly several orchestrators, one conversation": 6.1's
+participants and blocks, with the sender line from PR #2243 on every head.
+"Each participant's turn its own block anchored at the message it answers,
+streaming in parallel without scrambling": the placement and growth rules in
+6.1. "A finished ghost block collapses to a one-line result with links,
+expandable": 6.3. "Desktop and phone": 6.4. Nothing here adds a second seat,
+a second queue, a second list, or a new process kind beyond the structured
+host that already exists.
