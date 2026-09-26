@@ -26,7 +26,7 @@ Object.assign(globalThis, {
 });
 
 const previousFetch = globalThis.fetch;
-const calls: Array<{ url: string; method: string }> = [];
+const calls: Array<{ url: string; method: string; body?: string }> = [];
 let summary = { count: 3, newCount: 2, newestAt: 3 };
 let opened = false;
 
@@ -43,17 +43,19 @@ const PAGE: AlbumPage = {
   newCount: 2,
 };
 let albumPage: AlbumPage = PAGE;
+/* Answers for successive album reads, before `albumPage` takes over. */
+let albumAnswers: AlbumPage[] = [];
 
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input);
   const method = init?.method ?? "GET";
-  calls.push({ url, method });
+  calls.push({ url, method, ...(typeof init?.body === "string" ? { body: init.body } : {}) });
   if (url.startsWith("/api/task-album?")) return Response.json({ tasks: { "task-1": opened ? { ...summary, newCount: 0 } : summary } });
   if (url.startsWith("/api/tasks/task-1/album") && method === "POST") {
     opened = true;
     return Response.json({ ok: true, lastOpenedAt: 4_000 });
   }
-  if (url.startsWith("/api/tasks/task-1/album")) return Response.json(albumPage);
+  if (url.startsWith("/api/tasks/task-1/album")) return Response.json(albumAnswers.shift() ?? albumPage);
   return new Response("{}", { status: 404 });
 }) as unknown as typeof fetch;
 
@@ -72,6 +74,7 @@ afterEach(() => {
   calls.length = 0;
   opened = false;
   albumPage = PAGE;
+  albumAnswers = [];
   summary = { count: 3, newCount: 2, newestAt: 3 };
 });
 afterAll(() => {
@@ -133,8 +136,10 @@ test("opening the album groups newest first, marks the new pictures and clears t
   expect(album.querySelector("[data-album-item='newest'] > button")!.className).toContain("border-accent");
   expect(album.querySelector("[data-album-item='oldest'] > button")!.className).not.toContain("border-accent");
 
-  /* The album told the Viewer it was opened, and the card's dot is gone. */
-  expect(calls.some((call) => call.url === "/api/tasks/task-1/album" && call.method === "POST")).toBe(true);
+  /* The album told the Viewer it was seen up to its newest picture, and the
+     card's dot is gone. */
+  const posts = calls.filter((call) => call.url === "/api/tasks/task-1/album" && call.method === "POST");
+  expect(posts.map((call) => JSON.parse(call.body!))).toEqual([{ through: 3_000 }]);
   const button = host.querySelector("[data-album-button='task-1']")!;
   expect(button.getAttribute("data-album-fresh")).toBe("0");
   expect(button.querySelector(".album-dot")).toBeNull();
@@ -166,7 +171,8 @@ test("a picture opens in the full-screen viewer, and its arrows follow the album
 });
 
 test("the header's «N new» brings the first new picture into view and focus", async () => {
-  albumPage = { ...PAGE, items: [item("seen", 3_000, false, STAGE), item("fresh", 2_000, true, OTHER)], newCount: 1 };
+  /* The first new picture is not the first tile drawn. */
+  albumPage = { ...PAGE, items: [item("seen", 1_000, false, STAGE), item("fresh", 2_000, true, OTHER)], newCount: 1 };
   const host = await mountButton();
   await act(async () => host.querySelector<HTMLButtonElement>("[data-album-button='task-1']")!.click());
   await settle(60);
@@ -197,4 +203,53 @@ test("a stage's attempt is spelled out, never a bare number beside the group", a
   await act(async () => document.querySelector<HTMLButtonElement>("[data-album-item='again'] > button")!.click());
   expect(document.querySelector("[data-lightbox-caption]")!.textContent).toContain("again.png");
   expect(document.querySelector("[data-lightbox-detail]")!.textContent).toContain("Implement · attempt 2 · ");
+});
+
+const albumReads = () => calls.filter((call) => call.url.startsWith("/api/tasks/task-1/album?"));
+const albumPosts = () => calls.filter((call) => call.url === "/api/tasks/task-1/album" && call.method === "POST");
+const freshTiles = () => [...document.querySelectorAll("[data-album-item-new='1']")].map((tile) => tile.getAttribute("data-album-item"));
+
+test("the marks survive the polls of an album still indexing, and the mark moves only once it is done", async () => {
+  /* The Viewer indexes from the oldest bytes, so the first answer holds the
+     oldest pictures; its mark already reads 4 000 on the second poll, the way
+     it would once any tab had marked the album. */
+  albumAnswers = [
+    { ...PAGE, items: [item("middle", 2_000, true, OTHER)], total: 1, indexing: true, lastOpenedAt: 1_500, newCount: 1 },
+    { ...PAGE, items: [item("newest", 3_000, false, STAGE), item("middle", 2_000, false, OTHER)], total: 2, indexing: true, lastOpenedAt: 4_000, newCount: 0 },
+    { ...PAGE, items: [item("newest", 3_000, false, STAGE), item("middle", 2_000, false, OTHER), item("oldest", 1_000, false, STAGE)], indexing: false, lastOpenedAt: 4_000, newCount: 2 },
+  ];
+  const host = await mountButton();
+  await act(async () => host.querySelector<HTMLButtonElement>("[data-album-button='task-1']")!.click());
+  await settle(60);
+  expect(freshTiles()).toEqual(["middle"]);
+  /* Nothing is marked seen while the Viewer is still reading. */
+  expect(albumPosts()).toEqual([]);
+
+  await settle(1_600);
+  expect(freshTiles()).toEqual(["newest", "middle"]);
+  expect(albumPosts()).toEqual([]);
+  /* Every later read asks against the mark the album opened with. */
+  expect(new URL(albumReads().at(-1)!.url, "http://localhost").searchParams.get("since")).toBe("1500");
+
+  await settle(1_600);
+  expect(freshTiles()).toEqual(["newest", "middle"]);
+  expect(document.querySelector("[data-album-new-count]")!.textContent).toContain("2 new");
+  expect(albumPosts().map((call) => JSON.parse(call.body!))).toEqual([{ through: 3_000 }]);
+});
+
+test("a page loaded with 'load more' keeps its marks after the album was marked seen", async () => {
+  albumAnswers = [
+    { ...PAGE, items: [item("newest", 3_000, true, STAGE)], total: 3, nextCursor: "1", lastOpenedAt: 1_500, newCount: 2 },
+    { ...PAGE, items: [item("middle", 2_000, false, OTHER), item("oldest", 1_000, false, STAGE)], total: 3, nextCursor: null, lastOpenedAt: 3_000, newCount: 0 },
+  ];
+  const host = await mountButton();
+  await act(async () => host.querySelector<HTMLButtonElement>("[data-album-button='task-1']")!.click());
+  await settle(60);
+  expect(albumPosts().map((call) => JSON.parse(call.body!))).toEqual([{ through: 3_000 }]);
+
+  await act(async () => document.querySelector<HTMLButtonElement>("[data-album-more]")!.click());
+  await settle(60);
+  expect(new URL(albumReads().at(-1)!.url, "http://localhost").searchParams.get("since")).toBe("1500");
+  expect(freshTiles()).toEqual(["newest", "middle"]);
+  expect(document.querySelector("[data-album-item='oldest']")!.getAttribute("data-album-item-new")).toBe("0");
 });

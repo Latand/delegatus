@@ -87,6 +87,12 @@ export function TaskAlbum({ taskId, title, pipelines, files, onClose }: TaskAlbu
   const [failed, setFailed] = useState(false);
   const [open, setOpen] = useState<GalleryImage | null>(null);
   const marked = useRef(false);
+  /* The mark the album found when it opened (null: never opened). Every
+     later read is judged against it, so the album's own mark moving
+     underneath it clears nothing while it stays open. */
+  const baseline = useRef<number | null | undefined>(undefined);
+  /* The newest picture's timestamp among every answer shown. */
+  const newest = useRef(0);
   const polls = useRef(0);
   const shown = useRef(0);
 
@@ -100,22 +106,30 @@ export function TaskAlbum({ taskId, title, pipelines, files, onClose }: TaskAlbu
       const query = new URLSearchParams();
       if (cursor) query.set("cursor", cursor);
       if (limit) query.set("limit", String(limit));
+      if (baseline.current !== undefined) query.set("since", String(baseline.current ?? 0));
       const res = await fetch(`${endpoint}?${query.toString()}`, { cache: "no-store" });
       if (!res.ok) throw new Error(String(res.status));
       const body = (await res.json()) as AlbumPage;
-      const { items: next, ...rest } = body;
+      if (baseline.current === undefined) baseline.current = body.lastOpenedAt;
+      const since = baseline.current;
+      const { items: answered, ...rest } = body;
+      const next = answered.map((item) => ({ ...item, isNew: since === null || item.ts > since }));
+      newest.current = next.reduce((max, item) => Math.max(max, item.ts), newest.current);
       setItems((held) => {
         const merged = cursor ? [...held, ...next.filter((item) => !held.some((own) => own.id === item.id))] : next;
         shown.current = merged.length;
         return merged;
       });
       setPage((held) => (cursor && held ? { ...rest, lastOpenedAt: held.lastOpenedAt } : rest));
-      if (!marked.current) {
-        /* Everything up to now is seen once the album has shown it; the
-           pictures keep their «new» marks for as long as it stays open. */
+      if (!marked.current && !body.indexing) {
+        /* Seen once the whole album has been indexed and shown, and only up
+           to the newest picture shown: a picture found later stays new. */
         marked.current = true;
         albumOpened(taskId, body.total);
-        void fetch(endpoint, { method: "POST" }).catch(() => {});
+        const through = newest.current;
+        if (through > 0) {
+          void fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ through }) }).catch(() => {});
+        }
       }
     } catch {
       setFailed(true);

@@ -6,7 +6,7 @@ import path from "node:path";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 
-import { readTaskAlbum, readTaskAlbumImage, taskAlbumSummaries, type TaskAlbumDeps } from "./album";
+import { markTaskAlbumSeen, readTaskAlbum, readTaskAlbumImage, taskAlbumSummaries, type TaskAlbumDeps } from "./album";
 import { fileAlbumSeenStore } from "./seen";
 import type { TaskAlbumWorld } from "./sources";
 import { resetTranscriptIndex } from "./transcriptIndex";
@@ -219,4 +219,35 @@ test("the new marker clears after the album is opened and returns for a newer pi
   expect((await taskAlbumSummaries(["task-a"], world))["task-a"]).toMatchObject({ count: 2, newCount: 1 });
   /* A late write from an older tab never moves the mark back. */
   expect(world.seen.markOpened("task-a", Date.parse(at(10)))).toBe(Date.parse(at(30)));
+});
+
+test("a picture indexed after the album was opened, older than the open, is still new on the next open", async () => {
+  /* Two conversations; the budget of the first read covers only the first. */
+  const early = transcript("early", [claudeSays(`render ${png(evidence, "early.png")}`, 20), claudeSays("x".repeat(4096), 21)]);
+  const late = transcript("late", [claudeSays("y".repeat(4096), 22), claudeSays(`render ${png(evidence, "late.png")}`, 25)]);
+  const world = deps([task("task-a", [early, late])]);
+  world.seen.markOpened("task-a", Date.parse(at(10)));
+
+  const opening = await readTaskAlbum("task-a", { budget: 4096 + 512 }, world);
+  expect(opening.indexing).toBe(true);
+  expect(opening.items.map((item) => item.name)).toEqual(["early.png"]);
+  /* The album is opened at minute 40 and marks what it showed. */
+  markTaskAlbumSeen("task-a", opening.items[0]!.ts, world, Date.parse(at(40)));
+
+  const next = await readTaskAlbum("task-a", {}, world);
+  expect(next.indexing).toBe(false);
+  expect(next.items.map((item) => [item.name, item.isNew])).toEqual([["late.png", true], ["early.png", false]]);
+  expect(next.newCount).toBe(1);
+
+  /* An open album keeps judging against the mark it opened with. */
+  const stillOpen = await readTaskAlbum("task-a", { since: Date.parse(at(10)) }, world);
+  expect(stillOpen.items.map((item) => item.isNew)).toEqual([true, true]);
+});
+
+test("the seen mark is clamped to now, and a missing one falls back to it", () => {
+  const world = deps([task("task-a", [])]);
+  const now = Date.parse(at(30));
+  expect(markTaskAlbumSeen("task-a", Date.parse(at(50)), world, now)).toBe(now);
+  expect(markTaskAlbumSeen("task-b", "soon", world, now)).toBe(now);
+  expect(markTaskAlbumSeen("task-c", undefined, world, now)).toBe(now);
 });

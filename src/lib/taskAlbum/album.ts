@@ -139,13 +139,17 @@ export function clampAlbumLimit(raw: unknown): number {
 
 export async function readTaskAlbum(
   taskId: string,
-  options: { cursor?: string | null; limit?: number; budget?: number },
+  options: { cursor?: string | null; limit?: number; budget?: number; since?: number | null },
   deps: TaskAlbumDeps,
 ): Promise<AlbumPage> {
   const { collected, indexing } = await collect(taskId, deps, options.budget ?? ALBUM_INDEX_BUDGET);
   const images = await drawable(taskId, collected);
   const lastOpenedAt = deps.seen.lastOpened(taskId);
-  const isNew = (ts: number) => lastOpenedAt === null || ts > lastOpenedAt;
+  /* An open album keeps judging «new» against the mark it found when it
+     opened (`since`), so its own mark moving underneath it clears nothing
+     on the next poll or page. */
+  const mark = options.since ?? lastOpenedAt;
+  const isNew = (ts: number) => mark === null || ts > mark;
   const start = parseCursor(options.cursor);
   const limit = options.limit ?? ALBUM_PAGE_DEFAULT;
   const page = images.slice(start, start + limit);
@@ -165,6 +169,25 @@ export async function readTaskAlbum(
     lastOpenedAt,
     newCount: images.filter(({ image }) => isNew(image.ts)).length,
   };
+}
+
+/**
+ * The operator has seen the album up to `through`, the newest picture it
+ * showed them. The mark moves only that far, never to the clock: a picture
+ * still unindexed when the album opened, however old its timestamp, stays new
+ * as long as it is newer than everything shown. A missing or unreadable
+ * `through` falls back to now; one in the future is clamped to now.
+ */
+export function markTaskAlbumSeen(taskId: string, through: unknown, deps: TaskAlbumDeps, now = Date.now()): number {
+  const value = typeof through === "number" && Number.isFinite(through) && through > 0 ? through : now;
+  return deps.seen.markOpened(taskId, Math.min(value, now));
+}
+
+/** A `since` query value: a finite mark, or null for «judge against the stored mark». */
+export function parseAlbumSince(raw: string | null | undefined): number | null {
+  if (raw === null || raw === undefined || raw === "") return null;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : null;
 }
 
 export async function taskAlbumSummaries(taskIds: readonly string[], deps: TaskAlbumDeps, budget = SUMMARY_INDEX_BUDGET): Promise<Record<string, AlbumSummary>> {
