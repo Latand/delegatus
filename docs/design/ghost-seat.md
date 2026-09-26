@@ -425,7 +425,13 @@ blocks sit in the list:
   first words cut at a word. A new seat head in between answers itself and
   needs none (`resumedSeatRows`, `deputyPlacement.ts`). While a ghost
   streams, the seat's own live turn carries «Оркестратор» above its rows too,
-  so two live streams never read as one.
+  so two live streams never read as one. On the phone every seat prose row
+  already has a header naming the engine («Claude · 12:33»), so the seat
+  keeps that one name there: a resuming prose row folds the continuation
+  into its own header («Claude · 12:33 · далі до «…»»), a resuming tool row
+  and the live turn carry a line of the same shape (glyph, «Claude»), and no
+  seat row shows two speaker names stacked. The live turn is named what its
+  settled row will be.
 - **Growth.** A block grows only at its own end. The seat's live turn stays
   the last tail section, so with a ghost live the reader sees the ghost's
   block filling in the middle of the list and the seat's answer filling at
@@ -510,7 +516,7 @@ built for them yet.
   transcript flushes, as they do for the seat.
 - **No composer.** The ghost takes no second message. The block has no input;
   the seat's composer stays the one composer, and a message typed while a
-  ghost runs goes to the seat as today (or, with «Паралельно» again, to a
+  ghost runs goes to the seat as today (or, with «Запитати паралельно» again, to a
   new ghost once the first has ended, since slice 1 allows one at a time).
 
 ### 6.3 The ghost block, finished
@@ -522,8 +528,13 @@ head plus one line:
    │                        ┌──────────────────────────────────────┐
    │                        │ Add a task: reviewer for #2244 …      │
    │                        └──────────────────────────────────────┘
-   ┆ ◌ Паралельно · 12:41 · ✓ створив задачу «Reviewer for #2244» [T-318] · прив'язав до [#2244]   ▸
+   ┆ ◌ Оркестратор · паралельне я · 12:41 · ✓ створив задачу «Reviewer for #2244» [T-318] · прив'язав до [#2244]   ▸
 ```
+
+- The line starts with the participant's name, in the same words as the
+  expanded caption: «Оркестратор · паралельне я» / "Orchestrator · parallel
+  self" on the desktop, «Паралельне я» / "Parallel self" on the phone, where
+  the ask's meta line right above already says «→ паралельне я».
 
 - The line is `record.result.line`: the outcome as the note to the seat says
   it, in the UI language, with `touched` rendered as the same entity chips the
@@ -556,8 +567,9 @@ Both render the same rows; the differences are the ones §3.4 already fixes.
 | Head | user bubble at `BUBBLE_MEASURE`, sender line above at the same width | bubble at 86 % width, sender line 14 px avatar |
 | Caption | in the `ml-9` chrome column; mark 16 px in a 20 px dashed ring | full width from the 12 px gutter; mark 16 px, ring 20 px; the line is 44 px tall as the tap target |
 | Edge | 1.5 px dashed, in the avatar column, from caption to last row | 1.5 px dashed at the gutter, rows indented 12 px past it |
-| Rows | `ToolLine` and `LiveMcpRow` as today; prose at `READING_MEASURE` | same rows, full width, prose at 15 px as the phone's own prose |
-| Collapsed line | one line; the result keeps its own width so the chips follow its last word (at most 12 px after it), chevron at the right | caption on the first line with the chevron, the result on up to two lines under it, the chips on the line after; the whole line is the target |
+| Rows | `ToolLine` and `LiveMcpRow` as today; prose at `READING_MEASURE`, live and settled at the feed's 13 px | same rows, full width, prose at 15 px as the phone's own prose |
+| Collapsed line | one line captioned «Оркестратор · паралельне я»; the result keeps its own width so the chips follow its last word (at most 12 px after it), chevron at the right | caption («Паралельне я») on the first line with the chevron, the result on up to two lines under it, the chips on the line after; the whole line is the target |
+| Seat rows beside a block | the continuation line is the seat's only name (its rows show the avatar) | one name per row: the continuation folds into the prose row's own «Claude · 12:33» header; live prose at the settled row's 15 px |
 | Collapse motion | 200 ms height, static under reduced motion | same |
 
 Measurements the rendered evidence has to show (section 7): at 390 px the
@@ -677,7 +689,10 @@ Tests, by path, under isolated state:
   the result shows whole at 390; no row inside a block is captioned with the
   bare engine name on the phone; the chips of one block share a left edge;
   the uk chips are Ukrainian; the two live carets differ and the seat's live
-  turn names its participant. The PNGs go under
+  turn names its participant; the collapsed line names the ghost in the
+  caption's or the ask's words; on the phone no seat row carries two speaker
+  names, the seat's live turn is named what its settled rows are, and live
+  and settled prose share one size. The PNGs go under
   `~/Pictures/delegatus-review/ghost-seat/`, never into the repository.
 - `scripts/privacy-publication-gate.ts --base <merge-base>` before push.
 

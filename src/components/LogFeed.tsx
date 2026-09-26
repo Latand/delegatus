@@ -1577,8 +1577,8 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                 /* While a parallel self streams in the same window, the seat's
                    own live turn names its participant too, so the two streams
                    never read as one. */
-                const lead = row.resumes ? <SeatSpeakerLine resumes={row.resumes} />
-                  : deputies.some((deputy) => deputy.state !== "ended") ? <SeatSpeakerLine /> : null;
+                const lead = row.resumes ? <SeatSpeakerLine resumes={row.resumes} engine={file.engine} />
+                  : deputies.some((deputy) => deputy.state !== "ended") ? <SeatSpeakerLine engine={file.engine} /> : null;
                 return <LiveTurnRows key="delta" items={visibleLiveTurnItems} lead={lead} />;
               }
               if (row.kind === "deputy") return <DeputyBlock key={row.key} deputy={row.deputy} engine={file.engine} />;
@@ -1607,6 +1607,10 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                 );
               }
               const { anchorKey, item, responseDurationMs, speakText, resumes } = row;
+              /* On the phone a prose row names its speaker in its own header,
+                 so the continuation joins that header rather than stacking a
+                 second name over it (ghost-seat.md §6.1). */
+              const foldResumes = resumes !== undefined && phone && item.kind === "prose";
               return (
                 /* Session-stable keys: a row keeps its DOM node while the
                    window slides. Compact panes live on the zoomable canvas:
@@ -1620,9 +1624,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                   data-feed-source-id={"sourceId" in item ? item.sourceId : undefined}
                   className={compact ? "feed-cv" : undefined}
                 >
-                  {resumes ? <SeatSpeakerLine resumes={resumes} /> : null}
+                  {resumes && !foldResumes ? <SeatSpeakerLine resumes={resumes} engine={file.engine} /> : null}
                   <GalleryOwnerProvider value={item}>
-                    <FeedItem item={item} speakText={speakText} />
+                    <FeedItem item={item} speakText={speakText} resumesAsk={foldResumes ? resumes.ask : undefined} />
                   </GalleryOwnerProvider>
                   {responseDurationMs !== undefined ? <ResponseDuration durationMs={responseDurationMs} /> : null}
                 </div>

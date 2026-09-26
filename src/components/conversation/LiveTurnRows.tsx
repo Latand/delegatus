@@ -439,8 +439,13 @@ export function LiveTurnRows({ items, lead = null }: {
   const { t } = useLocale();
   const deputyInk = useDeputyInk();
   /* The settled prose row has no avatar column on the phone (mobile v2,
-     #1439), so the live one drops the indent there too, as the tool row does. */
-  const proseIndent = useIsMobile() ? "" : "ml-9 ";
+     #1439), so the live one drops the indent there too, as the tool row does.
+     It is set at the settled row's size (feed prose on the desktop, 15 px on
+     the phone), so the text keeps its size when the transcript's echo
+     replaces it. */
+  const phone = useIsMobile();
+  const proseIndent = phone ? "" : "ml-9 ";
+  const proseSize = phone ? "text-title leading-[1.45]" : "text-body";
   const { rows, earlier } = useMemo(() => liveTurnTail(items), [items]);
   if (!rows.length && !earlier) return null;
   const last = rows.at(-1);
@@ -467,7 +472,7 @@ export function LiveTurnRows({ items, lead = null }: {
             key={key}
             data-live-turn
             data-live-turn-item-id={item.itemId ?? undefined}
-            className={`my-2 ${proseIndent}${READING_MEASURE} whitespace-pre-wrap [overflow-wrap:anywhere] text-ui ${deputyInk ? "text-secondary" : "text-primary"}`}
+            className={`my-2 ${proseIndent}${READING_MEASURE} whitespace-pre-wrap [overflow-wrap:anywhere] ${proseSize} ${deputyInk ? "text-secondary" : "text-primary"}`}
           >
             {item.omittedChars ? (
               <span data-live-turn-omitted-chars className="text-muted">

@@ -1318,7 +1318,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "feed.liveOmittedChars": "… (+{chars} символів)",
   "feed.liveEarlierSteps": { one: "{count} попередній крок", few: "{count} попередні кроки", many: "{count} попередніх кроків", other: "{count} попередніх кроків" },
   "deputy.participant": "Оркестратор · паралельне я",
-  "deputy.short": "Паралельно",
+  "deputy.short": "Паралельне я",
   "deputy.working": "працює",
   "deputy.starting": "запускається",
   "deputy.outcome.done": "готово",

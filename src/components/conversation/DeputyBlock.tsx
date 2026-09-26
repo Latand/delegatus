@@ -10,7 +10,8 @@ import type { McpCallLink } from "@/lib/mcp/presentation";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 
 import { ChevronDown, ChevronRight } from "../icons";
-import { FeedItem } from "../feed/FeedItem";
+import { EngineMark } from "../EngineMark";
+import { ENGINE_LABEL, FeedItem } from "../feed/FeedItem";
 import { GalleryOwnerProvider } from "../feed/Lightbox";
 import { createFeedSession, type FeedSnapshot } from "../feed/parse";
 import { DeputyInkContext, DeputyMark } from "./deputyInk";
@@ -260,7 +261,7 @@ export function DeputyBlock({ deputy, engine = "claude" }: { deputy: SeatDeputyV
           />
           <span className={`pointer-events-none flex shrink-0 items-center ${phone ? "" : "w-6.5 justify-center"}`}><DeputyMark engine={engine} /></span>
           <span className="pointer-events-none flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
-            <span data-deputy-short className="shrink-0 font-semibold text-secondary">{t("deputy.short")}</span>
+            <span data-deputy-short className="shrink-0 font-semibold text-secondary">{t(phone ? "deputy.short" : "deputy.participant")}</span>
             {started ? <span className="shrink-0 tabular-nums text-muted">{started}</span> : null}
             <span data-deputy-outcome={deputy.outcome ?? "done"} className={`inline-flex shrink-0 items-center gap-1 font-semibold ${warn ? "text-warning" : "text-success"}`}>
               {warn ? <CircleAlert className="h-3.5 w-3.5" aria-hidden /> : <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />}
@@ -362,8 +363,14 @@ function DeputyCaption({ engine, phone, started, stateWord, live, warn, open, to
  * never read as the answer to the ask above it; and the seat's live turn while
  * a parallel self streams beside it, «Orchestrator». The seat's own ink, in
  * the text column its rows already use.
+ *
+ * On the phone every seat prose row already carries a header naming the
+ * engine, so the line takes the same shape and the same name there — the
+ * glyph and «Claude» — and a resuming prose row folds the continuation into
+ * its own header instead (`FeedItem`'s `resumesAsk`). One name per row, and
+ * the live turn is called what its settled row will be.
  */
-export function SeatSpeakerLine({ resumes }: { resumes?: { ask: string | null } }) {
+export function SeatSpeakerLine({ resumes, engine = "claude" }: { resumes?: { ask: string | null }; engine?: string }) {
   const { t } = useLocale();
   const phone = useIsMobile();
   const ask = resumes?.ask ? quoteHead(resumes.ask) : null;
@@ -373,7 +380,10 @@ export function SeatSpeakerLine({ resumes }: { resumes?: { ask: string | null } 
       className={`${phone ? "pt-2" : "-mb-2 ml-9 mt-3"} flex min-h-5 min-w-0 items-center gap-1.5 text-label text-muted`}
       title={resumes?.ask ?? undefined}
     >
-      <span className="shrink-0 font-semibold text-secondary">{t("roleCopy.orchestrator.name")}</span>
+      {phone ? <EngineMark engine={engine} size={16} tone="inherit" className="h-4 w-4 shrink-0 text-secondary" /> : null}
+      <span data-seat-speaker-name className="shrink-0 font-semibold text-secondary">
+        {phone ? ENGINE_LABEL[engine as keyof typeof ENGINE_LABEL] ?? engine : t("roleCopy.orchestrator.name")}
+      </span>
       {ask ? <span className="min-w-0 truncate">{`· ${t("deputy.resumes", { ask })}`}</span> : null}
     </div>
   );

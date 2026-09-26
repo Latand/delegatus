@@ -44,6 +44,15 @@ export interface DeputyBlockReading {
   chipLineLefts: number[];
   /** The block's streaming caret: whose ink it wears. */
   caret: string | null;
+  /** Collapsed: the name the line gives the participant. */
+  collapsedSpeaker: string | null;
+  /** Computed font size of the block's prose, px: in-flight and settled rows. */
+  proseSizes: ProseSizes;
+}
+
+export interface ProseSizes {
+  live: number[];
+  settled: number[];
 }
 
 export interface DeputyEvidenceReading {
@@ -53,6 +62,11 @@ export interface DeputyEvidenceReading {
   seatLiveLast: boolean;
   /** The seat's live turn: its speaker line and its caret's ink. */
   seatLive: { speaker: string | null; caret: string | null } | null;
+  /** Every seat row of the window, in order, with the speaker names its own
+      headers carry: the phone's message header and the seat's participant line. */
+  seatRowSpeakers: string[][];
+  /** Computed font size of the seat's own prose, px: in-flight and settled. */
+  seatProseSizes: ProseSizes;
   scrollWidth: number;
   viewportWidth: number;
 }
@@ -110,6 +124,17 @@ export const MEASURE_DEPUTY_BLOCKS = `(() => {
     : child.hasAttribute("data-live-turn-group") ? ["seat-live"]
     : child.hasAttribute("data-feed-key") ? ["seat"] : []);
   const round = (value) => Math.round(value * 10) / 10;
+  const speakersOf = (row) => [...row.querySelectorAll("[data-seat-speaker], [data-mobile-message-header]")]
+    .filter((header) => !header.closest("[data-deputy-block]"))
+    .map((header) => {
+      const name = header.querySelector("[data-seat-speaker-name], [data-mobile-message-speaker]");
+      return (name ? name.textContent : header.textContent).trim();
+    });
+  const sizeOf = (element) => round(parseFloat(getComputedStyle(element).fontSize));
+  const proseSizes = (root, inside) => ({
+    live: [...root.querySelectorAll("[data-live-turn]:not([data-live-tool])")].filter(inside).map(sizeOf),
+    settled: [...root.querySelectorAll("[data-tts-body]")].filter(inside).map((body) => sizeOf(body.parentElement)),
+  });
   const lastGlyphRight = (element) => {
     const rects = [];
     const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
@@ -180,6 +205,8 @@ export const MEASURE_DEPUTY_BLOCKS = `(() => {
       rowSpeakers: [...block.querySelectorAll("[data-mobile-message-speaker]")].map((speaker) => speaker.textContent.trim()),
       chipLineLefts,
       caret: caret ? caret.getAttribute("data-live-turn-caret") + ":" + getComputedStyle(caret).backgroundColor : null,
+      collapsedSpeaker: firstText ? firstText.textContent.trim() : null,
+      proseSizes: proseSizes(block, () => true),
     };
   });
   const seatLiveGroup = children.find((child) => child.hasAttribute("data-live-turn-group"));
@@ -190,6 +217,8 @@ export const MEASURE_DEPUTY_BLOCKS = `(() => {
     order,
     seatLiveLast: order.at(-1) === "seat-live",
     seatLive: seatLiveGroup ? { speaker: seatSpeaker ? seatSpeaker.textContent.trim() : null, caret: seatCaret ? seatCaret.getAttribute("data-live-turn-caret") + ":" + getComputedStyle(seatCaret).backgroundColor : null } : null,
+    seatRowSpeakers: seatRows.map(speakersOf),
+    seatProseSizes: content ? proseSizes(content, (element) => !element.closest("[data-deputy-block]")) : { live: [], settled: [] },
     scrollWidth: document.documentElement.scrollWidth,
     viewportWidth: window.innerWidth,
   };
@@ -222,6 +251,12 @@ export function deputyEvidenceFailures(reading: DeputyEvidenceReading, label: st
     if (block.chipLineLefts.length > 1 && Math.max(...block.chipLineLefts) - Math.min(...block.chipLineLefts) > 2) {
       failures.push(`${name}: the block's chip lines start at ${block.chipLineLefts.join(", ")}`);
     }
+    if (!block.open) {
+      const name = options.lang === "uk" ? "паралельне я" : "parallel self";
+      if (!block.collapsedSpeaker || !block.collapsedSpeaker.toLowerCase().includes(name)) {
+        failures.push(`${label} ${block.askId}: the collapsed line does not name the parallel self (${block.collapsedSpeaker})`);
+      }
+    }
     if (block.caret && !block.caret.startsWith("deputy:")) failures.push(`${name}: the block's caret wears the seat's ink (${block.caret})`);
     if (block.open) {
       if (block.titleWidth === null || block.titleWidth < 120) failures.push(`${name}: the caption's title is ${block.titleWidth}px`);
@@ -242,6 +277,18 @@ export function deputyEvidenceFailures(reading: DeputyEvidenceReading, label: st
         failures.push(`${name}: the first chip sits ${block.resultToChipGap}px from the result's last glyph`);
       }
     }
+  }
+  if (options.phone) {
+    const stacked = reading.seatRowSpeakers.filter((names) => names.length > 1);
+    if (stacked.length) failures.push(`${label}: a seat row carries two speaker names (${stacked.map((names) => names.join(" / ")).join("; ")})`);
+    const names = [...new Set(reading.seatRowSpeakers.flat())];
+    if (names.length > 1) failures.push(`${label}: the seat is named ${names.join(" and ")}`);
+  }
+  const sizes = [reading.seatProseSizes, ...reading.blocks.map((block) => block.proseSizes)];
+  const live = [...new Set(sizes.flatMap((set) => set.live))];
+  const settled = [...new Set(sizes.flatMap((set) => set.settled))];
+  if (live.length && settled.length && [...new Set([...live, ...settled])].length > 1) {
+    failures.push(`${label}: live prose is ${live.join("/")}px, settled prose ${settled.join("/")}px`);
   }
   if (reading.blocks.some((block) => block.caret) && reading.seatLive) {
     if (!reading.seatLive.speaker) failures.push(`${label}: the seat's live turn streams beside a parallel self without naming its participant`);

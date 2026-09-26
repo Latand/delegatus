@@ -350,6 +350,8 @@ test("while a parallel self streams, the seat's live turn names its participant 
   expect(ghostCaret.getAttribute("data-live-turn-caret")).toBe("deputy");
   expect(ghostCaret.className).toContain("bg-secondary");
   expect(ghostCaret.className).not.toContain("bg-accent");
+  /* Live prose is set at the feed's prose size, as its settled row is. */
+  for (const row of host.querySelectorAll<HTMLElement>("[data-live-turn]:not([data-live-tool])")) expect(row.className).toContain("text-body");
 });
 
 test("on the phone, a prose row inside the block is captioned as the parallel self, never with the bare engine name", async () => {
@@ -390,4 +392,50 @@ test("an ended-early line is marked as the last step", async () => {
   await settle();
   expect(host.querySelector("[data-deputy-result]")?.textContent).toBe("last step: Reading the account limits…");
   expect(host.querySelector("[data-deputy-last-step]")?.className).toContain("text-muted");
+});
+
+test("on the phone, the seat row after a block carries one name: the continuation joins its own header", async () => {
+  phoneLayout = true;
+  const { host } = mount([deputy()]);
+  await settle();
+  const content = host.querySelector("[data-feed-state]")!;
+  const children = [...content.children] as HTMLElement[];
+  const block = host.querySelector<HTMLElement>('[data-deputy-block="deputy_1"]')!;
+  const next = children[children.indexOf(block) + 1]!;
+  const headers = next.querySelectorAll("[data-seat-speaker], [data-mobile-message-header]");
+  expect(headers.length).toBe(1);
+  const header = next.querySelector<HTMLElement>('[data-seat-speaker="resumes"]')!;
+  expect(header.hasAttribute("data-mobile-message-header")).toBe(true);
+  expect(header.querySelector("[data-mobile-message-speaker]")?.textContent).toBe("Claude");
+  expect(header.querySelector("[data-seat-continues]")?.textContent).toBe("· continuing «Review the queue»");
+});
+
+test("on the phone, the seat's live turn beside a parallel self is named what its settled rows are, at their size", async () => {
+  phoneLayout = true;
+  liveSessions.set("conversation_seat", { turn: "running", liveTurn: { turnId: "seat-turn", text: "", items: [
+    { itemId: "seat-live", text: "The seat is still answering the queue", phase: "streaming", startedAt: at(42), completedAt: null },
+  ] } });
+  liveSessions.set("conversation_ghost", { turn: "running", liveTurn: { turnId: "ghost-turn", text: "", items: [
+    { itemId: "ghost-live", text: "Linking the task to the lane", phase: "streaming", startedAt: at(39, 50), completedAt: null },
+  ] } });
+  const { host } = mount([deputy()]);
+  await settle();
+  const seatLive = [...host.querySelector("[data-feed-state]")!.children].find((child) => child.hasAttribute("data-live-turn-group"))!;
+  expect(seatLive.querySelector('[data-seat-speaker="live"] [data-seat-speaker-name]')?.textContent).toBe("Claude");
+  for (const row of host.querySelectorAll<HTMLElement>("[data-live-turn]:not([data-live-tool])")) {
+    expect(row.className).toContain("text-title");
+    expect(row.className).not.toContain("text-body");
+  }
+});
+
+test("a collapsed line names the parallel self: the full caption on the desktop, «Parallel self» on the phone", async () => {
+  const ended = deputy({ state: "ended", endedAt: at(41), outcome: "done", result: { line: "Done.", finalText: "" } });
+  const desktop = mount([ended]);
+  await settle();
+  expect(desktop.host.querySelector("[data-deputy-short]")?.textContent).toBe("Orchestrator · parallel self");
+  phoneLayout = true;
+  setLocale("uk");
+  const phone = mount([ended]);
+  await settle();
+  expect(phone.host.querySelector("[data-deputy-short]")?.textContent).toBe("Паралельне я");
 });

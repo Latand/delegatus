@@ -35,6 +35,7 @@ import { WakeupCard } from "./cards/WakeupCard";
 import { SpeakButton } from "./SpeakButton";
 import { McpCallCard } from "../runtime/McpCallCard";
 import { DeputyMark, useDeputyInk } from "../conversation/deputyInk";
+import { quoteHead } from "../conversation/deputyPlacement";
 
 /**
  * Resolves a row with delivery evidence (#1117). A delivered Claude system row
@@ -106,7 +107,7 @@ function internalCard(ts: unknown, text: string, senderRole: string | undefined)
 /* Mobile v2 (#1439, lane 4): the engine mark is the only avatar left on the
    phone — a 16 px glyph in secondary colour beside the engine's name in the
    message header (README §5). Proper nouns, so no locale entry. */
-const ENGINE_LABEL: Record<"codex" | "claude" | "openclaw" | "copilot", string> = {
+export const ENGINE_LABEL: Record<"codex" | "claude" | "openclaw" | "copilot", string> = {
   claude: "Claude",
   codex: "Codex",
   copilot: "Copilot",
@@ -117,7 +118,14 @@ const ENGINE_LABEL: Record<"codex" | "claude" | "openclaw" | "copilot", string> 
    (poll tick, camera state, files refresh) skips re-parsing markdown for
    every message that did not change. The provenance lookup arrives by context,
    so a resolved map re-renders exactly the memoized consumers. */
-export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: { item: Item; speakText?: string }) {
+export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText, resumesAsk }: {
+  item: Item;
+  speakText?: string;
+  /** Phone only: this seat row is the first after a parallel self's block, so
+      its header also says which seat head it continues (null: the head has no
+      text to quote). Absent: an ordinary row. */
+  resumesAsk?: string | null;
+}) {
   const { t } = useLocale();
   const provenance = useMessageProvenance();
   const isMobile = useIsMobile();
@@ -159,12 +167,20 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
       const time = mobileClock(item.ts);
       return (
         <div className="group/msg pt-2" data-mobile-message="agent" data-tts-message={`${item.engine}:${item.ts}`}>
-          <div data-mobile-message-header className="mb-1 flex h-5 w-full items-center gap-1.5 text-label text-muted">
+          <div
+            data-mobile-message-header
+            data-seat-speaker={resumesAsk !== undefined ? "resumes" : undefined}
+            className="mb-1 flex h-5 w-full min-w-0 items-center gap-1.5 text-label text-muted"
+            title={resumesAsk ?? undefined}
+          >
             {deputyInk ? <DeputyMark engine={item.engine} /> : <AvatarIcon className="h-4 w-4 shrink-0 text-secondary" aria-hidden />}
             {/* Inside a deputy's block the row is the parallel self's, and says so:
                 the bare engine name is what the seat's own rows carry. */}
-            <span data-mobile-message-speaker className="font-semibold text-secondary">{deputyInk ? t("deputy.participant") : ENGINE_LABEL[item.engine]}</span>
-            {time ? <span className="tabular-nums">· {time}</span> : null}
+            <span data-mobile-message-speaker className="shrink-0 font-semibold text-secondary">{deputyInk ? t("deputy.participant") : ENGINE_LABEL[item.engine]}</span>
+            {time ? <span className="shrink-0 tabular-nums">· {time}</span> : null}
+            {/* The seat's one name on the phone stays this header, so the head
+                it continues after a block joins it here (ghost-seat.md §6.1). */}
+            {resumesAsk ? <span data-seat-continues className="min-w-0 truncate">{`· ${t("deputy.resumes", { ask: quoteHead(resumesAsk) })}`}</span> : null}
           </div>
           <div className={`w-full whitespace-pre-wrap break-words text-title leading-[1.45]${deputyInk ? " text-secondary" : ""}`}>
             <div className="contents" data-tts-body>{mdBlocks(item.text)}</div>

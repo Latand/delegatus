@@ -1372,7 +1372,7 @@ export const en = {
   "feed.liveOmittedChars": "… (+{chars} characters)",
   "feed.liveEarlierSteps": { one: "{count} earlier step", other: "{count} earlier steps" },
   "deputy.participant": "Orchestrator · parallel self",
-  "deputy.short": "Parallel",
+  "deputy.short": "Parallel self",
   "deputy.working": "working",
   "deputy.starting": "starting",
   "deputy.outcome.done": "done",
