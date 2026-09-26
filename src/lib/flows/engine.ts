@@ -18,6 +18,7 @@ import { resolveSpawnedTranscriptPath } from "@/lib/agent/spawnedTranscript";
 import { headCwd } from "@/lib/agent/transcript";
 import { isNativeCodexSubagentTranscript } from "@/lib/scanner/codexNative";
 import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
+import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import type { AccountPark } from "@/lib/runtime/accountPark";
 import { recoverDeadStructuredConversation } from "@/lib/runtime/structuredRecovery";
 import { isShellCommand } from "@/lib/status";
@@ -452,7 +453,7 @@ export async function sendToImplementer(
           text,
           /* #1117: a relayed verdict is inter-agent traffic from the round's
              reviewer, and the feed labels it exactly that way. */
-          origin: { kind: "agent", role: "reviewer" },
+          origin: agentMessageOrigin(registry.readOnlySnapshot(), flow.rounds.at(-1)?.reviewerConversationId ?? null, "reviewer"),
         },
         { registry: () => registry },
       );

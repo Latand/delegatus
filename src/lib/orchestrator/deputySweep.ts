@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 
 import {
   endDeputy,
@@ -98,14 +99,15 @@ export interface DeputySweepPorts {
 /** The note's delivery request. `queue` is the whole point: the note lands as
     the seat's NEXT turn, after the running one, which it never interrupts
     (docs/design/ghost-seat.md §4). */
-export function deputySeatNoteRequest(deputy: Pick<OrchestratorDeputy, "seatPath" | "seatConversationId">, clientMessageId: string, text: string) {
+export function deputySeatNoteRequest(deputy: Pick<OrchestratorDeputy, "seatPath" | "seatConversationId"> & Partial<Pick<OrchestratorDeputy, "project" | "deputyConversationId">>, clientMessageId: string, text: string) {
   return {
     path: deputy.seatPath ?? "",
     conversationId: deputy.seatConversationId,
     clientMessageId,
     text,
     policy: "queue" as const,
-    origin: { kind: "agent" as const, role: "orchestrator" },
+    origin: { ...delegatusMessageOrigin("orchestrator", deputy.project),
+      ...(deputy.deputyConversationId ? { conversationId: deputy.deputyConversationId } : {}) },
   };
 }
 

@@ -10,11 +10,13 @@ export function escText(value: string): string {
 }
 
 export function fmtAge(mtime: number): string {
+  if (!Number.isFinite(mtime) || mtime <= 0) return "";
   return fmtAgeSeconds(Date.now() / 1000 - mtime);
 }
 
 /** `fmtAge` for a wait already measured in seconds, against a clock the caller holds. */
 export function fmtAgeSeconds(s: number): string {
+  if (!Number.isFinite(s)) return "";
   const locale = getLocale();
   if (s < 90) return translate(locale, "time.agoSec", { n: Math.round(s) });
   if (s < 5400) return translate(locale, "time.agoMin", { n: Math.round(s / 60) });

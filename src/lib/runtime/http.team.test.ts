@@ -118,11 +118,27 @@ test("an agent's relay in a team is neither refused nor stamped with a person", 
   claimInstall(teamStore(), "Mira", DESKTOP);
   const enqueued: unknown[] = [];
   await handleRuntimeCommand(request(
-    { conversationId: "conversation_direct", text: "relay", idempotencyKey: "agent-send-1" },
+    { conversationId: "conversation_direct", text: "relay", idempotencyKey: "agent-send-1", origin: { kind: "operator" } },
     { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) },
   ), "send", dependencies(enqueued));
   expect(enqueued).toHaveLength(1);
+  expect(enqueued[0]).toMatchObject({ origin: { kind: "agent", role: "agent", conversationId: "conversation_agent" } });
   expect(messageSenders(["agent-send-1"])).toEqual({});
+});
+
+test("direct runtime delivery keeps the server's agent author despite a claimed operator origin", async () => {
+  const sent: unknown[] = [];
+  const ports = { ...dependencies([]), enqueue: undefined,
+    client: () => ({ command: async (command: unknown) => {
+      sent.push(command);
+      return { operationId: "op_agent_direct", receipt: { status: "delivered" } };
+    } }) as never };
+  const response = await handleRuntimeCommand(request(
+    { conversationId: "conversation_direct", text: "relay", idempotencyKey: "agent-direct-1", origin: { kind: "operator" } },
+    { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) },
+  ), "send", ports);
+  expect(response.status).toBe(200);
+  expect(sent).toMatchObject([{ origin: { kind: "agent", role: "agent", conversationId: "conversation_agent" } }]);
 });
 
 test("a send the host refuses leaves no author and no event", async () => {

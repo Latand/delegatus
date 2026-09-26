@@ -59,13 +59,15 @@ test("compact operator records render the admitted selected card after canonical
 
 test("agent records preserve their sender through marked and unmarked echoes", () => {
   const wire = encodeCodexStructuredUserText("Review the fixture", undefined, null,
-    { kind: "agent", role: "orchestrator" }, "b".repeat(64));
+    { kind: "agent", role: "orchestrator", project: "wardrobe-agent", conversationId: "conversation_sender" }, "b".repeat(64));
   for (const echo of [undefined, wire, "Review the fixture"]) {
     const entries = parse(wire, echo);
     expect(entries.filter(({ item }) => item.kind === "tmsg")).toHaveLength(1);
     const html = render(entries);
-    expect(html).toContain("orchestrator");
-    expect(html).toContain("internal");
+    expect(html.replace(/<[^>]*>/g, "")).toContain("Agent · Orchestrator · wardrobe-agent");
+    expect(html).toContain('data-agent-role="orchestrator"');
+    expect(html).toMatch(/whitespace-nowrap[^>]*data-agent-project[^>]*> · wardrobe-agent<\/span>/);
+    expect(html).toContain('href="#c=conversation_sender" aria-label="Open sender conversation"');
     expect(html).not.toContain("llv:structured-user");
   }
 });

@@ -16,6 +16,7 @@ import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
 export async function serveEvidenceFixture(
   outDir: string,
   entryFixture = "src/components/kanban/issue1695Evidence.fixture.tsx",
+  responses: Record<string, unknown> = {},
 ): Promise<{ base: string; stop: () => void }> {
   /* Bundled in a separate process: inside the `bun test` process,
      `Bun.build` resolves the `@/` alias for some module graphs and not for
@@ -33,7 +34,9 @@ export async function serveEvidenceFixture(
     port: 0,
     async fetch(request) {
       const { pathname, searchParams } = new URL(request.url);
+      if (Object.hasOwn(responses, pathname)) return Response.json(responses[pathname]);
       if (pathname === "/api/task-icons") return Response.json({ icons: await taskIconNodes((searchParams.get("names") ?? "").split(",")) });
+      if (pathname === "/brand/delegatus-mark.svg") return new Response(Bun.file("public/brand/delegatus-mark.svg"), { headers: { "content-type": "image/svg+xml" } });
       if (pathname === "/app.js") return new Response(Bun.file(entry), { headers: { "content-type": "text/javascript" } });
       if (pathname === "/style.css") return new Response(css.css, { headers: { "content-type": "text/css" } });
       return new Response(

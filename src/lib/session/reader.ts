@@ -27,6 +27,8 @@ export interface SessionReadResult {
 
 export interface NormalizedSessionLine {
   record: SessionRecord;
+  /** Transcript UUID, used internally to join Claude's durable delivery ledger. */
+  sourceId?: string;
   /** Codex writes visible messages as adjacent event and response records.
       Page readers use this provenance to collapse those twins without changing
       readSession's long-standing output. */

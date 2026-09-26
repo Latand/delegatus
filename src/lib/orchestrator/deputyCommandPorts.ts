@@ -6,6 +6,7 @@ import { DEFAULT_SEAT_TICK_POLICY, seatTickPolicy, seatTurnProgressing } from "@
 import { defaultSeatTickSources, seatInput } from "@/lib/monitor/seatTickSources";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
 import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
+import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { commitTaskMembership } from "@/lib/tasks/membership";
 import { loadTasks } from "@/lib/tasks/store";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
@@ -90,7 +91,9 @@ export function productionDeputyCommandPorts(): DeputyCommandPorts {
         clientMessageId,
         text,
         images,
-        origin: deputyDeliveryOrigin(origin),
+        origin: origin.kind === "agent"
+          ? agentMessageOrigin(registry.readOnlySnapshot(), origin.conversationId, origin.role)
+          : deputyDeliveryOrigin(origin),
       });
       if (!result) return { ok: false, error: "structured delivery is unavailable" };
       if (result.ok) return { ok: true };
