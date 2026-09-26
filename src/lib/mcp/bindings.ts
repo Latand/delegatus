@@ -2624,7 +2624,7 @@ function withRecordAuthors<T extends { seq: number; role: string; ts: string | n
   if (!records.some((record) => record.role === "user")) return records;
   const context = readMessageAuthorContext(source, records);
   const authorRecords = context ?? records;
-  const agentAuthors = agentRecordAuthors(transcriptPath, authorRecords, context);
+  const agentAuthors = agentRecordAuthors(transcriptPath, source.engine, authorRecords, context);
   const humanBySeq = new Map<number, RecordAuthor>();
   for (const [index, author] of recordAuthors(conversationId, authorRecords.map((record, index) => ({
     role: agentAuthors.has(index) ? "system" : record.role,
