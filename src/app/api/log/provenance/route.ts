@@ -4,10 +4,11 @@ import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import { claudeMessageProvenance, type DeliveredMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
+import { deliveryDedupToken, NATIVE_QUEUE_DELIVERY_KEY } from "@/lib/runtime/deliveryDedup";
 import type { DeliveredMessageOccurrence } from "@/lib/runtime/messageOrigin";
 import { submissionIdentities } from "@/lib/runtime/submissionIdentity";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
-import { messageSenders } from "@/lib/team";
+import { conversationMessageSenders, messageSenders } from "@/lib/team";
 import type { MessageSender } from "@/lib/team/contract";
 import { pathAllowed } from "@/lib/scanner/roots";
 import type { ApiError } from "@/lib/types";
@@ -34,7 +35,10 @@ export interface MessageProvenanceResponse {
   /** `submission id → sender` for the submissions this answer names
       (sign-in-and-team §6.7): which member sent each human message, resolved
       from the team's own record at read time. Empty on a solo install and
-      for any message sent before a team existed. */
+      for any message sent before a team existed. A queued message is named
+      under its record's dedup token instead: its per-version delivery key is
+      not a submission any row is filed under, so it stays out of
+      `submissions`. */
   senders: Record<string, MessageSender>;
 }
 
@@ -60,9 +64,26 @@ export function GET(req: NextRequest): NextResponse<MessageProvenanceResponse | 
     ...Object.values(submissions),
   ];
   return NextResponse.json(
-    { messages, occurrences, submissions, senders: messageSenders(ids, conversationScope(path)) },
+    { messages, occurrences, submissions, senders: { ...queuedSenders(path), ...messageSenders(ids, conversationScope(path)) } },
     { headers: { "Cache-Control": "no-store" } },
   );
+}
+
+/** `dedup token → sender` for the queued messages members sent into the
+    conversation `path` belongs to (sign-in-and-team §7.1). */
+function queuedSenders(path: string): Record<string, MessageSender> {
+  try {
+    const lookup = readOnlyConversationLookupFromSnapshot(agentRegistry().readOnlySnapshot());
+    const conversation = lookup.conversationForPath(path);
+    if (!conversation) return {};
+    const senders: Record<string, MessageSender> = {};
+    for (const [key, sender] of Object.entries(conversationMessageSenders(conversation.id))) {
+      if (NATIVE_QUEUE_DELIVERY_KEY.test(key)) senders[deliveryDedupToken(key)] = sender;
+    }
+    return senders;
+  } catch {
+    return {};
+  }
 }
 
 /** Whether an author row's conversation is the one `path` belongs to. A sender

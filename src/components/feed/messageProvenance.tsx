@@ -374,6 +374,9 @@ function lookupFor(
       if (item.structuredUserRef && !item.structuredUserRef.startsWith("h.")) {
         const token = structuredUserReferenceKey(item.structuredUserRef);
         if (token && data.submissions[token]) return senderForSubmission(data.submissions[token]);
+        /* A queued message's record names its version's delivery key, which
+           no row is filed under; the route names its sender by the token. */
+        if (token && data.senders[token]) return data.senders[token];
       }
       return senderForSubmission(forItem(item)?.submissionId);
     },

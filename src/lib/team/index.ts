@@ -18,10 +18,11 @@ import { claimMessageAuthor, settleMessageAuthor } from "./authorship";
 import { messageTextDigest, recordMessageAuthor, recordTeamEvent } from "./events";
 import { teamMode } from "./sessions";
 import { existingTeamStore } from "./store";
+import { sessionBoundStream } from "./streams";
 import { recordConversationEvent } from "./subjects";
 import { teamTelegramHook } from "./telegramSignIn";
 
-export { claimMessageAuthor, isHumanActor, recordConversationEvent, recordMessageAuthor, recordTeamEvent, refuseAnonymous, settleMessageAuthor, teamActor, teamMode, teamTelegramHook };
+export { claimMessageAuthor, isHumanActor, recordConversationEvent, recordMessageAuthor, recordTeamEvent, refuseAnonymous, sessionBoundStream, settleMessageAuthor, teamActor, teamMode, teamTelegramHook };
 export type { MessageAuthorClaim, PriorSubmission } from "./contract";
 
 /** `client message id → sender`, for the ids a feed asks about. Members are
@@ -46,6 +47,27 @@ export function messageSenders(
       if (inConversation && (!conversationId || !inConversation(conversationId))) continue;
       const member = members.get(memberId);
       if (member) senders[id] = { memberId, name: member.name, color: member.color, initials: memberInitials(member.name) };
+    }
+    return senders;
+  } catch {
+    return {};
+  }
+}
+
+/** `client message id → sender` for every message a member sent into one
+    conversation. The provenance route reads it for the ids no transcript
+    record names directly (a queued message's per-version delivery key). */
+export function conversationMessageSenders(conversationId: string): Record<string, MessageSender> {
+  try {
+    const store = existingTeamStore();
+    if (!store) return {};
+    const rows = store.messageAuthorsForConversation(conversationId);
+    if (!rows.length) return {};
+    const members = new Map(store.members().map((member) => [member.id, member]));
+    const senders: Record<string, MessageSender> = {};
+    for (const { clientMessageId, memberId } of rows) {
+      const member = members.get(memberId);
+      if (member) senders[clientMessageId] = { memberId, name: member.name, color: member.color, initials: memberInitials(member.name) };
     }
     return senders;
   } catch {
@@ -113,8 +135,10 @@ export const team: TeamModule = {
   claimMessageAuthor,
   settleMessageAuthor,
   messageSenders,
+  conversationMessageSenders,
   subjectAuthorship,
   teamTelegramHook,
+  sessionBoundStream,
 };
 
 /** What `conversation_messages` says about a human message's author. */

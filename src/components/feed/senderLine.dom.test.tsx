@@ -6,6 +6,7 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
 import { structuredUserReference } from "@/lib/runtime/codexStructuredUserText";
+import { deliveryDedupToken, nativeQueueDeliveryKey } from "@/lib/runtime/deliveryDedup";
 import type { MessageSender } from "@/lib/team/contract";
 
 import { FeedItem } from "./FeedItem";
@@ -74,6 +75,18 @@ test("a structured Codex message names its member through the marker's delivery 
   const lookup = provenanceLookupFor({ submissions: { [token]: "sub-oleh-1" }, senders: { "sub-oleh-1": OLEH } }, [item]);
   const container = render(<MessageProvenanceProvider value={lookup}><FeedItem item={item} /></MessageProvenanceProvider>);
   expect(senderOf(container)).toEqual({ id: "m_oleh", text: "Oleh" });
+});
+
+test("a queued Codex message names its member through its version's delivery token", () => {
+  /* The record of a queued message names `<entry>-v<revision>`, which no
+     outbox row is filed under, so the route names the sender by the token
+     alone and leaves `submissions` untouched. */
+  const token = deliveryDedupToken(nativeQueueDeliveryKey("operation-queued-1", 2));
+  const item = { kind: "user", ts: TS, text: "Then rerun the gate", structuredUserRef: structuredUserReference(token, true) } as Item;
+  const lookup = provenanceLookupFor({ senders: { [token]: MIRA } }, [item]);
+  const container = render(<MessageProvenanceProvider value={lookup}><FeedItem item={item} /></MessageProvenanceProvider>);
+  expect(senderOf(container)).toEqual({ id: "m_mira", text: "Mira Koval" });
+  expect(lookup.submissionFor(token)).toBeNull();
 });
 
 test("a message nobody can name draws no sender line", () => {

@@ -2,6 +2,8 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
 import { callerConversationId, directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
+import { matchesOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 
 import { MEMBER_REQUIRED_CODE, type TeamActor } from "./contract";
 import { requestSession, teamMode, type LiveSession } from "./sessions";
@@ -11,7 +13,8 @@ import { requestSession, teamMode, type LiveSession } from "./sessions";
  * it names the person where `operatorAuthority` answers only operator or agent:
  *
  *   an agent's spawn capability → agent
- *   a Viewer service's tag      → service
+ *   the operator spawn capability,
+ *   or a Viewer service's tag    → service
  *   a live member session       → member
  *   otherwise                   → operator in solo mode, anonymous in team mode
  *
@@ -24,6 +27,7 @@ type ActorRequest = Pick<NextRequest, "headers" | "cookies">;
 export function teamActor(req: ActorRequest): TeamActor {
   const conversationId = callerConversationId(req);
   if (conversationId) return { kind: "agent", conversationId };
+  if (operatorSpawnCapabilityPresented(req)) return { kind: "service", service: "viewer" };
   if (!directOperatorActivityAuthority(req).ok) return { kind: "service", service: "viewer" };
   let live: LiveSession | null = null;
   try {
@@ -36,6 +40,21 @@ export function teamActor(req: ActorRequest): TeamActor {
     return teamMode() === "team" ? { kind: "anonymous" } : { kind: "operator" };
   } catch {
     return { kind: "anonymous" };
+  }
+}
+
+/* The operator spawn capability lives in a file only Viewer processes read; no
+   browser holds it. The in-process launchers (the scheduled Telegram report,
+   the seat, the MCP spawn, the onboarding health check) present it, and the
+   identity gate already admits it as first-party, so it names a Viewer service
+   here too rather than falling through to "anonymous" in team mode. */
+function operatorSpawnCapabilityPresented(req: ActorRequest): boolean {
+  const capability = req.headers.get(VIEWER_SPAWN_CAPABILITY_HEADER)?.trim() ?? "";
+  if (!capability) return false;
+  try {
+    return matchesOperatorSpawnCapability(capability);
+  } catch {
+    return false;
   }
 }
 

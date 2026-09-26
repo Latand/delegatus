@@ -194,8 +194,11 @@ export interface TeamModule {
   /** Records a claim once the host admitted the submission. */
   settleMessageAuthor(claim: MessageAuthorClaim | null): void;
   messageSenders(clientMessageIds: readonly string[], inConversation?: (conversationId: string) => boolean): Record<string, MessageSender>;
+  conversationMessageSenders(conversationId: string): Record<string, MessageSender>;
   subjectAuthorship(subjectIds: readonly string[]): Record<string, SubjectAuthorshipView>;
   teamTelegramHook(input: { from: { id: number; first_name?: string; username?: string; is_bot?: boolean } | undefined; chatType: string; text: string | undefined }): string | null;
+  /** An event stream that ends when the member session that opened it does. */
+  sessionBoundStream(req: RequestHeaders, signal: AbortSignal, open: (signal: AbortSignal) => ReadableStream<Uint8Array>): ReadableStream<Uint8Array>;
 }
 
 /** The module as an install without it answers: always solo, nobody named. */
@@ -208,8 +211,10 @@ export const nullTeam: TeamModule = {
   claimMessageAuthor: () => null,
   settleMessageAuthor: () => {},
   messageSenders: () => ({}),
+  conversationMessageSenders: () => ({}),
   subjectAuthorship: () => ({}),
   teamTelegramHook: () => null,
+  sessionBoundStream: (_req, signal, open) => open(signal),
 };
 
 /* ---- pure helpers --------------------------------------------------------- */
