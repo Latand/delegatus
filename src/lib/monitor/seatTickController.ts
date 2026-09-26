@@ -1136,7 +1136,7 @@ async function reconcileOutstandingWake(context: {
   if (settlement!.row === "keep") return next;
   if (state.accounting) {
     const accounting = new SeatTickAccounting(state.accounting.filename, context.project);
-    accounting.settle(wake.clientMessageId, next, settlement!.row === "commit" ? "landed" : "unsent");
+    accounting.settle(wake.clientMessageId, next, settlement!.row === "commit" ? "landed" : "unsent", observation.evidence?.record?.settledAt ?? null);
     return accounting.readState();
   }
   context.writeState(context.project, next);

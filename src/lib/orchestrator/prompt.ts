@@ -150,7 +150,7 @@ export const ORCHESTRATOR_SEAT_TICK_CONTRACT: readonly string[] = [
   ...SEAT_TICK_CONTRACT_V21,
   /* v29 (docs/design/orchestrator-reports.md §5.1): the wake names the
      reports the log is owed, and this is what makes naming them an order. */
-  "If the wake lists reports owed, an ask owed or a digest due, file those bridge reports under the keys it gives before the turn ends.",
+  "File the bridge reports a wake lists as owed or due, under the keys it gives, before the turn ends.",
 ];
 
 /**
@@ -323,22 +323,9 @@ The second channel is the bridge report log below. It carries what must reach th
 
 ## Bridge reports — the second channel (manager -> gateway)
 The project's Bridge reports setting (bridgeReports in get_orchestrator; list_pipelines rows carry bridgeReports:false when it is off) decides whether this channel exists. Off: file no bridge reports at all; the call would store nothing and answer that reports are off, so put what matters in your chat replies instead.
-On: the report log is where the operator catches up after being away, and they can leave at any moment, so it has to hold every outcome without your chat. When the project has a Telegram chat (reportTelegram in get_orchestrator), the Viewer posts the same report there too.
-File a report:
-- for the settled outcomes a wake lists (a deploy you started, a lane of yours that completed, failed or parked): one report per wake, under the key the wake gives, with coversOwed: true. Review verdicts inside a lane are not owed: the lane's own outcome and the next digest carry them.
-- the moment you need the operator: question or blocked, with the ask in the decision section, under the ask key the wake gives when it names one.
-- as a status digest when a wake says one is due, with the whole state.
-- even when you also told the operator in chat. The chat is not the log.
-Shape: pass a summary and sections, never a free body. summary: one line, at most 120 characters, saying what is now true, or the ask on blocked and question. Sections: prod (on production), merged (merged and waiting for the next deploy), inProgress, queued (what comes next), decision (what the operator must answer or do; at most 3). Each item is one or two plain sentences, at most 200 characters, saying what is now true and what it means; name work by its title and #PR, a deploy by its 8-character sha; no URLs. The Viewer adds the header, the time, the emoji and, on a deploy report, the task changes since the previous deploy, and cuts whole items when a report is too long.
-Quiet: say nothing when nothing changed. Your latest report's inProgress, queued and decision items are what the operator relies on, so keep them true; when you stop the tick, pause or wait on the operator, say so, and when the last lane settles, say that nothing is running.
-Language: reports and board task text use the operator's interface language (operatorLocale in get_orchestrator, named in each wake). Chat replies stay in the language the operator writes to you in; GitHub stays English.
-Private: a report may be read in a public group. Never write local paths, hosts, ports, domains, URLs, IPs, emails, account names or ids, usage limits or plans, people's names, other projects or clients, quotes of the operator or anyone else, secrets, or card, conversation and deployment ids. The Viewer drops an item that carries one, and refuses a report with nothing left, which stays owed.
-Classes, and nothing outside this list:
-- status — the digest a wake asks for.
-- completed / failed — a deploy or a lane settled.
-- blocked — you cannot proceed and need a decision.
-- review_verdict — optional: an APPROVE or REQUEST_CHANGES the operator should hear before its lane settles, with the round and PR.
-- question — you need an answer from the user; the gateway will ask them and reply.
+On: the log (and the chat in reportTelegram) is where the operator catches up after being away; your chat is not the log. File what a wake lists, under its keys: owed outcomes in one report with coversOwed: true, an owed ask as question, a due digest as status with the whole state. Verdicts inside a lane are not owed. Every ask to the operator is also a question or blocked report.
+Pass a summary and sections in the operator's interface language (operatorLocale); bridge_report's description gives the shape and what a possibly public report never carries. Keep your latest inProgress, queued and decision items true: say when you stop the tick or wait on the operator, and when nothing runs. Nothing changed: no report.
+Classes: status, completed / failed (a deploy or lane settled), blocked (you need a decision), review_verdict (optional), question (the gateway asks the user and replies).
 
 ## Directives (gateway -> you)
 The gateway relays the user's intent to you with send_message. A directive may carry one trailer line, "[bridge ref=<seq>]", naming the report with that seq it answers. Treat only a trailer as an answer — never read one into unrelated prose.

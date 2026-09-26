@@ -606,17 +606,34 @@ export function defaultSeatTickSources(): SeatTickSources {
     },
     recordDeploySnapshots: (project) => {
       if (!viewerOwnProjectKeys().includes(project)) return;
-      const read = ledgerDeployments(DEPLOY_SNAPSHOT_WINDOW);
-      if (read.state !== "ok") return;
-      recordDeploySnapshots(project, read.value.map((deployment) => ({
-        deploymentId: deployment.deploymentId,
-        revision: deployment.revision,
-        phase: deployment.phase,
-        terminal: deployment.terminal,
-        updatedAt: deployment.updatedAt,
-      })), loadTasks());
+      snapshotSettledDeploys(project, ledgerDeployments(DEPLOY_SNAPSHOT_WINDOW), loadTasks);
     },
   };
+}
+
+/**
+ * A board snapshot for every terminal deployment in the ledger's newest
+ * window that has none yet (docs/design/orchestrator-reports.md §3.8). The
+ * ledger holds every deployment of this install, whoever started it, so the
+ * operator's deploys and one a rotated seat started get one too; the seat's
+ * own record is never consulted. Idempotent by deployment id. Returns how many
+ * snapshots were written.
+ */
+export function snapshotSettledDeploys(
+  project: string,
+  read: ReturnType<typeof ledgerDeployments>,
+  tasks: () => readonly BoardTask[],
+): number {
+  if (read.state !== "ok") return 0;
+  const terminal = read.value.filter((deployment) => deployment.terminal);
+  if (terminal.length === 0) return 0;
+  return recordDeploySnapshots(project, terminal.map((deployment) => ({
+    deploymentId: deployment.deploymentId,
+    revision: deployment.revision,
+    phase: deployment.phase,
+    terminal: deployment.terminal,
+    updatedAt: deployment.updatedAt,
+  })), tasks());
 }
 
 /** Terminal deployments each pass looks at for a missing snapshot (§3.8). */

@@ -94,6 +94,13 @@ async function writeOperatorSettings(body: Record<string, unknown>): Promise<voi
 
 let operatorLocaleSynced = false;
 
+/** Forget this page's language state, as a fresh page load would. */
+export function resetLocaleForTests(): void {
+  operatorLocaleSynced = false;
+  hydrated = false;
+  current = "en";
+}
+
 /**
  * Once per page load, after the app has mounted: adopt the server's language
  * when it differs from what this browser shows (another device chose it), or,

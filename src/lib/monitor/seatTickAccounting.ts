@@ -738,8 +738,10 @@ export class SeatTickAccounting {
   }
   /** End the prepared attempt under `expectedKey` (#1465). See
       {@link WakeDisposition} for what each ending stamps. `state` carries the
-      instant a landing is stamped at, on `lastWakeAt`. */
-  settle(expectedKey: string, state: SeatTickProjectState, disposition: WakeDisposition): boolean {
+      instant a landing is stamped at, on `lastWakeAt`; `reachedAt` is when the
+      delivery record says the wake reached the seat, which the report ledger
+      stamps its owed outcomes with (docs/design/orchestrator-reports.md §5.1). */
+  settle(expectedKey: string, state: SeatTickProjectState, disposition: WakeDisposition, reachedAt?: string | null): boolean {
     return this.mutate((tx, row) => {
       const wake = row.state.outstandingWake;
       if (!wake || wake.clientMessageId !== expectedKey || (disposition === "unsent" && wake.dispatch?.state === "active")) return false;
@@ -764,7 +766,7 @@ export class SeatTickAccounting {
           tx.put({ ...child, harvestedEpoch: wake.seatEpoch });
         }
       }
-      const current = disposition === "landed" ? seatTickWakeCommit(row.state, wake.commit, Date.parse(state.lastWakeAt!)) : row.state;
+      const current = disposition === "landed" ? seatTickWakeCommit(row.state, wake.commit, Date.parse(state.lastWakeAt!), reachedAt) : row.state;
       /* A release carries the marker the next wake's identity is derived from
          (#1672); a landing has already cleared it in the commit. */
       row.state = { ...current, accounting: undefined, harvestedChildren: [], outstandingWake: null,

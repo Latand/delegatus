@@ -72,8 +72,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 28, and a v27 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(28);
+test("the default mandate is at version 29, and a v28 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(29);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -91,9 +91,15 @@ test("the default mandate is at version 28, and a v27 seat reads as stale", () =
      says when to mark the lane that finishes a task. v27 (#2146) says to file
      no bridge reports while the project's Bridge reports setting is off. v28
      (#2166) opens without issue numbers, greets in plain words and runs a
-     project's own release step only when the operator turned releases on. */
-  expect(orchestratorMandateStale(27)).toBe(true);
-  expect(orchestratorMandateStale(28)).toBe(false);
+     project's own release step only when the operator turned releases on.
+     v29 (docs/design/orchestrator-reports.md §5.7) makes the report log the
+     operator's catch-up surface: file what each wake lists as owed or due,
+     under its keys, as a summary and sections in the interface language. */
+  expect(orchestratorMandateStale(28)).toBe(true);
+  expect(orchestratorMandateStale(29)).toBe(false);
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("keep these rare");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Off: file no bridge reports at all");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('onExhausted?: "advance" | "stop-after-fix" | "park"');
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Use stop-after-fix only when the operator asked to look before merge");
@@ -124,6 +130,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   26: "4da3e6ed8d2f92540fc4fb1bcab2373a7173ca673736250ee235d8219b19b547",
   27: "1135c1274c1dc36fcc1f595035837e13f0913a818ed7d59ce1db79791de01a37",
   28: "90819032b795f74b3ac4f5bf0699f5443cf31353e95c1ad19ef87b16e8e1ab60",
+  29: "220722434e6ce6a265155097b000d1ec5cbf6461e67e7d39193b61cae5b6318a",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,

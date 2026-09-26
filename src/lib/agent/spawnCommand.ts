@@ -79,11 +79,14 @@ const PIN_FALLBACK_TITLE_UK = typeof PIN_FALLBACK_TITLE_UK_MESSAGE === "string"
     (docs/design/orchestrator-reports.md §3.5, §4.2). The request's
     Accept-Language, which is the browser's language and ignores the toggle,
     decides only while no client has reported the interface language. */
+export function viewerTitleLocale(chosen: "en" | "uk" | null, acceptLanguage: string | null): "en" | "uk" {
+  if (chosen) return chosen;
+  const language = acceptLanguage?.trim().toLowerCase() ?? "";
+  return language === "uk" || language.startsWith("uk-") ? "uk" : "en";
+}
+
 function prefersUkrainian(req: Pick<NextRequest, "headers">): boolean {
-  const chosen = operatorLocale();
-  if (chosen) return chosen === "uk";
-  const language = req.headers.get("accept-language")?.trim().toLowerCase() ?? "";
-  return language === "uk" || language.startsWith("uk-");
+  return viewerTitleLocale(operatorLocale(), req.headers.get("accept-language")) === "uk";
 }
 
 function pinFallbackTitle(req: Pick<NextRequest, "headers">): string {
