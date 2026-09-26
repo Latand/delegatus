@@ -24,12 +24,13 @@ import { procBackend } from "@/lib/proc";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { signalProcessGroup } from "@/lib/processGroup";
 import { hasUserAuthoredMessage } from "@/lib/session/reader";
+import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
 import { buildImagePayload, deleteInboxImages, spawnAgentWithPrompt } from "@/lib/tmux";
 import { admitRecoveredLaunch } from "@/lib/tasks/launchMembership";
 import { hardenedRedact } from "@/lib/view/compactText";
 
-import { ClaudeStreamBrokerHost } from "./claudeStreamBrokerHost";
-import { CodexAppServerHost } from "./codexAppServerHost";
+import { ClaudeStreamBrokerHost, type ClaudeStreamBrokerHostOptions } from "./claudeStreamBrokerHost";
+import { CodexAppServerHost, type CodexAppServerHostOptions } from "./codexAppServerHost";
 import { isRuntimeHostTransportFailure, RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import { supervisedRuntimeHostUnavailableReason } from "./flags";
 import { StructuredHostAdoptionCleanupError, StructuredSessionMaterializationError, type EngineHost, type HostState, type SessionMaterializationEvidence } from "./engineHost";
@@ -42,6 +43,7 @@ import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { runtimeImageCapability, runtimeImageStore } from "./runtimeImageStore";
 import { publishFilesRevision } from "./filesRevision";
 import { parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "./structuredContent";
+import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH } from "./telegramConnectorEnv";
 
 export type SpawnedStructuredHost = EngineHost & {
   identity: { threadId: string; path: string | null } | { sessionId: string };
@@ -985,6 +987,20 @@ export interface StructuredSpawnInput {
   client: RuntimeHostClient;
 }
 
+function admittedStructuredLaunchInput(input: StructuredSpawnInput): StructuredSpawnInput {
+  const receipt = input.registry.readOnlySnapshot().receipts[input.receipt.launchId];
+  if (!receipt) throw new Error("structured spawn receipt is unavailable before launch");
+  if (input.spec.launchProfile?.mcpServers.includes("telegram")
+    && !receipt.launchProfile.mcpServers.includes("telegram")) {
+    throw new Error(TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH);
+  }
+  if (receipt.launchProfile.mcpServers.includes("telegram") && receipt.telegramSeatGrant
+    && !isCurrentOperatorSeat(receipt.parentConversationId ?? "", input.registry)) {
+    throw new Error("telegram MCP orchestrator seat is no longer active");
+  }
+  return { ...input, receipt, spec: { ...input.spec, launchProfile: receipt.launchProfile } };
+}
+
 interface HostBinding {
   stopPersistence(): void;
   unregister(): Promise<void>;
@@ -1587,6 +1603,7 @@ export function claudeStructuredHostOptions(
   input: Pick<StructuredSpawnInput, "spec" | "account">,
   access: Pick<StructuredHostAccessMaterialization, "env" | "host">,
   initialEventCursor?: number,
+  validateTelegramGrant?: () => void,
 ) {
   const profile = input.spec.launchProfile ?? {} as LaunchProfile;
   return {
@@ -1596,6 +1613,7 @@ export function claudeStructuredHostOptions(
     providerAccount: Boolean(input.account.claudeProvider),
     allowSubagents: profile.allowSubagents,
     mcpServers: profile.mcpServers,
+    validateTelegramGrant,
     readOnly: launchProfileEngineReadOnly(profile),
     restricted: profile.sandbox === "restricted",
     model: input.account.claudeProvider
@@ -1611,9 +1629,21 @@ export function claudeStructuredHostOptions(
   };
 }
 
-async function defaultStartHost(input: StructuredSpawnInput, capability: string): Promise<SpawnedStructuredHost> {
+/** Narrow external-engine seam for launch-path tests; production passes none. */
+export async function defaultStartHost(
+  input: StructuredSpawnInput,
+  capability: string,
+  engineProcess: {
+    claude?: Partial<Pick<ClaudeStreamBrokerHostOptions, "spawnProcess" | "readAuthStatus">>;
+    codex?: Partial<Pick<CodexAppServerHostOptions, "spawnProcess">>;
+  } = {},
+): Promise<SpawnedStructuredHost> {
+  input = admittedStructuredLaunchInput(input);
   if (input.engine === "copilot") return await startCopilotStructuredHost(input, capability);
   const profile = input.spec.launchProfile ?? {} as LaunchProfile;
+  const validateTelegramGrant = profile.mcpServers.includes("telegram")
+    ? () => { admittedStructuredLaunchInput(input); }
+    : undefined;
   const resumeSessionId = structuredResumeSessionId(input);
   const initialEventCursor = resumeSessionId
     ? input.registry.readOnlySnapshot().entries[sessionKeyId({ engine: input.engine, sessionId: resumeSessionId })]?.structuredHost?.eventCursor
@@ -1633,6 +1663,7 @@ async function defaultStartHost(input: StructuredSpawnInput, capability: string)
       effort: profile.effort ?? undefined,
       allowSubagents: profile.allowSubagents,
       mcpServers: profile.mcpServers,
+      validateTelegramGrant,
       /* Plugin grant from the durable profile (issue #687): present only for
          an operator-launched root session that did not opt out. */
       plugins: profile.plugins,
@@ -1641,13 +1672,17 @@ async function defaultStartHost(input: StructuredSpawnInput, capability: string)
       approvalPolicy: profile.permissionMode ?? undefined,
       initialEventCursor,
       env,
+      ...engineProcess.codex,
     };
     return resumeSessionId
       ? await CodexAppServerHost.adopt(resumeSessionId, options)
       : await CodexAppServerHost.start(options);
   }
   const form = structuredClaudeLaunchForm(input);
-  const options = claudeStructuredHostOptions(input, { env, host: access.host }, initialEventCursor);
+  const options = {
+    ...claudeStructuredHostOptions(input, { env, host: access.host }, initialEventCursor, validateTelegramGrant),
+    ...engineProcess.claude,
+  };
   return form.kind === "resume"
     ? await ClaudeStreamBrokerHost.adopt(form.sessionId, options)
     : await ClaudeStreamBrokerHost.start({ ...options, ...(form.sessionId ? { sessionId: form.sessionId } : {}) });
@@ -1978,6 +2013,7 @@ export async function spawnStructuredConversation(
     return Promise.race([work, durableSetupTimeout]);
   };
   try {
+    input = admittedStructuredLaunchInput(input);
     /* Bypass acceptance and project trust are staged in the managed home
        before runtime admission: no structured launch may ever wait at an
        interactive acceptance gate, whichever caller reached this point. */
@@ -2002,6 +2038,7 @@ export async function spawnStructuredConversation(
       parentConversationId: input.receipt.parentConversationId,
       ...(input.receipt.purpose === "resume-successor" ? { sessionId: structuredResumeSessionId(input) } : {}),
     }));
+    input = admittedStructuredLaunchInput(input);
     const capability = input.registry.rotateSpawnCapabilityForReceipt(input.receipt.launchId);
     const resumeEntry = resumeKey ? input.registry.readOnlySnapshot().entries[sessionKeyId(resumeKey)] : null;
     if (resumeEntry?.structuredHost) {

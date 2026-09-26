@@ -188,6 +188,7 @@ export interface CodexAppServerHostOptions {
   effort?: string;
   allowSubagents?: boolean;
   mcpServers?: string[];
+  validateTelegramGrant?: () => void;
   /** Codex plugins granted to this session (issue #687). Empty or absent
       denies the plugin subsystem, which is the default for every session. */
   plugins?: readonly string[];
@@ -1406,15 +1407,22 @@ export class CodexAppServerHost implements EngineHost {
       "realtime_conversation",
     ];
     const granted = grantedPlugins(options.plugins);
-    const childEnv = withTelegramConnectorGrant(
-      subscriptionEnv(
-        options.env ?? process.env,
-        options.codexHome,
-        granted.length > 0,
-        options.forwardGitHubConfig === true,
-      ),
-      options.mcpServers,
-    );
+    let childEnv: NodeJS.ProcessEnv;
+    try {
+      childEnv = withTelegramConnectorGrant(
+        subscriptionEnv(
+          options.env ?? process.env,
+          options.codexHome,
+          granted.length > 0,
+          options.forwardGitHubConfig === true,
+        ),
+        options.mcpServers,
+        options.validateTelegramGrant,
+      );
+    } catch (error) {
+      options.releaseCleanup?.();
+      throw error;
+    }
     let child: ChildProcessWithoutNullStreams;
     try {
       child = spawnProcess(options.binary ?? process.env.LLV_CODEX_BINARY ?? "codex", args, {

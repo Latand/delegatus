@@ -11,7 +11,7 @@ import { AgentRegistry } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { procBackend } from "@/lib/proc";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
-import { saveTelegramSession, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
+import { saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 
 import { CodexAppServerHost, redactCodexHostDiagnostic, rolloutTurnsFromDisk } from "./codexAppServerHost";
 import { encodeCodexStructuredUserText } from "./codexStructuredUserText.server";
@@ -492,6 +492,8 @@ describe("CodexAppServerHost", () => {
     process.env.LLV_STATE_DIR = path.join(directory, "state");
     try {
       const stored = saveTelegramSession("1ApWapzMBu4placeholder-not-a-real-session");
+      writeTelegramConnection({ version: 1, status: "connected", credentialRef: stored.credentialRef,
+        identity: null, lastHealthCheckAt: null, errorCode: null, identityIdUpgradedAt: null });
       const rootServer = new FakeAppServer("telegram-root");
       rootServer.mcpServers = {
         viewer: { command: "viewer-mcp", enabled: true },
