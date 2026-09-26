@@ -3539,3 +3539,56 @@ test("a message to a seat's deputy is refused before anything is reserved or res
     else process.env.LLV_STATE_DIR = previousStateDir;
   }
 });
+
+/* #1835 × ghost-seat §4: a release cuts every in-flight turn, a live ghost's
+   included, and owes each one continuation. That continuation is the Viewer's
+   own, under the obligation's key, and it resumes the one job; everything
+   else, including the same text and origin sent by a caller, stays refused. */
+test("a live deputy takes the Viewer's own interruption continuation and nothing else", async () => {
+  const { beginDeputy, recordDeputyFork, activateDeputy, endDeputy } = await import("@/lib/orchestrator/deputies");
+  const { RECOVERY_NOTICE_ORIGIN } = await import("./recoveryNotices");
+  const { interruptionObligationId } = await import("./interruptionObligations");
+  const previousStateDir = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(sandbox, "deputy-state-"));
+  try {
+    const begun = beginDeputy({
+      project: "proj-ghost", seatConversationId: "conversation_seat", seatEpoch: 1, seatPath: "/sessions/seat.jsonl",
+      clientRequestId: "ask-1", ask: { text: "file a task", images: 0, sender: null },
+    });
+    if (begun.kind !== "begun") throw new Error("deputy did not begin");
+    const askId = begun.deputy.askId;
+    recordDeputyFork(askId, { deputyConversationId: conversationId, artifactPath, forkRecordCount: 2 });
+    activateDeputy(askId);
+    const obligationId = interruptionObligationId({
+      conversationId, hostKey: "host-key", owner: { pid: 4242, startIdentity: "boot-1" }, turnRef: "turn-1", boundary: "b-1",
+    } as Parameters<typeof interruptionObligationId>[0]);
+    const untouched = {
+      enabled: () => true,
+      client: () => { throw new Error("reached the host"); },
+      registry: () => { throw new Error("reached the registry"); },
+    } as const;
+    const continuation = { conversationId, path: "", clientMessageId: obligationId, text: "continue", origin: RECOVERY_NOTICE_ORIGIN };
+
+    /* Startup recovery's continuation passes the fence to the delivery path. */
+    await expect(enqueueStructuredMessage(continuation, { ...untouched, interruptionContinuation: true })).rejects.toThrow("reached the registry");
+    /* The same key and origin from anyone else — a request body can carry
+       both — is refused. */
+    expect(await enqueueStructuredMessage(continuation, untouched)).toMatchObject({ ok: false, code: "deputy_conversation_closed", status: 409 });
+    /* The recovery flag admits only an obligation's key under the recovery origin. */
+    expect(await enqueueStructuredMessage({ ...continuation, clientMessageId: "mcp_send_worker" }, { ...untouched, interruptionContinuation: true }))
+      .toMatchObject({ ok: false, code: "deputy_conversation_closed" });
+    expect(await enqueueStructuredMessage({ ...continuation, origin: { kind: "operator" } }, { ...untouched, interruptionContinuation: true }))
+      .toMatchObject({ ok: false, code: "deputy_conversation_closed" });
+    /* An operator or worker message to the same live deputy stays refused. */
+    expect(await enqueueStructuredMessage({ conversationId, path: "", clientMessageId: "composer_1", text: "and also…", origin: { kind: "operator" } }, untouched))
+      .toMatchObject({ ok: false, code: "deputy_conversation_closed" });
+
+    /* An ended deputy takes no continuation: its job is over. */
+    endDeputy(askId, { outcome: "timeout" });
+    expect(await enqueueStructuredMessage(continuation, { ...untouched, interruptionContinuation: true }))
+      .toMatchObject({ ok: false, code: "deputy_conversation_closed" });
+  } finally {
+    if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousStateDir;
+  }
+});

@@ -759,10 +759,27 @@ it lives:
   every send, steer and injection goes through, the conversation-host route
   before its legacy resume, and the `resume` and `compact` actions. The one
   message admitted is the ghost route's own, under the key derived from the
-  record, while the record is pending. Interrupt, kill and answers still reach
-  the ghost. So a worker's report never revives an ended ghost, a live one
-  never gets a second turn under the seat's authority, and the ask is the only
-  message its block ever answers.
+  record, while the record is pending. The other is the Viewer's own
+  continuation of a turn a release cut (#1835), under the interruption
+  obligation's key and the recovery origin, while the ghost is live and
+  unexpired: that turn is the one job, cut in half. Only startup recovery can
+  mark a delivery as that continuation; a request body carrying the same key
+  and origin is refused. Interrupt, kill and answers still reach the ghost.
+  So a worker's report never revives an ended ghost, a live one never gets a
+  second turn under the seat's authority, and the ask is the only message its
+  block ever answers.
+- **A cut turn is not an answer.** `done` needs the ghost's own transcript to
+  end on an assistant record that says something and leaves no tool call
+  open. A turn a release cut ends on a tool call, a tool result or a thought,
+  so the re-hosted ghost reads idle and still waits for its continuation; one
+  whose host never comes back ends `host-died` after the grace, and one that
+  never finishes ends at expiry.
+- **An uncertain first delivery leaves the record pending.** When the runtime
+  may have taken the ask without acknowledging it in time, the route answers
+  with `deliveryUncertain` and keeps the record pending, so the ghost keeps
+  the seat's authority while it may be working and the sweep settles it from
+  runtime facts: `done` once it answers, `timeout` with its host released at
+  expiry. Only a definite refusal ends the record `failed`.
 - **What a ghost spawns is the seat's child.** A spawn from a deputy's
   capability records the seat as its parent, so the seat tick harvests the
   child and its report goes to the seat; the deputy stays the launch's

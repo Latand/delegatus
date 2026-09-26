@@ -20,6 +20,7 @@ import type { OrchestratorSeat } from "./seats";
  *  - the record is past its expiry: `timeout`, host interrupted;
  *  - the deputy's turn is idle after it answered: `done` (also for a record
  *    still pending whose delivery went through and whose activation was lost);
+ *    a turn a release cut has not answered and waits for its continuation;
  *  - its host is gone before it answered: `host-died`.
  *
  * Ending releases the host, writes the touched ids and the collapsed line onto
@@ -48,7 +49,7 @@ export function deputyVerdict(
     nowMs: number;
     seat: Pick<OrchestratorSeat, "conversationId" | "seatEpoch"> | null;
     runtime: DeputyRuntimeFacts | null;
-    /** The deputy wrote at least one assistant record of its own. */
+    /** The deputy's own transcript ends on its answer ({@link deputyAnswered}). */
     answered: boolean;
   },
 ): DeputyVerdict {
@@ -112,8 +113,32 @@ export function deputyNoteKey(askId: string): string {
   return `deputy_note_${crypto.createHash("sha256").update(askId).digest("hex").slice(0, 40)}`;
 }
 
-function hasAssistantRecord(lines: readonly string[]): boolean {
-  return lines.some((line) => line.includes('"type":"assistant"') || line.includes('"type": "assistant"'));
+/** Whether the deputy's own transcript ends on an answer: its last
+    conversational record is an assistant record that closes the turn, with
+    something said and no tool call left open. A turn a release cut ends on a
+    tool call, a tool result or a thought, and is not done however idle its
+    host reads; the Viewer's continuation (#1835) resumes it. */
+export function deputyAnswered(lines: readonly string[]): boolean {
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    let record: unknown;
+    try {
+      record = JSON.parse(lines[index]);
+    } catch {
+      continue;
+    }
+    if (!record || typeof record !== "object") continue;
+    const { type, isMeta, message } = record as { type?: unknown; isMeta?: unknown; message?: { content?: unknown } };
+    if (type === "user" && isMeta === true) continue;
+    if (type === "user") return false;
+    if (type !== "assistant") continue;
+    const content = message?.content;
+    if (typeof content === "string") return content.trim().length > 0;
+    if (!Array.isArray(content)) return false;
+    const kinds = content.map((block) => (block && typeof block === "object" ? (block as { type?: unknown }).type : null));
+    if (kinds.includes("tool_use")) return false;
+    return kinds.some((kind) => kind !== "thinking" && kind !== "redacted_thinking");
+  }
+  return false;
 }
 
 /** End one record and tell the seat. Safe to call again: nothing repeats. */
@@ -173,7 +198,7 @@ export async function sweepDeputies(ports: DeputySweepPorts): Promise<boolean> {
       nowMs,
       seat: ports.activeSeat(deputy.project),
       runtime,
-      answered: lines ? hasAssistantRecord(lines) : false,
+      answered: lines ? deputyAnswered(lines) : false,
     });
     if (verdict.kind === "wait") {
       live = true;

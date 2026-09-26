@@ -50,6 +50,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<Record<string
       conversationId: result.deputyConversationId,
       replayed: result.replayed,
       deputy: result.deputy,
+      ...(result.deliveryUncertain ? { deliveryUncertain: true } : {}),
     });
   } catch (thrown) {
     const error = thrown instanceof Error ? thrown.message : String(thrown);

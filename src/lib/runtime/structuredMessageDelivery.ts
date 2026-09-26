@@ -44,6 +44,8 @@ import {
 } from "./structuredContent";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { markStructuredRuntimeSessionRecovered } from "./startupStatus";
+import { isInterruptionObligationId } from "./interruptionObligations";
+import { RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
 
 export interface StructuredMessageRequest {
   path: string;
@@ -108,6 +110,11 @@ export interface StructuredMessageDependencies {
   /** Cross-process fence spanning image publication and durable reservation. */
   withImageAdmissionLock?: <T>(operation: () => Promise<T>) => Promise<T>;
   executeSwitch?: (conversationId: ViewerConversationId, registry: AgentRegistry) => Promise<RegistryConversation>;
+  /** Set only by startup recovery when it delivers the continuation an
+      interruption obligation is owed (#1835). A dependency on purpose: nothing
+      a request body carries can set it. It admits that continuation to a
+      seat's live deputy, whose one job the release cut. */
+  interruptionContinuation?: boolean;
 }
 
 /** Serializes preflight → publication → reservation per (conversation,
@@ -813,8 +820,15 @@ export async function enqueueStructuredMessage(
 ): Promise<StructuredMessageResult | null> {
   /* A seat's deputy takes its one ask and nothing after it, whoever sends and
      whether it is live or ended (docs/design/ghost-seat.md §4). Refused before
-     anything is reserved, so no host is resumed for it. */
-  const deputyRefusal = deputyDeliveryRefusal(request);
+     anything is reserved, so no host is resumed for it. The one exception is
+     startup recovery's continuation of the turn a release cut, while the
+     deputy is live: that turn is still its one job. */
+  const deputyRefusal = deputyDeliveryRefusal({
+    ...request,
+    interruptionContinuation: dependencies.interruptionContinuation === true
+      && request.origin?.role === RECOVERY_NOTICE_ORIGIN.role
+      && isInterruptionObligationId(request.clientMessageId),
+  });
   if (deputyRefusal) return { ok: false, structured: true, outcome: "failed", ...deputyRefusal };
   if (!(dependencies.enabled ?? structuredHostsEnabled)()) return null;
   const imageAdmission = admitRuntimeImagePayload({ images: request.images ?? [] });

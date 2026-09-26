@@ -93,7 +93,8 @@ export function productionDeputyCommandPorts(): DeputyCommandPorts {
         origin: deputyDeliveryOrigin(origin),
       });
       if (!result) return { ok: false, error: "structured delivery is unavailable" };
-      return result.ok ? { ok: true } : { ok: false, error: result.error };
+      if (result.ok) return { ok: true };
+      return { ok: false, error: result.error, ...(result.transportUncertain ? { uncertain: true as const } : {}) };
     },
     watch: () => startDeputySweep(),
   };

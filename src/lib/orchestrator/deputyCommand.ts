@@ -45,7 +45,16 @@ export type AskInParallelRefusal =
   | "launch_failed";
 
 export type AskInParallelResult =
-  | { ok: true; askId: string; deputyConversationId: string; replayed: boolean; deputy: OrchestratorDeputy }
+  | {
+    ok: true;
+    askId: string;
+    deputyConversationId: string;
+    replayed: boolean;
+    deputy: OrchestratorDeputy;
+    /** The runtime may have taken the ask without acknowledging it in time:
+        the record stays pending and the sweep settles it from runtime facts. */
+    deliveryUncertain?: true;
+  }
   | { ok: false; code: AskInParallelRefusal; error: string; status: number; askId?: string };
 
 export interface AskInParallelInput {
@@ -75,7 +84,7 @@ export interface DeputyCommandPorts {
   registerConversation(input: { artifactPath: string; accountId: string | null; launchProfile: Partial<LaunchProfile> }): string;
   joinSeatTask(input: { project: string; seatConversationId: string; seatPath: string | null; deputyConversationId: string; artifactPath: string; accountId: string | null }): void;
   workContext(project: string): DeputyWorkContext;
-  deliver(input: { conversationId: string; path: string; clientMessageId: string; text: string; images: RuntimeImageUpload[]; origin: DeputyAskOrigin }): Promise<{ ok: true } | { ok: false; error: string }>;
+  deliver(input: { conversationId: string; path: string; clientMessageId: string; text: string; images: RuntimeImageUpload[]; origin: DeputyAskOrigin }): Promise<{ ok: true } | { ok: false; error: string; uncertain?: true }>;
   /** Starts the end sweep in this process (idempotent). */
   watch(): void;
   /** The store; injectable so the command is testable without a state dir. */
@@ -254,6 +263,15 @@ async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Pr
          request was admitted as. */
       origin: deputy.ask.origin,
     });
+    if (!delivered.ok && delivered.uncertain) {
+      /* The runtime may be running the ask. Ending the record here would take
+         the ghost's authority away while it works and leave its host to no
+         one, since the sweep releases no failed record. Pending, it is
+         settled like a lost activation: done once it answers, or interrupted
+         and released at expiry; a replay under this key redelivers once. */
+      ports.watch();
+      return { ok: true, askId: deputy.askId, deputyConversationId: deputy.deputyConversationId!, replayed, deputy, deliveryUncertain: true };
+    }
     if (!delivered.ok) {
       store.end(deputy.askId, { outcome: "failed", error: `launch: ${delivered.error}`, now: ports.now() });
       return refusal("launch_failed", `the parallel self could not start: ${delivered.error}`, 409, deputy.askId);

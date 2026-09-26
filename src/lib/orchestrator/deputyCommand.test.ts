@@ -173,6 +173,29 @@ test("a fork that fails ends the record, so the seat is free for the next ask", 
   expect((await askOrchestratorInParallel({ ...ask, clientRequestId: "ask-2" }, next.ports)).ok).toBe(true);
 });
 
+test("an uncertain first delivery leaves the record pending for the sweep, never failed with its host untouched", async () => {
+  /* The runtime took the send and did not acknowledge it in time: the ghost
+     may be running the ask. */
+  const uncertain = ports({ deliver: async () => ({ ok: false, error: "runtime host did not answer", uncertain: true }) });
+  const result = await askOrchestratorInParallel(ask, uncertain.ports);
+  expect(result).toMatchObject({ ok: true, deputyConversationId: "conversation_ghost", deliveryUncertain: true });
+  expect(readDeputies()[0]).toMatchObject({ state: "pending", deputyConversationId: "conversation_ghost" });
+  expect(readDeputies()[0]!.outcome).toBeNull();
+  /* The sweep runs, so the record is settled from runtime facts and its
+     host released when it ends. */
+  expect(uncertain.calls.watched).toBe(1);
+
+  /* It is still the seat's one live deputy. */
+  const next = ports();
+  expect(await askOrchestratorInParallel({ ...ask, clientRequestId: "ask-2" }, next.ports)).toMatchObject({ ok: false, code: "deputy_limit" });
+});
+
+test("a definite delivery refusal ends the record failed", async () => {
+  const refused = ports({ deliver: async () => ({ ok: false, error: "rejected" }) });
+  expect(await askOrchestratorInParallel(ask, refused.ports)).toMatchObject({ ok: false, code: "launch_failed" });
+  expect(readDeputies()[0]).toMatchObject({ state: "ended", outcome: "failed" });
+});
+
 test("the voice gateway's ask is recorded and delivered as the agent message it is, never as the operator's", async () => {
   const { ports: busy, calls } = ports();
   const origin = { kind: "agent" as const, role: "gateway", conversationId: "conversation_root" };

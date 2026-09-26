@@ -7,6 +7,7 @@ import { activateDeputy, beginDeputy, readDeputies, recordDeputyFork, type Orche
 import { deputyWorkFromLines } from "./deputyNote";
 import {
   DEPUTY_HOST_GRACE_MS,
+  deputyAnswered,
   deputyNoteKey,
   deputySeatNoteRequest,
   deputyVerdict,
@@ -227,4 +228,60 @@ test("a pending deputy that has not answered, or has no conversation yet, keeps 
   expect(deputyVerdict(deputy, { nowMs: START + 60_000, seat, runtime: hosted("idle"), answered: false })).toEqual({ kind: "wait" });
   expect(deputyVerdict(deputy, { nowMs: START + 60_000, seat, runtime: hosted("running"), answered: true })).toEqual({ kind: "wait" });
   expect(deputyVerdict({ ...deputy, deputyConversationId: null }, { nowMs: START + 60_000, seat, runtime: hosted("idle"), answered: true })).toEqual({ kind: "wait" });
+});
+
+/* A release cuts a ghost's turn mid-work (#1835): the re-hosted ghost reads
+   idle, and its transcript ends on a tool call. That is not an answer. */
+test("a ghost whose turn a release cut is never ended done; it waits for its continuation", async () => {
+  const toolCall = { type: "assistant", message: { content: [{ type: "tool_use", id: "call_1", name: "Bash", input: { command: "gh pr view 2244" } }] } };
+  const toolResult = { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "call_1", content: "open" }] } };
+  const thought = { type: "assistant", message: { content: [{ type: "thinking", thinking: "next the lane" }] } };
+  const answer = { type: "assistant", message: { content: [{ type: "text", text: "Filed the task." }] } };
+  const lines = (...records: unknown[]) => records.map((record) => JSON.stringify(record));
+  expect(deputyAnswered(lines({ type: "user", message: { content: "file a task" } }, toolCall))).toBe(false);
+  expect(deputyAnswered(lines(toolCall, toolResult))).toBe(false);
+  expect(deputyAnswered(lines(toolCall, toolResult, thought))).toBe(false);
+  expect(deputyAnswered(lines(toolCall, toolResult, answer))).toBe(true);
+  /* Bookkeeping records after the answer do not reopen it; the Viewer's
+     continuation does, until the ghost answers again. */
+  expect(deputyAnswered(lines(answer, { type: "system", subtype: "turn_duration" }, { type: "user", isMeta: true, message: { content: "x" } }))).toBe(true);
+  expect(deputyAnswered(lines(toolCall, { type: "user", message: { content: "A Viewer deployment interrupted your turn…" } }))).toBe(false);
+  expect(deputyAnswered([])).toBe(false);
+
+  const deputy = liveDeputy();
+  appendOwn(deputy, [{ type: "user", message: { content: "file a task" } }, toolCall]);
+  const calls: string[] = [];
+  let runtime: DeputyRuntimeFacts = hosted("idle");
+  const ports: DeputySweepPorts = {
+    now: () => new Date(START + 30_000),
+    deputies: readDeputies,
+    activeSeat: () => seat,
+    runtime: async () => runtime,
+    ownLines: readDeputyOwnLines,
+    interrupt: async () => { calls.push("interrupt"); },
+    release: async () => { calls.push("release"); },
+    noteSeat: async () => { calls.push("note"); return "queued"; },
+  };
+  /* Re-hosted and idle after the cut: still live, no note, no ✓. */
+  expect(await sweepDeputies(ports)).toBe(true);
+  expect(readDeputies()[0]).toMatchObject({ state: "active" });
+  expect(calls).toEqual([]);
+
+  /* The continuation lands and the ghost finishes its one job. */
+  appendOwn(deputy, [toolResult, { type: "user", message: { content: "continue" } }]);
+  runtime = hosted("running");
+  expect(await sweepDeputies(ports)).toBe(true);
+  appendOwn(deputy, [answer]);
+  runtime = hosted("idle");
+  expect(await sweepDeputies(ports)).toBe(false);
+  expect(readDeputies()[0]).toMatchObject({ state: "ended", outcome: "done", result: { line: "Filed the task." } });
+  expect(calls).toEqual(["release", "note"]);
+});
+
+test("a cut ghost whose host never came back ends host-died, never done", () => {
+  const deputy = liveDeputy();
+  const at = START + 1_000 + DEPUTY_HOST_GRACE_MS + 1_000;
+  expect(deputyVerdict(deputy, { nowMs: at, seat, runtime: { host: "dead", turn: "idle" }, answered: false }))
+    .toEqual({ kind: "end", outcome: "host-died", interrupt: false });
+  expect(deputyVerdict(deputy, { nowMs: at, seat, runtime: hosted("idle"), answered: false })).toEqual({ kind: "wait" });
 });

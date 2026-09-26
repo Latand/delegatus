@@ -468,18 +468,29 @@ export interface DeputyDeliveryRefusal {
     any message to a conversation a deputy record names is refused, live or
     ended, and points at the seat instead. The only message admitted is the
     ghost route's own first one, under the key derived from the record, while
-    the record is still pending. An unreadable deputy file refuses nothing: it
-    already stops every new deputy, and failing closed here would stop every
-    send on the machine. */
+    the record is still pending. The other is the Viewer's own continuation of
+    a turn a release cut (#1835), while the deputy is still live: that turn is
+    the one job, and refusing its continuation would leave the ghost half-done.
+    `interruptionContinuation` is set only by the Viewer's startup recovery,
+    through a code-only dependency, never from a request body. An unreadable
+    deputy file refuses nothing: it already stops every new deputy, and
+    failing closed here would stop every send on the machine. */
 export function deputyDeliveryRefusal(
-  target: { conversationId?: string | null; path?: string | null; clientMessageId?: string | null },
+  target: {
+    conversationId?: string | null;
+    path?: string | null;
+    clientMessageId?: string | null;
+    interruptionContinuation?: boolean;
+  },
   file: Pick<DeputyFile, "deputies" | "retired"> | null = readDeputyFileOrNull(),
+  nowMs = Date.now(),
 ): DeputyDeliveryRefusal | null {
   if (!file) return null;
   const named = deputyNamingIn(file, target);
   if (!named) return null;
   const deputy = named.deputy;
   if (deputy && deputy.state === "pending" && target.clientMessageId?.trim() === deputyMessageKey(deputy.askId)) return null;
+  if (deputy && target.interruptionContinuation === true && deputyLive(deputy, nowMs)) return null;
   return {
     code: DEPUTY_CONVERSATION_CLOSED,
     error: `this conversation is the orchestrator's parallel self for one ask and takes no further messages; send to the orchestrator instead (send_message_to_orchestrator, seat ${named.seatConversationId})`,

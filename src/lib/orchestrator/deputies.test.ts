@@ -96,6 +96,21 @@ test("only the route's own first message reaches a pending ghost; nothing reache
   expect(deputyDeliveryRefusal({ ...target, clientMessageId: deputyMessageKey(askId) })?.code).toBe(DEPUTY_CONVERSATION_CLOSED);
 });
 
+test("a live ghost admits the Viewer's interruption continuation; an expired or ended one does not", () => {
+  const now = new Date(Date.UTC(2026, 8, 26, 0, 3));
+  const askId = forked(3, now);
+  activateDeputy(askId, now);
+  const target = { conversationId: "conversation_ghost_3", clientMessageId: "interruption-continuation-abc" };
+  const file = readDeputyFileOrNull();
+  expect(deputyDeliveryRefusal({ ...target, interruptionContinuation: true }, file, now.getTime() + 60_000)).toBeNull();
+  /* Without the recovery mark, the same key is refused. */
+  expect(deputyDeliveryRefusal(target, file, now.getTime() + 60_000)?.code).toBe(DEPUTY_CONVERSATION_CLOSED);
+  /* Past its expiry the ghost's job is over, cut or not. */
+  expect(deputyDeliveryRefusal({ ...target, interruptionContinuation: true }, file, now.getTime() + 60 * 60_000)?.code).toBe(DEPUTY_CONVERSATION_CLOSED);
+  endDeputy(askId, { outcome: "timeout", now });
+  expect(deputyDeliveryRefusal({ ...target, interruptionContinuation: true })?.code).toBe(DEPUTY_CONVERSATION_CLOSED);
+});
+
 test("any other conversation is untouched by the fence and is its own spawn parent", () => {
   forked(2);
   expect(deputyDeliveryRefusal({ conversationId: SEAT_ID, clientMessageId: "x" })).toBeNull();
