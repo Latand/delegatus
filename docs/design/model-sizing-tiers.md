@@ -224,6 +224,13 @@ launches (UI drafts, operator capability) are the authority and pass:
   the runtime came from the mapping or from an explicit override. Message:
   "Sonnet and Haiku do not run orchestrator, architect, reviewer or verifier
   work; name an Opus-class model or use the role's row."
+  *Built:* a **review gate** is reviewer work whatever role it names. A stage
+  judges another stage's work when it is a `review-loop` stage or carries a
+  fail edge to a fix stage (the stage a conversion makes of a review-loop), so
+  `resolvePipelineRole` accepting `builder size=trivial` on a review-loop does
+  not put Sonnet on the gate. The fix stage has no fail edge and stays
+  `builder·trivial`. A `set-edge` by an agent that gives a Sonnet or Haiku
+  stage a fail edge is refused for the same reason.
 - **R2, the brief (requirement 1).** `size=trivial` is admitted only when the
   briefer is Opus class. An agent whose runtime cannot be read is not.
   Message names the briefer's runtime: "size=trivial runs a light model and
@@ -255,6 +262,7 @@ Call sites, each with the caller it already knows:
 | spawn | `spawnCommand.ts:306`, after `resolveSpawnRole`; the same check in `/api/spawn/validate` (`spawnAdmissionValidation.ts`) so the validator never admits what the route refuses | `authenticatedCaller` (`operator` when absent or operator-capability) |
 | MCP `spawn_agent` (*built*) | `bindings.ts`, before dispatch | the attributed conversation, else `parentConversationId`. MCP dispatches reach `/api/spawn` same-origin on the **operator** capability, so the route alone would read every seat's spawn as the operator's; the binding knows the caller and judges it before anything is dispatched, on every dispatch: the service hands a recoverable spawn its persisted request binding on the first dispatch, so a check that skipped bound calls would skip every real one, and a replay is answered from the receipt without reaching the binding |
 | mapping write | `parseRoleMappingPatch` / `saveRoleMapping` (`store.ts:155-221`) | R1 only, for every writer: a mapping row is a standing default that agents then launch |
+| orchestrator seat (*built*) | `runOrchestratorSeatRequest` (`seatCommand.ts`), after `resolveSpawnRole` and before the durable intent | R1 only, when the request's `triggeredBy` is an agent. `rotate_orchestrator` admits every caller and names it, so an agent could otherwise hand the seat to Sonnet. A rotation that names no runtime continues the incumbent's, which only the operator could have chosen, and passes. `create_orchestrator` reaches the seat route, which refuses an agent before reading the body |
 
 The engine reads the briefer's runtime through one new optional port,
 `conversationRuntime(conversationId) → { engine, model } | null`, backed by the
@@ -457,7 +465,16 @@ the four denied rows.
   review-loop's fix stage inherits `size=trivial`; an operator draft is
   admitted; an explicit `model: "sonnet"` on a builder without `size=trivial`
   is refused; an explicit Sonnet reviewer is refused; override-stage by an
-  agent actor is checked and by the operator it is not.
+  agent actor is checked and by the operator it is not. *Built:* a review-loop
+  that names `builder size=trivial` is refused for an Opus-run agent, and so
+  are override-stage of the converted reviewer to that role and a fail edge an
+  agent sets on a Sonnet stage; the operator's edits pass.
+- `src/lib/orchestrator/rotationAuthority.test.ts` (*built*): an agent's
+  rotation onto Sonnet or Haiku is refused over the tool and the route; the
+  operator's passes, and an agent's rotation that continues the operator's
+  Sonnet seat passes; an agent's `create_orchestrator` is refused at the seat
+  route, and a designation the seat command attributes to an agent is judged
+  by R1.
 - `src/app/api/spawn/route.test.ts`: an agent caller on Sonnet spawning
   `builder size=trivial` gets 400; the answer carries `runtime`.
 - `src/instrumentation.test.ts` (*built*): the boot pass runs with the serving
@@ -515,7 +532,8 @@ Run each file by path, never a directory sweep (AGENTS.md).
 2. Sizing rule: the role table tells the seat to size trivial / normal /
    design and maps each size to roles; the launch answers carry the runtime
    line the seat quotes with its reason.
-3. Sonnet deny list: R1 at every launch seam and at the mapping writer.
+3. Sonnet deny list: R1 at every launch seam, on review gates whatever role
+   they name, on an agent-triggered seat designation, and at the mapping writer.
 4. Prose on Claude: `domain=docs` ships on Claude Opus, and wins over the fix
    round so fix stages stay on Claude.
 5. Stale overrides: normalize plus a once-per-install retirement of the named
@@ -542,6 +560,4 @@ builder stage was pointed at Sonnet by hand).
   default moved since you set this row" notice.
 - Storing the seat's sizing reason on the pipeline record.
 - Docs-specific scaffold guidance for `domain=docs`.
-- R1 on orchestrator seat designation (`src/lib/orchestrator/seatCommand.ts:941`)
-  and on Copilot runtimes. Seats are designated from the operator's own
-  controls, which R1 exempts anyway.
+- R1 on Copilot runtimes.

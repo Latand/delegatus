@@ -143,3 +143,52 @@ test("override-stage and add-stage by an agent actor are checked, and by the ope
   expect(byOperator.error).toBeUndefined();
   expect(byOperator.pipeline?.stages[0]?.effectiveRole).toMatchObject({ engine: "claude", model: "sonnet" });
 });
+
+test("a review gate that names role builder·trivial is reviewer work: refused at create and at override-stage for an agent, admitted for the operator", async () => {
+  const opusBriefer = { briefer: { kind: "agent" as const, conversationId: OPUS_SEAT.conversationId } };
+  const builderReview = await createPipelineFromRequest(trivialLane(OPUS_SEAT.src, {
+    review: { role: { roleId: "builder", params: { size: "trivial" } } },
+  }), ports(), opusBriefer);
+  expect(builderReview.pipeline).toBeUndefined();
+  expect(builderReview.violations).toEqual([expect.objectContaining({
+    field: "stages[1].role",
+    message: expect.stringContaining("stage review: a review gate is reviewer work whatever role it names: Sonnet and Haiku do not run"),
+  })]);
+
+  const created = await createPipelineFromRequest(trivialLane(OPUS_SEAT.src), ports(), opusBriefer);
+  const id = created.pipeline?.id;
+  if (!id) throw new Error(`create refused: ${created.error}`);
+  expect(created.pipeline?.stages.find((stage) => stage.id === "review")?.onFail?.to).toBe("review-fix");
+  const opusAgent = { kind: "agent" as const, role: "orchestrator", conversationId: OPUS_SEAT.conversationId };
+  const overridden = await patchPipeline(id, { action: "override-stage", stageId: "review", role: { roleId: "builder", params: { size: "trivial" } } }, ports(), opusAgent);
+  expect(overridden.status).toBe(400);
+  expect(overridden.error).toContain("a review gate is reviewer work whatever role it names");
+
+  /* The fix stage is no gate, and the operator's own edit is not judged. */
+  const fixByAgent = await patchPipeline(id, { action: "override-stage", stageId: "review-fix", role: { roleId: "builder", params: { size: "trivial" } } }, ports(), opusAgent);
+  expect(fixByAgent.error).toBeUndefined();
+  const byOperator = await patchPipeline(id, { action: "override-stage", stageId: "review", role: { roleId: "builder", params: { size: "trivial" } } }, ports());
+  expect(byOperator.error).toBeUndefined();
+  expect(byOperator.pipeline?.stages.find((stage) => stage.id === "review")?.effectiveRole).toMatchObject({ engine: "claude", model: "sonnet" });
+});
+
+test("a fail edge set by an agent cannot turn a Sonnet stage into a review gate", async () => {
+  const created = await createPipelineFromRequest({
+    task: "Two trivial steps",
+    repoDir: REPO,
+    autoStart: false as const,
+    src: OPUS_SEAT.src,
+    stages: [
+      { id: "build", kind: "run" as const, role: { roleId: "builder" as const, params: { size: "trivial" } }, ["prompt"]: "Change the label", next: "check" },
+      { id: "check", kind: "run" as const, role: { roleId: "builder" as const, params: { size: "trivial" } }, ["prompt"]: "Check the label", next: null },
+    ],
+  }, ports(), { briefer: { kind: "agent", conversationId: OPUS_SEAT.conversationId } });
+  const id = created.pipeline?.id;
+  if (!id) throw new Error(`create refused: ${created.error}`);
+  const opusAgent = { kind: "agent" as const, role: "orchestrator", conversationId: OPUS_SEAT.conversationId };
+  const byAgent = await patchPipeline(id, { action: "set-edge", stageId: "check", edge: "fail", to: "build", maxRounds: 2 }, ports(), opusAgent);
+  expect(byAgent.status).toBe(400);
+  expect(byAgent.error).toContain("stage check: a review gate is reviewer work");
+  const byOperator = await patchPipeline(id, { action: "set-edge", stageId: "check", edge: "fail", to: "build", maxRounds: 2 }, ports());
+  expect(byOperator.error).toBeUndefined();
+});

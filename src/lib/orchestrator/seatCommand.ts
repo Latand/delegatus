@@ -13,7 +13,7 @@ import {
 import { validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { agentRegistry, identityMaterializationFence } from "@/lib/agent/registry";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
-import { defaultModelFor } from "@/lib/agent/models";
+import { defaultModelFor, normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { internalServiceHeaders, rotationActor, type ViewerActor } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { deliverConversationMessage } from "@/lib/delivery";
@@ -26,6 +26,7 @@ import { projectDirectoryFallbacks } from "@/lib/scanner/projectDirectories";
 import { pathAllowed } from "@/lib/scanner/roots";
 import { hasUserAuthoredMessage } from "@/lib/session/reader";
 import { resolveSpawnRole } from "@/lib/roles/registry";
+import { mappingRowRefusal, type LaunchRuntime } from "@/lib/roles/sizing";
 import { loadRoleDefinitionsOrDefaults } from "@/lib/roles/store";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { derivedSpawnTitle } from "@/lib/title";
@@ -755,6 +756,25 @@ async function guardedSeatTransition(
   }
 }
 
+/**
+ * R1 for a seat an agent put in place (docs/design/model-sizing-tiers.md §2):
+ * an agent may not seat an orchestrator on Claude Sonnet or Haiku. A rotation
+ * that continues the incumbent's own runtime keeps a choice only the operator
+ * could have made, and passes. The operator's own designations are not judged.
+ */
+function agentSeatSizingRefusal(
+  triggeredBy: OrchestratorSeatTrigger | null,
+  runtime: LaunchRuntime,
+  incumbent: OrchestratorSeat | null,
+): SeatCommandResult | null {
+  if (triggeredBy?.kind !== "agent") return null;
+  const continued = incumbent !== null && incumbent.engine === runtime.engine && (runtime.engine === "claude"
+    ? normalizeClaudeLaunchModel(incumbent.model) === normalizeClaudeLaunchModel(runtime.model)
+    : (incumbent.model ?? null) === runtime.model);
+  const refusal = continued ? null : mappingRowRefusal("orchestrator", runtime);
+  return refusal ? { status: 400, body: { error: refusal, code: "sizing_refused" } } : null;
+}
+
 export function executeOrchestratorSeatRequest(
   rawBody: Record<string, unknown>,
   dependencies: SeatCommandDependencies = productionSeatCommandDependencies,
@@ -841,6 +861,10 @@ async function runOrchestratorSeatRequest(
         body: { error: "conversation belongs to a different project", code: "project_mismatch" },
       };
     }
+    const adoptedSizing = target.engine
+      ? agentSeatSizingRefusal(triggeredBy, { engine: target.engine, model: target.model ?? null }, orchestratorSeatFor(project).active)
+      : null;
+    if (adoptedSizing) return adoptedSizing;
 
     const begun = beginOrchestratorSeatIntent({
       project,
@@ -948,6 +972,8 @@ async function runOrchestratorSeatRequest(
   if (!resolvedRuntime.ok || !resolvedRuntime.value) {
     return { status: 400, body: { error: resolvedRuntime.ok ? "orchestrator runtime is unavailable" : resolvedRuntime.error } };
   }
+  const spawnSizing = agentSeatSizingRefusal(triggeredBy, resolvedRuntime.value.config, incumbent);
+  if (spawnSizing) return spawnSizing;
   const begun = beginOrchestratorSeatIntent({
     project,
     mandate,

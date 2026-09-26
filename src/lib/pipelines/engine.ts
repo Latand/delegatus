@@ -80,7 +80,7 @@ import { laneMovedSince } from "./laneMovement";
 import { pipelineRepoPreflightError, pipelineRepoPreflightStatus, preflightPipelineRepo } from "./preflight";
 import { pipelineDeliveryGuidance, renderDecisionInput, renderStagePrompt } from "./prompts";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntimeIsExplicit, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
-import { launchSizingRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
+import { launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { normalizeStageOutputPath } from "./stageAccess";
 import { collectStageProvenance } from "./stageProvenance";
@@ -390,6 +390,13 @@ function sizingBriefer(briefer: PipelineBriefer, fallbackConversationId: string 
   return { kind: "agent", runtime: conversationId ? ports.conversationRuntime?.(conversationId) ?? null : null };
 }
 
+/** A stage that judges another stage's work, which R1 reads as reviewer work
+    whatever role it names: a review-loop stage, or the stage a conversion
+    made of one, which carries the fail edge to its fix stage. */
+function isReviewGate(stage: Pick<PipelineStage, "kind" | "onFail">): boolean {
+  return stage.kind === "review-loop" || Boolean(stage.onFail);
+}
+
 /** The sizing rules (docs/design/model-sizing-tiers.md §2) over stages already
     normalized, as create violations. `only` limits the check to the stages a
     graph edit touched; stages already admitted are not re-judged. */
@@ -408,6 +415,7 @@ function stageSizingRefusal(
       config: { engine: stage.effectiveRole.engine, model: stage.effectiveRole.model },
       explicitRuntime: stageRuntimeIsExplicit(stage, ports.roleLookup),
       briefer,
+      reviewGate: isReviewGate(stage),
     });
     if (message) violations.push({ field: `stages[${index}].role`, message: `stage ${stage.id}: ${message}`, expected: STAGE_RUNTIME_SHAPE });
   }
@@ -7657,6 +7665,10 @@ export async function patchPipeline(
           const candidate = pipeline.stages.map((item) => (item.id === from.id ? { ...item, onFail } : item));
           const graphError = pipelineGraphError(candidate);
           if (graphError) return { error: graphError, status: 400 };
+          /* A fail edge makes the stage a review gate, so an agent cannot turn
+             a Sonnet or Haiku stage into one (R1). */
+          const gateRefusal = actor && actor.kind !== "operator" ? reviewGateRefusal(from.effectiveRole) : null;
+          if (gateRefusal) return { error: `stage ${from.id}: ${gateRefusal}`, status: 400 };
           from.onFail = onFail;
           graphEdit = recordGraphEdit(pipeline, ports, actor, {
             action: "set-edge", stageId: from.id, effect: "applied", appliesFromAttempt: null,

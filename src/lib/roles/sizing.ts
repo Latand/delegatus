@@ -25,6 +25,16 @@ export const LIGHT_DENIED_ROLE_IDS: readonly RoleId[] = ["orchestrator", "archit
 export const LIGHT_DENIED_ROLE_MESSAGE =
   "Sonnet and Haiku do not run orchestrator, architect, reviewer or verifier work; name an Opus-class model or use the role's row.";
 
+/** A stage that judges another stage's work (a review-loop stage, or a stage
+    whose fail verdict routes to a fix stage) is reviewer work under R1,
+    whatever role it names. */
+export const REVIEW_GATE_MESSAGE = `a review gate is reviewer work whatever role it names: ${LIGHT_DENIED_ROLE_MESSAGE}`;
+
+/** R1 for a review gate. */
+export function reviewGateRefusal(runtime: LaunchRuntime): string | null {
+  return isLightClaudeRuntime(runtime) ? REVIEW_GATE_MESSAGE : null;
+}
+
 /** Whether a Claude runtime is Sonnet or Haiku. A dated id such as
     `claude-sonnet-5` goes through the family normalizer so it cannot pass as large. */
 export function isLightClaudeRuntime(runtime: LaunchRuntime): boolean {
@@ -64,6 +74,7 @@ export function runtimeName(runtime: LaunchRuntime | null): string {
  *
  * - R1: orchestrator, architect, reviewer and verifier never resolve to Claude
  *   Sonnet or Haiku, whether the runtime came from the mapping or an override.
+ *   A review gate counts as reviewer work whatever role it names.
  * - R2: `size=trivial` needs a brief from an Opus-class agent.
  * - R3: a builder (or a role-less run stage) reaches a light runtime through an
  *   explicit engine/model override only with `size=trivial`. A light runtime
@@ -80,11 +91,18 @@ export function launchSizingRefusal(input: {
   /** The caller set engine or model itself. */
   explicitRuntime: boolean;
   briefer: Briefer;
+  /** The stage judges another stage's work: a review-loop stage, or one
+      carrying a fail edge to its fix stage. */
+  reviewGate?: boolean;
 }): string | null {
   if (input.briefer.kind === "operator") return null;
   const roleId = input.roleId ?? "builder";
   if ((LIGHT_DENIED_ROLE_IDS as readonly string[]).includes(roleId) && isLightClaudeRuntime(input.config)) {
     return LIGHT_DENIED_ROLE_MESSAGE;
+  }
+  if (input.reviewGate) {
+    const gate = reviewGateRefusal(input.config);
+    if (gate) return gate;
   }
   const trivial = input.params?.size === "trivial";
   if (trivial && !isOpusClass(input.briefer.runtime)) {
