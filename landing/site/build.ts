@@ -30,7 +30,7 @@ fs.mkdirSync(path.join(dist, "demo"), { recursive: true });
 fs.mkdirSync(path.join(dist, "brand"), { recursive: true });
 
 /* The task icons the demo's cards draw, which the Viewer asks a route for. */
-const ICONS = ["file-text", "key-round", "repeat", "book-open", "list-ordered", "receipt-text", "layout-grid", "calculator", "wifi-off", "gauge"];
+const ICONS = ["file-text", "key-round", "repeat", "book-open", "list-ordered", "receipt-text", "layout-grid", "calculator", "wifi-off", "gauge", "shield-check", "download", "scroll-text", "mail", "archive", "activity", "database", "timer"];
 fs.writeFileSync(path.join(here, "demo/taskIcons.json"), `${JSON.stringify(await taskIconNodes(ICONS))}\n`);
 
 const SERVER_DIRECTIVE = /^\s*(?:\/\/[^\n]*\n\s*|\/\*[\s\S]*?\*\/\s*)*["']use server["']/;

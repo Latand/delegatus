@@ -134,6 +134,14 @@ const LIMITS_ACTION_CLASS = "inline-flex min-h-[44px] shrink-0 items-center gap-
  * the check time renders for fresh reads too, so the operator always sees when
  * the numbers were taken. Time formatting is shared with the limits footer.
  */
+/** The most characters a window label fits in the narrow `w-8` column at 10 px. */
+const NARROW_LABEL_CHARS = 5;
+
+/** Whether the list's label column takes the wide width: a tier row, or a window name longer than the narrow column holds. */
+export function wideLimitLabels(quotas: ReconciledQuota[], t: TFunction): boolean {
+  return quotas.some((quota) => quota.tiers.length > 0 || limitRows(quota, t).some((row) => row.label.length > NARROW_LABEL_CHARS));
+}
+
 function AccountLimitsBlock({ account, engine, quota, now, busy, disabled, wideLabels, onRefresh, onUseReset }: {
   account: AccountOption;
   engine: "claude" | "codex";
@@ -833,9 +841,10 @@ export function AccountsPanel({
     account,
     quota: quotaOverride?.accountId === active && account.id === active ? quotaOverride.quota : accountQuota(account, quotaNow),
   }));
-  // One label column for the whole list (#1358): a tier row's longer label
+  // One label column for the whole list (#1358): a tier row's longer label,
+  // or a translated window name the narrow column cannot hold ("Тиждень"),
   // widens every card's column, so the meters stay aligned from card to card.
-  const wideLabels = rows.some(({ quota }) => quota.tiers.length > 0);
+  const wideLabels = wideLimitLabels(rows.map(({ quota }) => quota), t);
 
   return (
     <>

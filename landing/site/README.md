@@ -100,6 +100,16 @@ other frames load a fresh frame per view and swap it in once it has drawn.
 - **Panels fill the frame.** A pipeline's stages and a conversation opened
   full take the whole frame, and the accounts panel takes the board's place
   beside the rail, so nothing half-covered shows at their edges.
+- **The hero renders 1820 px wide** and the page scales it down: beside the
+  380 px docked orchestrator the board needs 1400 px for the product's wide
+  mode, where all four columns fit and no card title breaks mid-word.
+- **A frame is also a still picture.** Transcripts fade in at their top edge,
+  so a pane scrolled to its tail never starts on half a line; a conversation
+  opened full wears the plain reader border instead of the builder's amber
+  ring; and a docked accounts list drops the popover's height cap.
+- **A lived-in board.** harbor-api carries a week of work (three cards in
+  Inbox, five in Assigned, two in Blocked, four in Done), so no frame is
+  mostly empty canvas.
 - **Activity** is the product's Overview: the cards someone is working on
   right now, across every project.
 - **Telegram** has no drawn cards: the product has no Telegram surface to show

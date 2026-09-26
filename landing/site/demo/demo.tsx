@@ -180,7 +180,7 @@ function accounts() {
   return {
     claude: {
       active: "main",
-      accounts: [accountRow("main", L("Main", "Основний"), "Max", 42, 140, 31), accountRow("work", L("Work", "Робочий"), "Max", 18, 200, 12), accountRow("side", L("Side", "Запасний"), "Pro", 71, 95, 64)],
+      accounts: [accountRow("main", L("Main", "Основний"), "Max", 42, 140, 31), accountRow("work", L("Work", "Робочий"), "Max", 18, 200, 12), accountRow("side", L("Side", "Запасний"), "Pro", 71, 95, 64), accountRow("team", L("Team", "Командний"), "Team", 54, 60, 47)],
       mutationLocked: false, migration: null, autoBalance: null,
     },
     codex: {
@@ -637,10 +637,29 @@ document.head.appendChild(coach);
 const frameFill = document.createElement("style");
 frameFill.textContent = `
 html[data-demo-quiet-hints] [role="tooltip"] { display: none; }
+[data-demo-docked] .overflow-y-auto { max-height: none !important; }
 [data-demo-docked] { position: fixed !important; margin: 0 !important; inset: 0 0 0 var(--demo-rail-right) !important; width: auto !important; max-width: none !important; max-height: none !important; translate: none !important; transform: none !important; border-radius: 0 !important; }
 html[data-demo-phone] [aria-label="${label("feed.copyMd")}"] { display: none; }
 .kb .gsheet-scrim, .kb .reader-full { padding: 0; }
-.kb .gsheet, .kb .reader-full .reader.conv { border-radius: 0; }`;
+.kb .gsheet, .kb .reader-full .reader.conv { border-radius: 0; }
+/* A conversation opened full is the whole frame, and a builder's amber ribbon
+   ring round the whole frame reads as an error. It wears the product's plain
+   reader border and names its role the quiet way the Stages sheet does. */
+:root[data-role-frame="ribbon"] .kb .reader-full .reader.conv[data-role-host]:not([data-role="orchestrator"]) {
+  border: 1px solid color-mix(in srgb, var(--color-accent) 40%, var(--border-default)); background: var(--surface-card); padding: 8px var(--inset-conversation) 10px;
+}
+:root[data-role-frame="ribbon"] .kb .reader-full .reader.conv[data-role-host]:not([data-role="orchestrator"])::after { display: none; }
+:root[data-role-frame="ribbon"] .kb .reader-full .reader.conv:not([data-role="orchestrator"]) .role-mark {
+  height: auto; margin-left: 0; padding: 0; gap: 7px; color: var(--role-ink); letter-spacing: 0.06em; background: none; clip-path: none;
+}
+:root[data-role-frame="ribbon"] .kb .reader-full .reader.conv:not([data-role="orchestrator"]) .role-mark-emblem {
+  width: 22px; height: 22px; border-radius: 6px; color: #fff; background: var(--role-fill); box-shadow: inset 0 0 0 1px color-mix(in srgb, #fff 18%, transparent);
+}
+/* A frame is a still picture as often as a window: a transcript scrolled to
+   its tail cuts a line at its top edge, so the top of every transcript fades
+   in instead of ending on half a line. */
+[data-log-feed-scroller] { -webkit-mask-image: linear-gradient(to bottom, transparent 0, transparent 6px, #000 34px); mask-image: linear-gradient(to bottom, transparent 0, transparent 6px, #000 34px); }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } }`;
 document.head.appendChild(frameFill);
 
 setLocale(LANG);

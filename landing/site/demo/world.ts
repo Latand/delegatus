@@ -174,6 +174,31 @@ export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSe
     ), "claude-sonnet-5"),
   ]);
 
+  /* The rest of a working week on harbor-api: one more builder at work, one
+     waiting on its review, and what shipped before today. */
+  const logs = add("request-logs", L("Structured request logs", "Структуровані логи запитів"), working(L("Replacing the router's console lines", "Замінюю рядки console у роутері"), 14 * MIN));
+  write(logs, [
+    asked(iso(15 * MIN), L("Log one JSON line per request: route, status, duration and the request id.", "Пиши один JSON-рядок на запит: маршрут, статус, тривалість і id запиту.")),
+    said(iso(14 * MIN), L("I'll add one logger in the router middleware and drop the scattered console lines.", "Додам один логер у проміжний шар роутера і приберу розкидані рядки console.")),
+  ]);
+  const settled = (id: string, title: string, ask: string, answer: string, endedAgo: number, model = "claude-opus-5-5") => {
+    const file = add(id, title, { ...idle(endedAgo), model });
+    write(file, [asked(iso(endedAgo + 25 * MIN), ask), said(iso(endedAgo), answer, model)]);
+    return file;
+  };
+  const receipts = settled("refund-receipts", L("Refund receipts", "Квитанції про повернення"),
+    L("Email the customer a receipt once the provider confirms a refund, in the merchant's language.", "Надсилай клієнту квитанцію, щойно провайдер підтвердить повернення, мовою мерчанта."),
+    L("The receipt goes out from the provider's confirmation webhook, once per refund. Ready for review.", "Квитанція йде з вебхука підтвердження провайдера, один раз на повернення. Готово до рев’ю."), 32 * MIN);
+  const health = settled("replica-lag", L("Replica lag in /health", "Затримка репліки в /health"),
+    L("Make /health report replica lag: degraded above 5 s, down above 60 s.", "Хай /health показує затримку репліки: degraded понад 5 с, down понад 60 с."),
+    L("`/health` now reads the replica's lag and answers degraded above 5 s and down above 60 s.", "`/health` тепер читає затримку репліки: degraded понад 5 с, down понад 60 с."), 6 * 60 * MIN, "claude-sonnet-5");
+  const postgres = settled("postgres-17", L("Postgres 17 upgrade", "Оновлення до Postgres 17"),
+    L("Upgrade to Postgres 17. Replay every migration on a copy first; no downtime.", "Онови до Postgres 17. Спершу прожени всі міграції на копії; без простою."),
+    L("All 42 migrations replayed on a copy, then the primary switched over with no downtime.", "Усі 42 міграції пройшли на копії, потім основна база перемкнулася без простою."), 26 * 60 * MIN);
+  const timeouts = settled("provider-timeouts", L("Provider call timeouts", "Тайм-аути викликів провайдера"),
+    L("Time out payment provider calls after 10 s so a hung provider stops holding workers.", "Обривай виклики платіжного провайдера через 10 с, щоб завислий провайдер не тримав воркерів."),
+    L("Every provider call now carries a 10 s deadline and a hung call frees its worker.", "Кожен виклик провайдера тепер має межу 10 с, і завислий виклик звільняє воркера."), 30 * 60 * MIN);
+
   /* The refunds pipeline's three conversations, from step 2 on. */
   let refundsBuild: FileEntry | null = null;
   let refundsReview: FileEntry | null = null;
@@ -315,6 +340,14 @@ export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSe
     task("t-retries", "assigned", L("Back off webhook retries\nExponential backoff with jitter, and a limit on how long a delivery retries.", "Затримка повторів вебхуків\nЕкспоненційна затримка з джитером і межа, як довго доставка повторюється."), [retries], retriesDecided ? at(5) : 20 * MIN, "teal", "repeat"),
     task("t-ledger", "blocked", L("Move invoices to the new ledger\nWaiting on finance to confirm the rounding rule for partial refunds.", "Перенести рахунки в новий реєстр\nЧекаємо, поки фінансисти підтвердять правило округлення часткових повернень."), [], 5 * 60 * MIN, "amber", "book-open"),
     task("t-charges", "done", L("Paginate GET /charges\nCursor pagination, 50 per page, capped at 200.", "Пагінація GET /charges\nПагінація курсором, 50 на сторінку, не більше 200."), [charges], 3 * 60 * MIN, "lime", "list-ordered"),
+    task("t-ratelimit", "inbox", L("Rate-limit refunds per merchant\nAt most 20 a minute; answer 429 with Retry-After.", "Обмежити частоту повернень для мерчанта\nНе більше 20 на хвилину; відповідати 429 з Retry-After."), [], 80 * MIN, "teal", "shield-check"),
+    task("t-export", "inbox", L("Export refunds as CSV\nFor the finance team's monthly close.", "Експорт повернень у CSV\nДля щомісячного закриття у фінансистів."), [], 2 * 60 * MIN, "lime", "download"),
+    task("t-logs", "assigned", L("Structured request logs\nOne JSON line per request: route, status, duration, request id.", "Структуровані логи запитів\nОдин JSON-рядок на запит: маршрут, статус, тривалість, id запиту."), [logs], 14 * MIN, "slate", "scroll-text"),
+    task("t-receipts", "assigned", L("Email a receipt for each refund\nSent once the provider confirms, in the merchant's language.", "Квитанція на кожне повернення\nНадсилається після підтвердження провайдера, мовою мерчанта."), [receipts], 32 * MIN, "lime", "mail"),
+    task("t-v1", "blocked", L("Retire the v1 charges endpoint\nTwo merchants still call it; waiting on their move to v2.", "Прибрати ендпоінт платежів v1\nДва мерчанти ще його викликають; чекаємо, поки перейдуть на v2."), [], 26 * 60 * MIN, "slate", "archive"),
+    task("t-health", "done", L("Report replica lag in /health\nDegraded above 5 s of lag, down above 60 s.", "Затримка репліки в /health\nDegraded понад 5 с затримки, down понад 60 с."), [health], 6 * 60 * MIN, "teal", "activity"),
+    task("t-postgres", "done", L("Upgrade to Postgres 17\nEvery migration replayed on a copy first; no downtime.", "Оновлення до Postgres 17\nУсі міграції спершу на копії; без простою."), [postgres], 26 * 60 * MIN, "teal", "database"),
+    task("t-timeouts", "done", L("Time out provider calls after 10 s\nA hung provider no longer holds a worker.", "Тайм-аут викликів провайдера 10 с\nЗавислий провайдер більше не тримає воркера."), [timeouts], 30 * 60 * MIN, "coral", "timer"),
   ];
   const otherFile = (id: string) => others.find((entry) => entry.file.name === `${id}.jsonl`)!;
   tasks.push(

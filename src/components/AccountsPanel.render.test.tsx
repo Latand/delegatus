@@ -4,7 +4,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { ClaudeLoginView, EngineAccountsState } from "@/hooks/useEngineAccounts";
 import { translate } from "@/lib/i18n";
 
-import { AccountsPanel, type ProjectAccountContext } from "./AccountsPanel";
+import { reconcileQuotaReadings, quotaReadingFromAccountLimits } from "@/lib/rateLimit";
+
+import { AccountsPanel, type ProjectAccountContext, wideLimitLabels } from "./AccountsPanel";
 import { formatResetClock } from "./rateLimit";
 
 const base = (over: Partial<EngineAccountsState> = {}): EngineAccountsState => ({
@@ -210,6 +212,17 @@ test("a weekly-horizon window in the session field is labelled by its horizon, n
   const labels = [...detail.matchAll(/<dt[^>]*>([^<]*)<\/dt>/g)].map((match) => match[1]);
   expect(labels).not.toContain(translate("en", "limits.5h"));
   expect(detail).toContain("85%"); // 100 - 15, under the weekly label
+});
+
+test("a translated window name wider than the narrow label column widens it", () => {
+  // "Тиждень" does not fit the 32 px column its English "Week" does, and ran
+  // straight into its meter in the Ukrainian panel.
+  const nowS = Math.floor(Date.now() / 1000);
+  const quota = reconcileQuotaReadings(null, quotaReadingFromAccountLimits({
+    freshness: "fresh", session: { usedPercent: 40, resetsAt: nowS + 3_600, windowMinutes: 300 }, weekly: { usedPercent: 15, resetsAt: nowS + 86_400, windowMinutes: 10_080 },
+  }), nowS);
+  expect(wideLimitLabels([quota], (key, params) => translate("en", key, params))).toBe(false);
+  expect(wideLimitLabels([quota], (key, params) => translate("uk", key, params))).toBe(true);
 });
 
 test("dims and labels a stale account limits read and omits a missing reset time", () => {

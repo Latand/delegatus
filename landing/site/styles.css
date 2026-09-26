@@ -496,5 +496,5 @@ kbd {
 /* ---------- Reduced motion: final frames, nothing moves ---------- */
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { transition-duration: 0ms !important; }
+  *, *::before, *::after { transition-duration: 0ms !important; animation: none !important; }
 }
