@@ -31,6 +31,8 @@ const LANG = params.get("lang") === "en" ? "en" : "uk";
 
 /* A pinned clock, so every age on every frame reads the same. */
 const now = Math.floor(Date.now() / 1000);
+/* The driver writes its readings relative to this clock, so two runs commit the same file. */
+(window as unknown as { __needsYouFixtureNow?: number }).__needsYouFixtureNow = now;
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
 const MIN = 60;
 

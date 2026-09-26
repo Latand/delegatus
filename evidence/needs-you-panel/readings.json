@@ -123,11 +123,11 @@
             ]
           ],
           "since": [
-            1790422508,
-            1790422868,
-            1790423768,
-            1790423888,
-            1790424188
+            "now-1920",
+            "now-1560",
+            "now-660",
+            "now-540",
+            "now-240"
           ]
         },
         {
@@ -138,13 +138,13 @@
               "2 год тому"
             ],
             [
-              "/repo/tg-bot-15.jsonl:delivery:1790421968",
+              "/repo/tg-bot-15.jsonl:delivery:now-2460",
               "41 хв тому"
             ]
           ],
           "since": [
-            1790417288,
-            1790421968
+            "now-7140",
+            "now-2460"
           ]
         },
         {
@@ -160,8 +160,8 @@
             ]
           ],
           "since": [
-            1790420828,
-            1790423348
+            "now-3600",
+            "now-1080"
           ]
         }
       ]
@@ -313,7 +313,7 @@
           "ellipsis": true
         },
         {
-          "id": "/repo/tg-bot-15.jsonl:delivery:1790421974",
+          "id": "/repo/tg-bot-15.jsonl:delivery:now-2460",
           "age": "41 хв тому",
           "ageInside": true,
           "decision": "доставка повідомлення",
@@ -474,11 +474,11 @@
             ]
           ],
           "since": [
-            1790422517,
-            1790422877,
-            1790423777,
-            1790423897,
-            1790424197
+            "now-1920",
+            "now-1560",
+            "now-660",
+            "now-540",
+            "now-240"
           ]
         },
         {
@@ -489,13 +489,13 @@
               "2h ago"
             ],
             [
-              "/repo/tg-bot-15.jsonl:delivery:1790421977",
+              "/repo/tg-bot-15.jsonl:delivery:now-2460",
               "41m ago"
             ]
           ],
           "since": [
-            1790417297,
-            1790421977
+            "now-7140",
+            "now-2460"
           ]
         },
         {
@@ -511,8 +511,8 @@
             ]
           ],
           "since": [
-            1790420837,
-            1790423357
+            "now-3600",
+            "now-1080"
           ]
         }
       ]
@@ -664,7 +664,7 @@
           "ellipsis": true
         },
         {
-          "id": "/repo/tg-bot-15.jsonl:delivery:1790421983",
+          "id": "/repo/tg-bot-15.jsonl:delivery:now-2460",
           "age": "41m ago",
           "ageInside": true,
           "decision": "message delivery",
