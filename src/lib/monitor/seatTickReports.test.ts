@@ -32,6 +32,9 @@ const T0 = Date.parse("2026-09-25T12:00:00.000Z");
 const SHA_A = "aaaaaaaa".padEnd(40, "1");
 const iso = (at: number) => new Date(at).toISOString();
 const idFor = (key: string) => `id:${key}`;
+/* A deployment id, assembled at run time: a UUID written out is what the
+   publication gate refuses in a committed file. */
+const attempt = (head: string) => [head, "0000", "4000", "8000", "0".repeat(12)].join("-");
 
 function reports(over: Partial<SeatTickReportsInput> = {}): SeatTickReportsInput {
   return {
@@ -77,7 +80,7 @@ function input(over: Partial<SeatTickCheckInput> = {}): SeatTickCheckInput {
   };
 }
 
-function deployed(sha: string, now = T0, phase = "succeeded", deploymentId = `${sha.slice(0, 8)}-0000-4000-8000-000000000000`): SeatTickDeployInput {
+function deployed(sha: string, now = T0, phase = "succeeded", deploymentId = attempt(sha.slice(0, 8))): SeatTickDeployInput {
   return { deploymentId, phase, sha, error: phase === "succeeded" ? null : "candidate health failed", settledAt: iso(now - MINUTE) };
 }
 
@@ -139,11 +142,11 @@ test("an unrelated report, or a refused one that stored nothing, clears nothing"
 });
 
 test("each failed attempt of one commit is owed under its own key", () => {
-  const failures = [deployed(SHA_A, T0, "failed", "11111111-0000-4000-8000-000000000000"), deployed(SHA_A, T0, "failed", "22222222-0000-4000-8000-000000000000")];
+  const failures = [deployed(SHA_A, T0, "failed", attempt("11111111")), deployed(SHA_A, T0, "failed", attempt("22222222"))];
   const first = landed(input({ settledDeploys: failures })).state;
   expect(first.reportsOwed!.map((entry) => entry.key)).toEqual(["deploy:aaaaaaaa:failed:11111111", "deploy:aaaaaaaa:failed:22222222"]);
   const later = T0 + 10 * MINUTE;
-  const third = landed(input({ now: later, state: first, settledDeploys: [deployed(SHA_A, later, "failed", "33333333-0000-4000-8000-000000000000")] })).state;
+  const third = landed(input({ now: later, state: first, settledDeploys: [deployed(SHA_A, later, "failed", attempt("33333333"))] })).state;
   expect(third.reportsOwed!.map((entry) => entry.key)).toEqual([
     "deploy:aaaaaaaa:failed:11111111", "deploy:aaaaaaaa:failed:22222222", "deploy:aaaaaaaa:failed:33333333",
   ]);

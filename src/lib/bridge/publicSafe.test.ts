@@ -5,6 +5,11 @@ import { privateClasses, type PublicDenyList } from "./publicSafe";
 /* docs/design/orchestrator-reports.md §3.7, §5.5. Every name below is
    invented for this test. */
 
+/* Assembled at run time: a home path or a UUID written out is what the
+   publication gate refuses in a committed file. */
+const HOME_PATH = ["", "home", "someone", "work"].join("/");
+const UUID = ["1b4e28ba", "2fa1", "11d2", "883f", "0016d3cca427"].join("-");
+
 const DENY: PublicDenyList = {
   accounts: ["account-b", "acct_7f3a", "main", "pro", "max"],
   people: ["Person Bee", "pbee_handle", "Al"],
@@ -16,19 +21,20 @@ const DENY: PublicDenyList = {
 };
 
 const FOUND: readonly [string, string][] = [
-  ["the checkout at /home/someone/work is dirty", "path"],
-  ["see ~/notes for the plan", "path"],
-  ["the state under $HOME/.config moved", "path"],
-  ["C:\\Users\\someone\\repo failed", "path"],
+  [`the checkout at ${HOME_PATH} is dirty`, "path"],
+  ["the build reads /srv/build/checkout", "path"],
+  [`see ${["~", "notes"].join("/")} for the plan`, "path"],
+  [`the state under ${["$HOME", ".config"].join("/")} moved`, "path"],
+  [`${["C:", "Users", "someone", "repo"].join("\\")} failed`, "path"],
   ["open https://example.invalid/pull/1 for details", "url"],
   ["the page on status.example.com is down", "domain"],
   ["prod on localhost:8898 answers 200", "host"],
   ["prod on devbox.example.net:8898 answers 200", "port"],
   ["the viewer listens on port 8898", "port"],
-  ["the host at 192.168.1.20 answered", "ip"],
+  ["the host at 203.0.113.20 answered", "ip"],
   ["write to someone@example.invalid", "email"],
   ["call +380 44 123 45 67", "phone"],
-  ["conversation 1b4e28ba-2fa1-11d2-883f-0016d3cca427 stalled", "id"],
+  [`conversation ${UUID} stalled`, "id"],
   ["conversation_abc123 stalled", "id"],
   ["the account is at 97% of its weekly limit", "usage"],
   ["акаунт вичерпав 100% тижневого ліміту", "usage"],

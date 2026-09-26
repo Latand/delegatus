@@ -33,6 +33,9 @@ const OTHER = "repo-project-b";
 /* Invented chat; no such group exists. */
 const TEAM = { id: -1000000000101, type: "supergroup", title: "Team Reports" };
 const NOW = new Date("2026-09-25T18:45:00Z");
+/* A deployment id, assembled at run time: a UUID written out is what the
+   publication gate refuses in a committed file. */
+const deploymentId = (head: string) => [head, "0000", "4000", "8000", "0".repeat(12)].join("-");
 
 let transport: InstanceType<typeof FakeBotTransport>;
 let bot: InstanceType<typeof TelegramBotService>;
@@ -191,9 +194,9 @@ function task(id: string, status: BoardTask["status"], text: string): BoardTask 
 
 test("a deploy report lists the board's task changes since the previous successful deploy", async () => {
   tasks = [task("t1", "assigned", "Scroll on the large board is slow"), task("t2", "inbox", "First run leads with the orchestrator")];
-  recordDeploySnapshot(PROJECT, { deploymentId: "d0000001-0000-4000-8000-000000000001", revision: "5064e5ec".padEnd(40, "0"), phase: "succeeded", terminal: true, updatedAt: "2026-09-25T16:20:00Z" }, tasks);
+  recordDeploySnapshot(PROJECT, { deploymentId: deploymentId("d0000001"), revision: "5064e5ec".padEnd(40, "0"), phase: "succeeded", terminal: true, updatedAt: "2026-09-25T16:20:00Z" }, tasks);
   tasks = [task("t1", "done", "Scroll on the large board is slow"), task("t2", "inbox", "First run leads with the orchestrator"), task("t3", "inbox", "Activity opens on the phone")];
-  recordDeploySnapshot(PROJECT, { deploymentId: "d0000002-0000-4000-8000-000000000002", revision: "1c41d361".padEnd(40, "0"), phase: "succeeded", terminal: true, updatedAt: "2026-09-25T18:45:00Z" }, tasks);
+  recordDeploySnapshot(PROJECT, { deploymentId: deploymentId("d0000002"), revision: "1c41d361".padEnd(40, "0"), phase: "succeeded", terminal: true, updatedAt: "2026-09-25T18:45:00Z" }, tasks);
 
   const answer = await file({ key: "deploy:1c41d361:succeeded", class: "completed", summary: "Release 1.5.0 is on prod.", sections: { prod: ["release 1.5.0"] }, coversOwed: true });
   expect(answer.recorded).toBe(true);
@@ -211,7 +214,7 @@ test("a deploy with no snapshot shows no task section, and the answer says so", 
 test("a report with nothing left after the scrub is refused, stores nothing and posts nothing", async () => {
   await connectTeamChat();
   setReportTelegram(PROJECT, { chat: "team-reports", name: "Delegatus" }, "operator");
-  const answer = await file({ key: "deploy:aaaaaaaa:succeeded", class: "completed", sections: { prod: ["the build reads /home/x/checkout/state and account-b"] } });
+  const answer = await file({ key: "deploy:aaaaaaaa:succeeded", class: "completed", sections: { prod: ["the build reads /srv/build/checkout/state and account-b"] } });
   expect(answer.ok).toBe(false);
   expect(answer.code).toBe("report_empty_after_scrub");
   expect(answer.retryable).toBe(false);

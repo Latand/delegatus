@@ -124,7 +124,7 @@ test("the decision section and the summary survive the tightest cut", () => {
 });
 
 test("a report whose only content was private is empty, and the classes are counted", () => {
-  const result = render({ summary: "", sections: { prod: ["the build reads /home/someone/checkout"] } });
+  const result = render({ summary: "", sections: { prod: ["the build reads /srv/build/checkout"] } });
   expect(result.empty).toBe(true);
   expect(result.dropped).toEqual({ path: 1 });
 });
@@ -140,7 +140,7 @@ test("a failed deploy's task changes are headed as not on prod yet; hidden title
     class: "failed",
     deploy: true,
     summary: "The deploy failed.",
-    taskChanges: { groups: { done: ["A task title", "Title naming /home/x/y"] }, notOnProdYet: true },
+    taskChanges: { groups: { done: ["A task title", "Title naming /srv/x/y"] }, notOnProdYet: true },
     deny: { accounts: [], people: [], local: [], projects: [] },
   });
   expect(renderPlain(cut)).toContain("📋 Tasks since the previous deploy (not on prod yet)\n• Done: A task title (1 hidden)");
