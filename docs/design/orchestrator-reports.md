@@ -1021,44 +1021,41 @@ Both answers are tested at the tool; the ask line is tested at the tick.
   switches today, so it gains this one entry with its own reader,
   `reportTelegram(project)`. "Log only" is stored as `{ chat: null, changedAt,
   changedBy }`, so it stays apart from a project that never chose.
-  `effectiveReportTelegram(project, postableChats)` is where reports go: the
-  chosen chat; nothing after "Log only"; for a project that never chose, the
-  bot's one chat that agents may post in, under the fallback header name
-  below, and nothing with none or several. `bridge_report` and
-  `get_orchestrator` read the chats through the Viewer's bot agent route,
-  and `get_orchestrator`'s `reportTelegram` carries `source: "chosen" |
-  "only-allowed-chat"`. `/api/projects/settings`
+  `effectiveReportTelegram(project)` is where reports go: the chosen chat,
+  and nothing else. "Log only" and a project that never chose both report to
+  the bridge only, however many chats agents may post in: only a project the
+  operator marked posts to Telegram. (An earlier release sent a project that
+  never chose to the bot's one allowed chat, which put a private project's
+  report into a public group; that fallback is gone, and the `{ chat: null }`
+  record it introduced for "Log only" stays.) `get_orchestrator`'s
+  `reportTelegram` carries `source: "chosen"`. `/api/projects/settings`
   (`src/app/api/projects/settings/route.ts`) accepts
   `{ project, reportTelegram: { chat, name } | null }`, only from the operator
   (`requireOperatorAuthority`, as the bot route does), and refuses a chat that
   `TelegramBotService` does not list with `postAllowed`. There is no MCP write,
   so no agent chooses where a public post goes. `get_orchestrator` carries
   `reportTelegram` (alias, name and source, or null), the destination in
-  effect. The route's answer adds `reportDestination`, the same,
-  `postableChats`, the count, and `reportFallbackName`, the header name the
-  one allowed chat would carry while the project has not chosen. The setup
-  step works out what is in use on every render from the stored choice and
-  the bot status it already holds, by the same rule over the same chats (the
-  bot is a member and may post), so allowing a chat inside the step moves the
-  in-use marker and the prompt to pick at once; while the fallback is in use
-  the name field holds `reportFallbackName` and its hint says reports carry
-  that name now. A chosen chat that agents may no longer post in (its switch
-  turned off, its alias changed, the bot gone) stays the destination, with no
-  re-route to the fallback: the step lists it chosen and in use, disabled,
-  with a line to allow it or pick another, and Save stays off until the
-  operator picks a chat that accepts posts or "Log only". The bot panel names
-  on each chat the projects with a seat whose reports go there, says when
-  that is only because it is the one allowed chat, and on a chosen chat that
-  refuses posts says the reports reach the log only.
+  effect. The route's answer adds `reportDestination`, the same, and
+  `postableChats`, the count. Until the operator chooses, the step says the
+  project is not reporting to Telegram and offers the chats, with nothing
+  preselected or marked in use. A chosen chat that agents may no longer post
+  in (its switch turned off, its alias changed, the bot gone) stays the
+  destination, with no re-route: the step lists it chosen and in use,
+  disabled, with a line to allow it or pick another, and Save stays off until
+  the operator picks a chat that accepts posts or "Log only". The bot panel
+  names on each chat the projects with a seat whose operator chose it, and on
+  a chosen chat that refuses posts says the reports reach the log only.
 - **Header name**, used by both copies and resolved by
   `reportHeaderName(project)` in `src/lib/projects/settings.ts`:
   `reportTelegram.name` when the operator set one; else the project's GitHub
   repository name capitalised, when it has a GitHub remote; else the project's
   display name from the catalog. A project that skipped the step, like
   projects B–E today, therefore gets its repository or display name in its
-  bridge-only reports. The display name can be a local folder name: choosing
-  a Telegram chat in the step requires a name (below), and a project posting
-  to the bot's one allowed chat without having chosen uses this same fallback.
+  bridge-only reports. The display name can be a local folder name, which only
+  the bridge copy carries: choosing a Telegram chat in the step requires a
+  name (below). An internal key (`dir-<hash>`, `repo-<hash>`) is never printed:
+  a project with nothing readable is "Unnamed project" in the interface
+  language.
 - **Where**: the guide becomes Engines, Project, **Reports to Telegram
   (optional)**, Orchestrator. The step sits before Orchestrator because Create
   ends the guide on the new seat, and the seat's first report should already
@@ -1075,19 +1072,16 @@ Both answers are tested at the tool; the ask line is tested at the tick.
     `useTelegramBot` (`src/hooks/useTelegramBot.ts`), which calls the same
     operator-only `connect` action;
   - a bot connected: its name, and the chats `useTelegramBot` lists. The
-    destination in effect is preselected and marked "In use now", with the
-    reason when it is the one allowed chat; with several allowed chats and no
-    choice nothing is preselected and the step asks for one. Chats
+    operator's stored choice is preselected and marked "In use now"; with no
+    choice the step says reports are not going to Telegram and nothing is
+    preselected, however many chats accept posts. Chats
     that accept posts are choices; chats the bot is in but not allowlisted
     show the panel's own `ChatRow` switch, so allowing one is the same one tap
     as in the panel; "Log only, no Telegram" is always a choice;
   - "Name in reports", prefilled with the project's GitHub repository name
     capitalised ("Delegatus") when it has a GitHub remote, else empty and
     required once a chat is chosen, since the folder name is local; it becomes
-    `reportTelegram.name`. While reports go to the one allowed chat, the field
-    holds the name they carry there (the header name fallback below, which can
-    be the display name) and its hint says so, saying also that it is the
-    project's name on this computer when there is no GitHub repository;
+    `reportTelegram.name`;
   - the rule in one sentence: the group may be public, so reports carry no
     private information, and they are posted silently, with no links;
   - Skip, as prominent as Continue. Skip writes nothing and leaves the step
