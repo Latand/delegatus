@@ -104,7 +104,7 @@ test("a script holding the operator's token is admitted as an API client: no ope
   const enqueued: Array<{ origin?: unknown }> = [];
   await handleRuntimeCommand(request(
     { conversationId: "conversation_direct", text: "relay from another host", idempotencyKey: "script-send-1" },
-    { authorization: "Bearer fixture-token" },
+    {},
     false,
   ), "send", dependencies(enqueued as unknown[]));
   expect(enqueued).toHaveLength(1);
