@@ -419,7 +419,7 @@ export function orchestratorRoleTable(roles: readonly RoleDefinition[]): string 
     "| --- | --- | --- | --- | --- | --- |",
     ...roles.map(roleTableRow),
     `- ${registryStatus}`,
-    "- Runtime overrides go on the stage beside role. override-stage binds from the NEXT attempt: a running one keeps its runtime.",
+    "- Runtime overrides go on the stage beside role, never inside it. A review-loop stage is always read-only. override-stage binds from the NEXT attempt: a running one keeps its runtime.",
     "- Size each lane first. trivial (a few lines of UI, copy, one flag or label; your brief states the exact change and its acceptance): builder and reviewer size=trivial, one review round. normal: the rows, effort low or medium for routine work. design (options, architecture, proposals, issues from design work): an architect stage first.",
     "- Only an Opus-class agent's brief admits size=trivial. Sonnet and Haiku never run orchestrator, architect, reviewer or verifier, nor a hand-set builder. README, docs, public text: builder domain=docs.",
     "- create_pipeline answers each stage's runtime and a runtimeLine (spawn_agent: runtime): fix a wrong one before attempt 1 (draft, or pause, override-stage, start), and quote it with the size you chose and why.",

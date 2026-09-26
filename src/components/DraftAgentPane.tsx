@@ -475,7 +475,10 @@ export function DraftAgentPane({
        (#1876) reaches the draft exactly as it reaches the registry; the
        precedence is the registry's own (variantForParams). */
     const variant = variantForParams(selected.id, next);
-    /* A role with no variants keeps whatever runtime the draft shows. */
+    /* Only a change of variant moves the runtime: a lens, a diff source or a
+       parallel count leaves the one the operator picked. A role with no
+       variants keeps whatever runtime the draft shows. */
+    if (variant === variantForParams(selected.id, roleParams)) return;
     if (!variant && !selected.variants) return;
     const config = variant
       ? selected.variants?.[variant] ?? shippedVariantConfig(selected.id, variant) ?? selected.config

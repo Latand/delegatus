@@ -1327,7 +1327,10 @@ function refuseMcpSpawnSizing(args: McpToolArgs, dependencies: Pick<ViewerMcpDom
 
 async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   validateExplicitMcpLaunchModel(args);
-  if (dependencies && !context?.binding) refuseMcpSpawnSizing(args, dependencies);
+  /* Judged on every dispatch, with or without a persisted binding: the service
+     calls a recoverable spawn with one on each first dispatch, and a replay is
+     answered from the receipt without reaching this function. */
+  if (dependencies) refuseMcpSpawnSizing(args, dependencies);
   /* #1490: the persisted downstream key wins over a recomputation — it is the
      key the claim was bound to and the one recovery will look up. */
   const clientAttemptId = context?.binding?.downstreamKey ?? spawnAttemptId(requestId(args));

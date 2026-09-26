@@ -253,7 +253,7 @@ Call sites, each with the caller it already knows:
 | pipeline create | `engine.ts`, beside `stageAccountRefusal` (`:6138`), over `normalized.stages` | new `CreatePipelineOptions.briefer`: the HTTP route passes `operator` when `!isAgentInitiatedSpawn(req)` and the authenticated conversation otherwise; MCP passes `attributionOf(...).conversationId`, falling back to the resolved `srcConversationId` |
 | add-stage, override-stage | `patchPipeline` (`engine.ts:7227`), after `resolvePipelineRole` | the `actor`: `operator`, or the agent's `conversationId`, falling back to `pipeline.srcConversationId` |
 | spawn | `spawnCommand.ts:306`, after `resolveSpawnRole`; the same check in `/api/spawn/validate` (`spawnAdmissionValidation.ts`) so the validator never admits what the route refuses | `authenticatedCaller` (`operator` when absent or operator-capability) |
-| MCP `spawn_agent` (*built*) | `bindings.ts`, before dispatch | the attributed conversation, else `parentConversationId`. MCP dispatches reach `/api/spawn` same-origin on the **operator** capability, so the route alone would read every seat's spawn as the operator's; the binding knows the caller and judges it before anything is dispatched |
+| MCP `spawn_agent` (*built*) | `bindings.ts`, before dispatch | the attributed conversation, else `parentConversationId`. MCP dispatches reach `/api/spawn` same-origin on the **operator** capability, so the route alone would read every seat's spawn as the operator's; the binding knows the caller and judges it before anything is dispatched, on every dispatch: the service hands a recoverable spawn its persisted request binding on the first dispatch, so a check that skipped bound calls would skip every real one, and a replay is answered from the receipt without reaching the binding |
 | mapping write | `parseRoleMappingPatch` / `saveRoleMapping` (`store.ts:155-221`) | R1 only, for every writer: a mapping row is a standing default that agents then launch |
 
 The engine reads the briefer's runtime through one new optional port,
@@ -321,10 +321,12 @@ past the room the envelope tests leave for a rotation's history. What shipped
 is the same rules in fewer words, merged with the two existing bullets they
 overlap (runtime overrides, and reading back create_pipeline's answer), and
 the effort guidance the old bullet carried is kept inside `normal`, so the
-2026-09-18 effort ladder is not lost:
+2026-09-18 effort ladder is not lost. The runtime-overrides bullet keeps its
+rules unchanged: an override never goes inside the role, and a review-loop
+stage is always read-only:
 
 ```
-- Runtime overrides go on the stage beside role. override-stage binds from the NEXT attempt: a running one keeps its runtime.
+- Runtime overrides go on the stage beside role, never inside it. A review-loop stage is always read-only. override-stage binds from the NEXT attempt: a running one keeps its runtime.
 - Size each lane first. trivial (a few lines of UI, copy, one flag or label; your brief states the exact change and its acceptance): builder and reviewer size=trivial, one review round. normal: the rows, effort low or medium for routine work. design (options, architecture, proposals, issues from design work): an architect stage first.
 - Only an Opus-class agent's brief admits size=trivial. Sonnet and Haiku never run orchestrator, architect, reviewer or verifier, nor a hand-set builder. README, docs, public text: builder domain=docs.
 - create_pipeline answers each stage's runtime and a runtimeLine (spawn_agent: runtime): fix a wrong one before attempt 1 (draft, or pause, override-stage, start), and quote it with the size you chose and why.
@@ -333,7 +335,7 @@ the effort guidance the old bullet carried is kept inside `normal`, so the
 Variant runtimes read `size=trivial: claude/sonnet/high; domain=frontend: …`.
 Even so the table grew by ~300 bytes: the section bound in
 `prompt.test.ts` is 3 300 bytes (was 3 000), the room left beside the
-delivered default is 7 800 bytes (was 8 000), and the delivered-directive
+delivered default is 7 700 bytes (was 8 000), and the delivered-directive
 budget in `handoffDigest.test.ts` is 12 500 bytes (was 12 000; main already
 measured 12 080 before this change). A rotation trims its history to what is
 left, and 19 500 bytes still hold two history budgets.

@@ -610,8 +610,9 @@ test("the role table keeps the delivered default inside the structured envelope"
   expect(Buffer.byteLength(section)).toBeLessThan(3_300);
   /* Leave the orchestrator scaffold and a rotation's history room beside it.
      The sizing rule (docs/design/model-sizing-tiers.md §4) takes 200 bytes of
-     that room; a rotation trims its history to what is left. */
-  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 7_800);
+     that room, and keeping the review-loop read-only rule beside it another
+     100; a rotation trims its history to what is left. */
+  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 7_700);
 });
 
 /* docs/design/model-sizing-tiers.md §4: the seat sizes every lane, reads each
@@ -635,6 +636,7 @@ test("the role table tells the seat to size lanes, lists every variant and names
   expect(table).toContain("- Only an Opus-class agent's brief admits size=trivial. Sonnet and Haiku never run orchestrator, architect, reviewer or verifier, nor a hand-set builder.");
   expect(table).toContain("README, docs, public text: builder domain=docs.");
   expect(table).toContain("a runtimeLine (spawn_agent: runtime)");
+  expect(table).toContain("- Runtime overrides go on the stage beside role, never inside it. A review-loop stage is always read-only.");
   expect(table).toContain("quote it with the size you chose and why");
   expect(table).toContain("builder:frontend (was claude/opus/xhigh); tell the operator");
   /* Delivery replaces the table up to the first blank line, so it carries none. */
