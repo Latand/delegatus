@@ -883,8 +883,8 @@ function ViewerApp() {
      that took the row away. */
   const closingPipelines = useClosingPipelines();
   /* The lanes parked on the operator ride in the same list as the
-     conversations (#2129): the island's number, its popover and its «Next ›»,
-     and the phone's ⚠ badge, all read `needsYou`, so the header counts the
+     conversations (#2129): the header's «Waiting N», the needs-you panel's
+     rows and the phone's ⚠ badge all read `needsYou`, so the header counts the
      lanes the cards and the columns already mark, and a lane dismissed on its
      card leaves every count at once. */
   const needsYou = useMemo(() => buildNeedsYouQueue(files, pipelines, clock, closingPipelines), [files, pipelines, clock, closingPipelines]);
@@ -1222,7 +1222,8 @@ function ViewerApp() {
   );
 
   /* The phone's ONE queue (mobile v2 §4.1, §4.6): the bar's badge counts it,
-     the sheet the badge opens lists it, and that sheet's «Next ›» walks it.
+     the sheet the badge opens lists it in rows, each opened by a tap and
+     cleared by its «Dismiss» or the header's «Dismiss all».
      It is SCOPED to the project behind the badge — the board under the bar
      shows one project, so counting every project's rows made the badge promise
      items that screen could not reach. The all-projects screen has no project

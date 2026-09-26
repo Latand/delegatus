@@ -129,3 +129,20 @@ test("the rail's ⏸ reads the panel's grouping: one number per project, a dismi
   const legacy = Object.fromEntries(buildProjectSummaries(FILES, NOW, [], [], PIPELINES, {}).map((summary) => [summary.project, summary.attentionCount]));
   expect(legacy).not.toEqual(summaries);
 });
+
+test("an agent that asked the operator in prose («Asks you») is a row of its project: its spawn role, its reason, counted once", () => {
+  const ask = file("/delta-architect", "delta", {
+    durableLineage: { kind: "spawn", role: "architect", parentConversationId: null, reviewsConversationId: null, memberships: [] },
+    operatorAsk: { id: "ask:conversation_delta-architect:claude:msg-1", messageAt: (NOW - 700) * 1000, gist: "Keep the presets, or fold them into one Export button?" },
+  } as unknown as Partial<FileEntry>);
+  const queue = buildNeedsYouQueue([...FILES, ask], PIPELINES, NOW, []);
+  const entry = queue.find((candidate) => candidate.id === "ask:conversation_delta-architect:claude:msg-1")!;
+  expect(entry.kind).toBe("conversation");
+  expect(entry.kind === "conversation" ? entry.item.reason.kind : null).toBe("ask");
+  expect(needsYouEntryRole(entry, PIPELINES)).toBe("architect");
+  expect(needsYouSections(queue, "delta")[0]).toEqual({ project: "delta", entries: [entry] });
+  expect(needsYouSubject(entry)).toEqual({
+    kind: "conversation", conversationId: "conversation_delta-architect", path: "/delta-architect", reasonId: "ask:conversation_delta-architect:claude:msg-1", reason: "ask",
+  });
+  expect(needsYouCounts(queue).get("delta")).toBe(1);
+});

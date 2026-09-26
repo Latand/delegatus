@@ -255,3 +255,31 @@ test("a permission row puts its long headline on a truncated line of its own and
   expect(q(host, "[data-permission-allow]")).not.toBeNull();
   expect(q(host, "[data-permission-deny]")).not.toBeNull();
 });
+
+test("an agent that asked the operator in prose is a row with its role, its own sentence on a line of its own, and «Dismiss» clears that ask", () => {
+  const calls: Array<{ subjects: unknown }> = [];
+  const dismiss = (async (_target: unknown, subjects: unknown) => {
+    calls.push({ subjects });
+    return { ok: true, outcome: { dismissed: [], alreadyClear: [], changed: [], at: "", by: { kind: "operator" }, undo: false } };
+  }) as never;
+  const askId = "ask:conversation_explore:claude:msg-7";
+  const gist = "Keep the per-format presets, or fold them into one «Export» button?";
+  const file = conversation("/p/explore.jsonl", "Export formats", NOW - 420, {
+    engine: "claude", fmt: "claude", model: "opus", pendingQuestion: null, conversationId: "conversation_explore",
+    durableLineage: { kind: "spawn", role: "architect", parentConversationId: null, reviewsConversationId: null, memberships: [] },
+    operatorAsk: { id: askId, messageAt: (NOW - 420) * 1000, gist },
+  } as unknown as Partial<FileEntry>);
+  const host = mount(<MobileAttentionSheet entries={buildMobileAttentionQueue(buildAttentionQueue([file], NOW, PROJECT), [])} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} dismiss={dismiss} />);
+  const row = q(host, `[data-needs-you-row="${askId}"]`)!;
+  expect(row.querySelector("[data-role-tag]")!.getAttribute("data-role")).toBe("architect");
+  expect(row.querySelector("[data-role-tag]")!.textContent).toBe("Architect");
+  expect(row.textContent).toContain("Export formats");
+  const decision = row.querySelector("[data-attention-decision]")!;
+  expect(decision.textContent).toBe(`asks you: ${gist}`);
+  /* The sentence has its own line; the age stays on the meta line. */
+  const age = row.querySelector("[data-attention-age]")!;
+  expect(age.textContent).toBe("7m ago");
+  expect(age.parentElement!.contains(decision)).toBe(false);
+  click(q(host, `[data-needs-you-dismiss="${askId}"]`));
+  expect(calls[0]!.subjects).toEqual([{ kind: "conversation", conversationId: "conversation_explore", path: "/p/explore.jsonl", reasonId: askId, reason: "ask" }]);
+});

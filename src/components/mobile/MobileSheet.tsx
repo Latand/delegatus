@@ -33,7 +33,7 @@ export const SHEET_CLOSE_DRAG_PX = 80;
 const HEADER_CONTROL = "button, a[href], input, select, textarea, [role='button']";
 
 /** True when the pointer landed on a control inside `within` (the header's ×,
-    an `extra` control such as the queue's Next ›). Capturing that pointer for
+    an `extra` control such as the queue's «Dismiss all»). Capturing that pointer for
     a drag would make Chromium retarget the tap's click to the capturing
     header, and the control would never fire. */
 function isControlTarget(target: EventTarget | null, within: HTMLElement): boolean {
@@ -57,7 +57,7 @@ export function MobileSheet({
 }: {
   name: MobileSheetName;
   title: string;
-  /** A header control beside the title (the queue's «Next ›», the switcher's «Board ›»). */
+  /** A header control beside the title (the queue's «Dismiss all», the switcher's «Board ›»). */
   extra?: ReactNode;
   footer?: ReactNode;
   /** Fullscreen (the rotate / create draft): no handle, no rounded top. */

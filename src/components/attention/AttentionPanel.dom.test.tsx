@@ -303,3 +303,29 @@ test("a permission prompt answers Allow once or Deny from its row", async () => 
   expect(row.querySelector("[data-permission-allow]")!.textContent).toBe("Allow once");
   expect(row.querySelector("[data-permission-deny]")).not.toBeNull();
 });
+
+test("an agent that asked the operator in prose is a row with its role, the agent's own sentence as the line, and «Dismiss» clears that ask", async () => {
+  const state = world();
+  const askId = "ask:conversation_explore:claude:msg-7";
+  state.files.push(conversation("/explore", BETA, {
+    ...spawned("architect"),
+    title: "Export formats",
+    operatorAsk: { id: askId, messageAt: (NOW - 900) * 1000, gist: "Keep the per-format presets, or fold them into one «Export» button?" },
+  } as Partial<FileEntry>));
+  const host = await mount(state, null);
+  const row = host.querySelector(`[data-needs-you-section="${BETA}"] [data-needs-you-row="${askId}"]`)!;
+  expect(row.getAttribute("data-needs-you-role")).toBe("architect");
+  const tag = row.querySelector("[data-role-tag]")!;
+  expect([tag.getAttribute("data-role"), tag.textContent, Boolean(tag.querySelector(".role-tag-emblem svg"))]).toEqual(["architect", "Architect", true]);
+  expect(row.querySelector("[data-needs-you-title-line]")!.textContent).toBe("Export formats");
+  expect(row.querySelector("[data-attention-decision]")!.textContent).toBe("asks you: Keep the per-format presets, or fold them into one «Export» button?");
+  expect(title(host)).toBe("Waiting for you · 7");
+  await click(host.querySelector(`[data-needs-you-dismiss="${askId}"]`)!);
+  expect(posted).toEqual([{
+    target: { kind: "subjects", subjects: [{ kind: "conversation", conversationId: "conversation_explore", path: "/explore", reasonId: askId, reason: "ask" }] },
+    undo: false,
+    surface: "desktop",
+  }]);
+  expect(rowIds(host)).not.toContain(askId);
+  expect(title(host)).toBe("Waiting for you · 6");
+});

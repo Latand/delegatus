@@ -282,7 +282,7 @@ function ConversationRow({ item, now, current, onOpen, role }: { item: Attention
   const title = (role && item.reason.report?.body) || cleanTitle(item.file.title, 90);
   /* With the role on its own mark, the line is the wait alone. */
   const decision = role ? reasonLine(t, item.reason) : decisionLine(t, item.file, now) ?? t("attention.decisionQuestion");
-  const headline = item.reason.kind === "permission" && Boolean(item.file.pendingPermission);
+  const headline = (item.reason.kind === "permission" && Boolean(item.file.pendingPermission)) || (item.reason.kind === "ask" && Boolean(item.reason.header));
   const row = (
     <button
       type="button"
@@ -302,7 +302,8 @@ function ConversationRow({ item, now, current, onOpen, role }: { item: Attention
         {/* A permission headline (tool, command, reason) runs to hundreds of
             characters, so it gets a line of its own that ends in an ellipsis
             and the meta line keeps the age in view: the request is denied
-            at ten minutes (#2215). */}
+            at ten minutes (#2215). An agent's own sentence that asks the
+            operator gets the same line. */}
         {headline ? <span data-attention-decision className="min-w-0 truncate text-label font-medium text-muted">{decision}</span> : null}
         <span className={META}>
           {headline ? null : (

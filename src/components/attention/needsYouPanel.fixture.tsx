@@ -89,7 +89,7 @@ const task = (project: string, id: string, status: string, text: string, over: R
   tasks.push({ id, project, status, text, placement: "unplaced", board: "shown", assignments: [], createdAt: iso(3 * 86_400), updatedAt: iso(3_600), revision: `r-${id}-1`, ...over });
 };
 
-/* ── delegatus (the board on screen): rows 1–3 ─────────────────────────── */
+/* ── delegatus (the board on screen): rows 1–4 ─────────────────────────── */
 const D = KEYS.delegatus;
 /* The seat's open questions in the report log: each is its own row, the
    seat's role on it, and resolving one here or in the log resolves both. */
@@ -109,9 +109,20 @@ const permission = conversation(D, "Аудит задач дошки", {
   ...role("reviewer"), ...working(900), mtime: now - 11 * MIN,
   pendingPermission: { id: "request-audit-1", tool: "Bash", command: "rm -rf .next", reason: null, reasonType: "safetyCheck", since: iso(11 * MIN) },
 });
+/* Row 3, `ask` ("Asks you"): an architect whose turn ended asking the
+   operator in prose; the line is its own sentence. */
+const EXPORT_ASK_GIST = "Лишити окремі пресети для кожного формату чи звести все в одну кнопку «Експорт» з розширеними параметрами?";
+const prose = conversation(D, "Експорт звітів у CSV і PDF", {
+  ...role("architect"), activity: "idle", mtime: now - 14 * MIN, lastAgentWorkAt: (now - 14 * MIN) * 1_000,
+  lastTurn: { startedAt: (now - 22 * MIN) * 1_000, endedAt: (now - 14 * MIN) * 1_000 }, lastAssistantMessageAt: (now - 14 * MIN) * 1_000,
+});
+const proseFile = files.find((entry) => entry.path === prose)!;
+proseFile.operatorAsk = { id: `ask:${proseFile.conversationId}:claude:msg-export-1`, messageAt: (now - 14 * MIN) * 1_000, gist: EXPORT_ASK_GIST };
+(window as unknown as { __needsYouFixtureAsk?: { id: string; gist: string } }).__needsYouFixtureAsk = { id: proseFile.operatorAsk.id, gist: EXPORT_ASK_GIST };
 task(D, "t-chip", "assigned", "Чип Чекають: 2–3 варіанти", { assignments: [assign(ask)], color: "amber", icon: "bell" });
+task(D, "t-export", "assigned", "Експорт звітів у CSV і PDF", { assignments: [assign(prose)], color: "violet", icon: "file-search" });
 task(D, "t-audit", "assigned", "Аудит задач дошки", { assignments: [assign(permission)], color: "sky", icon: "list-checks" });
-/* Row 3, `lane-decision`. */
+/* Row 4, `lane-decision`. */
 lane(D, "lane-limit", "Ліміт видимих задач", ["t-limit"], "needs_decision", [
   { id: "implement", state: "passed", ago: 3_000 }, { id: "review", state: "needs_decision", ago: 32 * MIN, role: "reviewer" },
 ]);
@@ -131,27 +142,27 @@ task(D, "t-quota", "inbox", "Витрачати квоту до скидання
 task(D, "t-digest-weekend", "inbox", "Нічний дайджест пропускає вихідні", { updatedAt: iso(86_400) });
 task(D, "t-seat", "assigned", "Оркестратор delegatus", { assignments: [assign(seatDelegatus)], icon: "compass" });
 
-/* ── shop-web: rows 4–5 ────────────────────────────────────────────────── */
+/* ── shop-web: rows 5–6 ────────────────────────────────────────────────── */
 const S = KEYS.shop;
-/* Row 4, `decision`: the orchestrator's open bridge ask. */
+/* Row 5, `decision`: the orchestrator's open bridge ask. */
 const shopAsk = { id: "report-shop-limit", at: iso(60 * MIN), seq: 1_190, body: "Підняти ліміт вкладень до 100 МБ чи лишити 25?" };
 const seatShop = conversation(S, "Оркестратор", { ...role("orchestrator"), mtime: now - 3_600, bridgeAsks: [shopAsk], bridgeAsk: shopAsk });
 task(S, "t-shop-seat", "assigned", "Оркестратор shop-web", { assignments: [assign(seatShop)] });
-/* Row 5, `plan`: an architect's plan approval. */
+/* Row 6, `plan`: an architect's plan approval. */
 const plan = conversation(S, "Пошук по каталогу", {
   ...role("architect"), activity: "idle", mtime: now - 18 * MIN,
   pendingQuestion: { kind: "plan", toolUseId: "toolu-plan-1", transcriptPath: "", pid: null, paneTarget: null, askedAt: iso(18 * MIN), questions: [] },
 });
 task(S, "t-catalog", "assigned", "Пошук по каталогу", { assignments: [assign(plan)] });
 
-/* ── tg-bot: rows 6–7 ──────────────────────────────────────────────────── */
+/* ── tg-bot: rows 7–8 ──────────────────────────────────────────────────── */
 const B = KEYS.bot;
-/* Row 6, `lane-review`: the review budget spent on implement. */
+/* Row 7, `lane-review`: the review budget spent on implement. */
 lane(B, "lane-digest", "Щоденний дайджест", ["t-digest"], "needs_review", [
   { id: "implement", state: "passed", ago: 2 * 3_600 }, { id: "review", state: "failed", ago: 2 * 3_600 - 60, role: "reviewer" },
 ], { cursor: { stageId: "implement", state: "reviewing", input: null, activatedBy: null } });
 task(B, "t-digest", "assigned", "Щоденний дайджест");
-/* Row 7, `delivery`: a message held for 41 minutes, to a verifier. */
+/* Row 8, `delivery`: a message held for 41 minutes, to a verifier. */
 const owed = conversation(B, "Перевірка #88 на стейджі", { ...role("verifier"), ...working(3_000), stuckDelivery: { since: iso(41 * MIN), attempts: 2, state: "held" } });
 task(B, "t-merge88", "assigned", "Мердж #88", { assignments: [assign(owed)] });
 
@@ -174,6 +185,9 @@ function reportPage(): ReportLogPage {
     ok: true, project: D, bridgeReports: true, github: "example/delegatus",
     revision: `fixture:${open.join(",")}:${[...resolvedQuestions.keys()].join(",")}`,
     entries: REPORTS.map((entry) => ({ ...entry, cards: reportCardRefs(entry.body, knownCards) })), nextBefore: null,
+    /* The Viewer's own line for the architect's ask, by time among the reports. */
+    asks: proseFile.attentionDismissal ? [] : [{ id: proseFile.operatorAsk!.id, at: iso(14 * MIN), conversationId: proseFile.conversationId ?? null, path: prose, role: "architect", title: proseFile.title, gist: EXPORT_ASK_GIST }],
+    nextAsksBefore: null,
     questions: { open, resolved: [...resolvedQuestions].map(([seq, at]) => ({ seq, at })) },
   };
 }

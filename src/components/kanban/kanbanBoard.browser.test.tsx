@@ -11770,9 +11770,9 @@ describe("needs-you panel: renders and readings over the real Viewer", () => {
         try {
           const count = await chipCount(opened.page);
           readings[`${lang}/desktop-closed`] = relative({ count, next: await opened.page.locator("[data-attention-next]").count(), title: await opened.page.title() });
-          check(`${lang}/desktop-closed`, count === 9, `the control counts ${count}, expected every project's 9`);
+          check(`${lang}/desktop-closed`, count === 10, `the control counts ${count}, expected every project's 10`);
           check(`${lang}/desktop-closed`, (await opened.page.locator("[data-attention-next]").count()) === 0, "a Next is drawn");
-          check(`${lang}/desktop-closed`, (await opened.page.title()).startsWith("(9) "), "the tab title lost the global count");
+          check(`${lang}/desktop-closed`, (await opened.page.title()).startsWith("(10) "), "the tab title lost the global count");
           await shot(opened.page, lang, "1440x900-closed");
         } finally { await opened.context.close(); }
 
@@ -11797,7 +11797,24 @@ describe("needs-you panel: renders and readings over the real Viewer", () => {
             document.querySelector("[data-needs-you-panel] [data-needs-you-dismiss-section]")?.textContent ?? "",
           ]);
           readings[`${lang}/desktop-dismiss-labels`] = relative(labels);
-          check(`${lang}/desktop-open-docked`, labels[0] !== labels[1] && /9/.test(labels[0]!), `head and section read ${JSON.stringify(labels)}`);
+          check(`${lang}/desktop-open-docked`, labels[0] !== labels[1] && /10/.test(labels[0]!), `head and section read ${JSON.stringify(labels)}`);
+          /* «Asks you»: the architect that asked in prose is a row of its
+             project, its role on it and its own sentence as the line. */
+          const askRow = await opened.page.evaluate(() => {
+            const fixture = (window as unknown as { __needsYouFixtureAsk?: { id: string; gist: string } }).__needsYouFixtureAsk!;
+            const row = document.querySelector(`[data-needs-you-panel] [data-needs-you-section="delegatus"] [data-needs-you-row="${CSS.escape(fixture.id)}"]`);
+            return {
+              gist: fixture.gist,
+              role: row?.getAttribute("data-needs-you-role") ?? null,
+              tag: row?.querySelector("[data-role-tag]")?.textContent ?? null,
+              emblem: Boolean(row?.querySelector("[data-role-tag] .role-tag-emblem svg")),
+              title: row?.querySelector("[data-needs-you-title-line]")?.textContent ?? null,
+              line: row?.querySelector("[data-attention-decision]")?.textContent ?? null,
+            };
+          });
+          readings[`${lang}/desktop-ask-row`] = relative(askRow);
+          const askLine = translate(lang, "attention.decisionAskNamed", { ask: askRow.gist });
+          check(`${lang}/desktop-ask-row`, askRow.role === "architect" && askRow.emblem && askRow.tag === translate(lang, "roleCopy.architect.name" as never) && askRow.line === askLine, `the ask row reads ${JSON.stringify(askRow)}`);
           await shot(opened.page, lang, "1440x900-open-docked");
           /* Every section open, to show every role. */
           for (const project of ["shop-web", "tg-bot"]) {
@@ -11806,7 +11823,7 @@ describe("needs-you panel: renders and readings over the real Viewer", () => {
           }
           const all = await panelReading(opened.page);
           check(`${lang}/desktop-open-all-sections`, new Set(all.roles).size >= 5, `roles ${JSON.stringify(all.roles)}`);
-          check(`${lang}/desktop-open-all-sections`, all.roles.length === 9, `${all.roles.length} rows`);
+          check(`${lang}/desktop-open-all-sections`, all.roles.length === 10, `${all.roles.length} rows`);
           /* Oldest wait first in every section, lanes among the conversations. */
           const since = await opened.page.evaluate(() => [...document.querySelectorAll("[data-needs-you-panel] [data-needs-you-section]")].map((section) => ({
             project: section.getAttribute("data-needs-you-section"),
@@ -11843,7 +11860,7 @@ describe("needs-you panel: renders and readings over the real Viewer", () => {
           }));
           readings[`${lang}/phone-sheet`] = relative(phone);
           check(`${lang}/phone-sheet`, phone.next === 0, "the sheet draws a Next");
-          check(`${lang}/phone-sheet`, phone.rows.length === 5 && phone.dismiss === 5, `rows ${JSON.stringify(phone)}`);
+          check(`${lang}/phone-sheet`, phone.rows.length === 6 && phone.dismiss === 6, `rows ${JSON.stringify(phone)}`);
           check(`${lang}/phone-sheet`, !phone.rows.includes(null), "a row without a role");
           const geometry = await sheetGeometry(opened.page);
           readings[`${lang}/phone-sheet-geometry`] = relative(geometry);
@@ -11851,6 +11868,8 @@ describe("needs-you panel: renders and readings over the real Viewer", () => {
             check(`${lang}/phone-sheet`, row.ageInside, `${row.id}: the age «${row.age}» leaves its row`);
             check(`${lang}/phone-sheet`, row.ellipsis, `${row.id}: a cut wait without an ellipsis`);
           }
+          const phoneAsk = geometry.rows.find((row) => row.id?.startsWith("ask:"));
+          check(`${lang}/phone-sheet`, Boolean(phoneAsk && phoneAsk.decision?.startsWith(translate(lang, "needs.ask"))), `the phone's ask row reads ${JSON.stringify(phoneAsk)}`);
           await shot(opened.page, lang, "390x844-sheet");
         } finally { await opened.context.close(); }
 
@@ -11898,24 +11917,24 @@ describe("needs-you panel: renders and readings over the real Viewer", () => {
         await page.waitForTimeout(300);
         const afterOne = { count: await chipCount(page), panel: await panelReading(page), gone: await page.locator(`[data-needs-you-row="${firstId}"]`).count() === 0 };
         readings["uk/desktop-dismiss-one"] = relative(afterOne);
-        check("uk/desktop-dismiss-one", afterOne.count === 8 && afterOne.gone, `after one dismissal: ${JSON.stringify(afterOne)}`);
+        check("uk/desktop-dismiss-one", afterOne.count === 9 && afterOne.gone, `after one dismissal: ${JSON.stringify(afterOne)}`);
         check("uk/desktop-dismiss-one", (await page.locator("[data-needs-you-undo]").count()) === 1, "no Undo after a dismissal");
         await shot(page, "uk", "1440x900-dismissed-one-undo");
         await page.locator('[data-needs-you-dismiss-section="shop-web"]').click();
         await page.waitForTimeout(300);
         const afterSection = { count: await chipCount(page), sections: (await panelReading(page)).sections };
         readings["uk/desktop-dismiss-section"] = relative(afterSection);
-        check("uk/desktop-dismiss-section", afterSection.count === 6 && !afterSection.sections.some((section) => section[0] === "shop-web"), `after shop-web's Dismiss all: ${JSON.stringify(afterSection)}`);
+        check("uk/desktop-dismiss-section", afterSection.count === 7 && !afterSection.sections.some((section) => section[0] === "shop-web"), `after shop-web's Dismiss all: ${JSON.stringify(afterSection)}`);
         await shot(page, "uk", "1440x900-dismissed-section");
         /* A poll later the server's record still holds. */
         await page.evaluate(() => window.dispatchEvent(new Event("llv:files-changed")));
         await page.waitForTimeout(800);
-        check("uk/desktop-dismiss-section", (await chipCount(page)) === 6, "the dismissal did not survive a poll");
+        check("uk/desktop-dismiss-section", (await chipCount(page)) === 7, "the dismissal did not survive a poll");
         await page.locator("[data-needs-you-undo]").click();
         await page.waitForTimeout(500);
         const undone = await chipCount(page);
         readings["uk/desktop-undo"] = relative({ count: undone });
-        check("uk/desktop-undo", undone === 8, `Undo brought the count to ${undone}, expected 8`);
+        check("uk/desktop-undo", undone === 9, `Undo brought the count to ${undone}, expected 9`);
       } finally { await opened.context.close(); }
 
       /* uk and en: the report log beside the seat, a question ticked there

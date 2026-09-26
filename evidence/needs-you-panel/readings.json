@@ -1,17 +1,17 @@
 {
   "readings": {
     "uk/desktop-closed": {
-      "count": 9,
+      "count": 10,
       "next": 0,
-      "title": "(9) Delegatus"
+      "title": "(10) Delegatus"
     },
     "uk/desktop-open-docked": {
       "placement": "docked",
-      "title": "Чекають на вас · 9",
+      "title": "Чекають на вас · 10",
       "sections": [
         [
           "delegatus",
-          5,
+          6,
           false
         ],
         [
@@ -28,6 +28,7 @@
       "roles": [
         "reviewer",
         "orchestrator",
+        "architect",
         "reviewer",
         "orchestrator",
         "builder"
@@ -36,10 +37,11 @@
       "tagColours": [
         "reviewer:rgb(3, 105, 161)",
         "orchestrator:rgb(67, 56, 202)",
+        "architect:rgb(15, 118, 110)",
         "builder:rgb(180, 83, 9)"
       ],
       "next": 0,
-      "title_": "(9) Delegatus",
+      "title_": "(10) Delegatus",
       "bar": {
         "name": "delegatus",
         "whole": true,
@@ -53,16 +55,24 @@
       }
     },
     "uk/desktop-dismiss-labels": [
-      "Зняти всі 9",
-      "Зняти 5"
+      "Зняти всі 10",
+      "Зняти 6"
     ],
+    "uk/desktop-ask-row": {
+      "gist": "Лишити окремі пресети для кожного формату чи звести все в одну кнопку «Експорт» з розширеними параметрами?",
+      "role": "architect",
+      "tag": "Архітектор",
+      "emblem": true,
+      "title": "Експорт звітів у CSV і PDF",
+      "line": "питає вас: Лишити окремі пресети для кожного формату чи звести все в одну кнопку «Експорт» з розширеними параметрами?"
+    },
     "uk/desktop-open-all-sections": {
       "placement": "docked",
-      "title": "Чекають на вас · 9",
+      "title": "Чекають на вас · 10",
       "sections": [
         [
           "delegatus",
-          5,
+          6,
           false
         ],
         [
@@ -79,6 +89,7 @@
       "roles": [
         "reviewer",
         "orchestrator",
+        "architect",
         "reviewer",
         "orchestrator",
         "builder",
@@ -91,12 +102,12 @@
       "tagColours": [
         "reviewer:rgb(3, 105, 161)",
         "orchestrator:rgb(67, 56, 202)",
+        "architect:rgb(15, 118, 110)",
         "builder:rgb(180, 83, 9)",
-        "verifier:rgb(21, 128, 61)",
-        "architect:rgb(15, 118, 110)"
+        "verifier:rgb(21, 128, 61)"
       ],
       "next": 0,
-      "title_": "(9) Delegatus",
+      "title_": "(10) Delegatus",
       "ages": [
         {
           "project": "delegatus",
@@ -108,6 +119,10 @@
             [
               "report-weekend-digest",
               "26 хв тому"
+            ],
+            [
+              "ask:conversation_delegatus-4:claude:msg-export-1",
+              "14 хв тому"
             ],
             [
               "/repo/delegatus-3.jsonl:permission:request-audit-1",
@@ -125,6 +140,7 @@
           "since": [
             "now-1920",
             "now-1560",
+            "now-840",
             "now-660",
             "now-540",
             "now-240"
@@ -138,7 +154,7 @@
               "2 год тому"
             ],
             [
-              "/repo/tg-bot-15.jsonl:delivery:now-2460",
+              "/repo/tg-bot-16.jsonl:delivery:now-2460",
               "41 хв тому"
             ]
           ],
@@ -168,11 +184,11 @@
     },
     "uk/desktop-open-overlay": {
       "placement": "overlay",
-      "title": "Чекають на вас · 9",
+      "title": "Чекають на вас · 10",
       "sections": [
         [
           "delegatus",
-          5,
+          6,
           false
         ],
         [
@@ -189,6 +205,7 @@
       "roles": [
         "reviewer",
         "orchestrator",
+        "architect",
         "reviewer",
         "orchestrator",
         "builder"
@@ -197,25 +214,27 @@
       "tagColours": [
         "reviewer:rgb(3, 105, 161)",
         "orchestrator:rgb(67, 56, 202)",
+        "architect:rgb(15, 118, 110)",
         "builder:rgb(180, 83, 9)"
       ],
       "next": 0,
-      "title_": "(9) Delegatus"
+      "title_": "(10) Delegatus"
     },
     "uk/phone-sheet": {
       "rows": [
         "reviewer",
         "orchestrator",
+        "architect",
         "reviewer",
         "orchestrator",
         "builder"
       ],
-      "dismiss": 5,
+      "dismiss": 6,
       "next": 0
     },
     "uk/phone-sheet-geometry": {
-      "title": "Чекають на вас · 5",
-      "head": "Зняти всі 5",
+      "title": "Чекають на вас · 6",
+      "head": "Зняти всі 6",
       "rows": [
         {
           "id": "lane-limit",
@@ -231,6 +250,14 @@
           "ageInside": true,
           "decision": "Питання",
           "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "ask:conversation_delegatus-4:claude:msg-export-1",
+          "age": "14 хв тому",
+          "ageInside": true,
+          "decision": "питає вас: Лишити окремі пресети для кожного формату чи звести все в одну кнопку «Експорт» з розширеними параметрами?",
+          "cut": true,
           "ellipsis": true
         },
         {
@@ -261,8 +288,8 @@
       "sections": []
     },
     "uk/phone-sheet-overview": {
-      "title": "Чекають на вас · 9",
-      "head": "Зняти всі 9",
+      "title": "Чекають на вас · 10",
+      "head": "Зняти всі 10",
       "rows": [
         {
           "id": "lane-limit",
@@ -278,6 +305,14 @@
           "ageInside": true,
           "decision": "Питання",
           "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "ask:conversation_delegatus-4:claude:msg-export-1",
+          "age": "14 хв тому",
+          "ageInside": true,
+          "decision": "питає вас: Лишити окремі пресети для кожного формату чи звести все в одну кнопку «Експорт» з розширеними параметрами?",
+          "cut": true,
           "ellipsis": true
         },
         {
@@ -313,7 +348,7 @@
           "ellipsis": true
         },
         {
-          "id": "/repo/tg-bot-15.jsonl:delivery:now-2460",
+          "id": "/repo/tg-bot-16.jsonl:delivery:now-2460",
           "age": "41 хв тому",
           "ageInside": true,
           "decision": "доставка повідомлення",
@@ -325,8 +360,8 @@
         {
           "project": "delegatus",
           "folded": false,
-          "count": 5,
-          "dismiss": "Зняти 5",
+          "count": 6,
+          "dismiss": "Зняти 6",
           "onScreen": true,
           "apart": true,
           "nameWhole": true
@@ -352,17 +387,17 @@
       ]
     },
     "en/desktop-closed": {
-      "count": 9,
+      "count": 10,
       "next": 0,
-      "title": "(9) Delegatus"
+      "title": "(10) Delegatus"
     },
     "en/desktop-open-docked": {
       "placement": "docked",
-      "title": "Waiting for you · 9",
+      "title": "Waiting for you · 10",
       "sections": [
         [
           "delegatus",
-          5,
+          6,
           false
         ],
         [
@@ -379,6 +414,7 @@
       "roles": [
         "reviewer",
         "orchestrator",
+        "architect",
         "reviewer",
         "orchestrator",
         "builder"
@@ -387,10 +423,11 @@
       "tagColours": [
         "reviewer:rgb(3, 105, 161)",
         "orchestrator:rgb(67, 56, 202)",
+        "architect:rgb(15, 118, 110)",
         "builder:rgb(180, 83, 9)"
       ],
       "next": 0,
-      "title_": "(9) Delegatus",
+      "title_": "(10) Delegatus",
       "bar": {
         "name": "delegatus",
         "whole": true,
@@ -404,16 +441,24 @@
       }
     },
     "en/desktop-dismiss-labels": [
-      "Dismiss all 9",
-      "Dismiss 5"
+      "Dismiss all 10",
+      "Dismiss 6"
     ],
+    "en/desktop-ask-row": {
+      "gist": "Лишити окремі пресети для кожного формату чи звести все в одну кнопку «Експорт» з розширеними параметрами?",
+      "role": "architect",
+      "tag": "Architect",
+      "emblem": true,
+      "title": "Експорт звітів у CSV і PDF",
+      "line": "asks you: Лишити окремі пресети для кожного формату чи звести все в одну кнопку «Експорт» з розширеними параметрами?"
+    },
     "en/desktop-open-all-sections": {
       "placement": "docked",
-      "title": "Waiting for you · 9",
+      "title": "Waiting for you · 10",
       "sections": [
         [
           "delegatus",
-          5,
+          6,
           false
         ],
         [
@@ -430,6 +475,7 @@
       "roles": [
         "reviewer",
         "orchestrator",
+        "architect",
         "reviewer",
         "orchestrator",
         "builder",
@@ -442,12 +488,12 @@
       "tagColours": [
         "reviewer:rgb(3, 105, 161)",
         "orchestrator:rgb(67, 56, 202)",
+        "architect:rgb(15, 118, 110)",
         "builder:rgb(180, 83, 9)",
-        "verifier:rgb(21, 128, 61)",
-        "architect:rgb(15, 118, 110)"
+        "verifier:rgb(21, 128, 61)"
       ],
       "next": 0,
-      "title_": "(9) Delegatus",
+      "title_": "(10) Delegatus",
       "ages": [
         {
           "project": "delegatus",
@@ -459,6 +505,10 @@
             [
               "report-weekend-digest",
               "26m ago"
+            ],
+            [
+              "ask:conversation_delegatus-4:claude:msg-export-1",
+              "14m ago"
             ],
             [
               "/repo/delegatus-3.jsonl:permission:request-audit-1",
@@ -476,6 +526,7 @@
           "since": [
             "now-1920",
             "now-1560",
+            "now-840",
             "now-660",
             "now-540",
             "now-240"
@@ -489,7 +540,7 @@
               "2h ago"
             ],
             [
-              "/repo/tg-bot-15.jsonl:delivery:now-2460",
+              "/repo/tg-bot-16.jsonl:delivery:now-2460",
               "41m ago"
             ]
           ],
@@ -519,11 +570,11 @@
     },
     "en/desktop-open-overlay": {
       "placement": "overlay",
-      "title": "Waiting for you · 9",
+      "title": "Waiting for you · 10",
       "sections": [
         [
           "delegatus",
-          5,
+          6,
           false
         ],
         [
@@ -540,6 +591,7 @@
       "roles": [
         "reviewer",
         "orchestrator",
+        "architect",
         "reviewer",
         "orchestrator",
         "builder"
@@ -548,25 +600,27 @@
       "tagColours": [
         "reviewer:rgb(3, 105, 161)",
         "orchestrator:rgb(67, 56, 202)",
+        "architect:rgb(15, 118, 110)",
         "builder:rgb(180, 83, 9)"
       ],
       "next": 0,
-      "title_": "(9) Delegatus"
+      "title_": "(10) Delegatus"
     },
     "en/phone-sheet": {
       "rows": [
         "reviewer",
         "orchestrator",
+        "architect",
         "reviewer",
         "orchestrator",
         "builder"
       ],
-      "dismiss": 5,
+      "dismiss": 6,
       "next": 0
     },
     "en/phone-sheet-geometry": {
-      "title": "Waiting for you · 5",
-      "head": "Dismiss all 5",
+      "title": "Waiting for you · 6",
+      "head": "Dismiss all 6",
       "rows": [
         {
           "id": "lane-limit",
@@ -582,6 +636,14 @@
           "ageInside": true,
           "decision": "Question",
           "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "ask:conversation_delegatus-4:claude:msg-export-1",
+          "age": "14m ago",
+          "ageInside": true,
+          "decision": "asks you: Лишити окремі пресети для кожного формату чи звести все в одну кнопку «Експорт» з розширеними параметрами?",
+          "cut": true,
           "ellipsis": true
         },
         {
@@ -612,8 +674,8 @@
       "sections": []
     },
     "en/phone-sheet-overview": {
-      "title": "Waiting for you · 9",
-      "head": "Dismiss all 9",
+      "title": "Waiting for you · 10",
+      "head": "Dismiss all 10",
       "rows": [
         {
           "id": "lane-limit",
@@ -629,6 +691,14 @@
           "ageInside": true,
           "decision": "Question",
           "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "ask:conversation_delegatus-4:claude:msg-export-1",
+          "age": "14m ago",
+          "ageInside": true,
+          "decision": "asks you: Лишити окремі пресети для кожного формату чи звести все в одну кнопку «Експорт» з розширеними параметрами?",
+          "cut": true,
           "ellipsis": true
         },
         {
@@ -664,7 +734,7 @@
           "ellipsis": true
         },
         {
-          "id": "/repo/tg-bot-15.jsonl:delivery:now-2460",
+          "id": "/repo/tg-bot-16.jsonl:delivery:now-2460",
           "age": "41m ago",
           "ageInside": true,
           "decision": "message delivery",
@@ -676,8 +746,8 @@
         {
           "project": "delegatus",
           "folded": false,
-          "count": 5,
-          "dismiss": "Dismiss 5",
+          "count": 6,
+          "dismiss": "Dismiss 6",
           "onScreen": true,
           "apart": true,
           "nameWhole": true
@@ -704,11 +774,11 @@
     },
     "uk/desktop-seat-beside": {
       "placement": "overlay",
-      "title": "Чекають на вас · 9",
+      "title": "Чекають на вас · 10",
       "sections": [
         [
           "delegatus",
-          5,
+          6,
           false
         ],
         [
@@ -725,6 +795,7 @@
       "roles": [
         "reviewer",
         "orchestrator",
+        "architect",
         "reviewer",
         "orchestrator",
         "builder"
@@ -733,20 +804,21 @@
       "tagColours": [
         "reviewer:rgb(3, 105, 161)",
         "orchestrator:rgb(67, 56, 202)",
+        "architect:rgb(15, 118, 110)",
         "builder:rgb(180, 83, 9)"
       ],
       "next": 0,
-      "title_": "(9) Delegatus"
+      "title_": "(10) Delegatus"
     },
     "uk/desktop-dismiss-one": {
-      "count": 8,
+      "count": 9,
       "panel": {
         "placement": "docked",
-        "title": "Чекають на вас · 8",
+        "title": "Чекають на вас · 9",
         "sections": [
           [
             "delegatus",
-            4,
+            5,
             false
           ],
           [
@@ -762,6 +834,7 @@
         ],
         "roles": [
           "orchestrator",
+          "architect",
           "reviewer",
           "orchestrator",
           "builder"
@@ -769,20 +842,21 @@
         "rowsWithoutTag": 0,
         "tagColours": [
           "orchestrator:rgb(67, 56, 202)",
+          "architect:rgb(15, 118, 110)",
           "reviewer:rgb(3, 105, 161)",
           "builder:rgb(180, 83, 9)"
         ],
         "next": 0,
-        "title_": "(8) Delegatus"
+        "title_": "(9) Delegatus"
       },
       "gone": true
     },
     "uk/desktop-dismiss-section": {
-      "count": 6,
+      "count": 7,
       "sections": [
         [
           "delegatus",
-          4,
+          5,
           false
         ],
         [
@@ -793,7 +867,7 @@
       ]
     },
     "uk/desktop-undo": {
-      "count": 8
+      "count": 9
     },
     "uk/report-log": {
       "open": "2",
@@ -819,7 +893,7 @@
           null
         ]
       ],
-      "count": 9
+      "count": 10
     },
     "uk/report-log-ticked": {
       "open": "1",
@@ -845,7 +919,7 @@
           null
         ]
       ],
-      "count": 8
+      "count": 9
     },
     "en/report-log": {
       "open": "2",
@@ -871,7 +945,7 @@
           null
         ]
       ],
-      "count": 9
+      "count": 10
     }
   },
   "failures": []
