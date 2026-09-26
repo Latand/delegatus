@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Delegatus: delegate everything</title>
+  <meta name="description" content="Tell one agent what you want shipped. It runs Claude Code and Codex builders and reviewers, checks the work and reports back.">
+  <meta name="theme-color" content="#111218">
+  <link rel="icon" href="../../public/brand/delegatus-mark.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geologica:wght@300..600&family=Martian+Mono:wght@400;500&family=Unbounded:wght@600;700&display=swap">
+  <link rel="stylesheet" href="styles.css">
+  <script>
+    // Pick the language before first paint so a Ukrainian visitor never sees English flash.
+    (function () {
+      var q = new URLSearchParams(location.search).get("lang");
+      var saved = null;
+      try { saved = localStorage.getItem("dlg-lang"); } catch (e) {}
+      var nav = (navigator.language || "").toLowerCase();
+      var lang = q === "uk" || q === "en" ? q : saved || (nav.indexOf("uk") === 0 ? "uk" : "en");
+      document.documentElement.lang = lang;
+      document.documentElement.classList.add("js");
+      if (matchMedia("(prefers-reduced-motion: reduce)").matches) document.documentElement.classList.add("still");
+    })();
+  </script>
+</head>
+<body>
+  <a class="skip" href="#main" data-i18n="nav.skip">Skip to content</a>
+
+  <header class="nav">
+    <a class="brand" href="#top">
+      <img src="../../public/brand/delegatus-mark.svg" alt="" width="22" height="22">
+      <span>Delegatus</span>
+    </a>
+    <nav class="nav-links" aria-label="Delegatus">
+      <a class="nav-gh" href="https://github.com/Latand/delegatus">
+        <span>GitHub</span>
+        <span class="stars" data-stars hidden>
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          <span data-stars-count></span>
+        </span>
+      </a>
+      <a href="https://github.com/Latand/delegatus#readme"><span class="long" data-i18n="nav.docs">Docs</span><span class="short" data-i18n="nav.docsShort">Docs</span></a>
+      <div class="lang" role="group" data-i18n-aria="nav.lang" aria-label="Language">
+        <button type="button" data-lang="en" lang="en">EN</button>
+        <button type="button" data-lang="uk" lang="uk">UK</button>
+      </div>
+    </nav>
+  </header>
+
+  <main id="main">
+    <!-- 1. The handoff: the headline, the install box, and the product itself -->
+    <section class="hero" id="top" data-section="hero">
+      <div class="hero-head">
+        <div class="hero-copy">
+          <h1 data-i18n="hero.title">Delegate everything.</h1>
+          <p class="sub" data-i18n="hero.sub">Tell one agent what you want shipped. It runs the builders and reviewers, checks the work and reports back.</p>
+          <p class="promise" data-i18n="hero.promise">Runs on your machine. Uses your agent accounts.</p>
+        </div>
+        <div class="install-slot" data-install="hero"></div>
+      </div>
+
+      <div class="stage-wrap">
+        <span class="catcher" data-mascot="catching"></span>
+        <div class="stage-bar">
+          <div class="seg" role="tablist" data-i18n-aria="demo.views" aria-label="Views">
+            <button type="button" role="tab" data-hero-view="board" aria-selected="true" data-i18n="demo.board">Board</button>
+            <button type="button" role="tab" data-hero-view="orchestrator" aria-selected="false" tabindex="-1" data-i18n="demo.orchestrator">Orchestrator</button>
+          </div>
+          <p class="live-tag"><i class="dot dot-green"></i><span data-i18n="demo.live">Live demo</span></p>
+        </div>
+        <div class="live live-hero" data-live="hero" data-lw="1180" data-lh="820" data-pw="390" data-ph="700"
+             data-query="step=0&view=board" data-phone-query="step=0&phone=1"
+             role="region" data-i18n-aria="demo.heroAlt" aria-label="The Delegatus interface with invented data: the harbor-api orchestrator beside its board.">
+          <div class="live-frame"></div>
+        </div>
+        <ol class="steps" data-steps>
+          <li><button type="button" data-step="0"><b>1</b><span data-i18n="step.0">Send the request</span></button></li>
+          <li><button type="button" data-step="2"><b>2</b><span data-i18n="step.2">A task and its pipeline</span></button></li>
+          <li><button type="button" data-step="3"><b>3</b><span data-i18n="step.3">Build passed</span></button></li>
+          <li><button type="button" data-step="4"><b>4</b><span data-i18n="step.4">Review passed</span></button></li>
+          <li><button type="button" data-step="5"><b>5</b><span data-i18n="step.5">It needs you</span></button></li>
+          <li class="steps-replay"><button type="button" data-replay>
+            <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            <span data-i18n="hero.replay">Replay</span></button></li>
+        </ol>
+        <p class="step-hint" aria-live="polite" data-step-hint></p>
+      </div>
+    </section>
+
+    <!-- 2. It runs the work -->
+    <section class="sec sec-run" data-section="run">
+      <div class="sec-head">
+        <h2 data-i18n="run.title">It runs the work, and checks it.</h2>
+        <ul class="caps caps-grid">
+          <li><i class="dot"></i><span data-i18n="run.c1">Each task gets a worktree, a builder and a fresh read-only reviewer.</span></li>
+          <li><i class="dot"></i><span data-i18n="run.c2">Claude Code builds, Codex reviews, and they message each other.</span></li>
+          <li><i class="dot"></i><span data-i18n="run.c3">A failed review sends the work back to the builder, within a round budget.</span></li>
+          <li><i class="dot dot-amber"></i><span data-i18n="run.c4">Decisions come to you. Merging on a passed review is optional and off by default.</span></li>
+        </ul>
+      </div>
+      <div class="stage-wrap">
+        <div class="stage-bar">
+          <div class="seg" role="tablist" data-i18n-aria="run.views" aria-label="Pipelines">
+            <button type="button" role="tab" data-view="pipeline" aria-selected="true" data-i18n="run.tab1">Build, Review, Verify</button>
+            <button type="button" role="tab" data-view="decision" aria-selected="false" tabindex="-1" data-i18n="run.tab2">A decision</button>
+          </div>
+        </div>
+        <div class="live live-run" data-live="run" data-lw="1180" data-lh="780" data-pw="390" data-ph="700"
+             data-query="step=5&view=pipeline" data-phone-query="step=5&phone=1&view=pipeline"
+             role="region" data-i18n-aria="run.alt" aria-label="A pipeline in Delegatus: Build passed, Review passed on Codex, Verify running; each stage's conversation beneath the graph.">
+          <div class="live-frame"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. Nothing is hidden -->
+    <section class="sec sec-open" data-section="open">
+      <div class="open-side">
+        <h2 data-i18n="open.title">Every conversation, open.</h2>
+        <div class="vtabs" role="tablist" aria-orientation="vertical" data-i18n-aria="open.views" aria-label="What you can open">
+          <button type="button" role="tab" data-view="conversation" aria-selected="true">
+            <b data-i18n="open.t1">A conversation</b><span data-i18n="open.c1">Every Claude Code, Codex and Copilot session reads as a chat.</span></button>
+          <button type="button" role="tab" data-view="search" aria-selected="false" tabindex="-1">
+            <b data-i18n="open.t2">Search</b><span data-i18n-key="open.c2">Search every conversation with /.</span></button>
+          <button type="button" role="tab" data-view="accounts" aria-selected="false" tabindex="-1">
+            <b data-i18n="open.t3">Accounts</b><span data-i18n="open.c3">Several Claude and Codex accounts, limits in view.</span></button>
+          <button type="button" role="tab" data-view="overview" aria-selected="false" tabindex="-1">
+            <b data-i18n="open.t4">Activity</b><span data-i18n="open.c4">What is being worked on right now, across every project.</span></button>
+        </div>
+      </div>
+      <div class="live live-open" data-live="open" data-lw="900" data-lh="760" data-pw="390" data-ph="700"
+           data-query="step=5&view=conversation" data-phone-query="step=5&phone=1&view=conversation"
+           role="region" data-i18n-aria="open.alt" aria-label="Delegatus with invented data: a builder's conversation, message search, the accounts and their limits, and the overview of work across projects.">
+        <div class="live-frame"></div>
+      </div>
+    </section>
+
+    <!-- 4. It reaches you -->
+    <section class="sec sec-reach" data-section="reach">
+      <div class="sec-copy">
+        <h2 data-i18n="reach.title">It finds you when it needs you.</h2>
+        <ul class="caps">
+          <li><i class="dot dot-green"></i><span data-i18n="reach.c1">Your board on your phone, inside your tailnet.</span></li>
+          <li><i class="dot dot-amber"></i><span data-i18n="reach.c2">A decision waits on its card, with the finding and the two ways forward.</span></li>
+          <li><i class="dot"></i><span data-i18n="reach.c3">Telegram built in: agents read chats you allow and report through your bot.</span></li>
+        </ul>
+      </div>
+      <div class="reach-art">
+        <div class="handset">
+          <span class="perch" data-mascot="perched"></span>
+          <div class="live live-phone" data-live="phone" data-lw="390" data-lh="800" data-pw="390" data-ph="800" data-fixed
+               data-query="step=5&phone=1" data-phone-query="step=5&phone=1"
+               role="region" data-i18n-aria="reach.phoneAlt" aria-label="Delegatus on a phone: the harbor-api board, with the task that needs a decision pinned first.">
+            <div class="live-frame"></div>
+          </div>
+        </div>
+        <div class="seg seg-phone" role="tablist" data-for="phone" data-i18n-aria="reach.views" aria-label="Phone screens">
+          <button type="button" role="tab" data-view="board" aria-selected="true" data-i18n="reach.tab1">Board</button>
+          <button type="button" role="tab" data-view="decision" aria-selected="false" tabindex="-1" data-i18n="reach.tab2">Decision</button>
+          <button type="button" role="tab" data-view="orchestrator" aria-selected="false" tabindex="-1" data-i18n="reach.tab3">Reports</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="band">
+    <div class="band-inner">
+      <div class="band-copy">
+        <p class="band-line" data-i18n="foot.line">Open source. Runs on your machine, on your own accounts.</p>
+        <p class="band-does" data-i18n="foot.does">The prompt installs Delegatus, connects its MCP server to your agent and starts it on this machine. Then you pick a project and create its orchestrator.</p>
+        <p class="band-needs" data-i18n="foot.needs">macOS or Linux (Windows through WSL 2) · Bun 1.4+ · Claude Code or Codex</p>
+      </div>
+      <div class="install-slot" data-install="footer"></div>
+    </div>
+    <div class="band-meta">
+      <a href="https://github.com/Latand/delegatus">GitHub</a>
+      <a href="https://www.npmjs.com/package/delegatus-cli">npm <code>delegatus-cli</code></a>
+      <span><span data-i18n="foot.version">version</span> <span class="num" data-version>1.5.0</span></span>
+    </div>
+  </footer>
+
+  <template id="install-template">
+    <div class="install">
+      <div class="install-bar">
+        <div class="tabs" role="tablist" data-i18n-aria="install.tabs" aria-label="Install through your agent">
+          <button type="button" role="tab" data-agent="claude" aria-selected="true">Claude Code</button>
+          <button type="button" role="tab" data-agent="codex" aria-selected="false" tabindex="-1">Codex</button>
+        </div>
+        <button type="button" class="copy-btn" data-copy-prompt>
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+          <span data-copy-label data-i18n="install.copy">Copy prompt</span>
+        </button>
+      </div>
+      <div class="prompt" role="tabpanel" data-open="false">
+        <pre><code data-prompt></code></pre>
+        <button type="button" class="prompt-more" aria-expanded="false"><span data-i18n="install.more">Read the whole prompt</span>
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+      </div>
+    </div>
+    <div class="legacy-wrap">
+      <button type="button" class="legacy-link" aria-expanded="false" data-i18n="legacy.open">I still use a terminal</button>
+      <div class="legacy" hidden>
+        <span class="giggler" data-mascot="giggling"></span>
+        <p class="bubble" aria-live="polite" data-bubble></p>
+        <div class="legacy-box">
+          <p class="legacy-title" data-i18n="legacy.title">Legacy install</p>
+          <div class="legacy-cmd">
+            <code>bunx delegatus-cli</code>
+            <button type="button" class="icon-btn" data-copy-cmd data-i18n-aria="legacy.copy" aria-label="Copy the command">
+              <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+            </button>
+          </div>
+          <p class="legacy-needs"><span data-i18n="legacy.needs">Needs Bun 1.4+:</span> <code>curl -fsSL https://bun.com/install | bash</code></p>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <script src="copy.js"></script>
+  <script src="mascot.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>
