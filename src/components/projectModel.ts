@@ -266,6 +266,21 @@ export function partitionCrownedSummaries<T extends { project: string }>(
   return { crowned: pinned, rest };
 }
 
+/**
+ * The projects in the order the rail lists them: crowned, then the rest, then
+ * the archive. The needs-you panel orders its sections by it, so the two
+ * columns on either side of the board read the projects the same way down.
+ */
+export function railProjectOrder(
+  summaries: readonly ProjectSummary[],
+  crowned: ReadonlySet<string>,
+  archived: ReadonlySet<string>,
+): string[] {
+  const active = summaries.filter((summary) => !archived.has(summary.project));
+  const { crowned: pinned, rest } = partitionCrownedSummaries(active, crowned);
+  return [...pinned, ...rest, ...summaries.filter((summary) => archived.has(summary.project))].map((summary) => summary.project);
+}
+
 export interface BranchColumn {
   file: FileEntry;
   /** Background tasks attached under this column as collapsed rows. */

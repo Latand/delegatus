@@ -11666,6 +11666,59 @@ describe("needs-you panel: renders and readings over the real Viewer", () => {
       title_: document.title,
     };
   });
+  /* The header bar's project name, whole or cut, and the rail's project order. */
+  const barReading = (page: Page) => page.evaluate(() => {
+    const name = document.querySelector('[data-bar="project"] [data-bar-group="where"] h1') as HTMLElement | null;
+    const flip = [...document.querySelectorAll("[data-flip-key]")].map((row) => row.getAttribute("data-flip-key") ?? "");
+    return { name: name?.textContent ?? null, whole: name ? name.scrollWidth <= name.clientWidth : null, nameWidth: name?.clientWidth ?? null, rail: flip.filter((key) => !key.startsWith("__")) };
+  });
+  /* The phone sheet's geometry: every row's age inside its line and its row,
+     a cut wait ending in an ellipsis, and every section header's name, count
+     and «Dismiss n» on screen and apart. */
+  const sheetGeometry = (page: Page) => page.evaluate(() => {
+    const sheet = document.querySelector('[data-mobile2-sheet="attention"]')!;
+    const width = document.documentElement.clientWidth;
+    const rows = [...sheet.querySelectorAll("[data-needs-you-row]")].map((row) => {
+      const box = row.querySelector("[data-attention-row]")!.getBoundingClientRect();
+      const age = row.querySelector("[data-attention-age]");
+      const line = age?.parentElement ?? null;
+      const decision = row.querySelector("[data-attention-decision]") as HTMLElement | null;
+      const ageBox = age?.getBoundingClientRect() ?? null;
+      const lineBox = line?.getBoundingClientRect() ?? null;
+      const cut = decision ? decision.scrollWidth > decision.clientWidth : false;
+      return {
+        id: row.getAttribute("data-needs-you-row"),
+        age: age?.textContent ?? null,
+        ageInside: Boolean(ageBox && lineBox && ageBox.right <= lineBox.right + 0.5 && ageBox.right <= box.right + 0.5 && ageBox.left >= lineBox.left - 0.5),
+        decision: decision?.textContent ?? null,
+        cut,
+        ellipsis: !cut || (decision ? getComputedStyle(decision).textOverflow === "ellipsis" : false),
+      };
+    });
+    const sections = [...sheet.querySelectorAll("[data-needs-you-section]")].map((section) => {
+      const fold = section.querySelector("[data-needs-you-fold]")!;
+      const name = fold.querySelector(".truncate") as HTMLElement;
+      const count = section.querySelector("[data-needs-you-section-count]")!.getBoundingClientRect();
+      const dismiss = section.querySelector("[data-needs-you-dismiss-section]")!;
+      const button = dismiss.getBoundingClientRect();
+      const nameBox = name.getBoundingClientRect();
+      return {
+        project: section.getAttribute("data-needs-you-section"),
+        folded: section.hasAttribute("data-folded"),
+        count: Number(section.querySelector("[data-needs-you-section-count]")!.textContent),
+        dismiss: dismiss.textContent,
+        onScreen: [nameBox, count, button].every((box) => box.left >= 0 && box.right <= width && box.width > 0),
+        apart: nameBox.right <= count.left + 0.5 && count.right <= button.left + 0.5,
+        nameWhole: name.scrollWidth <= name.clientWidth,
+      };
+    });
+    return {
+      title: sheet.querySelector("h2")?.textContent ?? null,
+      head: sheet.querySelector("[data-needs-you-dismiss-all]")?.textContent ?? null,
+      rows,
+      sections,
+    };
+  });
   const shot = async (page: Page, lang: string, name: string) => {
     const file = path.join(OUT, lang, `${name}.png`);
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -11708,11 +11761,24 @@ describe("needs-you panel: renders and readings over the real Viewer", () => {
         opened = await open("&open=1", lang);
         try {
           const reading = await panelReading(opened.page);
-          readings[`${lang}/desktop-open-docked`] = reading;
           check(`${lang}/desktop-open-docked`, reading.placement === "docked", `placement ${reading.placement}`);
-          check(`${lang}/desktop-open-docked`, reading.sections.map((section) => section[0]).join(",") === "delegatus,shop-web,tg-bot", `sections ${JSON.stringify(reading.sections)}`);
+          check(`${lang}/desktop-open-docked`, reading.sections[0]?.[0] === "delegatus" && reading.sections.length === 3, `sections ${JSON.stringify(reading.sections)}`);
           check(`${lang}/desktop-open-docked`, reading.rowsWithoutTag === 0, `${reading.rowsWithoutTag} rows without a role emblem`);
           check(`${lang}/desktop-open-docked`, new Set(reading.roles).size >= 3, `roles ${JSON.stringify(reading.roles)}`);
+          /* The project name stays whole with the panel docked beside the board. */
+          const bar = await barReading(opened.page);
+          readings[`${lang}/desktop-open-docked`] = { ...reading, bar };
+          check(`${lang}/desktop-open-docked`, bar.whole === true && bar.name === "delegatus", `the bar's project name is cut: ${JSON.stringify(bar)}`);
+          /* After the project on screen, the sections follow the rail. */
+          const others = reading.sections.map((section) => section[0] as string).slice(1);
+          check(`${lang}/desktop-open-docked`, JSON.stringify(others) === JSON.stringify(bar.rail.filter((project) => others.includes(project))), `sections ${JSON.stringify(others)} against the rail ${JSON.stringify(bar.rail)}`);
+          /* The head's «Dismiss all N» and a section's «Dismiss n» read differently. */
+          const labels = await opened.page.evaluate(() => [
+            document.querySelector("[data-needs-you-panel] [data-needs-you-dismiss-all]")?.textContent ?? "",
+            document.querySelector("[data-needs-you-panel] [data-needs-you-dismiss-section]")?.textContent ?? "",
+          ]);
+          readings[`${lang}/desktop-dismiss-labels`] = labels;
+          check(`${lang}/desktop-open-docked`, labels[0] !== labels[1] && /9/.test(labels[0]!), `head and section read ${JSON.stringify(labels)}`);
           await shot(opened.page, lang, "1440x900-open-docked");
           /* Every section open, to show every role. */
           for (const project of ["shop-web", "tg-bot"]) {
@@ -11720,9 +11786,18 @@ describe("needs-you panel: renders and readings over the real Viewer", () => {
             if (await fold.count()) await fold.click();
           }
           const all = await panelReading(opened.page);
-          readings[`${lang}/desktop-open-all-sections`] = all;
           check(`${lang}/desktop-open-all-sections`, new Set(all.roles).size >= 5, `roles ${JSON.stringify(all.roles)}`);
           check(`${lang}/desktop-open-all-sections`, all.roles.length === 9, `${all.roles.length} rows`);
+          /* Oldest wait first in every section, lanes among the conversations. */
+          const since = await opened.page.evaluate(() => [...document.querySelectorAll("[data-needs-you-panel] [data-needs-you-section]")].map((section) => ({
+            project: section.getAttribute("data-needs-you-section"),
+            ages: [...section.querySelectorAll("[data-attention-age]")].map((age) => age.textContent ?? ""),
+            since: [...section.querySelectorAll("[data-needs-you-row]")].map((row) => Number(row.getAttribute("data-needs-you-since"))),
+          })));
+          readings[`${lang}/desktop-open-all-sections`] = { ...all, ages: since };
+          for (const section of since) {
+            check(`${lang}/desktop-open-all-sections`, section.since.every((value, index) => index === 0 || value >= section.since[index - 1]!), `${section.project} not oldest first: ${JSON.stringify(section)}`);
+          }
           await shot(opened.page, lang, "1440x900-open-all-sections");
         } finally { await opened.context.close(); }
 
@@ -11750,7 +11825,34 @@ describe("needs-you panel: renders and readings over the real Viewer", () => {
           check(`${lang}/phone-sheet`, phone.next === 0, "the sheet draws a Next");
           check(`${lang}/phone-sheet`, phone.rows.length === 5 && phone.dismiss === 5, `rows ${JSON.stringify(phone)}`);
           check(`${lang}/phone-sheet`, !phone.rows.includes(null), "a row without a role");
+          const geometry = await sheetGeometry(opened.page);
+          readings[`${lang}/phone-sheet-geometry`] = geometry;
+          for (const row of geometry.rows) {
+            check(`${lang}/phone-sheet`, row.ageInside, `${row.id}: the age «${row.age}» leaves its row`);
+            check(`${lang}/phone-sheet`, row.ellipsis, `${row.id}: a cut wait without an ellipsis`);
+          }
           await shot(opened.page, lang, "390x844-sheet");
+        } finally { await opened.context.close(); }
+
+        /* The phone's Overview: every project in its own section, one folded. */
+        opened = await open("&overview=1", lang, true);
+        try {
+          await opened.page.locator('[data-mobile2-open="attention"]').click();
+          await opened.page.waitForSelector('[data-mobile2-sheet="attention"] [data-needs-you-section]', { timeout: 10_000 });
+          await opened.page.locator('[data-mobile2-sheet="attention"] [data-needs-you-fold="shop-web"]').click();
+          const geometry = await sheetGeometry(opened.page);
+          readings[`${lang}/phone-sheet-overview`] = geometry;
+          check(`${lang}/phone-sheet-overview`, geometry.sections.length === 3, `sections ${JSON.stringify(geometry.sections)}`);
+          check(`${lang}/phone-sheet-overview`, geometry.sections.some((section) => section.folded), "no folded section");
+          for (const section of geometry.sections) {
+            check(`${lang}/phone-sheet-overview`, section.onScreen && section.apart && section.nameWhole, `${section.project}: header ${JSON.stringify(section)}`);
+            check(`${lang}/phone-sheet-overview`, section.dismiss !== geometry.head, `${section.project}: «${section.dismiss}» reads like the head's «${geometry.head}»`);
+          }
+          for (const row of geometry.rows) {
+            check(`${lang}/phone-sheet-overview`, row.ageInside, `${row.id}: the age «${row.age}» leaves its row`);
+            check(`${lang}/phone-sheet-overview`, row.ellipsis, `${row.id}: a cut wait without an ellipsis`);
+          }
+          await shot(opened.page, lang, "390x844-sheet-overview");
         } finally { await opened.context.close(); }
       }
 

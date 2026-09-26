@@ -157,9 +157,9 @@ export function MobileSheet({
 }
 
 /** A section header inside a sheet (the prototype's `.sh`). */
-export function MobileSheetSection({ children, count }: { children: ReactNode; count?: number }) {
+export function MobileSheetSection({ children, count, className = "" }: { children: ReactNode; count?: number; className?: string }) {
   return (
-    <div className="flex min-h-[34px] items-center gap-1.5 px-4 pt-1.5 text-label font-semibold text-secondary">
+    <div className={`flex min-h-[34px] items-center gap-1.5 px-4 pt-1.5 text-label font-semibold text-secondary ${className}`}>
       {children}
       {count !== undefined ? <span className="text-caption font-semibold tabular-nums text-muted">{count}</span> : null}
     </div>

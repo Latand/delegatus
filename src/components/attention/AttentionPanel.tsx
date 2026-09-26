@@ -10,13 +10,14 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import { RoleTag } from "../RoleFrameMark";
 import { cleanTitle, fmtAge } from "../utils";
 import type { MobileAttentionEntry } from "./attentionQueue";
-import { needLabel, reasonLine } from "./decision";
+import { reasonLine } from "./decision";
 import { sendDismissal, type DismissalRequestOutcome } from "./dismissalOverlay";
-import { laneNeed } from "./needReason";
 import {
   isFocusedNeedsYouEntry,
   needsYouDismissal,
   needsYouEntryRole,
+  needsYouEntrySince,
+  needsYouLaneLine,
   needsYouSections,
 } from "./needsYouPanel";
 import { PermissionActions } from "./PermissionActions";
@@ -31,8 +32,9 @@ import { PermissionActions } from "./PermissionActions";
  * Every row carries the role of the agent behind it (the role frames' own
  * emblem and palette), its title, the wait in the one vocabulary every
  * attention surface uses, its age, «Dismiss», and a permission prompt's own
- * «Allow once / Deny». A section and the whole list carry «Dismiss all», and
- * the head offers Undo for the last dismissal. A dismissal is the needs-you
+ * «Allow once / Deny». A section carries «Dismiss n» and the head «Dismiss all
+ * N», each naming how many rows it clears, so the two never read alike; the
+ * head also offers Undo for the last dismissal, where it shifts no row. A dismissal is the needs-you
  * dismissal every card makes (`sendDismissal`): durable, drawn the moment it is
  * clicked, and gone from every count at once. An orchestrator's question is
  * its report, so dismissing it resolves it in the report log too.
@@ -49,6 +51,8 @@ export interface AttentionPanelProps {
   queue: readonly MobileAttentionEntry[];
   /** The project on screen, whose section leads; null on the Overview. */
   current: string | null;
+  /** The rail's project order, which the other sections follow. */
+  order?: readonly string[];
   projectNames: Readonly<Record<string, string>>;
   pipelines: readonly Pipeline[];
   placement: AttentionPanelPlacement;
@@ -96,6 +100,7 @@ interface LastDismissal {
 export function AttentionPanel({
   queue,
   current,
+  order,
   projectNames,
   pipelines,
   placement,
@@ -108,7 +113,7 @@ export function AttentionPanel({
   dismiss = sendDismissal,
 }: AttentionPanelProps) {
   const { t } = useLocale();
-  const sections = needsYouSections(queue, current);
+  const sections = needsYouSections(queue, current, order);
   const [folds, setFolds] = useState<Record<string, boolean>>(() => (typeof window === "undefined" ? {} : readFolds()));
   const [last, setLast] = useState<LastDismissal | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -146,9 +151,22 @@ export function AttentionPanel({
   const head = (
     <div className={`flex shrink-0 items-center gap-1 border-b border-border pl-3 pr-1.5 ${docked ? "h-12" : "h-10"}`}>
       <h2 className="min-w-0 flex-1 truncate text-ui font-semibold text-secondary" data-needs-you-title="">{title}</h2>
+      {/* Undo sits in the head, so offering it moves no row under the pointer. */}
+      {last ? (
+        <button
+          type="button"
+          className={ICON}
+          data-needs-you-undo=""
+          aria-label={t("attention.undoTitle", { count: last.subjects.length })}
+          title={t("attention.undoTitle", { count: last.subjects.length })}
+          onClick={undo}
+        >
+          <Undo2 className="h-3.5 w-3.5" aria-hidden />
+        </button>
+      ) : null}
       {queue.length ? (
         <button type="button" className={QUIET} data-needs-you-dismiss-all="" title={t("attention.dismissAllTitle")} onClick={() => run(queue)}>
-          {t("attention.dismissAll")}
+          {t("attention.dismissAll", { count: queue.length })}
         </button>
       ) : null}
       {docked || canDock ? (
@@ -171,12 +189,6 @@ export function AttentionPanel({
 
   const body = (
     <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-1.5" data-needs-you-body="">
-      {last ? (
-        <button type="button" className={`${QUIET} mb-1 inline-flex items-center gap-1`} data-needs-you-undo="" onClick={undo}>
-          <Undo2 className="h-3.5 w-3.5" aria-hidden />
-          {t("attention.undoTitle", { count: last.subjects.length })}
-        </button>
-      ) : null}
       {pinned}
       {error ? <p className="px-2.5 py-1.5 text-[11px] text-danger" role="status" data-needs-you-error="">{error}</p> : null}
       {sections.length === 0 ? (
@@ -207,7 +219,7 @@ export function AttentionPanel({
                 title={t("attention.dismissAllIn", { project: name })}
                 onClick={() => run(section.entries)}
               >
-                {t("attention.dismissAll")}
+                {t("attention.dismissSection", { count: section.entries.length })}
               </button>
             </div>
             {isFolded ? null : section.entries.map((entry) => (
@@ -263,19 +275,9 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
 }) {
   const { t } = useLocale();
   const role = needsYouEntryRole(entry, pipelines);
-  let title: string;
-  let since: number | null;
-  let line: string;
-  if (entry.kind === "conversation") {
-    title = entry.item.reason.report?.body || cleanTitle(entry.item.file.title, 90);
-    since = entry.item.since;
-    line = reasonLine(t, entry.item.reason);
-  } else {
-    const need = laneNeed(entry.row.pipeline)?.need ?? null;
-    title = entry.row.task;
-    since = need?.since ?? null;
-    line = need ? needLabel(t, need) : t("needs.laneDecision");
-  }
+  const since = needsYouEntrySince(entry);
+  const title = entry.kind === "conversation" ? entry.item.reason.report?.body || cleanTitle(entry.item.file.title, 90) : entry.row.task;
+  const line = entry.kind === "conversation" ? reasonLine(t, entry.item.reason) : needsYouLaneLine(t, entry.row.pipeline);
   const permission = entry.kind === "conversation" && entry.item.reason.kind === "permission" && entry.item.file.pendingPermission ? entry.item.file : null;
   return (
     <div
@@ -283,6 +285,7 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
       data-needs-you-row={entry.id}
       data-needs-you-kind={entry.kind}
       data-needs-you-role={role}
+      data-needs-you-since={since ?? undefined}
       data-focused={focused ? "" : undefined}
     >
       <div className="flex min-w-0 items-start gap-1">

@@ -62,7 +62,7 @@ import { OverviewBoard } from "./OverviewBoard";
 import { BarIslandProvider, BoardPaneProvider } from "./ProjectBar";
 import { GlobalSearch, transcriptFocusHash } from "./search/GlobalSearch";
 import { ProjectDashboard, queueColumnOpen } from "./ProjectDashboard";
-import { isChildConversation, OVERVIEW, projectKey } from "./projectModel";
+import { buildProjectSummaries, isChildConversation, OVERVIEW, projectKey, railProjectOrder } from "./projectModel";
 import { ProjectRail, RAIL_HIDDEN_STORAGE_KEY } from "./ProjectRail";
 import { DeploymentStatusPill } from "./runtime/DeploymentStatusPill";
 import { StagingBadge } from "./StagingBadge";
@@ -891,6 +891,12 @@ function ViewerApp() {
   /* The rail's ⏸, the Overview's rows and the phone's project sheet count
      this same grouping, one number per project with the panel's sections. */
   const needsYouByProject = useMemo(() => needsYouCounts(needsYou), [needsYou]);
+  /* The panel's and the sheet's sections follow the rail's project order, the
+     rail's own summaries over the same inputs the rail is handed. */
+  const railOrder = useMemo(
+    () => railProjectOrder(buildProjectSummaries(files, clock, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouByProject), crownedProjects, archivedProjects),
+    [files, clock, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouByProject, crownedProjects, archivedProjects],
+  );
   useEffect(() => {
     const expiries = attentionExpiries(files).filter((at) => at > clock);
     if (!expiries.length) return;
@@ -1423,6 +1429,7 @@ function ViewerApp() {
     <AttentionPanel
       queue={needsYou}
       current={project === OVERVIEW ? null : project}
+      order={railOrder}
       projectNames={projectDisplayNames}
       pipelines={pipelines}
       placement={placement}
@@ -1529,6 +1536,7 @@ function ViewerApp() {
               pipelines={pipelines}
               projectNames={projectDisplayNames}
               current={project === OVERVIEW ? null : project}
+              order={railOrder}
               /* Over the Overview a row opens as a screen on its stack, as its
                  cards do (#2098); a project's own board focuses in place. */
               onOpenConversation={project === OVERVIEW ? (item) => {
@@ -1558,7 +1566,7 @@ function ViewerApp() {
         return null;
       },
     };
-  }, [isMobile, shellEntries, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, projectCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, jumpToItem, phoneNotices.unseen, noticeRows]);
+  }, [isMobile, shellEntries, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, projectCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, jumpToItem, phoneNotices.unseen, noticeRows, railOrder]);
 
   const shell = (
     <div className="flex h-full">

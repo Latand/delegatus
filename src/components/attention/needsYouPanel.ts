@@ -1,11 +1,13 @@
 import { stagePosition } from "@/components/mobile/mobileChatState";
 import type { DismissalSubjectRequest, DismissalTarget } from "@/lib/attention/dismissalTypes";
+import type { TFunction } from "@/lib/i18n";
 import { drawnLaneMovement } from "@/lib/pipelines/laneMovement";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { conversationFrameRole, type FrameRole } from "@/lib/roleFrames";
 
 import { attentionEntryProject, type MobileAttentionEntry } from "./attentionQueue";
-import { laneStageId } from "./needReason";
+import { needLabel } from "./decision";
+import { laneNeed, laneStageId } from "./needReason";
 
 /*
  * The needs-you panel's pure half (docs/design/needs-you-options.md, option B):
@@ -23,20 +25,48 @@ export interface NeedsYouSection {
 
 /**
  * The queue by project: the project on screen first, then every other project
- * in the order its first entry holds in the queue (blocked first, oldest
- * first). Inside a section the queue's order stands, so a section reads the
- * rows the way the card and the phone list them.
+ * in the rail's order (`railProjectOrder`), so the panel and the rail beside
+ * it list the projects the same way down. A project the rail does not list,
+ * or every project when no order is given, follows in the order its first
+ * entry holds in the queue. Inside a section the rows run oldest wait first,
+ * conversations and lanes together (`needsYouEntrySince`), so the ages read
+ * in one direction down every section.
  */
-export function needsYouSections(queue: readonly MobileAttentionEntry[], current: string | null): NeedsYouSection[] {
+export function needsYouSections(queue: readonly MobileAttentionEntry[], current: string | null, order: readonly string[] = []): NeedsYouSection[] {
   const byProject = new Map<string, MobileAttentionEntry[]>();
-  if (current) byProject.set(current, []);
   for (const entry of queue) {
     const project = attentionEntryProject(entry);
     const list = byProject.get(project);
     if (list) list.push(entry);
     else byProject.set(project, [entry]);
   }
-  return [...byProject].filter(([, entries]) => entries.length > 0).map(([project, entries]) => ({ project, entries }));
+  const rank = new Map(order.map((project, index) => [project, index]));
+  const place = (project: string) => (project === current ? -1 : rank.get(project) ?? order.length);
+  /* `sort` is stable, so projects the order does not name keep the queue's order. */
+  return [...byProject]
+    .sort(([a], [b]) => place(a) - place(b))
+    .map(([project, entries]) => ({ project, entries: byWait(entries) }));
+}
+
+/** When an entry started waiting, in epoch seconds: a conversation's reason,
+    a lane's need (the movement it parked at); null when a lane names none. */
+/** A parked lane's wait in the card's words (`needLabel`): what the desktop
+    panel and the phone sheet both say under a lane's title. */
+export function needsYouLaneLine(t: TFunction, pipeline: Pipeline): string {
+  const need = laneNeed(pipeline)?.need;
+  return need ? needLabel(t, need) : t("needs.laneDecision");
+}
+
+export function needsYouEntrySince(entry: MobileAttentionEntry): number | null {
+  if (entry.kind === "conversation") return entry.item.since;
+  return laneNeed(entry.row.pipeline)?.need.since ?? null;
+}
+
+/* Oldest wait first; an entry without a start keeps its place after them. */
+function byWait(entries: readonly MobileAttentionEntry[]): MobileAttentionEntry[] {
+  const since = new Map(entries.map((entry) => [entry, needsYouEntrySince(entry)]));
+  const at = (entry: MobileAttentionEntry) => since.get(entry) ?? Number.MAX_SAFE_INTEGER;
+  return [...entries].sort((a, b) => at(a) - at(b));
 }
 
 /** How many entries each project holds: the rail's ⏸ count. */

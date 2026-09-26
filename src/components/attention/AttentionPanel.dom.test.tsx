@@ -33,6 +33,7 @@ Object.assign(globalThis, {
 });
 
 const { AttentionPanel } = await import("./AttentionPanel");
+const { translate } = await import("@/lib/i18n");
 const { buildNeedsYouQueue } = await import("./attentionQueue");
 const { resetDismissalOverlayForTests, useDismissalOverlay } = await import("./dismissalOverlay");
 type FileEntry = import("@/lib/types").FileEntry;
@@ -237,7 +238,8 @@ test("«Dismiss» takes the row out of the count at once, and Undo brings it bac
 test("«Dismiss all» on a section clears that project only; «Dismiss all» in the head clears everything, and Undo takes the whole batch back", async () => {
   const host = await mount();
   await click(host.querySelector(`[data-needs-you-dismiss-section="${ALPHA}"]`)!);
-  expect(posted[0]!.target.subjects!.map((subject) => subject.kind)).toEqual(["conversation", "conversation", "report", "report", "pipeline"]);
+  /* In the section's order: oldest wait first, the lane among the conversations. */
+  expect(posted[0]!.target.subjects!.map((subject) => subject.kind)).toEqual(["pipeline", "conversation", "conversation", "report", "report"]);
   expect(host.querySelector(`[data-needs-you-section="${ALPHA}"]`)).toBeNull();
   expect(title(host)).toBe("Waiting for you · 1");
 
@@ -250,6 +252,29 @@ test("«Dismiss all» on a section clears that project only; «Dismiss all» in 
   await click(host.querySelector("[data-needs-you-undo]")!);
   expect(posted[2]).toEqual({ ...posted[1]!, undo: true });
   expect(title(host)).toBe("Waiting for you · 1");
+});
+
+test("the head's «Dismiss all» and a section's read differently, each naming how many rows it clears; Undo appears in the head and moves no row", async () => {
+  const host = await mount();
+  const head = host.querySelector("[data-needs-you-dismiss-all]")!;
+  const section = host.querySelector(`[data-needs-you-dismiss-section="${ALPHA}"]`)!;
+  expect(head.textContent).toBe("Dismiss all 6");
+  expect(section.textContent).toBe("Dismiss 5");
+  expect(head.textContent).not.toBe(section.textContent);
+  /* In Ukrainian too. */
+  expect(translate("uk", "attention.dismissAll", { count: 6 })).not.toBe(translate("uk", "attention.dismissSection", { count: 5 }));
+  expect(translate("uk", "attention.dismissAll", { count: 5 })).not.toBe(translate("uk", "attention.dismissSection", { count: 5 }));
+
+  const body = host.querySelector("[data-needs-you-body]")!;
+  const firstRow = () => body.querySelector("[data-needs-you-row]")!;
+  const before = rowIds(host);
+  await click(host.querySelector(`[data-needs-you-dismiss="${before[0]}"]`)!);
+  const undo = host.querySelector("[data-needs-you-undo]")!;
+  expect(undo).not.toBeNull();
+  expect(body.contains(undo)).toBe(false);
+  expect(head.parentElement!.contains(undo)).toBe(true);
+  /* The body starts with the rows, as it did before the dismissal. */
+  expect(body.firstElementChild!.contains(firstRow())).toBe(true);
 });
 
 test("a row whose cause is gone leaves by itself: the question answered, the permission decided, the lane moved on, the report answered", async () => {

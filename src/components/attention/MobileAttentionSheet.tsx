@@ -15,14 +15,13 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { FrameRole } from "@/lib/roleFrames";
 
 import type { AttentionItem } from "../attention";
-import { pipelineReviewHeads, stageCardLabel, stageLatestAttemptPlace } from "../pipelines/pipelineModel";
 import { RoleTag } from "../RoleFrameMark";
 import { humanizeDuration } from "../turnDuration";
 import { cleanTitle, fileModelLabel } from "../utils";
 import type { MobileAttentionEntry } from "./attentionQueue";
 import { decisionLine, reasonLine } from "./decision";
 import { sendDismissal } from "./dismissalOverlay";
-import { needsYouDismissal, needsYouEntryRole, needsYouSections } from "./needsYouPanel";
+import { needsYouDismissal, needsYouEntryRole, needsYouEntrySince, needsYouLaneLine, needsYouSections } from "./needsYouPanel";
 import { PermissionActions } from "./PermissionActions";
 
 /*
@@ -30,26 +29,27 @@ import { PermissionActions } from "./PermissionActions";
  * §4.1, §4.6; the prototype's `attentionSheet`). The bar's `⚠ n` opens it
  * over whatever screen is showing, and it lists the ONE phone queue
  * (`attentionQueue.ts`): conversations waiting on a decision, and pipelines in
- * `needs_decision`, in the board's Needs-you order, one section per project.
- * Its header says «Needs you · n» and carries «Dismiss all»; there is no
- * «Next ›» (docs/design/needs-you-options.md, option B): the rows are the way
- * in, and nothing walks the operator.
+ * `needs_decision`, one section per project in the rail's order, oldest wait
+ * first inside each (`needsYouSections`). Its header is the desktop panel's
+ * «Waiting for you · n» and carries «Dismiss all n»; there is no «Next ›»
+ * (docs/design/needs-you-options.md, option B): the rows are the way in, and
+ * nothing walks the operator.
  *
  * Rows are the sheet-row anatomy (`.mrow`): the role of the agent behind it
  * (the needs-you panel's role tag), the title, one meta
- * line, a chevron. The meta line of a conversation is the DECISION — the one
- * `decisionLine` the desktop's toast and popover row also read (#1167) — then
- * how long it has waited, the engine glyph and the model; a pipeline's reads
- * `pipeline · stage k/n · <stage> failed · n findings · age`, the same words
- * the board's queue row uses (`MobilePipelineQueueRow`), so the two entries
- * cannot describe one pipeline differently.
+ * line, a chevron. The meta line of a conversation is its wait in the words
+ * the desktop panel uses (`reasonLine`), then how long it has waited, the
+ * engine glyph and the model; a lane's is the panel's lane line
+ * (`needsYouLaneLine`, the card's `needLabel`) and its age, so one item reads
+ * the same on both surfaces. The wait gives way to an ellipsis before the age
+ * does: the age is the one fact on the line that must stay whole.
  *
  * A row is the phone's OPEN gesture (#1244): the conversation screen it pushes
  * stamps the card seen. Pipelines have a destination once lane 7 lands the
  * pipeline screen; until the host passes `onOpenPipeline`, a pipeline row is a
  * statement rather than a control. Every row has «Dismiss», the needs-you
  * dismissal every card makes, with the receipt's Undo; a section of a sheet
- * that lists more than one project has its own «Dismiss all».
+ * that lists more than one project has its own «Dismiss n».
  *
  * Above the queue, «From your agents» lists the root agent's recent
  * `request_attention` calls (docs/design/needs-attention.md §6): on the phone
@@ -82,6 +82,8 @@ export interface MobileAttentionSheetProps {
   projectNames?: Readonly<Record<string, string>>;
   /** The project behind the sheet, whose section leads. */
   current?: string | null;
+  /** The rail's project order, which the other sections follow. */
+  order?: readonly string[];
   /** Test seam: the screen the rows mark as current. Production reads the nav store. */
   screen?: MobileScreen;
   /** Test seam. */
@@ -102,7 +104,7 @@ const NO_NOTICES: readonly MobileNoticeRow[] = [];
 const NO_PIPELINES: readonly Pipeline[] = [];
 const NO_NAMES: Readonly<Record<string, string>> = {};
 
-export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenPipeline, onClose, pipelines = NO_PIPELINES, projectNames = NO_NAMES, current = null, screen, dismiss = sendDismissal, notices = NO_NOTICES, onOpenNotice, onClearNotice, onNoticesSeen }: MobileAttentionSheetProps) {
+export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenPipeline, onClose, pipelines = NO_PIPELINES, projectNames = NO_NAMES, current = null, order, screen, dismiss = sendDismissal, notices = NO_NOTICES, onOpenNotice, onClearNotice, onNoticesSeen }: MobileAttentionSheetProps) {
   const { t } = useLocale();
   const [folded, setFolded] = useState<ReadonlySet<string>>(() => new Set());
   const shownNotices = notices.map((row) => row.notice.id).join("\n");
@@ -124,16 +126,20 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
       if (!result.ok) showReceipt(t("attention.dismissFailed", { error: result.error }), null, { error: true });
     });
   };
+  const laneAge = (entry: MobileAttentionEntry) => {
+    const since = needsYouEntrySince(entry);
+    return since === null ? (entry.kind === "pipeline" ? entry.row.seconds : null) : Math.max(0, now - since);
+  };
   const rowTitle = (entry: MobileAttentionEntry) => (entry.kind === "conversation" ? cleanTitle(entry.item.file.title, 90) : entry.row.task);
-  const sections = needsYouSections(entries, current);
+  const sections = needsYouSections(entries, current, order);
   const titled = sections.length > 1;
-  const title = entries.length ? `${t("mobile2.attention.title")} · ${entries.length}` : t("mobile2.attention.title");
+  const title = entries.length ? t("attention.panelTitle", { count: entries.length }) : t("attention.panelAria");
   const row = (entry: MobileAttentionEntry) => {
     const role = needsYouEntryRole(entry, pipelines);
     const body = entry.kind === "conversation" ? (
       <ConversationRow item={entry.item} now={now} role={role} current={here.kind === "chat" && here.id === entry.item.file.path} onOpen={() => open(entry)} />
     ) : (
-      <PipelineRow row={entry.row} role={role} current={here.kind === "pipeline" && here.id === entry.row.id} onOpen={onOpenPipeline ? () => open(entry) : undefined} />
+      <PipelineRow row={entry.row} role={role} age={laneAge(entry)} current={here.kind === "pipeline" && here.id === entry.row.id} onOpen={onOpenPipeline ? () => open(entry) : undefined} />
     );
     return (
       <div key={entry.id} className="flex min-w-0 items-start" data-needs-you-row={entry.id} data-needs-you-role={role}>
@@ -161,9 +167,9 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
           data-needs-you-dismiss-all=""
           className="inline-flex min-h-11 shrink-0 items-center rounded-[8px] px-2 text-ui font-semibold text-accent active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           title={t("attention.dismissAllTitle")}
-          onClick={() => clear(entries, t("needs.dismissedReceipt", { title: t("attention.dismissAll") }))}
+          onClick={() => clear(entries, t("needs.dismissedReceipt", { title: t("attention.dismissAll", { count: entries.length }) }))}
         >
-          {t("attention.dismissAll")}
+          {t("attention.dismissAll", { count: entries.length })}
         </button>
       ) : null}
     >
@@ -179,7 +185,7 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
               onClear={onClearNotice ? () => onClearNotice(row.notice.id) : undefined}
             />
           ))}
-          {entries.length ? <MobileSheetSection>{t("mobile2.attention.title")}</MobileSheetSection> : null}
+          {entries.length ? <MobileSheetSection>{t("attention.panelAria")}</MobileSheetSection> : null}
         </div>
       ) : null}
       {entries.length ? (
@@ -203,9 +209,11 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
                       return next;
                     })}
                   >
-                    <MobileSheetSection count={section.entries.length}>
-                      {isFolded ? <ChevronRight className="h-3.5 w-3.5 text-muted" aria-hidden /> : <ChevronDown className="h-3.5 w-3.5 text-muted" aria-hidden />}
+                    {/* A long project name truncates; the chevron and the count stay whole. */}
+                    <MobileSheetSection className="min-w-0 flex-1">
+                      {isFolded ? <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />}
                       <span className="min-w-0 truncate">{name}</span>
+                      <span className="shrink-0 text-caption font-semibold tabular-nums text-muted" data-needs-you-section-count="">{section.entries.length}</span>
                     </MobileSheetSection>
                   </button>
                   <button
@@ -215,13 +223,13 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
                     className="inline-flex min-h-11 shrink-0 items-center rounded-[8px] px-3 text-label font-semibold text-muted active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
                     onClick={() => clear(section.entries, t("needs.dismissedReceipt", { title: name }))}
                   >
-                    {t("attention.dismissAll")}
+                    {t("attention.dismissSection", { count: section.entries.length })}
                   </button>
                 </div>
                 {isFolded ? null : section.entries.map(row)}
               </div>
             );
-          }) : entries.map(row)}
+          }) : sections.flatMap((section) => section.entries.map(row))}
         </div>
       ) : notices.length ? null : (
         <div className="px-4 py-4 text-center text-ui text-muted" data-mobile2-attention-empty>{t("mobile2.attention.empty")}</div>
@@ -300,7 +308,7 @@ function ConversationRow({ item, now, current, onOpen, role }: { item: Attention
         <span className={META}>
           {headline ? null : (
             <>
-              <span data-attention-decision className="shrink-0">{decision}</span>
+              <span data-attention-decision className="min-w-0 truncate">{decision}</span>
               {SEP}
             </>
           )}
@@ -327,15 +335,8 @@ function ConversationRow({ item, now, current, onOpen, role }: { item: Attention
   );
 }
 
-function PipelineRow({ row, current, onOpen, role }: { row: MobileBoardPipelineRow; current: boolean; onOpen?: () => void; role?: FrameRole }) {
+function PipelineRow({ row, age, current, onOpen, role }: { row: MobileBoardPipelineRow; age: number | null; current: boolean; onOpen?: () => void; role?: FrameRole }) {
   const { t } = useLocale();
-  const stageName = row.stageRef ? stageCardLabel(t, row.stageRef, stageLatestAttemptPlace(row.pipeline, row.stageRef.id)).toLocaleLowerCase() : "";
-  const meta = [
-    t("mobile2.attention.pipeline"),
-    t(row.stageFailed ? "mobile2.board.pipelineStageFailed" : "mobile2.board.pipelineStage", { stage: row.stage, total: row.total, name: stageName }),
-    row.findings ? t("mobile2.board.pipelineFindings", { count: row.findings }) : null,
-    pipelineReviewHeads(t, row.review),
-  ].filter(Boolean).join(" · ");
   const Tag = onOpen ? "button" : "div";
   return (
     <Tag
@@ -351,11 +352,11 @@ function PipelineRow({ row, current, onOpen, role }: { row: MobileBoardPipelineR
         {role ? <RoleTag role={role} /> : null}
         <span className="min-w-0 truncate text-body font-semibold leading-[1.25] text-primary">{row.task}</span>
         <span className={META}>
-          <span data-attention-decision className="shrink-0">{meta}</span>
-          {row.seconds === null ? null : (
+          <span data-attention-decision className="min-w-0 truncate">{needsYouLaneLine(t, row.pipeline)}</span>
+          {age === null ? null : (
             <>
               {SEP}
-              <span className="shrink-0">{humanizeDuration(row.seconds)}</span>
+              <span data-attention-age className="shrink-0">{humanizeDuration(age)}</span>
             </>
           )}
         </span>
