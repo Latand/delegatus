@@ -37,6 +37,9 @@ export interface MobileProjectSheetProps {
   selected: string;
   /** The attention clock the Viewer owns. */
   now: number;
+  /** Each project's needs-you count, from the one queue the header and the
+      panel read, so the badge here carries the panel section's number. */
+  needsYouCounts?: ReadonlyMap<string, number>;
   loaded: boolean;
   catalogFailures?: number;
   onSelect: (project: string) => void;
@@ -56,6 +59,7 @@ export function MobileProjectSheet({
   crownedProjects = EMPTY_CROWNS,
   selected,
   now,
+  needsYouCounts,
   loaded,
   catalogFailures = 0,
   onSelect,
@@ -64,8 +68,8 @@ export function MobileProjectSheet({
 }: MobileProjectSheetProps) {
   const { t } = useLocale();
   const summaries = useMemo(
-    () => buildProjectSummaries(files, now, workflows, projectCatalog, pipelines, projectDisplayNames),
-    [files, now, workflows, projectCatalog, pipelines, projectDisplayNames],
+    () => buildProjectSummaries(files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts),
+    [files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts],
   );
   const active = useMemo(() => summaries.filter((summary) => !archivedProjects.has(summary.project)), [summaries, archivedProjects]);
   const archived = useMemo(() => summaries.filter((summary) => archivedProjects.has(summary.project)), [summaries, archivedProjects]);

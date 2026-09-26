@@ -200,6 +200,9 @@ function projectionBaseKey(
          has to invalidate the projection. Without it the ask would appear, and
          clear, only when some unrelated store happened to move. */
       bridgeReportLogSignature(),
+      /* An operator message to the seat answers its open questions, and the
+         moment it was admitted lives in the reply-suggestion store. */
+      hotStateSignature("reply_suggestions", "reply-suggestions.json"),
     ],
   })).digest("hex");
 }

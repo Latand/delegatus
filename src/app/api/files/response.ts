@@ -811,7 +811,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     if (file.project === "project_unresolved") file.projectUnresolved = true;
   }
   markTiming("files-project-catalog");
-  /* The orchestrator seat's open decision request (issue #1168). The bridge
+  /* The orchestrator seat's open decision requests (issue #1168). The bridge
      report log had exactly one reader — the voice gateway — so a `blocked` or
      `question` report reached the operator only if that channel happened to be
      up. Stamped here, on the seat's own row, it becomes an ordinary hard block

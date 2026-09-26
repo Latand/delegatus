@@ -93,6 +93,19 @@ function decisionText(t: TFunction, reason: ConversationReason): string {
 }
 
 /**
+ * The line of one needs-you row: the wait in the same fixed words, and for an
+ * orchestrator's question the question itself, its first line as the report
+ * log shows it. The row names the role with its own mark, so the line leaves
+ * it out.
+ */
+export function reasonLine(t: TFunction, reason: ConversationReason): string {
+  if (reason.kind === "decision" && reason.report) {
+    return reason.report.body ? t("attention.reportQuestionLine", { body: reason.report.body }) : t("attention.reportQuestion");
+  }
+  return decisionText(t, reason);
+}
+
+/**
  * The decision a conversation owes the operator, plus its role when the
  * evidence names one — or null when the queue counts no wait here at all.
  *

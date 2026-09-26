@@ -189,6 +189,11 @@ export function buildProjectSummaries(
   projectCatalog: ProjectCatalogEntry[] = [],
   pipelines: Pipeline[] = [],
   projectDisplayNames: Readonly<Record<string, string>> = {},
+  /** Each project's needs-you count (`needsYouCounts` over the one queue the
+      header and the panel read). Given, it is the attention count, so the
+      rail's ⏸, the panel's section and the header carry one number; a
+      dismissed lane or a paused one no longer counts. */
+  needsYou?: ReadonlyMap<string, number>,
 ): ProjectSummary[] {
   const map = new Map<string, ProjectSummary>();
   const summaryFor = (key: string, displayName = projectDisplayName(key)): ProjectSummary => {
@@ -233,6 +238,9 @@ export function buildProjectSummaries(
     if (pipeline.state === "provisioning" || pipeline.state === "running") summary.liveCount += 1;
     if (pipeline.state === "needs_decision" || pipeline.state === "needs_review" || pipeline.state === "paused") summary.attentionCount += 1;
     summary.smt = Math.max(summary.smt, (Date.parse(pipeline.createdAt) || 0) / 1000);
+  }
+  if (needsYou) {
+    for (const summary of map.values()) summary.attentionCount = needsYou.get(summary.project) ?? 0;
   }
   return [...map.values()].sort((a, b) => {
     const al = a.attentionCount > 0;

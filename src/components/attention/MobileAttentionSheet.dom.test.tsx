@@ -14,9 +14,10 @@ import { MobileAttentionSheet } from "./MobileAttentionSheet";
 /*
  * The Needs-you sheet (mobile v2 lane 8, #1439; README §4.1, §4.6): one list
  * of conversations and `needs_decision` pipelines, «Needs you · n» in the
- * header, «Next ›» beside it when there is more than one item — skipping the
- * item on screen and wrapping — rows that name the decision, and nothing at
- * zero but the empty line.
+ * header with «Dismiss all» beside it and no «Next ›»
+ * (docs/design/needs-you-options.md, option B), rows that name the agent's
+ * role and the decision and carry «Dismiss», a section per project when the
+ * sheet lists more than one, and nothing at zero but the empty line.
  */
 
 const dom = new Window({ url: "http://localhost/", width: 390, height: 844 });
@@ -138,50 +139,72 @@ test("a conversation row opens through the host; a pipeline row is inert until t
   expect(pipelines).toEqual(["pipeline_atlas_p2"]);
 });
 
-test("«Next ›» skips the item on screen and wraps, over both kinds once pipelines can be opened", () => {
-  const opened: string[] = [];
-  const props = { now: NOW, onOpenConversation: (item: { file: FileEntry }) => opened.push(item.file.path), onOpenPipeline: (row: { id: string }) => opened.push(row.id), onClose: () => {} };
-  /* From the board: the head. */
-  let host = mount(<MobileAttentionSheet entries={entries()} {...props} screen={{ kind: "board" }} />);
-  const next = q(host, "[data-attention-next]")!;
-  expect(next.className).toContain("min-h-11");
-  expect(next.getAttribute("aria-label")).toBe("Open the next one that needs you");
-  click(next);
-  for (const root of roots) flushSync(() => root.unmount());
-  roots = [];
-  /* From the first conversation: the second; from the second: the pipeline;
-     from the pipeline: wraps to the first. */
-  for (const screen of [{ kind: "chat" as const, id: "/p/export.jsonl" }, { kind: "chat" as const, id: "/p/migrate.jsonl" }, { kind: "pipeline" as const, id: "pipeline_atlas_p2" }]) {
-    host = mount(<MobileAttentionSheet entries={entries()} {...props} screen={screen} />);
-    click(q(host, "[data-attention-next]"));
-    for (const root of roots) flushSync(() => root.unmount());
-    roots = [];
-  }
-  expect(opened).toEqual(["/p/export.jsonl", "/p/migrate.jsonl", "pipeline_atlas_p2", "/p/export.jsonl"]);
-});
-
-test("without a pipeline opener «Next ›» walks the conversations only, and the row on screen is marked current", () => {
-  const opened: string[] = [];
-  const host = mount(<MobileAttentionSheet entries={entries()} now={NOW} onOpenConversation={(item) => opened.push(item.file.path)} onClose={() => {}} screen={{ kind: "chat", id: "/p/migrate.jsonl" }} />);
+test("there is no «Next ›»: the header carries «Dismiss all» instead, and the row on screen is marked current", () => {
+  const calls: Array<{ subjects: unknown; undo: boolean }> = [];
+  const dismiss = (async (_target: unknown, subjects: unknown, options: { undo?: boolean }) => {
+    calls.push({ subjects, undo: options.undo === true });
+    return { ok: true, outcome: { dismissed: [], alreadyClear: [], changed: [], at: "", by: { kind: "operator" }, undo: false } };
+  }) as never;
+  const host = mount(<MobileAttentionSheet entries={entries()} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "chat", id: "/p/migrate.jsonl" }} dismiss={dismiss} />);
+  expect(q(host, "[data-attention-next]")).toBeNull();
   expect(q(host, '[data-mobile2-conversation="/p/migrate.jsonl"]')!.getAttribute("aria-current")).toBe("true");
   expect(q(host, '[data-mobile2-conversation="/p/export.jsonl"]')!.getAttribute("aria-current")).toBeNull();
-  /* After the last conversation the pipeline has no door yet, so Next wraps
-     to the first conversation instead of stepping into nowhere. */
-  click(q(host, "[data-attention-next]"));
-  expect(opened).toEqual(["/p/export.jsonl"]);
+  const all = q(host, "[data-needs-you-dismiss-all]")!;
+  expect(all.className).toContain("min-h-11");
+  click(all);
+  expect(calls).toHaveLength(1);
+  expect((calls[0]!.subjects as Array<{ kind: string }>).map((subject) => subject.kind)).toEqual(["conversation", "conversation", "pipeline"]);
 });
 
-test("one item shows no «Next ›», and zero items show the empty line under a bare «Needs you»", () => {
+test("every row names its agent's role with the role's emblem, and «Dismiss» clears that row alone", () => {
+  const calls: Array<{ subjects: unknown }> = [];
+  const dismiss = (async (_target: unknown, subjects: unknown) => {
+    calls.push({ subjects });
+    return { ok: true, outcome: { dismissed: [], alreadyClear: [], changed: [], at: "", by: { kind: "operator" }, undo: false } };
+  }) as never;
+  const files = [
+    { ...FILES[0]!, durableLineage: { kind: "spawn", role: "builder", parentConversationId: null, reviewsConversationId: null, memberships: [] } } as FileEntry,
+    FILES[1]!,
+  ];
+  const list = buildMobileAttentionQueue(buildAttentionQueue(files, NOW, PROJECT), needsDecisionPipelineRows(PIPELINES, PROJECT, NOW));
+  const host = mount(<MobileAttentionSheet entries={list} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} pipelines={PIPELINES} dismiss={dismiss} />);
+  const roles = qa(host, "[data-needs-you-row]").map((row) => row.querySelector("[data-role-tag]")?.getAttribute("data-role"));
+  expect(roles).toEqual(["builder", "neutral", "reviewer"]);
+  expect(q(host, '[data-role-tag="builder"]')!.textContent).toBe("Builder");
+  click(q(host, '[data-needs-you-dismiss="pipeline_atlas_p2"]'));
+  expect(calls).toHaveLength(1);
+  expect(calls[0]!.subjects).toEqual([{ kind: "pipeline", pipelineId: "pipeline_atlas_p2", laneMovedAt: expect.any(Number) }]);
+});
+
+test("across projects the sheet is sectioned, the project on screen first, each section with its own «Dismiss all»", () => {
+  const calls: Array<{ subjects: unknown }> = [];
+  const dismiss = (async (_target: unknown, subjects: unknown) => {
+    calls.push({ subjects });
+    return { ok: true, outcome: { dismissed: [], alreadyClear: [], changed: [], at: "", by: { kind: "operator" }, undo: false } };
+  }) as never;
+  const other = conversation("/q/other.jsonl", "Another project's question", NOW - 30, { project: "borealis" });
+  const list = buildMobileAttentionQueue(buildAttentionQueue([other, ...FILES], NOW), []);
+  const host = mount(<MobileAttentionSheet entries={list} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} current={PROJECT} projectNames={{ borealis: "Borealis" }} dismiss={dismiss} />);
+  const sections = qa(host, "[data-needs-you-section]");
+  expect(sections.map((section) => section.getAttribute("data-needs-you-section"))).toEqual([PROJECT, "borealis"]);
+  expect(sections[1]!.textContent).toContain("Borealis");
+  click(q(host, '[data-needs-you-dismiss-section="borealis"]'));
+  expect((calls[0]!.subjects as Array<{ path: string }>).map((subject) => subject.path)).toEqual(["/q/other.jsonl"]);
+  /* A section folds under its header. */
+  flushSync(() => click(q(host, `[data-needs-you-fold="${PROJECT}"]`)));
+  expect(q(host, `[data-needs-you-section="${PROJECT}"] [data-needs-you-row]`) === null).toBe(true);
+});
+
+test("one item counts one, and zero items show the empty line under a bare «Needs you» with nothing to dismiss", () => {
   const one = buildMobileAttentionQueue(buildAttentionQueue([FILES[0]!], NOW, PROJECT), []);
   let host = mount(<MobileAttentionSheet entries={one} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} />);
-  expect(q(host, "[data-attention-next]")).toBeNull();
   expect(q(host, "h2")!.textContent).toBe("Needs you · 1");
   for (const root of roots) flushSync(() => root.unmount());
   roots = [];
 
   host = mount(<MobileAttentionSheet entries={[]} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} />);
   expect(q(host, "h2")!.textContent).toBe("Needs you");
-  expect(q(host, "[data-attention-next]")).toBeNull();
+  expect(q(host, "[data-needs-you-dismiss-all]")).toBeNull();
   expect(q(host, "[data-mobile2-attention-empty]")!.textContent).toBe("Nothing needs you.");
   expect(qa(host, "[data-attention-row]")).toHaveLength(0);
 });

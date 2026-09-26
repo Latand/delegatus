@@ -24,6 +24,9 @@ export function cardDismissal(card: KanbanCard, undo: boolean): { target: Dismis
 
 export function subjectOf(need: NeedReason): DismissalSubjectRequest {
   if (need.subject === "pipeline") return { kind: "pipeline", pipelineId: need.pipeline.id, laneMovedAt: drawnLaneMovement(need.pipeline) };
+  /* An orchestrator's question is its report: clearing it on the card
+     resolves it in the report log and on the needs-you panel at once. */
+  if (need.reason.report) return { kind: "report", seq: need.reason.report.seq };
   return {
     kind: "conversation",
     ...(need.file.conversationId ? { conversationId: need.file.conversationId } : {}),

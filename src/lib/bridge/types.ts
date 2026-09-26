@@ -26,6 +26,8 @@
  * the start of its next turn.
  */
 
+import type { DismissedBy } from "@/lib/attention/dismissalTypes";
+
 export const BRIDGE_CHANNEL_SCHEMA_VERSION = 1 as const;
 export const BRIDGE_REPORT_LOG_SCHEMA_VERSION = 1 as const;
 
@@ -257,6 +259,19 @@ export interface BridgeReportLogV1 {
       record says that operation was delivered. A send that failed leaves the
       ask standing, which is the safe end of the trade. */
   pendingAnswers?: BridgePendingAnswerV1[];
+  /** Decision requests the operator marked resolved: a tick in the report log
+      or «Dismiss» on its needs-you row, which are one action on one record.
+      A resolved question stops asking everywhere, and the seat tick counts it
+      as answered. Undo takes the row back out. */
+  resolvedAsks?: BridgeResolvedAskV1[];
+}
+
+export interface BridgeResolvedAskV1 {
+  /** The decision request's seq. */
+  seq: number;
+  /** Server clock, ISO. */
+  at: string;
+  by: DismissedBy;
 }
 
 export interface BridgePendingAnswerV1 {

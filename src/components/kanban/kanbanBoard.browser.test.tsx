@@ -11623,66 +11623,216 @@ describe("a task's album: every picture its agents made, one click from the card
   }, 600_000);
 });
 
-describe("needs-you options: renders for the operator to pick from", () => {
+describe("needs-you panel: renders and readings over the real Viewer", () => {
   /*
-   * docs/design/needs-you-options.md §4: each direction for the needs-you
-   * chip, drawn over the real Viewer from the product's own rows, closed and
-   * open, at 1440×900 and 390×844, in uk, over
-   * `src/components/attention/needsYouOptions.fixture.tsx`. The frames are for
-   * the operator's eyes and go outside the repository:
+   * docs/design/needs-you-options.md, option B, as built: the header control,
+   * the panel docked and floating, a dismissal with its Undo, a project's
+   * «Dismiss all», the report log's question ticks, and the phone's sheet and
+   * report screen, over `src/components/attention/needsYouPanel.fixture.tsx`
+   * at 1440×900 and 390×844 in uk and en. The frames are for the operator's
+   * eyes and go outside the repository; the readings each frame is checked
+   * against are committed under evidence/needs-you-panel/.
    *
    *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
-   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "needs-you options"
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "needs-you panel"
    *
-   * NEEDS_YOU_OPTIONS_OUT overrides where they go.
+   * NEEDS_YOU_PANEL_OUT overrides where the frames go.
    */
-  const OUT = process.env.NEEDS_YOU_OPTIONS_OUT?.trim()
-    || path.join(process.env.HOME ?? "/tmp", "Pictures/delegatus-review/needs-you-options");
+  const OUT = process.env.NEEDS_YOU_PANEL_OUT?.trim()
+    || path.join(process.env.HOME ?? "/tmp", "Pictures/delegatus-review/needs-you-b");
   const DESKTOP = { width: 1440, height: 900 } as const;
   const PHONE = { width: 390, height: 844 } as const;
-  interface Frame { option: string; name: string; phone: boolean; query: string }
-  const frames: Frame[] = [];
-  for (const option of ["today", "a", "b", "c"]) {
-    for (const phone of [false, true]) {
-      for (const open of [false, true]) {
-        frames.push({ option, phone, name: `${phone ? "390x844" : "1440x900"}-${open ? "open" : "closed"}`, query: `option=${option}${open ? "&open=1" : ""}` });
-      }
-    }
-  }
-  frames.push({ option: "a", phone: false, name: "1440x900-overview-closed", query: "option=a&overview=1" });
-  frames.push({ option: "a", phone: false, name: "1440x900-overview-open", query: "option=a&overview=1&open=1" });
-  frames.push({ option: "b", phone: false, name: "1440x900-seat-beside-open", query: "option=b&open=1&seat=beside" });
-  /* The fallback the options doc names for that width: the panel as today's popover. */
-  frames.push({ option: "b", phone: false, name: "1440x900-seat-beside-overlay", query: "option=b&open=1&seat=beside&panel=overlay" });
+  type Page = Awaited<ReturnType<typeof openFixture>>["page"];
 
-  browserTest("every option, closed and open, at both viewports", async () => {
-    const work = path.resolve(".artifacts/needs-you-options");
+  const chipCount = (page: Page) => page.evaluate(() => Number((document.querySelector("[data-attention-count]")?.textContent ?? "").replace(/\D+/g, "")));
+  const panelReading = (page: Page) => page.evaluate(() => {
+    const panel = document.querySelector("[data-needs-you-panel]");
+    const rows = [...document.querySelectorAll("[data-needs-you-panel] [data-needs-you-row]")];
+    return {
+      placement: panel?.getAttribute("data-needs-you-panel") ?? null,
+      title: panel?.querySelector("[data-needs-you-title]")?.textContent ?? null,
+      sections: [...document.querySelectorAll("[data-needs-you-panel] [data-needs-you-section]")].map((section) => [
+        section.getAttribute("data-needs-you-section"),
+        Number(section.querySelector("[data-needs-you-section-count]")?.textContent ?? "0"),
+        section.hasAttribute("data-folded"),
+      ]),
+      roles: rows.map((row) => row.getAttribute("data-needs-you-role")),
+      rowsWithoutTag: rows.filter((row) => !row.querySelector("[data-role-tag] .role-tag-emblem svg")).length,
+      tagColours: [...new Set(rows.map((row) => {
+        const emblem = row.querySelector(".role-tag-emblem") as HTMLElement | null;
+        return emblem ? `${row.getAttribute("data-needs-you-role")}:${getComputedStyle(emblem).backgroundColor}` : "";
+      }))],
+      next: document.querySelectorAll("[data-attention-next]").length,
+      title_: document.title,
+    };
+  });
+  const shot = async (page: Page, lang: string, name: string) => {
+    const file = path.join(OUT, lang, `${name}.png`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: file });
+  };
+
+  browserTest("the panel, its dismissals, the report log's ticks and the phone, in uk and en", async () => {
+    const work = path.resolve(".artifacts/needs-you-panel");
     fs.mkdirSync(work, { recursive: true });
-    const server = await serveEvidenceFixture(work, "src/components/attention/needsYouOptions.fixture.tsx");
+    const server = await serveEvidenceFixture(work, "src/components/attention/needsYouPanel.fixture.tsx");
     const browser = await chromium.launch(LAUNCH);
-    const only = process.env.NEEDS_YOU_OPTIONS_ONLY?.split(",").filter(Boolean) ?? [];
+    const readings: Record<string, unknown> = {};
     const failures: string[] = [];
+    const check = (frame: string, ok: boolean, what: string) => { if (!ok) failures.push(`${frame}: ${what}`); };
+    const open = async (query: string, lang: "uk" | "en", phone = false) => {
+      const opened = await openFixture(browser, `${server.base}?lang=${lang}${query}`, phone ? PHONE : DESKTOP, "light", lang, "reduce", phone);
+      await opened.page.waitForSelector(phone ? "[data-mobile2-bar]" : "[data-attention-count]", { timeout: 20_000 });
+      await opened.page.waitForTimeout(700);
+      return opened;
+    };
     try {
-      for (const frame of frames) {
-        if (only.length && !only.some((entry) => `${frame.option}/${frame.name}`.includes(entry))) continue;
-        const opened = await openFixture(browser, `${server.base}?${frame.query}`, frame.phone ? PHONE : DESKTOP, "light", "uk", "reduce", frame.phone);
+      for (const lang of ["uk", "en"] as const) {
+        /* Closed: the quiet control, no Next. */
+        let opened = await open("", lang);
         try {
-          await opened.page.waitForSelector("[data-needs-you-mockup-ready]", { state: "attached", timeout: 15_000 });
-          await opened.page.waitForTimeout(900);
-          const file = path.join(OUT, frame.option, `${frame.name}.png`);
-          fs.mkdirSync(path.dirname(file), { recursive: true });
-          await opened.page.screenshot({ path: file });
-          if (opened.pageErrors.length) failures.push(`${frame.option}/${frame.name}: ${opened.pageErrors.join(" | ")}`);
-        } catch (error) {
-          failures.push(`${frame.option}/${frame.name}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
-        } finally {
-          await opened.context.close();
-        }
+          const count = await chipCount(opened.page);
+          readings[`${lang}/desktop-closed`] = { count, next: await opened.page.locator("[data-attention-next]").count(), title: await opened.page.title() };
+          check(`${lang}/desktop-closed`, count === 9, `the control counts ${count}, expected every project's 9`);
+          check(`${lang}/desktop-closed`, (await opened.page.locator("[data-attention-next]").count()) === 0, "a Next is drawn");
+          check(`${lang}/desktop-closed`, (await opened.page.title()).startsWith("(9) "), "the tab title lost the global count");
+          await shot(opened.page, lang, "1440x900-closed");
+        } finally { await opened.context.close(); }
+
+        /* Open: docked beside the board, grouped by project, a role on every row. */
+        opened = await open("&open=1", lang);
+        try {
+          const reading = await panelReading(opened.page);
+          readings[`${lang}/desktop-open-docked`] = reading;
+          check(`${lang}/desktop-open-docked`, reading.placement === "docked", `placement ${reading.placement}`);
+          check(`${lang}/desktop-open-docked`, reading.sections.map((section) => section[0]).join(",") === "delegatus,shop-web,tg-bot", `sections ${JSON.stringify(reading.sections)}`);
+          check(`${lang}/desktop-open-docked`, reading.rowsWithoutTag === 0, `${reading.rowsWithoutTag} rows without a role emblem`);
+          check(`${lang}/desktop-open-docked`, new Set(reading.roles).size >= 3, `roles ${JSON.stringify(reading.roles)}`);
+          await shot(opened.page, lang, "1440x900-open-docked");
+          /* Every section open, to show every role. */
+          for (const project of ["shop-web", "tg-bot"]) {
+            const fold = opened.page.locator(`[data-needs-you-panel] [data-needs-you-section="${project}"][data-folded] [data-needs-you-fold]`);
+            if (await fold.count()) await fold.click();
+          }
+          const all = await panelReading(opened.page);
+          readings[`${lang}/desktop-open-all-sections`] = all;
+          check(`${lang}/desktop-open-all-sections`, new Set(all.roles).size >= 5, `roles ${JSON.stringify(all.roles)}`);
+          check(`${lang}/desktop-open-all-sections`, all.roles.length === 9, `${all.roles.length} rows`);
+          await shot(opened.page, lang, "1440x900-open-all-sections");
+        } finally { await opened.context.close(); }
+
+        /* Floating over the board. */
+        opened = await open("&open=1&placement=overlay", lang);
+        try {
+          const reading = await panelReading(opened.page);
+          readings[`${lang}/desktop-open-overlay`] = reading;
+          check(`${lang}/desktop-open-overlay`, reading.placement === "overlay", `placement ${reading.placement}`);
+          await shot(opened.page, lang, "1440x900-open-overlay");
+        } finally { await opened.context.close(); }
+
+        /* The phone: the bar, then the sheet. */
+        opened = await open("", lang, true);
+        try {
+          await shot(opened.page, lang, "390x844-closed");
+          await opened.page.locator('[data-mobile2-open="attention"]').click();
+          await opened.page.waitForSelector('[data-mobile2-sheet="attention"]', { timeout: 10_000 });
+          const phone = await opened.page.evaluate(() => ({
+            rows: [...document.querySelectorAll('[data-mobile2-sheet="attention"] [data-needs-you-row]')].map((row) => row.getAttribute("data-needs-you-role")),
+            dismiss: document.querySelectorAll('[data-mobile2-sheet="attention"] [data-needs-you-dismiss]').length,
+            next: document.querySelectorAll("[data-attention-next]").length,
+          }));
+          readings[`${lang}/phone-sheet`] = phone;
+          check(`${lang}/phone-sheet`, phone.next === 0, "the sheet draws a Next");
+          check(`${lang}/phone-sheet`, phone.rows.length === 5 && phone.dismiss === 5, `rows ${JSON.stringify(phone)}`);
+          check(`${lang}/phone-sheet`, !phone.rows.includes(null), "a row without a role");
+          await shot(opened.page, lang, "390x844-sheet");
+        } finally { await opened.context.close(); }
       }
+
+      /* uk: the seat beside the board leaves no room, so the panel floats. */
+      let opened = await open("&open=1&seat=beside", "uk");
+      try {
+        const reading = await panelReading(opened.page);
+        readings["uk/desktop-seat-beside"] = reading;
+        check("uk/desktop-seat-beside", reading.placement === "overlay", `placement ${reading.placement}`);
+        await shot(opened.page, "uk", "1440x900-seat-beside-open");
+      } finally { await opened.context.close(); }
+
+      /* uk: «Dismiss», «Dismiss all» on a project, Undo, and a poll between. */
+      opened = await open("&open=1", "uk");
+      try {
+        const page = opened.page;
+        const first = page.locator('[data-needs-you-panel] [data-needs-you-section="delegatus"] [data-needs-you-dismiss]').first();
+        const firstId = await first.getAttribute("data-needs-you-dismiss");
+        await first.click();
+        await page.waitForTimeout(300);
+        const afterOne = { count: await chipCount(page), panel: await panelReading(page), gone: await page.locator(`[data-needs-you-row="${firstId}"]`).count() === 0 };
+        readings["uk/desktop-dismiss-one"] = afterOne;
+        check("uk/desktop-dismiss-one", afterOne.count === 8 && afterOne.gone, `after one dismissal: ${JSON.stringify(afterOne)}`);
+        check("uk/desktop-dismiss-one", (await page.locator("[data-needs-you-undo]").count()) === 1, "no Undo after a dismissal");
+        await shot(page, "uk", "1440x900-dismissed-one-undo");
+        await page.locator('[data-needs-you-dismiss-section="shop-web"]').click();
+        await page.waitForTimeout(300);
+        const afterSection = { count: await chipCount(page), sections: (await panelReading(page)).sections };
+        readings["uk/desktop-dismiss-section"] = afterSection;
+        check("uk/desktop-dismiss-section", afterSection.count === 6 && !afterSection.sections.some((section) => section[0] === "shop-web"), `after shop-web's Dismiss all: ${JSON.stringify(afterSection)}`);
+        await shot(page, "uk", "1440x900-dismissed-section");
+        /* A poll later the server's record still holds. */
+        await page.evaluate(() => window.dispatchEvent(new Event("llv:files-changed")));
+        await page.waitForTimeout(800);
+        check("uk/desktop-dismiss-section", (await chipCount(page)) === 6, "the dismissal did not survive a poll");
+        await page.locator("[data-needs-you-undo]").click();
+        await page.waitForTimeout(500);
+        const undone = await chipCount(page);
+        readings["uk/desktop-undo"] = { count: undone };
+        check("uk/desktop-undo", undone === 8, `Undo brought the count to ${undone}, expected 8`);
+      } finally { await opened.context.close(); }
+
+      /* uk and en: the report log beside the seat, a question ticked there
+         leaving the panel too. */
+      for (const lang of ["uk", "en"] as const) {
+        opened = await open("&seat=beside", lang);
+        try {
+          const page = opened.page;
+          const toggle = page.locator("[data-report-log-toggle]").first();
+          if (await toggle.count()) await toggle.click();
+          await page.waitForSelector("[data-report-log-entries]", { timeout: 10_000 });
+          const log = () => page.evaluate(() => ({
+            open: document.querySelector("[data-report-open-count]")?.getAttribute("data-report-open-count") ?? null,
+            ticks: [...document.querySelectorAll("[data-report-entry]")].map((entry) => [entry.getAttribute("data-report-entry"), entry.getAttribute("data-report-question")]),
+          }));
+          const before = { ...(await log()), count: await chipCount(page) };
+          readings[`${lang}/report-log`] = before;
+          check(`${lang}/report-log`, before.open === "2", `open questions ${before.open}`);
+          await shot(page, lang, "1440x900-report-log");
+          if (lang === "uk") {
+            await page.locator('[data-report-resolve="1204"]').check();
+            await page.waitForTimeout(400);
+            const after = { ...(await log()), count: await chipCount(page) };
+            readings["uk/report-log-ticked"] = after;
+            check("uk/report-log-ticked", after.open === "1" && after.count === before.count - 1, `after the tick: ${JSON.stringify(after)} from ${JSON.stringify(before)}`);
+            await page.locator("[data-attention-count]").click();
+            await page.waitForTimeout(300);
+            check("uk/report-log-ticked", (await page.locator('[data-needs-you-row="report-merge-order"]').count()) === 0, "the ticked question is still on the panel");
+            await shot(page, "uk", "1440x900-report-log-ticked-panel");
+          }
+        } finally { await opened.context.close(); }
+      }
+
+      /* uk: the phone's report screen with its ticks. */
+      opened = await open("#reports", "uk", true);
+      try {
+        await opened.page.waitForSelector('[data-report-log][data-report-log-variant="screen"] [data-report-log-entries]', { timeout: 10_000 });
+        await shot(opened.page, "uk", "390x844-report-log");
+      } finally { await opened.context.close(); }
     } finally {
       await browser.close();
       server.stop();
     }
+    const evidence = path.resolve("evidence/needs-you-panel/readings.json");
+    fs.mkdirSync(path.dirname(evidence), { recursive: true });
+    fs.writeFileSync(evidence, `${JSON.stringify({ readings, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 600_000);
 });

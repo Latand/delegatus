@@ -1,20 +1,22 @@
 /*
- * The page the needs-you options are rendered on (docs/design/needs-you-options.md
- * §4): the real Viewer over an invented three-project board, answered by an
- * in-page fetch double, with each option's header control and list drawn over
- * it from the product's own rows (`needsYouOptions.mockups.tsx`). All data is
- * invented. The page is a mockup for the operator to choose from; nothing here
- * is the shipped behaviour.
+ * The page the needs-you panel is rendered on (docs/design/needs-you-options.md,
+ * option B): the real Viewer over an invented three-project board with every
+ * needs-you reason and several roles, answered by an in-page fetch double. The
+ * dismissal route is answered the way the server records it, so a row
+ * dismissed on the panel, a question ticked in the report log, and Undo, all
+ * survive the next poll here as they do in production. All data is invented.
  *
- *   ?option=today|a|b|c   which direction draws the header control
- *   &open=1               its popover, panel, inbox or sheet open
- *   &seat=beside          the orchestrator seat open beside the board (B's width frame)
- *   &overview=1           the Overview instead of the delegatus board (A's extra frame)
+ *   ?lang=uk|en           the interface language (uk by default)
+ *   &open=1               the panel open (it docks when the board has room)
+ *   &placement=overlay    the panel floating over the board
+ *   &seat=beside          the orchestrator seat open beside the board
+ *   &overview=1           the Overview instead of the delegatus board
  */
 import { createRoot } from "react-dom/client";
 
 import { Viewer } from "@/components/Viewer";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
+import type { DismissalSubjectRequest } from "@/lib/attention/dismissalTypes";
 import type { ReportLogEntry, ReportLogPage } from "@/lib/bridge/reportLog";
 import { reportCardRefs } from "@/lib/bridge/reportCardRefs";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -22,11 +24,10 @@ import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 
-import { mountNeedsYouMockup, type MockupData } from "./needsYouOptions.mockups";
-
 const params = new URLSearchParams(location.search);
 const OVERVIEW = params.has("overview");
 const SEAT_BESIDE = params.get("seat") === "beside";
+const LANG = params.get("lang") === "en" ? "en" : "uk";
 
 /* A pinned clock, so every age on every frame reads the same. */
 const now = Math.floor(Date.now() / 1000);
@@ -88,14 +89,18 @@ const task = (project: string, id: string, status: string, text: string, over: R
 
 /* ── delegatus (the board on screen): rows 1–3 ─────────────────────────── */
 const D = KEYS.delegatus;
+/* The seat's open questions in the report log: each is its own row, the
+   seat's role on it, and resolving one here or in the log resolves both. */
 const seatDelegatus = conversation(D, "Оркестратор", { ...role("orchestrator"), mtime: now - 300 });
-/* Row 1, `ask`. The Asks-you lane's reason kind is not on main yet; its row
-   reads «Просить вас · ‹роль› — «‹last sentence›»», which a question header
-   carries word for word here so the real row draws it. */
+const SEAT_ASKS = [
+  { id: "report-weekend-digest", at: iso(26 * MIN), seq: 1_202, body: "Слати нічний дайджест і у вихідні?" },
+  { id: "report-merge-order", at: iso(9 * MIN), seq: 1_204, body: "Що зливаємо першим: ліміт задач чи перемикання розмов?" },
+];
+/* Row 1: a builder's structured question. */
 const ask = conversation(D, "Чип Чекають: 2–3 варіанти", {
-  activity: "idle", mtime: now - 4 * MIN, lastAgentWorkAt: (now - 4 * MIN) * 1_000,
+  ...role("builder"), activity: "idle", mtime: now - 4 * MIN, lastAgentWorkAt: (now - 4 * MIN) * 1_000,
   pendingQuestion: { kind: "question", toolUseId: "toolu-ask-1", transcriptPath: "", pid: null, paneTarget: null, askedAt: iso(4 * MIN),
-    questions: [{ question: "Скажи «го», і я змерджу #2246.", header: "Просить вас · білдер — «Скажи «го», і я змерджу #2246.»", multiSelect: false, options: [] }] },
+    questions: [{ question: "Злити #2246 зараз чи після ревʼю?", header: "Злиття #2246", multiSelect: false, options: [] }] },
 });
 /* Row 2, `permission`: a structured host's tool request, answered inline. */
 const permission = conversation(D, "Аудит задач дошки", {
@@ -127,11 +132,12 @@ task(D, "t-seat", "assigned", "Оркестратор delegatus", { assignments:
 /* ── shop-web: rows 4–5 ────────────────────────────────────────────────── */
 const S = KEYS.shop;
 /* Row 4, `decision`: the orchestrator's open bridge ask. */
-const seatShop = conversation(S, "Оркестратор", { ...role("orchestrator"), mtime: now - 3_600, bridgeAsk: { id: "report-shop-limit", at: iso(3_600) } });
+const shopAsk = { id: "report-shop-limit", at: iso(60 * MIN), seq: 1_190, body: "Підняти ліміт вкладень до 100 МБ чи лишити 25?" };
+const seatShop = conversation(S, "Оркестратор", { ...role("orchestrator"), mtime: now - 3_600, bridgeAsks: [shopAsk], bridgeAsk: shopAsk });
 task(S, "t-shop-seat", "assigned", "Оркестратор shop-web", { assignments: [assign(seatShop)] });
-/* Row 5, `plan`. */
+/* Row 5, `plan`: an architect's plan approval. */
 const plan = conversation(S, "Пошук по каталогу", {
-  ...role("builder"), activity: "idle", mtime: now - 18 * MIN,
+  ...role("architect"), activity: "idle", mtime: now - 18 * MIN,
   pendingQuestion: { kind: "plan", toolUseId: "toolu-plan-1", transcriptPath: "", pid: null, paneTarget: null, askedAt: iso(18 * MIN), questions: [] },
 });
 task(S, "t-catalog", "assigned", "Пошук по каталогу", { assignments: [assign(plan)] });
@@ -143,24 +149,75 @@ lane(B, "lane-digest", "Щоденний дайджест", ["t-digest"], "needs
   { id: "implement", state: "passed", ago: 2 * 3_600 }, { id: "review", state: "failed", ago: 2 * 3_600 - 60, role: "reviewer" },
 ], { cursor: { stageId: "implement", state: "reviewing", input: null, activatedBy: null } });
 task(B, "t-digest", "assigned", "Щоденний дайджест");
-/* Row 7, `delivery`: a message held for 41 minutes. */
-const owed = conversation(B, "Мердж #88", { ...role("reviewer"), ...working(3_000), stuckDelivery: { since: iso(41 * MIN), attempts: 2, state: "held" } });
+/* Row 7, `delivery`: a message held for 41 minutes, to a verifier. */
+const owed = conversation(B, "Перевірка #88 на стейджі", { ...role("verifier"), ...working(3_000), stuckDelivery: { since: iso(41 * MIN), attempts: 2, state: "held" } });
 task(B, "t-merge88", "assigned", "Мердж #88", { assignments: [assign(owed)] });
 
-/* ── the reports log (Option C): four entries, the newest two unseen ───── */
+/* ── the report log beside delegatus's seat: two open questions (the two
+   needs-you rows above), one the operator already resolved, and the rest of
+   the log around them ── */
+const seatFile = files.find((entry) => entry.path === seatDelegatus)!;
 const REPORTS: Array<Omit<ReportLogEntry, "cards">> = [
-  { seq: 1_204, at: iso(4 * MIN), class: "question", body: "Білдер просить вас: Скажи «го», і я змерджу #2246. Картка t-chip" },
-  { seq: 1_203, at: iso(26 * MIN), class: "review_verdict", body: "Ревʼю, раунд 2 на #2244: APPROVE. Ліміт смуг рахує лише показані задачі; одне P3 лишив як #2247." },
-  { seq: 1_202, at: iso(60 * MIN), class: "blocked", body: "shop-web: лейн вкладень стоїть, доки не вирішите: підняти ліміт вкладень до 100 МБ чи лишити 25?" },
-  { seq: 1_201, at: iso(95 * MIN), class: "status", body: "Три лейни працюють: перемикання розмов (ревʼю, раунд 1), голосові (білд), ліміт задач (чекає вашого рішення)." },
+  { seq: 1_204, at: iso(9 * MIN), class: "question", body: "Що зливаємо першим: ліміт задач чи перемикання розмов?" },
+  { seq: 1_203, at: iso(20 * MIN), class: "review_verdict", body: "Ревʼю, раунд 2 на #2244: APPROVE. Ліміт смуг рахує лише показані задачі; одне P3 лишив як #2247." },
+  { seq: 1_202, at: iso(26 * MIN), class: "blocked", body: "Слати нічний дайджест і у вихідні?" },
+  { seq: 1_201, at: iso(70 * MIN), class: "question", body: "Лишити вебхук Telegram на старому домені до понеділка?" },
+  { seq: 1_200, at: iso(95 * MIN), class: "status", body: "Три лейни працюють: перемикання розмов (ревʼю, раунд 1), голосові (білд), ліміт задач (чекає вашого рішення)." },
 ];
+const resolvedQuestions = new Map<number, string>([[1_201, iso(64 * MIN)]]);
 const knownCards = new Map<string, "task" | "pipeline">([...tasks.map((row) => [String(row.id), "task"] as const), ...pipelines.map((row) => [row.id, "pipeline"] as const)]);
-export const REPORT_PAGE: ReportLogPage = {
-  ok: true, project: D, bridgeReports: true, github: "example/delegatus", revision: "fixture:1204",
-  entries: REPORTS.map((entry) => ({ ...entry, cards: reportCardRefs(entry.body, knownCards) })), nextBefore: null,
-};
+function reportPage(): ReportLogPage {
+  const open = (seatFile.bridgeAsks ?? []).map((entry) => entry.seq!).filter((seq) => !resolvedQuestions.has(seq));
+  return {
+    ok: true, project: D, bridgeReports: true, github: "example/delegatus",
+    revision: `fixture:${open.join(",")}:${[...resolvedQuestions.keys()].join(",")}`,
+    entries: REPORTS.map((entry) => ({ ...entry, cards: reportCardRefs(entry.body, knownCards) })), nextBefore: null,
+    questions: { open, resolved: [...resolvedQuestions].map(([seq, at]) => ({ seq, at })) },
+  };
+}
+seatFile.bridgeAsks = SEAT_ASKS;
+seatFile.bridgeAsk = SEAT_ASKS.at(-1)!;
 /* The operator last looked at the log before the two newest entries. */
 try { localStorage.setItem(`llvReportLogSeen:${D}`, "1202"); } catch { /* private mode */ }
+
+/* The dismissal route, recorded the way the server records it: a
+   conversation's reason on its entry, a lane's instant on the lane, a
+   question's resolution in the report log, which takes it off its seat. */
+const allAsks = new Map<number, { file: FileEntry; ask: NonNullable<FileEntry["bridgeAsk"]> }>();
+for (const entry of files) for (const ask of entry.bridgeAsks ?? []) allAsks.set(ask.seq!, { file: entry, ask });
+function dismiss(subjects: DismissalSubjectRequest[], undo: boolean): unknown[] {
+  const at = new Date().toISOString();
+  const by = { kind: "operator", surface: innerWidth < 768 ? "phone" : "desktop" } as const;
+  const done: unknown[] = [];
+  for (const subject of subjects) {
+    if (subject.kind === "report") {
+      const held = allAsks.get(subject.seq);
+      if (!held) continue;
+      const asks = held.file.bridgeAsks ?? [];
+      if (undo) {
+        resolvedQuestions.delete(subject.seq);
+        if (!asks.some((entry) => entry.seq === subject.seq)) held.file.bridgeAsks = [...asks, held.ask].sort((a, b) => a.seq! - b.seq!);
+      } else {
+        resolvedQuestions.set(subject.seq, at);
+        held.file.bridgeAsks = asks.filter((entry) => entry.seq !== subject.seq);
+      }
+      held.file.bridgeAsk = held.file.bridgeAsks!.at(-1) ?? null;
+      done.push({ kind: "report", seq: subject.seq });
+    } else if (subject.kind === "pipeline") {
+      const target = pipelines.find((entry) => entry.id === subject.pipelineId);
+      if (!target) continue;
+      Object.assign(target, undo ? { dismissedAt: null, dismissedBy: null } : { dismissedAt: at, dismissedBy: by });
+      done.push({ kind: "pipeline", pipelineId: subject.pipelineId });
+    } else {
+      const target = files.find((entry) => entry.path === subject.path);
+      if (!target) continue;
+      if (undo) delete target.attentionDismissal;
+      else target.attentionDismissal = { at, by, reasonId: subject.reasonId ?? null };
+      done.push({ kind: "conversation", conversationId: target.conversationId });
+    }
+  }
+  return done;
+}
 
 let board = {
   schemaVersion: 1, revision: 1, updatedAt: new Date(0).toISOString(), pathAliases: {},
@@ -190,7 +247,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     return json({ ok: true, board });
   }
-  if (url.pathname === "/api/orchestrator/reports") return json(REPORT_PAGE);
+  if (url.pathname === "/api/orchestrator/reports") return json(url.searchParams.get("project") === D ? reportPage() : { ...reportPage(), project: url.searchParams.get("project"), entries: [], questions: { open: [], resolved: [] } });
+  if (url.pathname === "/api/attention/dismissals" && method === "POST") {
+    const body = JSON.parse(String(init?.body)) as { target: { kind: "subjects"; subjects: DismissalSubjectRequest[] } | DismissalSubjectRequest; undo?: boolean };
+    const subjects = body.target.kind === "subjects" ? body.target.subjects : [body.target];
+    const dismissed = dismiss(subjects, body.undo === true);
+    return json({ ok: true, dismissed, alreadyClear: [], changed: [], at: new Date().toISOString(), by: { kind: "operator" }, undo: body.undo === true });
+  }
   if (url.pathname === "/api/projects/settings") {
     return json({ ok: true, project: url.searchParams.get("project") ?? D, mergeOnReview: { enabled: true, changedAt: iso(86_400), changedBy: "operator" }, bridgeReports: { enabled: true, changedAt: iso(86_400), changedBy: "operator" }, github: "example/delegatus" });
   }
@@ -222,13 +285,14 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 }) as typeof fetch;
 
 try {
-  localStorage.setItem("llv_lang", "uk");
+  localStorage.setItem("llv_lang", LANG);
+  if (params.has("open")) localStorage.setItem("llvNeedsYouPanel", "open");
+  if (params.get("placement") === "overlay") localStorage.setItem("llvNeedsYouPlacement", "overlay");
   localStorage.setItem("llvProject", OVERVIEW ? "__overview__" : D);
   /* The seat folded on top (§4: "seat collapsed"), or open at the side for B's width frame. */
   localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { [D]: !SEAT_BESIDE }, placement: SEAT_BESIDE ? "side" : "top", width: null, topWidths: {}, sideWidths: {}, heightV: 2 }));
 } catch { /* private mode */ }
 if (!OVERVIEW && !location.hash) location.hash = `#p=${D}`;
 
-const data: MockupData = { files, pipelines, now, names: NAMES, current: OVERVIEW ? null : D, seatBeside: SEAT_BESIDE, reportPage: REPORT_PAGE };
 createRoot(document.getElementById("root")!).render(<Viewer />);
-mountNeedsYouMockup(data);
+document.body.setAttribute("data-needs-you-fixture-ready", "");

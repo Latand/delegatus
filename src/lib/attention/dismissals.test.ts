@@ -62,12 +62,15 @@ interface Harness {
   clock: { now: Date };
   lanes: Map<string, Pipeline>;
   writes: Array<{ pipelineId: string; dismiss: boolean; by: DismissedBy }>;
+  /** Reports resolved, by seq: the bridge log's record, as the port writes it. */
+  resolved: Map<number, { at: string; by: DismissedBy }>;
 }
 
 function harness(options: { tasks?: BoardTask[]; lanes?: Pipeline[] } = {}): Harness {
   const clock = { now: new Date("2026-09-24T10:00:00.000Z") };
   const lanes = new Map((options.lanes ?? []).map((entry) => [entry.id, entry] as const));
   const writes: Harness["writes"] = [];
+  const resolved: Harness["resolved"] = new Map();
   const known = new Map([
     ["conversation_a", "/t/a.jsonl"],
     ["conversation_b", "/t/b.jsonl"],
@@ -90,9 +93,25 @@ function harness(options: { tasks?: BoardTask[]; lanes?: Pipeline[] } = {}): Har
       lanes.set(pipelineId, next);
       return { pipeline: next };
     },
+    resolveReports: (seqs, resolve, by, at) => {
+      const outcome = { resolved: [] as number[], alreadyClear: [] as number[], unknown: [] as number[] };
+      for (const seq of seqs) {
+        if (!QUESTIONS.has(seq)) outcome.unknown.push(seq);
+        else if (resolve === resolved.has(seq)) outcome.alreadyClear.push(seq);
+        else {
+          if (resolve) resolved.set(seq, { at, by });
+          else resolved.delete(seq);
+          outcome.resolved.push(seq);
+        }
+      }
+      return outcome;
+    },
   };
-  return { ports, clock, lanes, writes };
+  return { ports, clock, lanes, writes, resolved };
 }
+
+/** The decision requests the harness's report log holds. */
+const QUESTIONS = new Set([11, 12]);
 
 test("a conversation's dismissal is recorded with who made it, and a new one replaces the old", async () => {
   const h = harness();
@@ -273,4 +292,38 @@ test("the files projection stamps each record on its conversation's entries, and
   const unread = [entry({ path: "/t/q.jsonl" })];
   overlayAttentionDismissals(unread, () => { throw new Error("busy"); });
   expect(unread[0]!.attentionDismissal).toBeUndefined();
+});
+
+test("an orchestrator's question is resolved in the report log, together with the other rows of one «Dismiss all», and Undo takes it back", async () => {
+  const h = harness({ lanes: [lane("lane-1", "needs_decision")] });
+  const outcome = await dismissAttention({
+    kind: "subjects",
+    subjects: [
+      { kind: "report", seq: 11 },
+      { kind: "report", seq: 12 },
+      { kind: "conversation", conversationId: "conversation_a", reasonId: "toolu_1" },
+      { kind: "pipeline", pipelineId: "lane-1" },
+    ],
+  }, OPERATOR, { ports: h.ports });
+  expect(outcome.dismissed).toEqual([
+    { kind: "conversation", conversationId: "conversation_a" },
+    { kind: "pipeline", pipelineId: "lane-1" },
+    { kind: "report", seq: 11 },
+    { kind: "report", seq: 12 },
+  ]);
+  expect([...h.resolved.keys()]).toEqual([11, 12]);
+  expect(h.resolved.get(11)).toEqual({ at: "2026-09-24T10:00:00.000Z", by: OPERATOR });
+
+  const again = await dismissAttention({ kind: "subjects", subjects: [{ kind: "report", seq: 11 }] }, OPERATOR, { ports: h.ports });
+  expect(again).toMatchObject({ dismissed: [], alreadyClear: [{ kind: "report", seq: 11 }] });
+
+  const undone = await dismissAttention({ kind: "subjects", subjects: [{ kind: "report", seq: 11 }] }, OPERATOR, { ports: h.ports, undo: true });
+  expect(undone).toMatchObject({ dismissed: [{ kind: "report", seq: 11 }], undo: true });
+  expect([...h.resolved.keys()]).toEqual([12]);
+});
+
+test("a report subject is parsed from the operator's route; a seq that is not a positive integer is refused", () => {
+  expect(parseDismissalTarget({ kind: "subjects", subjects: [{ kind: "report", seq: 7 }] }, { allowSubjects: true })).toEqual({ kind: "subjects", subjects: [{ kind: "report", seq: 7 }] });
+  expect(() => parseDismissalTarget({ kind: "subjects", subjects: [{ kind: "report", seq: 0 }] }, { allowSubjects: true })).toThrow();
+  expect(() => parseDismissalTarget({ kind: "subjects", subjects: [{ kind: "report" }] }, { allowSubjects: true })).toThrow();
 });

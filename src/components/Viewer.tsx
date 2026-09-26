@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronRight, Crown, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 
 import { formatConversationHash, isArchivedPredecessor, parseConversationHash, resolveConversationTarget, withoutArchivedPredecessors, type ConversationHash } from "@/lib/accounts/identity";
 import { navigateToFragment, NOTIFICATION_OPEN_MESSAGE, setFragmentNavigator } from "@/lib/navigation/fragmentNavigation";
@@ -31,9 +31,11 @@ import { AttentionHost } from "./attention/AttentionHost";
 import { useDismissalOverlay } from "./attention/dismissalOverlay";
 import { clearNotice, markNoticesSeen, usePhoneNotices } from "./attention/phoneNotices";
 import { BootShell } from "./BootShell";
-import { AttentionIsland, AttentionLaneRow, AttentionQueueRow } from "./attention/AttentionIsland";
+import { AttentionIsland } from "./attention/AttentionIsland";
+import { AttentionPanel, type AttentionPanelPlacement } from "./attention/AttentionPanel";
+import { needsYouCounts } from "./attention/needsYouPanel";
 import { AttentionToast } from "./attention/AttentionToast";
-import { attentionEntryProject, buildNeedsYouQueue, laneFocusPath, type MobileAttentionEntry } from "./attention/attentionQueue";
+import { attentionEntryProject, buildNeedsYouQueue, laneFocusId, laneFocusPath, type MobileAttentionEntry } from "./attention/attentionQueue";
 import { MobileAttentionSheet, type MobileNoticeRow } from "./attention/MobileAttentionSheet";
 import { roleNameById } from "./builderCopy";
 import { purgeLegacyOperatorCredential } from "./operatorCredential";
@@ -150,6 +152,36 @@ function readStored(key: string): string | null {
     return window.localStorage.getItem(key);
   } catch {
     return null;
+  }
+}
+
+/* «Waiting for you»: its width when docked, and the board width it leaves
+   the columns (docs/design/needs-you-options.md, option B: short of room it
+   floats over the board, as the popover did). */
+const PANEL_WIDTH = 320;
+const PANEL_MIN_BOARD = 760;
+const PANEL_OPEN_KEY = "llvNeedsYouPanel";
+const PANEL_PLACEMENT_KEY = "llvNeedsYouPlacement";
+
+/** Whether the board keeps its minimum beside a docked panel, from the width
+    the board and a docked panel share. */
+function panelRoom(sharedWidth: number | null): boolean {
+  return sharedWidth === null || sharedWidth - PANEL_WIDTH >= PANEL_MIN_BOARD;
+}
+
+function readPanelPref(key: string): string | null {
+  try {
+    return typeof window === "undefined" ? null : window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writePanelPref(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    /* private mode: the choice lasts for the session */
   }
 }
 
@@ -856,6 +888,9 @@ function ViewerApp() {
      lanes the cards and the columns already mark, and a lane dismissed on its
      card leaves every count at once. */
   const needsYou = useMemo(() => buildNeedsYouQueue(files, pipelines, clock, closingPipelines), [files, pipelines, clock, closingPipelines]);
+  /* The rail's ⏸, the Overview's rows and the phone's project sheet count
+     this same grouping, one number per project with the panel's sections. */
+  const needsYouByProject = useMemo(() => needsYouCounts(needsYou), [needsYou]);
   useEffect(() => {
     const expiries = attentionExpiries(files).filter((at) => at > clock);
     if (!expiries.length) return;
@@ -863,8 +898,29 @@ function ViewerApp() {
     const timer = window.setTimeout(() => setClock(Date.now() / 1000), delay);
     return () => window.clearTimeout(timer);
   }, [files, clock]);
-  const [queueOpen, setQueueOpen] = useState(false);
+  /* «Waiting for you» (docs/design/needs-you-options.md, option B): open or
+     closed, and docked beside the board or floating over it, both remembered
+     on this device. It docks only while the board keeps room for its columns
+     beside it (`panelRoom`); short of that it floats under the header control. */
+  const [panelOpen, setPanelOpenState] = useState(() => readPanelPref(PANEL_OPEN_KEY) === "open");
+  const [panelPlacement, setPanelPlacementState] = useState<AttentionPanelPlacement>(() => (readPanelPref(PANEL_PLACEMENT_KEY) === "overlay" ? "overlay" : "docked"));
+  const setPanelOpen = useCallback((next: boolean | ((value: boolean) => boolean)) => {
+    setPanelOpenState((value) => {
+      const resolved = typeof next === "function" ? next(value) : next;
+      writePanelPref(PANEL_OPEN_KEY, resolved ? "open" : "closed");
+      return resolved;
+    });
+  }, []);
+  const setPanelPlacement = useCallback((next: AttentionPanelPlacement) => {
+    writePanelPref(PANEL_PLACEMENT_KEY, next);
+    setPanelPlacementState(next);
+  }, []);
   const queueRef = useRef<HTMLDivElement | null>(null);
+  const mainRef = useRef<HTMLElement | null>(null);
+  /* The width the board and a docked panel share: the board's own, plus the
+     panel's while it is docked beside it. */
+  const [sharedWidth, setSharedWidth] = useState<number | null>(null);
+  const dockedRef = useRef(false);
 
   /* Crown favorites pinned atop the «Чекають» popover (issue #224): the same
      durable board prefs the dashboard reads, scoped to the current project so
@@ -880,13 +936,30 @@ function ViewerApp() {
     document.title = needsYou.length ? `(${needsYou.length}) ${PRODUCT_NAME}` : PRODUCT_NAME;
   }, [needsYou.length]);
 
+  /* The board's width, for whether the panel can dock beside it. */
   useEffect(() => {
-    if (!queueOpen) return;
+    const element = mainRef.current;
+    if (!element || typeof ResizeObserver !== "function") return;
+    const apply = () => setSharedWidth(element.getBoundingClientRect().width + (dockedRef.current ? PANEL_WIDTH : 0));
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [isMobile]);
+  const panelDocked = !isMobile && panelOpen && panelPlacement === "docked" && panelRoom(sharedWidth);
+  const panelFloating = !isMobile && panelOpen && !panelDocked;
+  useLayoutEffect(() => {
+    dockedRef.current = panelDocked;
+  }, [panelDocked]);
+  /* The one that floats is a popover: a click outside or Escape closes it.
+     The docked one stays while the operator works through it. */
+  useEffect(() => {
+    if (!panelFloating) return;
     const onDown = (event: PointerEvent) => {
-      if (!queueRef.current?.contains(event.target as Node)) setQueueOpen(false);
+      if (!queueRef.current?.contains(event.target as Node)) setPanelOpen(false);
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setQueueOpen(false);
+      if (event.key === "Escape") setPanelOpen(false);
     };
     window.addEventListener("pointerdown", onDown);
     window.addEventListener("keydown", onKey);
@@ -894,12 +967,11 @@ function ViewerApp() {
       window.removeEventListener("pointerdown", onDown);
       window.removeEventListener("keydown", onKey);
     };
-  }, [queueOpen]);
+  }, [panelFloating, setPanelOpen]);
 
   /* «Show only needs me» filter: React-only state that auto-disables once no
      conversation waits (below, beside the paths it keeps lit) — a filter
-     surviving reload would silently gray the whole board (D6). The popover
-     closes when the queue empties. Desktop-only, like the F key: the mobile
+     surviving reload would silently gray the whole board (D6). Desktop-only, like the F key: the mobile
      strip and map render without the dimming channel, so the funnel stays
      hidden there and the state clears if the viewport shrinks into the phone
      layout mid-session. */
@@ -908,10 +980,6 @@ function ViewerApp() {
   useEffect(() => {
     if (isMobile) setAttentionFilter(false);
   }, [isMobile]);
-  useEffect(() => {
-    if (needsYou.length) return;
-    setQueueOpen(false);
-  }, [needsYou.length]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const cancelPendingIntent = useCallback(() => setPendingHash(null), []);
@@ -1241,21 +1309,22 @@ function ViewerApp() {
     return () => window.removeEventListener("keydown", onDown);
   }, [isMobile, projectEntries, attentionFilterable, openAttentionEntry, openSearch, toggleRail]);
 
-  /* A popover click is a deliberate act, so unlike the N hotkey it may switch
-     the project; the focus hand-off glides the board to the node. */
+  /* A panel row's click is a deliberate act, so unlike the N hotkey it may
+     switch the project; the focus hand-off glides the board to the node. A
+     floating panel steps aside for what it opened; a docked one stays. */
   const jumpToItem = useCallback(
     (item: AttentionItem) => {
-      setQueueOpen(false);
+      if (panelFloating) setPanelOpen(false);
       /* One gesture, one history entry: the focus record below names the
          project, so the switch itself writes nothing. */
       if (item.project !== project) applyProject(item.project);
       cycleRef.current = item.id;
       requestFocus(item.file.path);
     },
-    [project, applyProject, requestFocus],
+    [project, applyProject, requestFocus, panelFloating, setPanelOpen],
   );
 
-  /* A popover row that names a lane: the same deliberate act as a
+  /* A panel row that names a lane: the same deliberate act as a
      conversation's row, landing on the lane's card. */
   const jumpToEntry = useCallback(
     (entry: MobileAttentionEntry) => {
@@ -1263,35 +1332,23 @@ function ViewerApp() {
         jumpToItem(entry.item);
         return;
       }
-      setQueueOpen(false);
+      if (panelFloating) setPanelOpen(false);
       cycleRef.current = entry.id;
       openAttentionEntry(entry);
     },
-    [jumpToItem, openAttentionEntry],
+    [jumpToItem, openAttentionEntry, panelFloating, setPanelOpen],
   );
 
-  /* The island's visible Next (issue #963): a deliberate act like a popover
-     click, so it advances over the GLOBAL queue and may switch the project —
-     the same hand-off `jumpToItem` performs. It moves the SAME cycle pointer
-     the N/Shift-N keys read (through the one `advanceAttentionCycle` route),
-     so the button and the shortcut always continue one sequence. */
-  const advanceGlobalAttention = useCallback(
-    (dir: 1 | -1) => {
-      const next = advanceAttentionCycle(cycleRef, needsYou, dir);
-      if (next) openAttentionEntry(next);
-    },
-    [needsYou, openAttentionEntry],
-  );
-
-  /* A crowned row in the popover focuses its conversation, switching project
-     first if the favorite lives elsewhere — same hand-off as an attention jump. */
+  /* A crowned row pinned in the panel focuses its conversation, switching
+     project first if the favorite lives elsewhere — same hand-off as an
+     attention jump. */
   const openFavorite = useCallback(
     (row: FavoriteRow) => {
-      setQueueOpen(false);
+      if (panelFloating) setPanelOpen(false);
       if (row.project !== project) applyProject(row.project);
       requestFocus(row.file.path);
     },
-    [project, applyProject, requestFocus],
+    [project, applyProject, requestFocus, panelFloating, setPanelOpen],
   );
 
   useEffect(() => {
@@ -1314,72 +1371,80 @@ function ViewerApp() {
 
   const toastFile = toastPath ? files.find((file) => file.path === toastPath) : null;
 
-  /* Desktop keeps the island in the fixed top-right anchor; the phone embeds
-     this same node into the board header row, where it cannot cover the
-     header's own buttons. The queue popover then drops as a full-width sheet
-     under the header instead of hanging off the pill. The island renders in
-     the zero state too — muted and inert — so the corner always answers
-     "what needs me?" (issue #963). */
+  /* Crowned conversations pinned atop the panel, mirroring the scheme's
+     favorites row (issue #224). */
+  const favoritesPinned = favoriteRows.length ? (
+    <div className="mb-1 border-b border-border pb-1" data-needs-you-favorites="">
+      <div className="flex items-center gap-1 px-2.5 pb-0.5 pt-1.5 text-label font-semibold text-secondary">
+        <Crown className="h-3 w-3 fill-crown text-crown" aria-hidden />
+        {t("favorites.sectionTitle")}
+      </div>
+      {favoriteRows.map((row) => (
+        <div key={row.id} className="flex items-center gap-1 rounded-[8px] hover:bg-canvas">
+          <button
+            type="button"
+            className="flex min-w-0 flex-1 items-center gap-1.5 rounded-[8px] px-2.5 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            title={t("favorites.focusTitle", { title: cleanTitle(row.file.title, 60) })}
+            onClick={() => openFavorite(row)}
+          >
+            <span className={`h-2 w-2 shrink-0 rounded-full ${activityDot(row.file.activity)}`} aria-hidden />
+            <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-primary">
+              {cleanTitle(row.file.title, 90)}
+            </span>
+          </button>
+          <button
+            type="button"
+            className="mr-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] text-crown hover:bg-crown-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            aria-label={t("branch.unfavorite")}
+            title={t("branch.unfavorite")}
+            onClick={() => favoritesBoard.setFavorite(row.id, false)}
+          >
+            <Crown className="h-3.5 w-3.5 fill-crown" aria-hidden />
+          </button>
+        </div>
+      ))}
+    </div>
+  ) : null;
+
+  /* The row the operator is looking at: the last conversation or lane card a
+     deliberate focus landed on. */
+  const panelFocus = useMemo(() => {
+    const path = focusRequest?.path ?? null;
+    const laneId = path ? laneFocusId(path) : null;
+    return { path: laneId ? null : path, laneId };
+  }, [focusRequest]);
+
+  const panel = (placement: AttentionPanelPlacement) => (
+    <AttentionPanel
+      queue={needsYou}
+      current={project === OVERVIEW ? null : project}
+      projectNames={projectDisplayNames}
+      pipelines={pipelines}
+      placement={placement}
+      canDock={panelRoom(sharedWidth)}
+      onPlacement={setPanelPlacement}
+      onClose={() => setPanelOpen(false)}
+      onOpen={jumpToEntry}
+      focus={panelFocus}
+      pinned={favoritesPinned}
+    />
+  );
+
+  /* Desktop keeps the island in the fixed top-right anchor, over the bar's
+     right reserve; with the panel docked the anchor moves left by the panel's
+     width, so the control sits at the end of the bar it belongs to. The
+     island renders in the zero state too — muted and inert — so the corner
+     always answers "what needs me?" (issue #963). */
   const attentionBadge = (
     <div ref={queueRef} className="pointer-events-auto relative">
       <AttentionIsland
         count={needsYou.length}
-        queueOpen={queueOpen}
+        panelOpen={panelOpen}
         filterActive={attentionFilter}
-        onToggleQueue={() => setQueueOpen((value) => !value)}
-        onNext={advanceGlobalAttention}
+        onTogglePanel={() => setPanelOpen((value) => !value)}
         onToggleFilter={attentionFilterable ? () => setAttentionFilter((value) => !value) : undefined}
       />
-      {queueOpen ? (
-        <div
-          className={`${
-            isMobile ? "fixed inset-x-3 top-12" : "absolute right-0 top-[calc(100%+6px)] w-[340px] max-w-[calc(100vw-2rem)]"
-          } z-50 max-h-[60vh] overflow-y-auto rounded-[10px] border border-border bg-card p-1.5 shadow-1`}
-        >
-          {/* Crowned conversations pinned at the top, mirroring the scheme's
-              favorites row (issue #224). */}
-          {favoriteRows.length ? (
-            <div className="mb-1 border-b border-border pb-1">
-              <div className="flex items-center gap-1 px-2.5 pb-0.5 pt-1.5 text-label font-semibold text-secondary">
-                <Crown className="h-3 w-3 fill-crown text-crown" aria-hidden />
-                {t("favorites.sectionTitle")}
-              </div>
-              {favoriteRows.map((row) => (
-                <div key={row.id} className="flex items-center gap-1 rounded-[8px] hover:bg-canvas">
-                  <button
-                    type="button"
-                    className="flex min-w-0 flex-1 items-center gap-1.5 rounded-[8px] px-2.5 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                    title={t("favorites.focusTitle", { title: cleanTitle(row.file.title, 60) })}
-                    onClick={() => openFavorite(row)}
-                  >
-                    <span className={`h-2 w-2 shrink-0 rounded-full ${activityDot(row.file.activity)}`} aria-hidden />
-                    <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-primary">
-                      {cleanTitle(row.file.title, 90)}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    className="mr-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] text-crown hover:bg-crown-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                    aria-label={t("branch.unfavorite")}
-                    title={t("branch.unfavorite")}
-                    onClick={() => favoritesBoard.setFavorite(row.id, false)}
-                  >
-                    <Crown className="h-3.5 w-3.5 fill-crown" aria-hidden />
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          <div className="px-2.5 pb-1 pt-1.5 text-label font-semibold text-secondary">
-            {t("attention.popoverTitle")}
-          </div>
-          {needsYou.map((entry) => (entry.kind === "conversation" ? (
-            <AttentionQueueRow key={entry.id} item={entry.item} onOpen={() => jumpToEntry(entry)} />
-          ) : (
-            <AttentionLaneRow key={entry.id} row={entry.row} projectName={projectDisplayNames[entry.row.pipeline.project]} onOpen={() => jumpToEntry(entry)} />
-          )))}
-        </div>
-      ) : null}
+      {panelFloating ? panel("overlay") : null}
     </div>
   );
 
@@ -1438,6 +1503,7 @@ function ViewerApp() {
               crownedProjects={crownedProjects}
               selected={project}
               now={clock}
+              needsYouCounts={needsYouByProject}
               loaded={loaded}
               catalogFailures={catalogFailures}
               onSelect={selectProject}
@@ -1448,15 +1514,16 @@ function ViewerApp() {
         }
         if (name === "attention") {
           /* The Needs-you sheet (lane 8): the one list above, its rows opening
-             through the same hand-off a popover click performs (`jumpToItem`
-             moves the shared cycle pointer too, so «Next ›» here and N on a
-             desktop continue one sequence). A pipeline row opens the pipeline
-             screen (lane 7) on the same stack the board is on, so «Next ›»
-             walks both kinds and ‹ leaves the way the operator came in. */
+             through the same hand-off a panel click performs. A pipeline row
+             opens the pipeline screen (lane 7) on the same stack the board is
+             on, so ‹ leaves the way the operator came in. */
           return (
             <MobileAttentionSheet
               entries={shellEntries}
               now={clock}
+              pipelines={pipelines}
+              projectNames={projectDisplayNames}
+              current={project === OVERVIEW ? null : project}
               /* Over the Overview a row opens as a screen on its stack, as its
                  cards do (#2098); a project's own board focuses in place. */
               onOpenConversation={project === OVERVIEW ? (item) => {
@@ -1486,12 +1553,12 @@ function ViewerApp() {
         return null;
       },
     };
-  }, [isMobile, shellEntries, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, projectCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, loaded, catalogFailures, selectProject, createProject, jumpToItem, phoneNotices.unseen, noticeRows]);
+  }, [isMobile, shellEntries, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, projectCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, jumpToItem, phoneNotices.unseen, noticeRows]);
 
   const shell = (
     <div className="flex h-full">
       {isMobile || railHidden ? null : (
-        <ProjectRail onHide={toggleRail} files={files} projectCatalog={projectCatalog} projectDisplayNames={projectDisplayNames} pipelines={pipelines} workflows={workflows} archivedProjects={archivedProjects} crownedProjects={crownedProjects} selected={project} now={clock} loaded={loaded} catalogFailures={catalogFailures} onSelect={selectProject} onToggleCrown={toggleCrown} onCreateProject={createProject} />
+        <ProjectRail onHide={toggleRail} files={files} projectCatalog={projectCatalog} projectDisplayNames={projectDisplayNames} pipelines={pipelines} workflows={workflows} archivedProjects={archivedProjects} crownedProjects={crownedProjects} selected={project} now={clock} needsYouCounts={needsYouByProject} loaded={loaded} catalogFailures={catalogFailures} onSelect={selectProject} onToggleCrown={toggleCrown} onCreateProject={createProject} />
       )}
       {/* Hidden rail (issue #1819): one small control at the top-left edge of
           the main area brings it back, and nothing else of the rail is left on
@@ -1534,14 +1601,15 @@ function ViewerApp() {
           conversation took the difference for an open keyboard, and 42 px of
           empty band stayed under its composer. Clipping the slide here keeps the
           page the phone's width. */}
-      <main className={`flex min-w-0 flex-1 flex-col${isMobile ? " overflow-x-clip" : ""}`}>
+      <main ref={mainRef} className={`flex min-w-0 flex-1 flex-col${isMobile ? " overflow-x-clip" : ""}`}>
         {/* Desktop: the corner attention anchor — the badge pill sits where the
             toast appears, so a new toast visually docks into it (D7). On the
             phone the badge lives in the board header and the toast docks in flow
             below (see the mobile banner), so this fixed anchor is desktop-only. */}
         <BarIslandProvider island={isMobile ? null : (
-          /* On a project, top-[10px] centres the 28px island in the board's one
-             48px header bar (#1801), whose right 236px are reserved for it. The
+          /* On a project, top-2 centres the 32px bar controls of the island in
+             the board's one 48px header bar (#1801), whose right 236px are
+             reserved for it. The
              Overview keeps its 40px title row above its board bar, so there
              top-12 parks it in that bar's reserve instead, clear of the row.
              On a project the 16px gap drops the toast to y 54, clear of the
@@ -1549,7 +1617,10 @@ function ViewerApp() {
              the bar's last slot, after ⋯, so Tab reaches it where it is drawn;
              the text size and leading are the page's, which the board's own
              font would otherwise replace there. */
-          <div className={`pointer-events-none fixed right-4 ${project === OVERVIEW ? "top-12 gap-2" : "top-[10px] gap-4"} z-50 flex flex-col items-end text-[15px] leading-normal`}>
+          <div
+            className={`pointer-events-none fixed ${project === OVERVIEW ? "top-12 gap-2" : "top-2 gap-4"} z-50 flex flex-col items-end text-[15px] leading-normal`}
+            style={{ right: panelDocked ? PANEL_WIDTH + 16 : 16 }}
+          >
             {attentionBadge}
             {toastFile ? (
               <AttentionToast
@@ -1582,6 +1653,7 @@ function ViewerApp() {
             cached={cached}
             placesKnown={loaded && scopeCertified && !pendingHash}
             now={clock}
+            needsYouCounts={needsYouByProject}
             catalogFailures={catalogFailures}
             onSelectProject={selectProject}
             onOpenSearch={openSearch}
@@ -1626,6 +1698,7 @@ function ViewerApp() {
         )}
         </BarIslandProvider>
       </main>
+      {panelDocked ? panel("docked") : null}
       {/* Runtime connection pill — mounts the tab-wide bus and shows live /
           reconnecting / degraded / offline. Renders nothing while slice-one is
           disabled, so on the landing page it is inert. Docked bottom-left, clear

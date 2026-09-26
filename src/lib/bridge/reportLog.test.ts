@@ -7,7 +7,8 @@ import { mutateOperatorAsks, projectReportLogAsks, type OperatorAskRecord } from
 import { setBridgeReports } from "@/lib/projects/settings";
 
 import { readProjectReportLog, reportCardRefs, type ReportLogCard } from "./reportLog";
-import { acknowledgeBridgeReports, appendBridgeReports, BRIDGE_REPORT_PAGE_MAX, openBridgeChannel, pageBridgeReports, readBridgeChannel } from "./store";
+import { bridgeQuestionsForProject } from "./service";
+import { acknowledgeBridgeReports, appendBridgeReports, BRIDGE_REPORT_PAGE_MAX, openBridgeChannel, pageBridgeReports, readBridgeChannel, resolveBridgeAsks } from "./store";
 import type { BridgeReportInput } from "./types";
 
 /* The operator's report log (#2146): one project's bridge reports, newest
@@ -171,4 +172,24 @@ test("every ask line is reachable on a project with no bridge reports at all", (
   expect(new Set(lines).size).toBe(120);
   /* Each line comes once, newest first. */
   expect(lines).toHaveLength(120);
+});
+
+test("the page carries the project's questions from the needs-you projection, and a resolution moves its revision", () => {
+  sandbox();
+  const now = new Date(Date.UTC(2026, 8, 24, 8, 30));
+  const [open, resolved] = appendBridgeReports([
+    report(1, { class: "question", body: "Keep 25 MB?" }),
+    report(2, { class: "blocked", body: "Pick a base" }),
+    report(3, { class: "status", body: "Two lanes running" }),
+    report(4, { class: "question", body: "Another project's question", project: "repo-project-b", targetSeatConversationId: "conversation_seat_b" }),
+  ]).appended;
+  const questions = (inProject: (project: string) => boolean) => bridgeQuestionsForProject(inProject, { now });
+  const before = readProjectReportLog({ project: SCOPE.project }, { ...NO_CARDS, questions });
+  expect(before.questions).toEqual({ open: [open!.seq, resolved!.seq], resolved: [] });
+
+  resolveBridgeAsks([resolved!.seq], { by: { kind: "operator", surface: "desktop" }, at: now.toISOString() });
+  const after = readProjectReportLog({ project: SCOPE.project, since: before.revision }, { ...NO_CARDS, questions });
+  expect(after.unchanged).toBeUndefined();
+  expect(after.revision).not.toBe(before.revision);
+  expect(after.questions).toEqual({ open: [open!.seq], resolved: [{ seq: resolved!.seq, at: now.toISOString() }] });
 });
