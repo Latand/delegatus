@@ -4083,7 +4083,9 @@ async function flowAction(args: McpToolArgs, dependencies: ViewerMcpDomainDepend
     ? await dependencies.cancelRound(flowId)
     : action === "close"
       ? await dependencies.closeFlow(flowId)
-      : action === "pause" || action === "resume"
+      /* set-roles carries the actor so the sizing rules judge the agent's
+         reviewer (docs/design/model-sizing-tiers.md §2). */
+      : action === "pause" || action === "resume" || action === "set-roles"
         ? dependencies.patchFlow(flowId, request, pauseResumeActorOf(dependencies))
         : dependencies.patchFlow(flowId, request);
   if (!result.flow) throw new Error(result.error ?? "could not update flow");

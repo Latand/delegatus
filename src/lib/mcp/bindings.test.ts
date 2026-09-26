@@ -1082,6 +1082,13 @@ test("flow tools read durable flows and return a stable action receipt", async (
     action: "pause",
     actor: { kind: "agent", role: "reviewer", conversationId: "conversation_reviewer" },
   }]);
+  /* set-roles carries the agent too, so the sizing rules judge its reviewer. */
+  await bindings.flow_action({ clientRequestId: "set-roles-flow", flowId: "flow_open", action: "set-roles", roles: { reviewer: { engine: "claude", model: "sonnet" } } });
+  expect(actions.at(-1)).toEqual({
+    id: "flow_open",
+    action: "set-roles",
+    actor: { kind: "agent", role: "reviewer", conversationId: "conversation_reviewer" },
+  });
 });
 
 test("list_pipelines applies project, state, and closed filters to the durable registry", async () => {

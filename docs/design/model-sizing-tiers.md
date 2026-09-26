@@ -261,6 +261,7 @@ Call sites, each with the caller it already knows:
 | add-stage, override-stage | `patchPipeline` (`engine.ts:7227`), after `resolvePipelineRole` | the `actor`: `operator`, or the agent's `conversationId`, falling back to `pipeline.srcConversationId` |
 | spawn | `spawnCommand.ts:306`, after `resolveSpawnRole`; the same check in `/api/spawn/validate` (`spawnAdmissionValidation.ts`) so the validator never admits what the route refuses | `authenticatedCaller` (`operator` when absent or operator-capability) |
 | MCP `spawn_agent` (*built*) | `bindings.ts`, before dispatch | the attributed conversation, else `parentConversationId`. MCP dispatches reach `/api/spawn` same-origin on the **operator** capability, so the route alone would read every seat's spawn as the operator's; the binding knows the caller and judges it before anything is dispatched, on every dispatch: the service hands a recoverable spawn its persisted request binding on the first dispatch, so a check that skipped bound calls would skip every real one, and a replay is answered from the receipt without reaching the binding |
+| implement-review flow reviewer (*built*) | `patchFlow` set-roles and `createFlowFromRequest` (`src/lib/flows/commands.ts`), before the catalog check so a dated `claude-sonnet-5` reads as Sonnet | R1 only, when the actor is an agent. The flow engine launches its reviewer itself (`prepareReviewerLaunch`, `launchReviewer`), never through a spawn seam, so the role is judged where it is written. MCP `flow_action set-roles` passes the calling agent as it does for pause and resume; `POST /api/flows` reads its caller the way pipeline create does. `PATCH /api/flows/:id` stays operator-attributed, as `PATCH /api/pipelines/:id` does: only the operator's own panels call it. A pipeline's review-loop stage creates its flow as the Viewer, after the stage was judged at pipeline create |
 | mapping write | `parseRoleMappingPatch` / `saveRoleMapping` (`store.ts:155-221`) | R1 only, for every writer: a mapping row is a standing default that agents then launch |
 | orchestrator seat (*built*) | `runOrchestratorSeatRequest` (`seatCommand.ts`), after `resolveSpawnRole` and before the durable intent | R1 only, when the request's `triggeredBy` is an agent. `rotate_orchestrator` admits every caller and names it, so an agent could otherwise hand the seat to Sonnet. A rotation that names no runtime continues the incumbent's, which only the operator could have chosen, and passes. `create_orchestrator` reaches the seat route, which refuses an agent before reading the body |
 
@@ -514,6 +515,8 @@ Run each file by path, never a directory sweep (AGENTS.md).
   `src/lib/agent/spawnAdmissionValidation.ts` — the same refusal in
   `/api/spawn/validate`; `src/lib/agent/conversationRuntime.ts` (new) — the
   briefer's runtime from the registry.
+- `src/lib/flows/commands.ts`, `src/app/api/flows/route.ts` — R1 on a flow
+  reviewer an agent writes; `bindings.ts` passes the actor into set-roles.
 - `src/lib/mcp/compactAnswers.ts` — `role`, `variant`, `runtimeLine`.
 - `src/lib/orchestrator/prompt.ts` — role table rows and bullets, resets.
 - `src/app/api/roles/route.ts` — `shipped` variants for every role, `resets`.
@@ -533,7 +536,8 @@ Run each file by path, never a directory sweep (AGENTS.md).
    design and maps each size to roles; the launch answers carry the runtime
    line the seat quotes with its reason.
 3. Sonnet deny list: R1 at every launch seam, on review gates whatever role
-   they name, on an agent-triggered seat designation, and at the mapping writer.
+   they name, on an agent-triggered seat designation, on a flow reviewer an
+   agent sets, and at the mapping writer.
 4. Prose on Claude: `domain=docs` ships on Claude Opus, and wins over the fix
    round so fix stages stay on Claude.
 5. Stale overrides: normalize plus a once-per-install retirement of the named
