@@ -256,7 +256,10 @@ const Sep = () => <span aria-hidden className="shrink-0 opacity-60">·</span>;
     (P2-8). */
 function askDetail(item: PhoneCard): string | null {
   if (item.need?.kind !== "conversation") return null;
-  return item.need.member.file.pendingQuestion?.questions?.[0]?.question?.trim() || null;
+  const file = item.need.member.file;
+  /* An agent that asked in prose ("Asks you"): the sentence that asks. */
+  const asked = item.need.state.badge === "ask" ? file.operatorAsk?.gist?.trim() : null;
+  return file.pendingQuestion?.questions?.[0]?.question?.trim() || asked || null;
 }
 
 /** What a conversation that asks nothing still has to say about itself: a

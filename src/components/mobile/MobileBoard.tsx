@@ -144,6 +144,7 @@ export const BADGE_LABEL = {
   permission: "attention.decisionPermission",
   delivery: "needs.delivery",
   launch: "needs.launch",
+  ask: "needs.ask",
 } as const;
 
 /** A conversation as a phone row: the board's, and the task screen's agents

@@ -102,6 +102,7 @@ import { boundFlowExpansions } from "./scheme/placementHorizon";
 import { ArchiveRestore } from "./icons";
 import { KeepAwakeMenuRow } from "./KeepAwakeControl";
 import { ArchiveProjectButton, DeleteProjectButton } from "./ProjectTrash";
+import { AsksYouRow } from "./AsksYouRow";
 import { BridgeReportsRow } from "./BridgeReportsRow";
 import { MergeOnReviewRow } from "./MergeOnReviewRow";
 import { SoundToggle } from "./SoundToggle";
@@ -2062,6 +2063,9 @@ function ProjectDashboardView({
       { kind: "divider", key: "d-merge" },
       { kind: "custom", key: "merge-on-review", node: <MergeOnReviewRow project={project} variant="sheet" /> },
       { kind: "custom", key: "bridge-reports", node: <BridgeReportsRow project={project} variant="sheet" /> },
+      /* "Asks you" is the installation's, not the project's; it sits here
+         because this is where the operator looks for what reports to them. */
+      { kind: "custom", key: "asks-you", node: <AsksYouRow variant="sheet" /> },
     );
     if (archived) {
       entries.push({ kind: "divider", key: "d4" }, {
@@ -2138,6 +2142,7 @@ function ProjectDashboardView({
             <BarMenuGroup name="project">
               <MergeOnReviewRow project={project} variant="menu" />
               <BridgeReportsRow project={project} variant="menu" />
+              <AsksYouRow variant="menu" />
               {archived ? (
                 <button type="button" className={BAR_MENU_ROW} data-project-unarchive="" onClick={() => { close(); onUnarchive(project); }}>
                   <ArchiveRestore className="h-[15px] w-[15px]" aria-hidden /> {t("dash.unarchive")}

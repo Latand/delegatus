@@ -1,6 +1,7 @@
 import { BRIDGE_ASK_TTL_SECONDS } from "@/lib/bridge/types";
 import { permissionHeadline } from "@/lib/runtime/permissionRequests";
 import type { AttentionDismissalMark, ConversationReasonKind } from "@/lib/attention/dismissalTypes";
+import type { OperatorAskMark } from "@/lib/asks/types";
 import type { BridgeAsk, FileEntry } from "@/lib/types";
 import { DELIVERY_UNCERTAIN_MS, DELIVERY_WAIT_HELD_MS } from "@/components/runtime/deliveryWait";
 
@@ -143,6 +144,24 @@ export function failedOperatorLaunch(file: FileEntry): number | null {
 }
 
 /**
+ * The agent's open ask of the operator ("Asks you",
+ * docs/research/attention-classifier.md §7), or null once it is answered or
+ * moot. It is the last text of a turn the classifier judged an ask, and it
+ * stays open only while that text still ends the conversation: a newer turn
+ * means the operator (or someone) wrote to the agent, a newer agent message or
+ * a turn in progress means the agent moved on.
+ */
+export function openOperatorAsk(file: FileEntry): OperatorAskMark | null {
+  const ask = file.operatorAsk;
+  if (!ask) return null;
+  if (file.activity === "live") return null;
+  const turn = file.lastTurn;
+  if (turn && (turn.endedAt === null || turn.startedAt > ask.messageAt)) return null;
+  if (typeof file.lastAssistantMessageAt === "number" && file.lastAssistantMessageAt > ask.messageAt) return null;
+  return ask;
+}
+
+/**
  * Epoch seconds at which the queue changes on its own, with nothing polled
  * moving: an orchestrator ask crossing its TTL, an owed message crossing the
  * half hour. `/api/files` keeps the array identity while its body is
@@ -205,7 +224,8 @@ export function dismissalCovers(reason: Pick<ConversationReason, "id" | "raisedA
  * orchestrator's open bridge ask, then a structured question or plan, a
  * structured host's tool permission request, the screen-scrape permission
  * fallback, an owed message delivery, and a launch
- * that failed before it ran (#2170). Null when none of them holds. A
+ * that failed before it ran (#2170), and last an agent that asked the operator
+ * in prose ("Asks you"). Null when none of them holds. A
  * dismissed reason is still returned, with its
  * `dismissal`, so a card can say who cleared it; `attentionId` is what counts.
  *
@@ -295,6 +315,13 @@ function undismissedReason(file: FileEntry, now: number): ConversationReason | n
       header: file.spawn?.error?.trim().split("\n", 1)[0] || null,
       dismissal: null,
     };
+  }
+  /* Last: an inference from the agent's own words, below every structured
+     signal (docs/research/attention-classifier.md §7.3). */
+  const operatorAsk = openOperatorAsk(file);
+  if (operatorAsk) {
+    const at = operatorAsk.messageAt / 1000;
+    return { kind: "ask", id: operatorAsk.id, since: at, raisedAt: at, clocked: true, header: operatorAsk.gist || null, dismissal: null };
   }
   return null;
 }

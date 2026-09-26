@@ -1,3 +1,4 @@
+import type { ReportLogAsk } from "@/lib/asks/types";
 import type { ReportLogCard, ReportLogEntry } from "@/lib/bridge/reportLog";
 
 /*
@@ -108,4 +109,41 @@ export function mergeNewest(
   const oldest = page.entries.at(-1);
   if (page.nextBefore !== null && oldest && oldest.seq > head) return { entries: [...page.entries], nextBefore: page.nextBefore };
   return { entries: [...fresh, ...held], nextBefore: heldBefore };
+}
+
+/** Ask lines held and arrived, one per id, newest first. */
+export function mergeAsks(held: readonly ReportLogAsk[], incoming: readonly ReportLogAsk[]): ReportLogAsk[] {
+  if (!incoming.length) return [...held];
+  const byId = new Map(held.map((ask) => [ask.id, ask] as const));
+  for (const ask of incoming) byId.set(ask.id, ask);
+  return [...byId.values()].sort((left, right) => Date.parse(right.at) - Date.parse(left.at) || left.id.localeCompare(right.id));
+}
+
+export type ReportLogRow =
+  | { kind: "report"; key: string; entry: ReportLogEntry }
+  | { kind: "ask"; key: string; ask: ReportLogAsk };
+
+/**
+ * The log as one timeline, newest first: the orchestrator's reports and the
+ * Viewer's ask lines by time. An ask older than the oldest report held waits
+ * for the page that reaches it, unless every report is already held, so a
+ * line never shows out of its place.
+ */
+export function reportLogRows(entries: readonly ReportLogEntry[], asks: readonly ReportLogAsk[], complete: boolean): ReportLogRow[] {
+  const oldest = entries.at(-1);
+  const floor = !complete && oldest ? Date.parse(oldest.at) : Number.NEGATIVE_INFINITY;
+  const rows: { at: number; row: ReportLogRow }[] = [
+    ...entries.map((entry) => ({ at: Date.parse(entry.at), row: { kind: "report" as const, key: `r:${entry.seq}`, entry } })),
+    ...asks
+      .filter((ask) => Date.parse(ask.at) >= floor)
+      .map((ask) => ({ at: Date.parse(ask.at), row: { kind: "ask" as const, key: `a:${ask.id}`, ask } })),
+  ];
+  return rows
+    .sort((left, right) => (right.at || 0) - (left.at || 0) || (left.row.kind === right.row.kind ? 0 : left.row.kind === "report" ? -1 : 1))
+    .map((item) => item.row);
+}
+
+/** Where an ask line's link goes: the conversation, by its durable id. */
+export function askHref(ask: Pick<ReportLogAsk, "conversationId" | "path">): string {
+  return ask.conversationId ? `#c=${encodeURIComponent(ask.conversationId)}` : `#f=${encodeURIComponent(ask.path)}`;
 }

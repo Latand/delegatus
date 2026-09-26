@@ -198,3 +198,42 @@ test("with bridge reports off the panel is one line and the switch, which turns 
   expect(host.querySelector("[data-report-log-off]")).toBeNull();
   expect([...host.querySelectorAll("[data-report-entry]")].map((row) => row.getAttribute("data-report-entry"))).toEqual(["2", "1"]);
 });
+
+test("an agent that asked the operator is one line by time among the reports, and its name opens that conversation", async () => {
+  const ask = {
+    id: "ask:conv-builder-1:claude:msg-1",
+    at: new Date(Date.UTC(2026, 8, 24, 9, 2, 30)).toISOString(),
+    conversationId: "conv-builder-1",
+    path: "/transcripts/builder.jsonl",
+    role: "builder",
+    title: "Migrate the ledger",
+    gist: "Should I merge it now, or wait for the review round?",
+  };
+  pages = [page([entry(3), entry(2), entry(1)], { asks: [ask] })];
+  const host = mount();
+  await settle();
+
+  const rows = [...host.querySelectorAll("[data-report-log-entries] > li")];
+  expect(rows.map((row) => row.getAttribute("data-report-entry") ?? `ask:${row.getAttribute("data-report-ask")}`)).toEqual(["3", `ask:${ask.id}`, "2", "1"]);
+  const line = host.querySelector(`[data-report-ask='${ask.id}']`)!;
+  expect(line.querySelector("[data-report-class-label]")!.textContent).toBe("needs you");
+  expect(line.querySelector("p")!.textContent).toBe("Builder asks you: Should I merge it now, or wait for the review round?");
+  const link = line.querySelector("a[data-report-link=conversation]")!;
+  expect(link.textContent).toBe("Builder");
+  expect(link.getAttribute("href")).toBe("#c=conv-builder-1");
+
+  /* The link is the Viewer's own deep link: following it opens the conversation. */
+  (link as HTMLAnchorElement).click();
+  expect(window.location.hash).toBe("#c=conv-builder-1");
+});
+
+test("ask lines stay when the orchestrator's bridge reports are off: they are the Viewer's, not its", async () => {
+  const ask = { id: "ask:conv-2:claude:m", at: entry(2).at, conversationId: null, path: "/transcripts/two.jsonl", role: null, title: "Logo variants", gist: "" };
+  pages = [page([entry(2)], { bridgeReports: false, asks: [ask] })];
+  const host = mount();
+  await settle();
+  expect(host.querySelector("[data-report-log-off]")).not.toBeNull();
+  const line = host.querySelector(`[data-report-ask='${ask.id}']`)!;
+  expect(line.querySelector("p")!.textContent).toBe("Logo variants asks you");
+  expect(line.querySelector("a")!.getAttribute("href")).toBe("#f=%2Ftranscripts%2Ftwo.jsonl");
+});

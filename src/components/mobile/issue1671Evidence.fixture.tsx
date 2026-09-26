@@ -8,7 +8,7 @@
  */
 import { createRoot } from "react-dom/client";
 
-import { reportLogFixturePage } from "@/components/orchestrator/reportLog/reportLogEvidence.fixture";
+import { asksYouFixtureLines, asksYouFixtureSetting, reportLogFixturePage } from "@/components/orchestrator/reportLog/reportLogEvidence.fixture";
 import { Viewer } from "@/components/Viewer";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -302,7 +302,14 @@ const NOTICE = new URLSearchParams(location.search).has("notice");
    the title suggests, uncoloured with an icon, and with no icon at all, both
    coloured and not, under titles long enough to wrap. */
 const ICONS_SCENE = new URLSearchParams(location.search).has("icons");
-const KANBAN = new URLSearchParams(location.search).has("kanban") || OVERVIEW_SCENE || NEEDS_SCENE || ICONS_SCENE;
+/* "Asks you" (`?asks=1`, docs/research/attention-classifier.md §7): the kanban
+   scene with the switch on, two agents that ended their turn asking the
+   operator (one in English, one in Ukrainian) and their lines in the seat's
+   report log. Every other scene answers the switch off. */
+const ASKS_SCENE = new URLSearchParams(location.search).has("asks");
+const asksSetting = { enabled: ASKS_SCENE };
+const asksLines: Array<{ conversationId: string; path: string; role: string | null; title: string; gist: string; minutesAgo: number }> = [];
+const KANBAN = new URLSearchParams(location.search).has("kanban") || OVERVIEW_SCENE || NEEDS_SCENE || ICONS_SCENE || ASKS_SCENE;
 const kanbanFiles: FileEntry[] = [];
 const kanbanLinks: { pipelines: Record<string, unknown>; tasks: Record<string, unknown> } = { pipelines: {}, tasks: {} };
 /* A resolved role names its engine, as a stored one does. */
@@ -471,6 +478,28 @@ if (KANBAN) {
     kanbanTask("t-attention", "inbox", "request_attention: the target blinks, intent open opens the conversation (#1696)", { updatedAt: iso(86_400) }),
     kanbanTask("t-tray", "inbox", "Hide the Hidden tray when it holds nothing", { color: "amber", updatedAt: iso(5 * 3_600) }),
   );
+  if (ASKS_SCENE) {
+    const asked = (title: string, role: string, gist: string, minutesAgo: number) => {
+      const path = kanbanConversation(title, "settled", minutesAgo * 60);
+      const messageAt = (now - minutesAgo * 60) * 1_000;
+      const conversationId = idOf(path);
+      Object.assign(kanbanFiles.find((entry) => entry.path === path)!, {
+        activity: "recent", proc: "running",
+        lastTurn: { startedAt: messageAt - 14 * 60_000, endedAt: messageAt },
+        lastAssistantMessageAt: messageAt,
+        operatorAsk: { id: `ask:${conversationId}:fixture`, messageAt, gist },
+        durableLineage: { kind: "spawn", role, parentConversationId: null, reviewsConversationId: null, memberships: [] },
+      });
+      asksLines.push({ conversationId, path, role, title, gist, minutesAgo });
+      return path;
+    };
+    const cache = asked("Choose the cache eviction policy", "builder", "Evict by size or by age? Say which and I finish the migration.", 4);
+    const logs = asked("Скоротити зберігання логів на стейджі", "architect", "Лишити 14 днів логів чи 30? Скажіть, і я допишу міграцію.", 38);
+    kanbanTasks.push(
+      kanbanTask("t-cache", "assigned", "Choose the cache eviction policy", { assignments: [kanbanAssign(cache)] }),
+      kanbanTask("t-logs", "assigned", "Скоротити зберігання логів на стейджі", { assignments: [kanbanAssign(logs)] }),
+    );
+  }
   kanbanConversation("Audit the release notes for dead anchors", "stalled", 2_220);
   kanbanConversation("Measure the board's memory on a 390 px phone", "stalled", 2_230);
   kanbanConversation("Draft the Copilot engine login flow", "stalled", 2_280);
@@ -833,7 +862,15 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ...(kanbanTasks as Array<{ id: string }>).map((task) => [task.id, "task"] as const),
       ...kanbanPipelines.map((pipeline) => [pipeline.id, "pipeline"] as const),
     ]);
-    return json(reportLogFixturePage(url, { project: PROJECT, github: "example/atlas", enabled: bridgeSetting.enabled, knownCards: known }));
+    return json(reportLogFixturePage(url, { project: PROJECT, github: "example/atlas", enabled: bridgeSetting.enabled, knownCards: known, asks: asksYouFixtureLines(now * 1_000, asksLines) }));
+  }
+  /* "Asks you": the installation's switch and this month's spend. */
+  if (url.pathname === "/api/asks-you") {
+    if (method === "PUT") {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { enabled?: unknown };
+      if (typeof body.enabled === "boolean") asksSetting.enabled = body.enabled;
+    }
+    return json({ ok: true, ...asksYouFixtureSetting(asksSetting.enabled) });
   }
   if (KANBAN && url.pathname === "/api/tasks" && method === "GET") return json({ tasks: kanbanTasks });
   /* #2166 §3.8 (`&walk=1`): an install whose onboarding marker has never run

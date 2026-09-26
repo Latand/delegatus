@@ -86,6 +86,9 @@ function decisionText(t: TFunction, reason: ConversationReason): string {
        back in on (#2170). */
     case "launch":
       return reason.header ? t("attention.decisionLaunchReason", { reason: reason.header }) : t("attention.decisionLaunch");
+    /* The agent's own sentence, as it asked it. */
+    case "ask":
+      return reason.header ? t("attention.decisionAskNamed", { ask: reason.header }) : t("needs.ask");
   }
 }
 
@@ -140,6 +143,8 @@ export function conversationNeedText(t: TFunction, reason: Pick<ConversationReas
       return t("needs.delivery");
     case "launch":
       return t("needs.launch");
+    case "ask":
+      return t("needs.ask");
   }
 }
 

@@ -4,11 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { getRuntimeBus, isRuntimeUiEnabled } from "@/hooks/runtimeBus";
 import { filesPollCadence } from "@/hooks/useFiles";
+import type { ReportLogAsk } from "@/lib/asks/types";
 import type { ReportLogEntry, ReportLogPage } from "@/lib/bridge/reportLog";
 import { documentHidden } from "@/lib/client/hiddenTraffic";
 
 import { noteBridgeReportsSetting } from "./bridgeReportsSetting";
-import { mergeNewest } from "./reportLogModel";
+import { mergeAsks, mergeNewest } from "./reportLogModel";
 
 /** One page of the log. */
 export const REPORT_LOG_PAGE = 30;
@@ -19,6 +20,8 @@ const FALLBACK_POLL_MS = 10_000;
 
 export interface ReportLogRead {
   entries: ReportLogEntry[];
+  /** The Viewer's "Asks you" lines, newest first. */
+  asks: ReportLogAsk[];
   /** Null until the first page answers. */
   loaded: boolean;
   failed: boolean;
@@ -55,13 +58,14 @@ async function fetchPage(url: string): Promise<ReportLogPage | null> {
  */
 export function useReportLog(project: string, active: boolean, initial?: ReportLogPage): ReportLogRead {
   const [entries, setEntries] = useState<ReportLogEntry[]>(() => initial?.entries ?? []);
+  const [asks, setAsks] = useState<ReportLogAsk[]>(() => initial?.asks ?? []);
   const [nextBefore, setNextBefore] = useState<number | null>(initial?.nextBefore ?? null);
   const [loaded, setLoaded] = useState(Boolean(initial));
   const [failed, setFailed] = useState(false);
   const [bridgeReports, setBridgeReports] = useState<boolean | null>(initial?.bridgeReports ?? null);
   const [github, setGithub] = useState<string | null>(initial?.github ?? null);
   const [loadingOlder, setLoadingOlder] = useState(false);
-  const held = useRef({ entries, nextBefore, revision: initial?.revision ?? null as string | null, project });
+  const held = useRef({ entries, asks, nextBefore, revision: initial?.revision ?? null as string | null, project });
 
   const refresh = useCallback(async () => {
     const asked = project;
@@ -82,7 +86,10 @@ export function useReportLog(project: string, active: boolean, initial?: ReportL
     const merged = mergeNewest(held.current.entries, held.current.nextBefore, page);
     held.current.entries = merged.entries;
     held.current.nextBefore = merged.nextBefore;
+    /* A server from before the ask lines answers none. */
+    held.current.asks = mergeAsks(held.current.asks, page.asks ?? []);
     setEntries(merged.entries);
+    setAsks(held.current.asks);
     setNextBefore(merged.nextBefore);
   }, [project]);
 
@@ -133,13 +140,16 @@ export function useReportLog(project: string, active: boolean, initial?: ReportL
       const known = new Set(held.current.entries.map((entry) => entry.seq));
       held.current.entries = [...held.current.entries, ...page.entries.filter((entry) => !known.has(entry.seq))];
       held.current.nextBefore = page.nextBefore;
+      held.current.asks = mergeAsks(held.current.asks, page.asks ?? []);
       setEntries(held.current.entries);
+      setAsks(held.current.asks);
       setNextBefore(page.nextBefore);
     });
   }, [project, loadingOlder]);
 
   return {
     entries,
+    asks,
     loaded,
     failed,
     bridgeReports,

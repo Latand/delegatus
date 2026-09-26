@@ -1,0 +1,326 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { attentionId, attentionReason } from "@/components/attention";
+import { conversationNeedText, decisionLine } from "@/components/attention/decision";
+import { askHref } from "@/components/orchestrator/reportLog/reportLogModel";
+import { readProjectReportLog } from "@/lib/bridge/reportLog";
+import { translate, type TFunction } from "@/lib/i18n";
+import { finalAssistantMessageFromRecords, type FinalAssistantMessage } from "@/lib/scanner/lastAssistantMessage";
+import type { FileEntry } from "@/lib/types";
+
+import { estimatedJevCostUsd, JevError, type JevVerdict } from "./jev";
+import { overlayOperatorAsks } from "./overlay";
+import { writeAsksYouSettings } from "./settings";
+import { mutateOperatorAsks, operatorAsksSignature, projectReportLogAsks, readOperatorAsks } from "./store";
+import { runAskSweep, type AskCandidate, type AskSweepPorts } from "./sweep";
+
+/*
+ * "Asks you" end to end, with the classifier stubbed (docs/research/attention-classifier.md
+ * §7): the sweep sends the last message of a turn, the answer lands in the
+ * store, `/api/files` stamps it on the conversation, the reason model names it
+ * on the card, and the project's report log carries one line whose link opens
+ * that conversation.
+ */
+
+const t: TFunction = (key, params) => translate("en", key, params);
+const tUk: TFunction = (key, params) => translate("uk", key, params);
+
+const PROJECT = "repo-widgets";
+const CONVERSATION = "conv-builder-1";
+const TRANSCRIPT = "/transcripts/builder.jsonl";
+const NOW = Date.UTC(2026, 8, 26, 12, 0, 0);
+const MESSAGE_AT = NOW - 60_000;
+const ASKING = "The migration is ready on the branch and the checks are green.\n\nShould I merge it now, or wait for the review round?";
+const ROUTINE = "Ran the suite again; all 42 tests pass and the branch is pushed. Moving on to the next file.";
+
+let stateDir = "";
+let previousStateDir: string | undefined;
+
+beforeEach(() => {
+  previousStateDir = process.env.LLV_STATE_DIR;
+  stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-asks-you-"));
+  process.env.LLV_STATE_DIR = stateDir;
+  writeAsksYouSettings({ enabled: true }, new Date(NOW - 3_600_000));
+});
+
+afterEach(() => {
+  if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
+  else process.env.LLV_STATE_DIR = previousStateDir;
+  fs.rmSync(stateDir, { recursive: true, force: true });
+});
+
+function candidate(overrides: Partial<AskCandidate> = {}): AskCandidate {
+  return {
+    subject: CONVERSATION,
+    conversationId: CONVERSATION,
+    path: TRANSCRIPT,
+    project: PROJECT,
+    role: "builder",
+    title: "Migrate the ledger",
+    working: false,
+    structuredAsk: false,
+    lastTurnStartedAt: MESSAGE_AT - 120_000,
+    ...overrides,
+  };
+}
+
+function message(text: string, overrides: Partial<FinalAssistantMessage> = {}): FinalAssistantMessage {
+  return { id: "claude:msg-1", text, ts: MESSAGE_AT, engineError: false, ...overrides };
+}
+
+function verdict(score: number, costUsd = 0.00004): JevVerdict {
+  return { score, answers: { asks: score, waiting: 0.1, decision: 0.1 }, costUsd, inputTokens: 900 };
+}
+
+/** The ports production wires, over the real store, with the classifier stubbed. */
+function ports(overrides: Partial<AskSweepPorts> & { text?: string; classify?: AskSweepPorts["classify"] } = {}): AskSweepPorts & { calls: string[] } {
+  const calls: string[] = [];
+  const text = overrides.text ?? ASKING;
+  const classify = overrides.classify ?? (async () => verdict(0.93));
+  return {
+    now: () => new Date(NOW),
+    enabled: true,
+    enabledSince: NOW - 3_600_000,
+    capUsd: 1,
+    apiKey: "test-key",
+    candidates: [candidate()],
+    finalMessage: () => message(text),
+    read: () => readOperatorAsks(undefined, new Date(NOW)),
+    write: (mutation) => { mutateOperatorAsks(mutation, new Date(NOW)); },
+    ...overrides,
+    classify: async (body, key) => {
+      calls.push(body);
+      return classify(body, key);
+    },
+    calls,
+  };
+}
+
+/** The conversation's board entry as `/api/files` builds it, turn ended. */
+function entry(overrides: Partial<FileEntry> = {}): FileEntry {
+  return {
+    path: TRANSCRIPT,
+    root: "claude-projects",
+    name: "builder.jsonl",
+    project: PROJECT,
+    title: "Migrate the ledger",
+    engine: "claude",
+    kind: "session",
+    fmt: "claude",
+    parent: null,
+    mtime: MESSAGE_AT / 1000,
+    size: 10,
+    activity: "recent",
+    proc: "running",
+    pid: null,
+    model: "opus",
+    pendingQuestion: null,
+    waitingInput: null,
+    conversationId: CONVERSATION,
+    lastTurn: { startedAt: MESSAGE_AT - 120_000, endedAt: MESSAGE_AT },
+    lastAssistantMessageAt: MESSAGE_AT,
+    durableLineage: { kind: "spawn", role: "builder", parentConversationId: null, reviewsConversationId: null, memberships: [] },
+    ...overrides,
+  } as FileEntry;
+}
+
+function projected(file: FileEntry = entry()): FileEntry {
+  overlayOperatorAsks([file]);
+  return file;
+}
+
+function reportLog() {
+  return readProjectReportLog({ project: PROJECT }, {
+    knownCards: () => new Map(),
+    asks: (inProject, since, limit) => projectReportLogAsks(inProject, since, limit),
+    asksRevision: () => operatorAsksSignature(),
+  });
+}
+
+describe("an agent whose turn ends asking the operator", () => {
+  test("raises an «asks you» reason on its card and one report-log line that opens its conversation", async () => {
+    const sweep = ports();
+    const result = await runAskSweep(sweep);
+    expect(sweep.calls).toHaveLength(1);
+    expect(result.asks).toHaveLength(1);
+
+    const file = projected();
+    const reason = attentionReason(file, NOW / 1000)!;
+    expect(reason.kind).toBe("ask");
+    expect(reason.header).toBe("Should I merge it now, or wait for the review round?");
+    expect(attentionId(file, NOW / 1000)).toBe(reason.id);
+    expect(conversationNeedText(t, reason)).toBe("asks you");
+    expect(conversationNeedText(tUk, reason)).toBe("питає вас");
+    expect(decisionLine(t, file, NOW / 1000)).toBe("asks you: Should I merge it now, or wait for the review round? · Builder");
+
+    const log = reportLog();
+    expect(log.asks).toHaveLength(1);
+    const line = log.asks![0]!;
+    expect(line).toMatchObject({ id: reason.id, conversationId: CONVERSATION, role: "builder", gist: "Should I merge it now, or wait for the review round?" });
+    expect(line.at).toBe(new Date(MESSAGE_AT).toISOString());
+    expect(askHref(line)).toBe(`#c=${CONVERSATION}`);
+    /* Never a bridge report: the orchestrator's log and the relay see nothing. */
+    expect(log.entries).toHaveLength(0);
+  });
+
+  test("is sent once: the next sweep neither calls again nor adds a second line", async () => {
+    await runAskSweep(ports());
+    const again = ports();
+    await runAskSweep(again);
+    expect(again.calls).toHaveLength(0);
+    expect(readOperatorAsks().asks).toHaveLength(1);
+    expect(reportLog().asks).toHaveLength(1);
+  });
+
+  test("clears when the operator answers, when the agent speaks again or works, and on a dismissal", async () => {
+    await runAskSweep(ports());
+    expect(attentionReason(projected(), NOW / 1000)?.kind).toBe("ask");
+    expect(attentionReason(projected(entry({ lastTurn: { startedAt: MESSAGE_AT + 5_000, endedAt: null }, activity: "live" })), NOW / 1000)).toBeNull();
+    expect(attentionReason(projected(entry({ lastTurn: { startedAt: MESSAGE_AT + 5_000, endedAt: MESSAGE_AT + 9_000 } })), NOW / 1000)).toBeNull();
+    expect(attentionReason(projected(entry({ lastAssistantMessageAt: MESSAGE_AT + 1_000 })), NOW / 1000)).toBeNull();
+    const reason = attentionReason(projected(), NOW / 1000)!;
+    const dismissed = projected();
+    dismissed.attentionDismissal = { at: new Date(NOW).toISOString(), by: { kind: "operator", surface: "desktop" }, reasonId: reason.id };
+    expect(attentionId(dismissed, NOW / 1000)).toBeNull();
+  });
+
+  test("stays below every structured reason the conversation carries", async () => {
+    await runAskSweep(ports());
+    const file = projected(entry({ pendingPermission: { id: "perm-1", tool: "Bash", since: new Date(MESSAGE_AT).toISOString() } as FileEntry["pendingPermission"] }));
+    expect(attentionReason(file, NOW / 1000)?.kind).toBe("permission");
+  });
+
+  test("turning the switch off takes the reason off every card", async () => {
+    await runAskSweep(ports());
+    writeAsksYouSettings({ enabled: false }, new Date(NOW));
+    const file = projected();
+    expect(file.operatorAsk).toBeUndefined();
+    expect(attentionReason(file, NOW / 1000)).toBeNull();
+  });
+});
+
+describe("an agent whose turn ends without asking", () => {
+  test("produces nothing: no reason, no log line", async () => {
+    const sweep = ports({ text: ROUTINE, classify: async () => verdict(0.12) });
+    const result = await runAskSweep(sweep);
+    expect(sweep.calls).toHaveLength(1);
+    expect(result.asks).toHaveLength(0);
+    const file = projected();
+    expect(file.operatorAsk).toBeUndefined();
+    expect(attentionReason(file, NOW / 1000)).toBeNull();
+    expect(reportLog().asks).toEqual([]);
+  });
+
+  test("a stage ending, a short line or an engine error is never sent", async () => {
+    for (const [id, text, engineError] of [
+      ["claude:a", "All done.\n\nREVIEW_READY: https://example.invalid/pull/1", false],
+      ["claude:b", "Merged.", false],
+      ["claude:c", "API Error: 529 overloaded, the request could not be completed", true],
+    ] as const) {
+      const sweep = ports({ finalMessage: () => message(text, { id, engineError }) });
+      await runAskSweep(sweep);
+      expect(sweep.calls).toHaveLength(0);
+    }
+    expect(readOperatorAsks().asks).toHaveLength(0);
+  });
+
+  test("a message from before the latest turn, from before the switch, or still being written is never sent", async () => {
+    for (const overrides of [
+      { candidates: [candidate({ lastTurnStartedAt: MESSAGE_AT + 1 })] },
+      { enabledSince: MESSAGE_AT + 1 },
+      { candidates: [candidate({ working: true })] },
+      { candidates: [candidate({ structuredAsk: true })] },
+      { enabled: false },
+      { apiKey: null },
+    ] satisfies Partial<AskSweepPorts>[]) {
+      const sweep = ports(overrides);
+      await runAskSweep(sweep);
+      expect(sweep.calls).toHaveLength(0);
+    }
+  });
+});
+
+describe("the monthly cap", () => {
+  test("stops calls once this month's spend would pass it, and counts what it left unclassified", async () => {
+    const estimate = estimatedJevCostUsd(ASKING);
+    const two = [candidate(), candidate({ subject: "conv-2", conversationId: "conv-2", path: "/transcripts/two.jsonl" })];
+    const sweep = ports({
+      candidates: two,
+      capUsd: estimate * 1.5,
+      finalMessage: (target) => message(`${ASKING} (${target.subject})`, { id: `claude:${target.subject}` }),
+      classify: async () => verdict(0.93, estimate),
+    });
+    const result = await runAskSweep(sweep);
+    expect(sweep.calls).toHaveLength(1);
+    expect(result.capped).toBe(1);
+    const spend = readOperatorAsks().spend;
+    expect(spend.calls).toBe(1);
+    expect(spend.capped).toBe(1);
+    expect(spend.usd).toBeCloseTo(estimate, 12);
+
+    /* A cap already spent calls nothing at all. */
+    const spent = ports({ candidates: [candidate({ subject: "conv-3", conversationId: "conv-3", path: "/transcripts/three.jsonl" })], capUsd: estimate * 1.5 });
+    await runAskSweep(spent);
+    expect(spent.calls).toHaveLength(0);
+  });
+
+  test("a new month starts from nothing", async () => {
+    mutateOperatorAsks((file) => { file.spend.usd = 5; }, new Date(Date.UTC(2026, 7, 31)));
+    const sweep = ports();
+    await runAskSweep(sweep);
+    expect(sweep.calls).toHaveLength(1);
+    expect(readOperatorAsks().spend.month).toBe("2026-09");
+  });
+});
+
+describe("a classifier failure", () => {
+  test("leaves everything unchanged: no reason, no line, nothing billed, nothing retried", async () => {
+    for (const error of [new JevError("http", "answered 500", 500), new JevError("shape", "no cost"), new Error("socket hang up")]) {
+      fs.rmSync(path.join(stateDir, "operator-asks.json"), { force: true });
+      const sweep = ports({ classify: async () => { throw error; } });
+      const result = await runAskSweep(sweep);
+      expect(sweep.calls).toHaveLength(1);
+      expect(result).toMatchObject({ failed: 1, classified: 0, asks: [] });
+      const file = projected();
+      expect(file.operatorAsk).toBeUndefined();
+      expect(attentionReason(file, NOW / 1000)).toBeNull();
+      expect(reportLog().asks).toEqual([]);
+      expect(readOperatorAsks().spend.usd).toBe(0);
+      const retry = ports();
+      await runAskSweep(retry);
+      expect(retry.calls).toHaveLength(0);
+    }
+  });
+
+  test("a timeout counts its estimated cost against the cap and raises nothing", async () => {
+    const sweep = ports({ classify: async () => { throw new JevError("timeout", "slow"); } });
+    await runAskSweep(sweep);
+    expect(readOperatorAsks().spend.usd).toBeCloseTo(estimatedJevCostUsd(ASKING), 12);
+    expect(attentionReason(projected(), NOW / 1000)).toBeNull();
+  });
+});
+
+describe("the message a turn ends on", () => {
+  test("is the last text an agent wrote, named by its record or its turn, with engine errors marked", () => {
+    const claude = finalAssistantMessageFromRecords([
+      { type: "user", timestamp: "2026-09-26T11:57:00.000Z", message: { content: "go" } },
+      { type: "assistant", uuid: "u-1", timestamp: "2026-09-26T11:58:00.000Z", message: { id: "m-1", content: [{ type: "text", text: "Should I merge?" }] } },
+      { type: "assistant", uuid: "u-2", timestamp: "2026-09-26T11:58:05.000Z", message: { id: "m-1", content: [{ type: "tool_use", id: "t", name: "Bash", input: {} }] } },
+    ], "claude-projects", 0);
+    expect(claude).toEqual({ id: "claude:u-1", text: "Should I merge?", ts: Date.parse("2026-09-26T11:58:00.000Z"), engineError: false });
+
+    const codex = finalAssistantMessageFromRecords([
+      { type: "event_msg", timestamp: "2026-09-26T11:58:00.000Z", payload: { type: "agent_message", message: "Say go and I merge." } },
+      { type: "event_msg", timestamp: "2026-09-26T11:58:01.000Z", payload: { type: "task_complete", turn_id: "turn-7", last_agent_message: "Say go and I merge." } },
+    ], "codex-sessions", 0);
+    expect(codex).toMatchObject({ id: "codex-turn:turn-7", text: "Say go and I merge.", engineError: false });
+
+    const limited = finalAssistantMessageFromRecords([
+      { type: "event_msg", timestamp: "2026-09-26T11:58:01.000Z", payload: { type: "task_complete", turn_id: "turn-8", last_agent_message: "You've hit your usage limit.", error: { message: "limit" } } },
+    ], "codex-sessions", 0);
+    expect(limited?.engineError).toBe(true);
+  });
+});

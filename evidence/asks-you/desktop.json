@@ -1,0 +1,73 @@
+{
+  "readings": {
+    "1440-en-light": {
+      "toast": "permission promptWhich of the two anchors should win?",
+      "foot": {
+        "text": "asks you · Architect",
+        "title": "asks you · Architect",
+        "cut": false
+      },
+      "log": {
+        "asks": [
+          {
+            "label": "needs you",
+            "text": "Architect asks you: Keep the per-format presets, or fold them into one «Export» button with an advanced drawer?",
+            "link": "#c=conversation_export-explore",
+            "linkText": "Architect"
+          },
+          {
+            "label": "needs you",
+            "text": "Builder asks you: Лишити старий індекс ще на добу чи прибрати його одразу після перемикання?",
+            "link": "#c=conversation_search-impl-1",
+            "linkText": "Builder"
+          }
+        ],
+        "firstAsk": 1,
+        "ordered": true,
+        "sideways": 0
+      },
+      "row": {
+        "checked": "true",
+        "label": "Asks you",
+        "hint": "On, for all projects: each agent's last message of a turn goes to Jev on OpenRouter. This month $0.19 of $1.00.",
+        "inside": true
+      },
+      "opened": true
+    },
+    "1440-uk-light": {
+      "toast": "запит дозволуWhich of the two anchors should win?",
+      "foot": {
+        "text": "питає вас · Архітектор",
+        "title": "питає вас · Архітектор",
+        "cut": false
+      },
+      "log": {
+        "asks": [
+          {
+            "label": "чекає на вас",
+            "text": "Архітектор питає вас: Keep the per-format presets, or fold them into one «Export» button with an advanced drawer?",
+            "link": "#c=conversation_export-explore",
+            "linkText": "Архітектор"
+          },
+          {
+            "label": "чекає на вас",
+            "text": "Білдер питає вас: Лишити старий індекс ще на добу чи прибрати його одразу після перемикання?",
+            "link": "#c=conversation_search-impl-1",
+            "linkText": "Білдер"
+          }
+        ],
+        "firstAsk": 1,
+        "ordered": true,
+        "sideways": 0
+      },
+      "row": {
+        "checked": "true",
+        "label": "Питає вас",
+        "hint": "Увімкнено для всіх проєктів: останнє повідомлення кожного ходу агента йде в Jev на OpenRouter. Цього місяця 0,19 USD з 1,00 USD.",
+        "inside": true
+      },
+      "opened": true
+    }
+  },
+  "failures": []
+}

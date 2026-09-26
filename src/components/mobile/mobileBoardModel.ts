@@ -62,7 +62,7 @@ export type MobileRowStateKey =
 export type MobileBoardSection = "needs" | "working" | "recent";
 
 /** The trailing badge of a row that needs the operator: its reason. */
-export type MobileRowBadge = "question" | "plan" | "decision" | "permission" | "delivery" | "launch";
+export type MobileRowBadge = "question" | "plan" | "decision" | "permission" | "delivery" | "launch" | "ask";
 
 export type MobileRowDot = "success" | "warning" | "danger" | "accent" | "neutral";
 
@@ -113,6 +113,7 @@ function waitingBadge(reason: ConversationReason): MobileRowBadge {
     case "permission": return "permission";
     case "delivery": return "delivery";
     case "launch": return "launch";
+    case "ask": return "ask";
   }
 }
 

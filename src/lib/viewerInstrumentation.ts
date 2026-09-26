@@ -107,6 +107,8 @@ interface CurrentReleaseControllerLoaders {
   loadTempSweep?: () => Promise<{ startTempSweep: () => void }>;
   /** Optional for the same reason. */
   loadWorktreeSweep?: () => Promise<{ startWorktreeSweep: () => void }>;
+  /** Optional for the same reason. */
+  loadAsksClassifier?: () => Promise<{ startAsksClassifier: () => void }>;
 }
 
 interface ViewerRuntimeActivationSteps {
@@ -396,6 +398,7 @@ export async function startCurrentReleaseControllers(
     loadTempSweep: () => import("@/lib/tempSweep"),
     loadWorktreeSweep: () => import("@/lib/pipelines/worktreeSweep"),
     loadRoleMappingRetirements: () => import("@/lib/roles/retirements"),
+    loadAsksClassifier: () => import("@/lib/asks/controller"),
   },
 ): Promise<void> {
   /* Stale role mapping rows (docs/design/model-sizing-tiers.md §5) are reset
@@ -493,6 +496,15 @@ export async function startCurrentReleaseControllers(
     worktreeSweep?.startWorktreeSweep();
   } catch (error) {
     console.error("[worktree sweep] start failed", error instanceof Error ? error.name : "unknown");
+  }
+  /* "Asks you" (docs/research/attention-classifier.md §7), on the same clock
+     for the same reason. Each sweep reads the switch first; off, it reads one
+     small file and stops. */
+  try {
+    const asks = await loaders.loadAsksClassifier?.();
+    asks?.startAsksClassifier();
+  } catch (error) {
+    console.error("[asks you] start failed", error instanceof Error ? error.name : "unknown");
   }
   if (env.LLV_ACCOUNT_CONTROLLER_DISABLED === "1") return;
   const { startAccountMigrationController } = await loaders.loadAccountMigrationController();
