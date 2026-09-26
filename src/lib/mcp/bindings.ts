@@ -2647,13 +2647,18 @@ async function bridgeReport(
      own arguments are ignored (§5.5). Only the manager's own replay re-sends:
      the post goes out under the caller's capability and attribution. A row
      filed under the caller's old project key before it was folded is still
-     the same report. */
+     the same report. The stored copy goes out only while the project still
+     reports to the chat it was rendered for: a project whose operator chose
+     "Log only" since, or that never chose (a row written while a fallback
+     chat stood in for a choice), posts nothing, and a newly chosen chat is
+     never handed HTML rendered for the old one. */
   const reportId = scopedReportId(project, key);
   const existing = findBridgeReport(reportId)
     ?? (callerProject && callerProject !== project ? findBridgeReport(scopedReportId(callerProject, key)) : null);
   if (existing) {
     const telegram = existing.telegram && existing.telegram.state === "failed" && existing.origin?.kind === "manager"
       && origin.kind === "manager" && isRetryableReportSend(existing.telegram.code)
+      && project !== null && effectiveReportTelegram(project)?.chat === existing.telegram.chat
       ? await postReportTelegram(existing.id, existing.telegram.chat, existing.telegram.html, `bridge-report:${existing.id}:r${existing.telegram.attempts}`, dependencies, control)
       : existing.telegram ?? null;
     /* `alreadyRecorded`, because the tool service's envelope owns `replayed`

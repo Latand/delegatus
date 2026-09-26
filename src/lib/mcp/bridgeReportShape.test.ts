@@ -312,6 +312,54 @@ test("a rate-limited post is re-sent on replay byte for byte, under a new reques
   expect(readBridgeReportLog().reports[0]!.telegram).toMatchObject({ state: "sent", attempts: 2, html: stored });
 });
 
+test("a failed post is not re-sent on replay once the project chose the log only", async () => {
+  await connectTeamChat();
+  setReportTelegram(PROJECT, { chat: "team-reports", name: "Delegatus" }, "operator");
+  transport.script("sendMessage", refused(429, "Too Many Requests", { retryAfterSeconds: 3 }));
+  const first = await file({ key: "leak-log-only", summary: "One lane running." });
+  expect(first.destinations!.telegram).toMatchObject({ state: "failed", code: "rate_limited", retryable: true });
+
+  setReportTelegram(PROJECT, null, "operator");
+  transport.script("sendMessage", ok({ message_id: 74, date: 103 }));
+  const replay = await file({ key: "leak-log-only", summary: "One lane running." });
+  expect(replay.alreadyRecorded).toBe(true);
+  expect(replay.destinations!.telegram).toMatchObject({ chat: "team-reports", state: "failed", code: "rate_limited" });
+  expect(transport.callsOf("sendMessage")).toHaveLength(1);
+  expect(readBridgeReportLog().reports[0]!.telegram).toMatchObject({ state: "failed", attempts: 1 });
+});
+
+/* A row written while the removed fallback chat stood in for a choice carries
+   that chat for a project that never chose. */
+test("a failed post of a project that never chose is not re-sent on replay", async () => {
+  await connectTeamChat();
+  setReportTelegram(PROJECT, { chat: "team-reports", name: "Delegatus" }, "operator");
+  transport.script("sendMessage", refused(429, "Too Many Requests", { retryAfterSeconds: 3 }));
+  const first = await file({ key: "leak-never-chose", summary: "One lane running." });
+  expect(first.destinations!.telegram).toMatchObject({ state: "failed", code: "rate_limited", retryable: true });
+
+  fs.rmSync(path.join(process.env.LLV_STATE_DIR!, "project-settings.json"), { force: true });
+  resetProjectSettingsForTests();
+  transport.script("sendMessage", ok({ message_id: 75, date: 104 }));
+  const replay = await file({ key: "leak-never-chose", summary: "One lane running." });
+  expect(replay.alreadyRecorded).toBe(true);
+  expect(replay.destinations!.telegram).toMatchObject({ chat: "team-reports", state: "failed", code: "rate_limited" });
+  expect(transport.callsOf("sendMessage")).toHaveLength(1);
+});
+
+test("a failed post is not re-sent to a chat the project chose after it", async () => {
+  await connectTeamChat();
+  await allowLoungeChat();
+  setReportTelegram(PROJECT, { chat: "team-reports", name: "Delegatus" }, "operator");
+  transport.script("sendMessage", refused(429, "Too Many Requests", { retryAfterSeconds: 3 }));
+  await file({ key: "leak-new-chat", summary: "One lane running." });
+
+  setReportTelegram(PROJECT, { chat: "design-lounge", name: "Delegatus" }, "operator");
+  transport.script("sendMessage", ok({ message_id: 76, date: 105 }));
+  const replay = await file({ key: "leak-new-chat", summary: "One lane running." });
+  expect(replay.destinations!.telegram).toMatchObject({ chat: "team-reports", state: "failed" });
+  expect(transport.callsOf("sendMessage")).toHaveLength(1);
+});
+
 test("a worker replaying the manager's key after a failed send re-sends nothing", async () => {
   await connectTeamChat();
   setReportTelegram(PROJECT, { chat: "team-reports", name: "Delegatus" }, "operator");

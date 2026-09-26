@@ -1006,7 +1006,11 @@ Both answers are tested at the tool; the ask line is tested at the tick.
   `bridge-report:<reportId>:r<n>`. The replay's own arguments are ignored:
   nothing is re-rendered, and the task list and deny list are not re-read. So
   the group gets exactly what was prepared beside the bridge row. `send_uncertain` is never
-  re-sent: a second public post is worse than a missing one. A chat removed
+  re-sent: a second public post is worse than a missing one. The stored copy
+  is re-sent only while the project still reports to the chat it was rendered
+  for: after the operator picks "Log only" or another chat, or for a project
+  with no choice at all, the replay posts nothing and answers the stored
+  failed state. A chat removed
   from the allowlist answers `chat_not_allowed` until the operator changes the
   project's setting.
 - **Not posted**: reports from other sessions, anything while Bridge reports
