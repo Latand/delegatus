@@ -620,7 +620,8 @@ const overlaps = (a: Rect, b: Rect, slack = 0) => a.x + slack < b.x + b.w && b.x
  * and Ukrainian starts from a first run and walks the slice's states: the guide
  * opening by itself, one engine connected and one not installed, the mapping
  * with the refusal banner and the very-heavy nudge, the move to Claude and its
- * undo, Codex installed and signed out with the sign-in open, neither engine
+ * undo, a row an update reset and its Restore (model sizing §5), Codex
+ * installed and signed out with the sign-in open, neither engine
  * connected, the menu rows, the mapping opened alone, and a dismissal that
  * keeps the guide shut on reload. Slice 2 adds the Check step: before a run,
  * running, passed, the pass a new install ends on (no orchestrator, so row 5
@@ -728,6 +729,8 @@ function measureOnboarding(phone: boolean) {
     chipOffsets,
     headrooms: Array.from(dialog.querySelectorAll<HTMLElement>("[data-mapping-headroom]")).map((el) => ({ text: el.textContent ?? "", h: Math.round(el.getBoundingClientRect().height) })),
     changedRows: dialog.querySelectorAll("[data-mapping-reset]").length,
+    /* A row an update set back to its default (docs/design/model-sizing-tiers.md §5). */
+    retired: Array.from(dialog.querySelectorAll<HTMLElement>("[data-mapping-retired]")).map((el) => ({ row: el.dataset.mappingRetired!, text: el.textContent ?? "", clipped: clipped(el), w: Math.round(el.getBoundingClientRect().width) })),
     legendFirst: legend && rows[0] ? legend.getBoundingClientRect().top < rows[0].getBoundingClientRect().top : false,
     modelSelectWidths: Array.from(dialog.querySelectorAll<HTMLElement>("[data-mapping-row] select")).filter((_, index) => index % 2 === 0).map((el) => Math.round(el.getBoundingClientRect().width)),
     selectedSegmentRing: Array.from(dialog.querySelectorAll<HTMLElement>("[role=radio][aria-checked=true]")).slice(0, 1).map((el) => getComputedStyle(el).boxShadow)[0] ?? null,
@@ -961,6 +964,11 @@ async function captureOnboarding(): Promise<void> {
           const tag = `${viewport.tag}-${colorScheme}-${locale}`;
           const frames: Record<string, unknown> = {};
           await resetInstall(false);
+          /* The page adopts the language the server keeps over the browser's
+             own (docs/design/orchestrator-reports.md §4.2), so the combination's
+             language is written there as the operator's choice. */
+          const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale, source: "chosen" }) });
+          must(localeWrite.ok, `${tag}: the interface language write answered ${localeWrite.status}`);
           const context = await browser.newContext({
             viewport: { width: viewport.width, height: viewport.height },
             colorScheme,
@@ -992,6 +1000,16 @@ async function captureOnboarding(): Promise<void> {
             check(reading);
           };
 
+          /* #2166 moved Agents under "Later, any time", outside Continue and
+             Back, and a reload reopens the guide on the next numbered step:
+             the walk opens the step it measures by name. On the phone the
+             step list sits behind its toggle. */
+          const openStep = async (step: string) => {
+            await page.waitForSelector("[data-onboarding-dialog]", { timeout: 60_000 });
+            if (viewport.phone && !(await page.$(`[data-onboarding-step="${step}"]`))) await page.click("[data-onboarding-step-list-toggle]");
+            await page.click(`[data-onboarding-step="${step}"]`);
+          };
+
           try {
             /* 1. First run: the guide opens by itself on the Engines step. */
             await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded", timeout: 120_000 });
@@ -1001,18 +1019,19 @@ async function captureOnboarding(): Promise<void> {
               must(r.engines.claude === "connected" && r.engines.codex === "missing", `${tag}: with a Codex credential and no Codex command the engines read ${JSON.stringify(r.engines)}`);
             });
 
-            /* 2. The mapping: five roles and one variant sit on Codex, which is not connected. */
-            await page.click("[data-onboarding-primary]");
+            /* 2. The mapping: six roles and two variants sit on Codex, which is not connected. */
+            await openStep("agents");
             await page.waitForSelector("[data-mapping-banner]", { timeout: 30_000 });
             await page.click('[data-mapping-group="rare"] button[aria-expanded]');
             await page.waitForSelector('[data-mapping-row="deployer"]');
             await shot("agents-blocked", (r) => {
-              /* Seven rows ship on Codex: builder, fix rounds, reviewer, verifier, cleaner, prod-auditor, deployer. */
-              must(r.blockedRows === 7, `${tag}: ${r.blockedRows} blocked rows, expected the seven Codex rows`);
+              /* Eight rows ship on Codex: builder, fix rounds, reviewer, small-change reviewer, verifier, cleaner, prod-auditor, deployer. */
+              must(r.blockedRows === 8, `${tag}: ${r.blockedRows} blocked rows, expected the eight Codex rows`);
               must(r.nudges >= 1, `${tag}: no very-heavy nudge on the reviewer's xhigh default`);
               must(r.legendFirst, `${tag}: the cost legend comes after the first row`);
               must(r.costClasses.includes("reviewer=very-heavy") && r.costClasses.includes("cleaner=moderate"), `${tag}: cost classes ${r.costClasses.join(", ")}`);
-              must(r.roleLabels.length === 10, `${tag}: ${r.roleLabels.length} role rows rendered, expected 10`);
+              /* Ten rows, and the small-change builder, docs builder and small-change reviewer (docs/design/model-sizing-tiers.md §1). */
+              must(r.roleLabels.length === 13, `${tag}: ${r.roleLabels.length} role rows rendered, expected 13`);
             });
 
             /* 3. "Move them to Claude", then its receipt and every row changed. */
@@ -1049,6 +1068,7 @@ async function captureOnboarding(): Promise<void> {
               await route.fulfill({ response, json: body });
             });
             await page.reload({ waitUntil: "domcontentloaded" });
+            await openStep("agents");
             await page.waitForSelector("[data-mapping-headroom]", { timeout: 60_000 });
             await page.click('[data-mapping-group="rare"] button[aria-expanded]');
             await page.waitForSelector('[data-mapping-row="deployer"]');
@@ -1071,17 +1091,44 @@ async function captureOnboarding(): Promise<void> {
             });
             await page.click('[data-mapping-reset="reviewer"]');
             await page.waitForSelector('[data-mapping-reset="reviewer"]', { state: "detached" });
+
+            /* 3c. An update reset a stale row (docs/design/model-sizing-tiers.md
+               §5): the row says what it was, and Restore puts it back through
+               the ordinary mapping write, which clears the notice. */
+            const retirementId = "2026-09-builder-frontend-opus-xhigh";
+            const presetsFile = path.join(STATE_DIR, "role-presets.json");
+            fs.writeFileSync(presetsFile, JSON.stringify({ schemaVersion: 1, overrides: {}, retirements: { [retirementId]: { at: "2100-01-02T10:00:00.000Z", reset: { row: "builder:frontend", from: { engine: "claude", model: "opus", effort: "xhigh" } } } } }));
+            await page.reload({ waitUntil: "domcontentloaded" });
+            await openStep("agents");
+            await page.waitForSelector('[data-mapping-retired="builder:frontend"]', { timeout: 60_000 });
+            await page.locator('[data-mapping-row="builder:frontend"]').scrollIntoViewIfNeeded();
+            await shot("agents-reset", (r) => {
+              must(r.retired.length === 1 && r.retired[0]!.row === "builder:frontend", `${tag}: reset lines ${JSON.stringify(r.retired)}`);
+              for (const line of r.retired) must(!line.clipped, `${tag}: the reset line "${line.text}" is clipped at ${line.w}px`);
+            });
+            await page.click('[data-mapping-restore="builder:frontend"]');
+            await page.waitForSelector('[data-mapping-retired="builder:frontend"]', { state: "detached" });
+            /* The row turns "changed" as the write leaves; the file lands when
+               the server answers, so the read waits for it. */
+            type StoredPresets = { overrides: { builder?: { variants?: { frontend?: { effort: string } } } }; retirements?: Record<string, { reset?: unknown }> };
+            let restored = JSON.parse(fs.readFileSync(presetsFile, "utf8")) as StoredPresets;
+            for (const restoredBy = Date.now() + 10_000; Date.now() < restoredBy && restored.overrides.builder?.variants?.frontend === undefined;) {
+              await page.waitForTimeout(100);
+              restored = JSON.parse(fs.readFileSync(presetsFile, "utf8")) as StoredPresets;
+            }
+            must(restored.overrides.builder?.variants?.frontend?.effort === "xhigh" && restored.retirements?.[retirementId] !== undefined && restored.retirements[retirementId]!.reset === undefined, `${tag}: after Restore the stored mapping is ${JSON.stringify(restored)}`);
+            fs.writeFileSync(presetsFile, JSON.stringify({ schemaVersion: 1, overrides: {} }));
             await page.unroute("**/api/accounts");
             codexSignedIn(false);
             fakeCli("codex", false);
             await fetch(`${baseUrl}/api/accounts/cli`);
             await page.reload({ waitUntil: "domcontentloaded" });
+            await openStep("agents");
             await page.waitForSelector("[data-mapping-banner]", { timeout: 60_000 });
 
             /* 4. Codex installed and signed out; its sign-in opens in place. */
             fakeCli("codex", true);
-            if (viewport.phone) await page.click('button[aria-label="' + (locale === "en" ? "Back" : "Назад") + '"]');
-            else await page.click('[data-onboarding-step="engines"]');
+            await openStep("engines");
             await page.click('[data-onboarding-engine="codex"] button');
             await page.waitForSelector('[data-onboarding-engine="codex"][data-engine-state="signed-out"]', { timeout: 30_000 });
             /* Slice 3: the card is the account list, with the add row always there. */
@@ -1097,12 +1144,12 @@ async function captureOnboarding(): Promise<void> {
             fakeCli("codex", false);
             await fetch(`${baseUrl}/api/accounts/cli`);
             await page.reload({ waitUntil: "domcontentloaded" });
+            await openStep("agents");
             await page.waitForSelector("[data-agent-mapping] [data-mapping-row]", { timeout: 60_000 });
             await shot("agents-neither", (r) => {
               must(r.roleLabels.length > 0 && r.blockedRows === r.roleLabels.length, `${tag}: with no engine ${r.blockedRows} of ${r.roleLabels.length} rendered rows are blocked, expected every one`);
             });
-            if (viewport.phone) await page.click('button[aria-label="' + (locale === "en" ? "Back" : "Назад") + '"]');
-            else await page.click('[data-onboarding-step="engines"]');
+            await openStep("engines");
             await page.waitForSelector("[data-onboarding-engines-note]");
             await shot("engines-neither", (r) => {
               must(r.engines.claude !== "connected" && r.engines.codex === "missing", `${tag}: engines read ${JSON.stringify(r.engines)} with nothing signed in`);
@@ -1157,10 +1204,6 @@ async function captureOnboarding(): Promise<void> {
             }
             await page.waitForSelector('[data-onboarding-dialog="guide"]');
             /* The guide reopens on the first step not yet done; go to Agents by the step list. */
-            const openStep = async (id: string) => {
-              if (viewport.phone) await page.click("[data-onboarding-step-list-toggle]");
-              await page.click(`[data-onboarding-step="${id}"]`);
-            };
             await openStep("agents");
             await page.waitForSelector("[data-agent-mapping] [data-mapping-row]");
             await shot("finish", () => {});

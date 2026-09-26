@@ -9,6 +9,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { NextRequest } from "next/server";
 
 import { POST as rotateRoute } from "@/app/api/orchestrator/rotate/route";
+import { POST as seatRoute } from "@/app/api/orchestrator/seat/route";
 import { requireOperatorAuthority, setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import {
@@ -20,6 +21,7 @@ import {
 import { MemoryMcpReceiptStore, createMcpToolService, createViewerMcpServer } from "@/lib/mcp/server";
 
 import {
+  executeOrchestratorSeatRequest,
   setSeatCommandDependenciesForTests,
   type SeatCommandDependencies,
 } from "./seatCommand";
@@ -104,14 +106,18 @@ beforeAll(() => {
     port: 0,
     fetch: async (request) => {
       const url = new URL(request.url);
-      if (url.pathname !== "/api/orchestrator/rotate" || request.method !== "POST") {
+      /* The seat route is served for agent callers only: it refuses them
+         before reading the body, and an operator request there would reach the
+         production seat dependencies, which the tests never install. */
+      const seatByAgent = url.pathname === "/api/orchestrator/seat" && request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER);
+      if ((url.pathname !== "/api/orchestrator/rotate" && !seatByAgent) || request.method !== "POST") {
         return Response.json({ error: `no route for ${request.method} ${url.pathname}` }, { status: 404 });
       }
       routeRequests.push({
         pathname: url.pathname,
         capability: request.headers.get(VIEWER_SPAWN_CAPABILITY_HEADER),
       });
-      const answer = await rotateRoute(new NextRequest(url, {
+      const answer = await (seatByAgent ? seatRoute : rotateRoute)(new NextRequest(url, {
         method: "POST",
         headers: request.headers,
         body: await request.text(),
@@ -178,8 +184,8 @@ function callerIsOperator(): void {
   setCallerConversationResolverForTests(() => null);
 }
 
-function seatSeeded(project = "proj-a", conversationId = SEAT_ID): void {
-  beginOrchestratorSeatIntent({ project, mandate: "own the board", clientRequestId: "seed_0000001", mode: "spawn", now: AT });
+function seatSeeded(project = "proj-a", conversationId = SEAT_ID, runtime: { engine: string; model: string } | null = null): void {
+  beginOrchestratorSeatIntent({ project, mandate: "own the board", clientRequestId: "seed_0000001", mode: "spawn", ...(runtime ?? {}), now: AT });
   completeOrchestratorSeatIntent({ project, clientRequestId: "seed_0000001", conversationId, path: "/tmp/seat.jsonl", now: AT });
 }
 
@@ -276,10 +282,10 @@ interface ToolAnswer {
 
 /** One `rotate_orchestrator` call over the MCP protocol, from a session that
     has never called anything before. */
-async function toolRotation(args: Record<string, unknown>): Promise<ToolAnswer> {
+async function toolRotation(args: Record<string, unknown>, name = "rotate_orchestrator"): Promise<ToolAnswer> {
   const session = await mcpSession();
   try {
-    const result = await session.client.callTool({ name: "rotate_orchestrator", arguments: args });
+    const result = await session.client.callTool({ name, arguments: args });
     return {
       failed: result.isError === true,
       payload: (result.structuredContent ?? {}) as Record<string, unknown>,
@@ -478,4 +484,57 @@ test("the route and the MCP tool answer the same for the same actor: REFUSED, an
   const accepted = await routeRotation("seat", { ...request, clientRequestId: "rotate-parity-3" });
   expect(accepted.status).toBe(200);
   expect(accepted.body.triggeredBy).toEqual({ kind: "agent", conversationId: SEAT_ID, seatEpoch: 1 });
+});
+
+/* docs/design/model-sizing-tiers.md §2, R1 on the seat: rotation admits every
+   caller, so the runtime an agent names for the successor is judged instead. */
+test("an agent cannot rotate a seat onto Sonnet or Haiku; the operator can, and an agent may continue the operator's choice", async () => {
+  seatSeeded();
+  callerIs(SEAT_ID);
+  const { deps, spawns } = dependencies();
+
+  const sonnet = await toolRotation({ clientRequestId: "rotate-sonnet-1", project: "proj-a", engine: "claude", model: "sonnet" });
+  expect(sonnet.failed).toBe(true);
+  expect(sonnet.payload.error).toContain("orchestrator: Sonnet and Haiku do not run orchestrator");
+  const haiku = await routeRotation("seat", { clientRequestId: "rotate-haiku-1", project: "proj-a", engine: "claude", model: "haiku" });
+  expect(haiku.status).toBe(400);
+  expect(haiku.body.code).toBe("sizing_refused");
+  expect(spawns).toEqual([]);
+  expect(orchestratorSeatFor("proj-a").active?.conversationId).toBe(SEAT_ID);
+
+  callerIsOperator();
+  const byOperator = await routeRotation("operator", { clientRequestId: "rotate-sonnet-2", project: "proj-a", engine: "claude", model: "sonnet" });
+  expect(byOperator.status).toBe(200);
+  expect(spawns).toEqual([expect.objectContaining({ engine: "claude", model: "sonnet" })]);
+
+  /* The seat now runs the operator's Sonnet; its own rotation that names no
+     runtime continues it. */
+  deps.spawn = async (body) => {
+    spawns.push(body);
+    return { status: 200, body: { ok: true, conversationId: "conversation_44444444-4444-4444-8444-444444444444", path: "/tmp/third.jsonl" } };
+  };
+  callerIs(SUCCESSOR_ID);
+  const continued = await toolRotation({ clientRequestId: "rotate-continue-1", project: "proj-a" });
+  expect(continued.failed).toBe(false);
+  expect(spawns).toHaveLength(2);
+  expect(spawns[1]).toMatchObject({ engine: "claude", model: "sonnet" });
+});
+
+test("an agent's create_orchestrator is refused at the seat route, and a create the seat command attributes to an agent is judged by R1", async () => {
+  callerIs(BYSTANDER_ID);
+  const { deps, spawns } = dependencies();
+  const created = await toolRotation({ clientRequestId: "create-sonnet-1", project: "proj-a", engine: "claude", model: "sonnet" }, "create_orchestrator");
+  expect(created.failed).toBe(true);
+  expect(created.payload.error).toContain("an agent may not perform it");
+  expect(routeRequests).toEqual([{ pathname: "/api/orchestrator/seat", capability: CAPABILITY }]);
+
+  const request = { project: "proj-a", mandate: "own the board", clientRequestId: "create-sonnet-2", cwd: "/workspace", engine: "claude", model: "sonnet" };
+  const byAgent = await executeOrchestratorSeatRequest(request, deps, { kind: "agent", conversationId: BYSTANDER_ID, seatEpoch: null });
+  expect(byAgent.status).toBe(400);
+  expect(byAgent.body.error).toContain("orchestrator: Sonnet and Haiku do not run orchestrator");
+  expect(spawns).toEqual([]);
+
+  const byOperator = await executeOrchestratorSeatRequest(request, deps, { kind: "operator", conversationId: null, seatEpoch: null });
+  expect(byOperator.status).toBe(200);
+  expect(spawns).toEqual([expect.objectContaining({ engine: "claude", model: "sonnet" })]);
 });

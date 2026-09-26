@@ -11,7 +11,8 @@ import { ENGINE_MODELS } from "@/lib/agent/models";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import { costClass, effortRank, tightestHeadroom, type CostClass } from "@/lib/roles/costHints";
 import { equivalentConfig } from "@/lib/roles/equivalents";
-import type { BuilderVariantId, RoleConfig, RoleEngine, RoleId } from "@/lib/roles/types";
+import { LIGHT_DENIED_ROLE_IDS } from "@/lib/roles/sizing";
+import type { RoleConfig, RoleEngine, RoleId, RoleMappingReset, RoleVariantId } from "@/lib/roles/types";
 
 /**
  * The agent mapping (#1876, design §2.2 and §4): which engine, model and effort
@@ -22,7 +23,7 @@ import type { BuilderVariantId, RoleConfig, RoleEngine, RoleId } from "@/lib/rol
  */
 
 export type MappingCatalogItem = RoleCatalogItem & {
-  shipped?: { config: RoleConfig; variants?: Record<BuilderVariantId, RoleConfig> };
+  shipped?: { config: RoleConfig; variants?: Partial<Record<RoleVariantId, RoleConfig>> };
 };
 
 export type EngineStatus = {
@@ -33,7 +34,7 @@ export type EngineStatus = {
   account: AccountOption | null;
 };
 
-type RowKey = { roleId: RoleId; variant?: BuilderVariantId };
+type RowKey = { roleId: RoleId; variant?: RoleVariantId };
 
 const ENGINE_NAME: Record<RoleEngine, string> = { claude: "Claude", codex: "Codex" };
 
@@ -47,8 +48,14 @@ function blockedText(t: TFunction, engine: RoleEngine, status: EngineStatus): st
 }
 
 const GROUPS: readonly { id: "build" | "review" | "design" | "coordinate" | "rare"; rows: readonly RowKey[] }[] = [
-  { id: "build", rows: [{ roleId: "builder" }, { roleId: "builder", variant: "frontend" }, { roleId: "builder", variant: "apply-fixes" }] },
-  { id: "review", rows: [{ roleId: "reviewer" }, { roleId: "verifier" }] },
+  { id: "build", rows: [
+    { roleId: "builder" },
+    { roleId: "builder", variant: "trivial" },
+    { roleId: "builder", variant: "frontend" },
+    { roleId: "builder", variant: "docs" },
+    { roleId: "builder", variant: "apply-fixes" },
+  ] },
+  { id: "review", rows: [{ roleId: "reviewer" }, { roleId: "reviewer", variant: "trivial" }, { roleId: "verifier" }] },
   { id: "design", rows: [{ roleId: "architect" }] },
   { id: "coordinate", rows: [{ roleId: "orchestrator" }] },
   { id: "rare", rows: [{ roleId: "cleaner" }, { roleId: "prod-auditor" }, { roleId: "deployer" }] },
@@ -61,7 +68,10 @@ function rowId(row: RowKey): string {
 }
 
 function rowLabel(row: RowKey, t: TFunction): string {
+  if (row.roleId === "reviewer" && row.variant === "trivial") return t("onboarding.agents.role.reviewerTrivial");
+  if (row.variant === "trivial") return t("onboarding.agents.role.builderTrivial");
   if (row.variant === "frontend") return t("onboarding.agents.role.builderFrontend");
+  if (row.variant === "docs") return t("onboarding.agents.role.builderDocs");
   if (row.variant === "apply-fixes") return t("onboarding.agents.role.builderFixes");
   const keys: Record<RoleId, Parameters<TFunction>[0]> = {
     builder: "onboarding.agents.role.builder",
@@ -198,10 +208,26 @@ function EngineSegments({ value, label, statuses, onChange }: { value: RoleEngin
 
 const SELECT = "h-8 w-full min-w-0 rounded-[8px] border border-border bg-canvas px-1.5 text-ui font-semibold text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11";
 
-function RowControls({ row, config, shipped, statuses, layout, onChange }: {
+/** "Opus 5.5 · xhigh": a runtime as the model select names it. */
+function runtimeName(config: RoleConfig): string {
+  const model = ENGINE_MODELS[config.engine].find((option) => option.id === config.model)?.label ?? config.model;
+  return `${model} · ${config.effort}`;
+}
+
+/* Sonnet and Haiku never run these rows (docs/design/model-sizing-tiers.md
+   §2, R1); the server refuses them, so the select does not offer them. */
+function modelOptions(row: RowKey, engine: RoleEngine) {
+  const models = ENGINE_MODELS[engine];
+  if (engine !== "claude" || !LIGHT_DENIED_ROLE_IDS.includes(row.roleId)) return models;
+  return models.filter((option) => option.id !== "sonnet" && option.id !== "haiku");
+}
+
+function RowControls({ row, config, shipped, reset, statuses, layout, onChange }: {
   row: RowKey;
   config: RoleConfig;
   shipped: RoleConfig | null;
+  /** A retirement set this row back to its default and nobody has touched it since. */
+  reset: RoleMappingReset | null;
   statuses: Record<RoleEngine, EngineStatus>;
   layout: "table" | "card";
   onChange: (config: RoleConfig | null) => void;
@@ -212,7 +238,7 @@ function RowControls({ row, config, shipped, statuses, layout, onChange }: {
   const status = statuses[config.engine];
   const scale = effortScale(config.engine, config.model) ?? [];
   const nudge = costClass(config) === "very-heavy" && effortRank(config.effort) > effortRank("high") && scale.includes("high");
-  const models = ENGINE_MODELS[config.engine];
+  const models = modelOptions(row, config.engine);
   const modelSelect = (
     <select
       aria-label={t("onboarding.agents.modelAria", { role: label })}
@@ -251,6 +277,13 @@ function RowControls({ row, config, shipped, statuses, layout, onChange }: {
           {t("onboarding.agents.stateChanged")} ·
           <button type="button" data-mapping-reset={rowId(row)} onClick={() => onChange(null)} className="shrink-0 rounded-[6px] px-0.5 font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:-my-3.5 max-sm:min-h-11">
             {t("onboarding.agents.reset")}
+          </button>
+        </span>
+      ) : reset ? (
+        <span data-mapping-retired={rowId(row)} className="text-label text-secondary">
+          {t("onboarding.agents.retired", { was: runtimeName(reset.from) })}{" "}
+          <button type="button" data-mapping-restore={rowId(row)} onClick={() => onChange(reset.from)} className="rounded-[6px] px-0.5 font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:-my-3.5 max-sm:min-h-11">
+            {t("onboarding.agents.restore")}
           </button>
         </span>
       ) : <span className="sr-only">{t("onboarding.agents.stateDefault")}</span>}
@@ -311,6 +344,7 @@ export function AgentMappingTable({ statuses, layout, onConnect }: {
 }) {
   const { t } = useLocale();
   const [roles, setRoles] = useState<MappingCatalogItem[] | null>(null);
+  const [resets, setResets] = useState<RoleMappingReset[]>([]);
   const [loadFailed, setLoadFailed] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<{ count: number; engine: RoleEngine; undo: { row: RowKey; config: RoleConfig | null }[] } | null>(null);
@@ -322,9 +356,9 @@ export function AgentMappingTable({ statuses, layout, onConnect }: {
     void fetch("/api/roles")
       .then(async (response) => {
         if (!response.ok) throw new Error(String(response.status));
-        return (await response.json()) as { roles: MappingCatalogItem[] };
+        return (await response.json()) as { roles: MappingCatalogItem[]; resets?: RoleMappingReset[] };
       })
-      .then((body) => setRoles(body.roles))
+      .then((body) => { setRoles(body.roles); setResets(body.resets ?? []); })
       .catch(() => setLoadFailed(true));
   }, []);
   useEffect(load, [load]);
@@ -340,9 +374,10 @@ export function AgentMappingTable({ statuses, layout, onConnect }: {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(patchBody(changes)),
       });
-      const body = await response.json().catch(() => null) as { roles?: MappingCatalogItem[]; error?: string } | null;
+      const body = await response.json().catch(() => null) as { roles?: MappingCatalogItem[]; resets?: RoleMappingReset[]; error?: string } | null;
       if (!response.ok || !body?.roles) throw new Error(body?.error || `HTTP ${response.status}`);
       setRoles(body.roles);
+      setResets(body.resets ?? []);
       replaceRoleCatalog(body.roles);
       return true;
     } catch (error) {
@@ -451,6 +486,7 @@ export function AgentMappingTable({ statuses, layout, onConnect }: {
                       row={row}
                       config={config}
                       shipped={shippedOf(roles, row)}
+                      reset={resets.find((candidate) => candidate.row === rowId(row)) ?? null}
                       statuses={statuses}
                       layout={layout}
                       onChange={(next) => { setReceipt(null); void save([{ row, config: next }]); }}

@@ -6,10 +6,11 @@ import path from "node:path";
 import { CODEX_SOL_MODEL, ENGINE_MODELS } from "@/lib/agent/models";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-set-roles-"));
-const { patchFlow } = await import("./commands");
+const { createFlowFromRequest, patchFlow } = await import("./commands");
+const { LIGHT_DENIED_ROLE_MESSAGE } = await import("@/lib/roles/sizing");
 const { reviewerRoleFor, flowTickBase, persistTickFlows } = await import("./engine");
 const { loadFlows, saveFlows } = await import("./store");
-import type { Flow } from "./types";
+import type { CreateFlowRequest, Flow } from "./types";
 
 function seed(overrides: Partial<Flow> = {}): Flow {
   const flow: Flow = {
@@ -93,6 +94,45 @@ test("pause and resume accept a calling agent identity (#1121)", () => {
   expect(paused).toMatchObject({ state: "paused", stateDetail: "paused by reviewer conversation_reviewer" });
   const resumed = patchFlow("f1", { action: "resume" }, actor).flow!;
   expect(resumed).toMatchObject({ state: "reviewing", stateDetail: "resumed by reviewer conversation_reviewer" });
+});
+
+/* R1 (docs/design/model-sizing-tiers.md §2): the flow engine launches its
+   reviewer itself, so an agent's set-roles is where a light reviewer is refused. */
+for (const model of ["sonnet", "claude-sonnet-5", "haiku"]) {
+  test(`set-roles refuses an agent a Claude ${model} reviewer and keeps the stored one`, () => {
+    seed();
+    const actor = { kind: "agent" as const, role: "orchestrator", conversationId: "conversation_seat" };
+    const result = patchFlow("f1", { action: "set-roles", roles: { reviewer: { engine: "claude", model, effort: "high" } } }, actor);
+    expect(result).toEqual({ error: LIGHT_DENIED_ROLE_MESSAGE, status: 400 });
+    expect(loadFlows()[0]!.roles.reviewer).toEqual({ engine: "codex", model: "gpt-5.6", effort: "high" });
+  });
+}
+
+test("set-roles lets an agent seat an Opus-class reviewer and the operator seat Sonnet", () => {
+  seed();
+  const actor = { kind: "agent" as const, role: "orchestrator", conversationId: "conversation_seat" };
+  expect(patchFlow("f1", { action: "set-roles", roles: { reviewer: { engine: "claude", model: "opus" } } }, actor).flow!.roles.reviewer)
+    .toMatchObject({ engine: "claude", model: "opus" });
+  /* The operator's own override (GroupOverridePanel over HTTP) keeps its authority. */
+  const operator = patchFlow("f1", { action: "set-roles", roles: { reviewer: { engine: "claude", model: "sonnet" } } });
+  expect(operator.error).toBeUndefined();
+  expect(loadFlows()[0]!.roles.reviewer).toMatchObject({ engine: "claude", model: "sonnet" });
+});
+
+test("an agent-asked flow is refused a Claude Sonnet reviewer before anything is resolved", async () => {
+  const actor = { kind: "agent" as const, role: null, conversationId: null };
+  const request: CreateFlowRequest = {
+    implementerPath: "/impl",
+    baseMode: "head",
+    mode: "auto",
+    reviewerMode: "headless",
+    roundLimit: 3,
+    roles: { implementer: { engine: "claude" as const, model: null, effort: null }, reviewer: { engine: "claude" as const, model: "sonnet", effort: null } },
+  };
+  expect(await createFlowFromRequest(request, [], actor)).toEqual({ error: LIGHT_DENIED_ROLE_MESSAGE, status: 400 });
+  /* The operator's own request gets past the sizing rules to the implementer lookup. */
+  const operator = await createFlowFromRequest(request, []);
+  expect(operator.error).not.toBe(LIGHT_DENIED_ROLE_MESSAGE);
 });
 
 test("set-roles rejects a reviewer config the CLI cannot launch (issue #118 Finding 3)", () => {

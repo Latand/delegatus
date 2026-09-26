@@ -7,7 +7,7 @@ import type { FileEntry } from "@/lib/types";
 import { setLocale } from "@/lib/i18n";
 import { FILES_CHANGED_EVENT } from "@/lib/filesEvents";
 
-import { DraftAgentPane } from "./DraftAgentPane";
+import { DraftAgentPane, replaceRoleCatalog } from "./DraftAgentPane";
 
 const dom = new Window();
 Object.assign(globalThis, {
@@ -363,4 +363,53 @@ test("a recovered directory launches without a confirmation, and the picker's ch
 
   expect(posts).toHaveLength(1);
   expect(posts[0]).toMatchObject({ cwd: chosen, prompt: "Continue in the live checkout" });
+});
+
+test("a reviewer lens change keeps the model the operator picked; only a size change moves it", async () => {
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    if (url.startsWith("/api/spawn?")) return { ok: true, json: async () => ({ dirs: ["/repo"] }) } as Response;
+    if (url === "/api/accounts") return { ok: true, json: async () => ({ codex: { active: "terra", accounts: [] } }) } as Response;
+    throw new Error(`unexpected request: ${url}`);
+  }) as typeof fetch;
+  /* The catalog is session-cached across mounts, so it is seeded here. */
+  replaceRoleCatalog([{
+    id: "reviewer",
+    name: "Reviewer",
+    description: "Review an implementer",
+    config: { engine: "codex", model: "gpt-6-astra", effort: "high" },
+    variants: { trivial: { engine: "codex", model: "gpt-6-luna", effort: "high" } },
+    parameters: [
+      { key: "lens", label: "Lens", description: "Review lens.", kind: "select", options: ["correctness", "scope"], default: "correctness" },
+      { key: "size", label: "Size", description: "Change size.", kind: "select", options: ["normal", "trivial"], default: "normal" },
+    ],
+    promptPreview: "Review",
+    safetyFences: [],
+  }] as never);
+  const host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  flushSync(() => root!.render(
+    <DraftAgentPane draftId="lens-draft" project="proj" files={[implementer]} onClose={() => {}} onSpawned={() => {}} />,
+  ));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const change = (select: HTMLSelectElement, value: string) => {
+    select.value = value;
+    flushSync(() => select.dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event));
+  };
+  const model = () => host.querySelector('select[aria-label="Agent model"]') as HTMLSelectElement;
+  const param = (index: number) => host.querySelectorAll('[aria-label="Role parameters"] select')[index] as HTMLSelectElement;
+
+  change(host.querySelector('select[aria-label="Agent role preset"]') as HTMLSelectElement, "reviewer");
+  expect(model().value).toBe("gpt-6-astra");
+  change(model(), "gpt-6-sol");
+  expect(model().value).toBe("gpt-6-sol");
+
+  change(param(0), "scope");
+  expect(param(0).value).toBe("scope");
+  expect(model().value).toBe("gpt-6-sol");
+
+  change(param(1), "trivial");
+  expect(model().value).toBe("gpt-6-luna");
 });
