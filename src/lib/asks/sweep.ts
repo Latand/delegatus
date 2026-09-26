@@ -70,7 +70,7 @@ export function askId(subject: string, messageId: string): string {
 export async function runAskSweep(ports: AskSweepPorts, inflight: Set<string> = new Set()): Promise<AskSweepResult> {
   const result: AskSweepResult = { classified: 0, asks: [], skipped: 0, capped: 0, failed: 0 };
   if (!ports.enabled || !ports.apiKey) return result;
-  const key = ports.apiKey;
+  const credential = ports.apiKey;
   let seen = new Set(ports.read().seen);
   for (const candidate of ports.candidates) {
     if (candidate.working || candidate.structuredAsk) continue;
@@ -82,34 +82,34 @@ export async function runAskSweep(ports: AskSweepPorts, inflight: Set<string> = 
     if (candidate.lastTurnStartedAt !== null && message.ts < candidate.lastTurnStartedAt) continue;
     if (now.getTime() - message.ts > ASK_MAX_AGE_MS) continue;
     if (ports.enabledSince !== null && message.ts < ports.enabledSince) continue;
-    const key = `${candidate.subject}:${message.id}`;
-    if (seen.has(key) || inflight.has(key)) continue;
+    const seenKey = `${candidate.subject}:${message.id}`;
+    if (seen.has(seenKey) || inflight.has(seenKey)) continue;
     const duplicate = bodyKey(message.text);
     const skip = message.engineError ? "engine-error" : askSkipReason(message.text) ?? (seen.has(duplicate) ? "duplicate" : null);
     if (skip) {
-      ports.write((file) => { file.seen.push(key); });
-      seen.add(key);
+      ports.write((file) => { file.seen.push(seenKey); });
+      seen.add(seenKey);
       result.skipped += 1;
       continue;
     }
     const estimate = estimatedJevCostUsd(message.text);
     const spend = currentSpend(ports.read(), now);
     if (spend.usd + estimate > ports.capUsd) {
-      ports.write((file) => { file.seen.push(key); file.spend.capped += 1; });
-      seen.add(key);
+      ports.write((file) => { file.seen.push(seenKey); file.spend.capped += 1; });
+      seen.add(seenKey);
       result.capped += 1;
       continue;
     }
-    inflight.add(key);
+    inflight.add(seenKey);
     let verdict: JevVerdict | null = null;
     let timedOut = false;
     try {
-      verdict = await ports.classify(message.text, key);
+      verdict = await ports.classify(message.text, credential);
     } catch (error) {
       verdict = null;
       timedOut = error instanceof JevError && error.code === "timeout";
     } finally {
-      inflight.delete(key);
+      inflight.delete(seenKey);
     }
     const recordedAt = ports.now();
     const ask: OperatorAskRecord | null = verdict && verdict.score >= ASK_THRESHOLD ? {
@@ -127,7 +127,7 @@ export async function runAskSweep(ports: AskSweepPorts, inflight: Set<string> = 
       recordedAt: recordedAt.toISOString(),
     } : null;
     ports.write((file) => {
-      file.seen.push(key, duplicate);
+      file.seen.push(seenKey, duplicate);
       file.spend.calls += 1;
       /* A call that timed out may still have been billed: count the
          estimate, so the cap errs on the side of spending less. A refused
@@ -135,7 +135,7 @@ export async function runAskSweep(ports: AskSweepPorts, inflight: Set<string> = 
       file.spend.usd += verdict ? verdict.costUsd : timedOut ? estimate : 0;
       if (ask && !file.asks.some((held) => held.id === ask.id)) file.asks.push(ask);
     });
-    seen = new Set([...seen, key, duplicate]);
+    seen = new Set([...seen, seenKey, duplicate]);
     if (!verdict) {
       result.failed += 1;
       continue;

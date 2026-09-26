@@ -166,6 +166,15 @@ describe("an agent whose turn ends asking the operator", () => {
     expect(log.entries).toHaveLength(0);
   });
 
+  test("the classifier is handed the configured OpenRouter key, never the dedupe key", async () => {
+    const credentials: string[] = [];
+    await runAskSweep(ports({
+      apiKey: "sk-or-real",
+      classify: async (_body, credential) => { credentials.push(credential); return verdict(0.93); },
+    }));
+    expect(credentials).toEqual(["sk-or-real"]);
+  });
+
   test("is sent once: the next sweep neither calls again nor adds a second line", async () => {
     await runAskSweep(ports());
     const again = ports();
