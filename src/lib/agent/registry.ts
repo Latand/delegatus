@@ -6767,6 +6767,24 @@ export class AgentRegistry {
 
   /** Allocates one Viewer-owned identity for every native generation. Paths
       remain an interoperability detail and can change on every account move. */
+  /** A conversation for a transcript the Viewer forked itself (an orchestrator
+      seat's deputy, docs/design/ghost-seat.md §5), carrying the launch profile
+      its first resume must use: the seat's model, effort and grants, so the
+      resumed session reads the seat's prompt cache. Idempotent by path. */
+  ensureForkedConversation(engine: AgentEngine, artifactPath: string, accountId: string | null, launchProfile: Partial<LaunchProfile>): RegistryConversation {
+    const conversation = this.ensureConversation(engine, artifactPath, accountId);
+    const generation = conversation.generations.at(-1);
+    if (!generation || generation.path !== artifactPath || generation.launchProfile.parentConversationId) return conversation;
+    return this.mutate((file) => {
+      const stored = file.conversations[conversation.id];
+      const current = stored?.generations.at(-1);
+      if (!stored || !current || current.path !== artifactPath) return clone(conversation);
+      current.launchProfile = emptyLaunchProfile({ ...current.launchProfile, ...launchProfile });
+      stored.updatedAt = now();
+      return clone(stored);
+    });
+  }
+
   ensureConversation(engine: AgentEngine, artifactPath: string, accountId: string | null): RegistryConversation {
     return this.mutate((file) => {
       const existing = Object.values(file.conversations).find((conversation) => conversation.engine === engine && conversationOwnsPath(conversation, artifactPath));

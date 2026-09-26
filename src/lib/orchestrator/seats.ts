@@ -611,6 +611,8 @@ export interface SeatConversations {
   conversationIds: string[];
   paths: string[];
   previous: { conversationIds: string[]; paths: string[] };
+  /** The seats' deputies (docs/design/ghost-seat.md §5), when the reader added them. */
+  deputies?: { conversationIds: string[]; paths: string[] };
 }
 
 /**

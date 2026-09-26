@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { callerConversationId } from "@/lib/agent/operatorAuthority";
+import { productionDeputyPrincipal } from "@/lib/orchestrator/deputies";
 import { handleOrchestratorRotationRequest } from "@/lib/orchestrator/seatCommand";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
@@ -31,6 +33,11 @@ export async function POST(req: NextRequest): Promise<NextResponse<Record<string
      guard for everything before that — resolving the actor, reaching the
      command at all — so a caller always gets a reason it can read and report,
      and never a rotation that simply vanished. */
+  /* A seat's deputy never changes the seat's identity (docs/design/ghost-seat.md
+     §4 rule 4), whether it calls the tool or this route directly. */
+  if (productionDeputyPrincipal(callerConversationId(req))) {
+    return NextResponse.json({ error: "a parallel self of the orchestrator does not rotate the seat", code: "deputy_cannot_rotate" }, { status: 403 });
+  }
   try {
     const result = await handleOrchestratorRotationRequest(req, body);
     return NextResponse.json(result.body, { status: result.status });

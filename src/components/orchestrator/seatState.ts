@@ -2,6 +2,7 @@ import { currentConversationFile } from "@/lib/accounts/identity";
 import type { MessageKey } from "@/lib/i18n";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { parseSeatDeputyViews, type SeatDeputyView } from "@/lib/orchestrator/deputyView";
 import type { SeatRefs } from "@/lib/tasks/groupHide";
 import type { FileEntry } from "@/lib/types";
 
@@ -54,6 +55,10 @@ export interface OrchestratorSeatStatus {
       answer carries it. Null when the record could not be read, and absent
       from an answer written before the route carried the field. */
   all?: SeatRefs | null;
+  /** The active seat's deputies (docs/design/ghost-seat.md §5): the live one
+      and the newest ended ones, newest first. Absent from an answer written
+      before the route carried them. */
+  deputies?: SeatDeputyView[];
 }
 
 /** A seat's notes task as the answer carries it. */
@@ -99,6 +104,7 @@ export function parseSeatStatus(body: unknown): OrchestratorSeatStatus {
     previous?: unknown;
     currentTask?: unknown;
     all?: unknown;
+    deputies?: unknown;
   } | null;
   return {
     seat: seatOf(raw?.seat),
@@ -109,6 +115,7 @@ export function parseSeatStatus(body: unknown): OrchestratorSeatStatus {
     previous: Array.isArray(raw?.previous) ? raw.previous.flatMap((entry) => previousSeatOf(entry) ?? []) : [],
     currentTask: seatNotesTaskOf(raw?.currentTask),
     all: seatConversationsOf(raw?.all),
+    deputies: parseSeatDeputyViews(raw?.deputies),
   };
 }
 
@@ -130,10 +137,14 @@ export function seatConversationsOf(value: unknown): SeatRefs | null {
   const previous = row.previous;
   if (!previous || typeof previous !== "object" || Array.isArray(previous)) return null;
   const retired = previous as Record<string, unknown>;
+  const deputies = row.deputies && typeof row.deputies === "object" && !Array.isArray(row.deputies)
+    ? row.deputies as Record<string, unknown>
+    : null;
   return {
     conversationIds: strings(row.conversationIds),
     paths: strings(row.paths),
     previous: { conversationIds: strings(retired.conversationIds), paths: strings(retired.paths) },
+    ...(deputies ? { deputies: { conversationIds: strings(deputies.conversationIds), paths: strings(deputies.paths) } } : {}),
   };
 }
 

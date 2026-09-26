@@ -48,18 +48,26 @@ export interface SeatRefs {
     conversationIds: readonly string[];
     paths: readonly string[];
   };
+  /** Every conversation a seat's deputy ran as (docs/design/ghost-seat.md §5):
+      a seat's parallel self is part of the seat, so it is kept out of the task
+      bands and lists the same way. */
+  deputies?: {
+    conversationIds: readonly string[];
+    paths: readonly string[];
+  };
 }
 
 /**
  * Whether a conversation is one the project's seat record names, current,
- * pending or previous. False whenever `seat.previous` is absent: an unreadable
- * record hides nothing.
+ * pending or previous, or one of its deputies. False whenever `seat.previous`
+ * is absent: an unreadable record hides nothing.
  */
 export function isSeatConversation(seat: SeatRefs | null | undefined, ref: { conversationId?: string | null; path?: string | null }): boolean {
   if (!seat?.previous) return false;
   const { conversationId, path } = ref;
-  if (conversationId && (seat.conversationIds.includes(conversationId) || seat.previous.conversationIds.includes(conversationId))) return true;
-  return Boolean(path && (seat.paths.includes(path) || seat.previous.paths.includes(path)));
+  if (conversationId && (seat.conversationIds.includes(conversationId) || seat.previous.conversationIds.includes(conversationId)
+    || seat.deputies?.conversationIds.includes(conversationId))) return true;
+  return Boolean(path && (seat.paths.includes(path) || seat.previous.paths.includes(path) || seat.deputies?.paths.includes(path)));
 }
 
 /**

@@ -102,6 +102,7 @@ import { seatTickFenceDetail, seatTickReportedFence } from "@/lib/monitor/seatTi
 import { peekSeatTickState } from "@/lib/monitor/seatTickState";
 import type { SeatTickProjectState } from "@/lib/monitor/types";
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orchestrator/authority";
+import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies } from "@/lib/orchestrator/deputies";
 import { recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { activeSeatsByCurrentProject, seatLaunchCwd } from "@/lib/orchestrator/seatProjectIdentity";
@@ -860,21 +861,33 @@ export interface CallerAttribution {
   kind: "manager" | "agent" | "gateway" | "unidentified";
   conversationId: string | null;
   role: string | null;
+  /** Set when a live deputy of the seat is the caller (docs/design/ghost-seat.md
+      §4): `conversationId` is then the SEAT's, so every surface treats the call
+      as the seat's, and this keeps the deputy's own id for the audit trail. */
+  via?: { deputy: string };
 }
 
 /** Fold the caller authority with "is this the designated orchestrator" into
-    one label. Pure, so every mapping is testable without a process tree. */
+    one label. Pure, so every mapping is testable without a process tree.
+
+    `deputySeatOf` answers the seat a live deputy stands for. A caller it maps
+    is labelled `manager` under the seat's id with `via.deputy` naming itself;
+    a conversation that is itself a manager never consults it. */
 export function callerAttributionFrom(
   authority: AttentionCallerAuthority,
   isManagerConversation: (conversationId: string) => boolean,
+  deputySeatOf?: (conversationId: string) => string | null,
 ): CallerAttribution {
   if (authority.kind === "root") return { kind: "gateway", conversationId: authority.conversationId, role: null };
   if (authority.kind === "unidentified") return { kind: "unidentified", conversationId: null, role: null };
-  return {
-    kind: isManagerConversation(authority.conversationId) ? "manager" : "agent",
-    conversationId: authority.conversationId,
-    role: authority.role,
-  };
+  if (isManagerConversation(authority.conversationId)) {
+    return { kind: "manager", conversationId: authority.conversationId, role: authority.role };
+  }
+  const seat = deputySeatOf?.(authority.conversationId) ?? null;
+  if (seat && isManagerConversation(seat)) {
+    return { kind: "manager", conversationId: seat, role: authority.role, via: { deputy: authority.conversationId } };
+  }
+  return { kind: "agent", conversationId: authority.conversationId, role: authority.role };
 }
 
 function attributionOf(dependencies: Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority">): CallerAttribution {
@@ -1138,11 +1151,15 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
   adoptRootSession: () => { adoptLiveRootSession(rootSessionSource()); },
   raiseAttentionRequest,
   attentionAuthority: () => attentionCallerAuthority(attentionCallerSources()),
-  callerAttribution: () => callerAttributionFrom(
-    attentionCallerAuthority(attentionCallerSources()),
-    (conversationId) => authorizedManagerSeats(productionManagerAuthoritySources())
-      .some((seat) => seat.conversationId === conversationId),
-  ),
+  callerAttribution: () => {
+    let seats: ReturnType<typeof authorizedManagerSeats> | null = null;
+    const managers = () => (seats ??= authorizedManagerSeats(productionManagerAuthoritySources()));
+    return callerAttributionFrom(
+      attentionCallerAuthority(attentionCallerSources()),
+      (conversationId) => managers().some((seat) => seat.conversationId === conversationId),
+      (conversationId) => productionDeputyPrincipal(conversationId)?.seatConversationId ?? null,
+    );
+  },
   viewerProjects: viewerOwnProjects,
 };
 
@@ -2516,6 +2533,15 @@ async function deployExactSha(
      merged with the admission-injected spawn capability, checked against the
      durable per-project orchestrator designation. */
   const attribution = attributionOf(dependencies);
+  /* A deputy speaks as its seat everywhere except here and in rotation
+     (docs/design/ghost-seat.md §4 rule 4): a five-minute self runs neither the
+     one gated operation nor the one identity change. */
+  if (attribution.via?.deputy) {
+    throw new McpToolRefusal(
+      "a parallel self of the orchestrator does not deploy; say in your final message what should ship and the seat decides on its next turn.",
+      { code: "deputy_cannot_deploy", revision },
+    );
+  }
   if (attribution.kind !== "manager" || !attribution.conversationId) {
     throw new McpToolRefusal(
       "only the designated orchestrator executes deploys; this session is not attributed as a designated seat. Report the request over the bridge instead.",
@@ -3279,12 +3305,28 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
     liveness = null;
   }
 
+  /* docs/design/ghost-seat.md §5: the seat's parallel selves, live and the
+     newest ended, so the seat reads what its deputies did beside its own record. */
+  const deputies = active.conversationId
+    ? deputiesForSeatIn(readDeputies(), active.conversationId).map((deputy) => ({
+      askId: deputy.askId,
+      conversationId: deputy.deputyConversationId,
+      state: deputy.state,
+      outcome: deputy.outcome,
+      ask: deputy.ask.text.length > 200 ? `${deputy.ask.text.slice(0, 199)}…` : deputy.ask.text,
+      startedAt: deputy.startedAt,
+      endedAt: deputy.endedAt,
+      result: deputy.result?.line ?? null,
+      touched: deputy.touched,
+    }))
+    : [];
   return redactPayload({
     ...base,
     designated: true,
     seat: full ? active : compactOrchestratorSeat(active),
     seatEpoch: active.seatEpoch,
     conversationId: active.conversationId,
+    ...(deputies.length ? { deputies } : {}),
     transcriptPath,
     engine,
     model,
@@ -3826,7 +3868,26 @@ async function sendMessageToOrchestrator(
     the calling session's own capability like every other control call, and the
     rotation route admits that caller and names it. What comes back includes that
     name, so the caller reads the attribution its rotation was recorded under. */
-async function rotateOrchestrator(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
+async function rotateOrchestrator(
+  args: McpToolArgs,
+  control: ViewerControlDependencies,
+  dependencies?: Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority">,
+): Promise<McpToolPayload> {
+  /* docs/design/ghost-seat.md §4 rule 4: a deputy never changes the seat's
+     identity. Attribution reads process ancestry and can fault; a fault here
+     is not a deputy and leaves the route's own admission to decide. */
+  let deputy: string | null = null;
+  try {
+    deputy = dependencies ? attributionOf(dependencies).via?.deputy ?? null : null;
+  } catch {
+    deputy = null;
+  }
+  if (deputy) {
+    throw new McpToolRefusal(
+      "a parallel self of the orchestrator does not rotate the seat; say in your final message why the seat should rotate and it decides on its next turn.",
+      { code: "deputy_cannot_rotate" },
+    );
+  }
   const project = canonicalOrchestratorProject(required(args, "project"));
   /* #1452, #2030: with no mandate named, the route rebuilds the successor's
      core from the CURRENT default whenever the incumbent's stored mandate is
@@ -3851,6 +3912,23 @@ async function rotateOrchestrator(args: McpToolArgs, control: ViewerControlDepen
     triggeredBy: result.triggeredBy ?? null,
     /* Whether the prior handoffs were summarized or kept verbatim, and why. */
     handoff: result.handoff ?? null,
+    replayed: result.replayed === true,
+  });
+}
+
+/** ask_orchestrator_in_parallel (docs/design/ghost-seat.md §5): one command
+    with the composer's action — the tool posts to the same route. */
+async function askOrchestratorInParallelTool(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
+  const project = canonicalOrchestratorProject(required(args, "project"));
+  const result = await control.post("/api/orchestrator/ghost", {
+    project,
+    text: required(args, "text"),
+    clientRequestId: `mcp_${requestId(args)}`,
+  }, callerCapabilityHeaders());
+  return redactPayload({
+    project,
+    askId: result.askId ?? null,
+    conversationId: result.conversationId ?? null,
     replayed: result.replayed === true,
   });
 }
@@ -5925,7 +6003,8 @@ export function viewerMcpBindings(
     account_limits: async (args) => accountLimitsTool(args, domainDependencies),
     create_orchestrator: (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context)),
     send_message_to_orchestrator: (args, context) => sendMessageToOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
-    rotate_orchestrator: (args, context) => rotateOrchestrator(args, viewerControlForCall(controlDependencies, context)),
+    ask_orchestrator_in_parallel: (args, context) => askOrchestratorInParallelTool(args, viewerControlForCall(controlDependencies, context)),
+    rotate_orchestrator: (args, context) => rotateOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     telegram_bot_chats: (args, context) => telegramBotChats(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send: (args, context) => telegramBotSend(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),
