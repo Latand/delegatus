@@ -16,6 +16,8 @@ import {
   ROTATION_CONTEXT_PERCENT,
   SEAT_BIND_TIMEOUT_MS,
   seatBadgeOf,
+  seatDeputyPaths,
+  seatRefsOf,
   seatRequestSettled,
   type OrchestratorPanelState,
   type OrchestratorSeatStatus,
@@ -684,4 +686,27 @@ describe("a decision the operator owes outranks every word for «it is running»
       attention: `/transcripts/orchestrator.jsonl:stalled:${NOW - 60}`,
     });
   });
+});
+
+/* docs/design/ghost-seat.md §5: a seat's deputies leave the bands and the
+   phone's rows with the seat. */
+test("the seat refs carry every deputy the record names, and the phone hides their transcripts", () => {
+  const status = {
+    seat: null,
+    pending: null,
+    exists: true,
+    viewerMcpRegistered: false,
+    previous: [],
+    all: {
+      conversationIds: ["conversation_seat"],
+      paths: ["/t/seat.jsonl"],
+      previous: { conversationIds: [], paths: [] },
+      deputies: { conversationIds: ["conversation_ghost"], paths: ["/t/ghost.jsonl"] },
+    },
+  } as unknown as OrchestratorSeatStatus;
+  expect(seatRefsOf(status)?.deputies).toEqual({ conversationIds: ["conversation_ghost"], paths: ["/t/ghost.jsonl"] });
+  expect(seatRefsOf(status, true)?.deputies).toBeUndefined();
+  expect(seatDeputyPaths(status, [{ path: "/t/ghost-moved.jsonl", conversationId: "conversation_ghost" }, { path: "/t/w.jsonl", conversationId: "conversation_worker" }]).sort())
+    .toEqual(["/t/ghost-moved.jsonl", "/t/ghost.jsonl"]);
+  expect(seatDeputyPaths(null, [])).toEqual([]);
 });

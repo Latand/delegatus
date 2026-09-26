@@ -515,6 +515,7 @@ async function deliverInterruptionContinuations(
       enabled: () => true,
       client: () => client,
       registry: () => registry,
+      interruptionContinuation: true,
     });
     if (result?.ok) {
       store.update(obligation.id, {

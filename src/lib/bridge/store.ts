@@ -180,13 +180,15 @@ function readJsonFile(target: string): unknown | null {
 
 function normalizeOrigin(value: unknown): BridgeReportOrigin | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const candidate = value as { kind?: unknown; conversationId?: unknown; role?: unknown };
+  const candidate = value as { kind?: unknown; conversationId?: unknown; role?: unknown; via?: unknown };
   if (candidate.kind !== "manager" && candidate.kind !== "agent" && candidate.kind !== "gateway" && candidate.kind !== "unidentified") return undefined;
   if (candidate.kind === "unidentified") return { kind: "unidentified", conversationId: null, role: null };
+  const deputy = candidate.via && typeof candidate.via === "object" ? (candidate.via as { deputy?: unknown }).deputy : undefined;
   return {
     kind: candidate.kind,
     conversationId: typeof candidate.conversationId === "string" ? candidate.conversationId : null,
     role: typeof candidate.role === "string" ? candidate.role : null,
+    ...(typeof deputy === "string" && deputy ? { via: { deputy } } : {}),
   };
 }
 

@@ -2342,6 +2342,45 @@ test("a running spawned child with no lane is open work, and the interval wake n
   expect(rig.liveness).toEqual([{ conversationId: child.id }]);
 });
 
+/* docs/design/ghost-seat.md §4 rule 5: the tick wakes the active seat and
+   nothing else. A live parallel self of that seat — a fork registered with the
+   seat as its parent, mid-turn, with its record live — is never the wake's
+   target and never one of its items: it answers its one ask and hands its
+   result back through the note queued to the seat. */
+test("a live deputy of the seat is never woken, and the wake goes to the seat alone", async () => {
+  const { beginDeputy, recordDeputyFork, activateDeputy, readDeputies } = await import("@/lib/orchestrator/deputies");
+  const fixture = childFixture("live-deputy");
+  const worker = fixture.spawn({ title: "build the exporter", turn: "busy", host: "live" });
+  const ghostPath = path.join(SESSIONS, `${crypto.randomUUID()}.jsonl`);
+  fs.writeFileSync(ghostPath, "");
+  const ghost = fixture.registry.ensureForkedConversation("claude", ghostPath, null, {
+    cwd: fixture.cwd,
+    parentConversationId: fixture.seat.conversationId as never,
+    title: "Orchestrator · parallel self",
+  });
+  fixture.registry.reconcileConversations([{
+    engine: "claude",
+    path: ghostPath,
+    accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: fixture.cwd, title: "Orchestrator · parallel self" }),
+    turn: { state: "busy", source: "assistant", terminalAt: null },
+    observedAt: new Date(fixture.now - MINUTE).toISOString(),
+  }]);
+  const begun = beginDeputy({ project: fixture.project, seatConversationId: fixture.seat.conversationId, seatEpoch: 7, seatPath: fixture.seat.path, clientRequestId: `deputy-${crypto.randomUUID()}`, ask: { text: "file a task", images: 0, sender: null }, now: new Date(fixture.now - MINUTE) });
+  if (begun.kind !== "begun") throw new Error("deputy did not begin");
+  recordDeputyFork(begun.deputy.askId, { deputyConversationId: ghost.id, artifactPath: ghostPath, forkRecordCount: 0 });
+  activateDeputy(begun.deputy.askId, new Date(fixture.now - MINUTE));
+  expect(readDeputies().find((deputy) => deputy.askId === begun.deputy.askId)?.state).toBe("active");
+  fixture.seed();
+  const rig = childRig(fixture, { childActivity: { [worker.id]: { lifecycle: "running", reason: "host_alive_turn_active" } } });
+
+  const record = await runSeatTickCheck(fixture.project, rig.deps);
+  expect(record).toMatchObject({ verdict: "wake" });
+  expect(rig.sent.map((message) => message.conversationId)).toEqual([fixture.seat.conversationId]);
+  expect(rig.sent[0]!.text).toContain(`[child] ${worker.id}`);
+  expect(rig.sent[0]!.text).not.toContain(ghost.id);
+});
+
 test("a finished child is harvested by exactly one wake, across ticks, a fresh controller and a rotation (#1465)", async () => {
   const fixture = childFixture("finished-child");
   const child = fixture.spawn({ title: "review the exporter", turn: "terminal", terminalAt: ago(fixture, 20) });

@@ -1,0 +1,647 @@
+{
+  "readings": {
+    "running-390-en": {
+      "blocks": [
+        {
+          "askId": "deputy_a",
+          "state": "active",
+          "open": true,
+          "titleWidth": 128.3,
+          "resultWidth": null,
+          "chips": 0,
+          "targetHeight": 44,
+          "edge": {
+            "top": 474.5,
+            "bottom": 616.3,
+            "bodyTop": 474.5,
+            "lastRowBottom": 620.3
+          },
+          "overlapWithSeat": 0,
+          "rows": 3,
+          "addressee": "→parallel self",
+          "after": "resumes",
+          "resumeCaption": "Claude· 12:33· continuing «Go through the review queue…»",
+          "resultToChipGap": null,
+          "resultWhole": null,
+          "chevronOnFirstLine": null,
+          "chipTexts": [
+            "Open task",
+            "Open task",
+            "Open pipeline"
+          ],
+          "rowSpeakers": [],
+          "chipLineLefts": [
+            60,
+            60
+          ],
+          "caret": "deputy:rgb(85, 85, 95)",
+          "collapsedSpeaker": null,
+          "proseSizes": {
+            "live": [
+              15
+            ],
+            "settled": []
+          }
+        }
+      ],
+      "order": [
+        "seat",
+        "seat",
+        "seat",
+        "block:deputy_a",
+        "seat",
+        "seat",
+        "seat",
+        "seat-live"
+      ],
+      "seatLiveLast": true,
+      "seatLive": {
+        "speaker": "Claude",
+        "caret": "seat:rgb(90, 81, 224)"
+      },
+      "seatRowSpeakers": [
+        [],
+        [
+          "Claude"
+        ],
+        [],
+        [
+          "Claude"
+        ],
+        [
+          "Claude"
+        ],
+        [
+          "Claude"
+        ],
+        [
+          "Claude"
+        ]
+      ],
+      "seatProseSizes": {
+        "live": [
+          15
+        ],
+        "settled": [
+          15,
+          15,
+          15,
+          15
+        ]
+      },
+      "scrollWidth": 390,
+      "viewportWidth": 390
+    },
+    "running-390-uk": {
+      "blocks": [
+        {
+          "askId": "deputy_a",
+          "state": "active",
+          "open": true,
+          "titleWidth": 144.7,
+          "resultWidth": null,
+          "chips": 0,
+          "targetHeight": 44,
+          "edge": {
+            "top": 474.5,
+            "bottom": 616.3,
+            "bodyTop": 474.5,
+            "lastRowBottom": 620.3
+          },
+          "overlapWithSeat": 0,
+          "rows": 3,
+          "addressee": "→паралельне я",
+          "after": "resumes",
+          "resumeCaption": "Claude· 12:33· далі до «Проглянь чергу рев'ю і…»",
+          "resultToChipGap": null,
+          "resultWhole": null,
+          "chevronOnFirstLine": null,
+          "chipTexts": [
+            "Відкрити задачу",
+            "Відкрити задачу",
+            "Відкрити пайплайн"
+          ],
+          "rowSpeakers": [],
+          "chipLineLefts": [
+            60,
+            60
+          ],
+          "caret": "deputy:rgb(85, 85, 95)",
+          "collapsedSpeaker": null,
+          "proseSizes": {
+            "live": [
+              15
+            ],
+            "settled": []
+          }
+        }
+      ],
+      "order": [
+        "seat",
+        "seat",
+        "seat",
+        "block:deputy_a",
+        "seat",
+        "seat",
+        "seat",
+        "seat-live"
+      ],
+      "seatLiveLast": true,
+      "seatLive": {
+        "speaker": "Claude",
+        "caret": "seat:rgb(90, 81, 224)"
+      },
+      "seatRowSpeakers": [
+        [],
+        [
+          "Claude"
+        ],
+        [],
+        [
+          "Claude"
+        ],
+        [
+          "Claude"
+        ],
+        [
+          "Claude"
+        ],
+        [
+          "Claude"
+        ]
+      ],
+      "seatProseSizes": {
+        "live": [
+          15
+        ],
+        "settled": [
+          15,
+          15,
+          15,
+          15
+        ]
+      },
+      "scrollWidth": 390,
+      "viewportWidth": 390
+    },
+    "interleaved-390-en": {
+      "blocks": [
+        {
+          "askId": "deputy_a",
+          "state": "ended",
+          "open": true,
+          "titleWidth": 128.3,
+          "resultWidth": null,
+          "chips": 0,
+          "targetHeight": 44,
+          "edge": {
+            "top": 474.5,
+            "bottom": 704,
+            "bodyTop": 474.5,
+            "lastRowBottom": 708
+          },
+          "overlapWithSeat": 0,
+          "rows": 3,
+          "addressee": "→parallel self",
+          "after": "resumes",
+          "resumeCaption": "Claude· 12:33· continuing «Go through the review queue…»",
+          "resultToChipGap": null,
+          "resultWhole": null,
+          "chevronOnFirstLine": null,
+          "chipTexts": [
+            "Open task",
+            "Open task",
+            "Open pipeline"
+          ],
+          "rowSpeakers": [
+            "Orchestrator · parallel self"
+          ],
+          "chipLineLefts": [
+            60,
+            60
+          ],
+          "caret": null,
+          "collapsedSpeaker": null,
+          "proseSizes": {
+            "live": [],
+            "settled": [
+              15
+            ]
+          }
+        },
+        {
+          "askId": "deputy_b",
+          "state": "active",
+          "open": true,
+          "titleWidth": 128.3,
+          "resultWidth": null,
+          "chips": 0,
+          "targetHeight": 44,
+          "edge": {
+            "top": 1088.8,
+            "bottom": 1180.3,
+            "bodyTop": 1088.8,
+            "lastRowBottom": 1184.3
+          },
+          "overlapWithSeat": 0,
+          "rows": 2,
+          "addressee": "→parallel self",
+          "after": "resumes",
+          "resumeCaption": "Claude· 12:38· continuing «Go through the review queue…»",
+          "resultToChipGap": null,
+          "resultWhole": null,
+          "chevronOnFirstLine": null,
+          "chipTexts": [],
+          "rowSpeakers": [],
+          "chipLineLefts": [],
+          "caret": "deputy:rgb(85, 85, 95)",
+          "collapsedSpeaker": null,
+          "proseSizes": {
+            "live": [
+              15
+            ],
+            "settled": []
+          }
+        }
+      ],
+      "order": [
+        "seat",
+        "seat",
+        "seat",
+        "block:deputy_a",
+        "seat",
+        "seat",
+        "block:deputy_b",
+        "seat",
+        "seat-live"
+      ],
+      "seatLiveLast": true,
+      "seatLive": {
+        "speaker": "Claude",
+        "caret": "seat:rgb(90, 81, 224)"
+      },
+      "seatRowSpeakers": [
+        [],
+        [
+          "Claude"
+        ],
+        [],
+        [
+          "Claude"
+        ],
+        [
+          "Claude"
+        ],
+        [
+          "Claude"
+        ],
+        [
+          "Claude"
+        ]
+      ],
+      "seatProseSizes": {
+        "live": [
+          15
+        ],
+        "settled": [
+          15,
+          15,
+          15,
+          15
+        ]
+      },
+      "scrollWidth": 390,
+      "viewportWidth": 390
+    },
+    "interleaved-390-uk": {
+      "blocks": [
+        {
+          "askId": "deputy_a",
+          "state": "ended",
+          "open": true,
+          "titleWidth": 144.7,
+          "resultWidth": null,
+          "chips": 0,
+          "targetHeight": 44,
+          "edge": {
+            "top": 474.5,
+            "bottom": 721,
+            "bodyTop": 474.5,
+            "lastRowBottom": 725
+          },
+          "overlapWithSeat": 0,
+          "rows": 3,
+          "addressee": "→паралельне я",
+          "after": "resumes",
+          "resumeCaption": "Claude· 12:33· далі до «Проглянь чергу рев'ю і…»",
+          "resultToChipGap": null,
+          "resultWhole": null,
+          "chevronOnFirstLine": null,
+          "chipTexts": [
+            "Відкрити задачу",
+            "Відкрити задачу",
+            "Відкрити пайплайн"
+          ],
+          "rowSpeakers": [
+            "Оркестратор · паралельне я"
+          ],
+          "chipLineLefts": [
+            60,
+            60
+          ],
+          "caret": null,
+          "collapsedSpeaker": null,
+          "proseSizes": {
+            "live": [],
+            "settled": [
+              15
+            ]
+          }
+        },
+        {
+          "askId": "deputy_b",
+          "state": "active",
+          "open": true,
+          "titleWidth": 144.7,
+          "resultWidth": null,
+          "chips": 0,
+          "targetHeight": 44,
+          "edge": {
+            "top": 1105.8,
+            "bottom": 1197.3,
+            "bodyTop": 1105.8,
+            "lastRowBottom": 1201.3
+          },
+          "overlapWithSeat": 0,
+          "rows": 2,
+          "addressee": "→паралельне я",
+          "after": "resumes",
+          "resumeCaption": "Claude· 12:38· далі до «Проглянь чергу рев'ю і…»",
+          "resultToChipGap": null,
+          "resultWhole": null,
+          "chevronOnFirstLine": null,
+          "chipTexts": [],
+          "rowSpeakers": [],
+          "chipLineLefts": [],
+          "caret": "deputy:rgb(85, 85, 95)",
+          "collapsedSpeaker": null,
+          "proseSizes": {
+            "live": [
+              15
+            ],
+            "settled": []
+          }
+        }
+      ],
+      "order": [
+        "seat",
+        "seat",
+        "seat",
+        "block:deputy_a",
+        "seat",
+        "seat",
+        "block:deputy_b",
+        "seat",
+        "seat-live"
+      ],
+      "seatLiveLast": true,
+      "seatLive": {
+        "speaker": "Claude",
+        "caret": "seat:rgb(90, 81, 224)"
+      },
+      "seatRowSpeakers": [
+        [],
+        [
+          "Claude"
+        ],
+        [],
+        [
+          "Claude"
+        ],
+        [
+          "Claude"
+        ],
+        [
+          "Claude"
+        ],
+        [
+          "Claude"
+        ]
+      ],
+      "seatProseSizes": {
+        "live": [
+          15
+        ],
+        "settled": [
+          15,
+          15,
+          15,
+          15
+        ]
+      },
+      "scrollWidth": 390,
+      "viewportWidth": 390
+    },
+    "collapsed-390-en": {
+      "blocks": [
+        {
+          "askId": "deputy_a",
+          "state": "ended",
+          "open": false,
+          "titleWidth": null,
+          "resultWidth": 298,
+          "chips": 2,
+          "targetHeight": 101.5,
+          "edge": null,
+          "overlapWithSeat": 0,
+          "rows": 0,
+          "addressee": "→parallel self",
+          "after": "resumes",
+          "resumeCaption": "Claude· 12:33· continuing «Go through the review queue…»",
+          "resultToChipGap": null,
+          "resultWhole": true,
+          "chevronOnFirstLine": true,
+          "chipTexts": [
+            "Open task",
+            "Open pipeline"
+          ],
+          "rowSpeakers": [],
+          "chipLineLefts": [],
+          "caret": null,
+          "collapsedSpeaker": "Parallel self",
+          "proseSizes": {
+            "live": [],
+            "settled": []
+          }
+        },
+        {
+          "askId": "deputy_b",
+          "state": "ended",
+          "open": false,
+          "titleWidth": null,
+          "resultWidth": 298,
+          "chips": 0,
+          "targetHeight": 49,
+          "edge": null,
+          "overlapWithSeat": 0,
+          "rows": 0,
+          "addressee": "→parallel self",
+          "after": "resumes",
+          "resumeCaption": "Claude· 12:38· continuing «Go through the review queue…»",
+          "resultToChipGap": null,
+          "resultWhole": true,
+          "chevronOnFirstLine": true,
+          "chipTexts": [],
+          "rowSpeakers": [],
+          "chipLineLefts": [],
+          "caret": null,
+          "collapsedSpeaker": "Parallel self",
+          "proseSizes": {
+            "live": [],
+            "settled": []
+          }
+        }
+      ],
+      "order": [
+        "seat",
+        "seat",
+        "seat",
+        "block:deputy_a",
+        "seat",
+        "seat",
+        "block:deputy_b",
+        "seat"
+      ],
+      "seatLiveLast": false,
+      "seatLive": null,
+      "seatRowSpeakers": [
+        [],
+        [
+          "Claude"
+        ],
+        [],
+        [
+          "Claude"
+        ],
+        [
+          "Claude"
+        ],
+        [
+          "Claude"
+        ]
+      ],
+      "seatProseSizes": {
+        "live": [],
+        "settled": [
+          15,
+          15,
+          15,
+          15
+        ]
+      },
+      "scrollWidth": 390,
+      "viewportWidth": 390
+    },
+    "collapsed-390-uk": {
+      "blocks": [
+        {
+          "askId": "deputy_a",
+          "state": "ended",
+          "open": false,
+          "titleWidth": null,
+          "resultWidth": 298,
+          "chips": 2,
+          "targetHeight": 101.5,
+          "edge": null,
+          "overlapWithSeat": 0,
+          "rows": 0,
+          "addressee": "→паралельне я",
+          "after": "resumes",
+          "resumeCaption": "Claude· 12:33· далі до «Проглянь чергу рев'ю і…»",
+          "resultToChipGap": null,
+          "resultWhole": true,
+          "chevronOnFirstLine": true,
+          "chipTexts": [
+            "Відкрити задачу",
+            "Відкрити пайплайн"
+          ],
+          "rowSpeakers": [],
+          "chipLineLefts": [],
+          "caret": null,
+          "collapsedSpeaker": "Паралельне я",
+          "proseSizes": {
+            "live": [],
+            "settled": []
+          }
+        },
+        {
+          "askId": "deputy_b",
+          "state": "ended",
+          "open": false,
+          "titleWidth": null,
+          "resultWidth": 298,
+          "chips": 0,
+          "targetHeight": 49,
+          "edge": null,
+          "overlapWithSeat": 0,
+          "rows": 0,
+          "addressee": "→паралельне я",
+          "after": "resumes",
+          "resumeCaption": "Claude· 12:38· далі до «Проглянь чергу рев'ю і…»",
+          "resultToChipGap": null,
+          "resultWhole": true,
+          "chevronOnFirstLine": true,
+          "chipTexts": [],
+          "rowSpeakers": [],
+          "chipLineLefts": [],
+          "caret": null,
+          "collapsedSpeaker": "Паралельне я",
+          "proseSizes": {
+            "live": [],
+            "settled": []
+          }
+        }
+      ],
+      "order": [
+        "seat",
+        "seat",
+        "seat",
+        "block:deputy_a",
+        "seat",
+        "seat",
+        "block:deputy_b",
+        "seat"
+      ],
+      "seatLiveLast": false,
+      "seatLive": null,
+      "seatRowSpeakers": [
+        [],
+        [
+          "Claude"
+        ],
+        [],
+        [
+          "Claude"
+        ],
+        [
+          "Claude"
+        ],
+        [
+          "Claude"
+        ]
+      ],
+      "seatProseSizes": {
+        "live": [],
+        "settled": [
+          15,
+          15,
+          15,
+          15
+        ]
+      },
+      "scrollWidth": 390,
+      "viewportWidth": 390
+    }
+  },
+  "failures": []
+}
