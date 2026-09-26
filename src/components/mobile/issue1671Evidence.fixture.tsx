@@ -761,12 +761,12 @@ const telegramBot = BOT_SCENE === "typed"
     lastUpdateAt: iso(120),
     lastCheckedAt: iso(60),
     chats: [
-      /* The one chat agents may post in, so a project that never chose a
-         report destination reports here (orchestrator-reports §5.6). */
-      botChat({ alias: "team-reports", postAllowed: true, postable: true, seesAllMessages: true, lastPostAt: iso(3_600), lastPostBy: { conversationId: "conversation_writer", title: "Weekly delivery report for the atlas team" }, reports: [{ name: "Atlas", onlyAllowedChat: true }], ...(BOT_SCENE === "refused" ? {
+      /* The one chat agents may post in, which the operator chose for the
+         project's reports (orchestrator-reports §5.6). */
+      botChat({ alias: "team-reports", postAllowed: true, postable: true, seesAllMessages: true, lastPostAt: iso(3_600), lastPostBy: { conversationId: "conversation_writer", title: "Weekly delivery report for the atlas team" }, reports: [{ name: "Atlas" }], ...(BOT_SCENE === "refused" ? {
         /* `refused`: the project chose this chat, then posting was switched
            off here; the Viewer still addresses it and its posts are refused. */
-        postAllowed: false, postable: false, reports: [{ name: "Atlas", onlyAllowedChat: false, refused: true }],
+        postAllowed: false, postable: false, reports: [{ name: "Atlas", refused: true }],
       } : {}) }),
       botChat({ chatId: "-1000000000202", title: "Design review and release coordination", isForum: true }),
       botChat({ chatId: "700000303", title: "Person A", type: "private", seesAllMessages: true }),

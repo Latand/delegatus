@@ -51,7 +51,7 @@
       "lang": "en",
       "scene": "chats",
       "reportsLine": [
-        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+        "Orchestrator reports: Atlas"
       ],
       "top": {
         "panel": {
@@ -94,7 +94,7 @@
       "lang": "en",
       "scene": "webhook",
       "reportsLine": [
-        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+        "Orchestrator reports: Atlas"
       ],
       "top": {
         "panel": {
@@ -178,7 +178,7 @@
       "lang": "en",
       "scene": "chats",
       "reportsLine": [
-        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+        "Orchestrator reports: Atlas"
       ],
       "top": {
         "panel": {
@@ -221,7 +221,7 @@
       "lang": "en",
       "scene": "webhook",
       "reportsLine": [
-        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+        "Orchestrator reports: Atlas"
       ],
       "top": {
         "panel": {
@@ -305,7 +305,7 @@
       "lang": "en",
       "scene": "chats",
       "reportsLine": [
-        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+        "Orchestrator reports: Atlas"
       ],
       "top": {
         "panel": {
@@ -348,7 +348,7 @@
       "lang": "en",
       "scene": "webhook",
       "reportsLine": [
-        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+        "Orchestrator reports: Atlas"
       ],
       "top": {
         "panel": {
@@ -432,7 +432,7 @@
       "lang": "en",
       "scene": "chats",
       "reportsLine": [
-        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+        "Orchestrator reports: Atlas"
       ],
       "top": {
         "panel": {
@@ -475,7 +475,7 @@
       "lang": "en",
       "scene": "webhook",
       "reportsLine": [
-        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+        "Orchestrator reports: Atlas"
       ],
       "top": {
         "panel": {
@@ -559,7 +559,7 @@
       "lang": "en",
       "scene": "chats",
       "reportsLine": [
-        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+        "Orchestrator reports: Atlas"
       ],
       "top": {
         "panel": {
@@ -567,10 +567,10 @@
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 628
+          "scrollHeight": 615
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 445.875,
+        "botSectionHeight": 432.125,
         "controls": 10,
         "textLeaves": 26,
         "overlaps": 0,
@@ -582,10 +582,10 @@
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 856
+          "scrollHeight": 842
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 673.125,
+        "botSectionHeight": 659.375,
         "controls": 10,
         "textLeaves": 32,
         "overlaps": 0,
@@ -602,7 +602,7 @@
       "lang": "en",
       "scene": "webhook",
       "reportsLine": [
-        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+        "Orchestrator reports: Atlas"
       ],
       "top": {
         "panel": {
@@ -610,10 +610,10 @@
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 665
+          "scrollHeight": 651
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 482.75,
+        "botSectionHeight": 469,
         "controls": 10,
         "textLeaves": 26,
         "overlaps": 0,
@@ -625,10 +625,10 @@
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 892
+          "scrollHeight": 879
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 710,
+        "botSectionHeight": 696.25,
         "controls": 10,
         "textLeaves": 32,
         "overlaps": 0,
@@ -686,7 +686,7 @@
       "lang": "en",
       "scene": "chats",
       "reportsLine": [
-        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+        "Orchestrator reports: Atlas"
       ],
       "top": {
         "panel": {
@@ -694,10 +694,10 @@
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 628
+          "scrollHeight": 615
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 445.875,
+        "botSectionHeight": 432.125,
         "controls": 10,
         "textLeaves": 26,
         "overlaps": 0,
@@ -709,10 +709,10 @@
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 856
+          "scrollHeight": 842
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 673.125,
+        "botSectionHeight": 659.375,
         "controls": 10,
         "textLeaves": 32,
         "overlaps": 0,
@@ -729,7 +729,7 @@
       "lang": "en",
       "scene": "webhook",
       "reportsLine": [
-        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+        "Orchestrator reports: Atlas"
       ],
       "top": {
         "panel": {
@@ -737,10 +737,10 @@
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 665
+          "scrollHeight": 651
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 482.75,
+        "botSectionHeight": 469,
         "controls": 10,
         "textLeaves": 26,
         "overlaps": 0,
@@ -752,10 +752,10 @@
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 892
+          "scrollHeight": 879
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 710,
+        "botSectionHeight": 696.25,
         "controls": 10,
         "textLeaves": 32,
         "overlaps": 0,
@@ -772,7 +772,7 @@
       "lang": "uk",
       "scene": "chats",
       "reportsLine": [
-        "Звіти оркестратора: Atlas, бо це єдиний чат, куди агентам можна писати"
+        "Звіти оркестратора: Atlas"
       ],
       "top": {
         "panel": {
@@ -858,7 +858,7 @@
       "lang": "uk",
       "scene": "chats",
       "reportsLine": [
-        "Звіти оркестратора: Atlas, бо це єдиний чат, куди агентам можна писати"
+        "Звіти оркестратора: Atlas"
       ],
       "top": {
         "panel": {
@@ -866,10 +866,10 @@
           "top": 236,
           "width": 320,
           "height": 560,
-          "scrollHeight": 628
+          "scrollHeight": 615
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 445.875,
+        "botSectionHeight": 432.125,
         "controls": 10,
         "textLeaves": 26,
         "overlaps": 0,
@@ -881,10 +881,10 @@
           "top": 236,
           "width": 320,
           "height": 560,
-          "scrollHeight": 870
+          "scrollHeight": 856
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 687.5625,
+        "botSectionHeight": 673.8125,
         "controls": 10,
         "textLeaves": 32,
         "overlaps": 0,
