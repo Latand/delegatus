@@ -1,0 +1,65 @@
+import { expect, test } from "bun:test";
+
+import { privateClasses, type PublicDenyList } from "./publicSafe";
+
+/* docs/design/orchestrator-reports.md §3.7, §5.5. Every name below is
+   invented for this test. */
+
+const DENY: PublicDenyList = {
+  accounts: ["account-b", "acct_7f3a", "main", "pro", "max"],
+  people: ["Person Bee", "pbee_handle", "Al"],
+  local: ["devbox-one"],
+  projects: [
+    { repository: "someone/tools-repo", names: ["tools-repo", "tools"] },
+    { repository: null, names: ["client-site-2"] },
+  ],
+};
+
+const FOUND: readonly [string, string][] = [
+  ["the checkout at /home/someone/work is dirty", "path"],
+  ["see ~/notes for the plan", "path"],
+  ["the state under $HOME/.config moved", "path"],
+  ["C:\\Users\\someone\\repo failed", "path"],
+  ["open https://example.invalid/pull/1 for details", "url"],
+  ["the page on status.example.com is down", "domain"],
+  ["prod on localhost:8898 answers 200", "host"],
+  ["prod on devbox.example.net:8898 answers 200", "port"],
+  ["the viewer listens on port 8898", "port"],
+  ["the host at 192.168.1.20 answered", "ip"],
+  ["write to someone@example.invalid", "email"],
+  ["call +380 44 123 45 67", "phone"],
+  ["conversation 1b4e28ba-2fa1-11d2-883f-0016d3cca427 stalled", "id"],
+  ["conversation_abc123 stalled", "id"],
+  ["the account is at 97% of its weekly limit", "usage"],
+  ["акаунт вичерпав 100% тижневого ліміту", "usage"],
+  ["the Max 20x plan ran out", "usage"],
+  ["the deploy used account-b", "account"],
+  ["Person Bee asked for it", "person"],
+  ["pbee_handle approved", "person"],
+  ["devbox-one rebooted", "host"],
+  ["merged in someone/tools-repo too", "project"],
+  ["the tools-repo build is green", "project"],
+  ["client-site-2 needs a deploy", "project"],
+  ["Bearer abcdefghijklmnop1234 leaked", "secret"],
+];
+
+test.each(FOUND)("%p is private (%p)", (text, kind) => {
+  expect(privateClasses(text, DENY)).toContain(kind as never);
+});
+
+const CLEAN: readonly string[] = [
+  "release 1.5.0 is on prod and npm is still catching up",
+  "the RRSI document (#2222) merges once its checks pass",
+  "deploy 1c41d361 passed; the first-run flow is next",
+  "the board's scroll takes 40% less time after the fix",
+  "src/lib/bridge/reportRender.ts gained a byte budget",
+  "the new tools panel opens on the phone",
+  "the main branch is green and the pro tip in the docs holds",
+  "about ~5 minutes until the next check",
+  "Al and/or anyone reviews the plan",
+  "реліз 1.5.0 на проді, npm ще оновлює версію",
+];
+
+test.each(CLEAN)("%p is left alone", (text) => {
+  expect(privateClasses(text, DENY)).toEqual([]);
+});

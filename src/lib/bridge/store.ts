@@ -814,7 +814,9 @@ export function appendBridgeReports(
     for (const input of inputs) {
       const project = typeof input.project === "string" ? input.project : null;
       const id = scopedReportId(project, input.key);
-      if (known.has(id)) {
+      /* A row filed before ids were scoped carries the key's unscoped id, and a
+         late replay of it is still a replay. */
+      if (known.has(id) || (project !== null && known.has(bridgeReportId(input.key)))) {
         skipped += 1;
         continue;
       }

@@ -58,3 +58,31 @@ test("the bridge reports setting reads on by default and turns off through its o
   expect((await put({ project: "repo-bridge", bridgeReports: "off" })).status).toBe(400);
   expect((await put({ project: "repo-bridge" })).status).toBe(400);
 });
+
+/* docs/design/orchestrator-reports.md §5.6: the Telegram report destination
+   is the operator's to set, only to a chat the bot may post in, and a
+   project with a GitHub remote gets its repository's name as the suggested
+   header name. */
+test("the Telegram report destination is refused for a chat the bot may not post in, set for one it may, and cleared with null", async () => {
+  const { setTelegramBotServiceForTests } = await import("@/lib/telegram/bot/service");
+  const before = await (await get("repo-with-github")).json();
+  expect(before).toMatchObject({ reportTelegram: null, reportNameSuggestion: "Widgets" });
+
+  expect((await put({ project: "repo-with-github", reportTelegram: { chat: "team-reports", name: "Widgets" } })).status).toBe(409);
+  expect((await put({ project: "repo-with-github", reportTelegram: { chat: "team-reports", name: "" } })).status).toBe(400);
+
+  setTelegramBotServiceForTests({
+    listChats: () => ({ chats: [{ chat: "team-reports", alias: "team-reports", postAllowed: true }, { chat: "-100200", alias: null, postAllowed: false }] }),
+  } as never);
+  try {
+    expect((await put({ project: "repo-with-github", reportTelegram: { chat: "-100200", name: "Widgets" } })).status).toBe(409);
+    const set = await put({ project: "repo-with-github", reportTelegram: { chat: "team-reports", name: "Widgets" } });
+    expect(set.status).toBe(200);
+    expect((await set.json()).reportTelegram).toMatchObject({ chat: "team-reports", name: "Widgets", changedBy: "operator" });
+    expect((await (await get("repo-with-github")).json()).mergeOnReview.enabled).toBe(true);
+    const cleared = await put({ project: "repo-with-github", reportTelegram: null });
+    expect((await cleared.json()).reportTelegram).toBeNull();
+  } finally {
+    setTelegramBotServiceForTests(null);
+  }
+});

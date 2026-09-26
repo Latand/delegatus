@@ -76,6 +76,8 @@ const GENERIC_WORDS = new Set(["main", "default", "work", "personal", "team", "p
    extensions a report may name (`.md`, `.ts`, `.sh`, `.js`). */
 const TLD = "(?:com|org|net|io|dev|app|ai|co|me|xyz|info|biz|cloud|site|online|tech|ua|ru|uk|de|eu|us|local|internal|lan|home|arpa|tv|gg|so|to|run|page|link)";
 
+const LIMIT_WORD = "(?<!\\p{L})(?:limit|quota|window|usage|weekly|ліміт\\p{L}*|квот\\p{L}*|вікн\\p{L}*|використ\\p{L}*|лимит\\p{L}*|окн\\p{L}*|использ\\p{L}*|тижн\\p{L}*|недел\\p{L}*)";
+
 const PATTERNS: readonly [PrivateClass, RegExp][] = [
   ["url", /\b(?:https?|ftp|ssh|wss?):\/\/\S+/i],
   ["email", /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/],
@@ -86,7 +88,7 @@ const PATTERNS: readonly [PrivateClass, RegExp][] = [
   ["host", /\blocalhost\b/i],
   ["domain", new RegExp(`\\b(?:[a-z0-9-]+\\.)+${TLD}\\b(?![.\\w])`, "i")],
   ["port", /(?:\blocalhost|\b[\w-]+\.[\w.-]+|\b\d{1,3}(?:\.\d{1,3}){3}):\d{2,5}\b/i],
-  ["port", /\b(?:port|порт[уіа]?|порта)\s+\d{2,5}\b/iu],
+  ["port", /(?<!\p{L})(?:port|порт[уіа]?|порта)\s+\d{2,5}\b/iu],
   /* A path starts a token: `/x/y`, `~/x`, `$HOME/x`, `C:\x`. A repository-
      relative path (`src/lib/x.ts`) names nothing about this machine. */
   ["path", /(?:^|[\s(«"'`=:])(?:~\/|\$HOME\b|\$\{HOME\})/],
@@ -98,10 +100,11 @@ const PATTERNS: readonly [PrivateClass, RegExp][] = [
   ["id", /\bconversation_[\w-]+/i],
   ["id", /\b(?:rpt|rsg|dep|task|card|pipeline)_[0-9a-z]{6,}\b/i],
   /* A share or an amount next to the words for a limit, in English, Ukrainian
-     and Russian. */
-  ["usage", /\d+(?:[.,]\d+)?\s*%[^.;\n]{0,40}\b(?:limit|quota|window|usage|weekly|ліміт\w*|квот\w*|вікн\w*|використ\w*|лимит\w*|окн\w*|использ\w*|тижн\w*|недел\w*)/iu],
-  ["usage", /\b(?:limit|quota|window|usage|ліміт\w*|квот\w*|лимит\w*|використ\w*|использ\w*)\b[^.;\n]{0,40}?\d+(?:[.,]\d+)?\s*%/iu],
-  ["usage", /(?:\$|€|₴)\s?\d+(?:[.,]\d+)?[^.;\n]{0,30}\b(?:plan|tier|subscription|month|план\w*|підписк\w*|подписк\w*|місяц\w*|месяц\w*)/iu],
+     and Russian. `\b` and `\w` are ASCII-only, so the Cyrillic words are
+     bounded by letter classes instead. */
+  ["usage", new RegExp(`\\d+(?:[.,]\\d+)?\\s*%[^.;\\n]{0,40}${LIMIT_WORD}`, "iu")],
+  ["usage", new RegExp(`${LIMIT_WORD}[^.;\\n]{0,40}?\\d+(?:[.,]\\d+)?\\s*%`, "iu")],
+  ["usage", /(?:\$|€|₴)\s?\d+(?:[.,]\d+)?[^.;\n]{0,30}(?<!\p{L})(?:plan|tier|subscription|month|план\p{L}*|підписк\p{L}*|подписк\p{L}*|місяц\p{L}*|месяц\p{L}*)/iu],
   ["usage", /\b(?:max|pro|plus|team|enterprise)\s+(?:plan|tier|20x|5x)\b/i],
 ];
 

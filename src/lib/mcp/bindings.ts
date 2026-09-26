@@ -2648,9 +2648,11 @@ async function bridgeReport(
       && isRetryableReportSend(existing.telegram.code)
       ? await postReportTelegram(existing.id, existing.telegram.chat, existing.telegram.html, `bridge-report:${existing.id}:r${existing.telegram.attempts}`, dependencies, control)
       : existing.telegram ?? null;
+    /* `alreadyRecorded`, because the tool service's envelope owns `replayed`
+       (a replay of the same clientRequestId). */
     return {
       recorded: false,
-      replayed: true,
+      alreadyRecorded: true,
       seq: existing.seq,
       reportId: existing.id,
       destinations: reportDestinations(existing.seq, telegram),
@@ -2684,7 +2686,7 @@ async function bridgeReport(
         scrubbed
           ? "Nothing is left after removing private information; refile without it."
           : "Nothing is left to report: every item was empty or too long; refile with a summary and short items.",
-        { code: "report_empty_after_scrub", warnings: rendered.warnings },
+        { code: "report_empty_after_scrub", retryable: false, warnings: rendered.warnings },
       );
     }
     warnings.push(...rendered.warnings);
@@ -2719,7 +2721,7 @@ async function bridgeReport(
 
   /* A replay under the same key appends nothing, and says so rather than pretending
      to have delivered a second report. */
-  if (!appended) return { recorded: false, replayed: true };
+  if (!appended) return { recorded: false, alreadyRecorded: true };
   const telegram = appended.telegram
     ? await postReportTelegram(appended.id, appended.telegram.chat, appended.telegram.html, `bridge-report:${appended.id}`, dependencies, control)
     : null;

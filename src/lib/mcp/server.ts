@@ -2847,7 +2847,10 @@ export function createMcpToolService(
           /* A Telegram bot refusal answers with the bot's own code and its own
              retryable: a generic retryable tool_failed after send_uncertain
              would invite the double post the bot refuses to risk. */
-          const botRefusal = typedTool === "telegram_bot_send" && error instanceof McpToolRefusal
+          /* bridge_report's one refusal (a report with nothing left after the
+             privacy scrub) names its code the same way: the same call fails the
+             same way, so it is not retryable as sent. */
+          const botRefusal = (typedTool === "telegram_bot_send" || typedTool === "bridge_report") && error instanceof McpToolRefusal
             && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
             ? { code: error.details.code, retryable: error.details.retryable } : null;
           unadmitted = error instanceof McpUnadmittedRefusal;
