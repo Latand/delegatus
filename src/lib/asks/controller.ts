@@ -6,7 +6,7 @@ import type { FileEntry } from "@/lib/types";
 
 import { classifyWithJev } from "./jev";
 import { readAsksYouSettings, readOpenRouterApiKey } from "./settings";
-import { mutateOperatorAsks, readOperatorAsks } from "./store";
+import { loadOperatorAsks, mutateOperatorAsks } from "./store";
 import { ASK_MAX_AGE_MS, runAskSweep, type AskCandidate } from "./sweep";
 
 /*
@@ -106,7 +106,7 @@ export async function runAsksSweepOnce(): Promise<void> {
   const byPath = new Map(recent.map((file) => [file.path, file] as const));
   const candidates = askCandidates(recent, agentRegistry().readOnlySnapshot());
   let announced = false;
-  await runAskSweep({
+  const result = await runAskSweep({
     now: () => new Date(),
     settings: () => readAsksYouSettings(),
     enabledSince,
@@ -117,7 +117,7 @@ export async function runAsksSweepOnce(): Promise<void> {
       return file ? finalAssistantMessage(file) : null;
     },
     classify: (text, credential) => classifyWithJev(text, { apiKey: credential }),
-    read: () => readOperatorAsks(),
+    read: () => loadOperatorAsks(),
     write: (mutation) => { mutateOperatorAsks(mutation); },
     onAsk: () => {
       if (announced) return;
@@ -125,6 +125,7 @@ export async function runAsksSweepOnce(): Promise<void> {
       void announceAsk();
     },
   }, sent);
+  if (result.unreadable) console.error("[asks you] operator-asks.json cannot be read; nothing is sent until it reads again");
 }
 
 const host = globalThis as typeof globalThis & { __llvAsksSweepTimer?: ReturnType<typeof setTimeout> };

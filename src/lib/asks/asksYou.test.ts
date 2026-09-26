@@ -14,7 +14,7 @@ import type { FileEntry } from "@/lib/types";
 import { classifierText, classifyWithJev, JEV_INPUT_PRICE_USD, JevError, jevCostCeilingUsd, type JevVerdict } from "./jev";
 import { overlayOperatorAsks } from "./overlay";
 import { readAsksYouSettings, writeAsksYouSettings } from "./settings";
-import { mutateOperatorAsks, operatorAsksSignature, projectReportLogAsks, readOperatorAsks } from "./store";
+import { loadOperatorAsks, mutateOperatorAsks, OperatorAsksUnreadable, operatorAsksSignature, projectReportLogAsks, readOperatorAsks } from "./store";
 import { runAskSweep, type AskCandidate, type AskSweepPorts } from "./sweep";
 
 /*
@@ -87,7 +87,7 @@ function ports(overrides: Partial<AskSweepPorts> & { text?: string; classify?: A
     apiKey: "test-key",
     candidates: [candidate()],
     finalMessage: () => message(text),
-    read: () => readOperatorAsks(undefined, new Date(NOW)),
+    read: () => loadOperatorAsks(undefined, new Date(NOW)),
     write: (mutation) => { mutateOperatorAsks(mutation, new Date(NOW)); },
     ...overrides,
     classify: async (body, key) => {
@@ -438,6 +438,47 @@ describe("a state file that cannot be written", () => {
     const result = await runAskSweep(restarted, new Map());
     expect(restarted.calls).toHaveLength(0);
     expect(result.capped).toBe(1);
+  });
+});
+
+describe("a state file that cannot be read", () => {
+  /* A file that is there but cannot be read or parsed is no first run: its
+     month's spend is unknown, so the sweep sends nothing and no write puts an
+     empty file over it. */
+  const file = () => path.join(stateDir, "operator-asks.json");
+  const spoilers: { name: string; spoil: (held: string) => void; restore: (held: string) => void }[] = [
+    { name: "truncated", spoil: (held) => fs.writeFileSync(file(), held.slice(0, Math.floor(held.length / 2))), restore: (held) => fs.writeFileSync(file(), held) },
+    { name: "of another schema", spoil: (held) => fs.writeFileSync(file(), JSON.stringify({ ...JSON.parse(held), schemaVersion: 99 })), restore: (held) => fs.writeFileSync(file(), held) },
+    ...(process.getuid?.() === 0 ? [] : [{ name: "unreadable", spoil: () => fs.chmodSync(file(), 0o000), restore: () => fs.chmodSync(file(), 0o600) }]),
+  ];
+
+  for (const { name, spoil, restore } of spoilers) {
+    test(`a file ${name} sends nothing and keeps the month's spend for when it reads again`, async () => {
+      writeAsksYouSettings({ capUsd: 1 }, new Date(NOW));
+      mutateOperatorAsks((held) => { held.spend.usd = 0.95; held.spend.calls = 400; held.seen.push("earlier:claude:msg-0"); }, new Date(NOW));
+      const held = fs.readFileSync(file(), "utf8");
+      spoil(held);
+      try {
+        const sweep = ports();
+        for (let round = 0; round < 3; round += 1) expect((await runAskSweep(sweep)).unreadable).toBe(true);
+        expect(sweep.calls).toHaveLength(0);
+        expect(() => loadOperatorAsks()).toThrow(OperatorAsksUnreadable);
+        expect(readOperatorAsks().spend.usd).toBe(0);
+        expect(() => mutateOperatorAsks((current) => { current.spend.calls += 1; }, new Date(NOW))).toThrow();
+      } finally {
+        restore(held);
+      }
+      expect(fs.readFileSync(file(), "utf8")).toBe(held);
+      const kept = readOperatorAsks(undefined, new Date(NOW));
+      expect(kept.spend).toMatchObject({ usd: 0.95, calls: 400 });
+      expect(kept.seen).toContain("earlier:claude:msg-0");
+    });
+  }
+
+  test("a file that is not there yet is a first run, and the send goes out", async () => {
+    const sweep = ports();
+    await runAskSweep(sweep);
+    expect(sweep.calls).toHaveLength(1);
   });
 });
 

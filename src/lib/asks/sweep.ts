@@ -19,7 +19,8 @@ import { currentSpend, spendMonth, type OperatorAskRecord, type OperatorAsksFile
  * largest possible cost counted, then settled to what the call cost once it
  * answers. A state write that fails after the call, or a process that dies
  * during it, leaves the ceiling counted and the message never sent again; a
- * send that cannot be recorded is not made.
+ * send that cannot be recorded is not made. A state file that cannot be read
+ * holds a spend nobody knows, so it counts as a cap reached: nothing is sent.
  */
 
 /** A message older than this when the sweep first sees it is history. */
@@ -65,6 +66,8 @@ export interface AskSweepResult {
   skipped: number;
   capped: number;
   failed: number;
+  /** The state file could not be read, so nothing was sent. */
+  unreadable: boolean;
 }
 
 function bodyKey(text: string): string {
@@ -82,12 +85,19 @@ export function askId(subject: string, messageId: string): string {
  * leaves it once its message is too old to be sent at all.
  */
 export async function runAskSweep(ports: AskSweepPorts, sent: Map<string, number> = new Map()): Promise<AskSweepResult> {
-  const result: AskSweepResult = { classified: 0, asks: [], skipped: 0, capped: 0, failed: 0 };
+  const result: AskSweepResult = { classified: 0, asks: [], skipped: 0, capped: 0, failed: 0, unreadable: false };
   if (!ports.apiKey || !ports.settings().enabled) return result;
   const credential = ports.apiKey;
   const horizon = ports.now().getTime() - ASK_MAX_AGE_MS;
   for (const [key, messageAt] of sent) if (messageAt < horizon) sent.delete(key);
-  const seen = new Set(ports.read().seen);
+  let state: OperatorAsksFileV1;
+  try {
+    state = ports.read();
+  } catch {
+    result.unreadable = true;
+    return result;
+  }
+  const seen = new Set(state.seen);
   for (const candidate of ports.candidates) {
     if (candidate.working || candidate.structuredAsk) continue;
     const message = ports.finalMessage(candidate);

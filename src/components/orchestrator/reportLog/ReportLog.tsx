@@ -60,11 +60,27 @@ export function ReportLog({ project, active = true, variant, initial, now }: {
   }, [active, off, newest, project]);
 
   const column = variant === "column";
-  const rows = useMemo(() => reportLogRows(log.entries, log.asks, !log.hasOlder), [log.entries, log.asks, log.hasOlder]);
+  const rows = useMemo(
+    () => reportLogRows(log.entries, log.asks, { reports: !log.olderReports, asks: !log.olderAsks }),
+    [log.entries, log.asks, log.olderReports, log.olderAsks],
+  );
   const askLines = (asks: readonly ReportLogAsk[]) => (
     <ol className="flex flex-col" data-report-log-asks="">
       {asks.map((ask) => <AskLine key={ask.id} ask={ask} t={t} locale={locale} now={now} />)}
     </ol>
+  );
+  const olderButton = (
+    <div className="px-3 py-2">
+      <button
+        type="button"
+        data-report-log-older=""
+        disabled={log.loadingOlder}
+        onClick={log.loadOlder}
+        className={`w-full rounded-control border border-border bg-card px-3 text-ui font-semibold text-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${column ? "min-h-8" : "min-h-11"}`}
+      >
+        {log.loadingOlder ? t("reportLog.loading") : t("reportLog.older")}
+      </button>
+    </div>
   );
   let body: React.ReactNode;
   if (off) {
@@ -77,6 +93,7 @@ export function ReportLog({ project, active = true, variant, initial, now }: {
         </div>
         {/* The asks are the Viewer's, not the orchestrator's: its switch does not hide them. */}
         {log.asks.length ? askLines(log.asks) : null}
+        {log.olderAsks ? olderButton : null}
       </>
     );
   } else if (!log.loaded) {
@@ -104,19 +121,7 @@ export function ReportLog({ project, active = true, variant, initial, now }: {
             />
           ))}
         </ol>
-        {log.hasOlder ? (
-          <div className="px-3 py-2">
-            <button
-              type="button"
-              data-report-log-older=""
-              disabled={log.loadingOlder}
-              onClick={log.loadOlder}
-              className={`w-full rounded-control border border-border bg-card px-3 text-ui font-semibold text-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${column ? "min-h-8" : "min-h-11"}`}
-            >
-              {log.loadingOlder ? t("reportLog.loading") : t("reportLog.older")}
-            </button>
-          </div>
-        ) : null}
+        {log.hasOlder ? olderButton : null}
       </>
     );
   }

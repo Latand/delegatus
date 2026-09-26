@@ -119,24 +119,61 @@ export function mergeAsks(held: readonly ReportLogAsk[], incoming: readonly Repo
   return [...byId.values()].sort((left, right) => Date.parse(right.at) - Date.parse(left.at) || left.id.localeCompare(right.id));
 }
 
+/** The server's order for ask lines: newest first, then by id. */
+function askPrecedes(left: ReportLogAsk, right: ReportLogAsk): boolean {
+  const byTime = Date.parse(left.at) - Date.parse(right.at);
+  return byTime > 0 || (byTime === 0 && left.id.localeCompare(right.id) < 0);
+}
+
+/**
+ * The newest ask page merged into the asks held, as `mergeNewest` does for the
+ * reports: a page that does not reach back to the held head (more asked than
+ * one page holds) replaces the list and its cursor, so no line goes missing
+ * between them.
+ */
+export function mergeNewestAsks(
+  held: readonly ReportLogAsk[],
+  heldBefore: string | null,
+  page: { asks: readonly ReportLogAsk[]; nextAsksBefore: string | null },
+): { asks: ReportLogAsk[]; nextAsksBefore: string | null } {
+  if (held.length === 0) return { asks: [...page.asks], nextAsksBefore: page.nextAsksBefore };
+  const oldest = page.asks.at(-1);
+  if (page.nextAsksBefore !== null && oldest && askPrecedes(oldest, held[0]!)) return { asks: [...page.asks], nextAsksBefore: page.nextAsksBefore };
+  return { asks: mergeAsks(held, page.asks), nextAsksBefore: heldBefore };
+}
+
 export type ReportLogRow =
   | { kind: "report"; key: string; entry: ReportLogEntry }
   | { kind: "ask"; key: string; ask: ReportLogAsk };
 
 /**
  * The log as one timeline, newest first: the orchestrator's reports and the
- * Viewer's ask lines by time. An ask older than the oldest report held waits
- * for the page that reaches it, unless every report is already held, so a
- * line never shows out of its place.
+ * Viewer's ask lines by time. Each pages on its own cursor, so a line shows
+ * only once everything newer of both kinds is held: nothing older than the
+ * oldest report held while older reports remain, nor than the oldest ask held
+ * while older asks remain. A line never shows out of its place, and the last
+ * page shows the rest.
  */
-export function reportLogRows(entries: readonly ReportLogEntry[], asks: readonly ReportLogAsk[], complete: boolean): ReportLogRow[] {
-  const oldest = entries.at(-1);
-  const floor = !complete && oldest ? Date.parse(oldest.at) : Number.NEGATIVE_INFINITY;
+export function reportLogRows(
+  entries: readonly ReportLogEntry[],
+  asks: readonly ReportLogAsk[],
+  complete: { reports: boolean; asks: boolean },
+): ReportLogRow[] {
+  const oldestEntry = entries.at(-1);
+  const oldestAsk = asks.at(-1);
+  const floor = Math.max(
+    !complete.reports && oldestEntry ? Date.parse(oldestEntry.at) : Number.NEGATIVE_INFINITY,
+    !complete.asks && oldestAsk ? Date.parse(oldestAsk.at) : Number.NEGATIVE_INFINITY,
+  );
+  /* A time that does not parse keeps its row: it cannot be placed, but it was sent. */
+  const within = (at: number) => !(at < floor);
   const rows: { at: number; row: ReportLogRow }[] = [
-    ...entries.map((entry) => ({ at: Date.parse(entry.at), row: { kind: "report" as const, key: `r:${entry.seq}`, entry } })),
+    ...entries
+      .map((entry) => ({ at: Date.parse(entry.at), row: { kind: "report" as const, key: `r:${entry.seq}`, entry } }))
+      .filter((row) => within(row.at)),
     ...asks
-      .filter((ask) => Date.parse(ask.at) >= floor)
-      .map((ask) => ({ at: Date.parse(ask.at), row: { kind: "ask" as const, key: `a:${ask.id}`, ask } })),
+      .map((ask) => ({ at: Date.parse(ask.at), row: { kind: "ask" as const, key: `a:${ask.id}`, ask } }))
+      .filter((row) => within(row.at)),
   ];
   return rows
     .sort((left, right) => (right.at || 0) - (left.at || 0) || (left.row.kind === right.row.kind ? 0 : left.row.kind === "report" ? -1 : 1))

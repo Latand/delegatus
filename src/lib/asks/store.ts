@@ -20,10 +20,11 @@ import type { ReportLogAsk } from "./types";
  *
  * A send is recorded before its call, with its largest possible cost, and
  * settled after it (sweep.ts), so a write that fails after a call leaves the
- * cost counted and the message seen. Anything unreadable reads as empty: a
- * lost file costs a flag that does not show and forgets this month's spend,
- * but the classifier's process never sends a message twice, since it keeps
- * every key it sent in memory beside the file.
+ * cost counted and the message seen. A file that is not there is a first run.
+ * A file that is there but cannot be read or parsed holds a month's spend
+ * nobody can know: the classifier's read and every write refuse it, so the
+ * sweep sends nothing and no write puts an empty file over the real one. The
+ * board's reads (the overlay, the report log, the spend line) answer empty.
  */
 
 export const OPERATOR_ASKS_SCHEMA_VERSION = 1 as const;
@@ -113,15 +114,34 @@ function parseScores(value: unknown): Record<string, number> {
   return scores;
 }
 
-export function readOperatorAsks(file = operatorAsksFile(), now = new Date()): OperatorAsksFileV1 {
+/** The file is there, but what it holds cannot be known. */
+export class OperatorAsksUnreadable extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OperatorAsksUnreadable";
+  }
+}
+
+/**
+ * The file as the classifier needs it: empty only when it is not there, and
+ * `OperatorAsksUnreadable` when it is there and cannot be read or parsed.
+ */
+export function loadOperatorAsks(file = operatorAsksFile(), now = new Date()): OperatorAsksFileV1 {
+  let text: string;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptyFile(now);
+    throw new OperatorAsksUnreadable(`cannot read: ${(error as NodeJS.ErrnoException).code ?? "unknown"}`);
+  }
   let raw: unknown;
   try {
-    raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    raw = JSON.parse(text);
   } catch {
-    return emptyFile(now);
+    throw new OperatorAsksUnreadable("cannot parse");
   }
   const parsed = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Partial<OperatorAsksFileV1> : {};
-  if (parsed.schemaVersion !== OPERATOR_ASKS_SCHEMA_VERSION) return emptyFile(now);
+  if (parsed.schemaVersion !== OPERATOR_ASKS_SCHEMA_VERSION) throw new OperatorAsksUnreadable(`schema ${String(parsed.schemaVersion)}`);
   const spend = parsed.spend && typeof parsed.spend === "object" ? parsed.spend as Partial<AsksSpend> : {};
   return {
     schemaVersion: OPERATOR_ASKS_SCHEMA_VERSION,
@@ -138,19 +158,29 @@ export function readOperatorAsks(file = operatorAsksFile(), now = new Date()): O
   };
 }
 
+/** The board's read: anything unreadable reads as empty. */
+export function readOperatorAsks(file = operatorAsksFile(), now = new Date()): OperatorAsksFileV1 {
+  try {
+    return loadOperatorAsks(file, now);
+  } catch {
+    return emptyFile(now);
+  }
+}
+
 /** This month's spend: a new month starts from nothing. */
 export function currentSpend(file: OperatorAsksFileV1, now: Date): AsksSpend {
   const month = spendMonth(now);
   return file.spend.month === month ? file.spend : { month, usd: 0, calls: 0, capped: 0 };
 }
 
-/** One read-modify-write. The classifier is the only writer, in one process. */
+/** One read-modify-write. The classifier is the only writer, in one process.
+    A file that cannot be read is left as it is: the write throws. */
 export function mutateOperatorAsks(
   mutation: (current: OperatorAsksFileV1) => void,
   now = new Date(),
   file = operatorAsksFile(),
 ): OperatorAsksFileV1 {
-  const current = readOperatorAsks(file, now);
+  const current = loadOperatorAsks(file, now);
   current.spend = currentSpend(current, now);
   mutation(current);
   const floor = now.getTime() - ASK_RETENTION_MS;
