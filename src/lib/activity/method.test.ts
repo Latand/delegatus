@@ -262,12 +262,14 @@ describe("report hours", () => {
     expect(roundHalfHour(75 * MIN)).toBe(1.5);
   });
 
-  test("half-hour rounds per project per day", () => {
-    /* 10 min of harbor and 10 min of lantern: each project rounds up to 0.5 h. */
+  test("half-hour rounds each project's own day, and the day rounds every project's time together", () => {
+    /* 10 min of harbor and 10 min of lantern: each project rounds up to 0.5 h,
+       and the day's 20 minutes round to 0.5 h. */
     const report = dayReport([anchor(0, "harbor"), anchor(60, "lantern")]);
     expect(report.totals.humanMs).toBe(20 * MIN);
-    expect(report.totals.humanHours).toBe(1);
-    expect(report.days[0]!.humanHours).toBe(1);
+    expect(report.totals.humanHours).toBe(0.5);
+    expect(report.days[0]!.humanHours).toBe(0.5);
+    expect(report.projects.map((row) => row.humanHours)).toEqual([0.5, 0.5]);
   });
 
   test("clock-hour: the original weights 10-39 min = 0.5 h and 40+ min = 1 h", () => {
@@ -300,6 +302,71 @@ describe("report hours", () => {
        last. Lantern's 5 minutes past 10:00 weigh nothing in their own hour. */
     const split = humanSegments(humanEpisodes([anchor(50, "harbor"), anchor(55, "lantern")], clock, T0 + 2 * HOUR));
     expect(Object.fromEntries(dayReportHours(split, day, "clock-hour"))).toEqual({ lantern: 0.5 });
+  });
+});
+
+describe("each project counts its own hours; the day counts every project's time together", () => {
+  test("three projects worked in parallel each take the hour their own input covers", () => {
+    const clock = { ...PARAMS, rounding: "clock-hour" as const, breakMs: 10 * MIN };
+    /* 09:00-09:40 each: harbor, lantern and orchard interleave their requests. */
+    const anchors = [0, 10, 20, 30].flatMap((minute) => [anchor(minute, "harbor"), anchor(minute + 3, "lantern"), anchor(minute + 6, "orchard")]);
+    const report = dayReport(anchors, [], clock);
+    expect(Object.fromEntries(report.projects.map((row) => [row.project, row.humanHours]))).toEqual({ harbor: 1, lantern: 1, orchard: 1 });
+    expect(report.days[0]!.projects.map((entry) => entry.humanHours)).toEqual([1, 1, 1]);
+    /* The hour is one hour of the operator's: the union of every window. */
+    expect(report.totals.humanHours).toBe(1);
+    expect(report.days[0]!.humanHours).toBe(1);
+    /* Its minutes are still counted once. */
+    expect(report.totals.humanMs).toBe(46 * MIN);
+    expect(report.projects.reduce((sum, row) => sum + row.humanMs, 0)).toBe(46 * MIN);
+  });
+
+  test("another project's minutes neither take a project's hour nor raise its weight", () => {
+    const clock = { ...PARAMS, rounding: "clock-hour" as const, breakMs: 10 * MIN };
+    /* harbor 09:00-09:20 (20 min), lantern 09:20-09:50 (30 min): the hour
+       holds 50 minutes, 1 h in the day's total; harbor 0.5 h, lantern 0.5 h. */
+    const report = dayReport([anchor(0, "harbor"), anchor(10, "harbor"), anchor(20, "lantern"), anchor(30, "lantern"), anchor(40, "lantern")], [], clock);
+    expect(Object.fromEntries(report.projects.map((row) => [row.project, row.humanHours]))).toEqual({ harbor: 0.5, lantern: 0.5 });
+    expect(report.totals.humanHours).toBe(1);
+    const harbor = activityReport({
+      params: clock, range: "today", nowMs: Date.parse("2026-09-21T23:59:00Z"),
+      anchors: [anchor(0, "harbor"), anchor(10, "harbor"), anchor(20, "lantern"), anchor(30, "lantern"), anchor(40, "lantern")],
+      hosts: [LOCAL], agents: [], scope: { project: "harbor" },
+    });
+    expect(harbor.totals.humanHours).toBe(0.5);
+    expect(harbor.days[0]!.hours[9]!.weight).toBe(0.5);
+  });
+});
+
+describe("a replayed real day reads the daily report's hours", () => {
+  /* The day the page read 5.5 h for paid-a and the daily report 8.5 h. */
+  const params = clampMethodParams({}, REPLAY_DAY.tz);
+  const anchors: Anchor[] = REPLAY_DAY_INPUTS.map(([offset, project, host, surface, kind]) => ({ at: REPLAY_DAY.start + offset * 1000, project, surface, kind, host }));
+  const report = (project?: string) => activityReport({
+    params, range: "7d", nowMs: REPLAY_DAY.start + 36 * HOUR, anchors, hosts: [readHost("host-a"), readHost("host-b")], agents: [],
+    ...(project === undefined ? {} : { scope: { project } }),
+  });
+  const replayDay = (result: ReturnType<typeof report>) => result.days.find((day) => day.date === REPLAY_DAY.date)!;
+
+  test("paid-a reads 8.5 h on its row, its day entry and its own view, with 01:00 and 02:00 a full hour each", () => {
+    const all = report();
+    expect(all.projects.find((row) => row.project === "paid-a")!.humanHours).toBe(8.5);
+    expect(replayDay(all).projects.find((entry) => entry.project === "paid-a")!.humanHours).toBe(8.5);
+    const view = report("paid-a");
+    expect(view.totals.humanHours).toBe(8.5);
+    const day = replayDay(view);
+    expect(day.humanHours).toBe(8.5);
+    /* Its own inputs cover 01:00 and 02:00 for 40 minutes and more: other
+       projects' minutes used to win both. */
+    expect(day.hours[1]!.weight).toBe(1);
+    expect(day.hours[2]!.weight).toBe(1);
+    expect(day.hours.reduce((sum, hour) => sum + (hour.weight ?? 0), 0)).toBe(8.5);
+  });
+
+  test("the day's total is the union of every project's windows, and the projects add up to more", () => {
+    const day = replayDay(report());
+    expect(day.humanHours).toBe(11.5);
+    expect(day.projects.reduce((sum, entry) => sum + entry.humanHours, 0)).toBeGreaterThan(11.5);
   });
 });
 
@@ -546,49 +613,6 @@ describe("billable projects are counted on their own", () => {
   });
 });
 
-describe("a billable project's report hours are counted as the paid report counts them", () => {
-  /* The replayed day: 5.5 h for paid-a when every project competes for an
-     hour, 8.5 h in the paid report, which counts the paid projects alone. */
-  const params = clampMethodParams({}, REPLAY_DAY.tz);
-  const anchors: Anchor[] = REPLAY_DAY_INPUTS.map(([offset, project, host, surface, kind]) => ({ at: REPLAY_DAY.start + offset * 1000, project, surface, kind, host }));
-  const nowMs = REPLAY_DAY.start + 36 * HOUR;
-  const hosts = [readHost("host-a"), readHost("host-b")];
-  const report = (billable: string[], project?: string) => activityReport({
-    params, range: "7d", nowMs, anchors, hosts, agents: [], billable,
-    ...(project === undefined ? {} : { scope: { project } }),
-  });
-  const replayDay = (result: ReturnType<typeof report>) => result.days.find((day) => day.date === REPLAY_DAY.date)!;
-
-  test("the replayed day reads the paid report's 8.5 h for the paid project, on its row, its day entry and its view", () => {
-    const all = report(["paid-a", "paid-b"]);
-    expect(all.projects.find((row) => row.project === "paid-a")!.humanHours).toBe(8.5);
-    expect(replayDay(all).projects.find((entry) => entry.project === "paid-a")!.humanHours).toBe(8.5);
-    const view = report(["paid-a", "paid-b"], "paid-a");
-    expect(view.totals.humanHours).toBe(8.5);
-    const day = replayDay(view);
-    expect(day.humanHours).toBe(8.5);
-    /* Its own inputs cover 01:00 and 02:00 for 40 minutes and more: each is a
-       full hour, which another project's minutes used to win. */
-    expect(day.hours[1]!.weight).toBe(1);
-    expect(day.hours[2]!.weight).toBe(1);
-    expect(day.hours.reduce((sum, hour) => sum + (hour.weight ?? 0), 0)).toBe(8.5);
-  });
-
-  test("the day's total over every project and a project that is not billable keep the all-project count", () => {
-    const tagged = report(["paid-a", "paid-b"]);
-    const untagged = report([]);
-    expect(replayDay(tagged).humanHours).toBe(11.5);
-    expect(replayDay(untagged).humanHours).toBe(11.5);
-    expect(tagged.totals.humanHours).toBe(untagged.totals.humanHours);
-    for (const row of tagged.projects.filter((entry) => !entry.billable)) {
-      expect(row.humanHours).toBe(untagged.projects.find((entry) => entry.project === row.project)!.humanHours);
-    }
-    /* Untagged, the paid project competes with every project, as before. */
-    expect(untagged.projects.find((row) => row.project === "paid-a")!.humanHours).toBe(5.5);
-    expect(report([], "paid-a").totals.humanHours).toBe(5.5);
-  });
-});
-
 describe("presentation fields: the unclear part of unattended time and the clock hours", () => {
   const DEFAULTS = clampMethodParams({}, "UTC");
   const NOW = Date.parse("2026-09-24T20:00:00Z");
@@ -699,7 +723,9 @@ describe("presentation fields: the unclear part of unattended time and the clock
         expect(sum((hour) => hour.unattendedUnreadMs)).toBe(row.unattendedUnreadMs);
         if (params.rounding === "clock-hour") expect(sum((hour) => hour.weight ?? 0)).toBe(row.humanHours);
         else for (const hour of row.hours) expect(hour.weight).toBeNull();
-        expect(row.projects.reduce((total, entry) => total + entry.humanHours, 0)).toBe(row.humanHours);
+        /* Projects count their hours alone, so theirs add up to at least the
+           day's; their minutes, counted once, add up to the day's. */
+        expect(row.projects.reduce((total, entry) => total + entry.humanHours, 0)).toBeGreaterThanOrEqual(row.humanHours);
         expect(row.projects.reduce((total, entry) => total + entry.humanMs, 0)).toBe(row.humanMs);
       }
       expect(result.days.reduce((total, row) => total + row.unattendedUnreadMs, 0)).toBe(result.totals.unattendedUnreadMs);
@@ -776,11 +802,11 @@ describe("one project's view: the page filtered to a project", () => {
           expect(day.humanHours).toBe(whole.projects.find((entry) => entry.project === project)?.humanHours ?? 0);
         }
       }
-      /* The projects' views partition the page's human minutes. Report hours
-         partition it only when no project is billable: a billable project's
-         are counted among the billable projects alone. */
+      /* The projects' views partition the page's minutes; their report hours,
+         each counted alone, add up to at least the page's. */
       const views = ["A", "B"].map((project) => week(params, project).totals);
       expect(views.reduce((sum, totals) => sum + totals.humanMs, 0)).toBe(all.totals.humanMs);
+      expect(views.reduce((sum, totals) => sum + totals.humanHours, 0)).toBeGreaterThanOrEqual(all.totals.humanHours);
       expect(views.reduce((sum, totals) => sum + totals.agentHoursMs, 0)).toBe(all.totals.agentHoursMs);
     }
   });

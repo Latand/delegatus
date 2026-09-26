@@ -429,10 +429,7 @@ counted exactly.
      (a tie rounds up), and any non-zero time is at least 0.5 h.
 5. **Billable.** The billable figure repeats steps 1-4 on the billable
    projects' inputs alone, as a paid report would, so a request to another
-   project never takes a billable minute. A billable project's own report
-   hours, on its row and its page, are this count
-   (`docs/design/worktime-matches-zvit.md`); the day's total over every
-   project keeps steps 1-4.
+   project never takes a billable minute.
 
 Raw minutes stay the primary figure; report hours are secondary and name
 their mode.
