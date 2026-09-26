@@ -19,7 +19,7 @@ import { md, mdBlocks, mdImages } from "./markdown";
 import { BUBBLE_MEASURE, READING_MEASURE } from "./measure";
 import { UserMessageRow } from "./UserMessageRow";
 import { useMessageProvenance, type ProvenanceLookup } from "./messageProvenance";
-import { tr, type Item } from "./parse";
+import { rawUserTextFor, tr, type Item } from "./parse";
 import { BlobCard } from "./cards/BlobCard";
 import { CmdGroupCard } from "./cards/CmdGroupCard";
 import { CompactBand } from "./cards/CompactBand";
@@ -59,18 +59,16 @@ import { quoteHead } from "../conversation/deputyPlacement";
  * pictures of the row as drawn (#2144).
  */
 export function resolveDeliveredItem(item: Item, provenance: ProvenanceLookup): Item {
-  if (item.structuredUserRef && (item.kind === "user" || item.kind === "tmsg")) {
-    const resolved = provenance.forItem(item);
-    if (resolved?.origin === "agent") return internalCard(item.ts, item.text, resolved);
-    if (item.kind === "user" && resolved?.selectedContext) return { ...item, selectedContext: resolved.selectedContext };
-    return item;
-  }
-  if (item.kind === "user") {
+  if (item.kind === "user" || (item.kind === "tmsg" && item.internal)) {
     /* A selected-context capture exists only on operator composer sends. */
-    if (item.selectedContext) return item;
+    if (item.kind === "user" && item.selectedContext && !rawUserTextFor(item)) return item;
     const resolved = provenance.forItem(item);
-    if (resolved?.mandate) return mandateCard(item.ts, item.text, resolved.mandate);
-    if (resolved?.origin === "agent") return internalCard(item.ts, item.text, resolved);
+    const text = resolved?.matchedRawUserText ? rawUserTextFor(item)! : item.text;
+    if (resolved?.mandate) return mandateCard(item.ts, text, resolved.mandate);
+    if (resolved?.origin === "agent") return internalCard(item.ts, text, resolved);
+    if (resolved?.origin === "operator" && item.kind === "tmsg") return { kind: "user", ts: item.ts, text,
+      ...(resolved.selectedContext ? { selectedContext: resolved.selectedContext } : {}) };
+    if (item.kind === "user" && resolved?.selectedContext) return { ...item, text, selectedContext: resolved.selectedContext };
     return item;
   }
   if (item.kind !== "sysmsg" || !item.deliveredMessage) return item;

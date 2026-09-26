@@ -308,6 +308,13 @@ export type Item = (
   | { kind: "raw"; text: string; err: boolean }
 ) & { structuredUserRef?: string };
 
+/* The wire text can begin with marker-shaped literal content. Keep it outside
+   the public Item shape so legacy parsed rows retain their exact contracts. */
+const rawUserTexts = new WeakMap<Item, string>();
+export function rawUserTextFor(item: Item): string | undefined {
+  return rawUserTexts.get(item);
+}
+
 /** One rendered feed row: `key` is stable across incremental re-feeds, so a
     row keeps its DOM node (and its memoized render) while the tail grows. */
 export interface FeedEntry {
@@ -647,6 +654,8 @@ function inboxImagesFromPath(path: string): Extract<Item, { kind: "inbox-image" 
 interface CodexUserContent {
   metadataRef?: string;
   text: string;
+  /** Exact user text before marker decoding, retained for delivery receipt joins. */
+  rawText: string;
   attachments: Item[];
   structured: boolean;
   /** The Viewer card this turn was submitted against (#844), read off the
@@ -666,7 +675,7 @@ interface CodexUserContent {
    render approved inline raster data as an image, and describe every other
    non-empty attachment without exposing its payload in the feed. */
 function normalizeCodexUserContent(content: unknown): CodexUserContent {
-  if (typeof content === "string") return { ...decodeCodexStructuredUserText(content), attachments: [] };
+  if (typeof content === "string") return { ...decodeCodexStructuredUserText(content), rawText: content, attachments: [] };
   const text: string[] = [];
   const attachments: Item[] = [];
   for (const part of arr(content)) {
@@ -703,7 +712,8 @@ function normalizeCodexUserContent(content: unknown): CodexUserContent {
       attachments.push({ kind: "note", text: codexAttachmentLabel(type) });
     }
   }
-  return { ...decodeCodexStructuredUserText(text.join(" ").trim()), attachments };
+  const rawText = text.join(" ").trim();
+  return { ...decodeCodexStructuredUserText(rawText), rawText, attachments };
 }
 
 type ToolImageBlock = Extract<ToolOutputBlock, { type: "image" }>;
@@ -2656,10 +2666,13 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
        identity — the bubble and the attachment cards alike. An image-only
        send produces nothing but attachment rows, and they are the only thing
        that can say which submission the picture arrived for. */
-    const emit = (item: Item) => entrySeqs.push(push(
-      content.metadataRef ? { ...item, structuredUserRef: content.metadataRef } : item,
-      content.deliveryDedup,
-    ));
+    const emit = (item: Item) => {
+      const row = content.metadataRef ? { ...item, structuredUserRef: content.metadataRef } : item;
+      if ((row.kind === "user" || row.kind === "tmsg") && content.rawText !== row.text) {
+        rawUserTexts.set(row, content.rawText);
+      }
+      entrySeqs.push(push(row, content.deliveryDedup));
+    };
     const { cleaned, images } = extractInboxImages(content.text);
     const voice = cleaned ? parseRealtimeDelegation(cleaned) : null;
     if (voice) emit({ kind: "voice", ts, ...voice });
@@ -2736,6 +2749,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       const echoItem: Item = internal
         ? internalRelayItem(ts, cleaned, decoded.origin ?? { kind: "agent", ...(previous?.kind === "tmsg" ? { role: previous.peer } : {}) })
         : { kind: "user", ts, text: cleaned };
+      const rawText = decoded.rawText !== echoItem.text ? decoded.rawText : previous ? rawUserTextFor(previous) : undefined;
+      if (rawText) rawUserTexts.set(echoItem, rawText);
       const metadataRef = decoded.metadataRef ?? previous?.structuredUserRef;
       if (metadataRef) echoItem.structuredUserRef = metadataRef;
       const matchSeq = pending.entrySeqs.find((seq) => {
@@ -2781,7 +2796,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   };
   const addCodexResponseUser = (ts: unknown, content: unknown) => addCodexUserRecord(ts, normalizeCodexUserContent(content));
   const addCodexEventUser = (ts: unknown, text: string) =>
-    addCodexUserRecord(ts, { ...decodeCodexStructuredUserText(text), attachments: [] });
+    addCodexUserRecord(ts, { ...decodeCodexStructuredUserText(text), rawText: text, attachments: [] });
   const addCompact = (ts: unknown, meta?: { trigger?: string; preTokens?: number }) => {
     push({ kind: "compact", ts, trigger: meta?.trigger, preTokens: meta?.preTokens });
   };

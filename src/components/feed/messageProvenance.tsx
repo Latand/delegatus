@@ -8,8 +8,8 @@ import { structuredUserReferenceKey } from "@/lib/runtime/codexStructuredUserTex
 import { isMemberColor, type MessageSender } from "@/lib/team/contract";
 import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
 
-import { assignDeliveredOccurrences, candidateDigests, occurrenceCandidate } from "./deliveredOccurrences";
-import type { FeedEntry, Item } from "./parse";
+import { assignDeliveredOccurrences, candidateDigests, occurrenceCandidate, type MatchedDeliveryProvenance } from "./deliveredOccurrences";
+import { rawUserTextFor, type FeedEntry, type Item } from "./parse";
 import { BoundedLru } from "./scrollMemory";
 import { useStructuredUserProvenance } from "./structuredUserProvenance";
 
@@ -22,8 +22,8 @@ import { useStructuredUserProvenance } from "./structuredUserProvenance";
  * structured send — resolves through the occurrence join: the server projects
  * each settled delivery's content digest, settlement time and authorship, and
  * the feed attaches it to the ONE row carrying that text nearest that time.
- * Codex structured rows need neither join: their authorship rides the
- * structured-user marker the parser already decodes.
+ * Codex structured rows carry marker provenance; a receipt still takes
+ * precedence when the delivered text itself begins with a marker.
  *
  * The lookup travels by context so every FeedItem — focused pane, compact
  * canvas pane — reads the same resolution without threading a prop through
@@ -33,7 +33,7 @@ import { useStructuredUserProvenance } from "./structuredUserProvenance";
 export interface ProvenanceLookup {
   /** Delivery evidence for one feed row — the Claude ledger's id join first,
       then the occurrence join — or null when nothing proves its authorship. */
-  forItem(item: Item): DeliveredMessageProvenance | null;
+  forItem(item: Item): MatchedDeliveryProvenance | null;
   /**
    * WHICH submission a delivery identity belongs to (#1950 round 2): the
    * `dedup` token a structured Codex record carries in its own marker,
@@ -294,7 +294,7 @@ function wantedEvidence(items: readonly FeedEntry[], pending: readonly string[])
     const token = candidate ? candidateDigests(candidate)[0].slice(0, 16) : "";
     if (item.kind === "sysmsg" && item.deliveredMessage) {
       drivers.push({ item, engineMessageId: item.deliveredMessage.engineMessageId, tsMs: candidate?.tsMs ?? Number.NaN, token });
-    } else if (item.kind === "user" && !item.selectedContext && candidate) {
+    } else if (((item.kind === "user" && !item.selectedContext) || (item.kind === "tmsg" && item.internal && rawUserTextFor(item))) && candidate) {
       drivers.push({ item, engineMessageId: null, tsMs: candidate.tsMs, token });
     }
     /* One driver per RECORD, not per row: an image-only send paints several
@@ -350,7 +350,7 @@ function itemSerial(item: Item): number {
 
 function lookupFor(
   data: PathProvenance | null,
-  assignment: Map<Item, DeliveredMessageProvenance>,
+  assignment: Map<Item, MatchedDeliveryProvenance>,
   resolving: boolean,
   settledMessages?: ReadonlySet<string>,
 ): ProvenanceLookup {
@@ -361,7 +361,7 @@ function lookupFor(
   const messagePending = (id: string | null | undefined) =>
     Boolean(id) && settledMessages !== undefined && !settledMessages.has(id!) && !(data && id! in data.messages);
   if (!data) return { ...NO_PROVENANCE, submissionPending: pending, messagePending };
-  const forItem = (item: Item): DeliveredMessageProvenance | null => {
+  const forItem = (item: Item): MatchedDeliveryProvenance | null => {
     if (item.kind === "sysmsg" && item.deliveredMessage?.engineMessageId) {
       const byId = data.messages[item.deliveredMessage.engineMessageId];
       if (byId) return byId;
@@ -550,8 +550,8 @@ export function useDeliveredMessageProvenance(
   return useMemo(
     () => {
       const lookup = lookupFor(data, assignment, resolving, settledMessages);
-      return { ...lookup, forItem: (item: Item) => item.structuredUserRef
-        ? structuredForItem(item) : lookup.forItem(item) };
+      return { ...lookup, forItem: (item: Item) => lookup.forItem(item) ??
+        (item.structuredUserRef ? structuredForItem(item) : null) };
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by the assignment's CONTENT (assignmentKey) and the submissions it can resolve; a same-content map keeps the lookup
     [data, assignmentKey, submissionsKey, resolving, settledMessages, structuredForItem],
