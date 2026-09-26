@@ -232,8 +232,11 @@ function boundedRecord(
 
 /** A complete, bounded author join domain. Partial transcript scans cannot
  * safely assign an occurrence to one of several identical messages. */
-export function readMessageAuthorContext(source: MessagesPageSource): ConversationMessage[] | null {
-  if (source.size > MAX_SCAN_BYTES) return null;
+export function readMessageAuthorContext(
+  source: MessagesPageSource,
+  focus: ReadonlyArray<{ seq: number; role: string; ts: string | null }> = [],
+): ConversationMessage[] | null {
+  if (source.size > MAX_SCAN_BYTES) return readMessageAuthorNeighborhood(source, focus);
   const records: ConversationMessage[] = [];
   let cursor: MessagesPageCursor | null = null;
   do {
@@ -241,10 +244,52 @@ export function readMessageAuthorContext(source: MessagesPageSource): Conversati
       kinds: new Set(["message"]), roles: new Set(["user"]), limit: 200, maxChars: 1, cursor,
     });
     records.push(...page.records);
-    if (records.length > 10_000 || page.scanned.capped) return null;
+    if (records.length > 10_000 || page.scanned.capped) return readMessageAuthorNeighborhood(source, focus);
     cursor = page.cursor;
   } while (cursor);
   return records;
+}
+
+/** Read the time neighborhood of a requested page when the complete transcript
+ * is too large. The extra ten minutes on either side includes every row that
+ * could compete for an occurrence matching a focused row. If the byte budget
+ * cannot prove both time boundaries, leave occurrence authors unassigned. */
+function readMessageAuthorNeighborhood(
+  source: MessagesPageSource,
+  focus: ReadonlyArray<{ seq: number; role: string; ts: string | null }>,
+): ConversationMessage[] | null {
+  const users = focus.filter((record) => record.role === "user" && record.ts && Number.isFinite(Date.parse(record.ts)));
+  if (!users.length) return null;
+  const times = users.map((record) => Date.parse(record.ts!));
+  const window = 20 * 60_000;
+  const lower = Math.min(...times) - window;
+  const upper = Math.max(...times) + window;
+  const newestOffset = Math.max(...users.map((record) => record.seq));
+  const start = Math.min(source.size, newestOffset + MAX_SCAN_BYTES);
+  const records: ConversationMessage[] = [];
+  let cursor: MessagesPageCursor | null = start === source.size ? null : { o: start, p: 0, r: [] };
+  let spent = 0;
+  let sawUpperBoundary = start === source.size;
+  do {
+    const page = readMessagesPage(source, {
+      kinds: new Set(["message"]), roles: new Set(["user"]), limit: 200, maxChars: 1, cursor,
+    });
+    spent += page.scanned.bytes;
+    if (page.scanned.capped || spent > MAX_SCAN_BYTES) return null;
+    for (const record of page.records) {
+      const at = record.ts ? Date.parse(record.ts) : Number.NaN;
+      if (!Number.isFinite(at)) continue;
+      if (at > upper) {
+        sawUpperBoundary = true;
+        continue;
+      }
+      if (!sawUpperBoundary) return null;
+      if (at < lower) return records;
+      records.push(record);
+    }
+    cursor = page.cursor;
+  } while (cursor);
+  return sawUpperBoundary ? records : null;
 }
 
 function boundedPageInteger(value: number, fallback: number, maximum: number): number {

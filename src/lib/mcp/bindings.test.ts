@@ -41,6 +41,7 @@ import { emptySeatTickState } from "@/lib/monitor/types";
 import {
   createMcpToolService,
   MemoryMcpReceiptStore,
+  type McpToolPayload,
   type McpReceiptStore,
   type McpToolResult,
 } from "./server";
@@ -48,6 +49,14 @@ import {
 const sandboxes: string[] = [];
 const originalStateDir = process.env.LLV_STATE_DIR;
 const originalSpawnCapability = process.env[VIEWER_SPAWN_CAPABILITY_ENV];
+
+function messageRecords(payload: McpToolPayload): Array<{ text: string; author?: unknown }> {
+  if (!Array.isArray(payload.records) || payload.records.some((record) =>
+    !record || typeof record !== "object" || typeof record.text !== "string")) {
+    throw new Error("conversation_messages returned invalid records");
+  }
+  return payload.records as Array<{ text: string; author?: unknown }>;
+}
 
 afterEach(() => {
   setAgentRegistryForTests(null);
@@ -804,14 +813,14 @@ test("conversation_messages keeps delivery authors across cursors, filters, trun
         roles: ["user"], limit: 1, maxChars });
       const second = await bindings.conversation_messages({ clientRequestId: `author-${path.basename(transcriptPath)}-${maxChars}-second`, transcriptPath,
         roles: ["user"], limit: 1, maxChars, cursor: first.cursor });
-      expect(first.records[0].author).toEqual(sender);
-      expect(second.records[0].author).toBeUndefined();
-      expect(JSON.stringify(first.records[0])).not.toContain("sourceText");
-      expect(JSON.stringify(first.records[0])).not.toContain("sourceId");
-      if (maxChars === 16_000) expect(first.records[0].text).toContain("[redacted]");
+      expect(messageRecords(first)[0]?.author).toEqual(sender);
+      expect(messageRecords(second)[0]?.author).toBeUndefined();
+      expect(JSON.stringify(messageRecords(first)[0])).not.toContain("sourceText");
+      expect(JSON.stringify(messageRecords(first)[0])).not.toContain("sourceId");
+      if (maxChars === 16_000) expect(messageRecords(first)[0]?.text).toContain("[redacted]");
       const filtered = await bindings.conversation_messages({ clientRequestId: `author-${path.basename(transcriptPath)}-${maxChars}-filter`, transcriptPath,
         kinds: ["message"], roles: ["user"], limit: 2, maxChars });
-      expect(filtered.records.map((record: { author?: unknown }) => record.author ?? null)).toEqual([sender, null]);
+      expect(messageRecords(filtered).map((record) => record.author ?? null)).toEqual([sender, null]);
     }
   }
 }, 30_000);
@@ -857,52 +866,85 @@ test("real admitted deliveries keep the same MCP author when identical operator 
       const first = await bindings.conversation_messages({ clientRequestId: `${engine}-admitted-${maxChars}-first`, transcriptPath, limit: 1, maxChars });
       const second = await bindings.conversation_messages({ clientRequestId: `${engine}-admitted-${maxChars}-second`, transcriptPath,
         limit: 1, maxChars, cursor: first.cursor });
-      expect(first.records[0].author).toEqual({ kind: "agent", role: "orchestrator", project: "wardrobe-agent", conversationId: "conversation_sender" });
-      expect(second.records[0].author).toBeUndefined();
+      expect(messageRecords(first)[0]?.author).toEqual({ kind: "agent", role: "orchestrator", project: "wardrobe-agent", conversationId: "conversation_sender" });
+      expect(messageRecords(second)[0]?.author).toBeUndefined();
     }
+    const oldAt = new Date(Date.parse(operatorAt) - 60 * 60_000).toISOString();
+    const unrelated = engine === "claude"
+      ? { type: "user", timestamp: oldAt, message: { role: "user", content: `Unrelated progress ${"z".repeat(1_700)}` } }
+      : { type: "response_item", timestamp: oldAt, payload: { type: "message", role: "user",
+        content: [{ type: "input_text", text: `Unrelated progress ${"z".repeat(1_700)}` }] } };
+    fs.writeFileSync(transcriptPath, `${JSON.stringify(unrelated)}\n`.repeat(10_001) + fs.readFileSync(transcriptPath, "utf8"));
+    expect(fs.statSync(transcriptPath).size).toBeGreaterThan(16 * 1024 * 1024);
+    const largeFirst = await bindings.conversation_messages({ clientRequestId: `${engine}-large-first`, transcriptPath, limit: 1, roles: ["user"] });
+    const largeSecond = await bindings.conversation_messages({ clientRequestId: `${engine}-large-second`, transcriptPath,
+      limit: 1, roles: ["user"], cursor: largeFirst.cursor });
+    const largeBoth = await bindings.conversation_messages({ clientRequestId: `${engine}-large-both`, transcriptPath,
+      limit: 2, roles: ["user"] });
+    expect(messageRecords(largeFirst)[0]?.author).toEqual({ kind: "agent", role: "orchestrator", project: "wardrobe-agent", conversationId: "conversation_sender" });
+    expect(messageRecords(largeSecond)[0]?.author).toBeUndefined();
+    expect(messageRecords(largeBoth).map((record) => record.author ?? null)).toEqual([
+      { kind: "agent", role: "orchestrator", project: "wardrobe-agent", conversationId: "conversation_sender" }, null,
+    ]);
   }
 }, 30_000);
 
-test("a member's identical earlier turn keeps its name beside a ledger-attributed agent turn", async () => {
+test("a member's identical turn keeps its name beside a real agent delivery on every MCP page", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-member-agent-"));
   sandboxes.push(sandbox);
   process.env.LLV_STATE_DIR = sandbox;
   resetTeamStoreForTests();
   const store = teamStore();
   const member = claimInstall(store, "Mira", { surface: "desktop", browser: "chrome" }).member;
-  const registry = new AgentRegistry(path.join(sandbox, "registry.json"));
-  setAgentRegistryForTests(registry);
-  const transcriptPath = path.join(sandbox, "member-agent.jsonl");
-  const conversation = registry.ensureConversation("claude", transcriptPath, "default");
   const text = "Review the same seam";
-  const memberAt = "2026-09-26T11:00:00.000Z";
-  const agentAt = "2026-09-26T11:00:30.000Z";
-  store.recordMessageAuthor({ clientMessageId: "member-seam", conversationId: conversation.id, memberId: member.id,
-    at: memberAt, textDigest: messageTextDigest(text) });
-  fs.writeFileSync(transcriptPath, [
-    { type: "user", uuid: "member-turn", timestamp: memberAt, message: { role: "user", content: text } },
-    { type: "user", uuid: "agent-turn", timestamp: agentAt, promptSource: "sdk", message: { role: "user", content: [{ type: "text", text }] } },
-  ].map((row) => JSON.stringify(row)).join("\n") + "\n");
-  const ledger = new FileClaudeDeliveryLedger();
-  ledger.recordQueued("member-agent", { id: "agent-seam", text, origin: { kind: "agent", role: "reviewer" } }, "turn-started");
-  ledger.confirmDelivered("member-agent", "agent-seam", "agent-turn");
-  const pinnedTranscript = (candidate: string) => {
-    if (candidate !== transcriptPath) return undefined;
-    const descriptor = fs.openSync(candidate, "r");
-    return { descriptor, stat: fs.fstatSync(descriptor), rootName: "claude-projects", root: sandbox, sameIdentity: () => true };
-  };
-  const selectedContext = {
-    selectedConversation: () => ({ resolve: (id: string) => id === conversation.id
-      ? { conversationId: id, engine: "claude" as const, path: transcriptPath, project: "fixture" } : null }),
-    pathAllowed: (candidate: string) => candidate === transcriptPath,
-  };
-  const bindings = viewerMcpBindings(undefined, undefined, { pinnedTranscript, selectedContext } as never);
-  const first = await bindings.conversation_messages({ clientRequestId: "member-agent-first", conversationId: conversation.id, limit: 1 });
-  const second = await bindings.conversation_messages({ clientRequestId: "member-agent-second", conversationId: conversation.id, limit: 1, cursor: first.cursor });
-  expect(first.records[0].author).toEqual({ kind: "agent", role: "reviewer" });
-  expect(second.records[0].author).toMatchObject({ kind: "member", name: "Mira" });
-  const both = await bindings.conversation_messages({ clientRequestId: "member-agent-both", conversationId: conversation.id, limit: 2, roles: ["user"] });
-  expect(both.records.map((record: { author?: { kind: string } }) => record.author?.kind)).toEqual(["agent", "member"]);
+  for (const engine of ["claude", "codex"] as const) {
+    const registry = new AgentRegistry(path.join(sandbox, `${engine}-registry.json`));
+    setAgentRegistryForTests(registry);
+    const transcriptPath = path.join(sandbox, `${engine}-member-agent.jsonl`);
+    fs.writeFileSync(transcriptPath, "");
+    const conversation = registry.ensureConversation(engine, transcriptPath, "default");
+    const outcome = await deliverConversationMessage({
+      pid: 1, path: transcriptPath, conversationId: conversation.id, text, images: [],
+      clientMessageId: `${engine}-agent-seam`, origin: { kind: "agent", role: "reviewer", project: "fixture", conversationId: "conversation_sender" },
+    }, {
+      recover: async () => null, pathAllowed: () => true,
+      listFiles: async () => [{ root: `${engine}-sessions`, path: transcriptPath, project: "fixture", mtime: 0, size: 0 } as FileEntry],
+      resumeSpecFor: (() => ({ command: "resume", transcript: transcriptPath, launchProfile: emptyLaunchProfile() })) as never,
+      deliver: async () => ({ ok: true as const, outcome: "resumed" as const, target: "%7" }),
+    });
+    expect(outcome.ok).toBe(true);
+    const delivery = Object.values(registry.readOnlySnapshot().heldDeliveries).find((row) => row.clientMessageId === `${engine}-agent-seam`)!;
+    const agentAt = delivery.deliveredAt!;
+    const memberAt = new Date(Date.parse(agentAt) - 30_000).toISOString();
+    store.recordMessageAuthor({ clientMessageId: `${engine}-member-seam`, conversationId: conversation.id, memberId: member.id,
+      at: memberAt, textDigest: messageTextDigest(text) });
+    const line = (at: string, id: string) => engine === "claude"
+      ? { type: "user", uuid: id, timestamp: at, message: { role: "user", content: text } }
+      : { type: "response_item", timestamp: at, payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } };
+    fs.writeFileSync(transcriptPath, [line(memberAt, "member-turn"), line(agentAt, "agent-turn")].map((row) => JSON.stringify(row)).join("\n") + "\n");
+    const pinnedTranscript = (candidate: string) => {
+      if (candidate !== transcriptPath) return undefined;
+      const descriptor = fs.openSync(candidate, "r");
+      return { descriptor, stat: fs.fstatSync(descriptor), rootName: engine === "claude" ? "claude-projects" : "codex-sessions",
+        root: sandbox, sameIdentity: () => true };
+    };
+    const selectedContext = {
+      selectedConversation: () => ({ resolve: (id: string) => id === conversation.id
+        ? { conversationId: id, engine, path: transcriptPath, project: "fixture" } : null }),
+      pathAllowed: (candidate: string) => candidate === transcriptPath,
+    };
+    const bindings = viewerMcpBindings(undefined, undefined, { pinnedTranscript, selectedContext } as never);
+    const expectedAgent = { kind: "agent", role: "reviewer", project: "fixture", conversationId: "conversation_sender" };
+    for (const roles of [undefined, ["user"]]) {
+      const tag = roles ? "filtered" : "plain";
+      const first = await bindings.conversation_messages({ clientRequestId: `${engine}-${tag}-first`, conversationId: conversation.id, limit: 1, roles });
+      const second = await bindings.conversation_messages({ clientRequestId: `${engine}-${tag}-second`, conversationId: conversation.id, limit: 1, roles, cursor: first.cursor });
+      expect(messageRecords(first)[0]?.author).toEqual(expectedAgent);
+      expect(messageRecords(second)[0]?.author).toMatchObject({ kind: "member", name: "Mira" });
+      const both = await bindings.conversation_messages({ clientRequestId: `${engine}-${tag}-both`, conversationId: conversation.id, limit: 2, roles });
+      expect(messageRecords(both).map((record) => record.author)).toEqual([expectedAgent, expect.objectContaining({ kind: "member", name: "Mira" })]);
+    }
+  }
 }, 30_000);
 
 test("conversation_messages refuses unsupported roots and stale cursors with typed codes", async () => {

@@ -18,7 +18,7 @@ import { recordDirectOperatorWakatimeActivity } from "@/lib/wakatime/operatorAct
 import { RuntimeHostUnavailableError, runtimeHostClient, type RuntimeHostClient } from "./client";
 import { parseRuntimeCommand } from "./commands";
 import { API_CLIENT_ORIGIN } from "./messageOrigin";
-import { runtimePresentationReceipt, type RuntimeOperationKind } from "./contracts";
+import { runtimePresentationReceipt, type RuntimeOperationCommand, type RuntimeOperationKind } from "./contracts";
 import { runtimeEventsEnabled, runtimeEventsRolledBack, structuredHostsEnabled, RUNTIME_PLANE_ABSENT } from "./flags";
 import { readEvidence, type Evidence } from "./evidence";
 import { journalVerdict, resolveSendReceipt, runtimeReceiptForSend, SEND_DISCARDED_REASON, sendReceiptFor, type SendReceipt } from "./sendSettlement";
@@ -174,7 +174,7 @@ async function dispatchRuntimeCommand(
   } catch {
     return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
   }
-  let command;
+  let command: RuntimeOperationCommand;
   let rawImages: RuntimeImageUpload[] | null = null;
   try {
     let parseValue = value;

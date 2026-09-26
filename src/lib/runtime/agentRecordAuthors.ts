@@ -50,7 +50,8 @@ function recordEvidence(record: AuthorEvidenceRecord, ledger: Record<string, Del
 
 /** Exact Codex markers and Claude ledger UUIDs survive page size, filters,
  * redaction and truncation. Legacy occurrence evidence is assigned over a
- * complete bounded transcript context, never over the requested page alone. */
+ * complete transcript or a bounded time neighborhood, never over the
+ * requested page alone. */
 export function agentRecordAuthors(
   transcriptPath: string,
   records: ReadonlyArray<AuthorEvidenceRecord>,

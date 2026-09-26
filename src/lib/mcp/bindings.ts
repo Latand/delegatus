@@ -2622,16 +2622,15 @@ function withRecordAuthors<T extends { seq: number; role: string; ts: string | n
   source: { descriptor: number; size: number; engine: "claude" | "codex" | "copilot" },
 ): Array<T & { author?: RecordAuthor | AgentRecordAuthor }> {
   if (!records.some((record) => record.role === "user")) return records;
-  const context = readMessageAuthorContext(source);
+  const context = readMessageAuthorContext(source, records);
   const authorRecords = context ?? records;
-  const directAgents = agentRecordAuthors(transcriptPath, authorRecords);
+  const agentAuthors = agentRecordAuthors(transcriptPath, authorRecords, context);
   const humanBySeq = new Map<number, RecordAuthor>();
   for (const [index, author] of recordAuthors(conversationId, authorRecords.map((record, index) => ({
-    role: directAgents.has(index) ? "system" : record.role,
+    role: agentAuthors.has(index) ? "system" : record.role,
     ts: record.ts,
     text: record.sourceText ?? record.text,
   })))) humanBySeq.set(authorRecords[index]!.seq, author);
-  const agentAuthors = context ? agentRecordAuthors(transcriptPath, authorRecords, context) : directAgents;
   const agentBySeq = new Map<number, AgentRecordAuthor>();
   for (const [index, author] of agentAuthors) agentBySeq.set(authorRecords[index]!.seq, author);
   const authors = new Map<number, RecordAuthor | AgentRecordAuthor>();

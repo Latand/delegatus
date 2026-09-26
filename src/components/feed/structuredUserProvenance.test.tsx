@@ -64,9 +64,10 @@ test("agent records preserve their sender through marked and unmarked echoes", (
     const entries = parse(wire, echo);
     expect(entries.filter(({ item }) => item.kind === "tmsg")).toHaveLength(1);
     const html = render(entries);
-    expect(html).toContain("Orchestrator");
-    expect(html).toContain("Agent · Orchestrator · wardrobe-agent");
-    expect(html).toContain("#c=conversation_sender");
+    expect(html.replace(/<[^>]*>/g, "")).toContain("Agent · Orchestrator · wardrobe-agent");
+    expect(html).toContain('data-agent-role="orchestrator"');
+    expect(html).toMatch(/whitespace-nowrap[^>]*data-agent-project[^>]*> · wardrobe-agent<\/span>/);
+    expect(html).toContain('href="#c=conversation_sender" aria-label="Open sender conversation"');
     expect(html).not.toContain("llv:structured-user");
   }
 });
