@@ -34,6 +34,7 @@ export async function serveEvidenceFixture(
     async fetch(request) {
       const { pathname, searchParams } = new URL(request.url);
       if (pathname === "/api/task-icons") return Response.json({ icons: await taskIconNodes((searchParams.get("names") ?? "").split(",")) });
+      if (pathname === "/brand/delegatus-mark.svg") return new Response(Bun.file("public/brand/delegatus-mark.svg"), { headers: { "content-type": "image/svg+xml" } });
       if (pathname === "/app.js") return new Response(Bun.file(entry), { headers: { "content-type": "text/javascript" } });
       if (pathname === "/style.css") return new Response(css.css, { headers: { "content-type": "text/css" } });
       return new Response(

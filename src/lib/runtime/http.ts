@@ -12,6 +12,7 @@ import { operatorBrowserRequest } from "@/lib/agent/operatorAuthority";
 import { retireReplySuggestionsOnOperatorMessage } from "@/lib/suggestions/store";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { claimMessageAuthor, recordConversationEvent, refuseAnonymous, settleMessageAuthor, teamActor, type PriorSubmission } from "@/lib/team";
+import { agentMessageOrigin } from "./agentMessageAuthor";
 import { recordDirectOperatorWakatimeActivity } from "@/lib/wakatime/operatorActivity";
 
 import { RuntimeHostUnavailableError, runtimeHostClient, type RuntimeHostClient } from "./client";
@@ -267,6 +268,15 @@ async function dispatchRuntimeCommand(
   const client = dependencies.client();
   try {
     const byOperator = operatorBrowserRequest(request);
+    if (command.kind === "send" || command.kind === "steer" || command.kind === "inject") {
+      const origin = byOperator ? { kind: "operator" as const }
+        : person.kind === "agent" ? (() => {
+          try { return agentMessageOrigin((dependencies.registry ?? agentRegistry)().readOnlySnapshot(), person.conversationId); }
+          catch { return { kind: "agent" as const, role: "agent", conversationId: person.conversationId }; }
+        })()
+        : API_CLIENT_ORIGIN;
+      command = { ...command, origin };
+    }
     if ((command.kind === "send" || command.kind === "steer" || command.kind === "inject" || command.kind === "answer")
       && byOperator
       && dependencies.recordOperatorActivity) {
@@ -338,7 +348,7 @@ async function dispatchRuntimeCommand(
            authorship is stamped HERE, server-side — never read off the body.
            Only a Viewer page is the operator; any other caller is admitted
            the same and attributed as a client of the API. */
-        origin: byOperator ? { kind: "operator" } : API_CLIENT_ORIGIN,
+        origin: command.origin,
       }, {
         enabled: dependencies.structuredEnabled ?? (() => structuredHostsEnabled()),
         client: () => client,

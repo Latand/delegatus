@@ -32,6 +32,8 @@ export function readStructuredUserProvenance(refs: string[]): Record<string, Del
       return [ref, {
         origin: metadata.origin?.kind ?? "operator",
         ...(metadata.origin?.role ? { senderRole: metadata.origin.role } : {}),
+        ...(metadata.origin?.project ? { senderProject: metadata.origin.project } : {}),
+        ...(metadata.origin?.conversationId ? { senderConversationId: metadata.origin.conversationId } : {}),
         ...(metadata.selectedContext ? { selectedContext: metadata.selectedContext } : {}),
       }];
     } catch { return [ref, null]; }

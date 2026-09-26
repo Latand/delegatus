@@ -33,6 +33,7 @@ import { conversationTurnLiveness, outstandingDeliverySince, type TurnLivenessDe
 import { structuredDeliveryPublicationState } from "@/lib/runtime/structuredDeliveryController";
 import { DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR } from "@/lib/runtime/structuredDeliveryQueue";
 import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
+import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { interruptionObligationDirectory, interruptionObligationStore, submittedContinuationOutcome, type InterruptionObligation } from "@/lib/runtime/interruptionObligations";
 import { StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
 import { RUNTIME_HOST_UNAVAILABLE_CODE } from "@/lib/runtime/structuredControls";
@@ -279,6 +280,8 @@ export interface PipelinePorts {
     transcriptPath: string;
     clientMessageId: string;
     text: string;
+    project?: string;
+    cwd?: string;
   }): Promise<boolean>;
   sleep?(milliseconds: number): Promise<void>;
   durableTurnEvidence(engine: EffectivePipelineRole["engine"], transcriptPath: string): Promise<StageTurnEvidence | null>;
@@ -1287,7 +1290,7 @@ export function defaultPipelinePorts(
         text: input.text,
         /* #1117: the continuation is the controller's own message, and the
            feed labels it as one rather than as the operator's. */
-        origin: { kind: "agent", role: "controller" },
+        origin: delegatusMessageOrigin("pipeline", input.project, input.cwd),
       });
       return result?.ok === true;
     },
@@ -2919,6 +2922,8 @@ async function reconcileSeveredStageTurn(
       transcriptPath: attempt.agentPath,
       clientMessageId,
       text: SEVERED_TURN_CONTINUATION_TEXT,
+      project: pipeline.project,
+      cwd: pipeline.repoDir,
     });
     /* A refused admission leaves the continuation owed; the next tick asks
        again under the same identity. */
@@ -3000,6 +3005,8 @@ async function requestStageVerdictOnce(
     transcriptPath: attempt.agentPath,
     clientMessageId,
     text: VERDICT_REQUEST_TEXT,
+    project: pipeline.project,
+    cwd: pipeline.repoDir,
   });
   /* A refused admission leaves the request owed; the next tick asks again under
      the same identity, until the bound above runs out. */

@@ -7,6 +7,7 @@ import path from "node:path";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { SEND_LOST_REASON } from "@/lib/runtime/sendSettlement";
+import { encodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText.server";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { applyBoardCommand } from "@/lib/board/command";
 import { boardFor, mutateBoard, patchBoard } from "@/lib/board/store";
@@ -692,9 +693,13 @@ test("get_conversation presents current direct Codex tools and redacts recovered
 test("conversation_messages resolves id, path, and selectedContext through one pinned normalized reader", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-conversation-messages-"));
   sandboxes.push(sandbox);
+  process.env.LLV_STATE_DIR = sandbox;
   const transcriptPath = path.join(sandbox, "session.jsonl");
+  const agentWire = encodeCodexStructuredUserText("A message from the seat", undefined, null,
+    { kind: "agent", role: "orchestrator", project: "wardrobe-agent", conversationId: "conversation_sender" }, "c".repeat(64));
   fs.writeFileSync(transcriptPath, [
     { type: "response_item", timestamp: "2026-08-30T10:00:00.000Z", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "question" }] } },
+    { type: "response_item", timestamp: "2026-08-30T10:00:30.000Z", payload: { type: "message", role: "user", content: [{ type: "input_text", text: agentWire }] } },
     { type: "event_msg", timestamp: "2026-08-30T10:01:00.000Z", payload: { type: "agent_message", message: "answer" } },
   ].map((row) => JSON.stringify(row)).join("\n") + "\n");
   const selectedContext = {
@@ -732,16 +737,18 @@ test("conversation_messages resolves id, path, and selectedContext through one p
     transcriptPath,
     engine: "codex",
     lastRecordAt: "2026-08-30T10:01:00.000Z",
-    records: [{ role: "assistant", text: "answer" }, { role: "user", text: "question" }],
+    records: [{ role: "assistant", text: "answer" }, { role: "user", author: { kind: "agent", role: "orchestrator", project: "wardrobe-agent", conversationId: "conversation_sender" } }, { role: "user", text: "question" }],
     hasMore: false,
     cursor: null,
   });
+  expect((byId.records as Array<{ author?: unknown }>)[2]?.author).toBeUndefined();
 
   const byPath = await bindings.conversation_messages({
     clientRequestId: "messages-by-path",
     transcriptPath,
   });
-  expect(byPath).toMatchObject({ conversationId: null, transcriptPath, engine: "codex" });
+  expect(byPath).toMatchObject({ conversationId: null, transcriptPath, engine: "codex",
+    records: [{ role: "assistant" }, { author: { kind: "agent", conversationId: "conversation_sender" } }, { role: "user", text: "question" }] });
 
   const bySelection = await bindings.conversation_messages({
     clientRequestId: "messages-by-selection",

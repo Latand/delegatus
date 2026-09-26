@@ -3,7 +3,7 @@
 import { TriangleAlert } from "lucide-react";
 import { memo, type CSSProperties } from "react";
 import { DelegatusMark } from "@/components/brand/BrandMark";
-import { useLocale } from "@/lib/i18n";
+import { useLocale, type TFunction } from "@/lib/i18n";
 
 import { useIsMobile } from "@/hooks/useIsMobile";
 import type { MandateDelivery } from "@/lib/runtime/messageOrigin";
@@ -61,7 +61,7 @@ import { quoteHead } from "../conversation/deputyPlacement";
 export function resolveDeliveredItem(item: Item, provenance: ProvenanceLookup): Item {
   if (item.structuredUserRef && (item.kind === "user" || item.kind === "tmsg")) {
     const resolved = provenance.forItem(item);
-    if (resolved?.origin === "agent") return internalCard(item.ts, item.text, resolved.senderRole);
+    if (resolved?.origin === "agent") return internalCard(item.ts, item.text, resolved);
     if (item.kind === "user" && resolved?.selectedContext) return { ...item, selectedContext: resolved.selectedContext };
     return item;
   }
@@ -70,13 +70,13 @@ export function resolveDeliveredItem(item: Item, provenance: ProvenanceLookup): 
     if (item.selectedContext) return item;
     const resolved = provenance.forItem(item);
     if (resolved?.mandate) return mandateCard(item.ts, item.text, resolved.mandate);
-    if (resolved?.origin === "agent") return internalCard(item.ts, item.text, resolved.senderRole);
+    if (resolved?.origin === "agent") return internalCard(item.ts, item.text, resolved);
     return item;
   }
   if (item.kind !== "sysmsg" || !item.deliveredMessage) return item;
   const resolved = provenance.forItem(item);
   if (resolved?.mandate) return mandateCard(item.deliveredMessage.ts, item.text, resolved.mandate);
-  if (resolved?.origin === "agent") return internalCard(item.deliveredMessage.ts, item.text, resolved.senderRole);
+  if (resolved?.origin === "agent") return internalCard(item.deliveredMessage.ts, item.text, resolved);
   if (resolved?.origin === "operator") {
     return {
       kind: "user",
@@ -92,16 +92,33 @@ function mandateCard(ts: unknown, text: string, mandate: MandateDelivery): Item 
   return { kind: "mandate", ts, text, mandate };
 }
 
-function internalCard(ts: unknown, text: string, senderRole: string | undefined): Item {
+function internalCard(ts: unknown, text: string, sender: { senderRole?: string; senderProject?: string; senderConversationId?: string }): Item {
   return {
     kind: "tmsg",
     ts,
     dir: "in",
-    peer: senderRole ?? tr("render.agentPeer"),
+    peer: sender.senderRole ?? tr("render.agentPeer"),
     summary: "",
     text,
     internal: true,
+    ...(sender.senderProject ? { senderProject: sender.senderProject } : {}),
+    ...(sender.senderConversationId ? { senderConversationId: sender.senderConversationId } : {}),
   };
+}
+
+function agentRoleLabel(role: string, t: TFunction): string {
+  switch (role.toLowerCase()) {
+    case "orchestrator": return t("render.senderRoleOrchestrator");
+    case "reviewer": return t("render.senderRoleReviewer");
+    case "builder": return t("render.senderRoleBuilder");
+    case "gateway": return t("render.senderRoleGateway");
+    case "api-client": return t("render.senderRoleApiClient");
+    case "controller":
+    case "pipeline":
+    case "flow":
+    case "seat-tick": return "Delegatus";
+    default: return role.charAt(0).toUpperCase() + role.slice(1);
+  }
 }
 
 /* Mobile v2 (#1439, lane 4): the engine mark is the only avatar left on the
@@ -297,8 +314,14 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText, re
               {tr("render.internalTag")}
             </span>
           ) : null}
-          <span className="text-[11px] font-semibold text-muted">{item.dir === "out" ? tr("render.toDir") : tr("render.fromDir")}</span>
-          <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-bold text-accent">{item.peer}</span>
+          {item.internal ? (
+            <span className="min-w-0 text-[11px] font-semibold text-accent" data-agent-author data-agent-role={item.peer}>
+              {t("render.agentLabel")}{item.peer === "agent" || item.peer === t("render.agentPeer") ? null : ` · ${agentRoleLabel(item.peer, t)}`}
+              {item.senderProject ? ` · ${item.senderProject}` : null}
+              {item.senderConversationId ? <a className="ml-1 underline underline-offset-2" href={`#c=${encodeURIComponent(item.senderConversationId)}`} aria-label={tr("render.openSenderConversation")}>↗</a> : null}
+            </span>
+          ) : <><span className="text-[11px] font-semibold text-muted">{item.dir === "out" ? tr("render.toDir") : tr("render.fromDir")}</span>
+            <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-bold text-accent">{item.peer}</span></>}
           {item.delivery ? (
             <span
               className={`inline-flex shrink-0 items-center gap-1 text-[10.5px] font-semibold ${item.delivery === "ok" ? "text-success" : "text-danger"}`}

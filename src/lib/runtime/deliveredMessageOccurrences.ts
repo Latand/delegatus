@@ -174,6 +174,8 @@ export function heldDeliveryOccurrences(
       deliveredAt: delivery.deliveredAt,
       origin: origin.kind,
       ...(origin.kind === "agent" && origin.role ? { senderRole: origin.role } : {}),
+      ...(origin.kind === "agent" && origin.project ? { senderProject: origin.project } : {}),
+      ...(origin.kind === "agent" && origin.conversationId ? { senderConversationId: origin.conversationId } : {}),
       ...(mandate ? { mandate } : {}),
       ...(delivery.clientMessageId ? { clientMessageId: delivery.clientMessageId } : {}),
     });
@@ -183,12 +185,14 @@ export function heldDeliveryOccurrences(
 
 /** The wire shape of one occurrence: the join identity has done its work. */
 function wireOccurrence(occurrence: DeliveredMessageOccurrence): DeliveredMessageOccurrence {
-  const { textDigest, deliveredAt, origin, senderRole, selectedContext, mandate } = occurrence;
+  const { textDigest, deliveredAt, origin, senderRole, senderProject, senderConversationId, selectedContext, mandate } = occurrence;
   return {
     textDigest,
     deliveredAt,
     origin,
     ...(senderRole ? { senderRole } : {}),
+    ...(senderProject ? { senderProject } : {}),
+    ...(senderConversationId ? { senderConversationId } : {}),
     ...(selectedContext ? { selectedContext } : {}),
     ...(mandate ? { mandate } : {}),
   };

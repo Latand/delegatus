@@ -11,9 +11,15 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 import { Database } from "bun:sqlite";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import { AgentRegistry } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import { createFeedSession } from "@/components/feed/parse";
+import { FeedItem } from "@/components/feed/FeedItem";
+import { MessageProvenanceProvider, provenanceLookupFor } from "@/components/feed/messageProvenance";
+import { heldDeliveryOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 
 /* Every process these tests start — the packaged MCP server, the controlled
    Viewer host — runs against a sandbox of its own: state, home, config, temp
@@ -573,7 +579,7 @@ async function causalFixture(prefix: string): Promise<CausalFixture> {
       LLV_VIEWER_CONTROL_URL: `http://127.0.0.1:${Number(fs.readFileSync(config.portFile, "utf8"))}`,
       ...(options.identified === false ? {} : { LLV_SPAWN_CAPABILITY: options.caller === "other" ? otherCapability : capability }),
     }, options.name ?? "viewer-causal-proof"),
-    registryFile: () => registry.readOnlySnapshot(),
+    registryFile: () => new AgentRegistry(path.join(state, "agent-registry.json"), undefined, undefined, { resolveBackendIdentity: true }).readOnlySnapshot(),
   };
   return fixture;
 }
@@ -602,6 +608,9 @@ test("send: acceptance, lost response, original-key recovery — one recipient d
     const original = call(mcp, "send_message", sendArguments(fixture, "send-lost-1"));
     await fixture.marker("accepted");
     expect(fixture.effects().filter((effect) => effect.kind === "recipient")).toHaveLength(1);
+    const deliveredOrigin = fixture.effects().find((effect) => effect.kind === "recipient")?.origin as Record<string, unknown>;
+    expect(deliveredOrigin).toMatchObject({ kind: "agent", role: "agent", conversationId: fixture.caller.conversationId });
+    expect(typeof deliveredOrigin.project).toBe("string");
     await host.kill();
     const lost = await original;
     /* The reset reaches the MCP process as uncertainty; the immediate
@@ -610,6 +619,18 @@ test("send: acceptance, lost response, original-key recovery — one recipient d
     expect(lost).toMatchObject({ ok: true, recovered: true, outcome: "settled", state: "delivered", resend: "not-needed", nextAction: "follow-disposition" });
     expect(typeof lost.operationId).toBe("string");
     const operationId = lost.operationId as string;
+    const settledSnapshot = fixture.registryFile();
+    const occurrence = heldDeliveryOccurrences(fixture.recipient.transcriptPath, settledSnapshot);
+    expect(occurrence).toMatchObject([{ origin: "agent", senderConversationId: fixture.caller.conversationId }]);
+    const line = JSON.stringify({ type: "response_item", timestamp: occurrence[0]!.deliveredAt,
+      payload: { type: "message", role: "user", content: [{ type: "input_text", text: "hold the cutover until I say go" }] } });
+    const feed = createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" }).feed([line], 0, false).items;
+    const lookup = provenanceLookupFor({ occurrences: occurrence }, feed.map((entry) => entry.item));
+    const html = renderToStaticMarkup(React.createElement(MessageProvenanceProvider, { value: lookup },
+      React.createElement(FeedItem, { item: feed[0]!.item })));
+    expect(html).toContain("data-agent-author");
+    expect(html).toContain(`#c=${fixture.caller.conversationId}`);
+    expect(html).not.toContain("data-user-bubble");
 
     /* Recovery under the original key and unchanged payload, host restarted. */
     fixture.control({ mode: "respond" });

@@ -1,6 +1,7 @@
 import { test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { chromium, type BrowserContext, type CDPSession, type Page } from "playwright-core";
 
 import { serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
@@ -88,6 +89,41 @@ async function serveFixture(): Promise<{ base: string; stop: () => void }> {
 }
 
 const launchChromium = () => chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+
+browserTest("agent-delivered seat message keeps its author at desktop and phone widths in both languages", async () => {
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const out = path.join(os.homedir(), "Pictures/delegatus-review/agent-message-label");
+  fs.mkdirSync(out, { recursive: true });
+  try {
+    for (const locale of ["en", "uk"] as const) {
+      for (const width of [1440, 390]) {
+        const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: "dark",
+          ...(width === 390 ? { hasTouch: true, isMobile: true } : {}) });
+        try {
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          const page = await context.newPage();
+          await page.goto(`${base}/?agent-label=1#c=conversation_running`);
+          await page.waitForSelector("[data-agent-author]", { timeout: 15_000 });
+          await page.waitForSelector("[data-user-bubble]", { timeout: 15_000 });
+          const label = await page.locator("[data-agent-author]").first().innerText();
+          const expected = `${locale === "uk" ? "Агент · Оркестратор" : "Agent · Orchestrator"} · wardrobe-agent`;
+          if (!label.includes(expected)) throw new Error(`agent label missing: ${label}`);
+          const link = await page.locator("[data-agent-author] a").first().getAttribute("href");
+          if (link !== "#c=conversation_sender") throw new Error(`sender link missing: ${link}`);
+          const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+          if (overflow) throw new Error(`horizontal overflow at ${width}px`);
+          await page.screenshot({ path: path.join(out, `${width}-${locale}.png`), fullPage: true });
+          if (width === 1440) {
+            await page.keyboard.press("Escape");
+            await page.waitForSelector("[data-agent-author]");
+            await page.screenshot({ path: path.join(out, `${width}-${locale}-dock.png`), fullPage: true });
+          }
+        } finally { await context.close(); }
+      }
+    }
+  } finally { await browser.close(); stop(); }
+}, 120_000);
 
 browserTest("composer queue: a lost seat read drains once on the phone and survives reload", async () => {
   const { base, stop } = await serveFixture();

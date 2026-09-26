@@ -26,6 +26,9 @@ export interface MessageOrigin {
       Bounded to one marker-safe token so it can ride the structured-user
       marker and a journaled ledger record without a second escaping scheme. */
   role?: string;
+  /** Captured from the sending conversation at admission, never from message text. */
+  project?: string;
+  conversationId?: string;
 }
 
 /**
@@ -37,6 +40,8 @@ export interface MessageOrigin {
 export interface DeliveredMessageProvenance {
   origin: "operator" | "agent";
   senderRole?: string;
+  senderProject?: string;
+  senderConversationId?: string;
   /** Carried through for operator rows so the bubble renders the same
       selected-card badge the composer showed at submission (#844). */
   selectedContext?: SelectedContextRef;
@@ -104,9 +109,19 @@ export const API_CLIENT_ORIGIN: MessageOrigin = { kind: "agent", role: "api-clie
 
 /** Same grammar as the other opaque marker tokens: no whitespace, no `>`. */
 const ROLE_TOKEN = /^[A-Za-z0-9_.:-]{1,64}$/;
+const CONVERSATION_ID = /^conversation_[A-Za-z0-9_-]{1,120}$/;
 
 export function messageOriginRole(value: unknown): string | undefined {
   return typeof value === "string" && ROLE_TOKEN.test(value) ? value : undefined;
+}
+
+export function messageOriginProject(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() === value && value.length > 0 && value.length <= 120
+    && !value.startsWith("/") && !value.startsWith("\\") && !/[\u0000-\u001f<>]/.test(value) ? value : undefined;
+}
+
+export function messageOriginConversationId(value: unknown): string | undefined {
+  return typeof value === "string" && CONVERSATION_ID.test(value) ? value : undefined;
 }
 
 /**
@@ -119,5 +134,7 @@ export function parseMessageOrigin(value: unknown): MessageOrigin | null {
   const body = value as Record<string, unknown>;
   if (body.kind !== "operator" && body.kind !== "agent") return null;
   const role = body.kind === "agent" ? messageOriginRole(body.role) : undefined;
-  return { kind: body.kind, ...(role ? { role } : {}) };
+  const project = body.kind === "agent" ? messageOriginProject(body.project) : undefined;
+  const conversationId = body.kind === "agent" ? messageOriginConversationId(body.conversationId) : undefined;
+  return { kind: body.kind, ...(role ? { role } : {}), ...(project ? { project } : {}), ...(conversationId ? { conversationId } : {}) };
 }

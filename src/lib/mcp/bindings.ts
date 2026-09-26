@@ -82,6 +82,8 @@ import { SEAT_SECTION_IDS, type SeatSectionId } from "@/lib/bridge/reportWords";
 import { deployTaskChanges, projectSnapshots } from "@/lib/bridge/taskChanges";
 import { renderTelegram, type PullRequestLookup } from "@/lib/bridge/telegramReport";
 import { projectDisplayName } from "@/lib/displayNames";
+import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
+import { agentRecordAuthors, type AgentRecordAuthor } from "@/lib/runtime/agentRecordAuthors";
 import { forgeCacheView } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { languageMismatchWarning } from "@/lib/i18n/proseLanguage";
@@ -932,7 +934,7 @@ function pauseResumeActorOf(dependencies: ViewerMcpDomainDependencies): PauseRes
  * only the role, not the send.
  */
 function mcpSenderOrigin(
-  dependencies: Partial<Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority">>,
+  dependencies: Partial<Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority" | "registrySnapshot">>,
 ): MessageOrigin {
   let attribution: CallerAttribution | null = null;
   try {
@@ -948,7 +950,17 @@ function mcpSenderOrigin(
     : attribution?.kind === "gateway"
       ? "gateway"
       : messageOriginRole(attribution?.role);
-  return { kind: "agent", ...(role ? { role } : {}) };
+  try {
+    if (dependencies.registrySnapshot) {
+      return agentMessageOrigin(
+        dependencies.registrySnapshot(),
+        attribution?.via?.deputy ?? attribution?.conversationId ?? null,
+        role,
+      );
+    }
+  } catch { /* A missing registry row costs source detail, never authorship. */ }
+  return { kind: "agent", role: role ?? "agent",
+    ...(attribution?.conversationId ? { conversationId: attribution.via?.deputy ?? attribution.conversationId } : {}) };
 }
 
 /**
@@ -2589,7 +2601,7 @@ async function conversationMessages(
       engine,
       lastRecordAt: page.lastRecordAt,
       /* sign-in-and-team §7.1: a human message names its member. */
-      records: withRecordAuthors(conversationId, page.records),
+      records: withRecordAuthors(conversationId, transcriptPath, page.records),
       hasMore: page.hasMore,
       cursor: page.cursor ? encodeMessagesCursor(page.cursor, scope) : null,
       scanned: page.scanned,
@@ -2600,8 +2612,9 @@ async function conversationMessages(
   }
 }
 
-function withRecordAuthors<T extends { role: string; ts: string | null; text: string }>(conversationId: string | null, records: T[]): Array<T & { author?: RecordAuthor }> {
-  const authors = recordAuthors(conversationId, records);
+function withRecordAuthors<T extends { role: string; ts: string | null; text: string }>(conversationId: string | null, transcriptPath: string, records: T[]): Array<T & { author?: RecordAuthor | AgentRecordAuthor }> {
+  const authors = new Map<number, RecordAuthor | AgentRecordAuthor>(recordAuthors(conversationId, records));
+  for (const [index, author] of agentRecordAuthors(transcriptPath, records)) authors.set(index, author);
   return authors.size ? records.map((record, index) => (authors.has(index) ? { ...record, author: authors.get(index)! } : record)) : records;
 }
 

@@ -115,9 +115,10 @@ const deckRequested = new URLSearchParams(location.search).has("deck");
 const reviewerLineage = deckRequested
   ? { durableLineage: { kind: "review", role: "reviewer", parentConversationId: "conversation_done-0", reviewsConversationId: "conversation_done-0", memberships: [] } }
   : {};
+const AGENT_LABEL = new URLSearchParams(location.search).has("agent-label");
 
 const files: FileEntry[] = [
-  conversation(RUNNING_PATH, "Rebuild the board status projection", {
+  conversation(RUNNING_PATH, AGENT_LABEL ? "Orchestrator" : "Rebuild the board status projection", {
     activity: "live", proc: "running", pid: 4_401, mtime: now - 20,
     /* A real launch model, not a one-word one: the bar line has to hold
        `fable-5-1 · high` beside the state phrase and the account (#1795). */
@@ -269,7 +270,13 @@ const TOOL_RUN = [
   record(7, "user", [{ type: "tool_result", tool_use_id: "toolu_evidence_run", content: "src/board/projection.test.ts:\n✓ replays a band from the snapshot [11.20ms]\n✓ keeps the band order after a reload [3.90ms]\n✓ answers a stale revision with the current board [2.40ms]\n\n 3 pass\n 0 fail\nRan 3 tests across 1 file. [141.00ms]" }]),
   record(8, "assistant", [{ type: "text", text: "The projection replays every band from the snapshot, and the three board tests pass." }]),
 ].join("\n");
-const FEED = TOOLCARD ? `${BANDS}${TOOL_RUN}\n` : BANDS;
+const AGENT_FEED = [
+  JSON.stringify({ type: "user", uuid: "evidence-operator-turn", timestamp: iso(120), sessionId: "conversation_running",
+    message: { role: "user", content: "Please check the last review result." } }),
+  JSON.stringify({ type: "user", uuid: "evidence-agent-delivery", timestamp: iso(60), sessionId: "conversation_running",
+    promptSource: "sdk", message: { role: "user", content: [{ type: "text", text: "The review found one issue. I am sending the handoff to this seat." }] } }),
+].join("\n") + "\n";
+const FEED = AGENT_LABEL ? AGENT_FEED : TOOLCARD ? `${BANDS}${TOOL_RUN}\n` : BANDS;
 const tasks = TOOLCARD ? [{
   id: "task-projection", project: PROJECT, status: "assigned", placement: "unplaced", board: "shown",
   text: "Rebuild the board status projection\nReplay every band from the snapshot.",
@@ -845,6 +852,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
+  if (url.pathname === "/api/log/provenance" && AGENT_LABEL) return json({
+    messages: { "evidence-agent-delivery": { origin: "agent", senderRole: "orchestrator",
+      senderProject: "wardrobe-agent", senderConversationId: "conversation_sender" } },
+    occurrences: [], submissions: {}, senders: {},
+  });
   if (url.pathname === "/api/conversation-host" && method === "POST") {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     if (body.action === "permission") {
@@ -1027,6 +1039,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/orchestrator/seat") {
     // A lost optional read must never strand the composer's local wire fence.
     if (queueRecovery) return new Promise<Response>(() => {});
+    if (AGENT_LABEL) return json({ seat: {
+      project: PROJECT, seatEpoch: 1, conversationId: "conversation_running", path: RUNNING_PATH,
+      mandate: "Run the atlas board.", state: "active", designatedAt: iso(86_400),
+      intent: { clientRequestId: "seat-agent-label", mode: "existing", launchId: null, error: null },
+    }, pending: null, exists: true });
     /* The Overview's read of every project's seats (#1841). */
     if (url.searchParams.get("scope") === "all") {
       return json({ all: { conversationIds: SEAT_PATH ? [idOf(SEAT_PATH)] : [], paths: SEAT_PATH ? [SEAT_PATH] : [], previous: { conversationIds: [], paths: [] } } });

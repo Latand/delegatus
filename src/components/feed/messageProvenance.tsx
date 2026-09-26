@@ -3,7 +3,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import type { DeliveredMessageOccurrence, DeliveredMessageProvenance, MandateDelivery } from "@/lib/runtime/messageOrigin";
-import { messageOriginRole } from "@/lib/runtime/messageOrigin";
+import { messageOriginConversationId, messageOriginProject, messageOriginRole } from "@/lib/runtime/messageOrigin";
 import { structuredUserReferenceKey } from "@/lib/runtime/codexStructuredUserText";
 import { isMemberColor, type MessageSender } from "@/lib/team/contract";
 import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
@@ -166,12 +166,16 @@ function parseProvenance(entry: unknown): DeliveredMessageProvenance | null {
   const body = entry as Record<string, unknown>;
   if (body.origin !== "operator" && body.origin !== "agent") return null;
   const senderRole = messageOriginRole(body.senderRole);
+  const senderProject = messageOriginProject(body.senderProject);
+  const senderConversationId = messageOriginConversationId(body.senderConversationId);
   const selectedContext = parseSelectedContextRef(body.selectedContext);
   const mandate = parseMandate(body.mandate);
   const submissionId = parseSubmissionId(body.submissionId);
   return {
     origin: body.origin,
     ...(senderRole ? { senderRole } : {}),
+    ...(senderProject ? { senderProject } : {}),
+    ...(senderConversationId ? { senderConversationId } : {}),
     ...(selectedContext ? { selectedContext } : {}),
     ...(mandate ? { mandate } : {}),
     ...(submissionId ? { submissionId } : {}),

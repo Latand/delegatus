@@ -5,6 +5,8 @@ import path from "node:path";
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 
 import { NextRequest } from "next/server";
+import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 
 /* The composer's queue route and the team (sign-in-and-team §7.1): a queued
    message is a message. In team mode it needs a member and, once the host
@@ -42,10 +44,10 @@ function makeJournal(options: { session?: boolean } = {}): RuntimeJournalType {
   return journal;
 }
 
-function post(body: Record<string, unknown>, journal: RuntimeJournalType, cookie?: string) {
+function post(body: Record<string, unknown>, journal: RuntimeJournalType, cookie?: string, headers: Record<string, string> = {}) {
   return handleNativeQueue(new NextRequest("http://localhost/api/runtime/queue", {
     method: "POST",
-    headers: { host: "localhost", "content-type": "application/json", ...(cookie ? { cookie: `${MEMBER_COOKIE}=${cookie}` } : {}) },
+    headers: { host: "localhost", "content-type": "application/json", ...(cookie ? { cookie: `${MEMBER_COOKIE}=${cookie}` } : {}), ...headers },
     body: JSON.stringify(body),
   }), {
     client: () => ({
@@ -65,9 +67,10 @@ const sentEvents = () => existingTeamStore()!.events({ limit: 10, actions: ["mes
 beforeEach(() => {
   process.env.LLV_STATE_DIR = path.join(sandbox, `state-${Math.random().toString(36).slice(2)}`);
   resetTeamStoreForTests();
+  setCallerConversationResolverForTests(() => "conversation_agent");
 });
 
-afterEach(() => { resetTeamStoreForTests(); });
+afterEach(() => { resetTeamStoreForTests(); setCallerConversationResolverForTests(null); });
 
 afterAll(() => {
   if (previousState === undefined) delete process.env.LLV_STATE_DIR;
@@ -119,4 +122,15 @@ test("a refused queue admission leaves no author and no event", async () => {
   expect(response.status).toBe(409);
   expect(conversationMessageSenders(conversationId)).toEqual({});
   expect(sentEvents()).toEqual([]);
+});
+
+test("an agent queued version keeps its server author across admission", async () => {
+  claimInstall(teamStore(), "Mira", DESKTOP);
+  const journal = makeJournal();
+  const response = await post({ ...add("agent-queue-1", "continue the review"), origin: { kind: "operator" } },
+    journal, undefined, { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) });
+  expect(response.status).toBe(202);
+  expect(journal.nativeQueueRead(conversationId)[0]?.versions[0]?.origin).toMatchObject({
+    kind: "agent", role: "agent", conversationId: "conversation_agent",
+  });
 });

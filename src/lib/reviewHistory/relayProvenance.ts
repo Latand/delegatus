@@ -2,6 +2,7 @@ import fs from "node:fs";
 
 import type { DeliveredMessageOccurrence } from "@/lib/runtime/messageOrigin";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
+import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 
 import { relayClientMessageId } from "@/lib/reviewHistory/relayIdentity";
 import { relayPrompt } from "./relayPrompt";
@@ -61,11 +62,14 @@ export function flowRelayedMessageOccurrences(
           ? dependencies.findings(flow, round)
           : fs.readFileSync(round.findingsPath, "utf8");
         if (findings === null) continue;
+        const author = delegatusMessageOrigin("reviewer", flow.project, flow.cwd);
         occurrences.push({
           textDigest: messageTextDigest(relayPrompt(round, findings)),
           deliveredAt: delivery.deliveredAt,
           origin: "agent",
           senderRole: "reviewer",
+          ...(author.project ? { senderProject: author.project } : {}),
+          ...(round.reviewerConversationId ? { senderConversationId: round.reviewerConversationId } : {}),
           clientMessageId: relayClientMessageId(flow, round),
         });
       } catch {

@@ -72,6 +72,8 @@ function provenanceOf(occurrence: DeliveredMessageOccurrence): DeliveredMessageP
   return {
     origin: occurrence.origin,
     ...(occurrence.senderRole ? { senderRole: occurrence.senderRole } : {}),
+    ...(occurrence.senderProject ? { senderProject: occurrence.senderProject } : {}),
+    ...(occurrence.senderConversationId ? { senderConversationId: occurrence.senderConversationId } : {}),
     ...(occurrence.selectedContext ? { selectedContext: occurrence.selectedContext } : {}),
     ...(occurrence.mandate ? { mandate: occurrence.mandate } : {}),
   };

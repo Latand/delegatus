@@ -235,6 +235,8 @@ export type Tmsg = {
       envelope — the card adds an explicit "internal" tag and `peer` names the
       sender ROLE the delivery evidence attributed, not a teammate id. */
   internal?: boolean;
+  senderProject?: string;
+  senderConversationId?: string;
 };
 export type CmdGroupItem = {
   kind: "cmd-group";
@@ -2645,6 +2647,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     summary: "",
     text,
     internal: true,
+    ...(origin.project ? { senderProject: origin.project } : {}),
+    ...(origin.conversationId ? { senderConversationId: origin.conversationId } : {}),
   });
   const emitCodexUserContent = (ts: unknown, content: CodexUserContent): PendingCodexUser => {
     const entrySeqs: number[] = [];

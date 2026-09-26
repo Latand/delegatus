@@ -48,7 +48,7 @@ function spawnEntryProvenance(
   if (depth === 0) return { origin: "operator" };
   const parentId = receipt?.parentConversationId;
   const role = messageOriginRole(parentId ? snapshot.conversations[parentId]?.agentRole ?? undefined : undefined);
-  return { origin: "agent", ...(role ? { senderRole: role } : {}) };
+  return { origin: "agent", ...(role ? { senderRole: role } : {}), ...(parentId ? { senderConversationId: parentId } : {}) };
 }
 
 /**
@@ -78,6 +78,8 @@ function entryProvenance(
     return {
       origin: entry.origin.kind,
       ...(role ? { senderRole: role } : {}),
+      ...(entry.origin.kind === "agent" && entry.origin.project ? { senderProject: entry.origin.project } : {}),
+      ...(entry.origin.kind === "agent" && entry.origin.conversationId ? { senderConversationId: entry.origin.conversationId } : {}),
       ...(entry.origin.kind === "operator" && entry.selectedContext ? { selectedContext: entry.selectedContext } : {}),
       ...(submissionId ? { submissionId } : {}),
     };
