@@ -138,10 +138,12 @@ async function registered(synced = false) {
 }
 
 describe("which hosts can hold a passkey", () => {
-  test("a named HTTPS host and localhost can; an IP address or plain HTTP cannot", () => {
+  test("only a named HTTPS host can offer passkeys", () => {
     expect(relyingPartyFor("dev.example.net:8443", true)).toEqual(RP);
     expect(relyingPartyFor("host.tail0000.ts.net", true)).toEqual({ rpId: "host.tail0000.ts.net", origin: "https://host.tail0000.ts.net" });
-    expect(relyingPartyFor("localhost:8899", false)).toEqual({ rpId: "localhost", origin: "http://localhost:8899" });
+    expect(relyingPartyFor("localhost:8899", false)).toBeNull();
+    expect(relyingPartyFor("localhost:8899", true)).toBeNull();
+    expect(relyingPartyFor("device.localhost:8899", true)).toBeNull();
     expect(relyingPartyFor("203.0.113.20:8898", true)).toBeNull();
     expect(relyingPartyFor("[::1]:8898", false)).toBeNull();
     expect(relyingPartyFor("dev.example.net", false)).toBeNull();

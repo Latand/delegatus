@@ -7,6 +7,7 @@ import { AccessQrImage } from "@/components/AccessQrButton";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import { safeNextPath, type TeamPublicInfo } from "@/lib/team/contract";
+import { passkeyFeedback, passkeyFeedbackText, passkeyUnavailableText } from "@/lib/team/passkeyFeedback";
 
 import { AuthError, AuthShell, AuthTitle } from "./AuthShell";
 import { BUTTON, Field, INPUT, teamRequest, type ApiAnswer } from "./ui";
@@ -44,9 +45,10 @@ export function errorText(t: TFunction, answer: Extract<ApiAnswer<unknown>, { ok
     case "too_many_attempts": return t("team.error.tooMany");
     case "code_wrong": return t("team.approve.wrong");
     case "link_invalid": return t("team.join.invalid");
-    case "passkey_unknown": return t("team.error.passkeyUnknown");
-    case "passkey_rejected":
-    case "passkey_expired": return t("team.error.passkeyFailed");
+    case "passkey_unknown": return t("team.passkey.noCredential");
+    case "passkey_expired": return t("team.passkey.timeout");
+    case "passkey_unavailable": return t("team.passkey.unavailable");
+    case "passkey_rejected": return t("team.error.passkeyFailed");
     case "telegram_taken": return t("team.error.telegramTaken");
     case "name_required": return t("team.error.nameRequired");
     case "name_taken": return t("team.error.nameTaken");
@@ -129,6 +131,7 @@ export function SignInCard({ next }: { next: string }) {
   const [info, setInfo] = useState<TeamPublicInfo | null>(null);
   const [screen, setScreen] = useState<Screen>({ kind: "loading" });
   const [error, setError] = useState<string | null>(null);
+  const [passkeyNote, setPasskeyNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [supportsPasskeys, setSupportsPasskeys] = useState(false);
 
@@ -178,20 +181,29 @@ export function SignInCard({ next }: { next: string }) {
   const usePasskey = async () => {
     setBusy(true);
     setError(null);
+    setPasskeyNote(null);
     try {
       const options = await teamRequest<{ id: string; options: unknown }>("/api/team/session/passkey", { body: { step: "options" } });
       if (!options.ok) return setError(errorText(t, options));
       const { startAuthentication } = await import("@simplewebauthn/browser");
       let response;
+      const startedAt = Date.now();
       try {
         response = await startAuthentication({ optionsJSON: options.body.options as never });
-      } catch {
-        /* The person closed the browser's passkey sheet: nothing to say. */
+      } catch (cause) {
+        const feedback = passkeyFeedback(cause, "sign-in", {
+          elapsedMs: Date.now() - startedAt,
+          timeoutMs: (options.body.options as { timeout?: number }).timeout,
+        });
+        if (feedback.tone === "note") setPasskeyNote(passkeyFeedbackText(t, feedback));
+        else setError(passkeyFeedbackText(t, feedback, info?.methods.passkey.address, window.location.origin));
         return;
       }
       const verified = await teamRequest<{ me: { name: string } }>("/api/team/session/passkey", { body: { step: "verify", id: options.body.id, response } });
       if (!verified.ok) return setError(errorText(t, verified));
       finish(verified.body.me.name);
+    } catch {
+      setError(t("team.passkey.failed"));
     } finally {
       setBusy(false);
     }
@@ -383,8 +395,14 @@ export function SignInCard({ next }: { next: string }) {
             </button>
           </div>
           <p className="mt-5 text-balance text-center text-label leading-snug text-muted">{t("team.signIn.inviteHint")}</p>
+          {info && !info.methods.passkey.available ? (
+            <p className="mt-3 text-balance text-center text-label leading-snug text-muted" data-passkey-unavailable="">{passkeyUnavailableText(t, info.methods.passkey.address)}</p>
+          ) : info && !supportsPasskeys ? (
+            <p className="mt-3 text-balance text-center text-label leading-snug text-muted" data-passkey-unavailable="">{t("team.passkey.browserUnsupportedSignIn")}</p>
+          ) : null}
         </div>
       )}
+      {passkeyNote ? <p className="mt-3 text-center text-label text-muted" role="status" data-passkey-note="">{passkeyNote}</p> : null}
       <AuthError text={error} />
     </AuthShell>
   );
