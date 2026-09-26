@@ -123,7 +123,7 @@ export interface TeamPublicInfo {
   methods: {
     approval: boolean;
     telegram: { available: boolean; botUsername: string | null };
-    passkey: { available: boolean };
+    passkey: { available: boolean; address?: string | null };
   };
 }
 
