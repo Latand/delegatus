@@ -5,12 +5,11 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 
 import { advanceAttentionCycle, buildAttentionQueue } from "../attention";
-import { attentionEntryProject, buildMobileAttentionQueue, buildNeedsYouQueue, isCurrentAttentionEntry, laneFocusId, laneFocusPath, nextMobileAttention } from "./attentionQueue";
+import { attentionEntryProject, buildMobileAttentionQueue, buildNeedsYouQueue, laneFocusId, laneFocusPath } from "./attentionQueue";
 
 /*
  * One list for the phone (README §4.1, §4.6): conversations waiting on the
- * operator and pipelines in `needs_decision`, joined in the board's order;
- * «Next ›» skips the item on screen and wraps.
+ * operator and pipelines in `needs_decision`, joined in the board's order.
  */
 
 const NOW = 1_800_000_000;
@@ -51,44 +50,6 @@ test("conversations and needs_decision pipelines are ONE list, conversations in 
   expect(entries.every((entry) => entry.id.length > 0)).toBe(true);
 });
 
-test("Next from the board (nothing on screen) opens the head; backward opens the tail", () => {
-  const entries = buildMobileAttentionQueue(conversations, pipelines);
-  expect(nextMobileAttention(entries, { kind: "board" })).toBe(entries[0]!);
-  expect(nextMobileAttention(entries, null)).toBe(entries[0]!);
-  expect(nextMobileAttention(entries, { kind: "board" }, -1)).toBe(entries[2]!);
-});
-
-test("Next skips the item the operator is looking at and wraps past the end, across both kinds", () => {
-  const entries = buildMobileAttentionQueue(conversations, pipelines);
-  /* From the first conversation: the second. */
-  expect(nextMobileAttention(entries, { kind: "chat", id: "/p/old.jsonl" })).toBe(entries[1]!);
-  /* From the last conversation: the pipeline. */
-  expect(nextMobileAttention(entries, { kind: "chat", id: "/p/new.jsonl" })).toBe(entries[2]!);
-  /* From the pipeline: wraps to the first conversation. */
-  expect(nextMobileAttention(entries, { kind: "pipeline", id: "p-decide" })).toBe(entries[0]!);
-  /* Backward wraps the other way. */
-  expect(nextMobileAttention(entries, { kind: "chat", id: "/p/old.jsonl" }, -1)).toBe(entries[2]!);
-  /* A screen showing something not in the list is the same as the board. */
-  expect(nextMobileAttention(entries, { kind: "chat", id: "/p/elsewhere.jsonl" })).toBe(entries[0]!);
-  expect(nextMobileAttention(entries, { kind: "accounts" })).toBe(entries[0]!);
-});
-
-test("the item on screen is never the answer: one entry, and that one open, has no Next", () => {
-  const only = buildMobileAttentionQueue(conversations.slice(0, 1), []);
-  expect(nextMobileAttention(only, { kind: "chat", id: conversations[0]!.file.path })).toBeNull();
-  expect(nextMobileAttention(only, { kind: "board" })).toBe(only[0]!);
-  expect(nextMobileAttention([], { kind: "board" })).toBeNull();
-});
-
-test("the current entry is keyed the way the screens are: the conversation by its path, the pipeline by its id", () => {
-  const entries = buildMobileAttentionQueue(conversations, pipelines);
-  expect(isCurrentAttentionEntry(entries[0]!, { kind: "chat", id: "/p/old.jsonl" })).toBe(true);
-  expect(isCurrentAttentionEntry(entries[0]!, { kind: "pipeline", id: "/p/old.jsonl" })).toBe(false);
-  expect(isCurrentAttentionEntry(entries[2]!, { kind: "pipeline", id: "p-decide" })).toBe(true);
-  expect(isCurrentAttentionEntry(entries[2]!, { kind: "chat", id: "p-decide" })).toBe(false);
-  expect(isCurrentAttentionEntry(entries[2]!, null)).toBe(false);
-});
-
 /* The desktop island and the phone badge read one list (#2129). */
 
 const iso = (seconds: number) => new Date(seconds * 1_000).toISOString();
@@ -123,7 +84,7 @@ test("the list spans every project, conversations first; a project's slice is ex
   expect(slice).toEqual(buildMobileAttentionQueue(buildAttentionQueue(files, NOW, PROJECT), needsDecisionPipelineRows([parked, elsewhere], PROJECT, NOW)));
 });
 
-test("Next walks conversations and lanes on one pointer, and reaches the lane", () => {
+test("the N key walks conversations and lanes on one pointer, and reaches the lane", () => {
   const entries = buildNeedsYouQueue([waiting("/p/old.jsonl", NOW - 900)], [parked], NOW, []);
   const pointer = { current: null as string | null };
   expect(advanceAttentionCycle(pointer, entries, 1)?.kind).toBe("conversation");
