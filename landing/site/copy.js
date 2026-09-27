@@ -110,7 +110,7 @@
       "open.c3": "Several Claude and Codex accounts, limits in view.",
       "reach.title": "It finds you when it needs you.",
       "reach.c1": "Your board on your phone, inside your tailnet.",
-      "foot.line": "Open source. Runs on your machine, on your own accounts.",
+      "foot.line": "Source on GitHub. Runs locally with your agent accounts.",
       "foot.version": "version",
     },
     uk: {

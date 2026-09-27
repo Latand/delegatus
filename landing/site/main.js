@@ -237,6 +237,7 @@
   // ---------- Language ----------
 
   function applyLanguage(next, persist) {
+    const position = { left: scrollX, top: scrollY, behavior: "instant" };
     lang = next;
     root.lang = lang;
     document.title = t("meta.title");
@@ -264,6 +265,9 @@
       url.searchParams.set("lang", lang);
       history.replaceState(null, "", url);
     } catch { /* file:// in some browsers */ }
+    // Translation can change line wrapping above the reader. Resolve layout
+    // now, then retain the position from before the language changed.
+    window.scrollTo(position);
   }
 
   let onLanguage = () => {};
@@ -459,6 +463,8 @@
         showView(hero, heroViewFor(to), true);
         return;
       }
+      heroStep = to;
+      renderSteps();
       send(hero, { type: "dlg:step", step: to });
       showView(hero, heroViewFor(to));
     });
@@ -516,7 +522,7 @@
       if (live) mount(live);
 
     }
-  }, { rootMargin: "200px 0px" });
+  }, { threshold: 0.1 });
   for (const live of lives) near.observe(live.el);
 
   const relayout = () => lives.forEach(layout);
@@ -529,7 +535,7 @@
       if (live.iframe) {
         live.iframe.title = live.el.getAttribute("aria-label") || "Delegatus";
         const rect = live.el.getBoundingClientRect();
-        if (rect.bottom >= -200 && rect.top <= innerHeight + 200) reload(live);
+        if (rect.bottom > 0 && rect.top < innerHeight) reload(live);
         else live.stale = true;
       }
     }

@@ -30,7 +30,7 @@ import { translate, type Locale } from "@/lib/i18n";
 import { buildWorld } from "./demo/world";
 
 const here = path.dirname(new URL(import.meta.url).pathname);
-const dist = path.join(here, "dist");
+const dist = process.env.LANDING_DIST_DIR ?? path.join(here, "dist");
 const out = process.env.LANDING_RENDER_DIR ?? path.join(os.homedir(), "Pictures/delegatus-review/landing/final");
 const only = process.argv.find((arg) => arg.startsWith("--only="))?.slice("--only=".length) ?? null;
 const checkRuns = Number(process.argv.find((arg) => arg.startsWith("--check-request="))?.slice("--check-request=".length) ?? 0);
@@ -185,8 +185,9 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
         await page.evaluate(() => { (window as any).stepClick = 0; document.addEventListener("click", () => { (window as any).stepClick = performance.now(); }, { once: true, capture: true }); });
         await button.click();
         await page.waitForFunction(step => document.querySelector("[data-step-hint]")?.getAttribute("data-step") === String(step), step);
-        const stateMs = await page.evaluate(() => performance.now() - (window as any).stepClick);
         const current = await frameOf(page, ".live-hero");
+        await current.waitForFunction(step => document.documentElement.dataset.demoStep === String(step), step);
+        const stateMs = await page.evaluate(() => performance.now() - (window as any).stepClick);
         if (step === 2) await current.waitForFunction(() => document.body.innerText.replace(/\s+/g, " ").includes("Idempotent refunds"));
         if (step === 3) await current.waitForFunction(() => document.body.innerText.replace(/\s+/g, " ").includes("Build passed"));
         if (step === 4) {
@@ -222,6 +223,7 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
         if (view === "search") await frame.waitForFunction(() => !!document.querySelector('input[type="search"], [role="dialog"] input'));
         if (view === "accounts") await frame.waitForFunction(() => document.body.innerText.replace(/\s+/g, " ").includes("Max"));
         rows.push({ view, visibleMs: Date.now() - start });
+        if (perfLabel === "after") await page.locator(".live-open").screenshot({ path: path.join(out, `${perfLabel}-${viewport.name}-${view}.png`) });
       }
       return rows;
     });
@@ -231,11 +233,13 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
         await frameOf(page, selector);
       }
       const rows = [];
-      for (const lang of ["uk", "en", "uk", "en"]) {
-        await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+      for (const [index, lang] of ["uk", "en", "uk", "en", "uk", "en"].entries()) {
+        const top = index < 4 ? 0 : 800;
+        await page.evaluate(top => window.scrollTo({ top, behavior: "instant" }), top);
         await page.waitForTimeout(600);
         const before = await page.evaluate(() => scrollY);
-        await page.locator(`button[data-lang="${lang}"]`).click();
+        if (top === 0) await page.locator(`button[data-lang="${lang}"]`).click();
+        else await page.locator(`button[data-lang="${lang}"]`).evaluate((button: HTMLButtonElement) => button.click());
         await page.waitForTimeout(7000);
         const after = await page.evaluate(() => scrollY);
         rows.push({ lang, before, after, delta: after - before });

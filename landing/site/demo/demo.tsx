@@ -33,7 +33,8 @@ const PHONE = params.get("phone") === "1";
 const START = Math.max(0, Math.min(LAST_STEP, Number(params.get("step") ?? 0) || 0));
 
 /* How long each step waits after the one before it, once the visitor sent. */
-const STEP_DELAY_MS = [0, 0, 650, 5200, 5200, 4600];
+const FIRST_REPLY_MS = 650;
+const STEP_DELAY_MS = [0, 0, FIRST_REPLY_MS, 5200, 5200, 4600];
 /* The composer keeps its copy of a delivered message until the transcript
    moves this far past the delivery (OUTBOX_MTIME_GRACE_MS, 2 s), so the
    orchestrator's answer is always dated at least this long after the send. */
@@ -135,7 +136,7 @@ function offScript(conversationId: unknown, text: string, atMs: number) {
         "Це демо грає за сценарієм, тож тут я цього не виконаю. Встанови Delegatus, і виконаю.");
     refresh();
     if (toSeat && step === 0) setTimeout(() => prefill(true), 400);
-  }, ANSWER_AFTER_SEND_S * 1000);
+  }, FIRST_REPLY_MS);
 }
 
 function play() {
