@@ -504,6 +504,7 @@ test("the installed MCP launcher forwards termination to its Bun child", async (
       LLV_TEST_READY: readyPath,
       LLV_TEST_SIGNAL: signalPath,
     },
+    stdin: "pipe",
     stdout: "ignore",
     stderr: "pipe",
   });
@@ -545,6 +546,7 @@ test("the installed MCP launcher forwards escalating signals until its Bun child
       LLV_TEST_READY: readyPath,
       LLV_TEST_SIGNAL: signalPath,
     },
+    stdin: "pipe",
     stdout: "ignore",
     stderr: "pipe",
   });
@@ -564,6 +566,52 @@ test("the installed MCP launcher forwards escalating signals until its Bun child
   expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
   expect(fs.readFileSync(signalPath, "utf8")).toBe("SIGINT\nSIGTERM\n");
 }, 15_000);
+
+for (const runtime of ["node", "bun"] as const) {
+  test(`${runtime} MCP launcher exits after SIGTERM with client stdin held open`, async () => {
+    const { root, launcher } = installedPackage(`
+      const fs = await import("node:fs");
+      fs.appendFileSync(process.env.LLV_TEST_STARTS, "start\\n");
+      process.once("SIGTERM", () => {
+        fs.appendFileSync(process.env.LLV_TEST_SIGNALS, "SIGTERM\\n");
+        process.exit(0);
+      });
+      setInterval(() => {}, 1_000);
+    `);
+    const starts = path.join(root, "starts");
+    const signals = path.join(root, "signals");
+    const node = Bun.which("node");
+    const bun = Bun.which("bun");
+    if (!node || !bun) throw new Error("Node and Bun are required for the launcher test");
+    const launcherProcess = spawn(runtime === "node" ? node : bun, [launcher], {
+      cwd: root,
+      env: { ...process.env, LLV_BUN_EXECUTABLE: bun, LLV_TEST_STARTS: starts, LLV_TEST_SIGNALS: signals },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let outputClosed = false;
+    launcherProcess.stdout.on("end", () => { outputClosed = true; });
+    try {
+      const readyDeadline = Date.now() + 5_000;
+      while (!fs.existsSync(starts)) {
+        if (Date.now() >= readyDeadline) throw new Error("timed out waiting for the MCP child");
+        await Bun.sleep(5);
+      }
+      expect(launcherProcess.stdin.writableEnded).toBe(false);
+      launcherProcess.kill("SIGTERM");
+      const exited = new Promise<number | null>((resolve) => launcherProcess.once("close", resolve));
+      const code = await Promise.race([
+        exited,
+        Bun.sleep(3_000).then(() => { throw new Error("MCP launcher did not exit after SIGTERM"); }),
+      ]);
+      expect(code).toBe(0);
+      expect(outputClosed).toBe(true);
+      expect(fs.readFileSync(signals, "utf8")).toBe("SIGTERM\n");
+      expect(fs.readFileSync(starts, "utf8")).toBe("start\n");
+    } finally {
+      if (launcherProcess.exitCode === null && launcherProcess.signalCode === null) launcherProcess.kill("SIGKILL");
+    }
+  }, 10_000);
+}
 
 test("one stdio MCP session keeps its tools through endpoint loss and a newly published runtime", async () => {
   const { root, launcher } = installedPackage();

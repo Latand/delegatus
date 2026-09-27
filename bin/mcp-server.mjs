@@ -162,6 +162,7 @@ let replayId = null;
 let toolsList = null;
 const pending = new Map();
 let closing = false;
+let shutdownSignal = null;
 let protocolProbe = null;
 let protocolProbeTimer = null;
 let initializationTimer = null;
@@ -225,6 +226,12 @@ function scheduleRestart() {
     if (error) scheduleRestart();
   }, delay);
 }
+function finishSignalShutdown() {
+  if (!shutdownSignal || child) return;
+  input.close();
+  process.stdin.destroy();
+  process.stdout.end();
+}
 function disconnect(current, detail, planned = false) {
   if (child !== current) return;
   if (protocolProbe) clearTimeout(protocolProbe.timer);
@@ -247,6 +254,7 @@ function disconnect(current, detail, planned = false) {
   scheduleRestart();
   heartbeat();
   for (const request of interrupted) if (request.method !== "initialize") unavailable(request, detail);
+  finishSignalShutdown();
 }
 function sendInitialization(current) {
   if (!initialization || replayId !== null) return;
@@ -338,6 +346,7 @@ function start(selected) {
   heartbeat();
 }
 function ensureChild() {
+  if (closing) return { message: "Viewer MCP launcher is shutting down" };
   let selected;
   try { selected = selectedRuntime(); }
   catch (error) {
@@ -362,7 +371,8 @@ function ensureChild() {
   }
   return null;
 }
-createInterface({ input: process.stdin }).on("line", (line) => {
+const input = createInterface({ input: process.stdin }).on("line", (line) => {
+  if (closing) return;
   let request;
   try { request = JSON.parse(line); } catch { request = null; }
   if (request?.method === "initialize") initialization = request;
@@ -399,11 +409,12 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 });
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => {
   closing = true;
+  shutdownSignal = signal;
   clearInterval(heartbeatTimer);
   if (protocolProbeTimer) clearInterval(protocolProbeTimer);
   if (restartTimer) clearTimeout(restartTimer);
   if (child) child.kill(signal);
-  else process.exit(0);
+  else finishSignalShutdown();
 });
 process.on("beforeExit", () => {
   if (!heartbeatPath) return;
