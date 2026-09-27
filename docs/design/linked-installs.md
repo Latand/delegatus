@@ -1525,19 +1525,30 @@ records, per link and per linked project, a **fence**: the peer's watermark
 for that project, a stamp in the order of M.3, as the peer reported it
 at the start of the last exchange that ended with nothing more to send in
 either direction. Every task the peer held then had a stamp at or below its
-watermark and had reached this side, and every stamp the peer writes later is
+watermark and had reached this side, as a row or as a withheld stub (M.5),
+and every stamp the peer writes later is
 above it. Clock skew and clocks stepped backwards do not enter: the fence and
 the rows it is compared with are in the same stamp order. Each call carries an
 8-hex digest of the sender's watermarks, as it does for its shared list; while
 it differs from the digest of the fences the receiver holds, the next call
 carries the full map, so the fence moves only when the peer's watermark did,
-which needs a stamped write there. Every resync (M.5) carries the sender's
-full id list per project (about 40 bytes an id) and the fence it holds for the
-receiver. The receiver removes, with a local tombstone, each task it holds
-that is missing from the list, whose newest stamp is at or below that fence,
-and whose newest stamp was written by one of the two machines: the other side
-had it and deleted it. A row last written by a third machine is left to
-tombstones. A task this side stamps after the fence was captured is above its
+which needs a stamped write there. Every resync (M.5) carries the fence the
+sender holds for the receiver and the sender's ids of linked-project tasks,
+**paged** in key order: a page holds at most 2 000 ids and names the key
+range `(after, through]` it covers, the last one `through: null`. Each page
+is read in one read transaction. The ids the sender lists are its tasks plus
+its **withheld stubs** (M.5: a task the peer had but could not send because
+it breaks a bound). The receiver notes, per page, each task it holds in that
+range (a stub included) that is missing from the page, whose newest stamp is
+at or below that fence, and whose newest stamp was written by one of the two machines: the
+other side had it and deleted it. It removes those, with a local tombstone,
+in one commit after the last page arrives, checking each again there; a call
+cut before the last page removes nothing, and the exchange starts over. A row
+last written by a third machine is left to tombstones. Absence within a range
+is proof because the range was read whole: a task the other side held and no
+longer lists was deleted there, and its tombstone stops it from coming back.
+The noted ids cost 16 bytes each in memory, and only for tasks the receiver
+already stores. A task this side stamps after the fence was captured is above its
 own watermark, so above the fence, and survives. A restore rolls the database
 back, so the restored side judges each row it held at the restore by its
 newest stamp **at the restore**, kept in the restore snapshot (M.5): editing a
@@ -1548,11 +1559,12 @@ when a project stops being linked, so a project linked again merges both
 copies without removing anything.
 
 **Link state.** A small collection `board_links` on each side: on A `{ link,
-pull: <position>, store, pushed: <position>, gen, peerGen, peerSharedHash,
-peerShared, fences }`, on B `{ grant, gen, peerGen, peerSharedHash,
-peerShared, fences }`. A position is `[revision]` or `[revision, key]` (M.5). A
-row is written when a call applied rows, changed a shared list, or moved a
-fence; a cursor that only moved past other projects' writes is saved at most
+pull: <position>, store, pushed: <position>, gen, genRev, peerGen,
+peerSharedHash, peerShared, fences, confirmed }`, on B `{ grant, gen, genRev,
+peerGen, peerSharedHash, peerShared, fences, confirmed }`, and one row
+`{ start, marks }` per install (M.4). A position is `[revision]` or `[revision, key]`
+(M.5). A row is written when a call applied rows, sent rows committed after
+`genRev`, changed a shared list, moved a fence or confirmed a start; a cursor that only moved past other projects' writes is saved at most
 every 10 minutes, because a stale cursor only re-reads keys. A call in which
 no stamp was written on either side changes none of these, so an idle link
 writes nothing. "Synced 12 s ago" is memory only.
@@ -1629,7 +1641,7 @@ writes nothing. "Synced 12 s ago" is memory only.
   exempt: a resume, successor or adopt of a conversation the task already
   holds opens a new process, so it is new work and is refused like any other.
   Work that keeps running needs no admission, and while it runs the handover
-  waits. The seams:
+  waits. The five seams:
   1. Pipeline state that starts work, inside the pipelines lease, over all of
      the pipeline's tasks: creation (`pipelineTaskLinkError`,
      `src/lib/pipelines/store.ts:1400-1416`, called at
@@ -1652,30 +1664,72 @@ writes nothing. "Synced 12 s ago" is memory only.
      again), the origin placeholder (`:202-206`), the tasks a resumed
      conversation already holds (`:208-216`) and the targets inherited from a
      reviewed or parent conversation (`:218-226`; `reviewsConversationId` and
-     `parentConversationId`, `launchMembership.ts:88-93`). This seam is the
-     guarantee: whatever a pipeline's state, no agent process starts here for
-     a task that runs elsewhere. The reconcile pass (`admitConversations`,
+     `parentConversationId`, `launchMembership.ts:88-93`). With seams 4 and 5
+     it is the guarantee: whatever a pipeline's state, no agent process
+     starts here for a task that runs elsewhere. The reconcile pass (`admitConversations`,
      `membership.ts:493`) and `deleteTask`'s replacements record
      conversations that already run and are not checked.
   3. `/api/tasks/[id]/send` (`src/app/api/tasks/[id]/send/route.ts`), which
      hands a task to existing conversations: the guard and the hold move into
      a `mutateTasks` before the first delivery.
+  4. Boot adoption. `adoptStructuredHostsAtStartup`
+     (`src/lib/runtime/startup.ts:1194`, calling `adoptCodexRegistryHosts` at
+     `:1425` and `adoptClaudeRegistryHosts` at `:1464`) reopens every hosted
+     registry row through `CodexAppServerHost.adopt` and
+     `ClaudeStreamBrokerHost.adopt` (`src/lib/runtime/registry.ts:582-585`,
+     `:679-682`) and passes no admission today. Both loops gain one step
+     after `claimStructuredHost` and `shouldAdopt(claimed)` and before
+     `adopt`: one `mutateTasks` resolves the conversation's tasks as seam 2
+     does for a resume (the tasks whose assignment holds it, and a pipeline
+     stage's pipeline tasks), checks the guard on each and writes the hold,
+     kind `adopt`; `bindCodexHostPersistence` / `bindClaudeHostPersistence`
+     or the failure path clears it. A refusal releases the claim
+     (`releaseStructuredHostClaim`) and leaves the row stopped with the
+     refusal as its reason, and no process opens. A task whose ownership is
+     only unconfirmed (below) defers the row the way `deferredHostKeys`
+     already does, and it is adopted after the confirming call.
+  5. The account-migration successor
+     (`src/lib/accounts/migration/provider.ts:340`, `:458`), which reopens a
+     conversation under another account: the same step before `adopt`.
+
+  An M2 test holds the coverage: it lists every call of
+  `CodexAppServerHost.start/adopt` and `ClaudeStreamBrokerHost.start/adopt`
+  outside tests and fixtures (on `origin/main`: `structuredSpawn.ts:1679-1689`
+  after `admitReservedLaunch` / `admitRecoveredLaunch`, seam 2; `registry.ts`
+  `:584`, `:681`, seam 4; `provider.ts:340`, `:458`, seam 5; the unused
+  wrappers at `registry.ts:26-40`) and fails when a call appears outside
+  that list, so a new way to start an agent process cannot skip the guard.
 - **A restored machine starts nothing it may have handed away.** A backup
-  taken before a handover still names this machine as the owner. So while a
-  restore of this machine is known and not confirmed (M.5), `runsHere(task)` is
-  also false for every task of the restore snapshot whose `machine` names this
-  install (in case 3 of M.5, which has no snapshot, every task of a linked
-  project that names it). The refusal `TASK_OWNERSHIP_UNCONFIRMED` says "This
-  machine was restored from a backup. {task} can start here again once {peer}
-  confirms where it runs." It is the same guard at the same three seams, so it
-  also covers pipeline recovery and the seat tick at boot, which launch through
-  seam 1 or 2, and the seat tick treats those tasks as running elsewhere. A
-  project is confirmed once the resync with every link that links it has
-  ended; by then the peers' `machine` values have been applied under case 3
-  above and the guard reads them. Tasks created here since the restore are not
-  held back. A link revoked or removed before it confirmed leaves its tasks
-  unconfirmed, and they offer "Copy here" like a task whose owner is not
-  linked.
+  taken before a handover still names this machine as the owner, and a
+  machine cannot always tell from its own disk that it was restored: a whole
+  state directory put back by hand, or a snapshot of the machine, rolls back
+  every local record with it. Only the peer can say. So ownership is
+  confirmed **after every cold start**:
+  - A cold start (the runtime host starting with no live generation to take
+    over from; a release succession of the Viewer or of the runtime host
+    passes the value on) writes a fresh random `start` into `board_links`,
+    as a startup step before any launch or adoption. Until a link records
+    `confirmed = start`, `runsHere(task)` is false for every task of a
+    project that link links whose `machine` names this install. The first
+    call after the start confirms it once the `gen` check of M.5 passes; when
+    it finds a restore, confirmation waits for the end of that resync, by
+    which time the peer's `machine` values have been applied under case 3
+    above. On a machine that was not restored this costs one call: a few
+    seconds for A, and on B until A's next call, at most 5 minutes while A
+    runs. The Viewer also compares the stored `start` with its own on every
+    call, so a database replaced under it counts as a restore.
+  - While a restore is known and not confirmed (M.5), the same holds for
+    every task of the restore snapshot whose `machine` names this install.
+  - The refusal `TASK_OWNERSHIP_UNCONFIRMED` says "{task} can start here once
+    {peer} confirms where it runs." It is the same guard at the same five
+    seams, so it also covers pipeline recovery, boot adoption (which defers
+    the row) and the seat tick, which treats those tasks as running
+    elsewhere. The start also records each linked project's watermark, and a
+    task whose `machine` stamp is above it (created here or handed here since
+    the start) is not held back. A link
+    revoked or removed before it confirmed leaves its tasks unconfirmed, and
+    they offer "Copy here" like a task whose owner is not linked: removing
+    the link cannot prove that this machine did not hand the task away.
 - **The seat tick does not wake a seat for another machine's tasks.**
   `gatherSeatTickInput` (`src/lib/monitor/seatTickSources.ts:2081-2090`) passes
   them with `runsOn: <label>` and outside the unstarted and backlog reasons, and
@@ -1721,6 +1775,16 @@ Idle request, about 130 bytes:
 from the digest of the fences the receiver holds for the sender, the reply says
 `"hw":"stale"` and the sender's next message carries the map,
 `"hws":{"repo-…":"<stamp>"}`.
+
+Nothing on the wire grows with the number of projects or tasks. The `hws` map
+goes in pages of at most 200 entries (a 69-character key and a 26-character
+stamp, about 21 KB), a `shared` list in pages of at most 100 entries (`name`
+cut to 64 UTF-16 units, at most about 48 KB), and the resync ids of M.3 in
+pages of at most 2 000 (about 80 KB); each page says `more: true` until the
+last, and the receiver swaps a map or list in only once the last page
+arrived. With the task and agent parts below, a body stays under 700 KB; the
+receiver reads at most 1 MiB and fails a larger body as `malformed` before it
+parses anything.
 
 A **position** is `[revision, row_key]`: everything in the sender's change
 log up to and including that pair has been sent. One SQLite transaction gives
@@ -1774,19 +1838,27 @@ A deleted one: `{"id":"…","project":"repo-…","gone":"<stamp>"}`.
   (the collection's `migration_id` and `imported_at`, `:231-238`): **resync**.
 - **A restored copy on either side.** Each side keeps a counter `gen` in its
   `board_links` row, raised in the same commit as every apply and every fence
-  change (so never by an idle call) and copied after that commit into
-  `<state>/links/gen.json`. It sends `gen` on every request and answer and
-  stores the highest `gen` it has seen from the peer. A restore is known in
-  one of three ways:
+  change, and **before anything it wrote leaves it**: when a call is about to
+  send a row or tombstone committed after `genRev` (the tasks revision at the
+  last raise), the sender first raises `gen`, sets `genRev`, commits, and
+  writes `<state>/links/gen.json` with fsync; only then does it encode the
+  body. So the peer never holds a row newer than the `gen` both the database
+  and `gen.json` carry, and an idle call raises nothing. Each side sends `gen`
+  on every request and answer and stores the highest `gen` it has seen from
+  the peer. A restore is known in one of three ways:
   1. the durability fallback (`checkDatabaseAtActivation`,
      `src/lib/state/durability.ts:323-389`) restored the database, and it
      writes `restored: pending` into the copy's `task_tombstones` before
      swapping it in;
   2. at boot the database's `gen` is below the one in `gen.json`: the database
      was restored alone, and the Viewer writes the same marker as a startup
-     step (`assertStateStartupMutation`) before any task write;
+     step (`assertStateStartupMutation`) before any task write. This includes
+     a local handover the peer applied while its answer was lost: the push
+     that carried it raised `gen` first;
   3. the peer reports having seen a higher `gen` from this side than it holds:
-     the whole state directory was restored by hand, `gen.json` with it.
+     the whole state directory was restored, `gen.json` with it. The cold
+     start that such a restore needs holds every owned task of a linked
+     project until this check has run (M.4), so nothing launches before it.
 
   In cases 1 and 2 the first task commit on the restored database replaces the
   marker, before it stamps anything, with the **restore snapshot**: for each
@@ -1799,15 +1871,14 @@ A deleted one: `{"id":"…","project":"repo-…","gone":"<stamp>"}`.
   there, so an edit made after the restore does not bring it back, and a task
   created since the restore is never removed, whatever its clock did. The
   marker and the snapshot are deleted once every link has resynced. Case 3 has
-  no snapshot and is detected only by the first call that reaches the peer:
-  that side then removes only rows whose newest stamp the peer wrote, so a
-  deleted task edited there after the restore comes back, and until that
-  first call it may launch a task it had handed away (M.8). Nothing written
-  since the restore is lost in any case.
+  no snapshot: the restored side resyncs at once and removes only rows whose
+  newest stamp the peer wrote, so a deleted task edited there between the
+  start and that first call comes back as an ordinary task; no launch is
+  involved. Nothing written since the restore is lost in any case.
 
 **Resync** starts with the id exchange of M.3 for each linked project, in
 both directions, before any row of that project moves: each side sends its
-full id list and the fence it holds for the other, and each side applies the
+ids in pages and the fence it holds for the other, and each side applies the
 fence before it serves or pushes a row. Then B pages the linked projects' rows
 by key (`keyRange`, `:845-855`, 200 rows or 512 KB) and then its tombstones,
 and ends on the position it read when the resync began; A does the same
@@ -1815,8 +1886,8 @@ toward B when its own `change_floor` passed `pushed`, when B's `store`
 changed, or when B was restored. The merge is
 idempotent, so a row changed during the resync and sent again later changes
 nothing. A new link and a newly linked project start here with no fence; the
-largest measured project (977 tasks, about 0.85 MB of rows) takes 5 pages,
-once.
+largest measured project (977 tasks, about 0.85 MB of rows) takes one id page
+and 5 row pages, once, and 14 000 tasks take 7 id pages of at most 80 KB.
 
 **A pushing** walks A's own log from `pushed` the same way. B applies the
 page in one `mutateTasks` transaction, commits, and only then answers
@@ -1856,10 +1927,17 @@ text and details escaped as `\u00XX`, about 6 KB of links and 1.5 KB of the
 rest, at most 164 KB, and the sender refuses to encode one above 170 KB. An
 agent row is at most 1.5 KB (M.6), so the agents part of a body, 200 rows and
 200 markers, is at most 308 KB, and one task row of the largest size always
-fits a 512 KB page beside it. A stored row that breaks a bound (a longer repository written before M2)
-is not sent: the cursor passes it, the link row says "{n} tasks too large to
-sync" with a link to each, and the task syncs from its next write that fits.
-A received row that breaks a bound fails its page (`malformed`, as §4.1).
+fits a 512 KB page beside it. A stored row that breaks a bound (a longer
+repository written before M2) is not sent. In its place, at the same position,
+goes a **withheld stub** `{"id":"…","project":"repo-…","withheld":"<stamp>"}`
+with the row's newest stamp, and the sender's link row says "{n} tasks too
+large to sync" with a link to each. The receiver stores the stub in
+`task_tombstones` (`w:<id>`, about 120 bytes; never shown, never launched)
+and lists its id in every resync id page, so a fence that covers the stamp
+never reads the task as deleted there (M.3). The task's next write that fits
+replaces the stub with the row, and a tombstone for it replaces the stub like
+a row. A received row that breaks a bound fails its page (`malformed`, as
+§4.1).
 
 **Echoes.** `o` names the install whose copy equals the row. A local write
 sets `o` to this install. An apply sets it to the sender only when the merged
@@ -1979,9 +2057,10 @@ Each machine publishes its agents on linked projects: B in the answer, A in
 
 | Case | What happens |
 |---|---|
+| Cold start with the peer unreachable | Owned tasks of linked projects wait with `TASK_OWNERSHIP_UNCONFIRMED` until the first call to each linking peer, and boot adoption defers their agents (M.4). Tasks of unlinked projects and tasks created since the start run as usual. |
 | Link down | Both machines keep working on their copies. A's edits wait in its log and go out from `pushed` on the next good call; after about 2 days offline A's log is pruned below `pushed` and A resyncs its linked projects to B in pages. Tombstones wait as long as the link does. Remote agent rows grey after 15 minutes. |
 | Peer store recreated | `store` changed: resync in both directions, with the fences of M.3. |
-| Restored from a backup | Known from Delegatus's own restore marker, from `gen.json` ahead of the database at boot, or from the peer's `gen` (M.5). The restored side launches none of the tasks it owned at the backup until every link has resynced (M.4), so a task it handed away meanwhile is not started twice. The resync starts with the id exchange, so tasks both sides deleted after the backup are removed on the restored side before any row moves, tombstones pruned or not, edited since the restore or not, whatever the skew between the clocks; tasks created there since the restore stay. The stated gap: a whole state directory restored by hand, `gen.json` included, is known only at its first call that reaches the peer; before that call it may launch a task it had handed away, and a deleted task it edits comes back. Nothing is lost in any case. |
+| Restored from a backup | Known from Delegatus's own restore marker, from `gen.json` ahead of the database at boot, or from the peer's `gen` (M.5). The restored side launches none of the tasks it owned at the backup until every link has resynced (M.4), so a task it handed away meanwhile is not started twice. The resync starts with the id exchange, so tasks both sides deleted after the backup are removed on the restored side before any row moves, tombstones pruned or not, edited since the restore or not, whatever the skew between the clocks; tasks created there since the restore stay. A whole state directory restored by hand, `gen.json` included, is known at its first call that reaches the peer; the cold start it needs holds every owned task of a linked project until that call (M.4), so nothing launches before it. A deleted task edited there before that call comes back as a task. Nothing is lost in any case. |
 | Peer reinstalled | New `installId`: `install-changed` (§4.4), the link stops, pair again. The new install receives the linked projects in its first resync, tasks owned by the old install included (M.5 accepts an unknown owner); they show "runs on {old} (not linked)", no machine launches them, and "Copy here" makes a new task that runs where it is made (M.4). |
 | Revoke on either side | §2.6: the next call gets `401`, the link reads `revoked`. Copies stay, remote agent rows disappear, tasks owned by the peer are launched by neither machine; "Copy here" makes a new task (M.4). Tombstones kept only for that link are pruned with it. |
 | Project unshared | That project stops syncing; copies stay. |
@@ -2025,6 +2104,7 @@ UTF-8 body, never JavaScript string length.
 | Changed task, disk | one task row write, as a local edit; one `board_links` row when a cursor, `gen` or fence moves; ≤ 200 B per tombstone | M2: committed revisions per applied page are one `tasks` plus at most one `board_links` |
 | Disk growth per day | ≤ 20 KB beyond the task rows themselves (tombstones and cursor rows), pruned after acknowledgement | M2: 1 000 synced edits and 100 deletes, then the byte size of the two new collections |
 | First sync | pages ≤ 200 rows and ≤ 512 KB | M2: 1 000 fixture tasks arrive in ≤ 5 pages, each ≤ 512 KB |
+| Resync ids and metadata | id pages ≤ 2 000 ids (≈ 80 KB), `hws` pages ≤ 200 entries, `shared` pages ≤ 100 entries; every body < 700 KB sent, > 1 MiB refused unparsed; noted ids ≤ 16 B each in memory | M2: 14 000 tasks in one linked project resync in 7 id pages, each ≤ 80 KB by `Buffer.byteLength`; 1 000 shared projects travel in 10 `shared` pages and 5 `hws` pages; a peer sending an id page of 2 001 ids, a `shared` page of 101 entries, a `name` of 65 units or a 1 MiB + 1 B body gets `malformed` and nothing is applied |
 | Memory, added RSS | ≤ 3 MB added resident memory per link at steady state, one-time costs included | M2/M3: two child processes load the same populated fixture (2 000 tasks in 3 linked projects, 200 agents on each side); one runs with the link off, one with it on, both through 1 000 calls of mixed work (idle calls, edits, agent churn). `process.memoryUsage().rss` after `Bun.gc(true)`, median of 3 runs, differs by ≤ 3 MB |
 | Memory, growth | no growth per call | M2/M3: in the linked process, `heapUsed` after `Bun.gc(true)` is read once 100 calls of the workload have run and again after 1 000 more; it grows < 256 KB |
 | Agent maps | ≤ 200 rows and 200 markers per map, each row ≤ 1.5 KB encoded; about 120 KB sent and 60 KB received per link on measured shapes; a reset ≤ 200 rows in pages of 50 | M3: 500 agents across 20 linked projects and 10 000 start/stop cycles leave every map and marker list at its bound; a reset after churn arrives in ≤ 4 pages |
@@ -2086,9 +2166,11 @@ fallback's restore marker, `gen.json` and the restore snapshot included; the
 `derived` text flag and its wire substitution; the apply with its field
 bounds (the repository length bound in `normalizeWorkLinkInput` included), its
 checks and budget; the `machine` rule judged by the link; A's schedule; the
-fenced handover; holds; "Copy here"; `TASK_RUNS_ELSEWHERE` at the three seams
-over every resolved target, and `TASK_OWNERSHIP_UNCONFIRMED` on a restored
-machine; the seat
+fenced handover; holds; "Copy here"; `TASK_RUNS_ELSEWHERE` at the five seams
+over every resolved target (boot adoption and the migration successor
+included) with the call-site coverage test; `gen` raised before publication;
+the cold-start confirmation and `TASK_OWNERSHIP_UNCONFIRMED`; withheld stubs;
+paged ids, `hws` and `shared` and the 1 MiB body cap; the seat
 tick filter; MCP fields; the machine chip, "Run here" and the board header
 line; en and uk strings.
 Acceptance:
@@ -2159,6 +2241,21 @@ Acceptance:
   created on A after the restore launches; once the link returns and the
   resync ends, A reads `machine = B` and still refuses, and B's work never
   stopped;
+- lost answer, then a restore: A hands a task to B, B applies it and
+  launches, and A's call dies before B's answer arrives; A's `state.sqlite`
+  alone is replaced by a backup taken before the handover: A finds `gen.json`
+  ahead of the database at boot, refuses the task, and after the resync reads
+  `machine = B`. The same with the whole state directory replaced and the
+  link down at the cold start: A refuses the task and defers its agent at
+  boot until the first call, which finds B's `gen` ahead and resyncs; B's work
+  never stopped;
+- boot adoption: a hosted registry row whose conversation holds a task that
+  runs on B, and another whose task is unconfirmed after a cold start, go
+  through the real `adoptStructuredHostsAtStartup`, once for Codex and once
+  for Claude: no `adopt` is called for the first, its claim is released and
+  the row reads the refusal; the second is adopted only after the confirming
+  call; a migration successor for the first is refused the same way; the
+  coverage test fails on a new `start`/`adopt` call outside its list;
 - restore and edit: a task deleted on both sides, tombstones pruned, then A
   restored through the fallback from a backup that holds it, and that task
   edited on A before the next call: after the call it is gone on both and B
@@ -2173,7 +2270,10 @@ Acceptance:
   them, and each arrives with that text;
 - bounds: a stored task whose work link holds a 530 000-character repository
   is not sent, the link row names it, and the rows after it in the log still
-  arrive; `update_task` refuses such a link; the largest valid row encodes to
+  arrive; the exchange completes, a resync is then forced (`store` changed),
+  and the task stays on its machine because the peer lists its stub; its next
+  write that fits replaces the stub, and deleting it replaces the stub with a
+  tombstone; `update_task` refuses such a link; the largest valid row encodes to
   ≤ 170 KB and arrives in a page beside 200 maximal agent rows;
 - the seat tick marks those tasks `runsOn` and wakes no seat for them;
 - a release reading the database without the change still loads the task list
@@ -2215,7 +2315,7 @@ Slice 5 is replaced by M1–M3.
 | pair two machines; each opts projects in; default shares nothing; `repo-` keys match; no path crosses | M.1, M.2 |
 | the board syncs both ways: text, details, status, colour, icon, priority, placement and position, links; create, change, delete | M.3, M.5 |
 | last write wins with a stated clock and tiebreak; skew per §4.3; deletes as tombstones | M.3 |
-| each task names the machine it runs on; only that machine launches it (no double launch, also while a change is in flight); default is the creating machine; the operator can change it | M.4 (owner-written handover judged by the link it came over, holds, guard on every resolved target and every resume, a restored machine holding back until confirmed; an unlinked owner's task is copied, never launched twice) |
+| each task names the machine it runs on; only that machine launches it (no double launch, also while a change is in flight); default is the creating machine; the operator can change it | M.4 (owner-written handover judged by the link it came over, holds, the guard at five seams covering every call that starts an agent process, boot adoption and the migration successor included, checked by a call-site test; ownership confirmed by the peer after every cold start and every restore, with `gen` raised before anything leaves; an unlinked owner's task is copied, never launched twice) |
 | a compact agent list per machine; collapsed on the other board with the host; no transcript, no remote control | M.6, M.7 |
 | one orchestrator per machine on its own copy; each sees the other's tasks and agents; no messaging | M.4 |
 | the reachable-from side does pull and push | M.1, M.5 |
