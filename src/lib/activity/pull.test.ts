@@ -330,6 +330,17 @@ describe("pulling another host's records", () => {
     }
     expect(await pullWith({ ...config(), memberId: MEMBER_A })).toMatchObject({ ok: true });
     expect(local((store) => [store.count("stage"), store.hostState("stage")?.unknownAuthors])).toEqual([0, 3]);
+    let stdout = "";
+    const transport = async (env: Record<string, string>, script: string) => {
+      const answer = await localTransport()(env, script);
+      stdout += answer.stdout;
+      return answer;
+    };
+    expect(await pullWith({ ...config(), memberId: "operator" }, transport)).toMatchObject({ ok: true });
+    expect(stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line) as { type: string })
+      .filter((line) => line.type === "input")).toEqual([]);
+    expect(local((store) => [store.count("stage"), store.hostState("stage")?.unknownAuthors,
+      store.hostState("stage")?.error])).toEqual([0, 3, "member-unconfigured"]);
   });
 
   test("a local team member's figure excludes the owner's pulled remote inputs", async () => {
@@ -377,6 +388,7 @@ describe("pulling another host's records", () => {
     process.env.LLV_STATE_DIR = remoteState;
     try {
       const begun = registry.beginSpawnRequest({ engine: "codex", cwd: "/work/harbor", transport: "structured",
+        clientAttemptId: "codex_spawn_activity_20260928",
         accountId: "work", launchProfile: emptyLaunchProfile({ cwd: "/work/harbor", title: "Inspect harbor work" }) });
       if (begun.kind !== "created") throw new Error("spawn receipt was not created");
       const spawnId = `spawn_${begun.receipt.launchId}`;
@@ -392,6 +404,14 @@ describe("pulling another host's records", () => {
         createdAt: "2026-09-23T00:00:00Z", createdBy: "claim", revokedAt: null });
       team.recordMessageAuthor({ clientMessageId: spawnId, conversationId: begun.receipt.conversationId,
         memberId: MEMBER_A, at: "2026-09-23T08:00:00Z", textDigest: null });
+      const session = mintSession(team, MEMBER_A, "claim", { surface: "desktop", browser: "chrome" });
+      const ledger = recordOperatorRequest(new NextRequest("http://localhost/api/spawn", {
+        headers: { host: "localhost", origin: "http://localhost", "sec-fetch-site": "same-origin",
+          cookie: `llv_member=${session.value}` },
+      }), { kind: "spawn", project: "harbor", idempotencyKey: "spawn:codex_spawn_activity_20260928" }, {
+        now: () => Date.parse("2026-09-23T08:00:00Z"), dir: () => path.join(remoteState, "activity"),
+      });
+      expect(ledger?.author).toBe(MEMBER_A);
       fs.writeFileSync(file, [
         { timestamp: "2026-09-23T07:59:00Z", type: "session_meta", payload: { cwd: "/work/harbor", originator: "llv-structured-host" } },
         { timestamp: "2026-09-23T08:00:00Z", type: "response_item", payload: { type: "message", role: "user", id: "spawn-first",
@@ -405,7 +425,15 @@ describe("pulling another host's records", () => {
           resolver: () => conversationResolver(registry.readOnlySnapshot(), () => registry.readOnlySnapshot()),
         });
         expect(activity.localRowsAfter(0, 10).map((row) => row.author)).toEqual([MEMBER_A]);
+        expect(activity.localRowsAfter(0, 10)[0]?.ids).toContain(requestKey("spawn:codex_spawn_activity_20260928"));
       } finally { activity.close(); }
+      const activityDir = path.join(remoteState, "activity");
+      const read = readHumanInputs(DAY, NOW, { dir: () => activityDir,
+        readLedger: (from, to) => readRequests(from, to, { dir: () => activityDir }),
+        store: () => ActivityStore.openReadOnly(path.join(activityDir, "records.sqlite")) },
+      { mode: "team", memberId: MEMBER_A });
+      expect(read.inputs).toHaveLength(1);
+      expect(read.inputs[0]?.source).toBe("ledger");
     } finally {
       resetTeamStoreForTests();
       registry.close();

@@ -53,6 +53,12 @@ export function conversationResolver(
     let claude: ReturnType<typeof claudeMessageProvenance> | null = null;
     let codex: Record<string, string> | null = null;
     let queuedAuthors: Map<string, string> | null = null;
+    const requestIdentity = (submission: string | undefined): string | undefined => {
+      if (!submission?.startsWith("spawn_")) return submission;
+      const receipt = snapshot.receipts[submission.slice("spawn_".length)];
+      return receipt?.conversationId === conversation.id && receipt.clientAttemptId
+        ? `spawn:${receipt.clientAttemptId}` : submission;
+    };
     const authorFor = (submission: string | undefined, deliveryKey: string | null): string | undefined => {
       if (mode !== "team") return undefined;
       try {
@@ -76,7 +82,7 @@ export function conversationResolver(
           const found = rec.messageId ? claude[rec.messageId] : undefined;
           if (!found) return null;
           const memberId = authorFor(found.submissionId, null);
-          return { origin: found.origin, ...(found.submissionId ? { idempotencyKey: found.submissionId } : {}),
+          return { origin: found.origin, ...(found.submissionId ? { idempotencyKey: requestIdentity(found.submissionId) } : {}),
             ...(memberId ? { memberId } : {}) };
         }
         if (!rec.markerOrigin) return null;
@@ -84,7 +90,7 @@ export function conversationResolver(
           provenanceRegistrySnapshot ? { registrySnapshot: provenanceRegistrySnapshot } : {});
         const submission = rec.deliveryKey ? codex[rec.deliveryKey] : undefined;
         const memberId = authorFor(submission, rec.deliveryKey);
-        return { origin: rec.markerOrigin, ...(submission ? { idempotencyKey: submission } : {}), ...(memberId ? { memberId } : {}) };
+        return { origin: rec.markerOrigin, ...(submission ? { idempotencyKey: requestIdentity(submission) } : {}), ...(memberId ? { memberId } : {}) };
       } catch {
         return null;
       }

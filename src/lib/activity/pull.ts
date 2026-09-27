@@ -84,10 +84,11 @@ try {
   storeId = meta?.store_id ?? null;
   host = db.query("SELECT covered_from, covered_until, read_at, excluded FROM activity_hosts WHERE host = ''").get();
   unknownAuthors = mode === "team" || hasTeamHistory ? db.query("SELECT COUNT(*) AS n FROM activity_inputs WHERE host = '' AND " + (hasAuthor ? "(author IS NULL OR author = 'operator')" : "1 = 1")).get()?.n ?? 0 : 0;
+  const selectingMember = (mode !== "solo" || hasTeamHistory) && hasAuthor && !!member && member !== "operator";
   const selection = mode === "solo" && !hasTeamHistory ? ""
-    : hasAuthor && member ? " AND author = ?" : " AND 1 = 0";
+    : selectingMember ? " AND author = ? AND author != 'operator'" : " AND 1 = 0";
   const sql = "SELECT key, version, at, project, kind, surface, hash, conversation, ids" + (hasAuthor ? ", author" : "") + " FROM activity_inputs WHERE host = '' AND version > ?" + selection + " ORDER BY version LIMIT ?";
-  const args = selection === " AND author = ?" ? [after, member, limit + 1] : [after, limit + 1];
+  const args = selectingMember ? [after, member, limit + 1] : [after, limit + 1];
   rows = db.query(sql).all(...args).map((row) => ({ type: "input", ...row, author: mode === "solo" && !hasTeamHistory ? "operator" : row.author }));
   try {
     turns = db.query('SELECT key, version, conversation, project, engine, role, pipeline, stage, start, "end" FROM activity_turns WHERE host = \'\' AND version > ? ORDER BY version LIMIT ?').all(after, limit + 1).map((row) => ({ type: "turn", ...row }));
@@ -321,7 +322,7 @@ export async function pullHost(
     const state = parseState(parsed[0]);
     if (!state) return fail("malformed");
     if (state.state === "no-ingest") return fail("no-ingest");
-    const selectedMember = state.teamHistory ? config.memberId ?? null : null;
+    const selectedMember = state.teamHistory && config.memberId !== "operator" ? config.memberId ?? null : null;
     const recreated = (heldStore !== null && state.storeId !== null && state.storeId !== heldStore)
       || state.latest < cursor || ((held?.remoteMode ?? null) !== null && held?.remoteMode !== state.mode)
       || (held !== null && held.teamHistory !== state.teamHistory)

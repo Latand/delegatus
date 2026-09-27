@@ -151,5 +151,8 @@ describe("human input from every expected host", () => {
     expect(readHostsConfig(dir).state).toBe("unreadable");
     hostsFile([{ id: "Bad Id" }, { id: "stage", projects: ["client-a"], since: "2026-09-20" }, { id: "stage" }]);
     expect(readHostsConfig(dir).hosts).toEqual([{ id: "stage", label: null, projects: "all", since: null, pull: null }]);
+    hostsFile([{ id: "stage", memberId: "operator", pull: { ssh: "stage-box", memberId: "operator" } }]);
+    expect(readHostsConfig(dir).hosts[0]).toMatchObject({ pull: { memberId: null } });
+    expect(readHostsConfig(dir).hosts[0]?.memberId).toBeUndefined();
   });
 });

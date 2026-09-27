@@ -140,7 +140,7 @@ function pullConfig(value: unknown): PullConfig | null {
     bun: text(row.bun),
     stateDir: text(row.stateDir),
     everyMin: Number.isFinite(every) ? Math.min(24 * 60, Math.max(1, Math.round(every))) : PULL_DEFAULT_EVERY_MIN,
-    memberId: typeof row.memberId === "string" && /^[A-Za-z0-9_.:-]{1,120}$/.test(row.memberId) ? row.memberId : null,
+    memberId: typeof row.memberId === "string" && row.memberId !== "operator" && /^[A-Za-z0-9_.:-]{1,120}$/.test(row.memberId) ? row.memberId : null,
   };
 }
 
@@ -159,7 +159,7 @@ function entry(value: unknown, fallbackId: string | null): HostConfigEntry | nul
     since: Number.isFinite(since) ? since : null,
     pull: pullConfig(row?.pull),
     ...(row?.mode === "solo" || row?.mode === "team" ? { mode: row.mode } : {}),
-    ...(typeof row?.memberId === "string" && /^[A-Za-z0-9_.:-]{1,120}$/.test(row.memberId) ? { memberId: row.memberId } : {}),
+    ...(typeof row?.memberId === "string" && row.memberId !== "operator" && /^[A-Za-z0-9_.:-]{1,120}$/.test(row.memberId) ? { memberId: row.memberId } : {}),
   };
 }
 
