@@ -1451,19 +1451,26 @@ first prompt; a launch passes `launchDisplay.prompt`
 (`src/lib/tasks/launchMembership.ts:80`) and a pipeline its goal
 (`membership.ts:445`); `ensureTaskMembership` writes that as `text` (`:234`).
 The curator and the inbox scanner create tasks from transcript lines
-(`src/lib/tasks/curator.ts:282`, `src/lib/tasks/inboxScanner.ts:186`). So a
-task carries a local flag `derived: true` after any write that sets `text`
-without a person or an agent choosing it. Only an explicit write clears it: an
-edit in the UI, `create_task` or `update_task` with `text`, a first-action
-refine, "Copy here", or a peer's row whose `text` group wins. The flag is the default:
-`createTask`, `patchTask` and `ensureTaskMembership` set it unless the caller
-is one of those paths (the `/api/tasks` routes and the MCP bindings pass
-`explicit`), so a writer added later stays private until it opts in. While the
-flag is set the row goes on the wire with `text: "Untitled task"`
-(`UNTITLED_TASK_TEXT`, `types.ts:4`); `details`, which no automatic writer
-sets, crosses as stored. Clearing the flag counts as a change of the `text`
-group, so the group gets a new stamp and the real text follows even when the
-explicit write kept the same words.
+(`src/lib/tasks/curator.ts:282`, `src/lib/tasks/inboxScanner.ts:186`), and
+monitor and storage-incident cards carry local detail
+(`src/lib/monitor/seatTickController.ts:339`,
+`src/lib/state/durability.ts:1054`). No field of a stored row proves who
+chose its text, so a task's text crosses only when a local flag
+`chosen: true` says a person or an agent chose it. Only an explicit write sets
+it: an edit in the UI, `create_task` or `update_task` with `text`, a
+first-action refine, "Copy here", or a peer's row whose `text` group wins (it
+crossed, so it was chosen there). Every other write that sets `text` clears
+it: `createTask`, `patchTask` and `ensureTaskMembership` set it only when the
+caller passes `explicit` (the `/api/tasks` routes and the MCP bindings), so a
+writer added later stays private until it opts in. **A row without the flag
+is private**, and that includes every row written before M2: no read, first
+resync or share classifies it, so an old task whose text is a transcript
+prompt never crosses, edited or not. Such a row goes on the wire with
+`text: "Untitled task"` (`UNTITLED_TASK_TEXT`, `types.ts:4`) until an
+explicit write names it; `details`, which no automatic writer sets, crosses as
+stored. Setting the flag counts as a change of the `text` group, so the group
+gets a new stamp and the real text follows even when the explicit write kept
+the same words.
 
 Per group, because the common collision is the operator dragging a card on one
 machine while an agent on the other flips its status; per-task LWW would drop
@@ -1528,11 +1535,11 @@ either direction. Every task the peer held then had a stamp at or below its
 watermark and had reached this side, as a row or as a withheld stub (M.5),
 and every stamp the peer writes later is
 above it. Clock skew and clocks stepped backwards do not enter: the fence and
-the rows it is compared with are in the same stamp order. Each call carries an
-8-hex digest of the sender's watermarks, as it does for its shared list; while
-it differs from the digest of the fences the receiver holds, the next call
-carries the full map, so the fence moves only when the peer's watermark did,
-which needs a stamped write there. Every resync (M.5) carries the fence the
+the rows it is compared with are in the same stamp order. Each side keeps a
+copy of the peer's watermark map, kept current by the entries each message
+carries for the projects whose watermark moved (M.5), and sets the fences from
+the copy it held when a quiet exchange began. The fence therefore moves only
+when the peer's watermark did, which needs a stamped write there. Every resync (M.5) carries the fence the
 sender holds for the receiver and the sender's ids of linked-project tasks,
 **paged** in key order: a page holds at most 2 000 ids and names the key
 range `(after, through]` it covers, the last one `through: null`. Each page
@@ -1551,9 +1558,11 @@ The noted ids cost 16 bytes each in memory, and only for tasks the receiver
 already stores. A task this side stamps after the fence was captured is above its
 own watermark, so above the fence, and survives. A restore rolls the database
 back, so the restored side judges each row it held at the restore by its
-newest stamp **at the restore**, kept in the restore snapshot (M.5): editing a
-restored row before the resync does not save a task both sides deleted, and a
-row created since the restore is not in the snapshot and is never removed.
+newest stamp **at the restore**, kept in the restore snapshot (M.5) or, for a
+restore only the peer reveals, in the boot stamps (M.4), whichever machine
+wrote it: editing a restored row before the resync does not save a task both
+sides deleted, and a row created since the restore has no such stamp and is
+never removed.
 The fence goes back to nothing
 when a project stops being linked, so a project linked again merges both
 copies without removing anything.
@@ -1562,7 +1571,7 @@ copies without removing anything.
 pull: <position>, store, pushed: <position>, gen, genRev, peerGen,
 peerSharedHash, peerShared, fences, confirmed }`, on B `{ grant, gen, genRev,
 peerGen, peerSharedHash, peerShared, fences, confirmed }`, and one row
-`{ start, marks }` per install (M.4). A position is `[revision]` or `[revision, key]`
+`{ start, marks, bootGen }` per install (M.4). A position is `[revision]` or `[revision, key]`
 (M.5). A row is written when a call applied rows, sent rows committed after
 `genRev`, changed a shared list, moved a fence or confirmed a start; a cursor that only moved past other projects' writes is saved at most
 every 10 minutes, because a stale cursor only re-reads keys. A call in which
@@ -1692,13 +1701,21 @@ writes nothing. "Synced 12 s ago" is memory only.
      (`src/lib/accounts/migration/provider.ts:340`, `:458`), which reopens a
      conversation under another account: the same step before `adopt`.
 
-  An M2 test holds the coverage: it lists every call of
-  `CodexAppServerHost.start/adopt` and `ClaudeStreamBrokerHost.start/adopt`
+  Three hosts open agent processes: `CodexAppServerHost`,
+  `ClaudeStreamBrokerHost` and `CopilotAcpHost`
+  (`src/lib/runtime/copilotAcpHost.ts:387`, `:394`). An M2 test holds the
+  coverage: it lists every call of `start` or `adopt` on any of the three
   outside tests and fixtures (on `origin/main`: `structuredSpawn.ts:1679-1689`
-  after `admitReservedLaunch` / `admitRecoveredLaunch`, seam 2; `registry.ts`
-  `:584`, `:681`, seam 4; `provider.ts:340`, `:458`, seam 5; the unused
-  wrappers at `registry.ts:26-40`) and fails when a call appears outside
-  that list, so a new way to start an agent process cannot skip the guard.
+  for Codex and Claude and `:1598-1599` for Copilot, which the same
+  `startStructuredHost` reaches at `:1643`, all after `admitReservedLaunch` /
+  `admitRecoveredLaunch`, seam 2; `registry.ts` `:584`, `:681`, seam 4;
+  `provider.ts:340`, `:458`, seam 5; the unused wrappers at
+  `registry.ts:26-40`) and fails when a call appears outside that list, so a
+  new way to start an agent process cannot skip the guard. Boot never adopts
+  a Copilot host (`startup.ts:1503-1505`): its next message resumes it on
+  demand through seam 2, so seams 4 and 5 have no Copilot step. The test
+  proves it can fail: fed a source tree with one extra `start` or `adopt`
+  call per host outside the list, three in all, it reports each one.
 - **A restored machine starts nothing it may have handed away.** A backup
   taken before a handover still names this machine as the owner, and a
   machine cannot always tell from its own disk that it was restored: a whole
@@ -1708,25 +1725,42 @@ writes nothing. "Synced 12 s ago" is memory only.
   - A cold start (the runtime host starting with no live generation to take
     over from; a release succession of the Viewer or of the runtime host
     passes the value on) writes a fresh random `start` into `board_links`,
-    as a startup step before any launch or adoption. Until a link records
+    as a startup step before any launch, adoption or task write, together
+    with each linked project's watermark (`marks`) and each link's `gen`
+    as it stands at boot (`bootGen`). Until a link records
     `confirmed = start`, `runsHere(task)` is false for every task of a
-    project that link links whose `machine` names this install. The first
-    call after the start confirms it once the `gen` check of M.5 passes; when
-    it finds a restore, confirmation waits for the end of that resync, by
-    which time the peer's `machine` values have been applied under case 3
-    above. On a machine that was not restored this costs one call: a few
-    seconds for A, and on B until A's next call, at most 5 minutes while A
-    runs. The Viewer also compares the stored `start` with its own on every
-    call, so a database replaced under it counts as a restore.
+    project that link links whose `machine` names this install, and the link
+    is **frozen**: this side raises no `gen` for it, sends no row or
+    tombstone over it and applies none from it. Local edits and new tasks
+    commit as usual and wait. The first call after the start is therefore a
+    check before anything moves: the peer's highest-seen `gen` of this side
+    is compared with `bootGen` (M.5), a value no push and no raise since the
+    boot can have changed. When it finds no restore the start is confirmed
+    in that call and the link thaws; when it finds one, confirmation waits
+    for the end of that resync, by which time the peer's `machine` values
+    have been applied under case 3 above. On a machine that was not restored
+    this costs one call: a few seconds for A, and on B until A's next call,
+    at most 5 minutes while A runs. The Viewer also compares the stored
+    `start` with its own on every call and in every task commit of a linked
+    project, so a database replaced under it counts as a restore (case 2 of
+    M.5) before anything is written to it.
+  - **Boot stamps.** Until every link has confirmed the start, the first
+    write of a row whose newest stamp is at or below its project's mark, an
+    apply included, saves that stamp as `p:<id>` in `task_tombstones` in the
+    same commit. A row's boot stamp is its `p:` entry, else its newest stamp
+    when that is at or below the mark; a row with neither was created or
+    received since the start and has none. A resync that follows a restore
+    the peer revealed judges rows by these (M.5). The entries go in the
+    commit that confirms the last link, about 40 bytes each, and only for
+    rows written while a link was frozen.
   - While a restore is known and not confirmed (M.5), the same holds for
     every task of the restore snapshot whose `machine` names this install.
   - The refusal `TASK_OWNERSHIP_UNCONFIRMED` says "{task} can start here once
     {peer} confirms where it runs." It is the same guard at the same five
     seams, so it also covers pipeline recovery, boot adoption (which defers
     the row) and the seat tick, which treats those tasks as running
-    elsewhere. The start also records each linked project's watermark, and a
-    task whose `machine` stamp is above it (created here or handed here since
-    the start) is not held back. A link
+    elsewhere. A task whose `machine` stamp is above its project's mark
+    (created here or handed here since the start) is not held back. A link
     revoked or removed before it confirmed leaves its tasks unconfirmed, and
     they offer "Copy here" like a task whose owner is not linked: removing
     the link cannot prove that this machine did not hand the task away.
@@ -1771,14 +1805,22 @@ Idle request, about 130 bytes:
 ```
 
 `gen` is the sender's own counter and the highest it has seen from the peer;
-`hw` is an 8-hex digest of the sender's watermarks (M.3). When `hw` differs
-from the digest of the fences the receiver holds for the sender, the reply says
-`"hw":"stale"` and the sender's next message carries the map,
-`"hws":{"repo-…":"<stamp>"}`.
+`hw` is an 8-hex digest of the sender's whole watermark map (M.3). A message
+adds `"hws":{"repo-…":"<stamp>"}` only for the linked projects whose
+watermark moved since the map the peer last confirmed, so one edit sends one
+entry of about 70 bytes, whatever the number of linked projects. The receiver
+applies the entries to its copy of the sender's map and compares the copy's
+digest with `hw`. A message that does not say `"hwFull":true` confirms the map
+the other side sent last; when the digests differ (a process start on either
+side, a lost message, a restore), the next message says `"hwFull":true` and
+the sender answers with its whole map, paged. Each side holds the confirmed
+map per link in memory; after a process start it sends no entries until the
+first confirmation or `hwFull`, so the whole map moves only after a process
+start, a lost message or a restore, never for an ordinary edit.
 
 Nothing on the wire grows with the number of projects or tasks. The `hws` map
-goes in pages of at most 200 entries (a 69-character key and a 26-character
-stamp, about 21 KB), a `shared` list in pages of at most 100 entries (`name`
+goes in pages of at most 200 entries (a 37-character `repo-` key and a
+26-character stamp, 69 bytes an entry, about 14 KB), a `shared` list in pages of at most 100 entries (`name`
 cut to 64 UTF-16 units, at most about 48 KB), and the resync ids of M.3 in
 pages of at most 2 000 (about 80 KB); each page says `more: true` until the
 last, and the receiver swaps a map or list in only once the last page
@@ -1855,9 +1897,14 @@ A deleted one: `{"id":"…","project":"repo-…","gone":"<stamp>"}`.
      step (`assertStateStartupMutation`) before any task write. This includes
      a local handover the peer applied while its answer was lost: the push
      that carried it raised `gen` first;
-  3. the peer reports having seen a higher `gen` from this side than it holds:
-     the whole state directory was restored, `gen.json` with it. The cold
-     start that such a restore needs holds every owned task of a linked
+  3. the peer reports having seen a higher `gen` from this side than the
+     `bootGen` this side recorded at its cold start (M.4): the whole state
+     directory was restored, `gen.json` with it. The comparison uses
+     `bootGen` and runs while the link is frozen, before this side raises
+     `gen`, pushes, serves or applies anything over it; a raise before the
+     check could climb back to the value the peer saw (a backup at 40, a
+     handover sent at 41, a new task after the restore raising to 41 again)
+     and hide the restore. The cold start holds every owned task of a linked
      project until this check has run (M.4), so nothing launches before it.
 
   In cases 1 and 2 the first task commit on the restored database replaces the
@@ -1870,11 +1917,16 @@ A deleted one: `{"id":"…","project":"repo-…","gone":"<stamp>"}`.
   tasks both sides deleted. A task in the snapshot is judged by its stamp
   there, so an edit made after the restore does not bring it back, and a task
   created since the restore is never removed, whatever its clock did. The
-  marker and the snapshot are deleted once every link has resynced. Case 3 has
-  no snapshot: the restored side resyncs at once and removes only rows whose
-  newest stamp the peer wrote, so a deleted task edited there between the
-  start and that first call comes back as an ordinary task; no launch is
-  involved. Nothing written since the restore is lost in any case.
+  marker and the snapshot are deleted once every link has resynced. In case 3
+  the boot stamps of M.4 are the snapshot: the restored rows are exactly the
+  rows held at the cold start, and the freeze kept every one of them from
+  leaving. The restored side resyncs at once and judges each row by its boot
+  stamp, whichever of the two machines wrote it, so a task both sides deleted
+  is removed whether this side or the peer created it and whether or not it
+  was edited between the start and that first call, and a row with no boot
+  stamp, created since the start, is never removed. The boot stamps stay
+  until that resync ends. Nothing written since the restore is lost in any
+  case.
 
 **Resync** starts with the id exchange of M.3 for each linked project, in
 both directions, before any row of that project moves: each side sends its
@@ -1941,7 +1993,7 @@ a row. A received row that breaks a bound fails its page (`malformed`, as
 
 **Echoes.** `o` names the install whose copy equals the row. A local write
 sets `o` to this install. An apply sets it to the sender only when the merged
-row, in its wire form (so a withheld `derived` text is no difference), equals
+row, in its wire form (so a text withheld for lack of `chosen` is no difference), equals
 the row the sender sent, which means the sender already holds
 exactly this state; when a local group won the merge, `o` stays this install
 and the row goes back. A row is served to every link except the install named
@@ -1982,8 +2034,8 @@ Each machine publishes its agents on linked projects: B in the answer, A in
   first user prompt (`src/lib/scanner/describe.ts:935-939`), and
   `redactBounded` only masks patterns and truncates, so an ordinary prompt
   would pass through it. `t` is built only from what already crosses: the first
-  line of the bound task's `text` when that text crosses (not while it is
-  `derived`, M.3), else, for a pipeline agent, "{stage} stage", else the
+  line of the bound task's `text` when that text crosses (only while it is
+  `chosen`, M.3), else, for a pipeline agent, "{stage} stage", else the
   neutral "{engine} agent", cut to 120 UTF-16 units. Every other string of a
   row is an ASCII identifier of at most 64 characters, so a row encodes to at
   most 1.5 KB. `e` and `m` come from `types.ts:192` and `:238`; `st` is
@@ -2060,7 +2112,7 @@ Each machine publishes its agents on linked projects: B in the answer, A in
 | Cold start with the peer unreachable | Owned tasks of linked projects wait with `TASK_OWNERSHIP_UNCONFIRMED` until the first call to each linking peer, and boot adoption defers their agents (M.4). Tasks of unlinked projects and tasks created since the start run as usual. |
 | Link down | Both machines keep working on their copies. A's edits wait in its log and go out from `pushed` on the next good call; after about 2 days offline A's log is pruned below `pushed` and A resyncs its linked projects to B in pages. Tombstones wait as long as the link does. Remote agent rows grey after 15 minutes. |
 | Peer store recreated | `store` changed: resync in both directions, with the fences of M.3. |
-| Restored from a backup | Known from Delegatus's own restore marker, from `gen.json` ahead of the database at boot, or from the peer's `gen` (M.5). The restored side launches none of the tasks it owned at the backup until every link has resynced (M.4), so a task it handed away meanwhile is not started twice. The resync starts with the id exchange, so tasks both sides deleted after the backup are removed on the restored side before any row moves, tombstones pruned or not, edited since the restore or not, whatever the skew between the clocks; tasks created there since the restore stay. A whole state directory restored by hand, `gen.json` included, is known at its first call that reaches the peer; the cold start it needs holds every owned task of a linked project until that call (M.4), so nothing launches before it. A deleted task edited there before that call comes back as a task. Nothing is lost in any case. |
+| Restored from a backup | Known from Delegatus's own restore marker, from `gen.json` ahead of the database at boot, or from the peer's `gen` (M.5). The restored side launches none of the tasks it owned at the backup until every link has resynced (M.4), so a task it handed away meanwhile is not started twice. The resync starts with the id exchange, so tasks both sides deleted after the backup are removed on the restored side before any row moves, tombstones pruned or not, edited since the restore or not, whatever the skew between the clocks; tasks created there since the restore stay. A whole state directory restored by hand, `gen.json` included, is known at its first call that reaches the peer, which compares the peer's `gen` with the value held at boot before this side raises, pushes or applies anything; the cold start it needs holds every owned task of a linked project until that call (M.4), so nothing launches before it, and the resync judges its rows by their boot stamps, so a task both sides deleted stays deleted, edited before that call or not. Nothing is lost in any case. |
 | Peer reinstalled | New `installId`: `install-changed` (§4.4), the link stops, pair again. The new install receives the linked projects in its first resync, tasks owned by the old install included (M.5 accepts an unknown owner); they show "runs on {old} (not linked)", no machine launches them, and "Copy here" makes a new task that runs where it is made (M.4). |
 | Revoke on either side | §2.6: the next call gets `401`, the link reads `revoked`. Copies stay, remote agent rows disappear, tasks owned by the peer are launched by neither machine; "Copy here" makes a new task (M.4). Tombstones kept only for that link are pruned with it. |
 | Project unshared | That project stops syncing; copies stay. |
@@ -2100,11 +2152,11 @@ UTF-8 body, never JavaScript string length.
 | Idle link, per day | ≤ 0.3 MB of network, 0 bytes of disk: no apply, no fence move, no request-count flush (M.10) | M2: fake timers run the idle link for 3 hours, across two hourly flush points; no write reaches `state.sqlite`, `grants.json`, `peers.json` or `gen.json`, and every file under the state directory keeps its size and mtime |
 | Idle call, work | B: one cached `revision()`, no row read, no write. A: one cached read of its own revision. When only other projects changed: one indexed query, and a cursor write at most every 10 minutes | M2: the idle run starts after edits and deletes have synced, tombstones were pruned and both sides hold fences; store spies then see no `state_rows` read and no write over 100 idle calls on either side, and `gen`, the fences and the `board_links` revision stay the same; `state.sqlite`, its WAL and `links/*.json` keep size and mtime; 100 calls while an unlinked project takes writes cause ≤ 1 `board_links` write |
 | Idle call, CPU | ≤ 2 ms per side (one token hash, one cached read, small JSON) | M2: each side runs in its own process; after 100 warm-up calls, the user plus system time of `process.cpuUsage()` over 1 000 idle calls is ≤ 2 000 ms in each process, measured separately, the HTTP server's own work included |
-| Changed task, bytes | the encoded row plus ≤ 300 B. About 1 KB on measured data. At the bounds of M.5: about 58 KB for cap-sized Ukrainian text and details (2 bytes a unit), at most 164 KB in the worst case (control characters escape to 6 bytes; 26 000 × 6, 20 links at the length bound, the other fields); above 170 KB a row is not sent. One row of that size fits a 512 KB page beside the largest agents part (308 KB) | M2: one edit, socket bytes over the idle baseline ≤ `Buffer.byteLength(JSON.stringify(row)) + 300`; fixtures include a cap-sized Ukrainian task, a cap-sized task of control characters with 20 work links at the length bound, and a stored task whose link has a 530 000-character repository, which is not sent while later rows still arrive |
+| Changed task, bytes | the encoded row plus ≤ 300 B over all the calls the edit causes, whatever the number of linked projects (the push and its ack, one `hws` entry each way, `gen`). About 1 KB on measured data. At the bounds of M.5: about 58 KB for cap-sized Ukrainian text and details (2 bytes a unit), at most 164 KB in the worst case (control characters escape to 6 bytes; 26 000 × 6, 20 links at the length bound, the other fields); above 170 KB a row is not sent. One row of that size fits a 512 KB page beside the largest agents part (308 KB) | M2: with 1 000 linked projects on both sides (real 37-character `repo-` keys, maps confirmed), one edit of one task; the socket bytes of every call from the edit until both sides are quiet again and both fences moved, over the same number of idle calls, are ≤ `Buffer.byteLength(JSON.stringify(row)) + 300`, and no call carries more than one `hws` entry; fixtures include a cap-sized Ukrainian task, a cap-sized task of control characters with 20 work links at the length bound, and a stored task whose link has a 530 000-character repository, which is not sent while later rows still arrive |
 | Changed task, disk | one task row write, as a local edit; one `board_links` row when a cursor, `gen` or fence moves; ≤ 200 B per tombstone | M2: committed revisions per applied page are one `tasks` plus at most one `board_links` |
 | Disk growth per day | ≤ 20 KB beyond the task rows themselves (tombstones and cursor rows), pruned after acknowledgement | M2: 1 000 synced edits and 100 deletes, then the byte size of the two new collections |
 | First sync | pages ≤ 200 rows and ≤ 512 KB | M2: 1 000 fixture tasks arrive in ≤ 5 pages, each ≤ 512 KB |
-| Resync ids and metadata | id pages ≤ 2 000 ids (≈ 80 KB), `hws` pages ≤ 200 entries, `shared` pages ≤ 100 entries; every body < 700 KB sent, > 1 MiB refused unparsed; noted ids ≤ 16 B each in memory | M2: 14 000 tasks in one linked project resync in 7 id pages, each ≤ 80 KB by `Buffer.byteLength`; 1 000 shared projects travel in 10 `shared` pages and 5 `hws` pages; a peer sending an id page of 2 001 ids, a `shared` page of 101 entries, a `name` of 65 units or a 1 MiB + 1 B body gets `malformed` and nothing is applied |
+| Resync ids and metadata | id pages ≤ 2 000 ids (≈ 80 KB), `hws` pages ≤ 200 entries, `shared` pages ≤ 100 entries; every body < 700 KB sent, > 1 MiB refused unparsed; noted ids ≤ 16 B each in memory | M2: 14 000 tasks in one linked project resync in 7 id pages, each ≤ 80 KB by `Buffer.byteLength`; 1 000 shared projects travel in 10 `shared` pages, and after `hwFull` their watermarks in 5 `hws` pages; a peer sending an id page of 2 001 ids, a `shared` page of 101 entries, a `name` of 65 units or a 1 MiB + 1 B body gets `malformed` and nothing is applied |
 | Memory, added RSS | ≤ 3 MB added resident memory per link at steady state, one-time costs included | M2/M3: two child processes load the same populated fixture (2 000 tasks in 3 linked projects, 200 agents on each side); one runs with the link off, one with it on, both through 1 000 calls of mixed work (idle calls, edits, agent churn). `process.memoryUsage().rss` after `Bun.gc(true)`, median of 3 runs, differs by ≤ 3 MB |
 | Memory, growth | no growth per call | M2/M3: in the linked process, `heapUsed` after `Bun.gc(true)` is read once 100 calls of the workload have run and again after 1 000 more; it grows < 256 KB |
 | Agent maps | ≤ 200 rows and 200 markers per map, each row ≤ 1.5 KB encoded; about 120 KB sent and 60 KB received per link on measured shapes; a reset ≤ 200 rows in pages of 50 | M3: 500 agents across 20 linked projects and 10 000 start/stop cycles leave every map and marker list at its bound; a reset after churn arrives in ≤ 4 pages |
@@ -2159,17 +2211,18 @@ validation; an end-to-end with two installs; the M.9 idle-bytes check.
 **M2 — two-way task sync and the machine that runs a task.**
 Scope: `machine` and `sync` on tasks; the stamp step in `committedRows`; the
 clock and the project watermarks; `task_tombstones` with its atomic write,
-floors and durable acknowledgements; the watermark fences, their digests and
-the id exchange; `[revision, key]` positions; the `tasks` part of
+floors and durable acknowledgements; the watermark fences, their digests, per-project
+entries and `hwFull`, and the id exchange; `[revision, key]` positions; the `tasks` part of
 `boards/sync` in both directions, resync, restore detection and the
 fallback's restore marker, `gen.json` and the restore snapshot included; the
-`derived` text flag and its wire substitution; the apply with its field
+`chosen` text flag, private when absent, and its wire substitution; the apply with its field
 bounds (the repository length bound in `normalizeWorkLinkInput` included), its
 checks and budget; the `machine` rule judged by the link; A's schedule; the
 fenced handover; holds; "Copy here"; `TASK_RUNS_ELSEWHERE` at the five seams
 over every resolved target (boot adoption and the migration successor
 included) with the call-site coverage test; `gen` raised before publication;
-the cold-start confirmation and `TASK_OWNERSHIP_UNCONFIRMED`; withheld stubs;
+the cold-start confirmation against `bootGen` with the frozen link,
+boot stamps and `TASK_OWNERSHIP_UNCONFIRMED`; withheld stubs;
 paged ids, `hws` and `shared` and the 1 MiB body cap; the seat
 tick filter; MCP fields; the machine chip, "Run here" and the board header
 line; en and uk strings.
@@ -2203,9 +2256,15 @@ Acceptance:
   through the durability fallback within the 7 minutes: after the next call
   the task is gone on both and B receives nothing back. The same again with
   A's wall clock stepped back 1 hour after the restore, and a task created on
-  the restored A in that state survives on both. After a hand restore without
-  the marker, a task last written by B is removed and one created on A since
-  the restore survives;
+  the restored A in that state survives on both. After a hand restore of the
+  whole state directory, a task last written by B is removed and one created
+  on A since the restore survives;
+- hand restore of a task A created: A creates a task, it syncs, A's whole
+  state directory is backed up, both sides delete the task, acknowledge and
+  prune; the directory is put back and A cold-starts. Once with no edit and
+  once with that task edited on A before the first call, after that call and
+  its resync the task is gone on both, B never receives it, and no body
+  carries it;
 - for a task that runs on B, A refuses `create_pipeline`, `spawn_agent` with
   `taskIds`, `/api/tasks/[id]/spawn`, `/send`, `link-task`, a draft's `start`
   and a pipeline retry with `TASK_RUNS_ELSEWHERE`, and B accepts them; so is a
@@ -2249,13 +2308,23 @@ Acceptance:
   link down at the cold start: A refuses the task and defers its agent at
   boot until the first call, which finds B's `gen` ahead and resyncs; B's work
   never stopped;
+- gen caught up before the check: A's backup holds `gen` 40 and the task owned
+  by A; A hands it to B, raising `gen` to 41 for that push, B applies and
+  launches, and A's call dies before the answer. The whole state directory of
+  A is put back and A cold-starts with the link down, and A creates a new task
+  before the first call. That call carries no row, `gen` stays 40, B reports
+  41, and A finds the restore: it never launches the handed task, reads
+  `machine = B` after the resync, and the new task reaches B only after the
+  resync ended, owned by A; B's work never stopped;
 - boot adoption: a hosted registry row whose conversation holds a task that
   runs on B, and another whose task is unconfirmed after a cold start, go
   through the real `adoptStructuredHostsAtStartup`, once for Codex and once
   for Claude: no `adopt` is called for the first, its claim is released and
   the row reads the refusal; the second is adopted only after the confirming
-  call; a migration successor for the first is refused the same way; the
-  coverage test fails on a new `start`/`adopt` call outside its list;
+  call; a migration successor for the first is refused the same way; a
+  stopped Copilot conversation holding that task is resumed on demand on A
+  and refused at seam 2, and B launches it; the coverage test fails on a new
+  `start`/`adopt` call of each of the three hosts outside its list;
 - restore and edit: a task deleted on both sides, tombstones pruned, then A
   restored through the fallback from a backup that holds it, and that task
   edited on A before the next call: after the call it is gone on both and B
@@ -2264,10 +2333,14 @@ Acceptance:
   goes through the real scan, `planAdmissions` and `admitConversations`; a
   launch whose `launchDisplay.prompt` carries a second canary, a pipeline
   whose goal carries a third, and a curator task from a transcript line with a
-  fourth each make a task; no request or answer body carries any canary
-  (every body is scanned), and each task arrives as "Untitled task"; then
-  `update_task` sets the text of each, the same words as before on one of
-  them, and each arrives with that text;
+  fourth each make a task; so does a fifth: a pre-M2 task row holding a
+  canary as its `text` (a placeholder, a monitor card and an operator task,
+  written in the stored shape `origin/main` writes, without the flag) is
+  loaded unedited and its project shared for the first time; no request or
+  answer body carries any canary through the first resync and the calls
+  after it (every body is scanned), and each task arrives as "Untitled task";
+  then `update_task` sets the text of each, the same words as before on one
+  of them, and each arrives with that text;
 - bounds: a stored task whose work link holds a 530 000-character repository
   is not sent, the link row names it, and the rows after it in the log still
   arrive; the exchange completes, a resync is then forced (`store` changed),
@@ -2295,7 +2368,7 @@ one call, and the reverse; no body carries a transcript path, conversation id,
 account or prompt from the fixtures (the test scans every body for them),
 including an agent with no task and no pipeline whose scanned title is its
 first prompt carrying a unique canary, which arrives titled "{engine} agent",
-and one bound to a task whose `derived` text is its first prompt, which
+and one bound to a task whose unchosen text is its first prompt, which
 arrives titled the same way;
 500
 agents give at most 50 per project and 200 in all; 10 000 start/stop cycles
