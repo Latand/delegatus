@@ -302,9 +302,11 @@ export async function pullHost(
   };
   let restarted = false;
   for (let page = 0; page < PULL_MAX_PAGES; page += 1) {
-    const env: Record<string, string> = { LLV_ACTIVITY_AFTER: String(cursor), LLV_ACTIVITY_LIMIT: String(pageRows) };
+    const env: Record<string, string> = {
+      LLV_ACTIVITY_AFTER: String(cursor), LLV_ACTIVITY_LIMIT: String(pageRows),
+      LLV_ACTIVITY_MEMBER: config.memberId ?? "",
+    };
     if (config.stateDir) env.LLV_ACTIVITY_STATE_DIR = config.stateDir;
-    if (config.memberId) env.LLV_ACTIVITY_MEMBER = config.memberId;
     const answer = await transport(env, REMOTE_READER);
     result.pages += 1;
     if (answer.timedOut) return fail("timeout");

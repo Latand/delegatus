@@ -240,7 +240,14 @@ describe("pulling another host's records", () => {
     expect(anonymous.coverage[0]?.covered).toEqual([]);
 
     const missing = config();
-    expect(await pullWith(missing)).toMatchObject({ ok: true });
+    const ambientMember = process.env.LLV_ACTIVITY_MEMBER;
+    process.env.LLV_ACTIVITY_MEMBER = MEMBER_A;
+    try {
+      expect(await pullWith(missing)).toMatchObject({ ok: true });
+    } finally {
+      if (ambientMember === undefined) delete process.env.LLV_ACTIVITY_MEMBER;
+      else process.env.LLV_ACTIVITY_MEMBER = ambientMember;
+    }
     expect(local((store) => store.count("stage"))).toBe(0);
     expect(local((store) => store.hostState("stage"))).toMatchObject({ error: "member-unconfigured", unknownAuthors: 1 });
     const activityDir = path.join(dir, "local", "state", "activity");
@@ -271,6 +278,43 @@ describe("pulling another host's records", () => {
     expect(report.totals.requests).toBe(1);
     expect(await pullWith({ ...config(), memberId: MEMBER_B })).toMatchObject({ ok: true });
     expect(local((store) => store.candidates("stage", DAY.start, NOW, "stage").map((row) => row.author))).toEqual([MEMBER_B]);
+  });
+
+  test("a local team member's figure excludes the owner's pulled remote inputs", async () => {
+    await teamStageRecords();
+    expect(await pullWith({ ...config(), memberId: MEMBER_A })).toMatchObject({ ok: true });
+    const localState = path.join(dir, "local", "state");
+    const activityDir = path.join(localState, "activity");
+    fs.writeFileSync(path.join(activityDir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation" },
+      hosts: [{ id: "stage", pull: { ssh: "stage-box", memberId: MEMBER_A } }] }));
+    const team = new TeamStore(path.join(localState, "team", "team.sqlite"));
+    for (const [id, role] of [[LOCAL_MEMBER, "owner"], [MEMBER_B, "member"]] as const) {
+      team.insertMember({ id, name: role, role, status: "active", color: "teal", telegram: null,
+        createdAt: "2026-09-23T00:00:00Z", createdBy: "claim", revokedAt: null });
+    }
+    team.close();
+    const previous = process.env.LLV_STATE_DIR;
+    process.env.LLV_STATE_DIR = localState;
+    try {
+      const sources = { dir: () => activityDir,
+        readLedger: () => ({ rows: [], ledgerStartMs: null }),
+        store: () => ActivityStore.openReadOnly(localStoreFile) };
+      const member = readHumanInputs(DAY, NOW, sources, { mode: "team", memberId: MEMBER_B });
+      expect(member.inputs).toEqual([]);
+      expect(member.hosts.map((host) => host.host)).toEqual(["workstation"]);
+      expect(member.unknownAuthors).toBe(0);
+      const report = activityReport({ params: clampMethodParams({}), range: "today", nowMs: NOW,
+        anchors: member.inputs.map((input) => ({ at: input.at, project: input.project, surface: input.surface, kind: input.kind, host: input.host })),
+        hosts: member.coverage, agents: [] });
+      expect(report.totals.requests).toBe(0);
+      expect(report.totals.humanMs).toBe(0);
+      const owner = readHumanInputs(DAY, NOW, sources, { mode: "team", memberId: LOCAL_MEMBER });
+      expect(owner.inputs.map((input) => [input.host, input.author])).toEqual([["stage", MEMBER_A]]);
+    } finally {
+      resetTeamStoreForTests();
+      if (previous === undefined) delete process.env.LLV_STATE_DIR;
+      else process.env.LLV_STATE_DIR = previous;
+    }
   });
 
   test("the operator's differently named memberships dedupe one input across hosts", async () => {

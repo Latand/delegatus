@@ -226,7 +226,9 @@ on the remote host and no port is opened.
   `pull: { ssh, bun?, stateDir?, everyMin?, memberId? }`; `memberId` is the
   operator's member id on that host. A team host without it sends no personal
   input rows, and the hosts table names the configuration gap. A solo host
-  continues to send its sole operator's input. `ssh` is an alias from the
+  continues to send its sole operator's input. Configured remote hosts appear
+  in the operator's figure (solo or signed-in local owner); other local team
+  members see only their local input. `ssh` is an alias from the
   operator's ssh config and is never an option or a command.
   The reader checks for the author column at runtime, so a team host on an
   older schema sends no personal input and counts its rows as unknown; a solo
@@ -473,6 +475,9 @@ Existing team rows with no author also stay unknown. Neither adds to any
 person's hours. The page shows an unknown-author input count separately, and
 team remote pulls send its count without sending those inputs. Every activity
 figure has one person; the existing project and day views use the same filter.
+Configured remote hosts belong to the local operator's figure. A signed-in
+local team member who is not the owner sees no remote operator rows or remote
+coverage in their figure.
 Ingest keeps team attribution when the store has member history and its owner
 is no longer active, so a later backfill cannot label older team input as solo.
 The unknown-author count describes records the sources observed: local file

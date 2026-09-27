@@ -329,6 +329,13 @@ export function readHumanInputs(
   let localMode: "solo" | "team" = viewer?.mode ?? "team";
   if (!viewer) try { localMode = teamMode(); } catch { /* Unknown identity stays conservative. */ }
   const localMember = viewer?.memberId ?? null;
+  let operatorView = localMode === "solo";
+  if (localMode === "team" && localMember) {
+    try {
+      const member = existingTeamStore()?.member(localMember);
+      operatorView = member?.role === "owner" && member.status === "active";
+    } catch { /* An unreadable team store cannot grant the operator's remote rows. */ }
+  }
   const hostsDir = path.join(dir, "hosts");
   let exported: string[] = [];
   try {
@@ -351,9 +358,9 @@ export function readHumanInputs(
   const localTeamHistory = localMode === "team" || historicalMembers || storedTeamHistory;
   const expected: Array<HostConfigEntry & { local: boolean; configured: boolean }> = [
     { ...config.local, local: true, configured: true },
-    ...config.hosts.map((host) => ({ ...host, local: false, configured: true })),
+    ...(operatorView ? config.hosts.map((host) => ({ ...host, local: false, configured: true })) : []),
   ];
-  for (const id of exported.sort()) {
+  for (const id of operatorView ? exported.sort() : []) {
     if (!expected.some((host) => host.id === id)) expected.push({ id, label: null, projects: "all", since: null, pull: null, local: false, configured: false });
   }
 
