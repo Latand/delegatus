@@ -285,6 +285,52 @@ describe("pulling another host's records", () => {
     expect(local((store) => store.candidates("stage", DAY.start, NOW, "stage").map((row) => row.author))).toEqual([MEMBER_B]);
   });
 
+  test("a configured member change leaves old remote coverage pending until repulled", async () => {
+    await teamStageRecords();
+    expect(await pullWith({ ...config(), memberId: MEMBER_A })).toMatchObject({ ok: true });
+    const activityDir = path.join(dir, "local", "state", "activity");
+    fs.writeFileSync(path.join(activityDir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation" },
+      hosts: [{ id: "stage", pull: { ssh: "stage-box", memberId: MEMBER_B } }] }));
+    const sources = { dir: () => activityDir,
+      readLedger: () => ({ rows: [], ledgerStartMs: null }),
+      store: () => ActivityStore.openReadOnly(localStoreFile) };
+    const pending = readHumanInputs(DAY, NOW, sources);
+    expect(pending.inputs.filter((input) => input.host === "stage")).toEqual([]);
+    expect(pending.coverage.find((host) => host.host === "stage")?.covered).toEqual([]);
+    expect(pending.hosts.find((host) => host.host === "stage")).toMatchObject({
+      configurationGap: false, sources: [{ source: "pull", state: "pending", inputs: 0 }],
+    });
+    expect(await pullWith({ ...config(), memberId: MEMBER_B })).toMatchObject({ ok: true });
+    const complete = readHumanInputs(DAY, NOW, sources);
+    expect(complete.inputs.filter((input) => input.host === "stage").map((input) => input.author)).toEqual([MEMBER_B]);
+    expect(complete.coverage.find((host) => host.host === "stage")?.covered).not.toEqual([]);
+  });
+
+  test("pre-team solo input becomes unknown after team enrollment locally and remotely", async () => {
+    await stageRecords();
+    const team = new TeamStore(path.join(remoteState, "team", "team.sqlite"));
+    team.insertMember({ id: MEMBER_A, name: "Owner", role: "owner", status: "active", color: "teal", telegram: null,
+      createdAt: "2026-09-23T10:00:00Z", createdBy: "claim", revokedAt: null });
+    team.close();
+    const previous = process.env.LLV_STATE_DIR;
+    process.env.LLV_STATE_DIR = remoteState;
+    try {
+      const activityDir = path.join(remoteState, "activity");
+      const read = readHumanInputs(DAY, NOW, { dir: () => activityDir,
+        readLedger: () => ({ rows: [], ledgerStartMs: null }),
+        store: () => ActivityStore.openReadOnly(path.join(activityDir, "records.sqlite")) },
+      { mode: "team", memberId: MEMBER_A });
+      expect(read.inputs).toEqual([]);
+      expect(read.unknownAuthors).toBe(3);
+    } finally {
+      resetTeamStoreForTests();
+      if (previous === undefined) delete process.env.LLV_STATE_DIR;
+      else process.env.LLV_STATE_DIR = previous;
+    }
+    expect(await pullWith({ ...config(), memberId: MEMBER_A })).toMatchObject({ ok: true });
+    expect(local((store) => [store.count("stage"), store.hostState("stage")?.unknownAuthors])).toEqual([0, 3]);
+  });
+
   test("a local team member's figure excludes the owner's pulled remote inputs", async () => {
     await teamStageRecords();
     expect(await pullWith({ ...config(), memberId: MEMBER_A })).toMatchObject({ ok: true });

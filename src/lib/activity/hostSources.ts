@@ -396,17 +396,22 @@ export function readHumanInputs(
       const wanted = host.local ? (localMode === "solo" ? "operator" : localMember)
         : remoteSolo || explicitSoloExport ? "operator" : selectedMember ?? null;
       const soloHistory = host.local ? localMode === "solo" && !localTeamHistory : remoteSolo;
+      const historicalTeam = host.local ? localTeamHistory : remoteTeam || host.mode === "team";
+      const selectedPullIsStale = !host.local && Boolean(host.pull) && remoteTeam && remoteState !== null
+        && remoteState.pulledMember !== (selectedMember ?? null);
+      const effectiveAuthor = (input: HumanInput) => input.author === "operator" && historicalTeam
+        ? null : input.author ?? (soloHistory ? "operator" : null);
       let unknownAuthors = !host.local ? remoteState?.unknownAuthors ?? 0 : 0;
       const unknownInputs: HumanInput[] = [];
       const knownIds = new Set<string>();
       for (const source of sources) {
-        for (const input of source.inputs) if (input.author != null) {
+        for (const input of source.inputs) if (effectiveAuthor(input) !== null) {
           for (const id of input.ids) knownIds.add(id);
         }
         /* A legacy export has no author. It cannot make team input belong to
            the viewer, even when an older remote install produced it. */
         const selected = source.inputs.filter((input) => {
-          const author = input.author ?? (soloHistory ? "operator" : null);
+          const author = effectiveAuthor(input);
           if (author === null) {
             if (source.source !== "pull") unknownInputs.push(input);
             return false;
@@ -416,6 +421,13 @@ export function readHumanInputs(
         inputs.push(...selected);
         source.inputs = selected;
         if (configurationGap && source.scope === "all") source.covered = [];
+        if (selectedPullIsStale && source.source === "pull") {
+          source.covered = [];
+          source.state = "pending";
+          source.readAt = null;
+          source.error = null;
+          source.excluded = {};
+        }
       }
       const unknownFromSources = mergeHumanInputs(unknownInputs.filter((input) =>
         !input.ids.some((id) => knownIds.has(id)))).length;

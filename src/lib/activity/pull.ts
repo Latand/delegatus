@@ -83,7 +83,7 @@ try {
   latest = meta?.version ?? 0;
   storeId = meta?.store_id ?? null;
   host = db.query("SELECT covered_from, covered_until, read_at, excluded FROM activity_hosts WHERE host = ''").get();
-  unknownAuthors = mode === "team" || hasTeamHistory ? db.query("SELECT COUNT(*) AS n FROM activity_inputs WHERE host = '' AND " + (hasAuthor ? "author IS NULL" : "1 = 1")).get()?.n ?? 0 : 0;
+  unknownAuthors = mode === "team" || hasTeamHistory ? db.query("SELECT COUNT(*) AS n FROM activity_inputs WHERE host = '' AND " + (hasAuthor ? "(author IS NULL OR author = 'operator')" : "1 = 1")).get()?.n ?? 0 : 0;
   const selection = mode === "solo" && !hasTeamHistory ? ""
     : hasAuthor && member ? " AND author = ?" : " AND 1 = 0";
   const sql = "SELECT key, version, at, project, kind, surface, hash, conversation, ids" + (hasAuthor ? ", author" : "") + " FROM activity_inputs WHERE host = '' AND version > ?" + selection + " ORDER BY version LIMIT ?";

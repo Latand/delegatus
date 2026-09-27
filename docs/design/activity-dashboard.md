@@ -235,6 +235,8 @@ on the remote host and no port is opened.
   host on that schema keeps its previous figures, including when an empty team
   database exists after an unfinished claim. A host with recorded team members
   retains its team history boundary even if no owner is currently active. The
+  remote host's previous member selection supplies no coverage while a newly
+  configured member waits for the next pull. The
   local writer adds the author column to existing `records.sqlite` without
   replacing old rows.
 
@@ -477,6 +479,8 @@ Existing team rows with no author also stay unknown. Neither adds to any
 person's hours. The page shows an unknown-author input count separately, and
 team remote pulls send its count without sending those inputs. Every activity
 figure has one person; the existing project and day views use the same filter.
+Earlier solo `operator` rows also become unknown in a later team member view:
+their identity cannot be assigned to a member after enrollment.
 Configured remote hosts belong to the local operator's figure. A signed-in
 local team member who is not the owner sees no remote operator rows or remote
 coverage in their figure.
