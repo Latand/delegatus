@@ -162,7 +162,7 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
     const events = JSON.parse(data.toString()).traceEvents as { name: string; dur?: number; args?: { data?: { url?: string } } }[];
     const sum = (name: string) => events.filter(e => e.name === name).reduce((s, e) => s + (e.dur ?? 0) / 1000, 0);
     const tasks = events.filter(e => e.name === "RunTask" && (e.dur ?? 0) >= 50_000);
-    result[name] = { value, trace: { longTasks: tasks.length, longTaskMs: tasks.reduce((s,e) => s + e.dur! / 1000, 0), blockingMs: tasks.reduce((s,e) => s + e.dur! / 1000 - 50, 0), evaluateScriptMs: sum("EvaluateScript"), evaluateModuleMs: sum("v8.evaluateModule"), compileMs: sum("v8.compile"), layoutMs: sum("Layout"), paintMs: sum("Paint"), demoEvalMs: events.filter(e => /evaluate/i.test(e.name) && e.args?.data?.url?.includes("demo.js")).reduce((s,e) => s + (e.dur ?? 0) / 1000, 0) } };
+    result[name] = { value, trace: { longTasks: tasks.length, longTaskMs: tasks.reduce((s,e) => s + e.dur! / 1000, 0), blockingMs: tasks.reduce((s,e) => s + e.dur! / 1000 - 50, 0), evaluateScriptMs: sum("EvaluateScript"), evaluateModuleMs: sum("v8.evaluateModule"), compileMs: sum("v8.compile"), layoutMs: sum("Layout"), paintMs: sum("Paint"), demoModuleEvalMs: sum("v8.evaluateModule") } };
     fs.writeFileSync(path.join(out, `${perfLabel}-${viewport.name}.json`), JSON.stringify(result, null, 2));
     console.log(`${perfLabel}-${viewport.name} ${name}: ${JSON.stringify(result[name])}`);
   }
@@ -199,7 +199,7 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
             continue;
           }
         }
-        if (step === 5) await current.waitForFunction(() => !!document.querySelector('[data-id="task:t-retries"]') || document.body.innerText.replace(/\s+/g, " ").includes("Webhook retries"));
+        if (step === 5) await current.waitForFunction(() => !!document.querySelector('[data-id="task:t-retries"]') || document.body.innerText.replace(/\s+/g, " ").includes("Back off webhook retries"));
         rows.push({ step, stateMs, visibleMs: await page.evaluate(() => performance.now() - (window as any).stepClick) });
       }
       return rows;
