@@ -147,3 +147,42 @@ test("?project= answers that project's share of the same count: the numbers its 
   expect(pick(scoped.totals)).toEqual(pick(harbor));
   expect(scoped.projects).toEqual(all.projects);
 });
+
+test("GET keeps team-era terminal input unknown after the owner is revoked", async () => {
+  const { ingestTranscripts } = await import("@/lib/activity/ingest");
+  const { ActivityStore } = await import("@/lib/activity/store");
+  const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+  const { mintSession } = await import("@/lib/team/sessions");
+  const now = Date.now();
+  const project = "revocation-fixture";
+  const memberId = "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const team = teamStore();
+  team.insertMember({ id: memberId, name: "Owner", role: "owner", status: "active", color: "teal", telegram: null,
+    createdAt: new Date(now - 60_000).toISOString(), createdBy: "claim", revokedAt: null });
+  const session = mintSession(team, memberId, "claim", { surface: "desktop", browser: "chrome" }, now);
+  const transcript = path.join(sandbox, "HOME", "team-terminal.jsonl");
+  fs.writeFileSync(transcript, JSON.stringify({ type: "user", timestamp: new Date(now - 20 * 60_000).toISOString(),
+    uuid: "team-terminal-1", sessionId: "team-terminal", cwd: "/work/revocation-fixture", entrypoint: "cli", promptSource: "typed",
+    message: { role: "user", content: "typed terminal request" } }) + "\n");
+  const store = ActivityStore.open();
+  try {
+    const stat = fs.statSync(transcript);
+    await ingestTranscripts([{ path: transcript, engine: "claude", size: stat.size, mtimeMs: stat.mtimeMs }], {
+      complete: true, listedAt: now, now: () => now, store,
+      resolver: () => () => ({ project, launch: null, registered: false, mode: "team" }),
+    });
+    expect(store.hostState("")?.teamHistory).toBeTrue();
+  } finally { store.close(); }
+  const before = await (await get(`?range=7d&project=${project}`, { cookie: `llv_member=${session.value}` })).json() as {
+    totals: { requests: number; humanMs: number }; unknownAuthorInputs: number;
+  };
+  expect(before.totals.requests).toBe(0);
+  expect(before.totals.humanMs).toBe(0);
+  expect(before.unknownAuthorInputs).toBeGreaterThanOrEqual(1);
+  team.updateMember({ ...team.member(memberId)!, status: "revoked", revokedAt: new Date(now).toISOString() });
+  resetTeamStoreForTests();
+  const after = await (await get(`?range=7d&project=${project}`)).json() as typeof before;
+  expect(after.totals.requests).toBe(0);
+  expect(after.totals.humanMs).toBe(0);
+  expect(after.unknownAuthorInputs).toBeGreaterThanOrEqual(before.unknownAuthorInputs);
+});

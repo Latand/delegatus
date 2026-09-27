@@ -7,7 +7,7 @@ import { Database } from "bun:sqlite";
 
 import { readAgentConversations } from "./agentSource";
 import { conversationResolver } from "./conversationResolver";
-import { ledgerRowKey, requestKey } from "./humanInput";
+import { exportLines, ledgerRowKey, requestKey } from "./humanInput";
 import { readHumanInputs } from "./hostSources";
 import { activityReport, clampMethodParams } from "./method";
 import { readRequests, recordOperatorRequest } from "./requestLedger";
@@ -156,6 +156,7 @@ describe("pulling another host's records", () => {
     const old = new Database(file);
     old.exec(`ALTER TABLE activity_inputs DROP COLUMN author;
       ALTER TABLE activity_hosts DROP COLUMN remote_mode;
+      ALTER TABLE activity_hosts DROP COLUMN team_history;
       ALTER TABLE activity_hosts DROP COLUMN pulled_member;
       ALTER TABLE activity_hosts DROP COLUMN unknown_authors;
       PRAGMA user_version = 1`);
@@ -163,7 +164,19 @@ describe("pulling another host's records", () => {
     const upgraded = ActivityStore.open(file);
     expect(upgraded.localRowsAfter(0, 10)).toHaveLength(3);
     expect(upgraded.localRowsAfter(0, 10).every((row) => row.author === null)).toBeTrue();
-    expect(upgraded.db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(2);
+    expect(upgraded.db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(3);
+    upgraded.close();
+  });
+
+  test("migration retains team history from member-authored rows", async () => {
+    await teamStageRecords(false, true);
+    const file = path.join(remoteState, "activity", "records.sqlite");
+    const old = new Database(file);
+    old.exec("ALTER TABLE activity_hosts DROP COLUMN team_history; PRAGMA user_version = 2");
+    old.close();
+    const upgraded = ActivityStore.open(file);
+    expect(upgraded.localRowsAfter(0, 10)).toHaveLength(3);
+    expect(upgraded.hostState(LOCAL_HOST_KEY)?.teamHistory).toBeTrue();
     upgraded.close();
   });
 
@@ -353,6 +366,9 @@ describe("pulling another host's records", () => {
     const remote = ActivityStore.openReadOnly(path.join(remoteState, "activity", "records.sqlite"))!;
     expect(remote.localRowsAfter(0, 10).map((row) => row.author).sort()).toEqual([null, MEMBER_A, MEMBER_B].sort());
     remote.close();
+    const legacy = new Database(path.join(remoteState, "activity", "records.sqlite"));
+    legacy.exec("ALTER TABLE activity_hosts DROP COLUMN team_history; PRAGMA user_version = 2");
+    legacy.close();
     let output = "";
     const transport = async (env: Record<string, string>, script: string) => {
       const answer = await localTransport()(env, script);
@@ -372,6 +388,29 @@ describe("pulling another host's records", () => {
     expect(local((store) => store.count("stage"))).toBe(0);
     expect(output).not.toContain(MEMBER_A);
     expect(output).not.toContain(MEMBER_B);
+  });
+
+  test("a former team export cannot restore unknown input as operator hours", async () => {
+    await teamStageRecords(false, true);
+    expect(await pullWith(config())).toMatchObject({ ok: true });
+    expect(local((store) => store.hostState("stage"))).toMatchObject({ remoteMode: "solo", teamHistory: true, unknownAuthors: 1 });
+    const activityDir = path.join(dir, "local", "state", "activity");
+    const exportsDir = path.join(activityDir, "hosts", "stage");
+    fs.mkdirSync(exportsDir, { recursive: true });
+    const remote = ActivityStore.openReadOnly(path.join(remoteState, "activity", "records.sqlite"))!;
+    const unknown = remote.candidates(LOCAL_HOST_KEY, DAY.start, DAY.end, "stage")
+      .filter((row) => row.author === null)
+      .map((row) => ({ ...row, source: "transcripts" as const, hash: row.textHash }));
+    remote.close();
+    expect(unknown).toHaveLength(1);
+    fs.writeFileSync(path.join(exportsDir, "legacy.jsonl"), exportLines({ host: "stage", coveredFrom: DAY.start,
+      coveredUntil: DAY.end, exportedAt: NOW, records: 1, excluded: {} }, unknown));
+    fs.writeFileSync(path.join(activityDir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation" },
+      hosts: [{ id: "stage", pull: { ssh: "stage-box" } }] }));
+    const read = readHumanInputs(DAY, NOW, { dir: () => activityDir,
+      readLedger: () => ({ rows: [], ledgerStartMs: null }), store: () => ActivityStore.openReadOnly(localStoreFile) });
+    expect(read.inputs.filter((row) => row.host === "stage")).toEqual([]);
+    expect(read.hosts.find((host) => host.host === "stage")).toMatchObject({ configurationGap: true, unknownAuthors: 1 });
   });
   test("the pull is idempotent: a second pull and a replay from the start change nothing", async () => {
     await stageRecords();

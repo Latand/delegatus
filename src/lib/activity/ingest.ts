@@ -249,6 +249,7 @@ export async function ingestTranscripts(sources: readonly IngestSource[], option
           excluded,
           earliestOf(records),
           owner && turns.length ? { owner, turns } : null,
+          resolution?.mode === "team",
         );
         facts = piece.reader.state;
         offset = piece.offset;

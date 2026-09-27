@@ -36,7 +36,7 @@ import type { RequestKind, Surface } from "./method";
  */
 
 export const LOCAL_HOST_KEY = "";
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const ID_DOMAIN = "delegatus-activity-record-v1";
 
 type Database = BunDatabase;
@@ -113,6 +113,8 @@ export interface HostState {
   remoteStore: string | null;
   excluded: Partial<Record<ExclusionReason, number>>;
   remoteMode: "solo" | "team" | null;
+  /** This host has ever recorded team-mode input; owner revocation cannot erase it. */
+  teamHistory: boolean;
   pulledMember: string | null;
   unknownAuthors: number;
 }
@@ -145,7 +147,7 @@ function storedTurn(row: TurnRow): StoredTurn {
 type HostRow = {
   covered_from: number | null; covered_until: number | null; read_at: number | null; attempt_at: number | null;
   error: string | null; cursor: number; excluded: string; remote_store: string | null;
-  remote_mode: "solo" | "team" | null; pulled_member: string | null; unknown_authors: number;
+  remote_mode: "solo" | "team" | null; team_history: number; pulled_member: string | null; unknown_authors: number;
 };
 
 function parseIds(value: string): string[] {
@@ -262,6 +264,7 @@ export class ActivityStore {
           excluded TEXT NOT NULL DEFAULT '{}',
           remote_store TEXT,
           remote_mode TEXT,
+          team_history INTEGER NOT NULL DEFAULT 0,
           pulled_member TEXT,
           unknown_authors INTEGER NOT NULL DEFAULT 0
         );
@@ -274,6 +277,12 @@ export class ActivityStore {
       if (!columns("activity_inputs").has("author")) db.exec("ALTER TABLE activity_inputs ADD COLUMN author TEXT");
       const hostColumns = columns("activity_hosts");
       if (!hostColumns.has("remote_mode")) db.exec("ALTER TABLE activity_hosts ADD COLUMN remote_mode TEXT");
+      if (!hostColumns.has("team_history")) {
+        db.exec("ALTER TABLE activity_hosts ADD COLUMN team_history INTEGER NOT NULL DEFAULT 0");
+        db.exec(`UPDATE activity_hosts SET team_history = 1 WHERE
+          remote_mode = 'team' OR EXISTS (SELECT 1 FROM activity_inputs
+            WHERE activity_inputs.host = activity_hosts.host AND author IS NOT NULL AND author != 'operator')`);
+      }
       if (!hostColumns.has("pulled_member")) db.exec("ALTER TABLE activity_hosts ADD COLUMN pulled_member TEXT");
       if (!hostColumns.has("unknown_authors")) db.exec("ALTER TABLE activity_hosts ADD COLUMN unknown_authors INTEGER NOT NULL DEFAULT 0");
       db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
@@ -360,6 +369,7 @@ export class ActivityStore {
     excluded: Partial<Record<ExclusionReason, number>>,
     earliest: number | null,
     turns: { owner: TurnOwner; turns: readonly AgentTurn[] } | null = null,
+    teamHistory = false,
   ): number {
     return this.transaction(() => {
       let written = 0;
@@ -375,6 +385,9 @@ export class ActivityStore {
       for (const [reason, count] of Object.entries(excluded) as Array<[ExclusionReason, number]>) counts[reason] = (counts[reason] ?? 0) + count;
       if (!current) this.db.query("INSERT INTO activity_hosts(host) VALUES (?)").run(LOCAL_HOST_KEY);
       this.db.query("UPDATE activity_hosts SET excluded = ? WHERE host = ?").run(JSON.stringify(counts), LOCAL_HOST_KEY);
+      if (teamHistory || candidates.some((candidate) => candidate.author != null && candidate.author !== "operator")) {
+        this.db.query("UPDATE activity_hosts SET team_history = 1 WHERE host = ?").run(LOCAL_HOST_KEY);
+      }
       if (earliest !== null) {
         this.db.query("UPDATE activity_hosts SET covered_from = MIN(COALESCE(covered_from, ?), ?) WHERE host = ?").run(earliest, earliest, LOCAL_HOST_KEY);
       }
@@ -537,6 +550,7 @@ export class ActivityStore {
       cursor: row.cursor,
       excluded: parseExcluded(row.excluded),
       remoteMode: row.remote_mode,
+      teamHistory: row.team_history === 1,
       pulledMember: row.pulled_member,
       unknownAuthors: row.unknown_authors,
       remoteStore: row.remote_store,
@@ -544,15 +558,15 @@ export class ActivityStore {
   }
 
   setHostState(host: string, patch: Partial<HostState>): void {
-    const current: HostState = this.hostState(host) ?? { coveredFrom: null, coveredUntil: null, readAt: null, attemptAt: null, error: null, cursor: 0, excluded: {}, remoteStore: null, remoteMode: null, pulledMember: null, unknownAuthors: 0 };
+    const current: HostState = this.hostState(host) ?? { coveredFrom: null, coveredUntil: null, readAt: null, attemptAt: null, error: null, cursor: 0, excluded: {}, remoteStore: null, remoteMode: null, teamHistory: false, pulledMember: null, unknownAuthors: 0 };
     const next = { ...current, ...patch };
     this.db.query(`
-      INSERT INTO activity_hosts(host, covered_from, covered_until, read_at, attempt_at, error, cursor, excluded, remote_store, remote_mode, pulled_member, unknown_authors)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO activity_hosts(host, covered_from, covered_until, read_at, attempt_at, error, cursor, excluded, remote_store, remote_mode, team_history, pulled_member, unknown_authors)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(host) DO UPDATE SET covered_from = excluded.covered_from, covered_until = excluded.covered_until,
         read_at = excluded.read_at, attempt_at = excluded.attempt_at, error = excluded.error, cursor = excluded.cursor,
-        excluded = excluded.excluded, remote_store = excluded.remote_store, remote_mode = excluded.remote_mode,
+        excluded = excluded.excluded, remote_store = excluded.remote_store, remote_mode = excluded.remote_mode, team_history = excluded.team_history,
         pulled_member = excluded.pulled_member, unknown_authors = excluded.unknown_authors
-    `).run(host, next.coveredFrom, next.coveredUntil, next.readAt, next.attemptAt, next.error, next.cursor, JSON.stringify(next.excluded), next.remoteStore, next.remoteMode, next.pulledMember, next.unknownAuthors);
+    `).run(host, next.coveredFrom, next.coveredUntil, next.readAt, next.attemptAt, next.error, next.cursor, JSON.stringify(next.excluded), next.remoteStore, next.remoteMode, next.teamHistory ? 1 : 0, next.pulledMember, next.unknownAuthors);
   }
 }

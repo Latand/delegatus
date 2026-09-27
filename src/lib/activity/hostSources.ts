@@ -21,6 +21,7 @@ import { PULL_DEFAULT_EVERY_MIN, type PullConfig } from "./pull";
 import { readRequests, type LedgerRead } from "./requestLedger";
 import { ActivityStore, LOCAL_HOST_KEY } from "./store";
 import { teamMode } from "@/lib/team/sessions";
+import { existingTeamStore } from "@/lib/team/store";
 
 /*
  * Where the human axis reads from (docs/design/activity-dashboard.md,
@@ -343,6 +344,11 @@ export function readHumanInputs(
   } catch {
     /* An unreadable store reads as a source that could not be read. */
   }
+  let historicalMembers = false;
+  try { historicalMembers = (existingTeamStore()?.members().length ?? 0) > 0; } catch { historicalMembers = true; }
+  let storedTeamHistory = false;
+  try { storedTeamHistory = store?.hostState(LOCAL_HOST_KEY)?.teamHistory === true; } catch { storedTeamHistory = true; }
+  const localTeamHistory = localMode === "team" || historicalMembers || storedTeamHistory;
   const expected: Array<HostConfigEntry & { local: boolean; configured: boolean }> = [
     { ...config.local, local: true, configured: true },
     ...config.hosts.map((host) => ({ ...host, local: false, configured: true })),
@@ -369,13 +375,14 @@ export function readHumanInputs(
          one exists, or when nothing else reads the host. */
       if (exported.state !== "absent" || sources.every((source) => source.scope !== "all")) sources.push(exported);
       const remoteState = !host.local ? store?.hostState(host.id) : null;
-      const remoteTeam = remoteState?.remoteMode === "team";
-      const remoteSolo = remoteState?.remoteMode === "solo" || (!host.pull && !remoteState && host.mode === "solo");
+      const remoteTeam = remoteState?.teamHistory === true || remoteState?.remoteMode === "team";
+      const remoteSolo = (remoteState?.remoteMode === "solo" && !remoteTeam) || (!host.pull && !remoteState && host.mode === "solo");
       const selectedMember = host.pull ? host.pull.memberId : host.memberId;
       const configurationGap = host.local ? localMode === "team" && !localMember
         : (remoteTeam || host.mode === "team") && !selectedMember;
       const wanted = host.local ? (localMode === "solo" ? "operator" : localMember)
         : remoteSolo ? "operator" : selectedMember ?? null;
+      const soloHistory = host.local ? localMode === "solo" && !localTeamHistory : remoteSolo;
       let unknownAuthors = !host.local ? remoteState?.unknownAuthors ?? 0 : 0;
       const unknownInputs: HumanInput[] = [];
       const knownIds = new Set<string>();
@@ -386,7 +393,7 @@ export function readHumanInputs(
         /* A legacy export has no author. It cannot make team input belong to
            the viewer, even when an older remote install produced it. */
         const selected = source.inputs.filter((input) => {
-          const author = input.author ?? (host.local && localMode === "solo" || !host.local && remoteSolo ? "operator" : null);
+          const author = input.author ?? (soloHistory ? "operator" : null);
           if (author === null) {
             if (source.source !== "pull") unknownInputs.push(input);
             return false;
