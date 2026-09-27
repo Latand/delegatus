@@ -10,6 +10,7 @@ const { finishMerge, finishPr, provisionWorktree, prTitle, realExec, runFinish, 
 
 type Workflow = import("./types").Workflow;
 type ExecResult = import("./provision").ExecResult;
+type ExecPort = import("./provision").ExecPort;
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-wf-prov-repo-"));
 
@@ -78,6 +79,39 @@ function makeRepo(): string {
   git(repoDir, "add", ".");
   git(repoDir, "commit", "-m", "init");
   return repoDir;
+}
+
+function makeIdentityIsolatedRepo() {
+  const root = fs.mkdtempSync(path.join(SANDBOX, "identity-"));
+  const home = path.join(root, "home");
+  const xdg = path.join(root, "xdg");
+  const repo = path.join(root, "repo");
+  for (const directory of [home, xdg, repo]) fs.mkdirSync(directory);
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (/^GIT_(?:AUTHOR_|COMMITTER_|CONFIG_)/.test(key)) delete env[key];
+  }
+  Object.assign(env, { HOME: home, XDG_CONFIG_HOME: xdg, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(home, ".gitconfig") });
+  const exec: ExecPort = (command, args, cwd) => {
+    const result = spawnSync(command, args, { cwd, env, encoding: "utf8" });
+    return { code: result.status, stdout: result.stdout ?? "", stderr: result.stderr || result.error?.message || "" };
+  };
+  const run = (...args: string[]) => {
+    const result = exec("git", args, repo);
+    if (result.code !== 0) throw new Error(result.stderr || result.stdout);
+    return result.stdout.trim();
+  };
+  run("init", "--initial-branch=main");
+  fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
+  run("add", "base.txt");
+  run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "base");
+  const wf = makeWorkflow(repo, { baseBranch: "main" });
+  run("switch", "-c", wf.branch);
+  fs.writeFileSync(path.join(repo, "feature.txt"), "feature\n");
+  run("add", "feature.txt");
+  run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "feature");
+  run("switch", "main");
+  return { repo, exec, run, wf };
 }
 
 test("provisionWorktree composes worktree add and captures base branch/ref", () => {
@@ -214,6 +248,32 @@ test("finishMerge aborts and surfaces a merge conflict", () => {
   expect(res.ok).toBe(false);
   if (!res.ok) expect(res.error).toContain("CONFLICT");
   expect(calls.at(-1)?.args).toEqual(["merge", "--abort"]);
+});
+
+test("finishMerge supplies a controller identity when Git has none", () => {
+  const box = makeIdentityIsolatedRepo();
+  expect(box.exec("git", ["var", "GIT_AUTHOR_IDENT"], box.repo).code).not.toBe(0);
+  expect(box.exec("git", ["var", "GIT_COMMITTER_IDENT"], box.repo).code).not.toBe(0);
+
+  expect(finishMerge(box.wf, box.exec).ok).toBe(true);
+  const fallbackEmail = ["noreply", "delegatus.invalid"].join("@");
+  expect(box.run("log", "-1", "--format=%an%n%ae%n%cn%n%ce")).toBe(
+    ["Delegatus", fallbackEmail, "Delegatus", fallbackEmail].join("\n"),
+  );
+  expect(box.exec("git", ["config", "--local", "--get", "user.name"], box.repo).code).not.toBe(0);
+  expect(box.exec("git", ["config", "--local", "--get", "user.email"], box.repo).code).not.toBe(0);
+});
+
+test("finishMerge keeps the identity configured for its repository", () => {
+  const box = makeIdentityIsolatedRepo();
+  const email = ["configured", "example.invalid"].join("@");
+  box.run("config", "--local", "user.name", "Configured Test");
+  box.run("config", "--local", "user.email", email);
+
+  expect(finishMerge(box.wf, box.exec).ok).toBe(true);
+  expect(box.run("log", "-1", "--format=%an%n%ae%n%cn%n%ce")).toBe(
+    ["Configured Test", email, "Configured Test", email].join("\n"),
+  );
 });
 
 test("integration: provision + commit + local merge against a throwaway repo", async () => {

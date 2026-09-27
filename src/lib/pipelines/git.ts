@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { realExec, type ExecPort, type ExecResult } from "@/lib/workflows/provision";
+import { controllerCommitIdentityArgs } from "@/lib/git/controllerCommitIdentity";
 import { procBackend } from "@/lib/proc";
 import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, withDeliveryMutationAsync } from "./store";
 
@@ -274,13 +275,7 @@ export function commitPipelineStage(
     const missing = changedOutputPaths.find((candidate) => !stagedPaths.has(candidate));
     if (missing) return { ok: false, error: `declared output ${missing} was not staged` };
   }
-  // Git's ident probes include worktree config and GIT_AUTHOR_*/GIT_COMMITTER_*.
-  // Only a missing identity gets the controller's one-command fallback.
-  const author = exec("git", ["var", "GIT_AUTHOR_IDENT"], pipeline.worktreeDir);
-  const committer = exec("git", ["var", "GIT_COMMITTER_IDENT"], pipeline.worktreeDir);
-  const identity = author.code === 0 && committer.code === 0
-    ? []
-    : ["-c", "user.name=Delegatus", "-c", `user.email=${["noreply", "delegatus.invalid"].join("@")}`];
+  const identity = controllerCommitIdentityArgs(exec, pipeline.worktreeDir);
   const commit = exec("git", [...identity, "commit", "-m", `pipeline(${pipeline.id}): complete ${stageId}`], pipeline.worktreeDir);
   if (commit.code !== 0) return failure("committing the passed stage", commit);
   const head = exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
