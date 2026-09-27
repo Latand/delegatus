@@ -431,7 +431,7 @@ which is when the code should die.
 | Any caller reaches B while B's access key is off (a LAN proxy, a public proxy, an ssh tunnel on A) | B's gate lets every request through and the Host pin admits `Host: 127.0.0.1`: board and spawn for everyone on that path | the key is checked where it is used (§3.1): no non-loopback address is saved or admitted, no code is minted and no check reports `ok` while it is off; turning phone access off keeps it while links need it |
 | Token at rest on B | B holds hashes only | a copy of B's state yields no usable token |
 | Token at rest on A | plain text in `<state>/links/peers.json` (0600, dir 0700, like `records.sqlite` and `service.env`) | readable by A's operator uid, root, the Viewer container, and every agent Delegatus runs on A as that uid. A keyring is not used: the Docker install has no Secret Service. Blast radius below. |
-| Stolen read token | the thief reads B's activity feed (fields in §5) until revoked | read-only scope; no write, no transcript, no spawn; B shows per grant "last used" and request counts (today, last 7 days), so a second reader shows as a doubled count (counted in memory and flushed at most hourly, M.10); revoke on B. B does not show a caller address: behind a same-box proxy every request arrives from `127.0.0.1`, and `X-Forwarded-For` is caller-written (§11). |
+| Stolen read token | the thief reads B's activity feed (fields in §5) until revoked | read-only scope; no write, no transcript, no spawn; B shows per grant "last used" and request counts (today, last 7 days), so a second reader shows as a doubled count (counted in memory and written at most hourly, M.10); revoke on B. B does not show a caller address: behind a same-box proxy every request arrives from `127.0.0.1`, and `X-Forwarded-For` is caller-written (§11). |
 | Stolen push token | the thief writes invented rows into A's store under that host | per-grant daily row and byte budget and a total row cap per linked host (§4.6); A shows the stop; revoke on A |
 | Stolen push token used to erase | each POST with a fresh `storeId` would make A forget the host and start again from 0, so a thief could wipe A's genuine copy of B over and over | one automatic reset per push grant per 7 days (§4.6); a second is held, erases nothing, and the host row asks A's operator to accept the new history or revoke. The one reset the budget allows replaces the copy with whatever the thief sends, which is the same power the token already gives to write invented rows; the row says when it happened. |
 | Transport sniffing | HTTPS: nothing. LAN http: the code, the token and every page are readable on that network | plain HTTP only to loopback and RFC 1918 / link-local addresses (§3.2) with a visible warning; `100.64/10` is not among them; dispatch grants refuse plain HTTP outright (§10.3) |
@@ -1444,6 +1444,27 @@ larger one is kept. Everything else is local and never crosses:
 `dueAt`/`dueTz`, `board`, `groupHidden`, create receipts and migration
 markers.
 
+**Text nobody chose never crosses.** On `origin/main` a task's `text` is often
+a prompt. `planAdmissions` titles a conversation's placeholder with the scanned
+`entry.title` (`src/lib/tasks/membership.ts:469`), which is the AI title or the
+first prompt; a launch passes `launchDisplay.prompt`
+(`src/lib/tasks/launchMembership.ts:80`) and a pipeline its goal
+(`membership.ts:445`); `ensureTaskMembership` writes that as `text` (`:234`).
+The curator and the inbox scanner create tasks from transcript lines
+(`src/lib/tasks/curator.ts:282`, `src/lib/tasks/inboxScanner.ts:186`). So a
+task carries a local flag `derived: true` after any write that sets `text`
+without a person or an agent choosing it. Only an explicit write clears it: an
+edit in the UI, `create_task` or `update_task` with `text`, a first-action
+refine, "Copy here", or a peer's row whose `text` group wins. The flag is the default:
+`createTask`, `patchTask` and `ensureTaskMembership` set it unless the caller
+is one of those paths (the `/api/tasks` routes and the MCP bindings pass
+`explicit`), so a writer added later stays private until it opts in. While the
+flag is set the row goes on the wire with `text: "Untitled task"`
+(`UNTITLED_TASK_TEXT`, `types.ts:4`); `details`, which no automatic writer
+sets, crosses as stored. Clearing the flag counts as a change of the `text`
+group, so the group gets a new stamp and the real text follows even when the
+explicit write kept the same words.
+
 Per group, because the common collision is the operator dragging a card on one
 machine while an agent on the other flips its status; per-task LWW would drop
 one of the two. Seven stamps cost about 200 bytes a row.
@@ -1517,10 +1538,12 @@ that is missing from the list, whose newest stamp is at or below that fence,
 and whose newest stamp was written by one of the two machines: the other side
 had it and deleted it. A row last written by a third machine is left to
 tombstones. A task this side stamps after the fence was captured is above its
-own watermark, so above the fence, and survives. A restore rolls the
-watermark back with the database, so the restored side adds one bound (M.5):
-it removes only rows whose newest stamp is also at or below its watermark at
-the restore, and never a row stamped since. The fence goes back to nothing
+own watermark, so above the fence, and survives. A restore rolls the database
+back, so the restored side judges each row it held at the restore by its
+newest stamp **at the restore**, kept in the restore snapshot (M.5): editing a
+restored row before the resync does not save a task both sides deleted, and a
+row created since the restore is not in the snapshot and is never removed.
+The fence goes back to nothing
 when a project stops being linked, so a project linked again merges both
 copies without removing anything.
 
@@ -1539,14 +1562,32 @@ writes nothing. "Synced 12 s ago" is memory only.
 - A task created without a machine belongs to the machine that created it:
   `machine` stays absent locally and is stamped with this install once its
   project is linked.
-- **Only the owner writes `machine`.** Replication is asynchronous, so two
-  copies naming different owners must never both allow a launch. The machine a
-  task names (its **owner**) is the only one that writes the `machine` group,
-  and a receiver applies a `machine` write only when the stamp's install is the
-  owner named in its own copy; from anyone else it is dropped, so a peer's bug
-  or a stolen token cannot move work. Ownership passes along one chain, each
-  step written by the machine that held it, and each step's stamp is above the
-  one before (M.3), so both copies converge on the last step.
+- **Only the owner writes `machine`, and the receiver checks who sent it.**
+  Replication is asynchronous, so two copies naming different owners must never
+  both allow a launch. The machine a task names (its **owner**) is the only one
+  that writes the `machine` group. A stamp names an install, but the sender
+  writes the stamp, so the receiver never trusts it for this. The sender of a
+  call is the install the link was paired with, proven by the link itself: on
+  B, the grant whose token the call carries (each grant is minted for one
+  pairing); on A, the link whose address it called. Nothing in the body counts
+  as proof. A `machine` value is applied only in three cases:
+  1. it comes from the peer that the receiver's own copy names as owner (the
+     owner handing the task on), and its stamp is larger;
+  2. the receiver holds no row and no tombstone for the task (a new task), and
+     it is stored as it arrives;
+  3. the receiver is a restored machine whose ownership is not confirmed yet
+     (below), the value moves the task away from this machine, and its stamp is
+     larger: this machine's own handover, lost with the restore and witnessed
+     by the peer.
+
+  Every other `machine` value is dropped, whatever its stamp, so a peer's bug
+  or a stolen token cannot give this machine a task another machine still
+  runs. `handover.to` arriving over a link must name the sender: a machine
+  asks only for itself. Ownership therefore moves only between directly linked
+  machines. With three machines in a chain, a task handed on at the far end
+  keeps its previous owner here. That owner is this machine only if it handed
+  the task here directly, so the stale copy can stall a task but never start
+  it twice.
   - The owner moves a task itself ("Runs on: {peer}" on its chip, or
     `update_task { machine }` there): it writes `machine = peer` when the
     handover condition holds, else the move waits as a handover request. Its
@@ -1619,6 +1660,22 @@ writes nothing. "Synced 12 s ago" is memory only.
   3. `/api/tasks/[id]/send` (`src/app/api/tasks/[id]/send/route.ts`), which
      hands a task to existing conversations: the guard and the hold move into
      a `mutateTasks` before the first delivery.
+- **A restored machine starts nothing it may have handed away.** A backup
+  taken before a handover still names this machine as the owner. So while a
+  restore of this machine is known and not confirmed (M.5), `runsHere(task)` is
+  also false for every task of the restore snapshot whose `machine` names this
+  install (in case 3 of M.5, which has no snapshot, every task of a linked
+  project that names it). The refusal `TASK_OWNERSHIP_UNCONFIRMED` says "This
+  machine was restored from a backup. {task} can start here again once {peer}
+  confirms where it runs." It is the same guard at the same three seams, so it
+  also covers pipeline recovery and the seat tick at boot, which launch through
+  seam 1 or 2, and the seat tick treats those tasks as running elsewhere. A
+  project is confirmed once the resync with every link that links it has
+  ended; by then the peers' `machine` values have been applied under case 3
+  above and the guard reads them. Tasks created here since the restore are not
+  held back. A link revoked or removed before it confirmed leaves its tasks
+  unconfirmed, and they offer "Copy here" like a task whose owner is not
+  linked.
 - **The seat tick does not wake a seat for another machine's tasks.**
   `gatherSeatTickInput` (`src/lib/monitor/seatTickSources.ts:2081-2090`) passes
   them with `runsOn: <label>` and outside the unstarted and backlog reasons, and
@@ -1712,29 +1769,41 @@ A deleted one: `{"id":"…","project":"repo-…","gone":"<stamp>"}`.
   change it covered, `more: true`, and the next page starts right after it
   (`[N]` resumes at revision N + 1).
   A key changed again later reappears at its later pair, so nothing is skipped
-  or repeated forever. A single row always fits a page (M.9 gives the largest).
+  or repeated forever. A single row always fits a page (the bounds below).
 - `N < change_floor`, `N > revision`, or a `store` other than the one A holds
   (the collection's `migration_id` and `imported_at`, `:231-238`): **resync**.
 - **A restored copy on either side.** Each side keeps a counter `gen` in its
   `board_links` row, raised in the same commit as every apply and every fence
-  change (so never by an idle call), sends it on every request and answer, and
-  stores the highest `gen` it has seen from the peer. A side whose own `gen` is
-  below what the peer reports having seen from it was restored from a backup
-  (the counter rolled back with the database). It moves no row before a
-  **resync**: B answers resync and applies nothing from that call's `push`; A
-  asks for one and pushes nothing first. The restored copy may hold tasks both
-  sides deleted, and the id exchange below removes them, bounded by the
-  restored side's watermark at the restore (M.3), so a task written there
-  since the restore survives whatever its clock did. Delegatus knows that
-  watermark exactly when it did the restore itself: the durability fallback
-  (`checkDatabaseAtActivation`, `src/lib/state/durability.ts:323-389`) writes
-  `restored: pending` into the copy's `task_tombstones` before swapping it in,
-  and the first task commit on the restored database replaces it, before it
-  stamps anything, with the per-project watermarks of the rows it read; it is
-  cleared once every link has resynced. A database restored by hand carries no
-  marker. That side then removes only rows whose newest stamp the peer wrote:
-  a task both sides deleted may come back, and nothing written since the
-  restore is lost.
+  change (so never by an idle call) and copied after that commit into
+  `<state>/links/gen.json`. It sends `gen` on every request and answer and
+  stores the highest `gen` it has seen from the peer. A restore is known in
+  one of three ways:
+  1. the durability fallback (`checkDatabaseAtActivation`,
+     `src/lib/state/durability.ts:323-389`) restored the database, and it
+     writes `restored: pending` into the copy's `task_tombstones` before
+     swapping it in;
+  2. at boot the database's `gen` is below the one in `gen.json`: the database
+     was restored alone, and the Viewer writes the same marker as a startup
+     step (`assertStateStartupMutation`) before any task write;
+  3. the peer reports having seen a higher `gen` from this side than it holds:
+     the whole state directory was restored by hand, `gen.json` with it.
+
+  In cases 1 and 2 the first task commit on the restored database replaces the
+  marker, before it stamps anything, with the **restore snapshot**: for each
+  linked project, every task id it holds with that task's newest stamp (about
+  62 bytes a task, 125 KB for 2 000 tasks, written once). From then until
+  every link has resynced, the restored side moves no row (B answers resync and
+  applies nothing from that call's `push`; A asks for one and pushes nothing
+  first) and holds back its launches (M.4). The id exchange below removes
+  tasks both sides deleted. A task in the snapshot is judged by its stamp
+  there, so an edit made after the restore does not bring it back, and a task
+  created since the restore is never removed, whatever its clock did. The
+  marker and the snapshot are deleted once every link has resynced. Case 3 has
+  no snapshot and is detected only by the first call that reaches the peer:
+  that side then removes only rows whose newest stamp the peer wrote, so a
+  deleted task edited there after the restore comes back, and until that
+  first call it may launch a task it had handed away (M.8). Nothing written
+  since the restore is lost in any case.
 
 **Resync** starts with the id exchange of M.3 for each linked project, in
 both directions, before any row of that project moves: each side sends its
@@ -1755,26 +1824,47 @@ page in one `mutateTasks` transaction, commits, and only then answers
 sent again and changes nothing twice; the idempotent apply needs no base check
 (§4.6 needed one because activity rows are not merged by stamp).
 
-**Apply, on both sides, one function:** per group the larger stamp wins, with
-the `machine` group accepted only from its owner (M.4); a row
+**Apply, on both sides, one function:** per group the larger stamp wins and an
+equal stamp keeps the local value; the `machine` group follows the three cases
+of M.4, judged by the link the call came over and never by the stamp's
+install, and `handover.to` must name the sender. A row
 whose id holds a tombstone is dropped; a tombstone removes the local row
 through `deleteTask` (`src/lib/tasks/commands.ts:649`), which mints a
 placeholder for any local conversation still bound to it (#1586), and that
 placeholder then syncs as a new task. When no group wins, nothing is written,
 so a replay or an echo costs no revision. The owner commits a waiting
-`handover` inside this same apply when its condition holds. Rows are checked
-like a local write: `TASK_TEXT_LIMIT` and `TASK_DETAILS_LIMIT` (`types.ts:7`,
-`:17`), `TASK_COLORS`, `readTaskIconInput`, `MAX_WORK_LINKS`
-(`src/lib/forge/workLinks.ts:28`), a finite `pos` (`store.ts:77-81`), a linked
-`project`, `id` a UUID that no task of another project holds. `machine` and
-`handover.to` must be install ids in UUID form and may name an install this
-machine does not know (an earlier install of a reinstalled peer): such a task
-is stored and shown "runs on {label} (not linked)", and only launching it is
-refused (M.4). One bad row fails the page (`malformed`, as §4.1).
+`handover` inside this same apply when its condition holds. `machine` and
+`handover.to` may name an install this machine does not know (an earlier
+install of a reinstalled peer): such a task is stored and shown "runs on
+{label} (not linked)", and only launching it is refused (M.4).
+
+**Every wire field has a bound**, checked by the sender before it encodes a
+row and by the receiver like a local write: `text` ≤ 6 000 and `details`
+≤ 20 000 UTF-16 units (`TASK_TEXT_LIMIT`, `TASK_DETAILS_LIMIT`, `types.ts:7`,
+`:17`); `status`, `color` (`TASK_COLORS`), `priority` and `placement` from
+their sets; `icon` through `readTaskIconInput`; a finite `pos`
+(`store.ts:77-81`); a linked `project`; `id` a UUID that no task of another
+project holds; `machine` and `handover.to` UUIDs; stamps of the fixed width;
+ISO times; at most 20 `workLinks` (`MAX_WORK_LINKS`,
+`src/lib/forge/workLinks.ts:28`), each with a safe-integer number, a kind,
+`addedAt`, `addedBy` and an `owner/repo` of at most 39 + 1 + 100 characters
+from `[A-Za-z0-9_.-]`, GitHub's own limits. On `origin/main`
+`repositoryName` and `normalizeWorkLinkInput` (`workLinks.ts:106-109`,
+`:128-168`) check the characters but no length; M2 adds the same bound there,
+so no new local row exceeds it. The largest row is then 6 × 26 000 bytes of
+text and details escaped as `\u00XX`, about 6 KB of links and 1.5 KB of the
+rest, at most 164 KB, and the sender refuses to encode one above 170 KB. An
+agent row is at most 1.5 KB (M.6), so the agents part of a body, 200 rows and
+200 markers, is at most 308 KB, and one task row of the largest size always
+fits a 512 KB page beside it. A stored row that breaks a bound (a longer repository written before M2)
+is not sent: the cursor passes it, the link row says "{n} tasks too large to
+sync" with a link to each, and the task syncs from its next write that fits.
+A received row that breaks a bound fails its page (`malformed`, as §4.1).
 
 **Echoes.** `o` names the install whose copy equals the row. A local write
 sets `o` to this install. An apply sets it to the sender only when the merged
-row equals the row the sender sent, which means the sender already holds
+row, in its wire form (so a withheld `derived` text is no difference), equals
+the row the sender sent, which means the sender already holds
 exactly this state; when a local group won the merge, `o` stays this install
 and the row goes back. A row is served to every link except the install named
 by `o`. So a change made here between two calls is never hidden behind the
@@ -1814,9 +1904,11 @@ Each machine publishes its agents on linked projects: B in the answer, A in
   first user prompt (`src/lib/scanner/describe.ts:935-939`), and
   `redactBounded` only masks patterns and truncates, so an ordinary prompt
   would pass through it. `t` is built only from what already crosses: the first
-  line of the bound task's `text` (a synced field), else, for a pipeline
-  agent, "{stage} stage", else the neutral "{engine} agent", cut to 120
-  characters. `e` and `m` come from `types.ts:192` and `:238`; `st` is
+  line of the bound task's `text` when that text crosses (not while it is
+  `derived`, M.3), else, for a pipeline agent, "{stage} stage", else the
+  neutral "{engine} agent", cut to 120 UTF-16 units. Every other string of a
+  row is an ASCII identifier of at most 64 characters, so a row encodes to at
+  most 1.5 KB. `e` and `m` come from `types.ts:192` and `:238`; `st` is
   `working` while `proc` runs and `activity` is `live` or `recent` (`:214`,
   `:222`), `waiting` while alive with a pending question, input or permission
   (`:249`, `:284`), `done` otherwise; `at` is `lastAgentWorkAt` (`:282`);
@@ -1840,9 +1932,10 @@ Each machine publishes its agents on linked projects: B in the answer, A in
   first, `more: true` until the last), which the receiver swaps in only when
   the last page arrives.
 - **Bounds that follow:** at most 200 rows and 200 markers per map, about
-  300 bytes each, so about 120 KB for the map this machine publishes to one
-  link and 60 KB for the one it receives; a reset moves at most 200 rows,
-  about 40 KB, in four pages.
+  300 bytes a row on measured shapes and at most 1.5 KB, so about 120 KB for
+  the map this machine publishes to one link and 60 KB for the one it
+  receives, at most five times that; a reset moves at most 200 rows, about
+  40 KB, in four pages.
 - **The receiver** keeps them in memory only, drops them when the link is
   revoked or removed, and greys them "as of {time}" after 15 minutes without a
   successful call. Nothing about another machine's agents is written to disk.
@@ -1888,7 +1981,7 @@ Each machine publishes its agents on linked projects: B in the answer, A in
 |---|---|
 | Link down | Both machines keep working on their copies. A's edits wait in its log and go out from `pushed` on the next good call; after about 2 days offline A's log is pruned below `pushed` and A resyncs its linked projects to B in pages. Tombstones wait as long as the link does. Remote agent rows grey after 15 minutes. |
 | Peer store recreated | `store` changed: resync in both directions, with the fences of M.3. |
-| Peer restored from a backup | Detected by its `gen` falling behind what the other side saw from it (M.5). The resync starts with the id exchange, so tasks both sides deleted after the backup are removed on the restored side before any row moves, tombstones pruned or not, whatever the skew between the clocks; tasks written there since the restore stay. After a restore made by hand, without Delegatus's marker, a task the restored side itself last wrote and both sides later deleted may come back (M.5); nothing is lost. |
+| Restored from a backup | Known from Delegatus's own restore marker, from `gen.json` ahead of the database at boot, or from the peer's `gen` (M.5). The restored side launches none of the tasks it owned at the backup until every link has resynced (M.4), so a task it handed away meanwhile is not started twice. The resync starts with the id exchange, so tasks both sides deleted after the backup are removed on the restored side before any row moves, tombstones pruned or not, edited since the restore or not, whatever the skew between the clocks; tasks created there since the restore stay. The stated gap: a whole state directory restored by hand, `gen.json` included, is known only at its first call that reaches the peer; before that call it may launch a task it had handed away, and a deleted task it edits comes back. Nothing is lost in any case. |
 | Peer reinstalled | New `installId`: `install-changed` (§4.4), the link stops, pair again. The new install receives the linked projects in its first resync, tasks owned by the old install included (M.5 accepts an unknown owner); they show "runs on {old} (not linked)", no machine launches them, and "Copy here" makes a new task that runs where it is made (M.4). |
 | Revoke on either side | §2.6: the next call gets `401`, the link reads `revoked`. Copies stay, remote agent rows disappear, tasks owned by the peer are launched by neither machine; "Copy here" makes a new task (M.4). Tombstones kept only for that link are pruned with it. |
 | Project unshared | That project stops syncing; copies stay. |
@@ -1909,7 +2002,10 @@ on the projects you both share, including tasks this machine runs"), a daily
 budget per grant of 5 000 rows that changed something (beyond it `quota`,
 visible, as §4.6),
 "changed on {peer}" on the card from `o`, and revoke. It reaches no project
-outside the intersection and no transcript, path, spawn or composer.
+outside the intersection and no transcript, path, spawn or composer. The
+token does not move ownership: a `machine` value is taken only from the link
+whose copy is the owner (M.4), so a stolen or buggy peer cannot make this
+machine start a task that another machine runs, whatever stamp it writes.
 
 ### M.9 Performance budgets
 
@@ -1922,25 +2018,29 @@ UTF-8 body, never JavaScript string length.
 |---|---|---|
 | Idle call, bytes | request body ≤ 200 B, answer body ≤ 200 B, ≤ 1 KB per call on the wire with HTTP headers | M1/M2: the test server counts `socket.bytesRead` and `bytesWritten` over 100 idle calls |
 | Idle link, calls | ≤ 12 an hour once backed off; up to 240 an hour only while a linked board is open | M2: fake timers over 3 idle hours count calls |
-| Idle link, per day | ≤ 0.3 MB of network, 0 bytes of disk | follows from the rows above and below |
+| Idle link, per day | ≤ 0.3 MB of network, 0 bytes of disk: no apply, no fence move, no request-count flush (M.10) | M2: fake timers run the idle link for 3 hours, across two hourly flush points; no write reaches `state.sqlite`, `grants.json`, `peers.json` or `gen.json`, and every file under the state directory keeps its size and mtime |
 | Idle call, work | B: one cached `revision()`, no row read, no write. A: one cached read of its own revision. When only other projects changed: one indexed query, and a cursor write at most every 10 minutes | M2: the idle run starts after edits and deletes have synced, tombstones were pruned and both sides hold fences; store spies then see no `state_rows` read and no write over 100 idle calls on either side, and `gen`, the fences and the `board_links` revision stay the same; `state.sqlite`, its WAL and `links/*.json` keep size and mtime; 100 calls while an unlinked project takes writes cause ≤ 1 `board_links` write |
-| Idle call, CPU | ≤ 2 ms per side (one token hash, one cached read, small JSON) | M2: `process.cpuUsage()` over 100 idle calls ≤ 500 ms, a coarse ceiling that catches an accidental full read; the spy row above is the exact check |
-| Changed task, bytes | the encoded row plus ≤ 300 B. About 1 KB on measured data. At the caps (6 000 + 20 000 UTF-16 units): about 52 KB for Ukrainian text (2 bytes a unit), at most 160 KB in the worst case (a control character escapes to 6 bytes in JSON; 26 000 × 6 plus the other fields). A 512 KB page therefore always holds at least three rows | M2: one edit, socket bytes over the idle baseline ≤ `Buffer.byteLength(JSON.stringify(row)) + 300`; fixtures include a cap-sized Ukrainian task and a cap-sized task of control characters |
+| Idle call, CPU | ≤ 2 ms per side (one token hash, one cached read, small JSON) | M2: each side runs in its own process; after 100 warm-up calls, the user plus system time of `process.cpuUsage()` over 1 000 idle calls is ≤ 2 000 ms in each process, measured separately, the HTTP server's own work included |
+| Changed task, bytes | the encoded row plus ≤ 300 B. About 1 KB on measured data. At the bounds of M.5: about 58 KB for cap-sized Ukrainian text and details (2 bytes a unit), at most 164 KB in the worst case (control characters escape to 6 bytes; 26 000 × 6, 20 links at the length bound, the other fields); above 170 KB a row is not sent. One row of that size fits a 512 KB page beside the largest agents part (308 KB) | M2: one edit, socket bytes over the idle baseline ≤ `Buffer.byteLength(JSON.stringify(row)) + 300`; fixtures include a cap-sized Ukrainian task, a cap-sized task of control characters with 20 work links at the length bound, and a stored task whose link has a 530 000-character repository, which is not sent while later rows still arrive |
 | Changed task, disk | one task row write, as a local edit; one `board_links` row when a cursor, `gen` or fence moves; ≤ 200 B per tombstone | M2: committed revisions per applied page are one `tasks` plus at most one `board_links` |
 | Disk growth per day | ≤ 20 KB beyond the task rows themselves (tombstones and cursor rows), pruned after acknowledgement | M2: 1 000 synced edits and 100 deletes, then the byte size of the two new collections |
 | First sync | pages ≤ 200 rows and ≤ 512 KB | M2: 1 000 fixture tasks arrive in ≤ 5 pages, each ≤ 512 KB |
 | Memory, added RSS | ≤ 3 MB added resident memory per link at steady state, one-time costs included | M2/M3: two child processes load the same populated fixture (2 000 tasks in 3 linked projects, 200 agents on each side); one runs with the link off, one with it on, both through 1 000 calls of mixed work (idle calls, edits, agent churn). `process.memoryUsage().rss` after `Bun.gc(true)`, median of 3 runs, differs by ≤ 3 MB |
 | Memory, growth | no growth per call | M2/M3: in the linked process, `heapUsed` after `Bun.gc(true)` is read once 100 calls of the workload have run and again after 1 000 more; it grows < 256 KB |
-| Agent maps | ≤ 200 rows and 200 markers per map, about 120 KB sent and 60 KB received per link; a reset ≤ 200 rows in pages of 50 | M3: 500 agents across 20 linked projects and 10 000 start/stop cycles leave every map and marker list at its bound; a reset after churn arrives in ≤ 4 pages |
+| Agent maps | ≤ 200 rows and 200 markers per map, each row ≤ 1.5 KB encoded; about 120 KB sent and 60 KB received per link on measured shapes; a reset ≤ 200 rows in pages of 50 | M3: 500 agents across 20 linked projects and 10 000 start/stop cycles leave every map and marker list at its bound; a reset after churn arrives in ≤ 4 pages |
 | Agent change | one row, about 200 B | M3: one fixture agent flips state and the answer carries one row |
 | Remote agents on disk | 0 bytes | M3: no file or row written on either side |
 
 ### M.10 What this changes in the sections above
 
 - **§2.1** "pair twice": still true for activity; boards need one pairing (M.1).
-- **§2.7 and §8.1**, per-grant request counts: kept in memory and flushed at
-  most once an hour. Written per request they would rewrite `grants.json` on
-  every sync call.
+- **§2.7 and §8.1**, per-grant request counts and "last used": kept in
+  memory, and written to `grants.json` at most once an hour and only for an
+  hour in which some call moved data (a task row, tombstone or fence applied
+  or served, or an activity page with rows). An idle link therefore writes
+  nothing; the Settings row shows the counts from memory, and a restart loses
+  only the idle calls since the last write. Written per request they would
+  rewrite `grants.json` on every sync call.
 - **§7**: a new scope `board:sync`, a log feed in both directions. For the MVP
   it replaces `projects:read`, `board:read` and `liveness:read`.
 - **§10.1** is superseded by this section. It also named the wrong source:
@@ -1966,7 +2066,7 @@ New: `installId` in `self.json`; scope `board:sync` with its transport and
 self-check rules; `shared.json` with the per-project and "all" toggles in
 Settings and the project menu; `boards/sync` exchanging only shared lists and
 `store`/`now`; `board_links`; the "Shared projects" states; request counts in
-memory.
+memory, written only for hours that moved data (M.10).
 Acceptance: two isolated installs pair and each shows the other; with nothing
 shared, no project key appears in any body; X shared on A only reads "Only on
 A" on B, and once B shares it both read "Linked" after one call; a `dir-`,
@@ -1982,9 +2082,13 @@ clock and the project watermarks; `task_tombstones` with its atomic write,
 floors and durable acknowledgements; the watermark fences, their digests and
 the id exchange; `[revision, key]` positions; the `tasks` part of
 `boards/sync` in both directions, resync, restore detection and the
-fallback's restore marker included; the apply with its checks and budget; A's
-schedule; the fenced handover; holds; "Copy here"; `TASK_RUNS_ELSEWHERE` at
-the three seams over every resolved target; the seat
+fallback's restore marker, `gen.json` and the restore snapshot included; the
+`derived` text flag and its wire substitution; the apply with its field
+bounds (the repository length bound in `normalizeWorkLinkInput` included), its
+checks and budget; the `machine` rule judged by the link; A's schedule; the
+fenced handover; holds; "Copy here"; `TASK_RUNS_ELSEWHERE` at the three seams
+over every resolved target, and `TASK_OWNERSHIP_UNCONFIRMED` on a restored
+machine; the seat
 tick filter; MCP fields; the machine chip, "Run here" and the board header
 line; en and uk strings.
 Acceptance:
@@ -2043,6 +2147,34 @@ Acceptance:
   accepted, and neither machine launches it; "Copy here" on B2 makes a new
   task owned by B2 that A receives and refuses to launch, and the original
   still launches nowhere;
+- forged owner: for a task that runs on B, a call carrying A's token sends
+  `machine = A` with a newer stamp ending in B's install prefix, and another
+  with `handover.to` naming a third install; B drops both, still launches the task, and A
+  still refuses it;
+- handover, restore, offline launch: A hands a task to B and B launches it;
+  with the link down, A is restored from a backup taken before the handover,
+  once through the durability fallback and once by replacing `state.sqlite`
+  alone; after each, A refuses the task with `TASK_OWNERSHIP_UNCONFIRMED` at
+  every seam, at pipeline recovery on boot and in the seat tick, while a task
+  created on A after the restore launches; once the link returns and the
+  resync ends, A reads `machine = B` and still refuses, and B's work never
+  stopped;
+- restore and edit: a task deleted on both sides, tombstones pruned, then A
+  restored through the fallback from a backup that holds it, and that task
+  edited on A before the next call: after the call it is gone on both and B
+  never receives it; a task created on A after the restore survives;
+- prompts: a scanned conversation whose first prompt carries a unique canary
+  goes through the real scan, `planAdmissions` and `admitConversations`; a
+  launch whose `launchDisplay.prompt` carries a second canary, a pipeline
+  whose goal carries a third, and a curator task from a transcript line with a
+  fourth each make a task; no request or answer body carries any canary
+  (every body is scanned), and each task arrives as "Untitled task"; then
+  `update_task` sets the text of each, the same words as before on one of
+  them, and each arrives with that text;
+- bounds: a stored task whose work link holds a 530 000-character repository
+  is not sent, the link row names it, and the rows after it in the log still
+  arrive; `update_task` refuses such a link; the largest valid row encodes to
+  ≤ 170 KB and arrives in a page beside 200 maximal agent rows;
 - the seat tick marks those tasks `runsOn` and wakes no seat for them;
 - a release reading the database without the change still loads the task list
   (the rollback check);
@@ -2062,7 +2194,9 @@ Acceptance: an agent that starts, changes state or ends on B shows on A after
 one call, and the reverse; no body carries a transcript path, conversation id,
 account or prompt from the fixtures (the test scans every body for them),
 including an agent with no task and no pipeline whose scanned title is its
-first prompt carrying a unique canary, which arrives titled "{engine} agent";
+first prompt carrying a unique canary, which arrives titled "{engine} agent",
+and one bound to a task whose `derived` text is its first prompt, which
+arrives titled the same way;
 500
 agents give at most 50 per project and 200 in all; 10 000 start/stop cycles
 keep at most 200 markers; a new epoch resets in pages of 50 and the receiver
@@ -2081,7 +2215,7 @@ Slice 5 is replaced by M1–M3.
 | pair two machines; each opts projects in; default shares nothing; `repo-` keys match; no path crosses | M.1, M.2 |
 | the board syncs both ways: text, details, status, colour, icon, priority, placement and position, links; create, change, delete | M.3, M.5 |
 | last write wins with a stated clock and tiebreak; skew per §4.3; deletes as tombstones | M.3 |
-| each task names the machine it runs on; only that machine launches it (no double launch, also while a change is in flight); default is the creating machine; the operator can change it | M.4 (owner-written handover, holds, guard on every resolved target and every resume; an unlinked owner's task is copied, never launched twice) |
+| each task names the machine it runs on; only that machine launches it (no double launch, also while a change is in flight); default is the creating machine; the operator can change it | M.4 (owner-written handover judged by the link it came over, holds, guard on every resolved target and every resume, a restored machine holding back until confirmed; an unlinked owner's task is copied, never launched twice) |
 | a compact agent list per machine; collapsed on the other board with the host; no transcript, no remote control | M.6, M.7 |
 | one orchestrator per machine on its own copy; each sees the other's tasks and agents; no messaging | M.4 |
 | the reachable-from side does pull and push | M.1, M.5 |
