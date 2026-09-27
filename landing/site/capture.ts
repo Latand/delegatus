@@ -153,7 +153,7 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
   await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
   await cdp.send("Network.enable");
   await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
-  const result: Record<string, unknown> = { url: base, cpuThrottle: 4, viewport, errors };
+  const result: Record<string, unknown> = { url: base, browser: browser.version(), cpuThrottle: 4, viewport, errors };
   async function trace(name: string, action: () => Promise<unknown>) {
     await browser.startTracing(page, { screenshots: false, categories: ["devtools.timeline", "v8", "blink.user_timing", "disabled-by-default-devtools.timeline", "toplevel"] });
     const value = await action();
@@ -175,6 +175,7 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
       return page.evaluate((readyMs) => ({ readyMs, navigation: performance.getEntriesByType("navigation")[0]?.toJSON(), records: (window as any).perfRecords }), readyMs);
     });
     await page.screenshot({ path: path.join(out, `${perfLabel}-${viewport.name}-loaded.png`) });
+    if (process.argv.includes("--load-only")) return;
     await trace("steps", async () => {
       const rows = [];
       const hero = await frameOf(page, ".live-hero");

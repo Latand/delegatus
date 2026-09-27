@@ -118,7 +118,7 @@ frames farther down refresh when the reader approaches them.
   with invented data, so it stays one line of copy.
 - **Fonts** still load from Google Fonts, as in A: the publication gate
   refuses committed binaries.
-- **Size.** The demo bundle is about 3.5 MB minified; the hero's frame loads
+- **Size.** The demo bundle is about 3.6 MiB minified; the hero's frame loads
   with the page and the others as they come near.
 
 ## Performance and scroll regression
@@ -136,7 +136,8 @@ LANDING_RENDER_DIR="$HOME/Pictures/delegatus-review/landing-perf" \
 `--perf=before` records the same cases without enforcing the corrected scroll
 behavior. Set `LANDING_URL=https://delegatus.org/` to measure the published
 site. No capture command deploys the site. `--only=en-1440` or `--only=en-390`
-limits the run to one viewport.
+limits the run to one viewport. `--load-only` repeats just the cold-load case;
+`LANDING_DIST_DIR` selects a separately built baseline with the same driver.
 
 The driver records load, manual steps, automatic playback, tabs and repeated
 EN/UK switches after visiting the lower sections. Chrome traces record script
