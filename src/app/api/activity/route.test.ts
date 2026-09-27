@@ -156,10 +156,14 @@ test("GET keeps team-era terminal input unknown after the owner is revoked", asy
   const now = Date.now();
   const project = "revocation-fixture";
   const memberId = "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const activeMemberId = "m_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
   const team = teamStore();
   team.insertMember({ id: memberId, name: "Owner", role: "owner", status: "active", color: "teal", telegram: null,
     createdAt: new Date(now - 60_000).toISOString(), createdBy: "claim", revokedAt: null });
+  team.insertMember({ id: activeMemberId, name: "Member", role: "member", status: "active", color: "sky", telegram: null,
+    createdAt: new Date(now - 60_000).toISOString(), createdBy: "join", revokedAt: null });
   const session = mintSession(team, memberId, "claim", { surface: "desktop", browser: "chrome" }, now);
+  const activeSession = mintSession(team, activeMemberId, "claim", { surface: "desktop", browser: "chrome" }, now);
   const transcript = path.join(sandbox, "HOME", "team-terminal.jsonl");
   fs.writeFileSync(transcript, JSON.stringify({ type: "user", timestamp: new Date(now - 20 * 60_000).toISOString(),
     uuid: "team-terminal-1", sessionId: "team-terminal", cwd: "/work/revocation-fixture", entrypoint: "cli", promptSource: "typed",
@@ -181,6 +185,13 @@ test("GET keeps team-era terminal input unknown after the owner is revoked", asy
   expect(before.unknownAuthorInputs).toBeGreaterThanOrEqual(1);
   team.updateMember({ ...team.member(memberId)!, status: "revoked", revokedAt: new Date(now).toISOString() });
   resetTeamStoreForTests();
+  recordOperatorRequest(new NextRequest("http://127.0.0.1/api/tasks", { headers: {
+    cookie: `llv_member=${activeSession.value}`, "user-agent": "Mozilla/5.0 Chrome/140.0 Safari/537.36",
+  } }), { kind: "task", project, idempotencyKey: "former-team-active-member-task" }, { now: () => now - 15 * 60_000 });
+  const memberAfter = await (await get(`?range=7d&project=${project}`, { cookie: `llv_member=${activeSession.value}` })).json() as typeof before;
+  expect(memberAfter.totals.requests).toBe(1);
+  expect(memberAfter.totals.humanMs).toBe(10 * 60_000);
+  expect(memberAfter.unknownAuthorInputs).toBeGreaterThanOrEqual(1);
   const after = await (await get(`?range=7d&project=${project}`)).json() as typeof before;
   expect(after.totals.requests).toBe(0);
   expect(after.totals.humanMs).toBe(0);

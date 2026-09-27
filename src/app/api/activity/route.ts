@@ -22,9 +22,10 @@ export async function GET(req: NextRequest): Promise<NextResponse<ActivityRespon
   if (rejection) return rejection;
   try {
     const mode = teamMode();
+    const session = requestSession(req);
     const body = await activityResponse(req.nextUrl.searchParams, {}, {
-      mode,
-      memberId: mode === "team" ? requestSession(req)?.member.id ?? null : null,
+      mode: session ? "team" : mode,
+      memberId: session?.member.id ?? null,
     });
     return NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });
   } catch {

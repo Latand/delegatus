@@ -468,7 +468,8 @@ their mode.
 ### Human input belongs to one person
 
 The dashboard counts the signed-in member on a team host. The owner sees the
-owner's input when signed in; a solo host has one `operator`. The host's
+owner's input when signed in; a live member session still selects that member
+after the owner is revoked. A solo host has one `operator`. The host's
 `message_authors` row, keyed by the admitted submission and bound to its
 conversation (`src/lib/team/store.ts`), supplies the member id for a delivered
 message. An admitted spawn records its first delivery id with the spawning
