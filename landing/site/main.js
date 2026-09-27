@@ -301,7 +301,6 @@
     phone: false,
     step: null,
     view: null,
-    stale: false,
   }));
   const hero = lives.find((live) => live.id === "hero");
   let heroManual = false;
@@ -343,10 +342,7 @@
   }
 
   function mount(live) {
-    if (live.iframe) {
-      if (live.stale) reload(live);
-      return;
-    }
+    if (live.iframe) return;
     live.iframe = createFrame(live);
     layout(live);
     live.host.appendChild(live.iframe);
@@ -356,7 +352,6 @@
   // in once it has drawn, so a view never inherits what the last one left open.
   function reload(live) {
     if (!live.iframe) return;
-    live.stale = false;
     const next = createFrame(live);
     next.dataset.incoming = "";
     const old = live.iframe;
@@ -520,7 +515,6 @@
       if (!entry.isIntersecting) continue;
       const live = lives.find((item) => item.el === entry.target);
       if (live) mount(live);
-
     }
   }, { threshold: 0.1 });
   for (const live of lives) near.observe(live.el);
@@ -536,7 +530,15 @@
         live.iframe.title = live.el.getAttribute("aria-label") || "Delegatus";
         const rect = live.el.getBoundingClientRect();
         if (rect.bottom > 0 && rect.top < innerHeight) reload(live);
-        else live.stale = true;
+        else {
+          // Hidden translated frames restart when they enter the viewport.
+          // Release the old Viewer now so its timers stop and its old language
+          // cannot flash into view while the replacement starts.
+          live.host.replaceChildren();
+          live.iframe = null;
+          live.el.removeAttribute("data-loaded");
+          live.el.removeAttribute("data-busy");
+        }
       }
     }
   };
