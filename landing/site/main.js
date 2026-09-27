@@ -297,7 +297,7 @@
     phone: false,
     step: null,
     view: null,
-    wanted: false,
+    stale: false,
   }));
   const hero = lives.find((live) => live.id === "hero");
   let heroManual = false;
@@ -339,7 +339,10 @@
   }
 
   function mount(live) {
-    if (live.iframe) return;
+    if (live.iframe) {
+      if (live.stale) reload(live);
+      return;
+    }
     live.iframe = createFrame(live);
     layout(live);
     live.host.appendChild(live.iframe);
@@ -349,6 +352,7 @@
   // in once it has drawn, so a view never inherits what the last one left open.
   function reload(live) {
     if (!live.iframe) return;
+    live.stale = false;
     const next = createFrame(live);
     next.dataset.incoming = "";
     const old = live.iframe;
@@ -359,6 +363,7 @@
     const settle = () => {
       if (!next.isConnected || !next.hasAttribute("data-incoming")) return;
       next.removeAttribute("data-incoming");
+      delete next.settle;
       live.el.removeAttribute("data-busy");
       live.el.setAttribute("data-loaded", "");
       setTimeout(() => old.remove(), 450);
@@ -383,7 +388,10 @@
   function showView(live, view, fresh) {
     markTabs(live, view);
     if (fresh) reload(live);
-    else send(live, { type: "dlg:view", view });
+    else {
+      live.el.setAttribute("data-busy", "");
+      send(live, { type: "dlg:view", view });
+    }
   }
 
   // Tab lists: each drives the frame of its own section.
@@ -403,7 +411,7 @@
           live.view = view;
           mount(live);
         }
-        showView(live, view, live !== hero);
+        showView(live, view, false);
       });
       tab.addEventListener("keydown", (event) => {
         const vertical = list.getAttribute("aria-orientation") === "vertical";
@@ -424,6 +432,8 @@
   const stepButtons = [...document.querySelectorAll("[data-step]")];
   const hint = document.querySelector("[data-step-hint]");
   let heroStep = 0;
+  const playback = document.querySelector("[data-playback]");
+  let playbackAnimation;
 
   function renderSteps() {
     const shown = heroStep === 1 ? 0 : heroStep;
@@ -466,8 +476,12 @@
     const data = event.data;
     if (!live || !data || typeof data.type !== "string") return;
     if (data.type === "dlg:viewed") {
+      if (data.view && live.view && data.view !== live.view) return;
       if (live.iframe.settle) live.iframe.settle();
-      else live.el.setAttribute("data-loaded", "");
+      else {
+        live.el.setAttribute("data-loaded", "");
+        live.el.removeAttribute("data-busy");
+      }
       return;
     }
     if (data.type === "dlg:lang" && (data.lang === "en" || data.lang === "uk") && data.lang !== lang) {
@@ -479,6 +493,12 @@
     live.step = data.step;
     if (live !== hero) return;
     heroStep = data.step;
+    playback.hidden = !data.playing;
+    playbackAnimation?.cancel();
+    if (data.playing && !still) playbackAnimation = playback.querySelector("span").animate(
+      [{ transform: "scaleX(0)" }, { transform: "scaleX(1)" }],
+      { duration: data.nextInMs, fill: "forwards" },
+    );
     renderSteps();
     /* While the script plays, the frame turns to where the step happened. */
     const target = heroViewFor(data.step);
@@ -494,10 +514,10 @@
       if (!entry.isIntersecting) continue;
       const live = lives.find((item) => item.el === entry.target);
       if (live) mount(live);
-      near.unobserve(entry.target);
+
     }
-  }, { rootMargin: "900px 0px" });
-  for (const live of lives) if (live !== hero) near.observe(live.el);
+  }, { rootMargin: "200px 0px" });
+  for (const live of lives) near.observe(live.el);
 
   const relayout = () => lives.forEach(layout);
   new ResizeObserver(relayout).observe(document.body);
@@ -508,7 +528,9 @@
     for (const live of lives) {
       if (live.iframe) {
         live.iframe.title = live.el.getAttribute("aria-label") || "Delegatus";
-        reload(live);
+        const rect = live.el.getBoundingClientRect();
+        if (rect.bottom >= -200 && rect.top <= innerHeight + 200) reload(live);
+        else live.stale = true;
       }
     }
   };

@@ -128,6 +128,7 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
   const context = await browser.newContext({ viewport, deviceScaleFactor: 1,
     isMobile: viewport.phone, hasTouch: viewport.phone });
   const page = await context.newPage();
+  page.setDefaultTimeout(20_000);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await context.addInitScript(() => {
@@ -186,10 +187,19 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
         await page.waitForFunction(step => document.querySelector("[data-step-hint]")?.getAttribute("data-step") === String(step), step);
         const stateMs = await page.evaluate(() => performance.now() - (window as any).stepClick);
         const current = await frameOf(page, ".live-hero");
-        if (step === 2) await current.waitForFunction(() => document.body.innerText.includes("Idempotent refunds"));
-        if (step === 3) await current.waitForFunction(() => document.body.innerText.includes("Build passed"));
-        if (step === 4) await current.waitForFunction(() => document.body.innerText.includes("passed review with no findings: two"));
-        if (step === 5) await current.waitForFunction(() => !!document.querySelector('[data-id="task:t-retries"]') || document.body.innerText.includes("Webhook retries"));
+        if (step === 2) await current.waitForFunction(() => document.body.innerText.replace(/\s+/g, " ").includes("Idempotent refunds"));
+        if (step === 3) await current.waitForFunction(() => document.body.innerText.replace(/\s+/g, " ").includes("Build passed"));
+        if (step === 4) {
+          try { await current.waitForFunction(() => document.body.innerText.replace(/\s+/g, " ").includes("passed review with no findings: two"), undefined, { timeout: 4000 }); }
+          catch (error) {
+            await page.screenshot({ path: path.join(out, `${perfLabel}-${viewport.name}-step4.png`) });
+            fs.writeFileSync(path.join(out, `${perfLabel}-${viewport.name}-step4.txt`), await current.locator("body").innerText());
+            if (perfLabel === "after") throw error;
+            rows.push({ step, stateMs, visibleMs: null, error: "report not visible after 4 seconds" });
+            continue;
+          }
+        }
+        if (step === 5) await current.waitForFunction(() => !!document.querySelector('[data-id="task:t-retries"]') || document.body.innerText.replace(/\s+/g, " ").includes("Webhook retries"));
         rows.push({ step, stateMs, visibleMs: await page.evaluate(() => performance.now() - (window as any).stepClick) });
       }
       return rows;
@@ -210,7 +220,7 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
         await page.waitForFunction(() => !document.querySelector(".live-open[data-busy]"));
         const frame = await frameOf(page, ".live-open");
         if (view === "search") await frame.waitForFunction(() => !!document.querySelector('input[type="search"], [role="dialog"] input'));
-        if (view === "accounts") await frame.waitForFunction(() => document.body.innerText.includes("Max"));
+        if (view === "accounts") await frame.waitForFunction(() => document.body.innerText.replace(/\s+/g, " ").includes("Max"));
         rows.push({ view, visibleMs: Date.now() - start });
       }
       return rows;
@@ -235,7 +245,7 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
     result.frames = await Promise.all(page.frames().map(async frame => ({ url: frame.url(), records: await frame.evaluate(() => (window as any).perfRecords) })));
     await page.screenshot({ path: path.join(out, `${perfLabel}-${viewport.name}-language.png`) });
     fs.writeFileSync(path.join(out, `${perfLabel}-${viewport.name}.json`), JSON.stringify(result, null, 2));
-    console.log(JSON.stringify({ width: viewport.width, ...Object.fromEntries(Object.entries(result).filter(([k]) => !["frames"].includes(k))) }));
+    console.log(`${perfLabel}-${viewport.name}: complete`);
     if (perfLabel === "after" && (result.language as any).value.some((row: any) => Math.abs(row.delta) > 2)) throw new Error("language switch moved the page");
     if (errors.length) throw new Error(errors.join("\n"));
   } finally { await context.close(); }

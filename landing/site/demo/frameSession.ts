@@ -36,4 +36,12 @@ class FrameStorage {
 
 Object.defineProperty(window, "sessionStorage", { value: new FrameStorage(), configurable: true });
 
+// Product dialogs focus their contents on open. In an embedded demo that can
+// scroll the landing to a frame far below the reader (including on language
+// reload). Keep keyboard focus, while letting the reader own page scrolling.
+const focus = HTMLElement.prototype.focus;
+HTMLElement.prototype.focus = function (options?: FocusOptions) {
+  focus.call(this, { ...options, preventScroll: true });
+};
+
 export {};

@@ -498,3 +498,8 @@ kbd {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0ms !important; animation: none !important; }
 }
+
+/* The scripted dwell is visible; a manual step always interrupts it. */
+.playback { position: relative; width: fit-content; margin: 8px auto 0; padding-bottom: 5px; font-size: 12px; color: var(--cream-3); }
+.playback b { font-weight: 400; }
+.playback span { position: absolute; inset: auto 0 0; height: 2px; background: currentColor; transform-origin: left; }

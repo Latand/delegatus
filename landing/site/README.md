@@ -1,7 +1,6 @@
 # The Delegatus landing (delegatus.org)
 
-The final landing, built on prototype A (`landing/opus/`, left as it was) with
-the operator's feedback and [`docs/landing/critique.md`](../../docs/landing/critique.md).
+Source for the published landing, reviewed against `main`.
 Every picture of the product on the page is the product: Delegatus's own
 interface, bundled for the browser and running over invented data, in an
 iframe the visitor can click through.
@@ -21,7 +20,7 @@ remembers the choice, and so does the switch inside the demo.
 Renders for review (never committed):
 
 ```
-bun landing/site/capture.ts        # → ~/Pictures/delegatus-review/landing/final/
+flock /var/tmp/llv-heavy-gate.lock bun landing/site/capture.ts
 ```
 
 It takes 1440×900 and 390×844 in English and Ukrainian: the full page, the
@@ -76,7 +75,8 @@ show. A view is reached by pressing the product's own controls (fold the
 orchestrator, dock it at the side, open a pipeline, open a conversation, the
 accounts trigger, `/` for search), found by their labels in the product's own
 dictionaries, so both languages work. The hero switches views in place; the
-other frames load a fresh frame per view and swap it in once it has drawn.
+other frames also navigate in place. Language changes reload visible frames;
+frames farther down refresh when the reader approaches them.
 
 ## Decisions where the brief was open
 
@@ -96,7 +96,9 @@ other frames load a fresh frame per view and swap it in once it has drawn.
   until the transcript moves 2 s past the delivery, so the demo dates the
   request at the exact moment of the send and the answer at least 2.5 s
   later. Each frame also clears what another frame left in the shared
-  storage (sent messages, opened conversations) before it draws.
+  storage (sent messages, opened conversations) before it draws. The 2.5 s
+  timestamp offset is a delivery-order constraint, independent of playback
+  speed; the first response starts after 650 ms.
 - **Panels fill the frame.** A pipeline's stages and a conversation opened
   full take the whole frame, and the accounts panel takes the board's place
   beside the rail, so nothing half-covered shows at their edges.
@@ -118,3 +120,34 @@ other frames load a fresh frame per view and swap it in once it has drawn.
   refuses committed binaries.
 - **Size.** The demo bundle is about 3.5 MB minified; the hero's frame loads
   with the page and the others as they come near.
+
+## Performance and scroll regression
+
+Build first, then run the existing capture driver with Chrome's 4× CPU
+throttle at 1440×900 and 390×844. Each run uses one browser and one page at a
+time. Keep Chrome traces, JSON measurements and screenshots outside Git:
+
+```sh
+flock /var/tmp/llv-heavy-gate.lock bun landing/site/build.ts
+LANDING_RENDER_DIR="$HOME/Pictures/delegatus-review/landing-perf" \
+  flock /var/tmp/llv-heavy-gate.lock bun landing/site/capture.ts --perf=after
+```
+
+`--perf=before` records the same cases without enforcing the corrected scroll
+behavior. Set `LANDING_URL=https://delegatus.org/` to measure the published
+site. No capture command deploys the site. `--only=en-1440` or `--only=en-390`
+limits the run to one viewport.
+
+The driver records load, manual steps, automatic playback, tabs and repeated
+EN/UK switches after visiting the lower sections. Chrome traces record script
+evaluation, layout, paint and long tasks; JSON records click-to-state and
+click-to-visible-content times separately. Timings include automation sampling
+and vary with host load; compare runs on the same machine and throttle.
+
+The first scripted reply waits 650 ms. Later steps retain 5.2/5.2/4.6 seconds
+for reading the reports, with a visible playback progress line. Selecting a
+step interrupts playback immediately. Transcript changes stream to the Viewer
+as soon as the demo changes its world. Tabs keep that Viewer running, and
+view readiness follows the actual controls and rendering instead of fixed
+500/900 ms waits. Focus in a demo frame uses `preventScroll`, so opening a
+conversation or search after translation cannot move the outer landing.

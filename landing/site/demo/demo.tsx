@@ -33,7 +33,7 @@ const PHONE = params.get("phone") === "1";
 const START = Math.max(0, Math.min(LAST_STEP, Number(params.get("step") ?? 0) || 0));
 
 /* How long each step waits after the one before it, once the visitor sent. */
-const STEP_DELAY_MS = [0, 0, 2600, 5200, 5200, 4600];
+const STEP_DELAY_MS = [0, 0, 650, 5200, 5200, 4600];
 /* The composer keeps its copy of a delivered message until the transcript
    moves this far past the delivery (OUTBOX_MTIME_GRACE_MS, 2 s), so the
    orchestrator's answer is always dated at least this long after the send. */
@@ -69,7 +69,7 @@ function post(message: Record<string, unknown>) {
 }
 function announce() {
   document.documentElement.dataset.demoStep = String(step);
-  post({ type: "dlg:state", step, lang: LANG, playing });
+  post({ type: "dlg:state", step, lang: LANG, playing, nextInMs: playing ? STEP_DELAY_MS[step + 1] ?? 0 : 0 });
 }
 
 function advance(to: number) {
@@ -115,6 +115,9 @@ function refresh() {
   world = withAsides(buildWorld(step, LANG, boot, stepSeconds));
   filesRevision += 1;
   for (const stream of runtimeStreams) stream.filesChanged();
+  for (const stream of logStreams) stream.logsChanged();
+  // The invented world is already complete; wake the board immediately.
+  window.dispatchEvent(new Event("llv:files-changed"));
 }
 /** Takes a message the script has no part for: it lands as sent, and its agent answers in its own voice. */
 function offScript(conversationId: unknown, text: string, atMs: number) {
@@ -214,11 +217,11 @@ let board = {
 };
 
 /* The Viewer's streams. The runtime stream opens and carries a files
-   revision whenever the script moves, which is how a running Delegatus tells
-   the board to read again; the log stream says it cannot connect, so the
-   feeds poll /api/logs below. */
+   revision whenever the script moves. Transcript chunks arrive on the log
+   stream immediately, rather than simulating an outage and a 1.2 s poll. */
 type Listener = (event: { data: string }) => void;
 const runtimeStreams = new Set<DemoEventSource>();
+const logStreams = new Set<DemoEventSource>();
 let streamSeq = 1000;
 class DemoEventSource {
   onopen: ((event: Event) => void) | null = null;
@@ -226,6 +229,7 @@ class DemoEventSource {
   onmessage: Listener | null = null;
   private listeners = new Map<string, Set<Listener>>();
   private beat: ReturnType<typeof setInterval> | null = null;
+  private subscriptions: Array<{ id: string; path: string; offset: number }> = [];
   constructor(url: string | URL) {
     const target = String(url);
     if (target.startsWith("/api/runtime/stream")) {
@@ -233,11 +237,23 @@ class DemoEventSource {
       setTimeout(() => this.onopen?.(new Event("open")), 0);
       this.beat = setInterval(() => this.emit("heartbeat", ""), 10_000);
     } else if (target.startsWith("/api/logs/stream")) {
-      setTimeout(() => this.onerror?.(new Event("error")), 0);
+      this.subscriptions = JSON.parse(new URL(target, location.origin).searchParams.get("subs") ?? "[]");
+      logStreams.add(this);
+      setTimeout(() => { if (logStreams.has(this)) this.logsChanged(); }, 0);
     }
   }
   emit(name: string, data: string) {
     for (const listener of this.listeners.get(name) ?? []) listener({ data });
+  }
+  logsChanged() {
+    for (const sub of this.subscriptions) {
+      const bytes = new TextEncoder().encode(world.transcripts.get(sub.path) ?? "");
+      const start = Math.min(sub.offset, bytes.length);
+      this.emit("chunk", JSON.stringify({ id: sub.id, chunk: {
+        data: new TextDecoder().decode(bytes.slice(start)), start, offset: bytes.length, size: bytes.length,
+      } }));
+      sub.offset = bytes.length;
+    }
   }
   filesChanged() {
     streamSeq += 1;
@@ -252,6 +268,7 @@ class DemoEventSource {
   }
   close() {
     runtimeStreams.delete(this);
+    logStreams.delete(this);
     if (this.beat) clearInterval(this.beat);
   }
 }
@@ -474,7 +491,6 @@ function waitFor<T>(find: () => T | null | undefined, tries = 40): Promise<T | n
   });
 }
 const byLabel = (text: string) => document.querySelector<HTMLElement>(`[aria-label="${CSS.escape(text)}"]`);
-const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 function closeOverlays() {
   (document.activeElement instanceof HTMLElement ? document.activeElement : document.body).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
 }
@@ -497,7 +513,7 @@ function goBoard() {
 }
 
 /** Presses the product's own controls to reach a view, the way a visitor would. */
-async function showView(view: string) {
+async function navigateView(view: string) {
   closeOverlays();
   if (PHONE) {
     const screens: Record<string, string> = {
@@ -544,7 +560,6 @@ async function showView(view: string) {
   if (view === "fold") return;
   if (view === "pipeline" || view === "decision") {
     const card = view === "decision" || step < 2 ? "t-retries" : "t-refunds";
-    await pause(250);
     await press(() => document.querySelector<HTMLElement>(`.card[data-id="task:${card}"] [data-open-stages]`));
     return;
   }
@@ -552,11 +567,9 @@ async function showView(view: string) {
     location.hash = `#c=${encodeURIComponent(`conversation_${step >= 3 ? "refunds-builder" : "webhook-retries"}`)}`;
     await press(() => byLabel(label("kanban.readerFull")));
     /* Unfold the builder's tool calls, so the edit reads as a diff and the test run shows its output. */
-    for (let round = 0; round < 3; round += 1) {
-      await pause(400);
-      for (const details of document.querySelectorAll<HTMLDetailsElement>("details:not([open])")) {
-        if (details.querySelector("[data-tool-row]")) details.open = true;
-      }
+    await waitFor(() => document.querySelector("[data-tool-row]"));
+    for (const details of document.querySelectorAll<HTMLDetailsElement>("details:not([open])")) {
+      if (details.querySelector("[data-tool-row]")) details.open = true;
     }
     return;
   }
@@ -574,11 +587,25 @@ async function showView(view: string) {
     return;
   }
   if (view === "search") {
-    await pause(150);
     (document.activeElement as HTMLElement | null)?.blur();
     document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }));
     await typeSearch(true);
   }
+}
+
+// Serialize navigation and discard superseded queued tabs. Acknowledgement
+// follows rendering; no fixed 500/900 ms "ready" delay or iframe reboot.
+let viewVersion = 0;
+let viewQueue = Promise.resolve();
+function showView(view: string) {
+  const version = ++viewVersion;
+  viewQueue = viewQueue.then(async () => {
+    if (version !== viewVersion) return;
+    await navigateView(view);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    if (version === viewVersion) post({ type: "dlg:viewed", view });
+  });
+  return viewQueue;
 }
 
 /** Types the search the demo shows into the search field that just opened:
@@ -671,7 +698,5 @@ announce();
 const INITIAL_VIEW = params.get("view");
 /* The page swaps a frame in once it has drawn its view. */
 void waitFor(() => document.querySelector("[data-seat-placement], [data-mobile2-board-dock], [data-kanban-board]"), 80)
-  .then(() => (INITIAL_VIEW ? showView(INITIAL_VIEW) : undefined))
-  .then(() => pause(INITIAL_VIEW === "search" || INITIAL_VIEW === "conversation" ? 900 : 500))
-  .then(() => post({ type: "dlg:viewed", view: INITIAL_VIEW }));
+  .then(() => showView(INITIAL_VIEW ?? (PHONE ? "orchestrator" : "board")));
 if (PHONE) document.documentElement.dataset.demoPhone = "1";
