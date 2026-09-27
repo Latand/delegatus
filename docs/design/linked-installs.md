@@ -1401,7 +1401,9 @@ accounts and control never cross.
   `{ key, name }`, where `name` is the remote's last path segment
   (`remoteDisplayName`, `identity.ts:158-161`). No path crosses.
 - Unsharing on either side stops that project at the next call. Both machines
-  keep their copies as ordinary local tasks; nothing is deleted.
+  keep their copies as ordinary local tasks; nothing is deleted. A task held
+  after a cold start or a restore (M.4) stays held: unsharing does not lift
+  it.
 
 ### M.3 Data model
 
@@ -1596,10 +1598,10 @@ writes nothing. "Synced 12 s ago" is memory only.
      owner handing the task on), and its stamp is larger;
   2. the receiver holds no row and no tombstone for the task (a new task), and
      it is stored as it arrives;
-  3. the receiver is a restored machine whose ownership is not confirmed yet
-     (below), the value moves the task away from this machine, and its stamp is
-     larger: this machine's own handover, lost with the restore and witnessed
-     by the peer.
+  3. the receiver holds the task unconfirmed after a cold start or a restore
+     (below), the value comes from a link its held entry lists and moves the
+     task away from this machine, and its stamp is larger: this machine's own
+     handover, lost with the restore and witnessed by the peer.
 
   Every other `machine` value is dropped, whatever its stamp, so a peer's bug
   or a stolen token cannot give this machine a task another machine still
@@ -1726,20 +1728,32 @@ writes nothing. "Synced 12 s ago" is memory only.
     over from; a release succession of the Viewer or of the runtime host
     passes the value on) writes a fresh random `start` into `board_links`,
     as a startup step before any launch, adoption or task write, together
-    with each linked project's watermark (`marks`) and each link's `gen`
-    as it stands at boot (`bootGen`). Until a link records
-    `confirmed = start`, `runsHere(task)` is false for every task of a
-    project that link links whose `machine` names this install, and the link
-    is **frozen**: this side raises no `gen` for it, sends no row or
-    tombstone over it and applies none from it. Local edits and new tasks
+    with each link's `gen` as it stands at boot (`bootGen`) and the **held
+    set** `marks`: for each project linked at boot, its watermark and the
+    links that linked it. `runsHere(task)` is false for every task whose
+    project has a `marks` entry that still lists a link and whose `machine`
+    names this install with a stamp at or below that entry's watermark. The
+    held set is read from `marks` alone, never from the current sharing:
+    unsharing a project on either side, before or after the first call, lifts
+    nothing, because a handover lost with a restore was made while the
+    project was linked, and unsharing it afterwards does not undo it. A link
+    that has not recorded `confirmed = start` is **frozen**: this side raises
+    no `gen` for it, sends no row or tombstone over it and applies none from
+    it. Local edits and new tasks
     commit as usual and wait. The first call after the start is therefore a
     check before anything moves: the peer's highest-seen `gen` of this side
     is compared with `bootGen` (M.5), a value no push and no raise since the
     boot can have changed. When it finds no restore the start is confirmed
-    in that call and the link thaws; when it finds one, confirmation waits
-    for the end of that resync, by which time the peer's `machine` values
-    have been applied under case 3 above. On a machine that was not restored
-    this costs one call: a few seconds for A, and on B until A's next call,
+    in that call, the link thaws and leaves every `marks` entry, whether the
+    project is still linked or not: no handover over that link was lost, since
+    each one raised `gen` first. When it finds one, confirmation waits for the
+    end of that resync, by which time the peer's `machine` values have been
+    applied under case 3 above, and the link leaves only the entries of the
+    projects that resync covered. An entry for a project not linked at that
+    point keeps the link and its tasks stay held until an exchange covers the
+    project (it is linked again, and that first exchange of it applies the
+    peer's `machine` values under case 3) or the link is revoked or removed.
+    On a machine that was not restored this costs one call: a few seconds for A, and on B until A's next call,
     at most 5 minutes while A runs. The Viewer also compares the stored
     `start` with its own on every call and in every task commit of a linked
     project, so a database replaced under it counts as a restore (case 2 of
@@ -1754,16 +1768,20 @@ writes nothing. "Synced 12 s ago" is memory only.
     commit that confirms the last link, about 40 bytes each, and only for
     rows written while a link was frozen.
   - While a restore is known and not confirmed (M.5), the same holds for
-    every task of the restore snapshot whose `machine` names this install.
+    every task of the restore snapshot whose `machine` names this install,
+    and unsharing lifts it no more than it lifts `marks`: a snapshot project
+    no longer linked when its link resyncs stays held for that link as above.
   - The refusal `TASK_OWNERSHIP_UNCONFIRMED` says "{task} can start here once
     {peer} confirms where it runs." It is the same guard at the same five
     seams, so it also covers pipeline recovery, boot adoption (which defers
     the row) and the seat tick, which treats those tasks as running
     elsewhere. A task whose `machine` stamp is above its project's mark
-    (created here or handed here since the start) is not held back. A link
-    revoked or removed before it confirmed leaves its tasks unconfirmed, and
-    they offer "Copy here" like a task whose owner is not linked: removing
-    the link cannot prove that this machine did not hand the task away.
+    (created here or handed here since the start) is not held back. A
+    project unshared on either side while held keeps its tasks held, and
+    "Share again to confirm" on the card says why. A link revoked or removed
+    while it still holds entries leaves their tasks unconfirmed, and they
+    offer "Copy here" like a task whose owner is not linked: removing the
+    link cannot prove that this machine did not hand the task away.
 - **The seat tick does not wake a seat for another machine's tasks.**
   `gatherSeatTickInput` (`src/lib/monitor/seatTickSources.ts:2081-2090`) passes
   them with `runsOn: <label>` and outside the unstarted and backlog reasons, and
@@ -1909,15 +1927,18 @@ A deleted one: `{"id":"…","project":"repo-…","gone":"<stamp>"}`.
 
   In cases 1 and 2 the first task commit on the restored database replaces the
   marker, before it stamps anything, with the **restore snapshot**: for each
-  linked project, every task id it holds with that task's newest stamp (about
-  62 bytes a task, 125 KB for 2 000 tasks, written once). From then until
+  linked project, the links that link it and every task id it holds with that
+  task's newest stamp (about 62 bytes a task, 125 KB for 2 000 tasks, written
+  once). From then until
   every link has resynced, the restored side moves no row (B answers resync and
   applies nothing from that call's `push`; A asks for one and pushes nothing
   first) and holds back its launches (M.4). The id exchange below removes
   tasks both sides deleted. A task in the snapshot is judged by its stamp
   there, so an edit made after the restore does not bring it back, and a task
   created since the restore is never removed, whatever its clock did. The
-  marker and the snapshot are deleted once every link has resynced. In case 3
+  marker and the snapshot are deleted once each link has resynced every
+  snapshot project it linked; a project unshared before its link resynced
+  keeps its part of the snapshot and its launches held (M.4). In case 3
   the boot stamps of M.4 are the snapshot: the restored rows are exactly the
   rows held at the cold start, and the freeze kept every one of them from
   leaving. The restored side resyncs at once and judges each row by its boot
@@ -2022,8 +2043,8 @@ Each machine publishes its agents on linked projects: B in the answer, A in
 `push.agents`. One row:
 
 ```json
-{"k":"a:9f2c41d07be3a511","t":"Design: linked boards MVP","e":"claude","m":"claude-opus-5-5",
- "st":"working","task":"<taskId>","at":1790541006000,
+{"k":"a:9f2c41d07be3a511","p":"repo-<32 hex>","t":"Design: linked boards MVP","e":"claude",
+ "m":"claude-opus-5-5","st":"working","task":"<taskId>","at":1790541006000,
  "pl":{"id":"9906a9e6","state":"running","stage":"design","stageState":"running"}}
 ```
 
@@ -2046,7 +2067,13 @@ Each machine publishes its agents on linked projects: B in the answer, A in
   (`types.ts:76-95`); `pl` comes from the pipeline membership in
   `durableLineage` (`:303-320`) and the pipeline record. `k` is 16 hex of
   sha256(conversationId), so no conversation id, path, account or prompt
-  crosses.
+  crosses. `p` is the key of the linked project the row belongs to: the
+  bound task's `project`, else the key the scan files the conversation under
+  (`projectInfoFromCwd`). The sender builds a row only when that key is linked
+  over this link, and the receiver drops a row whose `p` is not a project
+  linked over the link it came on, so a row always names a project both
+  machines share and nothing else. One feed per link therefore still sorts
+  each row into its project, an agent bound to no task included.
 - **Which agents:** bound to a task of a linked project or scanned under one,
   alive or ended within 24 hours, most recent first, at most 50 per project
   **and at most 200 in all** per link direction, whatever the number of
@@ -2062,10 +2089,11 @@ Each machine publishes its agents on linked projects: B in the answer, A in
   first, `more: true` until the last), which the receiver swaps in only when
   the last page arrives.
 - **Bounds that follow:** at most 200 rows and 200 markers per map, about
-  300 bytes a row on measured shapes and at most 1.5 KB, so about 120 KB for
-  the map this machine publishes to one link and 60 KB for the one it
-  receives, at most five times that; a reset moves at most 200 rows, about
-  40 KB, in four pages.
+  350 bytes a row on measured shapes (`p` adds 45 bytes: a 37-character
+  `repo-` key, its name and quotes) and at most 1.5 KB with `p` counted, so
+  about 140 KB for the map this machine publishes to one link and 70 KB for
+  the one it receives, at most five times that; a reset moves at most 200
+  rows, about 70 KB, in four pages.
 - **The receiver** keeps them in memory only, drops them when the link is
   revoked or removed, and greys them "as of {time}" after 15 minutes without a
   successful call. Nothing about another machine's agents is written to disk.
@@ -2092,7 +2120,7 @@ Each machine publishes its agents on linked projects: B in the answer, A in
   `kanbanAssignments.ts`) one collapsed line, "On {peer}: 2 agents · 1
   working", which expands to rows with a state dot, title, engine and model,
   stage, and "3 min ago". Agents bound to no task sit in one collapsed "On
-  {peer}" group per project.
+  {peer}" group in the project their row's `p` names (M.6).
 - New strings, en and uk:
 
 | Key | English | Українською |
@@ -2103,6 +2131,7 @@ Each machine publishes its agents on linked projects: B in the answer, A in
 | link failing | {peer} unreachable since {time}. Changes made here wait and sync when it is back. | {peer} недоступна з {time}. Зміни, зроблені тут, чекають і синхронізуються, коли вона повернеться. |
 | `clock` | {peer}'s clock is {n} ahead. Syncing is paused until its time is correct. | Годинник {peer} поспішає на {n}. Синхронізацію призупинено, доки час там не виправлять. |
 | cannot share | Add a git remote to share this project. | Додайте git remote, щоб поділитися цим проєктом. |
+| share again | Share again to confirm: {peer} has not yet confirmed that this task still runs here. | Поділіться знову, щоб підтвердити: {peer} ще не підтвердила, що ця задача досі виконується тут. |
 | `quota` | {peer} changed more tasks today than allowed; syncing from it is paused until {time}. | {peer} сьогодні змінила більше задач, ніж дозволено; синхронізацію з неї призупинено до {time}. |
 
 ### M.8 Failure modes and threat
@@ -2112,10 +2141,10 @@ Each machine publishes its agents on linked projects: B in the answer, A in
 | Cold start with the peer unreachable | Owned tasks of linked projects wait with `TASK_OWNERSHIP_UNCONFIRMED` until the first call to each linking peer, and boot adoption defers their agents (M.4). Tasks of unlinked projects and tasks created since the start run as usual. |
 | Link down | Both machines keep working on their copies. A's edits wait in its log and go out from `pushed` on the next good call; after about 2 days offline A's log is pruned below `pushed` and A resyncs its linked projects to B in pages. Tombstones wait as long as the link does. Remote agent rows grey after 15 minutes. |
 | Peer store recreated | `store` changed: resync in both directions, with the fences of M.3. |
-| Restored from a backup | Known from Delegatus's own restore marker, from `gen.json` ahead of the database at boot, or from the peer's `gen` (M.5). The restored side launches none of the tasks it owned at the backup until every link has resynced (M.4), so a task it handed away meanwhile is not started twice. The resync starts with the id exchange, so tasks both sides deleted after the backup are removed on the restored side before any row moves, tombstones pruned or not, edited since the restore or not, whatever the skew between the clocks; tasks created there since the restore stay. A whole state directory restored by hand, `gen.json` included, is known at its first call that reaches the peer, which compares the peer's `gen` with the value held at boot before this side raises, pushes or applies anything; the cold start it needs holds every owned task of a linked project until that call (M.4), so nothing launches before it, and the resync judges its rows by their boot stamps, so a task both sides deleted stays deleted, edited before that call or not. Nothing is lost in any case. |
+| Restored from a backup | Known from Delegatus's own restore marker, from `gen.json` ahead of the database at boot, or from the peer's `gen` (M.5). The restored side launches none of the tasks it owned at the backup until every link has resynced (M.4), so a task it handed away meanwhile is not started twice. The resync starts with the id exchange, so tasks both sides deleted after the backup are removed on the restored side before any row moves, tombstones pruned or not, edited since the restore or not, whatever the skew between the clocks; tasks created there since the restore stay. Unsharing a project during any of this lifts no hold (M.4). A whole state directory restored by hand, `gen.json` included, is known at its first call that reaches the peer, which compares the peer's `gen` with the value held at boot before this side raises, pushes or applies anything; the cold start it needs holds every owned task of a linked project until that call (M.4), so nothing launches before it, and the resync judges its rows by their boot stamps, so a task both sides deleted stays deleted, edited before that call or not. Nothing is lost in any case. |
 | Peer reinstalled | New `installId`: `install-changed` (§4.4), the link stops, pair again. The new install receives the linked projects in its first resync, tasks owned by the old install included (M.5 accepts an unknown owner); they show "runs on {old} (not linked)", no machine launches them, and "Copy here" makes a new task that runs where it is made (M.4). |
 | Revoke on either side | §2.6: the next call gets `401`, the link reads `revoked`. Copies stay, remote agent rows disappear, tasks owned by the peer are launched by neither machine; "Copy here" makes a new task (M.4). Tombstones kept only for that link are pruned with it. |
-| Project unshared | That project stops syncing; copies stay. |
+| Project unshared | That project stops syncing; copies stay. Tasks held after a cold start or a restore stay held until the project is linked again and synced, or the link is removed (M.4). |
 | Clock far ahead | `clock` pause (M.3). |
 | Clock stepped backwards | New stamps stay above the project's watermark (M.3); nothing sorts earlier and no fence is crossed. |
 | Handover while the link is down | Nothing moves: the owner has not seen the request, the asking machine still refuses. The card says "handover waits for {owner}". |
@@ -2159,8 +2188,8 @@ UTF-8 body, never JavaScript string length.
 | Resync ids and metadata | id pages ≤ 2 000 ids (≈ 80 KB), `hws` pages ≤ 200 entries, `shared` pages ≤ 100 entries; every body < 700 KB sent, > 1 MiB refused unparsed; noted ids ≤ 16 B each in memory | M2: 14 000 tasks in one linked project resync in 7 id pages, each ≤ 80 KB by `Buffer.byteLength`; 1 000 shared projects travel in 10 `shared` pages, and after `hwFull` their watermarks in 5 `hws` pages; a peer sending an id page of 2 001 ids, a `shared` page of 101 entries, a `name` of 65 units or a 1 MiB + 1 B body gets `malformed` and nothing is applied |
 | Memory, added RSS | ≤ 3 MB added resident memory per link at steady state, one-time costs included | M2/M3: two child processes load the same populated fixture (2 000 tasks in 3 linked projects, 200 agents on each side); one runs with the link off, one with it on, both through 1 000 calls of mixed work (idle calls, edits, agent churn). `process.memoryUsage().rss` after `Bun.gc(true)`, median of 3 runs, differs by ≤ 3 MB |
 | Memory, growth | no growth per call | M2/M3: in the linked process, `heapUsed` after `Bun.gc(true)` is read once 100 calls of the workload have run and again after 1 000 more; it grows < 256 KB |
-| Agent maps | ≤ 200 rows and 200 markers per map, each row ≤ 1.5 KB encoded; about 120 KB sent and 60 KB received per link on measured shapes; a reset ≤ 200 rows in pages of 50 | M3: 500 agents across 20 linked projects and 10 000 start/stop cycles leave every map and marker list at its bound; a reset after churn arrives in ≤ 4 pages |
-| Agent change | one row, about 200 B | M3: one fixture agent flips state and the answer carries one row |
+| Agent maps | ≤ 200 rows and 200 markers per map, each row ≤ 1.5 KB encoded; `p` a linked project key; about 140 KB sent and 70 KB received per link on measured shapes; a reset ≤ 200 rows in pages of 50 | M3: 500 agents across 20 linked projects and 10 000 start/stop cycles leave every map and marker list at its bound; a reset after churn arrives in ≤ 4 pages |
+| Agent change | one row, about 250 B | M3: one fixture agent flips state and the answer carries one row |
 | Remote agents on disk | 0 bytes | M3: no file or row written on either side |
 
 ### M.10 What this changes in the sections above
@@ -2221,8 +2250,8 @@ checks and budget; the `machine` rule judged by the link; A's schedule; the
 fenced handover; holds; "Copy here"; `TASK_RUNS_ELSEWHERE` at the five seams
 over every resolved target (boot adoption and the migration successor
 included) with the call-site coverage test; `gen` raised before publication;
-the cold-start confirmation against `bootGen` with the frozen link,
-boot stamps and `TASK_OWNERSHIP_UNCONFIRMED`; withheld stubs;
+the cold-start confirmation against `bootGen` with the frozen link, the held
+set that unsharing does not lift, boot stamps and `TASK_OWNERSHIP_UNCONFIRMED`; withheld stubs;
 paged ids, `hws` and `shared` and the 1 MiB body cap; the seat
 tick filter; MCP fields; the machine chip, "Run here" and the board header
 line; en and uk strings.
@@ -2316,6 +2345,23 @@ Acceptance:
   41, and A finds the restore: it never launches the handed task, reads
   `machine = B` after the resync, and the new task reaches B only after the
   resync ended, owned by A; B's work never stopped;
+- unshare after a restore: A and B share a project and A holds a backup that
+  names A as a task's owner; A hands the task to B, B launches it; A's whole
+  state directory is put back, A cold-starts with B unreachable, and the
+  operator unshares the project on A before the first call (and, in a second
+  run, B unshares it instead). Before the first call, after that call finds
+  the restore and for as long as the project stays unshared, A refuses the
+  task with `TASK_OWNERSHIP_UNCONFIRMED` at every seam: a pipeline creation
+  and a draft start (seam 1), a spawn with the task as target and a resume
+  that inherits it (seam 2), a send (seam 3), and the migration successor
+  (seam 5); boot adoption (seam 4) defers its agent, for Codex and for
+  Claude; the seat tick wakes no seat for it; the card offers "Share again".
+  Once the project is shared again, its first exchange applies `machine = B`
+  and A refuses with `TASK_RUNS_ELSEWHERE`; with the link removed instead,
+  the task offers only "Copy here". B's work never stops in any run. A third
+  run without a restore (a plain cold start, the project unshared before the
+  first call) confirms at that call, and A's own tasks of the project run on
+  A;
 - boot adoption: a hosted registry row whose conversation holds a task that
   runs on B, and another whose task is unconfirmed after a cold start, go
   through the real `adoptStructuredHostsAtStartup`, once for Codex and once
@@ -2360,7 +2406,7 @@ pipeline engine tests, `send/route.test.ts`, `spawn/route.binding.test.ts`);
 header.
 
 **M3 — remote agents, collapsed.**
-Scope: the summary builder, the in-memory map, both directions in the call,
+Scope: the summary builder with each row's linked project `p`, the in-memory map, both directions in the call,
 the receiver's memory, the collapsed rows, `get_task.remoteAgents` and the same
 rows in `board_snapshot`.
 Acceptance: an agent that starts, changes state or ends on B shows on A after
@@ -2370,6 +2416,11 @@ including an agent with no task and no pipeline whose scanned title is its
 first prompt carrying a unique canary, which arrives titled "{engine} agent",
 and one bound to a task whose unchosen text is its first prompt, which
 arrives titled the same way;
+with two linked projects, an agent bound to no task and no pipeline scanned
+under each, and a third scanned under a project that is shared on one side
+only: the receiver shows the first two in the "On {peer}" group of their own
+project and never the third, and a row carrying a `p` that is not linked over
+the link is dropped;
 500
 agents give at most 50 per project and 200 in all; 10 000 start/stop cycles
 keep at most 200 markers; a new epoch resets in pages of 50 and the receiver
