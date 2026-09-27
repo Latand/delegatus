@@ -306,6 +306,92 @@
       ],
       "bar": "completed·4h 44m"
     },
+    "phone-bar-p-loops-done-390-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-done-390-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 280
+      },
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 91,
+      "away": true
+    },
+    "phone-bar-p-loops-done-360-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-done-360-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 250
+      },
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 91,
+      "away": true
+    },
     "phone-task-p-loops-review-390-en": {
       "pills": []
     },
@@ -325,6 +411,92 @@
       ],
       "bar": "stages running·Review · 2·stage 4 of 6·2h"
     },
+    "phone-bar-p-loops-review-390-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-review-390-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 280
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 186,
+      "away": true
+    },
+    "phone-bar-p-loops-review-360-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-review-360-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 250
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 186,
+      "away": true
+    },
     "phone-task-p-loops-return-390-en": {
       "pills": []
     },
@@ -341,6 +513,92 @@
       ],
       "bar": "stages running·Build · 2·stage 2 of 4·20m"
     },
+    "phone-bar-p-loops-return-390-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-return-390-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 280
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 62,
+      "away": true
+    },
+    "phone-bar-p-loops-return-360-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-return-360-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 250
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 62,
+      "away": true
+    },
     "phone-task-p-loops-retry-390-en": {
       "pills": []
     },
@@ -355,6 +613,82 @@
         "↺ If Migrate fails, work returns to Migrate · up to 3 rounds"
       ],
       "bar": "stages running·Migrate · 2·stage 2 of 3·10m"
+    },
+    "phone-bar-p-loops-retry-390-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-retry-390-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 9,
+      "away": false
+    },
+    "phone-bar-p-loops-retry-360-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-retry-360-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 9,
+      "away": false
     },
     "phone-task-p-loops-rework-390-en": {
       "pills": [
@@ -389,6 +723,82 @@
       ],
       "bar": "completed·54m"
     },
+    "phone-bar-p-loops-rework-390-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-rework-390-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-rework-360-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-rework-360-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
     "phone-task-p-loops-long-390-en": {
       "pills": []
     },
@@ -407,6 +817,92 @@
         "↺ If Review the export writer and its presets fails, work returns to Fix what the export review found in there · up to 3 rounds"
       ],
       "bar": "stages running·Fix what the export review found in there · 2·stage 6 of 6·5m"
+    },
+    "phone-bar-p-loops-long-390-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-long-390-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 280
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 260,
+      "away": true
+    },
+    "phone-bar-p-loops-long-360-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-long-360-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 250
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 260,
+      "away": true
     },
     "card-p-loops-done-1440-uk": {
       "dir": "TB",
@@ -464,7 +960,7 @@
       "rework": [],
       "captions": {
         "plan": "Plan | пройдено | ",
-        "build": "Build · 2 | працює | після невдачі Review",
+        "build": "Build · 2 | працює | через Review",
         "critique": "Critique | чекає | востаннє пройдено",
         "review": "Review | чекає | востаннє не пройдено",
         "review:fail:build": "назад до Build | bad next"
@@ -591,7 +1087,7 @@
       "rework": [],
       "captions": {
         "plan": "Plan | пройдено | ",
-        "build": "Build · 2 | працює | після невдачі Review",
+        "build": "Build · 2 | працює | через Review",
         "critique": "Critique | чекає | востаннє пройдено",
         "review": "Review | чекає | востаннє не пройдено",
         "review:fail:build": "назад до Build | bad next"
@@ -714,6 +1210,92 @@
       ],
       "bar": "завершено·4 год 44 хв"
     },
+    "phone-bar-p-loops-done-390-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-done-390-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 280
+      },
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 124,
+      "away": true
+    },
+    "phone-bar-p-loops-done-360-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-done-360-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 250
+      },
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 124,
+      "away": true
+    },
     "phone-task-p-loops-review-390-uk": {
       "pills": []
     },
@@ -733,6 +1315,92 @@
       ],
       "bar": "етапи виконуються·Review · 2·етап 4 з 6·2 год"
     },
+    "phone-bar-p-loops-review-390-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-review-390-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 280
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 219,
+      "away": true
+    },
+    "phone-bar-p-loops-review-360-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-review-360-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 250
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 219,
+      "away": true
+    },
     "phone-task-p-loops-return-390-uk": {
       "pills": []
     },
@@ -749,6 +1417,92 @@
       ],
       "bar": "етапи виконуються·Build · 2·етап 2 з 4·20 хв"
     },
+    "phone-bar-p-loops-return-390-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-return-390-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 280
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 98,
+      "away": true
+    },
+    "phone-bar-p-loops-return-360-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-return-360-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 250
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 98,
+      "away": true
+    },
     "phone-task-p-loops-retry-390-uk": {
       "pills": []
     },
@@ -763,6 +1517,82 @@
         "↺ Якщо Migrate не проходить, робота повертається до Migrate · до 3 раундів"
       ],
       "bar": "етапи виконуються·Migrate · 2·етап 2 з 3·10 хв"
+    },
+    "phone-bar-p-loops-retry-390-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-retry-390-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 25,
+      "away": false
+    },
+    "phone-bar-p-loops-retry-360-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-retry-360-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 25,
+      "away": false
     },
     "phone-task-p-loops-rework-390-uk": {
       "pills": [
@@ -797,6 +1627,82 @@
       ],
       "bar": "завершено·54 хв"
     },
+    "phone-bar-p-loops-rework-390-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-rework-390-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-rework-360-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-rework-360-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
     "phone-task-p-loops-long-390-uk": {
       "pills": []
     },
@@ -815,6 +1721,92 @@
         "↺ Якщо Review the export writer and its presets не проходить, робота повертається до Fix what the export review found in there · до 3 раундів"
       ],
       "bar": "етапи виконуються·Fix what the export review found in there · 2·етап 6 з 6·5 хв"
+    },
+    "phone-bar-p-loops-long-390-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-long-390-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 280
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 260,
+      "away": true
+    },
+    "phone-bar-p-loops-long-360-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-long-360-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 250
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 260,
+      "away": true
     }
   },
   "failures": []

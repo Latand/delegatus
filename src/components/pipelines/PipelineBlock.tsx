@@ -723,23 +723,32 @@ export function PipelineStateLine({ summary, nowMs }: { summary: KanbanPipeline;
     pipelineEnded(pipeline) ? null : position.charAt(0).toLocaleLowerCase() + position.slice(1),
     moved === null ? null : humanizeDuration(blockAgeSeconds((nowMs - moved) / 1000)),
   ].filter((part): part is string => Boolean(part));
-  return (
-    <span className="pb-stateline" data-pipeline-stateline={pipeline.id}>
+  const head = (
+    <>
       <span className="pstate-word" data-pstate={pipeline.state}>{pipelineStateLabel(t, pipeline.state)}</span>
       <MergeWord pipeline={pipeline} nowMs={nowMs} />
-      {stage ? (
+    </>
+  );
+  const tail = parts.map((part, index) => (
+    <span key={index} className="pb-statepart">
+      <span className="pb-sep" aria-hidden="true">·</span>
+      {part}
+    </span>
+  ));
+  if (!stage) return <span className="pb-stateline" data-pipeline-stateline={pipeline.id}>{head}{tail}</span>;
+  /* On a stage the line is two rows that never wrap (the bar holds 44 px):
+     the state and the stage, then where it sits and how long since it moved. */
+  return (
+    <span className="pb-stateline" data-pipeline-stateline={pipeline.id} data-stateline-rows="">
+      <span className="pb-staterow">
+        {head}
         <span className="pb-statepart pb-statestage" data-stateline-stage={stage.id}>
           <span className="pb-sep" aria-hidden="true">·</span>
           <span className="pb-statename">{stageDisplayName(t, stage)}</span>
           {attempts > 1 ? <span className="pb-attempt">{` · ${attempts}`}</span> : null}
         </span>
-      ) : null}
-      {parts.map((part, index) => (
-        <span key={index} className="pb-statepart">
-          <span className="pb-sep" aria-hidden="true">·</span>
-          {part}
-        </span>
-      ))}
+      </span>
+      {tail.length ? <span className="pb-staterow">{tail}</span> : null}
     </span>
   );
 }

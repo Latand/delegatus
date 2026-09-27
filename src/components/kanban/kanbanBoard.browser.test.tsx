@@ -12165,6 +12165,50 @@ describe("readable pipeline graph: loops fold into their sources, nodes say what
             /* The phone says what the desktop graph says: Build works again, and nothing else does. */
             const wantRework = lane.pipeline === "p-loops-rework" ? [`build: ${translate(lang, "kanban.graph.workingAgain")}`] : [];
             if (JSON.stringify(screen.rework) !== JSON.stringify(wantRework)) failures.push(`phone-${lane.pipeline}-390-${lang}: rows read working again on ${JSON.stringify(screen.rework)}, expected ${JSON.stringify(wantRework)}`);
+            /* The bar holds its own text (critique finding 1): at a short
+               viewport, at rest and with the list scrolled so the title moves
+               into the bar, the state line and the title lie inside it. */
+            for (const width of [390, 360]) {
+              await phone.page.setViewportSize({ width, height: 560 });
+              await phone.page.waitForTimeout(250);
+              for (const scrolled of [false, true]) {
+                await phone.page.evaluate((top) => { document.querySelector("[data-mobile2-pipeline-body]")!.scrollTop = top; }, scrolled ? 260 : 0);
+                await phone.page.waitForTimeout(300);
+                const bar = await phone.page.evaluate(() => {
+                  const screen = document.querySelector('[data-mobile2-screen="pipeline"]')!;
+                  const rect = (selector: string) => {
+                    const element = screen.querySelector(selector);
+                    if (!element) return null;
+                    const box = element.getBoundingClientRect();
+                    return { top: Math.round(box.top), bottom: Math.round(box.bottom), left: Math.round(box.left), right: Math.round(box.right) };
+                  };
+                  const line = screen.querySelector(".pb-stateline");
+                  const shown = line ? [...line.querySelectorAll(":scope > .pb-staterow")].filter((row) => (row as HTMLElement).offsetParent !== null) : [];
+                  const rows = shown.length;
+                  /* A row's text stays in the row: the stage name gives way, it never runs under the bar's buttons. */
+                  const lineRight = line ? line.getBoundingClientRect().right : 0;
+                  const spill = shown.filter((row) => row.getBoundingClientRect().right > lineRight + 1 || row.scrollWidth > row.clientWidth + 1)
+                    .map((row) => `${row.textContent}: ${Math.round(row.getBoundingClientRect().right)} > ${Math.round(lineRight)}`);
+                  /* A short lane may not scroll its heading out; only then does the title move up. */
+                  const body = screen.querySelector("[data-mobile2-pipeline-body]")!;
+                  const heading = screen.querySelector(".pb-heading");
+                  const away = Boolean(heading && heading.getBoundingClientRect().bottom < body.getBoundingClientRect().top);
+                  return { bar: rect("[data-mobile2-bar]"), line: rect(".pb-stateline"), title: rect("[data-mobile2-title-text]"), rows, spill, scrollTop: Math.round(body.scrollTop), away };
+                });
+                const name = `phone-bar-${lane.pipeline}-${width}-${scrolled ? "scrolled" : "rest"}-${lang}`;
+                readings[name] = bar as never;
+                const inside = (box: { top: number; bottom: number; left: number; right: number } | null) => !box || !bar.bar
+                  || (box.top >= bar.bar.top && box.bottom <= bar.bar.bottom && box.left >= bar.bar.left && box.right <= bar.bar.right);
+                if (!bar.bar || !bar.line) failures.push(`${name}: no bar or no state line`);
+                else if (!inside(bar.line) || !inside(bar.title)) failures.push(`${name}: the bar (${bar.bar.top}–${bar.bar.bottom}) does not hold the state line ${JSON.stringify(bar.line)} and the title ${JSON.stringify(bar.title)}`);
+                if (bar.spill.length) failures.push(`${name}: a row spills out of the state line: ${bar.spill.join(" | ")}`);
+                if (bar.away && !bar.title) failures.push(`${name}: the title did not move into the bar`);
+                await phone.page.screenshot({ path: path.join(pngDir, `${name}.png`), clip: { x: 0, y: 0, width, height: 160 } });
+              }
+              await phone.page.evaluate(() => { document.querySelector("[data-mobile2-pipeline-body]")!.scrollTop = 0; });
+            }
+            await phone.page.setViewportSize({ width: 390, height: 844 });
+            await phone.page.waitForTimeout(250);
             await full(`phone-pipeline-${lane.pipeline}-390-${lang}`, "[data-mobile2-pipeline-body]");
             await phone.page.locator("[data-mobile2-back]").first().evaluate((element) => (element as HTMLElement).click());
             await phone.page.waitForTimeout(300);

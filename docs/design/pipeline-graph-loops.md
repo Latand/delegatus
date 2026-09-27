@@ -244,7 +244,9 @@ sites without files pass nothing and draw as today.
 2. waits again: `kanban.graph.lastWas`, "last {state}" / «востаннє {state}»;
 3. a review-loop stage with rounds: `RoundsMark` (unchanged);
 4. running after a fail edge sent the work here: `kanban.graph.because`,
-   "after {stage} failed" / «після невдачі {stage}»;
+   "after {stage} failed" / «через {stage}» (the uk sentence «після невдачі
+   {stage}» cut an eight-letter name at 176 px, so it moved to the caption's
+   tooltip);
 5. never started: today's words;
 6. otherwise empty. The attempt number lives in the name row.
 
@@ -345,9 +347,13 @@ details changed from the text above:
   Migrate itself); its strip says "retry". The phone's current-stage line
   drops the same sentence and keeps the budget line.
 - On the phone the attempt number sits inside the stage name, so it follows
-  the last word of a wrapped name. In the pipeline screen's bar the stage name
-  truncates before the attempt number and the position, so a 40-character name
-  never slides under the header's badge.
+  the last word of a wrapped name. In the pipeline screen's bar the state line
+  is two rows that never wrap: the state word, the merge word and the stage
+  (its name truncates, its attempt number stays), then the position and the
+  age. When the title scrolls into the bar the second row hides, so the 44 px
+  cell holds two rows at most and a 40-character name never slides under the
+  header's badge. The rows' CSS is unlayered in `pipelineBlock.css`; a Tailwind
+  utility on the bar cannot override it.
 
 ## Deferred — not currently justified
 

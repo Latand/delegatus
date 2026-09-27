@@ -562,7 +562,7 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
           const detail = rework ? <span className="pdetail rework">{t("kanban.graph.workingAgain")}</span>
             : view?.again ? <span className="pdetail">{t("kanban.graph.lastWas", { state: graphStateWord(t, view.previous ?? "pending") })}</span>
               : rounds.length ? <RoundsMark rounds={rounds} />
-                : via ? <span className="pdetail">{t("kanban.graph.because", { stage: nameOf(via) })}</span>
+                : via ? <span className="pdetail" title={t("kanban.graph.becauseTitle", { stage: longLabel(via) })}>{t("kanban.graph.because", { stage: nameOf(via) })}</span>
                   : !attempts ? <span className="pdetail">{stage.kind === "review-loop" ? t("kanban.graph.reviewsRun") : t("kanban.graph.notStarted")}</span>
                     : null;
           const hasStrip = layout.strips.has(stage.id);

@@ -236,7 +236,14 @@
 .pb-stateline .pb-statepart { display: inline-flex; align-items: baseline; gap: 5px; white-space: nowrap; }
 .pb-stateline .pb-sep { color: var(--color-muted); opacity: 0.8; }
 /* The stage the lane stands on: its name gives way, its attempt number never does. */
-.pb-stateline .pb-statestage { min-width: 0; max-width: 100%; gap: 0; }
+.pb-stateline[data-stateline-rows] { flex-direction: column; flex-wrap: nowrap; align-items: stretch; }
+.pb-staterow { display: flex; flex-wrap: nowrap; align-items: baseline; column-gap: 5px; min-width: 0; }
+.pb-staterow > .pstate-word, .pb-staterow > .pb-merge { flex-shrink: 0; white-space: nowrap; }
+/* A row never opens with a separator. */
+.pb-staterow > .pb-statepart:first-child > .pb-sep { display: none; }
+/* With the title in the bar there is room for one row under it. */
+[data-mobile2-meta][data-title-away] .pb-staterow + .pb-staterow { display: none; }
+.pb-stateline .pb-statestage { flex: 0 1 auto; min-width: 0; max-width: 100%; gap: 0; }
 .pb-stateline .pb-statestage .pb-sep { margin-right: 5px; }
 .pb-stateline .pb-statename { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .pb-stateline .pb-attempt { flex-shrink: 0; white-space: pre; }

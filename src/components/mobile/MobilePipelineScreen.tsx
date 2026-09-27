@@ -513,7 +513,7 @@ export function MobilePipelineScreen({
   const barTitle = (
     <span className="flex min-w-0 flex-1 flex-col">
       {titleAway ? <span data-mobile2-title-text className="min-w-0 truncate text-title font-semibold leading-tight text-primary">{title}</span> : null}
-      <span data-mobile2-meta className={`min-w-0 ${titleAway ? "overflow-hidden [&_.pb-stateline]:flex-nowrap [&_.pb-stateline]:text-label" : ""}`}>
+      <span data-mobile2-meta data-title-away={titleAway ? "" : undefined} className={`min-w-0 ${titleAway ? "overflow-hidden" : ""}`}>
         <PipelineStateLine summary={summary} nowMs={now * 1000} />
       </span>
     </span>
