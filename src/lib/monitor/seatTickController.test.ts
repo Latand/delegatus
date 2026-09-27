@@ -28,6 +28,7 @@ const { SEAT_TICK_NO_SELF_SCHEDULE } = await import("./report");
 const { reconcileSeatTick, runSeatTickCheck, SEAT_TICK_WAKE_UNRESOLVED_REF, startSeatTick, stopSeatTick, wakeReached } = await import("./seatTickController");
 const { DEFAULT_SEAT_TICK_POLICY } = await import("./seatTick");
 const { seatMcpHealth } = await import("./seatMcpHealth");
+const { viewerMcpTransportForLaunch } = await import("@/lib/agent/spawnPolicy");
 const { defaultSeatTickSettings } = await import("./seatTickSettings");
 const { openPullRequestsForRepo } = await import("./githubEvidence");
 const { defaultSeatTickSources, journalReceipt, settleRecordFromJournal, wakeStateFromRecord } = await import("./seatTickSources");
@@ -278,6 +279,7 @@ function harness(options: {
           return {
             pageSeatChildren: registry.pageSeatChildren.bind(registry),
             seatTickConversation: registry.seatTickConversation.bind(registry),
+            seatMcpReceipt: registry.seatMcpReceipt.bind(registry),
             conversation: (id: string) => registry.conversation(id as never),
             conversationForPath: (artifactPath: string) => registry.conversationForPath(artifactPath),
             readOnlySnapshot: () => { result.snapshots += 1; return registry.readOnlySnapshot(); },
@@ -668,6 +670,45 @@ test("transport failure opens the MCP card and recovery closes it before wakes r
   expect(rig.sent).toHaveLength(1);
 });
 
+test("seat MCP health follows its recorded launch transport across server flag changes", async () => {
+  const prior = process.env.LLV_MCP_TRANSPORT;
+  try {
+    for (const { selected, current, blocked, requestedHttp, legacy } of [
+      { selected: "stdio", current: "http", blocked: true, requestedHttp: false, legacy: false },
+      { selected: "http", current: "stdio", blocked: false, requestedHttp: false, legacy: false },
+      /* HTTP requested at admission but rejected by the capability or local
+         endpoint gate: the actual launch remains stdio. */
+      { selected: "stdio", current: "http", blocked: true, requestedHttp: true, legacy: false },
+      { selected: "stdio", current: "http", blocked: true, requestedHttp: false, legacy: true },
+    ] as const) {
+      const fixture = childFixture(`mcp-transport-${selected}-${current}-${crypto.randomUUID()}`);
+      const digest = createHash("sha256").update(crypto.randomUUID()).digest("hex");
+      const begun = fixture.registry.beginSpawnRequest({ engine: "claude", cwd: fixture.cwd,
+        conversationId: fixture.seat.conversationId as never, spawnCapabilityDigest: digest,
+        launchProfile: { title: "Seat transport" } });
+      const launched = requestedHttp
+        ? viewerMcpTransportForLaunch({ LLV_SPAWN_CAPABILITY: "c".repeat(43) }, {
+            LLV_MCP_TRANSPORT: "http", LLV_TOKEN: "test-key", LLV_MCP_HTTP_URL: "http://127.0.0.1:41234/api/mcp",
+          })
+        : selected;
+      expect(launched).toBe(selected);
+      if (!legacy) fixture.registry.setReceiptViewerMcpTransport(begun.receipt.launchId, launched);
+      fixture.spawn({ title: "owed worker", turn: "terminal" });
+      fixture.seed();
+      process.env.LLV_MCP_TRANSPORT = current;
+      const seat = { ...fixture.seat, designatedAt: ago(fixture, 20) };
+      const rig = childRig(fixture, { seat });
+      const record = await runSeatTickCheck(fixture.project, rig.deps);
+      expect(rig.sent).toHaveLength(blocked ? 0 : 1);
+      expect(record?.delivery?.outcome).toBe(blocked ? "seat-mcp-unavailable" : "delivered");
+      expect(rig.cards.some(({ card }) => card.kind === "mcp-unavailable" && card.state === "open")).toBe(blocked);
+    }
+  } finally {
+    if (prior === undefined) delete process.env.LLV_MCP_TRANSPORT;
+    else process.env.LLV_MCP_TRANSPORT = prior;
+  }
+});
+
 test("repeated real launcher child crashes block seat wakes until a tool response proves recovery", async () => {
   const node = Bun.which("node");
   if (!node) throw new Error("Node is required for the launcher test");
@@ -956,7 +997,9 @@ test("a wake the holder delivered after the send is credited with the plan that 
     state: { ...RECENT, eventsThrough: 12, outstandingWake: outstanding },
     wakeState: "landed",
   });
-  await runSeatTickCheck(PROJECT, rig.deps);
+  await runSeatTickCheck(PROJECT, { ...rig.deps,
+    mcpHealth: () => ({ status: "dead", detail: "stdio MCP has no heartbeat" }),
+  });
   const landing = rig.journal.find((line) => line.verdict === "landed")!;
   expect(landing.delivery).toEqual({ clientMessageId: outstanding.clientMessageId, outcome: "landed" });
   expect(rig.written.at(-1)!.lastWakeAt).toBe(new Date(NOW).toISOString());
@@ -3702,6 +3745,37 @@ test("a returned 409 or 503 refusal is fenced across rotation and the successor 
     expect(again.sent).toEqual([]);
     expect(fixture.acknowledged()).toEqual([child.id]);
   }
+});
+
+test("dead Viewer MCP withholds a recordless refusal retry under its original key until recovery", async () => {
+  const fixture = childFixture("mcp-refused-retry");
+  setAgentRegistryForTests(fixture.registry);
+  const child = fixture.spawn({ title: "owed worker", turn: "terminal" });
+  fixture.seed();
+  await runSeatTickCheck(fixture.project, childRig(fixture, {
+    realWakeState: true, deliverWith: refuseBeforeReservation(503),
+  }).deps);
+  const pending = fixture.row().outstandingWake!;
+  expect(pending).toMatchObject({ operationId: null, dispatch: { state: "refused" } });
+
+  const unavailable = childRig(fixture, { realWakeState: true, now: fixture.now + 5 * MINUTE });
+  const dead = await runSeatTickCheck(fixture.project, { ...unavailable.deps,
+    mcpHealth: () => ({ status: "dead", detail: "stdio MCP has no heartbeat" }),
+  });
+  expect(unavailable.sent).toEqual([]);
+  expect(dead?.delivery?.outcome).toBe("seat-mcp-unavailable");
+  expect(unavailable.cards.some(({ card }) => card.kind === "mcp-unavailable" && card.state === "open")).toBe(true);
+  expect(fixture.row().outstandingWake).toEqual(pending);
+  expect(fixture.acknowledged()).toEqual([]);
+
+  const recovered = childRig(fixture, { realWakeState: true, now: fixture.now + 10 * MINUTE });
+  await runSeatTickCheck(fixture.project, { ...recovered.deps,
+    mcpHealth: () => ({ status: "healthy", detail: "stdio MCP is live" }),
+  });
+  expect(recovered.sent).toHaveLength(1);
+  expect(recovered.sent[0]).toMatchObject({ clientMessageId: pending.clientMessageId, text: pending.text });
+  expect(fixture.acknowledged()).toEqual([child.id]);
+  expect(fixture.row().outstandingWake).toBeNull();
 });
 
 test("a paused old lookup cannot dispatch after a successor replaces the refused wake (#1465)", async () => {

@@ -13,7 +13,7 @@ import { identityMaterializationFence, type AgentRegistry, type AgentRegistryEnt
 import { sessionKey, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import type { SpawnResponse } from "@/lib/agent/spawnResponse";
-import { prepareManagedClaudeSpawnHome } from "@/lib/agent/spawnPolicy";
+import { prepareManagedClaudeSpawnHome, viewerMcpTransportForLaunch } from "@/lib/agent/spawnPolicy";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { statePath } from "@/lib/configDir";
 import { rememberHandoffChild, persistHandoffLineage } from "@/lib/handoffLineage";
@@ -2043,6 +2043,8 @@ export async function spawnStructuredConversation(
     }));
     input = admittedStructuredLaunchInput(input);
     const capability = input.registry.rotateSpawnCapabilityForReceipt(input.receipt.launchId);
+    input.registry.setReceiptViewerMcpTransport(input.receipt.launchId,
+      viewerMcpTransportForLaunch({ ...input.account.env, LLV_SPAWN_CAPABILITY: capability }));
     const resumeEntry = resumeKey ? input.registry.readOnlySnapshot().entries[sessionKeyId(resumeKey)] : null;
     if (resumeEntry?.structuredHost) {
       adoptionClaim = input.registry.claimStructuredHost(resumeKey!, processIdentity(), { allowUnhosted: true });

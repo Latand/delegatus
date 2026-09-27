@@ -915,6 +915,8 @@ async function reconcileOutstandingWake(context: {
   /** The transport, for the same-key re-dispatch. Absent means this reconcile
       never re-dispatches — the one that follows a send in the same check. */
   deliver?: typeof deliverConversationMessage;
+  /** Recheck the seat's MCP immediately before a same-key dispatch. */
+  mayDispatch?: () => boolean;
   /** When the project's tick settings were last written, which a refusal run
       is counted against. Only the re-dispatching reconcile needs it. */
   settingsUpdatedAt?: string | null;
@@ -1014,6 +1016,7 @@ async function reconcileOutstandingWake(context: {
     const authority = context.sources.seatFor(context.project).active;
     if (held.outstandingWake?.clientMessageId !== wake.clientMessageId) return held;
     if (!authority || authority.conversationId !== wake.conversationId || authority.seatEpoch !== wake.seatEpoch) return state;
+    if (context.mayDispatch?.() === false) return state;
     const accounting = state.accounting ? new SeatTickAccounting(state.accounting.filename, context.project) : null;
     if (!accounting) return state;
     const token = accounting.beginDispatch(wake);
@@ -1225,6 +1228,15 @@ async function check(
   const writeState = dependencies.writeState ?? writeSeatTickState;
   const deliver = dependencies.deliver ?? deliverConversationMessage;
   const ensureCard = dependencies.ensureCard ?? ensureSeatTickCard;
+  const mcpHealthFor = (seat: { conversationId: string; designatedAt?: string | null }, now: number): SeatMcpHealth =>
+    dependencies.mcpHealth?.(seat.conversationId, seat.designatedAt ?? null, now)
+      ?? (() => {
+        try {
+          const receipt = sources.registry().seatMcpReceipt?.(seat.conversationId) ?? null;
+          return seatMcpHealth(receipt, seat.designatedAt ?? null,
+            path.dirname(statePath("mcp-runtime")), now, receipt?.viewerMcpTransport ?? "stdio");
+        } catch { return { status: "untracked", detail: "MCP liveness could not be read" } as SeatMcpHealth; }
+      })();
 
   /* BEFORE A SEAT IS READ AT ALL (#1757): converge the active seat with the
      launch it was activated on, so this check opens on the seat the operator
@@ -1280,6 +1292,7 @@ async function check(
     writeState,
     unresolved,
     deliver,
+    mayDispatch: () => !openingSeat?.conversationId || mcpHealthFor({ ...openingSeat, conversationId: openingSeat.conversationId }, sources.now()).status !== "dead",
     settingsUpdatedAt: settingsUpdatedAtFor(canonical, sources),
     at: new Date(opening).toISOString(),
     now: opening,
@@ -1295,16 +1308,7 @@ async function check(
      from `settled` here would drop the seal and read the whole journal as
      unread again at the next check. */
   const input = { ...gathered, state: seatTickStateForEpoch(gathered.state, gathered.seat?.seatEpoch ?? null) };
-  const mcpHealth = input.seat
-    ? (dependencies.mcpHealth?.(input.seat.conversationId, input.seat.designatedAt, input.now)
-      ?? (() => {
-        try {
-          return seatMcpHealth(sources.registry().seatMcpReceipt?.(input.seat!.conversationId) ?? null,
-            input.seat!.designatedAt, path.dirname(statePath("mcp-runtime")), input.now,
-            process.env.LLV_MCP_TRANSPORT?.trim().toLowerCase() === "http" ? "http" : "stdio");
-        } catch { return { status: "untracked", detail: "MCP liveness could not be read" } as SeatMcpHealth; }
-      })())
-    : null;
+  const mcpHealth = input.seat ? mcpHealthFor(input.seat, input.now) : null;
   if (input.seat && mcpHealth?.status !== "untracked") {
     try {
       ensureCard(input.project, {

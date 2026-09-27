@@ -304,7 +304,11 @@ registration from the Viewer-managed Codex accounts, and the Viewer writes the
 per launch. The URL is the stable listener, so a deploy changes nothing on the
 agent side: a call made while the releases swap fails, and the next one
 reaches the new release. Agents already running keep the transport they were
-launched with. Removing the flag alone takes new spawns back to stdio; run the
+launched with. The seat monitor reads the effective transport recorded on the
+launch receipt, including an HTTP request that fell back to stdio at admission;
+the current server flag does not change health checks for an existing seat.
+Older receipts without that field are checked as stdio. Removing the flag alone
+takes new spawns back to stdio; run the
 script with `LLV_MCP_TRANSPORT=stdio` to register the launcher again for Codex
 sessions started outside Delegatus.
 

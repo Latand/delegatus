@@ -2066,8 +2066,10 @@ test("the seat MCP heartbeat resolves its current digest through a keyed SQLite 
     });
     if (begun.kind !== "created") throw new Error("expected a new receipt");
     expect(registry.seatMcpReceipt(begun.receipt.conversationId)).toEqual({
-      spawnCapabilityDigest: "a".repeat(64), createdAt: begun.receipt.createdAt,
+      spawnCapabilityDigest: "a".repeat(64), createdAt: begun.receipt.createdAt, viewerMcpTransport: null,
     });
+    registry.setReceiptViewerMcpTransport(begun.receipt.launchId, "http");
+    expect(registry.seatMcpReceipt(begun.receipt.conversationId)?.viewerMcpTransport).toBe("http");
     expect(registry.seatMcpReceipt("conversation_missing")).toBeNull();
     registry.rotateSpawnCapabilityForReceipt(begun.receipt.launchId);
     expect(registry.seatMcpReceipt(begun.receipt.conversationId)?.spawnCapabilityDigest).not.toBe("a".repeat(64));
