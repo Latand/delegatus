@@ -3,9 +3,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 import { seatMcpHealth } from "../src/lib/monitor/seatMcpHealth";
+import { appDirIn } from "./appDir.mjs";
 
 const sandboxes: string[] = [];
 
@@ -58,12 +59,129 @@ function installedPackage(serverSource = `
   fs.mkdirSync(path.join(root, "bin"), { recursive: true });
   fs.mkdirSync(path.join(root, "dist"), { recursive: true });
   fs.copyFileSync(path.join(import.meta.dir, "mcp-server.mjs"), path.join(root, "bin", "mcp-server.mjs"));
-  for (const name of ["server-runtime.mjs", "appDir.mjs", "envAlias.mjs"]) {
+  for (const name of ["server-runtime.mjs", "appDir.mjs", "envAlias.mjs", "self-update-supervisor.mjs"]) {
     fs.copyFileSync(path.join(import.meta.dir, name), path.join(root, "bin", name));
   }
   fs.writeFileSync(path.join(root, "dist", "mcp-server.mjs"), serverSource, "utf8");
   return { root, launcher: path.join(root, "bin", "mcp-server.mjs") };
 }
+
+function git(cwd: string, ...args: string[]): string {
+  const result = spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" });
+  if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
+  return result.stdout.trim();
+}
+
+function selfUpdateFixture(checkoutBundle: string) {
+  const { root, launcher } = installedPackage(checkoutBundle);
+  const stateDir = path.join(root, "state");
+  const cacheDir = path.join(root, "cache");
+  const home = path.join(root, "home");
+  fs.mkdirSync(stateDir);
+  fs.mkdirSync(cacheDir);
+  fs.mkdirSync(home);
+  git(root, "init", "--initial-branch=main");
+  git(root, "add", "bin", "dist");
+  git(root, "commit", "-m", "checkout");
+  const checkoutHead = git(root, "rev-parse", "HEAD");
+  const installId = createHash("sha256").update(path.resolve(root)).digest("hex").slice(0, 16);
+  const pointer = path.join(stateDir, "self-update", `release-${installId}.json`);
+  const releasesDir = path.join(appDirIn(cacheDir), "self-update", installId, "releases");
+  fs.mkdirSync(path.dirname(pointer), { recursive: true });
+  fs.mkdirSync(releasesDir, { recursive: true });
+  function release(name: string, bundle: string) {
+    const dir = path.join(releasesDir, name);
+    git(root, "worktree", "add", "-b", name, dir);
+    fs.mkdirSync(path.join(dir, ".next"));
+    fs.writeFileSync(path.join(dir, ".next", "BUILD_ID"), "built\n");
+    fs.writeFileSync(path.join(dir, "dist", "mcp-server.mjs"), bundle);
+    git(dir, "add", ".next", "dist");
+    git(dir, "commit", "-m", name);
+    const sha = git(dir, "rev-parse", "HEAD");
+    return { dir, sha, checkoutHead };
+  }
+  const env = { HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), XDG_CACHE_HOME: cacheDir, LLV_STATE_DIR: stateDir };
+  return { root, launcher, stateDir, pointer, release, env };
+}
+
+function mcpBundle(label: string) {
+  return `
+    process.stdin.setEncoding("utf8");
+    let input = "";
+    process.stdin.on("data", chunk => {
+      input += chunk;
+      while (input.includes("\\n")) {
+        const at = input.indexOf("\\n");
+        const request = JSON.parse(input.slice(0, at)); input = input.slice(at + 1);
+        if (request.id === undefined) continue;
+        const result = request.method === "initialize"
+          ? { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "viewer", version: "1" } }
+          : request.method === "tools/list"
+            ? { tools: [{ name: "release", inputSchema: { type: "object" } }] }
+            : { content: [{ type: "text", text: "${label}" }] };
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\\n");
+      }
+    });
+  `;
+}
+
+test("self-update pointer selects the installed MCP bundle and falls back only as installedRelease decides", async () => {
+  const fixture = selfUpdateFixture("process.stdout.write('checkout:' + (process.env.LLV_HOT_STATE_RELEASE_REVISION || 'none') + '\\n');");
+  const { root, launcher, stateDir, pointer, release, env } = fixture;
+  const installed = release("first", "process.stdout.write('release\\n');");
+  const run = () => launchFrom(root, launcher, env, "", "bun");
+  expect(await run()).toMatchObject({ exitCode: 0, stdout: "checkout:none\n", stderr: "" });
+  fs.writeFileSync(pointer, "{invalid json");
+  expect(await run()).toMatchObject({ exitCode: 0, stdout: "checkout:none\n", stderr: "" });
+  fs.writeFileSync(pointer, JSON.stringify(installed));
+  expect(await run()).toMatchObject({ exitCode: 0, stdout: "release\n", stderr: "" });
+
+  const revision = "7".repeat(40);
+  const releaseId = `deploy-${revision}`;
+  const managedBundle = "process.stdout.write('managed:' + process.env.LLV_HOT_STATE_RELEASE_REVISION + '\\n');";
+  const managedRoot = path.join(stateDir, "mcp-runtime", "releases", releaseId, "dist");
+  fs.mkdirSync(managedRoot, { recursive: true });
+  fs.writeFileSync(path.join(managedRoot, "mcp-server.mjs"), managedBundle);
+  fs.writeFileSync(path.join(stateDir, "viewer-release.json"), JSON.stringify({
+    revision, image: "viewer:managed", container: "viewer-managed", endpoint: "http://127.0.0.1:1",
+    mcpRuntime: { source: "managed", revision, releaseId, artifactDigest: createHash("sha256").update(managedBundle).digest("hex"), stagedAt: "2026-07-23T08:00:00.000Z" },
+  }));
+  expect(await run()).toMatchObject({ exitCode: 0, stdout: `managed:${revision}\n`, stderr: "" });
+  fs.writeFileSync(path.join(stateDir, "viewer-release.json"), JSON.stringify({
+    revision, image: "viewer:managed", container: "viewer-managed", endpoint: "http://127.0.0.1:1",
+  }));
+  expect(await run()).toMatchObject({ exitCode: 0, stdout: `checkout:${revision}\n`, stderr: "" });
+
+  fs.unlinkSync(path.join(stateDir, "viewer-release.json"));
+  git(root, "commit", "--allow-empty", "-m", "checkout moved");
+  expect(await run()).toMatchObject({ exitCode: 0, stdout: "checkout:none\n", stderr: "" });
+}, 15_000);
+
+test("one MCP session starts the next installed release when the self-update pointer changes", async () => {
+  const { root, launcher, pointer, release, env } = selfUpdateFixture(mcpBundle("checkout"));
+  const first = release("first", mcpBundle("first"));
+  const second = release("second", mcpBundle("second"));
+  fs.writeFileSync(pointer, JSON.stringify(first));
+  const session = stdioSession(process.execPath, launcher, root, env);
+  try {
+    expect((await session.call(1, "initialize")).result.serverInfo.name).toBe("viewer");
+    session.process.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
+    expect((await session.call(2, "tools/call", { name: "release", arguments: {} })).result.content[0].text).toBe("first");
+    fs.writeFileSync(pointer, JSON.stringify(second));
+    let switched = false;
+    for (let id = 3; id < 23; id++) {
+      const answer = await session.call(id, "tools/call", { name: "release", arguments: {} });
+      if (answer.result?.content?.[0]?.text === "second") { switched = true; break; }
+      expect(answer.result?.isError).toBe(true);
+      await Bun.sleep(50);
+    }
+    expect(switched).toBe(true);
+    expect(session.process.exitCode).toBeNull();
+  } finally {
+    session.process.stdin.end();
+    if (session.process.exitCode === null) await new Promise<void>((resolve) => session.process.once("close", () => resolve()));
+  }
+}, 15_000);
 
 async function launchInstalled(env: Record<string, string>): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const { root, launcher } = installedPackage();
