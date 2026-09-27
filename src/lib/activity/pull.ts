@@ -62,28 +62,32 @@ try {
   db.exec("BEGIN");
   mode = "solo";
   const teamFile = path.join(path.dirname(path.dirname(file)), "team", "team.sqlite");
-  const hadTeamStore = fs.existsSync(teamFile);
-  if (hadTeamStore) {
+  let hasTeamHistory = false;
+  if (fs.existsSync(teamFile)) {
     mode = "team";
     try {
       const team = new Database(teamFile, { readonly: true });
+      hasTeamHistory = !!team.query("SELECT 1 FROM members LIMIT 1").get();
       mode = team.query("SELECT 1 FROM members WHERE role = 'owner' AND status = 'active' LIMIT 1").get() ? "team" : "solo";
       team.close();
-    } catch { mode = "team"; }
+    } catch { mode = "team"; hasTeamHistory = true; }
   }
   const hasAuthor = db.query("PRAGMA table_info(activity_inputs)").all().some((column) => column.name === "author");
+  if (hasAuthor && !hasTeamHistory) {
+    hasTeamHistory = !!db.query("SELECT 1 FROM activity_inputs WHERE host = '' AND author IS NOT NULL AND author != 'operator' LIMIT 1").get();
+  }
   const member = env.LLV_ACTIVITY_MEMBER || "";
   const meta = db.query("SELECT version, store_id FROM activity_meta WHERE singleton = 1").get();
   latest = meta?.version ?? 0;
   storeId = meta?.store_id ?? null;
   host = db.query("SELECT covered_from, covered_until, read_at, excluded FROM activity_hosts WHERE host = ''").get();
-  unknownAuthors = hadTeamStore ? db.query("SELECT COUNT(*) AS n FROM activity_inputs WHERE host = '' AND " + (hasAuthor ? "author IS NULL" : "1 = 1")).get()?.n ?? 0 : 0;
-  const selection = mode === "solo" && !hadTeamStore ? ""
+  unknownAuthors = mode === "team" || hasTeamHistory ? db.query("SELECT COUNT(*) AS n FROM activity_inputs WHERE host = '' AND " + (hasAuthor ? "author IS NULL" : "1 = 1")).get()?.n ?? 0 : 0;
+  const selection = mode === "solo" && !hasTeamHistory ? ""
     : mode === "solo" ? hasAuthor ? " AND author = 'operator'" : " AND 1 = 0"
     : hasAuthor && member ? " AND author = ?" : " AND 1 = 0";
   const sql = "SELECT key, version, at, project, kind, surface, hash, conversation, ids" + (hasAuthor ? ", author" : "") + " FROM activity_inputs WHERE host = '' AND version > ?" + selection + " ORDER BY version LIMIT ?";
   const args = selection === " AND author = ?" ? [after, member, limit + 1] : [after, limit + 1];
-  rows = db.query(sql).all(...args).map((row) => ({ type: "input", ...row, author: mode === "solo" && !hadTeamStore ? "operator" : row.author }));
+  rows = db.query(sql).all(...args).map((row) => ({ type: "input", ...row, author: mode === "solo" && !hasTeamHistory ? "operator" : row.author }));
   try {
     turns = db.query('SELECT key, version, conversation, project, engine, role, pipeline, stage, start, "end" FROM activity_turns WHERE host = \'\' AND version > ? ORDER BY version LIMIT ?').all(after, limit + 1).map((row) => ({ type: "turn", ...row }));
   } catch { turns = []; }

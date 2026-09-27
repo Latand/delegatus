@@ -6,7 +6,6 @@ import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { submissionIdentities } from "@/lib/runtime/submissionIdentity";
 import { deliveryDedupToken, NATIVE_QUEUE_DELIVERY_KEY } from "@/lib/runtime/deliveryDedup";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
-import { teamMode } from "@/lib/team/sessions";
 import { existingTeamStore } from "@/lib/team/store";
 
 import type { TranscriptContext, UserRecord } from "./humanInput";
@@ -25,7 +24,10 @@ import type { ConversationResolution, TranscriptFacts } from "./transcriptExport
 export function conversationResolver(snapshot: RegistryFile | null): (facts: TranscriptFacts) => ConversationResolution {
   const lookup = snapshot ? readOnlyConversationLookupFromSnapshot(snapshot) : null;
   let mode: "solo" | "team" = "team";
-  try { mode = teamMode(); } catch { /* An unreadable team store cannot name a person. */ }
+  try {
+    const store = existingTeamStore();
+    mode = store?.members().length ? "team" : "solo";
+  } catch { /* An unreadable team store cannot name a person. */ }
   return (facts) => {
     const conversation = lookup?.conversationForPath(facts.path) ?? null;
     const generation = conversation?.generations.at(-1);

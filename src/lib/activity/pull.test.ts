@@ -2,19 +2,23 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { NextRequest } from "next/server";
 import { Database } from "bun:sqlite";
 
 import { readAgentConversations } from "./agentSource";
 import { conversationResolver } from "./conversationResolver";
+import { ledgerRowKey, requestKey } from "./humanInput";
 import { readHumanInputs } from "./hostSources";
 import { activityReport, clampMethodParams } from "./method";
+import { readRequests, recordOperatorRequest } from "./requestLedger";
 import { ingestTranscripts } from "./ingest";
 import { localTransport, pullHost, type PullConfig } from "./pull";
 import { ActivityStore, LOCAL_HOST_KEY } from "./store";
 import type { ConversationResolution } from "./transcriptExport";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 import type { RegistryFile } from "@/lib/agent/registry";
-import { TeamStore, resetTeamStoreForTests } from "@/lib/team/store";
+import { TeamStore, resetTeamStoreForTests, teamStore } from "@/lib/team/store";
+import { mintSession } from "@/lib/team/sessions";
 
 /* Two invented hosts on one disk: a "stage" host whose own ingest recorded
    its transcripts, and this host, which pulls them. The transport runs the
@@ -36,6 +40,7 @@ const mark = (key: string) => `<!-- llv:structured-user ctx=o.${key.padEnd(43, "
 const config = (): PullConfig => ({ ssh: "stage-box", bun: null, stateDir: remoteState, everyMin: 5 });
 const MEMBER_A = "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const MEMBER_B = "m_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const LOCAL_MEMBER = "m_cccccccccccccccccccccccccccccccc";
 
 /** The stage host's own ingest over one Codex session with three operator
     messages and two agent turns. */
@@ -80,7 +85,7 @@ async function pullWith(configured: PullConfig, transport = localTransport()) {
   finally { store.close(); }
 }
 
-async function teamStageRecords(): Promise<void> {
+async function teamStageRecords(includeAnonymous = false, revokeOwnerBeforeIngest = false): Promise<void> {
   const file = path.join(dir, "stage", "sessions", "team.jsonl");
   const terminal = path.join(dir, "stage", "sessions", "typed.jsonl");
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -92,6 +97,10 @@ async function teamStageRecords(): Promise<void> {
   fs.writeFileSync(file, [
     { timestamp: "2026-09-23T07:59:00Z", type: "session_meta", payload: { cwd: "/work/harbor", originator: "llv-structured-host" } },
     sent(1, "a"), sent(30, "b"),
+    ...(includeAnonymous ? [{ timestamp: "2026-09-23T08:50:00Z", type: "response_item", payload: {
+      type: "message", role: "user", id: "anonymous-message",
+      content: [{ type: "input_text", text: "<!-- llv:structured-user origin=operator -->\nanonymous delivered input" }],
+    } }] : []),
   ].map((row) => JSON.stringify(row)).join("\n") + "\n");
   fs.writeFileSync(terminal, JSON.stringify({ type: "user", timestamp: "2026-09-23T09:00:00Z", uuid: "typed-1", promptSource: "typed",
     entrypoint: "cli", cwd: "/work/harbor", message: { role: "user", content: "typed terminal prompt" } }) + "\n");
@@ -103,6 +112,10 @@ async function teamStageRecords(): Promise<void> {
   for (const [id, memberId] of [["queue-a-v1", MEMBER_A], ["queue-b-v1", MEMBER_B]] as const) {
     team.recordMessageAuthor({ clientMessageId: id, conversationId: "conversation_team", memberId,
       at: "2026-09-23T08:00:00Z", textDigest: null });
+  }
+  if (revokeOwnerBeforeIngest) {
+    const owner = team.member(MEMBER_A)!;
+    team.updateMember({ ...owner, status: "revoked", revokedAt: "2026-09-23T10:00:00Z" });
   }
   team.close();
   const previous = process.env.LLV_STATE_DIR;
@@ -209,6 +222,104 @@ describe("pulling another host's records", () => {
     expect(local((store) => store.candidates("stage", DAY.start, NOW, "stage").map((row) => row.author))).toEqual([MEMBER_B]);
   });
 
+  test("the operator's differently named memberships dedupe one input across hosts", async () => {
+    await teamStageRecords();
+    expect(await pullWith({ ...config(), memberId: MEMBER_A })).toMatchObject({ ok: true });
+    const file = path.join(dir, "local", "sessions", "same-input.jsonl");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, [
+      { timestamp: "2026-09-23T08:00:00Z", type: "session_meta", payload: { cwd: "/work/harbor", originator: "llv-structured-host" } },
+      { timestamp: "2026-09-23T08:01:00Z", type: "response_item", payload: { type: "message", role: "user", id: "message-a",
+        content: [{ type: "input_text", text: `<!-- llv:structured-user origin=operator dedup=${deliveryDedupToken("queue-a-v1")} -->\nmessage a` }] } },
+    ].map((row) => JSON.stringify(row)).join("\n") + "\n");
+    const store = ActivityStore.open(localStoreFile);
+    try {
+      const stat = fs.statSync(file);
+      await ingestTranscripts([{ path: file, engine: "codex", size: stat.size, mtimeMs: stat.mtimeMs }], {
+        complete: true, listedAt: NOW, now: () => NOW, store,
+        resolver: () => (): ConversationResolution => ({ project: "harbor", launch: "operator", registered: true,
+          mode: "team", conversation: "local-conversation",
+          deliveryOrigin: () => ({ origin: "operator", memberId: LOCAL_MEMBER }) }),
+      });
+    } finally { store.close(); }
+    const activityDir = path.join(dir, "local", "state", "activity");
+    fs.writeFileSync(path.join(activityDir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation" },
+      hosts: [{ id: "stage", pull: { ssh: "stage-box", memberId: MEMBER_A } }] }));
+    const read = readHumanInputs(DAY, NOW, { dir: () => activityDir,
+      readLedger: () => ({ rows: [], ledgerStartMs: null }), store: () => ActivityStore.openReadOnly(localStoreFile) },
+    { mode: "team", memberId: LOCAL_MEMBER });
+    expect(read.inputs).toHaveLength(1);
+  });
+
+  test("an unrelated owner ledger request does not hide ingested unknown input", async () => {
+    await teamStageRecords(true);
+    const remote = ActivityStore.openReadOnly(path.join(remoteState, "activity", "records.sqlite"))!;
+    expect(remote.localRowsAfter(0, 10).map((row) => row.author).sort()).toEqual([null, null, MEMBER_A, MEMBER_B].sort());
+    remote.close();
+    const previous = process.env.LLV_STATE_DIR;
+    process.env.LLV_STATE_DIR = remoteState;
+    try {
+      const session = mintSession(teamStore(), MEMBER_A, "claim", { surface: "desktop", browser: "chrome" });
+      const request = new NextRequest("http://localhost/api/tasks", { headers: {
+        cookie: `llv_member=${session.value}`, "user-agent": "Mozilla/5.0 Chrome/140.0 Safari/537.36",
+      } });
+      const row = recordOperatorRequest(request, { kind: "task", project: "harbor", idempotencyKey: "unrelated-owner-action" }, {
+        dir: () => path.join(remoteState, "activity"), now: () => Date.parse("2026-09-23T08:40:00Z"),
+      });
+      expect(row?.author).toBe(MEMBER_A);
+      const read = readHumanInputs(DAY, NOW, {
+        dir: () => path.join(remoteState, "activity"),
+        readLedger: (from, to) => readRequests(from, to, { dir: () => path.join(remoteState, "activity") }),
+        store: () => ActivityStore.openReadOnly(path.join(remoteState, "activity", "records.sqlite")),
+      }, { mode: "team", memberId: MEMBER_A });
+      expect(read.inputs).toHaveLength(2);
+      expect(read.unknownAuthors).toBe(2);
+      expect(read.hosts[0]?.unknownAuthors).toBe(2);
+    } finally {
+      resetTeamStoreForTests();
+      if (previous === undefined) delete process.env.LLV_STATE_DIR;
+      else process.env.LLV_STATE_DIR = previous;
+    }
+  });
+
+  test("a matching legacy ledger row does not add unknown authors to known team input", async () => {
+    await teamStageRecords();
+    const activityDir = path.join(remoteState, "activity");
+    const file = path.join(dir, "stage", "sessions", "legacy-match.jsonl");
+    fs.writeFileSync(file, [
+      { timestamp: "2026-09-23T09:29:00Z", type: "session_meta", payload: { cwd: "/work/harbor", originator: "llv-structured-host" } },
+      { timestamp: "2026-09-23T09:30:00Z", type: "response_item", payload: { type: "message", role: "user", id: "legacy-match",
+        content: [{ type: "input_text", text: "<!-- llv:structured-user origin=operator -->\nlegacy delivery" }] } },
+    ].map((row) => JSON.stringify(row)).join("\n") + "\n");
+    const store = ActivityStore.open(path.join(activityDir, "records.sqlite"));
+    try {
+      const stat = fs.statSync(file);
+      await ingestTranscripts([{ path: file, engine: "codex", size: stat.size, mtimeMs: stat.mtimeMs }], {
+        complete: true, listedAt: NOW, now: () => NOW, store,
+        resolver: () => (): ConversationResolution => ({ project: "harbor", launch: "operator", registered: true,
+          mode: "team", conversation: "legacy-conversation",
+          deliveryOrigin: () => ({ origin: "operator", memberId: MEMBER_A, idempotencyKey: "legacy-match" }) }),
+      });
+      expect(store.localRowsAfter(0, 10).find((row) => row.ids.includes(requestKey("legacy-match")))?.author).toBe(MEMBER_A);
+    } finally { store.close(); }
+    fs.writeFileSync(path.join(activityDir, "requests-2026-09-23.jsonl"), JSON.stringify({
+      v: 1, key: ledgerRowKey("legacy-match"), at: Date.parse("2026-09-23T09:30:00Z"),
+      kind: "message", surface: "desktop", project: "harbor",
+    }) + "\n");
+    const read = readHumanInputs(DAY, NOW, { dir: () => activityDir,
+      readLedger: (from, to) => readRequests(from, to, { dir: () => activityDir }),
+      store: () => ActivityStore.openReadOnly(path.join(activityDir, "records.sqlite")) },
+    { mode: "team", memberId: MEMBER_A });
+    expect(read.inputs).toHaveLength(2);
+    expect(read.unknownAuthors).toBe(1);
+    const other = readHumanInputs(DAY, NOW, { dir: () => activityDir,
+      readLedger: (from, to) => readRequests(from, to, { dir: () => activityDir }),
+      store: () => ActivityStore.openReadOnly(path.join(activityDir, "records.sqlite")) },
+    { mode: "team", memberId: MEMBER_B });
+    expect(other.inputs).toHaveLength(1);
+    expect(other.unknownAuthors).toBe(1);
+  });
+
   test("a legacy remote schema supplies solo rows and only an unknown count on a team host", async () => {
     await stageRecords();
     const file = path.join(remoteState, "activity", "records.sqlite");
@@ -217,12 +328,50 @@ describe("pulling another host's records", () => {
     db.close();
     expect(await pull()).toMatchObject({ ok: true });
     expect(local((store) => store.count("stage"))).toBe(3);
+    new TeamStore(path.join(remoteState, "team", "team.sqlite")).close();
+    local((store) => { store.forgetHost("stage"); store.setHostState("stage", { cursor: 0 }); });
+    expect(await pull()).toMatchObject({ ok: true });
+    expect(local((store) => [store.count("stage"), store.hostState("stage")?.remoteMode,
+      store.hostState("stage")?.unknownAuthors])).toEqual([3, "solo", 0]);
+    const activityDir = path.join(dir, "local", "state", "activity");
+    fs.writeFileSync(path.join(activityDir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation" },
+      hosts: [{ id: "stage", pull: { ssh: "stage-box" } }] }));
+    const soloRead = readHumanInputs(DAY, NOW, { dir: () => activityDir,
+      readLedger: () => ({ rows: [], ledgerStartMs: null }), store: () => ActivityStore.openReadOnly(localStoreFile) });
+    expect(soloRead.inputs.filter((input) => input.host === "stage")).toHaveLength(3);
+    expect(soloRead.unknownAuthors).toBe(0);
     const team = new TeamStore(path.join(remoteState, "team", "team.sqlite"));
     team.insertMember({ id: MEMBER_A, name: "Owner", role: "owner", status: "active", color: "teal", telegram: null,
       createdAt: "2026-09-23T00:00:00Z", createdBy: "claim", revokedAt: null });
     team.close();
     expect(await pullWith({ ...config(), memberId: MEMBER_A })).toMatchObject({ ok: true });
     expect(local((store) => [store.count("stage"), store.hostState("stage")?.unknownAuthors])).toEqual([0, 3]);
+  });
+
+  test("a former team with no active owner does not release member rows as solo input", async () => {
+    await teamStageRecords(false, true);
+    const remote = ActivityStore.openReadOnly(path.join(remoteState, "activity", "records.sqlite"))!;
+    expect(remote.localRowsAfter(0, 10).map((row) => row.author).sort()).toEqual([null, MEMBER_A, MEMBER_B].sort());
+    remote.close();
+    let output = "";
+    const transport = async (env: Record<string, string>, script: string) => {
+      const answer = await localTransport()(env, script);
+      output += answer.stdout;
+      return answer;
+    };
+    expect(await pullWith(config(), transport)).toMatchObject({ ok: true });
+    expect(local((store) => [store.count("stage"), store.hostState("stage")?.unknownAuthors])).toEqual([0, 1]);
+    expect(output).not.toContain(MEMBER_A);
+    expect(output).not.toContain(MEMBER_B);
+    const reset = new Database(path.join(remoteState, "team", "team.sqlite"));
+    reset.exec("DELETE FROM members");
+    reset.close();
+    local((store) => { store.forgetHost("stage"); store.setHostState("stage", { cursor: 0 }); });
+    output = "";
+    expect(await pullWith(config(), transport)).toMatchObject({ ok: true });
+    expect(local((store) => store.count("stage"))).toBe(0);
+    expect(output).not.toContain(MEMBER_A);
+    expect(output).not.toContain(MEMBER_B);
   });
   test("the pull is idempotent: a second pull and a replay from the start change nothing", async () => {
     await stageRecords();

@@ -354,14 +354,12 @@ export function readHumanInputs(
   const inputs: HumanInput[] = [];
   const coverage: HostCoverage[] = [];
   const hosts: HostReport[] = [];
-  const ledgerSpans = new Map<string, Interval[]>();
   try {
     for (const host of expected) {
       const sources: HostSourceRead[] = [];
       if (host.local) {
         const ledger = ledgerSource(host.id, window, nowMs, dependencies.readLedger);
         sources.push(ledger);
-        ledgerSpans.set(host.id, ledger.covered);
         sources.push(storeSource("ingest", store, LOCAL_HOST_KEY, host.id, window, nowMs));
       } else if (host.pull) {
         sources.push(storeSource("pull", store, host.id, host.id, window, nowMs, INGEST_CAUGHT_UP_MS + host.pull.everyMin * 60_000));
@@ -380,7 +378,11 @@ export function readHumanInputs(
         : remoteSolo ? "operator" : selectedMember ?? null;
       let unknownAuthors = !host.local ? remoteState?.unknownAuthors ?? 0 : 0;
       const unknownInputs: HumanInput[] = [];
+      const knownIds = new Set<string>();
       for (const source of sources) {
+        for (const input of source.inputs) if (input.author != null) {
+          for (const id of input.ids) knownIds.add(id);
+        }
         /* A legacy export has no author. It cannot make team input belong to
            the viewer, even when an older remote install produced it. */
         const selected = source.inputs.filter((input) => {
@@ -395,7 +397,8 @@ export function readHumanInputs(
         source.inputs = selected;
         if (configurationGap && source.scope === "all") source.covered = [];
       }
-      const unknownFromSources = mergeHumanInputs(unknownInputs, ledgerSpans).length;
+      const unknownFromSources = mergeHumanInputs(unknownInputs.filter((input) =>
+        !input.ids.some((id) => knownIds.has(id)))).length;
       unknownAuthors = !host.local && remoteState ? Math.max(unknownAuthors, unknownFromSources) : unknownAuthors + unknownFromSources;
       coverage.push({
         host: host.id,
@@ -418,6 +421,6 @@ export function readHumanInputs(
   } finally {
     store?.close();
   }
-  return { inputs: mergeHumanInputs(inputs, ledgerSpans), coverage, hosts, config: config.state,
+  return { inputs: mergeHumanInputs(inputs), coverage, hosts, config: config.state,
     unknownAuthors: hosts.reduce((sum, host) => sum + host.unknownAuthors, 0) };
 }

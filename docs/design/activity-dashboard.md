@@ -230,8 +230,11 @@ on the remote host and no port is opened.
   operator's ssh config and is never an option or a command.
   The reader checks for the author column at runtime, so a team host on an
   older schema sends no personal input and counts its rows as unknown; a solo
-  host on that schema keeps its previous figures. The local writer adds the
-  author column to existing `records.sqlite` without replacing old rows.
+  host on that schema keeps its previous figures, including when an empty team
+  database exists after an unfinished claim. A host with recorded team members
+  retains its team history boundary even if no owner is currently active. The
+  local writer adds the author column to existing `records.sqlite` without
+  replacing old rows.
 
 ### Agent axis from the same record
 
@@ -464,9 +467,11 @@ conversation (`src/lib/team/store.ts`), supplies the member id for a delivered
 message. The ingress request ledger reads the request's team actor. A typed
 terminal prompt on a team host has no member identity and stays unknown.
 Existing team rows with no author also stay unknown. Neither adds to any
-person’s hours. The page shows an unknown-author input count separately, and
+person's hours. The page shows an unknown-author input count separately, and
 team remote pulls send its count without sending those inputs. Every activity
 figure has one person; the existing project and day views use the same filter.
+Ingest keeps team attribution when the store has member history and its owner
+is no longer active, so a later backfill cannot label older team input as solo.
 The unknown-author count describes records the sources observed: local file
 sources count the selected read window, and a pulled host reports the count in
 its stored record. It is a coverage figure, independent of the chosen person's
@@ -535,12 +540,13 @@ Two of these exist because the operator marker is not proof by itself:
    own ids. Two records of one conversation that both carry ids stay two.
    Only a SHA-256 of the canonical content is kept.
 3. **Across hosts.** The merge applies the id rule over every host, and the
-   fallback rule between hosts (same hash within 90 s).
-4. **The ledger and the transcripts of one host.** Inside the span a host's
-   ledger covers, that host's transcript inputs that came through Delegatus
-   (surface `unknown`) are dropped: the ledger recorded each Delegatus request
-   once, at ingress, fan-out included. Terminal-typed input still counts from
-   the transcripts.
+   fallback rule between hosts (same hash within 90 s). Member ids may differ
+   across hosts; each host selects the dashboard person before this merge.
+4. **The ledger and the transcripts of one host.** A transcript input that
+   came through Delegatus (surface `unknown`) yields to a ledger row only when
+   both carry the same request id. Time coverage alone cannot identify a copy;
+   unrelated and unknown-author inputs remain visible. Terminal-typed input
+   still counts from the transcripts.
 
 Duplicates change request counts. They barely change hours, because a copy
 within 90 s adds at most 90 s to a union of 10-minute windows.

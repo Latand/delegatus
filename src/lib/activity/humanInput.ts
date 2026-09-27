@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText";
 import { isRecoveryNotice } from "@/lib/runtime/recoveryNotices";
 
-import type { ExclusionReason, Interval, RequestKind, Surface } from "./method";
+import type { ExclusionReason, RequestKind, Surface } from "./method";
 import { EXCLUSION_REASONS, REQUEST_KINDS, SURFACES } from "./method";
 
 /*
@@ -436,28 +436,38 @@ export function dedupeCandidates(candidates: readonly InputCandidate[]): HumanIn
 }
 
 /**
- * Merge inputs from every source and host into one list.
+ * Merge member-scoped inputs from every source and host into one list. Each
+ * host has already selected the dashboard person's identity, which can have
+ * a different member id on another host.
  *
- * - Inside a span a host's request ledger covers, that host's transcript
- *   inputs that came through Delegatus (surface `unknown`) are dropped: the
- *   ledger recorded every Delegatus request there once, at ingress, fan-out
- *   included, and with its surface.
+ * - A host's transcript input is replaced by its ledger row only when they
+ *   share a request id. Ledger time coverage alone cannot identify a copy:
+ *   an unrelated request may fall in the same span.
  * - Inputs sharing an id are one: the same message in stores on both hosts.
  * - The fallback rule across hosts: the same content hash on two hosts within
  *   FALLBACK_WINDOW_MS, with no id in common, is one input.
  *
  * The earliest copy's time wins, and a ledger row wins a tie.
  */
-export function mergeHumanInputs(inputs: readonly HumanInput[], ledgerSpans: ReadonlyMap<string, readonly Interval[]>): HumanInput[] {
+export function mergeHumanInputs(inputs: readonly HumanInput[]): HumanInput[] {
+  const ledgerIds = new Set(inputs.filter((input) => input.source === "ledger")
+    .flatMap((input) => input.ids.map((id) => `${input.host}\0${id}`)));
   const kept = inputs.filter((input) => {
     if (input.source !== "transcripts" || input.surface !== "unknown") return true;
-    if (input.author == null) return !(ledgerSpans.get(input.host) ?? []).some((span) => input.at >= span.start && input.at <= span.end);
-    return !inputs.some((other) => other.source === "ledger" && other.host === input.host
-      && other.author === input.author && (ledgerSpans.get(input.host) ?? []).some((span) => input.at >= span.start && input.at <= span.end));
+    return !input.ids.some((id) => ledgerIds.has(`${input.host}\0${id}`));
   }).sort((a, b) => a.at - b.at || (a.source === b.source ? 0 : a.source === "ledger" ? -1 : 1));
   const groups = new Groups(kept.length);
   joinByIds(kept, groups);
-  joinByContent(kept, groups, (input) => input.hash && `${input.author ?? ""}\0${input.hash}`, (earlier, later) => earlier.host !== later.host);
+  const byId = new Map<string, number[]>();
+  kept.forEach((input, index) => {
+    for (const id of input.ids) {
+      const seen = byId.get(id) ?? [];
+      for (const other of seen) if (kept[other]!.host !== input.host) groups.join(other, index);
+      seen.push(index);
+      byId.set(id, seen);
+    }
+  });
+  joinByContent(kept, groups, (input) => input.hash, (earlier, later) => earlier.host !== later.host);
   const out = new Map<number, HumanInput>();
   kept.forEach((input, index) => {
     const root = groups.find(index);

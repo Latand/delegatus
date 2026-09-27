@@ -194,19 +194,26 @@ describe("copies of one input count once", () => {
     const input = (host: string, source: HumanInput["source"], at: number, ids: string[], surface: HumanInput["surface"] = "unknown"): HumanInput =>
       ({ ids, at, host, source, project: "client-a", kind: "message", surface, hash: source === "ledger" ? null : hash });
     /* Same prompt id on both hosts. */
-    expect(mergeHumanInputs([input("stage", "transcripts", AT, ["m:1".padEnd(66, "0")]), input("local", "transcripts", AT + 1000, ["m:1".padEnd(66, "0")])], new Map())).toHaveLength(1);
+    expect(mergeHumanInputs([input("stage", "transcripts", AT, ["m:1".padEnd(66, "0")]), input("local", "transcripts", AT + 1000, ["m:1".padEnd(66, "0")])])).toHaveLength(1);
     /* No id in common: the content hash within 90 s on another host. */
-    expect(mergeHumanInputs([input("stage", "transcripts", AT, ["m:a".padEnd(66, "0")]), input("local", "transcripts", AT + 60_000, ["m:b".padEnd(66, "0")])], new Map())).toHaveLength(1);
+    expect(mergeHumanInputs([input("stage", "transcripts", AT, ["m:a".padEnd(66, "0")]), input("local", "transcripts", AT + 60_000, ["m:b".padEnd(66, "0")])])).toHaveLength(1);
     /* A ledger row and the transcript record of the same request share its key. */
     const key = ledgerRowKey("client-msg-7");
     expect(requestKey("client-msg-7")).toBe(ledgerRequestId(key));
-    expect(mergeHumanInputs([input("local", "ledger", AT, [ledgerRequestId(key)], "desktop"), input("stage", "transcripts", AT + 2000, [requestKey("client-msg-7")])], new Map())).toHaveLength(1);
-    /* Inside the local ledger's span its delivered transcript copies are dropped; a terminal prompt stays. */
+    expect(mergeHumanInputs([input("local", "ledger", AT, [ledgerRequestId(key)], "desktop"), input("stage", "transcripts", AT + 2000, [requestKey("client-msg-7")])])).toHaveLength(1);
+    /* A matching request id replaces a delivered copy. A different input at
+       nearly the same time and a terminal prompt both stay. */
     const merged = mergeHumanInputs([
+      input("local", "ledger", AT, ["r:1".padEnd(66, "0")], "desktop"),
+      input("local", "transcripts", AT + 1000, ["r:1".padEnd(66, "0")], "unknown"),
       input("local", "transcripts", AT + 5000, ["m:c".padEnd(66, "0")], "unknown"),
       input("local", "transcripts", AT + 9000, ["m:d".padEnd(66, "0")], "terminal"),
-    ], new Map([["local", [{ start: AT - 1, end: AT + 3_600_000 }]]]));
-    expect(merged.map((row) => row.surface)).toEqual(["terminal"]);
+    ]);
+    expect(merged.map((row) => row.surface)).toEqual(["desktop", "unknown", "terminal"]);
+    const unknownCopy = { ...input("local", "transcripts", AT + 1000, ["r:1".padEnd(66, "0")]), author: null };
+    const knownLedger = { ...input("local", "ledger", AT, ["r:1".padEnd(66, "0")], "desktop"), author: "member-a" };
+    expect(mergeHumanInputs([unknownCopy, knownLedger]))
+      .toEqual([knownLedger]);
   });
 });
 
