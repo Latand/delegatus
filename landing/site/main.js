@@ -477,7 +477,12 @@
     const data = event.data;
     if (!live || !data || typeof data.type !== "string") return;
     if (data.type === "dlg:viewed") {
-      if (data.view && live.view && data.view !== live.view) return;
+      if (data.view && live.view && data.view !== live.view) {
+        // A click during script loading may precede the frame's listener.
+        // Replay the reader's latest tab once the frame can receive it.
+        send(live, { type: "dlg:view", view: live.view });
+        return;
+      }
       if (live.iframe.settle) live.iframe.settle();
       else {
         live.el.setAttribute("data-loaded", "");

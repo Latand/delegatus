@@ -262,6 +262,20 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
     });
     result.frames = await Promise.all(page.frames().map(async frame => ({ url: frame.url(), records: await frame.evaluate(() => (window as any).perfRecords) })));
     await page.screenshot({ path: path.join(out, `${perfLabel}-${viewport.name}-language.png`) });
+    if (perfLabel === "after") await trace("early-tab", async () => {
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const pattern = "**/demo.js";
+      await page.route(pattern, async route => { await gate; await route.continue(); });
+      try {
+        await page.goto(`${base}?lang=en`, { waitUntil: "domcontentloaded" });
+        await page.locator('.sec-open [data-view="search"]').click();
+        release();
+        const frame = await frameOf(page, ".live-open");
+        await frame.waitForSelector("[data-search-result]");
+        return { selectedBeforeScriptLoad: "search", results: await frame.locator("[data-search-result]").count() };
+      } finally { release(); await page.unroute(pattern); }
+    });
     fs.writeFileSync(path.join(out, `${perfLabel}-${viewport.name}.json`), JSON.stringify(result, null, 2));
     console.log(`${perfLabel}-${viewport.name}: complete`);
     if (perfLabel === "after" && (result.language as any).value.some((row: any) => Math.abs(row.delta) > 2)) throw new Error("language switch moved the page");

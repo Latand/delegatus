@@ -610,6 +610,7 @@ let viewQueue = Promise.resolve();
 function showView(view: string) {
   const version = ++viewVersion;
   viewQueue = viewQueue.then(async () => {
+    await viewerReady;
     if (version !== viewVersion) return;
     await navigateView(view);
     await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
@@ -708,6 +709,9 @@ createRoot(document.getElementById("root")!).render(<Viewer />);
 announce();
 const INITIAL_VIEW = params.get("view");
 /* The page swaps a frame in once it has drawn its view. */
-void waitFor(() => document.querySelector("[data-seat-placement], [data-mobile2-board-dock], [data-kanban-board]"), 80)
-  .then(() => showView(INITIAL_VIEW ?? (PHONE ? "orchestrator" : "board")));
+const viewerReady = waitFor(() => document.querySelector("[data-seat-placement], [data-mobile2-board-dock], [data-kanban-board]"), 80);
+void viewerReady.then(() => {
+  // A tab selected during boot owns navigation, including before first paint.
+  if (viewVersion === 0) return showView(INITIAL_VIEW ?? (PHONE ? "orchestrator" : "board"));
+});
 if (PHONE) document.documentElement.dataset.demoPhone = "1";
