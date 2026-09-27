@@ -232,6 +232,11 @@
 .pb-stateline { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 5px; min-width: 0; font-size: var(--text-ui); color: var(--color-muted); font-variant-numeric: tabular-nums; }
 .pb-stateline .pb-statepart { display: inline-flex; align-items: baseline; gap: 5px; white-space: nowrap; }
 .pb-stateline .pb-sep { color: var(--color-muted); opacity: 0.8; }
+/* The stage the lane stands on: its name gives way, its attempt number never does. */
+.pb-stateline .pb-statestage { min-width: 0; max-width: 100%; gap: 0; }
+.pb-stateline .pb-statestage .pb-sep { margin-right: 5px; }
+.pb-stateline .pb-statename { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pb-stateline .pb-attempt { flex-shrink: 0; white-space: pre; }
 .pblock .pb-heading { margin: 0; font-size: var(--text-title); font-weight: 600; line-height: 1.3; color: var(--color-primary); overflow-wrap: anywhere; }
 .pblock .pb-links-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
 .pblock .pb-links-row .pb-links { max-width: none; margin-top: 0; }
@@ -275,6 +280,7 @@
 .pblock .pb-stage-title { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--text-body); font-weight: 600; line-height: 1.3; }
 /* A stage's name is never cut on its own screen: a long one wraps. */
 .pblock .pb-stage-title .pb-name { min-width: 0; overflow-wrap: anywhere; }
+.pblock .pb-stage-title .pb-attempt { white-space: nowrap; font-weight: 600; color: var(--color-muted); font-variant-numeric: tabular-nums; }
 .pblock .pb-stage-title .ccircle { min-width: 16px; height: 16px; }
 .pblock .pb-stage-ident { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: var(--text-label); color: var(--color-muted); }
 .pblock .pb-stage-ident .pident { flex: 0 1 auto; }

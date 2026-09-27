@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 
-import { attemptArrivals, edgeFired, graphOrder, graphTopology, layoutGraph, pastAttempts, routeEdge, stageViews } from "./pipelineGraph";
+import { attemptArrivals, edgeFired, graphOrder, graphTopology, layoutGraph, loopShapes, operationalAttempts, pastAttempts, routeEdge, stageViews, unitMembers, wireFired } from "./pipelineGraph";
 
 /* The kanban stage graph's pure half (#1695 K5a) over invented pipeline
    records shaped like the store's: stages with `next`/`onFail`, runs of
@@ -31,52 +31,186 @@ const retryStages = [
   stage("merge", "cleaner", null),
 ];
 
-test("the topology keeps the pass chain forward, puts the fail edge back to an earlier stage in a return lane, and marks the branching stage", () => {
+test("the topology keeps the pass chain forward, folds the fail edge back to an earlier stage into its source, and draws no return wire", () => {
   const record = pipeline(retryStages, [], null);
   const topology = graphTopology(record);
   expect(topology.edges.map((edge) => edge.id)).toEqual(["implement:pass:review", "review:pass:verify", "verify:pass:merge", "verify:fail:implement"]);
-  expect([...topology.back]).toEqual(["verify:fail:implement"]);
+  expect(topology.wires.map((edge) => edge.id)).toEqual(["implement:pass:review", "review:pass:verify", "verify:pass:merge"]);
+  expect(topology.shapes.get("verify:fail:implement")).toBe("return");
+  expect(topology.loops.get("verify")?.shape).toBe("return");
+  expect([...topology.back]).toEqual([]);
   expect(retryStages.map((entry) => topology.layer.get(entry.id))).toEqual([0, 1, 2, 3]);
   expect(retryStages.map((entry) => topology.row.get(entry.id))).toEqual([0, 0, 0, 0]);
-  expect([...topology.branching]).toEqual(["verify"]);
+  /* Its only second exit is the strip: one out port, no pass label. */
+  expect([...topology.branching]).toEqual([]);
   expect(graphOrder(record, topology).map((entry) => entry.id)).toEqual(["implement", "review", "verify", "merge"]);
 });
 
-test("left to right when it fits, top to bottom when it does not, and numbered fail labels with a legend when even that is narrow", () => {
-  const record = pipeline(retryStages, [], null);
-  /* 18·2 + 4·176 + 3·68 + 16 for the return lane. */
-  const wide = layoutGraph(record, 960);
-  expect(wide.dir).toBe("LR");
-  expect(wide.width).toBe(960);
-  expect(wide.nodes.get("verify")).toEqual({ x: 18 + 2 * (176 + 68), y: 18, w: 176, h: 76 });
-  expect(wide.lanes).toEqual([{ id: "verify:fail:implement", pos: 18 + 76 + 26 }]);
-  const back = routeEdge(wide, wide.topology.edges[3]!)!;
-  expect(back.label).toEqual([(18 + 2 * 244 + 176 + 18) / 2, 120]);
-  expect(back.d.startsWith(`M${18 + 2 * 244 + 176},${18 + 76 * 0.72}`)).toBe(true);
-
-  const narrow = layoutGraph(record, 959);
-  expect(narrow.dir).toBe("TB");
-  expect(narrow.labelMode).toBe("inline");
-  expect(narrow.nodes.get("merge")!.y).toBe(12 + 3 * (76 + 46));
-
-  const tight = layoutGraph(record, 300);
-  expect(tight.dir).toBe("TB");
-  expect(tight.labelMode).toBe("legend");
-  expect(tight.nodes.get("implement")!.w).toBeGreaterThanOrEqual(132);
+test("a fail edge is a dock, a retry in place, a return or other, classified from the stages alone", () => {
+  const record = pipeline([
+    stage("build", "builder", "review", { onFail: { to: "build", maxRounds: 2 } }),
+    stage("review", "reviewer", "verify", { onFail: { to: "review-fix", maxRounds: 3 } }),
+    stage("review-fix", "builder", "review"),
+    stage("verify", "verifier", "report", { onFail: { to: "diagnose", maxRounds: 1 } }),
+    stage("diagnose", "architect", "archive"),
+    stage("report", "cleaner", null),
+    stage("archive", "cleaner", null),
+  ], [], null);
+  expect(Object.fromEntries(loopShapes(record))).toEqual({
+    "build:fail:build": "self",
+    "review:fail:review-fix": "dock",
+    "verify:fail:diagnose": "other",
+  });
+  /* A fix stage two reviewers share is no dock: it keeps its wires. */
+  const shared = pipeline([
+    stage("build", "builder", "critique"),
+    stage("critique", "reviewer", "review", { onFail: { to: "fix", maxRounds: 1 } }),
+    stage("review", "reviewer", null, { onFail: { to: "fix", maxRounds: 1 } }),
+    stage("fix", "builder", null),
+  ], [], null);
+  expect([...loopShapes(shared).values()]).toEqual(["other", "other"]);
 });
 
-test("a forward fail branch sits on its own row and a pass edge leaving a branching stage starts above the fail edge", () => {
+/* Design → Build → Critique → Review, each reviewer with a fix stage of its own. */
+const twoDockStages = [
+  stage("design", "architect", "build"),
+  stage("build", "builder", "critique"),
+  stage("critique", "reviewer", "review", { onFail: { to: "critique-fix", maxRounds: 2 } }),
+  stage("critique-fix", "builder", "critique"),
+  stage("review", "reviewer", null, { onFail: { to: "review-fix", maxRounds: 3 } }),
+  stage("review-fix", "builder", "review"),
+];
+const failVia = (stageId: string, n: number, budgetSpent = false) => ({ activatedBy: { stageId, attempt: n, edge: "fail" as const, ...(budgetSpent ? { budgetSpent: true as const } : {}) } });
+const passVia = (stageId: string, n: number) => ({ activatedBy: { stageId, attempt: n, edge: "pass" as const } });
+const at = (minute: number) => new Date(Date.UTC(2026, 8, 14, 10, minute)).toISOString();
+/* Both budgets spent: Critique failed twice, Review three times, and each
+   last fix handed its findings on (#1868). */
+const twoDockRuns = [
+  { stageId: "design", attempts: [attempt(1, "passed", at(0))] },
+  { stageId: "build", attempts: [attempt(1, "passed", at(2), passVia("design", 1))] },
+  { stageId: "critique", attempts: [attempt(1, "failed", at(4), passVia("build", 1)), attempt(2, "failed", at(8), passVia("critique-fix", 1))] },
+  { stageId: "critique-fix", attempts: [attempt(1, "passed", at(6), failVia("critique", 1)), attempt(2, "passed", at(10), failVia("critique", 2, true))] },
+  { stageId: "review", attempts: [attempt(1, "failed", at(12), passVia("critique-fix", 2)), attempt(2, "failed", at(16), passVia("review-fix", 1)), attempt(3, "failed", at(20), passVia("review-fix", 2))] },
+  { stageId: "review-fix", attempts: [attempt(1, "passed", at(14), failVia("review", 1)), attempt(2, "passed", at(18), failVia("review", 2)), attempt(3, "passed", at(22), failVia("review", 3, true))] },
+];
+
+test("a fix stage docks under its reviewer and takes no column: one row wide, one column compact, never wider than the card", () => {
+  const record = pipeline(twoDockStages, twoDockRuns, null, "completed");
+  const topology = graphTopology(record);
+  expect([...topology.docked]).toEqual([["critique-fix", "critique"], ["review-fix", "review"]]);
+  expect(topology.wires.map((edge) => edge.id)).toEqual(["design:pass:build", "build:pass:critique", "critique:pass:review"]);
+  expect(topology.layers).toBe(4);
+  expect(topology.rows).toBe(1);
+  expect(graphOrder(record, topology).map((entry) => entry.id)).toEqual(["design", "build", "critique", "critique-fix", "review", "review-fix"]);
+
+  const wide = layoutGraph(record, 1400);
+  expect(wide.dir).toBe("LR");
+  /* 18·2 + 4·176 + 3·68, and one row of 76 + a 28 strip. */
+  expect([wide.width, wide.height]).toEqual([944, 140]);
+  expect([...wide.nodes.keys()]).toEqual(["design", "build", "critique", "review"]);
+  expect(wide.strips.get("review")!.box).toEqual({ x: 18 + 3 * 244, y: 18 + 76, w: 176, h: 28 });
+  expect(wide.lanes).toEqual([]);
+  /* Every pass wire is one straight segment at the node's mid-height. */
+  expect(routeEdge(wide, wide.topology.wires[2]!)!.d).toBe(`M${18 + 2 * 244 + 176},${18 + 38} L${18 + 3 * 244 - 2},${18 + 38}`);
+  expect(layoutGraph(record, 1400, undefined, { coarse: true }).strips.get("review")!.box.h).toBe(44);
+
+  for (const available of [300, 340, 390]) {
+    const compact = layoutGraph(record, available);
+    expect(compact.dir).toBe("TB");
+    expect(compact.width).toBeLessThanOrEqual(available);
+    expect(new Set([...compact.nodes.values()].map((box) => box.x)).size).toBe(1);
+    expect(compact.lanes).toEqual([]);
+  }
+  /* The node takes the card's width up to 268. */
+  expect(layoutGraph(record, 390).nodes.get("design")!.w).toBe(268);
+  const compact = layoutGraph(record, 280);
+  expect(compact.nodes.get("design")!.w).toBe(280 - 24);
+  /* Critique's unit is its node and its strip; the wire leaves the strip. */
+  expect(compact.nodes.get("review")!.y).toBe(12 + (76 + 46) * 2 + (76 + 28 + 46));
+  expect(routeEdge(compact, compact.topology.wires[2]!)!.d.startsWith(`M${12 + (280 - 24) / 2},${compact.nodes.get("critique")!.y + 76 + 28}`)).toBe(true);
+});
+
+test("the wire leaving a unit counts the docked fix's handoff pass, which is how the lane moved on", () => {
+  const record = pipeline(twoDockStages, twoDockRuns, null, "completed");
+  const topology = graphTopology(record);
+  const onward = topology.wires.find((edge) => edge.id === "critique:pass:review")!;
+  expect(edgeFired(record, onward)).toBe(0);
+  expect(wireFired(record, topology, onward)).toBe(1);
+  expect(unitMembers(topology, "critique")).toEqual(["critique", "critique-fix"]);
+});
+
+test("a retry in place draws its strip only once it fired; a forward fail branch that is no dock keeps its own row and port", () => {
+  const self = [stage("wp", "builder", null, { onFail: { to: "wp", maxRounds: 2 } })];
+  expect(layoutGraph(pipeline(self, [], null), 1000).strips.size).toBe(0);
+  const fired = pipeline(self, [{ stageId: "wp", attempts: [attempt(1, "failed", at(0)), attempt(2, "running", at(2), failVia("wp", 1))] }], { stageId: "wp", state: "running", input: null, activatedBy: null });
+  expect(layoutGraph(fired, 1000).strips.get("wp")?.loop.shape).toBe("self");
+
   const record = pipeline([
     stage("build", "builder", "review", { onFail: { to: "diagnose", maxRounds: 1 } }),
     stage("review", "reviewer", null),
-    stage("diagnose", "architect", null),
+    stage("diagnose", "architect", "report"),
+    stage("report", "cleaner", null),
   ], [], null);
   const layout = layoutGraph(record, 2000);
+  expect(layout.topology.shapes.get("build:fail:diagnose")).toBe("other");
   expect(layout.topology.row.get("diagnose")).toBe(1);
   expect(layout.topology.back.size).toBe(0);
   const [pass, fail] = layout.topology.edges;
   expect(routeEdge(layout, pass!)!.d.startsWith(`M${18 + 176},${18 + 76 * 0.36}`)).toBe(true);
   expect(routeEdge(layout, fail!)!.d.startsWith(`M${18 + 176},${18 + 76 * 0.72}`)).toBe(true);
+});
+
+test("waits again follows the path ahead of the cursor: an ended lane has none, and a stage behind the cursor keeps its settled state", () => {
+  /* Completed with both budgets spent: every node reads what it last was. */
+  const completed = stageViews(pipeline(twoDockStages, twoDockRuns, null, "completed"));
+  expect([...completed.values()].filter((view) => view.again)).toEqual([]);
+  expect(completed.get("critique")!.state).toBe("failed");
+  expect(completed.get("review")!.state).toBe("failed");
+  expect(completed.get("review-fix")!.state).toBe("passed");
+
+  /* Cut back to Review running its second attempt: Critique is behind it. */
+  const cutRuns = twoDockRuns.map((run) => run.stageId === "review"
+    ? { ...run, attempts: [run.attempts[0]!, attempt(2, "running", at(16), passVia("review-fix", 1))] }
+    : run.stageId === "review-fix" ? { ...run, attempts: [run.attempts[0]!] } : run);
+  const cut = stageViews(pipeline(twoDockStages, cutRuns, { stageId: "review", state: "running", input: null, activatedBy: passVia("review-fix", 1).activatedBy }));
+  expect(cut.get("critique")).toMatchObject({ state: "failed", again: false });
+  expect(cut.get("review")).toMatchObject({ state: "reviewing", again: false, attempts: 2 });
+
+  /* A fix inside its budget runs: its reviewer waits, and says what it last was. */
+  const fixingRuns = twoDockRuns.map((run) => run.stageId === "review"
+    ? { ...run, attempts: [run.attempts[0]!] }
+    : run.stageId === "review-fix" ? { ...run, attempts: [attempt(1, "running", at(14), failVia("review", 1))] } : run);
+  const fixing = stageViews(pipeline(twoDockStages, fixingRuns, { stageId: "review-fix", state: "running", input: null, activatedBy: failVia("review", 1).activatedBy }));
+  expect(fixing.get("review")).toMatchObject({ state: "pending", again: true, previous: "failed" });
+  expect(fixing.get("critique")).toMatchObject({ state: "failed", again: false });
+
+  /* The last handoff of a spent budget follows the reviewer's own pass edge,
+     so the reviewer is not ahead. */
+  const handoffRuns = twoDockRuns.map((run) => run.stageId === "review-fix"
+    ? { ...run, attempts: [...run.attempts.slice(0, 2), attempt(3, "running", at(22), failVia("review", 3, true))] }
+    : run);
+  expect(stageViews(pipeline(twoDockStages, handoffRuns, { stageId: "review-fix", state: "running", input: null, activatedBy: failVia("review", 3, true).activatedBy })).get("review")).toMatchObject({ state: "failed", again: false });
+
+  /* A lane parked on a decision at Review reads as today. */
+  const parked = stageViews(pipeline(twoDockStages, twoDockRuns.map((run) => run.stageId === "review-fix" ? { ...run, attempts: run.attempts.slice(0, 2) } : run), { stageId: "review", state: "pending", input: null, activatedBy: null }, "needs_decision"));
+  expect(parked.get("review")).toMatchObject({ state: "failed", again: false });
+
+  /* A busy lane whose cursor moved onto a settled stage: that stage is next. */
+  const moved = stageViews(pipeline(twoDockStages, twoDockRuns.map((run) => run.stageId === "review-fix" ? { ...run, attempts: run.attempts.slice(0, 1) } : run.stageId === "review" ? { ...run, attempts: run.attempts.slice(0, 1) } : run), { stageId: "review", state: "pending", input: null, activatedBy: passVia("review-fix", 1).activatedBy }));
+  expect(moved.get("review")).toMatchObject({ state: "pending", again: true, previous: "failed" });
+});
+
+test("a settled stage whose conversation works again says so; a running one does not (#1744)", () => {
+  const record = pipeline(twoDockStages, twoDockRuns, null, "completed");
+  const fix = twoDockRuns.find((run) => run.stageId === "review-fix")!.attempts[2]!;
+  const views = stageViews(record, new Map(), new Set([fix.agentPath!]));
+  expect(views.get("review-fix")).toMatchObject({ state: "passed", rework: true });
+  expect([...views.values()].filter((view) => view.rework).length).toBe(1);
+  expect(stageViews(record, new Map(), new Set([fix.conversationId!])).get("review-fix")!.rework).toBe(true);
+
+  const running = pipeline(retryStages, [{ stageId: "implement", attempts: [attempt(1, "running", at(0))] }], { stageId: "implement", state: "running", input: null, activatedBy: null });
+  const live = operationalAttempts(running, "implement")[0]!;
+  expect(stageViews(running, new Map(), new Set([live.agentPath!])).get("implement")!.rework).toBe(false);
 });
 
 test("an edge's fired count comes from the attempts it activated; a stage an upstream stage ran again after waits for its next attempt", () => {

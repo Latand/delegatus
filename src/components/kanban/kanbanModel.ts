@@ -14,7 +14,7 @@ import type { TaskBand } from "@/components/scheme/taskBands";
 import type { TaskWorkflowProjection } from "@/components/tasks/taskWorkflowModel";
 import { workingSince } from "@/components/workingSince";
 
-import { pastAttempts, stageViews, type PastAttempt, type StageView } from "./pipelineGraph";
+import { pastAttempts, stageViews, type PastAttempt, type StageView, type WorkingConversations } from "./pipelineGraph";
 import { placeholderTitle } from "./placeholderTitle";
 
 /**
@@ -305,9 +305,12 @@ function passPath(pipeline: Pipeline): string[] {
   return path;
 }
 
-export function summarizePipeline(pipeline: Pipeline, flowsById: ReadonlyMap<string, Flow> = new Map()): KanbanPipeline {
+/** `working`: the transcript paths and conversation ids whose board row is
+    working, so a settled stage whose conversation took more work reads so
+    (#1744). A surface without the files passes nothing. */
+export function summarizePipeline(pipeline: Pipeline, flowsById: ReadonlyMap<string, Flow> = new Map(), working?: WorkingConversations): KanbanPipeline {
   const byId = stageIndex(pipeline);
-  const views = stageViews(pipeline, flowsById);
+  const views = stageViews(pipeline, flowsById, working);
   const main = passPath(pipeline);
   const onMain = new Set(main);
   /* Stages reached only through a fail edge are branches; any other stage the
@@ -479,6 +482,14 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       }
     }
   }
+  /* The stage conversations working right now, by the row state the card's
+     «N working» reads. Only a stage's own transcripts are asked. */
+  const workingStageConversations = new Set<string>();
+  for (const file of input.files ?? []) {
+    if (!stageByPath.has(file.path) || !WORKING_STATES.has(mobileRowState(file, now).key)) continue;
+    workingStageConversations.add(file.path);
+    if (file.conversationId) workingStageConversations.add(file.conversationId);
+  }
   const workflowByTask = new Map(projection.tasks.map((workflow) => [workflow.task.id, workflow] as const));
   const bandTitle = new Map(bands.map((band) => [band.id, band.title] as const));
 
@@ -636,7 +647,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     /* Newest agent work first; a pipeline with no recorded work sorts last. */
     const summaries = [...cardPipelines.values()]
       .sort((a, b) => pipelineWorkAt(b) - pipelineWorkAt(a) || a.id.localeCompare(b.id))
-      .map((pipeline) => summarizePipeline(pipeline, flowsById));
+      .map((pipeline) => summarizePipeline(pipeline, flowsById, workingStageConversations));
     const provisioning = summaries.filter((summary) => summary.pipeline.state === "provisioning").length;
     /* Why the card needs the operator, and what someone cleared. A lane
        dismissed on either surface asks nothing here either: `laneNeed` reads

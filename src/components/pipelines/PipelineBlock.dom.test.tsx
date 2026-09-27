@@ -121,10 +121,12 @@ test("every density says what the desktop says: the stage names, the stage state
   }
   /* The passed stages before the current one fold into one row; opened, every stage has its row. */
   click(screen.querySelector("[data-passed-fold]"));
-  expect(texts(screen, ".pb-stage[data-stage] .pb-name")).toEqual(names);
+  /* A stage row names its attempt from the second one, in the one caption (#1892). */
+  expect(texts(screen, ".pb-stage[data-stage] .pb-name")).toEqual(["Implement · 2", "Review", "Verify · 2", "Merge"]);
+  expect(texts(screen, ".pb-stage[data-stage] .pb-attempt")).toEqual([" · 2", " · 2"]);
   expect(texts(screen, ".pb-stage[data-stage] .pb-stage-state")).toEqual(["passed", "passed", "running", "pending"].map((word) => t(`kanban.graphState.${word}` as Parameters<typeof translate>[1])));
   expect(screen.querySelector<HTMLElement>('.pb-stage[data-stage="verify"] .pret')?.title).toContain(loop);
-  expect(texts(screen, ".pb-loops li")).toEqual([`↺ ${t("kanban.loopRest", { from: "Verify", to: "Implement", max: 2 })}`]);
+  expect(texts(screen, ".pb-loops li")).toEqual([`↺ ${t("kanban.loopRest", { from: "Verify", to: "Implement", count: 2 })}`]);
 });
 
 test("stage names stay the pipeline's in Ukrainian, and the state words are the desktop's Ukrainian words", () => {
@@ -296,7 +298,8 @@ test("the screen density numbers the stages, folds the passed ones before the cu
   const host = mount(<PipelineBlock summary={summarizePipeline(parked())} density="screen" nowMs={NOW_MS} onOpenStage={() => {}} onAnswer={(_pipeline, answer) => answers.push(answer.action)} />);
   /* The screen's bar says where the lane stands; the body owns the title. */
   const bar = mount(<PipelineStateLine summary={summarizePipeline(parked())} nowMs={NOW_MS} />);
-  expect(bar.textContent).toBe(`${translate("en", "pipelineState.needs_decision")}·stage 3 of 4·41m`);
+  /* The stage it stands on in the one attempt caption, then where it sits (#1892). */
+  expect(bar.textContent).toBe(`${translate("en", "pipelineState.needs_decision")}·Verify · 2·stage 3 of 4·41m`);
   expect(host.querySelector(".pb-stateline")).toBeNull();
   expect(host.querySelector("h2[data-pipeline-heading]")?.textContent).toBe("Restore search results after the index rebuild");
   const fold = host.querySelector<HTMLElement>("[data-passed-fold]")!;

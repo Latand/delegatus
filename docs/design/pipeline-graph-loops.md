@@ -331,6 +331,24 @@ intersects another node, graph width at most the card's width at 390, no
 element with class `back` in the first four lanes, no node reading waiting on
 a completed lane.
 
+### Settled while rendering
+
+The build rendered the invented lanes at 1440 and 390 px, en and uk, and four
+details changed from the text above:
+
+- The strip's frame takes its source node's tone (dashed under a waiting
+  node, red under a failed one), and the active tone while its fix stage runs
+  or works again. A frame in the fix stage's own tone read as a separate card.
+- The accent ring marks a round of the budget under way, so a spent budget
+  draws none: `●●` stays "nothing left" while the last fix runs.
+- A retry in place names no stage in the caption ("after Migrate failed" on
+  Migrate itself); its strip says "retry". The phone's current-stage line
+  drops the same sentence and keeps the budget line.
+- On the phone the attempt number sits inside the stage name, so it follows
+  the last word of a wrapped name. In the pipeline screen's bar the stage name
+  truncates before the attempt number and the position, so a 40-character name
+  never slides under the header's badge.
+
 ## Deferred — not currently justified
 
 - The reason a settled stage is working again (who sent the message), the

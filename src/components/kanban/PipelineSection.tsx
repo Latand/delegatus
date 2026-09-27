@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { roleNameById } from "@/components/builderCopy";
 import { useLocale, type TFunction } from "@/lib/i18n";
-import { failEdgeExhaustion } from "@/lib/pipelines/failEdgeBudget";
+import { edgeRoundsUsed, failEdgeExhaustion, failEdgeMaxRounds } from "@/lib/pipelines/failEdgeBudget";
 import type { Pipeline, PipelineGraphEdit, PipelineStage, PipelineStageReportEntry, StageFinding } from "@/lib/pipelines/types";
 import { attemptStateLabel, latestAttempt, pipelineReviewHeads, pipelineStateLabel, type StageChipState } from "@/components/pipelines/pipelineModel";
 
@@ -14,9 +14,10 @@ export { stageDisplayName, stageNames } from "@/components/pipelines/pipelineMod
 import { fmtAge } from "@/components/utils";
 
 import type { KanbanPipeline } from "./kanbanModel";
-import { attemptArrivals, graphOrder, layoutGraph, operationalAttempts, routeEdge, STAGE_TONE, type GraphEdge, type PastAttempt, type ReviewRound } from "./pipelineGraph";
-import { edgeCount, stageIdentity, type EdgeCount } from "./stageIdentity";
-import { CountCircle, engineWord, FiredMark, identityTitle, StageIdentity } from "./identityMarks";
+import { attemptArrivals, graphOrder, layoutGraph, routeEdge, STAGE_TONE, wireFired, type GraphEdge, type PastAttempt, type ReviewRound } from "./pipelineGraph";
+import { stageIdentity, type EdgeCount } from "./stageIdentity";
+import { CountCircle, engineWord, identityTitle, StageIdentity } from "./identityMarks";
+import { STAGE_MARK } from "@/components/pipelines/pipelineBlockModel";
 import { ChevronRight, svgProps } from "./kanbanGlyphs";
 import { stageDraftable } from "./stagesModel";
 
@@ -139,9 +140,10 @@ export function pipelineProgress(t: TFunction, summary: KanbanPipeline, nameOf: 
   if (needs) return t("kanban.progress.needs", { stage: nameOf(needs.stage) });
   const live = chips.find((chip) => LIVE_CHIP_STATES.has(chip.state));
   if (live) {
-    const attempts = operationalAttempts(pipeline, live.stage.id).length;
-    const base = t("kanban.progress.live", { stage: nameOf(live.stage), state: attemptStateLabel(t, live.state) });
-    return attempts > 1 ? t("kanban.progress.attempt", { progress: base, n: attempts }) : base;
+    /* One attempt caption (#1892): «Review · 2 running». */
+    const attempts = summary.views.get(live.stage.id)?.attempts ?? 0;
+    const stage = attempts > 1 ? t("kanban.stageAttempt", { stage: nameOf(live.stage), n: attempts }) : nameOf(live.stage);
+    return t("kanban.progress.live", { stage, state: attemptStateLabel(t, live.state) });
   }
   if (pipeline.state === "completed") return pipelineStateLabel(t, pipeline.state);
   const failed = chips.find((chip) => chip.state === "failed");
@@ -217,7 +219,7 @@ export function spentEdgeSentence(t: TFunction, arc: LoopArc, from: string, to: 
     fired what it did, and when the budget is gone what that costs the lane. */
 export function arcTitle(t: TFunction, arc: LoopArc, from: string, to: string): string {
   const { fired, max } = arc.loop;
-  if (arc.state === "rest") return t("kanban.loopRest", { from, to, max });
+  if (arc.state === "rest") return t("kanban.loopRest", { from, to, count: max });
   /* A lane that stopped here leads with that. It is the one thing the operator
      opened the arc to find out, and last of three clauses of budget it is read
      after everything it explains — in Ukrainian at a narrow width the note runs
@@ -275,12 +277,75 @@ export function LoopChip({ loop, from, to }: { loop: KanbanPipeline["loops"][num
 /** How long an edge an attempt just travelled stays marked. */
 const LIVE_EDGE_MS = 2_400;
 
+/** The mark in front of a stage's name: its shape carries the state and its
+    colour is the stage's `STAGE_TONE`, the one tone map the graph reads. */
+export function StageToneMark({ state, className }: { state: StageChipState; className?: string }) {
+  const shape = STAGE_MARK[state];
+  return (
+    <i
+      className={`pmark tone-${STAGE_TONE[state]}${className ? ` ${className}` : ""}`}
+      data-mark={shape}
+      data-live={LIVE_CHIP_STATES.has(state) ? "1" : undefined}
+      aria-hidden="true"
+    >
+      {shape === "check" ? <svg {...svgProps} strokeWidth={3}><path d="m5 12.5 4.5 4.5L19 7.5" /></svg> : null}
+      {shape === "cross" ? <svg {...svgProps} strokeWidth={3}><path d="M17 7 7 17M7 7l10 10" /></svg> : null}
+      {shape === "alert" ? <span className="pmark-bang">!</span> : null}
+    </i>
+  );
+}
+
+const COARSE_QUERY = "(pointer: coarse)";
+const subscribeCoarse = (change: () => void) => {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return () => {};
+  const query = window.matchMedia(COARSE_QUERY);
+  query.addEventListener?.("change", change);
+  return () => query.removeEventListener?.("change", change);
+};
+const coarseNow = () => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(COARSE_QUERY).matches;
+
+/** A finger for a pointer: the loop strip grows to a 44 px target. The graph
+    and the Stages sheet's zoom both lay out with it. */
+export function useCoarsePointer(): boolean {
+  return useSyncExternalStore(subscribeCoarse, coarseNow, () => false);
+}
+
+/** The dots a round budget draws: most dots never shrink, and a budget of more
+    than six draws as `n/max`. */
+const MAX_DOTS = 6;
+
+/**
+ * The rounds of a loop, one position per round of its budget: a filled danger
+ * dot for each round it fired, a success dot once the source passed, an
+ * accent ring on the round under way, and a hollow dot for each round left.
+ * No hollow dot left is a spent budget.
+ */
+export function RoundDots({ fired, max, passed, running }: { fired: number; max: number; passed: boolean; running: boolean }) {
+  if (max > MAX_DOTS) return <span className="sdots text" data-dots={`${fired}/${max}`}>{`${fired}/${max}`}</span>;
+  /* The ring marks a round of the budget under way; past a spent budget there is none. */
+  const ring = running && !passed && fired < max;
+  const dots: Array<"bad" | "ok" | "next" | "left"> = [
+    ...Array.from({ length: fired }, () => "bad" as const),
+    ...(passed ? ["ok" as const] : []),
+    ...(ring ? ["next" as const] : []),
+    ...Array.from({ length: Math.max(0, max - fired - (ring ? 1 : 0)) }, () => "left" as const),
+  ];
+  return (
+    <span className="sdots" data-dots={dots.join(" ")} aria-hidden="true">
+      {dots.map((kind, index) => <i key={index} className={`sdot ${kind}`} />)}
+    </span>
+  );
+}
+
 /**
  * The stage graph: HTML nodes over an SVG edge layer, fitted to the width it
- * has by choosing left-to-right or top-to-bottom. Pass edges are solid, fail
- * edges dashed and labelled with how often they fired; an edge back to an
- * earlier stage runs in its own lane. An edge is marked live only when a new
- * attempt arrives that it activated.
+ * has by choosing left-to-right or top-to-bottom. Only the pass chain is drawn
+ * as wires; each stage's fail edge folds into a strip under its node (the fix
+ * stage docked there, "back to" an earlier stage, or a retry in place) with
+ * its rounds as dots, so no return wire runs around the graph
+ * (docs/design/pipeline-graph-loops.md). A travelled wire is solid with its
+ * count; one only configured stays dashed. A wire or strip is marked live
+ * only when a new attempt arrives that it activated.
  */
 /* The identity row's text is `--text-caption`, 10 px. Below 9 px on screen it
    stops being readable, so a host that scales the whole graph (the modal's
@@ -291,20 +356,6 @@ const LIVE_EDGE_MS = 2_400;
    by hand — 0.8 gives 8 px, and the floor of 0.7 gives 7 px. */
 const CAPTION_PX = 10;
 const MIN_LEGIBLE_PX = 9;
-
-/** How much of itself a beside fail label still draws: the whole sentence, the
-    short budget, or the circled count with the sentence in the legend. */
-type BesideForm = "long" | "short" | "badge";
-const NO_FORMS: Readonly<Record<string, BesideForm>> = {};
-
-/** Registers a beside label for measurement; a label that is not beside the
-    return lane has the box's whole width and is never measured. */
-const besideRef = (boxes: React.RefObject<Map<string, HTMLElement>>, id: string | null) =>
-  (element: HTMLElement | null) => {
-    if (!id) return;
-    if (element) boxes.current.set(id, element);
-    else boxes.current.delete(id);
-  };
 
 export function PipelineGraph({ summary, names, available, selected, onOpenStage, force, navigate = false, inView, scale = 1 }: {
   summary: KanbanPipeline;
@@ -321,35 +372,13 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
       big its text actually lands. */
   scale?: number;
 }) {
-  const { t, locale } = useLocale();
+  const { t } = useLocale();
   const { pipeline, views } = summary;
-  const layout = useMemo(() => layoutGraph(pipeline, available, force), [pipeline, available, force]);
+  const coarse = useCoarsePointer();
+  const layout = useMemo(() => layoutGraph(pipeline, available, force, { coarse }), [pipeline, available, force, coarse]);
   const nameOf = (id: string) => names.get(id) ?? id;
   const identityWords = CAPTION_PX * scale >= MIN_LEGIBLE_PX;
-
-  /* A fail edge's label sits beside the return lane, in the width the layout
-     reserved for it. How wide the sentence actually is depends on the language
-     — Ukrainian's is half again longer than English's — and a label the box
-     cuts is worse than a short one: the remaining budget was the part that went
-     missing. So a beside label that does not fit steps down, measured rather
-     than guessed: the full sentence, then `fail n/m`, then the circled count
-     alone with the sentence moved into the legend under the graph. Each edge
-     only ever steps down, so the measurement settles. */
-  const labelBoxes = useRef(new Map<string, HTMLElement>());
-  const fitKey = `${layout.dir}|${layout.width}|${layout.labelMode}|${locale}`;
-  const [fit, setFit] = useState<{ key: string; forms: Readonly<Record<string, BesideForm>> }>({ key: fitKey, forms: {} });
-  const forms = fit.key === fitKey ? fit.forms : NO_FORMS;
-  useLayoutEffect(() => {
-    const next: Record<string, BesideForm> = { ...forms };
-    let changed = fit.key !== fitKey;
-    for (const [id, element] of labelBoxes.current) {
-      if (!element.isConnected || forms[id] === "badge") continue;
-      if (element.offsetLeft + element.offsetWidth <= layout.width + 0.5) continue;
-      next[id] = forms[id] === "short" ? "badge" : "short";
-      changed = true;
-    }
-    if (changed) setFit({ key: fitKey, forms: next });
-  });
+  const byId = new Map(pipeline.stages.map((stage) => [stage.id, stage] as const));
 
   /* Live edges: the stage's own attempts that were not here on the last render
      and name the edge that activated them. The first render marks nothing, and
@@ -378,16 +407,17 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
     if (clearTimer.current) clearTimeout(clearTimer.current);
   }, []);
 
-  const legend: Array<{ id: string; count: EdgeCount; text: string }> = [];
   const labels: React.ReactNode[] = [];
   const paths: React.ReactNode[] = [];
-  for (const edge of layout.topology.edges) {
+  for (const edge of layout.topology.wires) {
     const route = routeEdge(layout, edge);
     if (!route) continue;
-    /* One rule for what an edge did: the engine's own activation provenance,
-       through `edgeCount`. A travelled edge is drawn solid in its verdict's
-       colour; one that is only configured stays dashed and muted (#1743). */
-    const count = edgeCount(pipeline, edge);
+    /* One rule for what a wire did: the engine's own activation provenance.
+       The wire leaving a unit carries the passes of its docked fix stage too,
+       which is how the lane moves on after a spent budget. */
+    const fired = wireFired(pipeline, layout.topology, edge);
+    const max = edge.kind === "fail" ? edge.maxRounds : null;
+    const count: EdgeCount = { fired, max, travelled: fired > 0, exhausted: max !== null && fired >= max };
     const back = layout.topology.back.has(edge.id);
     const isLive = live.has(edge.id);
     paths.push(
@@ -400,56 +430,95 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
         data-edge-fired={count.fired}
       />,
     );
-    const style = { left: `${route.label[0]}px`, top: `${route.label[1]}px` };
-    const title = edgeTitle(t, edge, count, layout.topology.branching.has(edge.from));
-    const beside = route.labelAxis === "v" && edge.kind === "fail" && back;
-    /* Legend mode is the layout's own decision, taken before any text exists;
-       the step-down below is this label's, taken from what it measured. */
-    const legendMode = edge.kind === "fail" && layout.dir === "TB" && layout.labelMode === "legend" && back;
-    const measured = beside && !legendMode ? edge.id : null;
-    const form: BesideForm = measured ? forms[edge.id] ?? "long" : "long";
-    const badgeOnly = legendMode || form === "badge";
-    if (badgeOnly) {
-      /* The arrow carries the count and nothing else, so a circled number means
-         "times fired" here too. The row under the graph names the stages. */
-      legend.push({ id: edge.id, count, text: t("kanban.graph.legendFail", { from: nameOf(edge.from), to: nameOf(edge.to), n: count.fired, max: count.max ?? 0 }) });
-      if (count.travelled) {
-        labels.push(
-          <span
-            key={`label-${edge.id}`}
-            ref={besideRef(labelBoxes, measured)}
-            className={`pelabel ${edge.kind} badge${count.exhausted ? " spent" : ""}${beside ? " beside" : ""}${isLive ? " live" : ""}`}
-            data-edge-label={edge.id}
-            data-edge-fired={count.fired}
-            style={beside ? { left: `${route.label[0] + 8}px`, top: `${route.label[1]}px` } : style}
-            title={title}
-          >
-            {/* A fail count is a filled disc; on a bare badge exhaustion is the
-                ring drawn around it, not a lighter circle. */}
-            <FiredMark count={count} label={t("kanban.graph.firedTitle", { count: count.fired })} />
-          </span>,
-        );
-      }
-      continue;
-    }
-    const long = edge.kind === "fail" && back && form === "long";
-    const content = edgeContent(t, edge, count, layout.topology.branching.has(edge.from), long);
+    const content = edgeContent(t, edge, count, layout.topology.branching.has(edge.from));
     if (!content) continue;
     labels.push(
       <span
         key={`label-${edge.id}`}
-        ref={besideRef(labelBoxes, measured)}
-        className={`pelabel ${edge.kind}${count.travelled ? " taken" : ""}${count.exhausted ? " spent" : ""}${beside ? " beside" : ""}${isLive ? " live" : ""}`}
+        className={`pelabel ${edge.kind}${count.travelled ? " taken" : ""}${count.exhausted ? " spent" : ""}${route.beside ? " beside" : ""}${isLive ? " live" : ""}`}
         data-edge-label={edge.id}
         data-edge-fired={count.fired}
-        data-edge-label-form={measured ? form : undefined}
-        style={beside ? { left: `${route.label[0] + 8}px`, top: `${route.label[1]}px` } : style}
-        title={title}
+        style={{ left: `${route.label[0]}px`, top: `${route.label[1]}px` }}
+        title={edgeTitle(t, edge, count, layout.topology.branching.has(edge.from))}
       >
         {content}
       </span>,
     );
   }
+
+  const arcs = new Map(loopArcs(summary).map((arc) => [arc.id, arc] as const));
+  const openableStage = (stage: PipelineStage) => {
+    const attempt = views.get(stage.id)?.attempt ?? null;
+    const conversation = Boolean(attempt?.conversationId || attempt?.agentPath);
+    const draftable = !attempt && stageDraftable(pipeline, stage.id);
+    return { conversation, draftable, openable: navigate || conversation || draftable };
+  };
+  const trueState = (id: string): StageChipState => {
+    const view = views.get(id);
+    return view?.again ? view.previous ?? "pending" : view?.state ?? "pending";
+  };
+  /* The name a node or strip carries: the stage, and from its second own
+     attempt which attempt it stands on, as a muted suffix that survives the
+     name's truncation (#1865). */
+  const attemptSuffix = (id: string) => {
+    const attempts = views.get(id)?.attempts ?? 0;
+    return attempts > 1 ? <span className="pattempt">{` · ${attempts}`}</span> : null;
+  };
+  const longLabel = (id: string) => {
+    const attempts = views.get(id)?.attempts ?? 0;
+    return attempts > 1 ? t("kanban.stageAttemptOf", { stage: nameOf(id), n: attempts, total: attempts }) : nameOf(id);
+  };
+
+  const strips = [...layout.strips.entries()].map(([sourceId, strip]) => {
+    const { edge, shape } = strip.loop;
+    const source = byId.get(sourceId)!;
+    const target = byId.get(edge.to);
+    if (!target) return null;
+    const arc = arcs.get(edge.id);
+    const fired = edgeRoundsUsed(pipeline, edge);
+    const max = failEdgeMaxRounds(pipeline, source);
+    const targetView = views.get(target.id);
+    const sourceLive = LIVE_CHIP_STATES.has(views.get(sourceId)?.state ?? "pending");
+    const fixLive = shape === "dock" && LIVE_CHIP_STATES.has(targetView?.state ?? "pending");
+    const running = sourceLive || fixLive || Boolean(arc?.live);
+    const passed = trueState(sourceId) === "passed";
+    const title = arc ? arcTitle(t, arc, nameOf(sourceId), nameOf(target.id)) : "";
+    const opens = shape === "self" ? null : target;
+    const open = opens ? openableStage(opens) : null;
+    const rework = shape === "dock" && Boolean(targetView?.rework);
+    const fixState = shape === "dock" ? targetView?.state ?? "pending" : null;
+    const text = shape === "dock" ? `${longLabel(target.id)}: ${graphStateWord(t, fixState!)}` : shape === "return" ? t("kanban.loop.backTo", { stage: nameOf(target.id) }) : t("kanban.loop.retry");
+    const aria = [text, rework ? t("kanban.graph.workingAgain") : null, title].filter(Boolean).join(". ");
+    /* The strip is the bottom of its source's card: its frame takes the
+       source's tone, and a fix stage at work takes the active one. */
+    const unitTone = fixLive || rework ? "active" : STAGE_TONE[views.get(sourceId)?.state ?? "pending"];
+    const fixIdle = shape === "dock" && (fixState === "pending" || fixState === "skipped");
+    const className = `pstrip shape-${shape} utone-${unitTone}${fixIdle ? " fix-idle" : ""}${fired ? " fired" : ""}${fired >= max && fired ? " spent" : ""}${live.has(edge.id) ? " live" : ""}${fixLive || rework || (running && shape !== "dock") ? " pulse" : ""}${opens && selected.has(opens.id) ? " selected" : ""}${open?.openable ? "" : " no-conv"}`;
+    const body = (
+      <>
+        <span className="sglyph" aria-hidden="true">↺</span>
+        {shape === "dock" ? <StageToneMark state={fixState!} /> : null}
+        <span className="sname">
+          {shape === "dock" ? nameOf(target.id) : text}
+        </span>
+        {shape === "dock" ? attemptSuffix(target.id) : null}
+        {rework ? <span className="srework">{t("kanban.graph.workingAgain")}</span> : null}
+        <RoundDots fired={fired} max={max} passed={passed} running={running} />
+        {layout.dir === "TB" ? <span className="pport out" aria-hidden="true" /> : null}
+      </>
+    );
+    const style = { left: `${strip.box.x}px`, top: `${strip.box.y}px`, width: `${strip.box.w}px`, height: `${strip.box.h}px` };
+    const data = { "data-strip": edge.id, "data-strip-shape": shape, "data-strip-fired": fired, "data-strip-max": max };
+    return opens && open?.openable ? (
+      <button key={edge.id} type="button" className={className} style={style} {...data} title={title} aria-label={aria} aria-pressed={selected.has(opens.id)} onClick={() => onOpenStage(pipeline, opens)}>
+        {body}
+      </button>
+    ) : (
+      <div key={edge.id} className={className} style={style} {...data} title={title} role="img" aria-label={aria}>
+        {body}
+      </div>
+    );
+  });
 
   return (
     <div className="pgraph-box">
@@ -470,15 +539,13 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
           {paths}
         </svg>
         {labels}
-        {graphOrder(pipeline, layout.topology).map((stage) => {
+        {graphOrder(pipeline, layout.topology).filter((stage) => layout.nodes.has(stage.id)).map((stage) => {
           const box = layout.nodes.get(stage.id)!;
           const view = views.get(stage.id);
           const state = view?.state ?? "pending";
           const word = graphStateWord(t, state);
           const attempt = view?.attempt ?? null;
-          const conversation = Boolean(attempt?.conversationId || attempt?.agentPath);
-          const draftable = !attempt && stageDraftable(pipeline, stage.id);
-          const openable = navigate || conversation || draftable;
+          const { conversation, draftable, openable } = openableStage(stage);
           const roleId = stageRoleId(stage);
           /* Engine, model and effort of the attempt as it was actually
              launched, or the configuration, muted, when nothing has run (#1743). */
@@ -486,19 +553,21 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
           const isSelected = selected.has(stage.id);
           const rounds = view?.rounds ?? [];
           const attempts = view?.attempts ?? 0;
-          const detail = view?.again ? (
-            <span className="pdetail">{t("kanban.graph.nextAttempt", { state: graphStateWord(t, view.previous ?? "pending") })}</span>
-          ) : rounds.length ? <RoundsMark rounds={rounds} /> : (
-            <span className="pdetail">
-              {attempts
-                ? stage.onFail ? t("kanban.graph.attemptRetries", { n: attempts, count: stage.onFail.maxRounds }) : t("kanban.graph.attempt", { n: attempts })
-                : stage.kind === "review-loop" ? t("kanban.graph.reviewsRun") : t("kanban.graph.notStarted")}
-            </span>
-          );
+          const rework = Boolean(view?.rework);
+          /* A retry in place says so on its strip; the caption names another stage only. */
+          const via = attempt?.activatedBy?.edge === "fail" && attempt.activatedBy.stageId !== stage.id && LIVE_CHIP_STATES.has(state) ? attempt.activatedBy.stageId : null;
+          /* The state row's caption, first match wins (§3.4). */
+          const detail = rework ? <span className="pdetail rework">{t("kanban.graph.workingAgain")}</span>
+            : view?.again ? <span className="pdetail">{t("kanban.graph.lastWas", { state: graphStateWord(t, view.previous ?? "pending") })}</span>
+              : rounds.length ? <RoundsMark rounds={rounds} />
+                : via ? <span className="pdetail">{t("kanban.graph.because", { stage: nameOf(via) })}</span>
+                  : !attempts ? <span className="pdetail">{stage.kind === "review-loop" ? t("kanban.graph.reviewsRun") : t("kanban.graph.notStarted")}</span>
+                    : null;
+          const hasStrip = layout.strips.has(stage.id);
           const aria = [
-            t("kanban.graph.nodeAria", { stage: nameOf(stage.id), engine: engineWord(identity.engine), state: word }),
+            t("kanban.graph.nodeAria", { stage: longLabel(stage.id), engine: engineWord(identity.engine), state: word }),
             identityTitle(t, identity),
-            attempts ? t("kanban.graph.attempt", { n: attempts }) : "",
+            rework ? t("kanban.graph.workingAgain") : "",
             rounds.length ? rounds.map((round) => t("kanban.graph.roundTitle", { n: round.n, verdict: t(`kanban.graph.verdict.${round.verdict}`) })).join(", ") : "",
             navigate
               ? (isSelected ? t("kanban.stages.paneShown") : t("kanban.stages.showPane"))
@@ -509,8 +578,10 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
             <button
               key={stage.id}
               type="button"
-              className={`pnode tone-${STAGE_TONE[state]} st-${state} role-${roleId}${stage.kind === "review-loop" ? " review" : ""}${isSelected ? " selected" : ""}${openable ? "" : " no-conv"}${inView?.has(stage.id) ? " in-view" : ""}${state === "running" || state === "reviewing" ? " pulse" : ""}`}
+              className={`pnode tone-${STAGE_TONE[state]} st-${state} role-${roleId}${stage.kind === "review-loop" ? " review" : ""}${isSelected ? " selected" : ""}${openable ? "" : " no-conv"}${inView?.has(stage.id) ? " in-view" : ""}${state === "running" || state === "reviewing" || rework ? " pulse" : ""}${rework ? " rework" : ""}${hasStrip ? " has-strip" : ""}`}
               data-stage={stage.id}
+              data-stage-again={view?.again ? "1" : undefined}
+              data-stage-rework={rework ? "1" : undefined}
               style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.w}px`, height: `${box.h}px` }}
               aria-pressed={isSelected}
               aria-disabled={openable ? undefined : true}
@@ -524,10 +595,11 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
                   <span className="pport out pass" aria-hidden="true" />
                   <span className="pport out fail" aria-hidden="true" />
                 </>
-              ) : <span className="pport out" aria-hidden="true" />}
+              ) : hasStrip && layout.dir === "TB" ? null : <span className="pport out" aria-hidden="true" />}
               <span className="prow head">
                 <span className="pglyph" aria-hidden="true"><svg {...svgProps} strokeWidth={1.8}>{ROLE_GLYPH[roleId] ?? ROLE_GLYPH.builder}</svg></span>
                 <span className="pname">{nameOf(stage.id)}</span>
+                {attemptSuffix(stage.id)}
               </span>
               <span className="prow ident">
                 {/* The effort word only where the layout gave the node room for
@@ -541,21 +613,8 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
             </button>
           );
         })}
+        {strips}
       </div>
-      {legend.length ? (
-        <ul className="plegend">
-          {legend.map((entry) => (
-            <li key={entry.id} data-legend-edge={entry.id}>
-              {/* The key samples the mark the arrow above it actually carries,
-                  ring and all, or it explains a drawing that is not there. */}
-              {entry.count.travelled
-                ? <FiredMark count={entry.count} />
-                : <span className="esample" aria-hidden="true" />}
-              <span>{entry.text}{entry.count.exhausted ? ` · ${t("kanban.graph.noneLeft")}` : ""}</span>
-            </li>
-          ))}
-        </ul>
-      ) : null}
     </div>
   );
 }
@@ -598,23 +657,22 @@ function edgeTitle(t: TFunction, edge: GraphEdge, count: EdgeCount, branching: b
   ].filter(Boolean).join(" · ");
 }
 
-/** What the label draws on the arrow. A travelled edge leads with the circled
+/** What the label draws on a wire. A travelled edge leads with the circled
     count; a configured one keeps the word it had. A pass edge that has not
-    fired is labelled only where the source branches, as before. */
-function edgeContent(t: TFunction, edge: GraphEdge, count: EdgeCount, branching: boolean, long: boolean): React.ReactNode | null {
+    fired is labelled only where the source branches. The few fail edges that
+    still draw as wires carry the short budget. */
+function edgeContent(t: TFunction, edge: GraphEdge, count: EdgeCount, branching: boolean): React.ReactNode | null {
   const circle = <CountCircle n={count.fired} tone={edge.kind} filled={edge.kind === "fail" && !count.exhausted} label={t("kanban.graph.firedTitle", { count: count.fired })} />;
   if (edge.kind === "pass") {
     if (count.travelled) return circle;
     return branching ? t("kanban.graph.pass") : null;
   }
-  const budget = long
-    ? t("kanban.graph.failUsed", { n: count.fired, max: count.max ?? 0 })
-    : count.travelled ? t("kanban.graph.failUsedShort", { n: count.fired, max: count.max ?? 0 }) : t("kanban.graph.fail");
+  const budget = count.travelled ? t("kanban.graph.failUsedShort", { n: count.fired, max: count.max ?? 0 }) : t("kanban.graph.fail");
   if (!count.travelled) return budget;
   return (
     <>
       {circle}
-      <span className="ebudget">{budget}{count.exhausted && long ? ` · ${t("kanban.graph.noneLeft")}` : ""}</span>
+      <span className="ebudget">{budget}</span>
     </>
   );
 }
@@ -625,7 +683,9 @@ function edgeContent(t: TFunction, edge: GraphEdge, count: EdgeCount, branching:
 export function pastAttemptLabel(t: TFunction, row: PastAttempt, stage: string): string {
   if (row.kind === "helper") return t("kanban.past.helper", { stage, n: row.n });
   if (row.kind === "round") return row.ambiguous ? t("kanban.past.attemptRound", { stage, attempt: row.attempt ?? 0, n: row.n }) : t("kanban.past.round", { stage, n: row.n });
-  return t("kanban.past.attempt", { stage, n: row.n });
+  /* The label every surface gives a stage's attempt (#1865): the name alone
+     for a stage that ran once, «Critique · 2» from its second attempt. */
+  return row.of > 1 ? t("kanban.stageAttempt", { stage, n: row.n }) : stage;
 }
 
 /** How a past attempt ended: the round's verdict, or the attempt's state and verdict. */

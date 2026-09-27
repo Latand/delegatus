@@ -11987,3 +11987,186 @@ describe("needs-you panel: renders and readings over the real Viewer", () => {
     if (failures.length) throw new Error(failures.join("\n"));
   }, 600_000);
 });
+
+describe("readable pipeline graph: loops fold into their sources, nodes say what they are, one attempt caption", () => {
+  /*
+   * docs/design/pipeline-graph-loops.md, over `?scenario=graph-loops`: two fix
+   * stages docked on their reviewers (completed with both budgets spent, and
+   * cut back to Review running again), a return over two stages, a retry in
+   * place that fired, a completed lane whose Build conversation took more
+   * work, and stage names of 40 characters.
+   *
+   * Gated on measured geometry, at 1440 px (each card's compact graph and the
+   * Stages sheet's wide one) and on the phone at 390 px, in en and uk: no
+   * strip or wire label meets another node, no graph is wider than its card,
+   * no wire runs back around the graph, and no node of an ended lane reads
+   * waiting. Frames go to LOOPS_PNG_DIR (default /var/tmp/llv-graph-loops-evidence);
+   * readings to `evidence/pipeline-graph-loops/geometry.json`.
+   */
+  const LANES = [
+    { task: "t-loops-done", pipeline: "p-loops-done", ended: true },
+    { task: "t-loops-review", pipeline: "p-loops-review", ended: false },
+    { task: "t-loops-return", pipeline: "p-loops-return", ended: false },
+    { task: "t-loops-retry", pipeline: "p-loops-retry", ended: false },
+    { task: "t-loops-rework", pipeline: "p-loops-rework", ended: true },
+    { task: "t-loops-long", pipeline: "p-loops-long", ended: false },
+  ] as const;
+  type GraphReading = {
+    dir: string | null; width: number; boxWidth: number; scrolls: boolean; nodes: number; strips: number; back: number;
+    waitingEnded: string[]; hits: Array<{ a: string; b: string }>; cut: string[]; rework: string[];
+    captions: Record<string, string>;
+  };
+  /* One graph, read as boxes: every node, strip and wire label against every
+     node it does not belong to, and each name that its box cuts. */
+  const measureGraph = (scope: string, ended: boolean) => `(() => {
+    const graph = document.querySelector(${JSON.stringify(scope)} + " .pgraph");
+    if (!graph) return null;
+    const box = graph.closest(".pgraph-box");
+    const rect = el => el.getBoundingClientRect();
+    const meets = (a, b) => Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)) > 0.5;
+    const nodes = [...graph.querySelectorAll(".pnode")];
+    const strips = [...graph.querySelectorAll(".pstrip")];
+    const labels = [...graph.querySelectorAll(".pelabel")];
+    const hits = [];
+    for (const node of nodes) {
+      const own = node.getAttribute("data-stage");
+      for (const other of [...nodes, ...strips, ...labels]) {
+        if (other === node) continue;
+        const source = other.getAttribute("data-strip")?.split(":fail:")[0];
+        if (source === own) continue;
+        if (meets(rect(node), rect(other))) hits.push({ a: own, b: other.getAttribute("data-stage") || other.getAttribute("data-strip") || other.getAttribute("data-edge-label") });
+      }
+    }
+    const cut = [...graph.querySelectorAll(".pname, .sname")].filter(el => el.scrollWidth > el.clientWidth + 1).map(el => el.textContent);
+    const captions = {};
+    for (const node of nodes) captions[node.getAttribute("data-stage")] = [node.querySelector(".pname")?.textContent, node.querySelector(".pattempt")?.textContent ?? "", " | ", node.querySelector(".pstate")?.textContent, " | ", node.querySelector(".pdetail")?.textContent ?? ""].join("");
+    for (const strip of strips) captions[strip.getAttribute("data-strip")] = [strip.querySelector(".sname")?.textContent, strip.querySelector(".pattempt")?.textContent ?? "", " | ", strip.querySelector(".sdots")?.getAttribute("data-dots"), strip.querySelector(".srework") ? " | " + strip.querySelector(".srework").textContent : ""].join("");
+    return {
+      dir: graph.getAttribute("data-dir"),
+      width: Math.round(rect(graph).width),
+      boxWidth: Math.round(box.clientWidth),
+      scrolls: box.scrollWidth > box.clientWidth + 1,
+      nodes: nodes.length,
+      strips: strips.length,
+      back: graph.querySelectorAll(".pedge.back").length,
+      waitingEnded: ${ended ? "nodes.filter(n => n.getAttribute(\"data-stage-again\") === \"1\").map(n => n.getAttribute(\"data-stage\"))" : "[]"},
+      hits,
+      cut,
+      rework: nodes.filter(n => n.getAttribute("data-stage-rework") === "1").map(n => n.getAttribute("data-stage")),
+      captions,
+    };
+  })()`;
+
+  browserTest("the graph of every loop lane reads at 1440 and 390 px, in en and uk", async () => {
+    const out = path.resolve(".artifacts/pipeline-graph-loops");
+    const pngDir = process.env.LOOPS_PNG_DIR ?? "/var/tmp/llv-graph-loops-evidence";
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const base = `${server.base}?scenario=graph-loops`;
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, GraphReading | null> = {};
+    const failures: string[] = [];
+    const gate = (label: string, reading: GraphReading | null, lane: (typeof LANES)[number], wantDir?: "LR" | "TB") => {
+      readings[label] = reading;
+      if (!reading) return void failures.push(`${label}: no graph drawn`);
+      if (wantDir && reading.dir !== wantDir) failures.push(`${label}: drawn ${reading.dir}, expected ${wantDir}`);
+      if (reading.hits.length) failures.push(`${label}: ${reading.hits.length} boxes meet a node — ${JSON.stringify(reading.hits.slice(0, 3))}`);
+      if (reading.scrolls) failures.push(`${label}: the graph (${reading.width} px) is wider than its box (${reading.boxWidth} px)`);
+      if (reading.back) failures.push(`${label}: ${reading.back} wires run back around the graph`);
+      if (reading.waitingEnded.length) failures.push(`${label}: an ended lane reads waiting on ${reading.waitingEnded.join(", ")}`);
+      if (lane.pipeline === "p-loops-rework" && !reading.rework.includes("build")) failures.push(`${label}: Build's rework is not drawn`);
+    };
+    const seatFolded = `try { localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })); } catch {}`;
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        /* The desktop board: each card's graph, opened. */
+        const { context, page, pageErrors } = await openFixture(browser, base, { width: 1440, height: 2400 }, "light", lang);
+        try {
+          await context.addInitScript(seatFolded);
+          await page.reload();
+          await page.waitForSelector(`${card("t-loops-done")} [data-pipeline]`, { timeout: 30_000 });
+          await page.waitForTimeout(600);
+          for (const lane of LANES) {
+            await page.locator(`${card(lane.task)} [data-graph-toggle="${lane.pipeline}"]`).evaluate((element) => (element as HTMLElement).click());
+          }
+          await page.waitForTimeout(600);
+          for (const lane of LANES) {
+            const label = `card-${lane.pipeline}-1440-${lang}`;
+            gate(label, await page.evaluate(measureGraph(card(lane.task), lane.ended)) as GraphReading | null, lane, "TB");
+            await page.locator(card(lane.task)).screenshot({ path: path.join(pngDir, `${label}.png`) });
+          }
+          /* The Stages sheet draws the same lanes left to right. */
+          for (const lane of LANES) {
+            await page.locator(`${card(lane.task)} [data-open-stages="${lane.pipeline}"]`).first().evaluate((element) => (element as HTMLElement).click());
+            await page.waitForSelector(`[data-stages-sheet="${lane.pipeline}"] .gs-graph .pgraph`, { timeout: 10_000 });
+            await page.waitForTimeout(400);
+            const label = `sheet-${lane.pipeline}-1440-${lang}`;
+            gate(label, await page.evaluate(measureGraph(`[data-stages-sheet="${lane.pipeline}"] .gs-graph`, lane.ended)) as GraphReading | null, lane, "LR");
+            await page.locator(`[data-stages-sheet="${lane.pipeline}"] .gs-graph`).screenshot({ path: path.join(pngDir, `${label}.png`) });
+            await page.keyboard.press("Escape");
+            await page.waitForTimeout(300);
+          }
+          if (pageErrors.length) failures.push(`1440-${lang}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+
+        /* The phone: each lane's task screen, then its pipeline screen, the whole scroll. */
+        const phone = await openFixture(browser, base, { width: 390, height: 844 }, "light", lang, "no-preference", true);
+        const full = async (name: string, scroller: string) => {
+          const tall = await phone.page.evaluate((selector) => {
+            const body = document.querySelector(selector);
+            return body ? body.scrollHeight - body.clientHeight : 0;
+          }, scroller);
+          await phone.page.setViewportSize({ width: 390, height: 844 + Math.max(0, tall) });
+          await phone.page.waitForTimeout(250);
+          const scrollWidth = await phone.page.evaluate(() => document.documentElement.scrollWidth);
+          if (scrollWidth > 390) failures.push(`${name}: the page scrolls sideways (${scrollWidth})`);
+          await phone.page.screenshot({ path: path.join(pngDir, `${name}.png`) });
+          await phone.page.setViewportSize({ width: 390, height: 844 });
+          await phone.page.waitForTimeout(150);
+        };
+        try {
+          await phone.page.waitForSelector(`[data-phone-card="task:${LANES[0].task}"]`, { state: "attached", timeout: 30_000 });
+          await phone.page.waitForTimeout(500);
+          for (const lane of LANES) {
+            await phone.page.locator(`[data-phone-card="task:${lane.task}"]`).evaluate((element) => (element as HTMLElement).click());
+            /* A finished lane is folded under «Completed» on its task: unfold it. */
+            if (lane.ended) {
+              await phone.page.waitForSelector("[data-phone-task-ended]", { timeout: 10_000 });
+              await phone.page.locator("[data-phone-task-ended]").evaluate((element) => (element as HTMLElement).click());
+            }
+            await phone.page.waitForSelector(`[data-phone-task-lane="${lane.pipeline}"]`, { timeout: 10_000 });
+            await phone.page.waitForTimeout(400);
+            await full(`phone-task-${lane.pipeline}-390-${lang}`, `[data-phone-task-body="${lane.task}"]`);
+            await phone.page.locator(`[data-phone-task-lane="${lane.pipeline}"] [data-open-stages="${lane.pipeline}"]`).first().evaluate((element) => (element as HTMLElement).click());
+            await phone.page.waitForSelector(`[data-mobile2-screen="pipeline"][data-mobile2-pipeline="${lane.pipeline}"] .pblock`, { timeout: 10_000 });
+            await phone.page.waitForTimeout(400);
+            readings[`phone-${lane.pipeline}-390-${lang}`] = await phone.page.evaluate(() => ({
+              names: [...document.querySelectorAll('[data-mobile2-screen="pipeline"] .pb-stage[data-stage]')].map((row) => `${row.querySelector(".pb-name")?.textContent ?? ""} | ${row.querySelector(".pb-stage-state")?.textContent ?? ""}`),
+              loops: [...document.querySelectorAll('[data-mobile2-screen="pipeline"] .pb-loops li')].map((row) => row.textContent),
+              bar: document.querySelector('[data-mobile2-screen="pipeline"] .pb-stateline')?.textContent ?? null,
+            })) as never;
+            await full(`phone-pipeline-${lane.pipeline}-390-${lang}`, "[data-mobile2-pipeline-body]");
+            await phone.page.locator("[data-mobile2-back]").first().evaluate((element) => (element as HTMLElement).click());
+            await phone.page.waitForTimeout(300);
+            await phone.page.locator("[data-mobile2-back]").first().evaluate((element) => (element as HTMLElement).click());
+            await phone.page.waitForSelector(`[data-phone-card="task:${lane.task}"]`, { state: "attached", timeout: 10_000 });
+            await phone.page.waitForTimeout(300);
+          }
+          if (phone.pageErrors.length) failures.push(`390-${lang}: page errors ${phone.pageErrors.join(" | ")}`);
+        } finally {
+          await phone.context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/pipeline-graph-loops", { recursive: true });
+    fs.writeFileSync("evidence/pipeline-graph-loops/geometry.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 900_000);
+});

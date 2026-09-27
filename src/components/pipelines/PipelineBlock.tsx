@@ -16,14 +16,17 @@ import type { KanbanPipeline, KanbanStageChip } from "@/components/kanban/kanban
 import { ChevronDown, ChevronRight, MoreGlyph, svgProps } from "@/components/kanban/kanbanGlyphs";
 import { STAGE_TONE } from "@/components/kanban/pipelineGraph";
 import {
-  arcTitle, GraphEditLine, GraphGlyph, graphStateWord, ListGlyph, loopArcs, PipelineGraph, pipelineProgress, pipelineTitle, ReturnSuffix, spentEdgeSentence, StageReportLine,
+  arcTitle, GraphEditLine, GraphGlyph, graphStateWord, ListGlyph, loopArcs, PipelineGraph, pipelineProgress, pipelineTitle, ReturnSuffix, spentEdgeSentence, StageReportLine, StageToneMark,
   type LoopArc,
 } from "@/components/kanban/PipelineSection";
+
+/* The stage mark lives beside the graph, which draws it on a loop strip too. */
+export { StageToneMark } from "@/components/kanban/PipelineSection";
 import { stageIdentity } from "@/components/kanban/stageIdentity";
 import { stageDraftable, type PipelineActionKind } from "@/components/kanban/stagesModel";
 
 import {
-  latestAttempt, pipelineReviewHeads, pipelineStagePosition, pipelineStateLabel, stageChipLabel, stageConfigurable, stageLatestAttemptPlace, stageNames, stageRoleAside,
+  latestAttempt, pipelineReviewHeads, pipelineStagePosition, pipelineStateLabel, stageChipLabel, stageConfigurable, stageDisplayName, stageLatestAttemptPlace, stageNames, stageRoleAside,
   type StageChipState,
 } from "./pipelineModel";
 import {
@@ -64,23 +67,6 @@ const LIVE = new Set<StageChipState>(["running", "reviewing", "committing"]);
 
 /** How many findings the answer lists before counting the rest. */
 const ANSWER_FINDINGS = 1;
-
-/** The mark in front of a stage's name. */
-export function StageToneMark({ state, className }: { state: StageChipState; className?: string }) {
-  const shape = STAGE_MARK[state];
-  return (
-    <i
-      className={`pmark tone-${STAGE_TONE[state]}${className ? ` ${className}` : ""}`}
-      data-mark={shape}
-      data-live={LIVE.has(state) ? "1" : undefined}
-      aria-hidden="true"
-    >
-      {shape === "check" ? <svg {...svgProps} strokeWidth={3}><path d="m5 12.5 4.5 4.5L19 7.5" /></svg> : null}
-      {shape === "cross" ? <svg {...svgProps} strokeWidth={3}><path d="M17 7 7 17M7 7l10 10" /></svg> : null}
-      {shape === "alert" ? <span className="pmark-bang">!</span> : null}
-    </i>
-  );
-}
 
 interface Suffix { arc: LoopArc; title: string }
 
@@ -727,6 +713,10 @@ export function PipelineStateLine({ summary, nowMs }: { summary: KanbanPipeline;
   const { k, n } = index >= 0 ? { k: index + 1, n: summary.chips.length } : pipelineStagePosition(pipeline);
   const moved = pipelineMovedAtMs(pipeline);
   const position = t("kanban.stages.position", { k, n });
+  /* The stage it stands on, in the one attempt caption (#1892), then where
+     that stage sits in the lane. A long name truncates; its number stays. */
+  const stage = index >= 0 && !pipelineEnded(pipeline) ? summary.chips[index]!.stage : null;
+  const attempts = stage ? summary.views.get(stage.id)?.attempts ?? 0 : 0;
   const parts = [
     pipelineEnded(pipeline) ? null : position.charAt(0).toLocaleLowerCase() + position.slice(1),
     moved === null ? null : humanizeDuration(blockAgeSeconds((nowMs - moved) / 1000)),
@@ -735,6 +725,13 @@ export function PipelineStateLine({ summary, nowMs }: { summary: KanbanPipeline;
     <span className="pb-stateline" data-pipeline-stateline={pipeline.id}>
       <span className="pstate-word" data-pstate={pipeline.state}>{pipelineStateLabel(t, pipeline.state)}</span>
       <MergeWord pipeline={pipeline} nowMs={nowMs} />
+      {stage ? (
+        <span className="pb-statepart pb-statestage" data-stateline-stage={stage.id}>
+          <span className="pb-sep" aria-hidden="true">·</span>
+          <span className="pb-statename">{stageDisplayName(t, stage)}</span>
+          {attempts > 1 ? <span className="pb-attempt">{` · ${attempts}`}</span> : null}
+        </span>
+      ) : null}
       {parts.map((part, index) => (
         <span key={index} className="pb-statepart">
           <span className="pb-sep" aria-hidden="true">·</span>
@@ -791,7 +788,8 @@ function ScreenBlock(props: PipelineBlockProps & {
   const arcLines = (stage: PipelineStage) => arcs.flatMap((arc) => {
     const from = nameOf(arc.loop.from);
     const to = nameOf(arc.loop.to);
-    if (arc.live && arc.loop.to.id === stage.id) return [{ id: arc.id, text: t("kanban.loopLive", { from, to }) }];
+    /* A retry in place is not "running because it failed": its budget line says it. */
+    if (arc.live && arc.loop.to.id === stage.id && arc.loop.from.id !== stage.id) return [{ id: arc.id, text: t("kanban.loopLive", { from, to }) }];
     if (arc.loop.from.id !== stage.id || arc.state === "rest") return [];
     if (arc.parked) return [{ id: arc.id, text: t("kanban.loopParkedHere", { from }) }];
     return [{
@@ -848,8 +846,10 @@ function ScreenBlock(props: PipelineBlockProps & {
       aside,
       /* A role-less review loop's aside already names it: say it once. */
       stage.kind === "review-loop" && aside !== t("pipelineStrip.reviewStage") ? t("mobile2.pipeline.review") : null,
-      place.attempt !== null && (place.attempts > 1 || isCurrent) ? t("pipelineBlock.attempt", { n: place.attempt }) : null,
     ].filter(Boolean).join(" · ");
+    /* One attempt caption (#1892): «Critique · 2» in the name, from the
+       stage's second own attempt. */
+    const attemptN = place.attempt !== null && place.attempts > 1 ? place.attempt : null;
     const aria = [t("kanban.stageAria", { stage: name, state }), who, suffix?.title].filter(Boolean).join(". ");
     const head = (
       <>
@@ -857,7 +857,8 @@ function ScreenBlock(props: PipelineBlockProps & {
         <span className="pb-stage-main">
           <span className="pb-stage-title">
             <StageToneMark state={shown} />
-            <span className="pb-name">{chip.branch ? t("kanban.branch", { stage: name }) : name}</span>
+            {/* The number flows after the name's last word, wrapped or not. */}
+            <span className="pb-name">{chip.branch ? t("kanban.branch", { stage: name }) : name}{attemptN !== null ? <span className="pb-attempt">{` · ${attemptN}`}</span> : null}</span>
             {chip.rounds ? <CountCircle n={chip.rounds} tone="neutral" label={t("kanban.stageAriaRounds", { stage: name, state, count: chip.rounds })} /> : null}
             {suffix ? <ReturnSuffix arc={suffix.arc} title={suffix.title} /> : null}
           </span>
@@ -995,7 +996,7 @@ function ScreenBlock(props: PipelineBlockProps & {
       {summary.loops.length ? (
         <ul className="pb-loops">
           {summary.loops.map((loop) => (
-            <li key={`${loop.from.id}:${loop.to.id}`}>{`↺ ${t("kanban.loopRest", { from: nameOf(loop.from), to: nameOf(loop.to), max: loop.max })}`}</li>
+            <li key={`${loop.from.id}:${loop.to.id}`}>{`↺ ${t("kanban.loopRest", { from: nameOf(loop.from), to: nameOf(loop.to), count: loop.max })}`}</li>
           ))}
         </ul>
       ) : null}

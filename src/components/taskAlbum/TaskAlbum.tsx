@@ -55,7 +55,7 @@ export function albumSourceLabel(t: TFunction, source: AlbumSource, pipelines: r
     const name = stage ? stageDisplayName(t, stage) : source.stage.stageId;
     /* Beside a group of pictures a bare «· 2» reads as how many there are, so
        the attempt is spelled out, and named whenever a round follows it. */
-    const attempt = source.stage.attempt > 1 || source.stage.round ? t("album.stageAttempt", { stage: name, n: source.stage.attempt }) : name;
+    const attempt = source.stage.attempt > 1 || source.stage.round ? `${name} · ${t("kanban.attemptWord", { n: source.stage.attempt })}` : name;
     return source.stage.round ? t("album.review", { stage: attempt, n: source.stage.round }) : attempt;
   }
   const file = files.find((entry) => (source.conversationId && entry.conversationId === source.conversationId) || entry.path === source.path);

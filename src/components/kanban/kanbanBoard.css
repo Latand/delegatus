@@ -1139,14 +1139,8 @@
    into that mark would knock the disc back out to white inside a white ring —
    the lighter drawing for the worse state, twice over (#1743). */
 .kb .pelabel.fail.spent > .ccircle { --tone: var(--surface-card); color: var(--color-danger); background: var(--surface-card); }
-.kb .pelabel.badge, .kb .pelabel.badge.spent { padding: 0; border: 0; background: transparent; box-shadow: none; }
 .kb .pelabel.beside { transform: translate(0, -50%); }
 .kb .pelabel.live { border-color: var(--color-accent); color: var(--color-accent); }
-.kb .plegend { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: var(--text-label); color: var(--color-secondary); }
-/* A legend row for an edge nothing has travelled leads with the dashed line
-   itself, so the row and the arrow say the same thing. */
-.kb .plegend .esample { width: 16px; height: 0; flex-shrink: 0; border-top: 1.5px dashed color-mix(in srgb, var(--color-danger) 45%, transparent); }
-.kb .plegend li { display: flex; align-items: center; gap: 6px; }
 .kb .pnode {
   position: absolute; z-index: 1; display: flex; flex-direction: column; justify-content: center; gap: 4px; padding: 7px 10px; text-align: left;
   border-radius: 10px; background: var(--surface-card); border: 1px solid var(--border-default); box-shadow: var(--shadow-1);
@@ -1178,6 +1172,14 @@
 .kb .pnode.tone-bad .pstate { color: var(--color-danger); }
 .kb .pnode.tone-idle .pstate { color: var(--color-muted); }
 .kb .pnode .pdetail { font-size: var(--text-caption); color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; margin-left: auto; }
+/* A settled stage whose conversation took more work (#1744) keeps its state
+   word and says so in active ink, with the active border and the pulse. */
+.kb .pnode .pdetail.rework { color: var(--color-success); font-weight: 600; }
+.kb .pnode.rework { border-color: color-mix(in srgb, var(--color-success) 55%, var(--border-default)); }
+/* The attempt a stage stands on, from its second (#1865, #1892): a muted
+   suffix that never shrinks, so a long name truncates and the number stays. */
+.kb .pnode .pattempt, .kb .pstrip .pattempt { flex-shrink: 0; white-space: pre; font-weight: 600; color: var(--color-muted); font-variant-numeric: tabular-nums; }
+.kb .pnode .pattempt { font-size: var(--text-ui); margin-left: -6px; }
 /* A review-loop stage counts its own rounds in the same circled vocabulary the
    arrows use, then names the latest verdict (#1743). */
 .kb .rounds-mark { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; flex-shrink: 0; white-space: nowrap; }
@@ -1195,6 +1197,42 @@
 .kb .dir-TB .pport.in { top: -5px; left: calc(50% - 4.5px); }
 .kb .dir-TB .pport.out { bottom: -5px; left: calc(50% - 4.5px); }
 .kb .dir-TB .pport.out.fail { bottom: auto; left: auto; right: -5px; top: calc(66% - 4.5px); border-color: color-mix(in srgb, var(--color-danger) 60%, var(--border-strong)); }
+/* A loop folded into its source (docs/design/pipeline-graph-loops.md §3.2):
+   a strip under the node, the node's bottom corners squared so the two read
+   as one card. The fix stage docked there, "back to" an earlier stage, or a
+   retry in place, then its rounds as dots. */
+.kb .pnode.has-strip { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.kb .pstrip {
+  position: absolute; z-index: 1; display: flex; align-items: center; gap: 5px; min-width: 0; padding: 0 10px; text-align: left;
+  border: 1px solid var(--border-default); border-top: 0; border-radius: 0 0 10px 10px; background: var(--surface-well);
+  font-size: var(--text-caption); font-weight: 600; color: var(--color-secondary);
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
+}
+.kb button.pstrip { cursor: pointer; }
+.kb button.pstrip:hover { border-color: var(--border-strong); }
+.kb .pstrip.no-conv { cursor: default; }
+.kb .pstrip.utone-idle { border-style: dashed; }
+.kb .pstrip.utone-active { border-color: color-mix(in srgb, var(--color-success) 55%, var(--border-default)); }
+.kb .pstrip.utone-review { border-color: color-mix(in srgb, var(--color-info) 55%, var(--border-default)); }
+.kb .pstrip.utone-needs { border-color: color-mix(in srgb, var(--color-warning) 60%, var(--border-default)); }
+.kb .pstrip.utone-bad { border-color: color-mix(in srgb, var(--color-danger) 45%, var(--border-default)); }
+.kb .pstrip.selected { border-color: var(--color-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 22%, transparent); }
+.kb .pstrip.live { border-color: var(--color-accent); }
+.kb .pstrip .sglyph { flex-shrink: 0; font-weight: 700; color: var(--color-muted); }
+.kb .pstrip.fired .sglyph { color: var(--color-danger); }
+.kb .pstrip.live .sglyph { color: var(--color-accent); }
+.kb .pstrip .pmark { flex-shrink: 0; }
+.kb .pstrip.pulse .pmark::before { animation: pb-live 1.8s var(--ease-standard, ease-in-out) infinite; }
+.kb .pstrip .sname { min-width: 3ch; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-primary); }
+.kb .pstrip.fix-idle .sname, .kb .pstrip.shape-return .sname, .kb .pstrip.shape-self .sname { color: var(--color-secondary); }
+.kb .pstrip .srework { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-success); }
+.kb .pstrip .sdots { margin-left: auto; flex-shrink: 0; display: inline-flex; align-items: center; gap: 3px; }
+.kb .pstrip .sdots.text { font-variant-numeric: tabular-nums; color: var(--color-secondary); }
+.kb .pstrip .sdot { width: 7px; height: 7px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--color-muted) 70%, transparent); }
+.kb .pstrip .sdot.bad { background: var(--color-danger); box-shadow: none; }
+.kb .pstrip .sdot.ok { background: var(--color-success); box-shadow: none; }
+.kb .pstrip .sdot.next { box-shadow: inset 0 0 0 2px var(--color-accent); }
+.kb .dir-TB .pstrip .pport.out { bottom: -5px; left: calc(50% - 4.5px); }
 .kb .card .history { display: flex; flex-direction: column; gap: 4px; }
 .kb .card .history summary { list-style: none; display: inline-flex; align-items: center; gap: 6px; font-size: var(--text-label); color: var(--color-muted); cursor: pointer; border-radius: 4px; padding: 2px 4px; margin-left: -4px; min-height: 22px; }
 .kb .card .history summary::-webkit-details-marker { display: none; }
@@ -1224,7 +1262,7 @@
 .kb .card .history .hnone { font-size: var(--text-caption); color: var(--color-muted); }
 .kb .card .history .hsub { margin: 4px 0 0 16px; font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); }
 @media (prefers-reduced-motion: reduce) {
-  .kb .pedge.live, .kb .pnode.pulse .pdot { animation: none; }
+  .kb .pedge.live, .kb .pnode.pulse .pdot, .kb .pstrip.pulse .pmark::before { animation: none; }
   .kb .pedge.live { stroke-width: 3; stroke-dasharray: none; }
 }
 @media (pointer: coarse) {
