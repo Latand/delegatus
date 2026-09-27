@@ -274,7 +274,14 @@ export function commitPipelineStage(
     const missing = changedOutputPaths.find((candidate) => !stagedPaths.has(candidate));
     if (missing) return { ok: false, error: `declared output ${missing} was not staged` };
   }
-  const commit = exec("git", ["commit", "-m", `pipeline(${pipeline.id}): complete ${stageId}`], pipeline.worktreeDir);
+  // Git's ident probes include worktree config and GIT_AUTHOR_*/GIT_COMMITTER_*.
+  // Only a missing identity gets the controller's one-command fallback.
+  const author = exec("git", ["var", "GIT_AUTHOR_IDENT"], pipeline.worktreeDir);
+  const committer = exec("git", ["var", "GIT_COMMITTER_IDENT"], pipeline.worktreeDir);
+  const identity = author.code === 0 && committer.code === 0
+    ? []
+    : ["-c", "user.name=Delegatus", "-c", `user.email=${["noreply", "delegatus.invalid"].join("@")}`];
+  const commit = exec("git", [...identity, "commit", "-m", `pipeline(${pipeline.id}): complete ${stageId}`], pipeline.worktreeDir);
   if (commit.code !== 0) return failure("committing the passed stage", commit);
   const head = exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
   if (head.code !== 0 || !head.stdout.trim()) return failure("recording the passed stage commit", head);

@@ -44,6 +44,33 @@ function git(cwd: string, ...args: string[]): string {
   return result.stdout.trim();
 }
 
+function isolatedIdentityRepo() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-identity-"));
+  const home = path.join(root, "home");
+  const xdg = path.join(root, "xdg");
+  const repo = path.join(root, "repo");
+  for (const directory of [home, xdg, repo]) fs.mkdirSync(directory);
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (/^GIT_(?:AUTHOR_|COMMITTER_|CONFIG_)/.test(key)) delete env[key];
+  }
+  Object.assign(env, { HOME: home, XDG_CONFIG_HOME: xdg, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(home, ".gitconfig") });
+  const exec: ExecPort = (command, args, cwd) => {
+    const result = spawnSync(command, args, { cwd, env, encoding: "utf8" });
+    return { code: result.status, stdout: result.stdout ?? "", stderr: result.stderr || result.error?.message || "" };
+  };
+  const run = (...args: string[]) => {
+    const result = exec("git", args, repo);
+    if (result.code !== 0) throw new Error(result.stderr || result.stdout);
+    return result.stdout.trim();
+  };
+  run("init", "--initial-branch=main");
+  fs.writeFileSync(path.join(repo, "source.ts"), "export const value = 1;\n");
+  run("add", "source.ts");
+  run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "initial");
+  return { root, repo, env, exec, run };
+}
+
 test("a real stale dirty checkout provisions from the freshly fetched origin/main tip", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-base-"));
   const origin = path.join(root, "origin.git");
@@ -345,6 +372,72 @@ test("pass commits a dirty stage and retry resets plus cleans", () => {
   expect(calls).toContain("git add -A");
   expect(calls).toContain("git reset --hard base");
   expect(calls).toContain("git clean -fd");
+});
+
+test("read-only declared output commits with no host Git identity and leaves config untouched", () => {
+  const box = isolatedIdentityRepo();
+  try {
+    const subject = pipeline();
+    subject.worktreeDir = box.repo;
+    subject.lastPassedCommit = box.run("rev-parse", "HEAD");
+    expect(box.exec("git", ["var", "GIT_AUTHOR_IDENT"], box.repo).code).not.toBe(0);
+    expect(box.exec("git", ["var", "GIT_COMMITTER_IDENT"], box.repo).code).not.toBe(0);
+    fs.mkdirSync(path.join(box.repo, "reports"));
+    fs.writeFileSync(path.join(box.repo, "reports", "audit.md"), "audited\n");
+
+    const result = commitPipelineStage(subject, "audit", false, box.exec, ["reports/audit.md"]);
+    expect(result.ok).toBe(true);
+    expect(box.run("show", "--name-only", "--format=", "HEAD")).toBe("reports/audit.md");
+    const fallbackEmail = ["noreply", "delegatus.invalid"].join("@");
+    expect(box.run("log", "-1", "--format=%an%n%ae%n%cn%n%ce")).toBe(
+      ["Delegatus", fallbackEmail, "Delegatus", fallbackEmail].join("\n"),
+    );
+    expect(box.exec("git", ["config", "--local", "--get", "user.name"], box.repo).code).not.toBe(0);
+    expect(box.exec("git", ["config", "--local", "--get", "user.email"], box.repo).code).not.toBe(0);
+  } finally {
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
+});
+
+test("stage commit keeps the identity configured for its worktree", () => {
+  const box = isolatedIdentityRepo();
+  try {
+    const email = ["configured", "example.invalid"].join("@");
+    box.run("config", "--local", "user.name", "Configured Test");
+    box.run("config", "--local", "user.email", email);
+    fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 2;\n");
+    const subject = pipeline();
+    subject.worktreeDir = box.repo;
+
+    expect(commitPipelineStage(subject, "build", true, box.exec).ok).toBe(true);
+    expect(box.run("log", "-1", "--format=%an%n%ae%n%cn%n%ce")).toBe(
+      ["Configured Test", email, "Configured Test", email].join("\n"),
+    );
+  } finally {
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
+});
+
+test("stage commit keeps Git author and committer environment identities", () => {
+  const box = isolatedIdentityRepo();
+  try {
+    const authorEmail = ["author", "example.invalid"].join("@");
+    const committerEmail = ["committer", "example.invalid"].join("@");
+    Object.assign(box.env, {
+      GIT_AUTHOR_NAME: "Environment Author", GIT_AUTHOR_EMAIL: authorEmail,
+      GIT_COMMITTER_NAME: "Environment Committer", GIT_COMMITTER_EMAIL: committerEmail,
+    });
+    fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 2;\n");
+    const subject = pipeline();
+    subject.worktreeDir = box.repo;
+
+    expect(commitPipelineStage(subject, "build", true, box.exec).ok).toBe(true);
+    expect(box.run("log", "-1", "--format=%an%n%ae%n%cn%n%ce")).toBe(
+      ["Environment Author", authorEmail, "Environment Committer", committerEmail].join("\n"),
+    );
+  } finally {
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
 });
 
 test("read-only stage records a declared report without granting source commits", () => {
