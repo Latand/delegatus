@@ -140,6 +140,12 @@ limits the run to one viewport. `--load-only` repeats just the cold-load case;
 `LANDING_DIST_DIR` selects a separately built baseline with the same driver.
 `--steps-only` measures manual steps; `--early-tab-only` holds the demo script
 until a tab is selected, then verifies that selection survives startup.
+Run the full scenario to exercise startup again after playback, tabs and
+language switches have populated browser history and storage. The full run
+also checks early Search in both languages, rapid tab choices after each
+language switch, and empty search responses: a missing result must offer a
+retry without acknowledging readiness, and retry must recover three results
+in the same iframe. Acknowledgements are checked against the rendered DOM.
 
 The driver records load, manual steps, automatic playback, tabs and repeated
 EN/UK switches after visiting the lower sections. Chrome traces record script
@@ -154,3 +160,10 @@ as soon as the demo changes its world. Tabs keep that Viewer running, and
 view readiness follows the actual controls and rendering instead of fixed
 500/900 ms waits. Focus in a demo frame uses `preventScroll`, so opening a
 conversation or search after translation cannot move the outer landing.
+
+Phone navigation waits for its destination to render before the next queued
+view opens. Project navigation uses the Viewer's own navigation command,
+which clears pending conversation intent; an initial conversation can no
+longer finish opening over a later Search selection. Readiness timeouts show
+a localized retry control. Reloaded frames also wait for acknowledgement;
+elapsed time alone never marks a frame ready.

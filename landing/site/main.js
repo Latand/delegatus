@@ -499,6 +499,7 @@
         send(live, { type: "dlg:view", view: live.view });
         return;
       }
+      live.el.querySelector(".demo-retry")?.remove();
       if (live.iframe.settle) live.iframe.settle();
       else {
         live.el.setAttribute("data-loaded", "");
@@ -547,6 +548,7 @@
   onLanguage = () => {
     renderSteps();
     for (const live of lives) {
+      live.el.querySelector(".demo-retry")?.remove();
       if (live.iframe) {
         live.iframe.title = live.el.getAttribute("aria-label") || "Delegatus";
         const rect = live.el.getBoundingClientRect();

@@ -611,31 +611,30 @@ function showView(view: string) {
   const version = ++viewVersion;
   viewQueue = viewQueue.then(async () => {
     try {
-      await viewerReady;
+      await viewerReady();
       if (version !== viewVersion) return;
       await navigateView(view);
       await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
       // Recheck after paint: a transient search field is not a rendered result.
       if (view === "search" && !searchReady()) throw new Error("Search was replaced before rendering");
       if (version === viewVersion) post({ type: "dlg:viewed", view });
-    } catch {
-      if (version === viewVersion) post({ type: "dlg:view-error", view });
+    } catch (error) {
+      if (version === viewVersion) post({ type: "dlg:view-error", view, reason: error instanceof Error ? error.message : "Navigation failed" });
     }
   });
   return viewQueue;
 }
 
-/** Types the search the demo shows into the search field that just opened:
-    on the desktop the message-search dialog's own field, never the board's
-    task filter behind it. */
+/** The real search dialog owns query state, loading and duplicate folding. */
 function searchReady() {
   const field = document.querySelector<HTMLInputElement>("[data-search-input]");
   const dialog = field?.closest('[role="dialog"]');
   const query = L("webhook", "вебхук");
   return field?.value === query && !!dialog &&
     !dialog.querySelector("[data-search-loading], [data-search-updating], [data-search-stale], [data-search-error]") &&
-    dialog.querySelectorAll("[data-search-result]").length === search(query, null).items.length;
+    dialog.querySelectorAll("[data-search-result]").length > 0;
 }
+/** Use the message-search field on both layouts, never a background filter. */
 async function typeSearch() {
   const field = await waitFor(() => document.querySelector<HTMLInputElement>("[data-search-input]"), 30);
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(field, L("webhook", "вебхук"));
@@ -716,8 +715,8 @@ createRoot(document.getElementById("root")!).render(<Viewer />);
 announce();
 const INITIAL_VIEW = params.get("view");
 /* The page swaps a frame in once it has drawn its view. */
-const viewerReady = waitFor(() => document.querySelector("[data-seat-placement], [data-mobile2-board-dock], [data-kanban-board]"), 80);
-void viewerReady.then(() => {
+const viewerReady = () => waitFor(() => document.querySelector("[data-seat-placement], [data-mobile2-screen], [data-kanban-board]"), 80);
+void viewerReady().then(() => {
   // A tab selected during boot owns navigation, including before first paint.
   if (viewVersion === 0) return showView(INITIAL_VIEW ?? (PHONE ? "orchestrator" : "board"));
 }).catch(() => post({ type: "dlg:view-error", view: INITIAL_VIEW ?? (PHONE ? "orchestrator" : "board") }));

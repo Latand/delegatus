@@ -60,6 +60,7 @@ const settle = (page: Page, ms: number) => page.waitForTimeout(ms);
 
 async function frameOf(page: Page, selector: string): Promise<Frame> {
   await page.waitForFunction(selector => !document.querySelector(`${selector}[data-busy]`), selector, { timeout: 30_000 });
+  if (await page.locator(`${selector} .demo-retry`).count()) throw new Error(`navigation failed in ${selector}`);
   const handle = await page.locator(`${selector} iframe`).last().elementHandle({ timeout: 20_000 });
   const frame = await handle?.contentFrame();
   if (!frame) throw new Error(`no frame in ${selector}`);
@@ -349,6 +350,15 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
     console.log(`${perfLabel}-${viewport.name}: complete`);
     if (perfLabel === "after" && (result.language as any).value.some((row: any) => Math.abs(row.delta) > 2)) throw new Error("language switch moved the page");
     if (errors.length) throw new Error(errors.join("\n"));
+  } catch (error) {
+    await page.screenshot({ path: path.join(out, `${perfLabel}-${viewport.name}-failure.png`) });
+    const frames = await Promise.all(page.frames().map(async frame => frame.evaluate(() => ({
+      url: location.href, hash: location.hash, screen: document.querySelector("[data-mobile2-screen]")?.getAttribute("data-mobile2-screen"),
+      search: document.querySelector<HTMLInputElement>("[data-search-input]")?.value,
+      results: document.querySelectorAll("[data-search-result]").length, records: (window as any).perfRecords,
+    })).catch(() => null)));
+    fs.writeFileSync(path.join(out, `${perfLabel}-${viewport.name}-failure.json`), JSON.stringify({ error: String(error), frames }, null, 2));
+    throw error;
   } finally { await context.close(); }
 }
 if (perfLabel) {
