@@ -5100,6 +5100,19 @@ export class AgentRegistry {
     return conversation ? { id: conversation.id, turn: conversation.turn } : null;
   }
 
+  /** Current credential identity for the seat's stdio MCP heartbeat. */
+  seatMcpReceipt(conversationId: string): { spawnCapabilityDigest: string; createdAt: string } | null {
+    if (this.sqliteStore && (this.sqliteMode === "sqlite" || this.sqliteMode === "read")) {
+      return this.sqliteStore.seatMcpReceipt(conversationId);
+    }
+    const receipt = Object.values(this.readOnlySnapshot().receipts)
+      .filter((candidate) => candidate.conversationId === conversationId && candidate.spawnCapabilityDigest)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    return receipt?.spawnCapabilityDigest
+      ? { spawnCapabilityDigest: receipt.spawnCapabilityDigest, createdAt: receipt.createdAt }
+      : null;
+  }
+
   /** Resolves only conversation ids already present in the bounded custom-title
       store. JSON compatibility mode deliberately stays registry-free on the
       snapshot route; UUID/path title keys still apply there. */

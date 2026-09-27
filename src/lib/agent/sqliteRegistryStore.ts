@@ -860,6 +860,16 @@ export class SqliteAgentRegistryStore {
     }
   }
 
+  /** One indexed receipt lookup for seat MCP liveness. Never load the registry
+      or its child payloads into a five-minute monitor check. */
+  seatMcpReceipt(conversationId: string): { spawnCapabilityDigest: string; createdAt: string } | null {
+    const row = this.db.query<{ digest: string | null; created_at: string | null }, [string]>(
+      "SELECT json_extract(value_json, '$.spawnCapabilityDigest') AS digest, json_extract(value_json, '$.createdAt') AS created_at FROM registry_rows WHERE collection='receipts' AND json_extract(value_json, '$.conversationId')=? AND json_extract(value_json, '$.spawnCapabilityDigest') IS NOT NULL ORDER BY row_order DESC LIMIT 1",
+    ).get(conversationId);
+    if (!row || typeof row.digest !== "string" || !/^[0-9a-f]{64}$/.test(row.digest) || typeof row.created_at !== "string") return null;
+    return { spawnCapabilityDigest: row.digest, createdAt: row.created_at };
+  }
+
   /** Retirement observation reads only the named conversation and session row.
       No receipt/catalog materialization, catalog fallback or state write. */
   retirementSubject(conversationId: string, key: string): {

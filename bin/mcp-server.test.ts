@@ -266,3 +266,101 @@ test("the installed MCP launcher forwards escalating signals until its Bun child
   expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
   expect(fs.readFileSync(signalPath, "utf8")).toBe("SIGINT\nSIGTERM\n");
 }, 15_000);
+
+test("one stdio MCP session keeps its tools through endpoint loss and a newly published runtime", async () => {
+  const { root, launcher } = installedPackage();
+  const stateDir = path.join(root, "state");
+  const targetFile = path.join(stateDir, "viewer-release.json");
+  fs.mkdirSync(stateDir, { recursive: true });
+  const endpoint = Bun.serve({ port: 0, fetch: () => Response.json({ ok: true }) });
+  const firstPort = endpoint.port!;
+  const firstRevision = "1".repeat(40);
+  const secondRevision = "2".repeat(40);
+  function publish(revision: string, port: number) {
+    const releaseId = `deploy-${revision}`;
+    const bundle = `
+      let buffer = "";
+      process.stdin.setEncoding("utf8");
+      process.stdin.on("data", async (chunk) => {
+        buffer += chunk;
+        while (buffer.includes("\\n")) {
+          const at = buffer.indexOf("\\n");
+          const line = buffer.slice(0, at); buffer = buffer.slice(at + 1);
+          const request = JSON.parse(line);
+          if (request.id === undefined) continue;
+          let result;
+          if (request.method === "initialize") result = { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "viewer", version: "1" } };
+          else if (request.method === "tools/list") result = { tools: [{ name: "release", description: "active release", inputSchema: { type: "object" } }] };
+          else if (request.method === "tools/call") {
+            try {
+              const response = await fetch("http://127.0.0.1:${port}/health");
+              if (!response.ok) throw new Error("endpoint unavailable");
+              result = { content: [{ type: "text", text: "${revision}" }] };
+            } catch { result = { content: [{ type: "text", text: "endpoint unavailable; retry" }], isError: true }; }
+          } else result = {};
+          process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\\n");
+        }
+      });
+    `;
+    const releaseRoot = path.join(stateDir, "mcp-runtime", "releases", releaseId);
+    fs.mkdirSync(path.join(releaseRoot, "dist"), { recursive: true });
+    fs.writeFileSync(path.join(releaseRoot, "dist", "mcp-server.mjs"), bundle);
+    fs.writeFileSync(targetFile, JSON.stringify({
+      revision, image: `viewer:${revision}`, container: "viewer-candidate", endpoint: `http://127.0.0.1:${port}`,
+      mcpRuntime: { source: "managed", revision, releaseId, artifactDigest: createHash("sha256").update(bundle).digest("hex"), stagedAt: new Date().toISOString() },
+    }));
+  }
+  publish(firstRevision, firstPort);
+  const bun = process.execPath;
+  const session = Bun.spawn({ cmd: [bun, launcher], cwd: root,
+    env: { ...process.env, LLV_STATE_DIR: stateDir, LLV_VIEWER_DEPLOY_TARGET: targetFile, LLV_SPAWN_CAPABILITY: "A".repeat(43), LLV_BUN_EXECUTABLE: bun },
+    stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  const reader = session.stdout.getReader();
+  let buffered = "";
+  async function responseFor(id: number): Promise<Record<string, any>> {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const at = buffered.indexOf("\n");
+      if (at >= 0) {
+        const line = buffered.slice(0, at); buffered = buffered.slice(at + 1);
+        const message = JSON.parse(line);
+        if (message.id === id) return message;
+        continue;
+      }
+      const next = await Promise.race([reader.read(), Bun.sleep(5_000).then(() => { throw new Error("MCP response timed out"); })]);
+      if (next.done) throw new Error("stdio MCP pipe closed");
+      buffered += new TextDecoder().decode(next.value);
+    }
+    throw new Error("MCP response timed out");
+  }
+  function call(id: number, method: string, params: object = {}) {
+    session.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+    return responseFor(id);
+  }
+  try {
+    expect((await call(1, "initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "test", version: "1" } })).result.serverInfo.name).toBe("viewer");
+    session.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
+    expect((await call(2, "tools/list")).result.tools[0].name).toBe("release");
+    expect((await call(3, "tools/call", { name: "release", arguments: {} })).result.content[0].text).toBe(firstRevision);
+    endpoint.stop(true);
+    expect((await call(4, "tools/call", { name: "release", arguments: {} })).result.isError).toBe(true);
+    const successor = Bun.serve({ port: 0, fetch: () => Response.json({ ok: true }) });
+    try {
+      publish(secondRevision, successor.port!);
+      let recovered = false;
+      for (let id = 5; id < 25; id++) {
+        const answer = await call(id, "tools/call", { name: "release", arguments: {} });
+        if (answer.result?.content?.[0]?.text === secondRevision) { recovered = true; break; }
+        expect(answer.result?.isError).toBe(true);
+        await Bun.sleep(50);
+      }
+      expect(recovered).toBe(true);
+      expect((await call(25, "tools/list")).result.tools[0].name).toBe("release");
+      expect(session.exitCode).toBeNull();
+    } finally { successor.stop(true); }
+  } finally {
+    session.stdin.end();
+    await session.exited;
+    reader.releaseLock();
+  }
+}, 20_000);

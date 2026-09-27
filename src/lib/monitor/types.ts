@@ -1270,7 +1270,7 @@ export interface SeatTickCheckInput {
     second check re-finds it instead of minting a twin. */
 export interface SeatTickCard {
   ref: string;
-  kind: "no-seat" | "retry-guard" | "tick-settings" | "source-unreadable" | "wake-unresolved";
+  kind: "no-seat" | "retry-guard" | "tick-settings" | "source-unreadable" | "wake-unresolved" | "mcp-unavailable";
   detail: string;
   /**
    * Whether the condition still holds.

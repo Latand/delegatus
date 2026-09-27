@@ -629,6 +629,20 @@ test("a wake is delivered by durable conversation id, with an idempotent client 
   expect(rig.written.at(-1)!.lastWakeAt).toBe(new Date(NOW).toISOString());
 });
 
+test("a seat whose stdio Viewer MCP is dead is carded and receives no more tick wakes", async () => {
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  const record = await runSeatTickCheck(PROJECT, {
+    ...rig.deps,
+    mcpHealth: () => ({ status: "dead", detail: "the session's stdio MCP launcher stopped reporting liveness" }),
+  });
+  expect(rig.sent).toHaveLength(0);
+  expect(record?.delivery?.outcome).toBe("seat-mcp-unavailable");
+  expect(rig.cards).toContainEqual({ project: PROJECT, card: expect.objectContaining({
+    kind: "mcp-unavailable", ref: "seat-viewer-mcp-unavailable", state: "open", instance: "7",
+  }) });
+  expect(rig.written.at(-1)?.lastWakeAt).toBe(OVERDUE.lastWakeAt);
+});
+
 /* Two checks that found the same thing raise the same wake, so a re-send after
    a send that never landed is the replay the delivery layer treats it as —
    rather than a second copy of a message the seat may yet receive. */
