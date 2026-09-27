@@ -469,7 +469,9 @@ The dashboard counts the signed-in member on a team host. The owner sees the
 owner's input when signed in; a solo host has one `operator`. The host's
 `message_authors` row, keyed by the admitted submission and bound to its
 conversation (`src/lib/team/store.ts`), supplies the member id for a delivered
-message. The ingress request ledger reads the request's team actor. A typed
+message. An admitted spawn records its first delivery id with the spawning
+member, so remote ingest can attribute that prompt too. The ingress request
+ledger reads the request's team actor. A typed
 terminal prompt on a team host has no member identity and stays unknown.
 Existing team rows with no author also stay unknown. Neither adds to any
 person's hours. The page shows an unknown-author input count separately, and

@@ -186,6 +186,57 @@ test("direct spawn records one durable operator gesture while MCP service spawn 
   })]);
 });
 
+test("a team member's accepted spawn records the first delivery's author", async () => {
+  const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+  const { mintSession } = await import("@/lib/team/sessions");
+  const cwd = fs.mkdtempSync(path.join(routeSandbox, "member-spawn-author-"));
+  const store = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const previous = {
+    state: process.env.LLV_STATE_DIR,
+    transport: process.env.LLV_SPAWN_TRANSPORT,
+    hosts: process.env.LLV_STRUCTURED_HOSTS,
+    events: process.env.LLV_RUNTIME_EVENTS,
+    socket: process.env.LLV_RUNTIME_HOST_SOCKET,
+    ui: process.env.NEXT_PUBLIC_RUNTIME_UI,
+  };
+  process.env.LLV_STATE_DIR = path.join(cwd, "state");
+  process.env.LLV_SPAWN_TRANSPORT = "structured";
+  process.env.LLV_STRUCTURED_HOSTS = "1";
+  process.env.LLV_RUNTIME_EVENTS = "1";
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(cwd, "runtime.sock");
+  process.env.NEXT_PUBLIC_RUNTIME_UI = "1";
+  try {
+    const ownerId = "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const memberId = "m_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const team = teamStore();
+    team.insertMember({ id: ownerId, name: "Owner", role: "owner", status: "active", color: "teal",
+      telegram: null, createdAt: new Date().toISOString(), createdBy: "claim", revokedAt: null });
+    team.insertMember({ id: memberId, name: "Member", role: "member", status: "active", color: "sky",
+      telegram: null, createdAt: new Date().toISOString(), createdBy: "join", revokedAt: null });
+    const session = mintSession(team, memberId, "claim", { surface: "desktop", browser: "chrome" });
+    const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+      method: "POST",
+      headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin",
+        "content-type": "application/json", cookie: `llv_member=${session.value}` },
+      body: JSON.stringify({ title: "Review the harbor work", engine: "claude", cwd, project: "harbor",
+        ["prompt"]: "inspect", clientAttemptId: "member_spawn_author_1" }),
+    }), { ...structuredRouteDependencies(cwd), registry: () => store, defer: () => {},
+      recordOperatorActivity: () => ({ key: "b".repeat(64), engine: "claude", project: "harbor", atMs: 1 }) });
+    expect(response.status).toBe(202);
+    const body = await response.json() as { launchId: string; conversationId: string };
+    expect(team.messageAuthors([`spawn_${body.launchId}`]).get(`spawn_${body.launchId}`))
+      .toEqual({ memberId, conversationId: body.conversationId });
+  } finally {
+    resetTeamStoreForTests();
+    for (const [key, value] of Object.entries(previous)) {
+      const envKey = ({ state: "LLV_STATE_DIR", transport: "LLV_SPAWN_TRANSPORT", hosts: "LLV_STRUCTURED_HOSTS",
+        events: "LLV_RUNTIME_EVENTS", socket: "LLV_RUNTIME_HOST_SOCKET", ui: "NEXT_PUBLIC_RUNTIME_UI" } as const)[key as keyof typeof previous];
+      if (value === undefined) delete process.env[envKey];
+      else process.env[envKey] = value;
+    }
+  }
+});
+
 test("a corrupt WakaTime state file does not refuse an authorized direct spawn", async () => {
   const { recordDirectOperatorWakatimeActivity } = await import("@/lib/wakatime/operatorActivity");
   const { enqueueProductionOperatorHeartbeat } = await import("@/lib/wakatime/sync");

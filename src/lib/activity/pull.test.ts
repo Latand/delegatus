@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,7 +17,8 @@ import { localTransport, pullHost, type PullConfig } from "./pull";
 import { ActivityStore, LOCAL_HOST_KEY } from "./store";
 import { exportHumanInputs, listTranscriptFiles, type ConversationResolution } from "./transcriptExport";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
-import type { RegistryFile } from "@/lib/agent/registry";
+import { AgentRegistry, closeAgentRegistryForTests, type RegistryFile } from "@/lib/agent/registry";
+import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { TeamStore, resetTeamStoreForTests, teamStore } from "@/lib/team/store";
 import { mintSession } from "@/lib/team/sessions";
 
@@ -32,7 +34,10 @@ beforeEach(() => {
   remoteState = path.join(dir, "stage", "state");
   localStoreFile = path.join(dir, "local", "state", "activity", "records.sqlite");
 });
-afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+afterEach(() => {
+  closeAgentRegistryForTests();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
 
 const NOW = Date.parse("2026-09-23T12:00:00Z");
 const DAY = { start: Date.parse("2026-09-22T21:00:00Z"), end: Date.parse("2026-09-23T21:00:00Z") };
@@ -315,6 +320,79 @@ describe("pulling another host's records", () => {
       if (previous === undefined) delete process.env.LLV_STATE_DIR;
       else process.env.LLV_STATE_DIR = previous;
     }
+  });
+
+  test("a member's first spawn prompt is attributed through ingest and remote pull", async () => {
+    const file = path.join(dir, "stage", "sessions", "spawn-first.jsonl");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const registry = new AgentRegistry(path.join(remoteState, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+    const previous = process.env.LLV_STATE_DIR;
+    process.env.LLV_STATE_DIR = remoteState;
+    try {
+      const begun = registry.beginSpawnRequest({ engine: "codex", cwd: "/work/harbor", transport: "structured",
+        accountId: "work", launchProfile: emptyLaunchProfile({ cwd: "/work/harbor", title: "Inspect harbor work" }) });
+      if (begun.kind !== "created") throw new Error("spawn receipt was not created");
+      const spawnId = `spawn_${begun.receipt.launchId}`;
+      const operationId = `spawn_message_${begun.receipt.launchId}`;
+      const settled = registry.settleSpawn(begun.receipt.launchId, { key: { engine: "codex", sessionId: crypto.randomUUID() },
+        artifactPath: file, cwd: "/work/harbor", accountId: "work", status: "starting", host: null,
+        claimEpoch: 0, claimOwner: null, pendingAction: "spawn" });
+      if (settled.kind !== "settled") throw new Error("spawn receipt was not settled");
+      registry.holdDelivery(begun.receipt.conversationId, "inspect", spawnId, "text", [], null,
+        { operationId, kind: "send", policy: "queue" });
+      const team = teamStore();
+      team.insertMember({ id: MEMBER_A, name: "Owner", role: "owner", status: "active", color: "teal", telegram: null,
+        createdAt: "2026-09-23T00:00:00Z", createdBy: "claim", revokedAt: null });
+      team.recordMessageAuthor({ clientMessageId: spawnId, conversationId: begun.receipt.conversationId,
+        memberId: MEMBER_A, at: "2026-09-23T08:00:00Z", textDigest: null });
+      fs.writeFileSync(file, [
+        { timestamp: "2026-09-23T07:59:00Z", type: "session_meta", payload: { cwd: "/work/harbor", originator: "llv-structured-host" } },
+        { timestamp: "2026-09-23T08:00:00Z", type: "response_item", payload: { type: "message", role: "user", id: "spawn-first",
+          content: [{ type: "input_text", text: `<!-- llv:structured-user origin=operator dedup=${deliveryDedupToken(operationId)} -->\ninspect` }] } },
+      ].map((row) => JSON.stringify(row)).join("\n") + "\n");
+      const activity = ActivityStore.open(path.join(remoteState, "activity", "records.sqlite"));
+      try {
+        const stat = fs.statSync(file);
+        await ingestTranscripts([{ path: file, engine: "codex", size: stat.size, mtimeMs: stat.mtimeMs }], {
+          complete: true, listedAt: NOW, now: () => NOW, store: activity,
+          resolver: () => conversationResolver(registry.readOnlySnapshot(), () => registry.readOnlySnapshot()),
+        });
+        expect(activity.localRowsAfter(0, 10).map((row) => row.author)).toEqual([MEMBER_A]);
+      } finally { activity.close(); }
+    } finally {
+      resetTeamStoreForTests();
+      registry.close();
+      if (previous === undefined) delete process.env.LLV_STATE_DIR;
+      else process.env.LLV_STATE_DIR = previous;
+    }
+    expect(await pullWith({ ...config(), memberId: MEMBER_A })).toMatchObject({ ok: true });
+    expect(local((store) => store.candidates("stage", DAY.start, NOW, "stage").map((row) => row.author))).toEqual([MEMBER_A]);
+  });
+
+  test("an interrupted member change does not keep the previous member's coverage", async () => {
+    await teamStageRecords();
+    expect(await pullWith({ ...config(), memberId: MEMBER_A })).toMatchObject({ ok: true });
+    expect(local((store) => store.hostState("stage")?.coveredUntil)).toBe(NOW);
+    const real = localTransport();
+    let calls = 0;
+    const transport = async (env: Record<string, string>, script: string) => {
+      calls += 1;
+      return calls === 3 ? { code: 1, stdout: "", timedOut: false } : real(env, script);
+    };
+    const store = ActivityStore.open(localStoreFile);
+    try {
+      expect(await pullHost(store, "stage", { ...config(), memberId: MEMBER_B }, transport, () => NOW, 1))
+        .toMatchObject({ ok: false, error: "unreachable" });
+      expect(calls).toBe(3);
+      expect(store.hostState("stage")).toMatchObject({ coveredFrom: null, coveredUntil: null, readAt: null });
+    } finally { store.close(); }
+    const activityDir = path.join(dir, "local", "state", "activity");
+    fs.writeFileSync(path.join(activityDir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation" },
+      hosts: [{ id: "stage", pull: { ssh: "stage-box", memberId: MEMBER_B } }] }));
+    const read = readHumanInputs(DAY, NOW, { dir: () => activityDir,
+      readLedger: () => ({ rows: [], ledgerStartMs: null }), store: () => ActivityStore.openReadOnly(localStoreFile) });
+    expect(read.coverage.find((host) => host.host === "stage")?.covered).toEqual([]);
+    expect(read.hosts.find((host) => host.host === "stage")?.sources[0]).toMatchObject({ state: "unreadable", error: "unreachable" });
   });
 
   test("the operator's differently named memberships dedupe one input across hosts", async () => {

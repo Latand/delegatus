@@ -531,6 +531,7 @@ export class ActivityStore {
     this.transaction(() => {
       this.db.query("DELETE FROM activity_inputs WHERE host = ?").run(host);
       this.db.query("DELETE FROM activity_turns WHERE host = ?").run(host);
+      this.db.query("DELETE FROM activity_hosts WHERE host = ?").run(host);
     });
   }
 
