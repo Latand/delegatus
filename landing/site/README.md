@@ -146,6 +146,7 @@ also checks early Search in both languages, rapid tab choices after each
 language switch, and empty search responses: a missing result must offer a
 retry without acknowledging readiness, and retry must recover three results
 in the same iframe. Acknowledgements are checked against the rendered DOM.
+`--search-failure-only` isolates the empty-response and retry check.
 
 The driver records load, manual steps, automatic playback, tabs and repeated
 EN/UK switches after visiting the lower sections. Chrome traces record script

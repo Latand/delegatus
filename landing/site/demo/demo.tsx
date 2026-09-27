@@ -484,8 +484,12 @@ function waitFor<T>(find: () => T | null | undefined, tries = 40): Promise<T> {
   });
 }
 const byLabel = (text: string) => document.querySelector<HTMLElement>(`[aria-label="${CSS.escape(text)}"]`);
-function closeOverlays() {
+async function closeOverlays() {
+  const searchWasOpen = !!document.querySelector("[data-search-input]");
   (document.activeElement instanceof HTMLElement ? document.activeElement : document.body).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  // Let React unmount Search before reopening it. A close and open in one
+  // batch preserves the failed query, so typing it again cannot retry fetch.
+  if (searchWasOpen) await waitFor(() => !document.querySelector("[data-search-input]"));
 }
 /** The send control's hint stays up while the pointer or focus rests on it;
     once the request is on its way, the chat is what the visitor reads. Hints
@@ -507,7 +511,7 @@ function goBoard() {
 
 /** Presses the product's own controls to reach a view, the way a visitor would. */
 async function navigateView(view: string) {
-  closeOverlays();
+  await closeOverlays();
   if (!PHONE) {
     // Leaving full-screen mode only docks the reader. Close that local pane
     // too, so the next view has the same clean board as a fresh frame.

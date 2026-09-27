@@ -222,6 +222,13 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
     return { falseAcknowledgements: 0, recoveredResults: 3, sameFrame: true };
   }
   try {
+    if (process.argv.includes("--search-failure-only")) {
+      await page.goto(`${base}?lang=uk`, { waitUntil: "load" });
+      await page.locator(".live-open").scrollIntoViewIfNeeded();
+      await trace("search-failure", searchFailure);
+      if (errors.length) throw new Error(errors.join("\n"));
+      return;
+    }
     if (process.argv.includes("--early-tab-only")) {
       await trace("early-tab", earlyTab);
       return;
