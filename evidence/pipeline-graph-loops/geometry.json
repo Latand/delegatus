@@ -256,6 +256,40 @@
         "review-the-export-writer-and-its-presets:fail:fix-what-the-export-review-found-in-there": "Fix what the export review found in there · 2 | bad bad next"
       }
     },
+    "phone-task-p-loops-done-390-en": {
+      "pills": [
+        {
+          "stage": "design",
+          "rework": false,
+          "title": "Design · passed · Claude · Opus 5.5 · reasoning high"
+        },
+        {
+          "stage": "build",
+          "rework": false,
+          "title": "Build · passed · Claude · Opus 5.5 · reasoning high"
+        },
+        {
+          "stage": "critique",
+          "rework": false,
+          "title": "Critique · failed · Claude · Opus 5.5 · reasoning high · Fail edge: when Critique fails, Critique fix runs again. Used 2 of 2. · No rounds left · Critique fix fixes Critique's last findings once more, then the lane moves on"
+        },
+        {
+          "stage": "review",
+          "rework": false,
+          "title": "Review · failed · Claude · Opus 5.5 · reasoning high · Fail edge: when Review fails, Review fix runs again. Used 3 of 3. · No rounds left · Review fix fixes Review's last findings once more, then the lane moves on"
+        },
+        {
+          "stage": "critique-fix",
+          "rework": false,
+          "title": "Critique fix · passed · Claude · Opus 5.5 · reasoning high"
+        },
+        {
+          "stage": "review-fix",
+          "rework": false,
+          "title": "Review fix · passed · Claude · Opus 5.5 · reasoning high"
+        }
+      ]
+    },
     "phone-p-loops-done-390-en": {
       "names": [
         "Design | passed",
@@ -265,11 +299,15 @@
         "branch: Critique fix · 2 | passed",
         "branch: Review fix · 3 | passed"
       ],
+      "rework": [],
       "loops": [
         "↺ If Critique fails, work returns to Critique fix · up to 2 rounds",
         "↺ If Review fails, work returns to Review fix · up to 3 rounds"
       ],
       "bar": "completed·4h 44m"
+    },
+    "phone-task-p-loops-review-390-en": {
+      "pills": []
     },
     "phone-p-loops-review-390-en": {
       "names": [
@@ -280,11 +318,15 @@
         "branch: Critique fix · 2 | passed",
         "branch: Review fix | passed"
       ],
+      "rework": [],
       "loops": [
         "↺ If Critique fails, work returns to Critique fix · up to 2 rounds",
         "↺ If Review fails, work returns to Review fix · up to 3 rounds"
       ],
       "bar": "stages running·Review · 2·stage 4 of 6·2h"
+    },
+    "phone-task-p-loops-return-390-en": {
+      "pills": []
     },
     "phone-p-loops-return-390-en": {
       "names": [
@@ -293,10 +335,14 @@
         "Critique | waiting",
         "Review | waiting"
       ],
+      "rework": [],
       "loops": [
         "↺ If Review fails, work returns to Build · up to 2 rounds"
       ],
       "bar": "stages running·Build · 2·stage 2 of 4·20m"
+    },
+    "phone-task-p-loops-retry-390-en": {
+      "pills": []
     },
     "phone-p-loops-retry-390-en": {
       "names": [
@@ -304,21 +350,47 @@
         "Migrate · 2 | running",
         "Verify | waiting"
       ],
+      "rework": [],
       "loops": [
         "↺ If Migrate fails, work returns to Migrate · up to 3 rounds"
       ],
       "bar": "stages running·Migrate · 2·stage 2 of 3·10m"
     },
+    "phone-task-p-loops-rework-390-en": {
+      "pills": [
+        {
+          "stage": "build",
+          "rework": true,
+          "title": "Build · passed · working again · Claude · Opus 5.5 · reasoning high"
+        },
+        {
+          "stage": "critique",
+          "rework": false,
+          "title": "Critique · passed · Claude · Opus 5.5 · reasoning high · Fail edge: when Critique fails, Critique fix runs again. Used 1 of 1. · No rounds left · Critique fix fixes Critique's last findings once more, then the lane moves on"
+        },
+        {
+          "stage": "critique-fix",
+          "rework": false,
+          "title": "Critique fix · passed · Claude · Opus 5.5 · reasoning high"
+        }
+      ]
+    },
     "phone-p-loops-rework-390-en": {
       "names": [
-        "Build | passed",
+        "Build | passed | working again",
         "Critique · 2 | passed",
         "branch: Critique fix | passed"
+      ],
+      "rework": [
+        "build: working again"
       ],
       "loops": [
         "↺ If Critique fails, work returns to Critique fix · up to 1 round"
       ],
       "bar": "completed·54m"
+    },
+    "phone-task-p-loops-long-390-en": {
+      "pills": []
     },
     "phone-p-loops-long-390-en": {
       "names": [
@@ -329,6 +401,7 @@
         "branch: Fix what the export critique found there · 2 | passed",
         "branch: Fix what the export review found in there · 2 | running"
       ],
+      "rework": [],
       "loops": [
         "↺ If Critique the export against the old files fails, work returns to Fix what the export critique found there · up to 2 rounds",
         "↺ If Review the export writer and its presets fails, work returns to Fix what the export review found in there · up to 3 rounds"
@@ -591,6 +664,40 @@
         "review-the-export-writer-and-its-presets:fail:fix-what-the-export-review-found-in-there": "Fix what the export review found in there · 2 | bad bad next"
       }
     },
+    "phone-task-p-loops-done-390-uk": {
+      "pills": [
+        {
+          "stage": "design",
+          "rework": false,
+          "title": "Design · пройдено · Claude · Opus 5.5 · міркування високі"
+        },
+        {
+          "stage": "build",
+          "rework": false,
+          "title": "Build · пройдено · Claude · Opus 5.5 · міркування високі"
+        },
+        {
+          "stage": "critique",
+          "rework": false,
+          "title": "Critique · не пройдено · Claude · Opus 5.5 · міркування високі · Ребро невдачі: коли Critique не проходить, знову запускається Critique fix. Використано 2 з 2. · Раундів не лишилося · Critique fix ще раз виправляє останні зауваження Critique, далі пайплайн іде сам"
+        },
+        {
+          "stage": "review",
+          "rework": false,
+          "title": "Review · не пройдено · Claude · Opus 5.5 · міркування високі · Ребро невдачі: коли Review не проходить, знову запускається Review fix. Використано 3 з 3. · Раундів не лишилося · Review fix ще раз виправляє останні зауваження Review, далі пайплайн іде сам"
+        },
+        {
+          "stage": "critique-fix",
+          "rework": false,
+          "title": "Critique fix · пройдено · Claude · Opus 5.5 · міркування високі"
+        },
+        {
+          "stage": "review-fix",
+          "rework": false,
+          "title": "Review fix · пройдено · Claude · Opus 5.5 · міркування високі"
+        }
+      ]
+    },
     "phone-p-loops-done-390-uk": {
       "names": [
         "Design | пройдено",
@@ -600,11 +707,15 @@
         "гілка: Critique fix · 2 | пройдено",
         "гілка: Review fix · 3 | пройдено"
       ],
+      "rework": [],
       "loops": [
         "↺ Якщо Critique не проходить, робота повертається до Critique fix · до 2 раундів",
         "↺ Якщо Review не проходить, робота повертається до Review fix · до 3 раундів"
       ],
       "bar": "завершено·4 год 44 хв"
+    },
+    "phone-task-p-loops-review-390-uk": {
+      "pills": []
     },
     "phone-p-loops-review-390-uk": {
       "names": [
@@ -615,11 +726,15 @@
         "гілка: Critique fix · 2 | пройдено",
         "гілка: Review fix | пройдено"
       ],
+      "rework": [],
       "loops": [
         "↺ Якщо Critique не проходить, робота повертається до Critique fix · до 2 раундів",
         "↺ Якщо Review не проходить, робота повертається до Review fix · до 3 раундів"
       ],
       "bar": "етапи виконуються·Review · 2·етап 4 з 6·2 год"
+    },
+    "phone-task-p-loops-return-390-uk": {
+      "pills": []
     },
     "phone-p-loops-return-390-uk": {
       "names": [
@@ -628,10 +743,14 @@
         "Critique | чекає",
         "Review | чекає"
       ],
+      "rework": [],
       "loops": [
         "↺ Якщо Review не проходить, робота повертається до Build · до 2 раундів"
       ],
       "bar": "етапи виконуються·Build · 2·етап 2 з 4·20 хв"
+    },
+    "phone-task-p-loops-retry-390-uk": {
+      "pills": []
     },
     "phone-p-loops-retry-390-uk": {
       "names": [
@@ -639,21 +758,47 @@
         "Migrate · 2 | працює",
         "Verify | чекає"
       ],
+      "rework": [],
       "loops": [
         "↺ Якщо Migrate не проходить, робота повертається до Migrate · до 3 раундів"
       ],
       "bar": "етапи виконуються·Migrate · 2·етап 2 з 3·10 хв"
     },
+    "phone-task-p-loops-rework-390-uk": {
+      "pills": [
+        {
+          "stage": "build",
+          "rework": true,
+          "title": "Build · пройдено · знову працює · Claude · Opus 5.5 · міркування високі"
+        },
+        {
+          "stage": "critique",
+          "rework": false,
+          "title": "Critique · пройдено · Claude · Opus 5.5 · міркування високі · Ребро невдачі: коли Critique не проходить, знову запускається Critique fix. Використано 1 з 1. · Раундів не лишилося · Critique fix ще раз виправляє останні зауваження Critique, далі пайплайн іде сам"
+        },
+        {
+          "stage": "critique-fix",
+          "rework": false,
+          "title": "Critique fix · пройдено · Claude · Opus 5.5 · міркування високі"
+        }
+      ]
+    },
     "phone-p-loops-rework-390-uk": {
       "names": [
-        "Build | пройдено",
+        "Build | пройдено | знову працює",
         "Critique · 2 | пройдено",
         "гілка: Critique fix | пройдено"
+      ],
+      "rework": [
+        "build: знову працює"
       ],
       "loops": [
         "↺ Якщо Critique не проходить, робота повертається до Critique fix · до 1 раунду"
       ],
       "bar": "завершено·54 хв"
+    },
+    "phone-task-p-loops-long-390-uk": {
+      "pills": []
     },
     "phone-p-loops-long-390-uk": {
       "names": [
@@ -664,6 +809,7 @@
         "гілка: Fix what the export critique found there · 2 | пройдено",
         "гілка: Fix what the export review found in there · 2 | працює"
       ],
+      "rework": [],
       "loops": [
         "↺ Якщо Critique the export against the old files не проходить, робота повертається до Fix what the export critique found there · до 2 раундів",
         "↺ Якщо Review the export writer and its presets не проходить, робота повертається до Fix what the export review found in there · до 3 раундів"

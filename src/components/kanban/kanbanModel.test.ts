@@ -8,7 +8,7 @@ import { buildSchemeLayout, type SchemeLayout } from "@/components/scheme/layout
 import { buildTaskBands } from "@/components/scheme/taskBands";
 import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
 
-import { buildKanbanModel, cardHasLiveWork, KANBAN_STATUSES, summarizePipeline } from "./kanbanModel";
+import { buildKanbanModel, cardHasLiveWork, KANBAN_STATUSES, summarizePipeline, workingStageConversations } from "./kanbanModel";
 import { pipelineProgress } from "./PipelineSection";
 import { translate, type TFunction } from "@/lib/i18n";
 
@@ -198,6 +198,30 @@ function buildingLane(id: string, taskId: string, attempt: { conversationId?: st
     createdAt: iso(NOW - 3600),
   } as unknown as Pipeline;
 }
+
+/* A completed lane whose Build conversation took more work (#1744): the phone
+   screens, which summarize lanes outside the board model, read the same
+   working conversations the board does, and the chip carries it. */
+test("a settled stage whose conversation works again reads so on the board and on the phone summaries", () => {
+  const reworking = file(321, { activity: "live", lastTurn: { startedAt: (NOW - 60) * 1000, endedAt: null }, lastAgentWorkAt: (NOW - 30) * 1000, mtime: NOW - 30 });
+  const lane = buildingLane("p-rework", "t-rework", { conversationId: reworking.conversationId, agentPath: null, startedAt: iso(NOW - 3600) });
+  const done = {
+    ...lane,
+    state: "completed",
+    cursor: null,
+    runs: [{ stageId: "build", attempts: [{ ...lane.runs[0]!.attempts[0]!, state: "passed", completedAt: iso(NOW - 1800) }] }],
+  } as unknown as Pipeline;
+  const working = workingStageConversations([done], [reworking, file(322)], NOW);
+  expect([...working].sort()).toEqual([reworking.conversationId!, reworking.path].sort());
+  const phone = summarizePipeline(done, new Map(), working);
+  expect(phone.chips.find((chip) => chip.stage.id === "build")).toMatchObject({ state: "passed", rework: true });
+  expect(phone.chips.find((chip) => chip.stage.id === "review")!.rework).toBe(false);
+  const board = model([task("t-rework", "assigned", [])], [reworking], { pipelines: [done] });
+  const card = board.columns.assigned.cards.find((entry) => entry.task?.id === "t-rework")!;
+  expect(card.pipelines[0]!.chips.find((chip) => chip.stage.id === "build")!.rework).toBe(true);
+  /* Idle, it is plain passed. */
+  expect(summarizePipeline(done, new Map(), workingStageConversations([done], [file(321)], NOW)).chips[0]!.rework).toBe(false);
+});
 
 /* The operator's report of 2026-09-24, as the live board had it: in Assigned,
    the card whose build stage was running sat last. The stage's conversation

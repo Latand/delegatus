@@ -152,7 +152,10 @@ export function stageViews(pipeline: Pipeline, flowsById: ReadonlyMap<string, Fl
     const rounds = stage.kind === "review-loop" ? roundsOf(attempt, flowsById) : [];
     /* A stage the lane waits on is where it stands, whatever lies ahead. */
     const settled = Boolean(attempt) && !LIVE_CHIPS.has(state);
-    const rework = settled && Boolean((attempt!.agentPath && working.has(attempt!.agentPath)) || (attempt!.conversationId && working.has(attempt!.conversationId)));
+    /* Rework reads the attempt's own state: an attempt parked on a decision
+       has ended, and its conversation working again is rework too. */
+    const ended = Boolean(attempt) && !LIVE_ATTEMPT_STATES.has(attempt!.state);
+    const rework = ended && Boolean((attempt!.agentPath && working.has(attempt!.agentPath)) || (attempt!.conversationId && working.has(attempt!.conversationId)));
     views.set(stage.id, settled && !rework && ahead.has(stage.id)
       ? { state: "pending", again: true, previous: state, attempts, attempt, rounds: [], rework: false }
       : { state, again: false, previous: null, attempts, attempt, rounds, rework });

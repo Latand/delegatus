@@ -12139,15 +12139,32 @@ describe("readable pipeline graph: loops fold into their sources, nodes say what
             }
             await phone.page.waitForSelector(`[data-phone-task-lane="${lane.pipeline}"]`, { timeout: 10_000 });
             await phone.page.waitForTimeout(400);
+            /* The lane on its task screen: a settled stage working again says so on its pill (#1744). */
+            const taskPills = await phone.page.evaluate((pipeline) => [...document.querySelectorAll(`[data-phone-task-lane="${pipeline}"] .pb-pill[data-stage]`)]
+              .map((pill) => ({ stage: pill.getAttribute("data-stage"), rework: pill.classList.contains("rework"), title: (pill as HTMLElement).title })), lane.pipeline);
+            readings[`phone-task-${lane.pipeline}-390-${lang}`] = { pills: taskPills } as never;
+            if (lane.pipeline === "p-loops-rework") {
+              const build = taskPills.find((pill) => pill.stage === "build");
+              if (build && (!build.rework || !build.title.includes(translate(lang, "kanban.graph.workingAgain")))) failures.push(`phone-task-${lane.pipeline}-390-${lang}: Build's pill does not say it works again`);
+            }
+            if (taskPills.some((pill) => pill.rework && !(lane.pipeline === "p-loops-rework" && pill.stage === "build"))) failures.push(`phone-task-${lane.pipeline}-390-${lang}: a pill reads working again where no conversation works`);
             await full(`phone-task-${lane.pipeline}-390-${lang}`, `[data-phone-task-body="${lane.task}"]`);
             await phone.page.locator(`[data-phone-task-lane="${lane.pipeline}"] [data-open-stages="${lane.pipeline}"]`).first().evaluate((element) => (element as HTMLElement).click());
             await phone.page.waitForSelector(`[data-mobile2-screen="pipeline"][data-mobile2-pipeline="${lane.pipeline}"] .pblock`, { timeout: 10_000 });
             await phone.page.waitForTimeout(400);
-            readings[`phone-${lane.pipeline}-390-${lang}`] = await phone.page.evaluate(() => ({
-              names: [...document.querySelectorAll('[data-mobile2-screen="pipeline"] .pb-stage[data-stage]')].map((row) => `${row.querySelector(".pb-name")?.textContent ?? ""} | ${row.querySelector(".pb-stage-state")?.textContent ?? ""}`),
+            /* Every stage's row, the folded passed ones opened. */
+            await phone.page.evaluate(() => { (document.querySelector('[data-mobile2-screen="pipeline"] [data-passed-fold]') as HTMLElement | null)?.click(); });
+            await phone.page.waitForTimeout(200);
+            const screen = await phone.page.evaluate(() => ({
+              names: [...document.querySelectorAll('[data-mobile2-screen="pipeline"] .pb-stage[data-stage]')].map((row) => `${row.querySelector(".pb-name")?.textContent ?? ""} | ${row.querySelector(".pb-stage-state")?.firstChild?.textContent ?? ""}${row.querySelector(".pb-rework") ? ` | ${row.querySelector(".pb-rework")!.textContent}` : ""}`),
+              rework: [...document.querySelectorAll('[data-mobile2-screen="pipeline"] .pb-stage[data-stage-rework="1"]')].map((row) => `${row.getAttribute("data-stage")}: ${row.querySelector(".pb-rework")?.textContent ?? ""}`),
               loops: [...document.querySelectorAll('[data-mobile2-screen="pipeline"] .pb-loops li')].map((row) => row.textContent),
               bar: document.querySelector('[data-mobile2-screen="pipeline"] .pb-stateline')?.textContent ?? null,
-            })) as never;
+            }));
+            readings[`phone-${lane.pipeline}-390-${lang}`] = screen as never;
+            /* The phone says what the desktop graph says: Build works again, and nothing else does. */
+            const wantRework = lane.pipeline === "p-loops-rework" ? [`build: ${translate(lang, "kanban.graph.workingAgain")}`] : [];
+            if (JSON.stringify(screen.rework) !== JSON.stringify(wantRework)) failures.push(`phone-${lane.pipeline}-390-${lang}: rows read working again on ${JSON.stringify(screen.rework)}, expected ${JSON.stringify(wantRework)}`);
             await full(`phone-pipeline-${lane.pipeline}-390-${lang}`, "[data-mobile2-pipeline-body]");
             await phone.page.locator("[data-mobile2-back]").first().evaluate((element) => (element as HTMLElement).click());
             await phone.page.waitForTimeout(300);

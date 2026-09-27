@@ -293,6 +293,43 @@ test("the graph is the operator's toggle on the task row, and it replaces the ch
   expect(open.querySelector(".pb-chain")).toBeNull();
 });
 
+/* A completed lane whose Implement conversation took more work (#1744): the
+   phone's rows and pills say «working again» as the board's graph does. */
+test("a settled stage whose conversation works again says so on its row and its pill, in en and uk", () => {
+  const done = searchPipeline({
+    state: "completed", cursor: null,
+    runs: searchPipeline().runs.map((run) => ({ ...run, attempts: run.attempts.map((entry) => ({ ...entry, state: "passed", completedAt: iso(600) })) })),
+  } as Partial<Pipeline>);
+  const reworked = done.runs.find((run) => run.stageId === "implement")!.attempts[1]!;
+  const summary = summarizePipeline(done, new Map(), new Set([reworked.agentPath!]));
+  for (const lang of ["en", "uk"] as const) {
+    setLocale(lang);
+    const again = translate(lang, "kanban.graph.workingAgain");
+    const passed = translate(lang, "kanban.graphState.passed");
+    const screen = mount(<PipelineBlock summary={summary} density="screen" nowMs={NOW_MS} onOpenStage={() => {}} />);
+    const fold = screen.querySelector("[data-passed-fold]");
+    if (fold) click(fold);
+    const row = screen.querySelector<HTMLElement>('.pb-stage[data-stage="implement"]')!;
+    expect(row.dataset.stageRework).toBe("1");
+    expect(row.querySelector(".pb-stage-state")?.firstChild?.textContent).toBe(passed);
+    expect(row.querySelector(".pb-stage-state .pb-rework")?.textContent).toBe(again);
+    expect(row.querySelector(".pb-stage-title .pmark")?.getAttribute("data-live")).toBe("1");
+    expect(row.querySelector("[aria-label]")?.getAttribute("aria-label")).toContain(again);
+    expect(screen.querySelectorAll("[data-stage-rework]").length).toBe(1);
+    expect(screen.querySelectorAll(".pb-rework").length).toBe(1);
+    for (const density of ["card", "task"] as const) {
+      const host = mount(<PipelineBlock summary={summary} density={density} nowMs={NOW_MS} onOpenStage={() => {}} />);
+      const pill = host.querySelector<HTMLElement>('.pb-pill[data-stage="implement"]');
+      /* A card may fold its passed stages; the task row draws every pill. */
+      if (!pill && density === "card") continue;
+      expect(pill!.className).toContain("rework");
+      expect(pill!.title).toContain(again);
+      expect(pill!.querySelector(".pmark")?.getAttribute("data-live")).toBe("1");
+      expect(host.querySelector('.pb-pill[data-stage="review"]')?.className ?? "").not.toContain("rework");
+    }
+  }
+});
+
 test("the screen density numbers the stages, folds the passed ones before the current one, and answers inside the parked stage", () => {
   const answers: string[] = [];
   const host = mount(<PipelineBlock summary={summarizePipeline(parked())} density="screen" nowMs={NOW_MS} onOpenStage={() => {}} onAnswer={(_pipeline, answer) => answers.push(answer.action)} />);

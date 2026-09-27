@@ -47,6 +47,8 @@
 .pmark[data-mark="alert"] { border-radius: 50%; background: currentColor; }
 .pmark .pmark-bang { color: var(--surface-card); font-size: 9px; font-weight: 800; line-height: 1; }
 .pmark[data-live="1"]::before { animation: pb-live 1.8s var(--ease-standard, ease-in-out) infinite; }
+/* A passed stage whose conversation works again (#1744) pulses its check the same way. */
+.pmark[data-mark="check"][data-live="1"] { border-radius: 50%; animation: pb-live 1.8s var(--ease-standard, ease-in-out) infinite; }
 @keyframes pb-live { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 10%, transparent); } }
 
 /* ── The block ───────────────────────────────────────────────────────────── */
@@ -67,6 +69,7 @@
 .pblock .pb-pill .pb-name { min-width: 3ch; overflow: hidden; text-overflow: ellipsis; line-height: 16px; }
 .pblock .pb-pill.tone-active, .pblock .pb-pill.tone-review { border-color: color-mix(in srgb, var(--stage-tone) 55%, var(--border-default)); }
 .pblock .pb-pill.tone-needs { border-color: var(--stage-tone); color: var(--stage-tone); }
+.pblock .pb-pill.rework { border-color: color-mix(in srgb, var(--color-success) 55%, var(--border-default)); }
 .pblock .pb-pill.tone-bad { border-color: color-mix(in srgb, var(--stage-tone) 45%, var(--border-default)); }
 .pblock .pb-pill.tone-idle .pb-name { color: var(--color-secondary); }
 /* No conversation yet: dashed, as a configured edge is. */
@@ -287,6 +290,8 @@
 .pblock .pb-ident-words { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pblock .pb-stage-state { flex: none; max-width: 40%; font-size: var(--text-label); font-weight: 600; color: var(--stage-tone); text-align: right; }
 .pblock .pb-stage.tone-idle .pb-stage-state { color: var(--color-muted); font-weight: 500; }
+/* A settled stage whose conversation works again: the board's «working again» (#1744). */
+.pblock .pb-stage-state .pb-rework { display: block; color: var(--color-success); }
 /* The fail edge's budget at rest is configuration, said quietly. */
 .pblock .pret[data-arc-state="rest"] { color: var(--color-muted); }
 .pblock .pb-stage-body { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 0 10px 2px 44px; }

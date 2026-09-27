@@ -64,6 +64,8 @@ export interface KanbanStageChip {
   rounds: number;
   /** Off the pass path: reached only through a fail edge. */
   branch: boolean;
+  /** The stage settled and its conversation is working again (#1744). */
+  rework: boolean;
 }
 
 export interface KanbanLoop {
@@ -305,6 +307,35 @@ function passPath(pipeline: Pipeline): string[] {
   return path;
 }
 
+/** The stage conversations working right now, by the row state the card's
+    «N working» reads. Only a stage's own transcripts are asked. */
+function workingStageConversationsOf(stagePaths: { has(path: string): boolean }, files: readonly FileEntry[], now: number): Set<string> {
+  const working = new Set<string>();
+  for (const file of files) {
+    if (!stagePaths.has(file.path) || !WORKING_STATES.has(mobileRowState(file, now).key)) continue;
+    working.add(file.path);
+    if (file.conversationId) working.add(file.conversationId);
+  }
+  return working;
+}
+
+/** The working stage conversations of the given pipelines, for a surface that
+    summarizes lanes outside the board model (the phone's pipeline and task
+    screens). `now` is epoch seconds, as the board model reads it. */
+export function workingStageConversations(pipelines: readonly Pipeline[], files: readonly FileEntry[], now: number): WorkingConversations {
+  const pathByConversation = new Map(files.filter((file) => file.conversationId).map((file) => [file.conversationId!, file.path]));
+  const stagePaths = new Set<string>();
+  for (const pipeline of pipelines) {
+    for (const stage of pipeline.stages) {
+      for (const attempt of stageAttempts(pipeline, stage.id)) {
+        const attemptPath = attempt.agentPath ?? (attempt.conversationId ? pathByConversation.get(attempt.conversationId) : undefined);
+        if (attemptPath) stagePaths.add(attemptPath);
+      }
+    }
+  }
+  return workingStageConversationsOf(stagePaths, files, now);
+}
+
 /** `working`: the transcript paths and conversation ids whose board row is
     working, so a settled stage whose conversation took more work reads so
     (#1744). A surface without the files passes nothing. */
@@ -332,7 +363,8 @@ export function summarizePipeline(pipeline: Pipeline, flowsById: ReadonlyMap<str
     const rounds = stage.kind === "review-loop"
       ? stageAttempts(pipeline, stage.id).reduce((count, attempt) => count + (attempt.historical ? 0 : attempt.reviewFlowSync?.roundCount ?? 0), 0)
       : 0;
-    return { stage, state: views.get(id)?.state ?? stageChipState(pipeline, stage), rounds, branch: failOnly.has(id) };
+    const view = views.get(id);
+    return { stage, state: view?.state ?? stageChipState(pipeline, stage), rounds, branch: failOnly.has(id), rework: view?.rework ?? false };
   });
   const loops: KanbanLoop[] = [];
   for (const stage of pipeline.stages) {
@@ -482,14 +514,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       }
     }
   }
-  /* The stage conversations working right now, by the row state the card's
-     «N working» reads. Only a stage's own transcripts are asked. */
-  const workingStageConversations = new Set<string>();
-  for (const file of input.files ?? []) {
-    if (!stageByPath.has(file.path) || !WORKING_STATES.has(mobileRowState(file, now).key)) continue;
-    workingStageConversations.add(file.path);
-    if (file.conversationId) workingStageConversations.add(file.conversationId);
-  }
+  const workingStageConversations = workingStageConversationsOf(stageByPath, input.files ?? [], now);
   const workflowByTask = new Map(projection.tasks.map((workflow) => [workflow.task.id, workflow] as const));
   const bandTitle = new Map(bands.map((band) => [band.id, band.title] as const));
 

@@ -279,13 +279,15 @@ const LIVE_EDGE_MS = 2_400;
 
 /** The mark in front of a stage's name: its shape carries the state and its
     colour is the stage's `STAGE_TONE`, the one tone map the graph reads. */
-export function StageToneMark({ state, className }: { state: StageChipState; className?: string }) {
+/** `live` marks work in flight where the state alone does not say so: a
+    settled stage whose conversation works again (#1744). */
+export function StageToneMark({ state, className, live = false }: { state: StageChipState; className?: string; live?: boolean }) {
   const shape = STAGE_MARK[state];
   return (
     <i
       className={`pmark tone-${STAGE_TONE[state]}${className ? ` ${className}` : ""}`}
       data-mark={shape}
-      data-live={LIVE_CHIP_STATES.has(state) ? "1" : undefined}
+      data-live={live || LIVE_CHIP_STATES.has(state) ? "1" : undefined}
       aria-hidden="true"
     >
       {shape === "check" ? <svg {...svgProps} strokeWidth={3}><path d="m5 12.5 4.5 4.5L19 7.5" /></svg> : null}

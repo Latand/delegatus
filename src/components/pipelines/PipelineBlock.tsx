@@ -102,16 +102,18 @@ function StagePill({ pipeline, chip, name, suffix, interactive, selected, onOpen
   const conversation = Boolean(attempt?.agentPath || attempt?.conversationId);
   const openable = interactive && Boolean(onOpen) && (conversation || stageDraftable(pipeline, chip.stage.id));
   const who = whoRuns(t, pipeline, chip.stage);
+  const rework = chip.rework ? t("kanban.graph.workingAgain") : null;
   const aria = [
     chip.rounds ? t("kanban.stageAriaRounds", { stage: name, state, count: chip.rounds }) : t("kanban.stageAria", { stage: name, state }),
+    rework,
     who,
     suffix?.title,
   ].filter(Boolean).join(". ");
-  const hover = [[name, state, who].filter(Boolean).join(" · "), suffix?.title].filter(Boolean).join(" · ");
-  const className = `pb-pill tone-${STAGE_TONE[chip.state]} st-${chip.state}${attempt ? "" : " waiting"}${chip.branch ? " side" : ""}${selected ? " selected" : ""}`;
+  const hover = [[name, state, rework, who].filter(Boolean).join(" · "), suffix?.title].filter(Boolean).join(" · ");
+  const className = `pb-pill tone-${STAGE_TONE[chip.state]} st-${chip.state}${attempt ? "" : " waiting"}${chip.branch ? " side" : ""}${chip.rework ? " rework" : ""}${selected ? " selected" : ""}`;
   const body = (
     <>
-      <StageToneMark state={chip.state} />
+      <StageToneMark state={chip.state} live={chip.rework} />
       <span className="pb-name">{chip.branch ? t("kanban.branch", { stage: name }) : name}</span>
       {chip.rounds ? <CountCircle n={chip.rounds} tone="neutral" label={t("kanban.stageAriaRounds", { stage: name, state, count: chip.rounds })} /> : null}
       {drawn(suffix) ? <ReturnSuffix arc={suffix.arc} title={suffix.title} /> : null}
@@ -850,13 +852,15 @@ function ScreenBlock(props: PipelineBlockProps & {
     /* One attempt caption (#1892): «Critique · 2» in the name, from the
        stage's second own attempt. */
     const attemptN = place.attempt !== null && place.attempts > 1 ? place.attempt : null;
-    const aria = [t("kanban.stageAria", { stage: name, state }), who, suffix?.title].filter(Boolean).join(". ");
+    /* A settled stage whose conversation works again says so under its state (#1744). */
+    const rework = chip.rework ? t("kanban.graph.workingAgain") : null;
+    const aria = [t("kanban.stageAria", { stage: name, state }), rework, who, suffix?.title].filter(Boolean).join(". ");
     const head = (
       <>
         <span className="pb-num">{index + 1}</span>
         <span className="pb-stage-main">
           <span className="pb-stage-title">
-            <StageToneMark state={shown} />
+            <StageToneMark state={shown} live={chip.rework} />
             {/* The number flows after the name's last word, wrapped or not. */}
             <span className="pb-name">{chip.branch ? t("kanban.branch", { stage: name }) : name}{attemptN !== null ? <span className="pb-attempt">{` · ${attemptN}`}</span> : null}</span>
             {chip.rounds ? <CountCircle n={chip.rounds} tone="neutral" label={t("kanban.stageAriaRounds", { stage: name, state, count: chip.rounds })} /> : null}
@@ -869,7 +873,10 @@ function ScreenBlock(props: PipelineBlockProps & {
             </span>
           ) : null}
         </span>
-        <span className={`pb-stage-state tone-${tone}`}>{state}</span>
+        <span className={`pb-stage-state tone-${tone}`}>
+          {state}
+          {rework ? <span className="pb-rework">{rework}</span> : null}
+        </span>
       </>
     );
     /* A stage that has run opens its conversation from its row, the current
@@ -895,6 +902,7 @@ function ScreenBlock(props: PipelineBlockProps & {
         data-stage={stage.id}
         data-stage-state={chip.state}
         data-stage-held={isHeld ? "1" : undefined}
+        data-stage-rework={chip.rework ? "1" : undefined}
         data-stage-current={isCurrent ? "1" : undefined}
       >
         {control}

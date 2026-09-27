@@ -14,7 +14,7 @@ import { cleanTitle } from "@/lib/title";
 
 import { reviewerBindingTargetsForRound } from "../flows/flowModel";
 import type { ReceiptAction as BoardReceiptAction } from "../kanban/KanbanReceipts";
-import { summarizePipeline } from "../kanban/kanbanModel";
+import { summarizePipeline, workingStageConversations } from "../kanban/kanbanModel";
 import { pastAttempts } from "../kanban/pipelineGraph";
 import { pastAttemptLabel, pastAttemptState, pastAttemptTone, pipelineTitle } from "../kanban/PipelineSection";
 import { browserPipelinePorts, type PipelinePorts } from "../kanban/pipelinePorts";
@@ -393,7 +393,9 @@ export function MobilePipelineScreen({
   const navState = useMobileNav();
   const links = useWorkLinks().of({ kind: "pipeline", id: pipeline.id });
   const flowsById = useMemo(() => new Map(flows.map((flow) => [flow.id, flow] as const)), [flows]);
-  const summary = useMemo(() => summarizePipeline(pipeline, flowsById), [pipeline, flowsById]);
+  /* A settled stage whose conversation works again reads so, as on the board (#1744). */
+  const working = useMemo(() => workingStageConversations([pipeline], files, now), [pipeline, files, now]);
+  const summary = useMemo(() => summarizePipeline(pipeline, flowsById, working), [pipeline, flowsById, working]);
   const names = useMemo(() => stageNames(t, pipeline), [t, pipeline]);
   /* A closed lane has no screen left to stand on: Close lane goes back. */
   const lane = usePhonePipelineActs({ ports, acts, onClosed: () => nav.back() });
