@@ -292,6 +292,7 @@ test("one stdio MCP session keeps its tools through endpoint loss and a newly pu
           if (request.method === "initialize") result = { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "viewer", version: "1" } };
           else if (request.method === "tools/list") result = { tools: [{ name: "release", description: "active release", inputSchema: { type: "object" } }] };
           else if (request.method === "tools/call") {
+            if (request.params.name === "crash") process.exit(7);
             try {
               const response = await fetch("http://127.0.0.1:${port}/health");
               if (!response.ok) throw new Error("endpoint unavailable");
@@ -356,6 +357,15 @@ test("one stdio MCP session keeps its tools through endpoint loss and a newly pu
       }
       expect(recovered).toBe(true);
       expect((await call(25, "tools/list")).result.tools[0].name).toBe("release");
+      expect((await call(26, "tools/call", { name: "crash", arguments: {} })).result.isError).toBe(true);
+      let restarted = false;
+      for (let id = 27; id < 47; id++) {
+        const answer = await call(id, "tools/call", { name: "release", arguments: {} });
+        if (answer.result?.content?.[0]?.text === secondRevision) { restarted = true; break; }
+        expect(answer.result?.isError).toBe(true);
+        await Bun.sleep(50);
+      }
+      expect(restarted).toBe(true);
       expect(session.exitCode).toBeNull();
     } finally { successor.stop(true); }
   } finally {
