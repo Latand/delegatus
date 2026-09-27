@@ -352,6 +352,7 @@
   // in once it has drawn, so a view never inherits what the last one left open.
   function reload(live) {
     if (!live.iframe) return;
+    live.el.querySelector(".demo-retry")?.remove();
     const next = createFrame(live);
     next.dataset.incoming = "";
     const old = live.iframe;
@@ -368,7 +369,6 @@
       setTimeout(() => old.remove(), 450);
     };
     next.settle = settle;
-    setTimeout(settle, 6000);
   }
 
   function send(live, message) {
@@ -386,6 +386,7 @@
 
   function showView(live, view, fresh) {
     markTabs(live, view);
+    live.el.querySelector(".demo-retry")?.remove();
     if (fresh) reload(live);
     else {
       live.el.setAttribute("data-busy", "");
@@ -476,6 +477,21 @@
     const live = lives.find((entry) => entry.iframe && entry.iframe.contentWindow === event.source);
     const data = event.data;
     if (!live || !data || typeof data.type !== "string") return;
+    if (data.type === "dlg:view-error") {
+      if (live.view && data.view !== live.view) {
+        send(live, { type: "dlg:view", view: live.view });
+        return;
+      }
+      live.el.removeAttribute("data-busy");
+      live.el.querySelector(".demo-retry")?.remove();
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "demo-retry";
+      retry.textContent = lang === "uk" ? "Не вдалося відкрити. Спробувати ще раз" : "Could not open this view. Try again";
+      retry.addEventListener("click", () => showView(live, live.view || data.view));
+      live.el.appendChild(retry);
+      return;
+    }
     if (data.type === "dlg:viewed") {
       if (data.view && live.view && data.view !== live.view) {
         // A click during script loading may precede the frame's listener.

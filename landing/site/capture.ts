@@ -146,6 +146,13 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
     };
     addEventListener("message", (event) => {
       if (event.data?.type?.startsWith("dlg:")) records.push({ type: "message", at: performance.now(), data: event.data });
+      if (event.data?.type === "dlg:viewed") {
+        const doc = (event.source as Window | null)?.document;
+        if (doc) records.push({ type: "view-ack", at: performance.now(), view: event.data.view,
+          phone: doc.documentElement.hasAttribute("data-demo-phone"),
+          screen: doc.querySelector("[data-mobile2-screen]")?.getAttribute("data-mobile2-screen"),
+          results: doc.querySelectorAll("[data-search-result]").length });
+      }
     });
     addEventListener("scroll", () => records.push({ type: "scroll", at: performance.now(), y: scrollY }));
   });
@@ -166,13 +173,13 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
     fs.writeFileSync(path.join(out, `${perfLabel}-${viewport.name}.json`), JSON.stringify(result, null, 2));
     console.log(`${perfLabel}-${viewport.name} ${name}: ${JSON.stringify(result[name])}`);
   }
-  async function earlyTab() {
+  async function earlyTab(lang = "en") {
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
     const pattern = "**/demo.js";
     await page.route(pattern, async route => { await gate; await route.continue(); });
     try {
-      await page.goto(`${base}?lang=en`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${base}?lang=${lang}`, { waitUntil: "domcontentloaded" });
       await page.locator(".live-open").scrollIntoViewIfNeeded();
       await page.locator(".live-open iframe").waitFor({ state: "attached" });
       const initial = await page.locator(".live-open iframe").getAttribute("src");
@@ -181,8 +188,37 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
       release();
       const frame = await frameOf(page, ".live-open");
       await frame.waitForSelector("[data-search-result]");
-      return { selectedBeforeScriptLoad: "search", results: await frame.locator("[data-search-result]").count() };
+      const results = await frame.locator("[data-search-result]").count();
+      if (results !== 3) throw new Error(`early ${lang} Search rendered ${results} results`);
+      return { lang, selectedBeforeScriptLoad: "search", results };
     } finally { release(); await page.unroute(pattern); }
+  }
+  async function searchFailure() {
+    const frame = await frameOf(page, ".live-open");
+    await frame.evaluate(() => {
+      const original = window.fetch;
+      Object.assign(window, { restoreSearch: () => { window.fetch = original; } });
+      window.fetch = (async (...args: Parameters<typeof fetch>) => {
+        const response = await original(...args);
+        if (String(args[0]).includes("/api/search/transcripts")) {
+          return Response.json({ ...await response.json(), items: [], total: 0 });
+        }
+        return response;
+      }) as typeof fetch;
+    });
+    await page.locator('.sec-open [data-view="conversation"]').click();
+    await frameOf(page, ".live-open");
+    await page.evaluate(() => { (window as any).perfRecords.length = 0; });
+    await page.locator('.sec-open [data-view="search"]').click();
+    await page.locator(".live-open .demo-retry").waitFor();
+    const falseAck = await page.evaluate(() => (window as any).perfRecords.some((r: any) => r.type === "view-ack" && r.view === "search"));
+    if (falseAck || await frame.locator("[data-search-result]").count()) throw new Error("empty Search was acknowledged ready");
+    await page.locator(".live-open").screenshot({ path: path.join(out, `${perfLabel}-${viewport.name}-search-retry.png`) });
+    await frame.evaluate(() => (window as any).restoreSearch());
+    await page.locator(".live-open .demo-retry").click();
+    const recovered = await frameOf(page, ".live-open");
+    if (recovered !== frame || await recovered.locator("[data-search-result]").count() !== 3) throw new Error("retry did not recover Search in place");
+    return { falseAcknowledgements: 0, recoveredResults: 3, sameFrame: true };
   }
   try {
     if (process.argv.includes("--early-tab-only")) {
@@ -256,7 +292,10 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
         if (perfLabel === "after" && !viewport.phone && view !== "conversation") {
           await frame.waitForFunction(() => !document.querySelector("[data-reader-close]"));
         }
-        if (view === "search") await frame.waitForSelector("[data-search-result]");
+        if (view === "search") {
+          await frame.waitForSelector("[data-search-result]");
+          if (await frame.locator("[data-search-result]").count() !== 3) throw new Error("Search must show three results");
+        }
         if (view === "accounts") await frame.waitForFunction(() => document.body.innerText.replace(/\s+/g, " ").includes("Max"));
         rows.push({ view, visibleMs: Date.now() - start });
         if (perfLabel === "after") await page.locator(".live-open").screenshot({ path: path.join(out, `${perfLabel}-${viewport.name}-${view}.png`) });
@@ -279,12 +318,33 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
         await page.waitForTimeout(7000);
         const after = await page.evaluate(() => scrollY);
         rows.push({ lang, before, after, delta: after - before });
+        if (perfLabel === "after") {
+          await page.locator(".live-open").scrollIntoViewIfNeeded();
+          const frame = await frameOf(page, ".live-open");
+          // The latest of several quick tab choices must win without a reload.
+          await page.evaluate(() => {
+            for (const view of ["accounts", "overview", "search"]) document.querySelector<HTMLButtonElement>(`.sec-open [data-view="${view}"]`)!.click();
+          });
+          const selected = await frameOf(page, ".live-open");
+          if (selected !== frame || await selected.locator("[data-search-result]").count() !== 3) throw new Error(`Search failed after switching to ${lang}`);
+        }
       }
       return rows;
     });
     result.frames = await Promise.all(page.frames().map(async frame => ({ url: frame.url(), records: await frame.evaluate(() => (window as any).perfRecords) })));
+    const acknowledgements = await page.evaluate(() => (window as any).perfRecords.filter((r: any) => r.type === "view-ack"));
+    result.acknowledgements = acknowledgements;
+    if (perfLabel === "after" && acknowledgements.some((r: any) =>
+      (r.view === "search" && r.results !== 3) || (r.phone && r.view === "conversation" && r.screen !== "chat"))) {
+      fs.writeFileSync(path.join(out, `${perfLabel}-${viewport.name}-invalid-ack.json`), JSON.stringify(acknowledgements, null, 2));
+      throw new Error("demo acknowledged a view before its content rendered");
+    }
     await page.screenshot({ path: path.join(out, `${perfLabel}-${viewport.name}-language.png`) });
-    if (perfLabel === "after") await trace("early-tab", earlyTab);
+    if (perfLabel === "after") {
+      await trace("early-tab", () => earlyTab("en"));
+      await trace("early-tab-uk", () => earlyTab("uk"));
+      await trace("search-failure", searchFailure);
+    }
     fs.writeFileSync(path.join(out, `${perfLabel}-${viewport.name}.json`), JSON.stringify(result, null, 2));
     console.log(`${perfLabel}-${viewport.name}: complete`);
     if (perfLabel === "after" && (result.language as any).value.some((row: any) => Math.abs(row.delta) > 2)) throw new Error("language switch moved the page");

@@ -122,6 +122,12 @@ code, kbd, pre { font-family: var(--mono); font-feature-settings: normal; }
   animation: spin 900ms linear infinite;
 }
 .live[data-loaded]::before { display: none; }
+.live:has(.demo-retry)::before { display: none; }
+.demo-retry {
+  position: absolute; bottom: 14px; left: 14px; right: 14px; z-index: 3;
+  padding: 12px; border: 1px solid var(--line-strong); border-radius: 8px;
+  color: var(--product-text); background: var(--raised); cursor: pointer;
+}
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* A window around a frame: a bar with the frame's views, the frame, and in the hero the steps. */

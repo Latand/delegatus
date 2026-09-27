@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { Viewer } from "@/components/Viewer";
 import { reportCardRefs } from "@/lib/bridge/reportCardRefs";
 import { setLocale, translate, type MessageKey } from "@/lib/i18n";
+import { navigateToFragment } from "@/lib/navigation/fragmentNavigation";
 import { SNIPPET_MATCH_CLOSE, SNIPPET_MATCH_OPEN } from "@/lib/search/snippet";
 
 import { askedLine, buildWorld, LAST_STEP, PROJECT, saidLine, type Lang, type World } from "./world";
@@ -468,24 +469,15 @@ function search(query: string, speaker: string | null) {
 const label = (key: MessageKey, params?: Record<string, string | number>) => translate(LANG, key, params);
 
 /** Clicks the first element `find` returns, waiting for it to render. */
-function press(find: () => HTMLElement | null | undefined, tries = 40): Promise<boolean> {
-  return new Promise((resolve) => {
-    const attempt = (left: number) => {
-      const element = find();
-      if (element) {
-        element.click();
-        resolve(true);
-      } else if (left > 0) setTimeout(() => attempt(left - 1), 100);
-      else resolve(false);
-    };
-    attempt(tries);
-  });
+async function press(find: () => HTMLElement | null | undefined, tries = 40): Promise<void> {
+  (await waitFor(find, tries)).click();
 }
-function waitFor<T>(find: () => T | null | undefined, tries = 40): Promise<T | null> {
-  return new Promise((resolve) => {
+function waitFor<T>(find: () => T | null | undefined, tries = 40): Promise<T> {
+  return new Promise((resolve, reject) => {
     const attempt = (left: number) => {
       const found = find();
-      if (found || left <= 0) resolve(found ?? null);
+      if (found) resolve(found);
+      else if (left <= 0) reject(new Error("Demo view did not become ready"));
       else setTimeout(() => attempt(left - 1), 100);
     };
     attempt(tries);
@@ -531,14 +523,22 @@ async function navigateView(view: string) {
       pipeline: `#pipeline=${step >= 2 ? "p-refunds" : "p-retries"}`, decision: "#pipeline=p-retries",
       conversation: `#c=${encodeURIComponent(`conversation_${step >= 2 ? "refunds-builder" : "webhook-retries"}`)}`,
     };
-    location.hash = screens[view] ?? `#p=${PROJECT}`;
+    const hash = screens[view] ?? `#p=${PROJECT}`;
+    // Project navigation cancels unresolved conversation intent in the Viewer.
+    // Wait for its destination before opening a sheet or releasing this queue:
+    // assigning a hash alone leaves the previous resolver free to close Search.
+    navigateToFragment(hash);
+    const screen = hash.startsWith("#c=") ? "chat" : hash.startsWith("#pipeline=") ? "pipeline"
+      : hash === "#reports" ? "reports" : hash === "#accounts" ? "accounts"
+      : hash === "#pipelines" ? "pipelines" : "board";
+    await waitFor(() => location.hash === hash && document.querySelector(`[data-mobile2-screen="${screen}"]`));
     if (view === "overview") {
       await press(() => byLabel(label("mobile2.bar.switchProject")));
       await press(() => document.querySelector<HTMLElement>("[data-mobile2-project]"));
     }
     if (view === "search") {
       await press(() => document.querySelector<HTMLElement>('[data-mobile2-open="search"]'));
-      await typeSearch(false);
+      await typeSearch();
     }
     return;
   }
@@ -599,7 +599,7 @@ async function navigateView(view: string) {
   if (view === "search") {
     (document.activeElement as HTMLElement | null)?.blur();
     document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }));
-    await typeSearch(true);
+    await typeSearch();
   }
 }
 
@@ -610,11 +610,17 @@ let viewQueue = Promise.resolve();
 function showView(view: string) {
   const version = ++viewVersion;
   viewQueue = viewQueue.then(async () => {
-    await viewerReady;
-    if (version !== viewVersion) return;
-    await navigateView(view);
-    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-    if (version === viewVersion) post({ type: "dlg:viewed", view });
+    try {
+      await viewerReady;
+      if (version !== viewVersion) return;
+      await navigateView(view);
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      // Recheck after paint: a transient search field is not a rendered result.
+      if (view === "search" && !searchReady()) throw new Error("Search was replaced before rendering");
+      if (version === viewVersion) post({ type: "dlg:viewed", view });
+    } catch {
+      if (version === viewVersion) post({ type: "dlg:view-error", view });
+    }
   });
   return viewQueue;
 }
@@ -622,18 +628,19 @@ function showView(view: string) {
 /** Types the search the demo shows into the search field that just opened:
     on the desktop the message-search dialog's own field, never the board's
     task filter behind it. */
-async function typeSearch(inDialog: boolean) {
-  const field = await waitFor(() => {
-    const dialogField = document.querySelector<HTMLInputElement>('[role="dialog"] input');
-    if (dialogField || inDialog) return dialogField;
-    const active = document.activeElement;
-    if (active instanceof HTMLInputElement) return active;
-    return document.querySelector<HTMLInputElement>('input[type="search"]');
-  }, 30);
-  if (!field) return;
+function searchReady() {
+  const field = document.querySelector<HTMLInputElement>("[data-search-input]");
+  const dialog = field?.closest('[role="dialog"]');
+  const query = L("webhook", "вебхук");
+  return field?.value === query && !!dialog &&
+    !dialog.querySelector("[data-search-loading], [data-search-updating], [data-search-stale], [data-search-error]") &&
+    dialog.querySelectorAll("[data-search-result]").length === search(query, null).items.length;
+}
+async function typeSearch() {
+  const field = await waitFor(() => document.querySelector<HTMLInputElement>("[data-search-input]"), 30);
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(field, L("webhook", "вебхук"));
   field.dispatchEvent(new Event("input", { bubbles: true }));
-  await waitFor(() => document.querySelector("[data-search-result]"), 30);
+  await waitFor(searchReady, 30);
 }
 
 window.addEventListener("message", (event) => {
@@ -713,5 +720,5 @@ const viewerReady = waitFor(() => document.querySelector("[data-seat-placement],
 void viewerReady.then(() => {
   // A tab selected during boot owns navigation, including before first paint.
   if (viewVersion === 0) return showView(INITIAL_VIEW ?? (PHONE ? "orchestrator" : "board"));
-});
+}).catch(() => post({ type: "dlg:view-error", view: INITIAL_VIEW ?? (PHONE ? "orchestrator" : "board") }));
 if (PHONE) document.documentElement.dataset.demoPhone = "1";
