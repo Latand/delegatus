@@ -17,6 +17,7 @@ import { localTransport, pullHost, type PullConfig } from "./pull";
 import { ActivityStore, LOCAL_HOST_KEY } from "./store";
 import { exportHumanInputs, listTranscriptFiles, type ConversationResolution } from "./transcriptExport";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
+import { FileClaudeDeliveryLedger } from "@/lib/runtime/claudeStreamBrokerHost";
 import { AgentRegistry, closeAgentRegistryForTests, type RegistryFile } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { TeamStore, resetTeamStoreForTests, teamStore } from "@/lib/team/store";
@@ -400,6 +401,55 @@ describe("pulling another host's records", () => {
       try {
         const stat = fs.statSync(file);
         await ingestTranscripts([{ path: file, engine: "codex", size: stat.size, mtimeMs: stat.mtimeMs }], {
+          complete: true, listedAt: NOW, now: () => NOW, store: activity,
+          resolver: () => conversationResolver(registry.readOnlySnapshot(), () => registry.readOnlySnapshot()),
+        });
+        expect(activity.localRowsAfter(0, 10).map((row) => row.author)).toEqual([MEMBER_A]);
+      } finally { activity.close(); }
+    } finally {
+      resetTeamStoreForTests();
+      registry.close();
+      if (previous === undefined) delete process.env.LLV_STATE_DIR;
+      else process.env.LLV_STATE_DIR = previous;
+    }
+    expect(await pullWith({ ...config(), memberId: MEMBER_A })).toMatchObject({ ok: true });
+    expect(local((store) => store.candidates("stage", DAY.start, NOW, "stage").map((row) => row.author))).toEqual([MEMBER_A]);
+  });
+
+  test("a Claude member's first spawn prompt keeps its author through ingest and remote pull", async () => {
+    const sessionId = crypto.randomUUID();
+    const file = path.join(dir, "stage", "sessions", `${sessionId}.jsonl`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const registry = new AgentRegistry(path.join(remoteState, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+    const previous = process.env.LLV_STATE_DIR;
+    process.env.LLV_STATE_DIR = remoteState;
+    try {
+      const begun = registry.beginSpawnRequest({ engine: "claude", cwd: "/work/harbor", transport: "structured",
+        accountId: "work", launchProfile: emptyLaunchProfile({ cwd: "/work/harbor", title: "Inspect harbor work" }) });
+      if (begun.kind !== "created") throw new Error("spawn receipt was not created");
+      const spawnId = `spawn_${begun.receipt.launchId}`;
+      const operationId = `spawn_message_${begun.receipt.launchId}`;
+      const settled = registry.settleSpawn(begun.receipt.launchId, { key: { engine: "claude", sessionId },
+        artifactPath: file, cwd: "/work/harbor", accountId: "work", status: "starting", host: null,
+        claimEpoch: 0, claimOwner: null, pendingAction: "spawn" });
+      if (settled.kind !== "settled") throw new Error("spawn receipt was not settled");
+      registry.holdDelivery(begun.receipt.conversationId, "inspect", spawnId, "text", [], null,
+        { operationId, kind: "send", policy: "queue" });
+      const ledger = new FileClaudeDeliveryLedger();
+      ledger.recordQueued(sessionId, { id: operationId, text: "inspect" }, "turn-started");
+      ledger.confirmDelivered(sessionId, operationId, "engine-spawn-first");
+      const team = teamStore();
+      team.insertMember({ id: MEMBER_A, name: "Owner", role: "owner", status: "active", color: "teal", telegram: null,
+        createdAt: "2026-09-23T00:00:00Z", createdBy: "claim", revokedAt: null });
+      team.recordMessageAuthor({ clientMessageId: spawnId, conversationId: begun.receipt.conversationId,
+        memberId: MEMBER_A, at: "2026-09-23T08:00:00Z", textDigest: null });
+      fs.writeFileSync(file, JSON.stringify({ type: "user", timestamp: "2026-09-23T08:00:00Z",
+        uuid: "engine-spawn-first", sessionId, cwd: "/work/harbor", entrypoint: "sdk",
+        message: { role: "user", content: "inspect" } }) + "\n");
+      const activity = ActivityStore.open(path.join(remoteState, "activity", "records.sqlite"));
+      try {
+        const stat = fs.statSync(file);
+        await ingestTranscripts([{ path: file, engine: "claude", size: stat.size, mtimeMs: stat.mtimeMs }], {
           complete: true, listedAt: NOW, now: () => NOW, store: activity,
           resolver: () => conversationResolver(registry.readOnlySnapshot(), () => registry.readOnlySnapshot()),
         });
