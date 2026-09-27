@@ -43,6 +43,21 @@ test("three transport failures block an old seat and a successful call clears th
   expect(seatMcpHealth(receipt, new Date(now - 60_000).toISOString(), root, now).status).toBe("dead");
   write(100);
   expect(seatMcpHealth(receipt, null, root, now).status).toBe("dead");
+  fs.writeFileSync(filename, JSON.stringify({
+    checkedAt: new Date(now).toISOString(), ready: true,
+    unreadySince: new Date(now - 3 * 60_000).toISOString(), failedCalls: SEAT_MCP_TRANSPORT_FAILURE_LIMIT,
+  }));
+  expect(seatMcpHealth(receipt, new Date(now - 60_000).toISOString(), root, now).status).toBe("dead");
   write(0);
   expect(seatMcpHealth(receipt, null, root, now).status).toBe("healthy");
+});
+
+test("reinitializing a failed child does not erase a prolonged unready interval", () => {
+  const filename = path.join(root, "mcp-runtime", "sessions", `${digest}.json`);
+  fs.mkdirSync(path.dirname(filename), { recursive: true });
+  fs.writeFileSync(filename, JSON.stringify({
+    checkedAt: new Date(now).toISOString(), ready: true,
+    unreadySince: new Date(now - 3 * 60_000).toISOString(), failedCalls: 1,
+  }));
+  expect(seatMcpHealth(receipt, null, root, now).status).toBe("dead");
 });

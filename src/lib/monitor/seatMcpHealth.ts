@@ -5,7 +5,7 @@ import path from "node:path";
  * to register. A registered launcher must refresh every 30 seconds. */
 export const SEAT_MCP_START_GRACE_MS = 10 * 60_000;
 export const SEAT_MCP_HEARTBEAT_LIMIT_MS = 2 * 60_000;
-/** Consecutive transport failures; ordinary tool refusals reset this count. */
+/** Consecutive transport or child-pipe failures; ordinary tool refusals reset this count. */
 export const SEAT_MCP_TRANSPORT_FAILURE_LIMIT = 3;
 
 export type SeatMcpHealth = { status: "healthy" | "untracked" | "dead"; detail: string };
@@ -44,13 +44,13 @@ export function seatMcpHealth(
       ? { status: "untracked", detail: "MCP startup grace period" }
       : { status: "dead", detail: "the session's stdio MCP launcher stopped reporting liveness" };
   }
-  if (heartbeat.ready === false && Number.isFinite(unreadySince) && now - unreadySince > SEAT_MCP_HEARTBEAT_LIMIT_MS) {
+  if (typeof heartbeat.failedCalls === "number" && heartbeat.failedCalls >= SEAT_MCP_TRANSPORT_FAILURE_LIMIT) {
+    return { status: "dead", detail: "the session's Viewer MCP failed three consecutive calls because its transport or child pipe failed" };
+  }
+  if (Number.isFinite(unreadySince) && now - unreadySince > SEAT_MCP_HEARTBEAT_LIMIT_MS) {
     return inGrace
       ? { status: "untracked", detail: "MCP startup grace period" }
-      : { status: "dead", detail: "the session's stdio MCP child has stayed disconnected" };
-  }
-  if (typeof heartbeat.failedCalls === "number" && heartbeat.failedCalls >= SEAT_MCP_TRANSPORT_FAILURE_LIMIT) {
-    return { status: "dead", detail: "the session's Viewer MCP cannot reach the Viewer after three consecutive transport failures" };
+      : { status: "dead", detail: "the session's stdio MCP has not recovered from child or pipe loss" };
   }
   if (heartbeat.ready !== true) return { status: "untracked", detail: "MCP child is starting" };
   return { status: "healthy", detail: "the session's stdio MCP launcher is live" };

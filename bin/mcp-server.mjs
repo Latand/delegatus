@@ -34,6 +34,7 @@ let failedCalls = 0;
 let ready = false;
 let unreadySince = startedAt;
 let activeReleaseId = null;
+let transportUnverified = false;
 
 function heartbeat() {
   if (!heartbeatPath) return;
@@ -188,7 +189,17 @@ function probeProtocol(current) {
     current.kill("SIGTERM");
   }, PROTOCOL_PROBE_TIMEOUT_MS);
   protocolProbe = { id, timer };
-  current.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "ping" })}\n`);
+  writeChild(current, `${JSON.stringify({ jsonrpc: "2.0", id, method: "ping" })}\n`);
+}
+
+function writeChild(current, line) {
+  if (child !== current) return;
+  try {
+    current.stdin.write(line);
+  } catch (error) {
+    disconnect(current, `Viewer MCP child pipe failed: ${error instanceof Error ? error.message : String(error)}`);
+    current.kill("SIGTERM");
+  }
 }
 
 function reply(value) { process.stdout.write(`${JSON.stringify(value)}\n`); }
@@ -214,7 +225,7 @@ function scheduleRestart() {
     if (error) scheduleRestart();
   }, delay);
 }
-function disconnect(current, detail) {
+function disconnect(current, detail, planned = false) {
   if (child !== current) return;
   if (protocolProbe) clearTimeout(protocolProbe.timer);
   protocolProbe = null;
@@ -223,16 +234,25 @@ function disconnect(current, detail) {
   child = null;
   childKey = null;
   ready = false;
+  if (!planned) transportUnverified = true;
   unreadySince ??= new Date().toISOString();
-  for (const request of pending.values()) if (request.method !== "initialize") unavailable(request, detail);
+  const interrupted = [...pending.values()];
+  for (const request of interrupted) {
+    if (request.method === "tools/call") {
+      failedCalls += 1;
+      transportUnverified = true;
+    }
+  }
   pending.clear();
   scheduleRestart();
   heartbeat();
+  for (const request of interrupted) if (request.method !== "initialize") unavailable(request, detail);
 }
 function sendInitialization(current) {
   if (!initialization || replayId !== null) return;
   replayId = initializationComplete ? `llv-reinitialize-${process.pid}-${Date.now()}` : initialization.id;
-  current.stdin.write(`${JSON.stringify({ ...initialization, id: replayId })}\n`);
+  writeChild(current, `${JSON.stringify({ ...initialization, id: replayId })}\n`);
+  if (child !== current) return;
   initializationTimer = setTimeout(() => {
     disconnect(current, "Viewer MCP initialization timed out");
     current.kill("SIGTERM");
@@ -247,6 +267,13 @@ function start(selected) {
   activeReleaseId = selected.releaseId;
   ready = false;
   replayId = null;
+  current.once("error", (error) => disconnect(current, `Viewer MCP child could not start: ${error.message}`));
+  current.once("exit", () => disconnect(current, "Viewer MCP child exited"));
+  current.stdin.on("error", (error) => {
+    if (child !== current) return;
+    disconnect(current, `Viewer MCP child pipe failed: ${error.message}`);
+    current.kill("SIGTERM");
+  });
   sendInitialization(current);
   createInterface({ input: current.stdout }).on("line", (line) => {
     if (child !== current) return;
@@ -271,9 +298,10 @@ function start(selected) {
           reply(message);
         }
         ready = true;
-        unreadySince = null;
+        if (!transportUnverified) unreadySince = null;
         retryDelayMs = 200;
-        if (initialized) current.stdin.write(`${JSON.stringify(initialized)}\n`);
+        if (initialized) writeChild(current, `${JSON.stringify(initialized)}\n`);
+        if (child !== current) return;
         reply({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
       } else {
         disconnect(current, "Viewer MCP initialization failed");
@@ -291,14 +319,18 @@ function start(selected) {
         else if (message.result && !message.result.isError) {
           lastSuccessfulCallAt = new Date().toISOString();
           failedCalls = 0;
-        } else if (message.result?.structuredContent?.ok === false) failedCalls = 0;
+          transportUnverified = false;
+          unreadySince = null;
+        } else if (message.result?.structuredContent?.ok === false) {
+          failedCalls = 0;
+          transportUnverified = false;
+          unreadySince = null;
+        }
         heartbeat();
       }
     }
     process.stdout.write(`${line}\n`);
   });
-  current.once("error", (error) => disconnect(current, `Viewer MCP child could not start: ${error.message}`));
-  current.once("exit", () => disconnect(current, "Viewer MCP child exited"));
   if (!protocolProbeTimer) {
     protocolProbeTimer = setInterval(() => { if (child) probeProtocol(child); }, PROTOCOL_PROBE_INTERVAL_MS);
     protocolProbeTimer.unref();
@@ -319,7 +351,7 @@ function ensureChild() {
   const key = `${selected.root}\0${selected.revision}`;
   if (child && childKey !== key) {
     const old = child;
-    disconnect(old, "Viewer MCP release changed");
+    disconnect(old, "Viewer MCP release changed", true);
     old.kill("SIGTERM");
     nextStartAt = 0;
   }
@@ -341,7 +373,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       if (!ready) sendInitialization(child);
       else {
         pending.set(JSON.stringify(request.id), request);
-        child.stdin.write(`${line}\n`);
+        writeChild(child, `${line}\n`);
       }
     }
     return;
@@ -349,7 +381,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   /* Installed launcher consumers that do not speak MCP still get their
      original byte stream. This does not claim protocol readiness. */
   if (!initialization && !error && child) {
-    child.stdin.write(`${line}\n`);
+    writeChild(child, `${line}\n`);
     return;
   }
   if (error || !child || !ready) {
@@ -357,7 +389,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     return;
   }
   if (request?.id !== undefined && request?.id !== null) pending.set(JSON.stringify(request.id), request);
-  child.stdin.write(`${line}\n`);
+  writeChild(child, `${line}\n`);
 }).on("close", () => {
   closing = true;
   clearInterval(heartbeatTimer);

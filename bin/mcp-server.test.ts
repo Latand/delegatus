@@ -257,6 +257,91 @@ test("a missing published bundle recovers initialization on the original Node an
   }
 }, 15_000);
 
+test("a buffered child pipe failure keeps the original stdio session and call identity through a release switch", async () => {
+  const node = Bun.which("node");
+  if (!node) throw new Error("Node is required for the launcher test");
+  const crashingBundle = `
+    let input = "", exitOnNextChunk = false;
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", chunk => {
+      if (exitOnNextChunk) process.exit(7);
+      input += chunk;
+      while (input.includes("\\n")) {
+        const at = input.indexOf("\\n");
+        const request = JSON.parse(input.slice(0, at)); input = input.slice(at + 1);
+        if (request.id === undefined) continue;
+        const result = request.method === "initialize"
+          ? { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "viewer", version: "1" } }
+          : { tools: [{ name: "check", inputSchema: { type: "object" } }] };
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\\n");
+        if (request.method === "tools/list") exitOnNextChunk = true;
+      }
+    });
+  `;
+  const recoveredBundle = `
+    let input = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", chunk => {
+      input += chunk;
+      while (input.includes("\\n")) {
+        const at = input.indexOf("\\n");
+        const request = JSON.parse(input.slice(0, at)); input = input.slice(at + 1);
+        if (request.id === undefined) continue;
+        const result = request.method === "initialize"
+          ? { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "viewer", version: "2" } }
+          : request.method === "tools/list"
+            ? { tools: [{ name: "check", inputSchema: { type: "object" } }] }
+            : { content: [{ type: "text", text: "recovered" }] };
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\\n");
+      }
+    });
+  `;
+  for (const command of [node, process.execPath]) {
+    const { root, launcher } = installedPackage();
+    const stateDir = path.join(root, "state");
+    const targetFile = path.join(stateDir, "viewer-release.json");
+    const capability = "C".repeat(43);
+    const heartbeatFile = path.join(stateDir, "mcp-runtime", "sessions", `${createHash("sha256").update(capability).digest("hex")}.json`);
+    function publish(revision: string, bundle: string) {
+      const releaseId = `deploy-${revision}`;
+      const releaseRoot = path.join(stateDir, "mcp-runtime", "releases", releaseId, "dist");
+      fs.mkdirSync(releaseRoot, { recursive: true });
+      fs.writeFileSync(path.join(releaseRoot, "mcp-server.mjs"), bundle);
+      fs.writeFileSync(targetFile, JSON.stringify({
+        revision, image: `viewer:${revision}`, container: "viewer-candidate", endpoint: "http://127.0.0.1:1",
+        mcpRuntime: { source: "managed", revision, releaseId, artifactDigest: createHash("sha256").update(bundle).digest("hex"), stagedAt: new Date().toISOString() },
+      }));
+    }
+    publish("5".repeat(40), crashingBundle);
+    const session = stdioSession(command, launcher, root, { LLV_STATE_DIR: stateDir, LLV_VIEWER_DEPLOY_TARGET: targetFile, LLV_SPAWN_CAPABILITY: capability });
+    try {
+      expect((await session.call(1, "initialize")).result.serverInfo.name).toBe("viewer");
+      expect((await session.call(2, "tools/list")).result.tools[0].name).toBe("check");
+      const failed = await session.call(3, "tools/call", { name: "check", arguments: { payload: "x".repeat(1024 * 1024) } });
+      expect(failed.id).toBe(3);
+      expect(failed.result.isError).toBe(true);
+      expect(failed.result.content[0].text).toContain("retry");
+      expect(session.process.exitCode).toBeNull();
+      expect(JSON.parse(fs.readFileSync(heartbeatFile, "utf8")).failedCalls).toBe(1);
+      publish("6".repeat(40), recoveredBundle);
+      let recovered = false;
+      for (let id = 4; id < 24; id++) {
+        const answer = await session.call(id, "tools/call", { name: "check", arguments: {} });
+        if (answer.result?.content?.[0]?.text === "recovered") { recovered = true; break; }
+        expect(answer.result.isError).toBe(true);
+        await Bun.sleep(50);
+      }
+      expect(recovered).toBe(true);
+      expect((await session.call(24, "tools/list")).result.tools[0].name).toBe("check");
+      expect(session.process.exitCode).toBeNull();
+      expect(JSON.parse(fs.readFileSync(heartbeatFile, "utf8")).failedCalls).toBe(0);
+    } finally {
+      session.process.stdin.end();
+      if (session.process.exitCode === null) await new Promise<void>((resolve) => session.process.once("close", () => resolve()));
+    }
+  }
+}, 20_000);
+
 test("the production launcher records transport failure, excludes business refusals, and clears on a recovered call", async () => {
   const { root, launcher } = installedPackage(`
     const fs = await import("node:fs");

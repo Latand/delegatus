@@ -15,16 +15,20 @@ For stdio seats with a launch capability, the launcher refreshes a private
 record under `state/mcp-runtime/sessions/` every 30 seconds. The filename is
 the SHA-256 digest of the capability; the record contains no credential. After
 a 10-minute startup grace, the seat tick declares the MCP unavailable when
-that record is missing, older than two minutes, or reports a disconnected
-child for over two minutes. Three consecutive Viewer transport failures block
+that record is missing, older than two minutes, or has remained unrecovered
+from child or pipe loss for over two minutes, even if a replacement child has
+initialized. Three consecutive Viewer transport or child-pipe failures block
 wakes immediately, including during startup grace, because the launcher has
-already reported a broken path.
+already reported a broken path. A planned release replacement with no
+interrupted calls does not count as a transport failure.
 A protocol ping runs every 30 seconds with a 10-second response bound; a silent
-child is disconnected and restarted. The transport failure count clears after
-a completed tool response, including an ordinary business refusal, because
-the backend answered. A successful call after recovery clears the MCP card.
+child is disconnected and restarted. Failed pending tool calls count before
+their retryable responses are sent; a new initialization alone preserves the
+failure evidence. The transport failure count clears after a completed tool
+response, including an ordinary business refusal, because the backend
+answered. A successful call after recovery clears the MCP card.
 The tick puts a rotation request on the board and
-withholds wakes from that seat. A fresh, ready record clears the card. HTTP MCP
+withholds wakes from that seat. A recovered tool response clears the card. HTTP MCP
 sessions use the shared Viewer endpoint and have no per-session launcher, so
 this rule does not classify them.
 

@@ -2,6 +2,8 @@ import { afterAll, afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import { Database } from "bun:sqlite";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-tick-controller-"));
@@ -665,6 +667,104 @@ test("transport failure opens the MCP card and recovery closes it before wakes r
   expect(rig.cards.at(-1)?.card).toMatchObject({ kind: "mcp-unavailable", state: "resolved" });
   expect(rig.sent).toHaveLength(1);
 });
+
+test("repeated real launcher child crashes block seat wakes until a tool response proves recovery", async () => {
+  const node = Bun.which("node");
+  if (!node) throw new Error("Node is required for the launcher test");
+  const packageRoot = fs.mkdtempSync(path.join(SANDBOX, "mcp-launcher-"));
+  const bin = path.join(packageRoot, "bin");
+  const dist = path.join(packageRoot, "dist");
+  fs.mkdirSync(bin);
+  fs.mkdirSync(dist);
+  for (const name of ["mcp-server.mjs", "server-runtime.mjs", "appDir.mjs", "envAlias.mjs"]) {
+    fs.copyFileSync(path.join(import.meta.dir, "../../../bin", name), path.join(bin, name));
+  }
+  const crashFlag = path.join(packageRoot, "crash.flag");
+  fs.writeFileSync(crashFlag, "crash");
+  fs.writeFileSync(path.join(dist, "mcp-server.mjs"), `
+    const fs = await import("node:fs");
+    let input = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", chunk => {
+      input += chunk;
+      while (input.includes("\\n")) {
+        const at = input.indexOf("\\n");
+        const request = JSON.parse(input.slice(0, at)); input = input.slice(at + 1);
+        if (request.id === undefined) continue;
+        if (request.method === "tools/call" && fs.existsSync(process.env.LLV_TEST_CRASH_FLAG)) process.exit(7);
+        const result = request.method === "initialize"
+          ? { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "viewer", version: "1" } }
+          : request.method === "tools/list"
+            ? { tools: [{ name: "check", inputSchema: { type: "object" } }] }
+            : { content: [{ type: "text", text: "recovered" }] };
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\\n");
+      }
+    });
+  `);
+  const stateDir = path.join(packageRoot, "state");
+  const capability = "D".repeat(43);
+  const digest = createHash("sha256").update(capability).digest("hex");
+  const heartbeatFile = path.join(stateDir, "mcp-runtime", "sessions", `${digest}.json`);
+  const session = spawn(node, [path.join(bin, "mcp-server.mjs")], {
+    cwd: packageRoot,
+    env: { ...process.env, LLV_STATE_DIR: stateDir, LLV_SPAWN_CAPABILITY: capability,
+      LLV_BUN_EXECUTABLE: process.execPath, LLV_TEST_CRASH_FLAG: crashFlag },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const pendingResponses = new Map<number, (message: any) => void>();
+  let output = "";
+  session.stdout.setEncoding("utf8");
+  session.stdout.on("data", (chunk: string) => {
+    output += chunk;
+    while (output.includes("\n")) {
+      const at = output.indexOf("\n");
+      const message = JSON.parse(output.slice(0, at)); output = output.slice(at + 1);
+      if (pendingResponses.has(message.id)) {
+        pendingResponses.get(message.id)!(message);
+        pendingResponses.delete(message.id);
+      }
+    }
+  });
+  const call = (id: number, method: string) => new Promise<any>((resolve, reject) => {
+    const timeout = setTimeout(() => { pendingResponses.delete(id); reject(new Error(`MCP response ${id} timed out`)); }, 5_000);
+    pendingResponses.set(id, (message) => { clearTimeout(timeout); resolve(message); });
+    session.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params: { name: "check", arguments: {} } }) + "\n");
+  });
+  const readyHeartbeat = async () => {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      if (fs.existsSync(heartbeatFile) && JSON.parse(fs.readFileSync(heartbeatFile, "utf8")).ready === true) return;
+      await Bun.sleep(20);
+    }
+    throw new Error("MCP child did not reinitialize");
+  };
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  const receipt = { spawnCapabilityDigest: digest, createdAt: new Date(Date.now() - 30 * MINUTE).toISOString() };
+  const designatedAt = new Date(Date.now() - 20 * MINUTE).toISOString();
+  const deps = { ...rig.deps, mcpHealth: () => seatMcpHealth(receipt, designatedAt, stateDir, Date.now()) };
+  try {
+    expect((await call(1, "initialize")).result.serverInfo.name).toBe("viewer");
+    for (let id = 2; id <= 4; id++) {
+      await readyHeartbeat();
+      expect((await call(id, "tools/call")).result.isError).toBe(true);
+      expect(JSON.parse(fs.readFileSync(heartbeatFile, "utf8")).failedCalls).toBe(id - 1);
+    }
+    await readyHeartbeat();
+    expect(seatMcpHealth(receipt, designatedAt, stateDir, Date.now()).status).toBe("dead");
+    expect((await runSeatTickCheck(PROJECT, deps))?.delivery?.outcome).toBe("seat-mcp-unavailable");
+    expect(rig.sent).toHaveLength(0);
+    expect(rig.cards.at(-1)?.card).toMatchObject({ kind: "mcp-unavailable", state: "open" });
+    fs.unlinkSync(crashFlag);
+    expect((await call(5, "tools/call")).result.content[0].text).toBe("recovered");
+    expect(JSON.parse(fs.readFileSync(heartbeatFile, "utf8")).failedCalls).toBe(0);
+    await runSeatTickCheck(PROJECT, deps);
+    expect(rig.cards.at(-1)?.card).toMatchObject({ kind: "mcp-unavailable", state: "resolved" });
+    expect(rig.sent).toHaveLength(1);
+  } finally {
+    session.stdin.end();
+    if (session.exitCode === null) await new Promise<void>((resolve) => session.once("close", () => resolve()));
+  }
+}, 20_000);
 
 /* Two checks that found the same thing raise the same wake, so a re-send after
    a send that never landed is the replay the delivery layer treats it as —
