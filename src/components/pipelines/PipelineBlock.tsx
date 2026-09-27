@@ -783,7 +783,9 @@ function ScreenBlock(props: PipelineBlockProps & {
   const currentId = screenCurrentStageId(summary);
   const currentIndex = currentId ? chips.findIndex((chip) => chip.stage.id === currentId) : -1;
   const before = currentIndex > 0 ? chips.slice(0, currentIndex).filter((chip) => !chip.branch) : [];
-  const foldPassed = before.length > 1 && before.every((chip) => chip.state === "passed" || chip.state === "skipped");
+  /* A passed stage whose conversation works again (#1744) is live work, so it
+     keeps its row and its "working again", and nothing before it folds. */
+  const foldPassed = before.length > 1 && before.every((chip) => (chip.state === "passed" || chip.state === "skipped") && !chip.rework);
   const folded = foldPassed && !passedOpen ? new Set(before.map((chip) => chip.stage.id)) : new Set<string>();
   const selected = props.selected ?? NO_STAGES;
   const arcs = loopArcs(summary);

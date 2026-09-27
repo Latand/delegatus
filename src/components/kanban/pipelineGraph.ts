@@ -59,6 +59,15 @@ export function operationalAttempts(pipeline: Pipeline, stageId: string): Pipeli
   return stageAttempts(pipeline, stageId).filter((attempt) => !attempt.historical);
 }
 
+/** Which of the stage's own attempts attempt `n` is, counted from 1: the number
+    every caption shows. The engine's `n` also counts the helper conversations
+    it adopted, so it stays the key and never reaches a label. An attempt the
+    record does not list as the stage's own keeps its `n`. */
+export function attemptOrdinal(pipeline: Pipeline, stageId: string, n: number): number {
+  const index = operationalAttempts(pipeline, stageId).findIndex((attempt) => attempt.n === n);
+  return index >= 0 ? index + 1 : n;
+}
+
 /** How many times an edge fired: the distinct source attempts that activated
     its target. For a fail edge this is the engine's own spent retry budget,
     read from the engine's own function. */
@@ -524,6 +533,10 @@ export interface PastAttempt {
   of: number;
   /** For a round: the attempt whose review flow it belongs to. */
   attempt: number | null;
+  /** Which of the stage's own attempts the row is, or whose round it is,
+      counted from 1: the number its label shows. `n` and `attempt` stay the
+      record's own numbers, which also count adopted helpers. Null for a helper. */
+  ordinal: number | null;
   /** For a round: whether the stage has rounds under more than one attempt, so
       the label must name the attempt. */
   ambiguous: boolean;
@@ -564,7 +577,7 @@ export function pastAttempts(pipelines: readonly Pipeline[], flowsById: Readonly
       const reviewAttempts = stage.kind === "review-loop"
         ? own.filter((attempt) => attempt.flowId && (flowsById.get(attempt.flowId)?.rounds.length ?? 0) > 0)
         : [];
-      for (const attempt of own) {
+      for (const [index, attempt] of own.entries()) {
         const active = attempt === latest && ACTIVE_ATTEMPT(attempt);
         if (!active) {
           rows.push({
@@ -575,6 +588,7 @@ export function pastAttempts(pipelines: readonly Pipeline[], flowsById: Readonly
             n: attempt.n,
             of: own.length,
             attempt: null,
+            ordinal: index + 1,
             ambiguous: false,
             state: attempt.state,
             verdict: attempt.verdict?.status ?? null,
@@ -593,6 +607,7 @@ export function pastAttempts(pipelines: readonly Pipeline[], flowsById: Readonly
             n: round.n,
             of: own.length,
             attempt: attempt.n,
+            ordinal: index + 1,
             ambiguous: reviewAttempts.length > 1,
             state: round.verdict ?? "open",
             verdict: null,
@@ -611,6 +626,7 @@ export function pastAttempts(pipelines: readonly Pipeline[], flowsById: Readonly
           n: index + 1,
           of: own.length,
           attempt: null,
+          ordinal: null,
           ambiguous: false,
           state: helper.state,
           verdict: helper.verdict?.status ?? null,

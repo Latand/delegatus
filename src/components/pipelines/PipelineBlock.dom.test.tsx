@@ -330,6 +330,30 @@ test("a settled stage whose conversation works again says so on its row and its 
   }
 });
 
+/* Implement and Review passed, Verify runs, and Implement's latest
+   conversation works again: that is live work, so the passed stages do not
+   fold it away behind "2 passed". */
+test("the screen density keeps a reworking passed stage out of the passed fold", () => {
+  const lane = searchPipeline();
+  const reworked = lane.runs.find((run) => run.stageId === "implement")!.attempts.at(-1)!;
+  const summary = summarizePipeline(lane, new Map(), new Set([reworked.agentPath!]));
+  expect(summary.views.get("implement")?.rework).toBe(true);
+  for (const lang of ["en", "uk"] as const) {
+    setLocale(lang);
+    const screen = mount(<PipelineBlock summary={summary} density="screen" nowMs={NOW_MS} onOpenStage={() => {}} />);
+    expect(screen.querySelector("[data-passed-fold]")).toBeNull();
+    const row = screen.querySelector<HTMLElement>('.pb-stage[data-stage="implement"][data-stage-rework="1"]')!;
+    expect(row.querySelector(".pb-rework")?.textContent).toBe(translate(lang, "kanban.graph.workingAgain"));
+    expect(screen.querySelector('.pb-stage[data-stage="review"]')).toBeTruthy();
+    expect(screen.querySelector<HTMLElement>(".pb-stage[data-stage-current]")?.dataset.stage).toBe("verify");
+  }
+  setLocale("en");
+  /* The same lane with nothing reworking folds its two passed stages. */
+  const quiet = mount(<PipelineBlock summary={summarizePipeline(lane)} density="screen" nowMs={NOW_MS} onOpenStage={() => {}} />);
+  expect(quiet.querySelector("[data-passed-fold]")?.getAttribute("data-passed-fold")).toBe("2");
+  expect(quiet.querySelector('.pb-stage[data-stage="implement"]')).toBeNull();
+});
+
 test("the screen density numbers the stages, folds the passed ones before the current one, and answers inside the parked stage", () => {
   const answers: string[] = [];
   const host = mount(<PipelineBlock summary={summarizePipeline(parked())} density="screen" nowMs={NOW_MS} onOpenStage={() => {}} onAnswer={(_pipeline, answer) => answers.push(answer.action)} />);

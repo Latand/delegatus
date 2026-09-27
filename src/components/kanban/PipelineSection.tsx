@@ -684,10 +684,10 @@ function edgeContent(t: TFunction, edge: GraphEdge, count: EdgeCount, branching:
     both list them in these words. */
 export function pastAttemptLabel(t: TFunction, row: PastAttempt, stage: string): string {
   if (row.kind === "helper") return t("kanban.past.helper", { stage, n: row.n });
-  if (row.kind === "round") return row.ambiguous ? t("kanban.past.attemptRound", { stage, attempt: row.attempt ?? 0, n: row.n }) : t("kanban.past.round", { stage, n: row.n });
+  if (row.kind === "round") return row.ambiguous ? t("kanban.past.attemptRound", { stage, attempt: row.ordinal ?? row.attempt ?? 0, n: row.n }) : t("kanban.past.round", { stage, n: row.n });
   /* The label every surface gives a stage's attempt (#1865): the name alone
      for a stage that ran once, «Critique · 2» from its second attempt. */
-  return row.of > 1 ? t("kanban.stageAttempt", { stage, n: row.n }) : stage;
+  return row.of > 1 ? t("kanban.stageAttempt", { stage, n: row.ordinal ?? row.n }) : stage;
 }
 
 /** How a past attempt ended: the round's verdict, or the attempt's state and verdict. */

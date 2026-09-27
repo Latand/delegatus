@@ -2,8 +2,10 @@ import { expect, test } from "bun:test";
 
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
+import { translate } from "@/lib/i18n";
 
-import { attemptArrivals, edgeFired, graphOrder, graphTopology, layoutGraph, loopShapes, operationalAttempts, pastAttempts, routeEdge, stageViews, unitMembers, wireFired } from "./pipelineGraph";
+import { attemptArrivals, attemptOrdinal, edgeFired, graphOrder, graphTopology, layoutGraph, loopShapes, operationalAttempts, pastAttempts, routeEdge, stageViews, unitMembers, wireFired } from "./pipelineGraph";
+import { pastAttemptLabel } from "./PipelineSection";
 
 /* The kanban stage graph's pure half (#1695 K5a) over invented pipeline
    records shaped like the store's: stages with `next`/`onFail`, runs of
@@ -289,6 +291,39 @@ test("review rounds are the bound flow's rounds; Past attempts list every finish
   /* One that asks for a decision is still the stage's current work. */
   const deciding = pipeline([stage("build", "builder", null)], [{ stageId: "build", attempts: [attempt(1, "needs_decision", "2026-09-14T09:00:00.000Z")] }], null, "needs_decision");
   expect(pastAttempts([deciding], new Map())).toEqual([]);
+});
+
+/* The engine appends an adopted helper conversation to the stage's run with
+   the next `n`, so the stage's own attempts read 1 and 3. Every caption counts
+   them 1 and 2, as the graph does; the record's `n` stays the key. */
+test("past attempts and rounds are numbered among the stage's own attempts, never by the record's n", () => {
+  const review = { id: "flow-review-3", rounds: [{ n: 1, verdict: "APPROVE", reviewerPath: "/fixture/r3-1.jsonl", reviewerConversationId: null, startedAt: "2026-09-14T11:25:00.000Z" }] } as unknown as Flow;
+  const first = { id: "flow-review-1", rounds: [{ n: 1, verdict: "REQUEST_CHANGES", reviewerPath: "/fixture/r1-1.jsonl", reviewerConversationId: null, startedAt: "2026-09-14T10:25:00.000Z" }] } as unknown as Flow;
+  const record = pipeline(retryStages, [
+    { stageId: "implement", attempts: [
+      attempt(1, "failed", "2026-09-14T10:00:00.000Z", { completedAt: "2026-09-14T10:10:00.000Z" }),
+      attempt(2, "passed", "2026-09-14T10:05:00.000Z", { historical: true, completedAt: "2026-09-14T10:08:00.000Z" }),
+      attempt(3, "passed", "2026-09-14T11:00:00.000Z", { completedAt: "2026-09-14T11:10:00.000Z" }),
+    ] },
+    { stageId: "review", attempts: [
+      attempt(1, "failed", "2026-09-14T10:20:00.000Z", { flowId: "flow-review-1", completedAt: "2026-09-14T10:40:00.000Z" }),
+      attempt(2, "passed", "2026-09-14T10:30:00.000Z", { historical: true, completedAt: "2026-09-14T10:35:00.000Z" }),
+      attempt(3, "passed", "2026-09-14T11:20:00.000Z", { flowId: "flow-review-3", completedAt: "2026-09-14T11:30:00.000Z" }),
+    ] },
+  ], null, "completed");
+  const past = pastAttempts([record], new Map([[first.id, first], [review.id, review]]));
+  const row = (kind: string, stageId: string, n: number) => past.find((entry) => entry.kind === kind && entry.stageId === stageId && entry.n === n && (kind !== "round" || entry.attempt === 3))!;
+  expect([row("attempt", "implement", 3).ordinal, row("attempt", "implement", 3).of]).toEqual([2, 2]);
+  expect(row("round", "review", 1)).toMatchObject({ attempt: 3, ordinal: 2, ambiguous: true });
+  expect(past.find((entry) => entry.kind === "helper" && entry.stageId === "implement")!.ordinal).toBeNull();
+  expect(attemptOrdinal(record, "implement", 3)).toBe(2);
+  expect(attemptOrdinal(record, "implement", 1)).toBe(1);
+  expect(attemptOrdinal(record, "verify", 4)).toBe(4);
+  for (const lang of ["en", "uk"] as const) {
+    const t = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(lang, key, params);
+    expect(pastAttemptLabel(t, row("attempt", "implement", 3), "Implement")).toBe(t("kanban.stageAttempt", { stage: "Implement", n: 2 }));
+    expect(pastAttemptLabel(t, row("round", "review", 1), "Review")).toBe(t("kanban.past.attemptRound", { stage: "Review", attempt: 2, n: 1 }));
+  }
 });
 
 test("retries of a fail edge's target spend no round: the card's counter reads the traversals (#1754)", () => {

@@ -453,7 +453,9 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
       {neverRan ? null : <div className="pane-sub">{bits}</div>}
       {attempts.length > 1 ? (
         <div className="attempts" role="group" aria-label={t("kanban.stages.attempts")}>
-          {attempts.map((attempt) => {
+          {/* Numbered among the stage's own attempts, as the graph numbers them;
+              the engine's `n` keys the choice. */}
+          {attempts.map((attempt, index) => {
             const attemptWord = graphStateWord(t, chipState(attempt.state));
             return (
               <button
@@ -462,10 +464,10 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
                 aria-pressed={attempt === shown}
                 className={attempt.state === "failed" ? "bad" : undefined}
                 data-attempt={attempt.n}
-                aria-label={t("kanban.stages.attemptAria", { n: attempt.n, state: attemptWord })}
+                aria-label={t("kanban.stages.attemptAria", { n: index + 1, state: attemptWord })}
                 onClick={() => props.onChooseAttempt(stage.id, attempt.n)}
               >
-                {t("kanban.attemptWord", { n: attempt.n })} · {attemptWord}
+                {t("kanban.attemptWord", { n: index + 1 })} · {attemptWord}
               </button>
             );
           })}

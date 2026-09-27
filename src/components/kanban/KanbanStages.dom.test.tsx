@@ -487,6 +487,29 @@ test("Collapse finished folds passed stages and lets their readers go; a graph n
   expect(readerIn(pane(host, "verify"))).toBe(idOf(verify1));
 });
 
+/* The engine appended an adopted helper conversation to Verify's run as n=2,
+   so Verify's own attempts read 1 and 3: the tabs say attempt 1 and 2, as the
+   graph does, and the record's n still chooses the reader. */
+test("attempt tabs number the stage's own attempts, not the record's n", async () => {
+  const helper = conversation("verify-helper");
+  const adopted = searchPipeline({
+    runs: searchPipeline().runs.map((run) => (run.stageId === "verify"
+      ? { ...run, attempts: [run.attempts[0]!, attempt(2, "passed", helper, 3000, { historical: true }), { ...run.attempts[1]!, n: 3 }] }
+      : run)),
+  } as Partial<Pipeline>);
+  const { host } = mount(adopted, { files: [...baseFiles, helper] });
+  await tick();
+  click(card(host).querySelector("[data-open-stages]"));
+  await tick();
+  const tabs = [...pane(host, "verify")!.querySelectorAll<HTMLElement>("[data-attempt]")];
+  expect(tabs.map((tab) => tab.dataset.attempt)).toEqual(["1", "3"]);
+  expect(tabs.map((tab) => tab.textContent)).toEqual(["attempt 1 · failed", "attempt 2 · running"]);
+  expect(tabs[1]!.getAttribute("aria-label")).toBe("Attempt 2, running");
+  click(tabs[0]!);
+  await tick();
+  expect(readerIn(pane(host, "verify"))).toBe(idOf(verify1));
+});
+
 test("a pane's actions offer retry and skip only for the stage the pipeline waits on", async () => {
   const { host } = mount(searchPipeline({ state: "needs_decision", cursor: { stageId: "verify", state: "running", input: null, activatedBy: null } } as Partial<Pipeline>));
   await tick();

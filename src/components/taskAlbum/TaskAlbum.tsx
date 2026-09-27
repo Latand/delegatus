@@ -7,6 +7,7 @@ import { createPortal } from "react-dom";
 import { GlyphIcon, Loader2, X } from "@/components/icons";
 import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/feed/Lightbox";
 import { Z } from "@/components/layers";
+import { attemptOrdinal } from "@/components/kanban/pipelineGraph";
 import { stageDisplayName } from "@/components/pipelines/pipelineModel";
 import { fmtAge } from "@/components/utils";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -51,11 +52,14 @@ const INDEXING_POLLS = 20;
 
 export function albumSourceLabel(t: TFunction, source: AlbumSource, pipelines: readonly Pipeline[], files: readonly FileEntry[]): string {
   if (source.stage) {
-    const stage = pipelines.find((pipeline) => pipeline.id === source.stage!.pipelineId)?.stages.find((entry) => entry.id === source.stage!.stageId);
+    const pipeline = pipelines.find((entry) => entry.id === source.stage!.pipelineId);
+    const stage = pipeline?.stages.find((entry) => entry.id === source.stage!.stageId);
     const name = stage ? stageDisplayName(t, stage) : source.stage.stageId;
+    /* The attempt the graph shows, counted among the stage's own attempts. */
+    const n = pipeline ? attemptOrdinal(pipeline, source.stage.stageId, source.stage.attempt) : source.stage.attempt;
     /* Beside a group of pictures a bare «· 2» reads as how many there are, so
        the attempt is spelled out, and named whenever a round follows it. */
-    const attempt = source.stage.attempt > 1 || source.stage.round ? `${name} · ${t("kanban.attemptWord", { n: source.stage.attempt })}` : name;
+    const attempt = n > 1 || source.stage.round ? `${name} · ${t("kanban.attemptWord", { n })}` : name;
     return source.stage.round ? t("album.review", { stage: attempt, n: source.stage.round }) : attempt;
   }
   const file = files.find((entry) => (source.conversationId && entry.conversationId === source.conversationId) || entry.path === source.path);
