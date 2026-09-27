@@ -428,6 +428,56 @@ describe("pulling another host's records", () => {
     expect(output).not.toContain(MEMBER_B);
   });
 
+  test("a former team ledger keeps a live member and leaves an unsigned request unknown", async () => {
+    await teamStageRecords(false, true);
+    const activityDir = path.join(remoteState, "activity");
+    const previous = process.env.LLV_STATE_DIR;
+    process.env.LLV_STATE_DIR = remoteState;
+    try {
+      const session = mintSession(teamStore(), MEMBER_B, "claim", { surface: "desktop", browser: "chrome" });
+      const memberRequest = new NextRequest("http://localhost/api/tasks", { headers: {
+        cookie: `llv_member=${session.value}`, "user-agent": "Mozilla/5.0 Chrome/140.0 Safari/537.36",
+      } });
+      const unsignedRequest = new NextRequest("http://localhost/api/tasks", { headers: {
+        "user-agent": "Mozilla/5.0 Chrome/140.0 Safari/537.36",
+      } });
+      for (const [index, request] of [memberRequest, unsignedRequest].entries()) {
+        recordOperatorRequest(request, { kind: "task", project: "harbor", idempotencyKey: `former-team-${index}` }, {
+          dir: () => activityDir, now: () => Date.parse(`2026-09-23T08:4${index}:00Z`),
+        });
+      }
+      expect(readRequests(DAY.start, DAY.end, { dir: () => activityDir }).rows.map((row) => row.author))
+        .toEqual([MEMBER_B, null]);
+      const sources = { dir: () => activityDir,
+        readLedger: (from: number, to: number) => readRequests(from, to, { dir: () => activityDir }),
+        store: () => ActivityStore.openReadOnly(path.join(activityDir, "records.sqlite")) };
+      const solo = readHumanInputs(DAY, NOW, sources, { mode: "solo", memberId: null });
+      expect(solo.inputs).toEqual([]);
+      expect(solo.unknownAuthors).toBe(2);
+      const report = activityReport({ params: clampMethodParams({}), range: "today", nowMs: NOW,
+        anchors: solo.inputs.map((input) => ({ at: input.at, project: input.project, surface: input.surface, kind: input.kind, host: input.host })),
+        hosts: solo.coverage, agents: [] });
+      expect(report.totals.requests).toBe(0);
+      expect(report.totals.humanMs).toBe(0);
+      const member = readHumanInputs(DAY, NOW, sources, { mode: "team", memberId: MEMBER_B });
+      expect(member.inputs.filter((input) => input.author === MEMBER_B)).toHaveLength(2);
+      expect(member.unknownAuthors).toBe(2);
+      resetTeamStoreForTests();
+      const team = new Database(path.join(remoteState, "team", "team.sqlite"));
+      team.exec("DELETE FROM members");
+      team.close();
+      const afterReset = recordOperatorRequest(unsignedRequest,
+        { kind: "task", project: "harbor", idempotencyKey: "former-team-after-reset" },
+        { dir: () => activityDir, now: () => Date.parse("2026-09-23T08:42:00Z") });
+      expect(afterReset?.author).toBeNull();
+      expect(readHumanInputs(DAY, NOW, sources, { mode: "solo", memberId: null }).unknownAuthors).toBe(3);
+    } finally {
+      resetTeamStoreForTests();
+      if (previous === undefined) delete process.env.LLV_STATE_DIR;
+      else process.env.LLV_STATE_DIR = previous;
+    }
+  });
+
   test("a former team export cannot restore unknown input as operator hours", async () => {
     await teamStageRecords(false, true);
     expect(await pullWith(config())).toMatchObject({ ok: true });

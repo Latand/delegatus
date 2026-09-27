@@ -16,9 +16,11 @@ import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { requestSurface } from "@/lib/view/device";
 import { teamActor } from "@/lib/team/actor";
 import { teamMode } from "@/lib/team/sessions";
+import { existingTeamStore } from "@/lib/team/store";
 
 import { ledgerRowKey } from "./humanInput";
 import { REQUEST_KINDS, SURFACES, type RequestKind, type Surface } from "./method";
+import { ActivityStore, LOCAL_HOST_KEY } from "./store";
 
 /*
  * The operator request ledger (docs/design/activity-dashboard.md, "Privacy
@@ -187,10 +189,18 @@ export function recordOperatorRequest(
 
 function requestAuthor(request: Pick<NextRequest, "headers"> | null): string | null {
   try {
-    if (teamMode() === "solo") return "operator";
-    if (!request || !("cookies" in request)) return null;
-    const actor = teamActor(request as Pick<NextRequest, "headers" | "cookies">);
-    return actor.kind === "member" ? actor.memberId : null;
+    if (request && "cookies" in request) {
+      const actor = teamActor(request as Pick<NextRequest, "headers" | "cookies">);
+      if (actor.kind === "member") return actor.memberId;
+      if (actor.kind !== "operator") return null;
+    }
+    if (teamMode() !== "solo" || (existingTeamStore()?.members().length ?? 0) > 0) return null;
+    const store = ActivityStore.openReadOnly();
+    try {
+      return store?.hostState(LOCAL_HOST_KEY)?.teamHistory ? null : "operator";
+    } finally {
+      store?.close();
+    }
   } catch { return null; }
 }
 
