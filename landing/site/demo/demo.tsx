@@ -632,6 +632,7 @@ async function typeSearch(inDialog: boolean) {
   if (!field) return;
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(field, L("webhook", "вебхук"));
   field.dispatchEvent(new Event("input", { bubbles: true }));
+  await waitFor(() => document.querySelector("[data-search-result]"), 30);
 }
 
 window.addEventListener("message", (event) => {

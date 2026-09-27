@@ -76,10 +76,10 @@ async function shoot(page: Page, selector: string, file: string) {
 
 /* The orchestrator's answer to the request, by a phrase of it that is plain text. */
 const ANSWER = { en: "is on the board", uk: "вже на дошці" } as const;
-/* When to look after the send, each wait after the last. The script moves at
-   2.6 s, 7.8 s, 13 s and 17.6 s after the send, and the feed polls every
-   1.2 s, so each look falls a poll or more after its step arrived. */
-const TIMES_MS = [900, 3800, 4200, 5300, 5000];
+/* The script moves at 0.65, 5.85, 11.05 and 15.65 seconds. Check the
+   delivered request before the first reply, then allow each rendered report
+   half a second after its streamed update. Each wait follows the last. */
+const TIMES_MS = [300, 1200, 4900, 5200, 4600];
 
 /** How many copies of the request the frame shows, and whether each sits above the answer. */
 async function requestBubbles(frame: Frame, lang: Locale) {
@@ -201,7 +201,16 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
             continue;
           }
         }
-        if (step === 5) await current.waitForFunction(() => !!document.querySelector('[data-id="task:t-retries"][data-attention="needs"], [data-mobile2-section="needs"]'));
+        if (step === 5) {
+          try { await current.waitForFunction(() => !!document.querySelector('[data-id="task:t-retries"][data-attention="needs"], [data-mobile2-section="needs"], [data-pstate="needs_decision"]'), undefined, { timeout: 4000 }); }
+          catch (error) {
+            await page.screenshot({ path: path.join(out, `${perfLabel}-${viewport.name}-step5.png`) });
+            fs.writeFileSync(path.join(out, `${perfLabel}-${viewport.name}-step5.txt`), await current.locator("body").innerText());
+            if (perfLabel === "after") throw error;
+            rows.push({ step, stateMs, visibleMs: null, error: "decision not visible after 4 seconds" });
+            continue;
+          }
+        }
         rows.push({ step, stateMs, visibleMs: await page.evaluate(() => performance.now() - (window as any).stepClick) });
       }
       return rows;
@@ -225,7 +234,7 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
         if (perfLabel === "after" && !viewport.phone && view !== "conversation") {
           await frame.waitForFunction(() => !document.querySelector("[data-reader-close]"));
         }
-        if (view === "search") await frame.waitForFunction(() => !!document.querySelector('input[type="search"], [role="dialog"] input'));
+        if (view === "search") await frame.waitForSelector("[data-search-result]");
         if (view === "accounts") await frame.waitForFunction(() => document.body.innerText.replace(/\s+/g, " ").includes("Max"));
         rows.push({ view, visibleMs: Date.now() - start });
         if (perfLabel === "after") await page.locator(".live-open").screenshot({ path: path.join(out, `${perfLabel}-${viewport.name}-${view}.png`) });
