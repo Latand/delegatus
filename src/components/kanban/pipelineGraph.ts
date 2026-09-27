@@ -128,8 +128,10 @@ const ENDED_STATES: ReadonlySet<Pipeline["state"]> = new Set(["completed", "clos
  * except after a fix that ran on a spent fail edge's handoff, which follows the
  * failing stage's `next`. A lane with no cursor (completed, closed, waiting for
  * review) has nothing ahead. The cursor stage itself is ahead only while the
- * lane is busy and its latest attempt is settled: the engine has moved onto it
- * and the new attempt is not recorded yet.
+ * lane is busy, its latest attempt is settled and the cursor is `pending`: the
+ * engine has moved onto it and starts the new attempt on its next tick. Any
+ * other cursor state on a settled attempt is that attempt still finishing,
+ * such as a passed final stage retrying its publication under `committing`.
  */
 export function pathAhead(pipeline: Pipeline): Set<string> {
   const ahead = new Set<string>();
@@ -140,7 +142,7 @@ export function pathAhead(pipeline: Pipeline): Set<string> {
   if (!stage) return ahead;
   const latest = latestAttempt(pipeline, stage.id);
   const settled = !latest || !LIVE_CHIPS.has(stageChipState(pipeline, stage));
-  if (pipelineCursorActive(pipeline) && settled && latest) ahead.add(stage.id);
+  if (pipelineCursorActive(pipeline) && settled && latest && cursor.state === "pending") ahead.add(stage.id);
   const activation = cursor.activatedBy ?? latest?.activatedBy ?? null;
   const handoff = activation?.edge === "fail" && activation.budgetSpent ? byId.get(activation.stageId) : undefined;
   let next: string | null = handoff ? handoff.next : stage.next;

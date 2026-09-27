@@ -200,6 +200,19 @@ test("waits again follows the path ahead of the cursor: an ended lane has none, 
   /* A busy lane whose cursor moved onto a settled stage: that stage is next. */
   const moved = stageViews(pipeline(twoDockStages, twoDockRuns.map((run) => run.stageId === "review-fix" ? { ...run, attempts: run.attempts.slice(0, 1) } : run.stageId === "review" ? { ...run, attempts: run.attempts.slice(0, 1) } : run), { stageId: "review", state: "pending", input: null, activatedBy: passVia("review-fix", 1).activatedBy }));
   expect(moved.get("review")).toMatchObject({ state: "pending", again: true, previous: "failed" });
+
+  /* A passed final stage retrying its publication keeps the lane running with
+     the cursor committing on it: that attempt is finishing, not waiting for
+     another one. */
+  const publishing = pipeline(retryStages, [
+    { stageId: "implement", attempts: [attempt(1, "passed", at(0))] },
+    { stageId: "review", attempts: [attempt(1, "passed", at(2))] },
+    { stageId: "verify", attempts: [attempt(1, "passed", at(4))] },
+    { stageId: "merge", attempts: [attempt(1, "passed", at(6), { completedAt: at(8) })] },
+  ], { stageId: "merge", state: "committing", input: null, activatedBy: null });
+  const published = stageViews(publishing);
+  expect(published.get("merge")).toMatchObject({ state: "passed", again: false, previous: null });
+  expect([...published.values()].filter((view) => view.again)).toEqual([]);
 });
 
 test("a settled stage whose conversation works again says so; a running one does not (#1744)", () => {
