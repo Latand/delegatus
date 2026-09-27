@@ -201,11 +201,12 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
             continue;
           }
         }
-        if (step === 5) await current.waitForFunction(() => !!document.querySelector('[data-id="task:t-retries"]') || document.body.innerText.replace(/\s+/g, " ").includes("Back off webhook retries"));
+        if (step === 5) await current.waitForFunction(() => !!document.querySelector('[data-id="task:t-retries"][data-attention="needs"], [data-mobile2-section="needs"]'));
         rows.push({ step, stateMs, visibleMs: await page.evaluate(() => performance.now() - (window as any).stepClick) });
       }
       return rows;
     });
+    if (process.argv.includes("--steps-only")) return;
     await trace("playback", async () => {
       const hero = await frameOf(page, ".live-hero");
       await hero.locator(`[aria-label="${translate("en", "composer.sendToAgent")}"]`).first().click();
@@ -221,6 +222,9 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
         await page.locator(`.sec-open [data-view="${view}"]`).click();
         await page.waitForFunction(() => !document.querySelector(".live-open[data-busy]"));
         const frame = await frameOf(page, ".live-open");
+        if (perfLabel === "after" && !viewport.phone && view !== "conversation") {
+          await frame.waitForFunction(() => !document.querySelector("[data-reader-close]"));
+        }
         if (view === "search") await frame.waitForFunction(() => !!document.querySelector('input[type="search"], [role="dialog"] input'));
         if (view === "accounts") await frame.waitForFunction(() => document.body.innerText.replace(/\s+/g, " ").includes("Max"));
         rows.push({ view, visibleMs: Date.now() - start });

@@ -516,6 +516,13 @@ function goBoard() {
 /** Presses the product's own controls to reach a view, the way a visitor would. */
 async function navigateView(view: string) {
   closeOverlays();
+  if (!PHONE) {
+    // Leaving full-screen mode only docks the reader. Close that local pane
+    // too, so the next view has the same clean board as a fresh frame.
+    const readers = [...document.querySelectorAll<HTMLButtonElement>("[data-reader-close]")];
+    for (const reader of readers) reader.click();
+    if (readers.length) await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  }
   if (PHONE) {
     const screens: Record<string, string> = {
       /* The orchestrator is its chat until the answer is in, then its report log. */
@@ -556,8 +563,10 @@ async function navigateView(view: string) {
     if (toggle && toggle.dataset.seatPlacement !== want) toggle.click();
     return;
   }
-  goBoard();
-  if (byLabel(label("orchPanel.seatCollapse"))) await press(() => byLabel(label("orchPanel.seatCollapse")), 5);
+  if (view !== "conversation") {
+    goBoard();
+    if (byLabel(label("orchPanel.seatCollapse"))) await press(() => byLabel(label("orchPanel.seatCollapse")), 5);
+  }
   if (view === "fold") return;
   if (view === "pipeline" || view === "decision") {
     const card = view === "decision" || step < 2 ? "t-retries" : "t-refunds";
