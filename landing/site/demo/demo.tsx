@@ -625,7 +625,7 @@ function showView(view: string) {
   return viewQueue;
 }
 
-/** The real search dialog owns query state, loading and duplicate folding. */
+/** The real search dialog owns query state, loading and speaker scope. */
 function searchReady() {
   const field = document.querySelector<HTMLInputElement>("[data-search-input]");
   const dialog = field?.closest('[role="dialog"]');
