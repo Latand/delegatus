@@ -43,6 +43,7 @@ the orchestrator's chat, above the orchestrator's answer.
 | --- | --- |
 | `index.html` | the four sections, the footer band and the install-box template |
 | `styles.css` | the page: type, the product's dark tokens, the frames around the demo |
+| `launch.js` | launch-day switches: the Product Hunt link in the header shows only while its URL is set |
 | `copy.js` | every visible string of the page in English and Ukrainian, and the two install prompts |
 | `mascot.js` | the mascot's three poses (unchanged from A) |
 | `main.js` | language, install boxes, the legacy giggle, and the controller of the live frames |
@@ -50,7 +51,7 @@ the orchestrator's chat, above the orchestrator's answer.
 | `demo/world.ts` | the invented harbor-api world at each step, in both languages |
 | `demo/taskIcons.json` | the lucide drawings of the demo's task icons, written by the build |
 | `build.ts` | bundles the demo, compiles the product stylesheet, assembles `dist/` |
-| `capture.ts` | the render driver |
+| `capture.ts` | the render driver; `--gallery` renders the Product Hunt gallery (`docs/launch/product-hunt.md`) |
 
 ## How the demo works
 

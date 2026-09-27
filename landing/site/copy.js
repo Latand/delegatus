@@ -39,6 +39,7 @@
   const strings = {
     en: {
       "nav.skip": "Skip to content",
+      "nav.launch": "We are live on Product Hunt",
       "hero.promise": "Runs on your machine. Uses your agent accounts.",
       "demo.views": "Views",
       "demo.board": "Board",
@@ -115,6 +116,7 @@
     },
     uk: {
       "nav.skip": "Перейти до змісту",
+      "nav.launch": "Ми на Product Hunt",
       "hero.promise": "Працює на твоїй машині. На твоїх акаунтах агентів.",
       "demo.views": "Вигляд",
       "demo.board": "Дошка",

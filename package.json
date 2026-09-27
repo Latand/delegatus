@@ -89,13 +89,18 @@
     "github-copilot",
     "orchestrator",
     "kanban",
-    "code-review"
+    "code-review",
+    "agent-orchestration",
+    "multi-agent",
+    "mcp",
+    "local-first",
+    "developer-tools"
   ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Latand/delegatus.git"
   },
-  "homepage": "https://github.com/Latand/delegatus#readme",
+  "homepage": "https://delegatus.org",
   "bugs": {
     "url": "https://github.com/Latand/delegatus/issues"
   },

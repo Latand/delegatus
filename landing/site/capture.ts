@@ -13,6 +13,8 @@
  *
  * `--only=en-1440` limits the run to one language and width.
  *
+ * `--gallery` renders the Product Hunt gallery instead (see renderGallery).
+ *
  * `--check-request=10` renders nothing: it plays the hero's script that many
  * times in each language and width and fails unless every step shows the
  * visitor's request exactly once in the orchestrator's chat, above the reply.
@@ -387,6 +389,146 @@ if (checkRuns > 0) {
   server.stop(true);
   for (const failure of failures) console.error(failure);
   process.exit(failures.length ? 1 : 0);
+}
+
+/* `--gallery` renders the Product Hunt gallery that docs/launch/product-hunt.md
+   lists: each slide is the demo at one step and view, framed with its caption
+   at 1270×760 and twice the pixels, then the install slide, the 240×240
+   thumbnail and the repository's 1280×640 social preview. English only, the
+   language of the launch. PNGs go to <out>/gallery/ and are never committed. */
+type GallerySlide = { file: string; title: string; sub: string; query?: string; phone?: string[]; install?: true };
+const GALLERY: GallerySlide[] = [
+  { file: "01-orchestrator", query: "step=5&view=board", title: "Delegate everything.",
+    sub: "Tell one orchestrator what you want shipped. It plans the work, runs Claude Code, Codex and Copilot agents, and reports back." },
+  { file: "02-pipeline", query: "step=5&view=pipeline", title: "Build, review, verify. On its own.",
+    sub: "Every task gets a worktree, a builder and a fresh read-only reviewer on another engine. A failed review goes back to the builder." },
+  { file: "03-decision", query: "step=5&view=decision", title: "It stops only when the call is yours.",
+    sub: "A decision waits on its card with the finding and the ways forward. Merging on a passed review is your switch, off by default." },
+  { file: "04-conversation", query: "step=5&view=conversation", title: "Every agent session reads as a chat.",
+    sub: "Diffs, commands and their output as cards, streaming live. Press / to search everything any agent wrote, on any engine." },
+  { file: "05-accounts", query: "step=5&view=accounts", title: "Your accounts. Your limits, in view.",
+    sub: "Several Claude, Codex and Copilot accounts side by side, with their five-hour and weekly windows and when each resets." },
+  { file: "06-phone", phone: ["step=5&phone=1&view=board", "step=5&phone=1&view=decision"], title: "Answer from your phone.",
+    sub: "The board in your pocket, inside your own tailnet. A push when an agent asks you something. Telegram reports built in." },
+  { file: "07-install", install: true, title: "Runs on your machine. Uses your accounts.",
+    sub: "Free and open source under MIT. Claude Code, Codex and GitHub Copilot. macOS, Linux, and Windows through WSL 2." },
+];
+/* The demo is captured this wide and cropped to the slide's frame: 1174×554 CSS pixels. */
+const GALLERY_DEMO = { width: 1600, height: 756 };
+const GALLERY_PHONE = { width: 390, height: 812 };
+
+/* The install slide's claim, counted from this checkout's history when it renders. */
+function builtWithItself(days = 30) {
+  const git = (...args: string[]) => Bun.spawnSync(["git", ...args], { cwd: here }).stdout.toString().trim();
+  if (git("rev-parse", "--is-shallow-repository") === "true") throw new Error("--gallery counts merged pull requests: fetch the full history first (git fetch --unshallow)");
+  const merged = git("log", "--first-parent", `--since=${days} days ago`, "--format=%s%x09%(trailers:key=Co-Authored-By,valueonly,separator=%x2C)")
+    .split("\n").map((line) => line.split("\t")).filter(([subject]) => /\(#\d+\)$/.test(subject ?? ""));
+  return { days, merged: merged.length, byAgents: merged.filter(([, trailers]) => /Claude|Codex|Copilot/.test(trailers ?? "")).length };
+}
+
+async function renderGallery() {
+  const dir = path.join(out, "gallery");
+  fs.mkdirSync(dir, { recursive: true });
+  const brand = (name: string) => fs.readFileSync(path.join(here, "../../public/brand", name));
+  const uri = (type: string, data: Buffer) => `data:${type};base64,${data.toString("base64")}`;
+  const mark = uri("image/svg+xml", brand("delegatus-mark.svg"));
+  const escape = (text: string) => text.replace(/[&<>"]/g, (char) => `&#${char.charCodeAt(0)};`);
+  const counted = builtWithItself();
+  const fonts = await inlineFonts(GALLERY_FONTS);
+
+  async function demoShot(query: string, phone: boolean): Promise<string> {
+    const size = phone ? GALLERY_PHONE : GALLERY_DEMO;
+    const context = await browser.newContext({ viewport: size, deviceScaleFactor: 2, colorScheme: "dark", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+    const page = await context.newPage();
+    await page.goto(`${base}demo/index.html?lang=en&${query}`);
+    await settle(page, phone ? 5000 : 6000);
+    const shot = await page.screenshot();
+    await context.close();
+    return uri("image/png", shot);
+  }
+
+  const page = await browser.newPage({ viewport: { width: 1270, height: 760 }, deviceScaleFactor: 2, colorScheme: "dark" });
+  const render = async (html: string, file: string, size = { width: 1270, height: 760 }) => {
+    await page.setViewportSize(size);
+    await page.setContent(html, { waitUntil: "load" });
+    await page.evaluate(() => document.fonts.ready);
+    if (html.includes("@font-face") && !await page.evaluate(() => document.fonts.check('700 38px "Unbounded"'))) throw new Error(`${file}: the caption face did not load`);
+    /* A caption that wraps would run into the frame below it. */
+    const overflow = await page.evaluate(() => [...document.querySelectorAll("[data-one-line]")].filter((el) => el.scrollWidth > el.clientWidth || el.getBoundingClientRect().height > 60).length);
+    if (overflow) throw new Error(`${file}: a one-line caption wraps`);
+    await page.screenshot({ path: path.join(dir, `${file}.png`) });
+    console.log(`gallery: ${file}.png`);
+  };
+  const head = (slide: GallerySlide, oneLine = true) => `<h1${oneLine ? " data-one-line" : ""}>${escape(slide.title)}</h1><p class="sub">${escape(slide.sub)}</p>`;
+  const brandTag = `<div class="brand"><img src="${mark}" alt=""><span>Delegatus</span></div>`;
+
+  for (const slide of GALLERY) {
+    let body: string;
+    if (slide.phone) {
+      const shots = await Promise.all(slide.phone.map((query) => demoShot(query, true)));
+      body = `<div class="side">${head(slide, false)}${brandTag}</div><div class="phones">${shots.map((src) => `<div class="handset"><img src="${src}" alt=""></div>`).join("")}</div>`;
+    } else if (slide.install) {
+      body = `<div class="install"><img class="big-mark" src="${mark}" alt="">${head(slide)}<code>bunx delegatus-cli</code>`
+        + `<p class="fact">Built with itself: ${counted.byAgents} of the ${counted.merged} pull requests merged in the last ${counted.days} days were co-authored by the agents it runs.</p>`
+        + `<p class="url">delegatus.org</p></div>`;
+    } else {
+      body = `<div class="head">${head(slide)}</div>${brandTag}<div class="shot"><img src="${await demoShot(slide.query!, false)}" alt=""></div>`;
+    }
+    await render(GALLERY_PAGE(fonts, body), slide.file);
+  }
+  await render(`<!doctype html><body style="margin:0"><img src="${uri("image/svg+xml", brand("delegatus-touch-icon.svg"))}" style="display:block;width:240px;height:240px">`, "thumbnail", { width: 240, height: 240 });
+  await render(`<!doctype html><body style="margin:0"><img src="${uri("image/svg+xml", brand("delegatus-social-card.svg"))}" style="display:block;width:1280px;height:640px">`, "social-preview", { width: 1280, height: 640 });
+  await page.close();
+  console.log(`gallery in ${dir} (${counted.byAgents}/${counted.merged} agent-co-authored merges in ${counted.days} days)`);
+}
+
+/* The landing's own faces. The slide carries them inline, fetched here rather
+   than by the browser, so a slide never renders in a fallback face. */
+const GALLERY_FONTS = "https://fonts.googleapis.com/css2?family=Geologica:wght@300..600&family=Martian+Mono:wght@400;500&family=Unbounded:wght@600;700&display=swap";
+async function inlineFonts(url: string): Promise<string> {
+  const agent = { "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36" };
+  const css = await (await fetch(url, { headers: agent })).text();
+  const files = [...new Set(css.match(/https:\/\/fonts\.gstatic\.com\/[^)]+/g) ?? [])];
+  if (!files.length) throw new Error("--gallery could not load the landing's fonts");
+  const inlined = await Promise.all(files.map(async (file) => [file, Buffer.from(await (await fetch(file)).arrayBuffer()).toString("base64")] as const));
+  return inlined.reduce((text, [file, data]) => text.replaceAll(file, `data:font/woff2;base64,${data}`), css);
+}
+
+const GALLERY_PAGE = (fonts: string, body: string) => `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<style>${fonts}</style>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body { width: 1270px; height: 760px; overflow: hidden; position: relative; color: #fbebdd; font-family: Geologica, sans-serif;
+    background: radial-gradient(900px 520px at 88% -12%, rgba(139, 124, 246, .22), transparent 62%),
+      radial-gradient(700px 420px at -8% 112%, rgba(224, 57, 43, .13), transparent 60%), #111218; }
+  h1 { font: 700 38px/1.18 Unbounded, sans-serif; letter-spacing: -.01em; white-space: nowrap; }
+  .sub { margin-top: 14px; font-size: 20px; line-height: 1.45; color: #b8bcca; }
+  .head { position: absolute; top: 40px; left: 48px; width: 960px; }
+  .brand { position: absolute; top: 44px; right: 48px; display: flex; gap: 10px; align-items: center; font: 600 17px Unbounded, sans-serif; }
+  .brand img { width: 26px; height: 26px; }
+  .shot { position: absolute; left: 48px; right: 48px; top: 206px; bottom: 0; border-radius: 14px 14px 0 0; overflow: hidden;
+    border: 1px solid #353a4a; border-bottom: 0; box-shadow: 0 30px 80px rgba(0, 0, 0, .55), 0 0 0 6px rgba(255, 255, 255, .03); }
+  .shot img { display: block; width: 100%; }
+  .side { position: absolute; left: 56px; top: 0; bottom: 0; width: 470px; display: flex; flex-direction: column; justify-content: center; }
+  .side h1 { white-space: normal; }
+  .side .brand { position: absolute; top: auto; right: auto; bottom: 44px; left: 0; }
+  .phones { position: absolute; right: 64px; top: 0; bottom: 0; display: flex; gap: 30px; align-items: center; }
+  .handset { width: 318px; padding: 9px; border-radius: 44px; background: #05060a; border: 1px solid #3a3f50; box-shadow: 0 30px 80px rgba(0, 0, 0, .6); }
+  .handset img { display: block; width: 300px; border-radius: 35px; }
+  .install { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 0 90px; }
+  .install .big-mark { width: 96px; height: 96px; margin-bottom: 30px; }
+  .install .sub { max-width: 900px; }
+  .install code { margin-top: 38px; padding: 18px 34px; border-radius: 14px; background: #191b23; border: 1px solid #353a4a; font: 500 30px "Martian Mono", monospace; color: #fbebdd; }
+  .install code::before { content: "$ "; color: #7d8193; }
+  .install .fact { margin-top: 34px; font-size: 18px; color: #9fe0b5; }
+  .install .url { position: absolute; bottom: 36px; font: 600 16px Unbounded, sans-serif; color: #7d8193; letter-spacing: .02em; }
+</style></head><body>${body}</body></html>`;
+
+if (process.argv.includes("--gallery")) {
+  await renderGallery();
+  await browser.close();
+  server.stop(true);
+  process.exit(0);
 }
 
 for (const lang of ["en", "uk"] as Locale[]) {

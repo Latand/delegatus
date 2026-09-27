@@ -567,6 +567,17 @@
   };
   renderSteps();
 
+  // ---------- Launch-day links ----------
+
+  // launch.js lights a link by giving it a URL; an empty value keeps it hidden.
+  const launch = window.DLG_LAUNCH || {};
+  for (const link of document.querySelectorAll("[data-launch]")) {
+    const href = launch[link.dataset.launch];
+    if (typeof href !== "string" || !href.startsWith("https://")) continue;
+    link.href = href;
+    link.hidden = false;
+  }
+
   // ---------- Live numbers: stars and version ----------
 
   fetch("https://api.github.com/repos/Latand/delegatus", { headers: { Accept: "application/vnd.github+json" } })
