@@ -1796,9 +1796,11 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
 
   interface GraphMeasure {
     dir: string | null;
-    nodes: Array<{ stage: string; width: number; height: number; state: string; detail: string }>;
+    nodes: Array<{ stage: string; width: number; height: number; state: string; attempt: string; detail: string }>;
     edges: Array<{ edge: string; classes: string; dashed: boolean }>;
     labels: string[];
+    /* A fail edge folds into a strip under its source (docs/design/pipeline-graph-loops.md). */
+    strips: Array<{ strip: string; shape: string; classes: string; fired: string; max: string; text: string; dots: string }>;
   }
 
   /** The graph of one card, read the same way from either page. */
@@ -1815,7 +1817,9 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
           width: Math.round(box.width),
           height: Math.round(box.height),
           state: node.querySelector(".pstate")?.textContent?.trim() ?? "",
-          detail: [...node.querySelectorAll(".pdetail, .rchip")].map((part) => part.textContent?.trim()).join(" "),
+          /* The one attempt caption: "· N" beside the name from a stage's second own attempt. */
+          attempt: node.querySelector(".pattempt")?.textContent?.replace("·", "").trim() ?? "",
+          detail: [...node.querySelectorAll(".pdetail, .rounds-mark .ccircle, .rounds-mark .rverdict")].map((part) => part.textContent?.trim()).join(" "),
         };
       }),
       edges: [...graph.querySelectorAll<SVGPathElement>(".pedge")].map((edge) => ({
@@ -1824,6 +1828,15 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
         dashed: getComputedStyle(edge).strokeDasharray !== "none",
       })),
       labels: [...graph.querySelectorAll(".pelabel")].map((label) => label.textContent?.trim() ?? ""),
+      strips: [...graph.querySelectorAll<HTMLElement>(".pstrip")].map((strip) => ({
+        strip: strip.dataset.strip ?? "",
+        shape: strip.dataset.stripShape ?? "",
+        classes: strip.getAttribute("class") ?? "",
+        fired: strip.dataset.stripFired ?? "",
+        max: strip.dataset.stripMax ?? "",
+        text: strip.querySelector(".sname")?.textContent?.trim() ?? "",
+        dots: strip.querySelector<HTMLElement>(".sdots")?.dataset.dots ?? "",
+      })),
     };
   }, cardSelector);
 
@@ -1919,13 +1932,17 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
           if (graph.nodes.map((node) => node.stage).join() !== "implement,review,verify,merge") failures.push(`retry graph ${scheme}: nodes ${JSON.stringify(graph.nodes)}`);
           if (graph.nodes.some((node) => node.height !== 76)) failures.push(`retry graph ${scheme}: node heights ${graph.nodes.map((node) => node.height)}`);
           if (byStage.get("verify")?.state !== "running" || byStage.get("merge")?.state !== "waiting") failures.push(`retry graph ${scheme}: states ${JSON.stringify(graph.nodes)}`);
-          if (byStage.get("review")?.detail !== "R1 ✓") failures.push(`retry graph ${scheme}: review rounds ${byStage.get("review")?.detail}`);
+          if (byStage.get("review")?.detail !== "1 ✓") failures.push(`retry graph ${scheme}: review rounds ${byStage.get("review")?.detail}`);
           /* A helper conversation is adopted last on Implement: neither the attempt count nor the budget moves. */
-          if (byStage.get("implement")?.detail !== "attempt 2") failures.push(`retry graph ${scheme}: implement detail ${byStage.get("implement")?.detail}`);
-          const fail = graph.edges.find((edge) => edge.edge === "verify:fail:implement");
-          if (!fail?.dashed || !/\bback\b/.test(fail.classes) || !/\btaken\b/.test(fail.classes)) failures.push(`retry graph ${scheme}: fail edge ${JSON.stringify(fail)}`);
-          if (graph.edges.filter((edge) => !edge.dashed).length !== 3) failures.push(`retry graph ${scheme}: pass edges ${JSON.stringify(graph.edges)}`);
-          if (!graph.labels.includes("fail · retry 1 of 2")) failures.push(`retry graph ${scheme}: labels ${JSON.stringify(graph.labels)}`);
+          if (byStage.get("implement")?.attempt !== "2") failures.push(`retry graph ${scheme}: implement attempt ${byStage.get("implement")?.attempt}`);
+          if (byStage.get("verify")?.attempt !== "2" || byStage.get("review")?.attempt || byStage.get("merge")?.attempt) failures.push(`retry graph ${scheme}: attempt captions ${JSON.stringify(graph.nodes.map((node) => [node.stage, node.attempt]))}`);
+          /* Verify's fail edge is no wire: it folds into the strip under Verify, "back to Implement", one of two rounds spent. */
+          const fail = graph.strips.find((strip) => strip.strip === "verify:fail:implement");
+          if (graph.strips.length !== 1 || fail?.shape !== "return" || fail.fired !== "1" || fail.max !== "2" || !/\bfired\b/.test(fail.classes) || /\bspent\b/.test(fail.classes) || fail.text !== "back to Implement" || fail.dots !== "bad next") failures.push(`retry graph ${scheme}: fail strip ${JSON.stringify(graph.strips)}`);
+          /* Only the pass chain is wired; a wire the engine travelled is solid with its count, one it did not stays dashed. */
+          const wires = graph.edges.map((edge) => `${edge.edge}:${edge.dashed ? "dashed" : "solid"}`).join();
+          if (wires !== "implement:pass:review:dashed,review:pass:verify:solid,verify:pass:merge:dashed" || graph.edges.some((edge) => /\bback\b/.test(edge.classes))) failures.push(`retry graph ${scheme}: wires ${JSON.stringify(graph.edges)}`);
+          if (JSON.stringify(graph.labels) !== JSON.stringify(["1"])) failures.push(`retry graph ${scheme}: labels ${JSON.stringify(graph.labels)}`);
           /* The same toggle brings the summary back, all four stages with it. */
           await page.click(`${card("t-search")} .pblock [data-graph-toggle]`);
           await page.waitForSelector(`${card("t-search")} .pblock .pb-chain`, { timeout: 5_000 });
@@ -1965,7 +1982,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
           const node = document.querySelector<HTMLElement>(`${selector} .pnode[data-stage="review"]`);
           if (!node) return null;
           const box = node.getBoundingClientRect();
-          const chips = [...node.querySelectorAll<HTMLElement>(".rchip")].map((chip) => {
+          const chips = [...node.querySelectorAll<HTMLElement>(".rounds-mark .ccircle, .rounds-mark .rverdict")].map((chip) => {
             const rect = chip.getBoundingClientRect();
             return { text: chip.textContent?.trim(), right: Math.round(rect.right), top: Math.round(rect.top), bottom: Math.round(rect.bottom) };
           });
@@ -1974,8 +1991,9 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
         await shot(page, "production", "five-rounds", "light");
         frames["five-rounds"] = { production: review };
         const inside = review && review.chips.every((chip) => chip.right <= review.right - 1 && chip.bottom <= review.bottom);
-        const oneLine = review && new Set(review.chips.map((chip) => chip.top)).size === 1;
-        if (!review || review.dir !== "LR" || JSON.stringify(review.chips.map((chip) => chip.text)) !== JSON.stringify(["+4", "R5 ✓"]) || !inside || !oneLine) failures.push(`five rounds: ${JSON.stringify(review)}`);
+        /* The count circle and the verdict tick differ in height; one line means one centre. */
+        const oneLine = review && new Set(review.chips.map((chip) => Math.round((chip.top + chip.bottom) / 2))).size === 1;
+        if (!review || review.dir !== "LR" || JSON.stringify(review.chips.map((chip) => chip.text)) !== JSON.stringify(["5", "✓"]) || !inside || !oneLine) failures.push(`five rounds: ${JSON.stringify(review)}`);
       }, WIDE);
 
       await production("light", "past attempts and helpers", async (page) => {
@@ -1983,7 +2001,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
           kind: (row as HTMLElement).dataset.pastKind, label: row.querySelector(".lbl")?.textContent, verdict: row.querySelector(".verdict")?.textContent,
         })), card("t-limits"));
         frames["failed-latest"] = { production: limits };
-        if (!limits.some((row) => row.kind === "attempt" && row.label === "Builder · attempt 1" && row.verdict === "failed")) failures.push(`failed latest attempt missing from Past attempts: ${JSON.stringify(limits)}`);
+        if (!limits.some((row) => row.kind === "attempt" && row.label === "Build" && row.verdict === "failed")) failures.push(`failed latest attempt missing from Past attempts: ${JSON.stringify(limits)}`);
 
         await page.locator(`${card("t-search")} details.history`).evaluate((element) => { (element as HTMLDetailsElement).open = true; element.scrollIntoView({ block: "center" }); });
         await page.waitForTimeout(300);
@@ -1993,9 +2011,10 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
         await shot(page, "production", "history-open", "light");
         frames["history-open"] = { production: past };
         const labels = past.map((row) => row.label).sort();
-        const expected = ["Builder · attempt 1", "Builder · attempt 2", "Builder · helper conversation 1", "Reviewer · attempt 1", "Reviewer · round 1", "Verifier · attempt 1"];
+        /* One attempt caption: a stage's name, with "· N" once it has more than one attempt of its own. */
+        const expected = ["Implement · 1", "Implement · 2", "Implement · helper conversation 1", "Review", "Review · round 1", "Verify · 1"];
         if (JSON.stringify(labels) !== JSON.stringify(expected) || !past.every((row) => row.open)) failures.push(`past attempts: ${JSON.stringify(past)}`);
-        if (past.some((row) => row.label === "Verifier · attempt 2")) failures.push("past attempts: the running Verify attempt is listed");
+        if (past.some((row) => row.label === "Verify · 2")) failures.push("past attempts: the running Verify attempt is listed");
         await page.click(`${card("t-search")} details.history [data-past-kind="helper"] .hopen`);
         await page.waitForSelector(`${card("t-search")} [data-kanban-reader]`, { timeout: 10_000 });
         const opened = await page.evaluate((selector) => document.querySelector<HTMLElement>(`${selector} [data-kanban-reader]`)?.dataset.kanbanReader ?? null, card("t-search"));
@@ -2030,24 +2049,33 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
       await production("light", "live edge", async (page) => {
         type Hook = { evidence: { addStageAttempt: (pipelineId: string, stageId: string, over: Record<string, unknown>) => void } };
         const section = `${card("t-search")} .pblock`;
+        /* Verify's fail edge is drawn as the strip under Verify; a live mark may land on it or on any wire. */
+        const liveMarks = (selector: string) => document.querySelectorAll(`${selector} :is(.pedge, .pelabel, .pstrip).live`).length;
         await openGraph(page, "t-search");
-        const before = await page.evaluate((selector) => document.querySelectorAll(`${selector} .pedge.live`).length, section);
+        const before = await page.evaluate(liveMarks, section);
         /* A helper adopted with the fail edge's provenance copied: nothing travelled that edge. */
         await page.evaluate(() => (window as unknown as Hook).evidence.addStageAttempt("p-search", "implement", { historical: true, state: "passed", activatedBy: { stageId: "verify", attempt: 1, edge: "fail" } }));
         await page.waitForTimeout(1_500);
-        const afterHelper = await page.evaluate((selector) => document.querySelectorAll(`${selector} .pedge.live`).length, section);
+        const afterHelper = await page.evaluate(liveMarks, section);
+        const helperAttempt = await page.evaluate((selector) => document.querySelector(`${selector} .pnode[data-stage="implement"] .pattempt`)?.textContent ?? null, section);
         await page.evaluate(() => (window as unknown as Hook).evidence.addStageAttempt("p-search", "implement", { activatedBy: { stageId: "verify", attempt: 2, edge: "fail" } }));
-        await page.waitForSelector(`${section} .pedge.live[data-edge="verify:fail:implement"]`, { timeout: 10_000 });
+        await page.waitForSelector(`${section} .pstrip.live[data-strip="verify:fail:implement"]`, { timeout: 10_000 });
         const markedAt = Date.now();
-        const label = await page.evaluate((selector) => document.querySelector(`${selector} .pelabel.live`)?.textContent ?? null, section);
+        const strip = await page.evaluate((selector) => {
+          const element = document.querySelector<HTMLElement>(`${selector} .pstrip.live`);
+          return element ? { fired: element.dataset.stripFired, max: element.dataset.stripMax, spent: element.classList.contains("spent") } : null;
+        }, section);
+        const marks = await page.evaluate(liveMarks, section);
+        const implementAttempt = await page.evaluate((selector) => document.querySelector(`${selector} .pnode[data-stage="implement"] .pattempt`)?.textContent ?? null, section);
         await shot(page, "production", "live-edge", "light");
         /* Another change inside the window: an attempt of the stage's own that no edge activated. */
         await page.waitForTimeout(400);
         await page.evaluate(() => (window as unknown as Hook).evidence.addStageAttempt("p-search", "review", {}));
-        await page.waitForFunction((selector) => document.querySelector(`${selector} .pnode[data-stage="review"] .pdetail`)?.textContent === "attempt 2", section, { timeout: 5_000 });
-        await page.waitForFunction((selector) => !document.querySelector(`${selector} .pedge.live`), section, { timeout: 6_000 });
+        await page.waitForFunction((selector) => document.querySelector(`${selector} .pnode[data-stage="review"] .pattempt`)?.textContent === " · 2", section, { timeout: 5_000 });
+        await page.waitForFunction((selector) => !document.querySelector(`${selector} :is(.pedge, .pelabel, .pstrip).live`), section, { timeout: 6_000 });
         const clearedAfterMs = Date.now() - markedAt;
-        if (before !== 0 || afterHelper !== 0 || label !== "fail · retry 2 of 2") failures.push(`live edge: ${JSON.stringify({ before, afterHelper, label })}`);
+        const label = { strip, marks, helperAttempt, implementAttempt };
+        if (before !== 0 || afterHelper !== 0 || helperAttempt !== " · 2" || implementAttempt !== " · 3" || marks !== 1 || strip?.fired !== "2" || strip.max !== "2" || !strip.spent) failures.push(`live edge: ${JSON.stringify({ before, afterHelper, label })}`);
         if (clearedAfterMs > 3_400) failures.push(`live edge: cleared ${clearedAfterMs} ms after it was marked`);
         flows.liveEdge = { before, afterHelper, label, clearedAfterMs };
       });
@@ -2063,7 +2091,8 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
         dir: { production: frame.production.dir, prototype: frame.prototype.dir },
         nodeHeights: { production: frame.production.nodes.map((node) => node.height), prototype: frame.prototype.nodes.map((node) => node.height) },
         nodeWidths: { production: frame.production.nodes.map((node) => node.width), prototype: frame.prototype.nodes.map((node) => node.width) },
-        edges: { production: frame.production.edges.length, prototype: frame.prototype.edges.length },
+        /* The prototype wires every edge; production folds each fail edge into a strip. */
+        edges: { production: frame.production.edges.length + frame.production.strips.length, prototype: frame.prototype.edges.length + frame.prototype.strips.length },
         labels: { production: frame.production.labels, prototype: frame.prototype.labels },
       };
     };
