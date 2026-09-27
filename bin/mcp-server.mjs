@@ -255,7 +255,10 @@ function start(selected) {
     if (protocolProbe && message.id === protocolProbe.id) {
       clearTimeout(protocolProbe.timer);
       protocolProbe = null;
-      if (message.error) disconnect(current, "Viewer MCP child rejected its protocol probe");
+      if (message.error) {
+        disconnect(current, "Viewer MCP child rejected its protocol probe");
+        current.kill("SIGTERM");
+      }
       return;
     }
     if (message.id === replayId) {
@@ -272,7 +275,10 @@ function start(selected) {
         retryDelayMs = 200;
         if (initialized) current.stdin.write(`${JSON.stringify(initialized)}\n`);
         reply({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
-      } else disconnect(current, "Viewer MCP initialization failed");
+      } else {
+        disconnect(current, "Viewer MCP initialization failed");
+        current.kill("SIGTERM");
+      }
       heartbeat();
       return;
     }
