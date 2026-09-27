@@ -22,25 +22,31 @@ export function seatMcpHealth(
   const digest = receipt?.spawnCapabilityDigest;
   if (!digest || !/^[0-9a-f]{64}$/.test(digest)) return { status: "untracked", detail: "no current MCP launch capability" };
   const born = Date.parse(designatedAt ?? receipt.createdAt);
-  if (!Number.isFinite(born) || now - born < SEAT_MCP_START_GRACE_MS) {
-    return { status: "untracked", detail: "MCP startup grace period" };
-  }
+  const inGrace = !Number.isFinite(born) || now - born < SEAT_MCP_START_GRACE_MS;
   let record: unknown;
   try {
     record = JSON.parse(fs.readFileSync(path.join(stateDir, "mcp-runtime", "sessions", `${digest}.json`), "utf8"));
   } catch (error) {
+    if (inGrace) return { status: "untracked", detail: "MCP startup grace period" };
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return { status: "dead", detail: "the session's stdio MCP launcher has no liveness record" };
     return { status: "dead", detail: "the session's stdio MCP liveness record cannot be read" };
   }
-  if (!record || typeof record !== "object") return { status: "dead", detail: "the session's stdio MCP liveness record is invalid" };
+  if (!record || typeof record !== "object") return inGrace
+    ? { status: "untracked", detail: "MCP startup grace period" }
+    : { status: "dead", detail: "the session's stdio MCP liveness record is invalid" };
   const heartbeat = record as { checkedAt?: unknown; ready?: unknown; unreadySince?: unknown };
   const checkedAt = typeof heartbeat.checkedAt === "string" ? Date.parse(heartbeat.checkedAt) : Number.NaN;
   const unreadySince = typeof heartbeat.unreadySince === "string" ? Date.parse(heartbeat.unreadySince) : Number.NaN;
   if (!Number.isFinite(checkedAt) || checkedAt > now + 60_000 || now - checkedAt > SEAT_MCP_HEARTBEAT_LIMIT_MS) {
-    return { status: "dead", detail: "the session's stdio MCP launcher stopped reporting liveness" };
+    return inGrace
+      ? { status: "untracked", detail: "MCP startup grace period" }
+      : { status: "dead", detail: "the session's stdio MCP launcher stopped reporting liveness" };
   }
   if (heartbeat.ready === false && Number.isFinite(unreadySince) && now - unreadySince > SEAT_MCP_HEARTBEAT_LIMIT_MS) {
-    return { status: "dead", detail: "the session's stdio MCP child has stayed disconnected" };
+    return inGrace
+      ? { status: "untracked", detail: "MCP startup grace period" }
+      : { status: "dead", detail: "the session's stdio MCP child has stayed disconnected" };
   }
+  if (heartbeat.ready !== true) return { status: "untracked", detail: "MCP child is starting" };
   return { status: "healthy", detail: "the session's stdio MCP launcher is live" };
 }

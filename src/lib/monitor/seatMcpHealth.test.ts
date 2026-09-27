@@ -22,6 +22,7 @@ test("missing and stale session heartbeats identify a dead stdio MCP after start
   expect(seatMcpHealth(receipt, null, root, now).status).toBe("dead");
   fs.writeFileSync(filename, JSON.stringify({ checkedAt: new Date(now).toISOString(), ready: true, unreadySince: null }));
   expect(seatMcpHealth(receipt, null, root, now).status).toBe("healthy");
+  expect(seatMcpHealth(receipt, new Date(now - 60_000).toISOString(), root, now).status).toBe("healthy");
 });
 
 test("HTTP MCP sessions are outside the stdio launcher heartbeat rule", () => {

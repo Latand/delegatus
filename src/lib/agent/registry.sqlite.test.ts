@@ -2056,6 +2056,27 @@ test("a JSON-mode registry answers the seat tick's conversation read and decline
   expect(registry.pageSeatChildren(seat.id, null, 20)).toBeNull();
 });
 
+test("the seat MCP heartbeat resolves its current digest through a keyed SQLite receipt read", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "registry-seat-mcp-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  try {
+    const begun = registry.beginSpawnRequest({
+      engine: "codex", cwd: "/seat-project", spawnCapabilityDigest: "a".repeat(64),
+      launchProfile: { title: "Seat MCP liveness" },
+    });
+    if (begun.kind !== "created") throw new Error("expected a new receipt");
+    expect(registry.seatMcpReceipt(begun.receipt.conversationId)).toEqual({
+      spawnCapabilityDigest: "a".repeat(64), createdAt: begun.receipt.createdAt,
+    });
+    expect(registry.seatMcpReceipt("conversation_missing")).toBeNull();
+    registry.rotateSpawnCapabilityForReceipt(begun.receipt.launchId);
+    expect(registry.seatMcpReceipt(begun.receipt.conversationId)?.spawnCapabilityDigest).not.toBe("a".repeat(64));
+  } finally {
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 /**
  * THE NOTE THAT SAYS A HISTORY IS INCOMPLETE IS A PERSISTED ROW.
  *

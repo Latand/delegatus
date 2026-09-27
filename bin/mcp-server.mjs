@@ -237,7 +237,14 @@ function start(selected) {
 function ensureChild() {
   let selected;
   try { selected = selectedRuntime(); }
-  catch (error) { return error instanceof Error ? error.message : String(error); }
+  catch (error) {
+    if (child) {
+      const old = child;
+      disconnect(old, "Viewer MCP release target is unreadable");
+      old.kill("SIGTERM");
+    }
+    return error instanceof Error ? error.message : String(error);
+  }
   const key = `${selected.root}\0${selected.revision}`;
   if (child && childKey !== key) {
     const old = child;
