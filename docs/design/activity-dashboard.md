@@ -112,7 +112,8 @@ untouched.
 ## Decision
 
 1. **Human axis: human-input events from every expected host.** An event is
-   `{ ids, at, host, source, project, kind, surface, hash }`. Two sources exist
+   `{ ids, at, host, source, project, kind, surface, hash, author }`. `author` is
+   a team member id, `operator` on a solo host, or null when unknown. Two sources exist
    and more can be added behind the same interface:
    - `ledger`: this host's request ledger, written at each direct-operator
      ingress (exact, with the browser surface), from its first row on. It
@@ -156,7 +157,7 @@ right after the index and in the same process. It writes
 
 | table | one row per | fields |
 |---|---|---|
-| `activity_inputs` | operator input, per host | opaque ids, content hash, time, project, kind, surface, opaque conversation digest |
+| `activity_inputs` | human input, per host | opaque ids, content hash, time, project, kind, surface, opaque conversation digest, author |
 | `activity_input_ids` | id of this host's inputs | which row the id already names |
 | `activity_turns` | agent turn of a conversation, per host | opaque conversation digest, project, engine, role, pipeline and stage ids, start, end |
 | `activity_files` | transcript read | byte offset read to, what the lines before it said (cwd, entrypoint, how the session started, the open turn), whether its first message was judged |
@@ -206,8 +207,10 @@ So each host records itself with the same ingest, and this Viewer pulls:
 self-contained reader handed to the remote Bun on stdin. The reader uses Bun
 built-ins only, reads the remote `activity/records.sqlite` read-only in one
 transaction, and answers the remote's read span, exclusion counts, store id
-and every input and turn row written after the version this host last
-received. Nothing is installed on the remote host and no port is opened.
+and the selected member's input rows and agent turn rows written after the
+version this host last received. It also answers the count of unknown-author
+inputs. Rows by other members stay on the remote host. Nothing is installed
+on the remote host and no port is opened.
 
 - **Idempotent.** Rows are keyed per host and replace an older version only;
   a replay changes nothing. A remote store whose id changed (recreated) is
@@ -220,8 +223,15 @@ received. Nothing is installed on the remote host and no port is opened.
   default) has passed is pulled, one at a time, beside the index queue so a
   slow host delays nothing but itself.
 - **Configuration.** A host entry in `activity/hosts.json` gains
-  `pull: { ssh, bun?, stateDir?, everyMin? }`; `ssh` is an alias from the
+  `pull: { ssh, bun?, stateDir?, everyMin?, memberId? }`; `memberId` is the
+  operator's member id on that host. A team host without it sends no personal
+  input rows, and the hosts table names the configuration gap. A solo host
+  continues to send its sole operator's input. `ssh` is an alias from the
   operator's ssh config and is never an option or a command.
+  The reader checks for the author column at runtime, so a team host on an
+  older schema sends no personal input and counts its rows as unknown; a solo
+  host on that schema keeps its previous figures. The local writer adds the
+  author column to existing `records.sqlite` without replacing old rows.
 
 ### Agent axis from the same record
 
@@ -355,11 +365,16 @@ span it speaks for (`exportSource`, `src/lib/activity/hostSources.ts`).
 
 | file | shape | default when absent |
 |---|---|---|
-| `activity/hosts.json` | `{ v: 1, local: { id, label }, hosts: [{ id, label, projects, since, pull? }] }`, `pull` = `{ ssh, bun?, stateDir?, everyMin? }` | this host is `local`; no other host is expected unless it has an export directory |
+| `activity/hosts.json` | `{ v: 1, local: { id, label }, hosts: [{ id, label, projects, since, pull? }] }`, `pull` = `{ ssh, bun?, stateDir?, everyMin?, memberId? }` | this host is `local`; no other host is expected unless it has an export directory |
 | `activity/settings.json` | `{ v: 1, tz, billable: [project keys], workdays: [0-6] }` | Europe/Kyiv, nothing billable, Monday to Friday |
 
 `projects` scopes a host (`"all"` or a list): its absence makes only those
 projects unknown. `since` says when the host started holding work.
+An export-only host with old rows lacking `author` can declare `mode: "solo"`
+on its host entry when it has always had one operator. Without that evidence,
+old export rows remain unknown. A pulled host gets its mode from the remote
+reader instead. An export-only team host can use `mode: "team", memberId:
+"m_..."`; it otherwise reports a member configuration gap.
 
 ### Agent axis
 
@@ -440,7 +455,24 @@ their mode.
 
 ## Cross-host human input
 
-### Only real operator input counts
+### Human input belongs to one person
+
+The dashboard counts the signed-in member on a team host. The owner sees the
+owner's input when signed in; a solo host has one `operator`. The host's
+`message_authors` row, keyed by the admitted submission and bound to its
+conversation (`src/lib/team/store.ts`), supplies the member id for a delivered
+message. The ingress request ledger reads the request's team actor. A typed
+terminal prompt on a team host has no member identity and stays unknown.
+Existing team rows with no author also stay unknown. Neither adds to any
+person’s hours. The page shows an unknown-author input count separately, and
+team remote pulls send its count without sending those inputs. Every activity
+figure has one person; the existing project and day views use the same filter.
+The unknown-author count describes records the sources observed: local file
+sources count the selected read window, and a pulled host reports the count in
+its stored record. It is a coverage figure, independent of the chosen person's
+hours.
+
+### Only real human input counts
 
 `classifyUserRecord` (`src/lib/activity/humanInput.ts:262`) keeps a record
 only on a positive signal:
@@ -669,17 +701,21 @@ chip at "Lower bound", and the host named in the drawer and the hosts table.
 ## Privacy boundary
 
 - **Ledger rows** (`activity/requests-YYYY-MM-DD.jsonl`, mode `0600`,
-  directory `0700`, 90-day retention) hold exactly
-  `{ v, key, at, kind, surface, project }`. The key is
+  directory `0700`, 90-day retention) hold
+  `{ v, key, at, kind, surface, project, author }`. The key is
   `sha256("delegatus-activity-request-v1\0" + idempotencyKey)`, or random.
 - **Export rows** hold a manifest `{ v, type, host, coveredFrom, coveredUntil, exportedAt, records, excluded }`
   (counts only) and one line per input
-  `{ v, type, ids, hash, at, host, project, kind, surface }`. The ids are
+  `{ v, type, ids, hash, at, host, project, kind, surface, author }`. The ids are
   SHA-256 digests of the raw ids under a domain string; the hash is a SHA-256
   of the canonical content. No text, path, session id or title is written.
   The exporter reads text only in memory, to classify and to hash.
 - **The agent query** selects no body; transcript paths never leave the
   server.
+- **Remote pull** sends only the configured member's input rows from a team
+  host, and a count of inputs whose author is unknown. Other members' input
+  rows remain on that host. A missing member id is shown as a configuration
+  gap with no personal input rows pulled.
 - **API and UI** carry times, durations, counts, enums, project keys and
   names, host ids and the operator's own host labels, pipeline and stage ids,
   and role ids. No titles, model names or account names.

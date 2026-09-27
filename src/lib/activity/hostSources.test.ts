@@ -29,7 +29,8 @@ afterEach(() => {
 const quietLedger = (): LedgerRead => ({ rows: [], ledgerStartMs: NOW - 7 * 24 * 3_600_000 });
 
 function hostsFile(hosts: unknown[]): void {
-  fs.writeFileSync(path.join(dir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation" }, hosts }));
+  fs.writeFileSync(path.join(dir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation" },
+    hosts: hosts.map((host) => ({ mode: "solo", ...host as object })) }));
 }
 
 function stageExport(inputs: HumanInput[], coveredFrom = DAY.start, coveredUntil = NOW, host = "stage", name = "human-input-2026-09-23.jsonl"): void {
@@ -140,6 +141,6 @@ describe("human input from every expected host", () => {
     fs.writeFileSync(path.join(dir, "hosts.json"), "{not json");
     expect(readHostsConfig(dir).state).toBe("unreadable");
     hostsFile([{ id: "Bad Id" }, { id: "stage", projects: ["client-a"], since: "2026-09-20" }, { id: "stage" }]);
-    expect(readHostsConfig(dir).hosts).toEqual([{ id: "stage", label: null, projects: "all", since: null, pull: null }]);
+    expect(readHostsConfig(dir).hosts).toEqual([{ id: "stage", label: null, projects: "all", since: null, pull: null, mode: "solo" }]);
   });
 });

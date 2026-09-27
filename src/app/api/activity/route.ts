@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { activityResponse, type ActivityResponse } from "@/lib/activity/report";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
+import { requestSession, teamMode } from "@/lib/team/sessions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,7 +21,11 @@ export async function GET(req: NextRequest): Promise<NextResponse<ActivityRespon
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
   try {
-    const body = await activityResponse(req.nextUrl.searchParams);
+    const mode = teamMode();
+    const body = await activityResponse(req.nextUrl.searchParams, {}, {
+      mode,
+      memberId: mode === "team" ? requestSession(req)?.member.id ?? null : null,
+    });
     return NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });
   } catch {
     return NextResponse.json({ error: "activity report unavailable" }, { status: 500 });

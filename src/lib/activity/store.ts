@@ -11,14 +11,14 @@ import type { AgentTurn, TranscriptFactsState } from "./transcriptExport";
 import type { RequestKind, Surface } from "./method";
 
 /*
- * Delegatus's own record of operator input (docs/design/activity-dashboard.md,
+ * Delegatus's own record of human input (docs/design/activity-dashboard.md,
  * "Continuous ingest"): `<state>/activity/records.sqlite`.
  *
- * - `activity_inputs`: one row per operator input, keyed per host. This host's
+ * - `activity_inputs`: one row per human input, keyed per host. This host's
  *   rows are written by the ingest as transcripts are indexed (host `''`);
  *   another host's rows arrive by pull under that host's id. A row holds opaque
  *   ids, a content hash, a time, a project, a kind, a surface and an opaque
- *   conversation digest, the fields an export keeps. No text and no path.
+ *   conversation digest and author, the fields an export keeps. No text and no path.
  * - `activity_input_ids`: which row each id of this host already names, so a
  *   copy of an input in a second store (a shared mirror, an account store, a
  *   resumed transcript) joins its row instead of writing another.
@@ -36,7 +36,7 @@ import type { RequestKind, Surface } from "./method";
  */
 
 export const LOCAL_HOST_KEY = "";
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const ID_DOMAIN = "delegatus-activity-record-v1";
 
 type Database = BunDatabase;
@@ -62,6 +62,7 @@ export interface StoredInput {
   hash: string;
   conversation: string;
   ids: string[];
+  author?: string | null;
 }
 
 /** One stored agent turn, as rows cross hosts. */
@@ -111,11 +112,14 @@ export interface HostState {
   /** Which store on the remote host the cursor counts in. */
   remoteStore: string | null;
   excluded: Partial<Record<ExclusionReason, number>>;
+  remoteMode: "solo" | "team" | null;
+  pulledMember: string | null;
+  unknownAuthors: number;
 }
 
 type InputRow = {
   key: string; version: number; at: number; project: string | null; kind: string; surface: string;
-  hash: string; conversation: string; ids: string;
+  hash: string; conversation: string; ids: string; author: string | null;
 };
 
 type TurnRow = {
@@ -141,6 +145,7 @@ function storedTurn(row: TurnRow): StoredTurn {
 type HostRow = {
   covered_from: number | null; covered_until: number | null; read_at: number | null; attempt_at: number | null;
   error: string | null; cursor: number; excluded: string; remote_store: string | null;
+  remote_mode: "solo" | "team" | null; pulled_member: string | null; unknown_authors: number;
 };
 
 function parseIds(value: string): string[] {
@@ -177,6 +182,7 @@ function storedInput(row: InputRow): StoredInput {
     hash: row.hash,
     conversation: row.conversation,
     ids: parseIds(row.ids),
+    author: row.author,
   };
 }
 
@@ -213,6 +219,7 @@ export class ActivityStore {
           hash TEXT NOT NULL,
           conversation TEXT NOT NULL,
           ids TEXT NOT NULL,
+          author TEXT,
           PRIMARY KEY (host, key)
         ) WITHOUT ROWID;
         CREATE INDEX IF NOT EXISTS activity_inputs_at ON activity_inputs(host, at);
@@ -253,14 +260,23 @@ export class ActivityStore {
           error TEXT,
           cursor INTEGER NOT NULL DEFAULT 0,
           excluded TEXT NOT NULL DEFAULT '{}',
-          remote_store TEXT
+          remote_store TEXT,
+          remote_mode TEXT,
+          pulled_member TEXT,
+          unknown_authors INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS activity_meta (
           singleton INTEGER PRIMARY KEY CHECK (singleton = 1), version INTEGER NOT NULL, store_id TEXT NOT NULL
         );
         INSERT OR IGNORE INTO activity_meta VALUES (1, 0, '${crypto.randomUUID()}');
-        PRAGMA user_version = ${SCHEMA_VERSION};
       `);
+      const columns = (table: string) => new Set(db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all().map((row) => row.name));
+      if (!columns("activity_inputs").has("author")) db.exec("ALTER TABLE activity_inputs ADD COLUMN author TEXT");
+      const hostColumns = columns("activity_hosts");
+      if (!hostColumns.has("remote_mode")) db.exec("ALTER TABLE activity_hosts ADD COLUMN remote_mode TEXT");
+      if (!hostColumns.has("pulled_member")) db.exec("ALTER TABLE activity_hosts ADD COLUMN pulled_member TEXT");
+      if (!hostColumns.has("unknown_authors")) db.exec("ALTER TABLE activity_hosts ADD COLUMN unknown_authors INTEGER NOT NULL DEFAULT 0");
+      db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
       for (const candidate of [file, `${file}-wal`, `${file}-shm`]) {
         try { fs.chmodSync(candidate, 0o600); } catch { /* Not created yet. */ }
       }
@@ -386,19 +402,20 @@ export class ActivityStore {
       if (!row) return false;
       const ids = [...new Set([...parseIds(row.ids), ...candidate.ids])].sort();
       const at = Math.min(row.at, candidate.at);
-      if (ids.length !== parseIds(row.ids).length || at !== row.at) {
-        this.db.query("UPDATE activity_inputs SET ids = ?, at = ?, version = ? WHERE host = ? AND key = ?")
-          .run(JSON.stringify(ids), at, this.nextVersion(), LOCAL_HOST_KEY, existing);
+      const author = row.author ?? candidate.author ?? null;
+      if (ids.length !== parseIds(row.ids).length || at !== row.at || author !== row.author) {
+        this.db.query("UPDATE activity_inputs SET ids = ?, at = ?, author = ?, version = ? WHERE host = ? AND key = ?")
+          .run(JSON.stringify(ids), at, author, this.nextVersion(), LOCAL_HOST_KEY, existing);
       }
       addIds(existing);
       return false;
     }
     const key = candidate.ids.length ? [...candidate.ids].sort()[0]! : contentKey(candidate);
     const inserted = this.db.query(`
-      INSERT OR IGNORE INTO activity_inputs(host, key, version, at, project, kind, surface, hash, conversation, ids)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR IGNORE INTO activity_inputs(host, key, version, at, project, kind, surface, hash, conversation, ids, author)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(LOCAL_HOST_KEY, key, this.nextVersion(), candidate.at, candidate.project, candidate.kind, candidate.surface,
-      candidate.textHash, conversation, JSON.stringify([...candidate.ids].sort()));
+      candidate.textHash, conversation, JSON.stringify([...candidate.ids].sort()), candidate.author ?? null);
     addIds(key);
     return inserted.changes > 0;
   }
@@ -461,15 +478,15 @@ export class ActivityStore {
   upsertPulled(host: string, rows: readonly StoredInput[]): number {
     let changed = 0;
     const upsert = this.db.query(`
-      INSERT INTO activity_inputs(host, key, version, at, project, kind, surface, hash, conversation, ids)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO activity_inputs(host, key, version, at, project, kind, surface, hash, conversation, ids, author)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(host, key) DO UPDATE SET version = excluded.version, at = excluded.at, project = excluded.project,
-        kind = excluded.kind, surface = excluded.surface, hash = excluded.hash, conversation = excluded.conversation, ids = excluded.ids
+        kind = excluded.kind, surface = excluded.surface, hash = excluded.hash, conversation = excluded.conversation, ids = excluded.ids, author = excluded.author
       WHERE excluded.version > activity_inputs.version
     `);
     for (const row of rows) {
       changed += upsert.run(host, row.key, row.version, row.at, row.project, row.kind, row.surface, row.hash, row.conversation,
-        JSON.stringify([...row.ids].sort())).changes;
+        JSON.stringify([...row.ids].sort()), row.author ?? null).changes;
     }
     return changed;
   }
@@ -478,12 +495,12 @@ export class ActivityStore {
       dedupe rules. */
   candidates(host: string, start: number, end: number, label: string): InputCandidate[] {
     return this.db.query<InputRow, [string, number, number]>(
-      "SELECT key, version, at, project, kind, surface, hash, conversation, ids FROM activity_inputs WHERE host = ? AND at >= ? AND at <= ? ORDER BY at",
+      "SELECT key, version, at, project, kind, surface, hash, conversation, ids, author FROM activity_inputs WHERE host = ? AND at >= ? AND at <= ? ORDER BY at",
     ).all(host, start, end).map((row) => {
       const input = storedInput(row);
       return {
         at: input.at, host: label, project: input.project, kind: input.kind, surface: input.surface,
-        ids: input.ids, textHash: input.hash, conversation: input.conversation,
+        ids: input.ids, textHash: input.hash, conversation: input.conversation, author: input.author,
       };
     });
   }
@@ -491,7 +508,7 @@ export class ActivityStore {
   /** This host's rows written after `version`, oldest write first. */
   localRowsAfter(version: number, limit: number): StoredInput[] {
     return this.db.query<InputRow, [string, number, number]>(
-      "SELECT key, version, at, project, kind, surface, hash, conversation, ids FROM activity_inputs WHERE host = ? AND version > ? ORDER BY version LIMIT ?",
+      "SELECT key, version, at, project, kind, surface, hash, conversation, ids, author FROM activity_inputs WHERE host = ? AND version > ? ORDER BY version LIMIT ?",
     ).all(LOCAL_HOST_KEY, version, limit).map(storedInput);
   }
 
@@ -519,19 +536,23 @@ export class ActivityStore {
       error: row.error,
       cursor: row.cursor,
       excluded: parseExcluded(row.excluded),
+      remoteMode: row.remote_mode,
+      pulledMember: row.pulled_member,
+      unknownAuthors: row.unknown_authors,
       remoteStore: row.remote_store,
     };
   }
 
   setHostState(host: string, patch: Partial<HostState>): void {
-    const current: HostState = this.hostState(host) ?? { coveredFrom: null, coveredUntil: null, readAt: null, attemptAt: null, error: null, cursor: 0, excluded: {}, remoteStore: null };
+    const current: HostState = this.hostState(host) ?? { coveredFrom: null, coveredUntil: null, readAt: null, attemptAt: null, error: null, cursor: 0, excluded: {}, remoteStore: null, remoteMode: null, pulledMember: null, unknownAuthors: 0 };
     const next = { ...current, ...patch };
     this.db.query(`
-      INSERT INTO activity_hosts(host, covered_from, covered_until, read_at, attempt_at, error, cursor, excluded, remote_store)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO activity_hosts(host, covered_from, covered_until, read_at, attempt_at, error, cursor, excluded, remote_store, remote_mode, pulled_member, unknown_authors)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(host) DO UPDATE SET covered_from = excluded.covered_from, covered_until = excluded.covered_until,
         read_at = excluded.read_at, attempt_at = excluded.attempt_at, error = excluded.error, cursor = excluded.cursor,
-        excluded = excluded.excluded, remote_store = excluded.remote_store
-    `).run(host, next.coveredFrom, next.coveredUntil, next.readAt, next.attemptAt, next.error, next.cursor, JSON.stringify(next.excluded), next.remoteStore);
+        excluded = excluded.excluded, remote_store = excluded.remote_store, remote_mode = excluded.remote_mode,
+        pulled_member = excluded.pulled_member, unknown_authors = excluded.unknown_authors
+    `).run(host, next.coveredFrom, next.coveredUntil, next.readAt, next.attemptAt, next.error, next.cursor, JSON.stringify(next.excluded), next.remoteStore, next.remoteMode, next.pulledMember, next.unknownAuthors);
   }
 }

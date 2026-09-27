@@ -50,6 +50,7 @@ export interface ConversationResolution {
   /** How the host's registry says it was launched; null when unregistered. */
   launch: LaunchKind | null;
   registered: boolean;
+  mode?: "solo" | "team";
   /** A stable identity for the fan-out rule, when the registry has one. */
   conversation?: string;
   deliveryOrigin?: TranscriptContext["deliveryOrigin"];
@@ -305,6 +306,7 @@ export function transcriptContext(host: string, facts: TranscriptFacts, resoluti
       ? codexSessionKind(facts.sessionMeta)
       : claudeSessionKind(facts.entrypoint, resolution.registered),
     launch: resolution.launch,
+    mode: resolution.mode,
     ...(resolution.deliveryOrigin ? { deliveryOrigin: resolution.deliveryOrigin } : {}),
   };
 }

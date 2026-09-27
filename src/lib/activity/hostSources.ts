@@ -20,6 +20,7 @@ import { unionIntervals, type HostCoverage, type Interval } from "./method";
 import { PULL_DEFAULT_EVERY_MIN, type PullConfig } from "./pull";
 import { readRequests, type LedgerRead } from "./requestLedger";
 import { ActivityStore, LOCAL_HOST_KEY } from "./store";
+import { teamMode } from "@/lib/team/sessions";
 
 /*
  * Where the human axis reads from (docs/design/activity-dashboard.md,
@@ -56,6 +57,10 @@ export interface HostConfigEntry {
   since: number | null;
   /** How this host's records reach this one, when they are pulled. */
   pull: PullConfig | null;
+  /** For a legacy export-only host whose records predate author attribution. */
+  mode?: "solo" | "team";
+  /** Member viewed when a team host is supplied by exports alone. */
+  memberId?: string | null;
 }
 
 export interface HostsConfig {
@@ -95,6 +100,8 @@ export interface HostReport {
   projects: "all" | string[];
   since: number | null;
   sources: Array<Omit<HostSourceRead, "inputs"> & { inputs: number }>;
+  unknownAuthors: number;
+  configurationGap: boolean;
 }
 
 export interface HumanInputRead {
@@ -102,6 +109,7 @@ export interface HumanInputRead {
   coverage: HostCoverage[];
   hosts: HostReport[];
   config: HostsConfig["state"];
+  unknownAuthors?: number;
 }
 
 export interface HostSourceDependencies {
@@ -131,6 +139,7 @@ function pullConfig(value: unknown): PullConfig | null {
     bun: text(row.bun),
     stateDir: text(row.stateDir),
     everyMin: Number.isFinite(every) ? Math.min(24 * 60, Math.max(1, Math.round(every))) : PULL_DEFAULT_EVERY_MIN,
+    memberId: typeof row.memberId === "string" && /^[A-Za-z0-9_.:-]{1,120}$/.test(row.memberId) ? row.memberId : null,
   };
 }
 
@@ -148,6 +157,8 @@ function entry(value: unknown, fallbackId: string | null): HostConfigEntry | nul
     projects,
     since: Number.isFinite(since) ? since : null,
     pull: pullConfig(row?.pull),
+    ...(row?.mode === "solo" || row?.mode === "team" ? { mode: row.mode } : {}),
+    ...(typeof row?.memberId === "string" && /^[A-Za-z0-9_.:-]{1,120}$/.test(row.memberId) ? { memberId: row.memberId } : {}),
   };
 }
 
@@ -194,6 +205,7 @@ export function ledgerSource(host: string, window: Interval, nowMs: number, read
         kind: row.kind,
         surface: row.surface,
         hash: null,
+        author: row.author ?? null,
       })),
       excluded: {},
       exportedAt: null,
@@ -243,7 +255,7 @@ export function exportSource(host: string, hostDir: string, window: Interval): H
       if (!row || row.type !== "input") continue;
       const event = row as ExportEvent;
       if (event.host !== host || event.at < window.start || event.at > window.end) continue;
-      inputs.push({ ids: event.ids, at: event.at, host, source: "transcripts", project: event.project, kind: event.kind, surface: event.surface, hash: event.hash });
+      inputs.push({ ids: event.ids, at: event.at, host, source: "transcripts", project: event.project, kind: event.kind, surface: event.surface, hash: event.hash, author: event.author ?? null });
     }
   }
   const state = covered.length ? "read" : unreadable ? "unreadable" : "absent";
@@ -308,10 +320,14 @@ export function readHumanInputs(
   window: Interval,
   nowMs: number,
   overrides: Partial<HostSourceDependencies> = {},
+  viewer?: { mode: "solo" | "team"; memberId: string | null },
 ): HumanInputRead {
   const dependencies = { ...productionDependencies, ...overrides };
   const dir = dependencies.dir();
   const config = readHostsConfig(dir);
+  let localMode: "solo" | "team" = viewer?.mode ?? "team";
+  if (!viewer) try { localMode = teamMode(); } catch { /* Unknown identity stays conservative. */ }
+  const localMember = viewer?.memberId ?? null;
   const hostsDir = path.join(dir, "hosts");
   let exported: string[] = [];
   try {
@@ -354,7 +370,33 @@ export function readHumanInputs(
       /* An export is optional once a host records itself: list it only when
          one exists, or when nothing else reads the host. */
       if (exported.state !== "absent" || sources.every((source) => source.scope !== "all")) sources.push(exported);
-      for (const source of sources) inputs.push(...source.inputs);
+      const remoteState = !host.local ? store?.hostState(host.id) : null;
+      const remoteTeam = remoteState?.remoteMode === "team";
+      const remoteSolo = remoteState?.remoteMode === "solo" || (!host.pull && !remoteState && host.mode === "solo");
+      const selectedMember = host.pull ? host.pull.memberId : host.memberId;
+      const configurationGap = host.local ? localMode === "team" && !localMember
+        : (remoteTeam || host.mode === "team") && !selectedMember;
+      const wanted = host.local ? (localMode === "solo" ? "operator" : localMember)
+        : remoteSolo ? "operator" : selectedMember ?? null;
+      let unknownAuthors = !host.local ? remoteState?.unknownAuthors ?? 0 : 0;
+      const unknownInputs: HumanInput[] = [];
+      for (const source of sources) {
+        /* A legacy export has no author. It cannot make team input belong to
+           the viewer, even when an older remote install produced it. */
+        const selected = source.inputs.filter((input) => {
+          const author = input.author ?? (host.local && localMode === "solo" || !host.local && remoteSolo ? "operator" : null);
+          if (author === null) {
+            if (source.source !== "pull") unknownInputs.push(input);
+            return false;
+          }
+          return wanted !== null && author === wanted;
+        });
+        inputs.push(...selected);
+        source.inputs = selected;
+        if (configurationGap && source.scope === "all") source.covered = [];
+      }
+      const unknownFromSources = mergeHumanInputs(unknownInputs, ledgerSpans).length;
+      unknownAuthors = !host.local && remoteState ? Math.max(unknownAuthors, unknownFromSources) : unknownAuthors + unknownFromSources;
       coverage.push({
         host: host.id,
         projects: host.projects,
@@ -369,10 +411,13 @@ export function readHumanInputs(
         projects: host.projects,
         since: host.since,
         sources: sources.map(({ inputs: read, ...rest }) => ({ ...rest, inputs: read.length })),
+        unknownAuthors,
+        configurationGap,
       });
     }
   } finally {
     store?.close();
   }
-  return { inputs: mergeHumanInputs(inputs, ledgerSpans), coverage, hosts, config: config.state };
+  return { inputs: mergeHumanInputs(inputs, ledgerSpans), coverage, hosts, config: config.state,
+    unknownAuthors: hosts.reduce((sum, host) => sum + host.unknownAuthors, 0) };
 }

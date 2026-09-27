@@ -14,6 +14,8 @@ import { UNRESOLVED_PROJECT } from "@/lib/projects/identity";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { requestSurface } from "@/lib/view/device";
+import { teamActor } from "@/lib/team/actor";
+import { teamMode } from "@/lib/team/sessions";
 
 import { ledgerRowKey } from "./humanInput";
 import { REQUEST_KINDS, SURFACES, type RequestKind, type Surface } from "./method";
@@ -21,9 +23,9 @@ import { REQUEST_KINDS, SURFACES, type RequestKind, type Surface } from "./metho
 /*
  * The operator request ledger (docs/design/activity-dashboard.md, "Privacy
  * boundary"). One row per validated direct-operator request, written at the
- * ingress that admits it, into a UTC day file. A row holds exactly six keys —
- * a version, a digest key, a time, a kind, a surface and a project — and
- * nothing else: no conversation id, path, title, text, account or device.
+ * ingress that admits it, into a UTC day file. A row holds a version, a
+ * digest key, a time, a kind, a surface, a project and an author. It keeps no
+ * conversation id, path, title, text or device.
  *
  * Recording never throws and never refuses: the request it describes has
  * already been admitted, and a statistics outage must not take a control
@@ -31,18 +33,19 @@ import { REQUEST_KINDS, SURFACES, type RequestKind, type Surface } from "./metho
  * class and the row is dropped.
  */
 
-export const LEDGER_ROW_VERSION = 1;
+export const LEDGER_ROW_VERSION = 2;
 export const LEDGER_RETENTION_DAYS = 90;
 const DAY_FILE = /^requests-(\d{4}-\d{2}-\d{2})\.jsonl$/;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface LedgerRow {
-  v: typeof LEDGER_ROW_VERSION;
+  v: 1 | typeof LEDGER_ROW_VERSION;
   key: string;
   at: number;
   kind: RequestKind;
   surface: Surface;
   project: string | null;
+  author?: string | null;
 }
 
 export interface OperatorRequestInput {
@@ -161,6 +164,7 @@ export function recordOperatorRequest(
       kind: input.kind,
       surface: requestSurface(request?.headers.get("user-agent")),
       project: resolveProject(input, dependencies),
+      author: requestAuthor(request),
     };
     const dir = dependencies.dir();
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -181,6 +185,15 @@ export function recordOperatorRequest(
   }
 }
 
+function requestAuthor(request: Pick<NextRequest, "headers"> | null): string | null {
+  try {
+    if (teamMode() === "solo") return "operator";
+    if (!request || !("cookies" in request)) return null;
+    const actor = teamActor(request as Pick<NextRequest, "headers" | "cookies">);
+    return actor.kind === "member" ? actor.memberId : null;
+  } catch { return null; }
+}
+
 function parseRow(line: string): LedgerRow | null {
   let value: unknown;
   try {
@@ -190,19 +203,21 @@ function parseRow(line: string): LedgerRow | null {
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const row = value as Record<string, unknown>;
-  if (row.v !== LEDGER_ROW_VERSION
+  if ((row.v !== 1 && row.v !== LEDGER_ROW_VERSION)
     || typeof row.key !== "string" || !/^[0-9a-f]{64}$/.test(row.key)
     || typeof row.at !== "number" || !Number.isSafeInteger(row.at) || row.at <= 0
     || !REQUEST_KINDS.includes(row.kind as RequestKind)
     || !SURFACES.includes(row.surface as Surface)
-    || !(row.project === null || (typeof row.project === "string" && row.project.trim()))) return null;
+    || !(row.project === null || (typeof row.project === "string" && row.project.trim()))
+    || (row.v === LEDGER_ROW_VERSION && !(row.author === null || (typeof row.author === "string" && row.author.trim())))) return null;
   return {
-    v: LEDGER_ROW_VERSION,
+    v: row.v as 1 | typeof LEDGER_ROW_VERSION,
     key: row.key,
     at: row.at,
     kind: row.kind as RequestKind,
     surface: row.surface as Surface,
     project: row.project as string | null,
+    author: row.v === LEDGER_ROW_VERSION && typeof row.author === "string" ? row.author : null,
   };
 }
 

@@ -4,7 +4,7 @@ import { EXCLUSION_REASONS, REQUEST_KINDS, SURFACES, type ExclusionReason, type 
 import type { ActivityStore, StoredInput, StoredTurn } from "./store";
 
 /*
- * Another host's operator input, brought here (docs/design/activity-dashboard.md,
+ * Another host's selected member input, brought here (docs/design/activity-dashboard.md,
  * "Other hosts"). A host that runs Delegatus records its own input with the
  * same ingest; this host asks it for the rows written since the last version
  * it received, over the ssh access the operator already has, and stores them
@@ -23,6 +23,8 @@ export interface PullConfig {
   stateDir: string | null;
   /** Minutes between pulls. */
   everyMin: number;
+  /** Member on this host whose input belongs to the dashboard operator. */
+  memberId?: string | null;
 }
 
 export const PULL_DEFAULT_EVERY_MIN = 5;
@@ -55,14 +57,33 @@ const after = Math.max(0, Number(env.LLV_ACTIVITY_AFTER) || 0);
 const limit = Math.min(20000, Math.max(1, Number(env.LLV_ACTIVITY_LIMIT) || 5000));
 const db = new Database(file, { readonly: true });
 db.exec("PRAGMA busy_timeout = 5000");
-let host, rows, turns, latest, storeId;
+let host, rows, turns, latest, storeId, mode, unknownAuthors;
 try {
   db.exec("BEGIN");
+  mode = "solo";
+  const teamFile = path.join(path.dirname(path.dirname(file)), "team", "team.sqlite");
+  const hadTeamStore = fs.existsSync(teamFile);
+  if (hadTeamStore) {
+    mode = "team";
+    try {
+      const team = new Database(teamFile, { readonly: true });
+      mode = team.query("SELECT 1 FROM members WHERE role = 'owner' AND status = 'active' LIMIT 1").get() ? "team" : "solo";
+      team.close();
+    } catch { mode = "team"; }
+  }
+  const hasAuthor = db.query("PRAGMA table_info(activity_inputs)").all().some((column) => column.name === "author");
+  const member = env.LLV_ACTIVITY_MEMBER || "";
   const meta = db.query("SELECT version, store_id FROM activity_meta WHERE singleton = 1").get();
   latest = meta?.version ?? 0;
   storeId = meta?.store_id ?? null;
   host = db.query("SELECT covered_from, covered_until, read_at, excluded FROM activity_hosts WHERE host = ''").get();
-  rows = db.query("SELECT key, version, at, project, kind, surface, hash, conversation, ids FROM activity_inputs WHERE host = '' AND version > ? ORDER BY version LIMIT ?").all(after, limit + 1).map((row) => ({ type: "input", ...row }));
+  unknownAuthors = hadTeamStore ? db.query("SELECT COUNT(*) AS n FROM activity_inputs WHERE host = '' AND " + (hasAuthor ? "author IS NULL" : "1 = 1")).get()?.n ?? 0 : 0;
+  const selection = mode === "solo" && !hadTeamStore ? ""
+    : mode === "solo" ? hasAuthor ? " AND author = 'operator'" : " AND 1 = 0"
+    : hasAuthor && member ? " AND author = ?" : " AND 1 = 0";
+  const sql = "SELECT key, version, at, project, kind, surface, hash, conversation, ids" + (hasAuthor ? ", author" : "") + " FROM activity_inputs WHERE host = '' AND version > ?" + selection + " ORDER BY version LIMIT ?";
+  const args = selection === " AND author = ?" ? [after, member, limit + 1] : [after, limit + 1];
+  rows = db.query(sql).all(...args).map((row) => ({ type: "input", ...row, author: mode === "solo" && !hadTeamStore ? "operator" : row.author }));
   try {
     turns = db.query('SELECT key, version, conversation, project, engine, role, pipeline, stage, start, "end" FROM activity_turns WHERE host = \'\' AND version > ? ORDER BY version LIMIT ?').all(after, limit + 1).map((row) => ({ type: "turn", ...row }));
   } catch { turns = []; }
@@ -76,7 +97,7 @@ const more = page.length > limit;
 page.length = Math.min(page.length, limit);
 let excluded = {};
 try { excluded = JSON.parse(host?.excluded ?? "{}"); } catch {}
-out({ type: "state", v: 1, state: "read", coveredFrom: host?.covered_from ?? null, coveredUntil: host?.covered_until ?? null, readAt: host?.read_at ?? null, excluded, latest, storeId, more });
+out({ type: "state", v: 1, state: "read", coveredFrom: host?.covered_from ?? null, coveredUntil: host?.covered_until ?? null, readAt: host?.read_at ?? null, excluded, latest, storeId, more, mode, unknownAuthors });
 for (const row of page) {
   if (row.type === "turn") {
     out({ type: "turn", key: row.key, version: row.version, conversation: row.conversation, project: row.project, engine: row.engine, role: row.role, pipelineId: row.pipeline, stageId: row.stage, start: row.start, end: row.end });
@@ -84,7 +105,7 @@ for (const row of page) {
   }
   let ids = [];
   try { ids = JSON.parse(row.ids); } catch {}
-  out({ type: "input", key: row.key, version: row.version, at: row.at, project: row.project, kind: row.kind, surface: row.surface, hash: row.hash, conversation: row.conversation, ids });
+  out({ type: "input", key: row.key, version: row.version, at: row.at, project: row.project, kind: row.kind, surface: row.surface, hash: row.hash, conversation: row.conversation, ids, author: row.author });
 }
 `;
 
@@ -157,6 +178,8 @@ type RemoteState = { state: "no-ingest" } | {
   /** The remote store's identity; another one than before is a new store. */
   storeId: string | null;
   more: boolean;
+  mode: "solo" | "team";
+  unknownAuthors: number;
 };
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -175,7 +198,9 @@ function parseState(line: unknown): RemoteState | null {
     const count = record(row.excluded)?.[reason];
     if (Number.isSafeInteger(count) && (count as number) > 0) excluded[reason] = count as number;
   }
-  return { state: "read", coveredFrom: time(row.coveredFrom), coveredUntil: time(row.coveredUntil), readAt: time(row.readAt), excluded, latest: Number.isSafeInteger(row.latest) ? row.latest as number : 0, storeId: typeof row.storeId === "string" && /^[0-9a-f-]{36}$/.test(row.storeId) ? row.storeId : null, more: row.more === true };
+  if (row.mode !== "solo" && row.mode !== "team") return null;
+  return { state: "read", coveredFrom: time(row.coveredFrom), coveredUntil: time(row.coveredUntil), readAt: time(row.readAt), excluded, latest: Number.isSafeInteger(row.latest) ? row.latest as number : 0, storeId: typeof row.storeId === "string" && /^[0-9a-f-]{36}$/.test(row.storeId) ? row.storeId : null, more: row.more === true,
+    mode: row.mode, unknownAuthors: Number.isSafeInteger(row.unknownAuthors) && (row.unknownAuthors as number) >= 0 ? row.unknownAuthors as number : 0 };
 }
 
 const OPAQUE = /^[a-z]:[0-9a-f]{64}$/;
@@ -204,6 +229,7 @@ export function parseRemoteRow(line: unknown): StoredInput | null {
     hash: row.hash,
     conversation: row.conversation,
     ids: row.ids as string[],
+    author: typeof row.author === "string" ? row.author : null,
   };
 }
 
@@ -271,6 +297,7 @@ export async function pullHost(
   for (let page = 0; page < PULL_MAX_PAGES; page += 1) {
     const env: Record<string, string> = { LLV_ACTIVITY_AFTER: String(cursor), LLV_ACTIVITY_LIMIT: String(pageRows) };
     if (config.stateDir) env.LLV_ACTIVITY_STATE_DIR = config.stateDir;
+    if (config.memberId) env.LLV_ACTIVITY_MEMBER = config.memberId;
     const answer = await transport(env, REMOTE_READER);
     result.pages += 1;
     if (answer.timedOut) return fail("timeout");
@@ -285,7 +312,11 @@ export async function pullHost(
     const state = parseState(parsed[0]);
     if (!state) return fail("malformed");
     if (state.state === "no-ingest") return fail("no-ingest");
-    const recreated = (heldStore !== null && state.storeId !== null && state.storeId !== heldStore) || state.latest < cursor;
+    const selectedMember = state.mode === "team" ? config.memberId ?? null : null;
+    const recreated = (heldStore !== null && state.storeId !== null && state.storeId !== heldStore)
+      || state.latest < cursor || ((held?.remoteMode ?? null) !== null && held?.remoteMode !== state.mode)
+      || (state.mode === "team" && held !== null && held?.pulledMember !== selectedMember)
+      || (state.mode === "team" && held?.remoteMode === null && cursor > 0);
     if (recreated && !restarted) {
       /* A recreated remote store numbers its rows from one again, so its
          versions no longer order against the ones held here: drop what was
@@ -308,9 +339,12 @@ export async function pullHost(
     store.transaction(() => {
       result.changed += store.upsertPulled(host, inputs) + store.upsertPulledTurns(host, turns);
       for (const row of [...inputs, ...turns]) cursor = Math.max(cursor, row.version);
+      if (!state.more) cursor = state.latest;
       store.setHostState(host, state.more
-        ? { attemptAt: now(), cursor, remoteStore: state.storeId }
-        : { attemptAt: now(), readAt: now(), error: null, cursor, remoteStore: state.storeId, coveredFrom: state.coveredFrom, coveredUntil: state.coveredUntil, excluded: state.excluded });
+        ? { attemptAt: now(), cursor, remoteStore: state.storeId, remoteMode: state.mode, pulledMember: selectedMember, unknownAuthors: state.unknownAuthors }
+        : { attemptAt: now(), readAt: now(), error: state.mode === "team" && !selectedMember ? "member-unconfigured" : null,
+            cursor, remoteStore: state.storeId, remoteMode: state.mode, pulledMember: selectedMember, unknownAuthors: state.unknownAuthors,
+            coveredFrom: state.coveredFrom, coveredUntil: state.coveredUntil, excluded: state.excluded });
     });
     if (!state.more) {
       result.ok = true;

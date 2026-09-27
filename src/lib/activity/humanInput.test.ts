@@ -60,7 +60,7 @@ function claude(text: string, fields: Record<string, unknown> = {}, offsetSec = 
 
 describe("only real operator input counts", () => {
   test("marker-only counting: the operator-origin marker is the positive signal, unmarked records are excluded", () => {
-    expect(classifyUserRecord(codex(`${OPERATOR_MARK}Ship the invoice export`), context(), false)).toEqual({ human: true, kind: "message", surface: "unknown" });
+    expect(classifyUserRecord(codex(`${OPERATOR_MARK}Ship the invoice export`), context(), false)).toEqual({ human: true, kind: "message", surface: "unknown", author: "operator" });
     expect(classifyUserRecord(codex(`<!-- llv:structured-user sha256=${"e".repeat(64)} origin=operator -->\nShip it`), context(), false)).toMatchObject({ human: true });
     expect(classifyUserRecord(codex("Ship the invoice export"), context(), false)).toEqual({ human: false, reason: "unmarked" });
     /* An interactive session's unmarked prompt is excluded too, and counted. */
@@ -74,12 +74,12 @@ describe("only real operator input counts", () => {
     expect(classifyUserRecord(relay, context({ deliveryOrigin: () => ({ origin: "agent" }) }), false)).toEqual({ human: false, reason: "agent-message" });
     /* The same delivery attributed to the operator counts, carrying its request key. */
     expect(classifyUserRecord(relay, context({ deliveryOrigin: () => ({ origin: "operator", idempotencyKey: "client-msg-7" }) }), false))
-      .toEqual({ human: true, kind: "message", surface: "unknown", idempotencyKey: "client-msg-7" });
+      .toEqual({ human: true, kind: "message", surface: "unknown", author: "operator", idempotencyKey: "client-msg-7" });
   });
 
   test("the engine's own typed-by-a-person flag is a positive signal", () => {
     expect(classifyUserRecord(claude("rename the column", { promptSource: "typed", entrypoint: "cli" }), context({ session: "interactive", launch: null }), false))
-      .toEqual({ human: true, kind: "message", surface: "terminal" });
+      .toEqual({ human: true, kind: "message", surface: "terminal", author: "operator" });
   });
 
   test("generated prompts, notifications, hints and screenshots are excluded by reason", () => {
@@ -117,10 +117,10 @@ describe("only real operator input counts", () => {
     const template = codex(`${mark("U1")}You are a Builder in plain mode. Implement the directive…`, "item-u1");
     expect(classifyUserRecord(template, unregistered, true)).toEqual({ human: false, reason: "unregistered" });
     /* Later operator-marked messages in it still count. */
-    expect(classifyUserRecord(codex(`${mark("U2")}hold the merge`, "item-u2"), unregistered, false)).toEqual({ human: true, kind: "message", surface: "unknown" });
+    expect(classifyUserRecord(codex(`${mark("U2")}hold the merge`, "item-u2"), unregistered, false)).toEqual({ human: true, kind: "message", surface: "unknown", author: "operator" });
     /* An interactive session's typed first prompt is not affected. */
     expect(classifyUserRecord(claude("rename the column", { promptSource: "typed" }), context({ session: "interactive", launch: null }), true))
-      .toEqual({ human: true, kind: "message", surface: "terminal" });
+      .toEqual({ human: true, kind: "message", surface: "terminal", author: "operator" });
   });
 
   test("the marker is read by the runtime's decoder: one delivery has one id in either wire form", () => {
@@ -219,7 +219,7 @@ describe("export rows carry no text", () => {
     expect(text).not.toContain("item-77");
     const [manifest, event] = text.trim().split("\n").map(parseExportLine);
     expect(manifest).toMatchObject({ type: "manifest", host: "stage", excluded: { unmarked: 2 } });
-    expect(Object.keys(event!).sort()).toEqual(["at", "hash", "host", "ids", "kind", "project", "surface", "type", "v"]);
+    expect(Object.keys(event!).sort()).toEqual(["at", "author", "hash", "host", "ids", "kind", "project", "surface", "type", "v"]);
     expect(parseExportLine(JSON.stringify({ ...event, text: "leak" }))).not.toHaveProperty("text");
   });
 });
