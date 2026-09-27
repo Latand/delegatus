@@ -648,6 +648,73 @@ test("a seat whose stdio Viewer MCP is dead is carded and receives no more tick 
   expect(rig.written.at(-1)?.lastWakeAt).toBe(OVERDUE.lastWakeAt);
 });
 
+test("persisted MCP cards survive repeated outages and equal-epoch projects", async () => {
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(SANDBOX, "mcp-board-outages-"));
+  try {
+    const { loadTasks } = await import("@/lib/tasks/store");
+    const projectA = "mcp-board-a";
+    const projectB = "mcp-board-b";
+    const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+    const health = { status: "dead" as const, detail: "stdio MCP has no heartbeat" };
+    const deps = { ...rig.deps, ensureCard: undefined, mcpHealth: () => health };
+    const cards = (project: string) => loadTasks(statePath("tasks.json")).filter((task) =>
+      task.project === project && task.text.includes("monitor-ref: seat-viewer-mcp-unavailable"));
+
+    expect((await runSeatTickCheck(projectA, deps))?.delivery?.outcome).toBe("seat-mcp-unavailable");
+    expect((await runSeatTickCheck(projectB, deps))?.delivery?.outcome).toBe("seat-mcp-unavailable");
+    expect(cards(projectA).filter((task) => task.status !== "done")).toHaveLength(1);
+    expect(cards(projectB).filter((task) => task.status !== "done")).toHaveLength(1);
+    await runSeatTickCheck(projectA, deps);
+    expect(cards(projectA)).toHaveLength(1);
+
+    await runSeatTickCheck(projectA, { ...deps, mcpHealth: () => ({ status: "healthy", detail: "stdio MCP is live" }) });
+    expect(cards(projectA)[0]?.status).toBe("done");
+    await runSeatTickCheck(projectA, deps);
+    expect(cards(projectA).filter((task) => task.status !== "done")).toHaveLength(1);
+    expect(cards(projectB).filter((task) => task.status !== "done")).toHaveLength(1);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+  }
+});
+
+test("an HTTP successor closes the predecessor's persisted MCP alert and receives wakes", async () => {
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(SANDBOX, "mcp-board-http-"));
+  try {
+    const { loadTasks } = await import("@/lib/tasks/store");
+    const options = { pipelines: OPEN_LANE, state: OVERDUE, now: NOW };
+    const rig = harness(options);
+    const sources = rig.deps.sources!;
+    const deps = {
+      ...rig.deps,
+      ensureCard: undefined,
+      sources: { ...sources, registry: () => ({ ...sources.registry(), seatMcpReceipt: (id: string) => id === SUCCESSOR
+        ? { spawnCapabilityDigest: "a".repeat(64), createdAt: new Date(NOW).toISOString(), viewerMcpTransport: "http" as const }
+        : { spawnCapabilityDigest: "b".repeat(64), createdAt: new Date(NOW - 30 * MINUTE).toISOString(), viewerMcpTransport: "stdio" as const } } as never) },
+    };
+    const cards = () => loadTasks(statePath("tasks.json")).filter((task) =>
+      task.project === PROJECT && task.text.includes("monitor-ref: seat-viewer-mcp-unavailable"));
+
+    expect((await runSeatTickCheck(PROJECT, deps))?.delivery?.outcome).toBe("seat-mcp-unavailable");
+    expect(cards().filter((task) => task.status !== "done")).toHaveLength(1);
+    await runSeatTickCheck(PROJECT, { ...deps, mcpHealth: () => ({ status: "untracked", detail: "MCP liveness could not be read" }) });
+    expect(cards().filter((task) => task.status !== "done")).toHaveLength(1);
+
+    rig.seat = { conversationId: SUCCESSOR, seatEpoch: 8, path: null };
+    options.now = NOW + 120 * MINUTE;
+    expect((await runSeatTickCheck(PROJECT, deps))?.delivery?.outcome).toBe("delivered");
+    expect(rig.sent).toHaveLength(2);
+    expect(rig.sent.at(-1)?.conversationId).toBe(SUCCESSOR);
+    expect(cards()).toHaveLength(1);
+    expect(cards()[0]?.status).toBe("done");
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+  }
+});
+
 test("transport failure opens the MCP card and recovery closes it before wakes resume", async () => {
   const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
   const stateDir = fs.mkdtempSync(path.join(SANDBOX, "mcp-card-"));

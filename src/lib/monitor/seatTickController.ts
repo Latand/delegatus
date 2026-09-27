@@ -321,14 +321,29 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
         /* The condition is on the board either way; only its wording is stale. */
         : unchanged;
     }
+    if (card.kind === "mcp-unavailable" && card.state === "open") {
+      /* A recovered outage has a completed card and a durable create receipt.
+         Reopen that project's card on a later outage of the same seat: creating
+         with the old receipt would replay the completed task instead. */
+      const completed = state.tasks.findLast((task) =>
+        canonicalOrchestratorProject(task.project) === project
+        && task.status === "done"
+        && monitorRefIn(task.text) === card.ref);
+      if (completed) {
+        const reopened = patchTask(state.tasks, completed.id, { status: "inbox", text });
+        return reopened.ok
+          ? { state: { tasks: reopened.tasks, recentCreates: state.recentCreates }, result: true }
+          : { state: absorbed ? state : undefined, result: false };
+      }
+    }
     const created = createTask(state.tasks, {
       project,
       text,
       placement: "unplaced",
-      /* The occurrence, not just the condition (#1298). Without it the second
-         outage of a source replays the first outage's receipt and creates no
-         card at all, once the first has been completed. */
-      clientRequestId: monitorClientRequestId(card.instance ? `${card.ref}:${card.instance}` : card.ref),
+      /* Scope the receipt to the project, then to the occurrence where one is
+         known (#1298). A repeated MCP outage reopens its completed card above. */
+      clientRequestId: monitorClientRequestId(card.instance
+        ? `${card.ref}:${project}:${card.instance}` : `${card.ref}:${project}`),
     }, state.recentCreates);
     if (!created.ok) return { state: absorbed ? state : undefined, result: false };
     if (created.replay) return unchanged;
@@ -1228,15 +1243,15 @@ async function check(
   const writeState = dependencies.writeState ?? writeSeatTickState;
   const deliver = dependencies.deliver ?? deliverConversationMessage;
   const ensureCard = dependencies.ensureCard ?? ensureSeatTickCard;
-  const mcpHealthFor = (seat: { conversationId: string; designatedAt?: string | null }, now: number): SeatMcpHealth =>
-    dependencies.mcpHealth?.(seat.conversationId, seat.designatedAt ?? null, now)
-      ?? (() => {
-        try {
-          const receipt = sources.registry().seatMcpReceipt?.(seat.conversationId) ?? null;
-          return seatMcpHealth(receipt, seat.designatedAt ?? null,
-            path.dirname(statePath("mcp-runtime")), now, receipt?.viewerMcpTransport ?? "stdio");
-        } catch { return { status: "untracked", detail: "MCP liveness could not be read" } as SeatMcpHealth; }
-      })();
+  const mcpHealthFor = (seat: { conversationId: string; designatedAt?: string | null }, now: number): SeatMcpHealth & { transport?: "stdio" | "http" } => {
+    try {
+      const receipt = sources.registry().seatMcpReceipt?.(seat.conversationId) ?? null;
+      const health = dependencies.mcpHealth?.(seat.conversationId, seat.designatedAt ?? null, now)
+        ?? seatMcpHealth(receipt, seat.designatedAt ?? null,
+          path.dirname(statePath("mcp-runtime")), now, receipt?.viewerMcpTransport ?? "stdio");
+      return { ...health, ...(receipt?.viewerMcpTransport ? { transport: receipt.viewerMcpTransport } : {}) };
+    } catch { return { status: "untracked", detail: "MCP liveness could not be read" }; }
+  };
 
   /* BEFORE A SEAT IS READ AT ALL (#1757): converge the active seat with the
      launch it was activated on, so this check opens on the seat the operator
@@ -1309,7 +1324,7 @@ async function check(
      unread again at the next check. */
   const input = { ...gathered, state: seatTickStateForEpoch(gathered.state, gathered.seat?.seatEpoch ?? null) };
   const mcpHealth = input.seat ? mcpHealthFor(input.seat, input.now) : null;
-  if (input.seat && mcpHealth?.status !== "untracked") {
+  if (input.seat && (mcpHealth?.status !== "untracked" || mcpHealth.transport === "http")) {
     try {
       ensureCard(input.project, {
         ref: "seat-viewer-mcp-unavailable", kind: "mcp-unavailable",
