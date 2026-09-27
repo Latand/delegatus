@@ -3,8 +3,11 @@
 The installed `bin/mcp-server.mjs` owns an agent's stdio pipe for the life of
 the agent session. It selects the currently published MCP runtime for each
 request. When the release identity changes, it starts that release's bundle and
-replays MCP initialization into the child. A child exit starts bounded retries:
-200 ms, doubling to a 5-second ceiling. While the child is absent, `tools/list`
+replays MCP initialization into the child. A temporary gap before the first
+bundle is published keeps the original client initialization pending. Child
+exit and that startup gap start bounded retries: 200 ms, doubling to a
+5-second ceiling. Invalid release identities and bundle digests remain
+rejected before execution. While the child is absent, `tools/list`
 uses the last successful list and `tools/call` returns an MCP tool result with
 `isError: true` and a retry instruction. The agent's MCP connection stays open.
 
@@ -13,7 +16,14 @@ record under `state/mcp-runtime/sessions/` every 30 seconds. The filename is
 the SHA-256 digest of the capability; the record contains no credential. After
 a 10-minute startup grace, the seat tick declares the MCP unavailable when
 that record is missing, older than two minutes, or reports a disconnected
-child for over two minutes. It puts a rotation request on the board and
+child for over two minutes. Three consecutive Viewer transport failures block
+wakes immediately, including during startup grace, because the launcher has
+already reported a broken path.
+A protocol ping runs every 30 seconds with a 10-second response bound; a silent
+child is disconnected and restarted. The transport failure count clears after
+a completed tool response, including an ordinary business refusal, because
+the backend answered. A successful call after recovery clears the MCP card.
+The tick puts a rotation request on the board and
 withholds wakes from that seat. A fresh, ready record clears the card. HTTP MCP
 sessions use the shared Viewer endpoint and have no per-session launcher, so
 this rule does not classify them.

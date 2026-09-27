@@ -5,6 +5,8 @@ import path from "node:path";
  * to register. A registered launcher must refresh every 30 seconds. */
 export const SEAT_MCP_START_GRACE_MS = 10 * 60_000;
 export const SEAT_MCP_HEARTBEAT_LIMIT_MS = 2 * 60_000;
+/** Consecutive transport failures; ordinary tool refusals reset this count. */
+export const SEAT_MCP_TRANSPORT_FAILURE_LIMIT = 3;
 
 export type SeatMcpHealth = { status: "healthy" | "untracked" | "dead"; detail: string };
 
@@ -34,7 +36,7 @@ export function seatMcpHealth(
   if (!record || typeof record !== "object") return inGrace
     ? { status: "untracked", detail: "MCP startup grace period" }
     : { status: "dead", detail: "the session's stdio MCP liveness record is invalid" };
-  const heartbeat = record as { checkedAt?: unknown; ready?: unknown; unreadySince?: unknown };
+  const heartbeat = record as { checkedAt?: unknown; ready?: unknown; unreadySince?: unknown; failedCalls?: unknown };
   const checkedAt = typeof heartbeat.checkedAt === "string" ? Date.parse(heartbeat.checkedAt) : Number.NaN;
   const unreadySince = typeof heartbeat.unreadySince === "string" ? Date.parse(heartbeat.unreadySince) : Number.NaN;
   if (!Number.isFinite(checkedAt) || checkedAt > now + 60_000 || now - checkedAt > SEAT_MCP_HEARTBEAT_LIMIT_MS) {
@@ -46,6 +48,9 @@ export function seatMcpHealth(
     return inGrace
       ? { status: "untracked", detail: "MCP startup grace period" }
       : { status: "dead", detail: "the session's stdio MCP child has stayed disconnected" };
+  }
+  if (typeof heartbeat.failedCalls === "number" && heartbeat.failedCalls >= SEAT_MCP_TRANSPORT_FAILURE_LIMIT) {
+    return { status: "dead", detail: "the session's Viewer MCP cannot reach the Viewer after three consecutive transport failures" };
   }
   if (heartbeat.ready !== true) return { status: "untracked", detail: "MCP child is starting" };
   return { status: "healthy", detail: "the session's stdio MCP launcher is live" };

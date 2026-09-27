@@ -95,7 +95,11 @@ function deployedPackageRoot() {
   } catch (error) {
     /* A published target with no bundle is a temporary release gap. Keep the
        session's stdio pipe and ask the caller to retry. */
-    if (error?.code === "ENOENT") throw new Error("The published MCP runtime is temporarily unavailable; retry the call.");
+    if (error?.code === "ENOENT") {
+      const gap = new Error("The published MCP runtime is temporarily unavailable; retry the call.");
+      gap.recoverable = true;
+      throw gap;
+    }
     throw new Error(`Could not read the published MCP runtime bundle: ${error instanceof Error ? error.message : String(error)}`);
   }
   const artifactDigest = createHash("sha256").update(bundled).digest("hex");
@@ -116,7 +120,9 @@ function selectedRuntime() {
     if (error?.code !== "ENOENT") throw error;
     signature = "absent";
   }
-  if (signature === cachedTargetSignature && cachedRuntime && existsSync(cachedRuntime.entry)) return cachedRuntime;
+  /* Recheck the bundle digest before every new child. A cached selection is
+     safe only while its already-verified child is still the one running. */
+  if (child && signature === cachedTargetSignature && cachedRuntime && existsSync(cachedRuntime.entry)) return cachedRuntime;
   const selected = deployedPackageRoot();
   const root = typeof selected === "string" ? selected : selected.root;
   const bundled = join(root, "dist", "mcp-server.mjs");
@@ -149,11 +155,41 @@ let nextStartAt = 0;
 let retryDelayMs = 200;
 let restartTimer = null;
 let initialization = null;
+let initializationComplete = false;
 let initialized = null;
 let replayId = null;
 let toolsList = null;
 const pending = new Map();
 let closing = false;
+let protocolProbe = null;
+let protocolProbeTimer = null;
+let initializationTimer = null;
+const PROTOCOL_PROBE_INTERVAL_MS = 30_000;
+const PROTOCOL_PROBE_TIMEOUT_MS = 10_000;
+
+function transportFailure(result, protocolError) {
+  const verdict = result?.structuredContent;
+  if (verdict?.ok === false && (verdict.code === "tool_failed" || verdict.code === "outcome_unknown")) {
+    const reason = typeof verdict.error === "string" ? verdict.error : "";
+    if (/^Viewer control (?:is unreachable|did not reconnect|dispatch timed out)/.test(reason)
+      || (verdict.code === "outcome_unknown" && /(?:connection was refused|connection failed|Viewer did not answer)/.test(reason))) return true;
+  }
+  const text = [protocolError?.message, ...(Array.isArray(result?.content) ? result.content.map((item) => item?.text) : [])]
+    .filter((part) => typeof part === "string").join(" ");
+  return (result?.isError === true || protocolError)
+    && /(?:ECONNREFUSED|Viewer control (?:is unreachable|did not reconnect|dispatch timed out)|MCP server viewer is not connected)/.test(text);
+}
+
+function probeProtocol(current) {
+  if (child !== current || !ready || protocolProbe) return;
+  const id = `llv-probe-${process.pid}-${Date.now()}`;
+  const timer = setTimeout(() => {
+    disconnect(current, "Viewer MCP child stopped responding");
+    current.kill("SIGTERM");
+  }, PROTOCOL_PROBE_TIMEOUT_MS);
+  protocolProbe = { id, timer };
+  current.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "ping" })}\n`);
+}
 
 function reply(value) { process.stdout.write(`${JSON.stringify(value)}\n`); }
 function unavailable(request, detail = "Viewer MCP is reconnecting after a release change") {
@@ -180,14 +216,27 @@ function scheduleRestart() {
 }
 function disconnect(current, detail) {
   if (child !== current) return;
+  if (protocolProbe) clearTimeout(protocolProbe.timer);
+  protocolProbe = null;
+  if (initializationTimer) clearTimeout(initializationTimer);
+  initializationTimer = null;
   child = null;
   childKey = null;
   ready = false;
   unreadySince ??= new Date().toISOString();
-  for (const request of pending.values()) unavailable(request, detail);
+  for (const request of pending.values()) if (request.method !== "initialize") unavailable(request, detail);
   pending.clear();
   scheduleRestart();
   heartbeat();
+}
+function sendInitialization(current) {
+  if (!initialization || replayId !== null) return;
+  replayId = initializationComplete ? `llv-reinitialize-${process.pid}-${Date.now()}` : initialization.id;
+  current.stdin.write(`${JSON.stringify({ ...initialization, id: replayId })}\n`);
+  initializationTimer = setTimeout(() => {
+    disconnect(current, "Viewer MCP initialization timed out");
+    current.kill("SIGTERM");
+  }, 30_000);
 }
 function start(selected) {
   const env = { ...process.env };
@@ -196,19 +245,28 @@ function start(selected) {
   child = current;
   childKey = `${selected.root}\0${selected.revision}`;
   activeReleaseId = selected.releaseId;
-  ready = !initialization;
-  if (ready) unreadySince = null;
-  if (initialization) {
-    replayId = `llv-reinitialize-${process.pid}-${Date.now()}`;
-    current.stdin.write(`${JSON.stringify({ ...initialization, id: replayId })}\n`);
-  }
+  ready = false;
+  replayId = null;
+  sendInitialization(current);
   createInterface({ input: current.stdout }).on("line", (line) => {
     if (child !== current) return;
     let message;
     try { message = JSON.parse(line); } catch { process.stdout.write(`${line}\n`); return; }
+    if (protocolProbe && message.id === protocolProbe.id) {
+      clearTimeout(protocolProbe.timer);
+      protocolProbe = null;
+      if (message.error) disconnect(current, "Viewer MCP child rejected its protocol probe");
+      return;
+    }
     if (message.id === replayId) {
       replayId = null;
+      if (initializationTimer) clearTimeout(initializationTimer);
+      initializationTimer = null;
       if (message.result) {
+        if (!initializationComplete) {
+          initializationComplete = true;
+          reply(message);
+        }
         ready = true;
         unreadySince = null;
         retryDelayMs = 200;
@@ -223,8 +281,11 @@ function start(selected) {
       pending.delete(JSON.stringify(message.id));
       if (request.method === "tools/list" && message.result) toolsList = message.result;
       if (request.method === "tools/call") {
-        if (message.result && !message.result.isError) { lastSuccessfulCallAt = new Date().toISOString(); failedCalls = 0; }
-        else failedCalls += 1;
+        if (transportFailure(message.result, message.error)) failedCalls += 1;
+        else if (message.result && !message.result.isError) {
+          lastSuccessfulCallAt = new Date().toISOString();
+          failedCalls = 0;
+        } else if (message.result?.structuredContent?.ok === false) failedCalls = 0;
         heartbeat();
       }
     }
@@ -232,6 +293,10 @@ function start(selected) {
   });
   current.once("error", (error) => disconnect(current, `Viewer MCP child could not start: ${error.message}`));
   current.once("exit", () => disconnect(current, "Viewer MCP child exited"));
+  if (!protocolProbeTimer) {
+    protocolProbeTimer = setInterval(() => { if (child) probeProtocol(child); }, PROTOCOL_PROBE_INTERVAL_MS);
+    protocolProbeTimer.unref();
+  }
   heartbeat();
 }
 function ensureChild() {
@@ -243,7 +308,7 @@ function ensureChild() {
       disconnect(old, "Viewer MCP release target is unreadable");
       old.kill("SIGTERM");
     }
-    return error instanceof Error ? error.message : String(error);
+    return { message: error instanceof Error ? error.message : String(error), recoverable: error?.recoverable === true };
   }
   const key = `${selected.root}\0${selected.revision}`;
   if (child && childKey !== key) {
@@ -265,8 +330,24 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   if (request?.method === "initialize") initialization = request;
   if (request?.method === "notifications/initialized") initialized = request;
   const error = ensureChild();
+  if (request?.method === "initialize") {
+    if (!error && child) {
+      if (!ready) sendInitialization(child);
+      else {
+        pending.set(JSON.stringify(request.id), request);
+        child.stdin.write(`${line}\n`);
+      }
+    }
+    return;
+  }
+  /* Installed launcher consumers that do not speak MCP still get their
+     original byte stream. This does not claim protocol readiness. */
+  if (!initialization && !error && child) {
+    child.stdin.write(`${line}\n`);
+    return;
+  }
   if (error || !child || !ready) {
-    if (request) unavailable(request, error || "Viewer MCP child is starting");
+    if (request) unavailable(request, error?.message || "Viewer MCP child is starting");
     return;
   }
   if (request?.id !== undefined && request?.id !== null) pending.set(JSON.stringify(request.id), request);
@@ -274,12 +355,14 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 }).on("close", () => {
   closing = true;
   clearInterval(heartbeatTimer);
+  if (protocolProbeTimer) clearInterval(protocolProbeTimer);
   if (restartTimer) clearTimeout(restartTimer);
   if (child) child.stdin.end();
 });
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => {
   closing = true;
   clearInterval(heartbeatTimer);
+  if (protocolProbeTimer) clearInterval(protocolProbeTimer);
   if (restartTimer) clearTimeout(restartTimer);
   if (child) child.kill(signal);
   else process.exit(0);
@@ -293,7 +376,10 @@ process.on("beforeExit", () => {
 });
 const initialError = ensureChild();
 if (initialError) {
-  console.error(initialError);
-  process.exitCode = 1;
-  process.stdin.destroy();
+  console.error(initialError.message);
+  if (initialError.recoverable) scheduleRestart();
+  else {
+    process.exitCode = 1;
+    process.stdin.destroy();
+  }
 }

@@ -25,6 +25,7 @@ fs.mkdirSync(SESSIONS, { recursive: true });
 const { SEAT_TICK_NO_SELF_SCHEDULE } = await import("./report");
 const { reconcileSeatTick, runSeatTickCheck, SEAT_TICK_WAKE_UNRESOLVED_REF, startSeatTick, stopSeatTick, wakeReached } = await import("./seatTickController");
 const { DEFAULT_SEAT_TICK_POLICY } = await import("./seatTick");
+const { seatMcpHealth } = await import("./seatMcpHealth");
 const { defaultSeatTickSettings } = await import("./seatTickSettings");
 const { openPullRequestsForRepo } = await import("./githubEvidence");
 const { defaultSeatTickSources, journalReceipt, settleRecordFromJournal, wakeStateFromRecord } = await import("./seatTickSources");
@@ -641,6 +642,28 @@ test("a seat whose stdio Viewer MCP is dead is carded and receives no more tick 
     kind: "mcp-unavailable", ref: "seat-viewer-mcp-unavailable", state: "open", instance: "7",
   }) });
   expect(rig.written.at(-1)?.lastWakeAt).toBe(OVERDUE.lastWakeAt);
+});
+
+test("transport failure opens the MCP card and recovery closes it before wakes resume", async () => {
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  const stateDir = fs.mkdtempSync(path.join(SANDBOX, "mcp-card-"));
+  const digest = "c".repeat(64);
+  const heartbeatFile = path.join(stateDir, "mcp-runtime", "sessions", `${digest}.json`);
+  fs.mkdirSync(path.dirname(heartbeatFile), { recursive: true });
+  const receipt = { spawnCapabilityDigest: digest, createdAt: new Date(NOW - 30 * MINUTE).toISOString() };
+  const designatedAt = new Date(NOW - 20 * MINUTE).toISOString();
+  const write = (failedCalls: number) => fs.writeFileSync(heartbeatFile, JSON.stringify({
+    checkedAt: new Date(NOW).toISOString(), ready: true, unreadySince: null, failedCalls,
+  }));
+  const deps = { ...rig.deps, mcpHealth: () => seatMcpHealth(receipt, designatedAt, stateDir, NOW) };
+  write(3);
+  expect((await runSeatTickCheck(PROJECT, deps))?.delivery?.outcome).toBe("seat-mcp-unavailable");
+  expect(rig.sent).toHaveLength(0);
+  expect(rig.cards.at(-1)?.card).toMatchObject({ kind: "mcp-unavailable", state: "open" });
+  write(0);
+  await runSeatTickCheck(PROJECT, deps);
+  expect(rig.cards.at(-1)?.card).toMatchObject({ kind: "mcp-unavailable", state: "resolved" });
+  expect(rig.sent).toHaveLength(1);
 });
 
 /* Two checks that found the same thing raise the same wake, so a re-send after
