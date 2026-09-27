@@ -14,7 +14,7 @@ import { readRequests, recordOperatorRequest } from "./requestLedger";
 import { ingestTranscripts } from "./ingest";
 import { localTransport, pullHost, type PullConfig } from "./pull";
 import { ActivityStore, LOCAL_HOST_KEY } from "./store";
-import type { ConversationResolution } from "./transcriptExport";
+import { exportHumanInputs, listTranscriptFiles, type ConversationResolution } from "./transcriptExport";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 import type { RegistryFile } from "@/lib/agent/registry";
 import { TeamStore, resetTeamStoreForTests, teamStore } from "@/lib/team/store";
@@ -150,6 +150,44 @@ function local<T>(read: (store: ActivityStore) => T): T {
 }
 
 describe("pulling another host's records", () => {
+  test("a fresh solo export counts its operator without a host mode setting", async () => {
+    const transcript = path.join(dir, "stage", "sessions", "solo.jsonl");
+    fs.mkdirSync(path.dirname(transcript), { recursive: true });
+    fs.writeFileSync(transcript, JSON.stringify({ type: "user", timestamp: "2026-09-23T09:00:00Z",
+      uuid: "typed-solo", promptSource: "typed", entrypoint: "cli", cwd: "/work/harbor",
+      message: { role: "user", content: "typed solo prompt" } }) + "\n");
+    const previous = process.env.LLV_STATE_DIR;
+    process.env.LLV_STATE_DIR = remoteState;
+    let exported: Awaited<ReturnType<typeof exportHumanInputs>>;
+    try {
+      exported = await exportHumanInputs({ host: "stage", from: DAY.start, to: NOW, now: NOW,
+        files: listTranscriptFiles([path.dirname(transcript)], DAY.start), resolve: conversationResolver(null) });
+    } finally {
+      resetTeamStoreForTests();
+      if (previous === undefined) delete process.env.LLV_STATE_DIR;
+      else process.env.LLV_STATE_DIR = previous;
+    }
+    expect(exported.inputs.map((input) => input.author)).toEqual(["operator"]);
+    const activityDir = path.join(dir, "local", "state", "activity");
+    const exportsDir = path.join(activityDir, "hosts", "stage");
+    fs.mkdirSync(exportsDir, { recursive: true });
+    fs.writeFileSync(path.join(exportsDir, "solo.jsonl"), exportLines(exported.manifest, exported.inputs));
+    fs.writeFileSync(path.join(activityDir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation" },
+      hosts: [{ id: "stage" }] }));
+    const read = readHumanInputs(DAY, NOW, { dir: () => activityDir,
+      readLedger: () => ({ rows: [], ledgerStartMs: null }), store: () => null }, { mode: "solo", memberId: null });
+    expect(read.inputs.map((input) => input.author)).toEqual(["operator"]);
+    expect(read.hosts.find((host) => host.host === "stage")).toMatchObject({
+      configurationGap: false, unknownAuthors: 0, sources: [{ source: "transcripts", inputs: 1 }],
+    });
+    expect(read.coverage.find((host) => host.host === "stage")?.covered).toEqual([{ start: DAY.start, end: NOW }]);
+    const report = activityReport({ params: clampMethodParams({}), range: "today", nowMs: NOW,
+      anchors: read.inputs.map((input) => ({ at: input.at, project: input.project, surface: input.surface, kind: input.kind, host: input.host })),
+      hosts: read.coverage, agents: [] });
+    expect(report.totals.requests).toBe(1);
+    expect(report.totals.humanMs).toBe(10 * 60_000);
+  });
+
   test("the activity writer adds author to an existing store without losing rows", async () => {
     await stageRecords();
     const file = path.join(remoteState, "activity", "records.sqlite");

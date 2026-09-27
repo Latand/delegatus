@@ -375,9 +375,12 @@ span it speaks for (`exportSource`, `src/lib/activity/hostSources.ts`).
 projects unknown. `since` says when the host started holding work.
 An export-only host with old rows lacking `author` can declare `mode: "solo"`
 on its host entry when it has always had one operator. Without that evidence,
-old export rows remain unknown. A pulled host gets its mode from the remote
-reader instead. An export-only team host can use `mode: "team", memberId:
-"m_..."`; it otherwise reports a member configuration gap.
+old export rows remain unknown. A current export with explicit
+`author: "operator"` counts those rows on an export-only host without a mode
+setting; it does not assign that author to rows where the author is absent.
+A pulled host gets its mode from the remote reader instead. An export-only
+team host can use `mode: "team", memberId: "m_..."`; it otherwise reports a
+member configuration gap.
 
 ### Agent axis
 

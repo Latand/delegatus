@@ -30,7 +30,7 @@ const quietLedger = (): LedgerRead => ({ rows: [], ledgerStartMs: NOW - 7 * 24 *
 
 function hostsFile(hosts: unknown[]): void {
   fs.writeFileSync(path.join(dir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation" },
-    hosts: hosts.map((host) => ({ mode: "solo", ...host as object })) }));
+    hosts }));
 }
 
 function stageExport(inputs: HumanInput[], coveredFrom = DAY.start, coveredUntil = NOW, host = "stage", name = "human-input-2026-09-23.jsonl"): void {
@@ -45,7 +45,7 @@ function localExport(host = "workstation", coveredFrom = DAY.start - 86_400_000,
 }
 
 const stageInput = (isoTime: string, id: string): HumanInput => ({
-  ids: [messageId("codex", id)], at: Date.parse(isoTime), host: "stage", source: "transcripts", project: "client-a", kind: "message", surface: "unknown", hash: "a".repeat(64),
+  ids: [messageId("codex", id)], at: Date.parse(isoTime), host: "stage", source: "transcripts", project: "client-a", kind: "message", surface: "unknown", hash: "a".repeat(64), author: "operator",
 });
 
 function reportFor(read: ReturnType<typeof readHumanInputs>) {
@@ -71,6 +71,15 @@ describe("human input from every expected host", () => {
     expect(report.totals.coverage).toEqual({ complete: true, missingHosts: [] });
     expect(report.projects[0]!.byHost).toEqual({ stage: 30 * 60_000 });
     expect(report.days[0]!.missingSource).toBeNull();
+  });
+
+  test("an explicit solo author does not turn legacy export input into operator hours", () => {
+    hostsFile([{ id: "stage" }]);
+    stageExport([stageInput("2026-09-23T09:00:00Z", "solo"),
+      { ...stageInput("2026-09-23T09:20:00Z", "legacy"), author: null }]);
+    const read = readHumanInputs(DAY, NOW, { dir: () => dir, readLedger: quietLedger }, { mode: "solo", memberId: null });
+    expect(read.inputs.map((input) => input.author)).toEqual(["operator"]);
+    expect(read.hosts.find((host) => host.host === "stage")).toMatchObject({ unknownAuthors: 1, configurationGap: false });
   });
 
   test("the same with the stage host not connected: coverage unknown and a flagged zero", () => {
@@ -141,6 +150,6 @@ describe("human input from every expected host", () => {
     fs.writeFileSync(path.join(dir, "hosts.json"), "{not json");
     expect(readHostsConfig(dir).state).toBe("unreadable");
     hostsFile([{ id: "Bad Id" }, { id: "stage", projects: ["client-a"], since: "2026-09-20" }, { id: "stage" }]);
-    expect(readHostsConfig(dir).hosts).toEqual([{ id: "stage", label: null, projects: "all", since: null, pull: null, mode: "solo" }]);
+    expect(readHostsConfig(dir).hosts).toEqual([{ id: "stage", label: null, projects: "all", since: null, pull: null }]);
   });
 });

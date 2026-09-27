@@ -377,11 +377,17 @@ export function readHumanInputs(
       const remoteState = !host.local ? store?.hostState(host.id) : null;
       const remoteTeam = remoteState?.teamHistory === true || remoteState?.remoteMode === "team";
       const remoteSolo = (remoteState?.remoteMode === "solo" && !remoteTeam) || (!host.pull && !remoteState && host.mode === "solo");
+      /* A current solo export names its author explicitly. That is enough to
+         select those rows without a hosts.json mode, but it says nothing about
+         legacy rows in the same files, whose author must stay unknown. */
+      const explicitSoloExport = !host.local && !host.pull && !remoteState && host.mode !== "team" && !host.memberId
+        && exported.inputs.some((input) => input.author === "operator")
+        && exported.inputs.every((input) => input.author === null || input.author === "operator");
       const selectedMember = host.pull ? host.pull.memberId : host.memberId;
       const configurationGap = host.local ? localMode === "team" && !localMember
         : (remoteTeam || host.mode === "team") && !selectedMember;
       const wanted = host.local ? (localMode === "solo" ? "operator" : localMember)
-        : remoteSolo ? "operator" : selectedMember ?? null;
+        : remoteSolo || explicitSoloExport ? "operator" : selectedMember ?? null;
       const soloHistory = host.local ? localMode === "solo" && !localTeamHistory : remoteSolo;
       let unknownAuthors = !host.local ? remoteState?.unknownAuthors ?? 0 : 0;
       const unknownInputs: HumanInput[] = [];
