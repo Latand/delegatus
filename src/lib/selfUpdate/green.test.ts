@@ -5,7 +5,7 @@ const SHA = "a".repeat(40);
 const HEAD = "b".repeat(40);
 const TREE = "c".repeat(40);
 
-function reader(options: { runs?: Record<string, unknown>[]; statuses?: Record<string, unknown>[]; required?: string[]; pull?: boolean; mergeSha?: string; tree?: string; response?: number; invalidBranch?: boolean } = {}) {
+function reader(options: { runs?: Record<string, unknown>[]; statuses?: Record<string, unknown>[]; required?: string[]; requiredChecks?: { context: string; app_id: number }[]; pull?: boolean; mergeSha?: string; tree?: string; response?: number; invalidBranch?: boolean } = {}) {
   let reads = 0;
   let now = 1_000;
   const calls: string[] = [];
@@ -17,7 +17,7 @@ function reader(options: { runs?: Record<string, unknown>[]; statuses?: Record<s
     const body = url.includes("/pulls") ? (options.pull === false ? [] : [{ merged_at: "2026-01-01", merge_commit_sha: options.mergeSha ?? SHA, base: { ref: "main" }, head: { sha: HEAD } }])
       : url.includes("/check-runs") ? { check_runs: options.runs ?? [{ name: "test", status: "completed", conclusion: "success", started_at: "2026-01-01" }] }
       : url.includes("/statuses") ? options.statuses ?? []
-      : url.includes("/branches/") ? (options.invalidBranch ? {} : { protected: true, protection: { required_status_checks: { contexts: options.required ?? [] } } })
+      : url.includes("/branches/") ? (options.invalidBranch ? {} : { protected: true, protection: { required_status_checks: { contexts: options.required ?? [], checks: options.requiredChecks ?? [] } } })
       : { commit: { tree: { sha: options.tree ?? TREE } } };
     return Response.json(body);
   };
@@ -55,6 +55,35 @@ describe("green merge evidence", () => {
   test("a red optional status blocks an unattended update", async () => {
     const h = reader({ statuses: [{ context: "optional", state: "error", created_at: "2026-01-01" }] });
     expect(await h.subject.read("github.com/example/project", "main", SHA, "/checkout")).toMatchObject({ state: "red", detail: "optional" });
+  });
+
+  test("a newer successful status cannot erase a failed same-name required check run", async () => {
+    const h = reader({ required: ["build"], runs: [
+      { name: "build", status: "completed", conclusion: "failure", started_at: "2026-01-01T00:00:00Z" },
+    ], statuses: [{ context: "build", state: "success", created_at: "2026-01-01T01:00:00Z" }] });
+    expect(await h.subject.read("github.com/example/project", "main", SHA, "/checkout")).toMatchObject({ state: "red", detail: "build" });
+  });
+
+  test("an app-bound required check waits for the configured app", async () => {
+    const options = { requiredChecks: [{ context: "build", app_id: 15368 }], runs: [
+      { name: "build", status: "completed", conclusion: "success", started_at: "2026-01-01T00:00:00Z", app: { id: 999 } },
+    ] };
+    const h = reader(options);
+    expect(await h.subject.read("github.com/example/project", "main", SHA, "/checkout")).toMatchObject({ state: "pending", detail: "build" });
+    options.runs.push({ name: "build", status: "completed", conclusion: "success", started_at: "2026-01-01T00:01:00Z", app: { id: 15368 } });
+    expect((await h.subject.read("github.com/example/project", "main", SHA, "/checkout", undefined, true)).state).toBe("green");
+  });
+
+  test("a genuine same-app rerun supersedes failure; a newer status from another source does not", async () => {
+    const runs = [
+      { name: "build", status: "completed", conclusion: "failure", started_at: "2026-01-01T00:00:00Z", app: { id: 15368 } },
+      { name: "build", status: "completed", conclusion: "skipped", started_at: "2026-01-01T00:01:00Z", app: { id: 15368 } },
+    ];
+    const h = reader({ requiredChecks: [{ context: "build", app_id: 15368 }], runs });
+    expect((await h.subject.read("github.com/example/project", "main", SHA, "/checkout")).state).toBe("green");
+    const withRedStatus = reader({ requiredChecks: [{ context: "build", app_id: 15368 }], runs,
+      statuses: [{ context: "build", state: "failure", created_at: "2026-01-01T00:02:00Z" }] });
+    expect((await withRedStatus.subject.read("github.com/example/project", "main", SHA, "/checkout")).state).toBe("red");
   });
 
   test("pending checks time out after the first read", async () => {

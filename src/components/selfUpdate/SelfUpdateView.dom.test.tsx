@@ -180,6 +180,26 @@ describe("automatic updates", () => {
     expect(text(section(uk, "auto"))).toContain("Працюють ходи агентів: 2");
   });
 
+  test.each([
+    ["en", "pending", "required-build", "waiting for green checks: required-build", "quiet moment"],
+    ["uk", "pending", "required-build", "чекає на зелені перевірки: required-build", "тиху хвилину"],
+    ["en", "red", "required-build", "waiting for green checks: required-build", "quiet moment"],
+    ["uk", "red", "required-build", "чекає на зелені перевірки: required-build", "тиху хвилину"],
+    ["en", "unknown", "GitHub HTTP 503", "waiting for green checks: GitHub HTTP 503", "quiet moment"],
+    ["uk", "unknown", "GitHub HTTP 503", "чекає на зелені перевірки: GitHub HTTP 503", "тиху хвилину"],
+  ] as const)("%s dialog shows a %s check blocker during a built update wait", (locale, state, detail, expected, staleQuiet) => {
+    setLocale(locale);
+    const s = snapshot();
+    s.auto = { availability: "available", enabled: true, off: null, phase: "not-green", target: rev("a".repeat(40), "1"),
+      green: { state, detail }, blockers: { turns: 2, stages: 1, operatorActiveAt: null, busy: false, memoryMb: null, unreadable: null },
+      waitingSince: new Date(NOW - 25 * 60 * 60_000).toISOString(), longWait: true };
+    const copy = text(section(render(s), "auto"));
+    expect(copy).toContain(expected);
+    expect(copy).not.toContain(staleQuiet);
+    expect(copy).not.toContain(locale === "en" ? "Agent turns running" : "Працюють ходи агентів");
+    expect(copy).not.toContain(locale === "en" ? "Waiting over 24 hours" : "Очікування понад 24 години");
+  });
+
   test("managed installs explain why the switch is unavailable", () => {
     const s = snapshot();
     s.mode = "managed";

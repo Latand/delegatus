@@ -230,11 +230,12 @@ export class SelfUpdateService {
     const phase: AutoView["phase"] = !this.auto.enabled && !pending ? "idle"
       : pending ? pending.role === "web" ? "restarting-web" : "restarting-host"
       : snapshot.update.state === "running" && snapshot.update.trigger === "auto" ? "building"
-      : this.auto.waitingSince ? "waiting"
       : sha && this.auto.green[sha] && this.auto.green[sha].state !== "green" ? "not-green"
+      : this.auto.waitingSince ? "waiting"
       : sha && !this.auto.green[sha] ? "checks" : "idle";
     return { availability: this.autoAvailability(decision), enabled: this.auto.enabled, off: this.auto.off, phase, target, green: sha ? this.auto.green[sha] ?? null : null,
-      blockers: this.autoBlockers ?? this.auto.lastBlockers, waitingSince: this.auto.waitingSince, longWait: !!this.auto.waitingSince && this.deps.now() - Date.parse(this.auto.waitingSince) >= 24 * 60 * 60_000 };
+      blockers: phase === "waiting" ? this.autoBlockers ?? this.auto.lastBlockers : null,
+      waitingSince: this.auto.waitingSince, longWait: phase === "waiting" && !!this.auto.waitingSince && this.deps.now() - Date.parse(this.auto.waitingSince) >= 24 * 60 * 60_000 };
   }
 
   /** Re-read durable facts on every pass. A web restart replaces this object
@@ -300,9 +301,9 @@ export class SelfUpdateService {
     const target = this.slice.available ?? ((staleBuilt || this.auto.waitingSince) ? snapshot.installed : null);
     if (!target?.sha) return;
     let green = this.auto.green[target.sha] ?? null;
-    if (!green || ((green.state === "pending" || green.state === "unknown") && (!green.nextAt || Date.parse(green.nextAt) <= now))) {
-      green = await this.greenReader.read(this.deps.remote, this.deps.branch, target.sha, record.checkout!, green?.firstReadAt);
-      if (green.state === "pending" || green.state === "unknown") green = { ...green, nextAt: green.nextAt ?? new Date(now + 15 * 60_000).toISOString() };
+    if (!green || (["pending", "unknown", "red"].includes(green.state) && (!green.nextAt || Date.parse(green.nextAt) <= now))) {
+      green = await this.greenReader.read(this.deps.remote, this.deps.branch, target.sha, record.checkout!, green?.firstReadAt, green?.state === "red");
+      if (green.state === "pending" || green.state === "unknown" || green.state === "red") green = { ...green, nextAt: green.nextAt ?? new Date(now + 15 * 60_000).toISOString() };
       const entries = Object.entries({ ...this.auto.green, [target.sha]: green }).slice(-8);
       this.auto = { ...this.auto, green: Object.fromEntries(entries) };
       this.saveAuto();

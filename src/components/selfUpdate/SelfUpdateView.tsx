@@ -402,7 +402,7 @@ function AutoSection({ s, state, actions, t }: { s: Snapshot; state: ViewState; 
           {blockers.unreadable ? <li>{t("selfUpdate.auto.block.unreadable", { detail: blockers.unreadable })}</li> : null}
         </ul>
       ) : null}
-      {auto.longWait ? <p className="m-0 text-ui text-warning">{t("selfUpdate.auto.longWait")}</p> : null}
+      {auto.phase === "waiting" && auto.longWait ? <p className="m-0 text-ui text-warning">{t("selfUpdate.auto.longWait")}</p> : null}
       {s.mode === "checkout" && auto.target?.short && (s.serving.web?.short !== auto.target.short || s.serving.runtimeHost?.short !== auto.target.short) ? (
         <p className="m-0 text-ui text-secondary">{t("selfUpdate.auto.serving", { web: s.serving.web?.short ?? "—", host: s.serving.runtimeHost?.short ?? "—", built: auto.target.short })}</p>
       ) : null}

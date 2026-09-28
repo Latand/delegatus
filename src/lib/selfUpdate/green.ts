@@ -20,6 +20,7 @@ const defaultPorts: GreenPorts = {
 };
 const TIMEOUT_MS = 15_000;
 const WAIT_MS = 90 * 60_000;
+type RequiredCheck = { name: string; appId: number | null };
 class GitHubReadError extends Error {
   constructor(message: string, readonly nextAt?: string) { super(message); }
 }
@@ -27,7 +28,7 @@ class GitHubReadError extends Error {
 export class GreenReader {
   private readonly final = new Map<string, GreenVerdict>();
   private readonly firstPending = new Map<string, number>();
-  private readonly required = new Map<string, { at: number; names: string[] }>();
+  private readonly required = new Map<string, { at: number; checks: RequiredCheck[] }>();
   constructor(private readonly ports: GreenPorts = defaultPorts) {}
 
   private async page(url: string): Promise<{ body: unknown; next: string | null }> {
@@ -67,21 +68,31 @@ export class GreenReader {
     if (next) throw new Error("GitHub returned too many check runs");
     return all;
   }
-  private async requiredChecks(repository: string, branch: string, fresh: boolean): Promise<string[]> {
+  private async requiredChecks(repository: string, branch: string, fresh: boolean): Promise<RequiredCheck[]> {
     const key = `${repository}:${branch}`;
     const cached = this.required.get(key);
-    if (!fresh && cached && this.ports.now() - cached.at < 30 * 60_000) return cached.names;
-    const branchView = (await this.page(`https://api.github.com/repos/${repository}/branches/${encodeURIComponent(branch)}`)).body as { protected?: unknown; protection?: { required_status_checks?: { contexts?: unknown } } };
+    if (!fresh && cached && this.ports.now() - cached.at < 30 * 60_000) return cached.checks;
+    const branchView = (await this.page(`https://api.github.com/repos/${repository}/branches/${encodeURIComponent(branch)}`)).body as { protected?: unknown; protection?: { required_status_checks?: { contexts?: unknown; checks?: unknown } } };
     if (typeof branchView?.protected !== "boolean" || (branchView.protected && (!branchView.protection || typeof branchView.protection !== "object"))) {
       throw new Error("GitHub returned an invalid branch protection response");
     }
     const contexts = branchView?.protection?.required_status_checks?.contexts;
+    const configured = branchView?.protection?.required_status_checks?.checks;
     if (contexts !== undefined && (!Array.isArray(contexts) || !contexts.every((name) => typeof name === "string"))) {
       throw new Error("GitHub returned invalid required checks");
     }
-    const names = (contexts as string[] | undefined) ?? [];
-    this.required.set(key, { at: this.ports.now(), names });
-    return names;
+    if (configured !== undefined && (!Array.isArray(configured) || !configured.every((check) =>
+      check && typeof check === "object" && typeof check.context === "string"
+      && (check.app_id === null || Number.isInteger(check.app_id))))) {
+      throw new Error("GitHub returned invalid required check sources");
+    }
+    const checks = ((configured as { context: string; app_id: number | null }[] | undefined) ?? [])
+      .map(({ context, app_id }) => ({ name: context, appId: app_id === -1 ? null : app_id }));
+    for (const name of (contexts as string[] | undefined) ?? []) {
+      if (!checks.some((check) => check.name === name)) checks.push({ name, appId: null });
+    }
+    this.required.set(key, { at: this.ports.now(), checks });
+    return checks;
   }
   async read(remote: string, branch: string, target: string, checkout: string, firstReadAt?: string, fresh = false): Promise<GreenVerdict> {
     const repository = githubRepositoryOfRemote(remote);
@@ -113,27 +124,34 @@ export class GreenReader {
         this.list(`${api}/commits/${head}/statuses?per_page=100`),
         this.requiredChecks(repository, branch, fresh),
       ]);
-      const checks = rollupChecks([
-        ...runs.map((run) => {
-          const item = run as Record<string, unknown>;
-          return { ...item, startedAt: item.started_at, status: item.status, conclusion: item.conclusion };
-        }),
-        ...statuses.map((status) => {
+      const runGroups = new Map<number | null, Record<string, unknown>[]>();
+      for (const run of runs) {
+        const item = run as Record<string, unknown>;
+        const appId = (item.app as { id?: unknown } | null)?.id;
+        const group = Number.isInteger(appId) ? appId as number : null;
+        const entries = runGroups.get(group) ?? [];
+        entries.push({ ...item, startedAt: item.started_at });
+        runGroups.set(group, entries);
+      }
+      const checks = [
+        ...[...runGroups].flatMap(([appId, entries]) => rollupChecks(entries).map((check) => ({ ...check, kind: "run" as const, appId }))),
+        ...rollupChecks(statuses.map((status) => {
           const item = status as Record<string, unknown>;
           return { ...item, startedAt: item.created_at };
-        }),
-      ]);
+        })).map((check) => ({ ...check, kind: "status" as const, appId: null })),
+      ];
       if (!checks.length) return finish({ state: "no-checks" });
       const red = checks.find((check) => check.verdict === "red");
       if (red) return finish({ state: "red", detail: red.name });
       const done = checks.filter((check) => check.verdict === "green").length;
-      const missing = required.find((name) => !checks.some((check) => check.name === name && check.verdict === "green"));
+      const missing = required.find(({ name, appId }) => !checks.some((check) => check.name === name && check.verdict === "green"
+        && (appId === null || (check.kind === "run" && check.appId === appId))));
       if (done === checks.length && !missing) return finish({ state: "green", done, total: checks.length });
       const persistedFirst = firstReadAt ? Date.parse(firstReadAt) : NaN;
       const first = this.firstPending.get(target) ?? (Number.isFinite(persistedFirst) ? persistedFirst : this.ports.now());
       this.firstPending.set(target, first);
-      if (this.ports.now() - first >= WAIT_MS) return finish({ state: "checks-timeout", detail: missing });
-      return { state: "pending", done, total: checks.length, detail: missing, firstReadAt: new Date(first).toISOString() };
+      if (this.ports.now() - first >= WAIT_MS) return finish({ state: "checks-timeout", detail: missing?.name });
+      return { state: "pending", done, total: checks.length, detail: missing?.name, firstReadAt: new Date(first).toISOString() };
     } catch (error) {
       return { state: "unknown", detail: error instanceof Error ? error.message : String(error), ...(error instanceof GitHubReadError && error.nextAt ? { nextAt: error.nextAt } : {}) };
     }

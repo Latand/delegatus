@@ -11,6 +11,8 @@ import type { ViewerDeploymentPhase, ViewerDeploymentRequest, ViewerDeploymentSt
 import { requestViewerDeployment, setDeploymentRuntimeForTests } from "@/lib/runtime/deploymentRuntime";
 
 import { watchRestartRequests } from "../../../bin/self-update-supervisor.mjs";
+import { initialAuto, writeAuto } from "./auto";
+import type { GreenReader, GreenVerdict } from "./green";
 import { buildEnv } from "./env";
 import { checkForUpdate, readRevision, runGit } from "./git";
 import { readLauncherRecord, requestRestart } from "./launcher";
@@ -537,6 +539,45 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     const managed = new SelfUpdateService(baseDeps(mkdtempSync(join(root, "auto-managed-")), { mode: async () => ({ mode: "managed", reason: null, record: null }) }));
     setSelfUpdateServiceForTests(managed);
     expect((await postAuto(post("/auto", { enabled: true }))).status).toBe(409);
+  });
+
+  test.each(["pending", "red", "unknown"] as const)("the real snapshot names %s checks during a built update's wait, then resumes waiting after recovery", async (state) => {
+    const h = harness({ remote: "https://github.com/example/project.git" });
+    const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
+    record.web.revision = tipSha.slice(0, 7);
+    record.runtimeHost.revision = tipSha.slice(0, 7);
+    writeFileSync(h.recordFile, JSON.stringify(record));
+    let now = Date.parse("2026-09-28T00:00:00Z");
+    let verdict: GreenVerdict = { state: "green" };
+    h.deps.now = () => now;
+    const freshReads: (boolean | undefined)[] = [];
+    h.deps.green = { read: async (...args: Parameters<GreenReader["read"]>) => { freshReads.push(args[5]); return verdict; } } as unknown as GreenReader;
+    h.deps.quiet = { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: () => [], presence: () => [], memoryAvailableMb: () => 8_192 };
+    writeAuto(join(h.deps.dir, "auto.json"), { ...initialAuto(), enabled: true, green: { [firstSha]: { state: "green" } } });
+    h.service = new SelfUpdateService(h.deps);
+    setSelfUpdateServiceForTests(h.service);
+
+    await h.service.autoTick();
+    const waiting = await snapshot();
+    expect(waiting.auto).toMatchObject({ phase: "waiting", green: { state: "green" } });
+    const waitingSince = waiting.auto?.waitingSince;
+    expect(waitingSince).toBeTruthy();
+
+    verdict = { state, detail: state === "unknown" ? "GitHub HTTP 503" : "required-build" };
+    now += 60_000;
+    await h.service.autoTick();
+    expect(existsSync(record.requestFile)).toBe(false);
+    const blocked = await snapshot();
+    expect(blocked.auto).toMatchObject({ phase: "not-green", green: verdict, waitingSince, blockers: null, longWait: false });
+
+    verdict = { state: "green" };
+    now += 15 * 60_000;
+    await h.service.autoTick();
+    const recovered = await snapshot();
+    expect(recovered.auto).toMatchObject({ phase: "waiting", green: { state: "green" }, waitingSince });
+    if (state === "red") expect(freshReads.at(-1)).toBe(true);
+    expect(existsSync(record.requestFile)).toBe(false);
+    h.service.stop();
   });
 
   test.each([undefined, 2])("a launcher without supported final admission (%s) cannot enable auto-apply", async (autoAdmission) => {
