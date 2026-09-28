@@ -646,12 +646,12 @@ checks it ran and why they fit. The merge bar requires "the project's required
 checks green". A seat may name concrete commands in a brief, because a brief
 is project text.
 
-## 2.7 GitHub issues are optional
+## 2.7 GitHub issues are recommended, never waited for
 
-The board task is the unit of work. When the project has a GitHub remote and
-an issue tracks the work, the seat attaches it to the lane
-(`pipeline_action attach-link`), and opens one when the operator asks or the
-project's own rules want one. No step waits for an issue.
+The board task is the unit of work. When the project has a GitHub remote, the
+seat opens or reuses an issue where it helps tracking and
+attaches it to the lane (`pipeline_action attach-link`). No step waits for an
+issue.
 
 ## 2.8 Do pipelines cover what the mandate sends to flows? The engine says yes
 
@@ -1033,7 +1033,7 @@ CARRY THE TASK INTO THE LAUNCH ITSELF. Delegatus binds an agent to its task when
 
 ```text
 ## How work runs
-Every piece of accepted work runs as a pipeline on its board task: find or create the task, compose the stages, call create_pipeline with taskIds and autoStart, and bring the result to the merge bar. When the project has a GitHub remote and an issue tracks the work, attach it to the lane (pipeline_action attach-link), and open an issue when the operator asks or the project's own rules want one; no step waits for an issue.
+Every piece of accepted work runs as a pipeline on its board task: find or create the task, compose the stages, call create_pipeline with taskIds and autoStart, and bring the result to the merge bar. When the project has a GitHub remote, open or reuse an issue where it helps tracking and attach it to the lane (pipeline_action attach-link); no step waits for an issue.
 - Keep no more workers running at once than your role parameters allow, in every mode: each running lane and each live spawned agent counts as one.
 - Compose each lane from the role table: an architect stage first when the work needs options or a plan, then a builder, then a reviewer stage whose fail edge leads to a fix stage; add stages when the task needs them. Size the lane first.
 - A review is a run stage with role reviewer whose onFail names the fix stage; the fix stage is role builder with mode apply-fixes and the implementer's domain and size, and its next is the reviewer, so every round gets a fresh reviewer on the new head. Leave the fix stage's runtime to its row; override it only to raise the model for a fix that needs more.
@@ -1043,7 +1043,7 @@ Every piece of accepted work runs as a pipeline on its board task: find or creat
 - A stage that hands a document on (a design, an audit report) declares its path in outputs: read-only stages write only declared outputs.
 - Role parameters carry short values (a lens, a pull request reference, a one-line list of claims); the brief carries everything else.
 - Work no pipeline can host (a deploy, a review of a fork's pull request or of uncommitted work in another checkout) goes through spawn_agent with a role and the task's taskId; the agent ends with a Verdict line in the same three words.
-- Merge bar: the project's merge setting ("Merge when the review passes", mergeOnReview in get_orchestrator and in list_pipelines rows) governs every automatic merge, yours included. A pull request is ready when its lane's review stage passed on its final head, the project's required checks are green, and you have read its body. Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask. Setting on: Delegatus merges a completed lane whose reviews passed once its checks are settled green, one lane at a time; never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating or merging), and act on a stopped one (merge.state blocked): fix what its reason names or bring it to the operator, then pipeline_action retry-merge. A pull request no lane of yours carries follows the same setting: off, report it ready; on, merge it at the bar. Never merge red; a pull request that calls a premise unverified, assumed or synthetic goes to the operator.
+- Merge bar: the project's merge setting ("Merge when the review passes", mergeOnReview in get_orchestrator and in list_pipelines rows) governs every automatic merge, yours included. A pull request is ready when its lane's reviews passed on its final head, or spent their budget with the last fix passed and you have read the findings they kept; the project's required checks are green; and you have read its body. Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask. Setting on: Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed, once its checks are settled green, one lane at a time (use stop-after-fix when kept findings must be read first); never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating or merging), and act on a stopped one (merge.state blocked): fix what its reason names or bring it to the operator, then pipeline_action retry-merge. A pull request no lane of yours carries follows the same setting: off, report it ready; on, merge it at the bar. Never merge red; a pull request that calls a premise unverified, assumed or synthetic goes to the operator.
 - The project's own release step runs only when the operator has turned releases on for this project, in their message or as a standing line in your monitor note.
 - Keep the outcome's one task card current with update_task. Bridge reports follow the bridge reports section above.
 ```
@@ -1244,10 +1244,10 @@ never edits `role-presets.json`.
   it: the greeting now says accepted work keeps moving and new work starts on
   the operator's word; the clock section says the drive to keep going works
   inside a turn; the start-by-default contract says what proactive means.
-- **Size.** The delivered default grew from 24 253 to 26 932 bytes. A rotation
-  still keeps a full history budget beside it (4 127 bytes left against
-  4 096, so the next mandate line longer than about 30 bytes has to trim
-  something), which `handoffDigest.test.ts` pins; to fit, the conveyor's last
+- **Size.** The delivered default grew from 24 253 to 27 068 bytes. A rotation
+  still keeps a full history budget beside it (4 186 bytes left against
+  4 096 with the standard-mode scaffold, so the next mandate line longer than
+  about 90 bytes has to trim something), which `handoffDigest.test.ts` pins; to fit, the conveyor's last
   bullet drops "Bridge reports follow the bridge reports section above."
 - **The Codex spawn fence keeps its "Viewer spawn policy:" label**, because a
   review-flow test pins it and flow code is out of scope here; the flow-removal
@@ -1260,6 +1260,24 @@ never edits `role-presets.json`.
   criterion that cannot be judged without missing access is needs_decision
   whoever could supply it, so the #1843 case (a third party's rate limit)
   reads the same under both rules; §2.4 and §2.10 A above carry the change.
+- **The merge bar names the lanes Delegatus merges** (review of #2301).
+  `forge/autoMerge.ts` merges a completed lane whose reviews passed, were
+  accepted, or spent their budget with the last fix passed. The merge bar now
+  says a lane is ready in the first case or in the last once the seat has read
+  the kept findings, and tells the seat to use `stop-after-fix` when those
+  findings must be read before an automatic merge. The converted fixer no
+  longer promises a review after an exhausted round.
+- **Issues are recommended** where the project has GitHub (§2.7), matching the
+  operator's «желательным».
+- **Left outside this audit, named so nobody reads them as covered:** the
+  controller's missing-verdict request (`pipelines/engine.ts`, the message
+  asking a settled stage for a fenced JSON block, since `stage_report` is
+  refused once a stage settles; it expects the same three words, with no
+  findings on needs_decision); the `deploy_exact_sha` tool description, which
+  describes deploying Delegatus itself and belongs to that tool's own
+  retirement; and the seeded flow preset's label in `flows/store.ts`, which
+  still says "Terra low" for the fix row this change moved to GPT-6 Luna and
+  goes with the flow removal.
 - **A fix round has one finish line** (review of #2301). In `apply-fixes`
   mode the builder's "done when every acceptance criterion in the pinned
   specification holds" gives way to "done when every finding that names its

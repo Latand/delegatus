@@ -135,7 +135,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   27: "1135c1274c1dc36fcc1f595035837e13f0913a818ed7d59ce1db79791de01a37",
   28: "90819032b795f74b3ac4f5bf0699f5443cf31353e95c1ad19ef87b16e8e1ab60",
   29: "220722434e6ce6a265155097b000d1ec5cbf6461e67e7d39193b61cae5b6318a",
-  30: "04ea356f87b8981b4cea384d04858900d7d8732449f6c4b6e872caf0d7bc17dc",
+  30: "21cc2a0de69e58e1d0829d1100022556602874daf4eadbd3f00d7b4ce1ebd9f8",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -691,6 +691,14 @@ test("the delivered default names no stack and teaches one verdict vocabulary (v
   expect(delivered).toContain("never write REVIEW_READY, a VERDICT line, APPROVE or NO FINDINGS into a brief");
   /* A GitHub issue is attached when one exists and never waited for. */
   expect(delivered).toContain("no step waits for an issue");
+  /* Recommended when the project has GitHub, never mandatory (operator, 2026-09-27). */
+  expect(delivered).toContain("When the project has a GitHub remote, open or reuse an issue where it helps tracking and attach it to the lane (pipeline_action attach-link)");
+  /* Review of #2301: the merge bar names the lanes Delegatus merges
+     (forge/autoMerge.ts mergeEligible): reviews passed, or budget spent with
+     the last fix passed, whose kept findings the seat reads. */
+  expect(delivered).toContain("or spent their budget with the last fix passed and you have read the findings they kept");
+  expect(delivered).toContain("Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed");
+  expect(delivered).toContain("use stop-after-fix when kept findings must be read first");
   /* The worker cap holds in every mode, in the scaffold's words. */
   /* A seat designated onto an existing conversation gets no scaffold, so the
      mandate names the default cap itself (review of #2301). */
