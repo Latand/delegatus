@@ -19,6 +19,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-board-sync-test-"));
 const remote = "code.example.test/acme/widget";
 const key = projectIdentityFromRemote(`https://${remote}`, "/")!.project;
 const processes: ChildProcessWithoutNullStreams[] = [];
+const installProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 const meters: Meter[] = [];
 afterAll(() => {
   for (const counts of meters) counts.close();
@@ -49,7 +50,17 @@ async function install(name: string, extraRemotes: Record<string, string> = {}):
     child.on("exit", (code) => reject(new Error(`test server exited ${code}: ${errors}`)));
     setTimeout(() => reject(new Error(`test server did not start: ${errors}`)), 15_000).unref();
   });
-  return `http://127.0.0.1:${port}`;
+  const url = `http://127.0.0.1:${port}`;
+  installProcesses.set(url, child);
+  return url;
+}
+
+async function stopInstall(url: string): Promise<void> {
+  const child = installProcesses.get(url);
+  if (!child) return;
+  installProcesses.delete(url);
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise<void>((resolve) => { child.once("exit", () => resolve()); child.kill("SIGTERM"); });
 }
 
 async function request(base: string, route: string, method = "GET", body?: object) {
@@ -58,12 +69,12 @@ async function request(base: string, route: string, method = "GET", body?: objec
 }
 
 /** Pairs A to B (through `via`, a proxy in front of B, when given) and links the given projects on both sides. */
-async function link(a: string, b: string, share: { all?: boolean; projects?: string[] } = { projects: [key] }, via = b): Promise<string> {
+async function link(a: string, b: string, share: { all?: boolean; projects?: string[] } = { projects: [key] }, via = b, initialSync = true): Promise<string> {
   const code = String((await request(b, "/api/links/codes", "POST")).body.code);
   expect((await request(a, "/api/links/peers", "POST", { url: via, code })).status).toBe(200);
   const peerId = ((await request(a, "/api/links/peers")).body.peers as { id: string }[])[0]!.id;
   for (const side of [a, b]) expect((await request(side, "/api/links/shared", "POST", { v: 1, all: share.all ?? false, projects: share.projects ?? [] })).status).toBe(200);
-  await sync(a, peerId);
+  if (initialSync) await sync(a, peerId);
   return peerId;
 }
 
@@ -100,24 +111,212 @@ function fileMarks(name: string): Record<string, { size: number; mtimeMs: number
 }
 
 /** A Claude transcript on A whose first prompt carries a canary, in a checkout of the linked repository. */
-function seedTranscript(name: string, prompt: string): void {
-  const checkout = path.join(root, name, "checkout", "widget");
+function seedTranscript(name: string, prompt: string, origin = remote, sessionId = "session-canary"): void {
+  const checkout = path.join(root, name, "checkout", origin.split("/").at(-1)!);
   fs.mkdirSync(checkout, { recursive: true });
-  for (const args of [["init", "-q"], ["remote", "add", "origin", `https://${remote}`]]) {
+  for (const args of fs.existsSync(path.join(checkout, ".git")) ? [] : [["init", "-q"], ["remote", "add", "origin", `https://${origin}`]]) {
     const git = Bun.spawnSync(["git", ...args], { cwd: checkout, env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
     if (git.exitCode !== 0) throw new Error(`git ${args[0]} failed: ${git.stderr.toString()}`);
   }
   const projects = path.join(root, name, "home", ".claude", "projects", checkout.replace(/[/.]/g, "-"));
   fs.mkdirSync(projects, { recursive: true });
   const at = (offset: number) => new Date(Date.now() - 60_000 + offset).toISOString();
-  const envelope = { isSidechain: false, userType: "external", entrypoint: "sdk-cli", cwd: checkout, sessionId: "session-canary", version: "2.1.0", gitBranch: "main" };
+  const envelope = { isSidechain: false, userType: "external", entrypoint: "sdk-cli", cwd: checkout, sessionId, version: "2.1.0", gitBranch: "main" };
   const records = [
     { ...envelope, parentUuid: null, uuid: "rec-prompt", timestamp: at(0), type: "user", message: { role: "user", content: [{ type: "text", text: prompt }] } },
     { ...envelope, parentUuid: "rec-prompt", uuid: "rec-answer", timestamp: at(1_000), type: "assistant", requestId: "req-1",
       message: { id: "msg-1", model: "claude-opus-5", role: "assistant", type: "message", stop_reason: "end_turn", stop_sequence: null, content: [{ type: "text", text: "Done." }] } },
   ];
-  fs.writeFileSync(path.join(projects, "session-canary.jsonl"), records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+  fs.writeFileSync(path.join(projects, `${sessionId}.jsonl`), records.map((record) => JSON.stringify(record)).join("\n") + "\n");
 }
+
+test("remote agents travel both ways as prompt-free summaries and stay in their linked project", async () => {
+  const secondRemote = "code.example.test/acme/other";
+  const thirdRemote = "code.example.test/acme/local-only";
+  const secondKey = projectIdentityFromRemote(`https://${secondRemote}`, "/")!.project;
+  const thirdKey = projectIdentityFromRemote(`https://${thirdRemote}`, "/")!.project;
+  const extra = { [secondKey]: secondRemote, [thirdKey]: thirdRemote };
+  const a = await install("agents-A", extra);
+  const b = await install("agents-B", extra);
+  const peerId = await link(a, b, { projects: [key, secondKey] });
+  expect((await request(a, "/api/links/shared", "POST", { v: 1, all: false, projects: [key, secondKey, thirdKey] })).status).toBe(200);
+  await sync(a, peerId);
+  seedTranscript("agents-A", "PROMPT-CANARY-A-remote-agent");
+  seedTranscript("agents-A", "PROMPT-CANARY-A-other-project", secondRemote, "session-other");
+  seedTranscript("agents-A", "PROMPT-CANARY-A-local-only", thirdRemote, "session-local-only");
+  seedTranscript("agents-B", "PROMPT-CANARY-B-remote-agent");
+  const bound = await request(b, "/test/prompts", "POST", { project: key, launch: "PROMPT-CANARY-launch", goal: "PROMPT-CANARY-stage", curator: "PROMPT-CANARY-curator" });
+  expect(bound.status).toBe(200);
+  const scanA = await request(a, "/test/scan");
+  const scanB = await request(b, "/test/scan");
+  expect(scanA.status).toBe(200);
+  expect(scanB.status).toBe(200);
+  expect((scanA.body.files as { project: string }[]).map((file) => file.project).sort()).toEqual([key, secondKey, thirdKey].sort());
+  await captured(b);
+  await sync(a, peerId);
+  const onA = (await request(a, `/test/agents?project=${key}`)).body as unknown as { t: string; peer: string; p: string; task?: string }[];
+  const onB = (await request(b, `/test/agents?project=${key}`)).body as unknown as { t: string; peer: string; p: string; task?: string }[];
+  expect(onA).toHaveLength(1);
+  expect(onB).toHaveLength(1);
+  expect(((await request(b, `/test/agents?project=${secondKey}`)).body as unknown as unknown[])).toHaveLength(1);
+  expect(((await request(b, `/test/agents?project=${thirdKey}`)).body as unknown as unknown[])).toHaveLength(0);
+  expect(onA[0]).toMatchObject({ t: "claude agent", p: key });
+  expect(onB[0]).toMatchObject({ t: "claude agent", p: key });
+  expect(onA[0]!.task).toBeTruthy();
+  expect(onB[0]!.task).toBeUndefined();
+  await request(b, "/test/clock?offset=960000");
+  expect(((await request(b, `/test/agents?project=${key}`)).body as unknown as { stale: boolean }[])[0]!.stale).toBe(true);
+  await request(b, "/test/clock?offset=0");
+  await sync(a, peerId);
+  expect(((await request(b, `/test/agents?project=${key}`)).body as unknown as { stale: boolean }[])[0]!.stale).toBe(false);
+  const bodies = (await captured(b)).flatMap((item) => [item.request, item.response]).join("\n");
+  for (const forbidden of ["PROMPT-CANARY", "session-canary", "/checkout/", "/home/"]) expect(bodies).not.toContain(forbidden);
+  const grant = ((await request(b, "/api/links/grants")).body.grants as { id: string }[])[0]!;
+  expect((await request(b, `/api/links/grants?id=${grant.id}`, "DELETE")).body.removed).toBe(true);
+  expect((await request(b, `/test/agents?project=${key}`)).body as unknown).toEqual([]);
+  expect(await request(a, `/api/links/peers/${peerId}`, "POST")).toMatchObject({ status: 409, body: { error: "revoked" } });
+  expect((await request(a, `/test/agents?project=${key}`)).body as unknown).toEqual([]);
+});
+
+test("a changed remote shared list does not strand task or agent deltas awaiting an ack", async () => {
+  const addedRemote = "code.example.test/acme/newly-shared";
+  const addedKey = projectIdentityFromRemote(`https://${addedRemote}`, "/")!.project;
+  const extra = { [addedKey]: addedRemote };
+  const a = await install("renegotiate-A", extra);
+  const b = await install("renegotiate-B", extra);
+  const peerId = await link(a, b);
+  seedTranscript("renegotiate-A", "PROMPT-CANARY-renegotiate");
+  expect((await request(a, "/test/scan")).status).toBe(200);
+  const task = await createOn(a, "Task during project negotiation");
+  expect((await request(b, "/api/links/shared", "POST", { v: 1, all: false, projects: [key, addedKey] })).status).toBe(200);
+  await captured(b);
+
+  await sync(a, peerId);
+  const calls = (await captured(b)).map((entry) => ({
+    request: JSON.parse(entry.request) as { push?: { agents?: { cursor: string } } },
+    response: JSON.parse(entry.response) as { shared?: unknown[]; agentAck?: string },
+  }));
+  const unacked = calls.find((call) => call.request.push?.agents && call.response.shared && call.response.agentAck === undefined);
+  expect(unacked).toBeDefined();
+  expect(calls.some((call) => {
+    const cursor = call.request.push?.agents?.cursor;
+    return cursor !== undefined && cursor === unacked?.request.push?.agents?.cursor && call.response.agentAck === cursor;
+  })).toBe(true);
+  expect((await taskOn(b, task.id))?.text).toBe(task.text);
+  expect((await request(b, `/test/agents?project=${key}`)).body as unknown as unknown[]).toHaveLength(1);
+  const peerState = (await request(a, "/api/links/peers")).body;
+  expect(peerState.peers).toEqual(expect.arrayContaining([expect.objectContaining({ id: peerId, state: "active" })]));
+  expect(peerState.states).toEqual(expect.arrayContaining([expect.objectContaining({ id: peerId,
+    projects: expect.arrayContaining([expect.objectContaining({ key: addedKey, state: "only-there" })]) })]));
+});
+
+test("one agent change adds one bounded row on the measured sync transport", async () => {
+  const a = await install("agent-meter-A");
+  const b = await install("agent-meter-B");
+  const wire = await meter(b);
+  meters.push(wire);
+  const peerId = await link(a, b, { projects: [key] }, wire.url);
+  await sync(a, peerId);
+  await captured(b);
+  const idleUp = wire.up, idleDown = wire.down;
+  await sync(a, peerId);
+  const idleBytes = wire.up - idleUp + wire.down - idleDown;
+  const idle = (await captured(b))[0]!;
+  expect(Buffer.byteLength(idle.request)).toBeLessThanOrEqual(200);
+  expect(Buffer.byteLength(idle.response)).toBeLessThanOrEqual(200);
+  expect(idleBytes).toBeLessThanOrEqual(WIRE_BUDGET);
+  seedTranscript("agent-meter-A", "PROMPT-CANARY-agent-meter");
+  await request(a, "/test/scan");
+  const changedUp = wire.up, changedDown = wire.down;
+  await sync(a, peerId);
+  const changedBytes = wire.up - changedUp + wire.down - changedDown;
+  const bodies = await captured(b);
+  expect(bodies).toHaveLength(1);
+  const pushed = (JSON.parse(bodies[0]!.request) as { push?: { agents?: { rows?: unknown[] } } }).push?.agents;
+  expect(pushed?.rows).toHaveLength(1);
+  const rowBytes = Buffer.byteLength(JSON.stringify(pushed!.rows![0]));
+  expect(rowBytes).toBeLessThanOrEqual(1536);
+  expect(changedBytes - idleBytes).toBeLessThanOrEqual(rowBytes + 300);
+  expect(bodies[0]!.request + bodies[0]!.response).not.toContain("PROMPT-CANARY");
+});
+
+test("B's state flip returns one agent row and agent exchange writes no disk state", async () => {
+  const a = await install("agent-flip-A");
+  const b = await install("agent-flip-B");
+  const peerId = await link(a, b);
+  seedTranscript("agent-flip-B", "PROMPT-CANARY-state", remote, "session-flip");
+  await request(b, "/test/scan");
+  await sync(a, peerId);
+  expect(((await request(a, `/test/agents?project=${key}`)).body as unknown as { st: string }[])[0]!.st).toBe("done");
+  await request(b, "/test/agent-state?state=running");
+  await request(b, "/test/scan");
+  const diskA = fileMarks("agent-flip-A");
+  const diskB = fileMarks("agent-flip-B");
+  await captured(b);
+  await sync(a, peerId);
+  const calls = await captured(b);
+  const changed = calls.map((call) => (JSON.parse(call.response) as { agents?: { rows?: { st: string }[] } }).agents?.rows ?? []).flat();
+  expect(changed).toHaveLength(1);
+  expect(changed[0]!.st).toBe("working");
+  expect(((await request(a, `/test/agents?project=${key}`)).body as unknown as { st: string }[])[0]!.st).toBe("working");
+  expect(fileMarks("agent-flip-A")).toEqual(diskA);
+  expect(fileMarks("agent-flip-B")).toEqual(diskB);
+  expect(calls.map((call) => call.response).join("\n")).not.toContain("PROMPT-CANARY");
+});
+
+test("200 agents reset over the real link in four bounded transport pages", async () => {
+  const origins = Array.from({ length: 4 }, (_, n) => `code.example.test/acme/agent-batch-${n}`);
+  const remotes = Object.fromEntries(origins.map((origin) => [projectIdentityFromRemote(`https://${origin}`, "/")!.project, origin]));
+  const keys = Object.keys(remotes);
+  const a = await install("agent-pages-A", remotes);
+  const b = await install("agent-pages-B", remotes);
+  const wire = await meter(b);
+  meters.push(wire);
+  const peerId = await link(a, b, { projects: keys }, wire.url);
+  for (const origin of origins) for (let n = 0; n < 50; n++) seedTranscript("agent-pages-B", `PROMPT-CANARY-${n}`, origin, `session-${origin.at(-1)}-${n}`);
+  const scan = await request(b, "/test/scan");
+  expect((scan.body.files as unknown as unknown[]).length).toBe(200);
+  await sync(a, peerId);
+  for (const key of keys) expect(((await request(a, `/test/agents?project=${key}`)).body as unknown as unknown[])).toHaveLength(50);
+  await request(a, `/test/agent-reset?id=${peerId}`);
+  await captured(b);
+  const before = wire.up + wire.down;
+  await sync(a, peerId);
+  const bytes = wire.up + wire.down - before;
+  const calls = await captured(b);
+  const pages = calls.map((call) => ({ wire: call, agents: (JSON.parse(call.response) as { agents?: { rows?: unknown[]; reset?: boolean; more?: boolean } }).agents }))
+    .filter((entry) => entry.agents?.rows?.length);
+  expect(pages).toHaveLength(4);
+  expect(pages[0]!.agents!.reset).toBe(true);
+  for (const page of pages) {
+    expect(page.agents!.rows).toHaveLength(50);
+    expect(Buffer.byteLength(page.wire.response)).toBeLessThan(512 * 1024);
+    expect(page.wire.response).not.toContain("PROMPT-CANARY");
+  }
+  expect(bytes).toBeLessThan(100_000);
+});
+
+test("a feed restart between transport reset pages restarts at row zero without mixing epochs", async () => {
+  const origins = Array.from({ length: 4 }, (_, n) => `code.example.test/acme/restart-${n}`);
+  const remotes = Object.fromEntries(origins.map((origin) => [projectIdentityFromRemote(`https://${origin}`, "/")!.project, origin]));
+  const keys = Object.keys(remotes);
+  const a = await install("agent-restart-A", remotes);
+  const b = await install("agent-restart-B", remotes);
+  const peerId = await link(a, b, { projects: keys });
+  for (const origin of origins) for (let n = 0; n < 50; n++) seedTranscript("agent-restart-B", `PROMPT-CANARY-${n}`, origin, `session-${origin.at(-1)}-${n}`);
+  expect(((await request(b, "/test/scan")).body.files as unknown[])).toHaveLength(200);
+  await sync(a, peerId);
+  const grantId = ((await request(b, "/api/links/grants")).body.grants as { id: string }[])[0]!.id;
+  await request(a, `/test/agent-reset?id=${peerId}`);
+  await request(b, `/test/agent-feed-restart?id=${grantId}`);
+  await captured(b);
+  await sync(a, peerId);
+  const pages = (await captured(b)).map((call) => (JSON.parse(call.response) as { agents?: { cursor: string; reset?: boolean; rows?: { k: string }[] } }).agents).filter(Boolean);
+  expect(pages.filter((page) => page!.reset)).toHaveLength(2);
+  expect(pages[0]!.cursor).not.toBe(pages[1]!.cursor);
+  expect(pages[1]!.rows?.map((row) => row.k)).toEqual(pages[0]!.rows?.map((row) => row.k));
+  for (const project of keys) expect(((await request(a, `/test/agents?project=${project}`)).body as unknown as unknown[])).toHaveLength(50);
+});
 
 test("tasks created, changed in every group and deleted on either machine show on the other after one call; prompts never cross; an idle link costs next to nothing", async () => {
   const a = await install("both-A");
@@ -278,6 +477,93 @@ test("an idle call costs at most 2 ms of CPU on each side, and 1 000 calls grow 
   expect(heapAfter[0]! - heapBefore[0]!).toBeLessThan(256 * 1024);
   expect(heapAfter[1]! - heapBefore[1]!).toBeLessThan(256 * 1024);
 }, 120_000);
+
+test("M3 link RSS and heap are measured with 2 000 tasks, 200 agents per side, edits and churn; steady heap stays flat", async () => {
+  const origins = Array.from({ length: 3 }, (_, n) => `code.example.test/acme/memory-${n}`);
+  const remotes = Object.fromEntries(origins.map((origin) => [projectIdentityFromRemote(`https://${origin}`, "/")!.project, origin]));
+  const projectKeys = Object.keys(remotes);
+  type Memory = { rss: number; heapUsed: number };
+  const heap = async (sides: readonly string[]) => Promise.all(sides.map(async (side) => (await request(side, "/test/heap")).body as Memory));
+  const populated = async (run: number, mode: "off" | "on") => {
+    const names = [`memory-${run}-${mode}-A`, `memory-${run}-${mode}-B`];
+    const sides = await Promise.all(names.map((name) => install(name, remotes)));
+    const editIds: string[] = [];
+    for (const side of sides) {
+      // The capture harness retains whole sync bodies; exclude that test-only
+      // memory from the link's RSS measurement.
+      await request(side, "/test/measure-memory");
+    }
+    for (let project = 0; project < 3; project++) {
+      const ids = (await request(sides[0]!, "/test/bulk", "POST", { project: projectKeys[project]!, count: project === 2 ? 666 : 667 })).body.ids as string[];
+      if (project === 0) editIds.push(ids[0]!);
+    }
+    const tasks = await tasksOf(sides[0]!);
+    expect((await request(sides[1]!, "/test/import-tasks", "POST", { tasks })).body.count).toBe(2_000);
+    editIds.push(editIds[0]!);
+    for (const name of names) for (let project = 0; project < 3; project++)
+      for (let agent = 0; agent < (project === 2 ? 66 : 67); agent++) seedTranscript(name, `PROMPT-CANARY-${agent}`, origins[project]!, `session-${project}-${agent}`);
+    const peerId = await link(sides[0]!, sides[1]!, { projects: mode === "on" ? projectKeys : [] }, sides[1]!, false);
+    return { sides, editIds, peerId };
+  };
+  const work = async (sides: readonly string[], editIds: readonly string[], start: number, end: number, peerId?: string, agents = true) => {
+    const [a, b] = sides as [string, string];
+    for (let call = start; call < end; call++) {
+      if (call % 100 === 0) {
+        expect((await patchOn(a, editIds[0]!, { text: `Edit ${Math.floor(call / 100) % 2}` })).status).toBe(200);
+        expect((await patchOn(b, editIds[1]!, { text: `Edit ${Math.floor(call / 100) % 2}` })).status).toBe(200);
+      }
+      if (agents && call % 200 === 0) for (const side of sides) {
+        await request(side, `/test/agent-state?state=${call % 400 === 0 ? "running" : "done"}`);
+        await request(side, "/test/scan");
+      }
+      if (peerId) await sync(a, peerId);
+      else { await request(a, "/test/metrics"); await request(b, "/test/metrics"); }
+    }
+  };
+  const stages = ["no calls", "tasks only", "tasks + agents"] as const;
+  const measurements: Array<{ off: Memory[][]; on: Memory[][] }> = [];
+  const growth: number[][] = [[], []];
+  for (let run = 0; run < 3; run++) {
+    const pair: { off: Memory[][]; on: Memory[][] } = { off: [], on: [] };
+    for (const mode of ["off", "on"] as const) {
+      const fixture = await populated(run, mode);
+      try {
+        pair[mode].push(await heap(fixture.sides));
+        await work(fixture.sides, fixture.editIds, 0, 100, fixture.peerId, false);
+        const grantId = ((await request(fixture.sides[1]!, "/api/links/grants")).body.grants as { id: string }[])[0]!.id;
+        for (const [side, id] of [[fixture.sides[0]!, `peer:${fixture.peerId}`], [fixture.sides[1]!, `grant:${grantId}`]]) {
+          expect((await request(side, `/test/agent-maps?id=${id}`)).body).toEqual({ scanned: 0, local: { rows: 0, markers: 0 }, remote: 0 });
+        }
+        pair[mode].push(await heap(fixture.sides));
+        for (const side of fixture.sides) expect(((await request(side, "/test/scan")).body.files as unknown[])).toHaveLength(200);
+        await work(fixture.sides, fixture.editIds, 100, 1_100, fixture.peerId);
+        if (mode === "on") for (const [side, id] of [[fixture.sides[0]!, `peer:${fixture.peerId}`], [fixture.sides[1]!, `grant:${grantId}`]]) {
+          expect((await request(side, `/test/agent-maps?id=${id}`)).body).toMatchObject({ scanned: 200, local: { rows: 150 }, remote: 150 });
+        }
+        pair[mode].push(await heap(fixture.sides));
+        if (mode === "on") {
+          await work(fixture.sides, fixture.editIds, 1_100, 3_100, fixture.peerId);
+          const before = await heap(fixture.sides);
+          await work(fixture.sides, fixture.editIds, 3_100, 4_100, fixture.peerId);
+          const after = await heap(fixture.sides);
+          for (let side = 0; side < 2; side++) growth[side]!.push(after[side]!.heapUsed - before[side]!.heapUsed);
+        }
+      } finally { await Promise.all(fixture.sides.map(stopInstall)); }
+    }
+    measurements.push(pair);
+  }
+  const median = (values: number[]) => values.sort((a, b) => a - b)[1]!;
+  for (let stage = 0; stage < stages.length; stage++) for (let side = 0; side < 2; side++) {
+    const rss = median(measurements.map((pair) => pair.on[stage]![side]!.rss - pair.off[stage]![side]!.rss));
+    const heapUsed = median(measurements.map((pair) => pair.on[stage]![side]!.heapUsed - pair.off[stage]![side]!.heapUsed));
+    const control = median(measurements.map((pair) => pair.off[stage]![1]!.rss - pair.off[stage]![0]!.rss));
+    const runs = measurements.map((pair) => ({ rss: pair.on[stage]![side]!.rss - pair.off[stage]![side]!.rss,
+      heapUsed: pair.on[stage]![side]!.heapUsed - pair.off[stage]![side]!.heapUsed }));
+    console.log(`M.9 ${stages[stage]} side ${side}: median RSS ${rss} B, median heapUsed ${heapUsed} B, off-pair side RSS spread ${control} B, runs ${JSON.stringify(runs)}`);
+  }
+  console.log(`M.9 warmed heap growth over 1 000 further calls, three runs per side: ${JSON.stringify(growth)} B`);
+  for (const side of growth) expect(median(side)).toBeLessThan(256 * 1024);
+}, 600_000);
 
 test("1 000 tasks arrive in 5 pages of at most 512 KB; 1 100 writes on B while A is away push A below the change floor, and the resync converges without a duplicate", async () => {
   const a = await install("pages-A");

@@ -38,6 +38,83 @@ type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
+describe("linked boards M3 remote agents", () => {
+  browserTest("an unbound remote agent remains visible in an empty phone Inbox", async () => {
+    const out = path.resolve(".artifacts/linked-boards-m3-empty-inbox");
+    fs.mkdirSync(out, { recursive: true });
+    const project = `repo-${"a".repeat(32)}`;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/links/agents": { agents: [{ k: `a:${"3".repeat(16)}`, p: project, t: "copilot agent", e: "copilot", m: "model", st: "working", at: Date.now(), peer: "Machine B", stale: false }] },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const locale of ["en", "uk"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=linked-agents&empty=inbox`, { width: 390, height: 844 }, "light", locale, "reduce", true);
+        try {
+          await page.locator('[data-phone-kanban-tab="inbox"]').click();
+          const group = page.locator('[data-phone-kanban-column="inbox"] [data-remote-agents]');
+          await group.waitFor();
+          expect(await group.locator("summary").textContent()).toContain("Machine B");
+          await group.locator("summary").click();
+          expect(await group.locator("[data-remote-agent]").count()).toBe(1);
+          expect(await group.locator("button, a, input").count()).toBe(0);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 90_000);
+
+  browserTest("collapsed read-only rows fit desktop and phone in en and uk", async () => {
+    const out = path.resolve(".artifacts/linked-boards-m3");
+    fs.mkdirSync(out, { recursive: true });
+    const project = `repo-${"a".repeat(32)}`;
+    const now = Date.now();
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/links/agents": { agents: [
+        { k: `a:${"1".repeat(16)}`, p: project, t: "Review the sync budget", e: "claude", m: "claude-opus-5", st: "working", task: "t-search", at: now - 180_000, peer: "Machine B", stale: false,
+          pl: { id: "pipeline-1", state: "running", stage: "review", stageState: "running" } },
+        { k: `a:${"2".repeat(16)}`, p: project, t: "codex agent", e: "codex", m: "gpt-6-sol", st: "done", at: now - 600_000, peer: "Machine B", stale: true, asOf: now - 960_000 },
+      ] },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, { viewport: number; groupWidth: number; overflow: boolean; bound: number; unbound: number }> = {};
+    try {
+      for (const [label, width, locale] of [["desktop-en", 1440, "en"], ["desktop-uk", 1280, "uk"], ["phone-en", 390, "en"], ["phone-uk", 390, "uk"]] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=linked-agents`, { width, height: 844 }, "light", locale, "reduce", width === 390);
+        try {
+          if (width === 390) await page.screenshot({ path: path.join(out, `${label}-initial.png`) });
+          const bound = page.locator(width === 390 ? '[data-phone-kanban-column="assigned"] [data-remote-agents]' : `${card("t-search")} [data-remote-agents]`).first();
+          await bound.waitFor();
+          expect(await bound.locator("summary").textContent()).toContain("Machine B");
+          expect(await bound.locator("[data-remote-agent]").isVisible()).toBe(false);
+          await bound.locator("summary").click();
+          expect(await bound.locator("[data-remote-agent]").count()).toBe(1);
+          expect(await bound.locator("button, a, input").count()).toBe(0);
+          const geometry = await bound.evaluate((node) => ({ width: node.getBoundingClientRect().width, overflow: node.scrollWidth > node.clientWidth + 1 }));
+          expect(geometry.width).toBeLessThanOrEqual(width);
+          expect(geometry.overflow).toBe(false);
+          expect(pageErrors).toEqual([]);
+          await bound.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${label}.png`) });
+          if (width === 390) await page.locator('[data-phone-kanban-tab="inbox"]').click();
+          const unbound = page.locator(width === 390 ? '[data-phone-kanban-column="inbox"] [data-remote-agents]' : '[data-status="inbox"] [data-remote-agents]').first();
+          await unbound.waitFor();
+          await unbound.locator("summary").click();
+          expect(await unbound.textContent()).toContain("codex agent");
+          expect(await unbound.locator('[data-stale="true"]').count()).toBe(1);
+          readings[label] = { viewport: width, groupWidth: Math.round(geometry.width), overflow: geometry.overflow,
+            bound: await bound.locator("[data-remote-agent]").count(), unbound: await unbound.locator("[data-remote-agent]").count() };
+          if (width === 390) await page.screenshot({ path: path.join(out, `${label}-unbound.png`) });
+        } finally { await context.close(); }
+      }
+      const evidence = path.resolve("evidence/linked-boards-m3/geometry.json");
+      fs.mkdirSync(path.dirname(evidence), { recursive: true });
+      fs.writeFileSync(evidence, JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 90_000);
+});
+
 /* The loading leaf draws its own header bar until the Board mounts and draws
    the same bar itself, so a ⋯ menu opened before then is thrown away with the
    bar it opened in. Open the Board's own menu and wait until it is open. */

@@ -1497,6 +1497,7 @@ test("board_snapshot returns an inert bounded board projection with durable line
     count: 1,
     hiddenCount: 2,
     board: { revision: 7 },
+    remoteAgents: [],
     conversations: [{
       conversationId: "conversation_worker",
       title: "Audit api_key=[redacted]",
@@ -1639,6 +1640,8 @@ test("task read tools expose the pipeline-linked durable read model", async () =
   expect(await bindings.get_task({ clientRequestId: "get-task", taskId: "task_viewer" })).toEqual({
     taskId: "task_viewer",
     task: { ...tasks[0], pipelineIds: ["pipeline_608"] },
+    remoteAgents: [],
+    workLinks: { links: [], noPr: false },
   });
 });
 

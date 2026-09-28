@@ -101,6 +101,46 @@ test("the layout mode follows the board's own width, tabbed from 640 px up to 76
   expect(kanbanLayoutMode(1400)).toBe("wide");
 });
 
+test("remote agents stay on their own project while a different board loads or fails", async () => {
+  const first = `repo-${"a".repeat(32)}`;
+  const second = `repo-${"b".repeat(32)}`;
+  const row = (project: string) => ({ k: `a:${(project === first ? "1" : "2").repeat(16)}`, p: project, t: "claude agent", e: "claude", m: "model", st: "working", at: Date.now(), peer: "Machine B", asOf: Date.now(), stale: false });
+  const originalFetch = globalThis.fetch;
+  let failSecond: (() => void) | undefined;
+  globalThis.fetch = (async (input) => {
+    const project = new URL(String(input), "http://localhost").searchParams.get("project");
+    if (project === first) return Response.json({ agents: [row(first), row(second)] });
+    if (project === second) return new Promise<Response>((resolve) => { failSecond = () => resolve(new Response(null, { status: 503 })); });
+    throw new Error(`Unexpected agent request for ${project}`);
+  }) as typeof fetch;
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  roots.push(root);
+  const render = (project: string) => flushSync(() => root.render(
+    <KanbanBoard project={project} groups={[]} manual={[]} files={[]} flows={[]} pipelines={[]} tasks={[]} allTasks={[]} drafts={[]}
+      now={1_800_000_000} loaded catalogFailures={0} selection={new Set()} onOpenConversations={() => {}}
+      seatRefs={null} mutationPorts={NO_PORTS} />,
+  ));
+  try {
+    render(first);
+    await tick();
+    expect(host.querySelectorAll("[data-remote-agent]")).toHaveLength(1);
+    render("dir-local");
+    expect(host.querySelectorAll("[data-remote-agents]")).toHaveLength(0);
+    render(first);
+    expect(host.querySelectorAll("[data-remote-agent]")).toHaveLength(1);
+    render(second);
+    expect(host.querySelectorAll("[data-remote-agents]")).toHaveLength(0);
+    expect(failSecond).toBeDefined();
+    failSecond!();
+    await tick();
+    expect(host.querySelectorAll("[data-remote-agents]")).toHaveLength(0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("a seat docked at the side never costs the columns: what it leaves scrolls instead of folding into tabs (#1841)", () => {
   /* 1280 window: 1032 px of board, a 380 px seat leaves 652. */
   expect(kanbanLayoutModeBeside(1032, 380)).toBe("scroll");

@@ -6,6 +6,8 @@ import { forgetGrantCount, grantView, isSharedProject, readGrants, readPeers, sa
 export { remoteProjects, updateRemoteProjects } from "./boardLinks";
 import { dropRemoteProjects, ownBoardStoreId, remoteProjects, remoteStore, updateRemoteProjects } from "./boardLinks";
 import { serveTasks } from "./taskServe";
+import { acceptAgents, agentPart, decodeCursor, dropAgents, touchAgents } from "./agentFeed";
+import { linkedPeer } from "./linked";
 
 const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const encode = (bytes: Uint8Array, count: number) => [...bytes].slice(0, count).map((value) => alphabet[value & 31]).join("");
@@ -112,6 +114,7 @@ export function revokeGrant(id: string): boolean {
   file.grants = file.grants.filter((grant) => grant.id !== id);
   if (file.grants.length === before) return false;
   dropRemoteProjects(id);
+  dropAgents(`grant:${id}`);
   writeGrants(file);
   forgetGrantCount(id);
   partialShared.delete(id);
@@ -132,7 +135,7 @@ export function putPeer(peer: Link): void {
 export function removePeer(id: string): Link | undefined {
   const file = readPeers();
   const peer = file.peers.find((row) => row.id === id);
-  if (peer) { file.peers = file.peers.filter((row) => row.id !== id); dropRemoteProjects(id); writePeers(file); peerCalls.delete(id); }
+  if (peer) { file.peers = file.peers.filter((row) => row.id !== id); dropRemoteProjects(id); dropAgents(`peer:${id}`); writePeers(file); peerCalls.delete(id); }
   return peer;
 }
 
@@ -169,14 +172,30 @@ export function incomingSync(grant: Grant, input: unknown): { status: number; bo
   const want = typeof wire.want === "number" && Number.isInteger(wire.want) && wire.want >= 0 && wire.want <= local.length ? wire.want : 0;
   const sendLocal = wire.have !== localHash;
   const remoteHash = sharedDigest(remoteProjects(grant.id));
-  const served = serveTasks(grant, wire, wire.s === remoteHash && !sendLocal);
+  const agreed = wire.s === remoteHash && !sendLocal;
+  const agentAfter = wire.agents === undefined ? undefined : decodeCursor(wire.agents);
+  if (wire.agents !== undefined && agentAfter === undefined) return { status: 400, body: { error: "malformed" } };
+  const agentPage = wire.agentPage === undefined ? 0 : wire.agentPage;
+  if (!Number.isInteger(agentPage) || (agentPage as number) < 0 || (agentPage as number) > 200 || (agentPage as number) % 50 !== 0) return { status: 400, body: { error: "malformed" } };
+  const push = wire.push && typeof wire.push === "object" && !Array.isArray(wire.push) ? wire.push as Record<string, unknown> : null;
+  const pushAgents = push?.agents;
+  const served = serveTasks(grant, { ...wire, ...(push && push.rows === undefined ? { push: undefined } : {}) }, agreed);
   if ("error" in served) {
     usedGrant(grant, false);
     return { status: served.error === "quota" ? 429 : served.error === "clock" ? 409 : 400, body: { error: served.error } };
   }
-  // M.10: request counts reach grants.json only for hours that moved data.
-  usedGrant(grant, served.moved);
+  const projects = linkedPeer("grant", grant.id)?.projects ?? new Set<string>();
+  let agentAck: string | null | undefined;
+  if (agreed && pushAgents !== undefined) {
+    if (!acceptAgents(`grant:${grant.id}`, pushAgents, projects)) return { status: 400, body: { error: "malformed" } };
+    agentAck = (pushAgents as { cursor: string }).cursor;
+  }
+  if (agreed) touchAgents(`grant:${grant.id}`);
+  const agents = agreed && agentAfter !== undefined && projects.size ? agentPart(`grant:${grant.id}`, agentAfter, projects, agentPage as number) : undefined;
+  // M.10: an idle call writes no grant file; a page with rows counts as movement.
+  usedGrant(grant, served.moved || Boolean((pushAgents as { rows?: unknown[] } | undefined)?.rows?.length) || Boolean(agents && "rows" in agents));
   return { status: 200, body: { v: 1, now: Date.now(), store: ownBoardStoreId(), s: localHash,
     ...(wire.s !== remoteHash ? { need: true } : {}),
-    ...(sendLocal ? { shared: local.slice(want, want + 100), index: want, total: local.length } : {}), ...served.parts } };
+    ...(sendLocal ? { shared: local.slice(want, want + 100), index: want, total: local.length } : {}), ...served.parts,
+    ...(agents ? { agents } : {}), ...(agentAck !== undefined ? { agentAck } : {}) } };
 }

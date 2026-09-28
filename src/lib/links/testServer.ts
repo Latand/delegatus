@@ -25,6 +25,9 @@ import { createTask } from "@/lib/tasks/commands";
 import { loadTasks, mutateTasks, taskFeedSource } from "@/lib/tasks/store";
 import { runsElsewhere } from "./linked";
 import { listFiles } from "@/lib/scanner";
+import { currentFileScan, lastScannedFiles, setFileScanRunnerForTests } from "@/lib/scanner/scanCache";
+import { runFileCatalogScan } from "@/lib/scanner/scanCoordinator";
+import { agentCursors, agentFeed, dropAgents, receivedAgentRows, remoteAgents } from "./agentFeed";
 import { admitScannedConversations } from "@/lib/tasks/membership";
 import { admitRecoveredLaunch, admitReservedLaunch } from "@/lib/tasks/launchMembership";
 import { applyTaskCuratorProposals, collectTaskCuratorInputs } from "@/lib/tasks/curator";
@@ -37,6 +40,7 @@ process.env.LLV_STATE_OWNER = "viewer";
 process.env.LLV_TOKEN = "key";
 fs.mkdirSync(dir, { recursive: true });
 let syncCalls = 0;
+let restartAgentFeedAfterPage: string | null = null;
 let padSync = 0;
 let maxSyncBody = 0;
 let failSync: number | null = null;
@@ -48,6 +52,8 @@ let releaseSync: (() => void) | null = null;
 const syncBodySizes: number[] = [];
 const syncAnswerSizes: number[] = [];
 const wire: { path: string; request: string; response: string }[] = [];
+let captureWire = true;
+let measureMemory = false;
 /* Every sync body since the last reset, for the tests that scan them all. */
 let captured: { request: string; response: string }[] = [];
 const realNow = Date.now.bind(Date);
@@ -117,11 +123,40 @@ const server = http.createServer(async (request, response) => {
     const query = new URL(request.url ?? "/", "http://localhost").searchParams;
     const body = () => JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as Record<string, unknown>;
     if (path === "/test/cpu") { const usage = process.cpuUsage(); json(response, { ms: (usage.user + usage.system) / 1000 }); return; }
-    if (path === "/test/heap") { Bun.gc(true); const memory = process.memoryUsage(); json(response, { heapUsed: memory.heapUsed, rss: memory.rss }); return; }
+    if (path === "/test/heap") {
+      Bun.gc(true);
+      const memory = process.memoryUsage();
+      json(response, { heapUsed: memory.heapUsed, rss: memory.rss });
+      return;
+    }
     if (path === "/test/clock") { clockOffset = Number(query.get("offset") ?? 0); json(response, { clockOffset }); return; }
     if (path === "/test/capture") { capturing = query.get("on") !== "0"; captured = []; json(response, { capturing }); return; }
+    if (path === "/test/measure-memory") { capturing = false; captured = []; captureWire = false; wire.length = 0; measureMemory = true; json(response, { ok: true }); return; }
     if (path === "/test/captured") { json(response, captured); if (query.get("reset") === "1") captured = []; return; }
     if (path === "/test/tasks") { json(response, loadTasks()); return; }
+    if (path === "/test/import-tasks") {
+      const input = body() as { tasks: ReturnType<typeof loadTasks> };
+      mutateTasks(() => ({ tasks: input.tasks, result: null }));
+      json(response, { count: input.tasks.length });
+      return;
+    }
+    if (path === "/test/scan") { const scan = await currentFileScan({ fresh: true }); json(response, { files: scan.snapshot.files.map((file) => ({ project: file.project, engine: file.engine, conversationId: file.conversationId, proc: file.proc })), generation: scan.generation }); return; }
+    if (path === "/test/agent-state") {
+      const state = query.get("state");
+      setFileScanRunnerForTests(state === "running" || state === "done"
+        ? (...args) => runFileCatalogScan(...args).then((snapshot) => ({ ...snapshot, files: snapshot.files.map((file) => ({ ...file,
+          proc: state, activity: state === "running" ? "live" as const : "idle" as const })) }))
+        : null);
+      json(response, { state }); return;
+    }
+    if (path === "/test/agents") { json(response, remoteAgents(query.get("project") ?? "")); return; }
+    if (path === "/test/agent-maps") {
+      const id = query.get("id") ?? "";
+      json(response, { scanned: lastScannedFiles()?.length ?? 0, local: agentFeed(id).sizes(), remote: receivedAgentRows(id).length });
+      return;
+    }
+    if (path === "/test/agent-reset") { const cursor = agentCursors(`peer:${query.get("id") ?? ""}`); cursor.pull = null; cursor.pullOffset = 0; json(response, { ok: true }); return; }
+    if (path === "/test/agent-feed-restart") { restartAgentFeedAfterPage = query.get("id"); json(response, { ok: true }); return; }
     if (path === "/test/runs-here") {
       const task = loadTasks().find((row) => row.id === query.get("id"));
       json(response, task ? { refusal: runsElsewhere(task) } : { error: "not found" });
@@ -295,9 +330,16 @@ const server = http.createServer(async (request, response) => {
     }
     else result = Response.json({ error: "not found" }, { status: 404 });
     let resultBody = Buffer.from(await result.arrayBuffer());
+    if (path === "/api/peer/v1/boards/sync" && restartAgentFeedAfterPage) {
+      const agents = (JSON.parse(resultBody.toString("utf8")) as { agents?: { reset?: boolean; more?: boolean } }).agents;
+      if (agents?.reset && agents.more) {
+        dropAgents(`grant:${restartAgentFeedAfterPage}`);
+        restartAgentFeedAfterPage = null;
+      }
+    }
     // Whitespace after the JSON keeps it valid; only the size cap refuses it.
     if (path === "/api/peer/v1/boards/sync" && padAnswer > resultBody.byteLength) resultBody = Buffer.concat([resultBody, Buffer.alloc(padAnswer - resultBody.byteLength, " ")]);
-    if (path.startsWith("/api/peer/v1/") && wire.length < 30) wire.push({ path, request: Buffer.concat(chunks).toString("utf8"), response: resultBody.toString("utf8") });
+    if (captureWire && path.startsWith("/api/peer/v1/") && wire.length < 30) wire.push({ path, request: Buffer.concat(chunks).toString("utf8"), response: resultBody.toString("utf8") });
     if (path === "/api/peer/v1/boards/sync" && holdNextSync &&
         JSON.parse((holdNextSync === "response" ? resultBody : Buffer.concat(chunks)).toString("utf8")).index === 0) {
       holdNextSync = null;
@@ -316,8 +358,10 @@ const server = http.createServer(async (request, response) => {
         if (captured.length > 5_000) captured.shift();
         syncCalls++;
         maxSyncBody = Math.max(maxSyncBody, Buffer.concat(chunks).byteLength);
-        syncBodySizes.push(Buffer.concat(chunks).byteLength);
-        syncAnswerSizes.push(resultBody.byteLength);
+        if (!measureMemory) {
+          syncBodySizes.push(Buffer.concat(chunks).byteLength);
+          syncAnswerSizes.push(resultBody.byteLength);
+        }
       }
     });
   } catch (error) {

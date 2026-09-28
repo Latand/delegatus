@@ -13,6 +13,7 @@ import { ChevronRight } from "@/components/icons";
 import { KANBAN_STATUSES, type KanbanCard as KanbanCardModel } from "@/components/kanban/kanbanModel";
 import { subjectOf } from "@/components/kanban/cardDismissal";
 import { statusLabel, TASK_COLOR_HEX } from "@/components/kanban/KanbanCard";
+import { RemoteAgents, type RemoteAgentView } from "@/components/kanban/RemoteAgents";
 import { pipelineTitle } from "@/components/kanban/PipelineSection";
 import { useTaskMutations, type StatusMoveOutcome, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
@@ -359,12 +360,13 @@ function ClearedLine({ item, nowMs }: { item: PhoneCard; nowMs: number }) {
   );
 }
 
-function CardView({ item, now, project, onOpen, onLongPress, onDismiss, onUndo }: {
+function CardView({ item, now, project, remoteAgents, onOpen, onLongPress, onDismiss, onUndo }: {
   item: PhoneCard;
   /** Epoch seconds. */
   now: number;
   /** The card's project, on a board that spans several (#2098). */
   project: string | null;
+  remoteAgents: readonly RemoteAgentView[];
   onOpen: (() => void) | null;
   onLongPress: (() => void) | null;
   /** Dismiss what the card asks (docs/design/needs-attention.md §5). */
@@ -444,6 +446,7 @@ function CardView({ item, now, project, onOpen, onLongPress, onDismiss, onUndo }
     <div {...data} className={className} style={aside ? undefined : colour}>{body}</div>
   );
   return (
+    <>
     <Pressable onLongPress={onLongPress}>
       {aside ? (
         <div data-phone-card-frame={item.key} className={`${FRAME} ${tone}`} style={colour}>
@@ -473,6 +476,8 @@ function CardView({ item, now, project, onOpen, onLongPress, onDismiss, onUndo }
         </div>
       ) : face}
     </Pressable>
+    {remoteAgents.length ? <div className="rounded-b-xl bg-card px-3 pb-1"><RemoteAgents rows={remoteAgents} nowMs={nowMs} /></div> : null}
+    </>
   );
 }
 
@@ -699,6 +704,25 @@ export function MobileKanban(props: MobileKanbanProps) {
   const nav = useMobileNavStore();
   const navState = useMobileNav();
   const ids = useId().replace(/:/g, "");
+  const [remoteAgentFeed, setRemoteAgentFeed] = useState<{ project: string; rows: RemoteAgentView[] } | null>(null);
+  const remoteAgents = remoteAgentFeed?.project === project
+    ? remoteAgentFeed.rows.filter((row) => row.p === project)
+    : [];
+  useEffect(() => {
+    if (!/^repo-[0-9a-f]{32}$/.test(project)) return;
+    let live = true;
+    const refresh = async () => {
+      try {
+        const answer = await fetch(`/api/links/agents?project=${encodeURIComponent(project)}`);
+        if (!answer.ok) return;
+        const payload = await answer.json() as { agents?: RemoteAgentView[] };
+        if (live) setRemoteAgentFeed({ project, rows: Array.isArray(payload.agents) ? payload.agents : [] });
+      } catch { /* Preserve the last rows while the Viewer is unavailable. */ }
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 15_000);
+    return () => { live = false; window.clearInterval(timer); };
+  }, [project]);
 
   /* The desktop's mutations: a move or a hide shows at once, is written with
      the task's revision as its guard, and a refusal puts the card back. The
@@ -974,6 +998,7 @@ export function MobileKanban(props: MobileKanbanProps) {
       item={item}
       now={now}
       project={projectLabel?.(item.card.project) ?? null}
+      remoteAgents={item.card.task ? remoteAgents.filter((row) => row.task === item.card.task!.id) : []}
       onOpen={open(item)}
       onLongPress={() => openSheet(item)}
       onDismiss={item.reasons.length ? () => sendCardDismissal(item, false) : null}
@@ -1040,7 +1065,7 @@ export function MobileKanban(props: MobileKanbanProps) {
               className="h-full w-full min-w-full shrink-0 snap-start snap-always overflow-y-auto overflow-x-hidden overscroll-y-contain"
               onScroll={(event) => writePlace(project, { offsets: { [status]: event.currentTarget.scrollTop } })}
             >
-              {columnEmpty(column) ? (
+              {columnEmpty(column) && !(status === "inbox" && remoteAgents.some((row) => !row.task)) ? (
                 <EmptyColumn column={column} columns={phone.columns} copy={props.emptyCopy} onJump={choose} onNewTask={props.onNewTask} onTellOrchestrator={props.onTellOrchestrator} />
               ) : (
                 <div className="flex flex-col gap-2 px-3 pb-3 pt-2">
@@ -1064,6 +1089,7 @@ export function MobileKanban(props: MobileKanbanProps) {
                       {column.unlinked.map(cardOf)}
                     </>
                   ) : null}
+                  {status === "inbox" && remoteAgents.some((row) => !row.task) ? <div className="rounded-xl bg-card px-3"><RemoteAgents rows={remoteAgents.filter((row) => !row.task)} nowMs={modelNow * 1000} /></div> : null}
                 </div>
               )}
             </section>

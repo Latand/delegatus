@@ -34,6 +34,7 @@ import type { PastAttempt } from "./pipelineGraph";
 import type { PipelinePorts } from "./pipelinePorts";
 import { ReaderSlot, type ReaderPlacement } from "./KanbanReaders";
 import { StageDraftPanel } from "./StageDraft";
+import { RemoteAgents, type RemoteAgentView } from "./RemoteAgents";
 import type { StageDrafts } from "./stageDrafts";
 import type { PipelineActionKind } from "./stagesModel";
 
@@ -169,6 +170,7 @@ const MemberTile = memo(function MemberTile({ member, workspace, onOpen }: { mem
 });
 
 export interface KanbanCardProps {
+  remoteAgents?: readonly RemoteAgentView[];
   card: KanbanCardModel;
   status: TaskStatus;
   pending: boolean;
@@ -769,6 +771,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           })}
         </div>
       ) : null}
+      {!collapsed && props.remoteAgents?.length ? <RemoteAgents rows={props.remoteAgents} nowMs={nowMs} /> : null}
 
       {!collapsed ? <CardDrafts ids={card.drafts} /> : null}
 
