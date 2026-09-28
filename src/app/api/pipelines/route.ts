@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { authenticatedAgentSpawnCaller, isAgentInitiatedSpawn } from "@/app/api/spawn/admission";
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { agentRegistry } from "@/lib/agent/registry";
-import { revokedSeatPipelineRefusal } from "@/lib/orchestrator/seatAuthority";
+import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { conversationAgentRole, isSpawnDeniedRole, reviewerOriginSpawnGuidance, type SpawnRejectionCode } from "@/lib/agent/spawnAdmission";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
@@ -22,7 +22,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type PipelineApiError = ApiError & {
-  code?: PipelineRepoPreflightErrorCode | SpawnRejectionCode | "orchestrator_seat_revoked" | "store_busy" | typeof ENGINE_NOT_CONNECTED;
+  code?: PipelineRepoPreflightErrorCode | SpawnRejectionCode | "orchestrator_seat_revoked" | "orchestrator_seat_authority_unavailable" | "store_busy" | typeof ENGINE_NOT_CONNECTED;
   /** With ENGINE_NOT_CONNECTED: the stage, role and engine (#1876). */
   details?: EngineNotConnectedDetails;
   /** #1766: set when the registry lock refused before anything was admitted, so
@@ -165,6 +165,9 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; p
       ...(result.legacyReview?.length ? { legacyReview: result.legacyReview } : {}),
     }, { status: result.queued ? 202 : 201 });
   } catch (error) {
+    if (error instanceof SeatRevocationStoreUnavailableError) {
+      return NextResponse.json({ error: error.message, code: "orchestrator_seat_authority_unavailable", retryable: true }, { status: 503 });
+    }
     /* #1766: the registry lock was never taken, so no pipeline was created.
        Say so, and say the same request may be repeated — a 500 leaves a caller
        guessing whether a pipeline exists. */

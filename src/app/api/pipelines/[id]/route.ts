@@ -5,7 +5,7 @@ import { authenticatedAgentSpawnCaller } from "@/app/api/spawn/admission";
 import { agentRegistry } from "@/lib/agent/registry";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
-import { revokedSeatPipelineRefusal } from "@/lib/orchestrator/seatAuthority";
+import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { carryingTaskWorkLinks, pipelineWorkLinks } from "@/lib/forge/resolve";
 import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
@@ -30,7 +30,7 @@ const CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-st
 
 type PipelineApiError = ApiError & {
   code?: PipelineRepoPreflightErrorCode | PipelineGuardErrorCode | "store_busy" | typeof ENGINE_NOT_CONNECTED
-    | "WORK_LINK_INVALID" | "WORK_LINK_AUTO" | "WORK_LINK_LIMIT" | "orchestrator_seat_revoked";
+    | "WORK_LINK_INVALID" | "WORK_LINK_AUTO" | "WORK_LINK_LIMIT" | "orchestrator_seat_revoked" | "orchestrator_seat_authority_unavailable";
   /** With ENGINE_NOT_CONNECTED: the stage, role and engine (#1876). */
   details?: EngineNotConnectedDetails;
   /** #1766: set when the registry lock refused before the action was admitted,
@@ -50,8 +50,15 @@ function pipelineControlRefusal(req: NextRequest): NextResponse<PipelineApiError
   const caller = authenticatedAgentSpawnCaller(req, undefined, registry);
   if ("error" in caller) return NextResponse.json({ error: caller.error }, { status: caller.status ?? 403 });
   if (caller.kind === "operator") return null;
-  const revoked = revokedSeatPipelineRefusal(caller.conversationId, id => registry.canonicalConversationId(id as `conversation_${string}`));
-  return revoked ? NextResponse.json({ error: revoked, code: "orchestrator_seat_revoked" }, { status: 403 }) : null;
+  try {
+    const revoked = revokedSeatPipelineRefusal(caller.conversationId, id => registry.canonicalConversationId(id as `conversation_${string}`));
+    return revoked ? NextResponse.json({ error: revoked, code: "orchestrator_seat_revoked" }, { status: 403 }) : null;
+  } catch (error) {
+    if (error instanceof SeatRevocationStoreUnavailableError) {
+      return NextResponse.json({ error: error.message, code: "orchestrator_seat_authority_unavailable", retryable: true }, { status: 503 });
+    }
+    throw error;
+  }
 }
 
 export async function GET(

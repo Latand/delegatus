@@ -233,4 +233,38 @@ test("rotation revokes A's pipeline control while B, its builder and a live depu
   actor = deputy;
   const deputyCreate = await mcp.callTool("create_pipeline", { clientRequestId: "deputy-create", ...request(deputy, "deputy lane") });
   expect(deputyCreate).toMatchObject({ ok: true });
+
+  const seatFile = path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json");
+  const standingRecord = fs.readFileSync(seatFile, "utf8");
+  const pipelineCount = getPipelines().pipelines.length;
+  actor = a;
+  for (const [index, unreadableRecord] of ["{malformed", JSON.stringify({ schemaVersion: 999 })].entries()) {
+    const clientRequestId = `unavailable-seat-${index}`;
+    fs.writeFileSync(seatFile, unreadableRecord);
+    try {
+      const mcpCreate = await mcp.callTool("create_pipeline", { clientRequestId, ...request(a, "unavailable store duplicate") });
+      expect(mcpCreate).toMatchObject({ ok: false, retryable: true, details: { code: "orchestrator_seat_authority_unavailable" } });
+      const mcpAction = await mcp.callTool("pipeline_action", { clientRequestId: `${clientRequestId}-action`, pipelineId: predecessor.pipeline.id, action: "pause" });
+      expect(mcpAction).toMatchObject({ ok: false, retryable: true, details: { code: "orchestrator_seat_authority_unavailable" } });
+
+      const httpCreate = await POST(pipelineRequest(request(a, "unavailable HTTP duplicate"), { "x-llv-spawn-capability": a.capability }));
+      expect(httpCreate.status).toBe(503);
+      expect(await httpCreate.json()).toMatchObject({ code: "orchestrator_seat_authority_unavailable", retryable: true });
+      const sourceCreate = await POST(pipelineRequest(request(a, "unavailable source duplicate")));
+      expect(sourceCreate.status).toBe(503);
+      expect(await sourceCreate.json()).toMatchObject({ code: "orchestrator_seat_authority_unavailable", retryable: true });
+      const httpAction = await PATCH(new NextRequest(`http://127.0.0.1:8898/api/pipelines/${predecessor.pipeline.id}`, {
+        method: "PATCH", headers: { host: "127.0.0.1:8898", "content-type": "application/json", "x-llv-spawn-capability": a.capability },
+        body: JSON.stringify({ action: "pause" }),
+      }), { params: Promise.resolve({ id: predecessor.pipeline.id }) });
+      expect(httpAction.status).toBe(503);
+      expect(await httpAction.json()).toMatchObject({ code: "orchestrator_seat_authority_unavailable", retryable: true });
+      expect(getPipelines().pipelines.length).toBe(pipelineCount);
+    } finally {
+      fs.writeFileSync(seatFile, standingRecord);
+    }
+    const afterRecovery = await mcp.callTool("create_pipeline", { clientRequestId, ...request(a, "unavailable store duplicate") });
+    expect(afterRecovery).toMatchObject({ ok: false });
+    expect(JSON.stringify(afterRecovery)).toContain(b.conversationId);
+  }
 });

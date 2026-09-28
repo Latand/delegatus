@@ -108,7 +108,7 @@ import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orch
 import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies, spawnParentForCaller } from "@/lib/orchestrator/deputies";
 import { recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
-import { revokedSeatPipelineRefusal } from "@/lib/orchestrator/seatAuthority";
+import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
@@ -1621,20 +1621,20 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
 /**
  * The pipeline mutations that share one idempotency receipt path (#1766).
  *
- * A registry lock that was never taken refused before anything was admitted:
- * no pipeline row, no task assignment, nothing reserved downstream. That
- * refusal is reported as unadmitted, so the receipt layer releases the claim
- * and the caller's retry under the SAME clientRequestId runs the operation
- * instead of replaying the refusal. Any other busy error keeps its ordinary
- * meaning — releasing the lease raises the same message after the write has
- * already committed, and such an answer must stay this request's answer.
+ * A registry lock refusal or unavailable seat revocations occurs before
+ * admission: no record or downstream reservation exists. Release the receipt
+ * claim so a retry under the SAME clientRequestId checks authority again. Any
+ * later busy error keeps its ordinary meaning because a write may already
+ * have committed.
  */
-async function unadmittedOnStoreBusy<T>(run: () => Promise<T>): Promise<T> {
+async function unadmittedBeforeMutation<T>(run: () => Promise<T>): Promise<T> {
   try {
     return await run();
   } catch (error) {
-    if (error instanceof StoreBusyBeforeAdmissionError) {
-      throw new McpUnadmittedRefusal(error.message, { code: "store_busy" });
+    if (error instanceof StoreBusyBeforeAdmissionError || error instanceof SeatRevocationStoreUnavailableError) {
+      throw new McpUnadmittedRefusal(error.message, {
+        code: error instanceof SeatRevocationStoreUnavailableError ? "orchestrator_seat_authority_unavailable" : "store_busy",
+      });
     }
     throw error;
   }
@@ -6047,9 +6047,9 @@ export function viewerMcpBindings(
     message_receipt: (args) => messageReceipt(args),
     create_task: (args) => createBoardTask(args, domainDependencies),
     update_task: (args) => updateBoardTask(args, domainDependencies),
-    create_pipeline: (args, context) => unadmittedOnStoreBusy(() => createPipeline(args, context, domainDependencies)),
+    create_pipeline: (args, context) => unadmittedBeforeMutation(() => createPipeline(args, context, domainDependencies)),
     pipeline_action: Object.assign(
-      (args: McpToolArgs) => unadmittedOnStoreBusy(() => pipelineAction(args, domainDependencies)),
+      (args: McpToolArgs) => unadmittedBeforeMutation(() => pipelineAction(args, domainDependencies)),
       { authorizeReceipt: (args: McpToolArgs) => {
         if (!PIPELINE_RECEIPT_ACTIONS.has(args.action as PipelineAction)) return;
         const id = required(args, "pipelineId");
@@ -6066,7 +6066,7 @@ export function viewerMcpBindings(
       } },
     ),
     stage_report: (args) => stageReport(args, domainDependencies),
-    link_task_to_pipeline: (args) => unadmittedOnStoreBusy(() => linkTaskToPipeline(args, linkTaskDependencies)),
+    link_task_to_pipeline: (args) => unadmittedBeforeMutation(() => linkTaskToPipeline(args, linkTaskDependencies)),
     list_conversations: (args, context) => budgeted("list_conversations", args, 12_000, cursor => listConversations({ ...args, cursor }, viewerControlForCall(controlDependencies, context))),
     search_transcripts: (args, context) => searchTranscripts(args, viewerControlForCall(controlDependencies, context)),
     get_conversation: (args, context) => getConversation(args, domainDependencies, context),
