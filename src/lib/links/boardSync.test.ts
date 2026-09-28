@@ -178,6 +178,38 @@ test("remote agents travel both ways as prompt-free summaries and stay in their 
   expect((await request(a, `/test/agents?project=${key}`)).body as unknown).toEqual([]);
 });
 
+test("a changed remote shared list does not strand task or agent deltas awaiting an ack", async () => {
+  const addedRemote = "code.example.test/acme/newly-shared";
+  const addedKey = projectIdentityFromRemote(`https://${addedRemote}`, "/")!.project;
+  const extra = { [addedKey]: addedRemote };
+  const a = await install("renegotiate-A", extra);
+  const b = await install("renegotiate-B", extra);
+  const peerId = await link(a, b);
+  seedTranscript("renegotiate-A", "PROMPT-CANARY-renegotiate");
+  expect((await request(a, "/test/scan")).status).toBe(200);
+  const task = await createOn(a, "Task during project negotiation");
+  expect((await request(b, "/api/links/shared", "POST", { v: 1, all: false, projects: [key, addedKey] })).status).toBe(200);
+  await captured(b);
+
+  await sync(a, peerId);
+  const calls = (await captured(b)).map((entry) => ({
+    request: JSON.parse(entry.request) as { push?: { agents?: { cursor: string } } },
+    response: JSON.parse(entry.response) as { shared?: unknown[]; agentAck?: string },
+  }));
+  const unacked = calls.find((call) => call.request.push?.agents && call.response.shared && call.response.agentAck === undefined);
+  expect(unacked).toBeDefined();
+  expect(calls.some((call) => {
+    const cursor = call.request.push?.agents?.cursor;
+    return cursor !== undefined && cursor === unacked?.request.push?.agents?.cursor && call.response.agentAck === cursor;
+  })).toBe(true);
+  expect((await taskOn(b, task.id))?.text).toBe(task.text);
+  expect((await request(b, `/test/agents?project=${key}`)).body as unknown as unknown[]).toHaveLength(1);
+  const peerState = (await request(a, "/api/links/peers")).body;
+  expect(peerState.peers).toEqual(expect.arrayContaining([expect.objectContaining({ id: peerId, state: "active" })]));
+  expect(peerState.states).toEqual(expect.arrayContaining([expect.objectContaining({ id: peerId,
+    projects: expect.arrayContaining([expect.objectContaining({ key: addedKey, state: "only-there" })]) })]));
+});
+
 test("one agent change adds one bounded row on the measured sync transport", async () => {
   const a = await install("agent-meter-A");
   const b = await install("agent-meter-B");
@@ -473,14 +505,14 @@ test("M3 link RSS and heap are measured with 2 000 tasks, 200 agents per side, e
     const peerId = await link(sides[0]!, sides[1]!, { projects: mode === "on" ? projectKeys : [] }, sides[1]!, false);
     return { sides, editIds, peerId };
   };
-  const work = async (sides: readonly string[], editIds: readonly string[], start: number, end: number, peerId?: string) => {
+  const work = async (sides: readonly string[], editIds: readonly string[], start: number, end: number, peerId?: string, agents = true) => {
     const [a, b] = sides as [string, string];
     for (let call = start; call < end; call++) {
       if (call % 100 === 0) {
         expect((await patchOn(a, editIds[0]!, { text: `Edit ${Math.floor(call / 100) % 2}` })).status).toBe(200);
         expect((await patchOn(b, editIds[1]!, { text: `Edit ${Math.floor(call / 100) % 2}` })).status).toBe(200);
       }
-      if (call % 200 === 0) for (const side of sides) {
+      if (agents && call % 200 === 0) for (const side of sides) {
         await request(side, `/test/agent-state?state=${call % 400 === 0 ? "running" : "done"}`);
         await request(side, "/test/scan");
       }
@@ -490,24 +522,31 @@ test("M3 link RSS and heap are measured with 2 000 tasks, 200 agents per side, e
   };
   const stages = ["no calls", "tasks only", "tasks + agents"] as const;
   const measurements: Array<{ off: Memory[][]; on: Memory[][] }> = [];
-  const growth: number[] = [];
+  const growth: number[][] = [[], []];
   for (let run = 0; run < 3; run++) {
     const pair: { off: Memory[][]; on: Memory[][] } = { off: [], on: [] };
     for (const mode of ["off", "on"] as const) {
       const fixture = await populated(run, mode);
       try {
         pair[mode].push(await heap(fixture.sides));
-        await work(fixture.sides, fixture.editIds, 0, 100, fixture.peerId);
+        await work(fixture.sides, fixture.editIds, 0, 100, fixture.peerId, false);
+        const grantId = ((await request(fixture.sides[1]!, "/api/links/grants")).body.grants as { id: string }[])[0]!.id;
+        for (const [side, id] of [[fixture.sides[0]!, `peer:${fixture.peerId}`], [fixture.sides[1]!, `grant:${grantId}`]]) {
+          expect((await request(side, `/test/agent-maps?id=${id}`)).body).toEqual({ scanned: 0, local: { rows: 0, markers: 0 }, remote: 0 });
+        }
         pair[mode].push(await heap(fixture.sides));
         for (const side of fixture.sides) expect(((await request(side, "/test/scan")).body.files as unknown[])).toHaveLength(200);
         await work(fixture.sides, fixture.editIds, 100, 1_100, fixture.peerId);
+        if (mode === "on") for (const [side, id] of [[fixture.sides[0]!, `peer:${fixture.peerId}`], [fixture.sides[1]!, `grant:${grantId}`]]) {
+          expect((await request(side, `/test/agent-maps?id=${id}`)).body).toMatchObject({ scanned: 200, local: { rows: 150 }, remote: 150 });
+        }
         pair[mode].push(await heap(fixture.sides));
-        if (mode === "on" && run === 0) {
+        if (mode === "on") {
           await work(fixture.sides, fixture.editIds, 1_100, 3_100, fixture.peerId);
           const before = await heap(fixture.sides);
           await work(fixture.sides, fixture.editIds, 3_100, 4_100, fixture.peerId);
           const after = await heap(fixture.sides);
-          for (let side = 0; side < 2; side++) growth.push(after[side]!.heapUsed - before[side]!.heapUsed);
+          for (let side = 0; side < 2; side++) growth[side]!.push(after[side]!.heapUsed - before[side]!.heapUsed);
         }
       } finally { await Promise.all(fixture.sides.map(stopInstall)); }
     }
@@ -522,8 +561,8 @@ test("M3 link RSS and heap are measured with 2 000 tasks, 200 agents per side, e
       heapUsed: pair.on[stage]![side]!.heapUsed - pair.off[stage]![side]!.heapUsed }));
     console.log(`M.9 ${stages[stage]} side ${side}: median RSS ${rss} B, median heapUsed ${heapUsed} B, off-pair side RSS spread ${control} B, runs ${JSON.stringify(runs)}`);
   }
-  console.log(`M.9 warmed heap growth over 1 000 further calls: ${JSON.stringify(growth)} B`);
-  for (const delta of growth) expect(delta).toBeLessThan(256 * 1024);
+  console.log(`M.9 warmed heap growth over 1 000 further calls, three runs per side: ${JSON.stringify(growth)} B`);
+  for (const side of growth) expect(median(side)).toBeLessThan(256 * 1024);
 }, 600_000);
 
 test("1 000 tasks arrive in 5 pages of at most 512 KB; 1 100 writes on B while A is away push A below the change floor, and the resync converges without a duplicate", async () => {

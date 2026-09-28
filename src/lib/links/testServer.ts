@@ -25,9 +25,9 @@ import { createTask } from "@/lib/tasks/commands";
 import { loadTasks, mutateTasks, taskFeedSource } from "@/lib/tasks/store";
 import { runsElsewhere } from "./linked";
 import { listFiles } from "@/lib/scanner";
-import { currentFileScan, setFileScanRunnerForTests } from "@/lib/scanner/scanCache";
+import { currentFileScan, lastScannedFiles, setFileScanRunnerForTests } from "@/lib/scanner/scanCache";
 import { runFileCatalogScan } from "@/lib/scanner/scanCoordinator";
-import { agentCursors, dropAgents, remoteAgents } from "./agentFeed";
+import { agentCursors, agentFeed, dropAgents, receivedAgentRows, remoteAgents } from "./agentFeed";
 import { admitScannedConversations } from "@/lib/tasks/membership";
 import { admitRecoveredLaunch, admitReservedLaunch } from "@/lib/tasks/launchMembership";
 import { applyTaskCuratorProposals, collectTaskCuratorInputs } from "@/lib/tasks/curator";
@@ -150,6 +150,11 @@ const server = http.createServer(async (request, response) => {
       json(response, { state }); return;
     }
     if (path === "/test/agents") { json(response, remoteAgents(query.get("project") ?? "")); return; }
+    if (path === "/test/agent-maps") {
+      const id = query.get("id") ?? "";
+      json(response, { scanned: lastScannedFiles()?.length ?? 0, local: agentFeed(id).sizes(), remote: receivedAgentRows(id).length });
+      return;
+    }
     if (path === "/test/agent-reset") { const cursor = agentCursors(`peer:${query.get("id") ?? ""}`); cursor.pull = null; cursor.pullOffset = 0; json(response, { ok: true }); return; }
     if (path === "/test/agent-feed-restart") { restartAgentFeedAfterPage = query.get("id"); json(response, { ok: true }); return; }
     if (path === "/test/runs-here") {

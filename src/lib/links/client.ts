@@ -220,11 +220,17 @@ async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProj
         throw error;
       }
       if (pushAgents) {
-        if (answer.body.agentAck !== pushAgents.cursor) throw new LinkError("malformed");
-        const resetting = agentState.pushOffset > 0 || pushAgents.reset === true;
-        if (pushAgents.more && resetting) agentState.pushOffset = (pushAgents.reset ? 0 : agentState.pushOffset) + (pushAgents.rows?.length ?? 0);
-        else { agentState.pushed = decodeCursor(pushAgents.cursor)!; agentState.pushOffset = 0; }
-        agentMore = pushAgents.more === true;
+        if (answer.body.agentAck === undefined && (answer.body.need === true || answer.body.s !== remoteHash)) {
+          // B cannot accept agent rows until both shared lists agree. Keep the
+          // cursor and retry the same delta after processing its new list.
+          agentMore = true;
+        } else {
+          if (answer.body.agentAck !== pushAgents.cursor) throw new LinkError("malformed");
+          const resetting = agentState.pushOffset > 0 || pushAgents.reset === true;
+          if (pushAgents.more && resetting) agentState.pushOffset = (pushAgents.reset ? 0 : agentState.pushOffset) + (pushAgents.rows?.length ?? 0);
+          else { agentState.pushed = decodeCursor(pushAgents.cursor)!; agentState.pushOffset = 0; }
+          agentMore = pushAgents.more === true;
+        }
       }
       if (answer.body.agents !== undefined) {
         const part = answer.body.agents as { cursor?: unknown; more?: unknown; reset?: unknown; rows?: unknown[] };
