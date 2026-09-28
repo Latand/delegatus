@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { act, type ReactNode } from "react";
 import type { Root } from "react-dom/client";
+import type { TFunction } from "@/lib/i18n";
 
 import { installActEnv } from "@/test-helpers/actEnv";
 import { installOnboardingDom, jsonResponse, settle, typeInto } from "@/test-helpers/onboardingDom";
@@ -276,7 +277,7 @@ test("in Ukrainian the relay surface writes times and dates as uk-UA does, on a 
   const progressAt = "2026-09-28T17:07:10.000Z";
   const pairedAt = "2026-09-27T17:27:16.000Z";
   answers.relay = {
-    relays: [relay({ pairedAt })],
+    relays: [relay({ pairedAt, targets: [target({ engine: "claude", model: "opus", effort: "low" })] })],
     pending: [pending({ id: "pair-2", expires_at: new Date(Date.now() + 600_000).toISOString() })],
     status: [{ id: "relay-1", state: { state: "polling", lastOutcome: "answered", lastOutcomeAt: outcomeAt, lastProgress: { targetId: "bot-1", label: "Пишу відповідь", at: progressAt } }, running: {} }],
   };
@@ -293,7 +294,26 @@ test("in Ukrainian the relay surface writes times and dates as uk-UA does, on a 
     expect(pairing.textContent).not.toMatch(/AM|PM/);
     expect(card.textContent).not.toMatch(/AM|PM/);
     expect(card.textContent).toMatch(/\d{2}\.\d{2}\.2026/);
+    const effort = card.querySelector<HTMLSelectElement>('select[aria-label^="Зусилля"]')!;
+    expect(effort.value).toBe("low");
+    expect(effort.selectedOptions[0]?.textContent).toBe("низькі");
+    expect(Array.from(effort.options).map((option) => option.value)).toContain("xhigh");
+    expect(Array.from(effort.options).map((option) => option.textContent)).toContain("дуже високі");
   } finally {
     setLocale("en");
+  }
+});
+
+test("a refusal made by this install, or its own failure, never reads as the relay service's refusal", async () => {
+  const { relayErrorText } = await import("./ExternalRelaySection");
+  const { translate } = await import("@/lib/i18n");
+  for (const locale of ["en", "uk"] as const) {
+    const t: TFunction = (key, params) => translate(locale, key, params);
+    for (const code of ["refused_here", "local_error"]) {
+      const text = relayErrorText(t, code);
+      expect(text).toContain("Delegatus");
+      expect(text).not.toBe(t("externalRelay.error.other", { code }));
+      expect(text).not.toMatch(/relay service|Сервіс/i);
+    }
   }
 });

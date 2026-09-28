@@ -170,6 +170,7 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
               targets: Array.from(element.querySelectorAll("[data-external-relay-target]")).map((row) => ({
                 id: row.getAttribute("data-external-relay-target"),
                 settings: Array.from(row.querySelectorAll("select")).map((select) => (select as HTMLSelectElement).value),
+                settingsText: Array.from(row.querySelectorAll("select")).map((select) => (select as HTMLSelectElement).selectedOptions[0]?.textContent ?? null),
                 answeredHere: (row.querySelector("[data-external-relay-answered-by]") as HTMLInputElement | null)?.checked ?? null,
                 switchDisabled: (row.querySelector("[data-external-relay-answered-by]") as HTMLInputElement | null)?.disabled ?? null,
                 noAccount: row.querySelector("[data-external-relay-no-account]") !== null,
@@ -191,6 +192,8 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
             if (JSON.stringify(reading.states) !== JSON.stringify(["polling", "paused"])) failures.push(`${label}: poller states ${JSON.stringify(reading.states)}`);
             const [first, second, third] = reading.targets;
             if (JSON.stringify(first?.settings) !== JSON.stringify(["claude", "opus", "low", "2"]) || first?.answeredHere !== true) failures.push(`${label}: the first target reads ${JSON.stringify(first)}`);
+            const effortText = locale === "uk" ? "низькі" : "low";
+            if (first?.settingsText?.[2] !== effortText) failures.push(`${label}: the first target's effort reads ${JSON.stringify(first?.settingsText?.[2])}`);
             if (!second?.noAccount || !second.switchDisabled) failures.push(`${label}: a Codex target without a Codex account can be switched on`);
             if (!third?.switchDisabled) failures.push(`${label}: a target with no engine can be switched on`);
             if (!reading.lastProgress?.includes("Reading the last messages in the thread")) failures.push(`${label}: last progress reads ${JSON.stringify(reading.lastProgress)}`);

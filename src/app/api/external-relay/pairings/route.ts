@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   guardRelayRoute,
+  refusedHere,
   relayRouteError,
 } from "@/lib/externalRelay/routeGuard";
 import { startRelayPairing } from "@/lib/externalRelay/pairing";
@@ -16,7 +17,7 @@ export async function POST(req: NextRequest) {
       (body.label !== undefined &&
         (typeof body.label !== "string" || body.label.length > 64))
     )
-      return NextResponse.json({ error: "malformed" }, { status: 400 });
+      return refusedHere();
     return NextResponse.json(
       { pairing: await startRelayPairing(body.url, body.label) },
       { status: 201 },

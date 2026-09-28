@@ -54,7 +54,7 @@ test("status omits credential and poll secret", async () => {
         poll_secret: "secret_poll",
         code: "1234-5678",
         verify_url: null,
-        expires_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 600_000).toISOString(),
         poll_interval_s: 2,
       },
     ],
@@ -171,4 +171,65 @@ test("a pairing the service ended leaves the store after one check", async () =>
   } finally {
     await server.close();
   }
+});
+test("settings this install refuses answer with local codes, never the service's", async () => {
+  const { updateRelayStore, readRelayStore } = await import("@/lib/externalRelay/store");
+  const { PATCH } = await import("./relays/[id]/route");
+  updateRelayStore((store) => ({
+    ...store,
+    relays: store.relays.map((relay) =>
+      relay.id === "relay"
+        ? {
+            ...relay,
+            targets: [
+              {
+                id: "bot",
+                name: "Bot",
+                answered_by: "service",
+                fallback: "service",
+                enabled: true,
+                engine: null,
+                model: null,
+                effort: null,
+                project: null,
+                concurrency: 1,
+                hardCapMinutes: 30,
+              },
+            ],
+          }
+        : relay,
+    ),
+  }));
+  const patch = (body: string) =>
+    PATCH(
+      new NextRequest(`${origin}/api/external-relay/relays/relay`, {
+        method: "PATCH",
+        headers: { ...local.headers, "content-type": "application/json" },
+        body,
+      }),
+      { params: Promise.resolve({ id: "relay" }) },
+    );
+  const answers = await Promise.all(
+    [
+      JSON.stringify({ target: { id: "missing" } }),
+      JSON.stringify({ target: { id: "bot", concurrency: 9 } }),
+      JSON.stringify({ target: { id: "bot", effort: "high" } }),
+      "{not json",
+      JSON.stringify({ unknown: true }),
+    ].map(async (body) => {
+      const response = await patch(body);
+      return [response.status, (await response.json()).error];
+    }),
+  );
+  expect(answers).toEqual([
+    [404, "not_found"],
+    [400, "refused_here"],
+    [400, "refused_here"],
+    [400, "refused_here"],
+    [400, "refused_here"],
+  ]);
+  expect(
+    readRelayStore().relays.find((relay) => relay.id === "relay")?.targets[0]
+      ?.concurrency,
+  ).toBe(1);
 });

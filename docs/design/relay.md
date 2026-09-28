@@ -1359,6 +1359,8 @@ in the phone's menu sheet, and mounted beside it in the Viewer. Its body,
   elsewhere) says so with the service's reason as plain text and offers Start
   again; the check that learns it ended removes the pending entry and its
   poll secret from `relays.json`, so it does not come back. A pending
+  pairing past its local expiry leaves `relays.json` on the next read or
+  write of the store, whether or not a check reached the service. A pending
   pairing still in `relays.json` resumes when the surface opens. Times and
   dates are written in the interface language (`uk-UA` or `en-US`);
 - each paired relay: its name, origin, description, the owner it is paired
@@ -1368,14 +1370,17 @@ in the phone's menu sheet, and mounted beside it in the Viewer. Its body,
   last progress label with its target and time; Pause or Resume, and
   Disconnect;
 - each target: engine, model (the catalog of `ENGINE_MODELS`), effort (the
-  model's `effortScale`, or the model default) and "At once" (concurrency 1
-  to 4), each saved on change; changing the engine sends that engine's
-  default model and clears the effort. "Answered by this install" forwards
-  `answered_by` to the service, and stays disabled until the target has an
-  engine and a model, a signed-in account of that engine exists and the
-  relay is not paused; a target whose engine has no signed-in account says
-  so. The project binding and the hard cap stay on the route and are not
-  on the page.
+  model's `effortScale` in the words of `effortTierLabel`, or the model
+  default) and "At once" (concurrency 1 to 4), each saved on change;
+  changing the engine sends that engine's default model and clears the
+  effort. "Answered by this install" forwards `answered_by` to the service,
+  and stays disabled until the target has an engine and a model, a signed-in
+  account of that engine exists and the relay is not paused; a target whose
+  engine has no signed-in account says so. The project binding and the hard
+  cap stay on the route and are not on the page. A request the Viewer itself
+  turns away (a body that is not JSON, settings outside these ranges)
+  answers `400 refused_here`, an unknown target `404 not_found`, and a local
+  failure `500 local_error`; the page words these as Delegatus's own.
 
 The last outcome and the last progress label live in memory on
 `globalThis` (`src/lib/externalRelay/activity.ts`), keyed by relay, so they
@@ -1454,7 +1459,7 @@ Bun pin are untouched, so `scripts/verify-runtime-host.ts` is not needed.
 | 3 | `src/lib/agent/ephemeral.test.ts` | The exact argument list per engine, including `project_doc_max_bytes=0`; no `--settings`, `--mcp-config`, `--session-id` or `--dangerously-*`; the prompt only on stdin; the environment without `LLV_TOKEN`, `LLV_STATE_OWNER`, `LLV_SPAWN_CAPABILITY` or the credential; the answer home holds only the `auth.json` link; the catalog drops both keys and keeps the rest; a missing catalog entry, missing `auth.json` or provider account declines as `profile_error`; a hard cap of `2**31`, `Infinity` or 30 000 is refused. |
 | 4 | `src/lib/externalRelay/runner.test.ts`, with a stub CLI through `launchDetached`'s `runtime.command` seam (`headless.ts:368` [code]) that replays synthetic Codex JSONL and Claude stream-json | Heartbeats keep their interval while the stub prints nothing (L3); one label per heartbeat, the newest; the final JSON never becomes progress; an unsafe provider home declines as `profile_error` before launch; a `command_execution` item and a Claude init with an extra tool each end as `profile_violation`; a clean exit with a written answer is `answered`, a non-zero exit after writing it is `agent_error`; the hard cap fires `hard_cap`; the run directory is gone on every path; slots are freed on every path; a request for a full target is `busy`. |
 | 5 | `src/lib/externalRelay/poller.test.ts` | Slots advertised per target; a freed slot aborts and reopens the poll; the sweep kills a run whose Viewer is dead, completes it `install_restarted` and removes its directory, and leaves a live Viewer's run alone; nothing starts in staging; the last outcome and progress label outlive a poll loop restarted by a settings change. |
-| 6 | `src/app/api/external-relay/route.test.ts` | Each guard: cross-origin, access key withheld, agent caller, staging; no response carries the credential or the poll secret. |
+| 6 | `src/app/api/external-relay/route.test.ts` | Each guard: cross-origin, access key withheld, agent caller, staging; no response carries the credential or the poll secret; a request the Viewer turns away answers `refused_here` or `not_found`. |
 | 7 | `src/lib/agent/ephemeral.probe.test.ts`, run only with `LLV_ANSWER_PROFILE_PROBE=1` | The real installed `codex` and `claude`, driven by the built profile against a loopback stub model endpoint that records what they send, with dummy credentials and temp homes holding marker lines in `AGENTS.md`, `CLAUDE.md`, ancestor `.git/AGENTS.md` and `.claude/CLAUDE.md`, and a settings hook. It asserts the offered tools (Codex: `exec` nesting only the clock, `wait`, `request_user_input_async`; Claude: `StructuredOutput`), that no marker reached the request, that no hook ran, and that the answer format is a JSON schema. It uses no model quota; it re-runs on every CLI upgrade. It is the method of the Evidence section, made repeatable. |
 | 8 | manual, once per engine, in the implementing stage | A live marker probe on a real signed-in account at the lowest effort. Codex: a temp account home whose `auth.json` links to a real account's file and whose `AGENTS.md` holds a marker, run through the real launch path. Claude: the real account, with the marker in a `.claude/CLAUDE.md` above the cwd. The prompt asks the agent to repeat any marker word it was given; the answer must not contain it, and Claude's init event must list only `StructuredOutput` and no MCP servers. The PR records the outcome without identities. |
 | 9 | `src/components/externalRelay/ExternalRelaySection.dom.test.tsx`, the relay case in `OnboardingDialog.dom.test.tsx`, and the phone driver's "external relay" case | Every state of §B.9: the connect form, the code and link, the identity to confirm, a pairing ended in the service, a relay-provided link that is not a web address left out, a paired relay with poller state, last outcome and last progress, per-target settings, the answer switch held off without an engine, a model or a signed-in account, a staging refusal; the guide step pairing only with an account of the chosen engine signed in, recording done while a relay is paired and a skip otherwise; a pairing ended in the service leaving `relays.json` after one check (`src/app/api/external-relay/route.test.ts`); Ukrainian times in `uk-UA`; the entry rows in the rail and the menu sheet; no sideways scroll and 44 px controls on the phone. |

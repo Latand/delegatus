@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ZodError } from "zod";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { accessKeyWithheld } from "@/lib/team";
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
@@ -19,19 +20,23 @@ export function guardRelayRoute(request: NextRequest): NextResponse | null {
     return NextResponse.json({ error: "staging" }, { status: 409 });
   return null;
 }
+/**
+ * A request this install turns away before any call to the relay service.
+ * Its own code keeps the UI from reporting it as the service's refusal.
+ */
+export function refusedHere(): NextResponse {
+  return NextResponse.json({ error: "refused_here" }, { status: 400 });
+}
 export function relayRouteError(error: unknown): NextResponse {
-  return NextResponse.json(
-    {
-      error:
-        error instanceof ExternalRelayError ? error.code : "invalid_request",
-    },
-    {
-      status:
-        error instanceof ExternalRelayError &&
-        error.status >= 400 &&
-        error.status < 500
-          ? error.status
-          : 409,
-    },
-  );
+  if (error instanceof ExternalRelayError)
+    return NextResponse.json(
+      { error: error.code },
+      { status: error.status >= 400 && error.status < 500 ? error.status : 409 },
+    );
+  // A service reply that failed its schema.
+  if (error instanceof ZodError)
+    return NextResponse.json({ error: "malformed" }, { status: 502 });
+  // A request body that is not JSON.
+  if (error instanceof SyntaxError) return refusedHere();
+  return NextResponse.json({ error: "local_error" }, { status: 500 });
 }

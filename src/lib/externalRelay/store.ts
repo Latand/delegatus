@@ -94,7 +94,24 @@ function write(file: string, data: unknown): void {
     fs.rmSync(temp, { force: true });
   }
 }
+// A pending pairing past its expiry can no longer be confirmed, so it and its
+// poll secret leave the store on the next read or write, whether or not a
+// check ever reached the service after it ran out.
+const expired = (pending: PendingRelay, now: number) =>
+  Date.parse(pending.expires_at) <= now;
+function withoutExpired(store: RelayStore): RelayStore {
+  const now = Date.now();
+  return store.pending.some((item) => expired(item, now))
+    ? { ...store, pending: store.pending.filter((item) => !expired(item, now)) }
+    : store;
+}
 export function readRelayStore(): RelayStore {
+  const store = readStoredRelays();
+  return store.pending.some((item) => expired(item, Date.now()))
+    ? updateRelayStore((current) => current)
+    : store;
+}
+function readStoredRelays(): RelayStore {
   const file = externalRelayFile("relays");
   const existed = fs.existsSync(file);
   const store = read(file, () => ({
@@ -118,7 +135,7 @@ export function updateRelayStore(
 ): RelayStore {
   const file = externalRelayFile("relays");
   return withFileLock(file, () => {
-    const next = change(readRelayStore());
+    const next = withoutExpired(change(withoutExpired(readStoredRelays())));
     write(file, next);
     return next;
   });

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   guardRelayRoute,
+  refusedHere,
   relayRouteError,
 } from "@/lib/externalRelay/routeGuard";
 import { relayCall } from "@/lib/externalRelay/client";
@@ -32,7 +33,7 @@ export async function PATCH(req: NextRequest, context: Context) {
       (patch.answered_by === undefined && patch.fallback === undefined) ||
       (patch.answered_by === "install" && (!target.engine || !target.model))
     )
-      return NextResponse.json({ error: "malformed" }, { status: 400 });
+      return refusedHere();
     const result = await relayCall(
       relay.api_base,
       `/targets/${encodeURIComponent(targetId)}`,

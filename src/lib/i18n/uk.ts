@@ -98,6 +98,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "externalRelay.error.staging": "Це тестовий Delegatus, у ньому ретранслятори вимкнені.",
   "externalRelay.error.operatorOnly": "Змінювати ретранслятори може лише власник цієї інсталяції.",
   "externalRelay.error.rateLimited": "Сервіс попросив зачекати. Спробуйте за хвилину.",
+  "externalRelay.error.refusedHere": "Delegatus не прийняв цю зміну. Перезавантажте й спробуйте ще раз.",
+  "externalRelay.error.local": "Delegatus не зміг це завершити. Спробуйте ще раз.",
   "externalRelay.error.other": "Сервіс відмовив ({code}).",
   "links.thisInstall": "Ця інсталяція",
   "links.intro": "Вкажіть адресу, за якою інші машини можуть відкрити цю інсталяцію Delegatus.",

@@ -87,7 +87,7 @@ updateRelayStore((store) => {
     api_base: "https://example.test/v1", name: "Test", description: "",
     limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
     pairing_id: "pair", poll_secret: "x".repeat(43), code: "1234-5678",
-    verify_url: null, expires_at: new Date().toISOString(), poll_interval_s: 2,
+    verify_url: null, expires_at: new Date(Date.now() + 600_000).toISOString(), poll_interval_s: 2,
   }] };
 });
 `);
@@ -105,4 +105,24 @@ updateRelayStore((store) => {
   expect(readRelayStore().pending.map((item) => item.id).sort()).toEqual([
     "update_a", "update_b",
   ]);
+});
+test("a pending pairing past its expiry leaves relays.json with its poll secret on the next read", () => {
+  const file = path.join(root, "external-relay", "relays.json");
+  const entry = (id: string, expiresAt: number) => ({
+    id, origin: `https://${id}.example`, api_base: `https://${id}.example/v1`,
+    name: "Test", description: "",
+    limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
+    pairing_id: id, poll_secret: `${id}-poll`, code: "1234-5678",
+    verify_url: null, expires_at: new Date(expiresAt).toISOString(), poll_interval_s: 2,
+  });
+  // Written straight to the file, as a pairing left behind by an earlier
+  // process would be; no check ever reaches the service for it.
+  const stored = JSON.parse(fs.readFileSync(file, "utf8"));
+  fs.writeFileSync(file, JSON.stringify({ ...stored, pending: [
+    entry("lapsed", Date.now() - 1_000), entry("live", Date.now() + 600_000),
+  ] }));
+  expect(readRelayStore().pending.map((item) => item.id)).toEqual(["live"]);
+  const text = fs.readFileSync(file, "utf8");
+  expect(text).not.toContain("lapsed-poll");
+  expect(text).toContain("live-poll");
 });

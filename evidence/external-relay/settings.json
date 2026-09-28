@@ -30,19 +30,25 @@
         }
       ],
       "pairedAs": [
-        "Paired as Person A (@person_a) · 9/27/2026, 5:33:54 PM",
-        "Paired as Person A (@person_a) · 9/27/2026, 5:33:54 PM"
+        "Paired as Person A (@person_a) · 9/27/2026, 5:50:54 PM",
+        "Paired as Person A (@person_a) · 9/27/2026, 5:50:54 PM"
       ],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Answered · 5:29:54 PM",
-      "lastProgress": "Support bot: Reading the last messages in the thread · 5:28:54 PM",
+      "lastOutcome": "Answered · 5:46:54 PM",
+      "lastProgress": "Support bot: Reading the last messages in the thread · 5:45:54 PM",
       "targets": [
         {
           "id": "bot-1",
           "settings": [
             "claude",
             "opus",
+            "low",
+            "2"
+          ],
+          "settingsText": [
+            "Claude",
+            "Opus 5.5",
             "low",
             "2"
           ],
@@ -58,6 +64,12 @@
             "",
             "1"
           ],
+          "settingsText": [
+            "Codex",
+            "GPT-6-Astra",
+            "Model default",
+            "1"
+          ],
           "answeredHere": false,
           "switchDisabled": true,
           "noAccount": true
@@ -70,6 +82,12 @@
             "",
             "1"
           ],
+          "settingsText": [
+            "Choose…",
+            "Choose…",
+            "Model default",
+            "1"
+          ],
           "answeredHere": false,
           "switchDisabled": true,
           "noAccount": false
@@ -80,6 +98,12 @@
             "claude",
             "sonnet",
             "",
+            "1"
+          ],
+          "settingsText": [
+            "Claude",
+            "Sonnet",
+            "Model default",
             "1"
           ],
           "answeredHere": false,
@@ -120,12 +144,12 @@
         }
       ],
       "pairedAs": [
-        "Paired as Person A (@person_a) · 9/27/2026, 5:33:55 PM",
-        "Paired as Person A (@person_a) · 9/27/2026, 5:33:55 PM"
+        "Paired as Person A (@person_a) · 9/27/2026, 5:50:55 PM",
+        "Paired as Person A (@person_a) · 9/27/2026, 5:50:55 PM"
       ],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Failed: the agent stopped with an error · 4:33:55 PM",
+      "lastOutcome": "Failed: the agent stopped with an error · 4:50:55 PM",
       "lastProgress": "None yet",
       "targets": [
         {
@@ -134,6 +158,12 @@
             "claude",
             "opus",
             "",
+            "1"
+          ],
+          "settingsText": [
+            "Claude",
+            "Opus 5.5",
+            "Model default",
             "1"
           ],
           "answeredHere": true,
@@ -146,6 +176,12 @@
             "claude",
             "sonnet",
             "",
+            "1"
+          ],
+          "settingsText": [
+            "Claude",
+            "Sonnet",
+            "Model default",
             "1"
           ],
           "answeredHere": true,
@@ -169,7 +205,7 @@
       "stateLines": [],
       "pairedAs": [],
       "pairing": "pending",
-      "pairingText": "Example relay · https://relay.example\n\nAnswers questions in the example chats.\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 5:42:56 PM.\n\nWaiting for you to confirm in the relay service…\n\nCancel",
+      "pairingText": "Example relay · https://relay.example\n\nAnswers questions in the example chats.\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 5:59:56 PM.\n\nWaiting for you to confirm in the relay service…\n\nCancel",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
@@ -263,19 +299,25 @@
         }
       ],
       "pairedAs": [
-        "Paired as Person A (@person_a) · 9/27/2026, 5:33:59 PM",
-        "Paired as Person A (@person_a) · 9/27/2026, 5:33:59 PM"
+        "Paired as Person A (@person_a) · 9/27/2026, 5:51:00 PM",
+        "Paired as Person A (@person_a) · 9/27/2026, 5:51:00 PM"
       ],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Answered · 5:29:59 PM",
-      "lastProgress": "Support bot: Reading the last messages in the thread · 5:28:59 PM",
+      "lastOutcome": "Answered · 5:47:00 PM",
+      "lastProgress": "Support bot: Reading the last messages in the thread · 5:46:00 PM",
       "targets": [
         {
           "id": "bot-1",
           "settings": [
             "claude",
             "opus",
+            "low",
+            "2"
+          ],
+          "settingsText": [
+            "Claude",
+            "Opus 5.5",
             "low",
             "2"
           ],
@@ -291,6 +333,12 @@
             "",
             "1"
           ],
+          "settingsText": [
+            "Codex",
+            "GPT-6-Astra",
+            "Model default",
+            "1"
+          ],
           "answeredHere": false,
           "switchDisabled": true,
           "noAccount": true
@@ -303,6 +351,12 @@
             "",
             "1"
           ],
+          "settingsText": [
+            "Choose…",
+            "Choose…",
+            "Model default",
+            "1"
+          ],
           "answeredHere": false,
           "switchDisabled": true,
           "noAccount": false
@@ -313,6 +367,12 @@
             "claude",
             "sonnet",
             "",
+            "1"
+          ],
+          "settingsText": [
+            "Claude",
+            "Sonnet",
+            "Model default",
             "1"
           ],
           "answeredHere": false,
@@ -353,12 +413,12 @@
         }
       ],
       "pairedAs": [
-        "Paired as Person A (@person_a) · 9/27/2026, 5:34:00 PM",
-        "Paired as Person A (@person_a) · 9/27/2026, 5:34:00 PM"
+        "Paired as Person A (@person_a) · 9/27/2026, 5:51:01 PM",
+        "Paired as Person A (@person_a) · 9/27/2026, 5:51:01 PM"
       ],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Failed: the agent stopped with an error · 4:34:00 PM",
+      "lastOutcome": "Failed: the agent stopped with an error · 4:51:01 PM",
       "lastProgress": "None yet",
       "targets": [
         {
@@ -367,6 +427,12 @@
             "claude",
             "opus",
             "",
+            "1"
+          ],
+          "settingsText": [
+            "Claude",
+            "Opus 5.5",
+            "Model default",
             "1"
           ],
           "answeredHere": true,
@@ -379,6 +445,12 @@
             "claude",
             "sonnet",
             "",
+            "1"
+          ],
+          "settingsText": [
+            "Claude",
+            "Sonnet",
+            "Model default",
             "1"
           ],
           "answeredHere": true,
@@ -402,7 +474,7 @@
       "stateLines": [],
       "pairedAs": [],
       "pairing": "pending",
-      "pairingText": "Example relay · https://relay.example\n\nAnswers questions in the example chats.\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 5:43:02 PM.\n\nWaiting for you to confirm in the relay service…\n\nCancel",
+      "pairingText": "Example relay · https://relay.example\n\nAnswers questions in the example chats.\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 6:00:02 PM.\n\nWaiting for you to confirm in the relay service…\n\nCancel",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
@@ -496,13 +568,13 @@
         }
       ],
       "pairedAs": [
-        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:34:06",
-        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:34:06"
+        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:51:06",
+        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:51:06"
       ],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Відповіли · 17:30:06",
-      "lastProgress": "Support bot: Reading the last messages in the thread · 17:29:06",
+      "lastOutcome": "Відповіли · 17:47:06",
+      "lastProgress": "Support bot: Reading the last messages in the thread · 17:46:06",
       "targets": [
         {
           "id": "bot-1",
@@ -510,6 +582,12 @@
             "claude",
             "opus",
             "low",
+            "2"
+          ],
+          "settingsText": [
+            "Claude",
+            "Opus 5.5",
+            "низькі",
             "2"
           ],
           "answeredHere": true,
@@ -524,6 +602,12 @@
             "",
             "1"
           ],
+          "settingsText": [
+            "Codex",
+            "GPT-6-Astra",
+            "Типове для моделі",
+            "1"
+          ],
           "answeredHere": false,
           "switchDisabled": true,
           "noAccount": true
@@ -536,6 +620,12 @@
             "",
             "1"
           ],
+          "settingsText": [
+            "Оберіть…",
+            "Оберіть…",
+            "Типове для моделі",
+            "1"
+          ],
           "answeredHere": false,
           "switchDisabled": true,
           "noAccount": false
@@ -546,6 +636,12 @@
             "claude",
             "sonnet",
             "",
+            "1"
+          ],
+          "settingsText": [
+            "Claude",
+            "Sonnet",
+            "Типове для моделі",
             "1"
           ],
           "answeredHere": false,
@@ -586,12 +682,12 @@
         }
       ],
       "pairedAs": [
-        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:34:07",
-        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:34:07"
+        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:51:07",
+        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:51:07"
       ],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 16:34:07",
+      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 16:51:07",
       "lastProgress": "Ще нічого",
       "targets": [
         {
@@ -600,6 +696,12 @@
             "claude",
             "opus",
             "",
+            "1"
+          ],
+          "settingsText": [
+            "Claude",
+            "Opus 5.5",
+            "Типове для моделі",
             "1"
           ],
           "answeredHere": true,
@@ -612,6 +714,12 @@
             "claude",
             "sonnet",
             "",
+            "1"
+          ],
+          "settingsText": [
+            "Claude",
+            "Sonnet",
+            "Типове для моделі",
             "1"
           ],
           "answeredHere": true,
@@ -635,7 +743,7 @@
       "stateLines": [],
       "pairedAs": [],
       "pairing": "pending",
-      "pairingText": "Example relay · https://relay.example\n\nAnswers questions in the example chats.\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 17:43:08.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nСкасувати",
+      "pairingText": "Example relay · https://relay.example\n\nAnswers questions in the example chats.\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 18:00:08.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nСкасувати",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
@@ -729,13 +837,13 @@
         }
       ],
       "pairedAs": [
-        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:34:11",
-        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:34:11"
+        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:51:11",
+        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:51:11"
       ],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Відповіли · 17:30:11",
-      "lastProgress": "Support bot: Reading the last messages in the thread · 17:29:11",
+      "lastOutcome": "Відповіли · 17:47:11",
+      "lastProgress": "Support bot: Reading the last messages in the thread · 17:46:11",
       "targets": [
         {
           "id": "bot-1",
@@ -743,6 +851,12 @@
             "claude",
             "opus",
             "low",
+            "2"
+          ],
+          "settingsText": [
+            "Claude",
+            "Opus 5.5",
+            "низькі",
             "2"
           ],
           "answeredHere": true,
@@ -757,6 +871,12 @@
             "",
             "1"
           ],
+          "settingsText": [
+            "Codex",
+            "GPT-6-Astra",
+            "Типове для моделі",
+            "1"
+          ],
           "answeredHere": false,
           "switchDisabled": true,
           "noAccount": true
@@ -769,6 +889,12 @@
             "",
             "1"
           ],
+          "settingsText": [
+            "Оберіть…",
+            "Оберіть…",
+            "Типове для моделі",
+            "1"
+          ],
           "answeredHere": false,
           "switchDisabled": true,
           "noAccount": false
@@ -779,6 +905,12 @@
             "claude",
             "sonnet",
             "",
+            "1"
+          ],
+          "settingsText": [
+            "Claude",
+            "Sonnet",
+            "Типове для моделі",
             "1"
           ],
           "answeredHere": false,
@@ -819,12 +951,12 @@
         }
       ],
       "pairedAs": [
-        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:34:13",
-        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:34:13"
+        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:51:12",
+        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:51:12"
       ],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 16:34:13",
+      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 16:51:12",
       "lastProgress": "Ще нічого",
       "targets": [
         {
@@ -833,6 +965,12 @@
             "claude",
             "opus",
             "",
+            "1"
+          ],
+          "settingsText": [
+            "Claude",
+            "Opus 5.5",
+            "Типове для моделі",
             "1"
           ],
           "answeredHere": true,
@@ -845,6 +983,12 @@
             "claude",
             "sonnet",
             "",
+            "1"
+          ],
+          "settingsText": [
+            "Claude",
+            "Sonnet",
+            "Типове для моделі",
             "1"
           ],
           "answeredHere": true,
@@ -868,7 +1012,7 @@
       "stateLines": [],
       "pairedAs": [],
       "pairing": "pending",
-      "pairingText": "Example relay · https://relay.example\n\nAnswers questions in the example chats.\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 17:43:16.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nСкасувати",
+      "pairingText": "Example relay · https://relay.example\n\nAnswers questions in the example chats.\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 18:00:14.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nСкасувати",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],

@@ -3,10 +3,12 @@ import { validateLaunchModel } from "@/lib/agent/models";
 import { effortScale } from "@/lib/agent/efforts";
 import {
   guardRelayRoute,
+  refusedHere,
   relayRouteError,
 } from "@/lib/externalRelay/routeGuard";
 import { refreshExternalRelayPollers } from "@/lib/externalRelay/poller";
 import { unpairRelay } from "@/lib/externalRelay/pairing";
+import { ExternalRelayError } from "@/lib/externalRelay/client";
 import {
   publicRelay,
   updateRelayStore,
@@ -46,7 +48,7 @@ export async function PATCH(req: NextRequest, context: Context) {
               ].includes(key),
           )))
     )
-      return NextResponse.json({ error: "malformed" }, { status: 400 });
+      return refusedHere();
     let updated: ReturnType<typeof publicRelay> | null = null;
     updateRelayStore((store) => ({
       ...store,
@@ -58,7 +60,7 @@ export async function PATCH(req: NextRequest, context: Context) {
             id: string;
           };
           if (!targets.some((target) => target.id === patch.id))
-            throw new Error("target missing");
+            throw new ExternalRelayError("not_found", 404);
           targets = targets.map((target) => {
             if (target.id !== patch.id) return target;
             const next = { ...target, ...patch };
@@ -86,7 +88,7 @@ export async function PATCH(req: NextRequest, context: Context) {
               next.hardCapMinutes > 240 ||
               typeof next.enabled !== "boolean"
             )
-              throw new Error("invalid target settings");
+              throw new ExternalRelayError("refused_here", 400);
             return next;
           });
         }

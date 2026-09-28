@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 
+import { effortTierLabel } from "@/components/builderCopy";
 import { accountConnected } from "@/components/onboarding/EnginesStep";
 import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { effortScale } from "@/lib/agent/efforts";
@@ -77,6 +78,8 @@ const ERROR_KEYS: Record<string, Parameters<TFunction>[0]> = {
   operator_only: "externalRelay.error.operatorOnly",
   owner_required: "externalRelay.error.operatorOnly",
   rate_limited: "externalRelay.error.rateLimited",
+  refused_here: "externalRelay.error.refusedHere",
+  local_error: "externalRelay.error.local",
 };
 export function relayErrorText(t: TFunction, code: string): string {
   const key = ERROR_KEYS[code];
@@ -314,7 +317,7 @@ function TargetRow({ relay, target, running, signedIn, busy, onChange, onRoute }
           <select aria-label={`${t("externalRelay.target.effort")} · ${target.name}`} value={target.effort ?? ""} disabled={busy || !target.engine} className={input}
             onChange={(event) => onChange({ effort: event.target.value || null })}>
             <option value="">{t("externalRelay.target.effortDefault")}</option>
-            {scale.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
+            {scale.map((effort) => <option key={effort} value={effort}>{effortTierLabel(t, effort)}</option>)}
           </select>
         ))}
         {field(t("externalRelay.target.concurrency"), (

@@ -66,7 +66,7 @@ test("pairing confirms the identity shown locally and stores credential privatel
           poll_secret: secret,
           code: "1234-5678",
           verify_url: null,
-          expires_at: "2026-09-28T12:10:00Z",
+          expires_at: "2099-09-28T12:10:00Z",
           poll_interval_s: 2,
         },
       };
@@ -127,7 +127,7 @@ test("a prefixed API pairs and carries claims and heartbeats under its prefix", 
     if (req.url === "/relay/v1/pairings")
       return { status: 201, body: {
         pairing_id: "prefixed", poll_secret: secret, code: "1234-5678",
-        verify_url: null, expires_at: "2026-09-28T12:10:00Z", poll_interval_s: 2,
+        verify_url: null, expires_at: "2099-09-28T12:10:00Z", poll_interval_s: 2,
       } };
     if (req.url === "/relay/v1/requests/claim") return { status: 204 };
     if (req.url === "/relay/v1/requests/request_1/heartbeat")

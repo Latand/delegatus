@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   guardRelayRoute,
+  refusedHere,
   relayRouteError,
 } from "@/lib/externalRelay/routeGuard";
 import {
@@ -29,7 +30,7 @@ export async function POST(req: NextRequest, context: Context) {
   try {
     const body = await req.json();
     if (typeof body?.ownerId !== "string")
-      return NextResponse.json({ error: "malformed" }, { status: 400 });
+      return refusedHere();
     const relay = await confirmRelayPairing(
       (await context.params).id,
       body.ownerId,

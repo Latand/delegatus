@@ -99,6 +99,8 @@ export const en = {
   "externalRelay.error.staging": "This is a staging Delegatus, where relays stay off.",
   "externalRelay.error.operatorOnly": "Only the owner of this install can change relays.",
   "externalRelay.error.rateLimited": "The relay service asked to wait. Try again in a minute.",
+  "externalRelay.error.refusedHere": "Delegatus did not accept this change. Reload and try again.",
+  "externalRelay.error.local": "Delegatus could not finish this. Try again.",
   "externalRelay.error.other": "The relay service refused ({code}).",
   "links.thisInstall": "This install",
   "links.intro": "Enter the address other machines use to reach this Delegatus install.",
