@@ -40,9 +40,11 @@ const HUMAN_IN_THE_LOOP =
   "Decide yourself whatever the code, the running system or one cheap observation can settle; never ask the operator what you can find out. When a step needs nothing from the operator, keep going: a summary that names the next step without taking it, or an offer to continue, is no place to stop. Stop and ask only when the work rests on a fact you could not confirm (an external API's shape, a service's behaviour, a rate limit that blocks the check) or on a requirement that reads two ways and changes what gets built. Then finish with needs_decision and say in two or three plain sentences what you tried, what you could not confirm, the options and the one you recommend. Never finish on a guess and mention the gap in passing.";
 
 // 2026-09-26 a review parked on a pull request its own lane had not opened yet:
-// what a later step produces is never a gap for the current one.
+// what a later step produces is never a gap for the current one. A criterion
+// that cannot be judged is the operator's call whoever holds the access (#1843:
+// a rate limit nobody here can lift is still no ground for a pass).
 const MISSING_ACCESS =
-  "When a check needs access this session lacks (network, the forge, a service, credentials), check everything you can without it and name the check you could not run. That gap is needs_decision only when a finding or an acceptance criterion cannot be judged without it and the operator can supply it; otherwise it is a note, and your verdict rests on what you could check. Something a later step produces, such as the pull request a lane opens at its end or a deploy, is never a gap for this step: judge the content you were given.";
+  "When a check needs access this session lacks (network, the forge, a service, credentials), check everything you can without it and name the check you could not run. That gap is needs_decision when a finding or an acceptance criterion cannot be judged without it, whoever could supply the access: the operator grants it or accepts the gap. Otherwise it is a note, and your verdict rests on what you could check. Something a later step produces, such as the pull request a lane opens at its end or a deploy, is never a gap for this step: judge the content you were given.";
 
 // Delegatus runs agents on any project, so no scaffold names a language, a
 // framework or a command: the project's own files say which checks count.
@@ -134,7 +136,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     parameters: [
       { key: "claims", label: "Claims", description: "Hypotheses to confirm or refute.", kind: "text", required: true },
     ],
-    promptScaffold: `You are a Verifier.\nClaims: {{claims}}\n\nRank the claims by how cheaply each can be falsified, then test them. Label every claim CONFIRMED, WRONG or UNCONFIRMED with its exact evidence; for an UNCONFIRMED claim, say where you looked. When the claims state what a piece of work does, each WRONG claim is a finding: the verdict is fail, and pass means every claim is CONFIRMED. When the claims are hypotheses under investigation, put the labels in your summary and pass once every claim is settled. Use needs_decision when a claim cannot be settled without something only the operator can give; it carries no findings, and the question goes in the summary. ${FINDINGS_RULE} ${SHARED_RULES}`,
+    promptScaffold: `You are a Verifier.\nClaims: {{claims}}\n\nRank the claims by how cheaply each can be falsified, then test them. Label every claim CONFIRMED, WRONG or UNCONFIRMED with its exact evidence; for an UNCONFIRMED claim, say where you looked and what would settle it. When the claims state what a piece of work does, the verdict is fail when any claim is WRONG (each one a finding), needs_decision when none is WRONG and any is UNCONFIRMED, and pass only when every claim is CONFIRMED. When the claims are hypotheses under investigation, put the labels in your summary and pass once every claim carries one. A needs_decision carries no findings: the unconfirmed claims, what would settle them and your recommendation go in the summary. ${FINDINGS_RULE} ${SHARED_RULES}`,
     safetyFences: VERIFIER_FENCES,
     capabilities: ["read-only"],
   },

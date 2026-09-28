@@ -280,8 +280,20 @@ test("every role scaffold carries the shared rules and names no stack or retired
     expect(body).toContain("search_transcripts");
     expect(body).toContain("finish with needs_decision");
     expect(body).toContain("When a check needs access this session lacks");
+    /* Review of #2301 (C3): a criterion that cannot be judged is needs_decision
+       whoever holds the access, as human in the loop says for a rate limit. */
+    expect(body).toContain("cannot be judged without it, whoever could supply the access");
+    expect(body).not.toContain("and the operator can supply it");
     expect(body).toContain("The project's own rules govern the work");
   }
+});
+
+/* Review of #2301: every combination of claim labels about finished work
+   maps to one verdict. */
+test("the verifier names a verdict for every combination of claim labels", () => {
+  const verifier = resolveRole("verifier", { claims: "the export keeps every row" });
+  if (!verifier.ok) throw new Error(verifier.error);
+  expect(verifier.value.prompt).toContain("the verdict is fail when any claim is WRONG (each one a finding), needs_decision when none is WRONG and any is UNCONFIRMED, and pass only when every claim is CONFIRMED.");
 });
 
 /* §3 (a): a fix round tells a light fixer to fix only what names its place

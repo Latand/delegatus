@@ -252,7 +252,7 @@ export function reviewerOriginSpawnGuidance(role: string | null): string {
 }
 
 export function nestingDepthGuidance(childDepth: number, maxDepth: number): string {
-  return `Agent nesting is capped at depth ${maxDepth} and this launch would create a depth-${childDepth} child. Finish delegated work in-session or report the need to your parent. An operator can raise maxAgentNestingDepth in Viewer spawn settings (PATCH /api/spawn/policy).`;
+  return `Agent nesting is capped at depth ${maxDepth} and this launch would create a depth-${childDepth} child. Finish delegated work in-session or report the need to your parent. An operator can raise maxAgentNestingDepth in Delegatus's spawn settings.`;
 }
 
 type AdmissionFileView = Pick<RegistryFile, "conversations" | "conversationAliases" | "lineageEdges" | "memberships">;

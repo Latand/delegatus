@@ -607,9 +607,10 @@ declared outputs.
   the next stage. P3 findings are still findings: a reviewer uses them only
   for work that must be done before merge.
 - **Missing access.** Check everything possible without it and name the check
-  that could not run. It becomes `needs_decision` only when a finding or an
-  acceptance criterion cannot be judged without it and the operator can supply
-  it; otherwise it is a note and the verdict rests on what was checked.
+  that could not run. It becomes `needs_decision` when a finding or an
+  acceptance criterion cannot be judged without it, whoever could supply the
+  access: the operator grants it or accepts the gap. Otherwise it is a note
+  and the verdict rests on what was checked.
   Something a later step produces (the PR a lane opens at the end, a deploy)
   is never a gap for the current step. This settles C3 and the 09-26 park.
 - **WRONG-PREMISE / OVER-BUILT.** Labels, as in §2.1 and §2.3. A WRONG-PREMISE
@@ -712,7 +713,7 @@ Decide yourself whatever the code, the running system or one cheap observation c
 `MISSING_ACCESS` (new):
 
 ```text
-When a check needs access this session lacks (network, the forge, a service, credentials), check everything you can without it and name the check you could not run. That gap is needs_decision only when a finding or an acceptance criterion cannot be judged without it and the operator can supply it; otherwise it is a note, and your verdict rests on what you could check. Something a later step produces, such as the pull request a lane opens at its end or a deploy, is never a gap for this step: judge the content you were given.
+When a check needs access this session lacks (network, the forge, a service, credentials), check everything you can without it and name the check you could not run. That gap is needs_decision when a finding or an acceptance criterion cannot be judged without it, whoever could supply the access: the operator grants it or accepts the gap. Otherwise it is a note, and your verdict rests on what you could check. Something a later step produces, such as the pull request a lane opens at its end or a deploy, is never a gap for this step: judge the content you were given.
 ```
 
 `PROJECT_RULES` (new):
@@ -802,7 +803,7 @@ Run the project's own checks for what the change touches; when a check wants to 
 You are a Verifier.
 Claims: {{claims}}
 
-Rank the claims by how cheaply each can be falsified, then test them. Label every claim CONFIRMED, WRONG or UNCONFIRMED with its exact evidence; for an UNCONFIRMED claim, say where you looked. When the claims state what a piece of work does, each WRONG claim is a finding: the verdict is fail, and pass means every claim is CONFIRMED. When the claims are hypotheses under investigation, put the labels in your summary and pass once every claim is settled. Use needs_decision when a claim cannot be settled without something only the operator can give; it carries no findings, and the question goes in the summary. ${FINDINGS_RULE} ${SHARED_RULES}
+Rank the claims by how cheaply each can be falsified, then test them. Label every claim CONFIRMED, WRONG or UNCONFIRMED with its exact evidence; for an UNCONFIRMED claim, say where you looked and what would settle it. When the claims state what a piece of work does, the verdict is fail when any claim is WRONG (each one a finding), needs_decision when none is WRONG and any is UNCONFIRMED, and pass only when every claim is CONFIRMED. When the claims are hypotheses under investigation, put the labels in your summary and pass once every claim carries one. A needs_decision carries no findings: the unconfirmed claims, what would settle them and your recommendation go in the summary. ${FINDINGS_RULE} ${SHARED_RULES}
 ```
 
 **builder**:
@@ -1253,8 +1254,15 @@ never edits `role-presets.json`.
   task renames it.
 - **The deployer's role-table description** no longer says blue/green either,
   so the review check's grep holds on the seat mandate.
-- **The reviewer-spawn refusal** (`agent/spawnAdmission.ts`) no longer names
-  the install's endpoint or the forge.
+- **The reviewer-spawn and nesting-depth refusals** (`agent/spawnAdmission.ts`)
+  no longer name the install's endpoints or the forge.
+- **Missing access agrees with human in the loop** (review of #2301). A
+  criterion that cannot be judged without missing access is needs_decision
+  whoever could supply it, so the #1843 case (a third party's rate limit)
+  reads the same under both rules; §2.4 and §2.10 A above carry the change.
+- **The verifier's verdicts cover every label** (review of #2301): for claims
+  about finished work, any WRONG is fail, otherwise any UNCONFIRMED is
+  needs_decision, and pass needs every claim CONFIRMED.
 - **Two readers learned the spawn line** (review of #2301). The reviewer's
   verdict chip (`review/reviewOutcome.ts`) already parsed a spawned reviewer's
   last message: `Verdict: pass` reads as an approval with no findings, `fail`
