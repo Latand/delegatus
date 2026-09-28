@@ -81,10 +81,10 @@ export async function GET(req: NextRequest): Promise<NextResponse<PipelinesRespo
     reviewer-created container, so this route check is defense in depth.
     An admitted request answers who briefed it, for the sizing rules. */
 function pipelineOrigin(req: NextRequest, body: CreatePipelineRequest): NextResponse<PipelineApiError> | PipelineBriefer {
-  if (!isAgentInitiatedSpawn(req)) return { kind: "operator" };
+  const capability = req.headers.get(VIEWER_SPAWN_CAPABILITY_HEADER);
+  if (capability === null && !isAgentInitiatedSpawn(req)) return { kind: "operator" };
   const registry = agentRegistry();
-  const capability = req.headers.get(VIEWER_SPAWN_CAPABILITY_HEADER)?.trim();
-  if (capability) {
+  if (capability !== null) {
     const caller = authenticatedAgentSpawnCaller(req, body.src, registry);
     if ("error" in caller) return NextResponse.json({ error: caller.error }, { status: caller.status ?? 403 });
     /* The sizing rules judge the authenticated conversation; the operator's

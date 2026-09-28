@@ -1649,17 +1649,17 @@ function deliveryAcknowledgement(pipeline: import("@/lib/pipelines/types").Pipel
 
 const PIPELINE_CREATION_QUEUED_NOTE = "Pipeline state is not writable right now (a Viewer deployment is handing over, or the store is busy), so this pipeline is queued under the pipelineId above. The serving release stores and starts it on its next controller pass; get_pipeline answers once it is stored. Do not create it again.";
 
-function assertPipelineSeatAuthority(dependencies: ViewerMcpDomainDependencies): void {
+function assertPipelineSeatAuthority(dependencies: ViewerMcpDomainDependencies, src?: unknown): void {
   const caller = attributionOf(dependencies).conversationId;
-  if (!caller) return;
   const snapshot = dependencies.registrySnapshot?.();
   const lookup = snapshot ? readOnlyConversationLookupFromSnapshot(snapshot) : null;
-  const refusal = revokedSeatPipelineRefusal(caller, id => lookup?.canonicalConversationId(id as `conversation_${string}`) ?? id);
+  const source = !caller && typeof src === "string" ? lookup?.conversationForPath(src.trim()) : null;
+  const refusal = revokedSeatPipelineRefusal(caller ?? source?.id ?? null, id => lookup?.canonicalConversationId(id as `conversation_${string}`) ?? id);
   if (refusal) throw new McpToolRefusal(refusal, { code: "orchestrator_seat_revoked", status: 403 });
 }
 
 async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
-  if (dependencies) assertPipelineSeatAuthority(dependencies);
+  if (dependencies) assertPipelineSeatAuthority(dependencies, args.src);
   const request = withoutKeys(args, ["clientRequestId", "recoveryOnly"]);
   if (context?.dispatch) context.dispatch.attempted = true;
   /* Every MCP caller is an agent; the sizing rules judge the attributed

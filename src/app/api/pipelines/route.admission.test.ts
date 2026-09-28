@@ -199,11 +199,29 @@ test("rotation revokes A's pipeline control while B, its builder and a live depu
   const oldHttpCreate = await POST(pipelineRequest(request(a, "old HTTP duplicate"), { "x-llv-spawn-capability": a.capability }));
   expect(oldHttpCreate.status).toBe(403);
   expect(await oldHttpCreate.json()).toMatchObject({ code: "orchestrator_seat_revoked", error: expect.stringContaining(b.conversationId) });
+  const oldBrowserCreate = await POST(pipelineRequest(request(a, "old browser header duplicate"), {
+    "x-llv-spawn-capability": a.capability,
+    origin: "http://127.0.0.1:8898",
+    "sec-fetch-site": "same-origin",
+  }));
+  expect(oldBrowserCreate.status).toBe(403);
+  expect(await oldBrowserCreate.json()).toMatchObject({ code: "orchestrator_seat_revoked", error: expect.stringContaining(b.conversationId) });
   const oldSourceCreate = await POST(pipelineRequest(request(a, "old source duplicate")));
   expect(oldSourceCreate.status).toBe(403);
   expect(await oldSourceCreate.json()).toMatchObject({ code: "orchestrator_seat_revoked" });
+  expect(productionDomainDependencies.callerAttribution?.()).toMatchObject({ kind: "unidentified", conversationId: null });
+  const unidentifiedMcp = createMcpToolService(viewerMcpBindings(undefined, undefined, productionDomainDependencies), new MemoryMcpReceiptStore());
+  const oldUnattributedCreate = await unidentifiedMcp.callTool("create_pipeline", {
+    clientRequestId: "revoked-src-create", ...request(a, "old unattributed duplicate"),
+  });
+  expect(oldUnattributedCreate).toMatchObject({ ok: false });
+  expect(JSON.stringify(oldUnattributedCreate)).toContain(b.conversationId);
   expect({ pipelines: getPipelines().pipelines.length, tasks: loadTasks().length, launches: Object.keys(agentRegistry().readOnlySnapshot().receipts).length }).toEqual(beforeRefusal);
 
+  const operatorCreate = await POST(pipelineRequest({ task: "operator lane", repoDir: process.cwd(), autoStart: false, stages: [] }, {
+    origin: "http://127.0.0.1:8898", "sec-fetch-site": "same-origin",
+  }));
+  expect(operatorCreate.status).toBe(201);
   const created = await POST(pipelineRequest(request(b, "successor lane"), { "x-llv-spawn-capability": b.capability }));
   expect(created.status).toBe(201);
   actor = b;
