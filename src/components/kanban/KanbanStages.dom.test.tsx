@@ -347,7 +347,7 @@ test("Stages opens the sheet on the live stage: graph or navigator, loop, and a 
   expect(view.getAttribute("role")).toBe("dialog");
   same(document.activeElement, pane(host, "verify"));
   expect(view.querySelector("header h2")?.textContent).toBe("Restore search results after the index rebuild");
-  expect(view.querySelector("header .progress")?.textContent).toBe("4 stages · Verify running · attempt 2");
+  expect(view.querySelector("header .progress")?.textContent).toBe("4 stages · Verify · 2 running");
   /* The lane's controls sit in the head, and no bar of their own counts the
      stages in view. */
   expect(view.querySelector("header .lane-bar [data-collapse-finished]")).toBeTruthy();
@@ -357,12 +357,12 @@ test("Stages opens the sheet on the live stage: graph or navigator, loop, and a 
   expect(view.querySelectorAll(".lane-bar")).toHaveLength(1);
   expect(view.querySelector(".lane-bar .pos, .lane-bar .lane-count")).toBeNull();
   /* Wide enough, the graph is shown, and it is the navigation: it draws each
-     stage once, marks the one in focus and carries the loop on its fail edge,
-     so the chip strip is not drawn beside it. */
+     stage once, marks the one in focus and carries the loop in its failing
+     stage's strip, so the chip strip is not drawn beside it. */
   expect(view.querySelector("[data-sheet-graph]")?.getAttribute("aria-pressed")).toBe("true");
   expect(view.querySelectorAll(".gs-graph .pnode")).toHaveLength(4);
   expect(view.querySelector(".gs-graph .pnode.selected")?.getAttribute("data-stage")).toBe("verify");
-  expect(view.querySelector(".gs-graph .pelabel.fail")).toBeTruthy();
+  expect(view.querySelector('.gs-graph .pstrip[data-strip="verify:fail:implement"]')).toBeTruthy();
   expect(view.querySelector(".gs-nav")).toBeNull();
   expect(view.querySelectorAll("[data-nav-stage]")).toHaveLength(0);
   /* Hidden, the graph gives way to its collapsed form: the numbered chips and
@@ -394,7 +394,7 @@ test("Stages opens the sheet on the live stage: graph or navigator, loop, and a 
   expect(implement.querySelector(".prole [data-engine-mark], .prole [data-effort-pills]")).toBeNull();
   expect(implement.querySelector(".prole")?.getAttribute("title")).toContain("Claude");
   expect(implement.querySelector(".pane-sub")?.textContent).toBe("started by Verify · fail");
-  expect([...implement.querySelectorAll(".attempts button")].map((button) => [button.textContent, button.getAttribute("aria-pressed")])).toEqual([["#1 · passed", "false"], ["#2 · passed", "true"]]);
+  expect([...implement.querySelectorAll(".attempts button")].map((button) => [button.textContent, button.getAttribute("aria-pressed")])).toEqual([["attempt 1 · passed", "false"], ["attempt 2 · passed", "true"]]);
   expect([...pane(host, "review")!.querySelectorAll(".rounds .rchip")].map((chip) => chip.textContent)).toEqual(["Round 1 · changes requested", "Round 2 · approved"]);
   expect(pane(host, "verify")!.querySelector(".pane-sub")?.textContent).toBe("started by Review · pass · on fail → Implement · 1/2");
   /* Each started pane holds its shown attempt's conversation as a reader. */
@@ -484,6 +484,29 @@ test("Collapse finished folds passed stages and lets their readers go; a graph n
   click(card(host).querySelector("[data-open-stages]"));
   await tick();
   expect(pane(host, "implement")!.dataset.collapsed).toBe("1");
+  expect(readerIn(pane(host, "verify"))).toBe(idOf(verify1));
+});
+
+/* The engine appended an adopted helper conversation to Verify's run as n=2,
+   so Verify's own attempts read 1 and 3: the tabs say attempt 1 and 2, as the
+   graph does, and the record's n still chooses the reader. */
+test("attempt tabs number the stage's own attempts, not the record's n", async () => {
+  const helper = conversation("verify-helper");
+  const adopted = searchPipeline({
+    runs: searchPipeline().runs.map((run) => (run.stageId === "verify"
+      ? { ...run, attempts: [run.attempts[0]!, attempt(2, "passed", helper, 3000, { historical: true }), { ...run.attempts[1]!, n: 3 }] }
+      : run)),
+  } as Partial<Pipeline>);
+  const { host } = mount(adopted, { files: [...baseFiles, helper] });
+  await tick();
+  click(card(host).querySelector("[data-open-stages]"));
+  await tick();
+  const tabs = [...pane(host, "verify")!.querySelectorAll<HTMLElement>("[data-attempt]")];
+  expect(tabs.map((tab) => tab.dataset.attempt)).toEqual(["1", "3"]);
+  expect(tabs.map((tab) => tab.textContent)).toEqual(["attempt 1 · failed", "attempt 2 · running"]);
+  expect(tabs[1]!.getAttribute("aria-label")).toBe("Attempt 2, running");
+  click(tabs[0]!);
+  await tick();
   expect(readerIn(pane(host, "verify"))).toBe(idOf(verify1));
 });
 

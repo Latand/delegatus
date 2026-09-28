@@ -2334,6 +2334,7 @@ function ProjectDashboardView({
             <MobilePipelinesScreen
               pipelines={activePipelines}
               flows={flows}
+              files={files}
               now={nowSeconds}
               host={mobileShell}
               renderSheet={renderMobileSheet}

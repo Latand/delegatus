@@ -11,7 +11,9 @@ import type { FileEntry } from "@/lib/types";
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-completion-"));
 const { createPipelineFromRequest, reportStageCompletion, tickPipelines } = await import("./engine");
 const { registerPipelineTick } = await import("./controllerSignal");
-const { loadPipelines, savePipelines } = await import("./store");
+const { loadPipelines, savePipelines, withPipelineMutation } = await import("./store");
+const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
+const { createMcpToolService, FileMcpReceiptStore } = await import("@/lib/mcp/server");
 const { asStoredLegacyReviewLane } = await import("./fixtures/legacyReviewLane");
 type PipelinePorts = import("./engine").PipelinePorts;
 type StageCompletionRequest = import("./engine").StageCompletionRequest;
@@ -142,6 +144,61 @@ async function started(ports: PipelinePorts, stages: unknown[]): Promise<string>
 
 const current = () => loadPipelines()[0]!;
 const attemptsOf = (stageId: string) => current().runs.find((run) => run.stageId === stageId)!.attempts;
+
+test("stage_report retries the same request after a pre-admission pipeline store busy refusal", async () => {
+  const h = harness();
+  await started(h.ports, [stage("build", null)]);
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    reportStageCompletion: (request: StageCompletionRequest, actor: ReturnType<typeof agent>) => reportStageCompletion(request, actor, h.ports),
+    callerAttribution: () => ({ kind: "worker", conversationId: "conversation_stage_1", role: "builder" }),
+  } as never);
+  const receiptPath = path.join(process.env.LLV_STATE_DIR!, "busy-stage-report-receipts.json");
+  const service = createMcpToolService(bindings, new FileMcpReceiptStore(receiptPath));
+  const args = { clientRequestId: "busy-then-accepted", verdict: "pass", summary: "Build checked." };
+  let release!: () => void;
+  let entered!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const acquired = new Promise<void>((resolve) => { entered = resolve; });
+  const oldWait = process.env.LLV_PIPELINE_LOCK_WAIT_MS;
+  process.env.LLV_PIPELINE_LOCK_WAIT_MS = "0";
+  const holder = withPipelineMutation(async () => { entered(); await held; });
+  await acquired;
+  try {
+    expect(await service.callTool("stage_report", args)).toMatchObject({ ok: false, code: "tool_failed", details: { code: "store_busy", evidence: "not-admitted", nextAction: "retry-same-key" } });
+  } finally {
+    release();
+    await holder;
+    if (oldWait === undefined) delete process.env.LLV_PIPELINE_LOCK_WAIT_MS;
+    else process.env.LLV_PIPELINE_LOCK_WAIT_MS = oldWait;
+  }
+  expect(current().stageReports).toBeUndefined();
+  const accepted = await service.callTool("stage_report", args);
+  expect(accepted).toMatchObject({ ok: true, replayed: false, report: { seq: 1 } });
+  const reopened = createMcpToolService(bindings, new FileMcpReceiptStore(receiptPath));
+  expect(await reopened.callTool("stage_report", args)).toEqual({ ...accepted, replayed: true });
+  expect(current().stageReports).toHaveLength(1);
+  expect(attemptsOf("build")[0]!.report).toMatchObject({ calls: 1, verdict: { status: "pass" } });
+});
+
+test("terminal JSON with a bare severity cannot settle as a review finding", async () => {
+  const h = harness();
+  await reachedVerify(h, FIX_LOOP());
+  await tickPipelines([h.endTurn(2, 'Reviewed.\n\n```json\n{"status":"fail","findings":["P1"]}\n```')], h.ports);
+  expect(attemptsOf("verify")[0]!.verdict?.findings).toBeUndefined();
+  expect(h.spawnedStages).toEqual(["build", "verify"]);
+});
+
+test("a long stage_report finding survives settlement and the fix relay intact", async () => {
+  const h = harness();
+  await reachedVerify(h, FIX_LOOP());
+  const body = "x".repeat(1_995);
+  const result = await h.report(2, { verdict: "fail", findings: [{ severity: "P1", text: body }] });
+  expect(result.report?.verdict.findings).toEqual([`P1 — ${body}`]);
+  await tickPipelines([h.endTurn(2, "Reviewed.")], h.ports);
+  await tickPipelines([], h.ports);
+  expect(attemptsOf("verify")[0]!.verdict?.rankedFindings).toEqual([{ severity: "P1", text: body }]);
+  expect(attemptsOf("build")[1]!.input).toContain(`P1 — ${body}`);
+});
 
 test("a live attempt's reported completion settles it when the turn ends, with server-collected provenance", async () => {
   const h = harness();
