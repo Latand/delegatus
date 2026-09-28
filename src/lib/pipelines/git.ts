@@ -236,7 +236,7 @@ export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: P
   if (localSha && remoteSha && localSha !== remoteSha) {
     const remoteContainsLocal = await exec("git", ["merge-base", "--is-ancestor", localSha, remoteSha], pipeline.worktreeDir, signal);
     if (remoteContainsLocal.code === 0) {
-      const merged = await exec("git", ["merge", "--ff-only", remoteSha], pipeline.worktreeDir, signal);
+      const merged = await exec("git", ["merge", "--ff-only", "--no-overwrite-ignore", remoteSha], pipeline.worktreeDir, signal);
       if (merged.code !== 0) return failure("fast-forwarding the delivery branch before production", merged);
       expectedHead = remoteSha;
     }
@@ -747,7 +747,7 @@ export function synchronizePipelineRetryHead(pipeline: Pipeline, exec: ExecPort)
 
   const localIsAncestor = exec("git", ["merge-base", "--is-ancestor", local.sha, remoteSha], pipeline.worktreeDir);
   if (localIsAncestor.code === 0) {
-    const merge = exec("git", ["merge", "--ff-only", remoteSha], pipeline.worktreeDir);
+    const merge = exec("git", ["merge", "--ff-only", "--no-overwrite-ignore", remoteSha], pipeline.worktreeDir);
     if (merge.code !== 0) return failure("fast-forwarding the pipeline worktree to its remote repair", merge);
     return { ok: true, sha: remoteSha };
   }

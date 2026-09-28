@@ -5525,7 +5525,7 @@ test("retrying a parked review-loop fast-forwards to the pushed repair and recor
   expect(fastForwarded).toBe(true);
   expect(h.calls).toContain(`flow:/codex/stage-1.jsonl:${ORIGIN_MAIN_SHA}:${repairHead}:AC1`);
   expect(h.calls.some((call) => call.includes("reset --hard"))).toBe(false);
-  expect(h.calls.indexOf("flow-close:flow-1")).toBeLessThan(h.calls.indexOf(`git merge --ff-only ${repairHead}`));
+  expect(h.calls.indexOf("flow-close:flow-1")).toBeLessThan(h.calls.indexOf(`git merge --ff-only --no-overwrite-ignore ${repairHead}`));
 });
 
 test("issue 533: an in-loop repair advances expectedReviewHeadSha with reviewHeadSha from d03cc211 to 5755f992", async () => {
