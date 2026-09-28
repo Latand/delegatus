@@ -176,8 +176,10 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
   /* What the Phone step ended on: leaving it counts it done only once phone
      access is on, and skipped otherwise. */
   const phoneOutcome = useRef<PhoneStepOutcome | null>(null);
-  /* Whether the relay step paired a service; leaving it without one is a skip. */
+  /* Whether the install holds a paired relay, as the relay step last read it;
+     leaving the step without one is a skip, and with one it is done. */
   const relayPaired = useRef(false);
+  const onHasRelay = useCallback((paired: boolean) => { relayPaired.current = paired; }, []);
   /* The phone state on screen, for who holds the one filled button. */
   const [phoneState, setPhoneState] = useState<PhoneStepOutcome | null>(null);
   /* Every guide step the guide showed; finishing marks the ones never left by
@@ -344,7 +346,7 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
   ) : current === "voice" ? (
     <VoiceStep onSkip={() => skipLater("voice")} onGoEngines={() => goTo("engines")} />
   ) : current === "relay" ? (
-    <RelayStep claude={claude} codex={codex} onGoEngines={() => goTo("engines")} onPaired={() => { relayPaired.current = true; markDone("relay"); }} onSkip={() => skipLater("relay")} />
+    <RelayStep claude={claude} codex={codex} onGoEngines={() => goTo("engines")} onPaired={() => { relayPaired.current = true; markDone("relay"); }} onHasRelay={onHasRelay} onSkip={() => skipLater("relay")} />
   ) : current === "project" ? (
     <ProjectStep projects={projects} chosen={chosen} onChoose={choose} onCreate={onCreateProject} />
   ) : current === "telegram" ? (

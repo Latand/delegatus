@@ -2,14 +2,41 @@
   "readings": [
     {
       "label": "settings-paired-390-en",
+      "entry": {
+        "text": "External relay",
+        "width": 390,
+        "height": 44
+      },
       "overflow": false,
       "minControlHeight": 44,
       "states": [
         "polling",
         "paused"
       ],
-      "lastOutcome": "Answered · 5:08:35 PM",
-      "lastProgress": "Support bot: Reading the last messages in the thread · 5:07:35 PM",
+      "stateLines": [
+        {
+          "state": "polling",
+          "text": "Asking the service for requests.",
+          "tone": "plain",
+          "color": "rgb(232, 232, 236)",
+          "background": "rgb(20, 21, 27)"
+        },
+        {
+          "state": "paused",
+          "text": "Paused. This install takes no requests from the service.",
+          "tone": "plain",
+          "color": "rgb(232, 232, 236)",
+          "background": "rgb(20, 21, 27)"
+        }
+      ],
+      "pairedAs": [
+        "Paired as Person A (@person_a) · 9/27/2026, 5:33:54 PM",
+        "Paired as Person A (@person_a) · 9/27/2026, 5:33:54 PM"
+      ],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Answered · 5:29:54 PM",
+      "lastProgress": "Support bot: Reading the last messages in the thread · 5:28:54 PM",
       "targets": [
         {
           "id": "bot-1",
@@ -64,10 +91,85 @@
       "owner": null
     },
     {
+      "label": "settings-troubled-390-en",
+      "entry": {
+        "text": "External relay",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "minControlHeight": 44,
+      "states": [
+        "credential_rejected",
+        "unreachable"
+      ],
+      "stateLines": [
+        {
+          "state": "credential_rejected",
+          "text": "The service no longer accepts this pairing. Disconnect and pair again.",
+          "tone": "danger",
+          "color": "rgb(240, 113, 113)",
+          "background": "oklab(0.699398 0.145786 0.0587783 / 0.1)"
+        },
+        {
+          "state": "unreachable",
+          "text": "The service cannot be reached. Retrying.",
+          "tone": "warning",
+          "color": "rgb(224, 174, 69)",
+          "background": "rgb(43, 35, 18)"
+        }
+      ],
+      "pairedAs": [
+        "Paired as Person A (@person_a) · 9/27/2026, 5:33:55 PM",
+        "Paired as Person A (@person_a) · 9/27/2026, 5:33:55 PM"
+      ],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Failed: the agent stopped with an error · 4:33:55 PM",
+      "lastProgress": "None yet",
+      "targets": [
+        {
+          "id": "bot-1",
+          "settings": [
+            "claude",
+            "opus",
+            "",
+            "1"
+          ],
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "settings": [
+            "claude",
+            "sonnet",
+            "",
+            "1"
+          ],
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        }
+      ],
+      "code": null,
+      "owner": null
+    },
+    {
       "label": "settings-code-390-en",
+      "entry": {
+        "text": "External relay",
+        "width": 390,
+        "height": 44
+      },
       "overflow": false,
       "minControlHeight": 44,
       "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "pairing": "pending",
+      "pairingText": "Example relay · https://relay.example\n\nAnswers questions in the example chats.\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 5:42:56 PM.\n\nWaiting for you to confirm in the relay service…\n\nCancel",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
@@ -76,14 +178,43 @@
     },
     {
       "label": "settings-confirm-390-en",
+      "entry": {
+        "text": "External relay",
+        "width": 390,
+        "height": 44
+      },
       "overflow": false,
       "minControlHeight": 44,
       "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "pairing": "awaiting_install",
+      "pairingText": "Example relay · https://relay.example\n\nAnswers questions in the example chats.\n\nThe relay service says this is Person A (@person_a). Is this you?\n\nYes, pair\nNo, cancel",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
       "code": null,
       "owner": "The relay service says this is Person A (@person_a). Is this you?"
+    },
+    {
+      "label": "settings-ended-390-en",
+      "entry": {
+        "text": "External relay",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "minControlHeight": 44,
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "pairing": "denied",
+      "pairingText": "Example relay · https://relay.example\n\nAnswers questions in the example chats.\n\nThe relay service declined this pairing.\n\nThe owner declined this install in the relay service.\n\nStart again",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "code": null,
+      "owner": null
     },
     {
       "label": "guide-step-390-en",
@@ -104,14 +235,41 @@
     },
     {
       "label": "settings-paired-1440-en",
+      "entry": {
+        "text": "External relay",
+        "width": 222,
+        "height": 30
+      },
       "overflow": false,
       "minControlHeight": 44,
       "states": [
         "polling",
         "paused"
       ],
-      "lastOutcome": "Answered · 5:08:39 PM",
-      "lastProgress": "Support bot: Reading the last messages in the thread · 5:07:39 PM",
+      "stateLines": [
+        {
+          "state": "polling",
+          "text": "Asking the service for requests.",
+          "tone": "plain",
+          "color": "rgb(232, 232, 236)",
+          "background": "rgb(20, 21, 27)"
+        },
+        {
+          "state": "paused",
+          "text": "Paused. This install takes no requests from the service.",
+          "tone": "plain",
+          "color": "rgb(232, 232, 236)",
+          "background": "rgb(20, 21, 27)"
+        }
+      ],
+      "pairedAs": [
+        "Paired as Person A (@person_a) · 9/27/2026, 5:33:59 PM",
+        "Paired as Person A (@person_a) · 9/27/2026, 5:33:59 PM"
+      ],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Answered · 5:29:59 PM",
+      "lastProgress": "Support bot: Reading the last messages in the thread · 5:28:59 PM",
       "targets": [
         {
           "id": "bot-1",
@@ -166,10 +324,85 @@
       "owner": null
     },
     {
+      "label": "settings-troubled-1440-en",
+      "entry": {
+        "text": "External relay",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "minControlHeight": 44,
+      "states": [
+        "credential_rejected",
+        "unreachable"
+      ],
+      "stateLines": [
+        {
+          "state": "credential_rejected",
+          "text": "The service no longer accepts this pairing. Disconnect and pair again.",
+          "tone": "danger",
+          "color": "rgb(240, 113, 113)",
+          "background": "oklab(0.699398 0.145786 0.0587783 / 0.1)"
+        },
+        {
+          "state": "unreachable",
+          "text": "The service cannot be reached. Retrying.",
+          "tone": "warning",
+          "color": "rgb(224, 174, 69)",
+          "background": "rgb(43, 35, 18)"
+        }
+      ],
+      "pairedAs": [
+        "Paired as Person A (@person_a) · 9/27/2026, 5:34:00 PM",
+        "Paired as Person A (@person_a) · 9/27/2026, 5:34:00 PM"
+      ],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Failed: the agent stopped with an error · 4:34:00 PM",
+      "lastProgress": "None yet",
+      "targets": [
+        {
+          "id": "bot-1",
+          "settings": [
+            "claude",
+            "opus",
+            "",
+            "1"
+          ],
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "settings": [
+            "claude",
+            "sonnet",
+            "",
+            "1"
+          ],
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        }
+      ],
+      "code": null,
+      "owner": null
+    },
+    {
       "label": "settings-code-1440-en",
+      "entry": {
+        "text": "External relay",
+        "width": 222,
+        "height": 30
+      },
       "overflow": false,
       "minControlHeight": 44,
       "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "pairing": "pending",
+      "pairingText": "Example relay · https://relay.example\n\nAnswers questions in the example chats.\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 5:43:02 PM.\n\nWaiting for you to confirm in the relay service…\n\nCancel",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
@@ -178,14 +411,43 @@
     },
     {
       "label": "settings-confirm-1440-en",
+      "entry": {
+        "text": "External relay",
+        "width": 222,
+        "height": 30
+      },
       "overflow": false,
       "minControlHeight": 44,
       "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "pairing": "awaiting_install",
+      "pairingText": "Example relay · https://relay.example\n\nAnswers questions in the example chats.\n\nThe relay service says this is Person A (@person_a). Is this you?\n\nYes, pair\nNo, cancel",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
       "code": null,
       "owner": "The relay service says this is Person A (@person_a). Is this you?"
+    },
+    {
+      "label": "settings-ended-1440-en",
+      "entry": {
+        "text": "External relay",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "minControlHeight": 44,
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "pairing": "denied",
+      "pairingText": "Example relay · https://relay.example\n\nAnswers questions in the example chats.\n\nThe relay service declined this pairing.\n\nThe owner declined this install in the relay service.\n\nStart again",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "code": null,
+      "owner": null
     },
     {
       "label": "guide-step-1440-en",
@@ -206,14 +468,41 @@
     },
     {
       "label": "settings-paired-390-uk",
+      "entry": {
+        "text": "Зовнішній ретранслятор",
+        "width": 390,
+        "height": 44
+      },
       "overflow": false,
       "minControlHeight": 44,
       "states": [
         "polling",
         "paused"
       ],
-      "lastOutcome": "Відповіли · 5:08:43 PM",
-      "lastProgress": "Support bot: Reading the last messages in the thread · 5:07:43 PM",
+      "stateLines": [
+        {
+          "state": "polling",
+          "text": "Питаємо сервіс про запити.",
+          "tone": "plain",
+          "color": "rgb(232, 232, 236)",
+          "background": "rgb(20, 21, 27)"
+        },
+        {
+          "state": "paused",
+          "text": "Призупинено. Інсталяція не бере запитів від сервісу.",
+          "tone": "plain",
+          "color": "rgb(232, 232, 236)",
+          "background": "rgb(20, 21, 27)"
+        }
+      ],
+      "pairedAs": [
+        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:34:06",
+        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:34:06"
+      ],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Відповіли · 17:30:06",
+      "lastProgress": "Support bot: Reading the last messages in the thread · 17:29:06",
       "targets": [
         {
           "id": "bot-1",
@@ -268,10 +557,85 @@
       "owner": null
     },
     {
+      "label": "settings-troubled-390-uk",
+      "entry": {
+        "text": "Зовнішній ретранслятор",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "minControlHeight": 44,
+      "states": [
+        "credential_rejected",
+        "unreachable"
+      ],
+      "stateLines": [
+        {
+          "state": "credential_rejected",
+          "text": "Сервіс більше не приймає це під’єднання. Від’єднайте й під’єднайте знову.",
+          "tone": "danger",
+          "color": "rgb(240, 113, 113)",
+          "background": "oklab(0.699398 0.145786 0.0587783 / 0.1)"
+        },
+        {
+          "state": "unreachable",
+          "text": "Сервіс недоступний. Повторюємо спробу.",
+          "tone": "warning",
+          "color": "rgb(224, 174, 69)",
+          "background": "rgb(43, 35, 18)"
+        }
+      ],
+      "pairedAs": [
+        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:34:07",
+        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:34:07"
+      ],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 16:34:07",
+      "lastProgress": "Ще нічого",
+      "targets": [
+        {
+          "id": "bot-1",
+          "settings": [
+            "claude",
+            "opus",
+            "",
+            "1"
+          ],
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "settings": [
+            "claude",
+            "sonnet",
+            "",
+            "1"
+          ],
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        }
+      ],
+      "code": null,
+      "owner": null
+    },
+    {
       "label": "settings-code-390-uk",
+      "entry": {
+        "text": "Зовнішній ретранслятор",
+        "width": 390,
+        "height": 44
+      },
       "overflow": false,
       "minControlHeight": 44,
       "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "pairing": "pending",
+      "pairingText": "Example relay · https://relay.example\n\nAnswers questions in the example chats.\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 17:43:08.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nСкасувати",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
@@ -280,14 +644,43 @@
     },
     {
       "label": "settings-confirm-390-uk",
+      "entry": {
+        "text": "Зовнішній ретранслятор",
+        "width": 390,
+        "height": 44
+      },
       "overflow": false,
       "minControlHeight": 44,
       "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "pairing": "awaiting_install",
+      "pairingText": "Example relay · https://relay.example\n\nAnswers questions in the example chats.\n\nСервіс каже, що це Person A (@person_a). Це ви?\n\nТак, під’єднати\nНі, скасувати",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
       "code": null,
       "owner": "Сервіс каже, що це Person A (@person_a). Це ви?"
+    },
+    {
+      "label": "settings-ended-390-uk",
+      "entry": {
+        "text": "Зовнішній ретранслятор",
+        "width": 390,
+        "height": 44
+      },
+      "overflow": false,
+      "minControlHeight": 44,
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "pairing": "denied",
+      "pairingText": "Example relay · https://relay.example\n\nAnswers questions in the example chats.\n\nСервіс відхилив це під’єднання.\n\nThe owner declined this install in the relay service.\n\nПочати знову",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "code": null,
+      "owner": null
     },
     {
       "label": "guide-step-390-uk",
@@ -308,14 +701,41 @@
     },
     {
       "label": "settings-paired-1440-uk",
+      "entry": {
+        "text": "Зовнішній ретранслятор",
+        "width": 222,
+        "height": 30
+      },
       "overflow": false,
       "minControlHeight": 44,
       "states": [
         "polling",
         "paused"
       ],
-      "lastOutcome": "Відповіли · 5:08:46 PM",
-      "lastProgress": "Support bot: Reading the last messages in the thread · 5:07:46 PM",
+      "stateLines": [
+        {
+          "state": "polling",
+          "text": "Питаємо сервіс про запити.",
+          "tone": "plain",
+          "color": "rgb(232, 232, 236)",
+          "background": "rgb(20, 21, 27)"
+        },
+        {
+          "state": "paused",
+          "text": "Призупинено. Інсталяція не бере запитів від сервісу.",
+          "tone": "plain",
+          "color": "rgb(232, 232, 236)",
+          "background": "rgb(20, 21, 27)"
+        }
+      ],
+      "pairedAs": [
+        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:34:11",
+        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:34:11"
+      ],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Відповіли · 17:30:11",
+      "lastProgress": "Support bot: Reading the last messages in the thread · 17:29:11",
       "targets": [
         {
           "id": "bot-1",
@@ -370,10 +790,85 @@
       "owner": null
     },
     {
+      "label": "settings-troubled-1440-uk",
+      "entry": {
+        "text": "Зовнішній ретранслятор",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "minControlHeight": 44,
+      "states": [
+        "credential_rejected",
+        "unreachable"
+      ],
+      "stateLines": [
+        {
+          "state": "credential_rejected",
+          "text": "Сервіс більше не приймає це під’єднання. Від’єднайте й під’єднайте знову.",
+          "tone": "danger",
+          "color": "rgb(240, 113, 113)",
+          "background": "oklab(0.699398 0.145786 0.0587783 / 0.1)"
+        },
+        {
+          "state": "unreachable",
+          "text": "Сервіс недоступний. Повторюємо спробу.",
+          "tone": "warning",
+          "color": "rgb(224, 174, 69)",
+          "background": "rgb(43, 35, 18)"
+        }
+      ],
+      "pairedAs": [
+        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:34:13",
+        "Під’єднано як Person A (@person_a) · 27.09.2026, 17:34:13"
+      ],
+      "pairing": null,
+      "pairingText": null,
+      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 16:34:13",
+      "lastProgress": "Ще нічого",
+      "targets": [
+        {
+          "id": "bot-1",
+          "settings": [
+            "claude",
+            "opus",
+            "",
+            "1"
+          ],
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "settings": [
+            "claude",
+            "sonnet",
+            "",
+            "1"
+          ],
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        }
+      ],
+      "code": null,
+      "owner": null
+    },
+    {
       "label": "settings-code-1440-uk",
+      "entry": {
+        "text": "Зовнішній ретранслятор",
+        "width": 222,
+        "height": 30
+      },
       "overflow": false,
       "minControlHeight": 44,
       "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "pairing": "pending",
+      "pairingText": "Example relay · https://relay.example\n\nAnswers questions in the example chats.\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 17:43:16.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nСкасувати",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
@@ -382,14 +877,43 @@
     },
     {
       "label": "settings-confirm-1440-uk",
+      "entry": {
+        "text": "Зовнішній ретранслятор",
+        "width": 222,
+        "height": 30
+      },
       "overflow": false,
       "minControlHeight": 44,
       "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "pairing": "awaiting_install",
+      "pairingText": "Example relay · https://relay.example\n\nAnswers questions in the example chats.\n\nСервіс каже, що це Person A (@person_a). Це ви?\n\nТак, під’єднати\nНі, скасувати",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
       "code": null,
       "owner": "Сервіс каже, що це Person A (@person_a). Це ви?"
+    },
+    {
+      "label": "settings-ended-1440-uk",
+      "entry": {
+        "text": "Зовнішній ретранслятор",
+        "width": 222,
+        "height": 30
+      },
+      "overflow": false,
+      "minControlHeight": 44,
+      "states": [],
+      "stateLines": [],
+      "pairedAs": [],
+      "pairing": "denied",
+      "pairingText": "Example relay · https://relay.example\n\nAnswers questions in the example chats.\n\nСервіс відхилив це під’єднання.\n\nThe owner declined this install in the relay service.\n\nПочати знову",
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "code": null,
+      "owner": null
     },
     {
       "label": "guide-step-1440-uk",

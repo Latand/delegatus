@@ -102,10 +102,13 @@ browserTest("linked installs: a failed Settings read keeps the dialog usable", a
 /*
  * The external relay (docs/design/relay.md §B.9): its settings at phone and
  * desktop widths in en and uk over the fixture's `?relay=` scenes (a relay at
- * work beside a paused one, a pairing waiting on the owner in the service, one
- * waiting on the operator here), and the setup guide's optional step, which
- * lets a pairing start only while an account of the chosen engine is signed
- * in. Frames go to `.artifacts/external-relay`, readings to
+ * work beside a paused one, a refused credential beside an unreachable
+ * service, a pairing waiting on the owner in the service, one waiting on the
+ * operator here, one the service declined), each opened the way the operator
+ * opens it — the rail's ⋯ menu at desktop width, the menu sheet on the phone
+ * — and the setup guide's optional step, which lets a pairing start only
+ * while an account of the chosen engine is signed in. Frames go to
+ * `.artifacts/external-relay`, readings to
  * `evidence/external-relay/settings.json`.
  */
 browserTest("external relay: settings and the setup guide's step at 390 and desktop widths in en and uk", async () => {
@@ -127,14 +130,23 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
         await page.goto(`${base}/?relay=${scene}`);
         return { context, page, errors };
       };
-      for (const scene of ["paired", "code", "confirm"] as const) {
+      for (const scene of ["paired", "troubled", "code", "confirm", "ended"] as const) {
         const label = `settings-${scene}-${width}-${locale}`;
         const { context, page, errors } = await open(scene);
         try {
-          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-external-relay-settings")));
+          /* The entry row itself: the phone's menu sheet, the desktop rail's ⋯ menu. */
+          if (phone) await page.locator('[data-mobile2-open="menu"]').click();
+          else await page.locator("[data-rail-menu]").click();
+          const entry = page.locator(phone ? '[data-mobile2-menu-row="external-relay"]' : "[data-rail-menu-external-relay]");
+          await entry.waitFor();
+          const row = await entry.evaluate((element) => {
+            const box = element.getBoundingClientRect();
+            return { text: (element as HTMLElement).innerText.trim(), width: Math.round(box.width), height: Math.round(box.height) };
+          });
+          await entry.click();
           const dialog = page.locator("[data-external-relay-settings]");
           await dialog.waitFor();
-          const ready = scene === "paired" ? "[data-external-relay=relay-1]" : scene === "code" ? "[data-external-relay-code]" : "[data-external-relay-owner]";
+          const ready = scene === "paired" || scene === "troubled" ? "[data-external-relay=relay-1]" : scene === "code" ? "[data-external-relay-code]" : scene === "confirm" ? "[data-external-relay-owner]" : '[data-external-relay-pairing="denied"]';
           await page.locator(ready).waitFor();
           const reading = await dialog.evaluate((element) => {
             const body = element.querySelector<HTMLElement>(".overflow-y-auto")!;
@@ -143,6 +155,16 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
               overflow: element.scrollWidth > window.innerWidth || body.scrollWidth > body.clientWidth,
               minControlHeight: Math.min(...controls.map((control) => control.getBoundingClientRect().height)),
               states: Array.from(element.querySelectorAll("[data-external-relay-state]")).map((node) => node.getAttribute("data-external-relay-state")),
+              stateLines: Array.from(element.querySelectorAll<HTMLElement>("[data-external-relay-state]")).map((node) => ({
+                state: node.getAttribute("data-external-relay-state"),
+                text: node.textContent,
+                tone: node.className.includes("text-danger") ? "danger" : node.className.includes("text-warning") ? "warning" : "plain",
+                color: getComputedStyle(node).color,
+                background: getComputedStyle(node).backgroundColor,
+              })),
+              pairedAs: Array.from(element.querySelectorAll("[data-external-relay-paired-at]")).map((node) => node.textContent),
+              pairing: element.querySelector("[data-external-relay-pairing]")?.getAttribute("data-external-relay-pairing") ?? null,
+              pairingText: (element.querySelector("[data-external-relay-pairing]") as HTMLElement | null)?.innerText ?? null,
               lastOutcome: element.querySelector("[data-external-relay-last-outcome]")?.textContent ?? null,
               lastProgress: element.querySelector("[data-external-relay-last-progress]")?.textContent ?? null,
               targets: Array.from(element.querySelectorAll("[data-external-relay-target]")).map((row) => ({
@@ -157,8 +179,13 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
             };
           });
           await page.screenshot({ path: path.join(out, `${label}.png`), fullPage: true });
-          readings.push({ label, ...reading });
+          readings.push({ label, entry: row, ...reading });
+          const entryText = locale === "uk" ? "Зовнішній ретранслятор" : "External relay";
+          if (row.text !== entryText) failures.push(`${label}: the entry row reads ${JSON.stringify(row.text)}`);
+          if (phone && row.height < 44) failures.push(`${label}: the menu sheet row is ${row.height}px tall`);
           if (reading.overflow) failures.push(`${label}: the dialog scrolls sideways`);
+          const times = [reading.lastOutcome, reading.lastProgress, ...reading.pairedAs].filter(Boolean).join(" ");
+          if (locale === "uk" && /AM|PM/.test(times)) failures.push(`${label}: Ukrainian times read ${JSON.stringify(times)}`);
           if (phone && reading.minControlHeight < 44) failures.push(`${label}: a control is ${reading.minControlHeight}px tall`);
           if (scene === "paired") {
             if (JSON.stringify(reading.states) !== JSON.stringify(["polling", "paused"])) failures.push(`${label}: poller states ${JSON.stringify(reading.states)}`);
@@ -168,6 +195,16 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
             if (!third?.switchDisabled) failures.push(`${label}: a target with no engine can be switched on`);
             if (!reading.lastProgress?.includes("Reading the last messages in the thread")) failures.push(`${label}: last progress reads ${JSON.stringify(reading.lastProgress)}`);
             if (locale === "en" && !reading.lastOutcome?.startsWith("Answered")) failures.push(`${label}: last outcome reads ${JSON.stringify(reading.lastOutcome)}`);
+          }
+          if (scene === "troubled") {
+            const tones = reading.stateLines.map((line) => `${line.state}:${line.tone}`);
+            if (JSON.stringify(tones) !== JSON.stringify(["credential_rejected:danger", "unreachable:warning"])) failures.push(`${label}: poller lines ${JSON.stringify(tones)}`);
+            const [refused, unreachable] = reading.stateLines;
+            if (!refused || !unreachable || refused.color === unreachable.color || refused.background === unreachable.background) failures.push(`${label}: the danger and warning lines render alike`);
+          }
+          if (scene === "ended") {
+            if (reading.pairing !== "denied") failures.push(`${label}: the ended pairing reads ${JSON.stringify(reading.pairing)}`);
+            if (!reading.pairingText?.includes("The owner declined this install in the relay service.")) failures.push(`${label}: the service's reason is missing from ${JSON.stringify(reading.pairingText)}`);
           }
           if (scene === "code" && reading.code !== "K7QM-9XTD") failures.push(`${label}: the code reads ${JSON.stringify(reading.code)}`);
           if (scene === "confirm" && !reading.owner?.includes("Person A (@person_a)")) failures.push(`${label}: the identity reads ${JSON.stringify(reading.owner)}`);

@@ -1355,9 +1355,12 @@ in the phone's menu sheet, and mounted beside it in the Viewer. Its body,
   when it is an `http(s)` address, in a new tab without an opener) and the
   expiry while the owner acts in the service; then "The relay service says
   this is <name> (<handle>). Is this you?" with Confirm and Cancel. A
-  pairing that ends in the service (denied, cancelled, expired) says so with
-  the service's reason as plain text and offers Start again. A pending
-  pairing still in `relays.json` resumes when the surface opens;
+  pairing that ends in the service (denied, cancelled, expired, or completed
+  elsewhere) says so with the service's reason as plain text and offers Start
+  again; the check that learns it ended removes the pending entry and its
+  poll secret from `relays.json`, so it does not come back. A pending
+  pairing still in `relays.json` resumes when the surface opens. Times and
+  dates are written in the interface language (`uk-UA` or `en-US`);
 - each paired relay: its name, origin, description, the owner it is paired
   as and when; the poller state of §B.3 as one line, danger-toned when only
   the operator can clear it (`credential_rejected`, `unsupported_version`)
@@ -1392,8 +1395,11 @@ back to Engines, and the connect form stays disabled; it runs no check turn,
 and capacity is left to §B.4 step 3 at request time. With one, it renders the
 same `ExternalRelaySection`, and a confirmed pairing gives every target that
 has no engine yet the chosen engine and its default model, so the operator
-only has to switch "Answered by this install" on. Leaving the step without
-pairing records it as skipped, as the Phone step does.
+only has to switch "Answered by this install" on. Like the Phone step, the
+step's outcome comes from the live state: leaving it while `GET
+/api/external-relay` lists a paired relay, however and whenever it was
+paired, records it done and offers no Skip; leaving it with none records it
+skipped.
 
 Strings are in English and Ukrainian (`src/lib/i18n/en.ts`, `uk.ts`,
 `externalRelay.*` and `onboarding.relay.*`). Rendered evidence: DOM tests
@@ -1402,7 +1408,10 @@ for every state of the section and of the step
 case in `src/components/onboarding/OnboardingDialog.dom.test.tsx`), and one
 case in the phone driver (`src/components/mobile/issue1671Evidence.browser.test.tsx`,
 "external relay") over the fixture's `?relay=` scenes at 390 and 1440 in
-both languages; its readings are `evidence/external-relay/settings.json`.
+both languages, each opened through its entry row (the rail's ⋯ menu at
+1440, the menu sheet at 390, which must be at least 44 px tall) and covering
+the danger- and warning-toned poller lines and a pairing the service
+declined; its readings are `evidence/external-relay/settings.json`.
 No new driver.
 
 ## B.10 State ownership
@@ -1448,7 +1457,7 @@ Bun pin are untouched, so `scripts/verify-runtime-host.ts` is not needed.
 | 6 | `src/app/api/external-relay/route.test.ts` | Each guard: cross-origin, access key withheld, agent caller, staging; no response carries the credential or the poll secret. |
 | 7 | `src/lib/agent/ephemeral.probe.test.ts`, run only with `LLV_ANSWER_PROFILE_PROBE=1` | The real installed `codex` and `claude`, driven by the built profile against a loopback stub model endpoint that records what they send, with dummy credentials and temp homes holding marker lines in `AGENTS.md`, `CLAUDE.md`, ancestor `.git/AGENTS.md` and `.claude/CLAUDE.md`, and a settings hook. It asserts the offered tools (Codex: `exec` nesting only the clock, `wait`, `request_user_input_async`; Claude: `StructuredOutput`), that no marker reached the request, that no hook ran, and that the answer format is a JSON schema. It uses no model quota; it re-runs on every CLI upgrade. It is the method of the Evidence section, made repeatable. |
 | 8 | manual, once per engine, in the implementing stage | A live marker probe on a real signed-in account at the lowest effort. Codex: a temp account home whose `auth.json` links to a real account's file and whose `AGENTS.md` holds a marker, run through the real launch path. Claude: the real account, with the marker in a `.claude/CLAUDE.md` above the cwd. The prompt asks the agent to repeat any marker word it was given; the answer must not contain it, and Claude's init event must list only `StructuredOutput` and no MCP servers. The PR records the outcome without identities. |
-| 9 | `src/components/externalRelay/ExternalRelaySection.dom.test.tsx`, the relay case in `OnboardingDialog.dom.test.tsx`, and the phone driver's "external relay" case | Every state of §B.9: the connect form, the code and link, the identity to confirm, a pairing ended in the service, a relay-provided link that is not a web address left out, a paired relay with poller state, last outcome and last progress, per-target settings, the answer switch held off without an engine, a model or a signed-in account, a staging refusal; the guide step pairing only with an account of the chosen engine signed in and recording a skip otherwise; no sideways scroll and 44 px controls on the phone. |
+| 9 | `src/components/externalRelay/ExternalRelaySection.dom.test.tsx`, the relay case in `OnboardingDialog.dom.test.tsx`, and the phone driver's "external relay" case | Every state of §B.9: the connect form, the code and link, the identity to confirm, a pairing ended in the service, a relay-provided link that is not a web address left out, a paired relay with poller state, last outcome and last progress, per-target settings, the answer switch held off without an engine, a model or a signed-in account, a staging refusal; the guide step pairing only with an account of the chosen engine signed in, recording done while a relay is paired and a skip otherwise; a pairing ended in the service leaving `relays.json` after one check (`src/app/api/external-relay/route.test.ts`); Ukrainian times in `uk-UA`; the entry rows in the rail and the menu sheet; no sideways scroll and 44 px controls on the phone. |
 
 ---
 

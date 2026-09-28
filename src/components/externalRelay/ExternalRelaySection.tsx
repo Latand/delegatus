@@ -124,6 +124,11 @@ function safeLink(value: string | null): string | null {
   } catch { return null; }
 }
 
+/** Times and dates in the UI's language, as the rest of the interface writes them. */
+const localeTag = (locale: string) => locale === "uk" ? "uk-UA" : "en-US";
+const clock = (value: string, locale: string) => new Date(value).toLocaleTimeString(localeTag(locale));
+const stamp = (value: string, locale: string) => new Date(value).toLocaleString(localeTag(locale));
+
 const ownerLine = (owner: Owner) => owner.handle ? `${owner.display_name} (${owner.handle})` : owner.display_name;
 const input = "h-11 w-full rounded-[8px] border border-border bg-raised px-3 text-ui text-primary disabled:opacity-50";
 const primary = "min-h-11 rounded-[8px] bg-accent px-4 text-ui font-semibold text-white disabled:opacity-50";
@@ -167,7 +172,7 @@ export function RelayPairing({ resume, disabled = false, onPaired, onChanged }: 
   onPaired: (relay: RelayView) => void | Promise<void>;
   onChanged: () => void;
 }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const [url, setUrl] = useState("");
   const [pending, setPending] = useState<PendingView | null>(resume);
   const [status, setStatus] = useState<PairingStatus | null>(null);
@@ -259,7 +264,7 @@ export function RelayPairing({ resume, disabled = false, onPaired, onChanged }: 
           <p>{t("externalRelay.pairing.codePrompt")}</p>
           <code data-external-relay-code="" className="block select-all text-title font-bold tracking-wide text-primary">{pending.code}</code>
           {link ? <a href={link} target="_blank" rel="noopener noreferrer" className="block break-all text-accent hover:underline">{t("externalRelay.pairing.openLink")}</a> : null}
-          <p className="text-muted">{t("externalRelay.pairing.expires", { time: new Date(pending.expires_at).toLocaleTimeString() })}</p>
+          <p className="text-muted">{t("externalRelay.pairing.expires", { time: clock(pending.expires_at, locale) })}</p>
           <p role="status" className="text-muted">{t("externalRelay.pairing.waiting")}</p>
           {shownError}
           <button type="button" disabled={busy} onClick={() => void cancel()} className={bordered}>{t("common.cancel")}</button>
@@ -331,7 +336,7 @@ function TargetRow({ relay, target, running, signedIn, busy, onChange, onRoute }
 }
 
 function RelayCard({ relay, status, signedIn, onChanged }: { relay: RelayView; status: StatusRow | null; signedIn: Record<RelayEngine, boolean>; onChanged: () => Promise<void> }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warned, setWarned] = useState(false);
@@ -353,14 +358,14 @@ function RelayCard({ relay, status, signedIn, onChanged }: { relay: RelayView; s
       <div>
         <p className="break-words font-semibold text-primary">{relay.name} · {relay.origin}</p>
         {relay.description ? <p className="mt-1 text-muted">{relay.description}</p> : null}
-        <p className="mt-1 text-muted">{t("externalRelay.pairedAs", { owner: ownerLine(relay.owner), date: new Date(relay.pairedAt).toLocaleString() })}</p>
+        <p data-external-relay-paired-at="" className="mt-1 text-muted">{t("externalRelay.pairedAs", { owner: ownerLine(relay.owner), date: stamp(relay.pairedAt, locale) })}</p>
       </div>
       <p role="status" data-external-relay-state={state} className={`rounded-[8px] px-3 py-2 ${tone}`}>{t(STATE_KEYS[state] ?? "externalRelay.poller.paused")}</p>
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
         <dt className="text-muted">{t("externalRelay.lastOutcome")}</dt>
-        <dd data-external-relay-last-outcome="" className="min-w-0 break-words text-primary">{status?.state.lastOutcome ? `${outcomeText(t, status.state.lastOutcome)}${status.state.lastOutcomeAt ? ` · ${new Date(status.state.lastOutcomeAt).toLocaleTimeString()}` : ""}` : t("externalRelay.none")}</dd>
+        <dd data-external-relay-last-outcome="" className="min-w-0 break-words text-primary">{status?.state.lastOutcome ? `${outcomeText(t, status.state.lastOutcome)}${status.state.lastOutcomeAt ? ` · ${clock(status.state.lastOutcomeAt, locale)}` : ""}` : t("externalRelay.none")}</dd>
         <dt className="text-muted">{t("externalRelay.lastProgress")}</dt>
-        <dd data-external-relay-last-progress="" className="min-w-0 break-words text-primary">{progress ? `${progressTarget}: ${progress.label} · ${new Date(progress.at).toLocaleTimeString()}` : t("externalRelay.none")}</dd>
+        <dd data-external-relay-last-progress="" className="min-w-0 break-words text-primary">{progress ? `${progressTarget}: ${progress.label} · ${clock(progress.at, locale)}` : t("externalRelay.none")}</dd>
       </dl>
       {relay.targets.length ? relay.targets.map((target) => (
         <TargetRow key={target.id} relay={relay} target={target} running={status?.running[target.id] ?? 0} signedIn={signedIn} busy={busy}
@@ -382,9 +387,11 @@ function RelayCard({ relay, status, signedIn, onChanged }: { relay: RelayView; s
  * operator chose there: a new pairing's unset targets take it, with its
  * default model, so they can be switched to this install at once.
  */
-export function ExternalRelaySection({ pairEngine = null, pairDisabled = false, onPaired }: { pairEngine?: RelayEngine | null; pairDisabled?: boolean; onPaired?: (relay: RelayView) => void }) {
+export function ExternalRelaySection({ pairEngine = null, pairDisabled = false, onPaired, onRelays }: { pairEngine?: RelayEngine | null; pairDisabled?: boolean; onPaired?: (relay: RelayView) => void; onRelays?: (count: number) => void }) {
   const { t } = useLocale();
   const { state, error, refresh } = useExternalRelay();
+  const relayCount = state?.relays.length ?? null;
+  useEffect(() => { if (relayCount !== null) onRelays?.(relayCount); }, [relayCount, onRelays]);
   const claude = useEngineAccounts("claude");
   const codex = useEngineAccounts("codex");
   const signedIn = { claude: claude.accounts.some(accountConnected), codex: codex.accounts.some(accountConnected) };

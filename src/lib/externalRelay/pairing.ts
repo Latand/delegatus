@@ -64,6 +64,13 @@ export async function checkRelayPairing(id: string) {
           : item,
       ),
     }));
+  // A pairing the service ended cannot be resumed, so its entry and poll
+  // secret go now; the returned status still tells the UI why it ended.
+  else if (status.status !== "pending")
+    updateRelayStore((store) => ({
+      ...store,
+      pending: store.pending.filter((item) => item.id !== id),
+    }));
   return status;
 }
 export async function confirmRelayPairing(

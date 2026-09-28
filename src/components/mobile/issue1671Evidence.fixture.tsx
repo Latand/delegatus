@@ -863,10 +863,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     });
   }
   /* The external relay's settings and pairing (docs/design/relay.md §B.9),
-     over `?relay=`: `paired` holds one relay at work and one paused, `code`
-     a pairing waiting on the owner in the service, `confirm` one waiting on
-     the operator here, and `none` nothing yet. The service and its owner are
-     invented. */
+     over `?relay=`: `paired` holds one relay at work and one paused,
+     `troubled` one whose credential the service refused and one it cannot
+     reach, `code` a pairing waiting on the owner in the service, `confirm` one
+     waiting on the operator here, `ended` one the service declined, and `none`
+     nothing yet. The service and its owner are invented. */
   if (RELAY_SCENE && url.pathname.startsWith("/api/external-relay")) {
     const owner = { namespace: "example", id: "owner-1", display_name: "Person A", handle: "@person_a" };
     const target = (over: Record<string, unknown>) => ({ id: "bot-1", name: "Support bot", answered_by: "service", fallback: "service", enabled: true,
@@ -891,10 +892,23 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
           { id: "relay-2", state: { state: "paused", lastOutcome: "declined:no_capacity", lastOutcomeAt: iso(7_200), lastProgress: null }, running: { "bot-1": 0 } },
         ],
       });
-      return json({ relays: [], pending: RELAY_SCENE === "code" || RELAY_SCENE === "confirm" ? [pendingRow] : [], status: [] });
+      if (RELAY_SCENE === "troubled") return json({
+        relays: [
+          relayRow({ targets: [target({ engine: "claude", model: "opus", answered_by: "install" })] }),
+          relayRow({ id: "relay-2", origin: "https://second-relay.example", name: "Second relay", description: "", targets: [target({ engine: "claude", model: "sonnet", answered_by: "install" })] }),
+        ],
+        pending: [],
+        status: [
+          { id: "relay-1", state: { state: "credential_rejected", lastOutcome: "failed:agent_error", lastOutcomeAt: iso(3_600), lastProgress: null }, running: { "bot-1": 0 } },
+          { id: "relay-2", state: { state: "unreachable", lastOutcome: "answered", lastOutcomeAt: iso(1_800), lastProgress: null }, running: { "bot-1": 0 } },
+        ],
+      });
+      return json({ relays: [], pending: RELAY_SCENE === "code" || RELAY_SCENE === "confirm" || RELAY_SCENE === "ended" ? [pendingRow] : [], status: [] });
     }
     if (url.pathname === "/api/external-relay/pairings/pair-1" && method === "GET") {
-      return json({ pairing: RELAY_SCENE === "confirm" ? { status: "awaiting_install", owner, targets: [] } : { status: "pending" } });
+      return json({ pairing: RELAY_SCENE === "confirm" ? { status: "awaiting_install", owner, targets: [] }
+        : RELAY_SCENE === "ended" ? { status: "denied", reason: "The owner declined this install in the relay service." }
+        : { status: "pending" } });
     }
     return json({ error: "not_found" }, 404);
   }

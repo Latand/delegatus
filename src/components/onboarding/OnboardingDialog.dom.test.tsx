@@ -50,7 +50,7 @@ Object.assign(globalThis, {
       return json({ ok: true, reportNameSuggestion: nameSuggestion, ...reportSettings });
     }
     if (url.includes("/api/onboarding")) return json({ marker: null });
-    if (url.includes("/api/external-relay")) return json({ relays: [], pending: [], status: [] });
+    if (url.includes("/api/external-relay")) return json(relayBody);
     if (url.includes("/api/roles")) return json(rolesBody);
     if (url.includes("/api/transcribe/backend")) return json({ backend: "local", lockedByEnv: false, options: [] });
     if (url.includes("/api/access")) return json({ tailnetUrl: null, phone: { state: "missing", dnsName: null, viewerPort: 8898, servingPort: null, persisted: false }, phoneError: null });
@@ -60,6 +60,9 @@ Object.assign(globalThis, {
     return json({ claude: { active: "", accounts: [] }, codex: { active: "", accounts: [] } });
   },
 });
+
+/* What `/api/external-relay` answers; the relay step's cases set it. */
+let relayBody: unknown = { relays: [], pending: [], status: [] };
 
 /* What `/api/roles` answers; the agent mapping's case sets it. */
 let rolesBody: unknown = { schemaVersion: 2, roles: [] };
@@ -196,6 +199,33 @@ test("the relay service step is optional: it offers the engine that answers, and
   expect(host.querySelector("[data-onboarding-current]")?.getAttribute("data-onboarding-current")).toBe("engines");
   flushSync(() => root.unmount());
   host.remove();
+});
+
+test("the relay service step left without pairing is done, never skipped, when a relay was paired before", async () => {
+  answerAccounts({ claude: { active: "a", accounts: [signedIn("a", "Main")] }, codex: { active: "", accounts: [] } });
+  relayBody = {
+    relays: [{ id: "relay-1", origin: "https://relay.example", name: "Example relay", description: "", owner: { namespace: "example", id: "owner-1", display_name: "Person A", handle: null }, pairedAt: "2026-09-27T10:00:00.000Z", paused: false, targets: [] }],
+    pending: [],
+    status: [],
+  };
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  requests.length = 0;
+  try {
+    const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: null, telegram: null, orchestrator: null, agents: null, phone: null, voice: null, check: null, relay: null } } as const;
+    flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="relay" marker={marker} onClose={() => {}} />));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(host.querySelector("[data-external-relay=relay-1]")).not.toBeNull();
+    expect(host.querySelector("[data-onboarding-relay-skip]")).toBeNull();
+    flushSync(() => host.querySelector<HTMLElement>("[data-onboarding-primary]")!.click());
+    const writes = requests.filter((request) => request.url.includes("/api/onboarding") && request.method === "PUT").map((request) => request.body);
+    expect(writes).toEqual([{ steps: { relay: "done" } }]);
+  } finally {
+    relayBody = { relays: [], pending: [], status: [] };
+    flushSync(() => root.unmount());
+    host.remove();
+  }
 });
 
 test("#2166: a six-step marker with Engines done lands on Project; the Tour is gone", () => {

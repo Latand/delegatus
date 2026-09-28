@@ -9,6 +9,7 @@ afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 const { GET } = await import("./route");
 const { POST } = await import("./pairings/route");
 const origin = "http://127.0.0.1:8899";
+const local = { headers: { origin, host: "127.0.0.1:8899" } };
 test("status omits credential and poll secret", async () => {
   const { updateRelayStore } = await import("@/lib/externalRelay/store");
   updateRelayStore((store) => ({
@@ -58,8 +59,12 @@ test("status omits credential and poll secret", async () => {
       },
     ],
   }));
-  const response = await GET(new NextRequest(`${origin}/api/external-relay`));
+  const response = await GET(
+    new NextRequest(`${origin}/api/external-relay`, local),
+  );
+  expect(response.status).toBe(200);
   const text = await response.text();
+  expect(text).toContain("pending");
   expect(text).not.toContain("secret_credential");
   expect(text).not.toContain("secret_poll");
 });
@@ -117,5 +122,53 @@ test("agent capability cannot read or mutate relay settings", async () => {
     ).toBe(403);
   } finally {
     setCallerConversationResolverForTests(null);
+  }
+});
+test("a pairing the service ended leaves the store after one check", async () => {
+  const { startTestRelay } = await import("@/lib/externalRelay/testRelay");
+  const { updateRelayStore } = await import("@/lib/externalRelay/store");
+  const { GET: CHECK } = await import("./pairings/[id]/route");
+  const server = await startTestRelay(() => ({
+    body: { status: "denied", reason: "Declined by the owner" },
+  }));
+  try {
+    updateRelayStore((store) => ({
+      ...store,
+      pending: [
+        {
+          id: "ended",
+          origin: server.origin,
+          api_base: `${server.origin}/v1`,
+          name: "Test",
+          description: "",
+          limits: {
+            max_response_bytes: 1048576,
+            max_wait_s: 25,
+            max_answer_chars: 4000,
+          },
+          pairing_id: "pair-ended",
+          poll_secret: "secret_poll",
+          code: "1234-5678",
+          verify_url: null,
+          expires_at: new Date(Date.now() + 600_000).toISOString(),
+          poll_interval_s: 2,
+        },
+      ],
+    }));
+    const checked = await CHECK(
+      new NextRequest(`${origin}/api/external-relay/pairings/ended`, local),
+      { params: Promise.resolve({ id: "ended" }) },
+    );
+    expect(await checked.json()).toMatchObject({
+      pairing: { status: "denied", reason: "Declined by the owner" },
+    });
+    const listed = await (
+      await GET(new NextRequest(`${origin}/api/external-relay`, local))
+    ).json();
+    expect(
+      listed.pending.some((item: { id: string }) => item.id === "ended"),
+    ).toBe(false);
+  } finally {
+    await server.close();
   }
 });

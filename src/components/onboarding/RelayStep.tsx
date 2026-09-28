@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 import { ExternalRelaySection, type RelayEngine, type RelayView } from "@/components/externalRelay/ExternalRelaySection";
 import type { EngineAccountsState } from "@/hooks/useEngineAccounts";
@@ -14,17 +14,24 @@ import { engineConnected } from "./EnginesStep";
  * one thing before it lets a pairing start: that an account of that engine is
  * signed in. It runs nothing; a request that finds the account without
  * capacity is declined to the relay service, which falls back.
+ *
+ * `onHasRelay` reports whether the install holds a paired relay, whenever and
+ * however it was paired, so the guide records the step from that rather than
+ * from this visit. Like the Phone step once serving, it offers no Skip then.
  */
-export function RelayStep({ claude, codex, onGoEngines, onPaired, onSkip }: {
+export function RelayStep({ claude, codex, onGoEngines, onPaired, onHasRelay, onSkip }: {
   claude: EngineAccountsState;
   codex: EngineAccountsState;
   onGoEngines: () => void;
   onPaired: () => void;
+  onHasRelay: (paired: boolean) => void;
   onSkip: () => void;
 }) {
   const { t } = useLocale();
   const [engine, setEngine] = useState<RelayEngine>(() => engineConnected(claude) || !engineConnected(codex) ? "claude" : "codex");
   const [paired, setPaired] = useState<RelayView | null>(null);
+  const [hasRelay, setHasRelay] = useState(false);
+  const relays = useCallback((count: number) => { setHasRelay(count > 0); onHasRelay(count > 0); }, [onHasRelay]);
   const state = engine === "claude" ? claude : codex;
   const loading = state.status === "loading" && state.accounts.length === 0;
   const signedIn = engineConnected(state);
@@ -66,11 +73,13 @@ export function RelayStep({ claude, codex, onGoEngines, onPaired, onSkip }: {
           </div>
         )}
       </div>
-      <ExternalRelaySection pairEngine={engine} pairDisabled={!signedIn} onPaired={(relay) => { setPaired(relay); onPaired(); }} />
+      <ExternalRelaySection pairEngine={engine} pairDisabled={!signedIn} onPaired={(relay) => { setPaired(relay); onPaired(); }} onRelays={relays} />
       {paired ? <p role="status" data-onboarding-relay-paired="" className="text-ui font-semibold text-success">{t("onboarding.relay.paired", { name: paired.name, engine: name })}</p> : null}
-      <div className="flex gap-2">
-        <button type="button" data-onboarding-relay-skip="" onClick={onSkip} className={`${action} border border-border bg-card text-primary hover:bg-sunken`}>{t("onboarding.relay.skip")}</button>
-      </div>
+      {hasRelay ? null : (
+        <div className="flex gap-2">
+          <button type="button" data-onboarding-relay-skip="" onClick={onSkip} className={`${action} border border-border bg-card text-primary hover:bg-sunken`}>{t("onboarding.relay.skip")}</button>
+        </div>
+      )}
     </div>
   );
 }

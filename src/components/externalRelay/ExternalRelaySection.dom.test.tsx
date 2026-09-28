@@ -20,6 +20,7 @@ const { createRoot } = await import("react-dom/client");
 const { ExternalRelaySection } = await import("./ExternalRelaySection");
 const { RelayStep } = await import("@/components/onboarding/RelayStep");
 const { resetEngineAccountsStoresForTests } = await import("@/hooks/useEngineAccounts");
+const { setLocale } = await import("@/lib/i18n");
 
 const OWNER = { namespace: "example", id: "owner-1", display_name: "Person A", handle: "@person_a" };
 const target = (over: Record<string, unknown> = {}) => ({
@@ -240,7 +241,8 @@ test("the setup guide's step pairs only when an account of the chosen engine is 
   answers.relay = { relays: [], pending: [], status: [] };
   route();
   const gone: string[] = [];
-  const props = { claude: engineState("claude", [signedIn("main")]), codex: engineState("codex", []), onGoEngines: () => gone.push("engines"), onPaired: () => {}, onSkip: () => gone.push("skip") };
+  const reported: boolean[] = [];
+  const props = { claude: engineState("claude", [signedIn("main")]), codex: engineState("codex", []), onGoEngines: () => gone.push("engines"), onPaired: () => {}, onHasRelay: (paired: boolean) => reported.push(paired), onSkip: () => gone.push("skip") };
   const host = await mount(<RelayStep {...props} />);
   expect(host.querySelector("[data-onboarding-relay-engine=claude]")?.getAttribute("aria-checked")).toBe("true");
   expect(host.querySelector("[data-onboarding-relay-account]")?.getAttribute("data-onboarding-relay-account")).toBe("signed-in");
@@ -253,4 +255,45 @@ test("the setup guide's step pairs only when an account of the chosen engine is 
   await click(Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Go to Engines"));
   await click(host.querySelector("[data-onboarding-relay-skip]"));
   expect(gone).toEqual(["engines", "skip"]);
+  expect(reported.at(-1)).toBe(false);
+});
+
+test("the setup guide's step reports a relay paired earlier and offers no Skip while one is paired", async () => {
+  accounts({ claude: [signedIn("main")] });
+  answers.relay = { relays: [relay()], pending: [], status: [] };
+  route();
+  const reported: boolean[] = [];
+  const props = { claude: engineState("claude", [signedIn("main")]), codex: engineState("codex", []), onGoEngines: () => {}, onPaired: () => {}, onHasRelay: (paired: boolean) => reported.push(paired), onSkip: () => {} };
+  const host = await mount(<RelayStep {...props} />);
+  expect(host.querySelector("[data-external-relay=relay-1]")).not.toBeNull();
+  expect(reported.at(-1)).toBe(true);
+  expect(host.querySelector("[data-onboarding-relay-skip]")).toBeNull();
+});
+
+test("in Ukrainian the relay surface writes times and dates as uk-UA does, on a 24-hour clock", async () => {
+  accounts({ claude: [signedIn("main")] });
+  const outcomeAt = "2026-09-28T17:08:43.000Z";
+  const progressAt = "2026-09-28T17:07:10.000Z";
+  const pairedAt = "2026-09-27T17:27:16.000Z";
+  answers.relay = {
+    relays: [relay({ pairedAt })],
+    pending: [pending({ id: "pair-2", expires_at: new Date(Date.now() + 600_000).toISOString() })],
+    status: [{ id: "relay-1", state: { state: "polling", lastOutcome: "answered", lastOutcomeAt: outcomeAt, lastProgress: { targetId: "bot-1", label: "Пишу відповідь", at: progressAt } }, running: {} }],
+  };
+  answers.pairing = { status: "pending" };
+  route();
+  setLocale("uk");
+  try {
+    const host = await mount(<ExternalRelaySection />);
+    const card = host.querySelector("[data-external-relay=relay-1]")!;
+    expect(card.querySelector("[data-external-relay-last-outcome]")?.textContent).toBe(`Відповіли · ${new Date(outcomeAt).toLocaleTimeString("uk-UA")}`);
+    expect(card.querySelector("[data-external-relay-last-progress]")?.textContent).toContain(new Date(progressAt).toLocaleTimeString("uk-UA"));
+    expect(card.textContent).toContain(new Date(pairedAt).toLocaleString("uk-UA"));
+    const pairing = host.querySelector("[data-external-relay-pairing]")!;
+    expect(pairing.textContent).not.toMatch(/AM|PM/);
+    expect(card.textContent).not.toMatch(/AM|PM/);
+    expect(card.textContent).toMatch(/\d{2}\.\d{2}\.2026/);
+  } finally {
+    setLocale("en");
+  }
 });
