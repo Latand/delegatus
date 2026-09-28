@@ -6065,7 +6065,7 @@ export function viewerMcpBindings(
         if (refusal) throw new Error(refusal.error);
       } },
     ),
-    stage_report: (args) => stageReport(args, domainDependencies),
+    stage_report: (args) => unadmittedBeforeMutation(() => stageReport(args, domainDependencies)),
     link_task_to_pipeline: (args) => unadmittedBeforeMutation(() => linkTaskToPipeline(args, linkTaskDependencies)),
     list_conversations: (args, context) => budgeted("list_conversations", args, 12_000, cursor => listConversations({ ...args, cursor }, viewerControlForCall(controlDependencies, context))),
     search_transcripts: (args, context) => searchTranscripts(args, viewerControlForCall(controlDependencies, context)),
