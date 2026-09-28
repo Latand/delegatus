@@ -221,6 +221,37 @@ async function checkSwipe() {
       console.log(`${lang} hero flick coast: ${atRelease} -> ${afterCoast} (${afterCoast - atRelease})`);
       if (afterCoast - atRelease < 40) throw new Error(`${lang}: hero flick stopped without momentum`);
 
+      // A new gesture on the landing must take over from a forwarded iframe flick.
+      for (const interruption of ["touch", "wheel"] as const) {
+        await page.locator(".live-hero").scrollIntoViewIfNeeded();
+        const box = await page.locator(".live-hero iframe").boundingBox();
+        if (!box) throw new Error("hero frame has no box");
+        const x = Math.round(box.x + box.width / 2);
+        const y = Math.round(box.y + Math.min(box.height / 2, 400));
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y, id: 4 }] });
+        for (let step = 1; step <= 4; step += 1) {
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y - step * 40, id: 4 }] });
+          await settle(page, 10);
+        }
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        const releasePosition = await page.evaluate(() => scrollY);
+        await settle(page, 25);
+        const coastPosition = await page.evaluate(() => scrollY);
+        if (coastPosition - releasePosition < 2) throw new Error(`${lang}: ${interruption} probe had no active flick to interrupt`);
+        if (interruption === "touch") {
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 8, y: 8, id: 5 }] });
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        } else {
+          await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: 8, y: 8, deltaX: 0, deltaY: 0 });
+        }
+        await settle(page, 25);
+        const interruptedAt = await page.evaluate(() => scrollY);
+        await settle(page, 250);
+        const afterInterruption = await page.evaluate(() => scrollY);
+        console.log(`${lang} ${interruption} stopped flick: ${interruptedAt} -> ${afterInterruption}`);
+        if (Math.abs(afterInterruption - interruptedAt) > 5) throw new Error(`${lang}: ${interruption} did not stop iframe flick`);
+      }
+
       // A long draft still scrolls inside its textarea until it reaches an edge.
       await composer.fill(Array.from({ length: 30 }, (_, index) => `Draft line ${index + 1}`).join("\n"));
       const draftSize = await composer.evaluate((element) => ({ height: element.clientHeight, scrollHeight: element.scrollHeight }));

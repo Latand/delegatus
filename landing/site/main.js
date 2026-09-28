@@ -308,6 +308,8 @@
     cancelAnimationFrame(panAnimation);
     panAnimation = 0;
   }
+  window.addEventListener("touchstart", stopPanMomentum, { passive: true });
+  window.addEventListener("wheel", stopPanMomentum, { passive: true });
   function coastPan(velocity) {
     if (!Number.isFinite(velocity) || Math.abs(velocity) < 0.35) return;
     stopPanMomentum();
