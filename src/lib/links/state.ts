@@ -14,7 +14,7 @@ export function isSharedProject(value: unknown): value is SharedProject {
     !/[/\\\x00-\x1f\x7f]/.test(value.name);
 }
 export type Shared = { v: 1; all: boolean; projects: string[] };
-export type PairCode = { id: string; hash: string; expires: number; attempts: number; failures: number[]; scopes: Scope[]; used: boolean };
+export type PairCode = { id: string; hash: string; expires: number; attempts: number; failures: number[]; scopes: Scope[]; used: boolean; burned?: boolean };
 export type Grant = { id: string; hash: string; install: string; label: string; scopes: Scope[]; created: number; lastUsed: number | null; requests: number; days?: Record<string, number>; movedAt: number | null; flushedAt: number | null };
 export type Link = { id: string; url: string; token: string; grantId: string; install: string; label: string; store: string; state: "active" | "failing" | "revoked"; lastCall: number | null; error: string | null };
 type Grants = { v: 1; codes: PairCode[]; grants: Grant[] };

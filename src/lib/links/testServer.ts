@@ -1,7 +1,6 @@
 /** Private HTTP harness for the two-install protocol test. Never imported by production. */
 import fs from "node:fs";
 import http from "node:http";
-import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 
 import { saveAddress } from "./self";
@@ -19,12 +18,13 @@ const dir = process.argv[2]!;
 process.env.LLV_STATE_DIR = dir;
 process.env.XDG_CONFIG_HOME = `${dir}/config`;
 process.env.LLV_STATE_OWNER = "viewer";
-process.env.LLV_TOKEN = `test-${randomUUID()}`;
+process.env.LLV_TOKEN = "key";
 fs.mkdirSync(dir, { recursive: true });
 let syncCalls = 0;
 let syncRead = 0;
 let syncWritten = 0;
 let maxSyncBody = 0;
+let failSync = false;
 const syncBodySizes: number[] = [];
 const syncAnswerSizes: number[] = [];
 const wire: { path: string; request: string; response: string }[] = [];
@@ -36,6 +36,17 @@ const server = http.createServer(async (request, response) => {
     if (path === "/test/metrics") {
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ syncCalls, syncRead, syncWritten, maxSyncBody, maxSyncBodyLast100: Math.max(...syncBodySizes.slice(-100), 0), maxSyncAnswerLast100: Math.max(...syncAnswerSizes.slice(-100), 0) }));
+      return;
+    }
+    if (path === "/test/fail-sync") {
+      failSync = new URL(request.url ?? "/", "http://localhost").searchParams.get("on") === "1";
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ failSync }));
+      return;
+    }
+    if (path === "/api/peer/v1/boards/sync" && failSync) {
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "unavailable" }));
       return;
     }
     if (path === "/test/wire") {

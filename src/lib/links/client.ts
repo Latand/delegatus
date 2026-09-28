@@ -153,6 +153,7 @@ export async function syncPeer(id: string): Promise<{ peer: Link; remote: Shared
       if (calls === 201) throw new LinkError("malformed");
     }
     const current = { ...peer, state: "active" as const, lastCall: Date.now(), error: null };
+    if (peer.state !== "active" || peer.error !== null) putPeer(current);
     // Last-call freshness is only needed in memory; do not rewrite peers.json on idle calls.
     markPeerCall(id, current.lastCall);
     return { peer: current, remote };
@@ -184,8 +185,10 @@ export function projectLinkStates() {
     ...grantRows().map((grant) => ({ id: grant.id, label: grant.label, state: "active" })),
   ];
   return linked.map((peer) => {
-    const remote = new Set(remoteProjects(peer.id).map((project) => project.key));
+    const remoteRows = remoteProjects(peer.id);
+    const remote = new Set(remoteRows.map((project) => project.key));
+    const names = new Map([...sharedProjects(), ...remoteRows].map((project) => [project.key, project.name]));
     return { id: peer.id, label: peer.label, state: peer.state, projects: [...new Set([...local, ...remote])].sort().map((key) => ({ key,
-      state: local.has(key) && remote.has(key) ? "linked" : local.has(key) ? "only-here" : "only-there" })) };
+      name: names.get(key) ?? key, state: local.has(key) && remote.has(key) ? "linked" : local.has(key) ? "only-here" : "only-there" })) };
   });
 }

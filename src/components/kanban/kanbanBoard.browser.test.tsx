@@ -39,6 +39,57 @@ type Scheme = "light" | "dark";
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
 describe("linked boards M1 settings", () => {
+  browserTest("remote-only rows, revoked refresh and code attempts update in the open dialog", async () => {
+    const out = path.resolve(".artifacts/linked-boards-m1");
+    fs.mkdirSync(out, { recursive: true });
+    const key = `repo-${"b".repeat(32)}`;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/links": { self: { label: "Machine B", publicUrl: "https://board.example.test", check: null }, state: "ok", entry: { port: 8897, publishable: true }, keyOn: true },
+      "/api/links/shared": { shared: { v: 1, all: false, projects: [] }, known: [], states: [{ id: "peer", label: "Machine A", projects: [{ key, name: "alpha", state: "only-there" }] }] },
+      "/api/links/grants": { grants: [] },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, server.base, { width: 390, height: 844 }, "light", "en", "reduce", true);
+      let revoked = false;
+      let burned = false;
+      let codeReads = 0;
+      try {
+        await page.route("**/api/links/peers/peer", async (route) => {
+          revoked = true;
+          await route.fulfill({ status: 409, json: { error: "revoked" } });
+        });
+        await page.route("**/api/links/peers", async (route) => route.fulfill({ json: { peers: [{ id: "peer", label: "Machine A", url: "https://peer.example.test", state: revoked ? "revoked" : "active", error: revoked ? "revoked" : null, lastCall: null }] } }));
+        await page.route("**/api/links/codes", async (route) => {
+          if (route.request().method() === "POST") return route.fulfill({ json: { code: "ABCDEF-01234-56789", expiresAt: Date.now() + 600_000 } });
+          codeReads++;
+          return route.fulfill({ json: { codes: [{ id: "ABCDEF", expiresAt: Date.now() + 600_000, wrongAttempts: burned ? 20 : 2, used: burned, burned }] } });
+        });
+        await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-linked-settings")));
+        const remote = page.locator(`[data-shared-project="${key}"]`);
+        await remote.waitFor();
+        expect(await remote.locator('[data-share-state="only-there"]').textContent()).toContain("Only on Machine A");
+        expect(await remote.locator("input[type=checkbox]").isDisabled()).toBe(true);
+        expect(await remote.textContent()).toContain("alpha");
+        await page.locator('[data-linked-peer="active"] button').first().click();
+        await page.locator('[data-linked-peer="revoked"]').waitFor();
+        expect(await page.locator('[data-linked-peer="revoked"] button').first().isDisabled()).toBe(true);
+        await page.getByRole("button", { name: "Allow a connection" }).click();
+        await page.locator('[data-pair-code]').waitFor();
+        await page.locator('[data-code-state="open"]').waitFor();
+        expect(await page.locator('[data-code-state="open"]').textContent()).toContain("2 wrong attempts");
+        burned = true;
+        await page.waitForFunction(() => document.querySelector('[data-code-state="burned"]') !== null, null, { timeout: 6000 });
+        expect(codeReads).toBeGreaterThanOrEqual(2);
+        expect(await page.locator('[data-code-state="burned"]').textContent()).toContain("burned");
+        const stoppedReads = codeReads;
+        await page.waitForTimeout(3500);
+        expect(codeReads).toBe(stoppedReads);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 20_000);
+
   browserTest("pairing and shared projects fit at desktop and 390 px", async () => {
     const out = path.resolve(".artifacts/linked-boards-m1");
     fs.mkdirSync(out, { recursive: true });

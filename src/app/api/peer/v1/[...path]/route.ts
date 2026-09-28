@@ -3,12 +3,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { authorizePeer, incomingSync, pairIncoming, probePair, revokeGrant } from "@/lib/links/protocol";
 import { readSelf } from "@/lib/links/self";
 import { usedGrant } from "@/lib/links/state";
+import { unauthorizedPeer } from "@/lib/links/peerResponse";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ path: string[] }> };
 const answer = (body: object, status = 200) => NextResponse.json(body, { status, headers: { "cache-control": "no-store" } });
-const unauthorized = () => answer({ error: "unauthorized" }, 401);
+const unauthorized = unauthorizedPeer;
 
 async function json(req: NextRequest): Promise<unknown> {
   if (req.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json") throw new Error("malformed");

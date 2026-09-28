@@ -16,9 +16,10 @@ type State = {
   keyOn: boolean;
   tailnetUrl?: string | null;
 };
-type SharedState = { shared: { v: 1; all: boolean; projects: string[] }; known: { key: string; name: string }[]; states: { id: string; label: string; projects: { key: string; state: string }[] }[] };
+type SharedState = { shared: { v: 1; all: boolean; projects: string[] }; known: { key: string; name: string }[]; states: { id: string; label: string; projects: { key: string; name: string; state: string }[] }[] };
 type PeerState = { peers: { id: string; label: string; url: string; state: string; error: string | null; lastCall: number | null }[] };
 type GrantState = { grants: { id: string; label: string; requests: number; today: number; sevenDays: number; lastUsed: number | null }[] };
+type CodeState = { id: string; expiresAt: number; wrongAttempts: number; used: boolean; burned: boolean };
 
 function savedLanHttpAddress(publicUrl: string | null | undefined): boolean {
   if (!publicUrl) return false;
@@ -40,6 +41,26 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
   const [peers, setPeers] = useState<PeerState | null>(null);
   const [grants, setGrants] = useState<GrantState | null>(null);
   const [code, setCode] = useState<{ code: string; expiresAt: number } | null>(null);
+  const [codeStatus, setCodeStatus] = useState<CodeState | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const codeFinished = code !== null && (codeStatus?.used === true || now >= code.expiresAt);
+  useEffect(() => {
+    if (!code || codeFinished) return;
+    let active = true;
+    const id = code.code.slice(0, 6);
+    const read = async () => {
+      try {
+        const response = await fetch("/api/links/codes");
+        if (!response.ok) return;
+        const result = await response.json() as { codes: CodeState[] };
+        if (active) setCodeStatus(result.codes.find((row) => row.id === id) ?? null);
+      } catch { /* The next open-panel read retries. */ }
+    };
+    void read();
+    const poll = window.setInterval(() => void read(), 3000);
+    const tick = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => { active = false; window.clearInterval(poll); window.clearInterval(tick); };
+  }, [code?.code, codeFinished]);
   const refresh = async () => {
     const [s, p, g] = await Promise.all([fetch("/api/links/shared"), fetch("/api/links/peers"), fetch("/api/links/grants")]);
     if (!s.ok || !p.ok || !g.ok) throw new Error("unavailable");
@@ -77,14 +98,18 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
     try {
       const response = await fetch(url, { method, headers: body ? { "content-type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
       const result = await response.json();
-      if (!response.ok) { setError(result.error ?? "unavailable"); return; }
-      if (url === "/api/links/codes" && result.code) setCode(result);
+      if (!response.ok) { setError(result.error ?? "unavailable"); await refresh().catch(() => {}); return; }
+      if (url === "/api/links/codes" && result.code) { setCodeStatus(null); setCode(result); setNow(Date.now()); }
       if (result.warned === true) setNotice("remove-warning");
       await refresh();
     } catch { setError("unavailable"); }
     finally { setBusy(false); }
   };
   const share = (next: { all: boolean; projects: string[] }) => void linkedAction("/api/links/shared", "POST", { v: 1, ...next });
+  const projects = shared ? [...new Map<string, { key: string; name: string; local: boolean }>([
+    ...shared.states.flatMap((peer) => peer.projects.map((project) => [project.key, { key: project.key, name: project.name, local: false }] as const)),
+    ...shared.known.map((project) => [project.key, { ...project, local: true }] as const),
+  ]).values()].sort((a, b) => a.name.localeCompare(b.name)) : [];
   const state = error ?? value?.state;
   const shown = state && ["needs-access-key", "needs-remote-entry", "http-public", "open-to-internet", "host-rewritten", "tls-failure", "unverified", "ok", "invalid-address", "save-conflict", "key-failed", "unavailable"].includes(state) ? state : null;
   const linkError = error && !shown ? (
@@ -129,7 +154,7 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
             <h3 className="text-body font-semibold text-primary">{t("links.pairing")}</h3>
             <p className="text-ui text-muted">{t("links.pairingDescription")}</p>
             <button type="button" disabled={busy || !value?.keyOn || !value.self?.publicUrl || ["needs-remote-entry", "http-public", "open-to-internet"].includes(value.state ?? "")} onClick={() => void linkedAction("/api/links/codes", "POST")} className="min-h-11 rounded-[8px] bg-accent px-4 text-ui font-semibold text-white disabled:opacity-50">{t("links.allow")}</button>
-            {code ? <div className="rounded-[8px] border border-border bg-sunken p-3 text-ui"><p>{t("links.codePrompt")}</p><code className="mt-2 block select-all text-title font-bold tracking-wide text-primary">{code.code}</code><p className="mt-2 text-muted">{t("links.codeExpires", { date: new Date(code.expiresAt).toLocaleTimeString() })}</p><button type="button" disabled={busy} onClick={() => { void linkedAction(`/api/links/codes?id=${encodeURIComponent(code.code.slice(0, 6))}`, "DELETE"); setCode(null); }} className="mt-2 min-h-11 rounded-[8px] border border-border px-3">{t("links.cancelCode")}</button></div> : null}
+            {code ? <div className="rounded-[8px] border border-border bg-sunken p-3 text-ui" data-pair-code=""><p>{t("links.codePrompt")}</p><code className="mt-2 block select-all text-title font-bold tracking-wide text-primary">{code.code}</code><p className="mt-2 text-muted">{t("links.codeExpires", { date: new Date(code.expiresAt).toLocaleTimeString() })}</p><p role="status" data-code-state={codeStatus?.burned ? "burned" : codeStatus?.used ? "used" : now >= code.expiresAt ? "expired" : "open"} className="mt-2 text-muted">{codeStatus?.burned ? t("links.codeBurned") : codeStatus?.used ? t("links.codeUsed") : now >= code.expiresAt ? t("links.codeExpired") : codeStatus?.wrongAttempts ? t("links.wrongAttempts", { count: codeStatus.wrongAttempts }) : t("links.noWrongAttempts")}</p><button type="button" disabled={busy} onClick={() => { void linkedAction(`/api/links/codes?id=${encodeURIComponent(code.code.slice(0, 6))}`, "DELETE"); setCode(null); setCodeStatus(null); }} className="mt-2 min-h-11 rounded-[8px] border border-border px-3">{t("links.cancelCode")}</button></div> : null}
             <LinkConnectForm busy={busy} onConnect={(input) => void linkedAction("/api/links/peers", "POST", input)} />
             {peers?.peers.map((peer) => <div key={peer.id} className="rounded-[8px] border border-border p-3 text-ui" data-linked-peer={peer.state}>
               <p className="font-semibold text-primary">{peer.label} · {peer.state === "revoked" ? t("links.revoked") : peer.url}</p>
@@ -143,11 +168,11 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
             <h3 className="text-body font-semibold text-primary">{t("links.sharedProjects")}</h3>
             <p className="text-ui text-muted">{t("links.shareDefault")}</p>
             <label className="flex min-h-11 items-center gap-3 text-ui text-primary"><input type="checkbox" checked={shared?.shared.all ?? false} disabled={busy || !shared} onChange={(event) => shared && share({ ...shared.shared, all: event.target.checked })} />{t("links.shareAll")}</label>
-            {shared?.known.map((project) => <div key={project.key} className="rounded-[8px] border border-border px-3 py-2 text-ui">
-              <label className="flex min-h-10 items-center gap-3 text-primary"><input type="checkbox" checked={shared.shared.all || shared.shared.projects.includes(project.key)} disabled={busy || shared.shared.all} onChange={(event) => share({ all: shared.shared.all, projects: event.target.checked ? [...shared.shared.projects, project.key] : shared.shared.projects.filter((key) => key !== project.key) })} /><span>{project.name}</span></label>
-              {shared.states.map((peer) => { const state = peer.projects.find((row) => row.key === project.key)?.state; return state ? <p key={peer.id} className="pl-7 text-muted" data-share-state={state}>{t(state === "linked" ? "links.linked" : state === "only-here" ? "links.onlyHere" : "links.onlyThere", { peer: peer.label })}</p> : null; })}
+            {projects.map((project) => <div key={project.key} className="rounded-[8px] border border-border px-3 py-2 text-ui" data-shared-project={project.key}>
+              <label className="flex min-h-10 items-center gap-3 text-primary"><input type="checkbox" checked={project.local && (shared!.shared.all || shared!.shared.projects.includes(project.key))} disabled={busy || !project.local || shared!.shared.all} onChange={(event) => shared && share({ all: shared.shared.all, projects: event.target.checked ? [...shared.shared.projects, project.key] : shared.shared.projects.filter((key) => key !== project.key) })} /><span>{project.name}</span></label>
+              {shared?.states.map((peer) => { const state = peer.projects.find((row) => row.key === project.key)?.state; return state ? <p key={peer.id} className="pl-7 text-muted" data-share-state={state}>{t(state === "linked" ? "links.linked" : state === "only-here" ? "links.onlyHere" : "links.onlyThere", { peer: peer.label })}</p> : null; })}
             </div>)}
-            {!shared?.known.length ? <p className="text-ui text-muted">{t("links.cannotShare")}</p> : null}
+            {shared && !shared.known.length ? <p className="text-ui text-muted">{t("links.cannotShare")}</p> : null}
           </section>
         </div>
       </section>

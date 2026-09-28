@@ -1,5 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -163,4 +164,102 @@ test("share-all pages more than 100 projects and the next idle exchange is one c
   const after = (await request(b, "/test/metrics")).body as { syncCalls: number; syncRead: number; syncWritten: number };
   expect(after.syncCalls - before.syncCalls).toBe(1);
   expect(after.syncRead - before.syncRead + after.syncWritten - before.syncWritten).toBeLessThanOrEqual(1024);
+});
+
+test("remote-only project keeps its announced name and cannot be shared locally", async () => {
+  const alphaRemote = "code.example.test/acme/alpha";
+  const alpha = projectIdentityFromRemote(`https://${alphaRemote}`, "/")!.project;
+  const a = await install("remote-A", { [alpha]: alphaRemote });
+  const b = await install("remote-B");
+  const code = String((await request(b, "/api/links/codes", "POST")).body.code);
+  expect((await request(a, "/api/links/peers", "POST", { url: b, code })).status).toBe(200);
+  const id = ((await request(a, "/api/links/peers")).body.peers as { id: string }[])[0]!.id;
+  expect((await request(a, "/api/links/shared", "POST", { v: 1, all: false, projects: [alpha] })).status).toBe(200);
+  expect((await request(a, `/api/links/peers/${id}`, "POST")).status).toBe(200);
+  const view = (await request(b, "/api/links/shared")).body as { known: { key: string }[]; states: { projects: { key: string; name: string; state: string }[] }[] };
+  expect(view.known.some((project) => project.key === alpha)).toBe(false);
+  expect(view.states[0]!.projects).toContainEqual({ key: alpha, name: "alpha", state: "only-there" });
+  expect((await request(b, "/api/links/shared", "POST", { v: 1, all: false, projects: [alpha] })).status).toBe(400);
+});
+
+test("another code pairs while the first code is rate limited", async () => {
+  const b = await install("rate-B");
+  const c = await install("rate-C");
+  const first = String((await request(b, "/api/links/codes", "POST")).body.code);
+  const wrong = `${first.slice(0, -1)}${first.endsWith("0") ? "1" : "0"}`;
+  for (let i = 0; i < 5; i++) expect((await request(b, "/api/peer/v1/pair", "POST", { code: wrong, install: "00000000-0000-0000-0000-000000000000", label: "A" })).status).toBe(401);
+  expect((await request(b, "/api/peer/v1/pair", "POST", { code: wrong, install: "00000000-0000-0000-0000-000000000000", label: "A" })).status).toBe(429);
+  const second = String((await request(b, "/api/links/codes", "POST")).body.code);
+  expect((await request(c, "/api/links/peers", "POST", { url: b, code: second })).status).toBe(200);
+  expect(((await request(b, "/api/links/grants")).body.grants as unknown[]).length).toBe(1);
+});
+
+test("a failed link recovers durably after a successful sync", async () => {
+  const a = await install("recover-A");
+  const b = await install("recover-B");
+  const code = String((await request(b, "/api/links/codes", "POST")).body.code);
+  expect((await request(a, "/api/links/peers", "POST", { url: b, code })).status).toBe(200);
+  const id = ((await request(a, "/api/links/peers")).body.peers as { id: string }[])[0]!.id;
+  await request(b, "/test/fail-sync?on=1");
+  expect((await request(a, `/api/links/peers/${id}`, "POST")).status).toBe(409);
+  expect(((await request(a, "/api/links/peers")).body.peers as { state: string }[])[0]!.state).toBe("failing");
+  await request(b, "/test/fail-sync?on=0");
+  expect((await request(a, `/api/links/peers/${id}`, "POST")).status).toBe(200);
+  expect(((await request(a, "/api/links/peers")).body.peers as { state: string; error: string | null }[])[0]).toMatchObject({ state: "active", error: null });
+  expect(JSON.parse(fs.readFileSync(path.join(root, "recover-A", "links/peers.json"), "utf8")).peers[0]).toMatchObject({ state: "active", error: null });
+});
+
+test("all unauthenticated peer paths return the same status, headers and body", async () => {
+  const a = await install("guard-A");
+  const b = await install("guard-B");
+  const code = String((await request(b, "/api/links/codes", "POST")).body.code);
+  expect((await request(a, "/api/links/peers", "POST", { url: b, code })).status).toBe(200);
+  const peer = JSON.parse(fs.readFileSync(path.join(root, "guard-A", "links/peers.json"), "utf8")).peers[0] as { token: string; grantId: string };
+  const badToken = `${peer.grantId}.${"A".repeat(43)}`;
+  const unknownGrant = `${"0".repeat(8)}-0000-0000-0000-000000000000.${peer.token}`;
+  const grantsFile = path.join(root, "guard-B", "links/grants.json");
+  const grants = JSON.parse(fs.readFileSync(grantsFile, "utf8"));
+  const attempts = [
+    ["/api/peer/v1/info", "GET", {}],
+    ["/api/peer/v1/info", "GET", { "x-delegatus-peer": badToken }],
+    ["/api/peer/v1/info", "GET", { "x-delegatus-peer": unknownGrant }],
+    ["/api/peer/v1/boards/sync", "POST", {}],
+    ["/api/peer/v1/self-check", "GET", {}],
+    ["/api/peer/v1/self-check", "POST", {}],
+    ["/api/peer/v1/unknown", "GET", {}],
+    ["/api/peer/v2/unknown", "GET", {}],
+    ["/api/peer", "GET", { authorization: "Bearer key" }],
+    ["/api/peer/v1/info", "GET", { authorization: "Bearer key" }],
+    ["/api/peer/v1/pair/probe", "POST", { "content-type": "application/json" }],
+  ] as const;
+  const signatures: string[] = [];
+  for (const [route, method, headers] of attempts) {
+    const response = await fetch(b + route, { method, headers });
+    signatures.push(JSON.stringify({ status: response.status, cache: response.headers.get("cache-control"), type: response.headers.get("content-type"), body: await response.text() }));
+  }
+  expect(new Set(signatures).size).toBe(1);
+  expect(JSON.parse(signatures[0]!)).toMatchObject({ status: 401, cache: "no-store", body: '{"error":"unauthorized"}' });
+  grants.grants[0].scopes = [];
+  fs.writeFileSync(grantsFile, JSON.stringify(grants));
+  const missingScope = await fetch(b + "/api/peer/v1/boards/sync", { method: "POST", headers: { "x-delegatus-peer": `${peer.grantId}.${peer.token}` } });
+  expect(JSON.stringify({ status: missingScope.status, cache: missingScope.headers.get("cache-control"), type: missingScope.headers.get("content-type"), body: await missingScope.text() })).toBe(signatures[0]);
+});
+
+test("pairing never follows a redirect to another install, and remove revokes its grant", async () => {
+  const a = await install("remove-A");
+  const b = await install("remove-B");
+  const redirect = http.createServer((_request, response) => { response.writeHead(302, { location: b + "/api/peer/v1/pair", "content-type": "application/json" }); response.end('{"error":"redirect"}'); });
+  redirect.listen(0, "127.0.0.1");
+  await new Promise<void>((resolve) => redirect.once("listening", resolve));
+  try {
+    const port = (redirect.address() as { port: number }).port;
+    const code = String((await request(b, "/api/links/codes", "POST")).body.code);
+    expect((await request(a, "/api/links/peers", "POST", { url: `http://127.0.0.1:${port}`, code })).status).toBe(409);
+    expect(((await request(b, "/api/links/grants")).body.grants as unknown[]).length).toBe(0);
+    expect((await request(a, "/api/links/peers", "POST", { url: b, code })).status).toBe(200);
+    const id = ((await request(a, "/api/links/peers")).body.peers as { id: string }[])[0]!.id;
+    expect((await request(a, `/api/links/peers/${id}`, "DELETE")).status).toBe(200);
+    expect(((await request(a, "/api/links/peers")).body.peers as unknown[]).length).toBe(0);
+    expect(((await request(b, "/api/links/grants")).body.grants as unknown[]).length).toBe(0);
+  } finally { await new Promise<void>((resolve) => redirect.close(() => resolve())); }
 });

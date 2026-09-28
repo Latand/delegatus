@@ -12,7 +12,7 @@ export const normalizeCode = (value: string) => value.toUpperCase().replace(/[IL
 const validCode = (value: string) => /^[0-9A-HJKMNP-TV-Z]{16}$/.test(value);
 const codeId = (value: string) => value.slice(0, 6);
 const codeSecret = (value: string) => value.slice(6);
-const stamp = (code: PairCode) => ({ id: code.id, expiresAt: code.expires, attempts: code.attempts, wrongAttempts: code.failures.length, used: code.used });
+const stamp = (code: PairCode) => ({ id: code.id, expiresAt: code.expires, attempts: code.attempts, wrongAttempts: 20 - code.attempts, used: code.used, burned: code.burned === true });
 
 export async function mintCode(): Promise<{ code?: string; expiresAt?: number; error?: string }> {
   const state = currentSelf();
@@ -34,7 +34,7 @@ export async function mintCode(): Promise<{ code?: string; expiresAt?: number; e
 }
 
 export function listCodes() {
-  return readGrants().codes.filter((code) => code.expires > Date.now() && !code.used).map(stamp);
+  return readGrants().codes.filter((code) => code.expires > Date.now()).map(stamp);
 }
 
 export function cancelCode(id: string): void {
@@ -77,7 +77,7 @@ export function pairIncoming(value: unknown): { status: number; body: object } {
   if (!matches || typeof input.install !== "string" || !/^[0-9a-f-]{36}$/.test(input.install) || typeof input.label !== "string") {
     code.attempts--;
     code.failures = [...recent, Date.now()];
-    if (code.attempts <= 0) code.used = true;
+    if (code.attempts <= 0) { code.used = true; code.burned = true; }
     writeGrants(file);
     return { status: 401, body: { error: "unauthorized" } };
   }
