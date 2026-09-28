@@ -715,7 +715,7 @@ describe("MCP tool service", () => {
   });
 
   test("only the receipt-keyed pipeline writes recover an interrupted pipeline action receipt (#1938, legacy review conversion)", async () => {
-    const recoverable = ["resolve-decision", "continue-review", "convert-legacy-review", "revert-legacy-review"];
+    const recoverable = ["resolve-decision", "continue-review", "accept-head", "convert-legacy-review", "revert-legacy-review"];
     const bindings = Object.fromEntries(MCP_TOOL_NAMES.map((toolName) => [toolName, async () => ({})])) as unknown as McpToolBindings;
     const bindingCalls: string[] = [];
     bindings.pipeline_action = async (args) => {
@@ -1804,6 +1804,40 @@ describe("MCP tool service", () => {
       await server.close();
     }
   });
+});
+
+test("a real MCP client sees typed graph edits and forwards their JSON values", async () => {
+  const seen: Record<string, unknown>[] = [];
+  const bindings = Object.fromEntries(MCP_TOOL_NAMES.map((name) => [name, async () => ({})])) as unknown as McpToolBindings;
+  bindings.pipeline_action = async (args) => { seen.push(args); return { pipelineId: "pipeline_fixture" }; };
+  const server = createViewerMcpServer(createMcpToolService(bindings, new MemoryMcpReceiptStore()));
+  const client = new Client({ name: "graph-edit-test", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    const schema = (await client.listTools()).tools.find((tool) => tool.name === "pipeline_action")!.inputSchema;
+    expect(schema.properties).toMatchObject({
+      stage: { type: "object" },
+      edge: { enum: ["pass", "fail"] },
+      maxRounds: { type: "integer" },
+      onExhausted: { enum: ["advance", "stop-after-fix", "park"] },
+      role: {},
+      engine: { enum: ["claude", "codex"] },
+      access: { enum: ["read-only", "read-write"] },
+    });
+    expect(JSON.stringify(schema.properties!.to)).toContain("null");
+    const stage = { id: "review", kind: "run", prompt: "Review", next: null, role: { roleId: "reviewer" } };
+    const add = await client.callTool({ name: "pipeline_action", arguments: { clientRequestId: "graph-add", pipelineId: "pipeline_fixture", action: "add-stage", stage } });
+    const edge = await client.callTool({ name: "pipeline_action", arguments: { clientRequestId: "graph-edge", pipelineId: "pipeline_fixture", action: "set-edge", stageId: "review", edge: "pass", to: null } });
+    expect(add.structuredContent).toMatchObject({ ok: true });
+    expect(edge.structuredContent).toMatchObject({ ok: true });
+    expect(seen).toMatchObject([{ stage }, { edge: "pass", to: null }]);
+    expect(typeof seen[0]!.stage).toBe("object");
+    expect(seen[1]!.to).toBeNull();
+  } finally {
+    await client.close();
+    await server.close();
+  }
 });
 
 /* #774: `pipeline_action.action` was `z.string().min(1)` while the PATCH route
