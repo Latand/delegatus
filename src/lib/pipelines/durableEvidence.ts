@@ -201,16 +201,28 @@ export async function durableStageTurnEvidence(
   const message = lastAssistantMessageFromRecords(read.records, codex ? "codex-sessions" : "claude-projects", fallbackTs);
   const reportTime = reportAt ? Date.parse(reportAt) : NaN;
   const startedTime = attemptStartedAt ? Date.parse(attemptStartedAt) : NaN;
-  const reportProse = Number.isFinite(reportTime)
-    ? lastAssistantMessageFromRecords(
-      read.records.filter((record) => {
-        const timestamp = recordTs(record, fallbackTs);
-        return timestamp <= reportTime && (!Number.isFinite(startedTime) || timestamp > startedTime);
-      }),
-      codex ? "codex-sessions" : "claude-projects",
-      fallbackTs,
-    )?.text ?? null
-    : null;
+  let reportProse: string | null = null;
+  if (Number.isFinite(reportTime)) {
+    let reportRead = read;
+    let reportBytes = 131_072;
+    while (true) {
+      reportProse = lastAssistantMessageFromRecords(
+        reportRead.records.filter((record) => {
+          const timestamp = recordTs(record, fallbackTs);
+          return timestamp <= reportTime && (!Number.isFinite(startedTime) || timestamp > startedTime);
+        }),
+        codex ? "codex-sessions" : "claude-projects",
+        fallbackTs,
+      )?.text ?? null;
+      if (reportProse !== null || !reportRead.prefixTruncated) break;
+      // A JSONL line crossing the tail boundary is discarded. Grow the
+      // verified window until the whole pre-report assistant record is read.
+      reportBytes *= 2;
+      const expanded = await readStableTailRecords(transcriptPath, reportBytes);
+      if (expanded.integrity !== "complete") return null;
+      reportRead = expanded;
+    }
+  }
   const newest = read.records.at(-1);
   const ledger = codex ? null : await readBackgroundTaskLedger(transcriptPath);
   return {

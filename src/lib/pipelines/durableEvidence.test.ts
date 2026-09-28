@@ -39,6 +39,34 @@ for (const engine of ["claude", "codex"] as const) {
     expect(await durableStageTurnEvidence(engine, file, "2026-07-18T10:03:00.000Z", "2026-07-18T10:01:00.000Z"))
       .toMatchObject({ turn: "terminal", message: { text: closing }, reportProse: brief });
   });
+
+  for (const [caseName, briefLength, toolLength] of [
+    ["one oversized assistant record", 150_000, 0],
+    ["a later oversized tool result", 50_000, 100_000],
+  ] as const) {
+    test(`${engine} recovers the reported brief beyond the transcript tail after ${caseName}`, async () => {
+      const brief = `BEGIN BRIEF\n${"b".repeat(briefLength)}\nEND BRIEF`;
+      const tool = "t".repeat(toolLength);
+      const file = writeTranscript(`${engine}-large-reported-brief-${briefLength}.jsonl`, engine === "claude" ? [
+        { type: "user", timestamp: "2026-07-18T10:01:00.000Z", message: { role: "user", content: "Write the brief." } },
+        { type: "assistant", timestamp: "2026-07-18T10:02:00.000Z", message: { role: "assistant", content: [{ type: "text", text: brief }] } },
+        ...(toolLength ? [{ type: "user", timestamp: "2026-07-18T10:03:00.000Z", message: { role: "user", content: [{ type: "tool_result", content: tool }] } }] : []),
+        { type: "assistant", timestamp: "2026-07-18T10:05:00.000Z", message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "Done." }] } },
+      ] : [
+        { timestamp: "2026-07-18T10:01:00.000Z", payload: { type: "task_started" } },
+        { timestamp: "2026-07-18T10:02:00.000Z", payload: { type: "agent_message", message: brief } },
+        ...(toolLength ? [{ timestamp: "2026-07-18T10:03:00.000Z", payload: { type: "function_call_output", output: tool } }] : []),
+        { timestamp: "2026-07-18T10:05:00.000Z", payload: { type: "agent_message", message: "Done." } },
+        { timestamp: "2026-07-18T10:06:00.000Z", payload: { type: "task_complete", last_agent_message: "Done." } },
+      ]);
+
+      const tail = await readStableTailRecords(file);
+      expect(tail).toMatchObject({ integrity: "complete", prefixTruncated: true });
+      expect(tail.records.some((record) => JSON.stringify(record).includes("BEGIN BRIEF"))).toBe(false);
+      expect(await durableStageTurnEvidence(engine, file, "2026-07-18T10:04:00.000Z", "2026-07-18T10:01:00.000Z"))
+        .toMatchObject({ turn: "terminal", message: { text: "Done." }, reportProse: brief });
+    });
+  }
 }
 
 test("a one-record Codex launch transcript reports no agent progress (#1325)", async () => {
