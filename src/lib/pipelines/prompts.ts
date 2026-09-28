@@ -90,7 +90,7 @@ export function renderStagePrompt(
        engine still reads the block exactly as before when no report arrived.
        One vocabulary (agent-prompt-contract.md §2.1): the markers a brief may
        still ask for are retired here, where every stage reads it last. */
-    "Report this stage's completion with the Delegatus MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary }. That call is the only way to complete this stage, and it replaces any other ending the brief above asks for (REVIEW_READY, a VERDICT line, APPROVE, NO FINDINGS): write none of them.",
+    "Report this stage's completion with the Delegatus MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary }. That call is the only way to complete this stage, and it replaces any other ending the brief above asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS): write none of them.",
     "The server resolves your conversation to this stage's attempt and reads the head, the branch's pull request and the declared outputs itself, so claim none of them.",
     "The call records your intent. The stage settles when this turn ends, so you may keep working after it, and calling again before then replaces the report.",
     "Verdicts: pass when the stage's contract is complete; notes that block nothing go in the summary. fail when the work is not done: for a review, one finding per defect the fix stage must address; for any other stage, what stopped it. needs_decision when only the operator can unblock the stage: put the question, what you tried, the options and your recommendation in the summary and attach no findings, because findings on a stage with a fail edge send it to the fix stage.",

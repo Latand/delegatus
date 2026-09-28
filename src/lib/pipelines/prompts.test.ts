@@ -57,7 +57,7 @@ test("run prompt renders task, previous output, spec, access, verdict, and nesti
   expect(prompt).toContain("Access: read-write");
   expect(prompt).toContain('"status":"pass"');
   expect(prompt).toContain('"findings":[]');
-  expect(prompt).toContain("it replaces any other ending the brief above asks for (REVIEW_READY, a VERDICT line, APPROVE, NO FINDINGS): write none of them.");
+  expect(prompt).toContain("it replaces any other ending the brief above asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS): write none of them.");
   expect(prompt).toContain("Its status uses the same three words.");
   expect(prompt).not.toContain("COMMENT");
   expect(prompt).toContain("Role preset: builder");
@@ -233,7 +233,7 @@ test("every stage a lane renders names no stack and teaches one verdict vocabula
     const briefMarkers = current.id === "build" ? 1 : 0;
     expect(prompt.split("REVIEW_READY").length - 1).toBe(1 + briefMarkers);
     expect(prompt.split("NO FINDINGS").length - 1).toBe(1);
-    expect(prompt.split("VERDICT").length - 1).toBe(1);
+    expect(prompt.split("VERDICT").length - 1).toBe(2);
     /* The server reads the head itself, so a pipeline reviewer is never asked
        to report it (review of #2301). */
     expect(prompt).not.toContain("Report the commit you reviewed");

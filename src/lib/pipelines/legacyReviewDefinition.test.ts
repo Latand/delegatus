@@ -112,13 +112,27 @@ describe("preview", () => {
     const preview = ok(previewLegacyReviewConversion(definition([implementer, review("review", null)]), {}));
     const fixer = preview.stages.find((stage) => stage.id === "review-fix")!;
     expect(fixer.role).toEqual({ roleId: "builder", params: { mode: "apply-fixes", domain: "docs", size: "normal" } });
-    expect(fixer).toMatchObject({ sandbox: "restricted", account: "account-b", effectiveRole: { engine: "claude", model: "sonnet", effort: "high" } });
+    expect(fixer).toMatchObject({ sandbox: "restricted", effectiveRole: { engine: "claude", model: "sonnet", effort: "high" } });
+    /* The implementer's account runs Codex; the docs fix row runs Claude. */
+    expect(fixer).not.toHaveProperty("account");
     expect(fixer.engine).toBeUndefined();
     expect(fixer.effort).toBeUndefined();
     expect(fixer.prompt).toStartWith("Fix the findings stage review reported for: {{task}}");
     /* A role-less implementer gives its fixer the general fix row. */
     const roleless = ok(previewLegacyReviewConversion(definition([run("build", "review", "builder", "read-write", { role: undefined }), review("review", null)]), {}));
     expect(roleless.stages.find((stage) => stage.id === "review-fix")!.role).toEqual({ roleId: "builder", params: { mode: "apply-fixes" } });
+    /* A pinned account belongs to one engine: it carries over only when the
+       fix row runs that engine (review of #2301). */
+    const claudeImplementer = run("build", "review", "builder", "read-write", {
+      role: { roleId: "builder" }, engine: "claude", model: "opus", account: "claude-account-a",
+      effectiveRole: { ...role("builder", "read-write"), engine: "claude", model: "opus" },
+    });
+    const switched = ok(previewLegacyReviewConversion(definition([claudeImplementer, review("review", null)]), {})).stages.find((stage) => stage.id === "review-fix")!;
+    expect(switched.effectiveRole.engine).toBe("codex");
+    expect(switched).not.toHaveProperty("account");
+    const codexImplementer = run("build", "review", "builder", "read-write", { role: { roleId: "builder" }, account: "codex-account-a" });
+    const kept = ok(previewLegacyReviewConversion(definition([codexImplementer, review("review", null)]), {})).stages.find((stage) => stage.id === "review-fix")!;
+    expect(kept).toMatchObject({ account: "codex-account-a", effectiveRole: { engine: "codex" } });
     /* A registry that cannot resolve the fix role refuses instead of guessing a runtime. */
     const unresolved = refused(previewLegacyReviewConversion(definition([implementer, review("review", null)]), {}, { roleLookup: () => null }));
     expect(unresolved.refusals.map((refusal) => refusal.code)).toEqual(["fixer-role"]);

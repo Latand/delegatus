@@ -270,8 +270,10 @@ export function previewLegacyReviewConversion(
     onFail: { to: fixerId, maxRounds: reviewLimit, onExhausted: "advance" },
   };
   const source = structuredClone(implementer);
-  /* Access, sandbox and account still come from the implementer; engine, model
-     and effort do not, so the fix row decides them. */
+  /* Access and sandbox still come from the implementer; engine, model and
+     effort do not, so the fix row decides them. A pinned account belongs to
+     one engine, so it carries over only when the fix row runs that engine;
+     otherwise the fix stage resolves an account the usual way. */
   const fixerInput = {
     role: fixerRole(source),
     ...(source.access !== undefined ? { access: source.access } : {}),
@@ -286,7 +288,7 @@ export function previewLegacyReviewConversion(
     kind: "run",
     ...fixerInput,
     ...(source.sandbox !== undefined ? { sandbox: source.sandbox } : {}),
-    ...(source.account !== undefined ? { account: source.account } : {}),
+    ...(source.account !== undefined && resolved.role.engine === source.effectiveRole.engine ? { account: source.account } : {}),
     "prompt": fixerPrompt(stageId),
     next: stageId,
     onFail: null,

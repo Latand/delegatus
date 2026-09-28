@@ -135,7 +135,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   27: "1135c1274c1dc36fcc1f595035837e13f0913a818ed7d59ce1db79791de01a37",
   28: "90819032b795f74b3ac4f5bf0699f5443cf31353e95c1ad19ef87b16e8e1ab60",
   29: "220722434e6ce6a265155097b000d1ec5cbf6461e67e7d39193b61cae5b6318a",
-  30: "690aa8b228c1ea29e7e2214214edc06447c817af0c6692776549b420be42ff06",
+  30: "9743e8688175e3e08fd07d54df961ff363b8798b049d50ff11973e7bf2624e69",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -687,8 +687,10 @@ test("the delivered default names no stack and teaches one verdict vocabulary (v
   const delivered = orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT);
   for (const pattern of STACK_SPECIFIC) expect(delivered).not.toMatch(pattern);
   expect(delivered).not.toContain("COMMENT");
-  for (const marker of ["REVIEW_READY", "VERDICT", "NO FINDINGS"]) expect(delivered.split(marker)).toHaveLength(2);
-  expect(delivered).toContain("never write REVIEW_READY, a VERDICT line, APPROVE or NO FINDINGS into a brief");
+  for (const marker of ["REVIEW_READY", "NO FINDINGS"]) expect(delivered.split(marker)).toHaveLength(2);
+  /* The two retired VERDICT lines are named exactly, in the one retiring sentence. */
+  expect(delivered.match(/VERDICT/g)).toEqual(["VERDICT", "VERDICT"]);
+  expect(delivered).toContain("never write REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES or NO FINDINGS into a brief");
   /* A GitHub issue is attached when one exists and never waited for. */
   expect(delivered).toContain("no step waits for an issue");
   /* Recommended when the project has GitHub, never mandatory (operator, 2026-09-27). */

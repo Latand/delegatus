@@ -119,7 +119,7 @@ export function roleScaffoldBody(definition: RoleDefinition, params: RoleParamVa
     it has no stage to report to, so it ends in a line the seat reads, in the
     same three words a stage uses. The orchestrator reports outcomes and never
     gets it. */
-export const SPAWN_COMPLETION = "When you finish, end your final message with one line: Verdict: pass, Verdict: fail or Verdict: needs_decision. They mean what they mean for a pipeline stage: pass when the brief's contract is complete, with any notes above that line; fail with the findings listed above it; needs_decision with the question, the options and your recommendation above it. That line replaces any other ending the brief asks for (REVIEW_READY, a VERDICT line, APPROVE, NO FINDINGS).";
+export const SPAWN_COMPLETION = "When you finish, end your final message with one line: Verdict: pass, Verdict: fail or Verdict: needs_decision. They mean what they mean for a pipeline stage: pass when the brief's contract is complete, with any notes above that line; fail with the findings listed above it; needs_decision with the question, the options and your recommendation above it. That line replaces any other ending the brief asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS).";
 
 /** The first message of a role spawn: the scaffold, the caller's brief and the
     completion line; a spawn without a role is the brief alone. */

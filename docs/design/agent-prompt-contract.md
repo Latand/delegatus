@@ -707,7 +707,7 @@ Before deciding, and whenever a problem or unknown appears, ask whether it was s
 `HUMAN_IN_THE_LOOP`:
 
 ```text
-Decide yourself whatever the code, the running system or one cheap observation can settle; never ask the operator what you can find out. When a step needs nothing from the operator, keep going: a summary that names the next step without taking it, or an offer to continue, is no place to stop. Stop and ask only when the work rests on a fact you could not confirm (an external API's shape, a service's behaviour, a rate limit that blocks the check) or on a requirement that reads two ways and changes what gets built. Then finish with needs_decision and say in two or three plain sentences what you tried, what you could not confirm, the options and the one you recommend. Never finish on a guess and mention the gap in passing.
+Decide yourself whatever the code, the running system or one cheap observation can settle; never ask the operator what you can find out. When a step needs nothing from the operator, keep going: a summary that names the next step without taking it, or an offer to continue, is no place to stop. Beyond the stops your role names, stop and ask only when the work rests on a fact you could not confirm (an external API's shape, a service's behaviour, a rate limit that blocks the check) or on a requirement that reads two ways and changes what gets built. Then finish with needs_decision and say in two or three plain sentences what you tried, what you could not confirm, the options and the one you recommend. Never finish on a guess and mention the gap in passing.
 ```
 
 `MISSING_ACCESS` (new):
@@ -946,7 +946,7 @@ Relayed by the controller (a previous stage's output, or the answer to this stag
 Completion block (`:83-92`):
 
 ````text
-Report this stage's completion with the Delegatus MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary }. That call is the only way to complete this stage, and it replaces any other ending the brief above asks for (REVIEW_READY, a VERDICT line, APPROVE, NO FINDINGS): write none of them.
+Report this stage's completion with the Delegatus MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary }. That call is the only way to complete this stage, and it replaces any other ending the brief above asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS): write none of them.
 The server resolves your conversation to this stage's attempt and reads the head, the branch's pull request and the declared outputs itself, so claim none of them.
 The call records your intent. The stage settles when this turn ends, so you may keep working after it, and calling again before then replaces the report.
 Verdicts: pass when the stage's contract is complete; notes that block nothing go in the summary. fail when the work is not done: for a review, one finding per defect the fix stage must address; for any other stage, what stopped it. needs_decision when only the operator can unblock the stage: put the question, what you tried, the options and your recommendation in the summary and attach no findings, because findings on a stage with a fail edge send it to the fix stage.
@@ -979,7 +979,7 @@ New constant appended to role spawns only (`agent/spawnCommand.ts:368`:
 spawns are untouched:
 
 ```text
-When you finish, end your final message with one line: Verdict: pass, Verdict: fail or Verdict: needs_decision. They mean what they mean for a pipeline stage: pass when the brief's contract is complete, with any notes above that line; fail with the findings listed above it; needs_decision with the question, the options and your recommendation above it. That line replaces any other ending the brief asks for (REVIEW_READY, a VERDICT line, APPROVE, NO FINDINGS).
+When you finish, end your final message with one line: Verdict: pass, Verdict: fail or Verdict: needs_decision. They mean what they mean for a pipeline stage: pass when the brief's contract is complete, with any notes above that line; fail with the findings listed above it; needs_decision with the question, the options and your recommendation above it. That line replaces any other ending the brief asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS).
 ```
 
 `VIEWER_SPAWN_PROMPT_FENCE` (`agent/spawnPolicy.ts:46`):
@@ -1037,7 +1037,7 @@ Every piece of accepted work runs as a pipeline on its board task: find or creat
 - Keep no more workers running at once than your role parameters allow, in every mode: each running lane and each live spawned agent counts as one.
 - Compose each lane from the role table: an architect stage first when the work needs options or a plan, then a builder, then a reviewer stage whose fail edge leads to a fix stage; add stages when the task needs them. Size the lane first.
 - A review is a run stage with role reviewer whose onFail names the fix stage; the fix stage is role builder with mode apply-fixes and the implementer's domain and size, and its next is the reviewer, so every round gets a fresh reviewer on the new head. Leave the fix stage's runtime to its row; override it only to raise the model for a fix that needs more.
-- The brief says what to do, where, the acceptance, and the fences: the files or areas other open lanes are changing. It never says how to end. Delegatus tells every agent how to report, and the words are pass, fail and needs_decision; never write REVIEW_READY, a VERDICT line, APPROVE or NO FINDINGS into a brief.
+- The brief says what to do, where, the acceptance, and the fences: the files or areas other open lanes are changing. It never says how to end. Delegatus tells every agent how to report, and the words are pass, fail and needs_decision; never write REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES or NO FINDINGS into a brief.
 - Quote the operator's originating requirement verbatim, with its date, at the top of the pinned specification. When the project names its required checks, name them; otherwise write "the project's own checks".
 - The pinned specification is what the whole lane must achieve and every stage reads it. Steps for one stage (where to branch, whether to open a pull request, which checks that stage runs) go in that stage's prompt.
 - A stage that hands a document on (a design, an audit report) declares its path in outputs: read-only stages write only declared outputs.
@@ -1244,8 +1244,8 @@ never edits `role-presets.json`.
   it: the greeting now says accepted work keeps moving and new work starts on
   the operator's word; the clock section says the drive to keep going works
   inside a turn; the start-by-default contract says what proactive means.
-- **Size.** The delivered default grew from 24 253 to 27 047 bytes. A rotation
-  still keeps a full history budget beside it (4 207 bytes left against
+- **Size.** The delivered default grew from 24 253 to 27 066 bytes. A rotation
+  still keeps a full history budget beside it (4 188 bytes left against
   4 096 with the standard-mode scaffold, so the next mandate line longer than
   about 110 bytes has to trim something), which `handoffDigest.test.ts` pins; to fit, the conveyor's last
   bullet drops "Bridge reports follow the bridge reports section above."
@@ -1285,6 +1285,14 @@ never edits `role-presets.json`.
   retirement; and the seeded flow preset's label in `flows/store.ts`, which
   still says "Terra low" for the fix row this change moved to GPT-6 Luna and
   goes with the flow removal.
+- **The feed's review card** (`components/feed/parse.ts`) still renders only a
+  message that opens with a retired `VERDICT:` line, through `parseReview`,
+  which the review flows share; a spawned reviewer's `Verdict:` line shows on
+  its card's verdict chip instead. Teaching the feed card the new line belongs
+  with the flow removal, which frees that parser.
+- **A fix stage keeps the implementer's account only on the same engine**
+  (review of #2301): a pinned account belongs to one engine, and the fix row
+  may run the other.
 - **A fix round has one finish line** (review of #2301). In `apply-fixes`
   mode the builder's "done when every acceptance criterion in the pinned
   specification holds" gives way to "done when every finding that names its
