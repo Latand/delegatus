@@ -12,13 +12,12 @@ import { AccountProjectBindingsUnreadableError, accountProjectBindings, allowedA
 import { selectProjectAccount } from "./projectSelection";
 import { refreshStaleExhaustion, type LiveLimitsDeps } from "./liveLimits";
 import { selectHealthyClaudeAccount } from "./spawnHealth";
-import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 import { classifySpawnAccountAdmission, type SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { readProviderMessageHealth } from "./claudeProviderHealth";
 
 function contextForSpawn(engine: "claude" | "codex", requested?: string | null) {
-  if (engine === "claude") { const item = claudeAccountForSpawn(requested); return { engine, accountId: item.id, kind: item.kind, home: item.home, transcriptRoot: item.projectsDir, env: item.kind === "managed" ? claudeAccountEnvironment(item) : withoutWakatimeCredential(process.env), ...(item.provider ? { claudeProvider: item.provider } : {}) }; }
-  const item = accountForSpawn(requested); return { engine, accountId: item.id, kind: item.kind, home: item.home, transcriptRoot: item.sessionsDir, env: { ...withoutWakatimeCredential(process.env), CODEX_HOME: item.home } };
+  if (engine === "claude") { const item = claudeAccountForSpawn(requested); return { engine, accountId: item.id, kind: item.kind, home: item.home, transcriptRoot: item.projectsDir, env: item.kind === "managed" ? claudeAccountEnvironment(item) : { ...process.env }, ...(item.provider ? { claudeProvider: item.provider } : {}) }; }
+  const item = accountForSpawn(requested); return { engine, accountId: item.id, kind: item.kind, home: item.home, transcriptRoot: item.sessionsDir, env: { ...process.env, CODEX_HOME: item.home } };
 }
 
 /** Viewer-visible spawn admission performs a fresh Claude OAuth health pass. */
@@ -655,10 +654,10 @@ export const accountManager: AccountManager = {
         if (item) return contextForSpawn("claude", item.id);
       } else {
         const item = listCodexAccounts().find((candidate) => candidate.id === recorded);
-        if (item) return { engine, accountId: item.id, kind: item.kind, home: item.home, transcriptRoot: item.sessionsDir, env: { ...withoutWakatimeCredential(process.env), CODEX_HOME: item.home } };
+        if (item) return { engine, accountId: item.id, kind: item.kind, home: item.home, transcriptRoot: item.sessionsDir, env: { ...process.env, CODEX_HOME: item.home } };
       }
     }
     if (engine === "claude") { const home = claudeHomeOwningTranscript(transcript); if (!home) return null; const item = listClaudeAccounts().find((candidate) => candidate.home === home); return item ? contextForSpawn("claude", item.id) : null; }
-    const home = codexHomeOwningSessionPath(transcript); if (!home) return null; const item = listCodexAccounts().find((candidate) => candidate.home === home); return item ? { engine, accountId: item.id, kind: item.kind, home, transcriptRoot: item.sessionsDir, env: { ...withoutWakatimeCredential(process.env), CODEX_HOME: home } } : null;
+    const home = codexHomeOwningSessionPath(transcript); if (!home) return null; const item = listCodexAccounts().find((candidate) => candidate.home === home); return item ? { engine, accountId: item.id, kind: item.kind, home, transcriptRoot: item.sessionsDir, env: { ...process.env, CODEX_HOME: home } } : null;
   },
 };

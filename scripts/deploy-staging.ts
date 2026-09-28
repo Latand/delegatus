@@ -39,7 +39,6 @@ import {
   viewerCandidateTmuxEnvironment,
   viewerComposeServiceFromConfig,
   viewerComposeServiceUid,
-  viewerComposeSnapshotWithoutWakatimeCredential,
 } from "../src/runtime-host/candidateContainer";
 import { ensureCanonicalMirror } from "../src/runtime-host/canonicalMirror";
 import { viewerComposeSnapshotPath } from "../src/runtime-host/deploymentArtifacts";
@@ -55,7 +54,6 @@ import {
   stagingStatePaths,
   stagingViewerDockerArgs,
 } from "../src/runtime-host/stagingContainer";
-import { withoutWakatimeCredential } from "../src/lib/wakatime/credential";
 
 /** Prod state families the issue forbids staging from touching. */
 export const PROD_STATE_EVIDENCE_FILES: ReadonlySet<string> = new Set([
@@ -207,7 +205,7 @@ async function command(argv: string[], options: { cwd?: string } = {}): Promise<
     cwd: options.cwd,
     stdout: "pipe",
     stderr: "pipe",
-    env: withoutWakatimeCredential(process.env),
+    env: { ...process.env },
   });
   const [stdout, stderr, code] = await Promise.all([
     new Response(child.stdout).text(),
@@ -321,7 +319,7 @@ async function main(): Promise<void> {
       "docker", "compose", "--project-directory", sourceDir, "-f", path.join(sourceDir, "docker-compose.yml"),
       "--profile", "*", "config", "--format", "json",
     ]);
-    composeSnapshot = viewerComposeSnapshotWithoutWakatimeCredential(composeConfig);
+    composeSnapshot = composeConfig;
     service = viewerComposeServiceFromConfig(composeSnapshot);
     await command(stagingImageBuildArgs({ revision, image, sourceDir, runtimeHome: service.environment.HOME }));
     await command([process.execPath, "install", "--frozen-lockfile", "--production"], { cwd: sourceDir });

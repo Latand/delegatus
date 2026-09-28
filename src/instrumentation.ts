@@ -1,4 +1,3 @@
-import { discardWakatimeEnvironmentCredential } from "@/lib/wakatime/credential";
 
 interface ViewerRuntimeModule {
   registerViewerRuntime(): Promise<void>;
@@ -7,7 +6,7 @@ interface ViewerRuntimeModule {
 export async function registerNodeViewerRuntime(
   loadRuntime: () => Promise<ViewerRuntimeModule>,
 ): Promise<void> {
-  discardWakatimeEnvironmentCredential();
+
   const { registerViewerRuntime } = await loadRuntime();
   await registerViewerRuntime();
 }

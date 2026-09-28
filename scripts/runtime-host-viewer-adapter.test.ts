@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import type { Readable } from "node:stream";
 
-import { WAKATIME_CREDENTIAL_ENV, withoutWakatimeCredential } from "../src/lib/wakatime/credential";
 import { MCP_TOOL_NAMES } from "../src/lib/mcp/server";
 import { UnixRuntimeHostClient } from "../src/lib/runtime/client";
 import { viewerComposeSnapshotName } from "../src/runtime-host/deploymentArtifacts";
@@ -105,7 +104,7 @@ exit 1
   const child = Bun.spawn([process.execPath, adapter, "current-release"], {
     cwd: root,
     env: {
-      ...withoutWakatimeCredential(process.env),
+      ...process.env,
       PATH: `${bin}:${process.env.PATH ?? ""}`,
       FAKE_DOCKER_STATE: options.containerState ?? "running",
       LLV_DEPLOYMENT_ADAPTER_PROTOCOL: "1",
@@ -180,7 +179,7 @@ test("documented bootstrap input obtains host-owned admission through the final 
   };
   const calls: string[] = [];
   fs.mkdirSync(state, { recursive: true });
-  const environment = Object.fromEntries(Object.entries(withoutWakatimeCredential(process.env))
+  const environment = Object.fromEntries(Object.entries(process.env)
     .filter((entry): entry is [string, string] => typeof entry[1] === "string"));
   Object.assign(environment, {
     HOME: sandbox,
@@ -406,7 +405,7 @@ async function runAction(options: {
   const child = Bun.spawn([process.execPath, adapter, options.action], {
     cwd: root,
     env: {
-      ...withoutWakatimeCredential(process.env),
+      ...process.env,
       PATH: `${bin}:${process.env.PATH ?? ""}`,
       FAKE_DOCKER_LOG: dockerLog,
       LLV_DEPLOYMENT_ADAPTER_PROTOCOL: "1",
@@ -757,7 +756,7 @@ async function runReconcile(
     child = spawn(process.execPath, [adapter, "reconcile-mcp-runtime"], {
       cwd: root,
       env: {
-        ...withoutWakatimeCredential(process.env),
+        ...process.env,
         LLV_AGENT_REGISTRY_SQLITE: "off",
         LLV_CLAUDE_HOME: path.join(fixture.sandbox, "claude"),
         LLV_CODEX_HOME: path.join(fixture.sandbox, "codex"),
@@ -969,7 +968,7 @@ exit 1
   const child = Bun.spawn([process.execPath, adapter, "build-candidate"], {
     cwd: root,
     env: {
-      ...withoutWakatimeCredential(process.env),
+      ...process.env,
       HOME: runtimeHome,
       PATH: `${bin}:${process.env.PATH ?? ""}`,
       FAKE_COMPOSE: composeSnapshot(),
@@ -1086,28 +1085,6 @@ exit 1
   expect(result.dockerCalls).toContain("container rm -f viewer-obsolete");
 });
 
-test("deployment command children exclude the legacy WakaTime credential", async () => {
-  const credentialPlaceholder = ["legacy", "child", "placeholder"].join("-");
-  const result = await runAction({
-    action: "retain-only",
-    input: { releases: [release] },
-    environment: { [WAKATIME_CREDENTIAL_ENV]: credentialPlaceholder },
-    dockerScript: `#!/bin/sh
-set -eu
-if [ -n "\${WAKATIME_API_KEY+x}" ]; then exit 91; fi
-if [ "$1 $2" = "container ls" ]; then exit 0; fi
-exit 1
-`,
-  });
-
-  expect(result.code).toBe(0);
-  expect(JSON.stringify(result)).not.toContain(credentialPlaceholder);
-});
-
-/* The failed candidate is retired immediately, taking the only account of why it
-   failed with it. Without this read the gate can report nothing but its own name,
-   which is what #790 had to deploy blind against - and it is the one evidence
-   path that leaves the process. */
 test("a candidate that dies before readiness carries its container's own account into the evidence", async () => {
   const candidate = { ...release, container: "viewer-candidate" };
   const result = await runAction({

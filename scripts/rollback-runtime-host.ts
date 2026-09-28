@@ -20,7 +20,6 @@ import {
   requestRuntimeHostRollback,
   runtimeHostRollbackTargetFromHandoff,
 } from "../src/runtime-host/hostRollback";
-import { withoutWakatimeCredential } from "../src/lib/wakatime/credential";
 
 const USAGE = "usage: bun scripts/rollback-runtime-host.ts [--execute]";
 
@@ -41,7 +40,7 @@ async function docker(argv: string[]): Promise<string> {
   const child = Bun.spawn(["docker", ...argv], {
     stdout: "pipe",
     stderr: "pipe",
-    env: withoutWakatimeCredential(process.env),
+    env: { ...process.env },
   });
   const [stdout, stderr, code] = await Promise.all([
     new Response(child.stdout).text(),

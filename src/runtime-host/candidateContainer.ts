@@ -3,7 +3,6 @@ import path from "node:path";
 
 import { viewerBootGateKey } from "@/lib/access/phoneAccessBootGate";
 import type { ViewerReleaseIdentity } from "@/lib/runtime/contracts";
-import { WAKATIME_CREDENTIAL_ENV, withoutWakatimeCredential } from "@/lib/wakatime/credential";
 
 export interface ViewerComposeVolume {
   type: "bind";
@@ -82,18 +81,6 @@ function stringArray(value: unknown, label: string): string[] {
 function assertCoveredKeys(record: Record<string, unknown>, supported: Set<string>, label: string): void {
   const uncovered = Object.keys(record).filter((key) => !supported.has(key));
   if (uncovered.length > 0) throw new Error(`${label} has uncovered fields: ${uncovered.sort().join(", ")}`);
-}
-
-export function viewerComposeSnapshotWithoutWakatimeCredential(configJson: string): string {
-  const config = objectValue(JSON.parse(configJson), "Compose config");
-  const services = objectValue(config.services, "Compose services");
-  for (const [name, value] of Object.entries(services)) {
-    const service = objectValue(value, `Compose service ${name}`);
-    if (service.environment === undefined) continue;
-    const environment = objectValue(service.environment, `Compose service ${name} environment`);
-    delete environment[WAKATIME_CREDENTIAL_ENV];
-  }
-  return JSON.stringify(config);
 }
 
 function composeVolume(value: unknown, index: number): ViewerComposeVolume {
@@ -198,7 +185,7 @@ export function viewerCandidateDockerArgs(
 ): string[] {
   const endpoint = new URL(candidate.endpoint);
   const registryBackendMode = viewerRegistryBackendMode(service);
-  const environment = withoutWakatimeCredential({
+  const environment = {
     ...service.environment,
     [AGENT_REGISTRY_SQLITE_ENV]: registryBackendMode,
     PORT: endpoint.port,
@@ -207,7 +194,7 @@ export function viewerCandidateDockerArgs(
     LLV_LEGACY_TMUX_EXTERNAL: overrides.legacyTmuxExternal,
     LLV_ALLOW_LEGACY_VIEWER: "1",
     TMUX_TMPDIR: overrides.tmuxTmpdir,
-  });
+  };
   const labels = {
     ...service.labels,
     "dev.live-log-viewer.managed": "1",

@@ -33,7 +33,6 @@ import { readTranscriptHosts, type TranscriptHost, type TranscriptHostSnapshot }
 import { captureTmuxAttachReferences, type TmuxAttachReference } from "@/lib/tmux";
 import { statePath } from "@/lib/configDir";
 import { fsyncPath } from "@/lib/state/durableJson";
-import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 
 import { RESOURCE_STRUCTURED_HOST_LIMIT, type FileEntry, type ResourceSession, type ResourcesPayload, type ResourcesViewer } from "./types";
 
@@ -1458,7 +1457,7 @@ async function collectResourcesInWorker(
       cwd: process.cwd(),
       detached: true,
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...withoutWakatimeCredential(process.env), [RESOURCE_WORKER_OWNER_ENV]: workerOwner },
+      env: { ...process.env, [RESOURCE_WORKER_OWNER_ENV]: workerOwner },
     },
   );
   return new Promise<CollectedResources>((resolve, reject) => {

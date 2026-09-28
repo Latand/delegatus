@@ -144,14 +144,6 @@ async function recordAuthorizedOperatorActivity(
 ): Promise<AuthorizedOperatorAction> {
   if (!directOperatorActivityAuthority(req).ok) return { byOperator: false, conversationId: target.conversationId };
   const fallbackEntry = operatorFallbackEntry((await dependencies.completedFileScan()).snapshot.files, target);
-  dependencies.recordDirectOperatorWakatimeActivity({
-    ...(target.conversationId ? { conversationId: target.conversationId } : {}),
-    ...(target.filePath ? { path: target.filePath } : {}),
-    ...identity,
-    ...(fallbackEntry ? { fallbackEntry } : {}),
-  });
-  /* Beside the WakaTime point, never inside it: the dashboard's ledger is
-     written only once the gesture is admitted, and it cannot refuse it. */
   dependencies.recordOperatorRequest(req, {
     kind,
     idempotencyKey: identity.idempotencyKey ?? null,

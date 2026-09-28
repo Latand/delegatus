@@ -8,7 +8,6 @@ import { statePath } from "@/lib/configDir";
 import { CLAUDE_LOGIN_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
 import { darwinProcessArgv } from "@/lib/proc/darwinArgv";
 import { darwinProcessIdentity } from "@/lib/proc/darwinIdentity";
-import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 import { AccountMutationBusyError, withAccountMutationLock, withAccountMutationLockAsync } from "./accountMutation";
 
 import { readClaudeCredentials } from "./claudeCredentials";
@@ -223,7 +222,7 @@ export function isSupervisedClaudeHome(home: string): boolean {
     credentials at that home rather than an ambient API key. An unrecognized
     home receives a credential-isolated environment copy. */
 export function claudeStatusEnvironment(home: string): NodeJS.ProcessEnv {
-  return isSupervisedClaudeHome(home) ? claudeManagedEnvironment(home) : withoutWakatimeCredential(process.env);
+  return isSupervisedClaudeHome(home) ? claudeManagedEnvironment(home) : { ...process.env };
 }
 
 async function structuredStatus(home: string): Promise<{ loggedIn: boolean; method: string | null; email: string | null; plan: string | null; indeterminate?: boolean }> {

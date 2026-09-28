@@ -4,7 +4,6 @@ import path from "node:path";
 
 import { systemScheduler, type DeadlineScheduler } from "@/lib/deadline";
 import { scheduleTranscriptIndex, type TranscriptIndexFeed } from "@/lib/search/transcriptFeed";
-import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 
 import type { FileCatalogScan, FileScanOptions } from "./index";
 import { transcriptIndexFeed } from "./discover";
@@ -122,7 +121,7 @@ export function collectFileScanInWorker(
     cwd: runtime.cwd ?? process.cwd(),
     stdio: ["pipe", "pipe", "pipe"],
     env: {
-      ...withoutWakatimeCredential(runtime.env ?? process.env),
+      ...runtime.env ?? process.env,
       LLV_FILE_SCANNER_WORKER: "1",
     },
   });

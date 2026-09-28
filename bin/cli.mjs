@@ -28,7 +28,6 @@ import {
   browserOpenCommand,
   cliRuntimeHostConfig,
   cliRuntimeHostEnvironment,
-  discardWakatimeEnvironmentCredential,
   newlyBoundNonLoopbackAddress,
   readNonLoopbackBindState,
   viewerChildProcessOptions,
@@ -48,7 +47,6 @@ import { probeHeadersFrom } from "./internalService.mjs";
 import { findLegacySystemdUnits, legacySystemdNotice } from "./legacySystemd.mjs";
 import { linkSkills } from "./skillLinks.mjs";
 
-discardWakatimeEnvironmentCredential();
 
 /* The launcher is one of the process kinds that may resolve the operator's own
    config and state directories (#1905); everything it starts inherits the

@@ -312,8 +312,8 @@ This fixes G2, going forward only.
   honestly. The first-party callers are browser components
   (`src/hooks/useRuntime.ts`, `src/components/TmuxComposer.tsx`,
   `src/hooks/useNativeQueue.ts`). The check is `operatorBrowserRequest` in
-  `src/lib/agent/operatorAuthority.ts`; the operator's WakaTime activity and
-  the retirement of reply drafts, which read the same flag, follow it. The
+  `src/lib/agent/operatorAuthority.ts`; the retirement of reply drafts
+  follows the same flag. The
   task send route (`src/app/api/tasks/[id]/send/route.ts`) stamps its own
   operator origin and is unchanged, and no server-side caller posts to either
   route (the forwarders that set the header, such as

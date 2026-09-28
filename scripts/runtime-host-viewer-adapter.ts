@@ -37,7 +37,6 @@ import {
   viewerCandidateDockerArgs,
   viewerCandidateGateKey,
   viewerCandidateTmuxEnvironment,
-  viewerComposeSnapshotWithoutWakatimeCredential,
   viewerComposeServiceFromConfig,
   viewerComposeServiceUid,
   viewerRegistryBackendMode,
@@ -107,7 +106,6 @@ import {
   waitForViewerReadiness,
   type ViewerCandidateContainerState,
 } from "../src/runtime-host/deploymentHealth";
-import { withoutWakatimeCredential } from "../src/lib/wakatime/credential";
 
 const defaultConfigDir = process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || "/home/user", ".config");
 const stateDir = process.env.LLV_STATE_DIR || path.join(appDirIn(defaultConfigDir), "state");
@@ -163,7 +161,7 @@ async function commandResult(argv: string[], options: { cwd?: string; timeoutMs?
     ...(options.timeoutMs ? { timeout: options.timeoutMs, killSignal: "SIGKILL" as const } : {}),
     stdout: "pipe",
     stderr: "pipe",
-    env: withoutWakatimeCredential(process.env),
+    env: { ...process.env },
   });
   const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
   return { code, stdout: stdout.trim(), stderr: stderr.trim() };
@@ -191,7 +189,7 @@ function composeConfigFile(container: string): string {
 }
 
 function writeComposeConfig(container: string, config: string): void {
-  const snapshot = viewerComposeSnapshotWithoutWakatimeCredential(config);
+  const snapshot = config;
   viewerComposeServiceFromConfig(snapshot);
   const filename = composeConfigFile(container);
   fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
@@ -459,7 +457,7 @@ async function candidateContainerLog(container: string, tail = 40): Promise<stri
     const child = Bun.spawn(["/usr/bin/setpriv", "--pdeathsig", "KILL", "--", "docker", "logs", "--tail", String(tail), container], {
       stdout: "pipe",
       stderr: "pipe",
-      env: withoutWakatimeCredential(process.env),
+      env: { ...process.env },
     });
     const [stdout, stderr] = await Promise.all([
       new Response(child.stdout).text(),
@@ -605,7 +603,7 @@ export function mcpProbeEnvironment(
     throw new Error("candidate MCP probe requires the candidate's own control endpoint");
   }
   return {
-    ...Object.fromEntries(Object.entries(withoutWakatimeCredential(env))
+    ...Object.fromEntries(Object.entries(env)
       .filter((entry): entry is [string, string] => typeof entry[1] === "string")),
     LLV_VIEWER_DEPLOY_TARGET: deployTarget,
     // Candidate health must exercise the candidate's web/runtime client. The

@@ -5,11 +5,9 @@
 import "../../../bin/envAlias.mjs";
 import "@/lib/state/owner/mcp";
 
-import { discardWakatimeEnvironmentCredential } from "@/lib/wakatime/credential";
 
 import { startViewerMcpServer } from "./server";
 
-discardWakatimeEnvironmentCredential();
 
 startViewerMcpServer().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));

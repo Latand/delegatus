@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 
 import type { ViewerReleaseIdentity } from "@/lib/runtime/contracts";
-import { WAKATIME_CREDENTIAL_ENV } from "@/lib/wakatime/credential";
 
 import {
   RUNTIME_HOST_CONTAINER_ENV,
@@ -125,9 +124,6 @@ test("issue 521 review: successor cleanup converges when the predecessor is alre
   expect(cleared).toBe(true);
 });
 
-/* The unsupported credential as Docker would report it from the predecessor's
-   environment. The value is a test placeholder, never a real credential. */
-const wakatimePlaceholderValue = "waka-credential-value-placeholder";
 
 const predecessorInspect = JSON.stringify([{
   Name: "/llv-runtime-host-704ff4636294-0123456789ab",
@@ -139,7 +135,6 @@ const predecessorInspect = JSON.stringify([{
       "HOME=/home/user",
       `${AGENT_REGISTRY_SQLITE_ENV}=off`,
       `${AGENT_REGISTRY_SQLITE_ENV}=off`,
-      `${WAKATIME_CREDENTIAL_ENV}=${wakatimePlaceholderValue}`,
     ],
     Cmd: ["bun-container", "run", "src/runtime-host/main.ts"],
     "User": "1000:1000",
@@ -992,26 +987,6 @@ test("issue 521: a start-identity change alone between running inspections never
   expect(records).toEqual([]);
   expect(intents).toEqual([]);
   expect(calls.some((argv) => argv[0] === "container" && argv[1] === "update")).toBe(false);
-});
-
-/* PR #521 review, finding 2: the Docker-inspected predecessor environment was
-   cloned verbatim into the successor's `docker run` arguments, so the
-   unsupported credential's name and value leaked into the successor's
-   metadata. Neither may ever reach a Docker call or a durable record. */
-test("issue 521: the predecessor's unsupported credential never reaches Docker calls or successor metadata", async () => {
-  const { ports, calls, records, intents } = harness();
-
-  await stageRuntimeHostSuccessorContainer(candidate, "agent-log-viewer:node22", ports);
-
-  const dockerArguments = calls.flat();
-  expect(dockerArguments.some((argument) => argument.includes(WAKATIME_CREDENTIAL_ENV))).toBe(false);
-  expect(dockerArguments.some((argument) => argument.includes(wakatimePlaceholderValue))).toBe(false);
-  expect(JSON.stringify(records)).not.toContain(WAKATIME_CREDENTIAL_ENV);
-  expect(JSON.stringify(records)).not.toContain(wakatimePlaceholderValue);
-  expect(JSON.stringify(intents)).not.toContain(WAKATIME_CREDENTIAL_ENV);
-  expect(JSON.stringify(intents)).not.toContain(wakatimePlaceholderValue);
-  /* Supported predecessor environment entries still clone. */
-  expect(calls.find((argv) => argv[0] === "run")?.join(" ")).toContain("-e LLV_RUNTIME_EVENTS=1");
 });
 
 /* #1216. The staging action runs under a sixty-second host budget with an

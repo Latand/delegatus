@@ -19,7 +19,6 @@ import type {
   ViewerRuntimeHostHealthEvidence,
   ViewerRuntimeHostProbeEvidence,
 } from "@/lib/runtime/contracts";
-import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 
 import type { ViewerDeploymentAdapter } from "./deployment";
 import { candidateLogExcerpt } from "./deploymentHealth";
@@ -490,7 +489,7 @@ export class HostCommandViewerDeploymentAdapter implements ViewerDeploymentAdapt
         child = spawn("/usr/bin/setpriv", ["--pdeathsig", "KILL", "--", executable, action], {
           stdio,
           env: {
-            ...withoutWakatimeCredential(process.env),
+            ...process.env,
             LLV_DEPLOYMENT_ADAPTER_PROTOCOL: "1",
             LLV_DEPLOYMENT_ADAPTER_PHASE_FILE: phaseFile,
             /* #1216: the deadline this host will enforce, so the adapter can

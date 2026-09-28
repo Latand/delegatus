@@ -4,7 +4,6 @@ import path from "node:path";
 
 import { pidAlive } from "@/lib/scanner/process";
 import { controllerCommitIdentityArgs } from "@/lib/git/controllerCommitIdentity";
-import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 
 import { setupExitPath, setupStderrPath, setupStdoutPath } from "./store";
 import type { Workflow } from "./types";
@@ -87,7 +86,7 @@ export function startSetup(wf: Workflow): { pid: number | null; error?: string }
        text never gets interpolated into the wrapper script. */
     const child = spawn("sh", ["-c", `sh -c "$LLV_SETUP_CMD"; printf '%s' "$?" > "$LLV_SETUP_EXIT"`], {
       cwd: wf.worktreeDir,
-      env: { ...withoutWakatimeCredential(process.env), LLV_SETUP_CMD: setup, LLV_SETUP_EXIT: exitPath },
+      env: { ...process.env, LLV_SETUP_CMD: setup, LLV_SETUP_EXIT: exitPath },
       detached: true,
       stdio: ["ignore", stdoutFd, stderrFd],
     });

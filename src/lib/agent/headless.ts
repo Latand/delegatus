@@ -9,7 +9,6 @@ import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { applyClaudeSpawnPolicy, fenceViewerSpawnPrompt } from "@/lib/agent/spawnPolicy";
 import { procBackend } from "@/lib/proc";
 import { STATE_OWNER_ENV } from "@/lib/stateOwnership";
-import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 
 import type { RuntimeRoleConfig as RoleConfig } from "./runtimeConfig";
 
@@ -56,7 +55,7 @@ export interface LiveRun {
 export const headlessRuns = new Map<string, LiveRun>();
 
 export function reviewerEnvironment(base: NodeJS.ProcessEnv, spawnCapability?: string, omitKeys: readonly string[] = []): NodeJS.ProcessEnv {
-  const env = withoutWakatimeCredential(base);
+  const env = { ...base };
   delete env.LLV_TOKEN;
   /* A headless reviewer is no owner of the operator's state. The Viewer's own
      claim (the image sets it for the whole container) used to ride along, so a
@@ -342,7 +341,7 @@ export function reviewerCommand(
     args,
     env: reviewerEnvironment(
       codexAccount?.home
-        ? { ...withoutWakatimeCredential(process.env), CODEX_HOME: codexAccount.home }
+        ? { ...process.env, CODEX_HOME: codexAccount.home }
         : process.env,
       spawnCapability,
     ),

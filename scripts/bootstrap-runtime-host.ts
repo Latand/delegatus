@@ -53,7 +53,6 @@ import {
   findRuntimeHostPredecessor,
   stageRuntimeHostSuccessorContainer,
 } from "../src/runtime-host/hostSuccessor";
-import { withoutWakatimeCredential } from "../src/lib/wakatime/credential";
 
 const USAGE = "usage: bun scripts/bootstrap-runtime-host.ts [origin/main|<40-hex sha>] [--stage|--hand-over]";
 
@@ -89,7 +88,7 @@ async function command(argv: string[], options: { cwd?: string } = {}): Promise<
     cwd: options.cwd,
     stdout: "pipe",
     stderr: "pipe",
-    env: withoutWakatimeCredential(process.env),
+    env: { ...process.env },
   });
   const [stdout, stderr, code] = await Promise.all([
     new Response(child.stdout).text(),
@@ -107,7 +106,7 @@ async function streamedCommand(argv: string[]): Promise<void> {
   const child = Bun.spawn(argv, {
     stdout: "inherit",
     stderr: "inherit",
-    env: withoutWakatimeCredential(process.env),
+    env: { ...process.env },
   });
   if (await child.exited !== 0) throw new Error(`${argv[0]} failed`);
 }

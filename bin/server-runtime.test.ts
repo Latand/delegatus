@@ -23,8 +23,6 @@ import {
   structuredHostsEnabled as structuredHostsEnabledInLauncher,
   viewerServerBunRuntime,
   viewerChildProcessOptions,
-  WAKATIME_CREDENTIAL_ENV,
-  withoutWakatimeCredential,
 } from "./server-runtime.mjs";
 
 /**
@@ -149,35 +147,6 @@ test("the CLI uses the source runtime host in a checkout", () => {
   } finally {
     removeSandbox(packageRoot);
   }
-});
-
-test("the CLI runtime environment owns its socket, fence and journal and strips ambient WakaTime credentials", () => {
-  const socketPath = "/runtime/viewer.sock";
-  const fencePath = "/runtime/viewer.sock.lock";
-  const journalPath = "/runtime/viewer.sqlite";
-  const env: Record<string, string | undefined> = cliRuntimeHostEnvironment({
-    PATH: "/usr/bin",
-    LLV_RUNTIME_HOST_SOCKET: "/runtime/operator.sock",
-    LLV_RUNTIME_HOST_FENCE: "/runtime/operator.sock.lock",
-    LLV_RUNTIME_JOURNAL: "/runtime/operator.sqlite",
-    LLV_STRUCTURED_HOSTS: "off",
-    LLV_RUNTIME_EVENTS: "0",
-    LLV_SPAWN_TRANSPORT: "tmux",
-    NEXT_PUBLIC_RUNTIME_UI: "0",
-    [WAKATIME_CREDENTIAL_ENV]: "fixture-value",
-  }, { socketPath, fencePath, journalPath });
-
-  expect(env).toMatchObject({
-    PATH: "/usr/bin",
-    LLV_RUNTIME_HOST_SOCKET: socketPath,
-    LLV_RUNTIME_HOST_FENCE: fencePath,
-    LLV_RUNTIME_JOURNAL: journalPath,
-    LLV_STRUCTURED_HOSTS: "1",
-    LLV_RUNTIME_EVENTS: "1",
-    LLV_SPAWN_TRANSPORT: "structured",
-    NEXT_PUBLIC_RUNTIME_UI: "1",
-  });
-  expect(env[WAKATIME_CREDENTIAL_ENV]).toBeUndefined();
 });
 
 test("the CLI rejects a ready runtime socket owned by another process", async () => {
@@ -401,41 +370,6 @@ test("documented development and production scripts pin Bun and open every hot c
     else process.env.LLV_STATE_DIR = previous;
     removeSandbox(sandbox);
   }
-});
-
-test("Viewer child processes receive no ambient WakaTime key material", () => {
-  const placeholder = ["child", "fixture", "value"].join("-");
-  const env = withoutWakatimeCredential({
-    PATH: process.env.PATH,
-    KEEP_ME: "kept",
-    [WAKATIME_CREDENTIAL_ENV]: placeholder,
-  });
-  const probe = Bun.spawnSync([
-    process.execPath,
-    "--eval",
-    "process.stdout.write(JSON.stringify({ keep: process.env.KEEP_ME, key: process.env.WAKATIME_API_KEY ?? null }))",
-  ], { env, stdout: "pipe", stderr: "pipe" });
-
-  expect({ exitCode: probe.exitCode, success: probe.success }).toEqual({ exitCode: 0, success: true });
-  expect(JSON.parse(probe.stdout.toString())).toEqual({ keep: "kept", key: null });
-  expect(JSON.stringify(env)).not.toContain(placeholder);
-}, SPAWN_BUDGET_MS);
-
-test("published launcher child options capture no ambient WakaTime key material", () => {
-  const placeholder = ["launcher", "fixture", "value"].join("-");
-  const options = viewerChildProcessOptions({
-    cwd: "/viewer",
-    env: {
-      PATH: process.env.PATH,
-      KEEP_ME: "kept",
-      [WAKATIME_CREDENTIAL_ENV]: placeholder,
-    },
-    stdio: "ignore",
-  });
-
-  expect(options.env.KEEP_ME).toBe("kept");
-  expect(options.env[WAKATIME_CREDENTIAL_ENV]).toBeUndefined();
-  expect(JSON.stringify(options)).not.toContain(placeholder);
 });
 
 test("the launcher's endpoint rule is the same rule the runtime host compiles", () => {

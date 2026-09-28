@@ -4185,7 +4185,6 @@ function writeResourcesFixture(stale: boolean): number {
     { pid: 892_225, role: "server", name: "bun-container", rssBytes: 1.3 * GIB, swapBytes: 0, procCount: 1 },
     { pid: 921_801, role: "runtime-host", name: "main", rssBytes: 690 * MIB, swapBytes: 0, procCount: 1 },
     { pid: 894_438, role: "worker", name: "accountMigrationController.worker", rssBytes: 1.3 * GIB, swapBytes: 210 * MIB, procCount: 1 },
-    { pid: 894_382, role: "worker", name: "wakatimeSync.worker", rssBytes: 980 * MIB, swapBytes: 0, procCount: 1 },
     { pid: 2_787_025, role: "worker", name: "filesResponse.worker", rssBytes: 960 * MIB, swapBytes: 0, procCount: 1 },
     { pid: 894_409, role: "worker", name: "telegram-mcp-server", rssBytes: 52 * MIB, swapBytes: 0, procCount: 1 },
   ];

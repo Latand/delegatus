@@ -4,12 +4,9 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 
 import {
-  discardWakatimeEnvironmentCredential,
   viewerChildProcessOptions,
-  withoutWakatimeCredential,
 } from "../bin/server-runtime.mjs";
 
-discardWakatimeEnvironmentCredential();
 
 const root = process.cwd();
 const nextBin = join(root, "node_modules", ".bin", "next");
@@ -26,7 +23,7 @@ if (process.versions.bun) {
 } else {
   const bun = process.env.LLV_BUN_EXECUTABLE || "bun";
   const child = spawn(bun, ["--bun", __filename, ...process.argv.slice(2)], {
-    env: process.env,
+    env: { ...process.env },
     stdio: "inherit",
   });
   child.once("error", (error) => {
@@ -42,7 +39,7 @@ if (process.versions.bun) {
 
 function runNextBuild() {
   return new Promise((resolve, reject) => {
-    const env = { ...withoutWakatimeCredential(process.env), LLV_STANDALONE: "1" };
+    const env = { ...process.env, LLV_STANDALONE: "1" };
     for (const key of Object.keys(env)) {
       if (key.startsWith("__NEXT_PRIVATE_")) delete env[key];
     }
@@ -78,7 +75,7 @@ function runMcpBuild() {
     const bun = process.env.LLV_BUN_EXECUTABLE || "bun";
     const child = spawn(bun, ["run", "build:mcp"], viewerChildProcessOptions({
       cwd: root,
-      env: withoutWakatimeCredential(process.env),
+      env: { ...process.env },
       stdio: "inherit",
     }));
     child.on("error", (error) => reject(new Error(`Failed to start ${bun}: ${error.message}`)));
@@ -100,7 +97,7 @@ function runRuntimeHostBuild() {
       `--outfile=${runtimeHostBundle}`,
     ], viewerChildProcessOptions({
       cwd: root,
-      env: withoutWakatimeCredential(process.env),
+      env: { ...process.env },
       stdio: "inherit",
     }));
     child.on("error", (error) => reject(new Error(`Failed to start ${bun}: ${error.message}`)));

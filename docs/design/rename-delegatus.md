@@ -463,7 +463,6 @@ one pass over the environment at boot, so nothing pushes for removal.
 | Docker | compose `name: agent-log-viewer`; images `agent-log-viewer:node22` (3 references), `:deploy-<rev>-<key>` (`src/runtime-host/deploymentArtifacts.ts:13`), `:staging-<rev>` (`stagingContainer.ts:50`), `:hostboot-<rev>` (`scripts/bootstrap-runtime-host.ts:187`); containers `llv-runtime-host-<rev>-<gen>` (`hostSuccessor.ts:99`), `llv-deploy-<key>` (`deploymentArtifacts.ts:9`), `llv-staging-viewer`, `llv-staging-runtime-host` |
 | systemd (legacy) | retired; the CLI's migration notice names the old unit files (`docs/docker.md`, "Moving off the systemd install") |
 | Browser storage | 25 distinct `llv:*` / `llvAgent*` / `llv_auth` key literals in non-test `src/` |
-| External ids | WakaTime entities `agent-log-viewer/<engine>/…` (`src/lib/wakatime/sync.ts:331`) |
 | Canonical remote | `package.json:82` and the 4 script defaults listed in §2.3 |
 
 ### 6.2 UI and i18n (en, uk)
@@ -735,7 +734,7 @@ released to npm):
   users the new prefix, and an internal rename touches 617 files for no
   user-visible gain.
 - **Browser storage keys and the `llv_auth` cookie, `llv-` temp and container
-  prefixes other than the two in §6.6, WakaTime entities,
+  prefixes other than the two in §6.6,
   `/opt/llv-whisper-venv`, the legacy systemd unit name.** They are invisible
   identifiers. Renaming them logs everyone out, resets saved layouts or
   duplicates data already sent elsewhere.

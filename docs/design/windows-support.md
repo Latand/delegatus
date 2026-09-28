@@ -169,7 +169,7 @@ script, or a feature that stays a WSL route).
 | `src/lib/projects/identity.ts:39-47` | `fs.realpathSync.native` for directory identity | — | — | canonicalises drive-letter and path case on Windows; `identity.test.ts` on win32 |
 | Every `startsWith(root + path.sep)` containment (`roots.ts:89,118`, `artifact/route.ts:74`, `image/route.ts:48`, `inboxFiles.ts:128`, …) | case-sensitive string prefix | D | 2 | a cwd recorded as `c:\…` and a root as `C:\…` miss each other; phase 2 normalises the drive letter on win32; phase 1 documents it |
 | `bin/cli.mjs:711-724` (`linkSkills`) | creates symlinks | D | — | only from a git checkout; symlink creation without Developer Mode fails and is already caught |
-| `src/lib/accounts/claude.ts:69,80,159-165`, `codex.ts:164-168`, `wakatime/sync.ts:953`, `telegram/*`, `runtimeImageStore.ts:777` | POSIX mode bits (`0o700`, `& 0o077`) and `uid === getuid()` | B (Main account reads as signed out; headless selection finds no account) / D | 1c | `accounts/claude.test.ts` on win32: `managedClaudeCredentialIsSafe` true for a plain file; `headlessSelection.test.ts` selects Main |
+| `src/lib/accounts/claude.ts:69,80,159-165`, `codex.ts:164-168`, `telegram/*`, `runtimeImageStore.ts:777` | POSIX mode bits (`0o700`, `& 0o077`) and `uid === getuid()` | B (Main account reads as signed out; headless selection finds no account) / D | 1c | `accounts/claude.test.ts` on win32: `managedClaudeCredentialIsSafe` true for a plain file; `headlessSelection.test.ts` selects Main |
 | `src/lib/runtime/integrationTestHome.ts` | `chmod 0o700` | — | — | tests only |
 
 ### C. Spawn and termination
