@@ -40,7 +40,7 @@ export function forgetTaskExchange(id: string): void {
 }
 
 type Scan = { p: string[]; after: string; full: boolean; at: Position | null };
-type Inflight = { kind: "log"; through: Position; rows: number } | { kind: "scan"; next: string | null; rows: number };
+type Inflight = { kind: "log"; through: Position; rows: number; more: boolean } | { kind: "scan"; next: string | null; rows: number };
 export type TaskRequest = { tasks?: Record<string, unknown>; push?: Record<string, unknown> };
 
 const sameSet = (left: ReadonlySet<string>, right: readonly string[]) => right.every((key) => left.has(key));
@@ -114,7 +114,7 @@ export class TaskExchange {
         this.dirty = true;
         this.pushMore = true;
       } else if (page.rows.length) {
-        this.inflight = { kind: "log", through: page.cursor, rows: page.rows.length };
+        this.inflight = { kind: "log", through: page.cursor, rows: page.rows.length, more: page.more };
         request.push = { rows: page.rows, through: page.cursor };
       } else {
         if (JSON.stringify(page.cursor) !== JSON.stringify(this.pushed)) this.moved = true;
@@ -141,6 +141,7 @@ export class TaskExchange {
       this.movedRows += this.inflight.rows;
       if (this.inflight.kind === "log") {
         this.pushed = this.inflight.through;
+        this.pushMore = this.inflight.more;
         this.dirty = true;
       } else if (this.pushScan) {
         this.pushScan.after = this.inflight.next ?? "";

@@ -1,8 +1,9 @@
 /**
  * Two isolated installs, each its own process on port 0, syncing tasks over
  * the real peer routes (docs/design/linked-installs.md M.11 slice M2). A
- * makes every call; B is never given A's address. Byte figures are socket
- * counts and `Buffer.byteLength` of bodies, measured by the test server.
+ * makes every call; B is never given A's address. Wire figures come from a
+ * TCP counting proxy between the two (`wireMeter.ts`); body figures are
+ * `Buffer.byteLength` of what the test server received and answered.
  */
 import { afterAll, expect, test } from "bun:test";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -12,12 +13,15 @@ import path from "node:path";
 
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import type { BoardTask } from "@/lib/tasks/types";
+import { meter, WIRE_BUDGET, type Meter } from "./wireMeter";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-board-sync-test-"));
 const remote = "code.example.test/acme/widget";
 const key = projectIdentityFromRemote(`https://${remote}`, "/")!.project;
 const processes: ChildProcessWithoutNullStreams[] = [];
+const meters: Meter[] = [];
 afterAll(() => {
+  for (const counts of meters) counts.close();
   for (const child of processes) if (child.pid && !child.killed) child.kill("SIGTERM");
   fs.rmSync(root, { recursive: true, force: true });
 });
@@ -26,7 +30,10 @@ async function install(name: string, extraRemotes: Record<string, string> = {}):
   const state = path.join(root, name);
   fs.mkdirSync(state, { recursive: true });
   fs.writeFileSync(path.join(state, "project-remotes.json"), JSON.stringify({ schemaVersion: 1, remotes: { [key]: remote, ...extraRemotes } }));
-  const child = spawn(process.execPath, ["src/lib/links/testServer.ts", state], { cwd: process.cwd(), env: { ...process.env, LLV_STATE_DIR: state, XDG_CONFIG_HOME: path.join(state, "config") } });
+  // Each install scans only its own homes, never the operator's transcripts.
+  const home = path.join(state, "home");
+  const child = spawn(process.execPath, ["src/lib/links/testServer.ts", state], { cwd: process.cwd(), env: { ...process.env, LLV_STATE_DIR: state, XDG_CONFIG_HOME: path.join(state, "config"),
+    HOME: home, LLV_CLAUDE_HOME: path.join(home, ".claude"), LLV_CODEX_HOME: path.join(home, ".codex") } });
   processes.push(child);
   const port = await new Promise<number>((resolve, reject) => {
     let output = "";
@@ -50,10 +57,10 @@ async function request(base: string, route: string, method = "GET", body?: objec
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 }
 
-/** Pairs A to B and links the given projects on both sides. */
-async function link(a: string, b: string, share: { all?: boolean; projects?: string[] } = { projects: [key] }): Promise<string> {
+/** Pairs A to B (through `via`, a proxy in front of B, when given) and links the given projects on both sides. */
+async function link(a: string, b: string, share: { all?: boolean; projects?: string[] } = { projects: [key] }, via = b): Promise<string> {
   const code = String((await request(b, "/api/links/codes", "POST")).body.code);
-  expect((await request(a, "/api/links/peers", "POST", { url: b, code })).status).toBe(200);
+  expect((await request(a, "/api/links/peers", "POST", { url: via, code })).status).toBe(200);
   const peerId = ((await request(a, "/api/links/peers")).body.peers as { id: string }[])[0]!.id;
   for (const side of [a, b]) expect((await request(side, "/api/links/shared", "POST", { v: 1, all: share.all ?? false, projects: share.projects ?? [] })).status).toBe(200);
   await sync(a, peerId);
@@ -76,7 +83,7 @@ async function patchOn(base: string, id: string, patch: Record<string, unknown>)
   const answer = await request(base, `/api/tasks/${id}`, "PATCH", patch);
   return answer;
 }
-type Captured = { request: string; response: string; read: number; written: number };
+type Captured = { request: string; response: string };
 const captured = async (base: string, reset = true) => (await request(base, `/test/captured${reset ? "?reset=1" : ""}`)).body as unknown as Captured[];
 
 function fileMarks(name: string): Record<string, { size: number; mtimeMs: number }> {
@@ -92,19 +99,53 @@ function fileMarks(name: string): Record<string, { size: number; mtimeMs: number
   return marks;
 }
 
+/** A Claude transcript on A whose first prompt carries a canary, in a checkout of the linked repository. */
+function seedTranscript(name: string, prompt: string): void {
+  const checkout = path.join(root, name, "checkout", "widget");
+  fs.mkdirSync(checkout, { recursive: true });
+  for (const args of [["init", "-q"], ["remote", "add", "origin", `https://${remote}`]]) {
+    const git = Bun.spawnSync(["git", ...args], { cwd: checkout, env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+    if (git.exitCode !== 0) throw new Error(`git ${args[0]} failed: ${git.stderr.toString()}`);
+  }
+  const projects = path.join(root, name, "home", ".claude", "projects", checkout.replace(/[/.]/g, "-"));
+  fs.mkdirSync(projects, { recursive: true });
+  const at = (offset: number) => new Date(Date.now() - 60_000 + offset).toISOString();
+  const envelope = { isSidechain: false, userType: "external", entrypoint: "sdk-cli", cwd: checkout, sessionId: "session-canary", version: "2.1.0", gitBranch: "main" };
+  const records = [
+    { ...envelope, parentUuid: null, uuid: "rec-prompt", timestamp: at(0), type: "user", message: { role: "user", content: [{ type: "text", text: prompt }] } },
+    { ...envelope, parentUuid: "rec-prompt", uuid: "rec-answer", timestamp: at(1_000), type: "assistant", requestId: "req-1",
+      message: { id: "msg-1", model: "claude-opus-5", role: "assistant", type: "message", stop_reason: "end_turn", stop_sequence: null, content: [{ type: "text", text: "Done." }] } },
+  ];
+  fs.writeFileSync(path.join(projects, "session-canary.jsonl"), records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+}
+
 test("tasks created, changed in every group and deleted on either machine show on the other after one call; prompts never cross; an idle link costs next to nothing", async () => {
   const a = await install("both-A");
   const b = await install("both-B");
+  const wire = await meter(b);
+  meters.push(wire);
   // Pre-M2 rows whose text is a prompt, written before anything is linked.
   const canaryA = (await request(a, "/test/bulk", "POST", { project: key, count: 1, text: "CANARY-A-first-prompt", explicit: false })).body.ids as string[];
   const canaryB = (await request(b, "/test/bulk", "POST", { project: key, count: 1, text: "CANARY-B-launch-prompt", explicit: false })).body.ids as string[];
-  const peerId = await link(a, b);
+  // Tasks made by the paths that title a task from a prompt: the transcript
+  // scan's admission, a launch's display prompt, a pipeline goal, a curator card.
+  seedTranscript("both-A", "CANARY-SCAN-first-prompt of a scanned conversation");
+  const admitted = (await request(a, "/test/prompts", "POST", { project: key, launch: "CANARY-LAUNCH-display-prompt", goal: "CANARY-GOAL-pipeline-goal", curator: "CANARY-CURATOR-line" })).body as
+    { scanned: number; curated: number; tasks: { id: string; text: string }[] };
+  expect(admitted.scanned).toBe(1);
+  expect(admitted.curated).toBe(1);
+  const prompted = admitted.tasks;
+  for (const canary of ["CANARY-SCAN", "CANARY-LAUNCH", "CANARY-GOAL", "CANARY-CURATOR"]) expect(prompted.some((task) => task.text.includes(canary))).toBe(true);
+  // Every body from the first exchange until the tasks are named is kept and scanned.
+  const bodies: string[] = [];
+  const drain = async () => { for (const call of await captured(b)) bodies.push(call.request, call.response); };
+  const peerId = await link(a, b, { projects: [key] }, wire.url);
   await sync(a, peerId);
   expect((await taskOn(b, canaryA[0]!))?.text).toBe("Untitled task");
   expect((await taskOn(a, canaryB[0]!))?.text).toBe("Untitled task");
-  const firstBodies = [...await captured(b)].flatMap((call) => [call.request, call.response]).join("\n");
-  expect(firstBodies).not.toContain("CANARY");
-  expect(firstBodies).not.toContain(root);
+  for (const task of prompted) expect((await taskOn(b, task.id))?.text).toBe("Untitled task");
+  await drain();
+  expect(bodies.join("\n")).not.toContain(root);
 
   // Create on A: B has it after one call.
   const made = await createOn(a, "Plan the release");
@@ -154,12 +195,20 @@ test("tasks created, changed in every group and deleted on either machine show o
   expect((await taskOn(a, made.id))!.status).toBe("assigned");
   expect((await taskOn(b, made.id))!.text).toBe("Text from A");
 
+  // No request or answer body so far carried a prompt, the first exchange included.
+  await drain();
+  expect(bodies.length).toBeGreaterThan(20);
+  expect(bodies.join("\n")).not.toContain("CANARY");
+
   // Naming the prompt rows sends their text, the same words included.
   expect((await patchOn(a, canaryA[0]!, { text: "CANARY-A-first-prompt" })).status).toBe(200);
   expect((await patchOn(b, canaryB[0]!, { text: "A title chosen on B" })).status).toBe(200);
+  const named = prompted.map((task, index) => [task.id, index === 0 ? task.text : `Named task ${index}`] as const);
+  for (const [id, text] of named) expect((await patchOn(a, id, { text })).status).toBe(200);
   await sync(a, peerId);
   expect((await taskOn(b, canaryA[0]!))!.text).toBe("CANARY-A-first-prompt");
   expect((await taskOn(a, canaryB[0]!))!.text).toBe("A title chosen on B");
+  for (const [id, text] of named) expect((await taskOn(b, id))!.text).toBe(text);
 
   // Edit against delete: the delete wins on both.
   expect((await patchOn(a, fromB.id, { text: "edited while deleted" })).status).toBe(200);
@@ -179,14 +228,17 @@ test("tasks created, changed in every group and deleted on either machine show o
   await captured(b);
   const diskA = fileMarks("both-A");
   const diskB = fileMarks("both-B");
-  const before = (await request(b, "/test/metrics")).body as { syncCalls: number; syncRead: number; syncWritten: number };
+  const before = (await request(b, "/test/metrics")).body as { syncCalls: number };
+  const wireBefore = { total: wire.up + wire.down, connections: wire.connections };
   for (let i = 0; i < 100; i++) await sync(a, peerId);
-  const after = (await request(b, "/test/metrics")).body as { syncCalls: number; syncRead: number; syncWritten: number };
+  const after = (await request(b, "/test/metrics")).body as { syncCalls: number };
   expect(after.syncCalls - before.syncCalls).toBe(100);
+  expect(wire.connections - wireBefore.connections).toBe(100);
   const idle = await captured(b);
   expect(Math.max(...idle.map((call) => Buffer.byteLength(call.request)))).toBeLessThanOrEqual(200);
   expect(Math.max(...idle.map((call) => Buffer.byteLength(call.response)))).toBeLessThanOrEqual(200);
-  expect((after.syncRead - before.syncRead + after.syncWritten - before.syncWritten) / 100).toBeLessThanOrEqual(1024);
+  // Request line, headers and bodies both ways, as counted on the TCP connection.
+  expect((wire.up + wire.down - wireBefore.total) / 100).toBeLessThanOrEqual(WIRE_BUDGET);
   expect([(await request(a, "/test/revision")).body.revision, (await request(b, "/test/revision")).body.revision]).toEqual(revisions);
   expect(fileMarks("both-A")).toEqual(diskA);
   expect(fileMarks("both-B")).toEqual(diskB);
@@ -251,6 +303,39 @@ test("1 000 tasks arrive in 5 pages of at most 512 KB; 1 100 writes on B while A
   expect(new Set(onA.map((task) => task.id))).toEqual(new Set(onB.map((task) => task.id)));
 }, 180_000);
 
+test("A pushes a transaction of 201 linked tasks, and cap-sized rows past 512 KB, in pages inside one sync; nothing repeats or is skipped", async () => {
+  const a = await install("push-pages-A");
+  const b = await install("push-pages-B");
+  const peerId = await link(a, b);
+  await sync(a, peerId);
+  const pushPages = (calls: Captured[]) => calls.map((call) => JSON.parse(call.request) as { push?: { rows?: { id: string }[] } })
+    .flatMap((body) => body.push?.rows?.length ? [body.push.rows.map((row) => row.id)] : []);
+
+  // One revision of 201 rows: a page of 200 and a page of 1, both in this one sync.
+  await captured(b);
+  const bulk = (await request(a, "/test/bulk", "POST", { project: key, count: 201 })).body.ids as string[];
+  await sync(a, peerId);
+  const pages = pushPages(await captured(b));
+  expect(pages.map((page) => page.length)).toEqual([200, 1]);
+  expect(pages.flat().sort()).toEqual([...bulk].sort());
+  const onB = new Set((await tasksOf(b)).map((task) => task.id));
+  expect(bulk.every((id) => onB.has(id))).toBe(true);
+
+  // Cap-sized Ukrainian rows (about 52 KB each): the byte bound splits the page before 200 rows.
+  const big = (await request(a, "/test/bulk", "POST", { project: key, count: 12, text: "Ю".repeat(6_000), details: "Ї".repeat(20_000) })).body.ids as string[];
+  await sync(a, peerId);
+  const calls = await captured(b);
+  const bigPages = pushPages(calls);
+  expect(bigPages.length).toBeGreaterThan(1);
+  expect(bigPages.flat()).toHaveLength(12);
+  expect(new Set(bigPages.flat())).toEqual(new Set(big));
+  for (const call of calls) {
+    const rows = (JSON.parse(call.request) as { push?: { rows?: unknown[] } }).push?.rows ?? [];
+    expect(Buffer.byteLength(JSON.stringify(rows))).toBeLessThanOrEqual(512 * 1024);
+  }
+  for (const id of big) expect((await taskOn(b, id))?.details).toBe("Ї".repeat(20_000));
+}, 120_000);
+
 test("with B's clock 7 minutes ahead an edit A makes after receiving B's edit still wins; a stamp 2 hours ahead pauses with clock and applies nothing", async () => {
   const a = await install("clock-A");
   const b = await install("clock-B");
@@ -312,17 +397,19 @@ test("one edit costs its encoded row plus at most 300 bytes with 1 000 linked pr
   }
   const a = await install("bytes-A", remotes);
   const b = await install("bytes-B", remotes);
-  const peerId = await link(a, b, { all: true });
+  const wire = await meter(b);
+  meters.push(wire);
+  const peerId = await link(a, b, { all: true }, wire.url);
   const task = await createOn(a, "Measured task");
   await sync(a, peerId);
   await sync(a, peerId);
   expect((await taskOn(b, task.id))?.text).toBe("Measured task");
 
+  // Every byte of every call on the wire, headers included.
   const measure = async (run: () => Promise<void>) => {
-    await captured(b);
+    const start = { connections: wire.connections, bytes: wire.up + wire.down };
     await run();
-    const calls = await captured(b);
-    return { calls: calls.length, bytes: calls.reduce((sum, call) => sum + call.read + call.written, 0) };
+    return { calls: wire.connections - start.connections, bytes: wire.up + wire.down - start.bytes };
   };
   const edited = await measure(async () => {
     expect((await patchOn(a, task.id, { status: "blocked" })).status).toBe(200);

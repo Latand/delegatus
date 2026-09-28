@@ -24,6 +24,10 @@ import { statePath } from "@/lib/configDir";
 import { createTask } from "@/lib/tasks/commands";
 import { loadTasks, mutateTasks, taskFeedSource } from "@/lib/tasks/store";
 import { runsElsewhere } from "./linked";
+import { listFiles } from "@/lib/scanner";
+import { admitScannedConversations } from "@/lib/tasks/membership";
+import { admitRecoveredLaunch, admitReservedLaunch } from "@/lib/tasks/launchMembership";
+import { applyTaskCuratorProposals, collectTaskCuratorInputs } from "@/lib/tasks/curator";
 
 const dir = process.argv[2]!;
 process.env.LLV_STATE_DIR = dir;
@@ -44,7 +48,7 @@ const syncBodySizes: number[] = [];
 const syncAnswerSizes: number[] = [];
 const wire: { path: string; request: string; response: string }[] = [];
 /* Every sync body since the last reset, for the tests that scan them all. */
-let captured: { request: string; response: string; read: number; written: number }[] = [];
+let captured: { request: string; response: string }[] = [];
 const realNow = Date.now.bind(Date);
 let clockOffset = 0;
 Date.now = () => realNow() + clockOffset;
@@ -90,6 +94,24 @@ const server = http.createServer(async (request, response) => {
       });
       if (input.each) for (let i = 0; i < input.count; i++) run(1); else run(input.count);
       json(response, { ids });
+      return;
+    }
+    if (path === "/test/prompts") {
+      /* Tasks whose text starts as a prompt, each made by its production path:
+         the transcript scan's admission, a recovered launch's display prompt, a
+         pipeline stage launch titled with its goal, and a curator card. */
+      const input = body() as { project: string; launch: string; goal: string; curator: string };
+      const before = new Set(loadTasks().map((task) => task.id));
+      const entries = await listFiles();
+      const scanned = admitScannedConversations(entries, []);
+      admitRecoveredLaunch({ launchId: "launch-canary", conversationId: "conversation_launch_canary", engine: "claude", cwd: undefined, clientAttemptId: "attempt-canary",
+        explicitProject: input.project, launchProfile: {}, launchDisplay: { prompt: input.launch } });
+      admitReservedLaunch({ engine: "codex", cwd: undefined, explicitProject: input.project, launchProfile: { title: input.goal }, origin: { kind: "container", container: "pipeline", containerId: "lane-canary" } },
+        { launchId: "launch-stage-canary", conversationId: "conversation_stage_canary" }, () => undefined);
+      const curatorInput = collectTaskCuratorInputs(entries, { project: input.project })[0];
+      const curated = curatorInput ? applyTaskCuratorProposals(entries, [{ inputId: curatorInput.id, title: input.curator }]) : null;
+      json(response, { scanned, entries: entries.length, curated: curated?.created.length ?? 0, skipped: curated?.skipped ?? [],
+        tasks: loadTasks().filter((task) => !before.has(task.id)).map((task) => ({ id: task.id, text: task.text })) });
       return;
     }
     if (path === "/test/raw") {
@@ -228,7 +250,7 @@ const server = http.createServer(async (request, response) => {
     response.writeHead(result.status, { ...Object.fromEntries(result.headers), ...(path === "/api/peer/v1/boards/sync" && padSync ? { "x-test-pad": "p".repeat(padSync) } : {}) });
     response.end(resultBody, () => {
       if (path === "/api/peer/v1/boards/sync") {
-        if (capturing) captured.push({ request: Buffer.concat(chunks).toString("utf8"), response: resultBody.toString("utf8"), read: request.socket.bytesRead, written: request.socket.bytesWritten });
+        if (capturing) captured.push({ request: Buffer.concat(chunks).toString("utf8"), response: resultBody.toString("utf8") });
         if (captured.length > 5_000) captured.shift();
         syncCalls++;
         maxSyncBody = Math.max(maxSyncBody, Buffer.concat(chunks).byteLength);
