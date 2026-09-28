@@ -1620,10 +1620,10 @@ function rateLimitParkDetail(resetsAt: number | null, accountLabel: string): str
   return `rate limited until ${reset}, account ${accountLabel}`;
 }
 
-/** The usage limits that exclude accounts of `engine`. Both engines name their
-    main account `default`, so a limit hit on one engine never excludes an
-    account of the other; an entry from before engines were recorded belongs to
-    the engine its attempt was created under. */
+/** Usage-limit history for `engine`. Both engines name their main account
+    `default`, so a limit hit on one engine never affects an account of the
+    other; an entry from before engines were recorded belongs to the engine
+    its attempt was created under. */
 function usageLimitsOn(attempt: PipelineStageAttempt, engine: FlowEngine): NonNullable<PipelineStageAttempt["usageLimitedAccounts"]> {
   return (attempt.usageLimitedAccounts ?? []).filter((limited) => (limited.engine ?? attempt.effectiveRole.engine) === engine);
 }
@@ -1660,9 +1660,10 @@ function recoverUsageLimitedAttempt(
   }
 
   const limitedEngine = attempt.effectiveRole.engine;
+  const previousLimit = usageLimitsOn(attempt, limitedEngine).find((limited) => limited.accountId === accountId);
   attempt.usageLimitedAccounts = [
     ...(attempt.usageLimitedAccounts ?? []).filter((limited) => !(limited.accountId === accountId && (limited.engine ?? limitedEngine) === limitedEngine)),
-    { accountId, engine: limitedEngine, resetsAt: knownReset(usageLimit.resetsAt) },
+    { ...previousLimit, accountId, engine: limitedEngine, resetsAt: knownReset(usageLimit.resetsAt) },
   ];
   const retryWithLimits = () => {
     pipeline.state = "running";

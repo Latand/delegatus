@@ -8603,7 +8603,12 @@ test("a previously limited Claude account becomes available for a later stage re
   expect(reseats).toEqual([SPARE_ACCOUNT]);
   currentPath = "/codex/stage-2.jsonl";
   await tickPipelines([], h.ports);
-  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.runs[0]!.attempts[0]!.usageLimitedAccounts).toMatchObject([
+    { accountId: LIMITED_ACCOUNT, limitedAt: Date.parse("2026-08-27T09:41:00.000Z"), turnId: expect.any(String) },
+    { accountId: SPARE_ACCOUNT, limitedAt: Date.parse("2026-08-27T09:50:00.000Z"), turnId: expect.any(String) },
+  ]);
   recoveredA = true;
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
