@@ -47,13 +47,21 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     if (!code || codeFinished) return;
     let active = true;
+    let refreshed = false;
     const id = code.code.slice(0, 6);
     const read = async () => {
       try {
         const response = await fetch("/api/links/codes");
         if (!response.ok) return;
         const result = await response.json() as { codes: CodeState[] };
-        if (active) setCodeStatus(result.codes.find((row) => row.id === id) ?? null);
+        if (active) {
+          const status = result.codes.find((row) => row.id === id) ?? null;
+          if (status?.used && !refreshed) {
+            refreshed = true;
+            void refresh().catch(() => setError("unavailable"));
+          }
+          setCodeStatus(status);
+        }
       } catch { /* The next open-panel read retries. */ }
     };
     void read();

@@ -4,13 +4,16 @@ import https from "node:https";
 import net from "node:net";
 
 import { ensureSelf } from "./self";
-import { findPeer, grantRows, markPeerCall, peerRows, putPeer, remoteProjects, sharedDigest, updateRemoteProjects } from "./protocol";
+import { findPeer, grantRows, markPeerCall, peerRows, putPeer, remoteProjects, removePeer, sharedDigest, updateRemoteProjects } from "./protocol";
 import { isSharedProject, readPeers, sharedProjects, type Link, type SharedProject } from "./state";
 import { LOOPBACK_PROBE_HOSTS } from "@/runtime-host/deploymentProxy";
 import { ownBoardStoreId } from "./boardLinks";
 
 export class LinkError extends Error { constructor(readonly code: string) { super(code); } }
 const lastSent = new Map<string, string>();
+const sameLink = (current: Link | undefined, expected: Link): current is Link => !!current &&
+  current.id === expected.id && current.grantId === expected.grantId && current.token === expected.token &&
+  current.store === expected.store && current.url === expected.url;
 type Target = { url: URL; address: string };
 const bare = (host: string) => host.replace(/^\[|\]$/g, "");
 const loopback = (host: string) => host === "::1" || net.isIP(host) === 4 && host.split(".")[0] === "127";
@@ -99,8 +102,15 @@ export async function syncPeer(id: string): Promise<{ peer: Link; remote: Shared
   const peer = findPeer(id);
   if (!peer) throw new LinkError("not-found");
   if (peer.state === "revoked") throw new LinkError("revoked");
+  const stillLinked = (): Link => {
+    const current = findPeer(id);
+    if (!sameLink(current, peer)) throw new LinkError("not-found");
+    if (current.state === "revoked") throw new LinkError("revoked");
+    return current;
+  };
   try {
     const target = await peerTarget(peer.url);
+    stillLinked();
     const local = sharedProjects();
     const localHash = sharedDigest(local);
     const sentKey = `${peer.url}:${id}`;
@@ -112,12 +122,14 @@ export async function syncPeer(id: string): Promise<{ peer: Link; remote: Shared
     let remoteTotal: number | null = null;
     let store = peer.store;
     for (let calls = 0; calls < 202; calls++) {
+      stillLinked();
       const batch = send ? local.slice(sent, sent + 100) : undefined;
       const answer = await call(target, "/api/peer/v1/boards/sync", "POST", { v: 1, store: ownBoardStoreId(), now: Date.now(), s: localHash, have: remoteHash,
         ...(batch ? { shared: batch, index: sent, total: local.length } : {}),
         ...(remoteTotal !== null ? { want: received.length } : {}) }, { "x-delegatus-peer": `${peer.grantId}.${peer.token}` });
+      const live = stillLinked();
       if (answer.status === 401) {
-        putPeer({ ...peer, state: "revoked", error: "revoked" });
+        putPeer({ ...live, state: "revoked", error: "revoked" });
         throw new LinkError("revoked");
       }
       if (answer.status === 409 && answer.body.error === "store-changed") throw new LinkError("store-changed");
@@ -152,14 +164,18 @@ export async function syncPeer(id: string): Promise<{ peer: Link; remote: Shared
       if (!send && remoteTotal === null && answer.body.s === remoteHash && answer.body.need !== true) break;
       if (calls === 201) throw new LinkError("malformed");
     }
-    const current = { ...peer, state: "active" as const, lastCall: Date.now(), error: null };
-    if (peer.state !== "active" || peer.error !== null) putPeer(current);
+    const live = stillLinked();
+    const current = { ...live, state: "active" as const, lastCall: Date.now(), error: null };
+    if (live.state !== "active" || live.error !== null) putPeer(current);
     // Last-call freshness is only needed in memory; do not rewrite peers.json on idle calls.
     markPeerCall(id, current.lastCall);
     return { peer: current, remote };
   } catch (error) {
     if (error instanceof LinkError && error.code === "revoked") throw error;
-    if (peer.state !== "failing") putPeer({ ...peer, state: "failing", error: error instanceof LinkError ? error.code : "unreachable" });
+    const live = findPeer(id);
+    if (sameLink(live, peer) && live.state !== "revoked" && live.state !== "failing") {
+      putPeer({ ...live, state: "failing", error: error instanceof LinkError ? error.code : "unreachable" });
+    }
     throw error;
   }
 }
@@ -173,8 +189,11 @@ export async function removeConnectedPeer(id: string): Promise<{ warned: boolean
     const answer = await call(target, "/api/peer/v1/grant", "DELETE", undefined, { "x-delegatus-peer": `${peer.grantId}.${peer.token}` });
     warned = answer.status !== 200 && answer.status !== 401;
   } catch { warned = true; }
-  const { removePeer } = await import("./protocol");
-  removePeer(id);
+  const live = findPeer(id);
+  if (sameLink(live, peer)) {
+    removePeer(id);
+    lastSent.delete(`${peer.url}:${id}`);
+  }
   return { warned };
 }
 

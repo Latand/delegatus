@@ -39,6 +39,49 @@ type Scheme = "light" | "dark";
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
 describe("linked boards M1 settings", () => {
+  browserTest("a used pairing code reveals the new grant in the open receiver dialog", async () => {
+    const out = path.resolve(".artifacts/linked-boards-m1");
+    fs.mkdirSync(out, { recursive: true });
+    const key = `repo-${"c".repeat(32)}`;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/links": { self: { label: "Machine B", publicUrl: "https://board.example.test", check: null }, state: "ok", entry: { port: 8897, publishable: true }, keyOn: true },
+      "/api/links/peers": { peers: [] },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, server.base, { width: 390, height: 844 }, "light", "en", "reduce", true);
+      let paired = false;
+      let codeReads = 0;
+      try {
+        await page.route("**/api/links/shared", (route) => route.fulfill({ json: {
+          shared: { v: 1, all: false, projects: [] }, known: [],
+          states: paired ? [{ id: "grant", label: "Machine A", projects: [{ key, name: "widget", state: "only-there" }] }] : [],
+        } }));
+        await page.route("**/api/links/grants", (route) => route.fulfill({ json: { grants: paired
+          ? [{ id: "grant", label: "Machine A", requests: 0, today: 0, sevenDays: 0, lastUsed: null }] : [] } }));
+        await page.route("**/api/links/codes", (route) => {
+          if (route.request().method() === "POST") return route.fulfill({ json: { code: "ABCDEF-01234-56789", expiresAt: Date.now() + 600_000 } });
+          codeReads++;
+          return route.fulfill({ json: { codes: [{ id: "ABCDEF", expiresAt: Date.now() + 600_000, wrongAttempts: 0, used: paired, burned: false }] } });
+        });
+        await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-linked-settings")));
+        await page.locator('[data-linked-settings] input[type="checkbox"]').waitFor();
+        expect(await page.getByRole("button", { name: "Revoke" }).count()).toBe(0);
+        expect(await page.locator(`[data-shared-project="${key}"]`).count()).toBe(0);
+        await page.getByRole("button", { name: "Allow a connection" }).click();
+        await page.locator('[data-code-state="open"]').waitFor();
+        paired = true;
+        await page.locator('[data-code-state="used"]').waitFor({ timeout: 6000 });
+        await page.getByRole("button", { name: "Revoke" }).waitFor();
+        expect(await page.locator(`[data-shared-project="${key}"] [data-share-state="only-there"]`).textContent()).toContain("Only on Machine A");
+        const stoppedReads = codeReads;
+        await page.waitForTimeout(3500);
+        expect(codeReads).toBe(stoppedReads);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 15_000);
+
   browserTest("remote-only rows, revoked refresh and code attempts update in the open dialog", async () => {
     const out = path.resolve(".artifacts/linked-boards-m1");
     fs.mkdirSync(out, { recursive: true });
