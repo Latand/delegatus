@@ -12,6 +12,7 @@ import {
 } from "./poller";
 import { externalRelayFile, reserveRun, readRelayStore, readRunLedger, updateRelayStore } from "./store";
 import { startTestRelay } from "./testRelay";
+import { noteRelayOutcome, noteRelayProgress } from "./activity";
 import { sampleRequest } from "./protocol.test";
 const root = fs.mkdtempSync(path.join(externalRelayTempRoot(), "relay-poller-test-"));
 process.env.LLV_STATE_DIR = root;
@@ -324,3 +325,25 @@ test("a corrupt run ledger logs the sweep failure and still starts polling", asy
     await server.close();
   }
 }, 10_000);
+test("the last outcome and progress outlive a poll loop restarted by a settings change", async () => {
+  const server = await startTestRelay(() => ({ status: 204 }));
+  try {
+    updateRelayStore((store) => ({
+      ...store,
+      relays: store.relays.map((relay) => ({ ...relay, api_base: `${server.origin}/v1`, paused: false })),
+    }));
+    const id = readRelayStore().relays[0]!.id;
+    ensureExternalRelayPollers();
+    noteRelayOutcome(id, "declined:busy");
+    noteRelayProgress(id, "target_1", { kind: "note", label: "Reading the thread", tool: null, status: null, at: "2026-09-28T10:00:00.000Z" });
+    refreshExternalRelayPollers(id);
+    expect(relayPollerStatus(id)).toMatchObject({
+      lastOutcome: "declined:busy",
+      lastProgress: { targetId: "target_1", label: "Reading the thread" },
+    });
+    expect(relayPollerStatus(id).lastOutcomeAt).not.toBeNull();
+  } finally {
+    stopExternalRelayPollers();
+    await server.close();
+  }
+});

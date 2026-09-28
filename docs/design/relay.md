@@ -1,6 +1,6 @@
 # External relay: an outside service asks, this install answers
 
-Status: Phase 1 backend implemented; the settings UI in §B.9 is deferred.
+Status: Phase 1 implemented, backend and the settings UI of §B.9.
 This specification was written by the architect stage of the Phase 1 lane on
 2026-09-28. Baseline code claims were checked at `7a679e42` on `main`.
 Part A is the wire protocol and is normative for both
@@ -954,7 +954,10 @@ New files:
 | `src/lib/externalRelay/progress.ts` | Maps engine events to `Progress` (§B.7). |
 | `src/lib/agent/ephemeral.ts` | `runEphemeralAgent` and the answer-profile command builders (§B.5, §B.6). |
 | `src/app/api/external-relay/**` | Operator routes (§B.9). |
-| `src/components/externalRelay/ExternalRelaySection.tsx` | Deferred settings section (§B.9). |
+| `src/components/externalRelay/ExternalRelaySection.tsx` | The pairing flow and the relay cards (§B.9), shared by the settings dialog and the setup guide's step. |
+| `src/components/externalRelay/ExternalRelaySettingsDialog.tsx` | The "External relay" settings dialog and its host (§B.9). |
+| `src/components/onboarding/RelayStep.tsx` | The setup guide's optional "Relay service" step (§B.9). |
+| `src/lib/externalRelay/activity.ts` | The last outcome and last progress label per relay, in memory, for the settings page (§B.9). |
 
 ## B.2 Configuration and state
 
@@ -1342,21 +1345,65 @@ Target settings are validated against the existing catalogs:
 `effortScale` (`src/lib/agent/efforts.ts:75` [code]). Engines are `claude` and
 `codex`.
 
-**Deferred UI.** An "External relay" section in the settings dialog that holds linked
-installs (`src/components/links/LinkedSettingsDialog.tsx`, mounted at
-`src/components/Viewer.tsx:1749` [code]). It shows: a connect form (the service's
-URL); then the code, the link and the expiry while waiting; then "The relay
-service says this is <name> (<handle>). Is this you?" with Confirm and Cancel;
-then each target with engine, model, effort, project, concurrency and an
-"Answered by this install" switch, which stays disabled until an engine and
-model are set and a signed-in account of that engine exists; the poller state
-and the last outcome with its reason; Pause and Disconnect. Strings in English
-and Ukrainian (`src/lib/i18n/en.ts`, `uk.ts`). The same form is reachable as
-an optional onboarding step beside the existing optional one
-(`src/lib/onboarding/steps.ts:13-14` [code]). Rendered evidence: render and
-DOM tests for every state of the section, and one case added to the phone
-driver (`src/components/mobile/issue1671Evidence.browser.test.tsx`) for the
-narrow viewport. No new driver.
+**UI.** "External relay" is a settings dialog of its own, in the shell of
+the linked-installs dialog (`src/components/links/LinkedSettingsDialog.tsx`),
+opened from a row beside "Linked installs" in the desktop rail's ⋯ menu and
+in the phone's menu sheet, and mounted beside it in the Viewer. Its body,
+`ExternalRelaySection`, shows:
+
+- a connect form (the service's URL); then the code, the link (followed only
+  when it is an `http(s)` address, in a new tab without an opener) and the
+  expiry while the owner acts in the service; then "The relay service says
+  this is <name> (<handle>). Is this you?" with Confirm and Cancel. A
+  pairing that ends in the service (denied, cancelled, expired) says so with
+  the service's reason as plain text and offers Start again. A pending
+  pairing still in `relays.json` resumes when the surface opens;
+- each paired relay: its name, origin, description, the owner it is paired
+  as and when; the poller state of §B.3 as one line, danger-toned when only
+  the operator can clear it (`credential_rejected`, `unsupported_version`)
+  and warning-toned while it retries; the last outcome with its reason; the
+  last progress label with its target and time; Pause or Resume, and
+  Disconnect;
+- each target: engine, model (the catalog of `ENGINE_MODELS`), effort (the
+  model's `effortScale`, or the model default) and "At once" (concurrency 1
+  to 4), each saved on change; changing the engine sends that engine's
+  default model and clears the effort. "Answered by this install" forwards
+  `answered_by` to the service, and stays disabled until the target has an
+  engine and a model, a signed-in account of that engine exists and the
+  relay is not paused; a target whose engine has no signed-in account says
+  so. The project binding and the hard cap stay on the route and are not
+  on the page.
+
+The last outcome and the last progress label live in memory on
+`globalThis` (`src/lib/externalRelay/activity.ts`), keyed by relay, so they
+survive a poll loop that a settings change restarts, and `GET
+/api/external-relay` returns them with the poller state. Nothing of either
+is written under `<state>`; a restart of the Viewer clears them. The
+progress label is the one the heartbeats carry: recorded only when the
+request asked for notes, after the redaction of §B.7.
+
+The setup guide gains an optional step, "Relay service", listed last under
+"Later, any time" (`src/lib/onboarding/steps.ts`): pairing with an outside
+service is never on the way to a first orchestrator, so it stays out of the
+numbered steps. The step asks which engine answers (Claude or Codex) and
+checks one thing: that an account of that engine is signed in, as the
+Engines step counts it (`engineConnected`). Without one it says so, links
+back to Engines, and the connect form stays disabled; it runs no check turn,
+and capacity is left to §B.4 step 3 at request time. With one, it renders the
+same `ExternalRelaySection`, and a confirmed pairing gives every target that
+has no engine yet the chosen engine and its default model, so the operator
+only has to switch "Answered by this install" on. Leaving the step without
+pairing records it as skipped, as the Phone step does.
+
+Strings are in English and Ukrainian (`src/lib/i18n/en.ts`, `uk.ts`,
+`externalRelay.*` and `onboarding.relay.*`). Rendered evidence: DOM tests
+for every state of the section and of the step
+(`src/components/externalRelay/ExternalRelaySection.dom.test.tsx`, and one
+case in `src/components/onboarding/OnboardingDialog.dom.test.tsx`), and one
+case in the phone driver (`src/components/mobile/issue1671Evidence.browser.test.tsx`,
+"external relay") over the fixture's `?relay=` scenes at 390 and 1440 in
+both languages; its readings are `evidence/external-relay/settings.json`.
+No new driver.
 
 ## B.10 State ownership
 
@@ -1397,11 +1444,11 @@ Bun pin are untouched, so `scripts/verify-runtime-host.ts` is not needed.
 | 2 | `src/lib/externalRelay/client.test.ts` against `testRelay.ts`, an in-process fake relay service like `src/lib/links/testServer.ts` | Pairing to `completed`, including the owner echo, `owner_changed`, `expired` and `denied`; claim 200 and 204; heartbeat 409 stops the run; completion retried after a dropped response is accepted once (`duplicate: true`); 401 parks `credential_rejected`; 426 parks `unsupported_version`; 429 honours `Retry-After`; HTTP to a public address, a cross-origin `api_base`, a redirect and a body over 1 MiB are refused; every socket has its error handler before the first write. |
 | 3 | `src/lib/agent/ephemeral.test.ts` | The exact argument list per engine, including `project_doc_max_bytes=0`; no `--settings`, `--mcp-config`, `--session-id` or `--dangerously-*`; the prompt only on stdin; the environment without `LLV_TOKEN`, `LLV_STATE_OWNER`, `LLV_SPAWN_CAPABILITY` or the credential; the answer home holds only the `auth.json` link; the catalog drops both keys and keeps the rest; a missing catalog entry, missing `auth.json` or provider account declines as `profile_error`; a hard cap of `2**31`, `Infinity` or 30 000 is refused. |
 | 4 | `src/lib/externalRelay/runner.test.ts`, with a stub CLI through `launchDetached`'s `runtime.command` seam (`headless.ts:368` [code]) that replays synthetic Codex JSONL and Claude stream-json | Heartbeats keep their interval while the stub prints nothing (L3); one label per heartbeat, the newest; the final JSON never becomes progress; an unsafe provider home declines as `profile_error` before launch; a `command_execution` item and a Claude init with an extra tool each end as `profile_violation`; a clean exit with a written answer is `answered`, a non-zero exit after writing it is `agent_error`; the hard cap fires `hard_cap`; the run directory is gone on every path; slots are freed on every path; a request for a full target is `busy`. |
-| 5 | `src/lib/externalRelay/poller.test.ts` | Slots advertised per target; a freed slot aborts and reopens the poll; the sweep kills a run whose Viewer is dead, completes it `install_restarted` and removes its directory, and leaves a live Viewer's run alone; nothing starts in staging. |
+| 5 | `src/lib/externalRelay/poller.test.ts` | Slots advertised per target; a freed slot aborts and reopens the poll; the sweep kills a run whose Viewer is dead, completes it `install_restarted` and removes its directory, and leaves a live Viewer's run alone; nothing starts in staging; the last outcome and progress label outlive a poll loop restarted by a settings change. |
 | 6 | `src/app/api/external-relay/route.test.ts` | Each guard: cross-origin, access key withheld, agent caller, staging; no response carries the credential or the poll secret. |
 | 7 | `src/lib/agent/ephemeral.probe.test.ts`, run only with `LLV_ANSWER_PROFILE_PROBE=1` | The real installed `codex` and `claude`, driven by the built profile against a loopback stub model endpoint that records what they send, with dummy credentials and temp homes holding marker lines in `AGENTS.md`, `CLAUDE.md`, ancestor `.git/AGENTS.md` and `.claude/CLAUDE.md`, and a settings hook. It asserts the offered tools (Codex: `exec` nesting only the clock, `wait`, `request_user_input_async`; Claude: `StructuredOutput`), that no marker reached the request, that no hook ran, and that the answer format is a JSON schema. It uses no model quota; it re-runs on every CLI upgrade. It is the method of the Evidence section, made repeatable. |
 | 8 | manual, once per engine, in the implementing stage | A live marker probe on a real signed-in account at the lowest effort. Codex: a temp account home whose `auth.json` links to a real account's file and whose `AGENTS.md` holds a marker, run through the real launch path. Claude: the real account, with the marker in a `.claude/CLAUDE.md` above the cwd. The prompt asks the agent to repeat any marker word it was given; the answer must not contain it, and Claude's init event must list only `StructuredOutput` and no MCP servers. The PR records the outcome without identities. |
-| 9 | `src/components/externalRelay/ExternalRelaySection.*.test.tsx` and the phone-driver case | Deferred with the settings UI in §B.9. |
+| 9 | `src/components/externalRelay/ExternalRelaySection.dom.test.tsx`, the relay case in `OnboardingDialog.dom.test.tsx`, and the phone driver's "external relay" case | Every state of §B.9: the connect form, the code and link, the identity to confirm, a pairing ended in the service, a relay-provided link that is not a web address left out, a paired relay with poller state, last outcome and last progress, per-target settings, the answer switch held off without an engine, a model or a signed-in account, a staging refusal; the guide step pairing only with an account of the chosen engine signed in and recording a skip otherwise; no sideways scroll and 44 px controls on the phone. |
 
 ---
 
@@ -1443,8 +1490,6 @@ own issue; this lane does not change spawns.
 
 ## Deferred
 
-- **The settings UI of §B.9.** Phase 1 exposes operator routes; a later UI
-  change will provide the pairing and target controls described there.
 - **Trusted identities and work on the owner's machine** (the last sentence
   of the 2026-09-28 quote; Phase 2): a `work` request kind, a trusted-identity
   list seeded with the paired owner, a separate launch profile. The protocol

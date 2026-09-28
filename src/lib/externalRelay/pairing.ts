@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { forgetRelayActivity } from "./activity";
 import { discoverRelay, ExternalRelayError, relayCall } from "./client";
 import {
   pairingConfirmedSchema,
@@ -152,5 +153,6 @@ export async function unpairRelay(id: string): Promise<{ warned: boolean }> {
     ...store,
     relays: store.relays.filter((item) => item.id !== id),
   }));
+  forgetRelayActivity(id);
   return { warned };
 }

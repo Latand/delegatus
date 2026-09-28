@@ -20,6 +20,7 @@ import { engineAccount, engineReady, EnginesStep, type CliPresence } from "./Eng
 import { OrchestratorStep } from "./OrchestratorStep";
 import { PhoneStep, type PhoneStepOutcome } from "./PhoneStep";
 import { ProjectStep, type GuideProject } from "./ProjectStep";
+import { RelayStep } from "./RelayStep";
 import { TelegramReportsStep } from "./TelegramReportsStep";
 import { putOnboarding, useOnboarding, type OnboardingMode } from "./useOnboarding";
 import { VoiceStep } from "./VoiceStep";
@@ -51,6 +52,7 @@ const STEP_KEY: Record<OnboardingStepId, Parameters<TFunction>[0]> = {
   phone: "onboarding.step.phone",
   voice: "onboarding.step.voice",
   check: "onboarding.step.check",
+  relay: "onboarding.step.relay",
 };
 
 const HEADING_KEY: Record<OnboardingStepId, Parameters<TFunction>[0]> = {
@@ -62,6 +64,7 @@ const HEADING_KEY: Record<OnboardingStepId, Parameters<TFunction>[0]> = {
   phone: "onboarding.phone.heading",
   voice: "onboarding.voice.heading",
   check: "onboarding.check.heading",
+  relay: "onboarding.relay.heading",
 };
 
 /* The Check step writes its own lead: it names the model the run will use.
@@ -75,6 +78,7 @@ const LEAD_KEY: Record<OnboardingStepId, Parameters<TFunction>[0] | null> = {
   phone: "onboarding.phone.lead",
   voice: "onboarding.voice.lead",
   check: null,
+  relay: "onboarding.relay.lead",
 };
 
 /* The seat tick's shipped check interval, until the server says otherwise. */
@@ -172,6 +176,8 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
   /* What the Phone step ended on: leaving it counts it done only once phone
      access is on, and skipped otherwise. */
   const phoneOutcome = useRef<PhoneStepOutcome | null>(null);
+  /* Whether the relay step paired a service; leaving it without one is a skip. */
+  const relayPaired = useRef(false);
   /* The phone state on screen, for who holds the one filled button. */
   const [phoneState, setPhoneState] = useState<PhoneStepOutcome | null>(null);
   /* Every guide step the guide showed; finishing marks the ones never left by
@@ -257,6 +263,7 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
   /* Leaving a "Later" step records it the way Continue used to. */
   const leaveLater = () => {
     if (current === "phone" && phoneOutcome.current !== "serving") mark("phone", "skipped");
+    else if (current === "relay" && !relayPaired.current) mark("relay", "skipped");
     else markDone(current);
     backToGuide();
   };
@@ -336,6 +343,8 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
     <PhoneStep onSkip={() => skipLater("phone")} onState={(state) => { phoneOutcome.current = state; setPhoneState(state); }} />
   ) : current === "voice" ? (
     <VoiceStep onSkip={() => skipLater("voice")} onGoEngines={() => goTo("engines")} />
+  ) : current === "relay" ? (
+    <RelayStep claude={claude} codex={codex} onGoEngines={() => goTo("engines")} onPaired={() => { relayPaired.current = true; markDone("relay"); }} onSkip={() => skipLater("relay")} />
   ) : current === "project" ? (
     <ProjectStep projects={projects} chosen={chosen} onChoose={choose} onCreate={onCreateProject} />
   ) : current === "telegram" ? (
@@ -404,7 +413,8 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
   const stepOwnsPrimary = (current === "check" && checkOwnsPrimary)
     || (current === "phone" && (phoneState === "ready" || phoneState === "serving-other" || phoneState === "exposed"))
     || current === "orchestrator"
-    || current === "telegram";
+    || current === "telegram"
+    || current === "relay";
   const counter = guideStep ? t("onboarding.stepCounter", { n: guideIndex + 1, total: GUIDE.length }) : t("onboarding.later");
   const bordered = "border border-border bg-card text-primary hover:bg-sunken";
   const filled = "bg-brand text-on-brand hover:opacity-90";

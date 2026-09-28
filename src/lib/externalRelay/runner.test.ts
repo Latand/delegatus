@@ -8,6 +8,7 @@ import { processMatches, terminateHeadlessReviewerGroup } from "@/lib/agent/head
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { createManagedClaudeAccount } from "@/lib/accounts/claude";
 import { advertisedSlots, runClaimedRequest, runningCount } from "./runner";
+import { relayActivity } from "./activity";
 import { dropRun, externalRelayFile, readRunLedger, updateRelayStore, type PairedRelay } from "./store";
 import { confirmRelayPairing } from "./pairing";
 import { sampleRequest } from "./protocol.test";
@@ -160,6 +161,8 @@ test("heartbeats continue through silence, newest progress is sent, completion f
     expect(beats.length).toBeGreaterThanOrEqual(2);
     expect(beats[0].seq).toBe(1);
     expect(beats[1].progress.label).toBe("Checking notes");
+    /* The settings page reads the same label, kept in memory for the relay. */
+    expect(relayActivity(paired.id).lastProgress).toMatchObject({ targetId: "target_1", label: "Checking notes" });
     expect(completed).toHaveLength(1);
     expect(runningCount(paired.id, "target_1")).toBe(0);
     expect(readRunLedger().runs).toEqual([]);

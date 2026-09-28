@@ -99,6 +99,121 @@ browserTest("linked installs: a failed Settings read keeps the dialog usable", a
   } finally { await browser.close(); stop(); }
 }, 30_000);
 
+/*
+ * The external relay (docs/design/relay.md §B.9): its settings at phone and
+ * desktop widths in en and uk over the fixture's `?relay=` scenes (a relay at
+ * work beside a paused one, a pairing waiting on the owner in the service, one
+ * waiting on the operator here), and the setup guide's optional step, which
+ * lets a pairing start only while an account of the chosen engine is signed
+ * in. Frames go to `.artifacts/external-relay`, readings to
+ * `evidence/external-relay/settings.json`.
+ */
+browserTest("external relay: settings and the setup guide's step at 390 and desktop widths in en and uk", async () => {
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const out = path.resolve(".artifacts/external-relay");
+  fs.mkdirSync(out, { recursive: true });
+  const readings: Record<string, unknown>[] = [];
+  const failures: string[] = [];
+  try {
+    for (const locale of ["en", "uk"] as const) for (const width of [390, 1440]) {
+      const phone = width === 390;
+      const open = async (scene: string) => {
+        const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 900 }, colorScheme: "dark", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+        const page = await context.newPage();
+        const errors: string[] = [];
+        page.on("pageerror", (error) => errors.push(error.message));
+        await page.goto(`${base}/?relay=${scene}`);
+        return { context, page, errors };
+      };
+      for (const scene of ["paired", "code", "confirm"] as const) {
+        const label = `settings-${scene}-${width}-${locale}`;
+        const { context, page, errors } = await open(scene);
+        try {
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-external-relay-settings")));
+          const dialog = page.locator("[data-external-relay-settings]");
+          await dialog.waitFor();
+          const ready = scene === "paired" ? "[data-external-relay=relay-1]" : scene === "code" ? "[data-external-relay-code]" : "[data-external-relay-owner]";
+          await page.locator(ready).waitFor();
+          const reading = await dialog.evaluate((element) => {
+            const body = element.querySelector<HTMLElement>(".overflow-y-auto")!;
+            const controls = Array.from(element.querySelectorAll<HTMLElement>("button, select, input")).filter((control) => control.getClientRects().length > 0 && !(control instanceof HTMLInputElement && control.type === "checkbox"));
+            return {
+              overflow: element.scrollWidth > window.innerWidth || body.scrollWidth > body.clientWidth,
+              minControlHeight: Math.min(...controls.map((control) => control.getBoundingClientRect().height)),
+              states: Array.from(element.querySelectorAll("[data-external-relay-state]")).map((node) => node.getAttribute("data-external-relay-state")),
+              lastOutcome: element.querySelector("[data-external-relay-last-outcome]")?.textContent ?? null,
+              lastProgress: element.querySelector("[data-external-relay-last-progress]")?.textContent ?? null,
+              targets: Array.from(element.querySelectorAll("[data-external-relay-target]")).map((row) => ({
+                id: row.getAttribute("data-external-relay-target"),
+                settings: Array.from(row.querySelectorAll("select")).map((select) => (select as HTMLSelectElement).value),
+                answeredHere: (row.querySelector("[data-external-relay-answered-by]") as HTMLInputElement | null)?.checked ?? null,
+                switchDisabled: (row.querySelector("[data-external-relay-answered-by]") as HTMLInputElement | null)?.disabled ?? null,
+                noAccount: row.querySelector("[data-external-relay-no-account]") !== null,
+              })),
+              code: element.querySelector("[data-external-relay-code]")?.textContent ?? null,
+              owner: element.querySelector("[data-external-relay-owner]")?.textContent ?? null,
+            };
+          });
+          await page.screenshot({ path: path.join(out, `${label}.png`), fullPage: true });
+          readings.push({ label, ...reading });
+          if (reading.overflow) failures.push(`${label}: the dialog scrolls sideways`);
+          if (phone && reading.minControlHeight < 44) failures.push(`${label}: a control is ${reading.minControlHeight}px tall`);
+          if (scene === "paired") {
+            if (JSON.stringify(reading.states) !== JSON.stringify(["polling", "paused"])) failures.push(`${label}: poller states ${JSON.stringify(reading.states)}`);
+            const [first, second, third] = reading.targets;
+            if (JSON.stringify(first?.settings) !== JSON.stringify(["claude", "opus", "low", "2"]) || first?.answeredHere !== true) failures.push(`${label}: the first target reads ${JSON.stringify(first)}`);
+            if (!second?.noAccount || !second.switchDisabled) failures.push(`${label}: a Codex target without a Codex account can be switched on`);
+            if (!third?.switchDisabled) failures.push(`${label}: a target with no engine can be switched on`);
+            if (!reading.lastProgress?.includes("Reading the last messages in the thread")) failures.push(`${label}: last progress reads ${JSON.stringify(reading.lastProgress)}`);
+            if (locale === "en" && !reading.lastOutcome?.startsWith("Answered")) failures.push(`${label}: last outcome reads ${JSON.stringify(reading.lastOutcome)}`);
+          }
+          if (scene === "code" && reading.code !== "K7QM-9XTD") failures.push(`${label}: the code reads ${JSON.stringify(reading.code)}`);
+          if (scene === "confirm" && !reading.owner?.includes("Person A (@person_a)")) failures.push(`${label}: the identity reads ${JSON.stringify(reading.owner)}`);
+          if (errors.length) failures.push(`${label}: page errors ${errors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+        } finally { await context.close(); }
+      }
+      /* The setup guide's step: Claude is signed in in the fixture, Codex is not. */
+      const label = `guide-step-${width}-${locale}`;
+      const { context, page, errors } = await open("none");
+      try {
+        await page.evaluate(() => window.dispatchEvent(new CustomEvent("llv:open-onboarding", { detail: { mode: "guide", step: "relay" } })));
+        const step = page.locator("[data-onboarding-relay]");
+        await step.waitFor();
+        await page.locator("[data-onboarding-relay-account]").waitFor();
+        const read = () => page.evaluate(() => ({
+          engine: document.querySelector('[data-onboarding-relay-engine][aria-checked="true"]')?.getAttribute("data-onboarding-relay-engine") ?? null,
+          account: document.querySelector("[data-onboarding-relay-account]")?.getAttribute("data-onboarding-relay-account") ?? null,
+          pairDisabled: (document.querySelector("[data-external-relay-connect] input") as HTMLInputElement | null)?.disabled ?? null,
+          overflow: document.documentElement.scrollWidth > window.innerWidth,
+          minControlHeight: Math.min(...Array.from(document.querySelectorAll<HTMLElement>("[data-onboarding-relay] button, [data-onboarding-relay] input"))
+            .filter((control) => control.getClientRects().length > 0).map((control) => control.getBoundingClientRect().height)),
+        }));
+        const signedIn = await read();
+        await page.screenshot({ path: path.join(out, `${label}-claude.png`) });
+        await page.locator("[data-onboarding-relay-engine=codex]").click();
+        await page.locator('[data-onboarding-relay-account="signed-out"]').waitFor();
+        const signedOut = await read();
+        await page.screenshot({ path: path.join(out, `${label}-codex.png`) });
+        readings.push({ label, signedIn, signedOut });
+        if (signedIn.engine !== "claude" || signedIn.account !== "signed-in" || signedIn.pairDisabled !== false) failures.push(`${label}: with Claude signed in the step reads ${JSON.stringify(signedIn)}`);
+        if (signedOut.account !== "signed-out" || signedOut.pairDisabled !== true) failures.push(`${label}: with no Codex account the step reads ${JSON.stringify(signedOut)}`);
+        if (signedIn.overflow || signedOut.overflow) failures.push(`${label}: the guide scrolls sideways`);
+        if (phone && Math.min(signedIn.minControlHeight, signedOut.minControlHeight) < 44) failures.push(`${label}: a control in the step is under 44px tall`);
+        if (errors.length) failures.push(`${label}: page errors ${errors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+      } finally { await context.close(); }
+    }
+  } finally { await browser.close(); stop(); }
+  fs.mkdirSync("evidence/external-relay", { recursive: true });
+  fs.writeFileSync("evidence/external-relay/settings.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 300_000);
+
 type Point = [number, number];
 interface Rect { x: number; y: number; width: number; height: number }
 

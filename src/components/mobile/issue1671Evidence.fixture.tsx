@@ -768,6 +768,8 @@ if (OVERVIEW_SCENE) {
 
 /* An invented bot and its invented chats. */
 const BOT_SCENE = new URLSearchParams(location.search).get("bot");
+/* The external relay's scene (docs/design/relay.md §B.9). */
+const RELAY_SCENE = new URLSearchParams(location.search).get("relay");
 const botChat = (over: Record<string, unknown>) => ({
   chatId: "-1000000000101", title: "Team Reports", type: "supergroup", username: null, isForum: false, member: true,
   alias: null, postAllowed: false, postable: false, seesAllMessages: false, readdToApply: false,
@@ -859,6 +861,42 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     entry: { port: linked === "unsafe" ? 8898 : 8897, publishable: linked !== "unsafe" },
     keyOn: linked !== "keyoff", tailnetUrl: "https://example.tailnet.ts.net",
     });
+  }
+  /* The external relay's settings and pairing (docs/design/relay.md §B.9),
+     over `?relay=`: `paired` holds one relay at work and one paused, `code`
+     a pairing waiting on the owner in the service, `confirm` one waiting on
+     the operator here, and `none` nothing yet. The service and its owner are
+     invented. */
+  if (RELAY_SCENE && url.pathname.startsWith("/api/external-relay")) {
+    const owner = { namespace: "example", id: "owner-1", display_name: "Person A", handle: "@person_a" };
+    const target = (over: Record<string, unknown>) => ({ id: "bot-1", name: "Support bot", answered_by: "service", fallback: "service", enabled: true,
+      engine: null, model: null, effort: null, project: null, concurrency: 1, hardCapMinutes: 30, ...over });
+    const relayRow = (over: Record<string, unknown>) => ({ id: "relay-1", origin: "https://relay.example", name: "Example relay",
+      description: "Answers questions in the example chats.", owner, pairedAt: iso(86_400), paused: false, targets: [], ...over });
+    const pendingRow = { id: "pair-1", origin: "https://relay.example", name: "Example relay", description: "Answers questions in the example chats.",
+      code: "K7QM-9XTD", verify_url: "https://relay.example/pair?code=K7QM-9XTD", expires_at: new Date(Date.now() + 540_000).toISOString(), poll_interval_s: 3 };
+    if (url.pathname === "/api/external-relay") {
+      if (RELAY_SCENE === "paired") return json({
+        relays: [
+          relayRow({ targets: [
+            target({ engine: "claude", model: "opus", effort: "low", concurrency: 2, answered_by: "install" }),
+            target({ id: "bot-2", name: "Sales assistant for the weekend shift", engine: "codex", model: "gpt-6-astra" }),
+            target({ id: "bot-3", name: "New bot" }),
+          ] }),
+          relayRow({ id: "relay-2", origin: "https://second-relay.example", name: "Second relay", description: "", paused: true, targets: [target({ engine: "claude", model: "sonnet" })] }),
+        ],
+        pending: [],
+        status: [
+          { id: "relay-1", state: { state: "polling", lastOutcome: "answered", lastOutcomeAt: iso(240), lastProgress: { targetId: "bot-1", label: "Reading the last messages in the thread", at: iso(300) } }, running: { "bot-1": 1, "bot-2": 0, "bot-3": 0 } },
+          { id: "relay-2", state: { state: "paused", lastOutcome: "declined:no_capacity", lastOutcomeAt: iso(7_200), lastProgress: null }, running: { "bot-1": 0 } },
+        ],
+      });
+      return json({ relays: [], pending: RELAY_SCENE === "code" || RELAY_SCENE === "confirm" ? [pendingRow] : [], status: [] });
+    }
+    if (url.pathname === "/api/external-relay/pairings/pair-1" && method === "GET") {
+      return json({ pairing: RELAY_SCENE === "confirm" ? { status: "awaiting_install", owner, targets: [] } : { status: "pending" } });
+    }
+    return json({ error: "not_found" }, 404);
   }
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
   if (url.pathname === "/api/log/provenance" && AGENT_LABEL) return json((await deliveredAgentEvidence()).provenance);

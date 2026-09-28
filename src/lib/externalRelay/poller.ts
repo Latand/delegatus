@@ -6,6 +6,7 @@ import {
 } from "@/lib/agent/headless";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { isStagingMode } from "@/lib/staging";
+import { noteRelayOutcome, relayActivity } from "./activity";
 import { ExternalRelayError, relayCall } from "./client";
 import {
   advertisedSlots,
@@ -32,7 +33,6 @@ type PollLoop = {
   abort: AbortController;
   stopped: boolean;
   state: PollerState;
-  lastOutcome: string | null;
 };
 type PollerController = {
   loops: Map<string, PollLoop>;
@@ -51,9 +51,7 @@ const loops = controller.loops;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export function relayPollerStatus(id: string) {
   const loop = loops.get(id);
-  return loop
-    ? { state: loop.state, lastOutcome: loop.lastOutcome }
-    : { state: "paused" as const, lastOutcome: null };
+  return { state: loop ? loop.state : ("paused" as const), ...relayActivity(id) };
 }
 export function wakeExternalRelayPoller(id: string) {
   loops.get(id)?.abort.abort();
@@ -125,12 +123,15 @@ async function poll(
           wakeExternalRelayPoller(relay.id),
         )
           .then((outcome) => {
-            loop.lastOutcome = outcome
-              ? `${outcome.outcome}${outcome.outcome === "answered" ? "" : `:${outcome.reason}`}`
-              : "lease_lost";
+            noteRelayOutcome(
+              relay.id,
+              outcome
+                ? `${outcome.outcome}${outcome.outcome === "answered" ? "" : `:${outcome.reason}`}`
+                : "lease_lost",
+            );
           })
           .catch(() => {
-            loop.lastOutcome = "local_error";
+            noteRelayOutcome(relay.id, "local_error");
           });
       if (loop.stopped || !current) break;
     } catch (error) {
@@ -198,7 +199,6 @@ export function refreshExternalRelayPollers(changedId?: string): void {
         abort: new AbortController(),
         stopped: false,
         state: "polling" as PollerState,
-        lastOutcome: null,
       };
       loops.set(relay.id, loop);
       void poll(relay, loop);

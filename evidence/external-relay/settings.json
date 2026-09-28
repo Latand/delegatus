@@ -1,0 +1,413 @@
+{
+  "readings": [
+    {
+      "label": "settings-paired-390-en",
+      "overflow": false,
+      "minControlHeight": 44,
+      "states": [
+        "polling",
+        "paused"
+      ],
+      "lastOutcome": "Answered · 5:08:35 PM",
+      "lastProgress": "Support bot: Reading the last messages in the thread · 5:07:35 PM",
+      "targets": [
+        {
+          "id": "bot-1",
+          "settings": [
+            "claude",
+            "opus",
+            "low",
+            "2"
+          ],
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-2",
+          "settings": [
+            "codex",
+            "gpt-6-astra",
+            "",
+            "1"
+          ],
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": true
+        },
+        {
+          "id": "bot-3",
+          "settings": [
+            "",
+            "",
+            "",
+            "1"
+          ],
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "settings": [
+            "claude",
+            "sonnet",
+            "",
+            "1"
+          ],
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        }
+      ],
+      "code": null,
+      "owner": null
+    },
+    {
+      "label": "settings-code-390-en",
+      "overflow": false,
+      "minControlHeight": 44,
+      "states": [],
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "code": "K7QM-9XTD",
+      "owner": null
+    },
+    {
+      "label": "settings-confirm-390-en",
+      "overflow": false,
+      "minControlHeight": 44,
+      "states": [],
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "code": null,
+      "owner": "The relay service says this is Person A (@person_a). Is this you?"
+    },
+    {
+      "label": "guide-step-390-en",
+      "signedIn": {
+        "engine": "claude",
+        "account": "signed-in",
+        "pairDisabled": false,
+        "overflow": false,
+        "minControlHeight": 44
+      },
+      "signedOut": {
+        "engine": "codex",
+        "account": "signed-out",
+        "pairDisabled": true,
+        "overflow": false,
+        "minControlHeight": 44
+      }
+    },
+    {
+      "label": "settings-paired-1440-en",
+      "overflow": false,
+      "minControlHeight": 44,
+      "states": [
+        "polling",
+        "paused"
+      ],
+      "lastOutcome": "Answered · 5:08:39 PM",
+      "lastProgress": "Support bot: Reading the last messages in the thread · 5:07:39 PM",
+      "targets": [
+        {
+          "id": "bot-1",
+          "settings": [
+            "claude",
+            "opus",
+            "low",
+            "2"
+          ],
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-2",
+          "settings": [
+            "codex",
+            "gpt-6-astra",
+            "",
+            "1"
+          ],
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": true
+        },
+        {
+          "id": "bot-3",
+          "settings": [
+            "",
+            "",
+            "",
+            "1"
+          ],
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "settings": [
+            "claude",
+            "sonnet",
+            "",
+            "1"
+          ],
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        }
+      ],
+      "code": null,
+      "owner": null
+    },
+    {
+      "label": "settings-code-1440-en",
+      "overflow": false,
+      "minControlHeight": 44,
+      "states": [],
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "code": "K7QM-9XTD",
+      "owner": null
+    },
+    {
+      "label": "settings-confirm-1440-en",
+      "overflow": false,
+      "minControlHeight": 44,
+      "states": [],
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "code": null,
+      "owner": "The relay service says this is Person A (@person_a). Is this you?"
+    },
+    {
+      "label": "guide-step-1440-en",
+      "signedIn": {
+        "engine": "claude",
+        "account": "signed-in",
+        "pairDisabled": false,
+        "overflow": false,
+        "minControlHeight": 32
+      },
+      "signedOut": {
+        "engine": "codex",
+        "account": "signed-out",
+        "pairDisabled": true,
+        "overflow": false,
+        "minControlHeight": 32
+      }
+    },
+    {
+      "label": "settings-paired-390-uk",
+      "overflow": false,
+      "minControlHeight": 44,
+      "states": [
+        "polling",
+        "paused"
+      ],
+      "lastOutcome": "Відповіли · 5:08:43 PM",
+      "lastProgress": "Support bot: Reading the last messages in the thread · 5:07:43 PM",
+      "targets": [
+        {
+          "id": "bot-1",
+          "settings": [
+            "claude",
+            "opus",
+            "low",
+            "2"
+          ],
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-2",
+          "settings": [
+            "codex",
+            "gpt-6-astra",
+            "",
+            "1"
+          ],
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": true
+        },
+        {
+          "id": "bot-3",
+          "settings": [
+            "",
+            "",
+            "",
+            "1"
+          ],
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "settings": [
+            "claude",
+            "sonnet",
+            "",
+            "1"
+          ],
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        }
+      ],
+      "code": null,
+      "owner": null
+    },
+    {
+      "label": "settings-code-390-uk",
+      "overflow": false,
+      "minControlHeight": 44,
+      "states": [],
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "code": "K7QM-9XTD",
+      "owner": null
+    },
+    {
+      "label": "settings-confirm-390-uk",
+      "overflow": false,
+      "minControlHeight": 44,
+      "states": [],
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "code": null,
+      "owner": "Сервіс каже, що це Person A (@person_a). Це ви?"
+    },
+    {
+      "label": "guide-step-390-uk",
+      "signedIn": {
+        "engine": "claude",
+        "account": "signed-in",
+        "pairDisabled": false,
+        "overflow": false,
+        "minControlHeight": 44
+      },
+      "signedOut": {
+        "engine": "codex",
+        "account": "signed-out",
+        "pairDisabled": true,
+        "overflow": false,
+        "minControlHeight": 44
+      }
+    },
+    {
+      "label": "settings-paired-1440-uk",
+      "overflow": false,
+      "minControlHeight": 44,
+      "states": [
+        "polling",
+        "paused"
+      ],
+      "lastOutcome": "Відповіли · 5:08:46 PM",
+      "lastProgress": "Support bot: Reading the last messages in the thread · 5:07:46 PM",
+      "targets": [
+        {
+          "id": "bot-1",
+          "settings": [
+            "claude",
+            "opus",
+            "low",
+            "2"
+          ],
+          "answeredHere": true,
+          "switchDisabled": false,
+          "noAccount": false
+        },
+        {
+          "id": "bot-2",
+          "settings": [
+            "codex",
+            "gpt-6-astra",
+            "",
+            "1"
+          ],
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": true
+        },
+        {
+          "id": "bot-3",
+          "settings": [
+            "",
+            "",
+            "",
+            "1"
+          ],
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        },
+        {
+          "id": "bot-1",
+          "settings": [
+            "claude",
+            "sonnet",
+            "",
+            "1"
+          ],
+          "answeredHere": false,
+          "switchDisabled": true,
+          "noAccount": false
+        }
+      ],
+      "code": null,
+      "owner": null
+    },
+    {
+      "label": "settings-code-1440-uk",
+      "overflow": false,
+      "minControlHeight": 44,
+      "states": [],
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "code": "K7QM-9XTD",
+      "owner": null
+    },
+    {
+      "label": "settings-confirm-1440-uk",
+      "overflow": false,
+      "minControlHeight": 44,
+      "states": [],
+      "lastOutcome": null,
+      "lastProgress": null,
+      "targets": [],
+      "code": null,
+      "owner": "Сервіс каже, що це Person A (@person_a). Це ви?"
+    },
+    {
+      "label": "guide-step-1440-uk",
+      "signedIn": {
+        "engine": "claude",
+        "account": "signed-in",
+        "pairDisabled": false,
+        "overflow": false,
+        "minControlHeight": 32
+      },
+      "signedOut": {
+        "engine": "codex",
+        "account": "signed-out",
+        "pairDisabled": true,
+        "overflow": false,
+        "minControlHeight": 32
+      }
+    }
+  ],
+  "failures": []
+}

@@ -50,6 +50,7 @@ Object.assign(globalThis, {
       return json({ ok: true, reportNameSuggestion: nameSuggestion, ...reportSettings });
     }
     if (url.includes("/api/onboarding")) return json({ marker: null });
+    if (url.includes("/api/external-relay")) return json({ relays: [], pending: [], status: [] });
     if (url.includes("/api/roles")) return json(rolesBody);
     if (url.includes("/api/transcribe/backend")) return json({ backend: "local", lockedByEnv: false, options: [] });
     if (url.includes("/api/access")) return json({ tailnetUrl: null, phone: { state: "missing", dnsName: null, viewerPort: 8898, servingPort: null, persisted: false }, phoneError: null });
@@ -160,14 +161,14 @@ test("an engine whose command is missing reads Not installed even with a credent
   host.remove();
 });
 
-test("#2166: four numbered steps with the optional Telegram one, then Agents, Phone, Voice and Check under Later, counted to four", () => {
+test("#2166: four numbered steps with the optional Telegram one, then Agents, Phone, Voice, Check and Relay service under Later, counted to four", () => {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
   flushSync(() => root.render(<OnboardingDialog mode="guide" marker={null} onClose={() => {}} />));
   const steps = Array.from(host.querySelectorAll("[data-onboarding-step]")).map((element) => element.getAttribute("data-onboarding-step"));
-  expect(steps).toEqual(["engines", "project", "telegram", "orchestrator", "agents", "phone", "voice", "check"]);
-  expect(Array.from(host.querySelectorAll("[data-step-mark=later]")).length).toBe(4);
+  expect(steps).toEqual(["engines", "project", "telegram", "orchestrator", "agents", "phone", "voice", "check", "relay"]);
+  expect(Array.from(host.querySelectorAll("[data-step-mark=later]")).length).toBe(5);
   expect(host.textContent).toContain("Later, any time");
   expect(host.querySelector("[data-onboarding-step=engines]")?.getAttribute("aria-current")).toBe("step");
   expect(host.textContent).toContain("Step 1 of 4");
@@ -178,11 +179,30 @@ test("#2166: four numbered steps with the optional Telegram one, then Agents, Ph
   host.remove();
 });
 
+test("the relay service step is optional: it offers the engine that answers, and leaving it unpaired is a skip", async () => {
+  answerAccounts({ claude: { active: "a", accounts: [signedIn("a", "Main")] }, codex: { active: "", accounts: [] } });
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  requests.length = 0;
+  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="relay" marker={null} onClose={() => {}} />));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(host.querySelector("[data-onboarding-current]")?.getAttribute("data-onboarding-current")).toBe("relay");
+  expect(host.textContent).toContain("Answer for a relay service");
+  expect(host.querySelector("[data-onboarding-relay-engine=claude]")?.getAttribute("aria-checked")).toBe("true");
+  expect(host.querySelector("[data-external-relay-connect]")).not.toBeNull();
+  flushSync(() => host.querySelector<HTMLElement>("[data-onboarding-primary]")!.click());
+  expect(requests.find((request) => request.url.includes("/api/onboarding") && request.method === "PUT")?.body).toEqual({ steps: { relay: "skipped" } });
+  expect(host.querySelector("[data-onboarding-current]")?.getAttribute("data-onboarding-current")).toBe("engines");
+  flushSync(() => root.unmount());
+  host.remove();
+});
+
 test("#2166: a six-step marker with Engines done lands on Project; the Tour is gone", () => {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
-  const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: null, telegram: null, orchestrator: null, agents: "done", phone: null, voice: null, check: null } } as const;
+  const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: null, telegram: null, orchestrator: null, agents: "done", phone: null, voice: null, check: null, relay: null } } as const;
   flushSync(() => root.render(<OnboardingDialog mode="guide" marker={marker} onClose={() => {}} />));
   expect(host.querySelector("[data-onboarding-step=project]")?.getAttribute("aria-current")).toBe("step");
   expect(host.textContent).toContain("Step 2 of 4");
@@ -569,7 +589,7 @@ test("a skipped Telegram step is settled: the guide never reopens on it", () => 
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
-  const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: "done", telegram: "skipped", orchestrator: null, agents: null, phone: null, voice: null, check: null } } as const;
+  const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: "done", telegram: "skipped", orchestrator: null, agents: null, phone: null, voice: null, check: null, relay: null } } as const;
   flushSync(() => root.render(<OnboardingDialog mode="guide" marker={marker} onClose={() => {}} />));
   expect(host.querySelector("[data-onboarding-step=orchestrator]")?.getAttribute("aria-current")).toBe("step");
   flushSync(() => root.unmount());

@@ -19,6 +19,7 @@ import {
 } from "./protocol";
 import { answerPrompt } from "./prompt";
 import { progressForEvent } from "./progress";
+import { noteRelayProgress } from "./activity";
 import {
   changeRun,
   dropRun,
@@ -230,8 +231,10 @@ export async function runClaimedRequest(
         runtime,
         onEvent: (event) => {
           const progress = progressForEvent(event);
-          if (progress && request.answer.progress === "notes")
+          if (progress && request.answer.progress === "notes") {
             newestProgress = progress;
+            noteRelayProgress(relay.id, target.id, progress);
+          }
         },
       });
       void run.done.then(() => { runFinished = true; });
