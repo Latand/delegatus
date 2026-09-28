@@ -79,7 +79,7 @@ function install() {
   for (const dir of [path.join(checkout, "bin"), path.join(checkout, "node_modules", ".bin"), path.join(checkout, "dist"), home, state, cache, path.join(root, "tmp")]) {
     mkdirSync(dir, { recursive: true });
   }
-  for (const name of ["cli.mjs", "server-runtime.mjs", "tailscale.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs", "legacySystemd.mjs"]) {
+  for (const name of ["cli.mjs", "server-runtime.mjs", "tailscale.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs", "legacySystemd.mjs", "internalService.mjs", "skillLinks.mjs"]) {
     copyFileSync(path.resolve("bin", name), path.join(checkout, "bin", name));
   }
   writeFileSync(path.join(checkout, "package.json"), JSON.stringify({ type: "module", version: "0.0.0" }));
@@ -140,7 +140,7 @@ function recordFile(state: string): string {
 }
 
 type Entry = { state: string; pid: number | null; revision: string | null; requestId: string | null; error: { kind: string; revision?: string } | null };
-type Record = { checkout: string | null; releasePointer: string; requestFile: string; web: Entry; runtimeHost: Entry };
+type Record = { checkout: string | null; releasePointer: string; requestFile: string; socket: string; web: Entry; runtimeHost: Entry };
 
 async function until<T>(read: () => T | null | undefined | false, timeoutMs = 20_000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
@@ -179,6 +179,17 @@ async function start(fixture: ReturnType<typeof install>) {
   child.stderr?.on("data", (chunk) => { output += String(chunk); });
   await until(() => output.includes("Delegatus v"), 20_000).catch((error) => { throw new Error(`${String(error)}\n${output}`); });
   return { port, child, output: () => output };
+}
+
+/** Whether the runtime host's socket takes a connection right now. */
+function socketAnswers(socketPath: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.createConnection(socketPath);
+    const finish = (answered: boolean) => { socket.destroy(); resolve(answered); };
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+    socket.setTimeout(2_000, () => finish(false));
+  });
 }
 
 function request(record: Record, role: "web" | "runtime-host", requestId: string): void {
@@ -240,6 +251,50 @@ test("a release whose web does not start gives way to the one it replaced, and s
   expect(after.web.error).toMatchObject({ kind: "fell-back", revision: broken.sha.slice(0, 7) });
   expect(after.web.revision).toBe(fixture.first.slice(0, 7));
   expect(await served(port)).toBe(fixture.checkout);
+  expect(child.exitCode).toBeNull();
+}, 60_000);
+
+test("a web restart whose new and previous releases both fail leaves the web failed and the runtime host serving", async () => {
+  const fixture = install();
+  const { port, child } = await start(fixture);
+  const before = await until(() => { const record = readRecord(fixture.state); return record.web.state === "healthy" && record.runtimeHost.state === "healthy" ? record : null; });
+  expect(await socketAnswers(before.socket)).toBe(true);
+  const broken = release(fixture, "broken-web", { broken: true });
+  const healthy = release(fixture, "healthy-web");
+  writeFileSync(before.releasePointer, JSON.stringify({ sha: broken.sha, dir: broken.dir, checkoutHead: fixture.first }));
+  /* The package root's own web fails too, so the fallback does not come up either. */
+  const rootNext = path.join(fixture.checkout, "node_modules", ".bin", "next");
+  writeFileSync(rootNext, STUB_NEXT(true));
+
+  request(before, "web", "restart-web-both-broken");
+  const failed = await until(() => {
+    const record = readRecord(fixture.state);
+    return record.web.requestId === "restart-web-both-broken" && record.web.state === "failed" ? record : null;
+  });
+  expect(failed.web.error?.kind).toBe("message");
+  expect(existsSync(`/proc/${before.web.pid}`)).toBe(false);
+  /* The launcher, the host process and its endpoint carried on, and stay up. */
+  await Bun.sleep(1_500);
+  expect(child.exitCode).toBeNull();
+  expect(child.signalCode).toBeNull();
+  const stillFailed = readRecord(fixture.state);
+  expect(stillFailed.web.state).toBe("failed");
+  expect(stillFailed.runtimeHost).toMatchObject({ state: "healthy", pid: before.runtimeHost.pid });
+  expect(existsSync(`/proc/${before.runtimeHost.pid}`)).toBe(true);
+  expect(await socketAnswers(before.socket)).toBe(true);
+
+  /* The next explicit web restart is still taken, and moves only the web. */
+  writeFileSync(before.releasePointer, JSON.stringify({ sha: healthy.sha, dir: healthy.dir, checkoutHead: fixture.first }));
+  request(stillFailed, "web", "restart-web-recovered");
+  const recovered = await until(() => {
+    const record = readRecord(fixture.state);
+    return record.web.requestId === "restart-web-recovered" && record.web.state === "healthy" ? record : null;
+  });
+  expect(recovered.web.error).toBeNull();
+  expect(recovered.web.revision).toBe(healthy.sha.slice(0, 7));
+  expect(await served(port)).toBe(healthy.dir);
+  expect(recovered.runtimeHost.pid).toBe(before.runtimeHost.pid);
+  expect(await socketAnswers(before.socket)).toBe(true);
   expect(child.exitCode).toBeNull();
 }, 60_000);
 
