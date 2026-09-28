@@ -485,6 +485,42 @@ test("a non-terminal spawn receipt blocks retirement", async () => {
   });
 });
 
+test("a completed launch receipt does not keep its stamped host alive", async () => {
+  const probe = await sweep({
+    snapshot: () => snapshot({
+      entries: { [`claude:${SESSION}`]: entry({ structuredHostOperationId: "launch-1" }) },
+      receipts: {
+        "launch-1": { launchId: "launch-1", conversationId: CONVERSATION, key: null, state: "completed", engine: "claude" },
+      },
+    }),
+  });
+  expect(probe.report.refused).toEqual([]);
+  expect(probe.report.retired).toHaveLength(1);
+  expect(probe.report.retired[0]!.passed).toContain("no-open-operation");
+  expect(probe.terminated).toHaveLength(1);
+});
+
+test("a stamped host with a non-terminal launch receipt blocks retirement", async () => {
+  await refusedBy("no-open-operation", {
+    snapshot: () => snapshot({
+      entries: { [`claude:${SESSION}`]: entry({ structuredHostOperationId: "launch-1" }) },
+      receipts: {
+        /* This receipt names no candidate conversation or key, so only the
+           stamp can catch its unfinished launch. */
+        "launch-1": { launchId: "launch-1", conversationId: "unrelated-conversation", key: null, state: "starting", engine: "claude" },
+      },
+    }),
+  });
+});
+
+test("a stamped host with a missing launch receipt blocks retirement", async () => {
+  await refusedBy("no-open-operation", {
+    snapshot: () => snapshot({
+      entries: { [`claude:${SESSION}`]: entry({ structuredHostOperationId: "launch-1" }) },
+    }),
+  });
+});
+
 test("a pending registry action blocks retirement", async () => {
   await refusedBy("no-open-operation", {
     snapshot: () => snapshot({ entries: { [`claude:${SESSION}`]: entry({ pendingAction: "handoff" }) } }),
@@ -1020,6 +1056,7 @@ function qualifiedSubject(): StructuredHostRetirementSubject {
     activeFlags: [STRUCTURED_IMAGE_CAPABILITY, NATIVE_MULTI_AGENT_DENY_FLAG],
     pendingAction: null,
     structuredHostOperationId: null,
+    structuredHostOperationReceiptState: null,
     undeliveredHandoffEntries: determined(0),
     openOperations: 0,
     eventCursor: 12,
