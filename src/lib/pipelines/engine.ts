@@ -15,6 +15,8 @@ import {
 } from "@/lib/accounts/engineConnection";
 import { listClaudeAccounts, mirroredClaudeTranscriptPath } from "@/lib/accounts/claude";
 import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
+import { effectiveRemaining } from "@/lib/accounts/migration/quotaPolicy";
 import { freshSpecFor } from "@/lib/agent/cli";
 import { agentRegistry, identityMaterializationFence, type DurableMembershipInput, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { forEachCooperatively } from "@/lib/cooperative";
@@ -283,6 +285,12 @@ export interface PipelinePorts {
     project?: string;
     cwd?: string;
   }): Promise<boolean>;
+  /** Enrolls this stage's existing conversation in ordinary account migration. */
+  requestConversationReseat?(conversationId: string, targetAccountId: string): Promise<void>;
+  /** The target of an ordinary reseat already in flight for this conversation. */
+  conversationMigrationTarget?(conversationId: string): string | null;
+  /** A fresh live quota reading after the limit proves the source recovered. */
+  claudeAccountRecovered?(accountId: string, limitedAt: number, model: string | null): boolean;
   sleep?(milliseconds: number): Promise<void>;
   durableTurnEvidence(engine: EffectivePipelineRole["engine"], transcriptPath: string): Promise<StageTurnEvidence | null>;
   headCwd(transcriptPath: string): string | null;
@@ -570,7 +578,7 @@ async function spawnPipelineAgent(
     cwd: input.cwd,
     transport: "structured",
     accountId: account.accountId,
-    accountPin: true,
+    accountPin: input.role.engine !== "claude" || Boolean(input.requestedAccountId),
     parentConversationId: parent.conversationId,
     parentSessionKey: parent.sessionKey,
     parentArtifactPath: parent.conversationId ? input.parentPath : null,
@@ -1294,6 +1302,30 @@ export function defaultPipelinePorts(
       });
       return result?.ok === true;
     },
+    requestConversationReseat: async (conversationId, targetAccountId) => {
+      registry.requestConversationReseat(conversationId as ViewerConversationId, targetAccountId);
+      requestAccountMigrationTick();
+      invalidateRegistryProjection();
+    },
+    conversationMigrationTarget: (conversationId) => {
+      const migration = registry.conversation(conversationId as ViewerConversationId)?.migration;
+      return migration && !["committed", "rolled-back", "failed-recoverable"].includes(migration.phase)
+        ? migration.targetId : null;
+    },
+    claudeAccountRecovered: (accountId, limitedAt, model) => {
+      const observation = registry.quotaObservations("claude").find((item) => item.accountId === accountId);
+      if (!observation || Date.parse(observation.observedAt) <= limitedAt) return false;
+      const remaining = effectiveRemaining({
+        engine: "claude",
+        accountId,
+        authenticated: observation.authenticated,
+        limits: observation.limits,
+        provenance: observation.provenance,
+        observedAt: Date.parse(observation.observedAt),
+        authCheckedAt: Date.parse(observation.authCheckedAt),
+      }, Date.now(), { model });
+      return remaining !== null && remaining.percent > 0;
+    },
     sleep: (milliseconds) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)),
     durableTurnEvidence: durableStageTurnEvidence,
     headCwd: (transcriptPath) => headCwd(transcriptPath),
@@ -1596,10 +1628,9 @@ function usageLimitsOn(attempt: PipelineStageAttempt, engine: FlowEngine): NonNu
   return (attempt.usageLimitedAccounts ?? []).filter((limited) => (limited.engine ?? attempt.effectiveRole.engine) === engine);
 }
 
-/** Terminal usage-limit recovery reuses the ordinary attempt and account
-    selection seams. The failed attempt stays as evidence; an automatic retry
-    carries a durable exclusion into the next spawn, while a pin or exhausted
-    allowed set parks on the earliest reset the two sources can establish. */
+/** Terminal usage-limit recovery parks an exhausted Claude stage; Codex keeps
+    its existing automatic attempt retry. Both use the same project account
+    selection and earliest known reset. */
 function recoverUsageLimitedAttempt(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -1666,7 +1697,7 @@ function recoverUsageLimitedAttempt(
     return;
   }
 
-  if (resolution.kind === "available" && resolution.account.accountId !== accountId) {
+  if (limitedEngine !== "claude" && resolution.kind === "available" && resolution.account.accountId !== accountId) {
     retryWithLimits();
     return;
   }
@@ -1676,6 +1707,102 @@ function recoverUsageLimitedAttempt(
     resolution.kind === "exhausted" ? resolution.resetsAt : null,
   );
   park(pipeline, rateLimitParkDetail(earliestReset, accountLabel), attempt);
+}
+
+const CLAUDE_LIMIT_CONTINUATION_TEXT =
+  "This stage turn stopped at the Claude usage limit. Continue the same stage from its current worktree and report its verdict when the work is complete.";
+
+function claudeSourceCapacityReturned(
+  project: string,
+  source: { accountId: string; resetsAt: number | null } | null,
+  limitedAt: number | null,
+  model: string | null,
+  ports: PipelinePorts,
+): boolean {
+  if (!source) return false;
+  try {
+    const allowed = ports.allowedAccountIds?.(project, "claude") ?? null;
+    if (allowed && !allowed.includes(source.accountId)) return false;
+  } catch {
+    return false;
+  }
+  return (source.resetsAt !== null && source.resetsAt * 1_000 <= Date.now())
+    || (limitedAt !== null && ports.claudeAccountRecovered?.(source.accountId, limitedAt, model) === true);
+}
+
+/** A Claude limit resumes through the conversation's ordinary reseat. The
+    stable delivery key lets the migration hold and replay this one continuation
+    across controller ticks without making another stage attempt. */
+async function continueUsageLimitedClaudeAttempt(
+  pipeline: Pipeline,
+  stage: PipelineStage,
+  attempt: PipelineStageAttempt,
+  usageLimit: { resetsAt: number | null } | null,
+  limitedAt: number | null,
+  ports: PipelinePorts,
+  persist: () => void,
+): Promise<boolean> {
+  if (attempt.effectiveRole.engine !== "claude") return false;
+  const current = attempt.agentPath ? ports.accountForTranscript?.("claude", attempt.agentPath) ?? null : null;
+  const accountId = current?.accountId ?? attempt.accountId ?? null;
+  let limited = usageLimitsOn(attempt, "claude");
+  if (usageLimit && accountId && !limited.some((item) => item.accountId === accountId)) {
+    attempt.usageLimitedAccounts = [...(attempt.usageLimitedAccounts ?? []), { accountId, engine: "claude", resetsAt: usageLimit.resetsAt }];
+    limited = usageLimitsOn(attempt, "claude");
+    persist();
+  }
+  if (!limited.length) {
+    if (usageLimit) recoverUsageLimitedAttempt(pipeline, stage, attempt, usageLimit, ports);
+    return Boolean(usageLimit);
+  }
+  const stillLimited = accountId === null || limited.some((item) => item.accountId === accountId);
+  const migratingTo = attempt.conversationId ? ports.conversationMigrationTarget?.(attempt.conversationId) ?? null : null;
+  if (stillLimited && !migratingTo) {
+    let resolution: ReturnType<typeof accountManager.resolveProjectSpawn>;
+    try {
+      resolution = ports.resolveProjectSpawn?.("claude", {
+        project: pipeline.project,
+        model: attempt.effectiveRole.model,
+        unavailableIds: limited.map((item) => item.accountId),
+      }) ?? accountManager.resolveProjectSpawn("claude", {
+        project: pipeline.project,
+        model: attempt.effectiveRole.model,
+        unavailableIds: limited.map((item) => item.accountId),
+      });
+    } catch (error) {
+      pipeline.stateDetail = `account switch pending: ${error instanceof Error ? error.message : String(error)}`;
+      return true;
+    }
+    if (resolution.kind !== "available" || limited.some((item) => item.accountId === resolution.account.accountId)) {
+      const source = accountId ? limited.find((item) => item.accountId === accountId) : null;
+      if (!claudeSourceCapacityReturned(pipeline.project, source ?? null, limitedAt, attempt.effectiveRole.model, ports)) {
+        recoverUsageLimitedAttempt(pipeline, stage, attempt, usageLimit ?? { resetsAt: limited.at(-1)?.resetsAt ?? null }, ports);
+        return true;
+      }
+    } else {
+      if (!attempt.conversationId || attempt.paneId || !ports.requestConversationReseat || !ports.resumeSeveredTurn) {
+        pipeline.stateDetail = "account switch pending: this stage conversation has no structured migration host";
+        return true;
+      }
+      try {
+        await ports.requestConversationReseat(attempt.conversationId, resolution.account.accountId);
+      } catch (error) {
+        pipeline.stateDetail = `account switch pending: ${error instanceof Error ? error.message : String(error)}`;
+        return true;
+      }
+    }
+  }
+  if (!attempt.conversationId || !attempt.agentPath || !ports.resumeSeveredTurn) return true;
+  const delivered = await ports.resumeSeveredTurn({
+    conversationId: attempt.conversationId,
+    transcriptPath: attempt.agentPath,
+    clientMessageId: `stage-limit-continuation-${pipeline.id}-${stage.id}-${attempt.n}-${limited.length}`,
+    text: CLAUDE_LIMIT_CONTINUATION_TEXT,
+    project: pipeline.project,
+    cwd: pipeline.repoDir,
+  });
+  pipeline.stateDetail = delivered ? "Claude limit: continuing the same conversation" : "Claude limit: continuation is pending";
+  return true;
 }
 
 /** Moves the cursor's lifecycle state while preserving the durable relay record
@@ -2784,6 +2911,10 @@ function rebindPipelineAttemptPaths(pipeline: Pipeline, ports: PipelinePorts): b
       const currentPath = ports.pathForConversation(attempt.conversationId);
       if (!currentPath || currentPath === attempt.agentPath) continue;
       attempt.agentPath = currentPath;
+      if (attempt.effectiveRole.engine === "claude" && usageLimitsOn(attempt, "claude").length > 0) {
+        attempt.sessionId = sessionKeyFromTranscript("claude", currentPath)?.sessionId ?? attempt.sessionId;
+        attempt.accountId = ports.accountForTranscript?.("claude", currentPath)?.accountId ?? attempt.accountId;
+      }
       changed = true;
     }
   }
@@ -3740,6 +3871,10 @@ async function tickRunStage(
     && terminalProviderMessage.ts > unixMs(attempt.startedAt)
     ? terminalProviderMessage.usageLimit ?? null
     : null;
+  if (attempt.effectiveRole.engine === "claude"
+    && (terminalUsageLimit || (usageLimitsOn(attempt, "claude").length > 0 && durable?.turn !== "busy" && !durable?.message))) {
+    if (await continueUsageLimitedClaudeAttempt(pipeline, stage, attempt, terminalUsageLimit, terminalProviderMessage?.ts ?? null, ports, persist)) return;
+  }
   if (terminalUsageLimit) {
     recoverUsageLimitedAttempt(pipeline, stage, attempt, terminalUsageLimit, ports);
     return;
@@ -4782,6 +4917,47 @@ async function reconcileParkedDelivery(pipeline: Pipeline, ports: PipelinePorts)
   return true;
 }
 
+/** Capacity can return while a Claude stage is parked. Reopen its original
+    attempt; its terminal transcript then takes the ordinary reseat path. */
+async function reconcileParkedClaudeLimit(pipeline: Pipeline, ports: PipelinePorts): Promise<boolean> {
+  if (pipeline.state !== "needs_decision") return false;
+  const stage = currentStage(pipeline);
+  if (!stage || stage.kind !== "run") return false;
+  const attempt = currentAttempt(pipeline, stage.id);
+  const limited = attempt ? usageLimitsOn(attempt, "claude") : [];
+  if (!attempt || attempt.effectiveRole.engine !== "claude" || attempt.state !== "failed"
+    || !attempt.error?.startsWith("rate limited until ") || !limited.length) return false;
+  let resolution: ReturnType<typeof accountManager.resolveProjectSpawn>;
+  try {
+    resolution = ports.resolveProjectSpawn?.("claude", {
+      project: pipeline.project,
+      model: attempt.effectiveRole.model,
+      unavailableIds: limited.map((item) => item.accountId),
+    }) ?? accountManager.resolveProjectSpawn("claude", {
+      project: pipeline.project,
+      model: attempt.effectiveRole.model,
+      unavailableIds: limited.map((item) => item.accountId),
+    });
+  } catch {
+    return false;
+  }
+  if (resolution.kind !== "available" || limited.some((item) => item.accountId === resolution.account.accountId)) {
+    const accountId = attempt.agentPath
+      ? ports.accountForTranscript?.("claude", attempt.agentPath)?.accountId ?? attempt.accountId ?? null
+      : attempt.accountId ?? null;
+    const source = accountId ? limited.find((item) => item.accountId === accountId) ?? null : null;
+    const durable = attempt.agentPath ? await ports.durableTurnEvidence("claude", attempt.agentPath) : null;
+    if (!claudeSourceCapacityReturned(pipeline.project, source, durable?.terminalProviderMessage?.ts ?? null, attempt.effectiveRole.model, ports)) return false;
+  }
+  attempt.state = "running";
+  attempt.completedAt = null;
+  attempt.error = null;
+  pipeline.state = "running";
+  pipeline.stateDetail = null;
+  setCursorState(pipeline, stage.id, "running");
+  return true;
+}
+
 function reconcileParkedStructuredSpawn(pipeline: Pipeline, ports: PipelinePorts): boolean {
   if (pipeline.state !== "needs_decision") return false;
   const stage = currentStage(pipeline);
@@ -5410,6 +5586,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         // flow, so it needs the same pipeline-wide admission as ordinary ticks.
         if (!pipelineSurvivorRefusal(pipeline)) {
           pipelineChanged = await reconcileExhaustedVerdictRecovery(pipeline, ports, persistPipeline) || pipelineChanged;
+          pipelineChanged = await reconcileParkedClaudeLimit(pipeline, ports) || pipelineChanged;
           pipelineChanged = reconcileParkedVerdictMiss(pipeline, ports) || pipelineChanged;
           pipelineChanged = await reconcileParkedDelivery(pipeline, ports) || pipelineChanged;
           pipelineChanged = reconcileParkedStructuredSpawn(pipeline, ports) || pipelineChanged;
