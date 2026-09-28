@@ -64,12 +64,14 @@ export function deploymentFailureReport(status: unknown): string[] {
       for (const line of runtimeLog) lines.push(`  ${line}`);
     }
   }
-  const log = last.containerLog ?? [];
+  const log = deployment.candidateLog ?? last.containerLog ?? [];
   if (log.length > 0) {
     lines.push(`candidate output (last ${log.length} lines):`);
     for (const line of log) lines.push(`  ${line}`);
   } else {
-    lines.push("candidate output: none was captured before the candidate was retired");
+    lines.push(deployment.candidateLogError
+      ? `candidate output: capture failed (${deployment.candidateLogError})`
+      : "candidate output: none was captured before the candidate was retired");
   }
   return lines;
 }

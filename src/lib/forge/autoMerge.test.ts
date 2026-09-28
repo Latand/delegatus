@@ -14,7 +14,7 @@ const previousStateDir = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = sandbox;
 
 const {
-  MERGE_POLL_MS, MERGE_REASONS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, mergeEligible, resetAutoMergeForTests, rollupChecks, sweepAutoMerge,
+  MERGE_POLL_MS, MERGE_REASONS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, lanePullRequest, mergeEligible, resetAutoMergeForTests, rollupChecks, sweepAutoMerge, sweepTaskFinishes,
 } = await import("./autoMerge");
 
 afterAll(() => {
@@ -80,13 +80,14 @@ const red = (name: string): Check => ({ name, status: "COMPLETED", conclusion: "
 
 /** A fake GitHub: pull requests, commits, the base's required contexts, and
     what each `update-branch` does to its pull request. */
-function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: string[]; lanes: Pipeline[]; prs: PullRequest[] }) {
+function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: string[]; lanes: Pipeline[]; prs: PullRequest[]; tasks?: string[] }) {
   let clock = T0;
   const calls: string[][] = [];
   const pipelines = new Map(options.lanes.map((pipeline) => [pipeline.id, structuredClone(pipeline)]));
   const prs = new Map(options.prs.map((pr) => [pr.number, pr]));
   const prOf = new Map(options.lanes.map((pipeline, index) => [pipeline.id, options.prs[index]!.number]));
   const commits = new Map<string, { parents: string[]; committer: string }>();
+  const tasks = new Map((options.tasks ?? []).map((id) => [id, "assigned"]));
   let setting: MergeOnReviewSetting = { enabled: true, changedAt: iso(T0 - 3_600_000), changedBy: "operator", ...options.setting };
   let onUpdate: ((pr: PullRequest) => void) | null = null;
   let mergeRefusal: string | null = null;
@@ -155,8 +156,14 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
       return true;
     },
     setting: () => setting,
-    pullRequestOf: (pipeline: Pipeline) => (prOf.has(pipeline.id) ? { repository: REPO, number: prOf.get(pipeline.id)! } : null),
+    pullRequestOf: (pipeline: Pipeline) => lanePullRequest(pipeline) ?? (prOf.has(pipeline.id) ? { repository: REPO, number: prOf.get(pipeline.id)! } : null),
     cachedState: () => null,
+    finishTask: (taskId: string) => {
+      if (!tasks.has(taskId)) return "missing" as const;
+      if (tasks.get(taskId) === "done") return "already-done" as const;
+      tasks.set(taskId, "done");
+      return "moved" as const;
+    },
   };
 
   return {
@@ -165,12 +172,14 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
     commits,
     merge: (id: string): PipelineMerge | undefined => pipelines.get(id)?.merge,
     pipeline: (id: string) => pipelines.get(id)!,
+    taskStatus: (id: string) => tasks.get(id),
     setSetting: (next: Partial<MergeOnReviewSetting>) => { setting = { ...setting, ...next }; },
     onUpdate: (handler: (pr: PullRequest) => void) => { onUpdate = handler; },
     refuseMerges: (message: string) => { mergeRefusal = message; },
     merges: () => calls.filter((args) => args[0] === "pr" && args[1] === "merge"),
     updates: () => calls.filter((args) => args[0] === "api" && args[2] === "PUT"),
     sweep: async () => sweepAutoMerge(ports),
+    sweepFinishes: async () => sweepTaskFinishes(ports),
     /** Sweeps once per poll interval until `until` (ms after now), or until `stop`. */
     async run(forMs: number, stop: () => boolean = () => false) {
       const end = clock + forMs;
@@ -192,6 +201,41 @@ const openPr = (number: number, extra: Partial<PullRequest> = {}): PullRequest =
 beforeEach(() => resetAutoMergeForTests());
 
 describe("merge runner (#2187 §4.3-§4.4)", () => {
+  test("a completed writable review queues, merges after green checks, then finishes its task", async () => {
+    const completed = lane("L1");
+    completed.taskIds = ["task-1"];
+    completed.finishesTaskIds = ["task-1"];
+    completed.stages[1]!.access = "read-write";
+    completed.stages[1]!.effectiveRole = BUILDER as Pipeline["stages"][number]["effectiveRole"];
+    completed.runs[1]!.attempts[0]!.effectiveRole = BUILDER as Pipeline["runs"][number]["attempts"][number]["effectiveRole"];
+    completed.delivery = { target: { remote: "https://github.com/acme/widgets.git" } } as Pipeline["delivery"];
+    completed.runs[1]!.attempts[0]!.report = { provenance: { pullRequest: { number: 11 } } } as Pipeline["runs"][number]["attempts"][number]["report"];
+    expect(lanePullRequest(completed)).toEqual({ repository: REPO, number: 11 });
+    const h = harness({ lanes: [completed], prs: [openPr(11)], tasks: ["task-1"] });
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 2, () => h.merges().length > 0);
+    await h.sweepFinishes();
+    expect(h.merge("L1")).toMatchObject({ state: "merged", prNumber: 11 });
+    expect(h.taskStatus("task-1")).toBe("done");
+    expect(h.pipeline("L1").taskFinishes).toMatchObject([{ taskId: "task-1", outcome: "moved" }]);
+  });
+
+  test("a terminal read-only declared output keeps the reported PR head for merging", async () => {
+    const completed = lane("L1", { head: HEAD_B });
+    completed.delivery = { publish: "disabled", target: { remote: "https://github.com/acme/widgets.git" } } as Pipeline["delivery"];
+    completed.stages.push({ id: "critique", kind: "run", prompt: "critique", next: null, outputs: ["docs/critique.md"], onFail: { to: "build", maxRounds: 2 }, effectiveRole: REVIEWER } as Pipeline["stages"][number]);
+    completed.runs.push({ stageId: "critique", attempts: [{ n: 1, state: "passed", completedAt: completed.closedAt, effectiveRole: REVIEWER, report: { provenance: { head: HEAD_A } } }] } as unknown as Pipeline["runs"][number]);
+    const h = harness({ lanes: [completed], prs: [openPr(11, { head: HEAD_A })] });
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 2, () => h.merges().length > 0);
+    expect(h.merge("L1")).toMatchObject({ state: "merged", reviewedHead: HEAD_B, chain: [HEAD_A] });
+    expect(h.merges()).toHaveLength(1);
+    const pushed = harness({ lanes: [completed], prs: [openPr(11, { head: HEAD_B })] });
+    await pushed.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 2, () => pushed.merges().length > 0);
+    expect(pushed.merge("L1")).toMatchObject({ state: "merged", chain: [HEAD_B] });
+    const changed = harness({ lanes: [completed], prs: [openPr(11, { head: HEAD_X })] });
+    await changed.sweep();
+    expect(changed.merge("L1")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.headChanged });
+  });
+
   test("CLEAN with settled green checks merges with --match-head-commit, and never before the checks settled", async () => {
     const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
     await h.run(MERGE_SETTLE_MS - MERGE_POLL_MS);
@@ -401,6 +445,12 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
 describe("eligibility (#2187 §4.2)", () => {
   test("a passed review is eligible; no review stage, or one still failed, is not", () => {
     expect(mergeEligible(lane("ok"))).toBe(true);
+    const designReview = lane("design-review");
+    designReview.stages[1]!.id = "design-review";
+    designReview.stages[1]!.effectiveRole = BUILDER as Pipeline["stages"][number]["effectiveRole"];
+    designReview.runs[1]!.stageId = "design-review";
+    designReview.runs[1]!.attempts[0]!.effectiveRole = BUILDER as Pipeline["runs"][number]["attempts"][number]["effectiveRole"];
+    expect(mergeEligible(designReview)).toBe(true);
     expect(mergeEligible(lane("no-review", {
       stages: [{ id: "build", kind: "run", prompt: "build", next: null, onFail: null, effectiveRole: BUILDER }],
     }))).toBe(false);

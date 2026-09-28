@@ -454,9 +454,9 @@ function observation(
 
 /** Read while the candidate is alive: a failed candidate is retired, and its
     container - the only place its own account of a 500 exists - with it. */
-async function candidateContainerLog(container: string): Promise<string[]> {
+async function candidateContainerLog(container: string, tail = 40): Promise<string[]> {
   try {
-    const child = Bun.spawn(["/usr/bin/setpriv", "--pdeathsig", "KILL", "--", "docker", "logs", "--tail", "40", container], {
+    const child = Bun.spawn(["/usr/bin/setpriv", "--pdeathsig", "KILL", "--", "docker", "logs", "--tail", String(tail), container], {
       stdout: "pipe",
       stderr: "pipe",
       env: withoutWakatimeCredential(process.env),
@@ -466,7 +466,7 @@ async function candidateContainerLog(container: string): Promise<string[]> {
       new Response(child.stderr).text(),
       child.exited,
     ]);
-    return candidateLogExcerpt(`${stdout}\n${stderr}`);
+    return candidateLogExcerpt(`${stdout}\n${stderr}`, tail === 200 ? { maxLines: 200, maxChars: 500 } : {});
   } catch {
     return [];
   }
@@ -1321,6 +1321,7 @@ async function main(): Promise<unknown> {
       await Bun.sleep(1_000);
     }
   }
+  if (action === "candidate-log") return candidateContainerLog(release(input.candidate).container, 200);
   if (action === "rollback") {
     const previous = release(input.previous);
     reportAdapterPhase(action, "starting the rollback Viewer release");

@@ -797,6 +797,77 @@ test("a read-only architect pass commits its declared fix output through settlem
   }
 });
 
+test("fallback verdict preserves the pre-output PR head through real settlement and merge", async () => {
+  const fixture = await realWorktreeLane("fallback-output-merge", [
+    { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: "critique" },
+    { id: "critique", kind: "run", role: { roleId: "reviewer" }, access: "read-only", outputs: ["report.md"], prompt: "Review", next: null, onFail: { to: "build", maxRounds: 2 } },
+  ]);
+  try {
+    const { git, h, id, worktree } = fixture;
+    const admitted = loadPipelines().find((item) => item.id === id)!;
+    admitted.delivery = {
+      target: { repository: "acme/widgets", remote: "https://github.com/acme/widgets.git", branch: `refs/heads/${admitted.branch}`, pr: 11 },
+      disposition: "owner", publish: "disabled", ownerId: id, epoch: 1, active: false, journal: [],
+    };
+    savePipelines([admitted]);
+    fs.writeFileSync(path.join(worktree, "build.txt"), "accepted build\n");
+    git(worktree, "add", "build.txt");
+    git(worktree, "commit", "-m", "accepted build");
+    const prHead = git(worktree, "rev-parse", "HEAD");
+    h.setConversationActive(false);
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+    await tickPipelines([], h.ports);
+    fs.writeFileSync(path.join(worktree, "report.md"), "review passed\n");
+    await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
+    const completed = loadPipelines().find((item) => item.id === id)!;
+    expect(completed.state).toBe("completed");
+    expect(completed.lastPassedCommit).not.toBe(prHead);
+    expect(completed.runs[1]!.attempts[0]!.report).toBeUndefined();
+    expect(completed.runs[1]!.attempts[0]!.outputBaseHead).toBe(prHead);
+    savePipelines([completed]);
+    expect(loadPipelines().find((item) => item.id === id)!.runs[1]!.attempts[0]!.outputBaseHead).toBe(prHead);
+
+    const { productionAutoMergePorts, MERGE_POLL_MS, MERGE_SETTLE_MS, MERGE_REASONS, lanePullRequest, mergeEligible, sweepAutoMerge } = await import("@/lib/forge/autoMerge");
+    expect(mergeEligible(loadPipelines().find((item) => item.id === id)!)).toBe(true);
+    expect(lanePullRequest(loadPipelines().find((item) => item.id === id)!)).toEqual({ repository: "acme/widgets", number: 11 });
+    let clock = Date.parse(completed.closedAt!) + 1_000;
+    let merged = false;
+    const calls: string[][] = [];
+    const ports = productionAutoMergePorts({
+      now: () => clock,
+      loadPipelines,
+      setting: () => ({ enabled: true, changedAt: new Date(0).toISOString(), changedBy: "operator" }),
+      cachedState: () => null,
+      log: () => undefined,
+      run: async (args) => {
+        calls.push(args);
+        if (args[0] === "pr" && args[1] === "view") return JSON.stringify({
+          state: merged ? "MERGED" : "OPEN", isDraft: false, headRefOid: prHead, baseRefName: "main",
+          mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
+          statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS", startedAt: completed.closedAt }],
+          mergeCommit: merged ? { oid: "f".repeat(40) } : null, mergedAt: merged ? new Date(clock).toISOString() : null,
+        });
+        if (args[0] === "api" && args[1] === "repos/acme/widgets/branches/main") return "[]";
+        if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
+        if (args[0] === "pr" && args[1] === "merge") { merged = true; return ""; }
+        throw new Error(`unexpected gh ${args.join(" ")}`);
+      },
+    });
+    for (let poll = 0; poll < Math.ceil(MERGE_SETTLE_MS / MERGE_POLL_MS) + 3; poll += 1) {
+      await sweepAutoMerge(ports);
+      clock += MERGE_POLL_MS;
+    }
+    const settled = loadPipelines().find((item) => item.id === id)!;
+    expect(settled.merge?.reason).not.toBe(MERGE_REASONS.headChanged);
+    expect(settled.merge?.state).toBe("merged");
+    expect(settled.merge?.chain).toEqual([prHead]);
+    expect(calls.filter((args) => args[0] === "pr" && args[1] === "merge")).toHaveLength(1);
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("a skipped legacy architect publishes its declared output to the review flow", async () => {
   const fixture = await realWorktreeLane("legacy-architect-skip-review", [
     { id: "architect", kind: "run", role: { roleId: "architect" }, access: "read-only", outputs: ["fix.txt"], prompt: "Write fix", next: "review" },

@@ -382,6 +382,8 @@ export type PipelineStageAttempt = {
   };
   startedAt: string | null;
   completedAt: string | null;
+  /** Controller-observed head before committing a read-only stage's declared outputs. */
+  outputBaseHead?: string;
   /** Bounded wait for a structured delivery controller that is between
       publications (#1191). `startedAt` is wall-clock from the first sighting,
       so the budget covers the time a failing spawn attempt spent inside

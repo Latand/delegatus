@@ -171,7 +171,7 @@ export class McpRuntimeReleaseStore {
     const sourceLauncher = path.join(sourceBin, "mcp-server.mjs");
     /* Every module the launcher imports, published before the launcher itself
        so a launcher never lands beside a missing import. */
-    const launcherImports = ["server-runtime.mjs", "appDir.mjs", "envAlias.mjs"];
+    const launcherImports = ["server-runtime.mjs", "appDir.mjs", "envAlias.mjs", "self-update-supervisor.mjs"];
     if (!fs.statSync(sourceLauncher).isFile()
       || !launcherImports.every((name) => fs.statSync(path.join(sourceBin, name)).isFile())) {
       throw new Error("prepared MCP runtime launcher is incomplete");

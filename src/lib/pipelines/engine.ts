@@ -2787,6 +2787,10 @@ function commitPassedStage(
      one that review judged. */
   const handoff = passSuccessor(pipeline, stage, attempt).handoff;
   if (handoff?.attempt && handoff.attempt.reviewedHead === undefined) handoff.attempt.reviewedHead = pipeline.lastPassedCommit;
+  if (stage.kind === "run" && !allowCommit && attemptStage(stage, attempt).outputs?.length
+    && result.sha !== pipeline.lastPassedCommit) {
+    attempt.outputBaseHead = pipeline.lastPassedCommit;
+  }
   pipeline.lastPassedCommit = result.sha;
   if (!publishesRemoteBranch(pipeline)) {
     attempt.state = "passed";
