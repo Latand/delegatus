@@ -111,7 +111,7 @@ test("a recovered receipt re-establishes membership from its durable fields befo
     ports((input) => { commits.push(input); return { ok: true, tasks: [], taskIds: ["held"], created: [], changed: false }; }),
   );
   expect(result.ok && result.taskIds).toEqual(["held"]);
-  expect(commits).toEqual([{ project: "chosen", origin: { kind: "launch", key: "attempt-q" }, title: "Queued until later", identity: { launchId: "launch-q", conversationId: "conversation_q", clientAttemptId: "attempt-q", engine: "claude" } }]);
+  expect(commits).toEqual([{ project: "chosen", origin: { kind: "launch", key: "attempt-q" }, title: "Queued until later", identity: { launchId: "launch-q", conversationId: "conversation_q", clientAttemptId: "attempt-q", engine: "claude" }, admit: expect.any(Function) }]);
   expect(() => admitRecoveredLaunch(
     { launchId: "launch-q", conversationId: "conversation_q", engine: "claude", cwd: "/repo", clientAttemptId: null, explicitProject: null, launchProfile: {}, launchDisplay: null },
     ports(() => { throw new Error("EISDIR: illegal operation on a directory"); }),
@@ -151,4 +151,55 @@ test("an orchestrator seat's launch task is created named, since no seat ever re
     ["Orchestrator for fixture", "titled"],
     ["Build the upload fix", "pending"],
   ]);
+});
+
+/* docs/design/linked-installs.md M.4 seam 2: every task a launch resolves to
+   is checked before any process opens: explicit targets, a pipeline stage's
+   tasks, the tasks a resumed conversation holds, and those a reviewer or a
+   child inherits. The machine the task names admits the same launches. */
+test("a launch that resolves to a task another linked machine runs is refused with TASK_RUNS_ELSEWHERE; its own machine admits it", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { ensureTaskMembership } = await import("./membership");
+  const self = "0a0a0a0a-1111-4111-8111-111111111111";
+  const peer = "0b0b0b0b-2222-4222-8222-222222222222";
+  const prior = process.env.LLV_STATE_DIR;
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-launch-elsewhere-"));
+  process.env.LLV_STATE_DIR = state;
+  const writeSelf = (installId: string) => {
+    fs.mkdirSync(path.join(state, "links"), { recursive: true });
+    fs.writeFileSync(path.join(state, "links/self.json"), JSON.stringify({ v: 1, installId, label: "fixture", publicUrl: null, check: null }));
+  };
+  try {
+    const held = { path: "/sessions/worker.jsonl", conversationId: "conversation_worker", panePid: null, state: "linked" as const, error: null, at: "2026-09-28T00:00:00.000Z" };
+    const task = { id: "task-on-peer", project: "derived:/repo", status: "assigned" as const, text: "Runs on the peer", placement: "unplaced" as const,
+      assignments: [held], machine: peer, createdAt: "2026-09-28T00:00:00.000Z", updatedAt: "2026-09-28T00:00:00.000Z" };
+    const commits = ports((input) => ensureTaskMembership([task], input));
+    const withPipeline = { ...commits, pipelineTaskIds: (id: string) => (id === "lane" ? [task.id] : null) };
+    const launches = [
+      { name: "explicit targets", launch: { engine: "codex", cwd: "/repo", clientAttemptId: "explicit-1", taskIds: [task.id] }, conversationId: "conversation_new" },
+      { name: "pipeline stage", launch: { engine: "codex", cwd: "/repo", origin: { kind: "container", container: "pipeline", containerId: "lane" } }, conversationId: "conversation_stage" },
+      { name: "resume of a stopped conversation the task holds", launch: { engine: "codex", cwd: "/repo" }, conversationId: "conversation_worker" },
+      { name: "reviewer of the assigned conversation", launch: { engine: "claude", cwd: "/repo", clientAttemptId: "review-1", reviewsConversationId: "conversation_worker" }, conversationId: "conversation_reviewer" },
+      { name: "child of the assigned conversation", launch: { engine: "claude", cwd: "/repo", clientAttemptId: "child-1", parentConversationId: "conversation_worker" }, conversationId: "conversation_child" },
+    ];
+    writeSelf(self);
+    for (const { name, launch, conversationId } of launches) {
+      const failures: string[] = [];
+      let refusal: unknown = null;
+      try { admitReservedLaunch(launch, { launchId: `launch-${name}`, conversationId }, (reason) => failures.push(reason), withPipeline); }
+      catch (error) { refusal = error; }
+      expect([name, refusal instanceof LaunchMembershipError ? (refusal as LaunchMembershipError).code : null]).toEqual([name, "TASK_RUNS_ELSEWHERE"]);
+      expect(failures).toHaveLength(1);
+    }
+    writeSelf(peer);
+    for (const { name, launch, conversationId } of launches) {
+      const result = admitReservedLaunch(launch, { launchId: `launch-${name}`, conversationId }, () => undefined, withPipeline);
+      expect([name, result.ok && result.taskIds]).toEqual([name, [task.id]]);
+    }
+  } finally {
+    if (prior === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = prior;
+    fs.rmSync(state, { recursive: true, force: true });
+  }
 });

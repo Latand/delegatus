@@ -124,7 +124,9 @@ export function usedGrant(grant: Grant, moved: boolean): void {
   const current = { requests: (prior?.requests ?? grant.requests) + 1, lastUsed: now,
     days, movedAt: moved ? now : prior?.movedAt ?? grant.movedAt, flushedAt: prior?.flushedAt ?? grant.flushedAt };
   memoryCounts.set(key, current);
-  if (current.movedAt !== null && current.movedAt > (current.flushedAt ?? 0) && now - (current.flushedAt ?? grant.created) >= 3_600_000) {
+  // M.10: only a call that moved data writes, at most once an hour, so an idle
+  // link never rewrites grants.json.
+  if (moved && now - (current.flushedAt ?? grant.created) >= 3_600_000) {
     const file = readGrants();
     const stored = file.grants.find((row) => row.id === grant.id);
     if (stored) {

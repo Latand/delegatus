@@ -190,6 +190,41 @@ test("tasks created, changed in every group and deleted on either machine show o
   expect([(await request(a, "/test/revision")).body.revision, (await request(b, "/test/revision")).body.revision]).toEqual(revisions);
   expect(fileMarks("both-A")).toEqual(diskA);
   expect(fileMarks("both-B")).toEqual(diskB);
+  // Across two hourly flush points an idle link still writes nothing (M.10).
+  for (const hour of [1, 2, 3]) {
+    for (const side of [a, b]) await request(side, `/test/clock?offset=${hour * 3_600_000 + 60_000}`);
+    for (let i = 0; i < 5; i++) await sync(a, peerId);
+  }
+  expect(fileMarks("both-A")).toEqual(diskA);
+  expect(fileMarks("both-B")).toEqual(diskB);
+}, 120_000);
+
+test("an idle call costs at most 2 ms of CPU on each side, and 1 000 calls grow neither heap", async () => {
+  const a = await install("cpu-A");
+  const b = await install("cpu-B");
+  for (const side of [a, b]) await request(side, "/test/capture?on=0");
+  await request(a, "/test/bulk", "POST", { project: key, count: 300 });
+  await request(b, "/test/bulk", "POST", { project: key, count: 300 });
+  const peerId = await link(a, b);
+  await sync(a, peerId);
+  for (let i = 0; i < 100; i++) await sync(a, peerId);
+  const cpu = async () => Promise.all([a, b].map(async (side) => (await request(side, "/test/cpu")).body.ms as number));
+  const cpuBefore = await cpu();
+  for (let i = 0; i < 1_000; i++) await sync(a, peerId);
+  const cpuAfter = await cpu();
+  expect(cpuAfter[0]! - cpuBefore[0]!).toBeLessThanOrEqual(2_000);
+  expect(cpuAfter[1]! - cpuBefore[1]!).toBeLessThanOrEqual(2_000);
+  /* Bun's heap after a forced collection keeps growing for the first few
+     thousand requests of any route, linked or not (about 800 KB from call 100
+     to call 1 100 with no project shared); it levels off after about 3 000.
+     Growth is read once the runtime has warmed up. */
+  for (let i = 0; i < 2_000; i++) await sync(a, peerId);
+  const heap = async () => Promise.all([a, b].map(async (side) => (await request(side, "/test/heap")).body.heapUsed as number));
+  const heapBefore = await heap();
+  for (let i = 0; i < 1_000; i++) await sync(a, peerId);
+  const heapAfter = await heap();
+  expect(heapAfter[0]! - heapBefore[0]!).toBeLessThan(256 * 1024);
+  expect(heapAfter[1]! - heapBefore[1]!).toBeLessThan(256 * 1024);
 }, 120_000);
 
 test("1 000 tasks arrive in 5 pages of at most 512 KB; 1 100 writes on B while A is away push A below the change floor, and the resync converges without a duplicate", async () => {
@@ -317,3 +352,56 @@ test("one edit costs its encoded row plus at most 300 bytes with 1 000 linked pr
   expect((await taskOn(b, ukrainian.id))?.details?.length).toBe(20_000);
   expect((await taskOn(b, control.id))?.workLinks).toHaveLength(20);
 }, 180_000);
+
+test("a forged owner is dropped: A's token cannot give B's task to A or hand it to a third install, whatever the stamp", async () => {
+  const { sharedDigest } = await import("./protocol");
+  const a = await install("forged-A");
+  const b = await install("forged-B");
+  const peerId = await link(a, b);
+  const task = await createOn(b, "Runs on B");
+  await sync(a, peerId);
+  const onA = (await taskOn(a, task.id))!;
+  const bInstall = onA.machine!;
+  const aSelf = JSON.parse(fs.readFileSync(path.join(root, "forged-A", "links/self.json"), "utf8")) as { installId: string };
+  const stored = JSON.parse(fs.readFileSync(path.join(root, "forged-A", "links/peers.json"), "utf8")).peers[0] as { token: string; grantId: string };
+  const list = [{ key, name: "widget" }];
+  const later = `${String(Date.now() + 60_000).padStart(13, "0")}.000.${bInstall.replace(/-/g, "").slice(0, 8)}`;
+  const row = (fields: Record<string, unknown>) => ({ id: task.id, project: key, text: "Runs on B", status: "inbox", placement: "unplaced",
+    machine: bInstall, createdAt: onA.createdAt, updatedAt: onA.updatedAt,
+    s: { ...onA.sync!.s, machine: later, handover: later }, ...fields });
+  for (const forged of [row({ machine: aSelf.installId }), row({ handover: { to: "0c0c0c0c-3333-4333-8333-333333333333" } })]) {
+    const answer = await fetch(`${b}/api/peer/v1/boards/sync`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-delegatus-peer": `${stored.grantId}.${stored.token}` },
+      body: JSON.stringify({ v: 1, store: "00000000-0000-4000-8000-000000000000", now: Date.now(), s: sharedDigest(list), have: sharedDigest(list), push: { rows: [forged], through: [1] } }),
+    });
+    expect(answer.status).toBe(200);
+    // B took the page (the lists agreed) and acknowledged it after its commit.
+    expect(((await answer.json()) as { ack?: { push?: unknown } }).ack?.push).toEqual([1]);
+  }
+  const onB = (await taskOn(b, task.id))!;
+  expect(onB.machine).toBe(bInstall);
+  expect(onB.handover).toBeUndefined();
+  expect((await request(b, `/test/runs-here?id=${task.id}`)).body.refusal).toBeNull();
+  expect(((await request(a, `/test/runs-here?id=${task.id}`)).body.refusal as { code: string }).code).toBe("TASK_RUNS_ELSEWHERE");
+}, 60_000);
+
+test("a reinstalled peer receives the tasks of its earlier install with their old owner, and neither machine launches them", async () => {
+  const a = await install("reinstall-A");
+  const b = await install("reinstall-B");
+  const peerId = await link(a, b);
+  const task = await createOn(b, "Owned by the first install");
+  await sync(a, peerId);
+  const oldOwner = (await taskOn(a, task.id))!.machine!;
+  expect((await request(a, `/api/links/peers/${peerId}`, "DELETE")).status).toBe(200);
+  const b2 = await install("reinstall-B2");
+  const secondPeer = await link(a, b2);
+  await sync(a, secondPeer);
+  const received = (await taskOn(b2, task.id))!;
+  expect(received.machine).toBe(oldOwner);
+  const refusedOnB2 = (await request(b2, `/test/runs-here?id=${task.id}`)).body.refusal as { code: string; error: string };
+  const refusedOnA = (await request(a, `/test/runs-here?id=${task.id}`)).body.refusal as { code: string; error: string };
+  expect(refusedOnB2.code).toBe("TASK_RUNS_ELSEWHERE");
+  expect(refusedOnA.code).toBe("TASK_RUNS_ELSEWHERE");
+  expect(refusedOnA.error).toContain("(not linked)");
+}, 60_000);

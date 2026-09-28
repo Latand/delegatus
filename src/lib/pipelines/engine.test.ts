@@ -1484,6 +1484,52 @@ test("task links reject project mismatches without persisting a change", async (
   expect(loadPipelines()[0]!.taskIds).toEqual([]);
 });
 
+/* docs/design/linked-installs.md M.4 seam 1: pipeline state that starts work
+   refuses a task another linked machine runs; on that machine the same calls
+   pass. */
+test("a task another linked machine runs refuses pipeline creation, link-task, a draft's start and a retry", async () => {
+  const self = "0a0a0a0a-1111-4111-8111-111111111111";
+  const peer = "0b0b0b0b-2222-4222-8222-222222222222";
+  const selfFile = path.join(process.env.LLV_STATE_DIR!, "links/self.json");
+  const writeSelf = (installId: string) => {
+    fs.mkdirSync(path.dirname(selfFile), { recursive: true });
+    fs.writeFileSync(selfFile, JSON.stringify({ v: 1, installId, label: "fixture", publicUrl: null, check: null }));
+  };
+  writeSelf(self);
+  try {
+    const h = harness();
+    const elsewhere = { ...boardTask("task-runs-on-peer"), machine: peer };
+    const here = { ...boardTask("task-runs-here"), machine: self };
+    saveTasks([elsewhere, here]);
+    savePipelines([]);
+    const draftRequest = { repoDir: "/repo", autoStart: false, stages: [{ id: "run", kind: "run", role: { roleId: "builder" }, engine: "codex", prompt: "run", next: null }] } as const;
+    const refused = await createPipelineFromRequest({ ...draftRequest, task: "Refused", taskIds: [elsewhere.id] } as never, h.ports);
+    expect(refused).toMatchObject({ status: 409, code: "TASK_RUNS_ELSEWHERE" });
+    expect(loadPipelines()).toHaveLength(0);
+    const draft = await createPipelineFromRequest({ ...draftRequest, task: "Draft", taskIds: [here.id] } as never, h.ports);
+    expect(draft.pipeline?.state).toBe("draft");
+    expect(await patchPipeline(draft.pipeline!.id, { action: "link-task", taskId: elsewhere.id }, h.ports)).toMatchObject({ status: 409, code: "TASK_RUNS_ELSEWHERE" });
+    saveTasks([elsewhere, { ...here, machine: peer }]);
+    expect(await patchPipeline(draft.pipeline!.id, { action: "start" }, h.ports)).toMatchObject({ status: 409, code: "TASK_RUNS_ELSEWHERE" });
+    expect(loadPipelines().find((pipeline) => pipeline.id === draft.pipeline!.id)?.state).toBe("draft");
+
+    saveTasks([elsewhere, here]);
+    const created = await create(h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "fail", "retry me")], h.ports);
+    const failed = loadPipelines().find((pipeline) => pipeline.id === created.id)!;
+    expect(failed.state).toBe("needs_decision");
+    savePipelines([{ ...failed, taskIds: [elsewhere.id] }]);
+    expect(await patchPipeline(created.id, { action: "retry-stage" }, h.ports)).toMatchObject({ status: 409, code: "TASK_RUNS_ELSEWHERE" });
+    // On the machine the task names, the same retry is admitted.
+    writeSelf(peer);
+    expect((await patchPipeline(created.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  } finally {
+    fs.rmSync(selfFile, { force: true });
+  }
+});
+
 test("a linked draft cannot move to a different task project", async () => {
   const h = harness();
   const task = boardTask("task-repo-move");

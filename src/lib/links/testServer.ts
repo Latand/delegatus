@@ -23,6 +23,7 @@ import { initializeStateCollections, SqliteStateCollection } from "@/lib/state/s
 import { statePath } from "@/lib/configDir";
 import { createTask } from "@/lib/tasks/commands";
 import { loadTasks, mutateTasks, taskFeedSource } from "@/lib/tasks/store";
+import { runsElsewhere } from "./linked";
 
 const dir = process.argv[2]!;
 process.env.LLV_STATE_DIR = dir;
@@ -48,6 +49,7 @@ let captured: { request: string; response: string; read: number; written: number
 const realNow = Date.now.bind(Date);
 let clockOffset = 0;
 Date.now = () => realNow() + clockOffset;
+let capturing = true;
 const json = (response: http.ServerResponse, value: unknown) => { response.setHeader("content-type", "application/json"); response.end(JSON.stringify(value)); };
 const server = http.createServer(async (request, response) => {
   try {
@@ -61,9 +63,17 @@ const server = http.createServer(async (request, response) => {
     }
     const query = new URL(request.url ?? "/", "http://localhost").searchParams;
     const body = () => JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as Record<string, unknown>;
+    if (path === "/test/cpu") { const usage = process.cpuUsage(); json(response, { ms: (usage.user + usage.system) / 1000 }); return; }
+    if (path === "/test/heap") { Bun.gc(true); const memory = process.memoryUsage(); json(response, { heapUsed: memory.heapUsed, rss: memory.rss }); return; }
     if (path === "/test/clock") { clockOffset = Number(query.get("offset") ?? 0); json(response, { clockOffset }); return; }
+    if (path === "/test/capture") { capturing = query.get("on") !== "0"; captured = []; json(response, { capturing }); return; }
     if (path === "/test/captured") { json(response, captured); if (query.get("reset") === "1") captured = []; return; }
     if (path === "/test/tasks") { json(response, loadTasks()); return; }
+    if (path === "/test/runs-here") {
+      const task = loadTasks().find((row) => row.id === query.get("id"));
+      json(response, task ? { refusal: runsElsewhere(task) } : { error: "not found" });
+      return;
+    }
     if (path === "/test/revision") { json(response, { revision: taskFeedSource()?.revision() ?? 0 }); return; }
     if (path === "/test/bulk") {
       // Many tasks in one transaction, as a test fixture.
@@ -212,7 +222,7 @@ const server = http.createServer(async (request, response) => {
     response.writeHead(result.status, Object.fromEntries(result.headers));
     response.end(resultBody, () => {
       if (path === "/api/peer/v1/boards/sync") {
-        captured.push({ request: Buffer.concat(chunks).toString("utf8"), response: resultBody.toString("utf8"), read: request.socket.bytesRead, written: request.socket.bytesWritten });
+        if (capturing) captured.push({ request: Buffer.concat(chunks).toString("utf8"), response: resultBody.toString("utf8"), read: request.socket.bytesRead, written: request.socket.bytesWritten });
         if (captured.length > 5_000) captured.shift();
         syncCalls++;
         syncRead += request.socket.bytesRead;

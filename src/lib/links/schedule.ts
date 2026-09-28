@@ -1,7 +1,7 @@
 /**
  * A's sync schedule (docs/design/linked-installs.md M.5). Every 10 s A reads
  * its own cached task revision; a change in a linked project starts a call at
- * once. Otherwise a call every 15 s while a board of a linked project is open,
+ * once. The timer wakes when the next call or read is due. Otherwise a call every 15 s while a board of a linked project is open,
  * every 10 s for 2 minutes after a call that moved data, else an interval that
  * doubles from 30 s up to 5 minutes. Failures back off to 5 minutes. One call
  * at a time per link; B never calls.
@@ -35,17 +35,23 @@ export interface SchedulePorts {
 export class LinkedBoardSchedule {
   private readonly plans = new Map<string, Plan>();
   private lastRevision: number | null = null;
+  private revisionReadAt = -Infinity;
 
   constructor(private readonly ports: SchedulePorts) {}
 
-  /** One 10-second tick; resolves when the calls it started have ended. */
+  /** One tick; resolves when the calls it started have ended. The own
+      revision is read at most every 10 s. */
   async tick(): Promise<void> {
     const now = this.ports.now();
     const links = this.ports.links();
     for (const id of this.plans.keys()) if (!links.some((link) => link.id === id)) this.plans.delete(id);
-    const revision = this.ports.ownRevision();
-    const revisionMoved = revision !== this.lastRevision;
-    this.lastRevision = revision;
+    let revisionMoved = false;
+    if (now - this.revisionReadAt >= TICK_MS) {
+      this.revisionReadAt = now;
+      const revision = this.ports.ownRevision();
+      revisionMoved = revision !== this.lastRevision;
+      this.lastRevision = revision;
+    }
     const runs: Promise<void>[] = [];
     for (const link of links) {
       let plan = this.plans.get(link.id);
@@ -56,6 +62,14 @@ export class LinkedBoardSchedule {
       runs.push(this.run(link, plan));
     }
     await Promise.all(runs);
+  }
+
+  /** How long until the next call or revision read is due, 1 s to 10 s. */
+  nextDelay(): number {
+    const now = this.ports.now();
+    let due = this.revisionReadAt + TICK_MS;
+    for (const plan of this.plans.values()) if (!plan.running) due = Math.min(due, plan.nextAt);
+    return Math.min(TICK_MS, Math.max(1_000, due - now));
   }
 
   private async run(link: { id: string; projects: ReadonlySet<string> }, plan: Plan): Promise<void> {
@@ -105,18 +119,18 @@ export function startLinkedBoardSync(ports: SchedulePorts = productionSchedulePo
 }): void {
   if (host.__llvLinkedBoardTimer) return;
   const schedule = new LinkedBoardSchedule(ports);
-  const arm = () => {
+  const arm = (delay: number) => {
     const timer = setTimeout(() => {
       void (async () => {
         if (!(await ownsTraffic())) { host.__llvLinkedBoardTimer = undefined; return; }
         await schedule.tick();
       })().catch((error) => console.error("[linked boards] sync tick failed", error instanceof Error ? error.message : String(error)))
-        .finally(() => { if (host.__llvLinkedBoardTimer === timer) arm(); });
-    }, TICK_MS);
+        .finally(() => { if (host.__llvLinkedBoardTimer === timer) arm(schedule.nextDelay()); });
+    }, delay);
     timer.unref?.();
     host.__llvLinkedBoardTimer = timer;
   };
-  arm();
+  arm(TICK_MS);
 }
 
 export function stopLinkedBoardSync(): void {

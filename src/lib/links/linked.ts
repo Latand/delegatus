@@ -85,7 +85,9 @@ export function runsElsewhere(task: Pick<BoardTask, "id" | "text" | "machine">, 
   const { label, linked } = machineLabel(task.machine!, context);
   const title = task.text.split("\n", 1)[0]!.slice(0, 80);
   return { code: TASK_RUNS_ELSEWHERE, status: 409, taskId: task.id, machine: label,
-    error: `${TASK_RUNS_ELSEWHERE}: "${title}" runs on ${label}${linked ? "" : " (not linked)"}; its own orchestrator starts it there. Use Run here to ask for it.` };
+    error: linked
+      ? `${TASK_RUNS_ELSEWHERE}: "${title}" runs on ${label}; its own orchestrator starts it there. Use Run here to ask for it.`
+      : `${TASK_RUNS_ELSEWHERE}: "${title}" runs on ${label} (not linked); no machine launches it until a copy is made here.` };
 }
 
 /** The first refusal among tasks a seam resolved, or null. */

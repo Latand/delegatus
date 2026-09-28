@@ -1411,6 +1411,23 @@ test("the projects worth checking are the seated ones plus anything with work an
   expect(projects).toEqual(["abandoned", "unstarted", PROJECT]);
 });
 
+/* docs/design/linked-installs.md M.4: the sources mark another machine's
+   tasks and never count their project as work nobody is on. */
+test("a task another linked machine runs is marked runsOn and adds no project", async () => {
+  const selfFile = path.join(process.env.LLV_STATE_DIR!, "links/self.json");
+  fs.mkdirSync(path.dirname(selfFile), { recursive: true });
+  fs.writeFileSync(selfFile, JSON.stringify({ v: 1, installId: "0a0a0a0a-1111-4111-8111-111111111111", label: "alpha", publicUrl: null, check: null }));
+  try {
+    const peer = "0b0b0b0b-2222-4222-8222-222222222222";
+    const elsewhere = { id: "task_peer", project: "peer-only", status: "assigned", text: "card", placement: "unplaced", assignments: [], machine: peer, createdAt: "", updatedAt: "" };
+    expect(seatTickProjects({ ...sources({ tasks: [elsewhere] }), activeSeats: () => [], pipelines: () => [] as never })).toEqual([]);
+    const input = await gather({ tasks: [{ ...elsewhere, project: PROJECT, updatedAt: new Date(NOW - 60_000).toISOString() }] });
+    expect(input.tasks[0]).toMatchObject({ id: "task_peer", runsOn: "0b0b0b0b" });
+  } finally {
+    fs.rmSync(selfFile, { force: true });
+  }
+});
+
 test("a done board and a closed lane leave a project the tick has no opinion about", () => {
   const projects = seatTickProjects({
     ...sources({}),

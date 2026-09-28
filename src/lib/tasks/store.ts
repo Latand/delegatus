@@ -19,10 +19,11 @@ import {
 } from "@/lib/state/legacyImport";
 import { readStateImport, SqliteStateCollection, type StateImportRecord, type StateImportRow } from "@/lib/state/sqliteStateStore";
 
-import { snapshotTasks, stampTaskRevisions, taskFingerprint, taskRevision } from "./revision";
 import { linkedContext } from "@/lib/links/linked";
 import { snapshotGroups, stampLinkedRows, type GroupSnapshot, type TaskSyncWrite } from "@/lib/links/taskStamp";
 import { tombstoneCollection, type TombstoneRow } from "@/lib/links/tombstones";
+
+import { snapshotTasks, stampTaskRevisions, taskFingerprint, taskRevision } from "./revision";
 import { isTaskAttachment } from "./attachments";
 import type { RecentCreate } from "./commands";
 import type { AssignmentState, BoardTask, TaskAssignment, TaskBoardVisibility, TaskPlacement, TaskSource, TaskStatus, TaskOrigin } from "./types";
@@ -519,10 +520,6 @@ function fileBody(rows: unknown[], recentCreates: RecentCreate[], migrations: Ta
   };
 }
 
-/** One serialized read-modify-write: the prepare step reads the committed state
-    under the collection lease and returns the whole next state, or undefined to
-    skip the write. Only rows that changed are written; rows that disappeared
-    are deleted in the same transaction. */
 /** The linked-boards side of one task write: which projects are linked, and
     the `task_tombstones` rows this commit writes beside the tasks. Null when
     nothing is linked, which is every install that never paired. */
@@ -541,6 +538,10 @@ function taskSyncWrite(filePath: string): { write: TaskSyncWrite; companion: Non
   return { write, companion, pending: () => ({ records: [...puts.values()], deleteKeys: [...removed] }) };
 }
 
+/** One serialized read-modify-write: the prepare step reads the committed state
+    under the collection lease and returns the whole next state, or undefined to
+    skip the write. Only rows that changed are written; rows that disappeared
+    are deleted in the same transaction. */
 function writeTaskState<R>(
   filePath: string,
   prepare: (current: TasksFileState, sync: TaskSyncWrite | null) => { next: { rows: unknown[]; recentCreates: RecentCreate[]; migrations: TaskMigrations } | undefined; result: R },

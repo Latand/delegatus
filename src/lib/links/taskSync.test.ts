@@ -325,3 +325,55 @@ test("with no project linked nothing is stamped and no tombstone collection is c
   }, file);
   expect(readStateCollectionRevision(db, "task_tombstones")).toBeNull();
 });
+
+test("admission placeholders from a launch prompt or a pipeline goal, and curator cards, never cross with their text", async () => {
+  const { file } = linkedInstall();
+  const { ensureTaskMembership } = await import("@/lib/tasks/membership");
+  const made = mutateTasks((tasks) => {
+    const launch = ensureTaskMembership(tasks, { project: key, origin: { kind: "launch", key: "attempt-canary" }, title: "CANARY-launch-prompt", identity: { launchId: "launch-canary", conversationId: "conversation_canary" } });
+    if (!launch.ok) throw new Error(launch.error);
+    const pipeline = ensureTaskMembership(launch.tasks, { project: key, origin: { kind: "pipeline", key: "lane-canary" }, title: "CANARY-pipeline-goal", identity: { launchId: "launch-stage", conversationId: "conversation_stage" }, titled: true });
+    if (!pipeline.ok) throw new Error(pipeline.error);
+    const curator = createTask(pipeline.tasks, { project: key, text: "CANARY-curator-line", placement: "unplaced", source: { path: "/sessions/x.jsonl", ts: null, text: "CANARY-curator-line", fingerprint: "f", engine: "claude" } });
+    if (!curator.ok) throw new Error(curator.error);
+    return { tasks: curator.tasks, result: [...launch.created, ...pipeline.created, curator.task.id] };
+  }, file);
+  expect(made).toHaveLength(3);
+  for (const id of made) {
+    const row = wire(find(file, id)!);
+    expect(row.text).toBe(UNTITLED_TASK_TEXT);
+    expect(JSON.stringify(row)).not.toContain("CANARY");
+  }
+});
+
+/* The rollback check: a release from before this change reads the same
+   database. Its store is taken from the merge base with main and loaded
+   beside the current modules. */
+const mergeBase = (() => {
+  const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
+  const base = spawnSync("git", ["merge-base", "HEAD", "origin/main"], { encoding: "utf8" });
+  if (base.status !== 0) return null;
+  const source = spawnSync("git", ["show", `${base.stdout.trim()}:src/lib/tasks/store.ts`], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+  return source.status === 0 && !source.stdout.includes("taskSyncWrite") ? source.stdout : null;
+})();
+test.skipIf(mergeBase === null)("a release reading the database without the change still loads the task list", async () => {
+  const { file } = linkedInstall();
+  const kept = create(file, "Kept");
+  const gone = create(file, "Deleted");
+  mutateTasks((tasks) => {
+    const removed = deleteTask(tasks, gone.id);
+    if (!removed.ok) throw new Error(removed.error);
+    return { tasks: removed.tasks, result: null };
+  }, file);
+  applyTaskRows([peerRow({ id: randomUUID(), text: "From the peer" }, Date.now())], peerLink, { filePath: file });
+  const older = path.join(import.meta.dir, "../tasks", `rollbackStore.${process.pid}.tmp.ts`);
+  fs.writeFileSync(older, mergeBase!);
+  try {
+    const store = await import(older) as typeof import("@/lib/tasks/store");
+    const loaded = store.loadTasks(file);
+    expect(loaded.map((task) => task.text).sort()).toEqual(["From the peer", "Kept"]);
+    expect(loaded.find((task) => task.id === kept.id)?.machine).toBe(SELF);
+  } finally {
+    fs.rmSync(older, { force: true });
+  }
+});
