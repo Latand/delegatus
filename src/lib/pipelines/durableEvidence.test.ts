@@ -18,6 +18,29 @@ function writeTranscript(name: string, records: Record<string, unknown>[]): stri
 
 const PASS_TEXT = "done\n\n```json\n{\"status\":\"pass\"}\n```";
 
+for (const engine of ["claude", "codex"] as const) {
+  test(`${engine} reads the full assistant brief before stage_report and the later closing message`, async () => {
+    const before = "2026-07-18T10:02:00.000Z";
+    const after = "2026-07-18T10:05:00.000Z";
+    const brief = "Full builder brief with exact implementation details.";
+    const closing = "Brief ready.";
+    const file = writeTranscript(`${engine}-reported-brief.jsonl`, engine === "claude" ? [
+      { type: "assistant", timestamp: "2026-07-18T10:00:00.000Z", message: { role: "assistant", content: [{ type: "text", text: "Previous turn." }] } },
+      { type: "user", timestamp: "2026-07-18T10:01:00.000Z", message: { role: "user", content: "Write the brief." } },
+      { type: "assistant", timestamp: before, message: { role: "assistant", content: [{ type: "text", text: brief }] } },
+      { type: "assistant", timestamp: after, message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: closing }] } },
+    ] : [
+      { timestamp: "2026-07-18T10:00:00.000Z", payload: { type: "agent_message", message: "Previous turn." } },
+      { timestamp: "2026-07-18T10:01:00.000Z", payload: { type: "task_started" } },
+      { timestamp: before, payload: { type: "agent_message", message: brief } },
+      { timestamp: after, payload: { type: "agent_message", message: closing } },
+      { timestamp: "2026-07-18T10:06:00.000Z", payload: { type: "task_complete", last_agent_message: closing } },
+    ]);
+    expect(await durableStageTurnEvidence(engine, file, "2026-07-18T10:03:00.000Z", "2026-07-18T10:01:00.000Z"))
+      .toMatchObject({ turn: "terminal", message: { text: closing }, reportProse: brief });
+  });
+}
+
 test("a one-record Codex launch transcript reports no agent progress (#1325)", async () => {
   const file = writeTranscript("codex-launch-only.jsonl", [
     { type: "session_meta", timestamp: "2026-08-31T09:00:00.000Z", payload: { originator: "synthetic" } },

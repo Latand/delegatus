@@ -298,7 +298,7 @@ export interface PipelinePorts {
   /** Confirmed reset of the source account's governing exhausted quota window. */
   claudeAccountReset?(accountId: string, model: string | null): number | null;
   sleep?(milliseconds: number): Promise<void>;
-  durableTurnEvidence(engine: EffectivePipelineRole["engine"], transcriptPath: string): Promise<StageTurnEvidence | null>;
+  durableTurnEvidence(engine: EffectivePipelineRole["engine"], transcriptPath: string, reportAt?: string | null, attemptStartedAt?: string | null): Promise<StageTurnEvidence | null>;
   headCwd(transcriptPath: string): string | null;
   lastMessage(entry: FileEntry): { text: string; ts: number } | null;
   pathForConversation(conversationId: string): string | null;
@@ -2874,19 +2874,42 @@ export async function preparePipelineReviewRepair(flowId: string): Promise<{ ok:
  * slice 2). The call outranks the fenced JSON verdict in the transcript: it is
  * an explicit statement the server attributed to the calling conversation,
  * while the fenced block is the second input, for an attempt whose engine
- * cannot make the call or whose scaffold still ends in one. The prose keeps
- * its place as the relay payload when the call carried no summary, so nothing
- * the next stage reads is lost.
+ * cannot make the call or whose scaffold still ends in one. A passing stage
+ * relays its final prose, with the report's short summary as a header when it
+ * adds information.
  *
  * This is consulted only where settlement is already decided — at a terminal
  * turn — which is what keeps the call an intent: an attempt that reports and
  * then keeps working settles when its turn ends.
  */
+const MAX_STAGE_RELAY_BYTES = 60 * 1024;
+const STAGE_RELAY_TRUNCATED = "\n\n[Previous stage output truncated at 60 KiB]";
+
+function reportedPassOutput(summary: string | null, finalMessage: string, reportProse: string | null): string {
+  const prose = finalMessage.trim();
+  const earlier = reportProse?.trim() ?? "";
+  const short = summary?.trim() ?? "";
+  const messages = [
+    ...(prose ? [prose] : []),
+    ...(earlier && earlier !== prose ? [`Assistant message before stage_report:\n${earlier}`] : []),
+  ];
+  const full = messages.join("\n\n");
+  const output = full && short && short !== prose
+    ? `Reported summary:\n${short}\n\nFinal assistant message:\n${full}`
+    : full || short;
+  const bytes = Buffer.from(output, "utf8");
+  if (bytes.length <= MAX_STAGE_RELAY_BYTES) return output;
+  let end = MAX_STAGE_RELAY_BYTES - Buffer.byteLength(STAGE_RELAY_TRUNCATED);
+  while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end -= 1;
+  return bytes.subarray(0, end).toString("utf8") + STAGE_RELAY_TRUNCATED;
+}
+
 function reportedStageVerdict(
   attempt: PipelineStageAttempt,
   fenced: ParsedStageVerdict | { failureReason: string; output: string } | null,
   text: string,
   backgroundReportedAt: number | null | undefined,
+  reportProse: string | null = null,
 ): ParsedStageVerdict | null {
   const report = attempt.report;
   if (!report) return null;
@@ -2895,7 +2918,9 @@ function reportedStageVerdict(
   if (backgroundReportedAt && unixMs(report.at) < backgroundReportedAt) return null;
   return {
     verdict: report.verdict,
-    output: (report.summary ?? fenced?.output ?? text.trim()).slice(0, MAX_OUTPUT_CHARS),
+    output: report.verdict.status === "pass"
+      ? reportedPassOutput(report.summary, text, reportProse)
+      : (report.summary ?? fenced?.output ?? text.trim()).slice(0, MAX_OUTPUT_CHARS),
   };
 }
 
@@ -3940,7 +3965,7 @@ async function tickRunStage(
      verdict settles once — even when the runtime ledger is stale `running`, the
      scan projection transiently lost the transcript, or the host is already
      gone. A busy turn is mid-work: its messages are never verdict candidates. */
-  const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath);
+  const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, attempt.report?.at, attempt.startedAt);
   const unregisteredHostDeath = structuredActive === true
     ? null
     : await unregisteredStageHostDeathEvidence(attempt, {
@@ -3983,7 +4008,7 @@ async function tickRunStage(
   const durableTerminal = durable?.turn === "terminal" && durable.message !== null && durable.message.ts > unixMs(attempt.startedAt);
   if (durable && durableTerminal) {
     const fenced = parsePipelineStageVerdict(durable.message!.text);
-    const parsed = reportedStageVerdict(attempt, fenced, durable.message!.text, durable.backgroundReportedAt) ?? fenced;
+    const parsed = reportedStageVerdict(attempt, fenced, durable.message!.text, durable.backgroundReportedAt, durable.reportProse) ?? fenced;
     if (parsed && (!hostUnavailablePastGrace || "verdict" in parsed)) {
       markVerdictRecoverySucceeded(attempt, ports.now(), durable.message!.ts);
       settleStageVerdict(pipeline, stage, attempt, parsed, ports, persist);
@@ -4095,7 +4120,7 @@ async function tickRunStage(
     return;
   }
   const fenced = parsePipelineStageVerdict(message.text);
-  const parsed = reportedStageVerdict(attempt, fenced, message.text, durable?.backgroundReportedAt) ?? fenced;
+  const parsed = reportedStageVerdict(attempt, fenced, message.text, durable?.backgroundReportedAt, durable?.reportProse) ?? fenced;
   if (!parsed) {
     if (!canSpendRecoveryCheck()) return;
     recordVerdictRecoveryMiss(

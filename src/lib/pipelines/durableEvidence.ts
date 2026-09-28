@@ -21,6 +21,9 @@ type RecordLike = Record<string, unknown>;
 export type StageTurnEvidence = {
   turn: "terminal" | "busy" | "unknown";
   message: { text: string; ts: number } | null;
+  /** Prose written before this attempt's stage_report call, when the agent
+      followed its detailed answer with a shorter closing message. */
+  reportProse?: string | null;
   /** The verified read covers the complete artifact and contains only Codex's
       launch metadata record. */
   launchOnly?: boolean;
@@ -181,6 +184,8 @@ function terminalProviderMessageFromRecords(
 export async function durableStageTurnEvidence(
   engine: FlowEngine,
   transcriptPath: string,
+  reportAt?: string | null,
+  attemptStartedAt?: string | null,
 ): Promise<StageTurnEvidence | null> {
   const read = await readStableTailRecords(transcriptPath);
   if (read.integrity !== "complete") return null;
@@ -194,11 +199,24 @@ export async function durableStageTurnEvidence(
        timestamp fallback for records that carry no timestamp of their own. */
   }
   const message = lastAssistantMessageFromRecords(read.records, codex ? "codex-sessions" : "claude-projects", fallbackTs);
+  const reportTime = reportAt ? Date.parse(reportAt) : NaN;
+  const startedTime = attemptStartedAt ? Date.parse(attemptStartedAt) : NaN;
+  const reportProse = Number.isFinite(reportTime)
+    ? lastAssistantMessageFromRecords(
+      read.records.filter((record) => {
+        const timestamp = recordTs(record, fallbackTs);
+        return timestamp <= reportTime && (!Number.isFinite(startedTime) || timestamp > startedTime);
+      }),
+      codex ? "codex-sessions" : "claude-projects",
+      fallbackTs,
+    )?.text ?? null
+    : null;
   const newest = read.records.at(-1);
   const ledger = codex ? null : await readBackgroundTaskLedger(transcriptPath);
   return {
     turn: turn.state === "terminal" ? "terminal" : turn.state === "busy" ? "busy" : "unknown",
     message,
+    ...(reportAt ? { reportProse } : {}),
     lastRecordAt: newest ? recordTs(newest, fallbackTs) || null : null,
     launchOnly: codex
       && !read.prefixTruncated
