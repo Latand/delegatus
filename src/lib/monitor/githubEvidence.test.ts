@@ -11,7 +11,8 @@ process.env.XDG_CONFIG_HOME = path.join(SANDBOX, "config");
 process.env.TMPDIR = path.join(SANDBOX, "tmp");
 fs.mkdirSync(process.env.TMPDIR, { recursive: true });
 
-const { githubEvidenceSource, openIssuesForProposal, openPullRequestsForRepo } = await import("./githubEvidence");
+const { githubEvidenceSource, openIssuesForProposal, openIssuesRanked, openPullRequestsForRepo, rankOpenIssues } = await import("./githubEvidence");
+type OpenIssueRow = import("./githubEvidence").OpenIssueRow;
 const { evidenceFromGithub } = await import("./evidence");
 
 afterAll(() => {
@@ -174,5 +175,125 @@ describe("open issues for the proactive slot", () => {
       run: async () => JSON.stringify([{ title: "no number" }, "a string", { number: 7, title: "kept", labels: [{ name: 7 }] }]),
     });
     expect(issues).toEqual([{ number: 7, title: "kept", labels: [], updatedAt: null }]);
+  });
+});
+
+/* docs/design/board-maintenance-report.md §7: open issues ranked only by the
+   priority a project records (decision D2). */
+describe("open issues ranked for the board maintenance report", () => {
+  const issue = (number: number, overrides: Partial<OpenIssueRow> = {}): OpenIssueRow => ({
+    number,
+    title: `issue ${number}`,
+    createdAt: `2026-07-${String(10 + (number % 10)).padStart(2, "0")}T10:00:00Z`,
+    updatedAt: `2026-09-${String(10 + (number % 10)).padStart(2, "0")}T10:00:00Z`,
+    labels: [],
+    milestone: null,
+    openBlockers: 0,
+    closingPullRequests: 0,
+    projectFields: {},
+    ...overrides,
+  });
+  const rank = (issues: OpenIssueRow[], onBoard: number[] = []) => rankOpenIssues(issues, { totalCount: issues.length, onBoard: new Set(onBoard) });
+
+  test("a Project Priority field ranks first, then Urgency, and names the option as found", () => {
+    const ranking = rank([
+      issue(1, { projectFields: { Priority: "🟡 Medium" } }),
+      issue(2, { projectFields: { Priority: "🔴 Critical", Status: "Backlog" } }),
+      issue(3, { projectFields: { Urgency: "Soon" } }),
+      issue(4, { projectFields: { Priority: "Someday maybe" } }),
+    ]);
+    expect(ranking.ranked.map((row) => [row.number, row.tier])).toEqual([[2, 0], [3, 1], [1, 2], [4, 2]]);
+    expect(ranking.ranked[0]!.tierSignal).toBe("Priority 🔴 Critical");
+    expect(ranking.signals).toEqual(["Project Priority field", "Project Urgency field"]);
+    expect(ranking.unranked).toEqual([]);
+  });
+
+  test("a priority label ranks where no Project field does, and readiness orders within a tier", () => {
+    const ranking = rank([
+      issue(10, { labels: ["priority: urgent"] }),
+      issue(11, { labels: ["P1"] }),
+      issue(12, { labels: ["P1", "ready"] }),
+      issue(13, { labels: ["bug"] }),
+    ]);
+    expect(ranking.ranked.map((row) => row.number)).toEqual([10, 12, 11]);
+    expect(ranking.ranked[0]!.tierSignal).toBe("label priority: urgent");
+    expect(ranking.signals).toEqual(["priority label"]);
+    expect(ranking.unranked.map((row) => row.number)).toEqual([13]);
+  });
+
+  test("a milestone ranks after every tiered issue, soonest due first and undated last", () => {
+    const ranking = rank([
+      issue(20, { milestone: { title: "later", dueOn: "2026-12-01T00:00:00Z" } }),
+      issue(21, { milestone: { title: "sooner", dueOn: "2026-10-01T00:00:00Z" } }),
+      issue(22, { milestone: { title: "someday", dueOn: null } }),
+      issue(23, { labels: ["priority: low"] }),
+    ]);
+    expect(ranking.ranked.map((row) => row.number)).toEqual([23, 21, 20, 22]);
+    expect(ranking.signals).toEqual(["priority label", "milestone"]);
+  });
+
+  test("readiness alone ranks nothing, and no signal ranks nothing: the rest stay unranked, newest first", () => {
+    const ranking = rank([
+      issue(30, { projectFields: { Status: "Ready" }, labels: ["ready"], updatedAt: "2026-09-01T00:00:00Z" }),
+      issue(31, { updatedAt: "2026-09-20T00:00:00Z" }),
+      issue(32, { labels: ["bug", "enhancement"], updatedAt: "2026-09-10T00:00:00Z" }),
+    ]);
+    expect(ranking.ranked).toEqual([]);
+    expect(ranking.signals).toEqual([]);
+    expect(ranking.unranked.map((row) => row.number)).toEqual([31, 32, 30]);
+  });
+
+  test("issues on the board, closed by an open pull request, blocked or not open for work are counted and never ranked", () => {
+    const ranking = rank([
+      issue(40, { labels: ["P0"] }),
+      issue(41, { labels: ["P0"], closingPullRequests: 1 }),
+      issue(42, { labels: ["P0"], openBlockers: 2 }),
+      issue(43, { labels: ["P0"], projectFields: { Status: "🏗 In Progress" } }),
+      issue(44, { labels: ["P0"], projectFields: { Status: "On Hold" } }),
+      issue(45, { labels: ["P0"] }),
+    ], [45]);
+    expect(ranking.ranked.map((row) => row.number)).toEqual([40]);
+    expect(ranking.excluded).toBe(5);
+  });
+
+  test("one graphql read, repeated once without Project fields when they are unreadable", async () => {
+    const calls: string[][] = [];
+    const page = JSON.stringify({ data: { repository: { issues: {
+      totalCount: 1,
+      pageInfo: { hasNextPage: false, endCursor: null },
+      nodes: [{ number: 7, title: "Fix it", createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-02T00:00:00Z",
+        labels: { nodes: [{ name: "priority: high" }] }, milestone: null, issueDependenciesSummary: { blockedBy: 0 },
+        closedByPullRequestsReferences: { totalCount: 0 } }],
+    } } } });
+    const result = await openIssuesRanked({
+      cwd: SANDBOX,
+      repository: "owner-a/repo-a",
+      onBoard: new Set(),
+      run: async (args) => {
+        calls.push(args);
+        const query = args.find((arg) => arg.startsWith("query="))!;
+        if (query.includes("projectItems")) throw Object.assign(new Error("Resource not accessible by integration"), { code: 1 });
+        return page;
+      },
+    });
+    expect(calls).toHaveLength(2);
+    expect(calls.every((args) => args[0] === "api" && args[1] === "graphql")).toBe(true);
+    /* Read-only: a query, never a mutation. */
+    expect(calls.flat().join(" ")).not.toMatch(/\bmutation\b/);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.ranking.projectFieldsUnreadable).toBe(true);
+    expect(result.ranking.ranked.map((row) => [row.number, row.tier])).toEqual([[7, 1]]);
+  });
+
+  test("a failed or malformed read is carried out as unavailable, never as an empty list", async () => {
+    const timedOut = await openIssuesRanked({ cwd: SANDBOX, repository: "owner-a/repo-a", onBoard: new Set(),
+      run: async () => { throw Object.assign(new Error("killed"), { killed: true }); } });
+    expect(timedOut).toEqual({ ok: false, unavailable: "timed-out" });
+    const malformed = await openIssuesRanked({ cwd: SANDBOX, repository: "owner-a/repo-a", onBoard: new Set(), run: async () => "not json" });
+    expect(malformed).toEqual({ ok: false, unavailable: "malformed-output" });
+    const errors = await openIssuesRanked({ cwd: SANDBOX, repository: "owner-a/repo-a", onBoard: new Set(),
+      run: async () => JSON.stringify({ errors: [{ message: "rate limited" }] }) });
+    expect(errors).toEqual({ ok: false, unavailable: "malformed-output" });
   });
 });

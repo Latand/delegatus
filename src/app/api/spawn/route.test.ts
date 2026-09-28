@@ -487,7 +487,6 @@ test("Viewer draft and per-project orchestrator seat pass public spawn admission
       spawn: admit,
       deliver: async () => ({ ok: false, error: "unused" }),
       conversationTarget: () => null,
-      projectTasks: () => [],
       summarizeHandoffs: async () => ({ kind: "fallback", reason: "unavailable" }),
       launchSettlement: () => ({ kind: "unknown" }),
       runtimeIdentity: () => ({ engine: null, model: null }),

@@ -72,7 +72,6 @@ function seatDependencies(): SeatCommandDependencies {
     deliver: async () => ({ ok: true, outcome: "delivered" }),
     conversationTarget: () => null,
     stampRegistryIdentity: () => {},
-    projectTasks: () => [],
     summarizeHandoffs: async () => ({ kind: "fallback", reason: "unavailable" }),
     launchSettlement: () => ({ kind: "unknown" }),
     runtimeIdentity: () => ({ engine: null, model: null }),

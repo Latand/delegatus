@@ -12,6 +12,8 @@ import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { renderTaskColorRule, TASK_COLOR_RULE } from "@/lib/tasks/colorRule";
 
 import {
+  ORCHESTRATOR_BOARD_REPORT_DIRECTIVE,
+  ORCHESTRATOR_BOARD_REPORT_HEADING,
   ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
   ORCHESTRATOR_PROMPT_VERSION,
   ORCHESTRATOR_ROLE_TABLE_HEADING,
@@ -73,8 +75,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 30, and a v29 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(30);
+test("the default mandate is at version 31, and a v30 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(31);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -98,9 +100,12 @@ test("the default mandate is at version 30, and a v29 seat reads as stale", () =
      under its keys, as a summary and sections in the interface language.
      v30 (docs/design/agent-prompt-contract.md) runs every piece of work as a
      pipeline whose review is a reviewer and a fix stage, teaches one verdict
-     vocabulary, names no stack, and gives the seat its personality. */
-  expect(orchestratorMandateStale(29)).toBe(true);
-  expect(orchestratorMandateStale(30)).toBe(false);
+     vocabulary, names no stack, and gives the seat its personality. v31
+     (docs/design/board-maintenance-report.md §8) tells the seat how to read
+     the board maintenance report it is sent when it is seated. */
+  expect(orchestratorMandateStale(30)).toBe(true);
+  expect(orchestratorMandateStale(31)).toBe(false);
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("keep these rare");
@@ -136,6 +141,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   28: "90819032b795f74b3ac4f5bf0699f5443cf31353e95c1ad19ef87b16e8e1ab60",
   29: "220722434e6ce6a265155097b000d1ec5cbf6461e67e7d39193b61cae5b6318a",
   30: "9743e8688175e3e08fd07d54df961ff363b8798b049d50ff11973e7bf2624e69",
+  31: "89ab7a8c911bfa7599ddcf0f0ad8c514e8942846151828ec81886158d1ab0225",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -500,6 +506,25 @@ test("the task-ownership section reaches a bespoke or older mandate, exactly onc
   expect(orchestratorMandateForDelivery(reworded)).toStartWith(reworded);
 });
 
+/* docs/design/board-maintenance-report.md §8: a rotation that names no mandate
+   keeps the incumbent's core (#2283), so delivery is the only way a running
+   seat learns how to read the report it is sent. */
+test("the board report section reaches a bespoke or older mandate once, and is recognized by its heading", () => {
+  const bespoke = "A seat's own mandate, written before the board maintenance report.";
+  const delivered = orchestratorMandateForDelivery(bespoke);
+  expect(delivered.split(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE)).toHaveLength(2);
+  expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
+  const reworded = `${ORCHESTRATOR_BOARD_REPORT_HEADING}
+Read the report, then ask me before closing anything.`;
+  expect(orchestratorMandateForDelivery(reworded)).not.toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
+  expect(orchestratorMandateForDelivery(reworded)).toStartWith(reworded);
+  /* The operator's decisions of 2026-09-27: their own cards close on their
+     word (D3), and a missing priority is never a request to label (D2). */
+  expect(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE).toContain('a card marked "ask first" only when the operator agrees');
+  expect(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE).toContain("never ask the operator to label issues or add fields");
+  expect(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE).toContain("start none unasked");
+});
+
 /* The current default carries all three inline, so a fresh seat reads each in
    place and delivery has nothing to append. */
 test("the delivered default carries each directive exactly once, and delivery adds only the role table", () => {
@@ -508,6 +533,7 @@ test("the delivered default carries each directive exactly once, and delivery ad
   for (const directive of [
     ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE,
     ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE,
+    ORCHESTRATOR_BOARD_REPORT_DIRECTIVE,
     ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
   ]) {
     expect(ORCHESTRATOR_SYSTEM_PROMPT.split(directive)).toHaveLength(2);
@@ -638,9 +664,11 @@ test("the role table keeps the delivered default inside the structured envelope"
      history to what is left. v30 takes 2 850 more
      for one contract every agent reads (docs/design/agent-prompt-contract.md:
      how work runs, the stage contract, the fix rows) and the seat's
-     personality; its scaffold gave 200 back, and handoffDigest.test.ts pins
-     that the room left still holds a full history budget. */
-  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 4_800);
+     personality; its scaffold gave 200 back. v31 takes 700 more for the
+     board maintenance report section, paid for by the open-task list the
+     rotation handoff no longer carries (docs/design/board-maintenance-report.md
+     §5.5); handoffDigest.test.ts pins what that leaves a rotation's history. */
+  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 4_100);
 });
 
 /* docs/design/model-sizing-tiers.md §4: the seat sizes every lane, reads each
