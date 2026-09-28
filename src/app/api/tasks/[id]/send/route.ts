@@ -10,6 +10,7 @@ import { recordTeamEvent, refuseAnonymous, teamActor } from "@/lib/team";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { listFiles } from "@/lib/scanner";
 import { attachmentPath } from "@/lib/tasks/attachments";
+import { runsElsewhere } from "@/lib/links/linked";
 import { applyAssignmentPatches } from "@/lib/tasks/commands";
 import { isoNow, taskDeliveryText } from "@/lib/tasks/helpers";
 import { assembleSendResults, type TaskSendTargetOutcome } from "@/lib/tasks/send";
@@ -84,6 +85,10 @@ async function postTaskSend(
   const { id } = await ctx.params;
   const task = dependencies.loadTasks().find((item) => item.id === id);
   if (!task) return NextResponse.json({ error: "task not found" }, { status: 404 });
+  /* Handing a task to agents is work on it: only the machine it names does
+     that (docs/design/linked-installs.md M.4 seam 3). */
+  const elsewhere = runsElsewhere(task);
+  if (elsewhere) return NextResponse.json({ error: elsewhere.error, code: elsewhere.code }, { status: elsewhere.status });
 
   const files = await dependencies.listFiles();
   const byPath = new Map(files.map((file) => [file.path, file]));

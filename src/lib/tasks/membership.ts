@@ -50,11 +50,18 @@ export interface MembershipInput {
       conversation that has ended, an orchestrator seat), so its admission
       title is its title rather than a wait for a first action. */
   titled?: boolean;
+  /** Set by launch admission; the reconcile pass and delete replacements
+      record conversations that already run and pass none. */
+  admit?: MembershipAdmission;
 }
 
 export type MembershipResult =
   | { ok: true; tasks: BoardTask[]; taskIds: string[]; created: string[]; changed: boolean }
-  | { ok: false; error: string; status: number };
+  | { ok: false; error: string; status: number; code?: string };
+
+/** Launch admission's check of every task a launch resolved to, before any
+    process opens (docs/design/linked-installs.md M.4 seam 2). */
+export type MembershipAdmission = (tasks: readonly BoardTask[]) => { error: string; status: number; code: string } | null;
 
 function normalizeTitle(title: string | null | undefined): string {
   const first = (title ?? "").split(/\r?\n/, 1)[0]?.trim() ?? "";
@@ -195,12 +202,16 @@ export function ensureTaskMembership(existing: readonly BoardTask[], input: Memb
     if (missing >= 0) return { ok: false, error: `task ${unique[missing]} is not available`, status: 404 };
     const projects = new Set(indexes.map((index) => tasks[index]!.project));
     if (projects.size > 1 || (project && !projects.has(project))) return { ok: false, error: "explicit tasks must belong to the launch's project", status: 409 };
+    const refused = input.admit?.(indexes.map((index) => tasks[index]!));
+    if (refused) return { ok: false, ...refused };
     for (const index of indexes) commit(index, upsertLinked(tasks[index]!, input.identity, now));
     return { ok: true, tasks: changed ? tasks : existing.slice(), taskIds: unique, created: [], changed };
   }
 
   const byOrigin = tasks.findIndex((task) => task.project === project && task.origin?.kind === input.origin.kind && task.origin.key === input.origin.key);
   if (byOrigin >= 0) {
+    const refused = input.admit?.([tasks[byOrigin]!]);
+    if (refused) return { ok: false, ...refused };
     commit(byOrigin, upsertLinked(tasks[byOrigin]!, input.identity, now));
     return { ok: true, tasks: changed ? tasks : existing.slice(), taskIds: [tasks[byOrigin]!.id], created: [], changed };
   }
@@ -211,6 +222,8 @@ export function ensureTaskMembership(existing: readonly BoardTask[], input: Memb
     .map((task, index) => ({ task, index }))
     .filter(({ task }) => task.assignments.some((assignment) => assignment.state !== "failed" && sameIdentity(assignment, input.identity)));
   if (held.length) {
+    const refused = input.admit?.(held.map(({ task }) => task));
+    if (refused) return { ok: false, ...refused };
     for (const { index } of held) commit(index, upsertLinked(tasks[index]!, input.identity, now));
     return { ok: true, tasks: changed ? tasks : existing.slice(), taskIds: held.map(({ task }) => task.id), created: [], changed };
   }
@@ -222,6 +235,8 @@ export function ensureTaskMembership(existing: readonly BoardTask[], input: Memb
     .map((task, index) => ({ task, index }))
     .filter(({ task }) => inherit.some((identity) => task.assignments.some((assignment) => assignment.state !== "failed" && sameIdentity(assignment, identity))));
   if (inherited.length) {
+    const refused = input.admit?.(inherited.map(({ task }) => task));
+    if (refused) return { ok: false, ...refused };
     for (const { index } of inherited) commit(index, upsertLinked(tasks[index]!, input.identity, now));
     return { ok: true, tasks: changed ? tasks : existing.slice(), taskIds: inherited.map(({ task }) => task.id), created: [], changed };
   }
@@ -573,7 +588,9 @@ export function refineTask(existing: readonly BoardTask[], input: RefineTaskInpu
       refined.push({ taskId: task.id, result: replay ? "replayed" : "already-named" });
       continue;
     }
-    tasks[index] = { ...task, text, origin: { ...origin, refinement: "titled", refinedBy: caller, refinedText: text }, updatedAt: now };
+    /* A first-action refine is an explicit naming: the text may cross to a
+       linked board (docs/design/linked-installs.md M.3). */
+    tasks[index] = { ...task, text, chosen: true, origin: { ...origin, refinement: "titled", refinedBy: caller, refinedText: text }, updatedAt: now };
     refined.push({ taskId: task.id, result: "applied" });
   }
   return { ok: true, tasks, refined };

@@ -4,7 +4,11 @@ import { statePath } from "@/lib/configDir";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
 import type { SharedProject } from "./state";
 
-type BoardLink = { key: string; store: string; shared: SharedProject[] };
+/** A's task cursors for one link (M.3 "Link state"): what it has pulled from
+    and pushed to the peer store named by `store`, and the linked projects
+    whose rows have fully crossed each way. */
+export type TaskCursor = { pull: [number] | [number, string] | null; pushed: [number] | [number, string] | null; pullCovered: string[]; pushCovered: string[] };
+type BoardLink = { key: string; store: string; shared: SharedProject[]; cursor?: TaskCursor };
 const seed = { collection: "board_links", schemaVersion: 1, migrationId: "linked-boards-m1", key: (row: BoardLink) => row.key, loadRecords: (): BoardLink[] => [] };
 const cache = new Map<string, SqliteStateCollection<BoardLink>>();
 
@@ -23,6 +27,9 @@ function collection(create: boolean): SqliteStateCollection<BoardLink> | null {
   cache.set(file, opened);
   return opened;
 }
+
+/** Changes whenever a link row does; the linked-project cache keys on it. */
+export function boardLinksRevision(): number { return collection(false)?.revision() ?? -1; }
 
 export function remoteProjects(id: string): SharedProject[] { return collection(false)?.get(`peer:${id}`)?.shared ?? []; }
 export function remoteStore(id: string): string | null { return collection(false)?.get(`peer:${id}`)?.store ?? null; }
@@ -56,8 +63,26 @@ export function updateRemoteProjects(id: string, list: SharedProject[], store: s
 }
 
 export function dropRemoteProjects(id: string): void {
-  const key = `peer:${id}`;
+  const keys = [`peer:${id}`, `tasks:${id}`];
   const opened = collection(false);
-  if (!opened?.get(key)) return;
-  opened.boundedPatch(2, (tx) => { if (tx.get(key)) tx.delete(key); });
+  if (!keys.some((key) => opened?.get(key))) return;
+  opened!.boundedPatch(4, (tx) => { for (const key of keys) if (tx.get(key)) tx.delete(key); });
+}
+
+export function readTaskCursor(id: string, store: string): TaskCursor | null {
+  const row = collection(false)?.get(`tasks:${id}`);
+  return row?.cursor && row.store === store ? row.cursor : null;
+}
+
+/** Writes only a changed cursor. */
+export function writeTaskCursor(id: string, store: string, cursor: TaskCursor): void {
+  const key = `tasks:${id}`;
+  const next: BoardLink = { key, store, shared: [], cursor };
+  const held = collection(false)?.get(key);
+  if (held && JSON.stringify(held) === JSON.stringify(next)) return;
+  collection(true)!.boundedPatch(2, (tx) => {
+    const current = tx.get(key);
+    if (current && JSON.stringify(current) === JSON.stringify(next)) return;
+    tx.put(next);
+  });
 }

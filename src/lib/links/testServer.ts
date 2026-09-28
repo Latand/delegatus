@@ -16,6 +16,13 @@ import * as peers from "@/app/api/links/peers/route";
 import * as peerOne from "@/app/api/links/peers/[id]/route";
 import * as grants from "@/app/api/links/grants/route";
 import * as shared from "@/app/api/links/shared/route";
+import * as tasksRoute from "@/app/api/tasks/route";
+import * as taskOne from "@/app/api/tasks/[id]/route";
+import { ownBoardStoreId } from "./boardLinks";
+import { initializeStateCollections, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
+import { statePath } from "@/lib/configDir";
+import { createTask } from "@/lib/tasks/commands";
+import { loadTasks, mutateTasks, taskFeedSource } from "@/lib/tasks/store";
 
 const dir = process.argv[2]!;
 process.env.LLV_STATE_DIR = dir;
@@ -36,6 +43,12 @@ let releaseSync: (() => void) | null = null;
 const syncBodySizes: number[] = [];
 const syncAnswerSizes: number[] = [];
 const wire: { path: string; request: string; response: string }[] = [];
+/* Every sync body since the last reset, for the tests that scan them all. */
+let captured: { request: string; response: string; read: number; written: number }[] = [];
+const realNow = Date.now.bind(Date);
+let clockOffset = 0;
+Date.now = () => realNow() + clockOffset;
+const json = (response: http.ServerResponse, value: unknown) => { response.setHeader("content-type", "application/json"); response.end(JSON.stringify(value)); };
 const server = http.createServer(async (request, response) => {
   try {
     const chunks: Buffer[] = [];
@@ -44,6 +57,52 @@ const server = http.createServer(async (request, response) => {
     if (path === "/test/metrics") {
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ syncCalls, syncRead, syncWritten, maxSyncBody, maxSyncBodyLast100: Math.max(...syncBodySizes.slice(-100), 0), maxSyncAnswerLast100: Math.max(...syncAnswerSizes.slice(-100), 0) }));
+      return;
+    }
+    const query = new URL(request.url ?? "/", "http://localhost").searchParams;
+    const body = () => JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as Record<string, unknown>;
+    if (path === "/test/clock") { clockOffset = Number(query.get("offset") ?? 0); json(response, { clockOffset }); return; }
+    if (path === "/test/captured") { json(response, captured); if (query.get("reset") === "1") captured = []; return; }
+    if (path === "/test/tasks") { json(response, loadTasks()); return; }
+    if (path === "/test/revision") { json(response, { revision: taskFeedSource()?.revision() ?? 0 }); return; }
+    if (path === "/test/bulk") {
+      // Many tasks in one transaction, as a test fixture.
+      const input = body() as { project: string; count: number; text?: string; details?: string; explicit?: boolean; each?: boolean };
+      const ids: string[] = [];
+      const run = (count: number) => mutateTasks((tasks) => {
+        const next = tasks.slice();
+        for (let i = 0; i < count; i++) {
+          const outcome = createTask(next, { project: input.project, text: input.text ?? `fixture ${ids.length}`, details: input.details, placement: "unplaced", board: "hidden" }, [], { explicit: input.explicit !== false });
+          if (!outcome.ok) throw new Error(outcome.error);
+          next.push(outcome.task);
+          ids.push(outcome.task.id);
+        }
+        return { tasks: next, result: null };
+      });
+      if (input.each) for (let i = 0; i < input.count; i++) run(1); else run(input.count);
+      json(response, { ids });
+      return;
+    }
+    if (path === "/test/raw") {
+      // Write a row in a stored shape of the test's choosing (a pre-M2 row, an oversize link).
+      const input = body() as { id: string; fields: Record<string, unknown>; remove?: string[] };
+      mutateTasks((tasks) => {
+        const index = tasks.findIndex((task) => task.id === input.id);
+        const next = { ...tasks[index]!, ...input.fields } as Record<string, unknown>;
+        for (const key of input.remove ?? []) delete next[key];
+        tasks[index] = next as never;
+        return { tasks, result: null };
+      });
+      json(response, { ok: true });
+      return;
+    }
+    if (path === "/test/new-store") {
+      // A recreated board store: the self row goes, the next read mints another id.
+      const file = statePath("state.sqlite");
+      initializeStateCollections(file, [{ collection: "board_links", schemaVersion: 1, migrationId: "linked-boards-m1", key: (row: { key: string }) => row.key, loadRecords: () => [] }]);
+      const links = new SqliteStateCollection<{ key: string }>(file, { collection: "board_links", schemaVersion: 1, busyMessage: "busy", key: (row) => row.key, decode: (value) => value as { key: string }, clone: structuredClone });
+      links.boundedPatch(2, (tx) => { if (tx.get("self")) tx.delete("self"); });
+      json(response, { store: ownBoardStoreId() });
       return;
     }
     if (path === "/test/fail-sync") {
@@ -134,6 +193,11 @@ const server = http.createServer(async (request, response) => {
       result = method === "DELETE" ? await peerOne.DELETE(req, context) : await peerOne.POST(req, context);
     } else if (path === "/api/links/grants") result = method === "GET" ? grants.GET(req) : grants.DELETE(req);
     else if (path === "/api/links/shared") result = method === "GET" ? shared.GET(req) : method === "PATCH" ? await shared.PATCH(req) : await shared.POST(req);
+    else if (path === "/api/tasks") result = method === "GET" ? await tasksRoute.GET(req) : await tasksRoute.POST(req);
+    else if (path.startsWith("/api/tasks/")) {
+      const context = { params: Promise.resolve({ id: path.slice("/api/tasks/".length) }) };
+      result = method === "DELETE" ? await taskOne.DELETE(req, context) : await taskOne.PATCH(req, context);
+    }
     else result = Response.json({ error: "not found" }, { status: 404 });
     const resultBody = Buffer.from(await result.arrayBuffer());
     if (path.startsWith("/api/peer/v1/") && wire.length < 30) wire.push({ path, request: Buffer.concat(chunks).toString("utf8"), response: resultBody.toString("utf8") });
@@ -148,6 +212,8 @@ const server = http.createServer(async (request, response) => {
     response.writeHead(result.status, Object.fromEntries(result.headers));
     response.end(resultBody, () => {
       if (path === "/api/peer/v1/boards/sync") {
+        captured.push({ request: Buffer.concat(chunks).toString("utf8"), response: resultBody.toString("utf8"), read: request.socket.bytesRead, written: request.socket.bytesWritten });
+        if (captured.length > 5_000) captured.shift();
         syncCalls++;
         syncRead += request.socket.bytesRead;
         syncWritten += request.socket.bytesWritten;

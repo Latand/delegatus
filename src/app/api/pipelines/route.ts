@@ -22,7 +22,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type PipelineApiError = ApiError & {
-  code?: PipelineRepoPreflightErrorCode | SpawnRejectionCode | "orchestrator_seat_revoked" | "orchestrator_seat_authority_unavailable" | "store_busy" | typeof ENGINE_NOT_CONNECTED;
+  code?: PipelineRepoPreflightErrorCode | SpawnRejectionCode | "orchestrator_seat_revoked" | "orchestrator_seat_authority_unavailable" | "store_busy" | typeof ENGINE_NOT_CONNECTED | "TASK_RUNS_ELSEWHERE";
   /** With ENGINE_NOT_CONNECTED: the stage, role and engine (#1876). */
   details?: EngineNotConnectedDetails;
   /** #1766: set when the registry lock refused before anything was admitted, so

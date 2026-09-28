@@ -19,7 +19,10 @@ import {
 } from "@/lib/state/legacyImport";
 import { readStateImport, SqliteStateCollection, type StateImportRecord, type StateImportRow } from "@/lib/state/sqliteStateStore";
 
-import { snapshotTasks, stampTaskRevisions, taskRevision } from "./revision";
+import { snapshotTasks, stampTaskRevisions, taskFingerprint, taskRevision } from "./revision";
+import { linkedContext } from "@/lib/links/linked";
+import { snapshotGroups, stampLinkedRows, type GroupSnapshot, type TaskSyncWrite } from "@/lib/links/taskStamp";
+import { tombstoneCollection, type TombstoneRow } from "@/lib/links/tombstones";
 import { isTaskAttachment } from "./attachments";
 import type { RecentCreate } from "./commands";
 import type { AssignmentState, BoardTask, TaskAssignment, TaskBoardVisibility, TaskPlacement, TaskSource, TaskStatus, TaskOrigin } from "./types";
@@ -29,8 +32,9 @@ export const TASKS_FILE = statePath("tasks.json");
 // Keep untouched legacy rows exactly as stored, including extension fields and
 // omitted placement/revision. Response coercion must not migrate other rows.
 const persistedRows = new WeakMap<BoardTask, unknown>();
-function committedRows(tasks: BoardTask[], before: ReturnType<typeof snapshotTasks>, replacements: boolean): unknown[] {
+function committedRows(tasks: BoardTask[], before: ReturnType<typeof snapshotTasks>, replacements: boolean, sync?: { write: TaskSyncWrite; groups: ReadonlyMap<string, GroupSnapshot> }): unknown[] {
   for (const task of tasks) task.project = canonicalProject(task.project);
+  if (sync) stampLinkedRows(tasks, sync.groups, sync.write, taskFingerprint);
   stampTaskRevisions(tasks, before, replacements);
   return tasks.map(task => {
     const prior = before.get(task.id);
@@ -519,17 +523,37 @@ function fileBody(rows: unknown[], recentCreates: RecentCreate[], migrations: Ta
     under the collection lease and returns the whole next state, or undefined to
     skip the write. Only rows that changed are written; rows that disappeared
     are deleted in the same transaction. */
+/** The linked-boards side of one task write: which projects are linked, and
+    the `task_tombstones` rows this commit writes beside the tasks. Null when
+    nothing is linked, which is every install that never paired. */
+function taskSyncWrite(filePath: string): { write: TaskSyncWrite; companion: NonNullable<ReturnType<typeof tombstoneCollection>>; pending: () => { records: TombstoneRow[]; deleteKeys: string[] } } | null {
+  const context = linkedContext();
+  if (!context.self || context.all.size === 0) return null;
+  const companion = tombstoneCollection(legacyDatabasePath(filePath), true)!;
+  const puts = new Map<string, TombstoneRow>();
+  const removed = new Set<string>();
+  const write: TaskSyncWrite = {
+    linked: context.all, self: context.self, now: Date.now,
+    read: (key) => puts.get(key) ?? (removed.has(key) ? null : companion.get(key)),
+    put: (row) => { puts.set(row.key, row); removed.delete(row.key); },
+    remove: (key) => { puts.delete(key); removed.add(key); },
+  };
+  return { write, companion, pending: () => ({ records: [...puts.values()], deleteKeys: [...removed] }) };
+}
+
 function writeTaskState<R>(
   filePath: string,
-  prepare: (current: TasksFileState) => { next: { rows: unknown[]; recentCreates: RecentCreate[]; migrations: TaskMigrations } | undefined; result: R },
+  prepare: (current: TasksFileState, sync: TaskSyncWrite | null) => { next: { rows: unknown[]; recentCreates: RecentCreate[]; migrations: TaskMigrations } | undefined; result: R },
 ): R {
   const collection = taskCollection(filePath, "write")!;
+  const sync = taskSyncWrite(filePath);
   let result: R;
   collection.patchSync(() => {
     const committed = collection.snapshot();
-    const outcome = prepare(stateFromBody(bodyFromRows(committed)));
+    const outcome = prepare(stateFromBody(bodyFromRows(committed)), sync?.write ?? null);
     result = outcome.result;
-    if (!outcome.next) return { records: [] };
+    const companion = sync?.pending();
+    if (!outcome.next) return { records: [], ...(companion ? { companion } : {}) };
     const records = stateRows(outcome.next.rows, outcome.next.recentCreates, outcome.next.migrations);
     const nextKeys = new Set(records.map(taskRowKey));
     const deleteKeys = committed.map(taskRowKey).filter((key) => !nextKeys.has(key));
@@ -547,23 +571,26 @@ function writeTaskState<R>(
     /* A create that refreshes a receipt appends it as the newest; its row
        moves to the end too, so the receipt cap evicts it last after a reload. */
     const appendKeys = changed.map(taskRowKey).filter((key) => key.startsWith("r:") && byKey.has(key));
-    return { records: changed, deleteKeys, appendKeys };
-  });
+    return { records: changed, deleteKeys, appendKeys, ...(companion ? { companion } : {}) };
+  }, sync ? { companion: sync.companion } : {});
   return result!;
 }
 
+const syncStep = (current: readonly BoardTask[], sync: TaskSyncWrite | null) =>
+  sync ? { write: sync, groups: snapshotGroups(current, sync.linked, taskFingerprint) } : undefined;
+
 export function saveTasks(tasks: BoardTask[], filePath = TASKS_FILE): void {
-  writeTaskState(filePath, ({ tasks: current, recentCreates, migrations }) => {
+  writeTaskState(filePath, ({ tasks: current, recentCreates, migrations }, sync) => {
     /* Preserve the idempotency receipts a tasks-only save (patch/delete/send)
        doesn't touch, so a create replay still resolves after them. */
-    const rows = committedRows(tasks, snapshotTasks(current), false);
+    const rows = committedRows(tasks, snapshotTasks(current), false, syncStep(current, sync));
     return { next: { rows, recentCreates, migrations: migrations ?? {} }, result: undefined };
   });
 }
 
 export function saveTasksFile(state: TasksFileState, filePath = TASKS_FILE): void {
-  writeTaskState(filePath, (persisted) => {
-    const rows = committedRows(state.tasks, snapshotTasks(persisted.tasks), false);
+  writeTaskState(filePath, (persisted, sync) => {
+    const rows = committedRows(state.tasks, snapshotTasks(persisted.tasks), false, syncStep(persisted.tasks, sync));
     return { next: { rows, recentCreates: state.recentCreates, migrations: state.migrations ?? persisted.migrations ?? {} }, result: undefined };
   });
 }
@@ -577,11 +604,24 @@ export function mutateTasks<R>(
   mutate: (tasks: BoardTask[]) => { tasks: BoardTask[] | undefined; result: R },
   filePath = TASKS_FILE,
 ): R {
-  return writeTaskState(filePath, (current) => {
+  return mutateLinkedTasks((tasks) => mutate(tasks), filePath);
+}
+
+/**
+ * {@link mutateTasks} with the linked-boards companion in hand: the sync apply
+ * reads and writes `task_tombstones` rows in the same commit as the tasks.
+ * `sync` is null when nothing is linked.
+ */
+export function mutateLinkedTasks<R>(
+  mutate: (tasks: BoardTask[], sync: TaskSyncWrite | null) => { tasks: BoardTask[] | undefined; result: R },
+  filePath = TASKS_FILE,
+): R {
+  return writeTaskState(filePath, (current, sync) => {
     const before = snapshotTasks(current.tasks);
-    const outcome = mutate(current.tasks);
+    const step = syncStep(current.tasks, sync);
+    const outcome = mutate(current.tasks, sync);
     if (!outcome.tasks) return { next: undefined, result: outcome.result };
-    const rows = committedRows(outcome.tasks, before, true);
+    const rows = committedRows(outcome.tasks, before, true, step);
     return { next: { rows, recentCreates: current.recentCreates, migrations: current.migrations ?? {} }, result: outcome.result };
   });
 }
@@ -596,14 +636,34 @@ export function mutateTasksFile<R>(
   mutate: (state: TasksFileState) => { state: TasksFileState | undefined; result: R },
   filePath = TASKS_FILE,
 ): R {
-  return writeTaskState(filePath, (current) => {
+  return writeTaskState(filePath, (current, sync) => {
     const before = snapshotTasks(current.tasks);
+    const step = syncStep(current.tasks, sync);
     const outcome = mutate(current);
     if (!outcome.state) return { next: undefined, result: outcome.result };
-    const rows = committedRows(outcome.state.tasks, before, true);
+    const rows = committedRows(outcome.state.tasks, before, true, step);
     return {
       next: { rows, recentCreates: outcome.state.recentCreates, migrations: outcome.state.migrations ?? current.migrations ?? {} },
       result: outcome.result,
     };
   });
+}
+
+/** The change log and key order of the task collection, for the linked-boards
+    feed (docs/design/linked-installs.md M.5). Null before the store exists. */
+export function taskFeedSource(filePath = TASKS_FILE) {
+  const collection = taskCollection(filePath, "read");
+  if (!collection) return null;
+  return {
+    database: legacyDatabasePath(filePath),
+    revision: () => collection.revision(),
+    changesAfter: (revision: number, key: string, limit: number) => collection.changesAfter(revision, key, limit),
+    /** Task rows with keys in `(after, through]`, in key order. */
+    keyRange: (after: string, through: string, limit: number) => collection.keyRange(after, through, limit).map((row) => {
+      const task = coerceTask(row);
+      if (!task) throw new Error("invalid persisted task row");
+      return task;
+    }),
+    parse: (valueJson: string) => coerceTask(JSON.parse(valueJson)),
+  };
 }

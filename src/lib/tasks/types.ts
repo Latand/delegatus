@@ -135,6 +135,14 @@ export interface TaskAttachment {
   createdAt: string;
 }
 
+/** The field groups a linked board merges as units (M.3). */
+export const TASK_SYNC_GROUPS = ["text", "status", "look", "place", "links", "machine", "handover"] as const;
+export type TaskSyncGroup = (typeof TASK_SYNC_GROUPS)[number];
+export interface TaskSyncStamps {
+  s: Partial<Record<TaskSyncGroup, string>>;
+  o: string;
+}
+
 export interface BoardTask {
   id: string; // crypto.randomUUID(), server-side
   project: string; // FileEntry.project — the board the card lives on
@@ -197,6 +205,19 @@ export interface BoardTask {
   /** Set while the task's group is hidden from the kanban board. Unlike
       `board`, it holds whatever the group contains. */
   groupHidden?: TaskGroupHidden;
+  /** Linked boards (docs/design/linked-installs.md M.3, M.4): the `installId`
+      of the machine that runs the task. Absent means this machine. */
+  machine?: string;
+  /** One last-write-wins stamp per field group and `o`, the 8-hex prefix of
+      the install whose copy equals this row. Only on tasks that were ever in
+      a linked project. */
+  sync?: TaskSyncStamps;
+  /** A request that the owner move the task to `to` (M.4). */
+  handover?: { to: string };
+  /** Set only by an explicit write (the task routes, the MCP tools, a peer's
+      winning text). A row without it is private: its text crosses as
+      {@link UNTITLED_TASK_TEXT}. Local; never crosses. */
+  chosen?: true;
   createdAt: string;
   updatedAt: string; // bumped by every PATCH
 }

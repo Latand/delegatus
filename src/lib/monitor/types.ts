@@ -558,6 +558,9 @@ export interface SeatTickTaskInput {
       is the discharge, and a retry guard that could not see the movement would
       suppress the reason past the condition that raised it. */
   updatedAt: string | null;
+  /** Set when another linked machine runs the task (docs/design/linked-installs.md
+      M.4): its own orchestrator starts it there, so it is no wake reason here. */
+  runsOn?: string;
 }
 
 export interface SeatTickEventInput {
