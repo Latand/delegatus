@@ -172,7 +172,6 @@ import { taskSeatHolding } from "@/lib/tasks/seatHolding";
 import { recordAuthors, type RecordAuthor } from "@/lib/team";
 import { pipelineWorkLinks, pullRequestSummary, taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
 import { bridgeReportsEnabled, effectiveReportTelegram, mergeOnReviewEnabled, reportHeaderName, type EffectiveReportTelegram } from "@/lib/projects/settings";
-import { parseTelegramChatReference } from "@/lib/telegram/chatReference";
 import { refineTask } from "@/lib/tasks/membership";
 import { isoNow } from "@/lib/tasks/helpers";
 import { refuseBusyBeforeAdmission, StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
@@ -3866,17 +3865,14 @@ async function telegramBotMessages(args: McpToolArgs, control: ViewerControlDepe
 }
 
 async function telegramBotSend(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
-  const reference = required(args, "chat");
-  const parsed = parseTelegramChatReference(reference);
-  const chat = parsed?.chat ?? reference;
   const result = await dispatchControl(control)("/api/telegram/bot/agent", {
     op: "send",
     clientRequestId: requestId(args),
-    chat,
+    chat: required(args, "chat"),
     text: typeof args.text === "string" ? args.text : "",
     ...(args.format === "html" || args.format === "plain" ? { format: args.format } : {}),
     ...(typeof args.replyToMessageId === "number" ? { replyToMessageId: args.replyToMessageId } : {}),
-    ...(typeof args.topicId === "number" ? { topicId: args.topicId } : parsed?.topicId ? { topicId: parsed.topicId } : {}),
+    ...(typeof args.topicId === "number" ? { topicId: args.topicId } : {}),
     ...(args.silent === true ? { silent: true } : {}),
   }, callerCapabilityHeaders()).catch((error: unknown) => {
     /* The route's refusal names its code; which codes a new key may retry is

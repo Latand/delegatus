@@ -105,6 +105,18 @@ test("agent send resolves a public topic link and forwards message_thread_id", a
   expect(transport.callsOf("sendMessage")[0]!.params).toMatchObject({ chat_id: TEAM.id, message_thread_id: 51865 });
 });
 
+test("agent send treats a plain group's message link as a chat without a topic", async () => {
+  await connected();
+  transport.script("getUpdates", ok([{ update_id: 3, my_chat_member: { chat: { ...TEAM, username: "plain_group", is_forum: false }, date: 3, new_chat_member: { status: "administrator" } } }]));
+  await service.pollOnce(new AbortController().signal);
+  service.setChat(String(TEAM.id), "team-reports", true);
+  transport.script("sendMessage", ok({ message_id: 9, date: 4 }));
+  const sent = await agentRoute.POST(request("/api/telegram/bot/agent", { method: "POST", headers: AGENT, body: { op: "send", clientRequestId: "plain-link", chat: "t.me/plain_group/42", text: "report" } }));
+  expect(sent.status).toBe(200);
+  expect(transport.callsOf("sendMessage")[0]!.params).toMatchObject({ chat_id: TEAM.id });
+  expect(transport.callsOf("sendMessage")[0]!.params).not.toHaveProperty("message_thread_id");
+});
+
 test("an agent capability is refused every operator action, so no agent widens its own allowlist", async () => {
   await connected();
   for (const body of [
