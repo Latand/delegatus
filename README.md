@@ -92,7 +92,7 @@ the orchestrator can also start single agents, Copilot included. Delegatus
 shows every agent conversation on your machine as a chat, including the ones
 it did not start.
 
-![A pipeline opened from its task: Build, Review and Verify stages with the fail edge from Review back to Build, and the builder's and the reviewer's conversations side by side](docs/media/readme/pipeline.svg)
+![A pipeline opened from its task: Build, Review and Verify stages, with Review's loop back to Build folded under it, and the builder's and the reviewer's conversations side by side](docs/media/readme/pipeline.svg)
 
 ## How it works
 
@@ -121,7 +121,7 @@ task's card up to date. Delegatus wakes it whenever something is owed: a new
 pipeline event, a stage waiting on a decision, a task nobody started. It
 answers in its chat and can move your screen to the card where something
 landed. A decision it cannot make alone reaches you in its chat and on the
-board's **Needs you** counter. While it is busy with a turn, **Ask in
+board's **Waiting** counter. While it is busy with a turn, **Ask in
 parallel** in its composer sends a side question to a copy of it, which
 answers in its own block inside the same chat.
 [docs/orchestrator.md](docs/orchestrator.md) covers the rest.
@@ -154,7 +154,7 @@ and Ctrl+Shift+Z redoes them.
 When a task needs you, the foot of its card says why. It can be a question
 from an agent, a plan to approve, a permission prompt, a message that did not
 arrive, or a stage waiting on your decision. ✓ clears it until something new
-comes up. **Needs you** at the top of the board counts what waits across all
+comes up. **Waiting** at the top of the board counts what waits across all
 projects. Its panel lists each item by project, with the waiting agent's
 role, and lets you dismiss an item or answer a permission prompt in place.
 
@@ -195,7 +195,7 @@ orchestrator tells you it is ready. Turn it on and Delegatus merges each
 pipeline whose reviews passed, one at a time per repository, once every
 check on the head has finished green. It updates a branch that fell behind
 and leaves conflicts to you. The pipeline shows "waiting for checks", "merge
-stopped" or "merged". A stopped merge appears under **Needs you** with **Try
+stopped" or "merged". A stopped merge appears under **Waiting** with **Try
 the merge again**.
 
 Mark a pipeline **Finishes the task** and its task moves to Done when the

@@ -59,10 +59,10 @@ guarantees for the 1.x series.
   topic link posts into that forum topic. Orchestrators can also use your
   Telegram connector when it is connected ([#2236], [#2237], [#2242],
   [#2249], [#2260], [#2303]).
-- **The Needs you panel.** The header shows one quiet «Needs you» count for
-  every project, and its panel groups the waiting items by project, with the
-  project on screen first. It docks beside the board where there is room and
-  floats otherwise. Each row names the waiting agent's role in that role's
+- **One panel for what waits on you.** The header shows one quiet
+  **Waiting** count for every project, in place of the old pill with Next.
+  Its panel groups the waiting items by project, with the project on screen
+  first. It docks beside the board where there is room and floats otherwise. Each row names the waiting agent's role in that role's
   colour, how long it has waited and why, with **Dismiss** on every row and
   project, and **Allow once** / **Deny** inline on a permission prompt. An
   item whose cause is gone leaves by itself. The orchestrator's open
