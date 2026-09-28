@@ -1161,6 +1161,8 @@ export const en = {
   "telegram.bot.testSent": "Test post sent to {title}.",
   "telegram.bot.testPostText": "Delegatus: test post. Orchestrator reports can reach this chat.",
   "telegram.bot.projectsTitle": "Project reports",
+  "telegram.reportLink": "Chat or topic link, @username or ID",
+  "telegram.reportTopic": "topic {id}",
   "telegram.bot.projectsHint": "Each project with an orchestrator, and the chat its reports also go to.",
   "telegram.bot.projectsNone": "No project has an orchestrator yet.",
   "telegram.bot.projectLogOnly": "Log only",

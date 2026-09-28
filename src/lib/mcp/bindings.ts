@@ -2834,7 +2834,8 @@ async function bridgeReport(
     const telegram = existing.telegram && existing.telegram.state === "failed" && existing.origin?.kind === "manager"
       && origin.kind === "manager" && isRetryableReportSend(existing.telegram.code)
       && project !== null && effectiveReportTelegram(project)?.chat === existing.telegram.chat
-      ? await postReportTelegram(existing.id, existing.telegram.chat, existing.telegram.html, `bridge-report:${existing.id}:r${existing.telegram.attempts}`, dependencies, control)
+      && effectiveReportTelegram(project)?.topicId === existing.telegram.topicId
+      ? await postReportTelegram(existing.id, existing.telegram.chat, existing.telegram.html, existing.telegram.topicId, `bridge-report:${existing.id}:r${existing.telegram.attempts}`, dependencies, control)
       : existing.telegram ?? null;
     /* `alreadyRecorded`, because the tool service's envelope owns `replayed`
        (a replay of the same clientRequestId). */
@@ -2850,7 +2851,7 @@ async function bridgeReport(
   const locale = dependencies.operatorLocale ? dependencies.operatorLocale() : operatorLocale();
   const warnings: string[] = [];
   let storedBody: string;
-  let telegramCopy: { chat: string; html: string } | null = null;
+  let telegramCopy: { chat: string; html: string; topicId?: number } | null = null;
   if (origin.kind === "manager") {
     /* Only a chat the operator chose for the project is posted to (§5.6). */
     const destination = project ? effectiveReportTelegram(project) : null;
@@ -2884,7 +2885,7 @@ async function bridgeReport(
     if (language) warnings.push(language);
     storedBody = renderPlain(rendered.cut);
     if (destination) {
-      telegramCopy = { chat: destination.chat, html: renderTelegram(rendered.cut, knownPullRequests(project!)) };
+      telegramCopy = { chat: destination.chat, html: renderTelegram(rendered.cut, knownPullRequests(project!)), ...(destination.topicId ? { topicId: destination.topicId } : {}) };
     }
   } else {
     /* The visible attribution is SERVER-composed and leads the body, so
@@ -2912,7 +2913,7 @@ async function bridgeReport(
      to have delivered a second report. */
   if (!appended) return { recorded: false, alreadyRecorded: true };
   const telegram = appended.telegram
-    ? await postReportTelegram(appended.id, appended.telegram.chat, appended.telegram.html, `bridge-report:${appended.id}`, dependencies, control)
+    ? await postReportTelegram(appended.id, appended.telegram.chat, appended.telegram.html, appended.telegram.topicId, `bridge-report:${appended.id}`, dependencies, control)
     : null;
   return {
     recorded: true,
@@ -2969,6 +2970,7 @@ async function postReportTelegram(
   reportId: string,
   chat: string,
   html: string,
+  topicId: number | undefined,
   clientRequestId: string,
   dependencies: ViewerMcpDomainDependencies,
   control: ViewerControlDependencies | null,
@@ -2976,7 +2978,7 @@ async function postReportTelegram(
   const send = dependencies.sendReportTelegram ?? ((input: ReportTelegramSend) => productionSendReportTelegram(input, control));
   let outcome: ReportTelegramSendOutcome;
   try {
-    outcome = await send({ chat, html, clientRequestId });
+    outcome = await send({ chat, html, ...(topicId ? { topicId } : {}), clientRequestId });
   } catch (error) {
     outcome = { ok: false, code: "telegram_failed", message: error instanceof Error ? error.message : String(error) };
   }
@@ -2989,6 +2991,7 @@ async function postReportTelegram(
 export interface ReportTelegramSend {
   chat: string;
   html: string;
+  topicId?: number;
   clientRequestId: string;
 }
 
@@ -3003,6 +3006,7 @@ async function productionSendReportTelegram(input: ReportTelegramSend, control: 
       op: "send",
       clientRequestId: input.clientRequestId,
       chat: input.chat,
+      ...(input.topicId ? { topicId: input.topicId } : {}),
       text: input.html,
       format: "html",
       silent: true,

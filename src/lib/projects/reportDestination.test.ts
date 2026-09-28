@@ -53,6 +53,12 @@ test("a chosen chat is the destination and keeps its own name", () => {
   expect(effectiveReportTelegram(PROJECT)).toEqual({ chat: "design-lounge", name: "Atlas", source: "chosen" });
 });
 
+test("a topic survives persistence while legacy rows without topic still load", () => {
+  setReportTelegram(PROJECT, { chat: "team-reports", name: "Widgets", topicId: 51865 }, "operator");
+  resetProjectSettingsForTests();
+  expect(effectiveReportTelegram(PROJECT)).toEqual({ chat: "team-reports", name: "Widgets", topicId: 51865, source: "chosen" });
+});
+
 /* An explicit record written before this change reads the same. */
 test("a record stored by the earlier release keeps working unchanged", () => {
   fs.writeFileSync(path.join(SANDBOX, "project-settings.json"), JSON.stringify({ schemaVersion: 1, projects: {

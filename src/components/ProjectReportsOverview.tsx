@@ -69,6 +69,7 @@ function ProjectLine({ line, postable, onSaved }: {
   const stored = line.reportTelegram?.chat ?? LOG_ONLY;
   const [picked, setPicked] = useState<string | null>(null);
   const [name, setName] = useState("");
+  const [link, setLink] = useState("");
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState(false);
   const value = picked ?? stored;
@@ -77,18 +78,19 @@ function ProjectLine({ line, postable, onSaved }: {
   const refused = stored !== LOG_ONLY && !postable.some((chat) => chat.alias === stored) ? stored : null;
   const needsName = picked !== null && picked !== LOG_ONLY && !line.reportName;
 
-  const write = async (chat: string, reportName: string | null) => {
+  const write = async (chat: string, reportName: string | null, pastedLink?: string) => {
     setSaving(true);
     setFailed(false);
     try {
       const response = await fetch("/api/projects/settings", {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ project: line.project, reportTelegram: chat === LOG_ONLY ? null : { chat, name: reportName } }),
+        body: JSON.stringify({ project: line.project, reportTelegram: pastedLink ? { link: pastedLink, name: reportName } : chat === LOG_ONLY ? null : { chat, name: reportName } }),
       });
       if (!response.ok) throw new Error(String(response.status));
       setPicked(null);
       setName("");
+      setLink("");
       await onSaved();
     } catch {
       setFailed(true);
@@ -116,10 +118,17 @@ function ProjectLine({ line, postable, onSaved }: {
           className="h-11 min-w-0 max-w-[55%] rounded-[8px] border border-border bg-canvas px-1.5 text-[11.5px] outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-8"
         >
           <option value={LOG_ONLY}>{t("telegram.bot.projectLogOnly")}</option>
-          {refused ? <option value={refused} disabled>{refused}</option> : null}
-          {postable.map((chat) => <option key={chat.alias} value={chat.alias!}>{chat.title}</option>)}
+          {refused ? <option value={refused} disabled>{refused}{line.reportTelegram?.chat && line.reportTelegram.topicId ? ` · ${t("telegram.reportTopic", { id: line.reportTelegram.topicId })}` : ""}</option> : null}
+          {postable.map((chat) => <option key={chat.alias} value={chat.alias!}>{chat.title}{stored === chat.alias && line.reportTelegram?.chat && line.reportTelegram.topicId ? ` · ${t("telegram.reportTopic", { id: line.reportTelegram.topicId })}` : ""}</option>)}
         </select>
       </div>
+      <form className="flex min-w-0 flex-wrap gap-1.5" onSubmit={(event) => { event.preventDefault(); if (link.trim() && (line.reportName || name.trim())) void write(stored, (name.trim() || line.reportName), link.trim()); }}>
+        <input type="text" value={link} onChange={(event) => setLink(event.target.value)} aria-label={t("telegram.reportLink")}
+          placeholder={t("telegram.reportLink")} className="h-11 min-w-0 flex-1 basis-[180px] rounded-[8px] border border-border bg-canvas px-2 text-[11.5px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-8" />
+        {link.trim() && !line.reportName ? <input type="text" value={name} onChange={(event) => setName(event.target.value)} placeholder={t("onboarding.telegram.name")}
+          aria-label={t("telegram.bot.projectNameAria", { project: line.label })} maxLength={60} className="h-11 min-w-0 flex-1 basis-[120px] rounded-[8px] border border-border bg-canvas px-2 text-[11.5px] sm:h-8" /> : null}
+        <button type="submit" disabled={saving || !link.trim() || !(line.reportName || name.trim())} className="h-11 shrink-0 rounded-[8px] border border-border bg-canvas px-2.5 text-[11px] font-semibold disabled:opacity-45 sm:h-8">{t("telegram.bot.projectSave")}</button>
+      </form>
       {needsName ? (
         <form
           className="flex min-w-0 items-center gap-1.5"

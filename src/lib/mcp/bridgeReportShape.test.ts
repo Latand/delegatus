@@ -77,7 +77,7 @@ async function allowLoungeChat() {
 /** What the Viewer's bot agent route does with the binding's post. */
 async function sendThroughBot(input: ReportTelegramSend) {
   try {
-    const answer = await bot.send({ conversationId: MANAGER.conversationId, clientRequestId: input.clientRequestId, chat: input.chat, text: input.html, format: "html", silent: true });
+    const answer = await bot.send({ conversationId: MANAGER.conversationId, clientRequestId: input.clientRequestId, chat: input.chat, text: input.html, topicId: input.topicId, format: "html", silent: true });
     return { ok: true as const, messageIds: answer.messageIds };
   } catch (error) {
     if (error instanceof TelegramBotError) return { ok: false as const, code: error.code };
@@ -301,6 +301,18 @@ test("a manager report posts once to the project's chat, silently and as HTML, t
 
   const replay = await file({ key: "digest-post", summary: "different words" });
   expect(replay.alreadyRecorded).toBe(true);
+  expect(transport.callsOf("sendMessage")).toHaveLength(1);
+});
+
+test("a manager report carries its topic into message_thread_id and does not retry into a changed topic", async () => {
+  await connectTeamChat();
+  setReportTelegram(PROJECT, { chat: "team-reports", name: "Delegatus", topicId: 51865 }, "operator");
+  transport.script("sendMessage", refused(429, "Too Many Requests", { retryAfterSeconds: 3 }));
+  await file({ key: "topic-retry", summary: "One lane running." });
+  expect(transport.callsOf("sendMessage")[0]!.params).toMatchObject({ chat_id: TEAM.id, message_thread_id: 51865 });
+  expect(readBridgeReportLog().reports[0]!.telegram).toMatchObject({ topicId: 51865, state: "failed" });
+  setReportTelegram(PROJECT, { chat: "team-reports", name: "Delegatus", topicId: 99 }, "operator");
+  await file({ key: "topic-retry", summary: "One lane running." });
   expect(transport.callsOf("sendMessage")).toHaveLength(1);
 });
 

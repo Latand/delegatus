@@ -28,13 +28,13 @@ import type { GuideProject } from "./ProjectStep";
 
 const LOG_ONLY = "\u0000log-only";
 
-export type TelegramReportsOutcome = { chat: string; name: string } | null;
+export type TelegramReportsOutcome = { chat: string; name: string; topicId?: number } | { link: string; name: string } | null;
 
 type ProjectReportSettings = {
   /** The operator's choice: a chat, "Log only" (`chat: null`), or null when never chosen. */
-  reportTelegram: { chat: string | null; name?: string } | null;
+  reportTelegram: { chat: string | null; name?: string; topicId?: number } | null;
   /** Where reports go now besides the log: the chosen chat, else null. */
-  reportDestination: { chat: string; name: string; source: "chosen" } | null;
+  reportDestination: { chat: string; name: string; topicId?: number; source: "chosen" } | null;
   reportNameSuggestion: string | null;
 };
 
@@ -74,6 +74,7 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
      is in use now. */
   const [picked, setPicked] = useState<string | null>(null);
   const [typedName, setTypedName] = useState<string | null>(null);
+  const [link, setLink] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<TelegramReportsOutcome | undefined>(undefined);
   const [failed, setFailed] = useState(false);
@@ -111,14 +112,15 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
   /* The name in the field is the chosen chat's, else GitHub's to suggest. */
   const name = typedName ?? (settings?.reportTelegram?.name || settings?.reportNameSuggestion || "");
   const chatChosen = choice !== null && choice !== LOG_ONLY;
-  const nameMissing = chatChosen && name.trim() === "";
-  const canSave = choice !== null && choice !== refused && !nameMissing && !saving;
+  const nameMissing = (chatChosen || link.trim() !== "") && name.trim() === "";
+  const canSave = (link.trim() !== "" || choice !== null && choice !== refused) && !nameMissing && !saving;
 
   const save = async () => {
     if (!canSave) return;
     setSaving(true);
     setFailed(false);
-    const outcome: TelegramReportsOutcome = chatChosen ? { chat: choice!, name: name.trim() } : null;
+    const outcome: TelegramReportsOutcome = link.trim() ? { link: link.trim(), name: name.trim() }
+      : chatChosen ? { chat: choice!, name: name.trim(), ...(choice === inUse && settings?.reportTelegram?.topicId ? { topicId: settings.reportTelegram.topicId } : {}) } : null;
     try {
       const response = await fetch("/api/projects/settings", {
         method: "PUT",
@@ -126,9 +128,11 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
         body: JSON.stringify({ project: project.project, reportTelegram: outcome }),
       });
       if (!response.ok) throw new Error(String(response.status));
-      setSettings(settingsOf(await response.json().catch(() => ({})) as Partial<ProjectReportSettings>));
-      setPicked(chatChosen ? choice : LOG_ONLY);
-      setSaved(outcome);
+      const updated = settingsOf(await response.json().catch(() => ({})) as Partial<ProjectReportSettings>);
+      setSettings(updated);
+      setLink("");
+      setPicked(updated.reportTelegram?.chat ?? LOG_ONLY);
+      setSaved(updated.reportTelegram?.chat ? { chat: updated.reportTelegram.chat, name: updated.reportTelegram.name ?? name.trim(), topicId: updated.reportTelegram.topicId } : null);
       onSaved(outcome);
     } catch {
       setFailed(true);
@@ -149,7 +153,7 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
         aria-checked={on}
         disabled={refusing}
         data-onboarding-report-chat={value === LOG_ONLY ? "log-only" : value}
-        onClick={() => { setPicked(value); setSaved(undefined); }}
+        onClick={() => { setPicked(value); setLink(""); setSaved(undefined); }}
         className={`flex w-full items-center gap-3 rounded-[10px] border px-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed max-sm:py-3 ${on ? "border-accent/50 bg-accent-soft/50" : "border-border bg-card hover:bg-sunken"}`}
       >
         <span aria-hidden className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border-2 ${on ? "border-accent" : "border-strong"}`}>
@@ -196,10 +200,13 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
             <div className="text-label font-semibold uppercase tracking-[0.06em] text-muted">{t("onboarding.telegram.choose")}</div>
             {notReporting ? <p data-onboarding-report-not-reporting="" className="text-ui leading-snug text-secondary">{t("onboarding.telegram.notReporting")}</p> : null}
             <div role="radiogroup" aria-label={t("onboarding.telegram.choose")} className="flex flex-col gap-2">
-              {refused ? radio(refused, refusedChat?.title ?? refused, refused) : null}
-              {postable.map((chat) => radio(chat.alias!, chat.title, chat.alias))}
+              {refused ? radio(refused, `${refusedChat?.title ?? refused}${settings?.reportTelegram?.topicId ? ` · ${t("telegram.reportTopic", { id: settings.reportTelegram.topicId })}` : ""}`, refused) : null}
+              {postable.map((chat) => radio(chat.alias!, `${chat.title}${inUse === chat.alias && settings?.reportTelegram?.topicId ? ` · ${t("telegram.reportTopic", { id: settings.reportTelegram.topicId })}` : ""}`, chat.alias))}
               {radio(LOG_ONLY, t("onboarding.telegram.logOnly"), null)}
             </div>
+            <input type="text" value={link} onChange={(event) => { setLink(event.target.value); setSaved(undefined); }}
+              aria-label={t("telegram.reportLink")} placeholder={t("telegram.reportLink")}
+              className="h-11 w-full min-w-0 rounded-[8px] border border-border bg-card px-2 text-body text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" />
           </div>
           {members.length === 0 ? <p className="text-ui text-muted">{t("onboarding.telegram.noChats")}</p> : null}
           <details data-onboarding-report-add="" open={postable.length === 0 ? true : undefined} className="group max-w-[480px]">
@@ -243,7 +250,7 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
       {failed ? <p role="alert" className="text-ui font-semibold text-danger">{t("onboarding.telegram.failed")}</p> : null}
       {saved !== undefined ? (
         <p role="status" data-onboarding-report-saved="" className="text-ui font-semibold text-success">
-          {saved ? t("onboarding.telegram.savedChat", { chat: saved.chat }) : t("onboarding.telegram.savedLog")}
+          {saved && "chat" in saved ? t("onboarding.telegram.savedChat", { chat: `${saved.chat}${saved.topicId ? ` · ${t("telegram.reportTopic", { id: saved.topicId })}` : ""}` }) : t("onboarding.telegram.savedLog")}
         </p>
       ) : null}
 
