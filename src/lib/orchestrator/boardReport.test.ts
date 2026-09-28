@@ -201,23 +201,31 @@ test("sections 1 to 3: decisions, permission requests, review budgets, merged wo
   expect(report.counts).toMatchObject({ decisions: 2, ready: 2, stuck: 3, running: 0 });
 });
 
-test("section 5: an assigned task nothing started, one whose agent ended, and a blocked task", () => {
+test("section 5: an assigned task nothing started, one whose agent ended, a blocked task and queued inbox work", () => {
   const report = composeBoardReport(facts({
     lanes: [lane("old", { state: "completed", open: false, completed: true, movedAt: minutesAgo(300) }), lane("live")],
     tasks: [
+      task("queued", { status: "inbox", createdAt: minutesAgo(90) }),
       task("never", { updatedAt: minutesAgo(120) }),
       task("ended", { laneIds: ["old", "missing"], updatedAt: minutesAgo(200) }),
       task("blocked", { status: "blocked", updatedAt: minutesAgo(60 * 30) }),
       task("busy", { laneIds: ["live"] }),
-      task("inbox", { status: "inbox" }),
+      task("inbox-busy", { status: "inbox", laneIds: ["live"] }),
+      task("inbox-notice", { status: "inbox", title: "A Delegatus notice", noticeRef: "ref-notice" }),
     ],
   }));
-  expect(report.text).toContain("5. Tasks with nothing running (3)");
+  expect(report.text).toContain("5. Tasks with nothing running (4)");
   expect(report.text).toContain("- task never [assigned] «Task never», idle 2 h: never started");
   expect(report.text).toContain("- task ended [assigned] «Task ended», idle 3 h: its last agent ended 5 h ago");
   expect(report.text).toContain("- task blocked [blocked] «Task blocked», blocked 30 h");
+  /* Inbox work follows the assigned and blocked rows, so the byte bound cuts it first. */
+  expect(report.text).toContain("- task blocked [blocked] «Task blocked», blocked 30 h\n- task queued [inbox] «Task queued», waiting 1 h");
   expect(report.text).not.toContain("task busy");
-  expect(report.text).not.toContain("task inbox");
+  expect(report.text).not.toContain("task inbox-busy");
+  /* A notice card is named on the Notices line and nowhere else. */
+  expect(report.text).toContain("Notices on the board: «A Delegatus notice».");
+  expect(report.text).not.toContain("task inbox-notice");
+  expect(report.text.split("A Delegatus notice").length - 1).toBe(1);
 });
 
 test("each close rule fires on its evidence and holds back without it", () => {
@@ -300,7 +308,7 @@ test("task groups the operator hid are counted in one line and never listed", ()
   expect(report.text).not.toContain("hidden-2");
 });
 
-test("a 150-task board stays within 6 000 bytes and keeps sections 1 to 3 whole", () => {
+test("a board of 150 assigned and 50 inbox tasks stays within 6 000 bytes and keeps sections 1 to 3 whole", () => {
   const lanes = Array.from({ length: 30 }, (_, index) => lane(`run${index}`, { title: `A long running lane title number ${index} that goes on and on for a while` }));
   const tasks = Array.from({ length: 150 }, (_, index) => task(`task-${String(index).padStart(3, "0")}-${"x".repeat(24)}`, {
     title: `An assigned task that nothing started, number ${index}, with a title long enough to be cut`,
@@ -308,13 +316,17 @@ test("a 150-task board stays within 6 000 bytes and keeps sections 1 to 3 whole"
     updatedAt: minutesAgo(index % 3 === 0 ? 30 * 60 : 60),
     conversationIds: index % 3 === 0 ? [WORKER] : [],
   }));
+  const inbox = Array.from({ length: 50 }, (_, index) => task(`inbox-${String(index).padStart(3, "0")}-${"y".repeat(24)}`, {
+    status: "inbox",
+    title: `A queued request nobody started yet, number ${index}, with a title long enough to be cut`,
+  }));
   const decisions = Array.from({ length: 8 }, (_, index) => lane(`dec${index}`, { state: "needs_decision", question: "q".repeat(300) }));
   const stalls = Array.from({ length: 8 }, (_, index) => agent({ conversationId: `conversation_s${index}`, lifecycle: "stalled", reason: "host_alive_transcript_silent", laneId: `run${index}`, stageId: "build", lastWords: "w".repeat(400) }));
   const pullRequests = Array.from({ length: 20 }, (_, index) => openPr(1000 + index, `feature/other-${index}`, "p".repeat(120)));
   const ranking = rankOpenIssues(Array.from({ length: 100 }, (_, index) => issue(2000 + index, { labels: index < 20 ? ["P1"] : [], title: "i".repeat(150) })), { totalCount: 300, onBoard: new Set() });
   const report = composeBoardReport(facts({
     lanes: [...lanes, ...decisions],
-    tasks,
+    tasks: [...tasks, ...inbox],
     agents: stalls,
     pullRequests: { ok: true, pullRequests },
     github: { kind: "ranked", ranking },
@@ -378,8 +390,15 @@ test("a source that failed is named in the header and its sections say unavailab
 test("with GitHub absent: an empty board composes to empty, and a busy one says GitHub is not configured and runs no issue lines", () => {
   const empty = composeBoardReport(facts());
   expect(empty.empty).toBe(true);
-  const quiet = composeBoardReport(facts({ tasks: [task("t-inbox", { status: "inbox" })] }));
+  /* A notice card alone is not work: nothing is sent. */
+  const quiet = composeBoardReport(facts({ tasks: [task("t-notice", { status: "inbox", noticeRef: "ref-notice" })] }));
   expect(quiet.empty).toBe(true);
+  /* A board holding only queued inbox work is not empty: the successor is told of it. */
+  const queued = composeBoardReport(facts({ tasks: [task("t-inbox", { status: "inbox", title: "Operator's queued request" })] }));
+  expect(queued.empty).toBe(false);
+  expect(queued.counts.idle).toBe(1);
+  expect(queued.text).toContain("5. Tasks with nothing running (1)\n- task t-inbox [inbox] «Operator's queued request», waiting 2 days");
+  expect(queued.text).toContain("8. GitHub: not configured for this project.");
   const busy = composeBoardReport(facts({ lanes: [lane("run1")] }));
   expect(busy.empty).toBe(false);
   expect(busy.text).toContain("8. GitHub: not configured for this project.");

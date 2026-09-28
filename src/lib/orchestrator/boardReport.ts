@@ -416,8 +416,11 @@ export function composeBoardReport(facts: BoardReportFacts): BoardReport {
     running.push(row(`lane ${lane.id} ${title(lane.title)}${at}${paused}${attempt}, ${age(now - Date.parse(lane.attemptStartedAt ?? lane.createdAt))}`));
   }
 
-  /* 5. Tasks with nothing running. */
+  /* 5. Tasks with nothing running. Inbox work the operator queued and nobody
+     started follows the assigned and blocked rows, so the byte bound cuts it
+     first; a notice card is named only on the header's Notices line. */
   const idle: string[] = [];
+  const queued: string[] = [];
   for (const task of visibleTasks) {
     if (candidateTasks.has(task.id)) continue;
     const taskLanes = task.laneIds.map((id) => lanes.get(id)).filter((lane): lane is ReportLane => Boolean(lane));
@@ -425,14 +428,18 @@ export function composeBoardReport(facts: BoardReportFacts): BoardReport {
       idle.push(row(`task ${task.id} [blocked] ${title(task.title)}, blocked ${age(now - Date.parse(task.updatedAt))}`));
       continue;
     }
-    if (task.status !== "assigned") continue;
     if (taskLanes.some((lane) => lane.open) || task.conversationIds.some((id) => live.has(id))) continue;
+    if (task.status === "inbox") {
+      if (!task.noticeRef) queued.push(row(`task ${task.id} [inbox] ${title(task.title)}, waiting ${age(now - Date.parse(task.createdAt))}`));
+      continue;
+    }
     const ended = taskLanes.reduce<string | null>((held, lane) => (!held || Date.parse(lane.movedAt) > Date.parse(held) ? lane.movedAt : held), null);
     const why = task.conversationIds.length === 0 && task.laneIds.length === 0
       ? "never started"
       : `its last agent ended${ended ? ` ${age(now - Date.parse(ended))} ago` : ""}`;
     idle.push(row(`task ${task.id} [assigned] ${title(task.title)}, idle ${age(now - Date.parse(task.updatedAt))}: ${why}`));
   }
+  idle.push(...queued);
 
   /* 7. Open pull requests no lane here carries. */
   const orphanRequests = (pullRequests ?? [])
