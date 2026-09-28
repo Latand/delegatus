@@ -303,6 +303,25 @@
     view: null,
   }));
   const hero = lives.find((live) => live.id === "hero");
+  let panAnimation = 0;
+  function stopPanMomentum() {
+    cancelAnimationFrame(panAnimation);
+    panAnimation = 0;
+  }
+  function coastPan(velocity) {
+    if (!Number.isFinite(velocity) || Math.abs(velocity) < 0.35) return;
+    stopPanMomentum();
+    let last = performance.now();
+    function tick(now) {
+      const elapsed = Math.min(32, now - last);
+      last = now;
+      window.scrollBy(0, velocity * elapsed);
+      velocity *= Math.exp(-elapsed / 180);
+      if (Math.abs(velocity) >= 0.05) panAnimation = requestAnimationFrame(tick);
+      else panAnimation = 0;
+    }
+    panAnimation = requestAnimationFrame(tick);
+  }
   let heroManual = false;
   const heroViewFor = (step) => ((hero.fixed || phoneQuery.matches) ? HERO_PHONE_VIEW_FOR_STEP : HERO_VIEW_FOR_STEP)[step];
 
@@ -477,8 +496,16 @@
     const live = lives.find((entry) => entry.iframe && entry.iframe.contentWindow === event.source);
     const data = event.data;
     if (!live || !data || typeof data.type !== "string") return;
+    if (data.type === "dlg:vertical-start") {
+      if (live.phone) stopPanMomentum();
+      return;
+    }
     if (data.type === "dlg:vertical-pan") {
       if (live.phone && Number.isFinite(data.deltaY)) window.scrollBy(0, Math.max(-100, Math.min(100, data.deltaY)));
+      return;
+    }
+    if (data.type === "dlg:vertical-end") {
+      if (live.phone) coastPan(data.velocity);
       return;
     }
     if (data.type === "dlg:view-error") {

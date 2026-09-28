@@ -126,7 +126,7 @@ async function checkRequest(lang: Locale, viewport: (typeof VIEWPORTS)[number], 
    the outer page moves in the finger's expected direction. */
 async function checkSwipe() {
   if (swipeCheck !== "before" && swipeCheck !== "after") throw new Error("use --check-swipe=before or --check-swipe=after");
-  const rows: { lang: Locale; surface: string; direction: string; before: number; after: number; delta: number }[] = [];
+  const rows: { lang: Locale; surface: string; direction: string; before: number; after: number; delta: number; available: number }[] = [];
   const surfaces = [
     ["install-prompt", '.hero [data-install="hero"] .prompt pre'],
     ["hero-composer", ".live-hero iframe"],
@@ -147,6 +147,16 @@ async function checkSwipe() {
         await frameOf(page, selector.replace(" iframe", ""));
       }
       for (const direction of ["down", "up"] as const) {
+        if (swipeCheck === "after" && (surface.endsWith("demo") || surface === "hero-composer")) {
+          const frame = await frameOf(page, selector.replace(" iframe", ""));
+          await frame.evaluate((direction) => {
+            for (const node of document.querySelectorAll<HTMLElement>("*")) {
+              if (/auto|scroll/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight + 1) {
+                node.scrollTop = direction === "down" ? node.scrollHeight : 0;
+              }
+            }
+          }, direction);
+        }
         const element = page.locator(selector).first();
         await element.scrollIntoViewIfNeeded();
         let point = await page.evaluate((selector) => {
@@ -168,7 +178,7 @@ async function checkSwipe() {
           point = { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) };
         }
         await settle(page, 250);
-        const before = await page.evaluate(() => scrollY);
+        const { before, available } = await page.evaluate((direction) => ({ before: scrollY, available: direction === "down" ? document.documentElement.scrollHeight - innerHeight - scrollY : scrollY }), direction);
         const travel = direction === "down" ? -300 : 300;
         await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: point.x, y: point.y, id: 1 }] });
         for (let step = 1; step <= 12; step += 1) {
@@ -178,7 +188,7 @@ async function checkSwipe() {
         await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
         await settle(page, 450);
         const after = await page.evaluate(() => scrollY);
-        rows.push({ lang, surface, direction, before, after, delta: after - before });
+        rows.push({ lang, surface, direction, before, after, delta: after - before, available });
       }
     }
     if (swipeCheck === "after") {
@@ -186,6 +196,53 @@ async function checkSwipe() {
       const composer = hero.locator("textarea").first();
       await composer.fill("A visitor can still type in this field");
       if (await composer.inputValue() !== "A visitor can still type in this field") throw new Error(`${lang}: composer did not accept typing`);
+
+      // A short flick must keep moving after release, unlike an immediate scrollBy.
+      await page.locator(".live-hero").scrollIntoViewIfNeeded();
+      await hero.evaluate(() => {
+        for (const node of document.querySelectorAll<HTMLElement>("*")) {
+          if (/auto|scroll/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight + 1) node.scrollTop = node.scrollHeight;
+        }
+      });
+      const heroBox = await page.locator(".live-hero iframe").boundingBox();
+      if (!heroBox) throw new Error("hero frame has no box");
+      const flickX = Math.round(heroBox.x + heroBox.width / 2);
+      const flickY = Math.round(heroBox.y + Math.min(heroBox.height / 2, 400));
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: flickX, y: flickY, id: 2 }] });
+      for (let step = 1; step <= 4; step += 1) {
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: flickX, y: flickY - step * 40, id: 2 }] });
+        await settle(page, 10);
+      }
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await settle(page, 25);
+      const atRelease = await page.evaluate(() => scrollY);
+      await settle(page, 300);
+      const afterCoast = await page.evaluate(() => scrollY);
+      console.log(`${lang} hero flick coast: ${atRelease} -> ${afterCoast} (${afterCoast - atRelease})`);
+      if (afterCoast - atRelease < 40) throw new Error(`${lang}: hero flick stopped without momentum`);
+
+      // A long draft still scrolls inside its textarea until it reaches an edge.
+      await composer.fill(Array.from({ length: 30 }, (_, index) => `Draft line ${index + 1}`).join("\n"));
+      const draftSize = await composer.evaluate((element) => ({ height: element.clientHeight, scrollHeight: element.scrollHeight }));
+      if (draftSize.scrollHeight <= draftSize.height + 40) throw new Error(`${lang}: long composer draft did not overflow`);
+      await composer.evaluate((element) => { element.scrollTop = 0; });
+      await composer.scrollIntoViewIfNeeded();
+      const composerBox = await composer.boundingBox();
+      if (!composerBox) throw new Error("composer has no box");
+      const draftX = Math.round(composerBox.x + composerBox.width / 2);
+      const draftY = Math.round(composerBox.y + composerBox.height / 2);
+      const pageBeforeDraft = await page.evaluate(() => scrollY);
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: draftX, y: draftY, id: 3 }] });
+      for (let step = 1; step <= 4; step += 1) {
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: draftX, y: draftY - step * 25, id: 3 }] });
+        await settle(page, 20);
+      }
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await settle(page, 200);
+      const draftScroll = await composer.evaluate((element) => element.scrollTop);
+      const pageAfterDraft = await page.evaluate(() => scrollY);
+      console.log(`${lang} long draft scroll: inner ${draftScroll}, page ${pageAfterDraft - pageBeforeDraft}`);
+      if (draftScroll < 40 || Math.abs(pageAfterDraft - pageBeforeDraft) > 20) throw new Error(`${lang}: long composer draft did not retain inner scrolling`);
 
       const phone = await frameOf(page, ".live-phone");
       const columns = phone.locator(".snap-x").first();
@@ -201,8 +258,12 @@ async function checkSwipe() {
   fs.writeFileSync(path.join(out, `swipe-${swipeCheck}.json`), `${JSON.stringify({ url: base, viewport: "390x844 touch DPR3", rows }, null, 2)}\n`);
   for (const row of rows) console.log(`${row.lang} ${row.surface} ${row.direction}: ${row.before} -> ${row.after} (${row.delta})`);
   if (swipeCheck === "after") {
-    const failed = rows.filter((row) => row.direction === "down" ? row.delta < 40 : row.delta > -40);
-    if (failed.length) throw new Error(`outer page did not scroll for ${failed.map((row) => `${row.lang}/${row.surface}/${row.direction}`).join(", ")}`);
+    const failed = rows.filter((row) => {
+      const control = rows.find((candidate) => candidate.lang === row.lang && candidate.surface === "plain-text" && candidate.direction === row.direction)!;
+      const required = Math.min(300, Math.abs(control.delta), row.available) * 0.8;
+      return Math.abs(row.delta) < required || Math.sign(row.delta) !== Math.sign(control.delta);
+    });
+    if (failed.length) throw new Error(`outer page moved less than 80% of the plain-text control for ${failed.map((row) => `${row.lang}/${row.surface}/${row.direction}`).join(", ")}`);
   }
 }
 
