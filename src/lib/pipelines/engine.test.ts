@@ -5284,7 +5284,7 @@ test("a contradictory durable pass verdict parks with the parser failure reason"
   const current = loadPipelines()[0]!;
   expect(current.state).toBe("needs_decision");
   expect(current.stateDetail).toBe(reason);
-  expect(current.cursor).toEqual({ stageId: "plan", state: "running", input: null, activatedBy: null });
+  expect(current.cursor).toEqual({ stageId: "plan", state: "pending", input: null, activatedBy: null });
   expect(current.lastPassedCommit).toBe(ORIGIN_MAIN_SHA);
   expect(current.runs[0]!.attempts[0]).toMatchObject({
     state: "needs_decision",
@@ -7065,7 +7065,10 @@ test("failed stages park and retry without discarding checkout work", async () =
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "fail", "blocked")], h.ports);
-  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.cursor).toEqual({ stageId: "plan", state: "pending", input: null, activatedBy: null });
+  expect(parked.runs[0]!.attempts[0]).toMatchObject({ state: "failed", verdict: { status: "fail" } });
   await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports);
   expect(h.calls.some((call) => call.includes("reset --hard") || call.includes("clean -fd"))).toBe(false);
   await tickPipelines([], h.ports);
@@ -9155,7 +9158,7 @@ test("a rejected structured fail verdict parks before fail-edge traversal (#429)
   expect(current.stateDetail).toBe(reason);
   expect(current.cursor).toEqual({
     stageId: "verify",
-    state: "running",
+    state: "pending",
     input: "built",
     activatedBy: { stageId: "build", attempt: 1, edge: "pass" },
   });

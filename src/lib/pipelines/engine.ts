@@ -2699,6 +2699,7 @@ function settleStageVerdict(
   attempt.output = parsed.output;
   if ("failureReason" in parsed) {
     attempt.completedAt = ports.now();
+    setCursorState(pipeline, stage.id, "pending");
     park(pipeline, parsed.failureReason, attempt);
     return;
   }
@@ -2706,6 +2707,9 @@ function settleStageVerdict(
   if (parsed.verdict.status !== "pass") {
     attempt.state = parsed.verdict.status === "fail" ? "failed" : "needs_decision";
     attempt.completedAt = ports.now();
+    // The completed attempt no longer owns a running cursor. A fail edge may
+    // replace this pending cursor with its target in the same mutation.
+    setCursorState(pipeline, stage.id, "pending");
     /* Fail-edge routing (#353): a fail verdict on a stage with a fail edge and
        remaining round budget advances the cursor along that edge instead of
        parking. The failed attempt keeps its truthful failed state and verdict;
