@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { statePath } from "@/lib/configDir";
+import { procBackend } from "@/lib/proc";
 import type { ExternalRelayOwner, ExternalRelayTarget } from "./protocol";
 
 export type RelayTargetSettings = {
@@ -131,14 +132,65 @@ export function readRunLedger(): RunLedger {
 export function updateRunLedger(
   change: (ledger: RunLedger) => RunLedger,
 ): RunLedger {
-  const next = change(readRunLedger());
-  write(externalRelayFile("runs"), next);
-  return next;
+  const file = externalRelayFile("runs");
+  const lock = `${file}.lock`;
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  let fd: number | null = null;
+  const deadline = Date.now() + 5_000;
+  while (fd === null) {
+    try {
+      fd = fs.openSync(lock, "wx", 0o600);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const stat = fs.statSync(lock, { throwIfNoEntry: false });
+      if (stat && Date.now() - stat.mtimeMs > 1_000) {
+        try {
+          const owner = JSON.parse(fs.readFileSync(lock, "utf8")) as {
+            pid?: number;
+            identity?: string;
+          };
+          if (
+            !owner.pid ||
+            !owner.identity ||
+            procBackend.processIdentity(owner.pid) !== owner.identity
+          )
+            fs.rmSync(lock, { force: true });
+        } catch {
+          fs.rmSync(lock, { force: true });
+        }
+      }
+      if (Date.now() >= deadline) throw new Error("relay run ledger is busy");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+  try {
+    fs.writeSync(
+      fd,
+      JSON.stringify({
+        pid: process.pid,
+        identity: procBackend.processIdentity(process.pid),
+      }),
+    );
+    const next = change(readRunLedger());
+    write(file, next);
+    return next;
+  } finally {
+    fs.closeSync(fd);
+    fs.rmSync(lock, { force: true });
+  }
 }
-export function putRun(record: RunRecord): boolean {
+export function putRun(record: RunRecord, maxConcurrent?: number): boolean {
   let added = false;
   updateRunLedger((ledger) => {
     if (ledger.runs.some((run) => run.requestId === record.requestId))
+      return ledger;
+    if (
+      maxConcurrent !== undefined &&
+      ledger.runs.filter(
+        (run) =>
+          run.relayId === record.relayId && run.targetId === record.targetId,
+      ).length >= maxConcurrent
+    )
       return ledger;
     added = true;
     return { ...ledger, runs: [...ledger.runs, record] };

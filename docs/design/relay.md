@@ -1304,8 +1304,10 @@ to summarize.
 
 - Each target has `concurrency` from 1 to 4, default 1. The runner keeps a
   running count per target. The claim poll advertises
-  `free = concurrency - running`. A request for a full target is declined as
-  `busy`, which happens only when a relay service ignores `slots`.
+  `free = concurrency - running`. `runs.json` writes use a short-lived lock,
+  and recording a run checks the target's capacity inside that lock. This
+  keeps the bound when two Viewer generations overlap during a release. A
+  request for a full target is declined as `busy`.
 - Capacity is the account's: step 3 of §B.4 goes through the same
   capacity-aware selection headless runs use, bound to the target's
   `project`. An owner who wants chat answers kept apart from their coding

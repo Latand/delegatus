@@ -42,3 +42,37 @@ test("store mints one install ID and writes a private file", () => {
     0o700,
   );
 });
+test("two Viewer processes cannot reserve the same target slot", async () => {
+  const childFile = path.join(root, "reserve-child.ts");
+  const modulePath = path.join(process.cwd(), "src/lib/externalRelay/store.ts");
+  fs.writeFileSync(
+    childFile,
+    `import { putRun } from ${JSON.stringify(modulePath)};\nconst id = process.env.RELAY_TEST_ID!;\nconsole.log(putRun({ requestId: id, leaseId: id, relayId: "shared", targetId: "target", childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity: "child", runDir: "", startedAt: new Date().toISOString() }, 1));\n`,
+  );
+  const children = ["first", "second"].map((id) =>
+    Bun.spawn([process.execPath, childFile], {
+      env: { ...process.env, LLV_STATE_DIR: root, RELAY_TEST_ID: id },
+      stdout: "pipe",
+      stderr: "pipe",
+    }),
+  );
+  const outputs = await Promise.all(
+    children.map(async (child) => ({
+      code: await child.exited,
+      text: await new Response(child.stdout).text(),
+      error: await new Response(child.stderr).text(),
+    })),
+  );
+  expect(outputs.map((item) => item.code)).toEqual([0, 0]);
+  expect(outputs.map((item) => item.text.trim()).sort()).toEqual([
+    "false",
+    "true",
+  ]);
+  expect(
+    readRunLedger().runs.filter((run) => run.relayId === "shared"),
+  ).toHaveLength(1);
+  for (const run of readRunLedger().runs.filter(
+    (item) => item.relayId === "shared",
+  ))
+    dropRun(run.requestId);
+});

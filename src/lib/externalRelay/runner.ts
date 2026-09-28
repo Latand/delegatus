@@ -23,6 +23,7 @@ import {
   changeRun,
   dropRun,
   putRun,
+  readRunLedger,
   type PairedRelay,
   type RelayTargetSettings,
 } from "./store";
@@ -43,11 +44,21 @@ export function runningCount(relayId: string, targetId: string): number {
 export function advertisedSlots(
   relay: PairedRelay,
 ): { target_id: string; free: number }[] {
+  const held = readRunLedger().runs;
   return relay.targets
     .filter((target) => target.enabled && target.engine && target.model)
     .map((target) => ({
       target_id: target.id,
-      free: Math.max(0, target.concurrency - runningCount(relay.id, target.id)),
+      free: Math.max(
+        0,
+        target.concurrency -
+          Math.max(
+            runningCount(relay.id, target.id),
+            held.filter(
+              (run) => run.relayId === relay.id && run.targetId === target.id,
+            ).length,
+          ),
+      ),
     }));
 }
 function reserve(relay: PairedRelay, target: RelayTargetSettings): boolean {
@@ -179,11 +190,13 @@ export async function runClaimedRequest(
       runDir,
       startedAt: new Date().toISOString(),
     };
-    if (!putRun(record)) return await finish(declined(leaseId, "busy"));
+    if (!putRun(record, target.concurrency))
+      return await finish(declined(leaseId, "busy"));
     recorded = true;
     let newestProgress: ExternalRelayProgress | null = null;
     let leaseLost = false;
     let beatBusy = false;
+    let pendingBeat: Promise<void> | null = null;
     let seq = 0;
     let nextBeatAt = 0;
     const started = Date.now();
@@ -258,9 +271,10 @@ export async function runClaimedRequest(
         beatBusy = false;
       }
     };
-    await beat();
+    pendingBeat = beat();
+    await pendingBeat;
     const timer = setInterval(() => {
-      if (Date.now() >= nextBeatAt) void beat();
+      if (!beatBusy && Date.now() >= nextBeatAt) pendingBeat = beat();
     }, 1000);
     timer.unref();
     let result;
@@ -269,6 +283,7 @@ export async function runClaimedRequest(
     } finally {
       clearInterval(timer);
     }
+    if (pendingBeat) await pendingBeat;
     if (leaseLost) return null;
     const completion =
       result.status === "done" ? checkedAnswer(result.answer, request) : null;
