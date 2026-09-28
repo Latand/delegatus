@@ -58,8 +58,8 @@ function human(stage: HostReport["sources"], inputs: HumanInput[]): HumanInputRe
     inputs,
     coverage,
     hosts: [
-      { host: "workstation", label: "Workstation", local: true, configured: true, projects: "all", since: null, sources: local },
-      { host: "stage", label: "Stage host", local: false, configured: true, projects: [CLIENT_OLD], since: null, sources: stage },
+      { host: "workstation", label: "Workstation", local: true, configured: true, projects: "all", since: null, sources: local, unknownAuthors: 0, configurationGap: false },
+      { host: "stage", label: "Stage host", local: false, configured: true, projects: [CLIENT_OLD], since: null, sources: stage, unknownAuthors: 0, configurationGap: false },
     ],
     config: "ok",
   };

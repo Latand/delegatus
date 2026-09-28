@@ -95,6 +95,10 @@ export function ActivityFigures({ data, unread, locale, t, onConnect }: {
             </div>
           </>
         )}
+        <div className={`mt-1 text-[11px] ${data.unknownAuthorInputs ? "text-warning" : "text-muted"}`}
+          data-activity-unknown-author-total={data.unknownAuthorInputs}>
+          {t("activity.counted.unknownAuthor", { count: data.unknownAuthorInputs })}
+        </div>
       </div>
 
       <div
@@ -152,4 +156,3 @@ export function ActivityFigures({ data, unread, locale, t, onConnect }: {
     </div>
   );
 }
-

@@ -68,7 +68,7 @@ function run(key: string, project: string, date: string, from: string, to: strin
 }
 
 /** This workstation reads everything; a stage host holds the client project. */
-function deps(stagePull: HostReport["sources"][number], inputs: HumanInput[], agents: AgentConversation[]): Partial<ActivityResponseDependencies> {
+function deps(stagePull: HostReport["sources"][number], inputs: HumanInput[], agents: AgentConversation[], memberGap = false): Partial<ActivityResponseDependencies> {
   const local = [source("ingest", "read", [ALWAYS])];
   const coverage: HostCoverage[] = [
     { host: "workstation", projects: "all", since: null, covered: [ALWAYS] },
@@ -78,10 +78,11 @@ function deps(stagePull: HostReport["sources"][number], inputs: HumanInput[], ag
     inputs,
     coverage,
     hosts: [
-      { host: "workstation", label: "Workstation", local: true, configured: true, projects: "all", since: null, sources: local },
-      { host: "stage", label: "Stage host", local: false, configured: true, projects: [CLIENT], since: null, sources: [stagePull] },
+      { host: "workstation", label: "Workstation", local: true, configured: true, projects: "all", since: null, sources: local, unknownAuthors: 2, configurationGap: false },
+      { host: "stage", label: "Stage host", local: false, configured: true, projects: [CLIENT], since: null, sources: [stagePull], unknownAuthors: 0, configurationGap: memberGap },
     ],
     config: "ok",
+    unknownAuthors: 2,
   };
   return {
     now: () => NOW,
@@ -151,6 +152,21 @@ beforeEach(() => {
 afterEach(unmount);
 
 describe("the page filtered to one project", () => {
+  test("unknown-author input has its own visible count outside the personal figure", async () => {
+    await open("/activity?range=7d");
+    expect($("[data-activity-unknown-author-total]")?.getAttribute("data-activity-unknown-author-total")).toBe("2");
+    expect($("[data-activity-unknown-author-total]")?.textContent).toContain("Unknown author: 2");
+    await click($("[data-activity-how]"));
+    expect($("[data-activity-host=workstation] [data-activity-unknown-author]")?.textContent).toContain("Unknown author: 2");
+  });
+
+  test("a team host without member selection names the configuration gap", async () => {
+    current = deps({ ...source("pull", "read", []), error: "member-unconfigured" }, [], [], true);
+    await open("/activity?range=7d");
+    await click($("[data-activity-how]"));
+    expect($("[data-activity-host=stage] [data-activity-member-gap]")?.textContent).toContain("member ID");
+  });
+
   test("?project= round-trips: it opens scoped, a row click pushes a step, Back restores it, the range keeps it, a reload keeps it", async () => {
     await open(`/activity?range=7d&project=${HARBOR}`);
     expect(lastRequest().get("project")).toBe(HARBOR);

@@ -20,7 +20,7 @@ import { grantedMcpServers, mcpServersForSession, normalizeSpawnMcpServers, SCHE
 import { normalizeSpawnPlugins, pluginAllowlistForSession, SCHEDULED_REPORT_PLUGINS, sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { codexModelSupportsImages, defaultModelFor, modelFromBody, validateLaunchModel } from "@/lib/agent/models";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
-import { recordTeamEvent, refuseAnonymous, teamActor } from "@/lib/team";
+import { recordMessageAuthor, recordTeamEvent, refuseAnonymous, teamActor } from "@/lib/team";
 import { resolveSpawnRole } from "@/lib/roles/registry";
 import { ENGINE_NOT_CONNECTED, engineNotConnectedDetails, engineNotConnectedMessage, engineReadiness, type EngineReadiness } from "@/lib/accounts/engineConnection";
 import { assertDarwinStructuredRuntime } from "@/lib/proc/darwinIdentity";
@@ -969,6 +969,11 @@ export async function executeSpawnRequest(
     }
     if (begun.kind === "created") launchId = begun.receipt.launchId;
     if (begun.kind === "created" && begun.receipt.conversationId) {
+      /* The structured host delivers the first prompt under this receipt's
+         stable id. Preserve the admitted member for transcript ingest and
+         member-filtered remote pulls, including a later delivery retry. */
+      recordMessageAuthor({ actor: spawnActor, clientMessageId: `spawn_${begun.receipt.launchId}`,
+        conversationId: begun.receipt.conversationId, text: prompt });
       recordTeamEvent({
         actor: spawnActor,
         action: "agent.started",
