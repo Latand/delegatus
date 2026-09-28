@@ -1235,6 +1235,26 @@ never edits `role-presets.json`.
   parks with the detail "stage verdict: needs_decision"
   (`engine.ts:2753` on main); it should show the summary's first line.
 
+### Where the build departed from §2.10
+
+- **The seat's personality (operator, 2026-09-27).** Mandate v30 also carries
+  a `## Who you are` section: warm, a friend who teases a little, speaking the
+  operator's way, hard-working and proactive. Three lines were reconciled with
+  it: the greeting now says accepted work keeps moving and new work starts on
+  the operator's word; the clock section says the drive to keep going works
+  inside a turn; the start-by-default contract says what proactive means.
+- **Size.** The delivered default grew from 24 253 to 27 093 bytes. A rotation
+  still keeps a full history budget beside it (4 138 bytes left against
+  4 096), which `handoffDigest.test.ts` pins; to fit, the conveyor's last
+  bullet drops "Bridge reports follow the bridge reports section above."
+- **The Codex spawn fence keeps its "Viewer spawn policy:" label**, because a
+  review-flow test pins it and flow code is out of scope here; the flow-removal
+  task renames it.
+- **The deployer's role-table description** no longer says blue/green either,
+  so the review check's grep holds on the seat mandate.
+- **The reviewer-spawn refusal** (`agent/spawnAdmission.ts`) no longer names
+  the install's endpoint or the forge.
+
 ---
 
 # Part 3 — Decisions

@@ -144,9 +144,15 @@ test("Builder domain=frontend resolves to the Claude/Opus config", () => {
   expect(resolved).toMatchObject({ roleId: "builder", engine: "claude", model: "opus" });
 });
 
-test("Builder mode=apply-fixes resolves to the Terra config", () => {
-  const resolved = resolvePipelineRole({ role: { roleId: "builder", params: { mode: "apply-fixes" } } }, "run", pipelineRoleLookup).role;
-  expect(resolved).toMatchObject({ roleId: "builder", engine: "codex", model: "gpt-5.6-terra" });
+/* docs/design/agent-prompt-contract.md §3 (a): a fix round's runtime follows
+   its lane's domain and size through the fix rows. */
+test("a Builder fix round resolves to the fix row its domain and size select", () => {
+  const fix = (params: Record<string, string>) => resolvePipelineRole({ role: { roleId: "builder", params: { mode: "apply-fixes", ...params } } }, "run", pipelineRoleLookup).role;
+  expect(fix({})).toMatchObject({ roleId: "builder", engine: "codex", model: "gpt-6-luna", effort: "high" });
+  expect(fix({ domain: "frontend" })).toMatchObject({ engine: "claude", model: "sonnet", effort: "high" });
+  expect(fix({ domain: "docs" })).toMatchObject({ engine: "claude", model: "sonnet", effort: "high" });
+  expect(fix({ domain: "frontend", size: "trivial" })).toMatchObject({ engine: "claude", model: "sonnet", effort: "high" });
+  expect(fix({})?.promptScaffold).toContain("Apply-fixes guidance: the brief is a list of findings.");
 });
 
 test("validatePipelineRoleParams enforces canonical value rules and skips required-when-absent", () => {
@@ -165,13 +171,13 @@ test("operator role params substitute into the resolved prompt scaffold", () => 
     "review-loop",
     pipelineRoleLookup,
   );
-  expect(resolved.role?.promptScaffold).toContain("PR#100");
-  expect(resolved.role?.promptScaffold).toContain("lens scope");
+  expect(resolved.role?.promptScaffold).toContain("Change under review: PR#100");
+  expect(resolved.role?.promptScaffold).toContain("Lens: scope.");
 });
 
 test("pipeline role lookup defaults omitted orchestrator maxWorkers to three", () => {
-  expect(pipelineRoleLookup("orchestrator")?.promptScaffold).toContain("Maximum workers: 3");
-  expect(pipelineRoleLookup("orchestrator", { maxWorkers: 1 })?.promptScaffold).toContain("Maximum workers: 1");
+  expect(pipelineRoleLookup("orchestrator")?.promptScaffold).toContain("keep at most 3 workers running at once");
+  expect(pipelineRoleLookup("orchestrator", { maxWorkers: 1 })?.promptScaffold).toContain("keep at most 1 workers running at once");
   expect(pipelineRoleLookup("reviewer")?.promptScaffold).toContain("Run 1 independent pass(es)");
 });
 
@@ -181,9 +187,12 @@ test("blank role params fall back to the registry default token value", () => {
     "review-loop",
     pipelineRoleLookup,
   );
-  /* lens defaults to the first registry option, so no empty token is substituted. */
-  expect(resolved.role?.promptScaffold).toContain("lens correctness");
-  expect(resolved.role?.promptScaffold).not.toContain("lens .");
+  /* lens defaults to the first registry option, so no empty token is
+     substituted, and an empty change drops its labelled line (C6). */
+  expect(resolved.role?.promptScaffold).toContain("Lens: correctness.");
+  expect(resolved.role?.promptScaffold).not.toContain("Lens: .");
+  expect(resolved.role?.promptScaffold).not.toContain("Change under review:");
+  expect(resolved.role?.promptScaffold).not.toMatch(/Inspect\s+with/);
 });
 
 test("Builder domain=frontend keeps the canonical frontend scaffold guidance (parity with resolveRole)", () => {

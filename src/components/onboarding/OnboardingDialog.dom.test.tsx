@@ -625,7 +625,10 @@ test("the mapping shows the small-change and docs rows, a reset row with Restore
     flushSync(() => root.render(<OnboardingDialog mode="mapping" marker={null} onClose={() => {}} />));
     await until(() => Boolean(host.querySelector("[data-mapping-row]")));
     const rows = [...host.querySelectorAll("[data-mapping-row]")].map((row) => row.getAttribute("data-mapping-row"));
-    expect(rows.slice(0, 8)).toEqual(["builder", "builder:trivial", "builder:frontend", "builder:docs", "builder:apply-fixes", "reviewer", "reviewer:trivial", "verifier"]);
+    expect(rows.slice(0, 10)).toEqual(["builder", "builder:trivial", "builder:frontend", "builder:docs", "builder:apply-fixes", "builder:frontend-fixes", "builder:docs-fixes", "reviewer", "reviewer:trivial", "verifier"]);
+    /* docs/design/agent-prompt-contract.md §3 (a): the fix rows sit together. */
+    expect(host.querySelector("[data-mapping-row='builder:frontend-fixes']")?.textContent).toContain("Builder, frontend fix rounds");
+    expect(host.querySelector("[data-mapping-row='builder:docs-fixes']")?.textContent).toContain("Builder, docs fix rounds");
     expect(host.querySelector("[data-mapping-row='builder:trivial']")?.textContent).toContain("Builder, small changes");
     expect(host.querySelector("[data-mapping-row='builder:docs']")?.textContent).toContain("Builder, docs and text");
     expect(host.querySelector("[data-mapping-row='reviewer:trivial']")?.textContent).toContain("Reviewer, small changes");
@@ -644,6 +647,36 @@ test("the mapping shows the small-change and docs rows, a reset row with Restore
     flushSync(() => (host.querySelector("[data-mapping-restore='builder:frontend']") as HTMLElement).click());
     await until(() => requests.some((request) => request.method === "PUT" && request.url.includes("/api/roles")));
     expect(requests.find((request) => request.method === "PUT")?.body).toEqual({ overrides: { builder: { variants: { frontend: from } } } });
+  } finally {
+    flushSync(() => root.unmount());
+    host.remove();
+    rolesBody = { schemaVersion: 2, roles: [] };
+  }
+});
+
+/* docs/design/agent-prompt-contract.md §2.10 I: a role whose prompt text this
+   install replaced says so, and one action puts the shipped text back. */
+test("the mapping marks a replaced prompt and restores the shipped one", async () => {
+  const { mergeRoleDefinitions } = await import("@/lib/roles/store");
+  const { ROLE_DEFAULTS } = await import("@/lib/roles/defaults");
+  const roles = mergeRoleDefinitions({ architect: { promptScaffold: "An install's own architect text." } }).map((role) => ({
+    ...role,
+    promptPreview: role.promptScaffold,
+    shipped: { config: role.config, promptScaffold: ROLE_DEFAULTS.find((shipped) => shipped.id === role.id)!.promptScaffold },
+  }));
+  rolesBody = { schemaVersion: 4, roles, resets: [] };
+  requests.length = 0;
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => root.render(<OnboardingDialog mode="mapping" marker={null} onClose={() => {}} />));
+    await until(() => Boolean(host.querySelector("[data-mapping-row]")));
+    expect(host.querySelectorAll("[data-mapping-custom-prompt]")).toHaveLength(1);
+    expect(host.querySelector("[data-mapping-custom-prompt='architect']")?.textContent).toContain("Custom prompt text");
+    flushSync(() => (host.querySelector("[data-mapping-prompt-reset='architect']") as HTMLElement).click());
+    await until(() => requests.some((request) => request.method === "PUT" && request.url.includes("/api/roles")));
+    expect(requests.find((request) => request.method === "PUT")?.body).toEqual({ overrides: { architect: { promptScaffold: null } } });
   } finally {
     flushSync(() => root.unmount());
     host.remove();

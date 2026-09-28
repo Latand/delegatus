@@ -22,7 +22,9 @@ export function renderDecisionInput(previousInput: string | null, decision: Pipe
     `Decision continuation for stage ${decision.stageId}, settled attempt ${decision.attempt}:`,
     "Question / prior result:", decision.question,
     "Answer:", decision.answer,
-    "Continue the stage using this answer and report its final result.",
+    /* agent-prompt-contract.md N5: an answer that replaced a spec item lost to
+       the pinned specification rendered below it. */
+    "Where the answer differs from the brief or the pinned specification, the answer governs. Continue the stage from where the prior attempt stopped and report the final result with stage_report.",
   ].filter(Boolean).join("\n\n");
 }
 
@@ -43,7 +45,7 @@ export function renderStagePrompt(
   const relayPlaced = stage.prompt.includes(RELAY_PLACEHOLDER) || (role.promptScaffold?.includes(RELAY_PLACEHOLDER) ?? false);
   const relayed = previousOutput.trim();
   const relaySection = !relayPlaced && relayed
-    ? ["", "Previous stage output (relayed by the controller; the prompt above did not place {{prev.output}}):", relayed]
+    ? ["", "Relayed by the controller (a previous stage's output, or the answer to this stage's earlier question):", relayed]
     : [];
   const declaredOutputs = stage.outputs?.length ? stage.outputs.map((output) => `\`${output}\``).join(", ") : null;
   const access = role.access === "read-only"
@@ -53,7 +55,12 @@ export function renderStagePrompt(
     : "Access: read-write. Work only inside this pipeline's dedicated worktree and commit-ready scope.";
   const hostAccess = pipelineStageSandbox(stage) === "restricted"
     ? "Host access: restricted. This stage runs inside the engine sandbox."
-    : "Host access: full. Network, SSH, GitHub CLI, and the pipeline worktree are available.";
+    : "Host access: full. Network, SSH, installed command-line tools and the pipeline worktree are available.";
+  /* The reviewer's scaffold reviews "the commits since the pipeline's base
+     commit" when its brief names no change; this line names that commit. */
+  const baseLine = pipeline.baseRef
+    ? [`This pipeline's worktree started from commit ${pipeline.baseRef}${pipeline.baseBranch ? ` on ${pipeline.baseBranch}` : ""}.`]
+    : [];
   const roleContext = role.roleId
     ? [
         `Role preset: ${role.roleId} (${role.engine}${role.model ? `/${role.model}` : ""}${role.effort ? `, ${role.effort}` : ""}).`,
@@ -73,22 +80,25 @@ export function renderStagePrompt(
     ...roleContext,
     access,
     hostAccess,
+    ...baseLine,
     ...pipelineDeliveryGuidance(pipeline),
     "Pipeline nesting is forbidden. Never create or start another pipeline from this stage.",
     "",
     /* One completion channel, one fallback (#1797): asking for the call AND an
        unconditional fenced block let a stage treat the block as the real answer
        and skip the call, which is where every unreadable-verdict park fell. The
-       engine still reads the block exactly as before when no report arrived. */
-    "Report this stage's completion with the Delegatus MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary }. That call is the only way to complete this stage.",
+       engine still reads the block exactly as before when no report arrived.
+       One vocabulary (agent-prompt-contract.md §2.1): the markers a brief may
+       still ask for are retired here, where every stage reads it last. */
+    "Report this stage's completion with the Delegatus MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary }. That call is the only way to complete this stage, and it replaces any other ending the brief above asks for (REVIEW_READY, a VERDICT line, APPROVE, NO FINDINGS): write none of them.",
     "The server resolves your conversation to this stage's attempt and reads the head, the branch's pull request and the declared outputs itself, so claim none of them.",
     "The call records your intent. The stage settles when this turn ends, so you may keep working after it, and calling again before then replaces the report.",
-    "Use pass when the stage contract is complete, fail for a retryable stage failure, and needs_decision when operator judgment is required. Pass carries no findings, so use fail or needs_decision when findings describe unresolved work.",
+    "Verdicts: pass when the stage's contract is complete; notes that block nothing go in the summary. fail when the work is not done: for a review, one finding per defect the fix stage must address; for any other stage, what stopped it. needs_decision when only the operator can unblock the stage: put the question, what you tried, the options and your recommendation in the summary and attach no findings, because findings on a stage with a fail edge send it to the fix stage.",
     "",
     "Fallback, only when the stage_report call returned an error or the tool is absent from this session: quote that error, then end the turn with one fenced JSON object as the final block, with nothing after it.",
     "```json",
     '{"status":"pass","findings":[],"confidence":0.9}',
     "```",
-    "In that block the status uses the same vocabulary, and any prose terminal marker must agree with it: APPROVE=pass, REQUEST_CHANGES=fail, COMMENT=needs_decision, NO FINDINGS agrees with pass.",
+    "Its status uses the same three words.",
   ].join("\n");
 }

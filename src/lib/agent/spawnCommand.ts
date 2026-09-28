@@ -21,7 +21,7 @@ import { normalizeSpawnPlugins, pluginAllowlistForSession, SCHEDULED_REPORT_PLUG
 import { codexModelSupportsImages, defaultModelFor, modelFromBody, validateLaunchModel } from "@/lib/agent/models";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { recordMessageAuthor, recordTeamEvent, refuseAnonymous, teamActor } from "@/lib/team";
-import { resolveSpawnRole } from "@/lib/roles/registry";
+import { resolveSpawnRole, roleSpawnPrompt } from "@/lib/roles/registry";
 import { ENGINE_NOT_CONNECTED, engineNotConnectedDetails, engineNotConnectedMessage, engineReadiness, type EngineReadiness } from "@/lib/accounts/engineConnection";
 import { assertDarwinStructuredRuntime } from "@/lib/proc/darwinIdentity";
 import { spawnAdmissionBodyDigest, spawnContentDigest, spawnParentSelector, spawnRequestDigests } from "@/lib/agent/spawnIdentity";
@@ -365,7 +365,7 @@ export async function executeSpawnRequest(
   }
 
   const userPrompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
-  const prompt = role.value ? [role.value.scaffold, userPrompt].filter(Boolean).join("\n\n") : userPrompt;
+  const prompt = roleSpawnPrompt(role.value, userPrompt);
   const { images, error: imageError } = collectImagePayloads(body);
   if (imageError) {
     return NextResponse.json({ error: imageError.error }, { status: imageError.status });

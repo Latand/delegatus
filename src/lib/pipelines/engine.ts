@@ -6007,7 +6007,7 @@ function normalizeStages(
      the one place a new review-loop stage becomes a reviewer, a fix stage and
      an `advance` fail edge. Stages already in the plan are preserved as they
      are, and a conversion that would need a guess stores the stage as sent. */
-  const converted = legacyReview.convertNewLegacyReviewStages(stages, preservedStages, (candidate) => pipelineGraphError(candidate));
+  const converted = legacyReview.convertNewLegacyReviewStages(stages, preservedStages, (candidate) => pipelineGraphError(candidate), lookup);
   return {
     stages: converted.stages,
     legacyReview: { convertedStages: converted.convertedStages, legacyReview: converted.legacyReview },
@@ -7502,6 +7502,7 @@ function previewLegacyReview(pipeline: Pipeline, req: PatchPipelineRequest, port
   const preview = legacyReview.previewLegacyReviewConversion(pipeline, options, {
     flowRoundLimit,
     graphError: (stages) => pipelineGraphError(stages),
+    roleLookup: ports.roleLookup,
   });
   const refusals = legacyReviewOwnershipRefusals(pipeline, ports);
   if (!refusals.length) return preview;

@@ -71,24 +71,56 @@ export function validateRoleParams(
   return { ok: true, value: values };
 }
 
-function renderScaffold(template: string, params: RoleParamValues): string {
-  return template
-    .replace(/\{\{([A-Za-z][A-Za-z0-9]*)\}\}/g, (_match, key: string) => String(params[key] ?? ""))
-    .replace(/^(Repository|Issue query|Urgent list):\s*\n/gm, "");
+/** Labelled parameter lines a scaffold drops when their value is empty, so an
+    optional parameter never renders as a dangling label. */
+const OPTIONAL_PARAMETER_LINES = ["Repository", "Issue query", "Urgent list", "Merge policy", "Completion policy", "Change under review", "Pull request", "Claims", "Questions"];
+/** The orchestrator lines that belong to backlog-campaign mode alone; in any
+    other mode they would read as standing rules (agent-prompt-contract.md N6). */
+const BACKLOG_CAMPAIGN_LINES = ["Repository", "Issue query", "Urgent list", "Merge policy", "Completion policy"];
+
+function withoutLines(text: string, labels: readonly string[], emptyOnly: boolean): string {
+  const value = emptyOnly ? "[ \\t]*" : "[^\\n]*";
+  return text.replace(new RegExp(`^(?:${labels.join("|")}):${value}(?:\\n|$)`, "gm"), "");
 }
+
+function renderScaffold(definition: RoleDefinition, params: RoleParamValues): string {
+  const rendered = definition.promptScaffold.replace(/\{\{([A-Za-z][A-Za-z0-9]*)\}\}/g, (_match, key: string) => String(params[key] ?? ""));
+  const scoped = definition.id === "orchestrator" && params.mode !== "backlog-campaign"
+    ? withoutLines(rendered, BACKLOG_CAMPAIGN_LINES, false)
+    : rendered;
+  return withoutLines(scoped, OPTIONAL_PARAMETER_LINES, true);
+}
+
+/** Added to a builder in a fix round (agent-prompt-contract.md §3 (a)): a light
+    fix row runs only what names its place, and hands back anything else. */
+export const APPLY_FIXES_GUIDANCE = "Apply-fixes guidance: the brief is a list of findings. Fix each one at the place it names, add or adjust the test that shows it, and change nothing else. A finding you judge wrong stays unfixed: give the evidence in your summary, which the next reviewer reads. A finding that names no place you can find, or that asks for a redesign or a new approach (a WRONG-PREMISE, an OVER-BUILT or a P0 finding), is beyond a fix round: leave it, name it, and finish with fail so the orchestrator can re-plan.";
 
 /**
  * The rendered scaffold body — parameter substitution plus any role-specific
- * guidance (Builder's domain=frontend contract) — with the safety-fence block
+ * guidance (Builder's domain=frontend contract and its fix-round rules) — with the safety-fence block
  * kept separate so a length-capped caller (the pipeline lookup) can trim the
  * body without ever cutting a fence. This is the single source of the frontend
  * guidance; the pipeline reuses it, so a re-render can't drop it.
  */
 export function roleScaffoldBody(definition: RoleDefinition, params: RoleParamValues): string {
   const frontendGuidance = definition.id === "builder" && params.domain === "frontend"
-    ? "\n\nUI/frontend implementation guidance: follow the approved interaction and visual contract, preserve accessible semantics, responsive behavior, and English/Ukrainian parity. Reuse the colours, type, spacing and components the surrounding UI already uses; add no new colour, font, pill or card shape, or decorative label the issue does not ask for."
+    ? "\n\nUI/frontend implementation guidance: follow the approved interaction and visual contract, preserve accessible semantics and responsive behaviour, and keep every language the project ships in step. Reuse the colours, type, spacing and components the surrounding UI already uses; add no new colour, font, pill or card shape, or decorative label the brief does not ask for."
     : "";
-  return renderScaffold(definition.promptScaffold, params) + frontendGuidance;
+  const fixGuidance = definition.id === "builder" && params.mode === "apply-fixes" ? `\n\n${APPLY_FIXES_GUIDANCE}` : "";
+  return renderScaffold(definition, params) + frontendGuidance + fixGuidance;
+}
+
+/** How a spawned role agent ends (docs/design/agent-prompt-contract.md §2.2):
+    it has no stage to report to, so it ends in a line the seat reads, in the
+    same three words a stage uses. The orchestrator reports outcomes and never
+    gets it. */
+export const SPAWN_COMPLETION = "When you finish, end your final message with one line: Verdict: pass, Verdict: fail or Verdict: needs_decision. They mean what they mean for a pipeline stage: pass when the brief's contract is complete, with any notes above that line; fail with the findings listed above it; needs_decision with the question, the options and your recommendation above it. That line replaces any other ending the brief asks for (REVIEW_READY, a VERDICT line, APPROVE, NO FINDINGS).";
+
+/** The first message of a role spawn: the scaffold, the caller's brief and the
+    completion line; a spawn without a role is the brief alone. */
+export function roleSpawnPrompt(role: { role: RoleId; scaffold: string } | null, userPrompt: string): string {
+  if (!role) return userPrompt;
+  return [role.scaffold, userPrompt, role.role === "orchestrator" ? "" : SPAWN_COMPLETION].filter(Boolean).join("\n\n");
 }
 
 /** The trailing safety-fence block for a role, or "" when it declares none. */

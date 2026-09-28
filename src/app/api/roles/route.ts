@@ -17,13 +17,14 @@ function catalog(snapshot: RoleRegistrySnapshot) {
     revision: snapshot.revision,
     health: snapshot.health,
     /* promptPreview duplicates promptScaffold under the name the draft pane
-       reads; `shipped` is the runtime before this install's mapping, so the
-       mapping editor can tell "default" from "changed". */
+       reads; `shipped` is the runtime and prompt text before this install's
+       mapping, so the mapping editor can tell "default" from "changed". */
     roles: roles.map((role) => ({
       ...role,
       promptPreview: role.promptScaffold,
       shipped: {
         config: ROLE_DEFAULTS.find((candidate) => candidate.id === role.id)!.config,
+        promptScaffold: ROLE_DEFAULTS.find((candidate) => candidate.id === role.id)!.promptScaffold,
         ...(role.id in ROLE_VARIANT_DEFAULTS ? { variants: ROLE_VARIANT_DEFAULTS[role.id as keyof typeof ROLE_VARIANT_DEFAULTS] } : {}),
       },
     })),
@@ -39,10 +40,11 @@ export async function GET(): Promise<NextResponse> {
 
 /**
  * The agent mapping's writer (#1876): `{ overrides: { [roleId]: { config,
- * variants } } }`, where a full config sets a row and `null` resets it to the
- * shipped value. It merges into the stored file, so a prompt-scaffold override
- * survives, and answers the merged catalog so the editor re-renders from the
- * server's truth.
+ * variants, promptScaffold } } }`, where a full config sets a row and `null`
+ * resets it to the shipped value; `promptScaffold` accepts only `null`, which
+ * restores the shipped prompt text. It merges into the stored file, so a
+ * prompt-scaffold override survives a runtime edit, and answers the merged
+ * catalog so the editor re-renders from the server's truth.
  */
 export async function PUT(req: NextRequest): Promise<NextResponse> {
   const rejection = rejectCrossOrigin(req);

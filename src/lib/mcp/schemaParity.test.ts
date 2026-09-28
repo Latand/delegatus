@@ -718,13 +718,15 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
       expect(stage?.[field]?.description).toContain(expected);
     }
 
-    /* Reachability, the draft baseRef rule and the review-loop runtime default
-       are graph-level facts no per-field schema can carry. */
+    /* Reachability, the draft baseRef rule and the shape of a review are
+       graph-level facts no per-field schema can carry. A review is a reviewer
+       and a fix stage; review-loop is the legacy kind stored lanes keep
+       (docs/design/agent-prompt-contract.md §2.10 F). */
     expect(tool?.description).toContain("pass-reachable from a run stage");
     expect(tool?.description).toContain("`next` defaults to null");
     expect(tool?.description).toContain("must also pass `baseRef`");
-    expect(tool?.description).toContain("always read-only");
-    expect(tool?.description).toContain("Codex");
+    expect(tool?.description).toContain("A review is a run stage with role reviewer (read-only by its role) whose onFail names a fix stage");
+    expect(tool?.description).toContain("`review-loop` is a legacy kind kept for stored lanes");
     expect(tool?.description).toContain("access is the repository-mutation policy enforced at settlement");
     expect(stage?.access?.description).toContain("does not select the sandbox");
     expect(stage?.sandbox?.description).toContain("independent from access");

@@ -53,9 +53,10 @@ export const pipelineRoleLookup: PipelineRoleLookup = (roleId, params) => {
   const body = roleScaffoldBody(definition, parameters);
   const fences = roleFenceBlock(definition);
   return {
-    /* Parameter-aware runtime: Builder domain=frontend → Claude/Opus,
-       mode=apply-fixes → Terra, matching the registry so an omitted override
-       does not silently fall back to the base Astra config. */
+    /* Parameter-aware runtime: Builder domain=frontend → its frontend row, a
+       fix round (mode=apply-fixes) → the fix row its domain and size select,
+       matching the registry so an omitted override does not silently fall
+       back to the base config. */
     ...configForParams(definition, parameters),
     access: definition.capabilities.includes("read-only") ? "read-only" : "read-write",
     promptScaffold: `${body.slice(0, MAX_SCAFFOLD_LENGTH - fences.length)}${fences}`,

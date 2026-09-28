@@ -86,14 +86,42 @@ describe("preview", () => {
       id: "reviewer", kind: "run", "prompt": "Review reviewer", next: null, role: { roleId: "reviewer" },
       effectiveRole: role("reviewer", "read-only"), onFail: { to: "reviewer-fix", maxRounds: 5, onExhausted: "advance" }, legacyNote: "unknown field",
     });
-    /* The fixer carries the implementer's role snapshot and the findings input, then hands back to the reviewer. */
-    expect(fixer).toMatchObject({ id: "reviewer-fix", kind: "run", role: { roleId: "builder" }, effectiveRole: role("builder", "read-write"), next: "reviewer", onFail: null });
+    /* The fixer is a builder fix round on the fix row (agent-prompt-contract.md
+       §3 (a)), takes the findings input, then hands back to the reviewer. */
+    expect(fixer).toMatchObject({
+      id: "reviewer-fix", kind: "run", role: { roleId: "builder", params: { mode: "apply-fixes" } },
+      effectiveRole: { roleId: "builder", engine: "codex", model: "gpt-6-luna", effort: "high", access: "read-write" }, next: "reviewer", onFail: null,
+    });
+    expect(fixer).not.toHaveProperty("engine");
+    expect(fixer).not.toHaveProperty("model");
     expect(fixer!.prompt).toContain("{{prev.output}}");
     expect(fixer!.prompt).toContain("{{task}}");
     /* The predecessors are unchanged; the architect is never the fix stage. */
     expect(architect).toEqual(pipeline.stages[0]!);
     expect(builder).toEqual(pipeline.stages[1]!);
     expect(preview.stages.some((stage) => stage.onFail?.to === "architect" || stage.onFail?.to === "builder")).toBe(false);
+  });
+
+  /* §3 (a): the fix row follows the lane's domain and size; access, sandbox
+     and account stay the implementer's, and its engine, model and effort do not. */
+  test("the fixer takes its implementer's domain and size, and the row decides its runtime", () => {
+    const implementer = run("build", "review", "builder", "read-write", {
+      role: { roleId: "builder", params: { mode: "tdd", domain: "docs", size: "normal" } },
+      engine: "codex", model: "gpt-6-sol", effort: "xhigh", sandbox: "restricted", account: "account-b",
+    });
+    const preview = ok(previewLegacyReviewConversion(definition([implementer, review("review", null)]), {}));
+    const fixer = preview.stages.find((stage) => stage.id === "review-fix")!;
+    expect(fixer.role).toEqual({ roleId: "builder", params: { mode: "apply-fixes", domain: "docs", size: "normal" } });
+    expect(fixer).toMatchObject({ sandbox: "restricted", account: "account-b", effectiveRole: { engine: "claude", model: "sonnet", effort: "high" } });
+    expect(fixer.engine).toBeUndefined();
+    expect(fixer.effort).toBeUndefined();
+    expect(fixer.prompt).toStartWith("Fix the findings stage review reported for: {{task}}");
+    /* A role-less implementer gives its fixer the general fix row. */
+    const roleless = ok(previewLegacyReviewConversion(definition([run("build", "review", "builder", "read-write", { role: undefined }), review("review", null)]), {}));
+    expect(roleless.stages.find((stage) => stage.id === "review-fix")!.role).toEqual({ roleId: "builder", params: { mode: "apply-fixes" } });
+    /* A registry that cannot resolve the fix role refuses instead of guessing a runtime. */
+    const unresolved = refused(previewLegacyReviewConversion(definition([implementer, review("review", null)]), {}, { roleLookup: () => null }));
+    expect(unresolved.refusals.map((refusal) => refusal.code)).toEqual(["fixer-role"]);
   });
 
   test("an empty draft has nothing to convert", () => {
@@ -119,7 +147,7 @@ describe("preview", () => {
     expect(ambiguous.refusals.map((refusal) => refusal.code)).toEqual(["ambiguous-implementer"]);
     expect(ambiguous.implementerCandidates).toEqual(["plan", "build"]);
     const chosen = ok(previewLegacyReviewConversion(pipeline, { implementerStageId: "build" }));
-    expect(chosen.stages.find((stage) => stage.id === "review-fix")!.effectiveRole).toEqual(role("builder", "read-write"));
+    expect(chosen.stages.find((stage) => stage.id === "review-fix")!.effectiveRole).toMatchObject({ roleId: "builder", model: "gpt-6-luna", access: "read-write" });
     /* A read-only predecessor cannot fix anything. */
     expect(refused(previewLegacyReviewConversion(pipeline, { implementerStageId: "plan" })).refusals.map((refusal) => refusal.code)).toEqual(["implementer-read-only"]);
     /* A stage that does not pass into the review is not a candidate. */
