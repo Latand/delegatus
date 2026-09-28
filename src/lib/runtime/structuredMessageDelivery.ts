@@ -1185,6 +1185,10 @@ export async function enqueueStructuredMessage(
     return refuseReservedPayload("runtime image request encoding is too large", 413);
   }
   let commandResult: RuntimeOperationResult | null = null;
+  /* The operation a claimed reservation was accepted under. The claim leaves
+     the reservation `delivery-uncertain`, so from here a throw is an accepted
+     send whose fate is unknown, and it answers with this handle. */
+  let claimedOperationId: string | null = null;
   try {
     /* The same admission the recovery branch already ran. Re-entering it is
        how the reservation's CURRENT state is read: a hold the drain assigned
@@ -1254,6 +1258,7 @@ export async function enqueueStructuredMessage(
       const claimed = registry.beginDeliveryAttempt(assigned.id, assigned.generationId);
       if (!claimed) return null;
       claimedReservationId = claimed.id;
+      claimedOperationId = claimed.command.operationId;
       commandResult = await client.command({
         kind: assigned.command.kind,
         operationId: assigned.command.operationId,
@@ -1324,7 +1329,15 @@ export async function enqueueStructuredMessage(
     const failure = deliveryFailure(error);
     /* Assigned inside the actuation section's callback, which control-flow narrowing does not follow. */
     const handedOver = commandResult as RuntimeOperationResult | null;
-    if (!handedOver) return failure;
+    const claimedOperation = claimedOperationId as string | null;
+    if (!handedOver) {
+      /* Thrown before the runtime answered, after the claim: the command may
+         have reached the journal, so the send stays uncertain and keeps the
+         operation it was accepted with. */
+      return claimedOperation
+        ? { ...failure, operationId: claimedOperation, transportUncertain: true }
+        : failure;
+    }
     const receipt = handedOver.receipt;
     const definitiveFailure = receipt.status === "failed" || receipt.status === "rejected";
     return {

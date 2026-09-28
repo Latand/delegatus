@@ -106,13 +106,21 @@ function cycleOpenedAfter(window: ReconciledQuotaWindow | null, observedAt: numb
 /** An exhaustion with a known reset governs until it. One whose reset the
     provider never named can only speak for the cycle it was observed in, so it
     expires a window length after that observation — the horizon of the key it
-    is filed under when the window declares no length of its own — and loses
-    sooner to a rival whose own cycle opened after it, which is proof that cycle
-    has rolled. */
+    is filed under when the window declares no length of its own. Either kind
+    loses sooner to a rival whose own cycle opened after it, which is proof that
+    cycle has rolled; with a known reset the rival must also reset later, since
+    one sharing the reset is the same cycle. A redeemed reset credit opens a new
+    cycle before the old reset arrives, and a transcript's last 100% must not
+    outrank the live 0% that follows it until that old reset (task 8feee404). */
 function activeExhaustion(window: ReconciledQuotaWindow, rival: ReconciledQuotaWindow | null, key: "session" | "weekly", now: number): boolean {
   if (window.value.usedPercent < 100) return false;
-  if (window.value.resetsAt !== null) return window.value.resetsAt > now;
+  const resetsAt = window.value.resetsAt;
+  if (resetsAt !== null && resetsAt <= now) return false;
   if (window.observedAt === null) return true;
+  if (resetsAt !== null) {
+    const rivalReset = rival?.value.resetsAt ?? null;
+    return !(rivalReset !== null && rivalReset > resetsAt && cycleOpenedAfter(rival, window.observedAt));
+  }
   const windowMinutes = typeof window.value.windowMinutes === "number"
     ? window.value.windowMinutes
     : key === "weekly" ? WEEKLY_WINDOW_MINUTES : SESSION_WINDOW_MINUTES;

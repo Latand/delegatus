@@ -1234,6 +1234,22 @@ test("an estimated context number is marked as one — a guess never reads as a 
   expect(incumbentRow(host)!.textContent).toContain("~53%");
 });
 
+test("an estimate at 100% is never the red chip; a provider count there is", async () => {
+  const chipTone = async (estimated: boolean) => {
+    const host = await mountLive(incumbent({
+      context: { tokens: 1_250_549, limit: 1_000_000, percent: 100, estimated, basis: "", policy: "claude-opus-1m" },
+    }));
+    const face = incumbentRow(host)!.querySelector("[data-orchestrator-context] > span")!;
+    return { text: face.textContent, className: face.className };
+  };
+
+  const estimate = await chipTone(true);
+  expect(estimate.text).toBe("~100%");
+  expect(estimate.className).not.toContain("text-danger");
+  expect(estimate.className).toContain("text-warning");
+  expect((await chipTone(false)).className).toContain("text-danger");
+});
+
 test("Rotate over a STALE seat opens the SAME draft on the CURRENT default mandate, names it, and keeps the incumbent's text one press away (#1452)", async () => {
   const host = await mountLive();
 

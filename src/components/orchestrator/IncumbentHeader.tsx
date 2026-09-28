@@ -234,9 +234,10 @@ function ContextMeter({ context }: { context: IncumbentContext | null }) {
   const { t } = useLocale();
   if (!context || context.tokens === null) return null;
   const { percent, estimated } = context;
+  /* An estimate stops at amber: red claims a measured, nearly full window. */
   const tone = percent === null || percent < ROTATION_CONTEXT_PERCENT
     ? { text: "text-secondary", bar: "bg-secondary/50" }
-    : percent >= 90
+    : percent >= 90 && !estimated
       ? { text: "text-danger", bar: "bg-danger" }
       : { text: "text-warning", bar: "bg-warning" };
   const title = [

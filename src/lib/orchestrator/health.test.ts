@@ -5,7 +5,9 @@ import path from "node:path";
 
 import { contextWindowPolicyFor, ROTATION_THRESHOLD_FRACTION } from "./contextPolicy";
 import {
+  ATTACHMENT_ESTIMATE_TOKENS,
   contextReading,
+  estimatedContextTokens,
   lastReportedContextTokens,
   readOrchestratorTranscriptFacts,
   rotationRecommendation,
@@ -162,19 +164,68 @@ test("a recoverable provider reading prevents a bytes estimate from driving stro
   expect(recommendation).toMatchObject({ recommended: false, level: "none", advisory: null });
 });
 
-test("provider usage outside the scan cap leaves the byte fallback visibly estimated", () => {
-  const file = transcript([
-    { type: "assistant", message: { usage: { input_tokens: 100_000 } } },
-    { type: "user", message: { content: [{ type: "image", source: { data: "a".repeat(4 * 1024 * 1024) } }] } },
-  ]);
-  const gathered = readOrchestratorTranscriptFacts(file, null);
-  const context = contextReading({ policy: OPUS, facts: gathered });
-  const recommendation = rotationRecommendation({ context, facts: gathered, activity: "live", policy: OPUS });
+/** Invented base64: `bytes` of a repeating pattern, encoded — no real image. */
+const inventedBase64 = (bytes: number, seed = 0) =>
+  Buffer.from(Array.from({ length: bytes }, (_, index) => (index * 31 + seed) % 256)).toString("base64");
 
+const imageRow = (count: number, bytesEach: number) => ({
+  type: "user",
+  message: {
+    role: "user",
+    content: [
+      ...Array.from({ length: count }, (_, index) => ({ type: "image", source: { type: "base64", media_type: "image/png", data: inventedBase64(bytesEach, index) } })),
+      { type: "text", text: "look at these" },
+    ],
+  },
+});
+
+test("provider usage before a user row larger than the scan depth is still the reading", () => {
+  /* The incident: a seat's bootstrap turn reported usage, then the operator's
+     first message was one 4.4 MB row of base64 images — longer than the whole
+     search depth, so the scan never reached a complete row. */
+  const file = transcript([
+    { type: "assistant", message: { usage: { input_tokens: 2, cache_read_input_tokens: 90_558, cache_creation_input_tokens: 2_309 } } },
+    imageRow(13, 360 * 1024),
+    { type: "last-prompt", text: "look at these" },
+  ]);
+  expect(fs.statSync(file).size).toBeGreaterThan(6 * 1024 * 1024);
+
+  const gathered = readOrchestratorTranscriptFacts(file, null);
+  expect(gathered.reportedContextTokens).toBe(92_869);
+  expect(contextReading({ policy: OPUS, facts: gathered })).toMatchObject({ tokens: 92_869, percent: 9, estimated: false });
+});
+
+test("the byte fallback counts each base64 image at a fixed cost, never at its encoded length", () => {
+  const file = transcript([imageRow(13, 240 * 1024)]);
+  const bytes = fs.statSync(file).size;
+  expect(bytes).toBeGreaterThan(4 * 1024 * 1024);
+
+  const tokens = estimatedContextTokens(file, bytes)!;
+  const textRow = Buffer.byteLength(JSON.stringify(imageRow(13, 0)));
+  expect(tokens).toBeGreaterThanOrEqual(13 * ATTACHMENT_ESTIMATE_TOKENS);
+  expect(tokens).toBeLessThan(13 * ATTACHMENT_ESTIMATE_TOKENS + textRow);
+
+  const gathered = readOrchestratorTranscriptFacts(file, null);
   expect(gathered.reportedContextTokens).toBeNull();
-  expect(context).toMatchObject({ estimated: true });
-  expect(context.basis).toContain("ESTIMATE");
-  expect(recommendation.reasons[0]).toContain("(estimate)");
+  const context = contextReading({ policy: OPUS, facts: gathered });
+  expect(context).toMatchObject({ tokens, estimated: true, percent: 2 });
+  expect(context.basis).toContain("inline image");
+  expect(rotationRecommendation({ context, facts: gathered, activity: "live", policy: OPUS }))
+    .toMatchObject({ recommended: false, level: "none", advisory: null });
+});
+
+test("the fallback estimate follows a growing transcript and a replaced one", () => {
+  const file = transcript([{ type: "user", message: { content: "x".repeat(4_000) } }]);
+  const first = estimatedContextTokens(file, fs.statSync(file).size)!;
+  expect(first).toBeGreaterThan(1_000);
+
+  fs.appendFileSync(file, JSON.stringify(imageRow(2, 30 * 1024)) + "\n", "utf8");
+  const grown = estimatedContextTokens(file, fs.statSync(file).size)!;
+  expect(grown - first).toBeGreaterThanOrEqual(2 * ATTACHMENT_ESTIMATE_TOKENS);
+  expect(grown - first).toBeLessThan(2 * ATTACHMENT_ESTIMATE_TOKENS + 200);
+
+  fs.writeFileSync(file, "{}\n", "utf8");
+  expect(estimatedContextTokens(file, fs.statSync(file).size)).toBe(1);
 });
 
 test("codex token-usage info rows are read too", () => {
@@ -265,13 +316,14 @@ test("an unknown window withholds the threshold recommendation and says the thre
   expect(recommendation.thresholdUnknown).toBe(true);
 });
 
-test("an ESTIMATED usage over the threshold still recommends, and the reason says it is an estimate", () => {
+test("an ESTIMATED usage over the threshold is an ordinary recommendation, never a strong one", () => {
   const policy = contextWindowPolicyFor("claude", "opus-4-8");
   /* 2.4 MB of transcript ≈ 600k estimated tokens — over the 500k threshold. */
   const estimated = facts({ transcriptBytes: 2_400_000 });
   const context = contextReading({ policy, facts: estimated });
   const recommendation = rotationRecommendation({ context, facts: estimated, activity: "live", policy });
-  expect(recommendation.level).toBe("strongly_recommend");
+  expect(recommendation.level).toBe("recommend");
+  expect(recommendation.advisory).toBeNull();
   expect(recommendation.reasons[0]).toContain("(estimate)");
 });
 

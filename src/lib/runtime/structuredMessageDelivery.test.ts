@@ -1195,6 +1195,27 @@ test("legacy synchronization rejects structured command semantics before fallbac
   expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
 });
 
+test("the structured transport refuses a queue send once the owner turns out to be a legacy pane host", async () => {
+  const { registry, conversation } = registryWithConversation();
+  recordLegacyOwner(registry, conversation);
+  const result = await enqueueStructuredMessage({
+    path: artifactPath,
+    conversationId: conversation.id,
+    clientMessageId: "seat-tick:legacy:1",
+    text: "wake text",
+    hasImages: false,
+    policy: "queue",
+  }, {
+    enabled: () => true,
+    client: () => null,
+    registry: () => registry,
+  });
+
+  expect(result).toMatchObject({ ok: false, structured: true, outcome: "failed", status: 409,
+    error: "legacy delivery cannot preserve structured command semantics" });
+  expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
+});
+
 test("a durable legacy host wins over retained structured adapter metadata during runtime client absence", async () => {
   const { registry, conversation } = registryWithConversation();
   recordLegacyOwner(registry, conversation);
@@ -3004,6 +3025,48 @@ test("a post-admission settlement failure preserves the accepted receipt as deli
     outcome: "delivered",
   });
   expect(commands).toBe(1);
+});
+
+test("a runtime throw before any command result still answers with the claimed operation, uncertain, and a replay keeps it", async () => {
+  const { registry, conversation } = registryWithConversation();
+  const commanded: string[] = [];
+  const client = {
+    readSession: sessionReader(async () => snapshot(conversation.id)),
+    command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
+      commanded.push(command.operationId!);
+      throw new Error("runtime host socket closed before it answered");
+    },
+  } as unknown as RuntimeHostClient;
+  const request = {
+    path: artifactPath,
+    conversationId: conversation.id,
+    clientMessageId: "thrown-before-result",
+    text: "the instruction whose command never answered",
+  };
+  const dependencies = { enabled: () => true, client: () => client, registry: () => registry, kick: () => {} };
+
+  const thrown = await enqueueStructuredMessage(request, dependencies);
+
+  const reservation = Object.values(registry.snapshot().heldDeliveries)
+    .find((delivery) => delivery.clientMessageId === request.clientMessageId)!;
+  expect(reservation.state).toBe("delivery-uncertain");
+  expect(thrown).toMatchObject({
+    ok: false,
+    structured: true,
+    outcome: "failed",
+    operationId: reservation.command.operationId,
+    transportUncertain: true,
+    error: "runtime host socket closed before it answered",
+  });
+  /* The same send asked again is the same accepted operation: the retry
+     reaches the journal under the operation it already owns, which dedupes it,
+     and never under a new one. */
+  expect(await enqueueStructuredMessage(request, dependencies)).toMatchObject({
+    ok: false,
+    operationId: reservation.command.operationId,
+    transportUncertain: true,
+  });
+  expect(commanded).toEqual([reservation.command.operationId, reservation.command.operationId]);
 });
 
 test("a runtime-synchronization hold persists the admission origin, and a replay without it stays compatible", async () => {
