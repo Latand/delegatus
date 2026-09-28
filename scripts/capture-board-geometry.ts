@@ -5342,6 +5342,7 @@ async function lightboxMain(): Promise<void> {
    fixture, so no capture can start a real update or restart. */
 async function selfUpdateAutoMain(): Promise<void> {
   seedHome();
+  const evidenceDir = process.env.SELF_UPDATE_AUTO_EVIDENCE_DIR?.trim() || null;
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const old = "a".repeat(40);
@@ -5402,7 +5403,12 @@ async function selfUpdateAutoMain(): Promise<void> {
       report.frames[tag] = geometry;
       if (geometry.overflow > 1 || !geometry.controlVisible) report.failures.push(`${tag}: overflow or clipped switch`);
       if (!geometry.text.includes(lang === "uk" ? "Автооновлення" : "Automatic updates")) report.failures.push(`${tag}: wrong interface language`);
-      await page.screenshot({ path: path.join(OUT_DIR, `${tag}.png`) });
+      const frame = path.join(OUT_DIR, `${tag}.png`);
+      await page.screenshot({ path: frame });
+      if (evidenceDir) {
+        fs.mkdirSync(evidenceDir, { recursive: true });
+        fs.copyFileSync(frame, path.join(evidenceDir, `${tag}.png`));
+      }
       await context.close();
     }
   } finally {
@@ -5411,9 +5417,9 @@ async function selfUpdateAutoMain(): Promise<void> {
   }
   const result = JSON.stringify(report, null, 2) + "\n";
   fs.writeFileSync(path.join(OUT_DIR, "self-update-auto.json"), result);
-  if (process.env.SELF_UPDATE_AUTO_EVIDENCE_DIR) {
-    fs.mkdirSync(process.env.SELF_UPDATE_AUTO_EVIDENCE_DIR, { recursive: true });
-    fs.writeFileSync(path.join(process.env.SELF_UPDATE_AUTO_EVIDENCE_DIR, "geometry.json"), result);
+  if (evidenceDir) {
+    fs.mkdirSync(evidenceDir, { recursive: true });
+    fs.writeFileSync(path.join(evidenceDir, "geometry.json"), result);
   }
   if (report.failures.length) throw new Error(report.failures.join("; "));
   console.log(`self-update auto geometry: ${path.join(OUT_DIR, "self-update-auto.json")}`);
