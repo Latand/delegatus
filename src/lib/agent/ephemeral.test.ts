@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   buildEphemeralCommand,
+  EphemeralProfileError,
   runEphemeralAgent,
   type EphemeralAgentRequest,
 } from "./ephemeral";
@@ -66,6 +67,7 @@ test("Codex answer profile is closed and the answer home links only auth", () =>
   expect(args).toContain("--disable apps");
   expect(args).toContain("--disable plugins");
   expect(args).toContain("web_search=disabled");
+  expect(args).toContain("-c project_doc_max_bytes=0");
   expect(args).toContain("--output-schema");
   expect(args).not.toContain("dangerously");
   expect(args).not.toContain("PERSONAL_MARKER");
@@ -149,6 +151,16 @@ test("Claude answer profile excludes settings, connectors, and instruction marke
   expect(built.args.join(" ")).not.toContain("PERSONAL_MARKER");
   expect(built.args.join(" ")).not.toContain(request.prompt);
   expect(built.stdin).toBe(request.prompt);
+});
+test("Claude provider account declines before launch", () => {
+  const request = fixture("claude");
+  request.account.claudeProvider = {
+    baseUrl: "https://provider.invalid",
+    model: "provider-model",
+    smallFastModel: null,
+  };
+  expect(() => buildEphemeralCommand(request)).toThrow("provider account");
+  expect(() => buildEphemeralCommand(request)).toThrow(EphemeralProfileError);
 });
 test("profile errors close before launch", () => {
   const request = fixture("codex");

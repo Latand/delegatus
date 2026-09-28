@@ -106,6 +106,10 @@ function account(engine: "codex" | "claude"): AccountContext {
 }
 function request(engine: "codex" | "claude"): EphemeralAgentRequest {
   const ancestor = path.join(root, `ancestor-${engine}`);
+  if (engine === "codex") {
+    fs.mkdirSync(path.join(ancestor, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(ancestor, "AGENTS.md"), marker);
+  }
   fs.mkdirSync(path.join(ancestor, ".claude"), { recursive: true });
   fs.writeFileSync(path.join(ancestor, ".claude", "CLAUDE.md"), marker);
   return {

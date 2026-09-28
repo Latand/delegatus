@@ -9,7 +9,6 @@ import {
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { statePath } from "@/lib/configDir";
 import {
-  claudeProviderCommand,
   launchDetached,
   headlessRuns,
   reviewerEnvironment,
@@ -150,12 +149,15 @@ export function buildEphemeralCommand(
   const schemaPath = path.join(request.runDir, "schema.json");
   fs.writeFileSync(schemaPath, JSON.stringify(request.schema), { mode: 0o600 });
   if (request.engine === "claude") {
+    if (request.account.claudeProvider)
+      throw new EphemeralProfileError("provider account answer profile unavailable");
     const provider = claudeProviderForHome(request.account.home);
+    if (provider)
+      throw new EphemeralProfileError("provider account answer profile unavailable");
     const baseEnv =
       request.account.kind === "managed"
         ? claudeManagedEnvironment(request.account.home, request.account.env)
         : request.account.env;
-    const model = provider?.model ?? request.model;
     const args = [
       "-p",
       "--output-format",
@@ -170,11 +172,12 @@ export function buildEphemeralCommand(
       JSON.stringify(request.schema),
       "--no-session-persistence",
       "--model",
-      model,
+      request.model,
       ...(request.effort ? ["--effort", request.effort] : []),
     ];
     return {
-      ...claudeProviderCommand(request.account.home, provider, args),
+      command: resolveBinary("claude"),
+      args,
       env: answerEnvironment(baseEnv),
       stdin: request.prompt,
       outputPath: null,
@@ -233,6 +236,8 @@ export function buildEphemeralCommand(
     "-c",
     "web_search=disabled",
     "-c",
+    "project_doc_max_bytes=0",
+    "-c",
     "skills.include_instructions=false",
     "-c",
     "include_environment_context=false",
@@ -265,7 +270,13 @@ export function buildEphemeralCommand(
 export function runEphemeralAgent(
   request: EphemeralAgentRequest,
 ): EphemeralAgentRun {
-  const built = buildEphemeralCommand(request);
+  let built: EphemeralCommand;
+  try {
+    built = buildEphemeralCommand(request);
+  } catch (error) {
+    if (error instanceof EphemeralProfileError) throw error;
+    throw new EphemeralProfileError("answer profile unavailable");
+  }
   const stdout = path.join(request.runDir, "stdout.log");
   const stderr = path.join(request.runDir, "stderr.txt");
   let offset = 0;

@@ -1095,9 +1095,7 @@ What it reuses, and what it adds:
   exit outranks the artifact (`headless.ts:464-478` [code]); the child
   environment scrub that removes `LLV_TOKEN`, the state owner and the
   WakaTime credential (`reviewerEnvironment`, `headless.ts:58-69` [code],
-  exported for this); the Claude provider-account wrapping
-  (`headless.ts:311-314` [code], moved into a small exported helper with no
-  change in behaviour); `claudeManagedEnvironment`
+  exported for this); `claudeManagedEnvironment`
   (`src/lib/accounts/claude.ts:789` [code]).
 - **Added:** the two answer-profile builders of §B.6; a tail reader that
   polls `stdout.log` every 250 ms from the last offset, hands complete lines
@@ -1114,7 +1112,7 @@ The builders are separate from `reviewerCommand`
 (`headless.ts:273-340` [code]) and add no third `sandbox` value to it, because
 the answer profile differs from the reviewer's in almost every flag. It needs
 a different `CODEX_HOME`, about twenty Codex switches and a catalog file. On
-the Claude side it must leave out the `--session-id` the reviewer path always
+the Claude side it leaves out the `--session-id` the reviewer path always
 passes and the `--settings` file it passes whenever the account is known
 (`headless.ts:296-309` [code]). `reviewerCommand` also serves flows and
 pipelines (`src/lib/flows/exec.ts:15` [code]), which this lane must not
@@ -1132,7 +1130,7 @@ environment scrub, and keep separate flag sets.
 | No web search | `-c web_search=disabled` | `--tools ""` (no web tools) | [phase 0] |
 | No sub-agent tools | per-run catalog without `multi_agent_version`; `--disable multi_agent` alone does not remove them | `--tools ""` (no agent tool); init tripwire | E2; E6 |
 | No other acting tools | `--disable view_image`, catalog without `apply_patch_tool_type`, `--disable image_generation --disable goals --disable memories --disable browser_use --disable computer_use --disable sleep_tool` | `--tools ""`, `--restricted` | E3; E6 |
-| No personal instruction files | a dedicated answer `CODEX_HOME` with no `AGENTS.md` | `--restricted --safe-mode`; cwd outside `$HOME` | E1; E6 |
+| No personal instruction files | a dedicated answer `CODEX_HOME` with no `AGENTS.md`; `-c project_doc_max_bytes=0` blocks project files from the cwd and its ancestors | `--restricted --safe-mode`; cwd outside `$HOME` | E1; E6; test 7 |
 | No hooks | the answer home has no config, where Codex hooks live | `--safe-mode`; no `--settings` | Claude: E7. Codex: follows from the empty home (E1, E4) |
 | No MCP servers | `--ignore-user-config`; the answer home has no config | `--strict-mcp-config` | E4; E6 |
 | Structured answer | `--json`, `--output-schema`, `--output-last-message` | `--output-format stream-json --verbose --json-schema` | [phase 0]; E4 |
@@ -1186,6 +1184,7 @@ codex exec -
   --disable multi_agent --disable goals --disable image_generation --disable memories
   --disable browser_use --disable computer_use --disable sleep_tool --disable view_image
   -c web_search=disabled
+  -c project_doc_max_bytes=0
   -c skills.include_instructions=false
   -c include_environment_context=false
   -c include_apps_instructions=false
@@ -1226,7 +1225,6 @@ claude -p
 
 env: by account kind, then the reviewer scrub:
   managed home   → claudeManagedEnvironment(home)       (CLAUDE_CONFIG_DIR = the home)
-  provider       → the provider launcher wrapping        (bin/claude-provider-launch.mjs:54-61 sets env only)
   default        → the Viewer's environment
 cwd: <runDir>/cwd
 ```
@@ -1247,9 +1245,11 @@ cwd: <runDir>/cwd
   CLI returns the schema answer (E6). **`--strict-mcp-config`** with no
   `--mcp-config` loads no MCP server, including the account's hosted
   connectors [phase 0].
-- **No `--session-id`**: there is no transcript to find.
-- **Model.** The target's model, except for provider accounts, which take the
-  provider's model as `headless.ts:299-300` [code] already does.
+- **No `--session-id`**: there is no transcript to find. Provider accounts
+  decline as `profile_error` before launch. Their launcher requires a
+  `--session-id` or `--resume` and appends `--setting-sources ""`; this answer
+  profile has not been probed through that launcher.
+- **Model.** The target's model is used for supported Claude accounts.
 - **cwd outside `$HOME`.** The run directory is under the OS temp root. With
   a cwd under `$HOME`, Claude's ancestor search found the owner's
   `$HOME/.claude/CLAUDE.md` as a project file even with `CLAUDE_CONFIG_DIR`
@@ -1395,11 +1395,11 @@ Bun pin are untouched, so `scripts/verify-runtime-host.ts` is not needed.
 |---|---|---|
 | 1 | `src/lib/externalRelay/protocol.test.ts` | The §A.5 schema accepts the §A.5 examples and refuses each violated limit; unknown fields are ignored; the answer checks of §A.8 (empty reply, over-long text, foreign `reply_to` replaced by null). |
 | 2 | `src/lib/externalRelay/client.test.ts` against `testRelay.ts`, an in-process fake relay service like `src/lib/links/testServer.ts` | Pairing to `completed`, including the owner echo, `owner_changed`, `expired` and `denied`; claim 200 and 204; heartbeat 409 stops the run; completion retried after a dropped response is accepted once (`duplicate: true`); 401 parks `credential_rejected`; 426 parks `unsupported_version`; 429 honours `Retry-After`; HTTP to a public address, a cross-origin `api_base`, a redirect and a body over 1 MiB are refused; every socket has its error handler before the first write. |
-| 3 | `src/lib/agent/ephemeral.test.ts` | The exact argument list per engine; no `--settings`, `--mcp-config`, `--session-id` or `--dangerously-*`; the prompt only on stdin; the environment without `LLV_TOKEN`, `LLV_STATE_OWNER`, `LLV_SPAWN_CAPABILITY` or the credential; the answer home holds only the `auth.json` link; the catalog drops both keys and keeps the rest; a missing catalog entry and a missing `auth.json` both give `profile_error`; a hard cap of `2**31`, `Infinity` or 30 000 is refused. |
-| 4 | `src/lib/externalRelay/runner.test.ts`, with a stub CLI through `launchDetached`'s `runtime.command` seam (`headless.ts:368` [code]) that replays synthetic Codex JSONL and Claude stream-json | Heartbeats keep their interval while the stub prints nothing (L3); one label per heartbeat, the newest; the final JSON never becomes progress; a `command_execution` item and a Claude init with an extra tool each end as `profile_violation`; a clean exit with a written answer is `answered`, a non-zero exit after writing it is `agent_error`; the hard cap fires `hard_cap`; the run directory is gone on every path; slots are freed on every path; a request for a full target is `busy`. |
+| 3 | `src/lib/agent/ephemeral.test.ts` | The exact argument list per engine, including `project_doc_max_bytes=0`; no `--settings`, `--mcp-config`, `--session-id` or `--dangerously-*`; the prompt only on stdin; the environment without `LLV_TOKEN`, `LLV_STATE_OWNER`, `LLV_SPAWN_CAPABILITY` or the credential; the answer home holds only the `auth.json` link; the catalog drops both keys and keeps the rest; a missing catalog entry, missing `auth.json` or provider account declines as `profile_error`; a hard cap of `2**31`, `Infinity` or 30 000 is refused. |
+| 4 | `src/lib/externalRelay/runner.test.ts`, with a stub CLI through `launchDetached`'s `runtime.command` seam (`headless.ts:368` [code]) that replays synthetic Codex JSONL and Claude stream-json | Heartbeats keep their interval while the stub prints nothing (L3); one label per heartbeat, the newest; the final JSON never becomes progress; an unsafe provider home declines as `profile_error` before launch; a `command_execution` item and a Claude init with an extra tool each end as `profile_violation`; a clean exit with a written answer is `answered`, a non-zero exit after writing it is `agent_error`; the hard cap fires `hard_cap`; the run directory is gone on every path; slots are freed on every path; a request for a full target is `busy`. |
 | 5 | `src/lib/externalRelay/poller.test.ts` | Slots advertised per target; a freed slot aborts and reopens the poll; the sweep kills a run whose Viewer is dead, completes it `install_restarted` and removes its directory, and leaves a live Viewer's run alone; nothing starts in staging. |
 | 6 | `src/app/api/external-relay/route.test.ts` | Each guard: cross-origin, access key withheld, agent caller, staging; no response carries the credential or the poll secret. |
-| 7 | `src/lib/agent/ephemeral.probe.test.ts`, run only with `LLV_ANSWER_PROFILE_PROBE=1` | The real installed `codex` and `claude`, driven by the built profile against a loopback stub model endpoint that records what they send, with dummy credentials and temp homes holding marker lines in `AGENTS.md`, `CLAUDE.md`, an ancestor `.claude/CLAUDE.md` and a settings hook. It asserts the offered tools (Codex: `exec` nesting only the clock, `wait`, `request_user_input_async`; Claude: `StructuredOutput`), that no marker reached the request, that no hook ran, and that the answer format is a JSON schema. It uses no model quota; it re-runs on every CLI upgrade. It is the method of the Evidence section, made repeatable. |
+| 7 | `src/lib/agent/ephemeral.probe.test.ts`, run only with `LLV_ANSWER_PROFILE_PROBE=1` | The real installed `codex` and `claude`, driven by the built profile against a loopback stub model endpoint that records what they send, with dummy credentials and temp homes holding marker lines in `AGENTS.md`, `CLAUDE.md`, ancestor `.git/AGENTS.md` and `.claude/CLAUDE.md`, and a settings hook. It asserts the offered tools (Codex: `exec` nesting only the clock, `wait`, `request_user_input_async`; Claude: `StructuredOutput`), that no marker reached the request, that no hook ran, and that the answer format is a JSON schema. It uses no model quota; it re-runs on every CLI upgrade. It is the method of the Evidence section, made repeatable. |
 | 8 | manual, once per engine, in the implementing stage | A live marker probe on a real signed-in account at the lowest effort. Codex: a temp account home whose `auth.json` links to a real account's file and whose `AGENTS.md` holds a marker, run through the real launch path. Claude: the real account, with the marker in a `.claude/CLAUDE.md` above the cwd. The prompt asks the agent to repeat any marker word it was given; the answer must not contain it, and Claude's init event must list only `StructuredOutput` and no MCP servers. The PR records the outcome without identities. |
 | 9 | `src/components/externalRelay/ExternalRelaySection.*.test.tsx` and the phone-driver case | Deferred with the settings UI in §B.9. |
 

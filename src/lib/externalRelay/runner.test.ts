@@ -6,6 +6,7 @@ import { accountManager } from "@/lib/accounts/manager";
 import { procBackend } from "@/lib/proc";
 import { processMatches, terminateHeadlessReviewerGroup } from "@/lib/agent/headless";
 import type { AccountContext } from "@/lib/accounts/contracts";
+import { createManagedClaudeAccount } from "@/lib/accounts/claude";
 import { advertisedSlots, runClaimedRequest, runningCount } from "./runner";
 import { dropRun, externalRelayFile, readRunLedger, updateRelayStore, type PairedRelay } from "./store";
 import { confirmRelayPairing } from "./pairing";
@@ -81,6 +82,46 @@ function stub(script: string) {
   fs.chmodSync(file, 0o700);
   return file;
 }
+test("an unsafe provider home declines as a profile error before launch", async () => {
+  const completions: any[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const previous = accountManager.resolveHeadlessSpawn;
+  const previousClaudeHome = process.env.LLV_CLAUDE_HOME;
+  try {
+    process.env.LLV_CLAUDE_HOME = path.join(root, "empty-claude-home");
+    fs.mkdirSync(process.env.LLV_CLAUDE_HOME, { recursive: true });
+    const provider = createManagedClaudeAccount("Relay provider", {
+      config: { baseUrl: "https://provider.invalid", model: "provider-model", smallFastModel: null },
+      token: "local-provider-fixture-token",
+    });
+    fs.rmSync(path.join(provider.home, ".provider-token"));
+    const unsafeAccount: AccountContext = {
+      ...account,
+      engine: "claude",
+      home: provider.home,
+    };
+    accountManager.resolveHeadlessSpawn = (() => ({
+      kind: "available", account: unsafeAccount,
+    })) as typeof previous;
+    const paired = relay(`${server.origin}/v1`);
+    paired.targets[0] = { ...paired.targets[0]!, engine: "claude", model: "haiku" };
+    const outcome = await runClaimedRequest(paired, {
+      ...sampleRequest, request_id: "rq_unsafe_provider_home",
+    }, undefined, { command: stub("throw new Error('should not launch')") });
+    expect(outcome).toMatchObject({ outcome: "declined", reason: "profile_error" });
+    expect(completions).toHaveLength(1);
+    expect(readRunLedger().runs).toEqual([]);
+    expect(runningCount(paired.id, "target_1")).toBe(0);
+  } finally {
+    accountManager.resolveHeadlessSpawn = previous;
+    if (previousClaudeHome === undefined) delete process.env.LLV_CLAUDE_HOME;
+    else process.env.LLV_CLAUDE_HOME = previousClaudeHome;
+    await server.close();
+  }
+});
 test("heartbeats continue through silence, newest progress is sent, completion frees slot", async () => {
   const beats: any[] = [];
   const completed: any[] = [];
