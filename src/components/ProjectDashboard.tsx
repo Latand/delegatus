@@ -64,6 +64,7 @@ import { MobileSeatCard } from "./mobile/MobileSeatCard";
 import { activityMobileMenuEntry } from "./activity/menuEntry";
 import { teamMobileMenuEntry } from "./team/menuEntry";
 import { onboardingMobileMenuEntries } from "./onboarding/menuEntries";
+import { openLinkedSettings } from "./links/openLinkedSettings";
 import { selfUpdateMobileMenuEntry } from "./selfUpdate/menuEntry";
 import { MobileMenuSheet, type MobileMenuEntry } from "./mobile/MobileMenuSheet";
 import { showReceipt } from "./mobile/MobileReceipt";
@@ -2064,6 +2065,7 @@ function ProjectDashboardView({
       { kind: "custom", key: "awake", node: <div className="px-2.5"><KeepAwakeMenuRow /></div> },
       { kind: "divider", key: "d-setup" },
       ...onboardingMobileMenuEntries(t, () => mobileNav.closeSheet()),
+      { kind: "row", key: "linked-settings", icon: null, label: t("links.title"), onSelect: () => { mobileNav.closeSheet(); openLinkedSettings(); } },
       selfUpdateMobileMenuEntry(t, () => mobileNav.closeSheet()),
       /* The project's merge and bridge report settings (#2187 §6, #2146), the
          same rows as the desktop ⋯. */

@@ -1,0 +1,88 @@
+{
+  "readings": [
+    {
+      "width": 390,
+      "locale": "en",
+      "mode": "safe",
+      "state": "Reachable at this address.",
+      "overflow": false
+    },
+    {
+      "width": 1440,
+      "locale": "en",
+      "mode": "safe",
+      "state": "Reachable at this address.",
+      "overflow": false
+    },
+    {
+      "width": 390,
+      "locale": "uk",
+      "mode": "safe",
+      "state": "Адреса доступна.",
+      "overflow": false
+    },
+    {
+      "width": 1440,
+      "locale": "uk",
+      "mode": "safe",
+      "state": "Адреса доступна.",
+      "overflow": false
+    },
+    {
+      "width": 390,
+      "locale": "en",
+      "mode": "unsafe",
+      "state": "Set up a non-vouching remote entry before publishing this address.",
+      "overflow": false
+    },
+    {
+      "width": 1440,
+      "locale": "en",
+      "mode": "unsafe",
+      "state": "Set up a non-vouching remote entry before publishing this address.",
+      "overflow": false
+    },
+    {
+      "width": 390,
+      "locale": "uk",
+      "mode": "unsafe",
+      "state": "Перед публікацією адреси налаштуйте окремий вхід без довіри до локальних запитів.",
+      "overflow": false
+    },
+    {
+      "width": 1440,
+      "locale": "uk",
+      "mode": "unsafe",
+      "state": "Перед публікацією адреси налаштуйте окремий вхід без довіри до локальних запитів.",
+      "overflow": false
+    },
+    {
+      "width": 390,
+      "locale": "en",
+      "mode": "keyoff",
+      "state": "Turn on the access key first.",
+      "overflow": false
+    },
+    {
+      "width": 1440,
+      "locale": "en",
+      "mode": "keyoff",
+      "state": "Turn on the access key first.",
+      "overflow": false
+    },
+    {
+      "width": 390,
+      "locale": "uk",
+      "mode": "keyoff",
+      "state": "Спочатку увімкніть ключ доступу.",
+      "overflow": false
+    },
+    {
+      "width": 1440,
+      "locale": "uk",
+      "mode": "keyoff",
+      "state": "Спочатку увімкніть ключ доступу.",
+      "overflow": false
+    }
+  ]
+}

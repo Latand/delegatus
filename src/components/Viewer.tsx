@@ -43,6 +43,7 @@ import { ArtifactPreviewHost } from "./preview/ArtifactPreviewHost";
 import { OnboardingHost } from "./onboarding/OnboardingDialog";
 import { OnboardingWalk } from "./onboarding/OnboardingWalk";
 import { SelfUpdateHost } from "./selfUpdate/SelfUpdateDialog";
+import { LinkedSettingsHost } from "./links/LinkedSettingsDialog";
 import { VoiceBridgeRelayHost } from "./voice/VoiceBridgeRelayHost";
 import { VoiceComposerHost } from "./voice/VoiceComposerHost";
 import { VoicePipHost } from "./voice/VoicePipHost";
@@ -1745,6 +1746,7 @@ function ViewerApp() {
       <OnboardingWalk project={project === OVERVIEW ? null : project} projectCwd={project === OVERVIEW ? undefined : projectCwds[project]} mobile={isMobile} />
       {/* #2007: the Update surface, opened from the menus' "Update" row. */}
       <SelfUpdateHost />
+      <LinkedSettingsHost />
       {/* #691: the ONE voice conversation panel, portalled into the card's dock
           slot or the floating PiP window. Mounted here rather than in the card
           because the card unmounts on board navigation while the call keeps

@@ -9,6 +9,7 @@ import { PhoneGateRefusal, restorePhoneAccessGate, type AccessResponse, type Pho
 import { internalServiceHeaders, spawnCapabilityDigest } from "@/lib/agent/callerClaims";
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { statePath } from "@/lib/configDir";
+import { linksNeedGate, readSelf, selfFile } from "@/lib/links/self";
 import { claimInstall, createInvite, redeemJoin } from "@/lib/team/members";
 import { MEMBER_COOKIE } from "@/lib/team/sessions";
 import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
@@ -21,6 +22,7 @@ import { recordViewerEntries, VIEWER_ENTRIES_FILE } from "@/runtime-host/viewerE
 import { createTailscaleStub, STUB_DNS_NAME, type TailscaleStub } from "@/test-helpers/tailscaleStub";
 
 import { detectTailscale } from "../../../../../bin/tailscale.mjs";
+import { appDirIn } from "../../../../../bin/appDir.mjs";
 
 import { GET } from "../route";
 import { POST } from "./route";
@@ -33,7 +35,7 @@ import { POST } from "./route";
 
 const PORT = 4310;
 const GATE = ["LLV_TOKEN", "LLV_TS_HOST", "LLV_TS_URL"] as const;
-const SAVED = ["PATH", "XDG_CONFIG_HOME", "PORT", "HOSTNAME", "LLV_DOCKER_NSENTER_SHIMS", "LLV_DOCKER_TAILSCALE_SHIM", "LLV_VIEWER_PORT", "LLV_STAGING", ...GATE] as const;
+const SAVED = ["PATH", "XDG_CONFIG_HOME", "LLV_STATE_DIR", "PORT", "HOSTNAME", "LLV_DOCKER_NSENTER_SHIMS", "LLV_DOCKER_TAILSCALE_SHIM", "LLV_VIEWER_PORT", "LLV_STAGING", ...GATE] as const;
 const saved: Record<string, string | undefined> = {};
 
 let stub: TailscaleStub;
@@ -64,6 +66,7 @@ beforeEach(() => {
   setEnv("LLV_DOCKER_TAILSCALE_SHIM", canaryShim());
   setEnv("LLV_STAGING", undefined);
   setEnv("XDG_CONFIG_HOME", config);
+  setEnv("LLV_STATE_DIR", path.join(config, "state"));
   setEnv("PATH", stub.dir);
   setEnv("PORT", undefined);
   setEnv("HOSTNAME", "127.0.0.1");
@@ -86,7 +89,7 @@ afterEach(() => {
 const gatewayFile = () => statePath(VIEWER_GATEWAY_FILE);
 const entriesFile = () => statePath(VIEWER_ENTRIES_FILE);
 
-const appDir = () => path.join(config, "agent-log-viewer");
+const appDir = () => appDirIn(config);
 const flagFile = () => path.join(appDir(), "phone-access");
 const tokenFile = () => path.join(appDir(), "token");
 
@@ -276,6 +279,9 @@ describe("POST /api/access/phone disable", () => {
   test("takes the mapping down, forgets the choice, lifts the gate and keeps the key", async () => {
     expect((await press("enable")).status).toBe(200);
     const key = fs.readFileSync(tokenFile(), "utf8");
+    expect(readSelf()).toBeNull();
+    expect(fs.existsSync(statePath("links/grants.json"))).toBe(false);
+    expect(linksNeedGate()).toBe(false);
     const response = await press("disable");
     expect(response.status).toBe(200);
     expect(stub.calls()).toContain(`serve --https=443 ${PORT} off`);
@@ -312,6 +318,15 @@ describe("POST /api/access/phone disable", () => {
     expect((await press("disable")).status).toBe(200);
     expect(process.env.LLV_TOKEN).toMatch(/^[0-9a-f]{32}$/);
     expect(process.env.LLV_TS_URL).toBeUndefined();
+  });
+
+  test("a loopback Viewer keeps its key while a public address is saved", async () => {
+    expect((await press("enable")).status).toBe(200);
+    fs.mkdirSync(path.dirname(selfFile()), { recursive: true });
+    fs.writeFileSync(selfFile(), JSON.stringify({ v: 1, installId: "install-a", label: "server", publicUrl: "https://board.example.test", check: null }));
+    expect((await press("disable")).status).toBe(200);
+    expect(process.env.LLV_TOKEN).toMatch(/^[0-9a-f]{32}$/);
+    expect(fs.existsSync(flagFile())).toBe(false);
   });
 
   test("an unknown action is refused", async () => {

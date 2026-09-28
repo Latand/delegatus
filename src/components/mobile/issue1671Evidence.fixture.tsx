@@ -848,6 +848,15 @@ const bridgeSetting = { enabled: new URLSearchParams(location.search).get("bridg
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
+  if (url.pathname === "/api/links") {
+    const linked = new URLSearchParams(location.search).get("linked");
+    return json({
+    self: { v: 1, installId: "fixture-install", label: "Example server", publicUrl: "https://delegatus.example.com", check: { code: "ok", at: "2026-09-28T12:00:00.000Z" } },
+    state: linked === "unsafe" ? "needs-remote-entry" : linked === "keyoff" ? "needs-access-key" : "ok",
+    entry: { port: linked === "unsafe" ? 8898 : 8897, publishable: linked !== "unsafe" },
+    keyOn: linked !== "keyoff", tailnetUrl: "https://example.tailnet.ts.net",
+    });
+  }
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
   if (url.pathname === "/api/log/provenance" && AGENT_LABEL) return json((await deliveredAgentEvidence()).provenance);
   if (url.pathname === "/api/conversation-host" && method === "POST") {

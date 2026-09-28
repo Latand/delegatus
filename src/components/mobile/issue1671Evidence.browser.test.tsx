@@ -1,4 +1,4 @@
-import { test } from "bun:test";
+import { expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -44,6 +44,39 @@ const runningPath = (account: string) => `/state/agent-log-viewer/shared/account
 const RUNNING_PATH = runningPath("spare");
 const VIEWPORTS = [{ width: 390, height: 844 }, { width: 430, height: 932 }] as const;
 const SCHEMES = ["light", "dark"] as const;
+
+browserTest("linked installs: this install renders at 390 and desktop widths in en and uk", async () => {
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const out = path.resolve(".artifacts/linked-installs");
+  fs.mkdirSync(out, { recursive: true });
+  const readings: Array<{ width: number; locale: string; mode: string; state: string; overflow: boolean }> = [];
+  try {
+    for (const mode of ["safe", "unsafe", "keyoff"] as const) for (const locale of ["en", "uk"] as const) for (const width of [390, 1440]) {
+      const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: "dark" });
+      try {
+        await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+        const page = await context.newPage();
+        await page.goto(`${base}/?linked=${mode}`);
+        await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-linked-settings")));
+        const expected = mode === "unsafe" ? "needs-remote-entry" : mode === "keyoff" ? "needs-access-key" : "ok";
+        await page.locator(`[data-linked-state="${expected}"]`).waitFor();
+        const dialog = page.locator("[data-linked-settings]");
+        const overflow = await dialog.evaluate((element) => element.scrollWidth > window.innerWidth);
+        const state = await page.locator(`[data-linked-state="${expected}"]`).innerText();
+        expect(overflow).toBe(false);
+        expect(await dialog.locator('input[type="url"]').inputValue()).toBe("https://delegatus.example.com");
+        expect(state.length).toBeGreaterThan(0);
+        if (mode === "unsafe") expect((await dialog.innerText())).not.toContain("127.0.0.1:8898");
+        if (mode === "keyoff") expect(await dialog.getByRole("button", { name: locale === "uk" ? "Увімкнути ключ доступу" : "Turn on the access key" }).count()).toBe(1);
+        await page.screenshot({ path: path.join(out, `${mode}-${width}-${locale}.png`), fullPage: true });
+        readings.push({ width, locale, mode, state, overflow });
+      } finally { await context.close(); }
+    }
+  } finally { await browser.close(); stop(); }
+  fs.mkdirSync("evidence/linked-installs", { recursive: true });
+  fs.writeFileSync("evidence/linked-installs/this-install.json", `${JSON.stringify({ readings }, null, 2)}\n`);
+}, 120_000);
 
 type Point = [number, number];
 interface Rect { x: number; y: number; width: number; height: number }

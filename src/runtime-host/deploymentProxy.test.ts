@@ -390,6 +390,20 @@ test("the trusted local entry vouches only for a Host that names loopback: a DNS
   }
 });
 
+test("a trusted local entry never vouches for a proxied loopback Host", async () => {
+  const entry = await gateway();
+  try {
+    for (const header of ["X-Forwarded-For: 203.0.113.7", "X-Real-IP: 203.0.113.7", "Forwarded: for=203.0.113.7"]) {
+      const result = await curl(entry.localPort, "/api/files", "-H", "Host: LOCALHOST:443", "-H", header);
+      expect(result.status).toBe(403);
+      expect(entry.viewer.seen.at(-1)?.vouched).toBe(false);
+    }
+    const local = await curl(entry.localPort, "/api/files", "-H", "Host: LOCALHOST:443");
+    expect(local.status).toBe(200);
+    expect(entry.viewer.seen.at(-1)?.vouched).toBe(true);
+  } finally { await entry.close(); }
+});
+
 test("the remote entry rejects an unauthenticated request whatever local identity its headers forge", async () => {
   const entry = await gateway();
   try {

@@ -219,6 +219,14 @@ export function isLoopbackHost(host: string | undefined): boolean {
   return LOOPBACK_HOST_NAMES.has(name.toLowerCase());
 }
 
+/** Representative spoof names shared by the pairing and local self-check. */
+export const LOOPBACK_PROBE_NAMES = [
+  "127.0.0.1", "localhost", "[::1]", "127.0.0.1:{port}", "localhost:{port}", "[::1]:{port}", "LOCALHOST",
+] as const;
+export function LOOPBACK_PROBE_HOSTS(port: string): readonly string[] {
+  return LOOPBACK_PROBE_NAMES.map((name) => name.replace("{port}", port));
+}
+
 /** Connection-scoped headers never cross the hop; node:http frames each hop
     itself. Forwarding `transfer-encoding` verbatim made Bun 1.3.3 answer
     `chunked, chunked`. */
@@ -271,14 +279,15 @@ export function serveViewerLocalEntry(
     reported.add(line);
     report(line);
   };
-  const vouchedCredential = (target: ViewerReleaseIdentity, hostHeader: string | undefined): string | null => {
+  const vouchedCredential = (target: ViewerReleaseIdentity, headers: http.IncomingHttpHeaders): string | null => {
     const gateway = readViewerGatewayConfig(options.gatewayFile, port);
     if (gateway.problem) {
       reportOnce(`[runtime host] viewer gateway ${options.gatewayFile} ignored, local entry stays authenticated: ${gateway.problem}`);
       return null;
     }
     if (gateway.config.localEntry !== "trusted") return null;
-    if (!isLoopbackHost(hostHeader)) return null;
+    if (!isLoopbackHost(headers.host)) return null;
+    if (headers.forwarded !== undefined || headers["x-forwarded-for"] !== undefined || headers["x-real-ip"] !== undefined) return null;
     const credential = options.releaseCredential(target);
     if (credential === null) {
       reportOnce(`[runtime host] viewer gateway: local entry is trusted but no credential is known for release container ${target.container}; requests stay authenticated`);
@@ -298,7 +307,7 @@ export function serveViewerLocalEntry(
       return;
     }
     const headers = forwardedHeaders(request.headers);
-    const credential = vouchedCredential(target, request.headers.host);
+    const credential = vouchedCredential(target, request.headers);
     if (credential !== null) headers.authorization = `Bearer ${credential}`;
     const upstream = http.request({
       ...endpointAddress(target),
@@ -332,7 +341,7 @@ export function serveViewerLocalEntry(
       downstream.end(UNAVAILABLE);
       return;
     }
-    const credential = vouchedCredential(target, request.headers.host);
+    const credential = vouchedCredential(target, request.headers);
     const upstream = net.createConnection(endpointAddress(target));
     upstream.on("error", () => {
       upstream.destroy();
