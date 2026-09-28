@@ -78,7 +78,9 @@ function isNullableString(value: unknown): value is string | null {
 }
 
 function isVerdict(value: unknown): boolean {
-  return value === null || stageVerdictFrom(value) !== null;
+  // Older persisted attempts may contain a bare severity such as "P1".
+  // New completion input still requires finding text; only stored history uses this path.
+  return value === null || stageVerdictFrom(value, { allowLegacySeverityOnly: true }) !== null;
 }
 
 function isReviewFlowSync(value: unknown): boolean {
@@ -177,6 +179,7 @@ function isAttempt(value: unknown, index: number): boolean {
     isReviewFlowSync(attempt.reviewFlowSync) &&
     isNullableString(attempt.startedAt) &&
     isNullableString(attempt.completedAt) &&
+    (attempt.outputBaseHead === undefined || (typeof attempt.outputBaseHead === "string" && /^[0-9a-f]{40}$/i.test(attempt.outputBaseHead))) &&
     (attempt.input === undefined || isNullableString(attempt.input)) &&
     isActivation(attempt.activatedBy) &&
     isNullableString(attempt.output) &&
@@ -276,7 +279,7 @@ function isStageReport(value: unknown): boolean {
   return Number.isSafeInteger(report.seq) && (report.seq as number) >= 1
     && typeof report.at === "string"
     && isActor(report.actor)
-    && stageVerdictFrom(report.verdict) !== null
+    && stageVerdictFrom(report.verdict, { allowLegacySeverityOnly: true }) !== null
     && isNullableString(report.summary)
     && isStageProvenance(report.provenance)
     && Number.isSafeInteger(report.calls) && (report.calls as number) >= 1;

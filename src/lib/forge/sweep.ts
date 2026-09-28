@@ -27,6 +27,7 @@ export const FORGE_FILL_LIMIT = 10;
 const FORGE_TIMEOUT_MS = 20_000;
 
 const PR_FIELDS = "number,url,headRefName,headRefOid,state,isDraft,createdAt,updatedAt,closingIssuesReferences";
+const LEGACY_PR_FIELDS = "number,url,headRefName,headRefOid,state,isDraft,createdAt,updatedAt";
 
 export interface ForgeSweepPorts {
   now: () => number;
@@ -126,13 +127,49 @@ type RepositoryOutcome =
   | { ok: true; rows: SweptRow[]; complete: boolean; full: boolean; canonical: string | null; filled: SweptRow[]; issues: number[] }
   | { ok: false; error: ForgeSweepError };
 
+/** Debian's gh cannot name closingIssuesReferences in --json. Keep that
+ * linkage by asking GraphQL for each returned page in one bounded batch. */
+async function legacyPullRequestRows(raw: string, run: GithubRunner): Promise<string> {
+  const rows: unknown = JSON.parse(raw);
+  if (!Array.isArray(rows)) throw new Error("legacy pull request list is malformed");
+  for (let start = 0; start < rows.length; start += FORGE_PAGE_LIMIT) {
+    const batch = rows.slice(start, start + FORGE_PAGE_LIMIT) as Record<string, unknown>[];
+    const repository = batch.map((row) => typeof row.url === "string" ? repositoryOfUrl(row.url) : null).find(Boolean);
+    if (!repository) throw new Error("legacy pull request list has no repository");
+    const [owner, name] = repository.split("/");
+    const aliases = batch.map((row, index) => {
+      if (!Number.isSafeInteger(row.number)) throw new Error("legacy pull request number is malformed");
+      return `p${index}: pullRequest(number: ${row.number}) { closingIssuesReferences(first: 100) { nodes { number url } pageInfo { hasNextPage } } }`;
+    });
+    const query = `query { repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) { ${aliases.join(" ")} } }`;
+    const answer = JSON.parse(await run(["api", "graphql", "-f", `query=${query}`])) as { data?: { repository?: Record<string, unknown> }; errors?: unknown[] };
+    if (answer.errors?.length || !answer.data?.repository) throw new Error("closing issue references could not be read");
+    for (const [index, row] of batch.entries()) {
+      const pr = answer.data.repository[`p${index}`] as { closingIssuesReferences?: { nodes?: unknown[]; pageInfo?: { hasNextPage?: boolean } } } | null;
+      const refs = pr?.closingIssuesReferences;
+      if (!Array.isArray(refs?.nodes) || refs.pageInfo?.hasNextPage !== false
+        || refs.nodes.some((ref) => !ref || typeof ref !== "object"
+          || !Number.isSafeInteger((ref as { number?: unknown }).number)
+          || typeof (ref as { url?: unknown }).url !== "string")) throw new Error("closing issue references are incomplete");
+      row.closingIssuesReferences = refs.nodes;
+    }
+  }
+  return JSON.stringify(rows);
+}
+
 async function readRepository(repository: string, entry: ForgeRepositoryEntry | undefined, demand: Demand, ports: ForgeSweepPorts, startedAt: string): Promise<RepositoryOutcome> {
   const name = entry?.canonical ?? repository;
   const list = async (args: string[]): Promise<SweptRow[] | ForgeSweepError> => {
     try {
       return parseRows(await ports.run(["pr", "list", "--repo", name, "--state", "all", ...args, "--json", PR_FIELDS]), startedAt) ?? "malformed-output";
     } catch (error) {
-      return githubUnavailableFromError(error);
+      if (!/Unknown JSON field[^\n]*closingIssuesReferences/i.test(`${(error as { stderr?: unknown })?.stderr ?? ""}\n${(error as Error)?.message ?? ""}`)) return githubUnavailableFromError(error);
+      try {
+        const raw = await ports.run(["pr", "list", "--repo", name, "--state", "all", ...args, "--json", LEGACY_PR_FIELDS]);
+        return parseRows(await legacyPullRequestRows(raw, ports.run), startedAt) ?? "malformed-output";
+      } catch (fallbackError) {
+        return githubUnavailableFromError(fallbackError);
+      }
     }
   };
   let rows: SweptRow[] | ForgeSweepError | null = null;
@@ -168,7 +205,14 @@ async function readRepository(repository: string, entry: ForgeRepositoryEntry | 
   const issues: number[] = [];
   for (const number of missing) {
     try {
-      const raw = await ports.run(["pr", "view", String(number), "--repo", canonical ?? name, "--json", PR_FIELDS]);
+      let raw: string;
+      try {
+        raw = await ports.run(["pr", "view", String(number), "--repo", canonical ?? name, "--json", PR_FIELDS]);
+      } catch (error) {
+        if (!/Unknown JSON field[^\n]*closingIssuesReferences/i.test(`${(error as { stderr?: unknown })?.stderr ?? ""}\n${(error as Error)?.message ?? ""}`)) throw error;
+        const legacy = await ports.run(["pr", "view", String(number), "--repo", canonical ?? name, "--json", LEGACY_PR_FIELDS]);
+        raw = (await legacyPullRequestRows(`[${legacy.trim()}]`, ports.run)).slice(1, -1);
+      }
       const parsed = parseRows(`[${raw.trim()}]`, startedAt);
       if (parsed?.[0]) filled.push(parsed[0]);
     } catch (error) {
