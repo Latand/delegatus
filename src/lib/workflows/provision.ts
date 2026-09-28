@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { pidAlive } from "@/lib/scanner/process";
+import { controllerCommitIdentityArgs } from "@/lib/git/controllerCommitIdentity";
 import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 
 import { setupExitPath, setupStderrPath, setupStdoutPath } from "./store";
@@ -188,7 +189,8 @@ export function finishMerge(wf: Workflow, exec: ExecPort): FinishResult {
   if (current !== wf.baseBranch) {
     return { ok: false, error: `the repo checkout is on ${current}; check out ${wf.baseBranch} before merging` };
   }
-  const merge = exec("git", ["merge", "--no-ff", wf.branch, "-m", `Merge ${wf.branch}: ${prTitle(wf)}`], wf.repoDir);
+  const identity = controllerCommitIdentityArgs(exec, wf.repoDir);
+  const merge = exec("git", [...identity, "merge", "--no-ff", wf.branch, "-m", `Merge ${wf.branch}: ${prTitle(wf)}`], wf.repoDir);
   if (merge.code !== 0) {
     /* Leave the checkout clean: an aborted merge is retryable after the user
        resolves whatever blocked it. */
