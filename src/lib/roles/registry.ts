@@ -1,7 +1,9 @@
 import { effortScale } from "@/lib/agent/efforts";
 import { validateLaunchModel } from "@/lib/agent/models";
 
-import { BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE } from "./defaults";
+import { ORCHESTRATOR_TASK_OWNERSHIP_HEADING } from "@/lib/orchestrator/prompt";
+
+import { BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE, ORCHESTRATOR_WITHOUT_MANDATE_RULES } from "./defaults";
 import { configForVariant } from "./paramConfig";
 import { defaultRoleParameterValue } from "./parameters";
 import { loadRoleDefinitions } from "./store";
@@ -121,11 +123,22 @@ export function roleScaffoldBody(definition: RoleDefinition, params: RoleParamVa
     gets it. */
 export const SPAWN_COMPLETION = "When you finish, end your final message with one line: Verdict: pass, Verdict: fail or Verdict: needs_decision. They mean what they mean for a pipeline stage: pass when the brief's contract is complete, with any notes above that line; fail with the findings listed above it; needs_decision with the question, the options and your recommendation above it. That line replaces any other ending the brief asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS).";
 
+/** Whether a brief carries the seat mandate: every delivered mandate carries
+    the task-ownership section, since delivery appends it when missing. */
+function carriesSeatMandate(text: string): boolean {
+  return text.includes(ORCHESTRATOR_TASK_OWNERSHIP_HEADING);
+}
+
 /** The first message of a role spawn: the scaffold, the caller's brief and the
-    completion line; a spawn without a role is the brief alone. */
+    completion line; a spawn without a role is the brief alone. An orchestrator
+    reports outcomes and gets no completion line; one launched without the
+    mandate gets the shared rules its scaffold leaves to the mandate. */
 export function roleSpawnPrompt(role: { role: RoleId; scaffold: string } | null, userPrompt: string): string {
   if (!role) return userPrompt;
-  return [role.scaffold, userPrompt, role.role === "orchestrator" ? "" : SPAWN_COMPLETION].filter(Boolean).join("\n\n");
+  const ending = role.role !== "orchestrator"
+    ? SPAWN_COMPLETION
+    : carriesSeatMandate(userPrompt) ? "" : ORCHESTRATOR_WITHOUT_MANDATE_RULES;
+  return [role.scaffold, userPrompt, ending].filter(Boolean).join("\n\n");
 }
 
 /** The trailing safety-fence block for a role, or "" when it declares none. */

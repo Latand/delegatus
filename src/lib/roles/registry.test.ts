@@ -3,6 +3,8 @@ import { expect, test } from "bun:test";
 import { BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE, PROCESS_CLEANUP_MARKER } from "./defaults";
 import { defaultRoleParameterValue } from "./parameters";
 import { variantForParams } from "./paramConfig";
+import { ORCHESTRATOR_TASK_OWNERSHIP_HEADING } from "@/lib/orchestrator/prompt";
+
 import { APPLY_FIXES_GUIDANCE, listRoles, resolveRole, resolveSpawnRole, roleFenceBlock, roleScaffoldBody, roleSpawnPrompt, SPAWN_COMPLETION } from "./registry";
 
 test("role registry exposes the frozen eight role ids and campaign-ready orchestrator config", () => {
@@ -331,7 +333,15 @@ test("a builder fix round carries the apply-fixes guidance", () => {
    Verdict line; the orchestrator reports outcomes and gets none. */
 test("a role spawn ends with the verdict line, and a seat or a role-less spawn does not", () => {
   expect(roleSpawnPrompt({ role: "verifier", scaffold: "Scaffold." }, "Check the claim.")).toBe(`Scaffold.\n\nCheck the claim.\n\n${SPAWN_COMPLETION}`);
-  expect(roleSpawnPrompt({ role: "orchestrator", scaffold: "Scaffold." }, "Run the board.")).toBe("Scaffold.\n\nRun the board.");
+  /* Review of #2301: a seat's brief carries the mandate, which holds longer
+     versions of the shared rules; an orchestrator launched without it (a
+     child spawn) gets them, and neither gets a completion line. */
+  const mandate = `${ORCHESTRATOR_TASK_OWNERSHIP_HEADING}\nThe seat's mandate.`;
+  expect(roleSpawnPrompt({ role: "orchestrator", scaffold: "Scaffold." }, mandate)).toBe(`Scaffold.\n\n${mandate}`);
+  const child = roleSpawnPrompt({ role: "orchestrator", scaffold: "Scaffold." }, "Coordinate the migration lanes.");
+  expect(child).toContain("search_transcripts");
+  expect(child).toContain("finish with needs_decision");
+  expect(child).not.toContain(SPAWN_COMPLETION);
   expect(roleSpawnPrompt(null, "Just this.")).toBe("Just this.");
   expect(SPAWN_COMPLETION).toContain("Verdict: pass, Verdict: fail or Verdict: needs_decision");
 });

@@ -1298,6 +1298,13 @@ never edits `role-presets.json`.
 - **Sizing refusals name the class the role table names**: "a large model
   (Claude Opus or Fable, or a large Codex model)", in `roles/sizing.ts` and
   the `create_pipeline` violation in `mcp/bindings.ts`.
+- **An orchestrator without the mandate carries the shared rules** (review of
+  #2301). A seat's brief is its delivered mandate, which always carries the
+  task-ownership section; an orchestrator spawned as a child or run as a
+  pipeline stage gets missing access, project rules, prior conversations and
+  human in the loop after its scaffold instead. A seat's prompt is unchanged.
+- **The fallback block states its own shape**: string findings led by their
+  severity, no summary key, the summary as prose above the block.
 - **A fix stage keeps the implementer's account only on the same engine**
   (review of #2301): a pinned account belongs to one engine, and the fix row
   may run the other.

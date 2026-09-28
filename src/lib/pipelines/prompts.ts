@@ -99,6 +99,6 @@ export function renderStagePrompt(
     "```json",
     '{"status":"pass","findings":[]}',
     "```",
-    "Its status uses the same three words.",
+    "Its status uses the same three words. In the block each finding is a string that starts with its severity, such as \"P1 — what is wrong and where\"; the block has no summary key, so write the summary as prose above it.",
   ].join("\n");
 }

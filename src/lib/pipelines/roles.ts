@@ -1,4 +1,5 @@
 import { configForParams, listRoles, roleFenceBlock, roleScaffoldBody, validateRoleParams } from "@/lib/roles/registry";
+import { ORCHESTRATOR_WITHOUT_MANDATE_RULES } from "@/lib/roles/defaults";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
 import { effortScale } from "@/lib/agent/efforts";
 import { validateLaunchModel } from "@/lib/agent/models";
@@ -50,7 +51,11 @@ export const pipelineRoleLookup: PipelineRoleLookup = (roleId, params) => {
      same frontend guidance resolveRole emits — a hand-rolled substitution here
      dropped it, weakening the Opus scaffold. Fences stay separate so a near-limit
      body can be trimmed to the store cap without ever cutting a fence. */
-  const body = roleScaffoldBody(definition, parameters);
+  /* A pipeline stage never carries the seat mandate, so an orchestrator stage
+     gets the shared rules its scaffold leaves to the mandate. */
+  const body = definition.id === "orchestrator"
+    ? `${roleScaffoldBody(definition, parameters)}\n\n${ORCHESTRATOR_WITHOUT_MANDATE_RULES}`
+    : roleScaffoldBody(definition, parameters);
   const fences = roleFenceBlock(definition);
   return {
     /* Parameter-aware runtime: Builder domain=frontend → its frontend row, a
@@ -155,8 +160,9 @@ export function resolvePipelineRole(
  * Whether a stage's resolved runtime was set by hand rather than taken from its
  * role's row (docs/design/model-sizing-tiers.md §2, R3): the engine or model
  * differs from what the install's mapping gives this role and these params.
- * Judged on the resolved values, so a fix stage that copied its implementer's
- * runtime reads the same as its implementer.
+ * Judged on the resolved values: a converted fix stage runs its fix row and
+ * reads as not explicit, and a fix stage stored before that change, which
+ * copied its implementer's runtime, reads the same as its implementer.
  */
 export function stageRuntimeIsExplicit(
   stage: Pick<PipelineStage, "role" | "effectiveRole">,

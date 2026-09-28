@@ -5,6 +5,7 @@ import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { convertNewLegacyReviewStages } from "./legacyReviewDefinition";
 import { buildPipeline } from "./store";
 import { renderDecisionInput, renderStagePrompt } from "./prompts";
+import { parseStageVerdict } from "./verdict";
 import { pipelineRoleLookup, resolvePipelineRole } from "./roles";
 import type { PipelineStage } from "./types";
 
@@ -59,6 +60,10 @@ test("run prompt renders task, previous output, spec, access, verdict, and nesti
   expect(prompt).toContain('"findings":[]');
   expect(prompt).toContain("it replaces any other ending the brief above asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS): write none of them.");
   expect(prompt).toContain("Its status uses the same three words.");
+  /* Review of #2301: the fallback block's own shape, which the parser reads:
+     string findings led by their severity, and no summary key. */
+  expect(prompt).toContain("In the block each finding is a string that starts with its severity");
+  expect(parseStageVerdict('```json\n{"status":"fail","findings":["P1 — src/a.ts:3 wrong label"]}\n```')).toMatchObject({ verdict: { status: "fail", rankedFindings: [{ severity: "P1", text: "src/a.ts:3 wrong label" }] } });
   expect(prompt).not.toContain("COMMENT");
   expect(prompt).toContain("Role preset: builder");
   expect(prompt).toContain("Keep the implementation focused on pipeline support.");

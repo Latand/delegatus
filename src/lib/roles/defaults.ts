@@ -83,6 +83,11 @@ export const FIX_ROUND_FINISH_LINE = "You are done when every finding that names
     line) and never in a scaffold. */
 const SHARED_RULES = [MISSING_ACCESS, PROJECT_RULES, SEARCH_PRIOR_CONVERSATIONS, HUMAN_IN_THE_LOOP, PROCESS_CLEANUP_RULE].join(" ");
 
+/** The same rules for an orchestrator launched without the mandate (a child
+    spawn, a pipeline stage): its scaffold already carries process cleanup,
+    and a seat's mandate carries longer versions of the rest. */
+export const ORCHESTRATOR_WITHOUT_MANDATE_RULES = [MISSING_ACCESS, PROJECT_RULES, SEARCH_PRIOR_CONVERSATIONS, HUMAN_IN_THE_LOOP].join(" ");
+
 // docs/design/model-sizing-tiers.md §1: the small-change tier. Builder and
 // reviewer only, so any other role refuses size as an unknown parameter.
 const SIZE_PARAMETER: RoleParameter = {

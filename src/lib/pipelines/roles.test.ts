@@ -175,6 +175,15 @@ test("operator role params substitute into the resolved prompt scaffold", () => 
   expect(resolved.role?.promptScaffold).toContain("Lens: scope.");
 });
 
+/* Review of #2301: a pipeline stage never carries the seat mandate, so an
+   orchestrator stage gets the shared rules its scaffold leaves to it. */
+test("an orchestrator pipeline stage carries the shared rules", () => {
+  const scaffold = pipelineRoleLookup("orchestrator", { mode: "standard" })?.promptScaffold ?? "";
+  expect(scaffold).toContain("search_transcripts");
+  expect(scaffold).toContain("finish with needs_decision");
+  expect(scaffold).toContain("The project's own rules govern the work");
+});
+
 test("pipeline role lookup defaults omitted orchestrator maxWorkers to three", () => {
   expect(pipelineRoleLookup("orchestrator")?.promptScaffold).toContain("keep at most 3 workers running at once");
   expect(pipelineRoleLookup("orchestrator", { maxWorkers: 1 })?.promptScaffold).toContain("keep at most 1 workers running at once");
