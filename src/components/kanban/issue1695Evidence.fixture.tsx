@@ -92,6 +92,13 @@ const MARKS = SCENARIO === "issue1743";
    design and critique share the architect preset and critique ran twice — so
    each stage's conversation can be read for which stage it is. */
 const LABELS = SCENARIO === "issue1865";
+/* Readable pipeline graph (docs/design/pipeline-graph-loops.md): lanes whose
+   fail edges fold into their sources — two fix stages docked on their
+   reviewers, completed with both budgets spent and cut back to Review running
+   again; a return over two stages; a retry in place that fired; a completed
+   lane whose passed Build conversation took more work; and stage names of 40
+   characters. */
+const LOOPS = SCENARIO === "graph-loops";
 /* #1820: the Overview draws the SAME board over every project, filtered to the
    cards a worker is working on right now. Two invented projects join `atlas`
    so the shared columns can be read across three, each bringing one card with
@@ -433,6 +440,110 @@ const marksPipelines: Pipeline[] = MARKS ? (() => {
         attempt(2, "failed", spentRev, { effectiveRole: runRole("verifier", "codex", "gpt-6-astra", "xhigh"), startedAt: iso(60 * MIN), activatedBy: { stageId: "fix", attempt: 2, edge: "pass" } }),
       ] },
     ], { stageId: "fix", state: "running", input: null, activatedBy: null }),
+  ];
+})() : [];
+
+const loopsPipelines: Pipeline[] = LOOPS ? (() => {
+  const conv = (id: string, title: string, ago: number, over: Record<string, unknown> = {}) => add(conversation(id, title, { mtime: now - ago * MIN, ...over }));
+  const failVia = (stageId: string, n: number, budgetSpent = false) => ({ activatedBy: { stageId, attempt: n, edge: "fail", ...(budgetSpent ? { budgetSpent: true } : {}) } });
+  const passVia = (stageId: string, n: number) => ({ activatedBy: { stageId, attempt: n, edge: "pass" } });
+  const done = (at: number) => ({ startedAt: iso(at * MIN), completedAt: iso((at - 6) * MIN) });
+  /* Design → Build → Critique → Review, each reviewer with its own fix stage. */
+  const docks = (names: { design: string; build: string; critique: string; critiqueFix: string; review: string; reviewFix: string }) => [
+    stage(names.design, "architect", names.build),
+    stage(names.build, "builder", names.critique),
+    stage(names.critique, "architect", names.review, { onFail: { to: names.critiqueFix, maxRounds: 2 } }),
+    stage(names.critiqueFix, "builder", names.critique),
+    stage(names.review, "reviewer", null, { kind: "run", onFail: { to: names.reviewFix, maxRounds: 3 } }),
+    stage(names.reviewFix, "builder", names.review),
+  ];
+  const short = { design: "design", build: "build", critique: "critique", critiqueFix: "critique-fix", review: "review", reviewFix: "review-fix" };
+  /* The first half every docked lane shares: Critique failed twice, and its
+     second fix handed its findings on past the spent budget. */
+  const firstHalf = (key: string, names: typeof short, from: number) => [
+    { stageId: names.design, attempts: [attempt(1, "passed", conv(`${key}-design`, "Wrote the plan", from), done(from))] },
+    { stageId: names.build, attempts: [attempt(1, "passed", conv(`${key}-build`, "Built the first pass", from - 10), { ...done(from - 10), ...passVia(names.design, 1) })] },
+    { stageId: names.critique, attempts: [
+      attempt(1, "failed", conv(`${key}-crit-1`, "Sent it back: the count hides", from - 20), { ...done(from - 20), ...passVia(names.build, 1) }),
+      attempt(2, "failed", conv(`${key}-crit-2`, "Sent it back again", from - 40), { ...done(from - 40), ...passVia(names.critiqueFix, 1) }),
+    ] },
+    { stageId: names.critiqueFix, attempts: [
+      attempt(1, "passed", conv(`${key}-cfix-1`, "Moved the count out", from - 30), { ...done(from - 30), ...failVia(names.critique, 1) }),
+      attempt(2, "passed", conv(`${key}-cfix-2`, "Took the last findings", from - 50), { ...done(from - 50), ...failVia(names.critique, 2, true) }),
+    ] },
+  ];
+  const reviews = (key: string, names: typeof short, from: number, count: number, lastRunning: boolean) => Array.from({ length: count }, (_, index) => {
+    const running = lastRunning && index === count - 1;
+    const file = conv(`${key}-rev-${index + 1}`, running ? "Reading the third revision" : "Sent it back", from - index * 20, running ? working() : {});
+    return attempt(index + 1, running ? "running" : "failed", file, { ...(running ? { startedAt: iso((from - index * 20) * MIN) } : done(from - index * 20)), ...(index ? passVia(names.reviewFix, index) : passVia(names.critiqueFix, 2)) });
+  });
+  const fixes = (key: string, names: typeof short, from: number, count: number, spentLast: boolean) => Array.from({ length: count }, (_, index) =>
+    attempt(index + 1, "passed", conv(`${key}-rfix-${index + 1}`, "Fixed the review's findings", from - index * 20), { ...done(from - index * 20), ...failVia(names.review, index + 1, spentLast && index === count - 1) }));
+  const long = {
+    design: "design-the-export-for-every-old-format",
+    build: "build-the-export-writer-and-its-presets",
+    critique: "critique-the-export-against-the-old-files",
+    critiqueFix: "fix-what-the-export-critique-found-there",
+    review: "review-the-export-writer-and-its-presets",
+    reviewFix: "fix-what-the-export-review-found-in-there",
+  };
+  return [
+    pipeline("p-loops-done", L("Show a spent review budget on the lane", "Показати вичерпаний бюджет рев’ю на лінії"), "t-loops-done", "completed", docks(short), [
+      ...firstHalf("loops-done", short, 400),
+      { stageId: "review", attempts: reviews("loops-done", short, 340, 3, false) },
+      { stageId: "review-fix", attempts: fixes("loops-done", short, 330, 3, true) },
+    ], null, { closedAt: iso(270 * MIN) }),
+    pipeline("p-loops-review", L("Show a spent review budget on the lane, again", "Показати вичерпаний бюджет рев’ю, знову"), "t-loops-review", "running", docks(short), [
+      ...firstHalf("loops-review", short, 200),
+      { stageId: "review", attempts: reviews("loops-review", short, 140, 2, true) },
+      { stageId: "review-fix", attempts: fixes("loops-review", short, 130, 1, false) },
+    ], { stageId: "review", state: "running", input: null, ...passVia("review-fix", 1) }),
+    pipeline("p-loops-return", L("Resume an upload after a reload", "Продовжити вивантаження після перезавантаження"), "t-loops-return", "running", [
+      stage("plan", "architect", "build"),
+      stage("build", "builder", "critique"),
+      stage("critique", "architect", "review"),
+      stage("review", "reviewer", null, { kind: "run", onFail: { to: "build", maxRounds: 2 } }),
+    ], [
+      { stageId: "plan", attempts: [attempt(1, "passed", conv("loops-return-plan", "Planned the resume token", 160), done(160))] },
+      { stageId: "build", attempts: [
+        attempt(1, "passed", conv("loops-return-build-1", "Built the resume token", 140), { ...done(140), ...passVia("plan", 1) }),
+        attempt(2, "running", conv("loops-return-build-2", "Keeping the token across a reload", 20, working()), { startedAt: iso(20 * MIN), ...failVia("review", 1) }),
+      ] },
+      { stageId: "critique", attempts: [attempt(1, "passed", conv("loops-return-crit", "The plan holds", 110), { ...done(110), ...passVia("build", 1) })] },
+      { stageId: "review", attempts: [attempt(1, "failed", conv("loops-return-rev", "A reload loses the token", 80), { ...done(80), ...passVia("critique", 1) })] },
+    ], { stageId: "build", state: "running", input: null, ...failVia("review", 1) }),
+    pipeline("p-loops-retry", L("Migrate the ledger to the new schema", "Перенести реєстр на нову схему"), "t-loops-retry", "running", [
+      stage("prepare", "architect", "migrate"),
+      stage("migrate", "builder", "verify", { onFail: { to: "migrate", maxRounds: 3 } }),
+      stage("verify", "verifier", null),
+    ], [
+      { stageId: "prepare", attempts: [attempt(1, "passed", conv("loops-retry-prep", "Wrote the migration plan", 90), done(90))] },
+      { stageId: "migrate", attempts: [
+        attempt(1, "failed", conv("loops-retry-mig-1", "The lock timed out", 60), { ...done(60), ...passVia("prepare", 1) }),
+        attempt(2, "running", conv("loops-retry-mig-2", "Migrating in batches", 10, working()), { startedAt: iso(10 * MIN), ...failVia("migrate", 1) }),
+      ] },
+    ], { stageId: "migrate", state: "running", input: null, ...failVia("migrate", 1) }),
+    pipeline("p-loops-rework", L("Keep the draft when the tab closes", "Зберегти чернетку, коли вкладку закрито"), "t-loops-rework", "completed", [
+      stage("build", "builder", "critique"),
+      stage("critique", "architect", null, { onFail: { to: "critique-fix", maxRounds: 1 } }),
+      stage("critique-fix", "builder", "critique"),
+    ], [
+      /* The Build conversation took more work after the lane completed (#1744). */
+      { stageId: "build", attempts: [attempt(1, "passed", conv("loops-rework-build", "Reworking the draft store", 1, working()), done(120))] },
+      { stageId: "critique", attempts: [
+        attempt(1, "failed", conv("loops-rework-crit-1", "The draft is lost on close", 100), { ...done(100), ...passVia("build", 1) }),
+        attempt(2, "passed", conv("loops-rework-crit-2", "Approved", 60), { ...done(60), ...passVia("critique-fix", 1) }),
+      ] },
+      { stageId: "critique-fix", attempts: [attempt(1, "passed", conv("loops-rework-fix", "Saved the draft on close", 80), { ...done(80), ...failVia("critique", 1) })] },
+    ], null, { closedAt: iso(50 * MIN) }),
+    pipeline("p-loops-long", L("Export every old format the importer reads", "Експортувати кожен старий формат, який читає імпорт"), "t-loops-long", "running", docks(long), [
+      ...firstHalf("loops-long", long, 200),
+      { stageId: long.review, attempts: reviews("loops-long", long, 140, 2, false) },
+      { stageId: long.reviewFix, attempts: [
+        attempt(1, "passed", conv("loops-long-rfix-1", "Fixed the review's findings", 130), { ...done(130), ...failVia(long.review, 1) }),
+        attempt(2, "running", conv("loops-long-rfix-2", "Fixing the presets", 5, working()), { startedAt: iso(5 * MIN), ...failVia(long.review, 2) }),
+      ] },
+    ], { stageId: long.reviewFix, state: "running", input: null, ...failVia(long.review, 2) }),
   ];
 })() : [];
 
@@ -886,6 +997,7 @@ const pipelines: Pipeline[] = [
   ...arcPipelines,
   ...labelPipelines,
   ...marksPipelines,
+  ...loopsPipelines,
   ...manyPipelines,
   pipeline("p-search", "Restore search results after the index rebuild", "t-search", "running",
     [stage("implement", "builder", "review"), stage("review", "reviewer", "verify"), stage("verify", "verifier", "merge", { onFail: { to: "implement", maxRounds: 2 } }), stage("merge", "cleaner", null)],
@@ -1104,6 +1216,14 @@ const tasks: BoardTask[] = [
   ...(PIPELINES ? [task("t-rounds", "assigned", "Rework the retry banner until review passes", "", 12 * MIN)] : []),
   ...(MANY ? [task("t-many", "assigned", "Kanban: say what each pipeline of a task does", "Five pipelines on one card: two running, three finished.", 5 * MIN)] : []),
   ...(MARKS ? [task("t-marks", "assigned", "Say who runs each stage, and how often an edge fired", "Two pipelines: one fail edge fired twice of three, one with its budget spent.", 4 * MIN)] : []),
+  ...(LOOPS ? [
+    task("t-loops-done", "assigned", L("Show a spent review budget on the lane", "Показати вичерпаний бюджет рев’ю на лінії"), "", 4 * 60 * MIN),
+    task("t-loops-review", "assigned", L("Show a spent review budget on the lane, again", "Показати вичерпаний бюджет рев’ю, знову"), "", 2 * MIN),
+    task("t-loops-return", "assigned", L("Resume an upload after a reload", "Продовжити вивантаження після перезавантаження"), "", 3 * MIN),
+    task("t-loops-retry", "assigned", L("Migrate the ledger to the new schema", "Перенести реєстр на нову схему"), "", 6 * MIN),
+    task("t-loops-rework", "assigned", L("Keep the draft when the tab closes", "Зберегти чернетку, коли вкладку закрито"), "", 1 * MIN),
+    task("t-loops-long", "assigned", L("Export every old format the importer reads", "Експортувати кожен старий формат, який читає імпорт"), "", 1 * MIN),
+  ] : []),
   ...(LABELS ? [task("t-labels", "assigned", "Build the board header lane", "Design, build and critique; the critique sent the first build back.", 2 * MIN)] : []),
   ...(REVIEW_SPENT ? [task("t-review-spent", "assigned", "Show the retry count in the banner", "The last review failed, and the fix after it was never reviewed.", 3 * MIN)] : []),
   ...(GHOSTS ? [

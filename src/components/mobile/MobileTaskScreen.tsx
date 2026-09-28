@@ -7,7 +7,7 @@ import { EngineMark } from "@/components/EngineMark";
 import { ChevronRight } from "@/components/icons";
 import { TASK_COLOR_HEX } from "@/components/kanban/KanbanCard";
 import { dismissUnstartedLaunch, dismissUnstartedLaunches } from "@/components/kanban/kanbanAssignments";
-import { KANBAN_STATUSES, summarizePipeline, type KanbanPipeline, type KanbanUnstartedLaunch } from "@/components/kanban/kanbanModel";
+import { KANBAN_STATUSES, summarizePipeline, workingStageConversations, type KanbanPipeline, type KanbanUnstartedLaunch } from "@/components/kanban/kanbanModel";
 import { pastAttemptLabel, pastAttemptState, pastAttemptTone, pipelineTitle } from "@/components/kanban/PipelineSection";
 import { browserPipelinePorts, type PipelinePorts } from "@/components/kanban/pipelinePorts";
 import { textField, withField } from "@/components/kanban/taskText";
@@ -455,9 +455,11 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
   const closing = props.closing;
   const lanes = useMemo(() => {
     const flowsById = new Map(flows.map((flow) => [flow.id, flow] as const));
-    const found = card ? card.pipelines : props.pipelines.filter((pipeline) => pipeline.taskIds?.includes(taskId)).map((pipeline) => summarizePipeline(pipeline, flowsById));
-    return found.filter((summary) => !closing?.includes(summary.pipeline.id));
-  }, [card, props.pipelines, flows, taskId, closing]);
+    if (card) return card.pipelines.filter((summary) => !closing?.includes(summary.pipeline.id));
+    const named = props.pipelines.filter((pipeline) => pipeline.taskIds?.includes(taskId) && !closing?.includes(pipeline.id));
+    const working = workingStageConversations(named, files, now);
+    return named.map((pipeline) => summarizePipeline(pipeline, flowsById, working));
+  }, [card, props.pipelines, flows, files, now, taskId, closing]);
   const ordered = useMemo(() => lanes
     .map((summary, index) => ({ summary, index }))
     .sort((a, b) => LANE_RANK[a.summary.pipeline.state] - LANE_RANK[b.summary.pipeline.state] || a.index - b.index)

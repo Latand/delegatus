@@ -19,6 +19,22 @@ describe("translation parity between en and uk", () => {
   });
 });
 
+describe("loop labels decline the round count (#2094)", () => {
+  const rest = (locale: "en" | "uk", count: number) => translate(locale, "kanban.loopRest", { from: "Review", to: "Fix", count });
+
+  test("Ukrainian takes the genitive singular after 1 and 21 and the genitive plural after 2 and 5", () => {
+    expect(rest("uk", 1).endsWith("· до 1 раунду")).toBe(true);
+    expect(rest("uk", 2).endsWith("· до 2 раундів")).toBe(true);
+    expect(rest("uk", 5).endsWith("· до 5 раундів")).toBe(true);
+    expect(rest("uk", 21).endsWith("· до 21 раунду")).toBe(true);
+  });
+
+  test("English says round once and rounds otherwise", () => {
+    expect(rest("en", 1)).toBe("If Review fails, work returns to Fix · up to 1 round");
+    expect(rest("en", 2)).toBe("If Review fails, work returns to Fix · up to 2 rounds");
+  });
+});
+
 describe("degraded account pin copy (#926)", () => {
   test("fallback launches explain the degraded guarantee in both locales", () => {
     expect(translate("en", "spawnCard.pinUnavailableFallback")).toBe("Launched on another account — pin unavailable");

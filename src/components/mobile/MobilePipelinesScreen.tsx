@@ -7,6 +7,8 @@ import { ChevronDown, ChevronRight } from "@/components/icons";
 import { useLocale } from "@/lib/i18n";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline } from "@/lib/pipelines/types";
+import type { FileEntry } from "@/lib/types";
+import { workingStageConversations } from "@/components/kanban/kanbanModel";
 
 import { pipelineHiddenFromBoard } from "./mobileBoardModel";
 import { useMobileScrollMemory } from "./mobileNav";
@@ -60,13 +62,16 @@ export interface MobilePipelinesScreenProps {
   onOpenPipeline: (pipeline: Pipeline) => void;
   /** The review flows a card counts its rounds from. */
   flows?: readonly Flow[];
+  /** The conversations, so a settled stage whose conversation works again says so (#1744). */
+  files?: readonly FileEntry[];
   /** Test seam: the held-act store. Production reads the tab's singleton. */
   acts?: PendingPipelineActs;
 }
 
-export function MobilePipelinesScreen({ pipelines, now, host, renderSheet, onOpenPipeline, flows, acts = pendingPipelineActs }: MobilePipelinesScreenProps) {
+export function MobilePipelinesScreen({ pipelines, now, host, renderSheet, onOpenPipeline, flows, files, acts = pendingPipelineActs }: MobilePipelinesScreenProps) {
   const { t } = useLocale();
   const flowsById = useMemo(() => new Map((flows ?? []).map((flow) => [flow.id, flow] as const)), [flows]);
+  const working = useMemo(() => workingStageConversations(pipelines, files ?? [], now), [pipelines, files, now]);
   const [showCompleted, setShowCompleted] = useState(false);
   /* Back to the list lands where the operator left it (#2105). */
   const list = useRef<HTMLDivElement>(null);
@@ -83,6 +88,7 @@ export function MobilePipelinesScreen({ pipelines, now, host, renderSheet, onOpe
         pipeline={pipeline}
         now={now}
         flowsById={flowsById}
+        working={working}
         quiet={quiet}
         onOpen={onOpenPipeline}
         label={t("mobile2.pipelines.open", { task: pipeline.task })}
