@@ -172,6 +172,16 @@ test("a chat added by id in the picker is picked in place and saved for this pro
   expect(stored["repo-alpha"]).toBeNull();
 });
 
+test("the picker saves a pasted topic link and shows a stored topic on the chip", async () => {
+  const section = await mount("repo-beta");
+  const input = q<HTMLInputElement>(section, '[aria-label="Chat or topic link, @username or ID"]')!;
+  await act(async () => reactProps(input).onChange!({ target: { value: "https://t.me/c/2470529049/51865" } }));
+  await click(q(section, "[data-seat-reports-save]"));
+  expect(puts).toEqual([{ project: "repo-beta", reportTelegram: { link: "https://t.me/c/2470529049/51865", name: "Beta" } }]);
+  const t = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate("en", key, params);
+  expect(seatReportsReading({ reportTelegram: { chat: "team-reports", name: "Beta", topicId: 51865 }, reportChatTitle: "Team Reports", reportNameSuggestion: null }, t).face).toBe("Team Reports · topic 51865");
+});
+
 /* The closed chip names a chat by the title the picker shows: two aliases
    that share their first fifteen characters truncate alike, their titles do
    not. Without a known title it falls back to the alias. */

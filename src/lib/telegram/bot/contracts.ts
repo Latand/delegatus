@@ -180,6 +180,7 @@ export type TelegramBotAgentChat = {
   /** The value the other tools accept: the alias when set, else the chat id. */
   chat: string;
   chatId: string;
+  username: string | null;
   alias: string | null;
   title: string;
   type: TelegramChatType;

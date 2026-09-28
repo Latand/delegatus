@@ -90,6 +90,35 @@ test("the Telegram report destination is refused for a chat the bot may not post
   }
 });
 
+test("topic links resolve only known postable chats and preserve topics only for forums", async () => {
+  const { setTelegramBotServiceForTests } = await import("@/lib/telegram/bot/service");
+  setTelegramBotServiceForTests({
+    listChats: () => ({ chats: [
+      { chat: "reports", chatId: "-1002470529049", alias: "reports", username: "public_reports", isForum: true, postAllowed: true },
+      { chat: "plain", chatId: "-10077", alias: "plain", username: "plain_group", isForum: false, postAllowed: true },
+      { chat: "blocked", chatId: "-10088", alias: "blocked", username: "blocked_group", isForum: true, postAllowed: false },
+    ] }),
+  } as never);
+  try {
+    const privateLink = await put({ project: "repo-topic", reportTelegram: { link: "https://t.me/c/2470529049/51865", name: "Topic" } });
+    expect(privateLink.status).toBe(200);
+    expect(await privateLink.json()).toMatchObject({ reportTelegram: { chat: "reports", topicId: 51865 }, reportDestination: { chat: "reports", topicId: 51865 } });
+    const publicLink = await put({ project: "repo-topic", reportTelegram: { link: "t.me/public_reports/42", name: "Topic" } });
+    expect(publicLink.status).toBe(200);
+    expect((await publicLink.json()).reportTelegram.topicId).toBe(42);
+    const plain = await put({ project: "repo-topic", reportTelegram: { link: "t.me/plain_group/42", name: "Topic" } });
+    expect(plain.status).toBe(200);
+    expect((await plain.json()).reportTelegram).not.toHaveProperty("topicId");
+    for (const link of ["t.me/unknown_group/42", "t.me/blocked_group/42"]) {
+      expect((await put({ project: "repo-topic", reportTelegram: { link, name: "Topic" } })).status).toBe(409);
+    }
+    expect((await put({ project: "repo-topic", reportTelegram: { chat: "reports", name: "Topic", topicId: 0 } })).status).toBe(400);
+    expect((await put({ project: "repo-topic", reportTelegram: { chat: "reports", name: "Topic", topicId: 77 } })).status).toBe(200);
+  } finally {
+    setTelegramBotServiceForTests(null);
+  }
+});
+
 /* Only a project the operator marked posts to Telegram: a project that never
    chose shows no destination even when the bot may post in exactly one chat,
    a chosen chat is the destination, and a stored Log only stays the log only. */

@@ -69,6 +69,13 @@ test("telegram_bot_send dispatches once with the caller's capability, never a ca
   expect(dispatched[0]!.headers[VIEWER_SPAWN_CAPABILITY_HEADER]).toBe(CAPABILITY);
 });
 
+test("telegram_bot_send takes a topic from a link unless topicId is explicit", async () => {
+  await bindings().telegram_bot_send({ clientRequestId: "link-1", chat: "https://t.me/c/2470529049/51865", text: "Report" });
+  expect(dispatched[0]!.body).toMatchObject({ chat: "-1002470529049", topicId: 51865 });
+  await bindings().telegram_bot_send({ clientRequestId: "link-2", chat: "t.me/public_reports/51865", topicId: 7, text: "Report" });
+  expect(dispatched[1]!.body).toMatchObject({ chat: "@public_reports", topicId: 7 });
+});
+
 test("a route refusal keeps its code, whether a new key may retry, and Telegram's wait", async () => {
   dispatchAnswer = async () => { throw new McpDispatchVerdictError("the operator has not allowed posting to Team Reports", { status: 403, code: "chat_not_allowed" }); };
   const notAllowed = await bindings().telegram_bot_send({ clientRequestId: "req-2", chat: "team-reports", text: "x" }).catch((error: unknown) => error);

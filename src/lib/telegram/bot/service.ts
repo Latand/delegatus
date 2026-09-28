@@ -643,6 +643,7 @@ export class TelegramBotService {
       chat: chat.alias ?? chat.chatId,
       chatId: chat.chatId,
       alias: chat.alias,
+      username: chat.username,
       title: chat.title,
       type: chat.type,
       isForum: chat.isForum,

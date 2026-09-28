@@ -1136,6 +1136,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "telegram.bot.testSent": "Тестовий допис надіслано в {title}.",
   "telegram.bot.testPostText": "Delegatus: тестовий допис. Звіти оркестратора можуть надходити в цей чат.",
   "telegram.bot.projectsTitle": "Звіти проєктів",
+  "telegram.reportLink": "Посилання на чат або топік, @username чи ID",
+  "telegram.reportTopic": "топік {id}",
   "telegram.bot.projectsHint": "Кожен проєкт з оркестратором і чат, куди також ідуть його звіти.",
   "telegram.bot.projectsNone": "Поки що в жодного проєкту немає оркестратора.",
   "telegram.bot.projectLogOnly": "Лише журнал",

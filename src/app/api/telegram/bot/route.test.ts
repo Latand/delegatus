@@ -94,6 +94,17 @@ test("token never serialised: connect, status, chat edits and every agent answer
   expect(bodies[1]).toContain("Report Bot");
 });
 
+test("agent send resolves a public topic link and forwards message_thread_id", async () => {
+  await connected();
+  transport.script("getUpdates", ok([{ update_id: 3, my_chat_member: { chat: { ...TEAM, username: "public_reports", is_forum: true }, date: 3, new_chat_member: { status: "administrator" } } }]));
+  await service.pollOnce(new AbortController().signal);
+  service.setChat(String(TEAM.id), "team-reports", true);
+  transport.script("sendMessage", ok({ message_id: 9, date: 4 }));
+  const sent = await agentRoute.POST(request("/api/telegram/bot/agent", { method: "POST", headers: AGENT, body: { op: "send", clientRequestId: "topic-link", chat: "t.me/public_reports/51865", text: "report" } }));
+  expect(sent.status).toBe(200);
+  expect(transport.callsOf("sendMessage")[0]!.params).toMatchObject({ chat_id: TEAM.id, message_thread_id: 51865 });
+});
+
 test("an agent capability is refused every operator action, so no agent widens its own allowlist", async () => {
   await connected();
   for (const body of [

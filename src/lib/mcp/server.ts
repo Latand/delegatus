@@ -3087,7 +3087,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "With no bot connected the answer is still ok, with `connected: false` and a note. Every answer carries `limits`: " + TELEGRAM_BOT_LIMITS.join(" "),
   ].join(" "),
   telegram_bot_send: [
-    "Post a message through the operator's Telegram bot into a chat the operator allowlisted — for example a report into a team group. `chat` is the alias (or chat id) from telegram_bot_chats.",
+    "Post a message through the operator's Telegram bot into a chat the operator allowlisted — for example a report into a team group. `chat` accepts its alias, chat id, @username or t.me chat/topic link. A topic link supplies `topicId` unless one is given explicitly.",
     "`format` is plain (default) or html (Telegram's HTML subset: b, i, u, s, code, pre, a, blockquote, tg-spoiler). Plain text over 4096 characters is split into up to 4 messages; html over 4096 is refused. `replyToMessageId` replies to a message in that chat, `topicId` posts into a forum topic, `silent` sends without a notification.",
     "The post is attributed in Delegatus to your conversation, resolved server-side. A chat outside the allowlist is refused before anything is sent (chat_not_allowed, bot_not_in_chat, chat_unknown, bot_not_connected); Telegram's own refusals come back as forbidden (blocked, removed, or a user who never wrote to the bot), format_invalid, or rate_limited with retryAfterSeconds.",
     "A refusal answers ok:false with the bot's code as `code` and `retryable` saying whether a retry under a NEW clientRequestId may help (true only for rate_limited, network_failed, timed_out, telegram_failed); send_partial adds `details.sentMessageIds`.",
@@ -3848,7 +3848,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   telegram_bot_send: z.object({
     clientRequestId: clientRequestIdSchema,
-    chat: z.string().trim().min(1).describe("The chat's alias or chat id, as telegram_bot_chats lists it."),
+    chat: z.string().trim().min(1).describe("The chat's alias, id, @username or t.me chat/topic link."),
     text: z.string().min(1).describe("The message. Plain text up to 16384 characters (split into up to 4 messages); html up to 4096."),
     format: z.enum(["plain", "html"]).optional().describe("plain (default) or html: Telegram's HTML subset."),
     replyToMessageId: z.number().int().positive().optional().describe("Reply to this message in the same chat. Sent anyway if it no longer exists."),
