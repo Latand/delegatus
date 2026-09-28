@@ -1,6 +1,7 @@
 import { effortScale } from "@/lib/agent/efforts";
 import { validateLaunchModel } from "@/lib/agent/models";
 
+import { BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE } from "./defaults";
 import { configForVariant } from "./paramConfig";
 import { defaultRoleParameterValue } from "./parameters";
 import { loadRoleDefinitions } from "./store";
@@ -76,7 +77,7 @@ export function validateRoleParams(
 const OPTIONAL_PARAMETER_LINES = ["Repository", "Issue query", "Urgent list", "Merge policy", "Completion policy", "Change under review", "Pull request", "Claims", "Questions"];
 /** The orchestrator lines that belong to backlog-campaign mode alone; in any
     other mode they would read as standing rules (agent-prompt-contract.md N6). */
-const BACKLOG_CAMPAIGN_LINES = ["Repository", "Issue query", "Urgent list", "Merge policy", "Completion policy"];
+const BACKLOG_CAMPAIGN_LINES = ["Repository", "Issue query", "Urgent list", "Merge policy", "Completion policy", "Backlog campaign"];
 
 function withoutLines(text: string, labels: readonly string[], emptyOnly: boolean): string {
   const value = emptyOnly ? "[ \\t]*" : "[^\\n]*";
@@ -108,8 +109,10 @@ export function roleScaffoldBody(definition: RoleDefinition, params: RoleParamVa
   const frontendGuidance = definition.id === "builder" && params.domain === "frontend"
     ? "\n\nUI/frontend implementation guidance: follow the approved interaction and visual contract, preserve accessible semantics and responsive behaviour, and keep every language the project ships in step. Reuse the colours, type, spacing and components the surrounding UI already uses; add no new colour, font, pill or card shape, or decorative label the brief does not ask for."
     : "";
-  const fixGuidance = definition.id === "builder" && params.mode === "apply-fixes" ? `\n\n${APPLY_FIXES_GUIDANCE}` : "";
-  return renderScaffold(definition, params) + frontendGuidance + fixGuidance;
+  const fixRound = definition.id === "builder" && params.mode === "apply-fixes";
+  /* A fix round has one finish line, scoped to its findings. */
+  const rendered = fixRound ? renderScaffold(definition, params).replace(BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE) : renderScaffold(definition, params);
+  return rendered + frontendGuidance + (fixRound ? `\n\n${APPLY_FIXES_GUIDANCE}` : "");
 }
 
 /** How a spawned role agent ends (docs/design/agent-prompt-contract.md §2.2):

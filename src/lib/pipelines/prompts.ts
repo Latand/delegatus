@@ -97,7 +97,7 @@ export function renderStagePrompt(
     "",
     "Fallback, only when the stage_report call returned an error or the tool is absent from this session: quote that error, then end the turn with one fenced JSON object as the final block, with nothing after it.",
     "```json",
-    '{"status":"pass","findings":[],"confidence":0.9}',
+    '{"status":"pass","findings":[]}',
     "```",
     "Its status uses the same three words.",
   ].join("\n");

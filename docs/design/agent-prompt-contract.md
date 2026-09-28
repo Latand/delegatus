@@ -1260,6 +1260,17 @@ never edits `role-presets.json`.
   criterion that cannot be judged without missing access is needs_decision
   whoever could supply it, so the #1843 case (a third party's rate limit)
   reads the same under both rules; §2.4 and §2.10 A above carry the change.
+- **A fix round has one finish line** (review of #2301). In `apply-fixes`
+  mode the builder's "done when every acceptance criterion in the pinned
+  specification holds" gives way to "done when every finding that names its
+  place is fixed, or left unfixed with the evidence that it is wrong, and the
+  project's own checks for what you touched pass"; criteria beyond the
+  findings are the reviewer's to judge. The converted fixer prompt says the
+  same.
+- **The backlog-campaign paragraph renders only in that mode**, its merge
+  policy yields to the project's merge setting, and "one review round" reads
+  "give each lane's reviewer maxRounds: 1". The fallback JSON example drops
+  `confidence`, which `stage_report` does not carry.
 - **The verifier's verdicts cover every label** (review of #2301): for claims
   about finished work, any WRONG is fail, otherwise any UNCONFIRMED is
   needs_decision, and pass needs every claim CONFIRMED.

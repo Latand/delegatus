@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { PROCESS_CLEANUP_MARKER } from "./defaults";
+import { BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE, PROCESS_CLEANUP_MARKER } from "./defaults";
 import { defaultRoleParameterValue } from "./parameters";
 import { variantForParams } from "./paramConfig";
 import { APPLY_FIXES_GUIDANCE, listRoles, resolveRole, resolveSpawnRole, roleFenceBlock, roleScaffoldBody, roleSpawnPrompt, SPAWN_COMPLETION } from "./registry";
@@ -45,6 +45,8 @@ test("role registry exposes the frozen eight role ids and campaign-ready orchest
   expect(orchestrator.ok && orchestrator.value.prompt).toContain("Urgent list: #35");
 
   expect(orchestrator.ok && orchestrator.value.prompt).toContain("Merge policy: pr\nCompletion policy: released");
+  /* The merge policy yields to the project's merge setting, as the mandate's merge bar says. */
+  expect(orchestrator.ok && orchestrator.value.prompt).toContain("The merge policy applies only where the project's merge setting allows a merge");
 
   /* The backlog-campaign lines render only in that mode, even with values, so
      none of them reads as a standing rule elsewhere (agent-prompt-contract.md
@@ -54,6 +56,8 @@ test("role registry exposes the frozen eight role ids and campaign-ready orchest
     if (!standard.ok) throw new Error(standard.error);
     for (const label of ["Repository:", "Issue query:", "Urgent list:", "Merge policy:", "Completion policy:"]) expect(standard.value.prompt).not.toContain(label);
     expect(standard.value.prompt).toContain("In every mode, keep at most 3 workers running at once");
+    expect(standard.value.prompt).not.toContain("Backlog campaign:");
+    expect(standard.value.prompt).not.toContain("\n\n\n");
   }
 
   expect(resolveRole("builder", { mode: "plain", domain: "general" })).toMatchObject({
@@ -304,6 +308,12 @@ test("a builder fix round carries the apply-fixes guidance", () => {
   if (!fix.ok || !plain.ok) throw new Error("builder did not resolve");
   expect(fix.value.prompt).toContain(APPLY_FIXES_GUIDANCE);
   expect(plain.value.prompt).not.toContain("Apply-fixes guidance");
+  /* Review of #2301: one finish line, scoped to the findings; the reviewer
+     judges the lane against the pinned specification. */
+  expect(fix.value.prompt.split("You are done when")).toHaveLength(2);
+  expect(fix.value.prompt).toContain(FIX_ROUND_FINISH_LINE);
+  expect(fix.value.prompt).not.toContain(BUILDER_FINISH_LINE);
+  expect(plain.value.prompt).toContain(BUILDER_FINISH_LINE);
 });
 
 /* §2.2: a spawned role agent has no stage to report to, so it ends in a

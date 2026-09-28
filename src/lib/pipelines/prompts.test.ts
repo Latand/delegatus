@@ -247,5 +247,8 @@ test("every stage a lane renders names no stack and teaches one verdict vocabula
   expect(fixPrompt).toContain("Fix the findings stage review reported for: pipeline support");
   expect(fixPrompt).toContain("P1 src/a.ts:3 wrong label");
   expect(fixPrompt).toContain("Apply-fixes guidance");
-  expect(fixPrompt).toContain("its steps for the first build (where to branch, whether to open a pull request) are already done");
+  expect(fixPrompt).toContain("the specification's steps for the first build (where to branch, whether to open a pull request) are already done");
+  /* Review of #2301: the fix stage has one finish line, scoped to its findings. */
+  expect(fixPrompt.split("You are done when")).toHaveLength(2);
+  expect(fixPrompt).toContain("You are done when every finding that names its place is fixed");
 });

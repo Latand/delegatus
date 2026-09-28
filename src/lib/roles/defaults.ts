@@ -71,6 +71,12 @@ export const PROCESS_CLEANUP_MARKER = "stop only the processes you started yours
 const PROCESS_CLEANUP_RULE =
   `Process cleanup: ${PROCESS_CLEANUP_MARKER}, each by the PID you recorded when you started it. Never stop anything by port, name or pattern — no fuser -k, no lsof piped into kill, no pkill, no killall — because a match can be the operator's own long-running process. A port that is already in use is a reason to pick another port, never a reason to free it; a probe or stub server binds port 0 and reads the assigned port back.`;
 
+/** The builder's finish line, and a fix round's in its place: a fix round's
+    brief is a list of findings, and the reviewer judges the lane against the
+    pinned specification (review of #2301). `roleScaffoldBody` swaps them. */
+export const BUILDER_FINISH_LINE = "You are done when every acceptance criterion in the pinned specification holds at your final commit and the project's own checks you ran pass; a finish line the brief names governs over this one.";
+export const FIX_ROUND_FINISH_LINE = "You are done when every finding that names its place is fixed, or left unfixed with the evidence that it is wrong, and the project's own checks for what you touched pass. Acceptance criteria of the pinned specification beyond the findings are not this round's work: the reviewer judges the lane against them.";
+
 /** The block every role but the orchestrator ends with, whose mandate carries
     longer versions of the search and human-in-the-loop rules. How an agent
     completes is stated once per launch path (the stage wrapper, the spawn
@@ -103,9 +109,11 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
       { key: "mergePolicy", label: "Merge policy", description: "Delivery policy for backlog-campaign mode.", kind: "select", options: ["pr", "merge"] },
       { key: "completionPolicy", label: "Completion policy", description: "Terminal policy for backlog-campaign mode.", kind: "select", options: ["pr-opened", "merged", "released"] },
     ],
-    /* The backlog-campaign lines render only in that mode (`registry.ts`); the
-       worker cap holds in every mode (agent-prompt-contract.md §3 (c1)). */
-    promptScaffold: `You are the Orchestrator. Mode: {{mode}}. In every mode, keep at most {{maxWorkers}} workers running at once: each running lane and each live spawned agent counts as one.\nRepository: {{repo}}\nIssue query: {{issueQuery}}\nUrgent list: {{urgent}}\nMerge policy: {{mergePolicy}}\nCompletion policy: {{completionPolicy}}\n\nIn backlog-campaign mode, inventory dependencies before assigning work, take each lane's runtime from the role table, run one review round per lane, and require the project's own release checks. ${PROCESS_CLEANUP_RULE}`,
+    /* The backlog-campaign lines, its paragraph included, render only in that
+       mode (`registry.ts`); the worker cap holds in every mode
+       (agent-prompt-contract.md §3 (c1)). The merge policy yields to the
+       project's merge setting, as the mandate's merge bar says. */
+    promptScaffold: `You are the Orchestrator. Mode: {{mode}}. In every mode, keep at most {{maxWorkers}} workers running at once: each running lane and each live spawned agent counts as one.\nRepository: {{repo}}\nIssue query: {{issueQuery}}\nUrgent list: {{urgent}}\nMerge policy: {{mergePolicy}}\nCompletion policy: {{completionPolicy}}\nBacklog campaign: inventory dependencies before assigning work, take each lane's runtime from the role table, give each lane's reviewer maxRounds: 1, and require the project's own release checks. The merge policy applies only where the project's merge setting allows a merge; that setting governs every merge.\n\n${PROCESS_CLEANUP_RULE}`,
     safetyFences: [
       "Delegatus control uses the Delegatus MCP tools with src lineage.",
       "Fresh empty sessions only; forks are disabled.",
@@ -150,7 +158,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
       { key: "domain", label: "Domain", description: "Product domain for the implementation. docs is README, docs and public text, which stays on Claude.", kind: "select", options: ["general", "frontend", "docs"] },
       SIZE_PARAMETER,
     ],
-    promptScaffold: `You are a Builder in {{mode}} mode. Implement the brief with focused checks. You are done when every acceptance criterion in the pinned specification holds at your final commit and the project's own checks you ran pass; a finish line the brief names governs over this one. Review your own diff before you finish and report the verification evidence. Hand over a file as its absolute path, with :line or #heading when you mean a place in it; Delegatus opens that in its preview. ${SCOPE} ${SHARED_RULES}`,
+    promptScaffold: `You are a Builder in {{mode}} mode. Implement the brief with focused checks. ${BUILDER_FINISH_LINE} Review your own diff before you finish and report the verification evidence. Hand over a file as its absolute path, with :line or #heading when you mean a place in it; Delegatus opens that in its preview. ${SCOPE} ${SHARED_RULES}`,
     safetyFences: ["Product source changes stay inside the scope the brief names.", "A deployment requires a Deployer and explicit operator approval."],
     capabilities: [],
   },
