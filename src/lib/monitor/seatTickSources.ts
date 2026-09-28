@@ -1078,22 +1078,36 @@ export interface RetirementJournalWindow {
 /** The window a sweep that retires nothing is judged over. Four times the
     default six-hour idle bound, so an idle host has had every chance to go. */
 export const RETIREMENT_STALL_WINDOW_MS = 24 * 3_600_000;
-/** Refusals on one diagnostic clause across the window that make a window
-    without a retirement a stall rather than a quiet machine. */
+/** Refusals on one clause across the window that make a window without a
+    retirement a stall rather than a quiet machine. */
 export const RETIREMENT_STALL_REFUSALS = 1000;
-/** These refusals can expose a broken retirement gate. Other clauses protect
-    live seats, turns, pending deliveries or operations, so repeatedly refusing
-    them is expected and cannot establish that a host should have retired. */
-const RETIREMENT_STALL_DIAGNOSTIC_CLAUSES = new Set(["no-active-flags", "process-identity"]);
+/** These clauses read a live condition of the seat, turn, question, host or
+    session, and a refusal on them holds for as long as that condition does.
+    Every other clause reads durable bookkeeping (receipts, queues, cursors,
+    transcripts, flags, identities) that only a defect leaves unsettled on an
+    idle host, so a new clause counts toward the stall until it is listed here.
+    `no-open-operation` is one of those: the production registry held 64 spawn
+    receipts that had sat in a non-terminal state for months, and each refused
+    its host on every sweep. */
+const RETIREMENT_STALL_EXPECTED_CLAUSES = new Set([
+  "seat-free",
+  "turn-settled",
+  "attention-settled",
+  "host-idle-or-dead",
+  "no-realtime-binding",
+  "transcript-idle",
+]);
 /** Enough of the journal's tail to hold a day of sweeps several times over. */
 const RETIREMENT_JOURNAL_TAIL_BYTES = 1024 * 1024;
 
 /**
- * A diagnostic gate repeatedly holding hosts back when a window of sweeps
- * retired nothing (#1818). Safety refusals such as `no-open-operation` are
- * omitted: an unresolved spawn receipt protects work, even on an idle host.
- * Null when the window is not fully observed, when anything retired, or when
- * no diagnostic clause crossed the threshold.
+ * The clause holding hosts back, when a window of sweeps retired nothing
+ * (#1818). A predicate stuck on one clause produces neither a failure nor an
+ * undetermined refusal, so the report the other signal reads stays clean while
+ * the host population grows; the journal's per-clause counts are where it
+ * shows. Clauses that follow a live condition are not counted. Null when the
+ * window is not fully observed, when anything retired, or when no clause
+ * crossed the threshold.
  *
  * When that clause is `no-active-flags`, `flags` carries the flags it refused
  * on across the window, most frequent first: a flag the classifier does not
@@ -1110,7 +1124,7 @@ export function stalledRetirementClause(
   const flagTotals = new Map<string, number>();
   for (const sweep of window.sweeps) {
     for (const [clause, count] of Object.entries(sweep.refusedByClause)) {
-      if (RETIREMENT_STALL_DIAGNOSTIC_CLAUSES.has(clause)) totals.set(clause, (totals.get(clause) ?? 0) + count);
+      if (!RETIREMENT_STALL_EXPECTED_CLAUSES.has(clause)) totals.set(clause, (totals.get(clause) ?? 0) + count);
     }
     for (const [flag, count] of Object.entries(sweep.refusedByFlag)) flagTotals.set(flag, (flagTotals.get(flag) ?? 0) + count);
   }
