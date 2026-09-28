@@ -1,0 +1,1813 @@
+{
+  "readings": {
+    "card-p-loops-done-1440-en": {
+      "dir": "TB",
+      "width": 292,
+      "boxWidth": 436,
+      "scrolls": false,
+      "nodes": 4,
+      "strips": 2,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [],
+      "rework": [],
+      "captions": {
+        "design": "Design | passed | ",
+        "build": "Build | passed | ",
+        "critique": "Critique · 2 | failed | ",
+        "review": "Review · 3 | failed | ",
+        "critique:fail:critique-fix": "Critique fix · 2 | bad bad",
+        "review:fail:review-fix": "Review fix · 3 | bad bad bad"
+      }
+    },
+    "card-p-loops-review-1440-en": {
+      "dir": "TB",
+      "width": 292,
+      "boxWidth": 436,
+      "scrolls": false,
+      "nodes": 4,
+      "strips": 2,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [],
+      "rework": [],
+      "captions": {
+        "design": "Design | passed | ",
+        "build": "Build | passed | ",
+        "critique": "Critique · 2 | failed | ",
+        "review": "Review · 2 | running | ",
+        "critique:fail:critique-fix": "Critique fix · 2 | bad bad",
+        "review:fail:review-fix": "Review fix | bad next left"
+      }
+    },
+    "card-p-loops-return-1440-en": {
+      "dir": "TB",
+      "width": 292,
+      "boxWidth": 436,
+      "scrolls": false,
+      "nodes": 4,
+      "strips": 1,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [],
+      "rework": [],
+      "captions": {
+        "plan": "Plan | passed | ",
+        "build": "Build · 2 | running | after Review failed",
+        "critique": "Critique | waiting | last passed",
+        "review": "Review | waiting | last failed",
+        "review:fail:build": "back to Build | bad next"
+      }
+    },
+    "card-p-loops-retry-1440-en": {
+      "dir": "TB",
+      "width": 292,
+      "boxWidth": 436,
+      "scrolls": false,
+      "nodes": 3,
+      "strips": 1,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [],
+      "rework": [],
+      "captions": {
+        "prepare": "Prepare | passed | ",
+        "migrate": "Migrate · 2 | running | ",
+        "verify": "Verify | waiting | not started",
+        "migrate:fail:migrate": "retry | bad next left"
+      }
+    },
+    "card-p-loops-rework-1440-en": {
+      "dir": "TB",
+      "width": 292,
+      "boxWidth": 436,
+      "scrolls": false,
+      "nodes": 2,
+      "strips": 1,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [],
+      "rework": [
+        "build"
+      ],
+      "captions": {
+        "build": "Build | passed | working again",
+        "critique": "Critique · 2 | passed | ",
+        "critique:fail:critique-fix": "Critique fix | bad ok"
+      }
+    },
+    "card-p-loops-long-1440-en": {
+      "dir": "TB",
+      "width": 292,
+      "boxWidth": 436,
+      "scrolls": false,
+      "nodes": 4,
+      "strips": 2,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [
+        "Critique the export against the old files",
+        "Review the export writer and its presets",
+        "Fix what the export critique found there",
+        "Fix what the export review found in there"
+      ],
+      "rework": [],
+      "captions": {
+        "design-the-export-for-every-old-format": "Design the export for every old format | passed | ",
+        "build-the-export-writer-and-its-presets": "Build the export writer and its presets | passed | ",
+        "critique-the-export-against-the-old-files": "Critique the export against the old files · 2 | failed | ",
+        "review-the-export-writer-and-its-presets": "Review the export writer and its presets · 2 | waiting | last failed",
+        "critique-the-export-against-the-old-files:fail:fix-what-the-export-critique-found-there": "Fix what the export critique found there · 2 | bad bad",
+        "review-the-export-writer-and-its-presets:fail:fix-what-the-export-review-found-in-there": "Fix what the export review found in there · 2 | bad bad next"
+      }
+    },
+    "sheet-p-loops-done-1440-en": {
+      "dir": "LR",
+      "width": 944,
+      "boxWidth": 944,
+      "scrolls": false,
+      "nodes": 4,
+      "strips": 2,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [],
+      "rework": [],
+      "captions": {
+        "design": "Design | passed | ",
+        "build": "Build | passed | ",
+        "critique": "Critique · 2 | failed | ",
+        "review": "Review · 3 | failed | ",
+        "critique:fail:critique-fix": "Critique fix · 2 | bad bad",
+        "review:fail:review-fix": "Review fix · 3 | bad bad bad"
+      }
+    },
+    "sheet-p-loops-review-1440-en": {
+      "dir": "LR",
+      "width": 944,
+      "boxWidth": 944,
+      "scrolls": false,
+      "nodes": 4,
+      "strips": 2,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [],
+      "rework": [],
+      "captions": {
+        "design": "Design | passed | ",
+        "build": "Build | passed | ",
+        "critique": "Critique · 2 | failed | ",
+        "review": "Review · 2 | running | ",
+        "critique:fail:critique-fix": "Critique fix · 2 | bad bad",
+        "review:fail:review-fix": "Review fix | bad next left"
+      }
+    },
+    "sheet-p-loops-return-1440-en": {
+      "dir": "LR",
+      "width": 944,
+      "boxWidth": 944,
+      "scrolls": false,
+      "nodes": 4,
+      "strips": 1,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [],
+      "rework": [],
+      "captions": {
+        "plan": "Plan | passed | ",
+        "build": "Build · 2 | running | after Review failed",
+        "critique": "Critique | waiting | last passed",
+        "review": "Review | waiting | last failed",
+        "review:fail:build": "back to Build | bad next"
+      }
+    },
+    "sheet-p-loops-retry-1440-en": {
+      "dir": "LR",
+      "width": 700,
+      "boxWidth": 700,
+      "scrolls": false,
+      "nodes": 3,
+      "strips": 1,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [],
+      "rework": [],
+      "captions": {
+        "prepare": "Prepare | passed | ",
+        "migrate": "Migrate · 2 | running | ",
+        "verify": "Verify | waiting | not started",
+        "migrate:fail:migrate": "retry | bad next left"
+      }
+    },
+    "sheet-p-loops-rework-1440-en": {
+      "dir": "LR",
+      "width": 456,
+      "boxWidth": 456,
+      "scrolls": false,
+      "nodes": 2,
+      "strips": 1,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [],
+      "rework": [
+        "build"
+      ],
+      "captions": {
+        "build": "Build | passed | working again",
+        "critique": "Critique · 2 | passed | ",
+        "critique:fail:critique-fix": "Critique fix | bad ok"
+      }
+    },
+    "sheet-p-loops-long-1440-en": {
+      "dir": "LR",
+      "width": 944,
+      "boxWidth": 944,
+      "scrolls": false,
+      "nodes": 4,
+      "strips": 2,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [
+        "Design the export for every old format",
+        "Build the export writer and its presets",
+        "Critique the export against the old files",
+        "Review the export writer and its presets",
+        "Fix what the export critique found there",
+        "Fix what the export review found in there"
+      ],
+      "rework": [],
+      "captions": {
+        "design-the-export-for-every-old-format": "Design the export for every old format | passed | ",
+        "build-the-export-writer-and-its-presets": "Build the export writer and its presets | passed | ",
+        "critique-the-export-against-the-old-files": "Critique the export against the old files · 2 | failed | ",
+        "review-the-export-writer-and-its-presets": "Review the export writer and its presets · 2 | waiting | last failed",
+        "critique-the-export-against-the-old-files:fail:fix-what-the-export-critique-found-there": "Fix what the export critique found there · 2 | bad bad",
+        "review-the-export-writer-and-its-presets:fail:fix-what-the-export-review-found-in-there": "Fix what the export review found in there · 2 | bad bad next"
+      }
+    },
+    "phone-task-p-loops-done-390-en": {
+      "pills": [
+        {
+          "stage": "design",
+          "rework": false,
+          "title": "Design · passed · Claude · Opus 5.5 · reasoning high"
+        },
+        {
+          "stage": "build",
+          "rework": false,
+          "title": "Build · passed · Claude · Opus 5.5 · reasoning high"
+        },
+        {
+          "stage": "critique",
+          "rework": false,
+          "title": "Critique · failed · Claude · Opus 5.5 · reasoning high · Fail edge: when Critique fails, Critique fix runs again. Used 2 of 2. · No rounds left · Critique fix fixes Critique's last findings once more, then the lane moves on"
+        },
+        {
+          "stage": "review",
+          "rework": false,
+          "title": "Review · failed · Claude · Opus 5.5 · reasoning high · Fail edge: when Review fails, Review fix runs again. Used 3 of 3. · No rounds left · Review fix fixes Review's last findings once more, then the lane moves on"
+        },
+        {
+          "stage": "critique-fix",
+          "rework": false,
+          "title": "Critique fix · passed · Claude · Opus 5.5 · reasoning high"
+        },
+        {
+          "stage": "review-fix",
+          "rework": false,
+          "title": "Review fix · passed · Claude · Opus 5.5 · reasoning high"
+        }
+      ]
+    },
+    "phone-p-loops-done-390-en": {
+      "names": [
+        "Design | passed",
+        "Build | passed",
+        "Critique · 2 | failed",
+        "Review · 3 | failed",
+        "branch: Critique fix · 2 | passed",
+        "branch: Review fix · 3 | passed"
+      ],
+      "rework": [],
+      "loops": [
+        "↺ If Critique fails, work returns to Critique fix · up to 2 rounds",
+        "↺ If Review fails, work returns to Review fix · up to 3 rounds"
+      ],
+      "bar": "completed·4h 44m"
+    },
+    "phone-bar-p-loops-done-390-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-done-390-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 280
+      },
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 91,
+      "away": true
+    },
+    "phone-bar-p-loops-done-360-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-done-360-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 250
+      },
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 91,
+      "away": true
+    },
+    "phone-task-p-loops-review-390-en": {
+      "pills": []
+    },
+    "phone-p-loops-review-390-en": {
+      "names": [
+        "Design | passed",
+        "Build | passed",
+        "Critique · 2 | failed",
+        "Review · 2 | running",
+        "branch: Critique fix · 2 | passed",
+        "branch: Review fix | passed"
+      ],
+      "rework": [],
+      "loops": [
+        "↺ If Critique fails, work returns to Critique fix · up to 2 rounds",
+        "↺ If Review fails, work returns to Review fix · up to 3 rounds"
+      ],
+      "bar": "stages running·Review · 2·stage 4 of 6·2h"
+    },
+    "phone-bar-p-loops-review-390-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-review-390-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 280
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 186,
+      "away": true
+    },
+    "phone-bar-p-loops-review-360-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-review-360-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 250
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 186,
+      "away": true
+    },
+    "phone-task-p-loops-return-390-en": {
+      "pills": []
+    },
+    "phone-p-loops-return-390-en": {
+      "names": [
+        "Plan | passed",
+        "Build · 2 | running",
+        "Critique | waiting",
+        "Review | waiting"
+      ],
+      "rework": [],
+      "loops": [
+        "↺ If Review fails, work returns to Build · up to 2 rounds"
+      ],
+      "bar": "stages running·Build · 2·stage 2 of 4·20m"
+    },
+    "phone-bar-p-loops-return-390-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-return-390-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 280
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 62,
+      "away": true
+    },
+    "phone-bar-p-loops-return-360-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-return-360-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 250
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 62,
+      "away": true
+    },
+    "phone-task-p-loops-retry-390-en": {
+      "pills": []
+    },
+    "phone-p-loops-retry-390-en": {
+      "names": [
+        "Prepare | passed",
+        "Migrate · 2 | running",
+        "Verify | waiting"
+      ],
+      "rework": [],
+      "loops": [
+        "↺ If Migrate fails, work returns to Migrate · up to 3 rounds"
+      ],
+      "bar": "stages running·Migrate · 2·stage 2 of 3·10m"
+    },
+    "phone-bar-p-loops-retry-390-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-retry-390-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 9,
+      "away": false
+    },
+    "phone-bar-p-loops-retry-360-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-retry-360-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 9,
+      "away": false
+    },
+    "phone-task-p-loops-rework-390-en": {
+      "pills": [
+        {
+          "stage": "build",
+          "rework": true,
+          "title": "Build · passed · working again · Claude · Opus 5.5 · reasoning high"
+        },
+        {
+          "stage": "critique",
+          "rework": false,
+          "title": "Critique · passed · Claude · Opus 5.5 · reasoning high · Fail edge: when Critique fails, Critique fix runs again. Used 1 of 1. · No rounds left · Critique fix fixes Critique's last findings once more, then the lane moves on"
+        },
+        {
+          "stage": "critique-fix",
+          "rework": false,
+          "title": "Critique fix · passed · Claude · Opus 5.5 · reasoning high"
+        }
+      ]
+    },
+    "phone-p-loops-rework-390-en": {
+      "names": [
+        "Build | passed | working again",
+        "Critique · 2 | passed",
+        "branch: Critique fix | passed"
+      ],
+      "rework": [
+        "build: working again"
+      ],
+      "loops": [
+        "↺ If Critique fails, work returns to Critique fix · up to 1 round"
+      ],
+      "bar": "completed·54m"
+    },
+    "phone-bar-p-loops-rework-390-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-rework-390-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-rework-360-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-rework-360-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-task-p-loops-long-390-en": {
+      "pills": []
+    },
+    "phone-p-loops-long-390-en": {
+      "names": [
+        "Design the export for every old format | passed",
+        "Build the export writer and its presets | passed",
+        "Critique the export against the old files · 2 | failed",
+        "Review the export writer and its presets · 2 | waiting",
+        "branch: Fix what the export critique found there · 2 | passed",
+        "branch: Fix what the export review found in there · 2 | running"
+      ],
+      "rework": [],
+      "loops": [
+        "↺ If Critique the export against the old files fails, work returns to Fix what the export critique found there · up to 2 rounds",
+        "↺ If Review the export writer and its presets fails, work returns to Fix what the export review found in there · up to 3 rounds"
+      ],
+      "bar": "stages running·Fix what the export review found in there · 2·stage 6 of 6·5m"
+    },
+    "phone-bar-p-loops-long-390-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-long-390-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 280
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 260,
+      "away": true
+    },
+    "phone-bar-p-loops-long-360-rest-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-long-360-scrolled-en": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 250
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 260,
+      "away": true
+    },
+    "card-p-loops-done-1440-uk": {
+      "dir": "TB",
+      "width": 292,
+      "boxWidth": 436,
+      "scrolls": false,
+      "nodes": 4,
+      "strips": 2,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [],
+      "rework": [],
+      "captions": {
+        "design": "Design | пройдено | ",
+        "build": "Build | пройдено | ",
+        "critique": "Critique · 2 | не пройдено | ",
+        "review": "Review · 3 | не пройдено | ",
+        "critique:fail:critique-fix": "Critique fix · 2 | bad bad",
+        "review:fail:review-fix": "Review fix · 3 | bad bad bad"
+      }
+    },
+    "card-p-loops-review-1440-uk": {
+      "dir": "TB",
+      "width": 292,
+      "boxWidth": 436,
+      "scrolls": false,
+      "nodes": 4,
+      "strips": 2,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [],
+      "rework": [],
+      "captions": {
+        "design": "Design | пройдено | ",
+        "build": "Build | пройдено | ",
+        "critique": "Critique · 2 | не пройдено | ",
+        "review": "Review · 2 | працює | ",
+        "critique:fail:critique-fix": "Critique fix · 2 | bad bad",
+        "review:fail:review-fix": "Review fix | bad next left"
+      }
+    },
+    "card-p-loops-return-1440-uk": {
+      "dir": "TB",
+      "width": 292,
+      "boxWidth": 436,
+      "scrolls": false,
+      "nodes": 4,
+      "strips": 1,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [],
+      "rework": [],
+      "captions": {
+        "plan": "Plan | пройдено | ",
+        "build": "Build · 2 | працює | через Review",
+        "critique": "Critique | чекає | востаннє пройдено",
+        "review": "Review | чекає | востаннє не пройдено",
+        "review:fail:build": "назад до Build | bad next"
+      }
+    },
+    "card-p-loops-retry-1440-uk": {
+      "dir": "TB",
+      "width": 292,
+      "boxWidth": 436,
+      "scrolls": false,
+      "nodes": 3,
+      "strips": 1,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [],
+      "rework": [],
+      "captions": {
+        "prepare": "Prepare | пройдено | ",
+        "migrate": "Migrate · 2 | працює | ",
+        "verify": "Verify | чекає | не почато",
+        "migrate:fail:migrate": "повтор | bad next left"
+      }
+    },
+    "card-p-loops-rework-1440-uk": {
+      "dir": "TB",
+      "width": 292,
+      "boxWidth": 436,
+      "scrolls": false,
+      "nodes": 2,
+      "strips": 1,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [],
+      "rework": [
+        "build"
+      ],
+      "captions": {
+        "build": "Build | пройдено | знову працює",
+        "critique": "Critique · 2 | пройдено | ",
+        "critique:fail:critique-fix": "Critique fix | bad ok"
+      }
+    },
+    "card-p-loops-long-1440-uk": {
+      "dir": "TB",
+      "width": 292,
+      "boxWidth": 436,
+      "scrolls": false,
+      "nodes": 4,
+      "strips": 2,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [
+        "Critique the export against the old files",
+        "Review the export writer and its presets",
+        "Fix what the export critique found there",
+        "Fix what the export review found in there"
+      ],
+      "rework": [],
+      "captions": {
+        "design-the-export-for-every-old-format": "Design the export for every old format | пройдено | ",
+        "build-the-export-writer-and-its-presets": "Build the export writer and its presets | пройдено | ",
+        "critique-the-export-against-the-old-files": "Critique the export against the old files · 2 | не пройдено | ",
+        "review-the-export-writer-and-its-presets": "Review the export writer and its presets · 2 | чекає | востаннє не пройдено",
+        "critique-the-export-against-the-old-files:fail:fix-what-the-export-critique-found-there": "Fix what the export critique found there · 2 | bad bad",
+        "review-the-export-writer-and-its-presets:fail:fix-what-the-export-review-found-in-there": "Fix what the export review found in there · 2 | bad bad next"
+      }
+    },
+    "sheet-p-loops-done-1440-uk": {
+      "dir": "LR",
+      "width": 944,
+      "boxWidth": 944,
+      "scrolls": false,
+      "nodes": 4,
+      "strips": 2,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [],
+      "rework": [],
+      "captions": {
+        "design": "Design | пройдено | ",
+        "build": "Build | пройдено | ",
+        "critique": "Critique · 2 | не пройдено | ",
+        "review": "Review · 3 | не пройдено | ",
+        "critique:fail:critique-fix": "Critique fix · 2 | bad bad",
+        "review:fail:review-fix": "Review fix · 3 | bad bad bad"
+      }
+    },
+    "sheet-p-loops-review-1440-uk": {
+      "dir": "LR",
+      "width": 944,
+      "boxWidth": 944,
+      "scrolls": false,
+      "nodes": 4,
+      "strips": 2,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [],
+      "rework": [],
+      "captions": {
+        "design": "Design | пройдено | ",
+        "build": "Build | пройдено | ",
+        "critique": "Critique · 2 | не пройдено | ",
+        "review": "Review · 2 | працює | ",
+        "critique:fail:critique-fix": "Critique fix · 2 | bad bad",
+        "review:fail:review-fix": "Review fix | bad next left"
+      }
+    },
+    "sheet-p-loops-return-1440-uk": {
+      "dir": "LR",
+      "width": 944,
+      "boxWidth": 944,
+      "scrolls": false,
+      "nodes": 4,
+      "strips": 1,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [],
+      "rework": [],
+      "captions": {
+        "plan": "Plan | пройдено | ",
+        "build": "Build · 2 | працює | через Review",
+        "critique": "Critique | чекає | востаннє пройдено",
+        "review": "Review | чекає | востаннє не пройдено",
+        "review:fail:build": "назад до Build | bad next"
+      }
+    },
+    "sheet-p-loops-retry-1440-uk": {
+      "dir": "LR",
+      "width": 700,
+      "boxWidth": 700,
+      "scrolls": false,
+      "nodes": 3,
+      "strips": 1,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [],
+      "rework": [],
+      "captions": {
+        "prepare": "Prepare | пройдено | ",
+        "migrate": "Migrate · 2 | працює | ",
+        "verify": "Verify | чекає | не почато",
+        "migrate:fail:migrate": "повтор | bad next left"
+      }
+    },
+    "sheet-p-loops-rework-1440-uk": {
+      "dir": "LR",
+      "width": 456,
+      "boxWidth": 456,
+      "scrolls": false,
+      "nodes": 2,
+      "strips": 1,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [],
+      "rework": [
+        "build"
+      ],
+      "captions": {
+        "build": "Build | пройдено | знову працює",
+        "critique": "Critique · 2 | пройдено | ",
+        "critique:fail:critique-fix": "Critique fix | bad ok"
+      }
+    },
+    "sheet-p-loops-long-1440-uk": {
+      "dir": "LR",
+      "width": 944,
+      "boxWidth": 944,
+      "scrolls": false,
+      "nodes": 4,
+      "strips": 2,
+      "back": 0,
+      "waitingEnded": [],
+      "hits": [],
+      "cut": [
+        "Design the export for every old format",
+        "Build the export writer and its presets",
+        "Critique the export against the old files",
+        "Review the export writer and its presets",
+        "Fix what the export critique found there",
+        "Fix what the export review found in there"
+      ],
+      "rework": [],
+      "captions": {
+        "design-the-export-for-every-old-format": "Design the export for every old format | пройдено | ",
+        "build-the-export-writer-and-its-presets": "Build the export writer and its presets | пройдено | ",
+        "critique-the-export-against-the-old-files": "Critique the export against the old files · 2 | не пройдено | ",
+        "review-the-export-writer-and-its-presets": "Review the export writer and its presets · 2 | чекає | востаннє не пройдено",
+        "critique-the-export-against-the-old-files:fail:fix-what-the-export-critique-found-there": "Fix what the export critique found there · 2 | bad bad",
+        "review-the-export-writer-and-its-presets:fail:fix-what-the-export-review-found-in-there": "Fix what the export review found in there · 2 | bad bad next"
+      }
+    },
+    "phone-task-p-loops-done-390-uk": {
+      "pills": [
+        {
+          "stage": "design",
+          "rework": false,
+          "title": "Design · пройдено · Claude · Opus 5.5 · міркування високі"
+        },
+        {
+          "stage": "build",
+          "rework": false,
+          "title": "Build · пройдено · Claude · Opus 5.5 · міркування високі"
+        },
+        {
+          "stage": "critique",
+          "rework": false,
+          "title": "Critique · не пройдено · Claude · Opus 5.5 · міркування високі · Ребро невдачі: коли Critique не проходить, знову запускається Critique fix. Використано 2 з 2. · Раундів не лишилося · Critique fix ще раз виправляє останні зауваження Critique, далі пайплайн іде сам"
+        },
+        {
+          "stage": "review",
+          "rework": false,
+          "title": "Review · не пройдено · Claude · Opus 5.5 · міркування високі · Ребро невдачі: коли Review не проходить, знову запускається Review fix. Використано 3 з 3. · Раундів не лишилося · Review fix ще раз виправляє останні зауваження Review, далі пайплайн іде сам"
+        },
+        {
+          "stage": "critique-fix",
+          "rework": false,
+          "title": "Critique fix · пройдено · Claude · Opus 5.5 · міркування високі"
+        },
+        {
+          "stage": "review-fix",
+          "rework": false,
+          "title": "Review fix · пройдено · Claude · Opus 5.5 · міркування високі"
+        }
+      ]
+    },
+    "phone-p-loops-done-390-uk": {
+      "names": [
+        "Design | пройдено",
+        "Build | пройдено",
+        "Critique · 2 | не пройдено",
+        "Review · 3 | не пройдено",
+        "гілка: Critique fix · 2 | пройдено",
+        "гілка: Review fix · 3 | пройдено"
+      ],
+      "rework": [],
+      "loops": [
+        "↺ Якщо Critique не проходить, робота повертається до Critique fix · до 2 раундів",
+        "↺ Якщо Review не проходить, робота повертається до Review fix · до 3 раундів"
+      ],
+      "bar": "завершено·4 год 44 хв"
+    },
+    "phone-bar-p-loops-done-390-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-done-390-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 280
+      },
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 124,
+      "away": true
+    },
+    "phone-bar-p-loops-done-360-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-done-360-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 250
+      },
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 124,
+      "away": true
+    },
+    "phone-task-p-loops-review-390-uk": {
+      "pills": []
+    },
+    "phone-p-loops-review-390-uk": {
+      "names": [
+        "Design | пройдено",
+        "Build | пройдено",
+        "Critique · 2 | не пройдено",
+        "Review · 2 | працює",
+        "гілка: Critique fix · 2 | пройдено",
+        "гілка: Review fix | пройдено"
+      ],
+      "rework": [],
+      "loops": [
+        "↺ Якщо Critique не проходить, робота повертається до Critique fix · до 2 раундів",
+        "↺ Якщо Review не проходить, робота повертається до Review fix · до 3 раундів"
+      ],
+      "bar": "етапи виконуються·Review · 2·етап 4 з 6·2 год"
+    },
+    "phone-bar-p-loops-review-390-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-review-390-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 280
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 219,
+      "away": true
+    },
+    "phone-bar-p-loops-review-360-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-review-360-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 250
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 219,
+      "away": true
+    },
+    "phone-task-p-loops-return-390-uk": {
+      "pills": []
+    },
+    "phone-p-loops-return-390-uk": {
+      "names": [
+        "Plan | пройдено",
+        "Build · 2 | працює",
+        "Critique | чекає",
+        "Review | чекає"
+      ],
+      "rework": [],
+      "loops": [
+        "↺ Якщо Review не проходить, робота повертається до Build · до 2 раундів"
+      ],
+      "bar": "етапи виконуються·Build · 2·етап 2 з 4·20 хв"
+    },
+    "phone-bar-p-loops-return-390-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-return-390-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 280
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 98,
+      "away": true
+    },
+    "phone-bar-p-loops-return-360-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-return-360-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 250
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 98,
+      "away": true
+    },
+    "phone-task-p-loops-retry-390-uk": {
+      "pills": []
+    },
+    "phone-p-loops-retry-390-uk": {
+      "names": [
+        "Prepare | пройдено",
+        "Migrate · 2 | працює",
+        "Verify | чекає"
+      ],
+      "rework": [],
+      "loops": [
+        "↺ Якщо Migrate не проходить, робота повертається до Migrate · до 3 раундів"
+      ],
+      "bar": "етапи виконуються·Migrate · 2·етап 2 з 3·10 хв"
+    },
+    "phone-bar-p-loops-retry-390-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-retry-390-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 25,
+      "away": false
+    },
+    "phone-bar-p-loops-retry-360-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-retry-360-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 25,
+      "away": false
+    },
+    "phone-task-p-loops-rework-390-uk": {
+      "pills": [
+        {
+          "stage": "build",
+          "rework": true,
+          "title": "Build · пройдено · знову працює · Claude · Opus 5.5 · міркування високі"
+        },
+        {
+          "stage": "critique",
+          "rework": false,
+          "title": "Critique · пройдено · Claude · Opus 5.5 · міркування високі · Ребро невдачі: коли Critique не проходить, знову запускається Critique fix. Використано 1 з 1. · Раундів не лишилося · Critique fix ще раз виправляє останні зауваження Critique, далі пайплайн іде сам"
+        },
+        {
+          "stage": "critique-fix",
+          "rework": false,
+          "title": "Critique fix · пройдено · Claude · Opus 5.5 · міркування високі"
+        }
+      ]
+    },
+    "phone-p-loops-rework-390-uk": {
+      "names": [
+        "Build | пройдено | знову працює",
+        "Critique · 2 | пройдено",
+        "гілка: Critique fix | пройдено"
+      ],
+      "rework": [
+        "build: знову працює"
+      ],
+      "loops": [
+        "↺ Якщо Critique не проходить, робота повертається до Critique fix · до 1 раунду"
+      ],
+      "bar": "завершено·54 хв"
+    },
+    "phone-bar-p-loops-rework-390-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-rework-390-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-rework-360-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-rework-360-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 17,
+        "bottom": 35,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 0,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-task-p-loops-long-390-uk": {
+      "pills": []
+    },
+    "phone-p-loops-long-390-uk": {
+      "names": [
+        "Design the export for every old format | пройдено",
+        "Build the export writer and its presets | пройдено",
+        "Critique the export against the old files · 2 | не пройдено",
+        "Review the export writer and its presets · 2 | чекає",
+        "гілка: Fix what the export critique found there · 2 | пройдено",
+        "гілка: Fix what the export review found in there · 2 | працює"
+      ],
+      "rework": [],
+      "loops": [
+        "↺ Якщо Critique the export against the old files не проходить, робота повертається до Fix what the export critique found there · до 2 раундів",
+        "↺ Якщо Review the export writer and its presets не проходить, робота повертається до Fix what the export review found in there · до 3 раундів"
+      ],
+      "bar": "етапи виконуються·Fix what the export review found in there · 2·етап 6 з 6·5 хв"
+    },
+    "phone-bar-p-loops-long-390-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-long-390-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 390
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 280
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 280
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 260,
+      "away": true
+    },
+    "phone-bar-p-loops-long-360-rest-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 8,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": null,
+      "rows": 2,
+      "spill": [],
+      "scrollTop": 0,
+      "away": false
+    },
+    "phone-bar-p-loops-long-360-scrolled-uk": {
+      "bar": {
+        "top": 0,
+        "bottom": 52,
+        "left": 0,
+        "right": 360
+      },
+      "line": {
+        "top": 26,
+        "bottom": 44,
+        "left": 56,
+        "right": 250
+      },
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 250
+      },
+      "rows": 1,
+      "spill": [],
+      "scrollTop": 260,
+      "away": true
+    }
+  },
+  "failures": []
+}

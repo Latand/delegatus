@@ -62,6 +62,32 @@ test("Collapse finished folds passed and skipped stages, never the live one or a
   expect(finishedStageIds(retrying, stageViews(retrying))).toEqual(["implement", "review"]);
 });
 
+test("Collapse finished reads the path ahead: a passed stage the lane returns to still folds, and a completed lane's fix stages fold", () => {
+  const fixStages = [
+    stage("build", "builder", "review"),
+    stage("review", "reviewer", null, { onFail: { to: "review-fix", maxRounds: 1 } }),
+    stage("review-fix", "builder", "review"),
+  ];
+  const runs = [
+    { stageId: "build", attempts: [attempt(1, "passed", "2026-09-15T08:00:00Z")] },
+    { stageId: "review", attempts: [attempt(1, "failed", "2026-09-15T08:10:00Z")] },
+    { stageId: "review-fix", attempts: [attempt(1, "passed", "2026-09-15T08:20:00Z", { activatedBy: { stageId: "review", attempt: 1, edge: "fail", budgetSpent: true } })] },
+  ];
+  /* The last fix handed on past a spent budget and the lane completed: the
+     reviewer failed, the rest passed, nothing waits. */
+  const completed = pipeline(fixStages, runs, null, "completed");
+  expect(finishedStageIds(completed, stageViews(completed))).toEqual(["build", "review-fix"]);
+  /* Build passed and the lane is back on it: it waits again, and folds as passed. */
+  const again = pipeline(retryStages, [
+    { stageId: "implement", attempts: [attempt(1, "passed", "2026-09-15T08:00:00Z")] },
+    { stageId: "review", attempts: [attempt(1, "passed", "2026-09-15T08:10:00Z")] },
+    { stageId: "verify", attempts: [attempt(1, "failed", "2026-09-15T08:20:00Z")] },
+  ], { stageId: "implement", state: "pending", activatedBy: { stageId: "verify", attempt: 1, edge: "fail" } });
+  const views = stageViews(again);
+  expect(views.get("review")).toMatchObject({ state: "pending", again: true, previous: "passed" });
+  expect(finishedStageIds(again, views)).toEqual(["implement", "review"]);
+});
+
 test("a pane shows the operator's attempt or the latest own one, and a helper is never an attempt tab", () => {
   expect(shownAttempt(retrying, "implement", null)?.n).toBe(2);
   expect(shownAttempt(retrying, "implement", 1)?.n).toBe(1);

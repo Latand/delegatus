@@ -1,7 +1,7 @@
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineEdgeKind, PipelineStage, PipelineStageAttempt } from "@/lib/pipelines/types";
 import { edgeRoundsUsed } from "@/lib/pipelines/failEdgeBudget";
-import { LIVE_ATTEMPT_STATES, latestAttempt, stageAttempts, stageChipState, type StageChipState } from "@/components/pipelines/pipelineModel";
+import { LIVE_ATTEMPT_STATES, latestAttempt, pipelineCursorActive, stageAttempts, stageChipState, type StageChipState } from "@/components/pipelines/pipelineModel";
 
 /**
  * The stage graph a kanban card draws for its pipeline (#1695 K5a), ported from
@@ -59,6 +59,15 @@ export function operationalAttempts(pipeline: Pipeline, stageId: string): Pipeli
   return stageAttempts(pipeline, stageId).filter((attempt) => !attempt.historical);
 }
 
+/** Which of the stage's own attempts attempt `n` is, counted from 1: the number
+    every caption shows. The engine's `n` also counts the helper conversations
+    it adopted, so it stays the key and never reaches a label. An attempt the
+    record does not list as the stage's own keeps its `n`. */
+export function attemptOrdinal(pipeline: Pipeline, stageId: string, n: number): number {
+  const index = operationalAttempts(pipeline, stageId).findIndex((attempt) => attempt.n === n);
+  return index >= 0 ? index + 1 : n;
+}
+
 /** How many times an edge fired: the distinct source attempts that activated
     its target. For a fail edge this is the engine's own spent retry budget,
     read from the engine's own function. */
@@ -84,7 +93,8 @@ export interface ReviewRound {
 
 export interface StageView {
   state: StageChipState;
-  /** A stage an upstream stage ran again after: it waits for its next attempt. */
+  /** A settled stage the lane will run again: it lies on the path ahead of
+      the cursor, so it waits for its next attempt. */
   again: boolean;
   /** The state of the attempt that `again` set aside. */
   previous: StageChipState | null;
@@ -92,30 +102,14 @@ export interface StageView {
   attempt: PipelineStageAttempt | null;
   /** The review rounds of the stage's bound flow, in order. */
   rounds: ReviewRound[];
+  /** The latest attempt settled and its conversation is working again (#1744):
+      someone sent it more work after the stage reported. */
+  rework: boolean;
 }
 
-function passPredecessors(pipeline: Pick<Pipeline, "stages">): Map<string, string[]> {
-  const predecessors = new Map(pipeline.stages.map((stage) => [stage.id, [] as string[]] as const));
-  for (const stage of pipeline.stages) if (stage.next) predecessors.get(stage.next)?.push(stage.id);
-  return predecessors;
-}
-
-function upstreamOf(predecessors: ReadonlyMap<string, string[]>, stageId: string): Set<string> {
-  const seen = new Set<string>();
-  const stack = [...(predecessors.get(stageId) ?? [])];
-  while (stack.length) {
-    const id = stack.pop()!;
-    if (seen.has(id) || id === stageId) continue;
-    seen.add(id);
-    stack.push(...(predecessors.get(id) ?? []));
-  }
-  return seen;
-}
-
-const startedMs = (attempt: PipelineStageAttempt | null): number => {
-  const ms = attempt?.startedAt ? Date.parse(attempt.startedAt) : Number.NaN;
-  return Number.isFinite(ms) ? ms : Number.NaN;
-};
+/** Transcript paths and conversation ids whose board row is working, the
+    same reading the card's «N working» counts. */
+export type WorkingConversations = ReadonlySet<string>;
 
 export function roundsOf(attempt: PipelineStageAttempt | null, flowsById: ReadonlyMap<string, Flow>): ReviewRound[] {
   const flow = attempt?.flowId ? flowsById.get(attempt.flowId) : undefined;
@@ -126,44 +120,153 @@ export function roundsOf(attempt: PipelineStageAttempt | null, flowsById: Readon
   }));
 }
 
-export function stageViews(pipeline: Pipeline, flowsById: ReadonlyMap<string, Flow> = new Map()): Map<string, StageView> {
-  const predecessors = passPredecessors(pipeline);
+const ENDED_STATES: ReadonlySet<Pipeline["state"]> = new Set(["completed", "closed", "needs_review"]);
+
+/**
+ * The stages the lane will start again, in the order it reaches them: from the
+ * cursor, the stage the engine starts on a pass (`passSuccessor`): its `next`,
+ * except after a fix that ran on a spent fail edge's handoff, which follows the
+ * failing stage's `next`. A lane with no cursor (completed, closed, waiting for
+ * review) has nothing ahead. The cursor stage itself is ahead only while the
+ * lane is busy, its latest attempt is settled and the cursor is `pending`: the
+ * engine has moved onto it and starts the new attempt on its next tick. Any
+ * other cursor state on a settled attempt is that attempt still finishing,
+ * such as a passed final stage retrying its publication under `committing`.
+ */
+export function pathAhead(pipeline: Pipeline): Set<string> {
+  const ahead = new Set<string>();
+  const cursor = pipeline.cursor;
+  if (!cursor || ENDED_STATES.has(pipeline.state)) return ahead;
+  const byId = new Map(pipeline.stages.map((stage) => [stage.id, stage] as const));
+  const stage = byId.get(cursor.stageId);
+  if (!stage) return ahead;
+  const latest = latestAttempt(pipeline, stage.id);
+  const settled = !latest || !LIVE_CHIPS.has(stageChipState(pipeline, stage));
+  if (pipelineCursorActive(pipeline) && settled && latest && cursor.state === "pending") ahead.add(stage.id);
+  const activation = cursor.activatedBy ?? latest?.activatedBy ?? null;
+  const handoff = activation?.edge === "fail" && activation.budgetSpent ? byId.get(activation.stageId) : undefined;
+  let next: string | null = handoff ? handoff.next : stage.next;
+  while (next && !ahead.has(next) && byId.has(next)) {
+    ahead.add(next);
+    next = byId.get(next)!.next;
+  }
+  return ahead;
+}
+
+export function stageViews(pipeline: Pipeline, flowsById: ReadonlyMap<string, Flow> = new Map(), working: WorkingConversations = new Set()): Map<string, StageView> {
+  const ahead = pathAhead(pipeline);
   const views = new Map<string, StageView>();
   for (const stage of pipeline.stages) {
     const attempt = latestAttempt(pipeline, stage.id);
     const state = stageChipState(pipeline, stage);
     const attempts = operationalAttempts(pipeline, stage.id).length;
     const rounds = stage.kind === "review-loop" ? roundsOf(attempt, flowsById) : [];
-    const mine = startedMs(attempt);
-    /* A stage the lane waits on is where it stands, however new its upstream. */
-    const newerUpstream = attempt && !LIVE_CHIPS.has(state) && state !== "needs_decision" && Number.isFinite(mine)
-      && [...upstreamOf(predecessors, stage.id)].some((id) => startedMs(latestAttempt(pipeline, id)) > mine);
-    views.set(stage.id, newerUpstream
-      ? { state: "pending", again: true, previous: state, attempts, attempt, rounds: [] }
-      : { state, again: false, previous: null, attempts, attempt, rounds });
+    /* A stage the lane waits on is where it stands, whatever lies ahead. */
+    const settled = Boolean(attempt) && !LIVE_CHIPS.has(state);
+    /* Rework reads the attempt's own state: an attempt parked on a decision
+       has ended, and its conversation working again is rework too. */
+    const ended = Boolean(attempt) && !LIVE_ATTEMPT_STATES.has(attempt!.state);
+    const rework = ended && Boolean((attempt!.agentPath && working.has(attempt!.agentPath)) || (attempt!.conversationId && working.has(attempt!.conversationId)));
+    views.set(stage.id, settled && !rework && ahead.has(stage.id)
+      ? { state: "pending", again: true, previous: state, attempts, attempt, rounds: [], rework: false }
+      : { state, again: false, previous: null, attempts, attempt, rounds, rework });
   }
   return views;
 }
 
+/* ── Loops: a fail edge folds into its source (docs/design/pipeline-graph-loops.md §3.1) ─ */
+
+/**
+ * - `dock`: the target is a dedicated fix stage: nothing passes into it, only
+ *   this fail edge reaches it, it has no fail edge of its own, and its pass
+ *   goes back to the source, on to the source's `next`, or nowhere. It draws
+ *   as a strip under its source and takes no column.
+ * - `self`: the stage retries itself.
+ * - `return`: the target is an earlier stage of the pass chain.
+ * - `other`: anything else keeps a wire.
+ */
+export type LoopShape = "dock" | "return" | "self" | "other";
+
+export function loopShapes(pipeline: Pick<Pipeline, "stages">): Map<string, LoopShape> {
+  const byId = new Map(pipeline.stages.map((stage) => [stage.id, stage] as const));
+  const passTargets = new Set(pipeline.stages.flatMap((stage) => (stage.next ? [stage.next] : [])));
+  const failSources = new Map<string, number>();
+  for (const stage of pipeline.stages) if (stage.onFail?.to) failSources.set(stage.onFail.to, (failSources.get(stage.onFail.to) ?? 0) + 1);
+  const passReach = (from: string, to: string) => {
+    const seen = new Set<string>();
+    let current: string | null = from;
+    while (current && !seen.has(current)) {
+      if (current === to) return true;
+      seen.add(current);
+      current = byId.get(current)?.next ?? null;
+    }
+    return false;
+  };
+  const shapes = new Map<string, LoopShape>();
+  for (const source of pipeline.stages) {
+    const to = source.onFail?.to;
+    if (!to) continue;
+    const id = `${source.id}:fail:${to}`;
+    const target = byId.get(to);
+    if (!target) continue;
+    if (to === source.id) shapes.set(id, "self");
+    else if (
+      !passTargets.has(to)
+      && failSources.get(to) === 1
+      && !target.onFail
+      && pipeline.stages[0]?.id !== to
+      && (target.next === null || target.next === source.id || target.next === source.next)
+    ) shapes.set(id, "dock");
+    else if (passReach(to, source.id)) shapes.set(id, "return");
+    else shapes.set(id, "other");
+  }
+  return shapes;
+}
+
 /* ── Topology: back edges, layers, rows ───────────────────────────────────── */
 
+export interface GraphLoop {
+  edge: GraphEdge;
+  shape: Exclude<LoopShape, "other">;
+}
+
 export interface GraphTopology {
+  /** Every edge the pipeline declares. */
   edges: GraphEdge[];
+  /** The edges drawn as wires: pass edges between units and `other` fail edges. */
+  wires: GraphEdge[];
   back: Set<string>;
   layer: Map<string, number>;
   row: Map<string, number>;
   branching: Set<string>;
   layers: number;
   rows: number;
+  shapes: Map<string, LoopShape>;
+  /** A docked fix stage, by id, and the source it docks on. */
+  docked: Map<string, string>;
+  /** The loop each source folds, by source id. */
+  loops: Map<string, GraphLoop>;
 }
 
 export function graphTopology(pipeline: Pick<Pipeline, "stages">): GraphTopology {
   const edges = graphEdges(pipeline);
-  const ids = pipeline.stages.map((stage) => stage.id);
+  const shapes = loopShapes(pipeline);
+  const docked = new Map<string, string>();
+  const loops = new Map<string, GraphLoop>();
+  for (const edge of edges) {
+    const shape = shapes.get(edge.id);
+    if (edge.kind !== "fail" || !shape || shape === "other") continue;
+    loops.set(edge.from, { edge, shape });
+    if (shape === "dock") docked.set(edge.to, edge.from);
+  }
+  /* A docked stage's own pass joins its source's unit: back into it, or on to
+     where the source's pass goes, which the unit's outgoing wire carries. */
+  const wires = edges.filter((edge) => edge.kind === "pass" ? !docked.has(edge.from) : shapes.get(edge.id) === "other");
+  const ids = pipeline.stages.map((stage) => stage.id).filter((id) => !docked.has(id));
   const out = new Map(ids.map((id) => [id, [] as GraphEdge[]] as const));
   /* Pass edges first, so the pass chain defines "forward". */
-  for (const edge of [...edges.filter((e) => e.kind === "pass"), ...edges.filter((e) => e.kind === "fail")]) out.get(edge.from)?.push(edge);
-  const hasIncomingPass = new Set(edges.filter((edge) => edge.kind === "pass").map((edge) => edge.to));
+  for (const edge of [...wires.filter((e) => e.kind === "pass"), ...wires.filter((e) => e.kind === "fail")]) out.get(edge.from)?.push(edge);
+  const hasIncomingPass = new Set(wires.filter((edge) => edge.kind === "pass").map((edge) => edge.to));
   const roots = ids.filter((id) => !hasIncomingPass.has(id));
   const color = new Map<string, 1 | 2>();
   const back = new Set<string>();
@@ -179,7 +282,7 @@ export function graphTopology(pipeline: Pick<Pipeline, "stages">): GraphTopology
   for (const root of roots.length ? roots : ids.slice(0, 1)) if (!color.has(root)) visit(root);
   for (const id of ids) if (!color.has(id)) visit(id);
 
-  const forward = edges.filter((edge) => !back.has(edge.id) && out.has(edge.to));
+  const forward = wires.filter((edge) => !back.has(edge.id) && out.has(edge.to));
   const layer = new Map<string, number>(ids.map((id) => [id, 0]));
   const indegree = new Map<string, number>(ids.map((id) => [id, 0]));
   for (const edge of forward) indegree.set(edge.to, (indegree.get(edge.to) ?? 0) + 1);
@@ -196,7 +299,7 @@ export function graphTopology(pipeline: Pick<Pipeline, "stages">): GraphTopology
   const main = new Set<string>();
   const byId = new Map(pipeline.stages.map((stage) => [stage.id, stage] as const));
   let current: string | null = roots[0] ?? ids[0] ?? null;
-  while (current && !main.has(current) && byId.has(current)) {
+  while (current && !main.has(current) && byId.has(current) && !docked.has(current)) {
     main.add(current);
     current = byId.get(current)?.next ?? null;
   }
@@ -212,78 +315,140 @@ export function graphTopology(pipeline: Pick<Pipeline, "stages">): GraphTopology
     taken.set(at, used);
     row.set(id, r);
   }
+  /* A docked stage stands where its source stands. */
+  for (const [fix, source] of docked) {
+    layer.set(fix, layer.get(source) ?? 0);
+    row.set(fix, row.get(source) ?? 0);
+  }
   const branching = new Set(ids.filter((id) => (out.get(id) ?? []).length > 1));
   return {
     edges,
+    wires,
     back,
     layer,
     row,
     branching,
-    layers: Math.max(0, ...layer.values()) + 1,
-    rows: Math.max(0, ...row.values()) + 1,
+    layers: Math.max(0, ...ids.map((id) => layer.get(id) ?? 0)) + 1,
+    rows: Math.max(0, ...ids.map((id) => row.get(id) ?? 0)) + 1,
+    shapes,
+    docked,
+    loops,
   };
 }
 
-/** Stages in graph order: by layer, then row. */
+/** Stages in graph order: by layer, then row, each docked fix stage right after its source. */
 export function graphOrder(pipeline: Pick<Pipeline, "stages">, topology: GraphTopology = graphTopology(pipeline)): PipelineStage[] {
-  return [...pipeline.stages].sort((a, b) => (topology.layer.get(a.id) ?? 0) - (topology.layer.get(b.id) ?? 0) || (topology.row.get(a.id) ?? 0) - (topology.row.get(b.id) ?? 0));
+  const units = pipeline.stages
+    .filter((stage) => !topology.docked.has(stage.id))
+    .sort((a, b) => (topology.layer.get(a.id) ?? 0) - (topology.layer.get(b.id) ?? 0) || (topology.row.get(a.id) ?? 0) - (topology.row.get(b.id) ?? 0));
+  return units.flatMap((stage) => {
+    const loop = topology.loops.get(stage.id);
+    const fix = loop?.shape === "dock" ? pipeline.stages.find((candidate) => candidate.id === loop.edge.to) : undefined;
+    return fix ? [stage, fix] : [stage];
+  });
+}
+
+/** The stages whose passes the wire leaving a unit carries: the source and the
+    fix stage docked on it, whose pass after a spent budget continues the lane. */
+export function unitMembers(topology: GraphTopology, stageId: string): string[] {
+  const loop = topology.loops.get(stageId);
+  return loop?.shape === "dock" ? [stageId, loop.edge.to] : [stageId];
+}
+
+/** How often a wire fired: every attempt of its target a member of the source's
+    unit activated along that kind of edge. */
+export function wireFired(pipeline: Pipeline, topology: GraphTopology, edge: Pick<GraphEdge, "from" | "to" | "kind">): number {
+  if (edge.kind === "fail") return edgeRoundsUsed(pipeline, edge);
+  return unitMembers(topology, edge.from).reduce((sum, from) => sum + edgeRoundsUsed(pipeline, { from, to: edge.to, kind: "pass" }), 0);
+}
+
+/** Whether a source draws its loop strip. A retry in place draws one only once it fired. */
+export function drawsStrip(pipeline: Pick<Pipeline, "stages"> & Partial<Pick<Pipeline, "runs">>, loop: GraphLoop | undefined): boolean {
+  if (!loop) return false;
+  if (loop.shape !== "self") return true;
+  return Boolean(pipeline.runs) && edgeRoundsUsed(pipeline as Pipeline, loop.edge) > 0;
 }
 
 /* ── Geometry ─────────────────────────────────────────────────────────────── */
 
-const LR = { W: 176, H: 76, gx: 68, gy: 30, pad: 18, lane: 22 };
-const TB = { H: 76, gy: 46, gx: 16, pad: 12, lane: 20, laneGap: 22, minW: 176, maxW: 268, labelW: 104 };
+const NODE_H = 76;
+const LR = { W: 176, gx: 68, gy: 30, pad: 18, lane: 22 };
+const TB = { gy: 46, pad: 12, lane: 20, laneGap: 22, labelW: 84, minW: 132, maxW: 268 };
+/** The loop strip under a node: 28 px, 44 px where the pointer is a finger. */
+export const STRIP_H = { fine: 28, coarse: 44 } as const;
 
 export interface GraphBox { x: number; y: number; w: number; h: number }
+
+export interface GraphStrip {
+  loop: GraphLoop;
+  box: GraphBox;
+}
 
 export interface GraphLayout {
   dir: "LR" | "TB";
   topology: GraphTopology;
+  /** The node of every stage that is not docked. */
   nodes: Map<string, GraphBox>;
+  /** The loop strip under a node, by the source's id. */
+  strips: Map<string, GraphStrip>;
   lanes: Array<{ id: string; pos: number }>;
   width: number;
   height: number;
-  /** Top-to-bottom too narrow for labels beside the return lane: numbered badges and a legend. */
-  labelMode: "inline" | "legend";
 }
 
 /** Choose a layout for the width available. Text never shrinks: when
-    left-to-right does not fit, the graph turns top-to-bottom. */
-export function layoutGraph(pipeline: Pick<Pipeline, "stages">, available: number, force?: "LR" | "TB"): GraphLayout {
+    left-to-right does not fit, the graph turns top-to-bottom, one column of
+    units never wider than the width it has. */
+export function layoutGraph(
+  pipeline: Pick<Pipeline, "stages"> & Partial<Pick<Pipeline, "runs">>,
+  available: number,
+  force?: "LR" | "TB",
+  options: { coarse?: boolean } = {},
+): GraphLayout {
   const topology = graphTopology(pipeline);
-  const backCount = topology.edges.filter((edge) => topology.back.has(edge.id)).length;
-  const lrWidth = LR.pad * 2 + topology.layers * LR.W + (topology.layers - 1) * LR.gx + (backCount ? 16 : 0);
+  const stripH = options.coarse ? STRIP_H.coarse : STRIP_H.fine;
+  const units = graphOrder(pipeline, topology).filter((stage) => !topology.docked.has(stage.id));
+  const striped = new Set(units.filter((stage) => drawsStrip(pipeline, topology.loops.get(stage.id))).map((stage) => stage.id));
+  const unitH = (id: string) => NODE_H + (striped.has(id) ? stripH : 0);
+  const backWires = topology.wires.filter((edge) => topology.back.has(edge.id));
+  const lrWidth = LR.pad * 2 + topology.layers * LR.W + (topology.layers - 1) * LR.gx + (backWires.length ? 16 : 0);
   const dir = force ?? (lrWidth <= available ? "LR" : "TB");
   const nodes = new Map<string, GraphBox>();
+  const strips = new Map<string, GraphStrip>();
   let width: number;
   let height: number;
   let lanes: Array<{ id: string; pos: number }> = [];
-  let labelMode: GraphLayout["labelMode"] = "inline";
   if (dir === "LR") {
-    for (const stage of pipeline.stages) {
-      nodes.set(stage.id, { x: LR.pad + (topology.layer.get(stage.id) ?? 0) * (LR.W + LR.gx), y: LR.pad + (topology.row.get(stage.id) ?? 0) * (LR.H + LR.gy), w: LR.W, h: LR.H });
+    const pitch = Math.max(NODE_H, ...units.map((stage) => unitH(stage.id)));
+    for (const stage of units) {
+      nodes.set(stage.id, { x: LR.pad + (topology.layer.get(stage.id) ?? 0) * (LR.W + LR.gx), y: LR.pad + (topology.row.get(stage.id) ?? 0) * (pitch + LR.gy), w: LR.W, h: NODE_H });
     }
-    const bottom = LR.pad + topology.rows * LR.H + (topology.rows - 1) * LR.gy;
-    lanes = topology.edges.filter((edge) => topology.back.has(edge.id)).map((edge, index) => ({ id: edge.id, pos: bottom + 26 + index * (LR.lane + 12) }));
+    const bottom = LR.pad + topology.rows * pitch + (topology.rows - 1) * LR.gy;
+    lanes = backWires.map((edge, index) => ({ id: edge.id, pos: bottom + 26 + index * (LR.lane + 12) }));
     width = lrWidth;
     height = (lanes.length ? lanes[lanes.length - 1]!.pos + 22 : bottom) + LR.pad;
   } else {
-    const laneSpace = backCount ? TB.laneGap + backCount * TB.lane : 0;
-    let w = Math.floor((available - TB.pad * 2 - (topology.rows - 1) * TB.gx - laneSpace - (backCount ? TB.labelW : 0)) / topology.rows);
-    if (w < TB.minW && backCount) {
-      labelMode = "legend";
-      w = Math.floor((available - TB.pad * 2 - (topology.rows - 1) * TB.gx - laneSpace - 8) / topology.rows);
+    /* One column: a wire that does not run from one unit to the next takes a
+       lane on the right, labelled beside it. */
+    const index = new Map(units.map((stage, at) => [stage.id, at] as const));
+    const laned = topology.wires.filter((edge) => (index.get(edge.to) ?? -1) !== (index.get(edge.from) ?? -2) + 1 || edge.kind === "fail");
+    const laneSpace = laned.length ? TB.laneGap + laned.length * TB.lane + TB.labelW : 0;
+    const w = Math.max(Math.min(available - TB.pad * 2 - laneSpace, TB.maxW), TB.minW);
+    let y = TB.pad;
+    for (const stage of units) {
+      nodes.set(stage.id, { x: TB.pad, y, w, h: NODE_H });
+      y += unitH(stage.id) + TB.gy;
     }
-    w = Math.max(Math.min(w, TB.maxW), 132);
-    for (const stage of pipeline.stages) {
-      nodes.set(stage.id, { x: TB.pad + (topology.row.get(stage.id) ?? 0) * (w + TB.gx), y: TB.pad + (topology.layer.get(stage.id) ?? 0) * (TB.H + TB.gy), w, h: TB.H });
-    }
-    const right = TB.pad + topology.rows * w + (topology.rows - 1) * TB.gx;
-    lanes = topology.edges.filter((edge) => topology.back.has(edge.id)).map((edge, index) => ({ id: edge.id, pos: right + TB.laneGap + index * TB.lane }));
-    width = right + laneSpace + (backCount && labelMode === "inline" ? TB.labelW : 8) + TB.pad;
-    height = TB.pad * 2 + topology.layers * TB.H + (topology.layers - 1) * TB.gy;
+    lanes = laned.map((edge, at) => ({ id: edge.id, pos: TB.pad + w + TB.laneGap + at * TB.lane }));
+    width = TB.pad * 2 + w + laneSpace;
+    height = y - TB.gy + TB.pad;
   }
-  return { dir, topology, nodes, lanes, width, height, labelMode };
+  for (const stage of units) {
+    if (!striped.has(stage.id)) continue;
+    const node = nodes.get(stage.id)!;
+    strips.set(stage.id, { loop: topology.loops.get(stage.id)!, box: { x: node.x, y: node.y + node.h, w: node.w, h: stripH } });
+  }
+  return { dir, topology, nodes, strips, lanes, width, height };
 }
 
 /** An orthogonal polyline with rounded corners, as an SVG path. */
@@ -310,6 +475,8 @@ export interface EdgeRoute {
   d: string;
   label: [number, number];
   labelAxis: "h" | "v";
+  /** The label sits beside a lane on the right rather than centred on the wire. */
+  beside?: boolean;
 }
 
 export function routeEdge(layout: GraphLayout, edge: GraphEdge): EdgeRoute | null {
@@ -337,25 +504,20 @@ export function routeEdge(layout: GraphLayout, edge: GraphEdge): EdgeRoute | nul
     }
     return { d: roundPath(points, 10), label: [sx + Math.min(38, (tx - sx) / 2), sy], labelAxis: "h" };
   }
-  /* Top-to-bottom: pass leaves the bottom, fail leaves the right side. */
-  if (edge.kind === "fail" || back) {
+  /* Top-to-bottom: a pass to the next unit leaves the bottom of the unit;
+     anything else runs in its lane on the right. */
+  const lane = layout.lanes.find((candidate) => candidate.id === edge.id);
+  if (lane) {
     const sx = a.x + a.w;
     const sy = a.y + a.h * (edge.kind === "fail" ? 0.66 : 0.5);
     const tx = b.x + b.w;
     const ty = b.y + b.h * 0.34;
-    const lane = layout.lanes.find((candidate) => candidate.id === edge.id);
-    if (lane) return { d: roundPath([[sx, sy], [lane.pos, sy], [lane.pos, ty], [tx + 2, ty]], 10), label: [lane.pos, (sy + ty) / 2], labelAxis: "v" };
-    /* A forward fail branch into another column. */
-    const bx = b.x + b.w / 2;
-    return { d: roundPath([[sx, sy], [bx, sy], [bx, b.y - 2]], 10), label: [sx + (bx - sx) / 2, sy], labelAxis: "h" };
+    return { d: roundPath([[sx, sy], [lane.pos, sy], [lane.pos, ty], [tx + 2, ty]], 10), label: [lane.pos + 8, (sy + ty) / 2], labelAxis: "v", beside: true };
   }
-  const sx = a.x + a.w / 2;
-  const sy = a.y + a.h;
-  const tx = b.x + b.w / 2;
+  const bottom = a.y + a.h + (layout.strips.get(edge.from)?.box.h ?? 0);
+  const x = a.x + a.w / 2;
   const ty = b.y;
-  const my = sy + (ty - sy) / 2;
-  const points: Array<[number, number]> = Math.abs(sx - tx) < 1 ? [[sx, sy], [tx, ty - 2]] : [[sx, sy], [sx, my], [tx, my], [tx, ty - 2]];
-  return { d: roundPath(points, 10), label: [sx, sy + Math.min(22, (ty - sy) / 2)], labelAxis: "v" };
+  return { d: roundPath([[x, bottom], [x, ty - 2]], 10), label: [x, bottom + Math.min(22, (ty - bottom) / 2)], labelAxis: "v" };
 }
 
 /* ── Past attempts ────────────────────────────────────────────────────────── */
@@ -368,8 +530,15 @@ export interface PastAttempt {
       of one of its attempts; "helper": a conversation a stage agent brought in. */
   kind: "attempt" | "round" | "helper";
   n: number;
+  /** How many own attempts the stage has, so a stage that ran once is named
+      without a number. */
+  of: number;
   /** For a round: the attempt whose review flow it belongs to. */
   attempt: number | null;
+  /** Which of the stage's own attempts the row is, or whose round it is,
+      counted from 1: the number its label shows. `n` and `attempt` stay the
+      record's own numbers, which also count adopted helpers. Null for a helper. */
+  ordinal: number | null;
   /** For a round: whether the stage has rounds under more than one attempt, so
       the label must name the attempt. */
   ambiguous: boolean;
@@ -410,7 +579,7 @@ export function pastAttempts(pipelines: readonly Pipeline[], flowsById: Readonly
       const reviewAttempts = stage.kind === "review-loop"
         ? own.filter((attempt) => attempt.flowId && (flowsById.get(attempt.flowId)?.rounds.length ?? 0) > 0)
         : [];
-      for (const attempt of own) {
+      for (const [index, attempt] of own.entries()) {
         const active = attempt === latest && ACTIVE_ATTEMPT(attempt);
         if (!active) {
           rows.push({
@@ -419,7 +588,9 @@ export function pastAttempts(pipelines: readonly Pipeline[], flowsById: Readonly
             stageId: stage.id,
             kind: "attempt",
             n: attempt.n,
+            of: own.length,
             attempt: null,
+            ordinal: index + 1,
             ambiguous: false,
             state: attempt.state,
             verdict: attempt.verdict?.status ?? null,
@@ -436,7 +607,9 @@ export function pastAttempts(pipelines: readonly Pipeline[], flowsById: Readonly
             stageId: stage.id,
             kind: "round",
             n: round.n,
+            of: own.length,
             attempt: attempt.n,
+            ordinal: index + 1,
             ambiguous: reviewAttempts.length > 1,
             state: round.verdict ?? "open",
             verdict: null,
@@ -453,7 +626,9 @@ export function pastAttempts(pipelines: readonly Pipeline[], flowsById: Readonly
           kind: "helper",
           /* Numbered among the stage's helper conversations, never as an attempt. */
           n: index + 1,
+          of: own.length,
           attempt: null,
+          ordinal: null,
           ambiguous: false,
           state: helper.state,
           verdict: helper.verdict?.status ?? null,
