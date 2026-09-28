@@ -41,7 +41,15 @@ export async function POST(req: NextRequest, context: Context): Promise<NextResp
   const grant = authorizePeer(req.headers.get("x-delegatus-peer"), path === "boards/sync" ? "board:sync" : undefined);
   if (!grant) return unauthorized();
   if (path === "boards/sync") {
-    try { const result = incomingSync(grant, await json(req)); return answer(result.body, result.status); }
+    let input: unknown;
+    let malformed = false;
+    try { input = await json(req); } catch { malformed = true; }
+    // A body can arrive long after the headers; a grant revoked meanwhile
+    // gets the same 401 as any stranger and writes nothing.
+    const current = authorizePeer(req.headers.get("x-delegatus-peer"), "board:sync");
+    if (current?.id !== grant.id) return unauthorized();
+    if (malformed) return answer({ error: "malformed" }, 400);
+    try { const result = incomingSync(current, input); return answer(result.body, result.status); }
     catch { return answer({ error: "malformed" }, 400); }
   }
   usedGrant(grant, false);
