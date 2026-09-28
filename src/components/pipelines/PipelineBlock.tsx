@@ -874,7 +874,7 @@ function ScreenBlock(props: PipelineBlockProps & {
         <span className="pb-num">{index + 1}</span>
         <span className="pb-stage-main">
           <span className="pb-stage-title">
-            <StageGlyph state={shown} model={identity} live={chip.rework} fallback="mark" />
+            <StageGlyph state={shown} model={identity} live={chip.rework} fallback="mark" badge={false} />
             {/* The number flows after the name's last word, wrapped or not. */}
             <span className="pb-name">{chip.branch ? t("kanban.branch", { stage: name }) : name}{attemptN !== null ? <span className="pb-attempt">{` · ${attemptN}`}</span> : null}</span>
             {chip.rounds ? <CountCircle n={chip.rounds} tone="neutral" label={t("kanban.stageAriaRounds", { stage: name, state, count: chip.rounds })} /> : null}

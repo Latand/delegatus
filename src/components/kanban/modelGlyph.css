@@ -5,6 +5,8 @@
 .mglyph {
   --glyph-size: 14px;
   --glyph-glow: var(--glyph-claude);
+  /* One period per glyph: its figure and its halo keep the same beat. */
+  --mg-period: 3.2s;
   position: relative; flex: none; display: inline-grid; place-items: center;
   width: var(--glyph-size); height: var(--glyph-size);
 }
@@ -13,61 +15,73 @@
 .mglyph .mg-ray { fill: none; stroke: var(--glyph-ink); stroke-width: 1.45; stroke-linecap: round; }
 
 .mglyph:is(.g-opus, .g-fable, .g-sonnet, .g-haiku) { --glyph-ink: var(--glyph-claude); --glyph-glow: var(--glyph-claude); }
-.mglyph.g-sol { --glyph-ink: var(--glyph-sol-edge); --glyph-glow: var(--glyph-sol); }
+.mglyph.g-opus { --mg-period: 3.6s; }
+.mglyph.g-sonnet { --mg-period: 3.2s; }
+.mglyph.g-haiku { --mg-period: 4s; }
+.mglyph.g-fable { --mg-period: 3.6s; }
+.mglyph.g-sol { --glyph-ink: var(--glyph-sol-edge); --glyph-glow: var(--glyph-sol); --mg-period: 3.5s; }
 .mglyph.g-sol .mg-disc { fill: var(--glyph-sol); stroke: var(--glyph-sol-edge); stroke-width: 0.9; }
-.mglyph.g-astra { --glyph-ink: var(--glyph-astra); --glyph-glow: var(--glyph-astra); }
-.mglyph.g-astra .mg-core { fill: var(--glyph-astra-core); }
-.mglyph.g-terra { --glyph-glow: var(--glyph-terra-sea); }
+.mglyph.g-astra { --glyph-ink: var(--glyph-astra); --glyph-glow: var(--glyph-astra); --glyph-halo-peak: var(--glyph-halo-peak-strong); --mg-period: 3s; }
+.mglyph.g-terra { --glyph-glow: var(--glyph-terra-sea); --mg-period: 3s; }
 .mglyph.g-terra .mg-sea { fill: var(--glyph-terra-sea); }
 .mglyph.g-terra .mg-land { fill: var(--glyph-terra-land); }
 .mglyph.g-terra .mg-rim { fill: none; stroke: var(--glyph-terra-rim); stroke-width: 0.8; }
-.mglyph.g-luna { --glyph-ink: var(--glyph-luna); --glyph-glow: var(--glyph-luna); }
-.mglyph.g-luna .mg-earthshine { fill: var(--glyph-luna); opacity: 0.22; }
+.mglyph.g-luna { --glyph-ink: var(--glyph-luna); --glyph-glow: var(--glyph-luna-glow); --mg-period: 5s; }
+.mglyph.g-luna .mg-earthshine { fill: var(--glyph-luna); opacity: 0.1; }
 
-/* Waiting: the model is chosen and has not run. Dimmed, as a configured node
-   is dashed, and still its own shape. */
-.mglyph[data-glyph-state="waiting"] > svg { opacity: 0.45; }
+/* Waiting: the model is chosen and has not run. Its colour drains toward
+   grey, with no halo and no motion, while the silhouette keeps its full ink:
+   the drained inks still clear 3:1 on every surface a stage sits on, which
+   tokens.contrast.test.ts pins from this very rule. */
+.mglyph[data-glyph-state="waiting"] > svg { filter: saturate(0.35); opacity: 1; }
 
 /* Running: a halo in the glyph's own tone behind it. The halo is the running
    signal that survives reduced motion; every movement below is asked for only
-   where motion is welcome, so nothing has to be switched off again. */
+   where motion is welcome, so nothing has to be switched off again. Its reach
+   and strength are per theme (tokens.css): tight on the light paper, where a
+   wide glow is a stain, and strong on the dark, where a faint one is lost. */
 .mglyph::before {
-  content: ""; position: absolute; inset: -5px; border-radius: 50%; pointer-events: none; opacity: 0;
-  background: radial-gradient(closest-side, color-mix(in srgb, var(--glyph-glow) 60%, transparent), color-mix(in srgb, var(--glyph-glow) 18%, transparent) 55%, transparent);
+  content: ""; position: absolute; inset: calc(-1 * var(--glyph-halo-reach)); border-radius: 50%; pointer-events: none; opacity: 0;
+  /* Faint behind the drawing, so the silhouette keeps its edge against a
+     glow of its own colour, and strongest just past the glyph's rim. */
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--glyph-glow) calc(var(--glyph-halo-peak) * 0.3), transparent), color-mix(in srgb, var(--glyph-glow) var(--glyph-halo-peak), transparent) 62%, transparent);
 }
 .mglyph[data-live="1"]::before { opacity: 1; }
-.mglyph[data-live="1"] > svg { filter: drop-shadow(0 0 1.2px color-mix(in srgb, var(--glyph-glow) 80%, transparent)); }
 .mglyph svg * { transform-box: view-box; transform-origin: 8px 8px; }
-.mglyph .mg-sway { transform-origin: 8px 8.9px; }
+.mglyph .mg-write { transform-origin: 1.6px 14.4px; }
 .mglyph .mg-tilt { transform-origin: 8px 14px; }
 
+/* Every figure keeps one silhouette from frame to frame: it turns, sways or
+   changes phase slowly, and never grows or shrinks by more than 8%. */
 @media (prefers-reduced-motion: no-preference) {
-  .mglyph[data-live="1"]::before { animation: mg-halo 1.8s var(--ease-standard, ease-in-out) infinite; }
-  .mglyph[data-live="1"] .mg-turn { animation: mg-turn 7s linear infinite; }
-  .mglyph.g-opus[data-live="1"] .mg-turn { animation: mg-turn 7s linear infinite, mg-breathe 1.8s var(--ease-standard, ease-in-out) infinite; }
-  .mglyph[data-live="1"] .mg-long { animation: mg-beat-long 1.1s ease-in-out infinite alternate; }
-  .mglyph[data-live="1"] .mg-short { animation: mg-beat-short 1.1s ease-in-out infinite alternate; }
-  .mglyph[data-live="1"] .mg-sway { animation: mg-sway 2.4s ease-in-out infinite alternate; }
-  .mglyph[data-live="1"] .mg-tilt { animation: mg-tilt 2.2s ease-in-out infinite alternate; }
-  .mglyph[data-live="1"] .mg-twinkle { animation: mg-twinkle 1.4s ease-in-out infinite alternate; }
-  .mglyph[data-live="1"] .mg-spin { animation: mg-spin 6s linear infinite; }
-  .mglyph[data-live="1"] .mg-phase { animation: mg-phase 4.8s ease-in-out infinite alternate; }
+  .mglyph[data-live="1"]::before { animation: mg-halo var(--mg-period) var(--ease-standard, ease-in-out) infinite; }
+  .mglyph[data-live="1"] .mg-turn { animation: mg-turn calc(var(--mg-period) * 4) linear infinite; }
+  .mglyph[data-live="1"] .mg-breathe { animation: mg-breathe var(--mg-period) var(--ease-standard, ease-in-out) infinite; }
+  .mglyph[data-live="1"] .mg-write { animation: mg-write var(--mg-period) ease-in-out infinite; }
+  .mglyph[data-live="1"] .mg-sway { animation: mg-sway var(--mg-period) ease-in-out infinite; }
+  .mglyph[data-live="1"] .mg-tilt { animation: mg-tilt var(--mg-period) ease-in-out infinite; }
+  .mglyph[data-live="1"] .mg-corona { animation: mg-turn calc(var(--mg-period) * 6) linear infinite; }
+  .mglyph[data-live="1"] .mg-core { animation: mg-flare var(--mg-period) ease-in-out infinite; }
+  .mglyph[data-live="1"] .mg-spin { animation: mg-spin calc(var(--mg-period) * 2) linear infinite; }
+  .mglyph[data-live="1"] .mg-phase { animation: mg-phase calc(var(--mg-period) * 2) ease-in-out infinite; }
 }
-@keyframes mg-halo { 50% { opacity: 0.4; transform: scale(0.78); } }
+@keyframes mg-halo { 50% { opacity: 0.6; transform: scale(0.92); } }
 @keyframes mg-turn { to { transform: rotate(360deg); } }
-@keyframes mg-breathe { 50% { scale: 0.86; } }
-@keyframes mg-beat-long { to { transform: scale(0.72); } }
-@keyframes mg-beat-short { to { transform: scale(1.42); } }
-@keyframes mg-sway { from { transform: rotate(-14deg); } to { transform: rotate(14deg); } }
-@keyframes mg-tilt { from { transform: rotate(-8deg); } to { transform: rotate(8deg); } }
-@keyframes mg-twinkle { from { transform: scale(0.8) rotate(-8deg); } to { transform: scale(1.12) rotate(8deg); } }
+@keyframes mg-breathe { 50% { transform: scale(0.93); } }
+@keyframes mg-write { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(4deg); } }
+@keyframes mg-sway { 0%, 100% { transform: rotate(-6deg); } 50% { transform: rotate(6deg); } }
+@keyframes mg-tilt { 0%, 100% { transform: rotate(-5deg); } 50% { transform: rotate(5deg); } }
+@keyframes mg-flare { 50% { opacity: 0.55; } }
 @keyframes mg-spin { to { transform: translateX(-13.2px); } }
-@keyframes mg-phase { to { transform: translate(-6.4px, 1.6px); } }
+/* The shadow disc slides between a thin crescent and a fat one, and never
+   uncovers a half moon, so every frame is a crescent. */
+@keyframes mg-phase { 0%, 100% { transform: translate(-1.1px, 0.55px); } 50% { transform: translate(0.55px, -0.28px); } }
 
 /* A settled state rides the corner as a badge in the stage's tone, cut out of
-   the glyph by a ring of the surface under it. */
+   the glyph by a ring of the surface under it. It sits out past the corner so
+   the drawing keeps its ink; a host that prints the state word draws none. */
 .mglyph .mg-badge {
-  position: absolute; right: -3px; bottom: -3px; width: 8px; height: 8px; border-radius: 50%;
+  position: absolute; right: -4px; bottom: -4px; width: 8px; height: 8px; border-radius: 50%;
   display: grid; place-items: center; background: var(--stage-tone);
   box-shadow: 0 0 0 1.5px var(--glyph-cut, var(--surface-card));
 }

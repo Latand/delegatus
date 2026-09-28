@@ -593,7 +593,7 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
                 <StageIdentity identity={identity} density="node" showWord={box.w >= 176} words={identityWords} glyph />
               </span>
               <span className="prow">
-                <span className="pstate"><StageGlyph state={state} model={identity} live={rework} fallback="dot" />{word}</span>
+                <span className="pstate"><StageGlyph state={state} model={identity} live={rework} fallback="dot" badge={false} />{word}</span>
                 {detail}
               </span>
             </button>

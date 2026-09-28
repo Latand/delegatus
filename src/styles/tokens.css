@@ -151,6 +151,12 @@
   --glyph-terra-land: #2b9a4f;
   --glyph-terra-rim: #1d5aa3;
   --glyph-luna: #66728f;
+  --glyph-luna-glow: #9fb3d9;
+  /* The running halo: how far past the glyph it reaches and how strong it is
+     at its heart. Astra, the brightest sun, takes the strong peak. */
+  --glyph-halo-reach: 3px;
+  --glyph-halo-peak: 40%;
+  --glyph-halo-peak-strong: 60%;
 
   /* Activity chart marks (docs/design/activity-dashboard-v2.md, "Colour"):
      you are the accent, agents the info teal, each with one lighter step
@@ -254,12 +260,16 @@
     --effort-empty: #64646f;
     --glyph-sol: #ffcd38;
     --glyph-sol-edge: #ffcd38;
-    --glyph-astra: #63b3ff;
+    --glyph-astra: #4da3ff;
     --glyph-astra-core: #f2f8ff;
     --glyph-terra-sea: #4a9cf0;
     --glyph-terra-land: #5ccf80;
     --glyph-terra-rim: #8cc2f7;
     --glyph-luna: #d3daea;
+    --glyph-luna-glow: #c9d6f2;
+    --glyph-halo-reach: 5px;
+    --glyph-halo-peak: 45%;
+    --glyph-halo-peak-strong: 75%;
 
     /* The app's dark accent and info sit above the chart lightness band;
        these steps are inside it. */
@@ -335,12 +345,16 @@
   --effort-empty: #64646f;
   --glyph-sol: #ffcd38;
   --glyph-sol-edge: #ffcd38;
-  --glyph-astra: #63b3ff;
+  --glyph-astra: #4da3ff;
   --glyph-astra-core: #f2f8ff;
   --glyph-terra-sea: #4a9cf0;
   --glyph-terra-land: #5ccf80;
   --glyph-terra-rim: #8cc2f7;
   --glyph-luna: #d3daea;
+  --glyph-luna-glow: #c9d6f2;
+  --glyph-halo-reach: 5px;
+  --glyph-halo-peak: 45%;
+  --glyph-halo-peak-strong: 75%;
 
   --mark-you: #7f79e6;
   --mark-you-half: #4a4786;

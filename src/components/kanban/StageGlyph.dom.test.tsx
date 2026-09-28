@@ -62,6 +62,59 @@ test("a running stage draws its model moving; a settled one carries its state as
   expect(host.querySelector(".pmark, .pdot")).toBeNull();
 });
 
+test("a host that prints the state word draws the glyph without a badge, so it keeps all of its ink", () => {
+  const host = mount(
+    <>
+      <StageGlyph state="failed" model={{ engine: "codex", model: "gpt-6-astra" }} fallback="dot" badge={false} />
+      <StageGlyph state="passed" model={{ engine: "claude", model: "sonnet" }} fallback="mark" badge={false} />
+    </>,
+  );
+  expect([...host.querySelectorAll<HTMLElement>(".mglyph")].map((glyph) => [glyph.dataset.glyphState, Boolean(glyph.querySelector(".mg-badge"))])).toEqual([["failed", false], ["passed", false]]);
+});
+
+test("a stage pane's header draws the glyph named, or its tone dot for a model with none", () => {
+  const host = mount(
+    <>
+      <span data-case="glyph"><StageGlyph state="running" model={{ engine: "claude", model: "haiku" }} fallback="tone" named title="Running" /></span>
+      <span data-case="dot"><StageGlyph state="running" model={{ engine: "codex", model: "gpt-5.5" }} fallback="tone" named title="Running" /></span>
+      <span data-case="settled-dot"><StageGlyph state="passed" model={{ engine: "codex", model: "gpt-5.5" }} fallback="tone" title="Passed" /></span>
+    </>,
+  );
+  const glyph = host.querySelector<HTMLElement>('[data-case="glyph"] .mglyph')!;
+  expect([glyph.dataset.glyph, glyph.getAttribute("role"), glyph.getAttribute("aria-label"), glyph.title]).toEqual(["haiku", "img", "Haiku: running", "Running"]);
+  const dot = host.querySelector<HTMLElement>('[data-case="dot"] span')!;
+  expect(dot.className).toContain("animate-pulse");
+  expect([dot.style.backgroundColor, dot.title]).toEqual(["var(--color-accent)", "Running"]);
+  const settled = host.querySelector<HTMLElement>('[data-case="settled-dot"] span')!;
+  expect(settled.className).not.toContain("animate-pulse");
+  expect(settled.style.backgroundColor).toBe("var(--color-success)");
+});
+
+test("each Claude model draws an object of its own", () => {
+  const host = mount(
+    <>
+      {["opus", "sonnet", "haiku", "fable"].map((model) => <StageGlyph key={model} state="running" model={{ engine: "claude", model }} fallback="mark" />)}
+    </>,
+  );
+  const drawings = [...host.querySelectorAll<HTMLElement>(".mglyph")].map((glyph) => glyph.querySelector("svg")!.innerHTML);
+  expect(new Set(drawings).size).toBe(4);
+  /* Each moves in its own way: the spark turns and breathes, the quill writes,
+     the blossom sways, the fox tilts its head. */
+  expect([...host.querySelectorAll<HTMLElement>(".mglyph")].map((glyph) => [...glyph.querySelectorAll("[class*=mg-]")].map((node) => node.getAttribute("class")).filter((name) => /mg-(turn|breathe|write|sway|tilt)/.test(name ?? "")))).toEqual([
+    ["mg-turn", "mg-breathe"], ["mg-fill mg-write"], ["mg-fill mg-sway"], ["mg-fill mg-tilt"],
+  ]);
+});
+
+test("Astra is a sun: a filled disc, a white-hot core and a corona of twelve rays", () => {
+  const host = mount(<StageGlyph state="running" model={{ engine: "codex", model: "gpt-6-astra" }} fallback="mark" />);
+  const corona = host.querySelector(".mg-corona")!.getAttribute("d")!;
+  /* A star of twelve points is twenty-four vertices. */
+  expect(corona.split("L")).toHaveLength(24);
+  expect(host.querySelectorAll("circle.mg-fill")).toHaveLength(1);
+  const core = host.querySelector("circle.mg-core")!;
+  expect(core.getAttribute("fill")).toBe(`url(#${host.querySelector("radialGradient")!.id})`);
+});
+
 test("a settled stage whose conversation works again moves while keeping its badge", () => {
   const host = mount(<StageGlyph state="passed" model={{ engine: "claude", model: "opus" }} live fallback="mark" />);
   const glyph = host.querySelector<HTMLElement>(".mglyph")!;
@@ -93,17 +146,18 @@ test("the glyph is decoration beside a host label, and says model and state wher
   expect(mount(named).querySelector("[role=img]")!.getAttribute("aria-label")).toBe("GPT-6-Astra: працює");
 });
 
-test("each Luna and Terra draws with an id of its own, so two on one page do not share a mask", () => {
+test("each Luna, Terra and Astra draws with an id of its own, so two on one page do not share a mask", () => {
   const host = mount(
     <>
       <StageGlyph state="running" model={{ engine: "codex", model: "gpt-6-luna" }} fallback="dot" />
       <StageGlyph state="pending" model={{ engine: "codex", model: "gpt-5.6-luna" }} fallback="dot" />
       <StageGlyph state="running" model={{ engine: "codex", model: "gpt-5.6-terra" }} fallback="dot" />
+      <StageGlyph state="running" model={{ engine: "codex", model: "gpt-6-astra" }} fallback="dot" />
     </>,
   );
-  const ids = [...host.querySelectorAll("mask, clipPath")].map((element) => element.id);
-  expect(ids).toHaveLength(3);
-  expect(new Set(ids).size).toBe(3);
+  const ids = [...host.querySelectorAll("mask, clipPath, radialGradient")].map((element) => element.id);
+  expect(ids).toHaveLength(4);
+  expect(new Set(ids).size).toBe(4);
   expect(host.querySelectorAll("[mask]")[1]!.getAttribute("mask")).toBe(`url(#${ids[1]})`);
 });
 

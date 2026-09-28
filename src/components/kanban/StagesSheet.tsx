@@ -372,7 +372,7 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
       <section className={className} data-stage={stage.id} data-collapsed="1" tabIndex={-1} role="region" aria-label={aria}>
         <button type="button" className="pane-strip" data-pane-fold={stage.id} aria-label={t("kanban.stages.expandPane", { stage: name })} onClick={() => props.onFold(stage.id, false)}>
           {glyph}
-          <StageGlyph state={state} model={ran} fallback="dot" />
+          <StageGlyph state={state} model={ran} fallback="dot" badge={false} />
           <span className="vlabel"><span className="num">{index + 1}</span> {name} · {word}</span>
         </button>
       </section>
@@ -447,7 +447,7 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
         </span>
         {/* A drawn glyph already names the model and the state, so the word
             beside it is for the eye only. */}
-        <span className="pstate"><StageGlyph state={state} model={ran} fallback="dot" named /><span aria-hidden={modelGlyphKind(ran.engine, ran.model) ? true : undefined}>{word}</span></span>
+        <span className="pstate"><StageGlyph state={state} model={ran} fallback="dot" badge={false} named /><span aria-hidden={modelGlyphKind(ran.engine, ran.model) ? true : undefined}>{word}</span></span>
         <span className="spacer" />
         <button type="button" className="icon-btn sm" data-pane-fold={stage.id} aria-label={t("kanban.stages.collapsePane", { stage: name })} title={t("kanban.readerCollapse")} onClick={() => props.onFold(stage.id, true)}>
           <CollapseGlyph />

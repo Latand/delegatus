@@ -1,0 +1,96 @@
+{
+  "foot-light": {
+    "cls": "clamp",
+    "parent": "foot-meta needs",
+    "html": "<span class=\"foot-meta needs\" data-foot-needs=\"1\" title=\"needs a decision · sol\"><span class=\"clamp\">needs a decision · sol</span></span>"
+  },
+  "waiting-light": [
+    {
+      "kind": "opus",
+      "opacity": "0.45",
+      "ink": "#c96442"
+    },
+    {
+      "kind": "fable",
+      "opacity": "0.45",
+      "ink": "#c96442"
+    },
+    {
+      "kind": "sonnet",
+      "opacity": "0.45",
+      "ink": "#c96442"
+    },
+    {
+      "kind": "haiku",
+      "opacity": "0.45",
+      "ink": "#c96442"
+    },
+    {
+      "kind": "sol",
+      "opacity": "0.45",
+      "ink": "#9b6500"
+    },
+    {
+      "kind": "astra",
+      "opacity": "0.45",
+      "ink": "#1764e8"
+    },
+    {
+      "kind": "terra",
+      "opacity": "0.45",
+      "ink": ""
+    },
+    {
+      "kind": "luna",
+      "opacity": "0.45",
+      "ink": "#66728f"
+    }
+  ],
+  "foot-dark": {
+    "cls": "clamp",
+    "parent": "foot-meta needs",
+    "html": "<span class=\"foot-meta needs\" data-foot-needs=\"1\" title=\"needs a decision · sol\"><span class=\"clamp\">needs a decision · sol</span></span>"
+  },
+  "waiting-dark": [
+    {
+      "kind": "opus",
+      "opacity": "0.45",
+      "ink": "#e08a6d"
+    },
+    {
+      "kind": "fable",
+      "opacity": "0.45",
+      "ink": "#e08a6d"
+    },
+    {
+      "kind": "sonnet",
+      "opacity": "0.45",
+      "ink": "#e08a6d"
+    },
+    {
+      "kind": "haiku",
+      "opacity": "0.45",
+      "ink": "#e08a6d"
+    },
+    {
+      "kind": "sol",
+      "opacity": "0.45",
+      "ink": "#ffcd38"
+    },
+    {
+      "kind": "astra",
+      "opacity": "0.45",
+      "ink": "#63b3ff"
+    },
+    {
+      "kind": "terra",
+      "opacity": "0.45",
+      "ink": ""
+    },
+    {
+      "kind": "luna",
+      "opacity": "0.45",
+      "ink": "#d3daea"
+    }
+  ]
+}
