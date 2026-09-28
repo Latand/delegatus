@@ -253,6 +253,29 @@ test("a stall wakes only once it has persisted across two consecutive checks", (
   expect(reasonsOf(second.verdict)).toEqual(["stalled"]);
 });
 
+test("a stall the last wake reported and that has not moved gives its place to a task assigned since", () => {
+  const stuckSince = new Date(NOW - 120 * MINUTE).toISOString();
+  const stalls = [1, 2, 3, 4, 5].map((n) => lane({ id: `pipeline_s${n}`, title: `stuck ${n}`, updatedAt: stuckSince,
+    stageActivity: { lifecycle: "stalled", reason: "host_alive_transcript_silent" } }));
+  const fresh = card({ id: "task_new", title: "assigned after the wake", updatedAt: new Date(NOW - 10 * MINUTE).toISOString() });
+  const older = card({ id: "task_old", title: "assigned before the wake", updatedAt: new Date(NOW - 90 * MINUTE).toISOString() });
+  const seen = { lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString(), stalledSeen: stalls.map((stall) => stall.id) };
+  const idsOf = (verdict: SeatTickVerdict) => verdict.kind === "wake" ? verdict.items.map((item) => item.id) : [];
+
+  const reported = seatTickDecision(input({ pipelines: stalls, tasks: [older, fresh], state: stateWith({ ...seen, lastWakeReasons: ["stalled"] }) }));
+  expect(reasonsOf(reported.verdict)).toEqual(["stalled", "unstarted-task"]);
+  expect(idsOf(reported.verdict)).toEqual(["task_new", "pipeline_s1", "pipeline_s2", "pipeline_s3", "pipeline_s4"]);
+
+  /* Never reported, the stalls keep the head of the agenda. */
+  const unreported = seatTickDecision(input({ pipelines: stalls, tasks: [older, fresh], state: stateWith(seen) }));
+  expect(idsOf(unreported.verdict)).toEqual(stalls.map((stall) => stall.id));
+
+  /* A stalled lane that moved since the wake is news again and stays ahead. */
+  const moved = stalls.map((stall, index) => index === 0 ? { ...stall, updatedAt: new Date(NOW - 30 * MINUTE).toISOString() } : stall);
+  const again = seatTickDecision(input({ pipelines: moved, tasks: [older, fresh], state: stateWith({ ...seen, lastWakeReasons: ["stalled"] }) }));
+  expect(idsOf(again.verdict)).toEqual(["pipeline_s1", "task_new", "pipeline_s2", "pipeline_s3", "pipeline_s4"]);
+});
+
 test("a stage or child held on a permission request is listed as a permission item, never as a stall (#2215)", () => {
   const permission = { tool: "Bash", command: "rm -rf $R/*.json", reason: "Dangerous rm operation on possibly-empty variable path: $R/*.json" };
   const held = lane({ stageId: "build", stageActivity: { lifecycle: "waiting", reason: "permission_request", turnState: "busy", permission } });

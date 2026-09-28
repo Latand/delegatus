@@ -3006,6 +3006,48 @@ test("a post-admission settlement failure preserves the accepted receipt as deli
   expect(commands).toBe(1);
 });
 
+test("a runtime throw before any command result still answers with the claimed operation, uncertain, and a replay keeps it", async () => {
+  const { registry, conversation } = registryWithConversation();
+  const commanded: string[] = [];
+  const client = {
+    readSession: sessionReader(async () => snapshot(conversation.id)),
+    command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
+      commanded.push(command.operationId!);
+      throw new Error("runtime host socket closed before it answered");
+    },
+  } as unknown as RuntimeHostClient;
+  const request = {
+    path: artifactPath,
+    conversationId: conversation.id,
+    clientMessageId: "thrown-before-result",
+    text: "the instruction whose command never answered",
+  };
+  const dependencies = { enabled: () => true, client: () => client, registry: () => registry, kick: () => {} };
+
+  const thrown = await enqueueStructuredMessage(request, dependencies);
+
+  const reservation = Object.values(registry.snapshot().heldDeliveries)
+    .find((delivery) => delivery.clientMessageId === request.clientMessageId)!;
+  expect(reservation.state).toBe("delivery-uncertain");
+  expect(thrown).toMatchObject({
+    ok: false,
+    structured: true,
+    outcome: "failed",
+    operationId: reservation.command.operationId,
+    transportUncertain: true,
+    error: "runtime host socket closed before it answered",
+  });
+  /* The same send asked again is the same accepted operation: the retry
+     reaches the journal under the operation it already owns, which dedupes it,
+     and never under a new one. */
+  expect(await enqueueStructuredMessage(request, dependencies)).toMatchObject({
+    ok: false,
+    operationId: reservation.command.operationId,
+    transportUncertain: true,
+  });
+  expect(commanded).toEqual([reservation.command.operationId, reservation.command.operationId]);
+});
+
 test("a runtime-synchronization hold persists the admission origin, and a replay without it stays compatible", async () => {
   const { registry, conversation } = registryWithConversation();
   recordStructuredOwner(registry, conversation);

@@ -689,6 +689,10 @@ export interface ConversationMessage {
       on the legacy hold's command so the evidence survives even when the paste
       itself — engine input this path must not change — cannot carry it. */
   origin?: MessageOrigin;
+  /** How a structured host treats a turn already running. Absent keeps the
+      send default, which interrupts it; `queue` waits until the host is idle,
+      which is what a seat tick wake asks for. A pane has no such choice. */
+  policy?: "queue";
 }
 
 interface DeliveryOverrides {
@@ -741,13 +745,24 @@ export async function deliverConversationMessage(message: ConversationMessage, o
           text,
           hasImages: images.length > 0,
           ...(message.origin ? { origin: message.origin } : {}),
+          ...(message.policy ? { policy: message.policy } : {}),
         }, {
           registry: () => registry,
           /* Handed down by the migration drain that holds this conversation's section, never inherited. */
           ...(overrides.actuationLease ? { actuationLease: overrides.actuationLease } : {}),
         });
         if (!structured) return failure("structured delivery ownership is unavailable", 503);
-        if (!structured.ok) return failure(structured.error, structured.status);
+        if (!structured.ok) {
+          /* An accepted send keeps its handle on a refusal, and one whose fate
+             is unknown says so: the caller can ask what became of it, and
+             never reads it as refused before anything was reserved. */
+          const uncertain = structured.transportUncertain && structured.operationId;
+          return {
+            ...failure(structured.error, structured.status, uncertain ? "started" : undefined),
+            ...(structured.operationId ? { operationId: structured.operationId } : {}),
+            ...(uncertain ? { resend: "verify-first" as const } : {}),
+          };
+        }
         if (structured.outcome === "held") {
           return {
             ok: true,

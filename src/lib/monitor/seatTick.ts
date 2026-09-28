@@ -1775,28 +1775,48 @@ function wakeItems(context: {
   /* A request only an answer ends (#2215), ahead of the stalls: it is not a
      stall, and the line says what is being asked. */
   items.push(...pendingPermissionItems(input));
+  /* A stall the last delivered wake already reported, on a lane or child that
+     has not moved since, gives its place to a task assigned after that wake.
+     Ahead of it, the same stall filled the item window on every wake and the
+     new task was only ever counted as deferred. It is still listed, after the
+     new tasks and ahead of the older ones. */
+  const lastWakeAt = input.state.lastWakeAt ? Date.parse(input.state.lastWakeAt) : Number.NaN;
+  const stallsReported = Number.isFinite(lastWakeAt) && input.state.lastWakeReasons.includes("stalled");
+  const unmovedSinceWake = (at: string | null | undefined): boolean =>
+    stallsReported && !!at && Date.parse(at) <= lastWakeAt;
+  const assignedSinceWake = (task: SeatTickTaskInput): boolean =>
+    !Number.isFinite(lastWakeAt) || !task.updatedAt || Date.parse(task.updatedAt) > lastWakeAt;
   const owned = new Set(context.ownLanes.map((lane) => lane.id));
-  for (const entry of context.stalled) {
-    if (owned.has(entry.pipeline.id)) continue;
-    if (items.some((item) => item.kind === "pipeline" && item.id === entry.pipeline.id)) continue;
+  const laneStall = (entry: { pipeline: SeatTickPipelineInput; reason: string }): void => {
+    if (owned.has(entry.pipeline.id)) return;
+    if (items.some((item) => item.kind === "pipeline" && item.id === entry.pipeline.id)) return;
     items.push({ kind: "pipeline", id: entry.pipeline.id, label: `${entry.pipeline.title} — ${entry.reason}` });
-  }
+  };
   /* One line per child here too (#1783 round two). A child whose host died
      over an open turn can hold owed outcomes AND be reported stalled — the
      harvest reads its ledger, the liveness plane reads its turn — and the
      harvest line above already names it and says what to do with it. */
-  for (const entry of context.stalledChildren) {
-    if (items.some((item) => item.kind === "child" && item.id === entry.child.conversationId)) continue;
+  const childStall = (entry: { child: SeatTickChildInput; reason: string }): void => {
+    if (items.some((item) => item.kind === "child" && item.id === entry.child.conversationId)) return;
     items.push({
       kind: "child",
       id: entry.child.conversationId,
       stateTokens: [childStateToken(entry.child, null)],
       label: `${entry.child.title} — ${entry.reason}`,
     });
-  }
-  for (const task of context.unstarted) {
-    items.push({ kind: "task", id: task.id, label: `${task.title} — assigned, nothing started it` });
-  }
+  };
+  const task = (entry: SeatTickTaskInput): void => {
+    items.push({ kind: "task", id: entry.id, label: `${entry.title} — assigned, nothing started it` });
+  };
+  const unmovedLanes = context.stalled.filter((entry) => unmovedSinceWake(entry.pipeline.updatedAt));
+  const unmovedChildren = context.stalledChildren.filter((entry) => unmovedSinceWake(entry.child.lastRecordAt));
+  const newTasks = unmovedLanes.length + unmovedChildren.length > 0 ? context.unstarted.filter(assignedSinceWake) : [];
+  for (const entry of context.stalled) if (!unmovedLanes.includes(entry)) laneStall(entry);
+  for (const entry of context.stalledChildren) if (!unmovedChildren.includes(entry)) childStall(entry);
+  for (const entry of newTasks) task(entry);
+  for (const entry of unmovedLanes) laneStall(entry);
+  for (const entry of unmovedChildren) childStall(entry);
+  for (const entry of context.unstarted) if (!newTasks.includes(entry)) task(entry);
   /* On an interval wake the open lanes are the agenda; they carry no reason of
      their own, so they come last and only when nothing sharper displaced them. */
   for (const pipeline of input.pipelines) {
