@@ -14,16 +14,27 @@ import { createInterface } from "node:readline";
 
 import { appDirIn } from "./appDir.mjs";
 import {
+  cliRuntimeHostConfig,
   discardWakatimeEnvironmentCredential,
   viewerChildProcessOptions,
   viewerServerBunRuntime,
 } from "./server-runtime.mjs";
+import { installedRelease, isGitCheckout, selfUpdatePaths } from "./self-update-supervisor.mjs";
 
 discardWakatimeEnvironmentCredential();
+process.env.LLV_STATE_OWNER = "mcp";
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const stateDir = process.env.LLV_STATE_DIR || join(appDirIn(process.env.XDG_CONFIG_HOME || join(homedir(), ".config")), "state");
 const targetFile = process.env.LLV_VIEWER_DEPLOY_TARGET || join(stateDir, "viewer-release.json");
+const selfUpdateConfig = isGitCheckout(packageRoot) ? cliRuntimeHostConfig(packageRoot) : null;
+const selfUpdatePointer = selfUpdateConfig
+  ? selfUpdatePaths({
+      stateDirectory: selfUpdateConfig.stateDirectory,
+      cacheDirectory: process.env.XDG_CACHE_HOME?.trim() || join(homedir(), ".cache"),
+      installId: selfUpdateConfig.installId,
+    }).releasePointer
+  : null;
 const capability = process.env.LLV_SPAWN_CAPABILITY;
 const heartbeatPath = /^[A-Za-z0-9_-]{43}$/.test(capability || "")
   ? join(stateDir, "mcp-runtime", "sessions", `${createHash("sha256").update(capability).digest("hex")}.json`)
@@ -59,7 +70,7 @@ function deployedPackageRoot() {
   try {
     target = JSON.parse(readFileSync(targetFile, "utf8"));
   } catch (error) {
-    if (error?.code === "ENOENT") return packageRoot;
+    if (error?.code === "ENOENT") return null;
     throw new Error(`Could not read the Viewer release target: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (!target
@@ -112,26 +123,33 @@ function deployedPackageRoot() {
 
 let cachedTargetSignature = null;
 let cachedRuntime = null;
-function selectedRuntime() {
-  let signature;
+function fileSignature(file) {
+  if (!file) return "absent";
   try {
-    const target = statSync(targetFile);
-    signature = `${target.dev}:${target.ino}:${target.size}:${target.mtimeMs}`;
+    const stat = statSync(file);
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
-    signature = "absent";
+    return "absent";
   }
+}
+function selectedRuntime() {
+  const signature = `${fileSignature(targetFile)}\0${fileSignature(selfUpdatePointer)}`;
   /* Recheck the bundle digest before every new child. A cached selection is
      safe only while its already-verified child is still the one running. */
   if (child && signature === cachedTargetSignature && cachedRuntime && existsSync(cachedRuntime.entry)) return cachedRuntime;
-  const selected = deployedPackageRoot();
-  const root = typeof selected === "string" ? selected : selected.root;
+  const selected = deployedPackageRoot() ?? {
+    root: selfUpdatePointer ? installedRelease(selfUpdatePointer, packageRoot).dir : packageRoot,
+    revision: null,
+    releaseId: null,
+  };
+  const root = selected.root;
   const bundled = join(root, "dist", "mcp-server.mjs");
   const source = join(root, "src", "lib", "mcp", "entry.ts");
   const runtime = {
     root,
-    revision: typeof selected === "string" ? null : selected.revision,
-    releaseId: typeof selected === "string" ? null : selected.releaseId,
+    revision: selected.revision,
+    releaseId: selected.releaseId,
     entry: existsSync(bundled) ? bundled : source,
   };
   cachedTargetSignature = signature;
