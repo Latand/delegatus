@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { runtimeEventsEnabled, runtimeHostSocket } from "@/lib/runtime/flags";
+import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 
 import {
   AGENT_REGISTRY_SQLITE_ENV,
@@ -11,6 +12,7 @@ import {
   viewerCandidateDockerArgs,
   viewerCandidateGateKey,
   viewerCandidateTmuxEnvironment,
+  viewerComposeSnapshotWithoutUnsupportedApiCredentials,
   viewerComposeServiceFromConfig,
   type ViewerComposeService,
 } from "./candidateContainer";
@@ -83,7 +85,7 @@ function resolvedCompose(overrides: Record<string, string> = {}): { services: Re
      CI shell that exports it would leak into `docker compose config` and break
      the default-value assertions. Drop it from the inherited env so the test is
      hermetic — an override still sets it explicitly when a case needs it. */
-  const baseEnv = process.env;
+  const baseEnv = withoutUnsupportedApiCredentials(process.env);
   delete baseEnv.LLV_ALLOW_LEGACY_VIEWER;
   /* The same for every `DELEGATUS_` input, which wins over its `LLV_` name,
      and for the app-dir paths the config-dir cases assert. */
@@ -137,6 +139,25 @@ test("promoted candidate derives its runtime contract from Compose", () => {
   expect(args[args.indexOf("--user") + 1]).toBe("1000:1000");
   expect(args[args.indexOf("--workdir") + 1]).toBe("/app");
   expect(args).toContain("--privileged");
+});
+
+test("candidate and Compose snapshots exclude unapproved ambient API keys", () => {
+  const pluginKey = ["EXAMPLE", "PLUGIN", "API", "KEY"].join("_");
+  const serviceKey = ["SONIOX", "API", "KEY"].join("_");
+  const service = {
+    ...composeService,
+    environment: { ...composeService.environment, [pluginKey]: "private-fixture", [serviceKey]: "service-fixture" },
+  };
+  const snapshot = JSON.parse(viewerComposeSnapshotWithoutUnsupportedApiCredentials(JSON.stringify({ services: { viewer: service } }))) as {
+    services: { viewer: { environment: Record<string, string> } };
+  };
+  expect(snapshot.services.viewer.environment[pluginKey]).toBeUndefined();
+  expect(snapshot.services.viewer.environment[serviceKey]).toBe("service-fixture");
+  const args = viewerCandidateDockerArgs(candidate, service, {
+    runtimeSocket: "/runtime.sock", legacyTmuxExternal: "0", tmuxTmpdir: "/tmp/tmux",
+  });
+  expect(environmentFromArgs(args)[pluginKey]).toBeUndefined();
+  expect(environmentFromArgs(args)[serviceKey]).toBe("service-fixture");
 });
 
 test("candidate accepts an older Compose snapshot without supplementary groups", () => {

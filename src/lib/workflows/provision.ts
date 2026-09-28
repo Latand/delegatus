@@ -1,3 +1,4 @@
+import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -86,7 +87,7 @@ export function startSetup(wf: Workflow): { pid: number | null; error?: string }
        text never gets interpolated into the wrapper script. */
     const child = spawn("sh", ["-c", `sh -c "$LLV_SETUP_CMD"; printf '%s' "$?" > "$LLV_SETUP_EXIT"`], {
       cwd: wf.worktreeDir,
-      env: { ...process.env, LLV_SETUP_CMD: setup, LLV_SETUP_EXIT: exitPath },
+      env: { ...withoutUnsupportedApiCredentials(process.env), LLV_SETUP_CMD: setup, LLV_SETUP_EXIT: exitPath },
       detached: true,
       stdio: ["ignore", stdoutFd, stderrFd],
     });

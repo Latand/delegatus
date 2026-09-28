@@ -1,3 +1,4 @@
+import { discardUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 
 interface ViewerRuntimeModule {
   registerViewerRuntime(): Promise<void>;
@@ -6,7 +7,7 @@ interface ViewerRuntimeModule {
 export async function registerNodeViewerRuntime(
   loadRuntime: () => Promise<ViewerRuntimeModule>,
 ): Promise<void> {
-
+  discardUnsupportedApiCredentials();
   const { registerViewerRuntime } = await loadRuntime();
   await registerViewerRuntime();
 }

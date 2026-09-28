@@ -38,6 +38,21 @@ test("account controller delay defaults to immediate startup and retains the exp
   expect(accountControllerDelayMs({ LLV_ACCOUNT_CONTROLLER_DELAY_MS: "invalid" })).toBe(0);
 });
 
+test("node bootstrap drops an unapproved ambient API key before loading the runtime", async () => {
+  const pluginKey = ["EXAMPLE", "PLUGIN", "API", "KEY"].join("_");
+  const previous = process.env[pluginKey];
+  process.env[pluginKey] = "private-fixture";
+  try {
+    await registerNodeViewerRuntime(async () => {
+      expect(process.env[pluginKey]).toBeUndefined();
+      return { registerViewerRuntime: async () => undefined };
+    });
+  } finally {
+    if (previous === undefined) delete process.env[pluginKey];
+    else process.env[pluginKey] = previous;
+  }
+});
+
 test("identity-wave evidence failure leaves later startup phases available", () => {
   const events: unknown[][] = [];
   const scheduled: Array<{ callback: () => void; delayMs: number }> = [];

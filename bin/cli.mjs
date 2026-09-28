@@ -28,11 +28,14 @@ import {
   browserOpenCommand,
   cliRuntimeHostConfig,
   cliRuntimeHostEnvironment,
+  discardUnsupportedApiCredentials,
   newlyBoundNonLoopbackAddress,
   readNonLoopbackBindState,
   viewerChildProcessOptions,
   viewerServerBunRuntime,
 } from "./server-runtime.mjs";
+
+discardUnsupportedApiCredentials();
 import {
   createLauncherRecord,
   exitError,

@@ -98,6 +98,28 @@ describe("spawn pane fencing", () => {
   const endpoint = createTmuxEndpointDescriptor("/run/user/1000/agent-log-viewer", 1000);
   const server = { pid: 900, startIdentity: "900:start" };
 
+  test("clears an unapproved ambient API key from the tmux server before spawn", async () => {
+    const pluginKey = ["EXAMPLE", "PLUGIN", "API", "KEY"].join("_");
+    const previous = process.env[pluginKey];
+    process.env[pluginKey] = "private-fixture";
+    const calls: string[][] = [];
+    try {
+      await expect(createSpawnWindow({ session: "agents", cwd: "/repo", windowName: "worker", endpoint, server }, {
+        runTmux: async (args) => {
+          calls.push(args);
+          return args[0] === "list-panes"
+            ? { code: 1, stdout: "", stderr: "snapshot unavailable" }
+            : { code: 0, stdout: "", stderr: "" };
+        },
+        processIdentity: () => null,
+      })).rejects.toThrow("snapshot unavailable");
+      expect(calls[0]).toEqual(["set-environment", "-gu", pluginKey]);
+    } finally {
+      if (previous === undefined) delete process.env[pluginKey];
+      else process.env[pluginKey] = previous;
+    }
+  });
+
   test("uses the pane id created by new-window while foreign idle panes exist and coordinates renumber", async () => {
     let display = "agents:3.0";
     const calls: string[][] = [];

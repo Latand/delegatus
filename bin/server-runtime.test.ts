@@ -23,7 +23,16 @@ import {
   structuredHostsEnabled as structuredHostsEnabledInLauncher,
   viewerServerBunRuntime,
   viewerChildProcessOptions,
+  withoutUnsupportedApiCredentials,
 } from "./server-runtime.mjs";
+
+test("launcher child options omit unapproved ambient API keys", () => {
+  const pluginKey = ["EXAMPLE", "PLUGIN", "API", "KEY"].join("_");
+  const providerKey = ["OPENAI", "API", "KEY"].join("_");
+  const source = { NODE_ENV: "test", [pluginKey]: "private-fixture", [providerKey]: "provider-fixture" };
+  expect(withoutUnsupportedApiCredentials(source)).toEqual({ NODE_ENV: "test", [providerKey]: "provider-fixture" });
+  expect(viewerChildProcessOptions({ env: source }).env).toEqual({ NODE_ENV: "test", [providerKey]: "provider-fixture" });
+});
 
 /**
  * Removing a scratch directory is teardown, not an assertion. Windows keeps a

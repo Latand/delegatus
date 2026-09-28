@@ -1,3 +1,4 @@
+import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -365,7 +366,7 @@ function residentWorker(runtime: FilesResponseWorkerRuntime): ResidentWorker {
   const launch = runtime.launch ?? workerLaunch(runtime.cwd);
   const useNice = runtime.launch === undefined && fs.existsSync("/usr/bin/nice");
   const cwd = runtime.cwd ?? process.cwd();
-  const env = { ...(runtime.env ?? process.env) };
+  const env = withoutUnsupportedApiCredentials(runtime.env ?? process.env);
   const signature = workerSignature(launch, useNice, cwd, env);
   const resultDirectory = runtime.env?.LLV_STATE_DIR
     ? path.resolve(runtime.env.LLV_STATE_DIR, "files-response-results")

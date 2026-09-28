@@ -1,3 +1,4 @@
+import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -121,7 +122,7 @@ export function collectFileScanInWorker(
     cwd: runtime.cwd ?? process.cwd(),
     stdio: ["pipe", "pipe", "pipe"],
     env: {
-      ...runtime.env ?? process.env,
+      ...withoutUnsupportedApiCredentials(runtime.env ?? process.env),
       LLV_FILE_SCANNER_WORKER: "1",
     },
   });

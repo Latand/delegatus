@@ -1,3 +1,4 @@
+import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import path from "node:path";
 
 import { APP_DIR_NAMES } from "../../bin/appDir.mjs";
@@ -112,7 +113,7 @@ function assertIsolatedStateDir(context: StagingContainerContext): void {
    values that decide where an agent's Viewer tools land. */
 function stagingEnvironment(context: StagingContainerContext): Record<string, string> {
   const port = context.port ?? STAGING_FRONT_PORT;
-  const snapshot = {
+  const snapshot = withoutUnsupportedApiCredentials({
     ...context.service.environment,
     [AGENT_REGISTRY_SQLITE_ENV]: viewerRegistryBackendMode(context.service),
     LLV_STAGING: "1",
@@ -132,7 +133,7 @@ function stagingEnvironment(context: StagingContainerContext): Record<string, st
     ...(process.env.LLV_ORCHESTRATOR_CWD?.trim()
       ? { LLV_ORCHESTRATOR_CWD: process.env.LLV_ORCHESTRATOR_CWD.trim() }
       : {}),
-  };
+  });
   return Object.fromEntries(Object.entries(snapshot)
     .filter((entry): entry is [string, string] => typeof entry[1] === "string"));
 }

@@ -4,10 +4,11 @@
    loads (#1905). See `@/lib/state/owner/mcp`. */
 import "../../../bin/envAlias.mjs";
 import "@/lib/state/owner/mcp";
-
+import { discardUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 
 import { startViewerMcpServer } from "./server";
 
+discardUnsupportedApiCredentials();
 
 startViewerMcpServer().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));

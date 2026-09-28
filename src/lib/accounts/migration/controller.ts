@@ -1,3 +1,4 @@
+import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { activeClaudeAccountId, setActiveClaudeAccount } from "@/lib/accounts/claude";
 import { activeCodexAccountId, codexAccountsMutationLocked, codexLoginPaneStatus, listCodexAccounts, setActiveCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
@@ -301,7 +302,7 @@ function startInventoryControllerWorker(): void {
     cwd: process.cwd(),
     stdio: ["ignore", "inherit", "inherit"],
     env: {
-      ...process.env,
+      ...withoutUnsupportedApiCredentials(process.env),
       LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER: "1",
     },
   });

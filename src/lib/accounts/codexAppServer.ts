@@ -1,3 +1,4 @@
+import { withoutUnsupportedApiCredentials } from "../environmentIsolation";
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
@@ -142,7 +143,7 @@ const defaultClock: CodexAppServerClock = {
 };
 
 export function codexAppServerEnvironment(home: string): NodeJS.ProcessEnv {
-  return { ...process.env, CODEX_HOME: home };
+  return { ...withoutUnsupportedApiCredentials(process.env), CODEX_HOME: home };
 }
 
 function spawnCodexAppServer(home: string, args: readonly string[]): CodexAppServerChild {

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { withoutUnsupportedApiCredentials } from "../src/lib/environmentIsolation";
 /* #1216 runtime-host bootstrap — the path onto a new revision that does NOT
    require a promote to have already succeeded.
  *
@@ -88,7 +89,7 @@ async function command(argv: string[], options: { cwd?: string } = {}): Promise<
     cwd: options.cwd,
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env },
+    env: withoutUnsupportedApiCredentials(process.env),
   });
   const [stdout, stderr, code] = await Promise.all([
     new Response(child.stdout).text(),
@@ -106,7 +107,7 @@ async function streamedCommand(argv: string[]): Promise<void> {
   const child = Bun.spawn(argv, {
     stdout: "inherit",
     stderr: "inherit",
-    env: { ...process.env },
+    env: withoutUnsupportedApiCredentials(process.env),
   });
   if (await child.exited !== 0) throw new Error(`${argv[0]} failed`);
 }

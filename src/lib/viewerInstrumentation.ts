@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
+import { discardUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { redactBounded } from "@/lib/monitor/redact";
 import { RuntimeHostUnavailableError } from "@/lib/runtime/client";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
@@ -847,6 +848,7 @@ export async function installSpawnCapabilityResolverAtStartup(): Promise<void> {
 }
 
 export async function registerViewerRuntime(): Promise<void> {
+  discardUnsupportedApiCredentials();
 
   await installSpawnCapabilityResolverAtStartup();
   await gatePhoneAccessBeforeServing();

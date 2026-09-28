@@ -1113,3 +1113,13 @@ test("#1412: an intent whose successor is not running keeps its claim and still 
   expect(JSON.stringify(storedIntent())).toBe(originalBytes);
   expect(records).toEqual([]);
 });
+
+test("successor metadata excludes an unapproved ambient API key", async () => {
+  const inspected = JSON.parse(predecessorInspect) as Array<{ Config: { Env: string[] } }>;
+  const pluginKey = ["EXAMPLE", "PLUGIN", "API", "KEY"].join("_");
+  inspected[0]!.Config.Env.push(`${pluginKey}=private-fixture`);
+  const { ports, calls, records, intents } = harness({ predecessorInspect: JSON.stringify(inspected) });
+  await stageRuntimeHostSuccessorContainer(candidate, "agent-log-viewer:node22", ports);
+  expect(JSON.stringify({ calls, records, intents })).not.toContain("private-fixture");
+  expect(JSON.stringify({ calls, records, intents })).not.toContain(pluginKey);
+});

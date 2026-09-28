@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { withoutUnsupportedApiCredentials } from "../src/lib/environmentIsolation";
 
 /**
  * Stage deploy entrypoint (#659): deploy the current `stage` head (or an
@@ -36,6 +37,7 @@ import { viewerControlOrigin, viewerControlToken } from "../src/lib/mcp/controlE
 import type { ViewerMcpRuntimeIdentity, ViewerReleaseIdentity } from "../src/lib/runtime/contracts";
 import { stagingReleaseRecord, STAGING_RELEASE_FILE, type StagingReleaseRecord } from "../src/lib/staging";
 import {
+  viewerComposeSnapshotWithoutUnsupportedApiCredentials,
   viewerCandidateTmuxEnvironment,
   viewerComposeServiceFromConfig,
   viewerComposeServiceUid,
@@ -205,7 +207,7 @@ async function command(argv: string[], options: { cwd?: string } = {}): Promise<
     cwd: options.cwd,
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env },
+    env: withoutUnsupportedApiCredentials(process.env),
   });
   const [stdout, stderr, code] = await Promise.all([
     new Response(child.stdout).text(),
@@ -319,7 +321,7 @@ async function main(): Promise<void> {
       "docker", "compose", "--project-directory", sourceDir, "-f", path.join(sourceDir, "docker-compose.yml"),
       "--profile", "*", "config", "--format", "json",
     ]);
-    composeSnapshot = composeConfig;
+    composeSnapshot = viewerComposeSnapshotWithoutUnsupportedApiCredentials(composeConfig);
     service = viewerComposeServiceFromConfig(composeSnapshot);
     await command(stagingImageBuildArgs({ revision, image, sourceDir, runtimeHome: service.environment.HOME }));
     await command([process.execPath, "install", "--frozen-lockfile", "--production"], { cwd: sourceDir });

@@ -1,3 +1,4 @@
+import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -225,7 +226,7 @@ export function copilotAccountContext(account: CopilotAccount): AccountContext {
     kind: account.kind,
     home: account.home,
     transcriptRoot: account.sessionStateDir,
-    env: { ...process.env },
+    env: withoutUnsupportedApiCredentials(process.env),
   };
 }
 

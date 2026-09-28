@@ -1,4 +1,5 @@
 #!/usr/bin/env bun-container
+import { withoutUnsupportedApiCredentials } from "../src/lib/environmentIsolation";
 
 /* FIRST, and before every other import: the claim has to precede the modules
    below, which resolve the operator's state directory while they load (#1905).
@@ -33,6 +34,7 @@ import {
   type HotStateAuthority,
 } from "../src/lib/state/hotStateAuthority";
 import {
+  viewerComposeSnapshotWithoutUnsupportedApiCredentials,
   obsoleteManagedViewerContainers,
   viewerCandidateDockerArgs,
   viewerCandidateGateKey,
@@ -161,7 +163,7 @@ async function commandResult(argv: string[], options: { cwd?: string; timeoutMs?
     ...(options.timeoutMs ? { timeout: options.timeoutMs, killSignal: "SIGKILL" as const } : {}),
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env },
+    env: withoutUnsupportedApiCredentials(process.env),
   });
   const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
   return { code, stdout: stdout.trim(), stderr: stderr.trim() };
@@ -189,7 +191,7 @@ function composeConfigFile(container: string): string {
 }
 
 function writeComposeConfig(container: string, config: string): void {
-  const snapshot = config;
+  const snapshot = viewerComposeSnapshotWithoutUnsupportedApiCredentials(config);
   viewerComposeServiceFromConfig(snapshot);
   const filename = composeConfigFile(container);
   fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
@@ -457,7 +459,7 @@ async function candidateContainerLog(container: string, tail = 40): Promise<stri
     const child = Bun.spawn(["/usr/bin/setpriv", "--pdeathsig", "KILL", "--", "docker", "logs", "--tail", String(tail), container], {
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env },
+      env: withoutUnsupportedApiCredentials(process.env),
     });
     const [stdout, stderr] = await Promise.all([
       new Response(child.stdout).text(),
@@ -603,7 +605,7 @@ export function mcpProbeEnvironment(
     throw new Error("candidate MCP probe requires the candidate's own control endpoint");
   }
   return {
-    ...Object.fromEntries(Object.entries(env)
+    ...Object.fromEntries(Object.entries(withoutUnsupportedApiCredentials(env))
       .filter((entry): entry is [string, string] => typeof entry[1] === "string")),
     LLV_VIEWER_DEPLOY_TARGET: deployTarget,
     // Candidate health must exercise the candidate's web/runtime client. The

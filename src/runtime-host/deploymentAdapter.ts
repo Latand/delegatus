@@ -1,3 +1,4 @@
+import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn, spawnSync, type StdioOptions } from "node:child_process";
@@ -489,7 +490,7 @@ export class HostCommandViewerDeploymentAdapter implements ViewerDeploymentAdapt
         child = spawn("/usr/bin/setpriv", ["--pdeathsig", "KILL", "--", executable, action], {
           stdio,
           env: {
-            ...process.env,
+            ...withoutUnsupportedApiCredentials(process.env),
             LLV_DEPLOYMENT_ADAPTER_PROTOCOL: "1",
             LLV_DEPLOYMENT_ADAPTER_PHASE_FILE: phaseFile,
             /* #1216: the deadline this host will enforce, so the adapter can

@@ -15,9 +15,12 @@ import { createInterface } from "node:readline";
 import { appDirIn } from "./appDir.mjs";
 import {
   cliRuntimeHostConfig,
+  discardUnsupportedApiCredentials,
   viewerChildProcessOptions,
   viewerServerBunRuntime,
 } from "./server-runtime.mjs";
+
+discardUnsupportedApiCredentials();
 import { installedRelease, isGitCheckout, selfUpdatePaths } from "./self-update-supervisor.mjs";
 
 process.env.LLV_STATE_OWNER = "mcp";

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { withoutUnsupportedApiCredentials } from "../src/lib/environmentIsolation";
 
 /* FIRST, and before every other import: the claim has to precede the modules
    below, which resolve the operator's state directory while they load (#1905).
@@ -40,7 +41,7 @@ async function docker(argv: string[]): Promise<string> {
   const child = Bun.spawn(["docker", ...argv], {
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env },
+    env: withoutUnsupportedApiCredentials(process.env),
   });
   const [stdout, stderr, code] = await Promise.all([
     new Response(child.stdout).text(),

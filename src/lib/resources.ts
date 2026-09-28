@@ -1,3 +1,4 @@
+import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { procBackend } from "@/lib/proc";
 import type { ProcBackend } from "@/lib/proc";
 import { systemBootEpoch } from "@/lib/processIdentity";
@@ -1457,7 +1458,7 @@ async function collectResourcesInWorker(
       cwd: process.cwd(),
       detached: true,
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, [RESOURCE_WORKER_OWNER_ENV]: workerOwner },
+      env: { ...withoutUnsupportedApiCredentials(process.env), [RESOURCE_WORKER_OWNER_ENV]: workerOwner },
     },
   );
   return new Promise<CollectedResources>((resolve, reject) => {
