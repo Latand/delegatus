@@ -399,6 +399,10 @@ the step's own process group only (`steps.ts:251`, recorded PID and start
 identity). It then settles the step as failed with a new
 `StepFailure` `{ kind: "timeout", minutes }` even if the awaited promise never
 resolves, and ignores a late resolution through a run generation counter.
+The runner also checks the recorded child process while a command is pending.
+If that process has gone away without settling the step, the same web process
+marks the step `interrupted` and offers retry. This covers a dead child before
+the deadline without touching any other process.
 
 ### 4.4 Deferrals and failures
 
@@ -490,14 +494,17 @@ written atomically (temp file and rename) by the web process only:
   "off": null,
   "green": {},
   "waitingSince": null,
+  "waitingTarget": null,
+  "lastBlockers": null,
   "quietSince": null,
   "noticeAt": null
 }
 ```
 
 A missing or unreadable file reads as off. The outstanding request and its
-rollback target live in `state.json`, beside the update they belong to, and
-are written synchronously before the request file.
+rollback target live in `state.json` as `autoPending`,
+`autoRollbackPointer` and `autoRollbackCaptured`, beside the update they
+belong to. They are written synchronously before the request file.
 
 ### 7.2 Route
 
@@ -609,14 +616,12 @@ and phone. No page reloads by itself.
 
 No new driver. The build adds:
 
-- a `self-update-auto` case to `scripts/capture-board-geometry.ts`. It writes a
-  launcher record naming the capture's own process as launcher into an
-  isolated state directory, seeds `auto.json`, `state.json` and
-  `history.jsonl`, opens the dialog, and measures overflow, clipped controls
-  and overlap at 1440 and 390, in English and Ukrainian. States: off; on and
-  up to date; checks pending; red; waiting with three blockers; long wait;
-  turned off after a web fallback; unavailable (managed); paused
-  (hand-managed); history with six rows;
+- a `self-update-auto` case to `scripts/capture-board-geometry.ts`. It serves
+  fixture snapshots through the read-only Update API in an isolated browser,
+  opens the dialog, and measures overflow and clipped controls at 1440 and
+  390, in English and Ukrainian. The frames cover off, waiting with three
+  blockers, long wait, web fallback and managed-unavailable; the DOM tests
+  cover the other states. No capture can issue a restart;
 - one `describe` block each in the kanban and phone browser drivers for the
   reload row of §7.5.
 
