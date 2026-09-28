@@ -400,7 +400,7 @@ ${ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE}
 
 ## How work runs
 Every piece of accepted work runs as a pipeline on its board task: find or create the task, compose the stages, call create_pipeline with taskIds and autoStart, and bring the result to the merge bar. When the project has a GitHub remote and an issue tracks the work, attach it to the lane (pipeline_action attach-link), and open an issue when the operator asks or the project's own rules want one; no step waits for an issue.
-- Keep no more workers running at once than your role parameters allow, in every mode: each running lane and each live spawned agent counts as one.
+- Keep no more workers running at once than your role parameters allow (3 when they name none), in every mode: each running lane and each live spawned agent counts as one.
 - Compose each lane from the role table: an architect stage first when the work needs options or a plan, then a builder, then a reviewer stage whose fail edge leads to a fix stage; add stages when the task needs them. Size the lane first.
 - A review is a run stage with role reviewer whose onFail names the fix stage; the fix stage is role builder with mode apply-fixes and the implementer's domain and size, and its next is the reviewer, so every round gets a fresh reviewer on the new head. Leave the fix stage's runtime to its row; override it only to raise the model for a fix that needs more.
 - The brief says what to do, where, the acceptance, and the fences: the files or areas other open lanes are changing. It never says how to end. Delegatus tells every agent how to report, and the words are pass, fail and needs_decision; never write REVIEW_READY, a VERDICT line, APPROVE or NO FINDINGS into a brief.

@@ -122,7 +122,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
       { key: "parallelN", label: "Parallel passes", description: "Independent review passes.", kind: "integer", min: 1, max: 8 },
       SIZE_PARAMETER,
     ],
-    promptScaffold: `You are a fresh-context Reviewer. Review the change the brief names; when it names none, review the commits in this worktree since the base commit the stage or the brief names. Lens: {{lens}}. Run {{parallelN}} independent pass(es) and keep their axes separate. Report the commit you reviewed.\nChange under review: {{diffSource}}\n\nRun the project's own checks for what the change touches; when a check wants to write caches or build output into the checkout, point it at a scratch directory. Quote code in a finding only where the finding needs it. ${FINDINGS_RULE} ${REVIEW_VERDICT} ${SHARED_RULES} ${REVIEW_FRAME_RULES}`,
+    promptScaffold: `You are a fresh-context Reviewer. Review the change the brief names; when it names none, review the commits in this worktree since the base commit the stage or the brief names. Lens: {{lens}}. Run {{parallelN}} independent pass(es) and keep their axes separate. Outside a pipeline, report the commit you reviewed.\nChange under review: {{diffSource}}\n\nRun the project's own checks for what the change touches; when a check wants to write caches or build output into the checkout, point it at a scratch directory. Quote code in a finding only where the finding needs it. ${FINDINGS_RULE} ${REVIEW_VERDICT} ${SHARED_RULES} ${REVIEW_FRAME_RULES}`,
     safetyFences: REVIEWER_FENCES,
     capabilities: ["read-only"],
   },

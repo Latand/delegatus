@@ -135,7 +135,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   27: "1135c1274c1dc36fcc1f595035837e13f0913a818ed7d59ce1db79791de01a37",
   28: "90819032b795f74b3ac4f5bf0699f5443cf31353e95c1ad19ef87b16e8e1ab60",
   29: "220722434e6ce6a265155097b000d1ec5cbf6461e67e7d39193b61cae5b6318a",
-  30: "e2ab3a989d4d841c27b30134ac68bb381f1896ddb8d475d4ced68ccf4f48c5e6",
+  30: "04ea356f87b8981b4cea384d04858900d7d8732449f6c4b6e872caf0d7bc17dc",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -692,7 +692,9 @@ test("the delivered default names no stack and teaches one verdict vocabulary (v
   /* A GitHub issue is attached when one exists and never waited for. */
   expect(delivered).toContain("no step waits for an issue");
   /* The worker cap holds in every mode, in the scaffold's words. */
-  expect(delivered).toContain("Keep no more workers running at once than your role parameters allow, in every mode: each running lane and each live spawned agent counts as one.");
+  /* A seat designated onto an existing conversation gets no scaffold, so the
+     mandate names the default cap itself (review of #2301). */
+  expect(delivered).toContain("Keep no more workers running at once than your role parameters allow (3 when they name none), in every mode: each running lane and each live spawned agent counts as one.");
 });
 
 /* The operator, 2026-09-27: a friend who teases a little, speaks their way,

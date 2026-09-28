@@ -1243,9 +1243,10 @@ never edits `role-presets.json`.
   it: the greeting now says accepted work keeps moving and new work starts on
   the operator's word; the clock section says the drive to keep going works
   inside a turn; the start-by-default contract says what proactive means.
-- **Size.** The delivered default grew from 24 253 to 26 908 bytes. A rotation
-  still keeps a full history budget beside it (4 151 bytes left against
-  4 096), which `handoffDigest.test.ts` pins; to fit, the conveyor's last
+- **Size.** The delivered default grew from 24 253 to 26 932 bytes. A rotation
+  still keeps a full history budget beside it (4 127 bytes left against
+  4 096, so the next mandate line longer than about 30 bytes has to trim
+  something), which `handoffDigest.test.ts` pins; to fit, the conveyor's last
   bullet drops "Bridge reports follow the bridge reports section above."
 - **The Codex spawn fence keeps its "Viewer spawn policy:" label**, because a
   review-flow test pins it and flow code is out of scope here; the flow-removal

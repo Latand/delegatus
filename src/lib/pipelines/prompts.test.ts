@@ -234,6 +234,9 @@ test("every stage a lane renders names no stack and teaches one verdict vocabula
     expect(prompt.split("REVIEW_READY").length - 1).toBe(1 + briefMarkers);
     expect(prompt.split("NO FINDINGS").length - 1).toBe(1);
     expect(prompt.split("VERDICT").length - 1).toBe(1);
+    /* The server reads the head itself, so a pipeline reviewer is never asked
+       to report it (review of #2301). */
+    expect(prompt).not.toContain("Report the commit you reviewed");
   }
   /* The fix stage is a builder fix round with the implementer's domain, on
      the fix row (§3 (a)), and its prompt says the first build's steps are done. */
