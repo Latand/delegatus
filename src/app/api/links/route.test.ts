@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { rejectCrossOrigin } from "@/lib/sameOrigin";
 
 import { GET, POST } from "./route";
 
@@ -42,4 +43,27 @@ test("the settings route refuses a network address until its key is on", async (
   expect(await checked.json()).toMatchObject({ keyOn: true, state: null });
   const httpPublic = await POST(request({ action: "save", publicUrl: "http://203.0.113.10" }));
   expect((await httpPublic.json()).error).toBe("http-public");
+});
+
+test("an authenticated public origin bootstraps its own Host pin through Settings", async () => {
+  process.env.LLV_TOKEN = "test-access-key";
+  const publicHost = "board.example.test";
+  const settings = (method: "GET" | "POST", body?: object, headers: Record<string, string> = {}) =>
+    new NextRequest(`https://${publicHost}/api/links`, {
+      method, headers: { host: publicHost, cookie: "llv_auth=test-access-key", origin: `https://${publicHost}`, ...headers,
+        ...(body ? { "content-type": "application/json" } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+  expect(rejectCrossOrigin(settings("GET"))?.status).toBe(403);
+  const initial = await GET(settings("GET"));
+  expect(initial.status).toBe(200);
+  expect(await initial.json()).toMatchObject({ self: null, keyOn: true });
+  expect((await GET(settings("GET", undefined, { cookie: "" }))).status).toBe(403);
+  expect((await POST(settings("POST", { action: "save", publicUrl: "https://board.example.test" },
+    { origin: "https://other.example.test" }))).status).toBe(403);
+  const saved = await POST(settings("POST", { action: "save", publicUrl: "https://board.example.test" }));
+  expect(saved.status).toBe(200);
+  expect((await saved.json()).self.publicUrl).toBe("https://board.example.test");
+  expect(rejectCrossOrigin(settings("GET"))).toBeNull();
+  expect((await GET(settings("GET", undefined, { host: "other.example.test" }))).status).toBe(403);
 });

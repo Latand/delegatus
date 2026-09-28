@@ -437,7 +437,7 @@ export async function restorePhoneAccessGate(): Promise<"off" | "gated" | "linke
 export async function restoreLinksGate(): Promise<void> {
   const { readSelf, linksNeedGate } = await import("@/lib/links/self");
   const saved = readSelf();
-  process.env.LLV_PUBLIC_HOST = saved?.publicUrl ? new URL(saved.publicUrl).hostname.replace(/^\[|\]$/g, "") : "";
+  process.env.LLV_PUBLIC_HOST = saved?.publicUrl ? new URL(saved.publicUrl).hostname : "";
   if (linksNeedGate() && !processGates()) {
     try { setEnv("LLV_TOKEN", (await getToken()).token); }
     catch (error) { throw new PhoneGateRefusal(errorText(error)); }

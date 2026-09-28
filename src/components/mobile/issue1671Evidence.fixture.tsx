@@ -850,6 +850,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const method = (init?.method ?? "GET").toUpperCase();
   if (url.pathname === "/api/links") {
     const linked = new URLSearchParams(location.search).get("linked");
+    if (linked === "error") return json({ error: "forbidden" }, 403);
     return json({
     self: { v: 1, installId: "fixture-install", label: "Example server", publicUrl: "https://delegatus.example.com", check: { code: "ok", at: "2026-09-28T12:00:00.000Z" } },
     state: linked === "unsafe" ? "needs-remote-entry" : linked === "keyoff" ? "needs-access-key" : "ok",

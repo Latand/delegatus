@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import http from "node:http";
 import https from "node:https";
+import dns from "node:dns/promises";
 import type { TLSSocket } from "node:tls";
 import os from "node:os";
 import path from "node:path";
@@ -18,7 +19,7 @@ import { recordViewerEntries } from "@/runtime-host/viewerEntries";
 import { proxy } from "@/proxy";
 import { POST as selfCheckRoute } from "@/app/api/peer/v1/self-check/route";
 
-import { checkAddress, currentSelf, probeSelfAddress, saveAddress, selfFile } from "./self";
+import { checkAddress, checkSavedAddress, currentSelf, probeSelfAddress, saveAddress, selfFile } from "./self";
 
 const names = ["LLV_STATE_DIR", "XDG_CONFIG_HOME", "LLV_TOKEN", "LLV_PUBLIC_HOST", "LLV_DOCKER_NSENTER_SHIMS", "PORT"] as const;
 const original = Object.fromEntries(names.map((name) => [name, process.env[name]]));
@@ -66,6 +67,77 @@ test("a saved public host is pinned only while the access key exists", () => {
     });
     expect(rejectCrossOrigin(pinned)).toBeNull();
   }
+});
+
+test("an IPv6 address remains pinned after save and boot restore", async () => {
+  process.env.LLV_TOKEN = "test-access-key";
+  expect((await saveAddress("http://[fd00::1234]:32123")).refusal).toBeUndefined();
+  expect(process.env.LLV_PUBLIC_HOST).toBe("[fd00::1234]");
+  const request = new NextRequest("http://[fd00::1234]:32123/api/board", {
+    headers: { host: "[fd00::1234]:32123", origin: "http://[fd00::1234]:32123" },
+  });
+  expect(rejectCrossOrigin(request)).toBeNull();
+  delete process.env.LLV_PUBLIC_HOST;
+  await restoreLinksGate();
+  expect(String(process.env.LLV_PUBLIC_HOST)).toBe("[fd00::1234]");
+  expect(rejectCrossOrigin(request)).toBeNull();
+});
+
+test("a saved HTTP name is rechecked against DNS and every probe uses the approved address", async () => {
+  process.env.LLV_TOKEN = "test-access-key";
+  let requests = 0;
+  const server = http.createServer((request, response) => {
+    requests++;
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ host: request.headers.host, vouched: false }));
+  });
+  const port = await listen(server);
+  let address = "127.0.0.1";
+  const lookup = spyOn(dns, "lookup").mockImplementation((async () => [{ address, family: 4 }]) as unknown as typeof dns.lookup);
+  try {
+    const url = `http://board.example.test:${port}`;
+    expect((await saveAddress(url)).self?.check?.code).toBe("ok");
+    const before = requests;
+    address = "203.0.113.10";
+    expect((await checkSavedAddress()).code).toBe("http-public");
+    expect(requests).toBe(before);
+    expect((await saveAddress(url)).refusal).toBe("http-public");
+    address = "127.0.0.1";
+    const callsBefore = lookup.mock.calls.length;
+    expect((await checkSavedAddress()).code).toBe("ok");
+    expect(lookup.mock.calls.length).toBe(callsBefore + 1);
+    expect(requests).toBeGreaterThan(before);
+  } finally { lookup.mockRestore(); await close(server); }
+});
+
+test("a slow Check cannot restore an address cleared by a newer Save", async () => {
+  process.env.LLV_TOKEN = "test-access-key";
+  let hold = false;
+  let arrived!: () => void;
+  let release!: () => void;
+  const arrival = new Promise<void>((resolve) => { arrived = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const server = http.createServer((request, response) => {
+    const answer = () => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ host: request.headers.host, vouched: false }));
+    };
+    if (hold) { hold = false; arrived(); void gate.then(answer); }
+    else answer();
+  });
+  const port = await listen(server);
+  try {
+    const url = `http://127.0.0.1:${port}`;
+    expect((await saveAddress(url, "old label")).self?.publicUrl).toBe(url);
+    hold = true;
+    const checking = checkSavedAddress();
+    await arrival;
+    expect((await saveAddress("", "new label")).self?.publicUrl).toBeNull();
+    release();
+    await checking;
+    expect(currentSelf().self).toMatchObject({ publicUrl: null, label: "new label", check: null });
+    expect(process.env.LLV_PUBLIC_HOST).toBe("");
+  } finally { release(); await close(server); }
 });
 
 test("a gateway changed after save creates a standing refusal without rewriting self.json", () => {
@@ -160,22 +232,24 @@ test("pass-through proxy to a remote entry passes all spoof probes; a trusted en
   });
   const frontPort = await listen(front);
   const publicUrl = new URL(`http://board.example.test:${frontPort}`);
+  const lookup = spyOn(dns, "lookup").mockImplementation((async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as typeof dns.lookup);
   try {
-    expect((await checkAddress(publicUrl, "127.0.0.1")).code).toBe("ok");
+    expect((await checkAddress(publicUrl)).code).toBe("ok");
     rewriteHost = true;
-    expect((await checkAddress(publicUrl, "127.0.0.1")).code).toBe("host-rewritten");
+    expect((await checkAddress(publicUrl)).code).toBe("host-rewritten");
     rewriteHost = false;
     targetPort = trustedAddress.port;
     onlySpoofHost = "LOCALHOST";
-    expect((await checkAddress(publicUrl, "127.0.0.1")).code).toBe("open-to-internet");
+    expect((await checkAddress(publicUrl)).code).toBe("open-to-internet");
     onlySpoofHost = `127.0.0.1:${frontPort}`;
-    expect((await checkAddress(publicUrl, "127.0.0.1")).code).toBe("open-to-internet");
+    expect((await checkAddress(publicUrl)).code).toBe("open-to-internet");
   } finally {
+    lookup.mockRestore();
     await close(front);
     await close(trusted);
     await close(viewer);
   }
-  expect((await checkAddress(publicUrl, "127.0.0.1")).code).toBe("unverified");
+  expect((await checkAddress(publicUrl)).code).toBe("http-public");
 });
 
 test("HTTPS probes keep the public SNI while sending a spoofed Host under Bun", async () => {

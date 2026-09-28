@@ -25,7 +25,10 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
-    void fetch("/api/links").then((response) => response.json()).then((state: State) => {
+    void fetch("/api/links").then(async (response) => {
+      if (!response.ok) throw new Error("settings unavailable");
+      return response.json() as Promise<State>;
+    }).then((state) => {
       if (!active) return;
       setValue(state);
       setAddress(state.self?.publicUrl ?? "");
@@ -56,7 +59,7 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
         </header>
         <div className="space-y-5 overflow-y-auto px-4 py-5 sm:px-6">
           <div><h3 className="text-body font-semibold text-primary">{t("links.thisInstall")}</h3><p className="mt-1 text-ui text-muted">{t("links.intro")}</p></div>
-          {value ? <p className="rounded-[8px] border border-border bg-sunken px-3 py-2 text-ui text-primary">{value.entry.publishable ? t("links.proxyTarget", { port: value.entry.port }) : t("links.noProxyTarget")}</p> : <p className="text-ui text-muted">{t("common.loading")}</p>}
+          {value ? <p className="rounded-[8px] border border-border bg-sunken px-3 py-2 text-ui text-primary">{value.entry.publishable ? t("links.proxyTarget", { port: value.entry.port }) : t("links.noProxyTarget")}</p> : error ? null : <p className="text-ui text-muted">{t("common.loading")}</p>}
           <label className="block text-ui font-semibold text-primary">{t("links.label")}<input value={label} onChange={(event) => setLabel(event.target.value)} className="mt-1 block h-11 w-full rounded-[8px] border border-border bg-raised px-3 font-normal text-primary" /></label>
           <label className="block text-ui font-semibold text-primary">{t("links.address")}<input value={address} onChange={(event) => setAddress(event.target.value)} type="url" placeholder="https://delegatus.example.com" className="mt-1 block h-11 w-full rounded-[8px] border border-border bg-raised px-3 font-normal text-primary" /></label>
           {browserOrigin ? <button type="button" className="block text-left text-ui text-accent hover:underline" onClick={() => setAddress(browserOrigin)}>{t("links.usePage", { address: browserOrigin })}</button> : null}

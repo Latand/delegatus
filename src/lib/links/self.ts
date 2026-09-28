@@ -11,7 +11,7 @@ import { statePath } from "@/lib/configDir";
 import { publicEntry } from "@/lib/links/publicEntry";
 import { LOOPBACK_PROBE_HOSTS } from "@/runtime-host/deploymentProxy";
 
-export type CheckCode = "ok" | "needs-access-key" | "needs-remote-entry" | "open-to-internet" | "host-rewritten" | "tls-failure" | "unverified";
+export type CheckCode = "ok" | "needs-access-key" | "needs-remote-entry" | "http-public" | "open-to-internet" | "host-rewritten" | "tls-failure" | "unverified";
 export type SelfCheck = { code: CheckCode; at: string };
 export type LinkSelf = { v: 1; installId: string; label: string; publicUrl: string | null; check: SelfCheck | null };
 export type SaveRefusal = "needs-access-key" | "needs-remote-entry" | "http-public" | "invalid-address";
@@ -73,14 +73,16 @@ function privateIp(hostname: string): boolean {
   return false;
 }
 
-async function addressKind(hostname: string): Promise<"loopback" | "private" | "public"> {
-  if (isLoopbackAddress(hostname)) return "loopback";
-  if (net.isIP(hostname.replace(/^\[|\]$/g, ""))) return privateIp(hostname) ? "private" : "public";
+async function resolvedAddress(hostname: string): Promise<{ kind: "loopback" | "private" | "public"; host: string } | null> {
+  const literal = hostname.replace(/^\[|\]$/g, "");
+  if (net.isIP(literal)) return { kind: isLoopbackAddress(literal) ? "loopback" : privateIp(literal) ? "private" : "public", host: literal };
   try {
     const addresses = await dns.lookup(hostname, { all: true });
-    if (addresses.length && addresses.every((entry) => privateIp(entry.address))) return "private";
-  } catch { /* An unresolved name cannot be declared private. */ }
-  return "public";
+    if (!addresses.length) return null;
+    const kind = addresses.every((entry) => isLoopbackAddress(entry.address)) ? "loopback" :
+      addresses.every((entry) => privateIp(entry.address)) ? "private" : "public";
+    return { kind, host: addresses[0]!.address };
+  } catch { return null; }
 }
 
 function parsedOrigin(input: string): URL | null {
@@ -106,7 +108,7 @@ export async function saveAddress(input: string, label?: string): Promise<{ self
   const url = input.trim() ? parsedOrigin(input) : null;
   if (input.trim() && !url) return { refusal: "invalid-address" };
   if (url && !isLoopbackAddress(url.hostname) && !process.env.LLV_TOKEN) return { refusal: "needs-access-key" };
-  const kind = url ? await addressKind(url.hostname) : "loopback";
+  const kind = url ? (await resolvedAddress(url.hostname))?.kind ?? "public" : "loopback";
   if (kind === "public" && url?.protocol === "http:") return { refusal: "http-public" };
   if (kind !== "loopback" && !publicEntry().publishable) return { refusal: "needs-remote-entry" };
   const old = readSelf();
@@ -114,9 +116,12 @@ export async function saveAddress(input: string, label?: string): Promise<{ self
     v: 1, installId: old?.installId ?? randomUUID(), label: label?.trim().slice(0, 100) || old?.label || os.hostname(),
     publicUrl: url ? url.origin : null, check: null,
   };
-  if (url) self.check = await checkAddress(url);
+  if (url) {
+    self.check = await checkAddress(url);
+    if (self.check.code === "http-public") return { refusal: "http-public" };
+  }
   writeSelf(self);
-  process.env.LLV_PUBLIC_HOST = url?.hostname.replace(/^\[|\]$/g, "") ?? "";
+  process.env.LLV_PUBLIC_HOST = url?.hostname ?? "";
   return { self };
 }
 
@@ -162,12 +167,17 @@ export function probeSelfAddress(url: URL, host: string, options: { certificateA
   }).finally(() => pending.delete(nonce));
 }
 
-export async function checkAddress(url: URL, connectionHost?: string): Promise<SelfCheck> {
+export async function checkAddress(url: URL): Promise<SelfCheck> {
   const result = (code: CheckCode): SelfCheck => ({ code, at: new Date().toISOString() });
   if (!process.env.LLV_TOKEN) return result("needs-access-key");
   if (!publicEntry().publishable && !isLoopbackAddress(url.hostname)) return result("needs-remote-entry");
+  const resolved = await resolvedAddress(url.hostname);
+  if (url.protocol === "http:" && resolved?.kind !== "loopback" && resolved?.kind !== "private") return result("http-public");
+  if (!resolved) return result("unverified");
+  // Keep the original Host and SNI while connecting to the checked address.
+  const pinnedHost = resolved.host;
   let reach: Probe;
-  try { reach = await probeSelfAddress(url, url.host, { connectionHost }); }
+  try { reach = await probeSelfAddress(url, url.host, { connectionHost: pinnedHost }); }
   catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     return result(code?.startsWith("ERR_TLS") || code?.startsWith("CERT") ||
@@ -179,7 +189,7 @@ export async function checkAddress(url: URL, connectionHost?: string): Promise<S
   if (reach.host.toLowerCase() !== url.host.toLowerCase()) return result("host-rewritten");
   const port = url.port || (url.protocol === "https:" ? "443" : "80");
   for (const host of LOOPBACK_PROBE_HOSTS(port)) {
-    try { const reply = await probeSelfAddress(url, host, { connectionHost }); if (reply.status === 200 && reply.vouched) return result("open-to-internet"); }
+    try { const reply = await probeSelfAddress(url, host, { connectionHost: pinnedHost }); if (reply.status === 200 && reply.vouched) return result("open-to-internet"); }
     catch { /* A proxy closing unknown hosts is safe. */ }
   }
   return result("ok");
@@ -189,6 +199,7 @@ export async function checkSavedAddress(): Promise<SelfCheck> {
   const self = readSelf();
   if (!self?.publicUrl) return { code: "unverified", at: new Date().toISOString() };
   const check = await checkAddress(new URL(self.publicUrl));
-  writeSelf({ ...self, check });
+  const current = readSelf();
+  if (current?.installId === self.installId && current.publicUrl === self.publicUrl) writeSelf({ ...current, check });
   return check;
 }

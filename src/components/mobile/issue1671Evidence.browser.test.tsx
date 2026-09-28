@@ -78,6 +78,19 @@ browserTest("linked installs: this install renders at 390 and desktop widths in 
   fs.writeFileSync("evidence/linked-installs/this-install.json", `${JSON.stringify({ readings }, null, 2)}\n`);
 }, 120_000);
 
+browserTest("linked installs: a failed Settings read keeps the dialog usable", async () => {
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium();
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await page.goto(`${base}/?linked=error`);
+    await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-linked-settings")));
+    await page.locator('[data-linked-state="unavailable"]').waitFor();
+    expect(await page.locator("[data-linked-settings]").count()).toBe(1);
+    expect(await page.locator('[data-linked-settings] button').count()).toBeGreaterThan(0);
+  } finally { await browser.close(); stop(); }
+}, 30_000);
+
 type Point = [number, number];
 interface Rect { x: number; y: number; width: number; height: number }
 
