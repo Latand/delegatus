@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { realExec, type ExecPort, type ExecResult } from "@/lib/workflows/provision";
+import { controllerCommitIdentityArgs } from "@/lib/git/controllerCommitIdentity";
 import { procBackend } from "@/lib/proc";
 import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, withDeliveryMutationAsync } from "./store";
 
@@ -329,7 +330,8 @@ export function commitPipelineStage(
     const missing = changedOutputPaths.find((candidate) => !stagedPaths.has(candidate));
     if (missing) return { ok: false, error: `declared output ${missing} was not staged` };
   }
-  const commit = exec("git", ["commit", "-m", `pipeline(${pipeline.id}): complete ${stageId}`], pipeline.worktreeDir);
+  const identity = controllerCommitIdentityArgs(exec, pipeline.worktreeDir);
+  const commit = exec("git", [...identity, "commit", "-m", `pipeline(${pipeline.id}): complete ${stageId}`], pipeline.worktreeDir);
   if (commit.code !== 0) return failure("committing the passed stage", commit);
   const head = exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
   if (head.code !== 0 || !head.stdout.trim()) return failure("recording the passed stage commit", head);
