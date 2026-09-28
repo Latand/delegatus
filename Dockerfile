@@ -282,5 +282,6 @@ EOF
 COPY scripts/published-image-entrypoint.sh /usr/local/bin/delegatus-published-entrypoint
 RUN chmod +x /usr/local/bin/delegatus-published-entrypoint
 ENTRYPOINT ["/usr/local/bin/delegatus-published-entrypoint"]
+CMD ["sh", "-c", "exec bun-container --bun node_modules/.bin/next start --port ${PORT:-8898} --hostname ${HOSTNAME:-127.0.0.1}"]
 
 FROM runtime AS local
