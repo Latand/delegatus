@@ -43,7 +43,7 @@ afterEach(() => {
   for (const dir of tmpDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-function emptySnapshot(overrides: Partial<Pick<RegistryFile, "receipts" | "conversations">> = {}): RegistryFile {
+function emptySnapshot(overrides: Partial<Pick<RegistryFile, "receipts" | "conversations" | "deliveryOperationOwners">> = {}): RegistryFile {
   return { receipts: {}, conversations: {}, ...overrides } as RegistryFile;
 }
 
@@ -102,10 +102,13 @@ test("a pre-#1117 spawn first message classifies through its launch receipt's de
     conversations: {
       conversation_parent: { agentRole: "orchestrator", generations: [] },
     } as unknown as RegistryFile["conversations"],
+    deliveryOperationOwners: {
+      "spawn_message_launch-root": { clientMessageId: "spawn_launch-root", conversationId: "conversation_root" },
+    } as unknown as RegistryFile["deliveryOperationOwners"],
   });
   const map = claudeMessageProvenance(TRANSCRIPT, { ledger, registrySnapshot: () => snapshot });
-  expect(map["engine-uuid-4"]).toEqual({ origin: "operator" });
-  expect(map["engine-uuid-5"]).toEqual({ origin: "agent", senderRole: "orchestrator" });
+  expect(map["engine-uuid-4"]).toEqual({ origin: "operator", submissionId: "spawn_launch-root" });
+  expect(map["engine-uuid-5"]).toEqual({ origin: "agent", senderRole: "orchestrator", senderConversationId: "conversation_parent" });
 });
 
 test("undelivered entries, unproven entries and a missing ledger resolve to nothing", () => {

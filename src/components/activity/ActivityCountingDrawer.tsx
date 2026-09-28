@@ -163,6 +163,10 @@ export function ActivityCountingDrawer({ context, focusHosts, onClose }: { conte
                   ? <> · {host.unread.length ? t("activity.drawer.hostGap", { when: when(host.unread) }) : t("activity.drawer.hostRead", { when: dateTimeText(readTo(host) ?? data.range.now, locale, tz) })}</>
                   : null}
                 {agentsUnread(host).length ? <> · {t("activity.drawer.agentsGap", { when: when(agentsUnread(host)) })}</> : null}
+                {host.configurationGap ? <div className="font-semibold text-warning" data-activity-member-gap="">{t(host.local ? "activity.hosts.signInGap" : "activity.hosts.memberGap")}</div> : null}
+                <div className="text-muted" data-activity-unknown-author={host.unknownAuthors}>
+                  {t("activity.counted.unknownAuthor", { count: host.unknownAuthors })}
+                </div>
               </div>
             </div>
           ))}
