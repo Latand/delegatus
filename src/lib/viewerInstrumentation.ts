@@ -97,6 +97,7 @@ interface CurrentReleaseControllerLoaders {
   loadTelegramReportScheduler?: () => Promise<{ ensureTelegramReportScheduler: () => void }>;
   /** Optional for the same reason. */
   loadTelegramBotPoller?: () => Promise<{ ensureTelegramBotPoller: () => void }>;
+  loadExternalRelayPollers?: () => Promise<{ ensureExternalRelayPollers: () => void }>;
   /** Optional for the same reason. */
   loadTelegramConnectorBoot?: () => Promise<{ provisionTelegramConnectorAtStartup: () => Promise<unknown> }>;
   /** Optional for the same reason. */
@@ -395,6 +396,7 @@ export async function startCurrentReleaseControllers(
     loadAccountMigrationController: () => import("@/lib/accounts/migration/controller"),
     loadTelegramReportScheduler: () => import("@/lib/telegram/reportRunner"),
     loadTelegramBotPoller: () => import("@/lib/telegram/bot/service"),
+    loadExternalRelayPollers: () => import("@/lib/externalRelay/poller"),
     loadTelegramConnectorBoot: () => import("@/lib/telegram/connectorBoot"),
     loadStructuredHostRetirement: () => import("@/lib/runtime/structuredHostRetirement"),
     loadSeatTick: () => import("@/lib/monitor/seatTickController"),
@@ -452,6 +454,12 @@ export async function startCurrentReleaseControllers(
     bot?.ensureTelegramBotPoller();
   } catch (error) {
     console.error("[telegram bot] poller start failed", error instanceof Error ? error.name : "unknown");
+  }
+  try {
+    const relays = await loaders.loadExternalRelayPollers?.();
+    relays?.ensureExternalRelayPollers();
+  } catch (error) {
+    console.error("[external relay] poller start failed", error instanceof Error ? error.name : "unknown");
   }
   /* Automatic structured host retirement (#747). It belongs to the release
      that owns traffic for a stronger reason than the others: ownership of a
@@ -1007,6 +1015,12 @@ export async function registerViewerRuntime(): Promise<void> {
       await ensureLegacyCollectionsImported();
     },
     onDemoted: async ({ fenced }) => {
+      try {
+        const relays = await import("@/lib/externalRelay/poller");
+        relays.stopExternalRelayPollers();
+      } catch (error) {
+        console.error("[external relay] poller stop failed", error instanceof Error ? error.name : "unknown");
+      }
       await quiesceStartup();
       await completeViewerReleaseDemotion(async () => {
         if (fenced) return;
