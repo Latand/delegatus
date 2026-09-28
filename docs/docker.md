@@ -16,11 +16,11 @@ docker compose --profile test up -d --no-build viewer-test
 Set `DELEGATUS_UID`, `DELEGATUS_GID`, and `DELEGATUS_DOCKER_GID` for your host
 when their defaults differ. Compose passes the host `HOME` and mounts it at
 the same path. The image's build-time home is only the default for its `node`
-account; the running processes use Compose's `HOME` and UID/GID. Host CLI
-shims use that runtime home. For a production instance, pull `runtime-host`
-with the same image override, then follow [Production instance](#production-instance)
-for its bootstrap. The runtime host still builds each Viewer release locally
-from its exact revision.
+account; the published target supplies a runtime passwd entry for Compose's
+`HOME` and UID/GID. Host CLI shims use that runtime home. For a production
+instance, pull `runtime-host` with the same image override, then follow
+[Production instance](#production-instance) for its bootstrap. The runtime host
+still builds each Viewer release locally from its exact revision.
 
 The npm/bunx CLI includes its own supervised runtime host, so pipelines and the
 orchestrator do not require Docker. Compose keeps a separate production
