@@ -2386,12 +2386,13 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }
   if (composingTask) readingStatuses.add("inbox");
   const wideShelf = widthControls ? wideColumns.wide : null;
-  /* An empty column folds to a strip beside the columns (never in tabs), unless it holds the wide share. */
+  /* A column holding no cards at all folds to a strip beside the columns (never
+     in tabs), unless it holds the wide share; a search never folds one. */
   const stripStatuses = new Set<TaskStatus>();
   if (mode !== "tabs") {
     for (const status of KANBAN_STATUSES) {
       if (status === (wideShelf ?? "assigned") || readingStatuses.has(status)) continue;
-      if (model.columns[status].shown.length || (status === "inbox" && (model.unlinkedShown.length || composingTask))) continue;
+      if (model.columns[status].cards.length || (status === "inbox" && (model.unlinked.length || composingTask))) continue;
       stripStatuses.add(status);
     }
   }
@@ -2464,6 +2465,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       reading={readingStatuses.has(status)}
       agent={agentStatuses.has(status)}
       strip={stripStatuses.has(status)}
+      menuOpen={menu.open?.value.kind === "column" && menu.open.value.status === status}
       widths={widthControls ? { state: wideColumns, wide: wideShelf } : null}
       readerKeysByCard={readerKeysByCard}
       panelsByCard={panelsByCard}
@@ -2845,7 +2847,7 @@ type CardHandlers = Pick<
   | "projectNames" | "onOpenProject"
 >;
 
-function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, widths, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, onColumnMenu, cardProps }: {
+function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, onColumnMenu, cardProps }: {
   status: TaskStatus;
   /** Which column holds the wide share and the controls that move it (#1841);
       null where every column is already full width. */
@@ -2861,6 +2863,8 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   agent: boolean;
   /** Empty: drawn as a narrow strip until a mouse rests on it, focused or dragged over. */
   strip: boolean;
+  /** Its own column menu is open, which keeps an opened strip open. */
+  menuOpen: boolean;
   readerKeysByCard: ReadonlyMap<string, string>;
   panelsByCard: ReadonlyMap<string, string>;
   actingByCard: ReadonlyMap<string, string>;
@@ -2928,7 +2932,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
         stripTimer.current = setTimeout(() => { stripTimer.current = null; setStripOpen(true); }, DWELL_CUE_MS);
       } : undefined}
       onPointerLeave={strip ? closeStrip : undefined}
-      className={`column${mode === "tabs" && activeTab === status ? " active" : ""}${reading ? " reading" : ""}${agent ? " agent" : ""}${strip ? " strip" : ""}${strip && stripOpen ? " open" : ""}${widths?.wide && isWide ? " wide" : ""}${gaveShare ? " shelf" : ""}`}
+      className={`column${mode === "tabs" && activeTab === status ? " active" : ""}${reading ? " reading" : ""}${agent ? " agent" : ""}${strip ? " strip" : ""}${strip && (stripOpen || menuOpen) ? " open" : ""}${widths?.wide && isWide ? " wide" : ""}${gaveShare ? " shelf" : ""}`}
       data-wide={widths ? (isWide ? "1" : "0") : undefined}
       data-status={status}
       id={`kb-col-${status}`}

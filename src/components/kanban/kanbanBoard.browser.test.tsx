@@ -12510,7 +12510,9 @@ describe("an empty column folds to a strip; an open agent keeps its minimum widt
    * strip no wider than 48 px that still names itself and its count and draws
    * no menu button; a pointer passing across it leaves it shut; it opens to a
    * shelf under a resting mouse (whose menu then opens) and under a dragged
-   * card, and a card dropped on it lands there; the open agent's column is never narrower than
+   * card, and a card dropped on it lands there; it stays open while its own
+   * menu is, with the pointer on the menu or focus in it; a search typed on
+   * the full board folds no column; the open agent's column is never narrower than
    * `--agent-min` (clamp(520px, 40vw, 760px)), and when the columns do not
    * fit the board scrolls sideways instead. Frames go to
    * EMPTY_STRIP_PNG_DIR.
@@ -12610,7 +12612,7 @@ describe("an empty column folds to a strip; an open agent keeps its minimum widt
                 }
               }
               if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
-              if (width === 1440) {
+              if (width !== 1280) {
                 /* A pointer passing across the strip leaves it shut: moved from
                    Assigned to the first Done card, it ends on Done. */
                 if (!agent) {
@@ -12637,11 +12639,33 @@ describe("an empty column folds to a strip; an open agent keeps its minimum widt
                 await page.screenshot({ path: path.join(pngDir, `${label}-hover.png`) });
                 const hovered = await readBoard(page);
                 if ((hovered.columns.blocked?.width ?? 0) < 200) failures.push(`${label}: hovered, the strip is ${hovered.columns.blocked?.width}px`);
-                /* Opened, its menu is where it is drawn and opens under a press. */
+                /* Opened, its menu is where it is drawn and opens under a press;
+                   the strip stays open while its menu is, under the pointer on
+                   the menu's first row and under the keyboard alike. */
+                const menuHolds = async (how: string) => {
+                  const menuOpened = await page.waitForSelector(".menu", { timeout: 3_000 }).then(() => true, () => false);
+                  if (!menuOpened) { failures.push(`${label}: the opened strip's menu does not open (${how})`); return; }
+                  if (how === "pointer") {
+                    const row = (await page.locator('.menu [role^="menuitem"]').first().boundingBox())!;
+                    await page.mouse.move(row.x + row.width / 2, row.y + row.height / 2, { steps: 6 });
+                  }
+                  await page.waitForTimeout(700);
+                  await page.screenshot({ path: path.join(pngDir, `${label}-menu-${how}.png`) });
+                  const held = await readBoard(page);
+                  const column = (await page.locator('[data-kanban-board] .column[data-status="blocked"]').boundingBox())!;
+                  const menuBox = (await page.locator(".menu").boundingBox())!;
+                  const inside = menuBox.x >= column.x - 1 && menuBox.x <= column.x + column.width;
+                  (readings[label] as Record<string, unknown>)[`menu-${how}`] = { blocked: held.columns.blocked?.width, column: { x: Math.round(column.x), width: Math.round(column.width) }, menuX: Math.round(menuBox.x) };
+                  if ((held.columns.blocked?.width ?? 0) < 200 || !inside) failures.push(`${label}: with its menu open (${how}) Blocked is ${held.columns.blocked?.width}px and the menu starts at ${Math.round(menuBox.x)} outside ${Math.round(column.x)}-${Math.round(column.x + column.width)}`);
+                  await page.keyboard.press("Escape");
+                };
                 await page.locator('[data-kanban-board] [data-colmenu="blocked"]').click();
-                const menuOpened = await page.waitForSelector(".menu", { timeout: 3_000 }).then(() => true, () => false);
-                if (!menuOpened) failures.push(`${label}: the opened strip's menu does not open`);
-                await page.keyboard.press("Escape");
+                await menuHolds("pointer");
+                await page.mouse.move(box.x + box.width / 2, box.y + 200);
+                await page.waitForTimeout(700);
+                await page.locator('[data-kanban-board] [data-colmenu="blocked"]').focus();
+                await page.keyboard.press("Enter");
+                await menuHolds("keyboard");
                 await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
                 await page.mouse.move(700, 10);
                 await page.waitForTimeout(500);
@@ -12679,6 +12703,38 @@ describe("an empty column folds to a strip; an open agent keeps its minimum widt
             } finally {
               await context.close();
             }
+          }
+        }
+        {
+          /* A search never folds a column that holds cards: typed key by key
+             on the board with no column emptied, every column stays open and
+             Assigned stays where it stood. */
+          const label = `1440x900-search-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, { width: 1440, height: 900 }, "light", lang);
+          try {
+            await page.waitForSelector('[data-kanban-board] .column[data-status="blocked"]', { timeout: 30_000 });
+            await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+            if (await page.locator('[data-seat-collapse][aria-expanded="true"]').count()) await page.keyboard.press("o");
+            await page.mouse.move(700, 10);
+            await page.waitForTimeout(700);
+            const assignedX = async () => Math.round((await page.locator('[data-kanban-board] .column[data-status="assigned"]').boundingBox())!.x);
+            const before = await assignedX();
+            const steps: Record<string, unknown> = {};
+            await page.locator("[data-kanban-search]").focus();
+            for (const typed of ["R", "Re", "Res", "Rest"]) {
+              await page.keyboard.type(typed.slice(-1));
+              await page.waitForTimeout(500);
+              const reading = await readBoard(page);
+              const x = await assignedX();
+              const strips = Object.entries(reading.columns).filter(([, column]) => column.strip).map(([status]) => status);
+              steps[typed] = { strips, assignedX: x };
+              if (strips.length || Math.abs(x - before) > 1) failures.push(`${label}: after «${typed}» ${strips.join(", ") || "no column"} folded and Assigned moved ${before} -> ${x}`);
+            }
+            await page.screenshot({ path: path.join(pngDir, `${label}-Rest.png`) });
+            readings[label] = { before, steps, pageErrors };
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
           }
         }
         {

@@ -159,6 +159,22 @@
         "under": "done",
         "blocked": 48
       },
+      "menu-pointer": {
+        "blocked": 280,
+        "column": {
+          "x": 1048,
+          "width": 280
+        },
+        "menuX": 1115
+      },
+      "menu-keyboard": {
+        "blocked": 280,
+        "column": {
+          "x": 1048,
+          "width": 280
+        },
+        "menuX": 1115
+      },
       "hovered": {
         "width": 280,
         "strip": true,
@@ -234,6 +250,22 @@
         "clientWidth": 992
       },
       "pageErrors": [],
+      "menu-pointer": {
+        "blocked": 280,
+        "column": {
+          "x": 852,
+          "width": 280
+        },
+        "menuX": 919
+      },
+      "menu-keyboard": {
+        "blocked": 280,
+        "column": {
+          "x": 852,
+          "width": 280
+        },
+        "menuX": 919
+      },
       "hovered": {
         "width": 280,
         "strip": true,
@@ -286,7 +318,53 @@
         "scrollWidth": 1352,
         "clientWidth": 1352
       },
-      "pageErrors": []
+      "pageErrors": [],
+      "passage": {
+        "under": "done",
+        "blocked": 48
+      },
+      "menu-pointer": {
+        "blocked": 220,
+        "column": {
+          "x": 1124,
+          "width": 220
+        },
+        "menuX": 1131
+      },
+      "menu-keyboard": {
+        "blocked": 220,
+        "column": {
+          "x": 1124,
+          "width": 220
+        },
+        "menuX": 1131
+      },
+      "hovered": {
+        "width": 220,
+        "strip": true,
+        "title": "Blocked",
+        "count": "0",
+        "headOverflows": false,
+        "cards": 0
+      },
+      "drag": {
+        "over": {
+          "width": 220,
+          "strip": true,
+          "title": "Blocked",
+          "count": "0",
+          "headOverflows": false,
+          "cards": 0
+        },
+        "dropped": {
+          "width": 220,
+          "strip": false,
+          "title": "Blocked",
+          "count": "1",
+          "headOverflows": false,
+          "cards": 1
+        }
+      }
     },
     "1600x900-agent-en": {
       "mode": "narrow",
@@ -334,6 +412,52 @@
       "scroll": {
         "scrollWidth": 1296,
         "clientWidth": 1296
+      },
+      "pageErrors": [],
+      "menu-pointer": {
+        "blocked": 220,
+        "column": {
+          "x": 1216,
+          "width": 220
+        },
+        "menuX": 1223
+      },
+      "menu-keyboard": {
+        "blocked": 220,
+        "column": {
+          "x": 1216,
+          "width": 220
+        },
+        "menuX": 1223
+      },
+      "hovered": {
+        "width": 220,
+        "strip": true,
+        "title": "Blocked",
+        "count": "0",
+        "headOverflows": false,
+        "cards": 0
+      }
+    },
+    "1440x900-search-en": {
+      "before": 556,
+      "steps": {
+        "R": {
+          "strips": [],
+          "assignedX": 556
+        },
+        "Re": {
+          "strips": [],
+          "assignedX": 556
+        },
+        "Res": {
+          "strips": [],
+          "assignedX": 556
+        },
+        "Rest": {
+          "strips": [],
+          "assignedX": 556
+        }
       },
       "pageErrors": []
     },
@@ -500,6 +624,22 @@
         "under": "done",
         "blocked": 48
       },
+      "menu-pointer": {
+        "blocked": 280,
+        "column": {
+          "x": 1048,
+          "width": 280
+        },
+        "menuX": 1115
+      },
+      "menu-keyboard": {
+        "blocked": 280,
+        "column": {
+          "x": 1048,
+          "width": 280
+        },
+        "menuX": 1115
+      },
       "hovered": {
         "width": 280,
         "strip": true,
@@ -575,6 +715,22 @@
         "clientWidth": 992
       },
       "pageErrors": [],
+      "menu-pointer": {
+        "blocked": 280,
+        "column": {
+          "x": 852,
+          "width": 280
+        },
+        "menuX": 919
+      },
+      "menu-keyboard": {
+        "blocked": 280,
+        "column": {
+          "x": 852,
+          "width": 280
+        },
+        "menuX": 919
+      },
       "hovered": {
         "width": 280,
         "strip": true,
@@ -627,7 +783,53 @@
         "scrollWidth": 1352,
         "clientWidth": 1352
       },
-      "pageErrors": []
+      "pageErrors": [],
+      "passage": {
+        "under": "done",
+        "blocked": 48
+      },
+      "menu-pointer": {
+        "blocked": 220,
+        "column": {
+          "x": 1124,
+          "width": 220
+        },
+        "menuX": 1131
+      },
+      "menu-keyboard": {
+        "blocked": 220,
+        "column": {
+          "x": 1124,
+          "width": 220
+        },
+        "menuX": 1131
+      },
+      "hovered": {
+        "width": 220,
+        "strip": true,
+        "title": "Заблоковані",
+        "count": "0",
+        "headOverflows": false,
+        "cards": 0
+      },
+      "drag": {
+        "over": {
+          "width": 220,
+          "strip": true,
+          "title": "Заблоковані",
+          "count": "0",
+          "headOverflows": false,
+          "cards": 0
+        },
+        "dropped": {
+          "width": 220,
+          "strip": false,
+          "title": "Заблоковані",
+          "count": "1",
+          "headOverflows": false,
+          "cards": 1
+        }
+      }
     },
     "1600x900-agent-uk": {
       "mode": "narrow",
@@ -675,6 +877,52 @@
       "scroll": {
         "scrollWidth": 1296,
         "clientWidth": 1296
+      },
+      "pageErrors": [],
+      "menu-pointer": {
+        "blocked": 220,
+        "column": {
+          "x": 1216,
+          "width": 220
+        },
+        "menuX": 1223
+      },
+      "menu-keyboard": {
+        "blocked": 220,
+        "column": {
+          "x": 1216,
+          "width": 220
+        },
+        "menuX": 1223
+      },
+      "hovered": {
+        "width": 220,
+        "strip": true,
+        "title": "Заблоковані",
+        "count": "0",
+        "headOverflows": false,
+        "cards": 0
+      }
+    },
+    "1440x900-search-uk": {
+      "before": 556,
+      "steps": {
+        "R": {
+          "strips": [],
+          "assignedX": 556
+        },
+        "Re": {
+          "strips": [],
+          "assignedX": 556
+        },
+        "Res": {
+          "strips": [],
+          "assignedX": 556
+        },
+        "Rest": {
+          "strips": [],
+          "assignedX": 556
+        }
       },
       "pageErrors": []
     },
