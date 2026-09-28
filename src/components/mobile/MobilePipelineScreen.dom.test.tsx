@@ -264,7 +264,10 @@ test("the decision is answered inside the stage it parked on: its finding, then 
   /* Who runs the stage, and its attempt, on the stage's own line. The attempt
      is counted the way every stage label counts it (#1865): the stage's own
      attempts, whatever the record numbered its single one. */
-  expect(q(current, ".pb-stage-ident [data-engine-mark]")).not.toBeNull();
+  /* Its model glyph names the engine, so the line under it draws no second mark. */
+  expect(q(current, ".pb-stage-title [data-glyph-engine]")).not.toBeNull();
+  expect(q(current, ".pb-stage-ident [data-engine-mark]")).toBeNull();
+  expect(q(current, ".pb-stage-ident .imodel")).not.toBeNull();
   /* A stage that ran once is its name alone (#1892). */
   expect(q(current, ".pb-ident-words")!.textContent).toBe(`· ${translate("en", "roleCopy.reviewer.name")} · ${translate("en", "mobile2.pipeline.review")}`);
   expect(q(current, ".pb-attempt")).toBeNull();
@@ -282,7 +285,7 @@ test("a running stage is expanded with who runs it, what it is doing and its con
   const current = q(host, ".pb-stage[data-stage-current]")!;
   expect(current.getAttribute("data-stage")).toBe("implement");
   expect(current.getAttribute("data-stage-state")).toBe("running");
-  expect(q(current, '.pmark[data-mark="dot"][data-live="1"]')).not.toBeNull();
+  expect(q(current, '.mglyph[data-glyph-state="running"][data-live="1"]')).not.toBeNull();
   expect(q(current, ".pb-stage-state")!.textContent).toBe(translate("en", "kanban.graphState.running"));
   expect(q(current, "[data-stage-now]")!.textContent).toBe(translate("en", "kanban.stageReport.line", { who: translate("en", "roleCopy.builder.name"), outcome: translate("en", "kanban.graphState.running"), age: "6m" }));
   expect(q(current, "[data-stage-latest]")!.textContent).toBe("“Checking the fallback path next”");
@@ -322,8 +325,8 @@ test("a paused lane holds its stage: a hollow mark and no live tone, still expan
 
   const held = q(view, ".pb-stage[data-stage-current]")!;
   expect(held.getAttribute("data-stage")).toBe("implement");
-  const mark = q(held, ".pb-stage-title .pmark")!;
-  expect(mark.getAttribute("data-mark")).toBe("ring");
+  const mark = q(held, ".pb-stage-title .mglyph")!;
+  expect(mark.getAttribute("data-glyph-state")).toBe("waiting");
   expect(mark.hasAttribute("data-live")).toBe(false);
   expect(mark.className).toContain("tone-idle");
   expect(held.className).toContain("tone-idle");
@@ -331,7 +334,7 @@ test("a paused lane holds its stage: a hollow mark and no live tone, still expan
   /* The stage's own state stays in the record; the drawing is the hold's. */
   expect(held.getAttribute("data-stage-state")).toBe("running");
   expect(held.getAttribute("data-stage-held")).toBe("1");
-  expect(q(view, '.pmark[data-live="1"]')).toBeNull();
+  expect(q(view, '.mglyph[data-live="1"], .pmark[data-live="1"]')).toBeNull();
   expect(q(held, ".pb-stage-state")!.textContent).toBe(translate("en", "pipelineState.paused"));
   /* Still the expanded stage: what it last did, in the lane's word, and its conversation. */
   expect(q(held, "[data-stage-now]")!.textContent).toBe(translate("en", "kanban.stageReport.line", { who: translate("en", "roleCopy.builder.name"), outcome: translate("en", "pipelineState.paused"), age: "6m" }));
@@ -349,8 +352,8 @@ test("a paused lane holds its stage: a hollow mark and no live tone, still expan
   const live = q(view, ".pb-stage[data-stage-current]")!;
   expect(live.hasAttribute("data-stage-held")).toBe(false);
   expect(live.className).toContain("tone-active");
-  const pulse = q(live, ".pb-stage-title .pmark")!;
-  expect(pulse.getAttribute("data-mark")).toBe("dot");
+  const pulse = q(live, ".pb-stage-title .mglyph")!;
+  expect(pulse.getAttribute("data-glyph-state")).toBe("running");
   expect(pulse.getAttribute("data-live")).toBe("1");
   expect(q(live, ".pb-stage-state")!.textContent).toBe(translate("en", "kanban.graphState.running"));
 });
@@ -381,7 +384,7 @@ test("a never-run stage's ⚙ opens its configuration in a sheet — the desktop
   expect(fix.getAttribute("aria-label")).toStartWith(translate("en", "mobile2.pipeline.configure", { stage: "Fix" }));
   expect(fix.getAttribute("aria-label")).toContain("Claude");
   expect(fix.getAttribute("aria-haspopup")).toBe("dialog");
-  expect(fix.querySelector("[data-engine-mark]")).not.toBeNull();
+  expect(fix.querySelector("[data-engine-mark], [data-glyph-engine]")).not.toBeNull();
   /* A stage that ran configures nothing: the engine snapshots its config at
      the first attempt. */
   expect(q(host, '[data-stage-configure="review"]')).toBeNull();

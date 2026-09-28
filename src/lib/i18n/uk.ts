@@ -3751,6 +3751,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "kanban.graphState.failed": "не пройдено",
   "kanban.graphState.needs_decision": "потрібні ви",
   "kanban.graphState.skipped": "пропущено",
+  "kanban.modelGlyph.aria": "{model}: {state}",
   "kanban.graph.showSummary": "Показати короткий рядок",
   "kanban.graph.showGraph": "Показати граф етапів",
   "kanban.graph.summary": "Коротко",

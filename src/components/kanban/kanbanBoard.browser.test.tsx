@@ -4492,7 +4492,9 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
       const identity = node.querySelector<HTMLElement>(".pident");
       return {
         stage: node.dataset.stage ?? "",
-        engineMark: node.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? null,
+        /* A model glyph stands in for the engine mark beside it
+           (docs/design/model-glyphs.md): one mark per stage, never two. */
+        engineMark: node.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? node.querySelector("[data-glyph-engine]")?.getAttribute("data-glyph-engine") ?? null,
         effortStep: node.querySelector("[data-effort-pills]")?.getAttribute("data-effort-step") ?? null,
         identity: identity?.dataset.identity ?? null,
         nextDiffers: Boolean(node.querySelector("[data-next-differs]")),
@@ -4571,9 +4573,9 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
     return {
       chips: [...scope.querySelectorAll<HTMLElement>(".pb-pills .pb-pill")].map((chip) => ({
         stage: chip.dataset.stage ?? "",
-        engineMark: chip.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? null,
+        engineMark: chip.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? chip.querySelector("[data-glyph-engine]")?.getAttribute("data-glyph-engine") ?? null,
         effortStep: chip.querySelector("[data-effort-pills]")?.getAttribute("data-effort-step") ?? null,
-        markWidth: Math.round((chip.querySelector("[data-engine-mark]")?.getBoundingClientRect().width ?? 0) * 100) / 100,
+        markWidth: Math.round((chip.querySelector("[data-engine-mark], [data-glyph-engine]")?.getBoundingClientRect().width ?? 0) * 100) / 100,
         scaleWidth: Math.round((chip.querySelector("[data-effort-pills]")?.getBoundingClientRect().width ?? 0) * 100) / 100,
         nextDiffers: Boolean(chip.querySelector("[data-next-differs]")),
       })),
@@ -4605,7 +4607,8 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
       headMarks: pane.querySelectorAll(".pane-head [data-engine-mark], .pane-head [data-effort-pills]").length,
       headTitle: role?.getAttribute("title") ?? "",
       idRow: Boolean(idRow),
-      engineMark: idRow?.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? null,
+      /* Or the model glyph the head draws, which stands in for the row's mark. */
+      engineMark: idRow?.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? pane.querySelector(".pane-head [data-glyph-engine]")?.getAttribute("data-glyph-engine") ?? null,
       /* Content wider than the row is content the row cuts. */
       roleOverflow: role ? Math.max(0, role.scrollWidth - role.clientWidth) : 0,
     };
@@ -4627,7 +4630,7 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
   const readPhoneStages = (page: Page) => page.evaluate(() => ({
     rows: [...document.querySelectorAll<HTMLElement>("[data-mobile2-stage]")].map((row) => ({
       stage: row.dataset.mobile2Stage ?? "",
-      engineMark: row.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? null,
+      engineMark: row.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? row.querySelector("[data-glyph-engine]")?.getAttribute("data-glyph-engine") ?? null,
       effortStep: row.querySelector("[data-effort-pills]")?.getAttribute("data-effort-step") ?? null,
       identity: row.querySelector<HTMLElement>(".pident")?.dataset.identity ?? null,
       model: row.querySelector(".imodel")?.textContent?.trim() ?? "",
@@ -4847,7 +4850,7 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
         await opened.page.waitForSelector("[data-nav-stage]", { state: "attached", timeout: 5_000 });
         const navChips = await opened.page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-nav-stage]")].map((chip) => ({
           stage: chip.dataset.navStage ?? "",
-          engineMark: chip.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? null,
+          engineMark: chip.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? chip.querySelector("[data-glyph-engine]")?.getAttribute("data-glyph-engine") ?? null,
           effortStep: chip.querySelector("[data-effort-pills]")?.getAttribute("data-effort-step") ?? null,
         })));
         await opened.page.screenshot({ path: path.join(OUT, `modal-${label}.png`) });
@@ -7671,13 +7674,17 @@ describe("#2072 one pipeline block, desktop and phone", () => {
       return color;
     };
     const cur = screen.querySelector(".pb-stage[data-stage-current]");
-    const mark = cur && cur.querySelector(".pb-stage-title .pmark");
+    /* A stage whose model has a glyph draws it in the mark's place
+       (docs/design/model-glyphs.md): its reading stands for the mark's shape,
+       and it paints in its model's tone rather than the stage's. */
+    const mark = cur && cur.querySelector(".pb-stage-title .pmark, .pb-stage-title .mglyph");
+    const glyph = Boolean(mark && mark.classList.contains("mglyph"));
     const tone = cur && mark ? {
       held: cur.getAttribute("data-stage-held") === "1",
-      mark: mark.getAttribute("data-mark"),
+      mark: glyph ? "glyph:" + mark.getAttribute("data-glyph-state") : mark.getAttribute("data-mark"),
       live: mark.getAttribute("data-live") === "1",
       pulse: getComputedStyle(mark, "::before").animationName,
-      markInk: getComputedStyle(mark).color,
+      markInk: glyph ? null : getComputedStyle(mark).color,
       word: getComputedStyle(cur.querySelector(".pb-stage-state")).color,
       stripe: getComputedStyle(cur).boxShadow,
     } : null;
@@ -7690,7 +7697,7 @@ describe("#2072 one pipeline block, desktop and phone", () => {
       scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth,
     };
   })()`;
-  type ScreenTone = { held: boolean; mark: string | null; live: boolean; pulse: string; markInk: string; word: string; stripe: string };
+  type ScreenTone = { held: boolean; mark: string | null; live: boolean; pulse: string; markInk: string | null; word: string; stripe: string };
   type ScreenReading = {
     texts: number; controls: number; overlaps: unknown[]; escapes: unknown[]; small: unknown[]; cut: unknown[];
     stages: string[]; current: string | null; answers: string[]; fold: string | null; scrollWidth: number; innerWidth: number;
@@ -7730,13 +7737,13 @@ describe("#2072 one pipeline block, desktop and phone", () => {
       if (reading.cut.length) failures.push(`${label}: ${reading.cut.length} names are cut — ${JSON.stringify(reading.cut.slice(0, 3))}`);
       if (reading.scrollWidth > reading.innerWidth) failures.push(`${label}: the page scrolls sideways (${reading.scrollWidth} > ${reading.innerWidth})`);
       const { tone, inks } = reading;
-      if (want.motion === "held" && (!tone || !tone.held || tone.mark !== "ring" || tone.live || tone.pulse !== "none"
-        || tone.markInk !== inks.muted || tone.word !== inks.muted || !tone.stripe.includes(inks.muted))) {
-        failures.push(`${label}: the held stage is drawn ${JSON.stringify(tone)}, expected a still hollow ring with the mark, the word and the stripe in ${inks.muted}`);
+      if (want.motion === "held" && (!tone || !tone.held || (tone.mark !== "ring" && tone.mark !== "glyph:waiting") || tone.live || tone.pulse !== "none"
+        || (tone.markInk !== null && tone.markInk !== inks.muted) || tone.word !== inks.muted || !tone.stripe.includes(inks.muted))) {
+        failures.push(`${label}: the held stage is drawn ${JSON.stringify(tone)}, expected a still hollow ring or waiting glyph, with the word and the stripe in ${inks.muted}`);
       }
-      if (want.motion === "live" && (!tone || tone.held || tone.mark !== "dot" || !tone.live || tone.pulse === "none"
-        || tone.markInk !== inks.success || tone.word !== inks.success || !tone.stripe.includes(inks.success))) {
-        failures.push(`${label}: the running stage is drawn ${JSON.stringify(tone)}, expected a pulsing dot with the mark, the word and the stripe in ${inks.success}`);
+      if (want.motion === "live" && (!tone || tone.held || (tone.mark !== "dot" && tone.mark !== "glyph:running") || !tone.live || tone.pulse === "none"
+        || (tone.markInk !== null && tone.markInk !== inks.success) || tone.word !== inks.success || !tone.stripe.includes(inks.success))) {
+        failures.push(`${label}: the running stage is drawn ${JSON.stringify(tone)}, expected a pulsing dot or running glyph, with the word and the stripe in ${inks.success}`);
       }
     };
     const bodyTo = (page: Page, where: "top" | "end") => page.evaluate((to) => {
@@ -12859,6 +12866,344 @@ describe("an empty column folds to a strip; an open agent keeps its minimum widt
     }
     fs.mkdirSync("evidence/empty-column-strip", { recursive: true });
     fs.writeFileSync("evidence/empty-column-strip/readings.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
+describe("model glyphs in place of the stage dot", () => {
+  /*
+   * The design evidence for docs/design/model-glyphs.md: the real Viewer over
+   * `issue1695Evidence.fixture.tsx?scenario=model-glyphs`. A lane runs one
+   * stage at a time, so "every model at work" is a task of nine lanes, each
+   * running one model; beside it a task holding a draft of the same nine
+   * stages, all waiting, and a lane with the settled states (passed, failed,
+   * waiting on the operator). The ninth model is uncatalogued and must keep
+   * the dot it always had.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "model glyphs"
+   *
+   * Drawn in light and dark, on the desktop (the cards, the cards' graphs, the
+   * Stages sheet's graph, pane heads and chips) and on the phone (the board
+   * cards, the task screens and the pipeline screens), at
+   * a device pixel ratio of 2 so a 14 px drawing reads as it does on the
+   * operator's screen. The running card is also caught in four frames, and
+   * once under reduced motion, where the figures stop and the halo alone says
+   * the stage runs. The cards are drawn in Ukrainian too.
+   *
+   * What it measures: every glyph's model, reading, motion, badge and box, the
+   * host that holds it, the host's label, that no stage draws the glyph and an
+   * engine mark both, and every stage that kept its dot.
+   * Readings go to `evidence/model-glyphs/design/readings.json`; the frames to
+   * the same directory, where the ignore rules keep them out of the commit.
+   */
+
+  const EVIDENCE = path.resolve("evidence/model-glyphs/design");
+  const RUN = card("t-glyphs-run");
+  const REST = card("t-glyphs");
+  const WAIT = "p-glyphs-wait";
+  const SETTLED_LANE = "p-glyphs-settled";
+  const KINDS = ["opus", "fable", "sonnet", "haiku", "sol", "astra", "terra", "luna"] as const;
+  const SETTLED: Record<string, string> = { opus: "passed", fable: "passed", astra: "failed", sol: "needs", haiku: "waiting" };
+  /* The model words a host's accessible text must carry: the catalogue's short
+     label, which the identity sentence and the identity line both print. */
+  const MODEL_WORD: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku", sol: "6-Sol", astra: "6-Astra", terra: "5.6-Terra", luna: "6-Luna" };
+  /* The pane head's glyph names itself with the catalogue's full label. */
+  const MODEL_NAME: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku", sol: "GPT-6-Sol", astra: "GPT-6-Astra", terra: "GPT-5.6-Terra", luna: "GPT-6-Luna" };
+  /* The stage state a glyph reading stands for in this fixture, for the words its name must end on. */
+  const STATE_OF_READING: Record<string, string> = { running: "running", waiting: "pending", passed: "passed", failed: "failed", needs: "needs_decision" };
+
+  interface GlyphReading {
+    stage: string | null;
+    host: string | null;
+    kind: string;
+    reading: string;
+    live: boolean;
+    width: number;
+    height: number;
+    /** The zoom the Stages sheet draws its graph under; 1 elsewhere. */
+    scale: number;
+    halo: string;
+    haloOpacity: string;
+    figure: string[];
+    badge: string | null;
+    ownLabel: string | null;
+    hostLabel: string | null;
+    inside: boolean;
+    /** The stage's unit also draws an engine mark: two marks for one stage. */
+    twin: boolean;
+  }
+  interface Reading { glyphs: GlyphReading[]; dots: Array<{ stage: string | null; mark: string }> }
+  type Lane = "running" | "waiting" | "settled" | "any";
+
+  /* Every glyph and every kept dot under `scope`, as drawn. */
+  const readGlyphs = (page: Page, scope: string) => page.evaluate((selector): Reading => {
+    const roots = [...document.querySelectorAll(selector)];
+    const HOSTS = ".pnode, .pstrip, .pb-pill, .pb-stage-row, .pb-stage, .navchip, .pane-head, .pane-strip";
+    const stageOf = (el: Element) => el.closest("[data-stage]")?.getAttribute("data-stage")
+      ?? el.closest("[data-nav-stage]")?.getAttribute("data-nav-stage") ?? null;
+    const glyphs = roots.flatMap((root) => [...root.querySelectorAll<HTMLElement>(".mglyph")]).filter((el) => el.getClientRects().length).map((el) => {
+      const host = el.closest(HOSTS);
+      const r = el.getBoundingClientRect();
+      const h = host?.getBoundingClientRect();
+      const halo = getComputedStyle(el, "::before");
+      const figure = [...el.querySelectorAll("svg *")].map((node) => getComputedStyle(node).animationName).filter((name) => name && name !== "none");
+      const badge = el.querySelector(".mg-badge");
+      return {
+        stage: stageOf(el),
+        host: host ? host.className.split(" ")[0] ?? null : null,
+        kind: el.dataset.glyph ?? "",
+        reading: el.dataset.glyphState ?? "",
+        live: el.dataset.live === "1",
+        width: Math.round(r.width * 10) / 10,
+        height: Math.round(r.height * 10) / 10,
+        scale: Number(el.closest("[data-zoom-scale]")?.getAttribute("data-zoom-scale") ?? 1),
+        halo: halo.animationName,
+        haloOpacity: halo.opacity,
+        figure: [...new Set(figure)],
+        badge: badge ? getComputedStyle(badge).backgroundColor : null,
+        ownLabel: el.getAttribute("aria-label"),
+        /* What a screen reader hears for the host: its own label, else its text. */
+        hostLabel: host ? host.getAttribute("aria-label") ?? (host.textContent ?? "").replace(/\s+/g, " ").trim() : el.parentElement?.closest("[aria-label]")?.getAttribute("aria-label") ?? null,
+        inside: !h || (r.left >= h.left - 0.5 && r.right <= h.right + 0.5 && r.top >= h.top - 0.5 && r.bottom <= h.bottom + 0.5),
+        twin: Boolean(el.closest(".pnode, .pstrip, .pb-pill, .pb-stage, .navchip, .pane")?.querySelector("[data-engine-mark]")),
+      };
+    });
+    const dots = roots.flatMap((root) => [...root.querySelectorAll<HTMLElement>(".pdot, .pmark")]).filter((el) => el.getClientRects().length)
+      .map((el) => ({ stage: stageOf(el), mark: el.classList.contains("pdot") ? "dot" : el.getAttribute("data-mark") ?? "" }));
+    return { glyphs, dots };
+  }, scope);
+
+  browserTest("every model draws its glyph, idle and running, light and dark, desktop and phone; any other model keeps the dot", async () => {
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const out = path.resolve(".artifacts/model-glyphs");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const base = `${server.base}?scenario=model-glyphs`;
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const shots: string[] = [];
+    const failures: string[] = [];
+    const shot = async (target: Page | ReturnType<Page["locator"]>, name: string) => {
+      const file = path.join(EVIDENCE, `${name}.png`);
+      await target.screenshot({ path: file });
+      shots.push(file);
+    };
+
+    /* What a frame must show for the lanes it draws. `motion` is false under
+       reduced motion, where the figures stop and the halo holds still.
+       `labels` asks every glyph's host label to name its model. */
+    const gate = (label: string, reading: Reading, lane: Lane, { motion = true, labels = false, dot = lane === "running" || lane === "waiting" } = {}) => {
+      frames[label] = reading;
+      const { glyphs, dots } = reading;
+      if (!glyphs.length) failures.push(`${label}: no glyph was drawn`);
+      for (const glyph of glyphs) {
+        const size = 14 * glyph.scale;
+        if (Math.abs(glyph.width - size) > 0.6 || Math.abs(glyph.height - size) > 0.6) failures.push(`${label}: ${glyph.kind} on ${glyph.stage} is ${glyph.width}×${glyph.height} px at scale ${glyph.scale}`);
+        if (!glyph.inside) failures.push(`${label}: ${glyph.kind} on ${glyph.stage} sticks out of its ${glyph.host}`);
+        if (glyph.live && motion && (!glyph.figure.length || glyph.halo !== "mg-halo")) failures.push(`${label}: running ${glyph.kind} does not move (${JSON.stringify([glyph.figure, glyph.halo])})`);
+        if (glyph.live && !motion && (glyph.figure.length || glyph.halo !== "none" || glyph.haloOpacity !== "1")) failures.push(`${label}: under reduced motion ${glyph.kind} reads ${JSON.stringify([glyph.figure, glyph.halo, glyph.haloOpacity])}`);
+        if (!glyph.live && (glyph.figure.length || glyph.halo !== "none")) failures.push(`${label}: idle ${glyph.kind} on ${glyph.stage} moves`);
+        const settled = glyph.reading === "passed" || glyph.reading === "failed" || glyph.reading === "needs";
+        if (settled !== Boolean(glyph.badge)) failures.push(`${label}: ${glyph.kind} reading ${glyph.reading} has badge ${glyph.badge}`);
+        if (glyph.stage === "other-model") failures.push(`${label}: the uncatalogued model drew a glyph`);
+        if (glyph.twin) failures.push(`${label}: ${glyph.kind} on ${glyph.stage} is drawn beside an engine mark as well`);
+        if (labels && !glyph.ownLabel && !(glyph.hostLabel ?? "").includes(MODEL_WORD[glyph.kind] ?? "?")) failures.push(`${label}: nothing names ${glyph.kind} on ${glyph.stage}: ${JSON.stringify(glyph.hostLabel)}`);
+      }
+      const drawn = (stage: string) => glyphs.filter((glyph) => glyph.stage === stage);
+      if (lane === "running" || lane === "waiting") {
+        for (const kind of KINDS) {
+          const mine = drawn(kind);
+          if (!mine.length) failures.push(`${label}: ${kind} drew no glyph`);
+          if (mine.some((glyph) => glyph.kind !== kind || glyph.reading !== lane || glyph.live !== (lane === "running"))) failures.push(`${label}: ${kind} reads ${JSON.stringify(mine.map((glyph) => [glyph.kind, glyph.reading, glyph.live]))}`);
+        }
+      }
+      if (lane === "settled") {
+        for (const [kind, want] of Object.entries(SETTLED)) {
+          const mine = drawn(kind);
+          if (!mine.length || mine.some((glyph) => glyph.reading !== want)) failures.push(`${label}: ${kind} should read ${want}, reads ${JSON.stringify(mine.map((glyph) => glyph.reading))}`);
+        }
+      }
+      if (dot && !dots.some((entry) => entry.stage === "other-model")) failures.push(`${label}: the uncatalogued model kept no dot ${JSON.stringify(dots)}`);
+    };
+    const laneOf = (id: string) => `.pblock[data-pipeline="${id}"]`;
+
+    const desktop = async (scheme: Scheme, lang: "en" | "uk", motion: "no-preference" | "reduce") => {
+      const suffix = `${lang === "uk" ? "uk-" : ""}${motion === "reduce" ? "reduced-motion-" : ""}${scheme}`;
+      const moving = motion === "no-preference";
+      const opened = await openFixture(browser, base, { width: 1440, height: 1200 }, scheme, lang, motion, false, 2);
+      const { page } = opened;
+      try {
+        await page.waitForSelector(`${REST} ${laneOf(SETTLED_LANE)}`, { state: "attached", timeout: 30_000 });
+        await page.waitForSelector(`${RUN} ${laneOf("p-glyph-luna")}`, { state: "attached", timeout: 30_000 });
+        await page.locator(RUN).evaluate((element) => element.scrollIntoView({ block: "start" }));
+        await page.waitForTimeout(700);
+        gate(`desktop-card-running-${suffix}`, await readGlyphs(page, RUN), "running", { motion: moving, labels: true });
+        gate(`desktop-card-waiting-${suffix}`, await readGlyphs(page, `${REST} ${laneOf(WAIT)}`), "waiting", { labels: true });
+        gate(`desktop-card-settled-${suffix}`, await readGlyphs(page, `${REST} ${laneOf(SETTLED_LANE)}`), "settled", { labels: true });
+        await shot(page.locator(RUN), `desktop-card-running-${suffix}`);
+        await page.locator(REST).evaluate((element) => element.scrollIntoView({ block: "start" }));
+        await page.waitForTimeout(300);
+        await shot(page.locator(REST), `desktop-card-waiting-settled-${suffix}`);
+        if (lang === "uk" || !moving) return;
+
+        /* The running card, four frames 350 ms apart: the figures move. */
+        await page.locator(RUN).evaluate((element) => element.scrollIntoView({ block: "start" }));
+        for (const frame of [1, 2, 3, 4]) {
+          await shot(page.locator(`${RUN} ${laneOf("p-glyph-opus")}`).locator("xpath=.."), `desktop-card-running-${scheme}-frame${frame}`);
+          await page.waitForTimeout(350);
+        }
+
+        /* Every lane's own graph on the card: the node's state row. The
+           graphs stand taller than a column, so the window grows to hold them. */
+        await page.setViewportSize({ width: 1440, height: 4200 });
+        const runToggles = page.locator(`${RUN} [data-graph-toggle]`);
+        for (let index = 0; index < await runToggles.count(); index++) await runToggles.nth(index).click();
+        await page.waitForTimeout(500);
+        gate(`desktop-card-graphs-running-${scheme}`, await readGlyphs(page, `${RUN} .pgraph`), "running", { labels: true });
+        await page.locator(RUN).evaluate((element) => element.scrollIntoView({ block: "start" }));
+        await shot(page.locator(RUN), `desktop-card-graphs-running-${scheme}`);
+        for (const id of [WAIT, SETTLED_LANE]) await page.click(`${REST} ${laneOf(id)} [data-graph-toggle]`);
+        await page.waitForTimeout(500);
+        gate(`desktop-card-graph-waiting-${scheme}`, await readGlyphs(page, `${REST} ${laneOf(WAIT)} .pgraph`), "waiting", { labels: true });
+        gate(`desktop-card-graph-settled-${scheme}`, await readGlyphs(page, `${REST} ${laneOf(SETTLED_LANE)} .pgraph`), "settled", { labels: true });
+        await page.locator(REST).evaluate((element) => element.scrollIntoView({ block: "start" }));
+        await shot(page.locator(REST), `desktop-card-graphs-waiting-settled-${scheme}`);
+        await page.setViewportSize({ width: 1440, height: 1200 });
+        await page.waitForTimeout(300);
+
+        /* The Stages sheet: its graph, its pane heads, then its chips. */
+        for (const [lane, id, holder] of [["waiting", WAIT, REST], ["settled", SETTLED_LANE, REST], ["running", "p-glyph-fable", RUN]] as const) {
+          await page.locator(`${holder} ${laneOf(id)} [data-open-stages]`).first().click();
+          await page.waitForSelector("[data-sheet-graph]", { state: "attached", timeout: 20_000 });
+          if (await page.getAttribute("[data-sheet-graph]", "aria-pressed") !== "true") await page.click("[data-sheet-graph]");
+          await page.waitForSelector(".gsheet .pgraph", { state: "attached", timeout: 20_000 });
+          await page.waitForTimeout(600);
+          const graph = await readGlyphs(page, ".gsheet .pgraph");
+          gate(`desktop-sheet-graph-${lane}-${scheme}`, graph, lane === "running" ? "any" : lane, { labels: true, dot: lane === "waiting" });
+          const heads = (await readGlyphs(page, ".gsheet .pane-head")).glyphs;
+          frames[`desktop-sheet-pane-heads-${lane}-${scheme}`] = heads;
+          if (!heads.length) failures.push(`desktop sheet ${lane} ${scheme}: no pane head drew a glyph`);
+          for (const head of heads) {
+            const state = translate(lang, `kanban.graphState.${STATE_OF_READING[head.reading] ?? "pending"}` as "kanban.graphState.pending");
+            const want = translate(lang, "kanban.modelGlyph.aria", { model: MODEL_NAME[head.kind] ?? "?", state });
+            if (head.ownLabel !== want) failures.push(`desktop sheet ${lane} ${scheme}: the pane head's glyph on ${head.stage} is named ${JSON.stringify(head.ownLabel)}, expected ${JSON.stringify(want)}`);
+          }
+          await shot(page.locator(".gsheet"), `desktop-sheet-${lane}-${scheme}`);
+          await page.click("[data-sheet-graph]");
+          await page.waitForSelector("[data-nav-stage]", { state: "attached", timeout: 5_000 });
+          await page.waitForTimeout(300);
+          gate(`desktop-sheet-chips-${lane}-${scheme}`, await readGlyphs(page, ".gs-nav"), lane === "running" ? "any" : lane, { labels: true, dot: lane === "waiting" });
+          await shot(page.locator(".gs-nav"), `desktop-sheet-chips-${lane}-${scheme}`);
+          /* The sheet remembers the graph switch; leave it on for the next lane. */
+          await page.click("[data-sheet-graph]");
+          await page.click("[data-sheet-close]");
+          await page.waitForSelector(".gsheet", { state: "detached", timeout: 5_000 });
+        }
+        if (opened.pageErrors.length) failures.push(`desktop ${suffix}: page errors ${opened.pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`desktop ${suffix}: ${(error as Error).message.split("\n")[0]}`);
+      } finally {
+        await opened.context.close();
+      }
+    };
+
+    /* The whole scroll of a phone screen whose body scrolls inside it. */
+    const tallShot = async (page: Page, body: string, name: string) => {
+      const tall = await page.evaluate((selector) => {
+        const element = document.querySelector(selector);
+        return element ? element.scrollHeight - element.clientHeight : 0;
+      }, body);
+      await page.setViewportSize({ width: 390, height: 844 + Math.max(0, tall) });
+      await page.waitForTimeout(300);
+      await shot(page, name);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.waitForTimeout(200);
+    };
+
+    const phone = async (scheme: Scheme, lang: "en" | "uk") => {
+      const suffix = `${lang === "uk" ? "uk-" : ""}${scheme}`;
+      const opened = await openFixture(browser, base, { width: 390, height: 844 }, scheme, lang, "no-preference", true, 2);
+      const { page } = opened;
+      let step = "the board";
+      try {
+        await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+        const tab = page.locator('[data-phone-kanban-tab="assigned"]');
+        if (await tab.count()) await tab.first().click();
+        /* A board card folds its lanes, so it is read for what it draws. */
+        for (const task of ["t-glyphs-run", "t-glyphs"] as const) {
+          const phoneCard = page.locator(`[data-phone-card="task:${task}"]`).first();
+          await phoneCard.waitFor({ timeout: 10_000 });
+          await phoneCard.scrollIntoViewIfNeeded();
+          await page.waitForTimeout(500);
+          gate(`phone-card-${task}-${suffix}`, await readGlyphs(page, `[data-phone-card="task:${task}"]`), "any", { dot: false });
+          await shot(phoneCard, `phone-card-${task === "t-glyphs" ? "waiting-settled" : "running"}-${suffix}`);
+        }
+
+        /* The task screens: every lane at task density, the whole scroll. */
+        for (const task of ["t-glyphs-run", "t-glyphs"] as const) {
+          step = `the task screen of ${task}`;
+          await page.locator(`[data-phone-card="task:${task}"]`).first().click();
+          await page.waitForSelector("[data-phone-task-body] .pblock", { timeout: 10_000 });
+          await page.waitForTimeout(600);
+          if (task === "t-glyphs-run") gate(`phone-task-running-${suffix}`, await readGlyphs(page, "[data-phone-task-body]"), "running", { labels: true });
+          else {
+            gate(`phone-task-waiting-${suffix}`, await readGlyphs(page, `[data-phone-task-body] ${laneOf(WAIT)}`), "waiting", { labels: true });
+            gate(`phone-task-settled-${suffix}`, await readGlyphs(page, `[data-phone-task-body] ${laneOf(SETTLED_LANE)}`), "settled", { labels: true });
+          }
+          await tallShot(page, "[data-phone-task-body]", `phone-task-${task === "t-glyphs" ? "waiting-settled" : "running"}-${suffix}`);
+          step = `back from the task screen of ${task}`;
+          await page.locator("[data-mobile2-back]").first().evaluate((element) => (element as HTMLElement).click());
+          await page.waitForSelector("[data-phone-kanban]", { timeout: 10_000 });
+          await page.waitForTimeout(300);
+        }
+        if (lang === "uk") return;
+
+        /* The pipeline screen of the draft and of the settled lane, opened
+           from the task screen's own "stages" row. */
+        for (const [lane, id] of [["waiting", WAIT], ["settled", SETTLED_LANE]] as const) {
+          step = `the pipeline screen of ${id}`;
+          await page.locator('[data-phone-card="task:t-glyphs"]').first().click();
+          await page.waitForSelector(`[data-phone-task-body] ${laneOf(id)} [data-open-stages]`, { timeout: 10_000 });
+          await page.locator(`[data-phone-task-body] ${laneOf(id)} [data-open-stages]`).first().evaluate((element) => (element as HTMLElement).click());
+          await page.waitForSelector(`[data-mobile2-screen="pipeline"][data-mobile2-pipeline="${id}"] .pblock`, { timeout: 10_000 });
+          await page.evaluate(() => { (document.querySelector('[data-mobile2-screen="pipeline"] [data-passed-fold][aria-expanded="false"]') as HTMLElement | null)?.click(); });
+          await page.waitForTimeout(500);
+          gate(`phone-pipeline-${lane}-${scheme}`, await readGlyphs(page, '[data-mobile2-screen="pipeline"]'), lane, { labels: true });
+          await tallShot(page, "[data-mobile2-pipeline-body]", `phone-pipeline-${lane}-${scheme}`);
+          /* Back to the task screen, then back to the board. */
+          for (let hop = 0; hop < 2; hop++) {
+            await page.locator("[data-mobile2-back]").first().evaluate((element) => (element as HTMLElement).click());
+            await page.waitForTimeout(300);
+          }
+          await page.waitForSelector("[data-phone-kanban]", { timeout: 10_000 });
+        }
+        if (opened.pageErrors.length) failures.push(`phone ${suffix}: page errors ${opened.pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`phone ${suffix}, ${step}: ${(error as Error).message.split("\n")[0]}`);
+      } finally {
+        await opened.context.close();
+      }
+    };
+
+    try {
+      for (const scheme of ["light", "dark"] as const) {
+        await desktop(scheme, "en", "no-preference");
+        await desktop(scheme, "uk", "no-preference");
+        await desktop(scheme, "en", "reduce");
+        await phone(scheme, "en");
+        await phone(scheme, "uk");
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    const record = {
+      viewport: { desktop: "1440x1200", phone: "390x844" }, deviceScaleFactor: 2,
+      screenshots: shots.map((file) => path.relative(process.cwd(), file)), frames, failures,
+    };
+    fs.writeFileSync(path.join(EVIDENCE, "readings.json"), `${JSON.stringify(record, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
   }, 900_000);

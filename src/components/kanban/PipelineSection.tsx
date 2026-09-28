@@ -17,9 +17,13 @@ import type { KanbanPipeline } from "./kanbanModel";
 import { attemptArrivals, graphOrder, layoutGraph, routeEdge, STAGE_TONE, wireFired, type GraphEdge, type PastAttempt, type ReviewRound } from "./pipelineGraph";
 import { stageIdentity, type EdgeCount } from "./stageIdentity";
 import { CountCircle, engineWord, identityTitle, StageIdentity } from "./identityMarks";
-import { STAGE_MARK } from "@/components/pipelines/pipelineBlockModel";
 import { ChevronRight, svgProps } from "./kanbanGlyphs";
 import { stageDraftable } from "./stagesModel";
+import { StageGlyph } from "./StageGlyph";
+
+/* The stage mark moved beside the model glyph that stands in for it; its
+   importers keep reading it here. */
+export { StageToneMark } from "./StageGlyph";
 
 /* The pieces of a pipeline the card's lane row (`PipelineBlock`, #2072) and
    the Stages sheet share: the stage graph, the stage report and graph-edit
@@ -277,26 +281,6 @@ export function LoopChip({ loop, from, to }: { loop: KanbanPipeline["loops"][num
 /** How long an edge an attempt just travelled stays marked. */
 const LIVE_EDGE_MS = 2_400;
 
-/** The mark in front of a stage's name: its shape carries the state and its
-    colour is the stage's `STAGE_TONE`, the one tone map the graph reads. */
-/** `live` marks work in flight where the state alone does not say so: a
-    settled stage whose conversation works again (#1744). */
-export function StageToneMark({ state, className, live = false }: { state: StageChipState; className?: string; live?: boolean }) {
-  const shape = STAGE_MARK[state];
-  return (
-    <i
-      className={`pmark tone-${STAGE_TONE[state]}${className ? ` ${className}` : ""}`}
-      data-mark={shape}
-      data-live={live || LIVE_CHIP_STATES.has(state) ? "1" : undefined}
-      aria-hidden="true"
-    >
-      {shape === "check" ? <svg {...svgProps} strokeWidth={3}><path d="m5 12.5 4.5 4.5L19 7.5" /></svg> : null}
-      {shape === "cross" ? <svg {...svgProps} strokeWidth={3}><path d="M17 7 7 17M7 7l10 10" /></svg> : null}
-      {shape === "alert" ? <span className="pmark-bang">!</span> : null}
-    </i>
-  );
-}
-
 const COARSE_QUERY = "(pointer: coarse)";
 const subscribeCoarse = (change: () => void) => {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") return () => {};
@@ -499,7 +483,7 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
     const body = (
       <>
         <span className="sglyph" aria-hidden="true">↺</span>
-        {shape === "dock" ? <StageToneMark state={fixState!} /> : null}
+        {shape === "dock" ? <StageGlyph state={fixState!} model={stageIdentity(pipeline, target)} live={rework} fallback="mark" /> : null}
         <span className="sname">
           {shape === "dock" ? nameOf(target.id) : text}
         </span>
@@ -606,10 +590,10 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
               <span className="prow ident">
                 {/* The effort word only where the layout gave the node room for
                     it, so the identity line never pushes the state row out. */}
-                <StageIdentity identity={identity} density="node" showWord={box.w >= 176} words={identityWords} />
+                <StageIdentity identity={identity} density="node" showWord={box.w >= 176} words={identityWords} glyph />
               </span>
               <span className="prow">
-                <span className="pstate"><i className="pdot" aria-hidden="true" />{word}</span>
+                <span className="pstate"><StageGlyph state={state} model={identity} live={rework} fallback="dot" />{word}</span>
                 {detail}
               </span>
             </button>

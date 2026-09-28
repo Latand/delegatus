@@ -3856,6 +3856,7 @@ export const en = {
   "kanban.graphState.failed": "failed",
   "kanban.graphState.needs_decision": "needs you",
   "kanban.graphState.skipped": "skipped",
+  "kanban.modelGlyph.aria": "{model}: {state}",
   "kanban.graph.showSummary": "Show the one-line summary",
   "kanban.graph.showGraph": "Show the stage graph",
   "kanban.graph.summary": "Summary",

@@ -132,3 +132,19 @@ test("the design system §1.5 table documents the shipped token values", () => {
     expect(row!.toLowerCase(), `§1.5 "${label}" dark value`).toContain(dark);
   }
 });
+
+/* The model glyphs (docs/design/model-glyphs.md) are graphical objects, so the
+   ink that draws each silhouette clears 3:1 on every surface a stage sits on.
+   Sol's yellow fill is exempt on purpose: on the light paper it sits inside
+   its edge ink, which carries the shape. The Claude glyphs take the Claude
+   mark token, already pinned at its own floor. */
+test("the model glyphs' silhouette inks clear the graphical-object floor in both schemes", () => {
+  const surfaces = ["surface-card", "surface-canvas", "surface-well", "surface-sunken"].map(values);
+  for (const ink of ["glyph-sol-edge", "glyph-astra", "glyph-terra-rim", "glyph-luna"]) {
+    const inks = values(ink);
+    expect(inks.length).toBe(3);
+    for (const scheme of [0, 1]) {
+      for (const surface of surfaces) expect(contrast(inks[scheme], surface[scheme])).toBeGreaterThanOrEqual(3);
+    }
+  }
+});

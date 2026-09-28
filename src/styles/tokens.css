@@ -137,6 +137,20 @@
      under the lit steps' own ~5.2:1, so lit and unlit stay two readings. */
   --engine-fill-ink: #ffffff;
   --effort-empty: #93939d;
+  /* Model glyphs (docs/design/model-glyphs.md): the Claude family takes the
+     Claude mark; the Codex line is its sky. Sol's yellow cannot clear 3:1 on
+     the light paper as a fill, so its disc is outlined and its rays drawn in
+     the deeper amber edge; the dark theme needs no edge. Terra's rim holds the
+     disc against the card on both themes. */
+  --glyph-claude: var(--color-claude-mark);
+  --glyph-sol: #f7b500;
+  --glyph-sol-edge: #9b6500;
+  --glyph-astra: #1764e8;
+  --glyph-astra-core: #d9e9ff;
+  --glyph-terra-sea: #2a78cf;
+  --glyph-terra-land: #2b9a4f;
+  --glyph-terra-rim: #1d5aa3;
+  --glyph-luna: #66728f;
 
   /* Activity chart marks (docs/design/activity-dashboard-v2.md, "Colour"):
      you are the accent, agents the info teal, each with one lighter step
@@ -238,6 +252,14 @@
     --color-codex-mark: var(--color-codex);
     --engine-fill-ink: #121620;
     --effort-empty: #64646f;
+    --glyph-sol: #ffcd38;
+    --glyph-sol-edge: #ffcd38;
+    --glyph-astra: #63b3ff;
+    --glyph-astra-core: #f2f8ff;
+    --glyph-terra-sea: #4a9cf0;
+    --glyph-terra-land: #5ccf80;
+    --glyph-terra-rim: #8cc2f7;
+    --glyph-luna: #d3daea;
 
     /* The app's dark accent and info sit above the chart lightness band;
        these steps are inside it. */
@@ -311,6 +333,14 @@
   --color-codex-mark: var(--color-codex);
   --engine-fill-ink: #121620;
   --effort-empty: #64646f;
+  --glyph-sol: #ffcd38;
+  --glyph-sol-edge: #ffcd38;
+  --glyph-astra: #63b3ff;
+  --glyph-astra-core: #f2f8ff;
+  --glyph-terra-sea: #4a9cf0;
+  --glyph-terra-land: #5ccf80;
+  --glyph-terra-rim: #8cc2f7;
+  --glyph-luna: #d3daea;
 
   --mark-you: #7f79e6;
   --mark-you-half: #4a4786;

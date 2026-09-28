@@ -90,6 +90,10 @@ const MANY = SCENARIO === "issue1765" || BALANCE || WORK_LINKS;
    all five effort levels, a long uncatalogued model, a stage edited after its
    launch, and a stage that has never started. */
 const MARKS = SCENARIO === "issue1743";
+/* Model glyphs (docs/design/model-glyphs.md): nine lanes each running one
+   model, a draft of the same nine waiting, and the settled states on a few;
+   the ninth model is uncatalogued and keeps the dot. */
+const GLYPHS = SCENARIO === "model-glyphs";
 /* #1865: the header lane the operator read — design → build → critique, where
    design and critique share the architect preset and critique ran twice — so
    each stage's conversation can be read for which stage it is. */
@@ -442,6 +446,43 @@ const marksPipelines: Pipeline[] = MARKS ? (() => {
         attempt(2, "failed", spentRev, { effectiveRole: runRole("verifier", "codex", "gpt-6-astra", "xhigh"), startedAt: iso(60 * MIN), activatedBy: { stageId: "fix", attempt: 2, edge: "pass" } }),
       ] },
     ], { stageId: "fix", state: "running", input: null, activatedBy: null }),
+  ];
+})() : [];
+
+/* One stage per model, named after it, each bound to what it runs on. A lane
+   runs one stage at a time, so every model at work is a lane of its own. */
+const GLYPH_MODELS = [
+  ["opus", "architect", "claude", "opus", "Opus"],
+  ["fable", "builder", "claude", "fable", "Fable"],
+  ["sonnet", "builder", "claude", "sonnet", "Sonnet"],
+  ["haiku", "cleaner", "claude", "haiku", "Haiku"],
+  ["sol", "verifier", "codex", "gpt-6-sol", "GPT-6-Sol"],
+  ["astra", "architect", "codex", "gpt-6-astra", "GPT-6-Astra"],
+  ["terra", "builder", "codex", "gpt-5.6-terra", "GPT-5.6-Terra"],
+  ["luna", "verifier", "codex", "gpt-6-luna", "GPT-6-Luna"],
+  ["other-model", "builder", "codex", "gpt-5.5", "GPT-5.5"],
+] as const;
+const glyphPipelines: Pipeline[] = GLYPHS ? (() => {
+  const chain = (models: ReadonlyArray<(typeof GLYPH_MODELS)[number]>) => models.map(([id, roleId, engine, model], index) =>
+    marksStage(id, roleId, models[index + 1]?.[0] ?? null, engine, model, "high"));
+  const ran = (id: string, state: string, ago: number) => {
+    const [, roleId, engine, model] = GLYPH_MODELS.find(([stageId]) => stageId === id)!;
+    return { stageId: id, attempts: [attempt(1, state, null, { effectiveRole: runRole(roleId, engine, model, "high"), startedAt: iso(ago * MIN) })] };
+  };
+  const settled = ["opus", "fable", "astra", "sol", "haiku"].map((id) => GLYPH_MODELS.find(([stageId]) => stageId === id)!);
+  return [
+    ...GLYPH_MODELS.map((entry, index) => {
+      const [id, , , , name] = entry;
+      return pipeline(`p-glyph-${id}`, id === "other-model" ? L(`${name}: no glyph, the dot stays`, `${name}: гліфа немає, крапка лишається`) : name, "t-glyphs-run", "running", chain([entry]),
+        [ran(id, "running", 30 - index)], { stageId: id, state: "running", input: null, activatedBy: null }, { createdAt: iso((40 - index) * MIN) });
+    }),
+    /* A draft: nine stages configured, none started, each waiting on its model. */
+    pipeline("p-glyphs-wait", L("Every model waiting", "Кожна модель чекає"), "t-glyphs", "draft", chain(GLYPH_MODELS),
+      [], { stageId: "opus", state: "pending", input: null, activatedBy: null }, { createdAt: iso(20 * MIN) }),
+    /* Passed, passed, failed, waiting on the operator, not yet run. */
+    pipeline("p-glyphs-settled", L("Settled states", "Завершені стани"), "t-glyphs", "needs_decision", chain(settled),
+      [ran("opus", "passed", 90), ran("fable", "passed", 70), ran("astra", "failed", 50), ran("sol", "needs_decision", 30)],
+      { stageId: "sol", state: "needs_decision", input: null, activatedBy: null }, { createdAt: iso(100 * MIN) }),
   ];
 })() : [];
 
@@ -999,6 +1040,7 @@ const pipelines: Pipeline[] = [
   ...arcPipelines,
   ...labelPipelines,
   ...marksPipelines,
+  ...glyphPipelines,
   ...loopsPipelines,
   ...manyPipelines,
   pipeline("p-search", "Restore search results after the index rebuild", "t-search", "running",
@@ -1218,6 +1260,10 @@ const tasks: BoardTask[] = [
   ...(PIPELINES ? [task("t-rounds", "assigned", "Rework the retry banner until review passes", "", 12 * MIN)] : []),
   ...(MANY ? [task("t-many", "assigned", "Kanban: say what each pipeline of a task does", "Five pipelines on one card: two running, three finished.", 5 * MIN)] : []),
   ...(MARKS ? [task("t-marks", "assigned", "Say who runs each stage, and how often an edge fired", "Two pipelines: one fail edge fired twice of three, one with its budget spent.", 4 * MIN)] : []),
+  ...(GLYPHS ? [
+    task("t-glyphs-run", "assigned", L("Every model at work", "Кожна модель у роботі"), L("Nine lanes, each running one model; the ninth has no glyph.", "Дев’ять конвеєрів, кожен запускає одну модель; дев’ята без гліфа."), 1 * MIN),
+    task("t-glyphs", "assigned", L("Every model waiting, and the settled states", "Кожна модель чекає, і завершені стани"), L("A draft of nine stages, and a lane parked on a decision.", "Чернетка з дев’яти етапів і конвеєр, що чекає на рішення."), 2 * MIN),
+  ] : []),
   ...(LOOPS ? [
     task("t-loops-done", "assigned", L("Show a spent review budget on the lane", "Показати вичерпаний бюджет рев’ю на лінії"), "", 4 * 60 * MIN),
     task("t-loops-review", "assigned", L("Show a spent review budget on the lane, again", "Показати вичерпаний бюджет рев’ю, знову"), "", 2 * MIN),

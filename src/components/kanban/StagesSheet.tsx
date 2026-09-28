@@ -13,7 +13,9 @@ import type { KanbanPipeline } from "./kanbanModel";
 import { ChevronRight, CloseGlyph, CollapseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
 import { cssEscape } from "./kanbanFocus";
 import { GraphGlyph, graphStateWord, LoopChip, PipelineGraph, pipelineProgress, ROLE_GLYPH, stageNames, stageRoleId, useCoarsePointer } from "./PipelineSection";
-import { stageIdentity } from "./stageIdentity";
+import { stageIdentity, valuesOf } from "./stageIdentity";
+import { modelGlyphKind } from "./modelGlyph";
+import { StageGlyph } from "./StageGlyph";
 import { engineWord, identityTitle, StageIdentity } from "./identityMarks";
 import { graphOrder, layoutGraph, roundsOf, STAGE_TONE } from "./pipelineGraph";
 import type { PipelinePorts } from "./pipelinePorts";
@@ -254,8 +256,8 @@ export function StagesSheet(props: {
                   onClick={() => reach(stage.id)}
                 >
                   <span className="nidx num">{index + 1}</span>
-                  <i className="pdot" aria-hidden="true" />
-                  <StageIdentity identity={identity} density="chip" name={<span className="nlbl">{nameOf(stage)}</span>} />
+                  <StageGlyph state={state} model={identity} fallback="dot" />
+                  <StageIdentity identity={identity} density="chip" name={<span className="nlbl">{nameOf(stage)}</span>} glyph />
                 </button>
               );
             })}
@@ -356,6 +358,9 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
      and ladder the chip and the node draw (#1743). */
   const identity = stageIdentity(pipeline, stage);
   const engine = engineWord(shown?.effectiveRole.engine ?? stage.effectiveRole.engine);
+  /* The glyph names the model of the attempt the pane shows, which an older
+     attempt may have run on another model than the stage's latest. */
+  const ran = shown?.effectiveRole ? valuesOf(shown.effectiveRole) : identity;
   const draftKey = stageDraftKey(pipeline.id, stage.id);
   const draft = useStageDraft(props.drafts, draftKey);
   const glyph = <span className="pglyph" aria-hidden="true"><svg {...svgProps} strokeWidth={1.8}>{ROLE_GLYPH[roleId] ?? ROLE_GLYPH.builder}</svg></span>;
@@ -367,7 +372,7 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
       <section className={className} data-stage={stage.id} data-collapsed="1" tabIndex={-1} role="region" aria-label={aria}>
         <button type="button" className="pane-strip" data-pane-fold={stage.id} aria-label={t("kanban.stages.expandPane", { stage: name })} onClick={() => props.onFold(stage.id, false)}>
           {glyph}
-          <i className="pdot" aria-hidden="true" />
+          <StageGlyph state={state} model={ran} fallback="dot" />
           <span className="vlabel"><span className="num">{index + 1}</span> {name} · {word}</span>
         </button>
       </section>
@@ -395,7 +400,7 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
     body = (
       <div className="pane-conv draft">
         <div className="ch-meta pane-id">
-          <StageIdentity identity={identity} density="header" showWord />
+          <StageIdentity identity={identity} density="header" showWord glyph />
           <StageAccountChip pipeline={pipeline} stage={stage} />
         </div>
         <StageDraftFeed pipeline={pipeline} stage={stage} names={names} drafts={props.drafts} ports={props.ports} />
@@ -440,7 +445,9 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
             {stage.kind === "review-loop" ? <span className="prole-kind">{t("kanban.stages.reviewLoop")}</span> : null}
           </span>
         </span>
-        <span className="pstate"><i className="pdot" aria-hidden="true" />{word}</span>
+        {/* A drawn glyph already names the model and the state, so the word
+            beside it is for the eye only. */}
+        <span className="pstate"><StageGlyph state={state} model={ran} fallback="dot" named /><span aria-hidden={modelGlyphKind(ran.engine, ran.model) ? true : undefined}>{word}</span></span>
         <span className="spacer" />
         <button type="button" className="icon-btn sm" data-pane-fold={stage.id} aria-label={t("kanban.stages.collapsePane", { stage: name })} title={t("kanban.readerCollapse")} onClick={() => props.onFold(stage.id, true)}>
           <CollapseGlyph />
