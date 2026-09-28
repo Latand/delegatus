@@ -1,0 +1,16 @@
+{
+  "desktop": {
+    "width": 640,
+    "viewport": 1280,
+    "overflow": false,
+    "linked": true,
+    "controls": 15
+  },
+  "phone": {
+    "width": 390,
+    "viewport": 390,
+    "overflow": false,
+    "linked": true,
+    "controls": 15
+  }
+}

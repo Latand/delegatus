@@ -1844,6 +1844,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
+  if (url.pathname.startsWith("/api/links")) return serverFetch(url.pathname + url.search, init);
   if (ALBUM && url.pathname === "/api/task-album") {
     const ids = (url.searchParams.get("ids") ?? "").split(",").filter((id) => albumItems()[id]);
     return json({ tasks: Object.fromEntries(ids.map((id) => {

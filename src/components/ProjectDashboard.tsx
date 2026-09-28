@@ -107,6 +107,7 @@ import { ArchiveProjectButton, DeleteProjectButton } from "./ProjectTrash";
 import { AsksYouRow } from "./AsksYouRow";
 import { BridgeReportsRow } from "./BridgeReportsRow";
 import { MergeOnReviewRow } from "./MergeOnReviewRow";
+import { ShareProjectRow } from "./links/ShareProjectRow";
 import { SoundToggle } from "./SoundToggle";
 import { BAR_MENU_ROW, BarCreateGroup, BarMenuGroup, BarMoreMenu, BarPanelToggles, DashboardBar } from "./ProjectBar";
 
@@ -2071,6 +2072,7 @@ function ProjectDashboardView({
          same rows as the desktop ⋯. */
       { kind: "divider", key: "d-merge" },
       { kind: "custom", key: "merge-on-review", node: <MergeOnReviewRow project={project} variant="sheet" /> },
+      { kind: "custom", key: "share-project", node: <ShareProjectRow project={project} variant="sheet" /> },
       { kind: "custom", key: "bridge-reports", node: <BridgeReportsRow project={project} variant="sheet" /> },
       /* "Asks you" is the installation's, not the project's; it sits here
          because this is where the operator looks for what reports to them. */
@@ -2150,6 +2152,7 @@ function ProjectDashboardView({
             </BarMenuGroup>
             <BarMenuGroup name="project">
               <MergeOnReviewRow project={project} variant="menu" />
+              <ShareProjectRow project={project} variant="menu" />
               <BridgeReportsRow project={project} variant="menu" />
               <AsksYouRow variant="menu" />
               {archived ? (

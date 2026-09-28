@@ -383,6 +383,11 @@ export function recordedProjectRemote(project: string): string | null {
   return readRemotes()[project] ?? null;
 }
 
+/** Known remote identities, for the operator's linked-project chooser. */
+export function recordedProjectRemotes(): Readonly<Record<string, string>> {
+  return { ...readRemotes() };
+}
+
 /**
  * Remember the remote behind a repository id. Writes only when the entry is
  * missing or changed, with the same temp-file-and-rename as the alias map; a
