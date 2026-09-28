@@ -65,6 +65,7 @@ import { activityMobileMenuEntry } from "./activity/menuEntry";
 import { teamMobileMenuEntry } from "./team/menuEntry";
 import { onboardingMobileMenuEntries } from "./onboarding/menuEntries";
 import { openLinkedSettings } from "./links/openLinkedSettings";
+import { openExternalRelaySettings } from "./externalRelay/openExternalRelaySettings";
 import { selfUpdateMobileMenuEntry } from "./selfUpdate/menuEntry";
 import { MobileMenuSheet, type MobileMenuEntry } from "./mobile/MobileMenuSheet";
 import { showReceipt } from "./mobile/MobileReceipt";
@@ -2067,6 +2068,7 @@ function ProjectDashboardView({
       { kind: "divider", key: "d-setup" },
       ...onboardingMobileMenuEntries(t, () => mobileNav.closeSheet()),
       { kind: "row", key: "linked-settings", icon: null, label: t("links.title"), onSelect: () => { mobileNav.closeSheet(); openLinkedSettings(); } },
+      { kind: "row", key: "external-relay", icon: null, label: t("externalRelay.title"), onSelect: () => { mobileNav.closeSheet(); openExternalRelaySettings(); } },
       selfUpdateMobileMenuEntry(t, () => mobileNav.closeSheet()),
       /* The project's merge and bridge report settings (#2187 §6, #2146), the
          same rows as the desktop ⋯. */

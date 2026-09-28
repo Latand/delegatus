@@ -24,6 +24,7 @@ import { openOnboarding } from "./onboarding/useOnboarding";
 import { startInterfaceWalk } from "./onboarding/walkStop";
 import { openSelfUpdate } from "./selfUpdate/openSelfUpdate";
 import { openLinkedSettings } from "./links/openLinkedSettings";
+import { openExternalRelaySettings } from "./externalRelay/openExternalRelaySettings";
 import { LimitsFooter } from "./LimitsFooter";
 import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "./projectModel";
 import { PushBell } from "./PushBell";
@@ -475,6 +476,9 @@ function RailHeaderMenu() {
           {/* #2007: how this install updates itself. */}
           <button type="button" data-rail-menu-linked-settings="" className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={() => { setOpen(false); openLinkedSettings(); }}>
             {t("links.title")}
+          </button>
+          <button type="button" data-rail-menu-external-relay="" className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={() => { setOpen(false); openExternalRelaySettings(); }}>
+            {t("externalRelay.title")}
           </button>
           <button
             type="button"

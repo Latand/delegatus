@@ -78,12 +78,12 @@ test("#2166: the guide's seven step ids round-trip, a six-step marker reads the 
   expect(typeof patch).toBe("object");
   writeOnboardingMarker(applyOnboardingPatch(null, patch as Exclude<typeof patch, string>, NOW), file);
   /* A marker written before the optional Telegram step (docs/design/orchestrator-reports.md §5.6) reads it as not visited. */
-  expect(readOnboardingMarker(file)?.steps).toEqual({ engines: "done", project: "done", telegram: null, orchestrator: null, agents: "done", phone: "skipped", voice: "done", check: null });
+  expect(readOnboardingMarker(file)?.steps).toEqual({ engines: "done", project: "done", telegram: null, orchestrator: null, agents: "done", phone: "skipped", voice: "done", check: null, relay: null });
 
   const old = path.join(sandbox, "six-steps.json");
   fs.writeFileSync(old, JSON.stringify({ schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps: { engines: "done", agents: "done", phone: "skipped", voice: null, tour: "done", check: null }, lastHealth: null }));
   const read = readOnboardingMarker(old);
-  expect(read?.steps).toEqual({ engines: "done", project: null, telegram: null, orchestrator: null, agents: "done", phone: "skipped", voice: null, check: null });
+  expect(read?.steps).toEqual({ engines: "done", project: null, telegram: null, orchestrator: null, agents: "done", phone: "skipped", voice: null, check: null, relay: null });
   expect(read?.walk).toBeNull();
 
   /* A tab still on the six-step guide may send the Tour's id; it is dropped. */
