@@ -1195,7 +1195,7 @@ test("legacy synchronization rejects structured command semantics before fallbac
   expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
 });
 
-test("a seat wake's queue policy is refused by a legacy pane owner, never pasted into the pane", async () => {
+test("the structured transport refuses a queue send once the owner turns out to be a legacy pane host", async () => {
   const { registry, conversation } = registryWithConversation();
   recordLegacyOwner(registry, conversation);
   const result = await enqueueStructuredMessage({

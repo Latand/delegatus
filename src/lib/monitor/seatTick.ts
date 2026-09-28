@@ -5,6 +5,7 @@ import { evidenceStallReason } from "./classify";
 import type { EffectiveSeatTickSettings } from "./seatTickSettings";
 import {
   SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
+  SEAT_TICK_REPORTED_STALLS_LIMIT,
   SEAT_TICK_ASKS_OWED_LIMIT,
   SEAT_TICK_CHILDREN_SHOWN_LIMIT,
   SEAT_TICK_REPORTS_OWED_LIMIT,
@@ -221,6 +222,16 @@ function isTerminalChild(child: SeatTickChildInput): boolean {
     a child can never share an entry. */
 function childStallId(child: SeatTickChildInput): string {
   return `child:${child.conversationId}`;
+}
+
+/** A reported stall's memory: the stall and the record it was stalled at, so
+    a lane or child that moved and stalled again is a stall nobody reported. */
+function laneStallToken(pipeline: SeatTickPipelineInput): string {
+  return `${pipeline.id}@${pipeline.updatedAt ?? ""}`;
+}
+
+function childStallToken(child: SeatTickChildInput): string {
+  return `${childStallId(child)}@${child.lastRecordAt ?? ""}`;
 }
 
 /**
@@ -1775,20 +1786,17 @@ function wakeItems(context: {
   /* A request only an answer ends (#2215), ahead of the stalls: it is not a
      stall, and the line says what is being asked. */
   items.push(...pendingPermissionItems(input));
-  /* A stall the last delivered wake already reported, on a lane or child that
-     has not moved since, gives its place to every unstarted task. Ahead of
-     them, the same stall filled the item window on every wake and a task was
-     only ever counted as deferred, including one assigned before the wake
-     that first reported the stall. It is still listed, after the tasks. */
-  const lastWakeAt = input.state.lastWakeAt ? Date.parse(input.state.lastWakeAt) : Number.NaN;
-  const stallsReported = Number.isFinite(lastWakeAt) && input.state.lastWakeReasons.includes("stalled");
-  const unmovedSinceWake = (at: string | null | undefined): boolean =>
-    stallsReported && !!at && Date.parse(at) <= lastWakeAt;
+  /* A stall a landed wake already named, on a lane or child that has not
+     moved since, gives its place to every unstarted task. Ahead of them, the
+     same stall filled the item window on every wake and a task was only ever
+     counted as deferred. It is still listed, after the tasks. A stall no wake
+     named keeps its place ahead of them, or the tasks would starve it. */
+  const reported = new Set(input.state.reportedStalls ?? []);
   const owned = new Set(context.ownLanes.map((lane) => lane.id));
   const laneStall = (entry: { pipeline: SeatTickPipelineInput; reason: string }): void => {
     if (owned.has(entry.pipeline.id)) return;
     if (items.some((item) => item.kind === "pipeline" && item.id === entry.pipeline.id)) return;
-    items.push({ kind: "pipeline", id: entry.pipeline.id, label: `${entry.pipeline.title} — ${entry.reason}` });
+    items.push({ kind: "pipeline", id: entry.pipeline.id, label: `${entry.pipeline.title} — ${entry.reason}`, stallToken: laneStallToken(entry.pipeline) });
   };
   /* One line per child here too (#1783 round two). A child whose host died
      over an open turn can hold owed outcomes AND be reported stalled — the
@@ -1801,13 +1809,14 @@ function wakeItems(context: {
       id: entry.child.conversationId,
       stateTokens: [childStateToken(entry.child, null)],
       label: `${entry.child.title} — ${entry.reason}`,
+      stallToken: childStallToken(entry.child),
     });
   };
   const task = (entry: SeatTickTaskInput): void => {
     items.push({ kind: "task", id: entry.id, label: `${entry.title} — assigned, nothing started it` });
   };
-  const unmovedLanes = context.stalled.filter((entry) => unmovedSinceWake(entry.pipeline.updatedAt));
-  const unmovedChildren = context.stalledChildren.filter((entry) => unmovedSinceWake(entry.child.lastRecordAt));
+  const unmovedLanes = context.stalled.filter((entry) => reported.has(laneStallToken(entry.pipeline)));
+  const unmovedChildren = context.stalledChildren.filter((entry) => reported.has(childStallToken(entry.child)));
   for (const entry of context.stalled) if (!unmovedLanes.includes(entry)) laneStall(entry);
   for (const entry of context.stalledChildren) if (!unmovedChildren.includes(entry)) childStall(entry);
   for (const entry of context.unstarted) task(entry);
@@ -1887,9 +1896,13 @@ export function seatTickWakeCommitPlan(
   const announcedDeploys = verdict.items.filter((item) => item.kind === "deploy").map((item) => item.id);
   /* The outcomes the report log is owed once this wake lands (§5.1). */
   const reportsOwed = context.bridgeReports ? seatTickOwedOutcomes(verdict.items) : [];
+  /* The stalls the wake actually names, never the check's whole stall list:
+     one the per-wake bound cut was not reported. */
+  const reportedStalls = verdict.items.flatMap((item) => item.stallToken ? [item.stallToken] : []);
   return {
     proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough, children, announcedLanes, announcedDeploys, shownChildren, ...note,
     ...(reportsOwed.length > 0 ? { reportsOwed } : {}),
+    ...(reportedStalls.length > 0 ? { reportedStalls } : {}),
   };
 }
 
@@ -1971,6 +1984,9 @@ export function seatTickWakeCommit(
     childrenShown: childrenShown(state.childrenShown ?? [], commit.shownChildren ?? []),
     announcedLanes: announced(state.announcedLanes ?? [], commit.announcedLanes ?? []),
     announcedDeploys: announced(state.announcedDeploys ?? [], commit.announcedDeploys ?? [], SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT),
+    ...(commit.reportedStalls?.length || state.reportedStalls
+      ? { reportedStalls: announced(state.reportedStalls ?? [], commit.reportedStalls ?? [], SEAT_TICK_REPORTED_STALLS_LIMIT) }
+      : {}),
     ...(owed ?? {}),
   };
 }
