@@ -8790,6 +8790,7 @@ test("an explicitly pinned Claude stage parks despite another free account and r
 test("a recorded Claude limit moves the stage's real registry conversation and settles on its successor", async () => {
   const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
   const { advanceConversationMigration, reconcileMigrations } = await import("@/lib/accounts/migration/coordinator");
+  const { enqueueStructuredMessage } = await import("@/lib/runtime/structuredMessageDelivery");
   const h = harness();
   const pipeline = await create(h.ports, [{ ...usageLimitStage()[0], engine: "claude", model: "fable" }] as never);
   await tickPipelines([], h.ports);
@@ -8807,9 +8808,12 @@ test("a recorded Claude limit moves the stage's real registry conversation and s
     observedAt: "2026-08-27T09:41:01.000Z",
   }]);
   const conversation = registry.conversationForPath(sourcePath)!;
+  const previouslyLimitedAccount = "account-previously-limited";
+  registry.setEngineRouting("claude", previouslyLimitedAccount);
   const running = loadPipelines().find((item) => item.id === pipeline.id)!;
   Object.assign(running.runs[0]!.attempts[0]!, {
     conversationId: conversation.id, agentPath: sourcePath, accountId: LIMITED_ACCOUNT, paneId: null,
+    usageLimitedAccounts: [{ accountId: previouslyLimitedAccount, engine: "claude", resetsAt: null }],
   });
   savePipelines([running]);
   h.ports.pathForConversation = (id) => id === conversation.id ? registry.conversation(conversation.id)?.generations.at(-1)?.path ?? null : null;
@@ -8821,10 +8825,23 @@ test("a recorded Claude limit moves the stage's real registry conversation and s
     const migration = registry.conversation(conversation.id)?.migration;
     return migration && !["committed", "rolled-back", "failed-recoverable"].includes(migration.phase) ? migration.targetId : null;
   };
-  h.ports.requestConversationReseat = async (id, target) => { registry.requestConversationReseat(id as never, target); };
+  let reseatOperationId: string | null = null;
+  h.ports.requestConversationReseat = async (id, target) => {
+    reseatOperationId = registry.requestConversationReseat(id as never, target).migration?.operationId ?? null;
+  };
   h.ports.resumeSeveredTurn = async (input) => {
-    registry.holdDelivery(conversation.id, input.text, input.clientMessageId);
-    return true;
+    const result = await enqueueStructuredMessage({
+      path: input.transcriptPath,
+      conversationId: input.conversationId,
+      clientMessageId: input.clientMessageId,
+      text: input.text,
+    }, {
+      enabled: () => true,
+      client: () => null,
+      registry: () => registry,
+      requestMigrationTick: () => {},
+    });
+    return result?.ok === true;
   };
   h.ports.durableTurnEvidence = durableStageTurnEvidence;
   h.ports.resolveProjectSpawn = () => ({ kind: "available", account: {
@@ -8833,7 +8850,10 @@ test("a recorded Claude limit moves the stage's real registry conversation and s
   } });
 
   await tickPipelines([], h.ports);
-  expect(registry.conversation(conversation.id)?.migration?.targetId).toBe(SPARE_ACCOUNT);
+  expect(registry.conversation(conversation.id)?.migration).toMatchObject({
+    targetId: SPARE_ACCOUNT, operationId: reseatOperationId,
+  });
+  expect(reseatOperationId).toBeTruthy();
   expect(registry.pendingDeliveries(conversation.id)).toHaveLength(1);
   const provider = {
     virtualSource: true as const,

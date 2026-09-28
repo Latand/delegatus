@@ -7834,6 +7834,11 @@ export class AgentRegistry {
          with no turn yet: a Claude move waits for a transcript only that
          held message can start, and a committed move drops the held message. */
       if (settlingLaunchChoseAccount(file, canonicalId, source, options.launchId)) return clone(conversation);
+      /* A conversation-scoped reseat already chose this thread's successor.
+         Lazy routing on message admission must leave that migration and its
+         held continuation on the chosen account. */
+      const migrating = inFlightMigration(conversation);
+      if (migrating && file.migrationIntents[migrating.intentId]?.scope === "conversation") return clone(conversation);
       if (admitAutomaticAccountTarget({
         project: conversationProjectKey(conversation.projectOwnership, source.launchProfile),
         engine: conversation.engine,
