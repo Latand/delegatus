@@ -17,11 +17,11 @@ afterAll(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-async function install(name: string, extraRemotes: Record<string, string> = {}): Promise<string> {
+async function install(name: string, extraRemotes: Record<string, string> = {}, configureAddress = true): Promise<string> {
   const state = path.join(root, name);
   fs.mkdirSync(state, { recursive: true });
   fs.writeFileSync(path.join(state, "project-remotes.json"), JSON.stringify({ schemaVersion: 1, remotes: { [key]: remote, [localKey]: "file:/var/fixtures/widget", ...extraRemotes } }));
-  const child = spawn(process.execPath, ["src/lib/links/testServer.ts", state], { cwd: process.cwd(), env: { ...process.env, LLV_STATE_DIR: state, XDG_CONFIG_HOME: path.join(state, "config") } });
+  const child = spawn(process.execPath, ["src/lib/links/testServer.ts", state, ...(configureAddress ? [] : ["--no-address"])], { cwd: process.cwd(), env: { ...process.env, LLV_STATE_DIR: state, XDG_CONFIG_HOME: path.join(state, "config") } });
   processes.push(child);
   const port = await new Promise<number>((resolve, reject) => {
     let output = "";
@@ -39,6 +39,23 @@ async function install(name: string, extraRemotes: Record<string, string> = {}):
   });
   return `http://127.0.0.1:${port}`;
 }
+
+test("a fresh outbound install pairs without saving its own public address", async () => {
+  const a = await install("fresh-A", {}, false);
+  const b = await install("fresh-B");
+  const selfFile = path.join(root, "fresh-A", "links/self.json");
+  expect(fs.existsSync(selfFile)).toBe(false);
+  expect((await request(a, "/api/links")).body.self).toBeNull();
+  const code = String((await request(b, "/api/links/codes", "POST")).body.code);
+  expect((await request(a, "/api/links/peers", "POST", { url: b, code })).status).toBe(200);
+  const self = JSON.parse(fs.readFileSync(selfFile, "utf8")) as { installId: string; publicUrl: string | null };
+  expect(self.installId).toMatch(/^[0-9a-f-]{36}$/);
+  expect(self.publicUrl).toBeNull();
+  expect(((await request(a, "/api/links/peers")).body.peers as unknown[])).toHaveLength(1);
+  expect(((await request(b, "/api/links/grants")).body.grants as unknown[])).toHaveLength(1);
+  expect((await request(a, "/api/links", "POST", { action: "save", publicUrl: a })).status).toBe(200);
+  expect(JSON.parse(fs.readFileSync(selfFile, "utf8")).installId).toBe(self.installId);
+});
 
 async function request(base: string, route: string, method = "GET", body?: object) {
   const response = await fetch(base + route, { method, headers: body ? { "content-type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
@@ -228,7 +245,9 @@ test("all unauthenticated peer paths return the same status, headers and body", 
     ["/api/peer/v1/self-check", "POST", {}],
     ["/api/peer/v1/unknown", "GET", {}],
     ["/api/peer/v2/unknown", "GET", {}],
+    ["/api/peer", "GET", {}],
     ["/api/peer", "GET", { authorization: "Bearer key" }],
+    ["/api/peer", "GET", { cookie: "llv_auth=key" }],
     ["/api/peer/v1/info", "GET", { authorization: "Bearer key" }],
     ["/api/peer/v1/pair/probe", "POST", { "content-type": "application/json" }],
   ] as const;

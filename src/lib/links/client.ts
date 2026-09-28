@@ -3,7 +3,7 @@ import http from "node:http";
 import https from "node:https";
 import net from "node:net";
 
-import { readSelf } from "./self";
+import { ensureSelf } from "./self";
 import { findPeer, grantRows, markPeerCall, peerRows, putPeer, remoteProjects, sharedDigest, updateRemoteProjects } from "./protocol";
 import { isSharedProject, readPeers, sharedProjects, type Link, type SharedProject } from "./state";
 import { LOOPBACK_PROBE_HOSTS } from "@/runtime-host/deploymentProxy";
@@ -56,11 +56,11 @@ async function call(target: Target, route: string, method: "GET" | "POST" | "DEL
 
 export async function connectPeer(input: { url: string; code: string; name?: string }): Promise<Link> {
   const target = await peerTarget(input.url);
-  const self = readSelf();
-  if (!self) throw new LinkError("this-install-unset");
-  const ownStore = ownBoardStoreId();
   const code = input.code.toUpperCase().replace(/[IL]/g, "1").replace(/O/g, "0").replace(/-/g, "");
   if (!/^[0-9A-HJKMNP-TV-Z]{16}$/.test(code)) throw new LinkError("invalid-code");
+  const self = ensureSelf();
+  if (!self) throw new LinkError("this-install-unset");
+  const ownStore = ownBoardStoreId();
   const id = code.slice(0, 6);
   const port = target.url.port || (target.url.protocol === "https:" ? "443" : "80");
   for (const host of LOOPBACK_PROBE_HOSTS(port)) {

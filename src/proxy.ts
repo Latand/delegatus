@@ -6,7 +6,8 @@ import { isTeamAuthPage, teamGate, teamPerimeter } from "@/lib/team/gate";
 
 const AUTH_COOKIE = "llv_auth";
 const FRAME_PREFIX = "/api/artifact/frame/";
-const PEER_PREFIX = "/api/peer/";
+const PEER_ROOT = "/api/peer";
+const isPeerRoute = (pathname: string) => pathname === PEER_ROOT || pathname.startsWith(`${PEER_ROOT}/`);
 const COOKIE_MAX_AGE_SECONDS = 2_592_000;
 
 function tokenMatches(candidate: string | undefined, token: string): boolean {
@@ -58,7 +59,7 @@ function forbidden(request: NextRequest): NextResponse {
 export function proxy(request: NextRequest): NextResponse {
   const perimeter = perimeterCheck(request);
   if (perimeter.response) return perimeter.response;
-  if (request.nextUrl.pathname.startsWith(PEER_PREFIX)) return NextResponse.next();
+  if (isPeerRoute(request.nextUrl.pathname)) return NextResponse.next();
   const gated = teamGate(request, { bearerAuthenticated: perimeter.bearer });
   if (gated) return gated;
   const response = NextResponse.next();
@@ -76,7 +77,7 @@ type PerimeterResult = { response: NextResponse | null; bearer: boolean };
 const PASS: PerimeterResult = { response: null, bearer: false };
 
 function perimeterCheck(request: NextRequest): PerimeterResult {
-  if (request.nextUrl.pathname.startsWith(PEER_PREFIX)) {
+  if (isPeerRoute(request.nextUrl.pathname)) {
     // Every peer handler has its own uniform token guard; operator credentials
     // and team cookies have no authority on this route family.
     return PASS;

@@ -4,10 +4,13 @@ import http from "node:http";
 import { NextRequest } from "next/server";
 
 import { saveAddress } from "./self";
+import { proxy } from "@/proxy";
 import { dropRemoteProjects } from "./boardLinks";
+import * as links from "@/app/api/links/route";
 import * as peer from "@/app/api/peer/v1/[...path]/route";
 import * as selfCheck from "@/app/api/peer/v1/self-check/route";
 import * as peerUnknown from "@/app/api/peer/[...path]/route";
+import * as peerRoot from "@/app/api/peer/route";
 import * as codes from "@/app/api/links/codes/route";
 import * as peers from "@/app/api/links/peers/route";
 import * as peerOne from "@/app/api/links/peers/[id]/route";
@@ -68,11 +71,16 @@ const server = http.createServer(async (request, response) => {
     });
     let result: Response;
     const method = request.method ?? "GET";
-    if (path === "/api/peer/v1/self-check") result = method === "POST" ? selfCheck.POST(req) : selfCheck.GET(req);
+    // Exercise the same proxy then route order used by the Viewer for peers.
+    const perimeter = path === "/api/peer" || path.startsWith("/api/peer/") ? proxy(req) : null;
+    if (perimeter && perimeter.headers.get("x-middleware-next") !== "1") result = perimeter;
+    else if (path === "/api/peer/v1/self-check") result = method === "POST" ? selfCheck.POST(req) : selfCheck.GET(req);
     else if (path.startsWith("/api/peer/v1/")) {
       const context = { params: Promise.resolve({ path: path.slice("/api/peer/v1/".length).split("/") }) };
       result = method === "GET" ? await peer.GET(req, context) : method === "DELETE" ? await peer.DELETE(req, context) : await peer.POST(req, context);
-    } else if (path === "/api/peer" || path.startsWith("/api/peer/")) result = peerUnknown.GET(req);
+    } else if (path === "/api/peer") result = peerRoot.GET(req);
+    else if (path.startsWith("/api/peer/")) result = peerUnknown.GET(req);
+    else if (path === "/api/links") result = method === "GET" ? links.GET(req) : await links.POST(req);
     else if (path === "/api/links/codes") result = method === "GET" ? codes.GET(req) : method === "DELETE" ? await codes.DELETE(req) : await codes.POST(req);
     else if (path === "/api/links/peers") result = method === "GET" ? peers.GET(req) : await peers.POST(req);
     else if (path.startsWith("/api/links/peers/")) {
@@ -101,8 +109,10 @@ const server = http.createServer(async (request, response) => {
 });
 server.listen(0, "127.0.0.1", async () => {
   const port = (server.address() as { port: number }).port;
-  const saved = await saveAddress(`http://127.0.0.1:${port}`, pathBasename(dir));
-  if (saved.refusal) throw new Error(saved.refusal);
+  if (process.argv[3] !== "--no-address") {
+    const saved = await saveAddress(`http://127.0.0.1:${port}`, pathBasename(dir));
+    if (saved.refusal) throw new Error(saved.refusal);
+  }
   process.stdout.write(JSON.stringify({ port }) + "\n");
 });
 function pathBasename(value: string) { return value.split("/").filter(Boolean).at(-1) ?? "install"; }
