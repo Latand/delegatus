@@ -219,7 +219,11 @@ function changedWorktreePaths(
       cwd,
     );
     if (ignored.code !== 0) return failure("checking ignored declared stage output paths", ignored);
-    ignoredOutputs = ignored.stdout;
+    // A directory declaration does not opt every ignored descendant into a
+    // commit. Only a file named exactly by the stage may bypass .gitignore.
+    ignoredOutputs = ignored.stdout.split("\0")
+      .filter((candidate) => declaredOutputs.includes(candidate))
+      .join("\0");
   }
   const paths = `${tracked.stdout}\0${untracked.stdout}\0${ignoredOutputs}`.split("\0").filter(Boolean);
   return { ok: true, paths: [...new Set(paths)] };
@@ -259,7 +263,7 @@ export function commitPipelineStage(
   }
   const add = exec(
     "git",
-    ["add", ...(allowCommit ? ["-A"] : ["-f", "-A", "--", ...declaredOutputs])],
+    ["add", ...(allowCommit ? ["-A"] : ["-f", "-A", "--", ...changedOutputPaths])],
     pipeline.worktreeDir,
   );
   if (add.code !== 0) return failure("staging the passed stage", add);
