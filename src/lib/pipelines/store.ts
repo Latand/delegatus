@@ -179,6 +179,7 @@ function isAttempt(value: unknown, index: number): boolean {
     isReviewFlowSync(attempt.reviewFlowSync) &&
     isNullableString(attempt.startedAt) &&
     isNullableString(attempt.completedAt) &&
+    (attempt.outputBaseHead === undefined || (typeof attempt.outputBaseHead === "string" && /^[0-9a-f]{40}$/i.test(attempt.outputBaseHead))) &&
     (attempt.input === undefined || isNullableString(attempt.input)) &&
     isActivation(attempt.activatedBy) &&
     isNullableString(attempt.output) &&

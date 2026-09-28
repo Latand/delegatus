@@ -288,7 +288,8 @@ function newMerge(pipeline: Pipeline, pr: { repository: string; number: number }
 }
 
 /** The PR head before a terminal read-only stage's declared output was
- * committed locally. Its report was captured before the controller commit. */
+ * committed locally. New attempts record it at commit time; older reports
+ * captured it before the controller commit. */
 function headBeforeLocalOutput(pipeline: Pipeline): string | null {
   if (pipeline.publishedCommit || pipeline.delivery?.publish !== "disabled") return null;
   const final = pipeline.stages.find((stage) => stage.next === null && stage.kind === "run" && stage.outputs?.length);
@@ -297,8 +298,8 @@ function headBeforeLocalOutput(pipeline: Pipeline): string | null {
   if (attempt?.state !== "passed" || attempt.effectiveRole.access !== "read-only") return null;
   const elapsed = Date.parse(pipeline.closedAt ?? "") - Date.parse(attempt.completedAt ?? "");
   if (!Number.isFinite(elapsed) || elapsed < 0 || elapsed > 5_000) return null;
-  const reportedHead = attempt.report?.provenance.head;
-  return typeof reportedHead === "string" && /^[0-9a-f]{40}$/i.test(reportedHead) && reportedHead !== pipeline.lastPassedCommit ? reportedHead : null;
+  const baseHead = attempt.outputBaseHead ?? attempt.report?.provenance.head;
+  return typeof baseHead === "string" && /^[0-9a-f]{40}$/i.test(baseHead) && baseHead !== pipeline.lastPassedCommit ? baseHead : null;
 }
 
 type Step =
