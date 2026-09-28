@@ -78,17 +78,25 @@ export function presentedPayloadReceipt<T extends ComposerPayloadReceipt>(receip
     : receipt;
 }
 
+/** A receipt that ends the message: it arrived, or it was discarded. */
+function endsMessage(receipt: Pick<ComposerPayloadReceipt, "status" | "reason">): boolean {
+  return receipt.status === "delivered" || receipt.reason === "delivery-discarded";
+}
+
 /** The operation admitted under the original key and the latest receipt of
  * the current attempt. A retry leaf counts only when it is presented under
- * that operation; anything else is not evidence about this message. */
+ * that operation; anything else is not evidence about this message. A receipt
+ * that ends the admitted operation is its outcome whatever its revision: the
+ * delivery record numbers its answer apart from the journal, so an open
+ * journal revision above it says nothing later about the message. */
 export function payloadAttemptState(
   key: string,
   history: readonly ComposerPayloadReceipt[],
 ): { operationId: string | null; current: ComposerPayloadReceipt | null } {
   const operationId = history.find(item => item.idempotencyKey === key && !item.retryOfOperationId)?.operationId ?? null;
-  const current = operationId === null ? null : history.filter(item => item.operationId === operationId)
-    .sort((a, b) => b.revision - a.revision)[0] ?? null;
-  return { operationId, current };
+  const receipts = operationId === null ? [] : history.filter(item => item.operationId === operationId)
+    .sort((a, b) => b.revision - a.revision);
+  return { operationId, current: receipts.find(endsMessage) ?? receipts[0] ?? null };
 }
 
 function retryRoute(
@@ -335,7 +343,9 @@ export class ComposerSubmissionPayloads {
   }
 
   /** Append evidence before projecting it into ephemeral UI state. Lower
-   * revisions and foreign operations cannot authorize deletion later. A
+   * revisions and foreign operations cannot authorize deletion later, except
+   * the admitted operation's own arrival or discard, which may carry the
+   * delivery record's lower revision. A
    * journal retry leaf joins when it is presented under the admitted
    * operation, which is how the retry contract's receipts reach this message. */
   observe(ref: ComposerPayloadRef, receipt: ComposerPayloadReceipt): Promise<boolean> {
@@ -349,10 +359,15 @@ export class ComposerSubmissionPayloads {
       const leaf = Boolean(captured.retryOfOperationId);
       if (leaf ? captured.operationId !== operationId
         : captured.idempotencyKey !== owner.key || (operationId !== null && captured.operationId !== operationId)) return false;
-      // One revision is one journal fact; a later projection at it is not newer.
-      if (history.some(item => item.revision >= captured.revision)) return false;
+      /* One revision is one journal fact; a later projection at it is not
+         newer. The one exception is the outcome of the admitted operation
+         itself, which the delivery record answers at its own revision, below
+         the journal's: it is kept once, beside the journal rows. */
+      const behindJournal = history.some(item => item.revision >= captured.revision);
+      if (behindJournal && (!endsMessage(captured) || captured.operationId !== operationId
+        || history.some(item => item.operationId === operationId && endsMessage(item)))) return false;
       await this.receipts.retain({ conversationId: owner.conversationId,
-        key: JSON.stringify([owner.key, captured.operationId, captured.revision]) }, { receipt: {
+        key: JSON.stringify([owner.key, captured.operationId, captured.revision, ...(behindJournal ? ["outcome"] : [])]) }, { receipt: {
           conversationId: captured.conversationId, idempotencyKey: captured.idempotencyKey,
           operationId: captured.operationId, revision: captured.revision,
           status: captured.status, reason: captured.reason ?? null, resend: captured.resend ?? null,
@@ -364,7 +379,7 @@ export class ComposerSubmissionPayloads {
 
   /** Caller first verifies matching authoritative terminal evidence, or an
    * applicable explicit discard, and disables every queue owner of this key.
-   * Only the latest receipt of the current attempt can settle, read in the
+   * Only the current attempt's receipt from `payloadAttemptState` can settle, read in the
    * admitted operation's presentation identity. Safe rejection alone is
    * recoverable and must keep its original payload. */
   settle(ref: ComposerPayloadRef, evidence?: ComposerPayloadReceipt): Promise<boolean> {

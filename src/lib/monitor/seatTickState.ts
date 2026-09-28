@@ -7,6 +7,7 @@ import { statePath } from "@/lib/configDir";
 import {
   emptySeatTickState,
   SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
+  SEAT_TICK_REPORTED_STALLS_LIMIT,
   SEAT_TICK_CHILDREN_SHOWN_LIMIT,
   SEAT_TICK_RETIRED_WAKE_LIMIT,
   SEAT_TICK_WAKE_REASON_KINDS,
@@ -76,6 +77,8 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
     announcedDeploys: conversationIds(raw.announcedDeploys),
     /* A plan from before #2030 records no note, so the next wake shows it. */
     ...(noteRevision(raw.noteShown) === undefined ? {} : { noteShown: noteRevision(raw.noteShown) }),
+    /* A plan from before reported stalls records none, so no stall yields. */
+    ...(conversationIds(raw.reportedStalls).length > 0 ? { reportedStalls: conversationIds(raw.reportedStalls) } : {}),
   };
 }
 
@@ -254,6 +257,11 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     /* Absent on every row from before #2030: a seat remembered as having been
        shown no note is shown it. */
     ...(noteRevision(raw.noteShown) === undefined ? {} : { noteShown: noteRevision(raw.noteShown) }),
+    /* Absent reads as empty: a stall no wake is remembered naming keeps its
+       place ahead of the unstarted tasks. */
+    ...(conversationIds(raw.reportedStalls).length > 0
+      ? { reportedStalls: conversationIds(raw.reportedStalls).slice(-SEAT_TICK_REPORTED_STALLS_LIMIT) }
+      : {}),
   };
 }
 

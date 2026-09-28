@@ -574,6 +574,37 @@ function successorCreationReady(conversation: RegistryConversation, registry: Ag
   return !registry.pendingDeliveries(conversation.id).some((delivery) => delivery.state === "delivery-uncertain");
 }
 
+/** A source whose launch never produced a transcript (#2057). A non-virtual
+    provider forks the source's history, so a missing file keeps a migration
+    waiting, which is right for a running conversation whose file is briefly
+    unavailable. A launch that never started has no history to fork and never
+    will: the only thing that could write its transcript is its first message,
+    held behind this migration. It is told apart by the registry's own record,
+    never by the absent file alone: its launch receipt never saw the artifact
+    materialize, inventory never observed a turn, no message ever reached the
+    engine, and no host is running a turn on the path. */
+function sourceNeverStarted(
+  registry: AgentRegistry,
+  conversation: RegistryConversation,
+  source: RegistryConversation["generations"][number],
+): boolean {
+  if (conversation.turn.state !== "unknown" || conversation.turn.observedAt !== null) return false;
+  if (fs.existsSync(source.path)) return false;
+  const snapshot = registry.readOnlySnapshot();
+  const unmaterializedLaunch = Object.values(snapshot.receipts).some((receipt) =>
+    receipt.purpose === "launch"
+    && resolveConversationAlias(snapshot, receipt.conversationId) === conversation.id
+    && receipt.artifactLifecycle === "pending"
+    && (receipt.artifactPath === null || receipt.artifactPath === source.path));
+  if (!unmaterializedLaunch) return false;
+  const reachedEngine = Object.values(snapshot.heldDeliveries).some((delivery) =>
+    resolveConversationAlias(snapshot, delivery.conversationId) === conversation.id
+    && (delivery.state === "delivered" || delivery.state === "delivery-uncertain" || delivery.attempts > 0));
+  if (reachedEngine) return false;
+  return !hasActiveRegisteredHost(registry, source.path)
+    || structuredHostTurnReleased(registry, conversation.engine, source);
+}
+
 function completeProviderTurnObservation(
   conversation: RegistryConversation,
   source: RegistryConversation["generations"][number],
@@ -844,7 +875,17 @@ export async function advanceConversationMigration(
       let source = conversation.generations.find((generation) => generation.id === migration.sourceGenerationId)
         ?? conversation.generations.at(-1);
       if (!source) throw new Error("conversation has no source generation");
-      if (!completeProviderTurnObservation(conversation, source, successorProvider.virtualSource === true, registry)) return conversation;
+      if (!completeProviderTurnObservation(conversation, source, successorProvider.virtualSource === true, registry)) {
+        /* Nothing to carry over and nothing that will ever appear: the move
+           is cancelled through the ordinary rollback, which hands the held
+           first message back to the account the launch was placed on. An
+           applying reconfigure owns its own switch and ends it itself. */
+        if (conversation.reconfigure?.status !== "applying"
+          && sourceNeverStarted(registry, conversation, source)) {
+          return registry.rollbackConversationMigration(conversation.id, migration.revision);
+        }
+        return conversation;
+      }
       if (migration.phase === "requested") {
         conversation = registry.transitionConversationMigration(conversation.id, migration.revision, ["requested"], { phase: "preparing" });
         migration = conversation.migration!;
@@ -1165,7 +1206,7 @@ export async function reconcileMigrations(
       return;
     }
     const advanced = await advanceConversationMigration(conversation.id, registry, provider, { ...options, deferBoardRepair: true });
-    if (advanced.migration?.phase === "committed"
+    if ((advanced.migration?.phase === "committed" || advanced.migration?.phase === "rolled-back")
       && registry.pendingDeliveries(advanced.id).some((item) =>
         item.state === "assigned"
         || (item.state === "delivery-uncertain" && delivery.reconcileUncertain))) {
