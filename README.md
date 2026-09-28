@@ -413,7 +413,7 @@ menu (the board's ⋯ menu on a phone).
   linked once both machines share it.
 - **Tasks sync both ways.** A task created, changed or deleted on one machine
   appears on the other within seconds while the board is open. Each task
-  names the machine that runs it, and the other machine will not start
+  belongs to the machine that runs it, and the other machine will not start
   agents or pipelines for it.
 - **Revoke** or **Remove** a link at any time from the same dialog.
 

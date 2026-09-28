@@ -24,10 +24,10 @@ guarantees for the 1.x series.
   revoke or remove the link. For a project both machines share, tasks sync
   both ways: a task created, edited or deleted on one machine appears on the
   other after the next sync, which runs within seconds while a linked board
-  is open. Each task names the machine that runs it, and the other machine
-  refuses to start agents or pipelines for it. A task's text crosses only once
-  someone has named it. Until then it shows as "Untitled task" ([#2280],
-  [#2287], [#2298]).
+  is open. Each task belongs to the machine that runs it, and the other
+  machine refuses to start agents or pipelines for it. A task's text crosses
+  only once someone has named it. Until then it shows as "Untitled task"
+  ([#2280], [#2287], [#2298]).
 - **Sign-in and team.** One Delegatus can be shared by a team, each person
   signed in as themselves. An owner claims the install from ⋯ → **Team**,
   then invites people with a one-time link that lasts seven days. Other
