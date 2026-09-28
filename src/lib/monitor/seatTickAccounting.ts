@@ -108,6 +108,9 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
       if (state.announcedDeploys !== undefined && (!Array.isArray(state.announcedDeploys) || !state.announcedDeploys.every(string))) return null;
       /* Absent on every row written before #2030; absent shows the note again. */
       if (state.noteShown !== undefined && state.noteShown !== null && !string(state.noteShown)) return null;
+      /* Absent on every row written before reported stalls; absent keeps every
+         stall ahead of the unstarted tasks. */
+      if (state.reportedStalls !== undefined && (!Array.isArray(state.reportedStalls) || !state.reportedStalls.every(string))) return null;
       const validWake = (wake: SeatTickOutstandingWake | null | undefined): boolean => {
         if (!wake || !string(wake.clientMessageId) || !string(wake.conversationId)
           || !integer(wake.seatEpoch) || !nullableString(wake.operationId) || !wake.commit
@@ -121,6 +124,8 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
           || (wake.commit.announcedDeploys !== undefined
             && (!Array.isArray(wake.commit.announcedDeploys) || !wake.commit.announcedDeploys.every(string)))
           || (wake.commit.noteShown !== undefined && wake.commit.noteShown !== null && !string(wake.commit.noteShown))
+          || (wake.commit.reportedStalls !== undefined
+            && (!Array.isArray(wake.commit.reportedStalls) || !wake.commit.reportedStalls.every(string)))
           || (wake.preparedAt !== undefined && !string(wake.preparedAt))) return false;
         return wake.dispatch === undefined || (!!wake.dispatch && string(wake.dispatch.token)
           && ["active", "refused", "returned"].includes(wake.dispatch.state));
