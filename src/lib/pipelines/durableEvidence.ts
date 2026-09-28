@@ -39,7 +39,7 @@ export type StageTurnEvidence = {
   terminalProviderMessage?: {
     text: string;
     ts: number;
-    /** Structured Codex usage-limit evidence from this same terminal turn. */
+    /** Usage-limit evidence from this same terminal turn. */
     usageLimit?: { resetsAt: number | null };
   } | null;
   /** Harness-tracked background work the conversation started and has not
@@ -84,6 +84,15 @@ function codexErrorInfo(payload: RecordLike): string | null {
 function isCodexUsageLimit(payload: RecordLike): boolean {
   const info = codexErrorInfo(payload)?.toLowerCase();
   return info === "usage_limit" || info === "usage_limit_exceeded";
+}
+
+/** Claude CLI writes a synthetic assistant with this terminal API-error code
+    and notice when the account's session capacity is spent. The displayed
+    local clock label has no date, so it cannot establish a reset instant. */
+function isClaudeUsageLimit(record: RecordLike, text: string): boolean {
+  return record.isApiErrorMessage === true
+    && record.error === "rate_limit"
+    && /^You've hit your session limit\b/i.test(text);
 }
 
 const CODEX_TURN_END_TYPES = new Set(["task_complete", "turn_complete", "turn_completed", "turn_aborted"]);
@@ -158,7 +167,13 @@ function terminalProviderMessageFromRecords(
     if (record.type !== "assistant") continue;
     if (record.isApiErrorMessage !== true) return null;
     const text = claudeAssistantText(record);
-    return text ? { text, ts: recordTs(record, fallbackTs) } : null;
+    return text
+      ? {
+          text,
+          ts: recordTs(record, fallbackTs),
+          ...(isClaudeUsageLimit(record, text) ? { usageLimit: { resetsAt: null } } : {}),
+        }
+      : null;
   }
   return null;
 }

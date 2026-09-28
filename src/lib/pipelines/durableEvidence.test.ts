@@ -380,6 +380,49 @@ test("a Codex usage-limit terminal record carries its governing reset (#1371)", 
   });
 });
 
+test("a recorded Claude session-limit API error carries an unknown reset", async () => {
+  // Shape observed in a 2026-09-26 Claude stage transcript: the CLI writes a
+  // synthetic assistant with error=rate_limit and stop_sequence, then appends
+  // bookkeeping. The local clock label does not identify a reset instant.
+  const file = writeTranscript("claude-session-limit.jsonl", [
+    { type: "user", timestamp: "2026-09-26T11:24:17.140Z", message: { role: "user", content: "fix the stage" } },
+    { type: "assistant", timestamp: "2026-09-26T11:27:59.577Z", message: { role: "assistant", content: [{ type: "text", text: "Working on the edit" }] } },
+    {
+      type: "assistant", timestamp: "2026-09-26T11:28:23.296Z", isApiErrorMessage: true, error: "rate_limit",
+      message: { role: "assistant", model: "<synthetic>", stop_reason: "stop_sequence", content: [{ type: "text", text: "You've hit your session limit · resets 2:30pm (Europe/Kyiv)" }] },
+    },
+    { type: "cost-state", timestamp: "2026-09-26T11:28:23.300Z" },
+  ]);
+
+  expect(await durableStageTurnEvidence("claude", file)).toMatchObject({
+    turn: "terminal",
+    terminalProviderMessage: {
+      text: "You've hit your session limit · resets 2:30pm (Europe/Kyiv)",
+      usageLimit: { resetsAt: null },
+    },
+  });
+});
+
+test("Claude limit prose without the terminal rate-limit envelope is not capacity evidence", async () => {
+  const file = writeTranscript("claude-quoted-limit.jsonl", [
+    { type: "user", timestamp: "2026-09-26T11:24:17.140Z", message: { role: "user", content: "explain the incident" } },
+    { type: "assistant", timestamp: "2026-09-26T11:28:23.296Z", message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "You've hit your session limit · resets 2:30pm (Europe/Kyiv)" }] } },
+  ]);
+  expect(await durableStageTurnEvidence("claude", file)).toMatchObject({ turn: "terminal", terminalProviderMessage: null });
+});
+
+test("a generic terminal Claude API rate limit is not a session-capacity verdict", async () => {
+  const file = writeTranscript("claude-generic-rate-limit.jsonl", [
+    { type: "user", timestamp: "2026-09-26T11:24:17.140Z", message: { role: "user", content: "run the stage" } },
+    { type: "assistant", timestamp: "2026-09-26T11:28:23.296Z", isApiErrorMessage: true, error: "rate_limit",
+      message: { role: "assistant", model: "<synthetic>", stop_reason: "stop_sequence", content: [{ type: "text", text: "Rate limit exceeded" }] } },
+  ]);
+  expect(await durableStageTurnEvidence("claude", file)).toMatchObject({
+    turn: "terminal", terminalProviderMessage: { text: "Rate limit exceeded" },
+  });
+  expect((await durableStageTurnEvidence("claude", file))?.terminalProviderMessage?.usageLimit).toBeUndefined();
+});
+
 test("a Codex turn that completed normally carries no provider notice (#1141)", async () => {
   const file = writeTranscript("codex-clean-complete.jsonl", [
     { timestamp: "2026-08-27T10:00:00.000Z", payload: { type: "task_started" } },

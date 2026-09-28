@@ -8085,7 +8085,7 @@ function stageTranscript(name: string, records: Record<string, unknown>[]): stri
   return file;
 }
 
-function limitInterruptedTranscript(name: string): string {
+function limitInterruptedTranscript(name: string, notice = PROVIDER_LIMIT_NOTICE): string {
   return stageTranscript(name, [
     { type: "user", timestamp: "2026-08-27T09:00:00.000Z", message: { role: "user", content: "run the stage" } },
     {
@@ -8102,7 +8102,7 @@ function limitInterruptedTranscript(name: string): string {
         role: "assistant",
         model: "<synthetic>",
         stop_reason: "stop_sequence",
-        content: [{ type: "text", text: PROVIDER_LIMIT_NOTICE }],
+        content: [{ type: "text", text: notice }],
       },
     },
   ]);
@@ -8337,6 +8337,75 @@ test("an unpinned usage-limited stage respawns on another allowed account (#1371
   const failedOver = loadPipelines().find((candidate) => candidate.id === pipeline.id)!;
   expect(h.spawnInputs[1]).toMatchObject({ requestedAccountId: null, unavailableAccountIds: [LIMITED_ACCOUNT] });
   expect(failedOver.runs[0]!.attempts[1]).toMatchObject({ state: "running", accountId: SPARE_ACCOUNT });
+});
+
+test("a Claude session limit preserves dirty work, stage identity and review rounds through controller recovery", async () => {
+  const h = harness();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-limit-work-"));
+  let repo = "";
+  const git = (...args: string[]) => {
+    const result = spawnSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout;
+  };
+  try {
+    const pipeline = await create(h.ports, [
+      { ...usageLimitStage()[0], engine: "claude", model: "fable", next: "review" },
+      { id: "review", kind: "run", engine: "claude", model: "fable", access: "read-only", prompt: "Review", next: null, onFail: { to: "build", maxRounds: 3 } },
+    ] as never);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([h.finish("/codex/stage-2.jsonl", "fail")], h.ports);
+    await tickPipelines([], h.ports);
+    const before = loadPipelines().find((item) => item.id === pipeline.id)!;
+    before.repoDir = path.join(root, "repo");
+    repo = path.join(root, `repo-pipeline-${pipeline.id}`);
+    before.worktreeDir = repo;
+    const limited = before.runs.find((run) => run.stageId === "build")!.attempts[1]!;
+    savePipelines([before]);
+    const roundCount = edgeRoundsUsed(before, { from: "build", to: "review", kind: "pass" });
+    expect(roundCount).toBe(1);
+
+    fs.mkdirSync(repo);
+    git("init", "-q");
+    fs.writeFileSync(path.join(repo, "work.txt"), "before\n");
+    git("add", "work.txt");
+    git("-c", "user.name=Test", "-c", "user.email=fixture", "commit", "-qm", "baseline");
+    fs.writeFileSync(path.join(repo, "work.txt"), "unfinished Claude edit\n");
+    const dirtyDiff = git("diff", "--", "work.txt");
+    expect(dirtyDiff).toContain("unfinished Claude edit");
+    readFixtures(h, { "/codex/stage-3.jsonl": limitInterruptedTranscript("claude-controller-session-limit", "You've hit your session limit · resets 2:30pm (Europe/Kyiv)") });
+    usageLimitPorts(h, { kind: "available", account: {
+      engine: "claude", accountId: SPARE_ACCOUNT, kind: "managed",
+      home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" },
+    } });
+
+    await tickPipelines([], h.ports);
+    const retrying = loadPipelines().find((item) => item.id === pipeline.id)!;
+    expect(retrying.cursor).toMatchObject({ stageId: "build", state: "pending" });
+    expect(retrying.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(3);
+    expect(retrying.runs.find((run) => run.stageId === "build")!.attempts[2]).toMatchObject({
+      state: "pending", usageLimitedAccounts: [{ accountId: LIMITED_ACCOUNT, engine: "claude", resetsAt: null }],
+    });
+    expect(retrying.runs.find((run) => run.stageId === "review")!.attempts).toHaveLength(1);
+    expect(edgeRoundsUsed(retrying, { from: "build", to: "review", kind: "pass" })).toBe(roundCount);
+    expect(git("diff", "--", "work.txt")).toBe(dirtyDiff);
+
+    await tickPipelines([], h.ports);
+    const resumed = loadPipelines().find((item) => item.id === pipeline.id)!;
+    expect(resumed.id).toBe(pipeline.id);
+    expect(resumed.branch).toBe(pipeline.branch);
+    expect(resumed.runs.find((run) => run.stageId === "build")!.attempts[2]).toMatchObject({ state: "running", accountId: SPARE_ACCOUNT });
+    expect(h.spawnInputs[3]).toMatchObject({ supersedes: limited.conversationId, unavailableAccountIds: [LIMITED_ACCOUNT] });
+    expect(h.spawnInputs[3]!.project).toBe(pipeline.project);
+    expect(edgeRoundsUsed(resumed, { from: "build", to: "review", kind: "pass" })).toBe(roundCount);
+    expect(git("diff", "--", "work.txt")).toBe(dirtyDiff);
+    expect(h.calls.some((call) => /\b(?:reset|clean)\b/.test(call))).toBe(false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("a failover attempt edited to another engine launches there with none of the old engine's limits (graph slice 1)", async () => {
