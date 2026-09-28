@@ -524,15 +524,23 @@ export function composeBoardReport(facts: BoardReportFacts): BoardReport {
 
   let text = render();
   /* Over the bound: cut rows from the bottom of 4, 7, 6, then 8's "next", then
-     5. The header and sections 1 to 3 are never cut. */
-  const order: (string | "next")[] = ["running", "pullRequests", "close", "next", "idle"];
-  for (const key of order) {
+     5. Sections 1 to 3 fit in about 3 500 bytes of ASCII, but the title and
+     line limits count characters and Cyrillic takes two bytes each, so after
+     those 3, 2 and 1 are cut down to one row each, then to none. Every cut
+     section keeps its heading and "(k more)", so each heading and the GitHub
+     block stay; the hard cut below is left to the header alone. */
+  const order: [string | "next", number][] = [
+    ["running", 0], ["pullRequests", 0], ["close", 0], ["next", 0], ["idle", 0],
+    ["stuck", 1], ["ready", 1], ["decisions", 1],
+    ["stuck", 0], ["ready", 0], ["decisions", 0],
+  ];
+  for (const [key, floor] of order) {
     while (Buffer.byteLength(text, "utf8") > BOARD_REPORT_CAP_BYTES) {
       if (key === "next") {
         if (!showNext) break;
         showNext = false;
       } else {
-        if (shown[key]! === 0) break;
+        if (shown[key]! <= floor) break;
         shown[key] = shown[key]! - 1;
       }
       text = render();

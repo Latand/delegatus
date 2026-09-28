@@ -332,6 +332,35 @@ test("a 150-task board stays within 6 000 bytes and keeps sections 1 to 3 whole"
   for (const line of lines(report.text)) expect(line.length).toBeLessThanOrEqual(200);
 });
 
+/* Titles, questions and last words written in Ukrainian take two bytes a
+   character, so the character limits that keep sections 1 to 3 near 3 500
+   bytes in ASCII double: those sections are then cut too, each down to its
+   heading and "(k more)", and no heading and no GitHub block is lost. */
+test("a Cyrillic board stays within 6 000 bytes and keeps every heading and the GitHub block", () => {
+  const ukrainian = (words: number) => Array.from({ length: words }, () => "перевірити").join(" ");
+  const decisions = Array.from({ length: 12 }, (_, index) => lane(`dec${index}`, { title: `Рішення ${index}: ${ukrainian(10)}`, state: "needs_decision", question: ukrainian(30) }));
+  const reviews = Array.from({ length: 12 }, (_, index) => lane(`rev${index}`, { title: `Огляд ${index}: ${ukrainian(10)}`, state: "needs_review", reviewStageId: "review" }));
+  const stalls = Array.from({ length: 12 }, (_, index) => agent({ conversationId: `conversation_s${index}`, title: `Агент ${index}: ${ukrainian(10)}`, lifecycle: "stalled", reason: "host_alive_transcript_silent", lastWords: ukrainian(30) }));
+  const ranking = rankOpenIssues(Array.from({ length: 10 }, (_, index) => issue(3000 + index, { labels: index < 4 ? ["P1"] : [], title: ukrainian(10) })), { totalCount: 10, onBoard: new Set() });
+  const report = composeBoardReport(facts({
+    lanes: [...decisions, ...reviews],
+    agents: stalls,
+    pullRequests: { ok: true, pullRequests: [] },
+    github: { kind: "ranked", ranking },
+  }));
+  expect(report.bytes).toBeLessThanOrEqual(BOARD_REPORT_CAP_BYTES);
+  expect(Buffer.byteLength(report.text, "utf8")).toBe(report.bytes);
+  /* No hard cut: the report ends on the GitHub block, whole. */
+  expect(report.text.endsWith("Newest without a recorded priority: #3004, #3005, #3006.")).toBe(true);
+  for (const heading of ["1. Decisions waiting on the operator (", "2. Ready to finish (", "3. Stuck (12)", "4. Running: none.", "5. Tasks with nothing running: none.", "8. GitHub issues (10 open)", "Worth starting now:"]) {
+    expect(report.text).toContain(heading);
+  }
+  const section = (from: string, to: string) => report.text.slice(report.text.indexOf(from), report.text.indexOf(to));
+  for (const [from, to] of [["1. Decisions", "2. Ready"], ["2. Ready", "3. Stuck"], ["3. Stuck", "4. Running"]] as const) {
+    expect(section(from, to).trimEnd()).toMatch(/\(\d+ more\)$/);
+  }
+});
+
 test("a source that failed is named in the header and its sections say unavailable", () => {
   const report = composeBoardReport(facts({
     agents: null,

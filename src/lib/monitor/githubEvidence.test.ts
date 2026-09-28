@@ -286,6 +286,72 @@ describe("open issues ranked for the board maintenance report", () => {
     expect(result.ranking.ranked.map((row) => [row.number, row.tier])).toEqual([[7, 1]]);
   });
 
+  /* A fake repository of 304 open issues served the way GitHub pages them:
+     newest update first, 100 a page, `labels[]` matching any one label. Its
+     only priority labels sit on issues 294th and 295th by update time. */
+  const repositoryOf = (labelsOf: (position: number) => string[], repositoryLabels: string[]) => {
+    const nodes = Array.from({ length: 304 }, (_, position) => ({
+      number: 3000 - position,
+      title: `issue at ${position}`,
+      createdAt: "2026-07-01T00:00:00Z",
+      updatedAt: new Date(Date.parse("2026-09-27T00:00:00Z") - position * 3_600_000).toISOString(),
+      labels: { nodes: labelsOf(position).map((name) => ({ name })) },
+      milestone: null,
+      issueDependenciesSummary: { blockedBy: 0 },
+      closedByPullRequestsReferences: { totalCount: 0 },
+    }));
+    const calls: { after: string | null; labels: string[]; readsLabels: boolean }[] = [];
+    const run = async (args: string[]) => {
+      const after = args.find((arg) => arg.startsWith("after="))?.slice("after=".length) ?? null;
+      const labels = args.filter((arg) => arg.startsWith("labels[]=")).map((arg) => arg.slice("labels[]=".length));
+      const query = args.find((arg) => arg.startsWith("query="))!;
+      calls.push({ after, labels, readsLabels: query.includes(" labels(first: 100)") });
+      const matching = labels.length ? nodes.filter((node) => node.labels.nodes.some((label) => labels.includes(label.name))) : nodes;
+      const start = after ? Number(after) : 0;
+      const end = Math.min(start + 100, matching.length);
+      return JSON.stringify({ data: { repository: {
+        ...(labels.length ? {} : { labels: { nodes: repositoryLabels.map((name) => ({ name })) } }),
+        issues: {
+          totalCount: matching.length,
+          pageInfo: { hasNextPage: end < matching.length, endCursor: end < matching.length ? String(end) : null },
+          nodes: matching.slice(start, end),
+        },
+      } } });
+    };
+    return { run, calls };
+  };
+
+  test("a priority label recorded only on the third page is found by label, in one more read", async () => {
+    const github = repositoryOf((position) => (position === 293 || position === 294 ? ["priority: urgent"] : position % 7 === 0 ? ["bug"] : []), ["bug", "enhancement", "priority: urgent", "priority: low"]);
+    const result = await openIssuesRanked({ cwd: SANDBOX, repository: "owner-a/repo-a", onBoard: new Set(), run: github.run });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.ranking.ranked.map((row) => [row.number, row.tier])).toEqual([[2706, 0], [2707, 0]]);
+    expect(result.ranking.signals).toEqual(["priority label"]);
+    /* The newest page is what was read in order; the label read adds only
+       ranked issues, so the unranked count stays "of the 100 most recent". */
+    expect(result.ranking.totalCount).toBe(304);
+    expect(result.ranking.read).toBe(100);
+    expect(result.ranking.unranked).toHaveLength(100);
+    expect(github.calls).toEqual([
+      { after: null, labels: [], readsLabels: true },
+      { after: null, labels: ["priority: urgent"], readsLabels: false },
+    ]);
+  });
+
+  test("a newest page that ranks high is the only read, and a repository with no priority label is never read by label", async () => {
+    const ranksHigh = repositoryOf((position) => (position === 3 ? ["P1"] : position === 293 ? ["P0"] : []), ["P0", "P1"]);
+    const high = await openIssuesRanked({ cwd: SANDBOX, repository: "owner-a/repo-a", onBoard: new Set(), run: ranksHigh.run });
+    expect(high.ok && high.ranking.ranked.map((row) => row.number)).toEqual([2997]);
+    expect(ranksHigh.calls).toHaveLength(1);
+
+    const unlabelled = repositoryOf(() => [], ["bug", "enhancement"]);
+    const none = await openIssuesRanked({ cwd: SANDBOX, repository: "owner-a/repo-a", onBoard: new Set(), run: unlabelled.run });
+    expect(none.ok && none.ranking.ranked).toEqual([]);
+    expect(unlabelled.calls.map((call) => [call.after, call.labels])).toEqual([[null, []], ["100", []]]);
+    expect(none.ok && none.ranking.read).toBe(200);
+  });
+
   test("a failed or malformed read is carried out as unavailable, never as an empty list", async () => {
     const timedOut = await openIssuesRanked({ cwd: SANDBOX, repository: "owner-a/repo-a", onBoard: new Set(),
       run: async () => { throw Object.assign(new Error("killed"), { killed: true }); } });

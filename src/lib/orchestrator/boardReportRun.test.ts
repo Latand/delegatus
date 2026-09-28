@@ -14,7 +14,7 @@ const RESTORE = { LLV_STATE_DIR: process.env.LLV_STATE_DIR };
 process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
 
-const { boardReportMessageId, reportLaneFrom, reportTaskFrom, runBoardReport, BOARD_REPORT_ORIGIN_ROLE } = await import("./boardReportRun");
+const { boardReportMessageId, readBoardReportGithub, reportLaneFrom, reportTaskFrom, runBoardReport, BOARD_REPORT_ORIGIN_ROLE } = await import("./boardReportRun");
 const { claimBoardReport, readBoardReportRecord, settleBoardReport } = await import("./boardReportStore");
 type Ports = import("./boardReportRun").BoardReportRunPorts;
 type Facts = import("./boardReport").BoardReportFacts;
@@ -175,4 +175,52 @@ test("a lane and a task read off the stores the way the report needs them", () =
   expect(reportTaskFrom(task)!.searchText).toContain("#42");
   expect(reportTaskFrom({ ...task, text: "Notice\nmonitor-ref: seat-tick-off" })!.noticeRef).toBe("seat-tick-off");
   expect(reportTaskFrom({ ...task, status: "done" })).toBeNull();
+});
+
+/* §10: GitHub is read only when the project's origin is on github.com, and
+   that check is what keeps `gh` from running at all without it. */
+test("gh runs only for a root whose origin is on github.com", async () => {
+  const checkout = (name: string, origin: string | null) => {
+    const root = path.join(SANDBOX, name);
+    fs.mkdirSync(path.join(root, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".git", "config"), `[core]\n\tbare = false\n${origin ? `[remote "origin"]\n\turl = ${origin}\n` : ""}`);
+    return root;
+  };
+  const calls: string[][] = [];
+  const runnerRoots: string[] = [];
+  const read = (root: string | null) => readBoardReportGithub({
+    root,
+    onBoard: new Set(),
+    deadlineMs: Date.now() + 5_000,
+    clock: () => Date.now(),
+    runnerFor: (at) => {
+      runnerRoots.push(at);
+      return async (args) => {
+        calls.push(args);
+        return args[0] === "pr"
+          ? "[]"
+          : JSON.stringify({ data: { repository: { labels: { nodes: [] }, issues: { totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } });
+      };
+    },
+  });
+
+  for (const root of [
+    null,
+    path.join(SANDBOX, "no-such-checkout"),
+    checkout("no-origin", null),
+    checkout("gitlab-origin", "https://gitlab.com/owner-a/repo-a.git"),
+    checkout("self-hosted-origin", "https://git.example.invalid/owner-a/repo-a.git"),
+  ]) {
+    expect(await read(root)).toEqual({ pullRequests: null, github: { kind: "not-configured" }, gaps: [] });
+  }
+  expect(runnerRoots).toEqual([]);
+  expect(calls).toEqual([]);
+
+  /* The same port, on a github.com origin, is what runs `gh`. */
+  const onGithub = checkout("github-origin", "https://github.com/owner-a/repo-a.git");
+  const answer = await read(onGithub);
+  expect(runnerRoots).toEqual([onGithub]);
+  expect(calls.map((args) => args[0]).sort()).toEqual(["api", "pr"]);
+  expect(answer.pullRequests).toEqual({ ok: true, pullRequests: [] });
+  expect(answer.github.kind).toBe("ranked");
 });

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 
 import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
 import { monitorRefIn } from "@/lib/monitor/cards";
+import type { GithubRunner } from "@/lib/monitor/githubEvidence";
 import { pipelineCompletedUnreviewed } from "@/lib/pipelines/failEdgeBudget";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
@@ -252,6 +253,44 @@ async function withDeadline<T>(work: Promise<T>, deadlineMs: number, now: () => 
   }
 }
 
+/**
+ * What the report states about GitHub, and the one place that decides whether
+ * `gh` runs at all: only for a project root whose origin is on github.com,
+ * read from local git metadata. A missing root, or an origin anywhere else,
+ * reports GitHub as not configured and never builds a runner.
+ */
+export async function readBoardReportGithub(options: {
+  root: string | null;
+  onBoard: ReadonlySet<number>;
+  deadlineMs: number;
+  clock: () => number;
+  /** The `gh` runner for a root; `gh` itself, in that root, by default. */
+  runnerFor?: (root: string) => GithubRunner;
+}): Promise<Pick<BoardReportFacts, "pullRequests" | "github" | "gaps">> {
+  const [{ githubRunner, openIssuesRanked, openPullRequestsForRepo }, { repositoryForProjectRoot }] = await Promise.all([
+    import("@/lib/monitor/githubEvidence"),
+    import("@/lib/projects/git"),
+  ]);
+  const { root, deadlineMs, clock } = options;
+  const repository = root ? repositoryForProjectRoot(root) : null;
+  if (!root || !repository) return { pullRequests: null, github: { kind: "not-configured" }, gaps: [] };
+  const run = options.runnerFor?.(root) ?? githubRunner(root, BOARD_REPORT_SOURCE_TIMEOUT_MS);
+  const [pullRequests, issues] = await Promise.all([
+    withDeadline(openPullRequestsForRepo({ cwd: root, run }), deadlineMs, clock),
+    withDeadline(openIssuesRanked({ cwd: root, repository, onBoard: options.onBoard, run }), deadlineMs, clock),
+  ]);
+  const gaps: BoardReportFacts["gaps"] = [];
+  if (pullRequests === "timed-out") gaps.push({ source: "pull requests", reason: "timed-out" });
+  else if (!pullRequests.ok) gaps.push({ source: "pull requests", reason: pullRequests.unavailable });
+  return {
+    pullRequests: pullRequests === "timed-out" ? { ok: false, unavailable: "timed-out" } : pullRequests,
+    github: issues === "timed-out"
+      ? { kind: "unavailable", reason: "timed-out" }
+      : issues.ok ? { kind: "ranked", ranking: issues.ranking } : { kind: "unavailable", reason: issues.unavailable },
+    gaps,
+  };
+}
+
 async function gatherBoardReportFacts(seat: BoardReportSeat, deadlineMs: number): Promise<BoardReportFacts> {
   const [
     fs,
@@ -264,8 +303,6 @@ async function gatherBoardReportFacts(seat: BoardReportSeat, deadlineMs: number)
     { childFinalMessage },
     { effectiveSeatTickSettings, readSeatTickSettings },
     { DEFAULT_SEAT_TICK_POLICY, SEAT_TICK_WAKE_INTERVAL_MS },
-    { openIssuesRanked, openPullRequestsForRepo },
-    { repositoryForProjectRoot },
     { repositoryRootForPath },
     { recordedProjectRoot },
     { projectDisplayName },
@@ -280,8 +317,6 @@ async function gatherBoardReportFacts(seat: BoardReportSeat, deadlineMs: number)
     import("@/lib/monitor/childFinalMessage"),
     import("@/lib/monitor/seatTickSettings"),
     import("@/lib/monitor/seatTick"),
-    import("@/lib/monitor/githubEvidence"),
-    import("@/lib/projects/git"),
     import("@/lib/projects/identity"),
     import("./seatCommand"),
     import("@/lib/displayNames"),
@@ -326,8 +361,8 @@ async function gatherBoardReportFacts(seat: BoardReportSeat, deadlineMs: number)
   const tickSettings = read("seat tick settings", () => readSeatTickSettings(project), null);
   const effective = tickSettings ? effectiveSeatTickSettings(tickSettings, now, SEAT_TICK_WAKE_INTERVAL_MS) : null;
 
-  /* GitHub only when the project's origin is on github.com: a read of local
-     git metadata, no subprocess, and no `gh` at all otherwise. */
+  /* The project's root, for GitHub; readBoardReportGithub decides whether it
+     is on GitHub at all. */
   const seatCwd = snapshot?.conversations[seat.conversationId]?.generations.at(-1)?.launchProfile?.cwd ?? null;
   const directory = (candidate: string | null | undefined): string | null => {
     if (!candidate) return null;
@@ -337,17 +372,13 @@ async function gatherBoardReportFacts(seat: BoardReportSeat, deadlineMs: number)
     .filter((pipeline) => directory(pipeline.repoDir))
     .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0]?.repoDir ?? null;
   const root = (directory(seatCwd) ? repositoryRootForPath(seatCwd!) : null) ?? recordedProjectRoot(project) ?? newestRepoDir;
-  const repository = root ? repositoryForProjectRoot(root) : null;
 
   const reportLanes = projectLanes.map(reportLaneFrom);
   const livenessWork = agentLivenessSnapshot({ project, liveOnly: true, stallAfterMs: DEFAULT_SEAT_TICK_POLICY.stallAfterMs, limit: 200 }, productionLivenessSources())
     .then((answer) => answer.conversations, () => "unreadable" as const);
-  const [liveness, pullRequests, issues] = await Promise.all([
+  const [liveness, github] = await Promise.all([
     withDeadline(livenessWork, deadlineMs, clock),
-    repository && root ? withDeadline(openPullRequestsForRepo({ cwd: root, timeoutMs: BOARD_REPORT_SOURCE_TIMEOUT_MS }), deadlineMs, clock) : Promise.resolve(null),
-    repository && root
-      ? withDeadline(openIssuesRanked({ cwd: root, repository, onBoard: issueNumbersOnBoard(reportTasks, reportLanes), timeoutMs: BOARD_REPORT_SOURCE_TIMEOUT_MS }), deadlineMs, clock)
-      : Promise.resolve(null),
+    readBoardReportGithub({ root, onBoard: issueNumbersOnBoard(reportTasks, reportLanes), deadlineMs, clock }),
   ]);
 
   let agents: ReportAgent[] | null = null;
@@ -362,8 +393,7 @@ async function gatherBoardReportFacts(seat: BoardReportSeat, deadlineMs: number)
       });
     });
   }
-  if (pullRequests === "timed-out") gaps.push({ source: "pull requests", reason: "timed-out" });
-  else if (pullRequests && !pullRequests.ok) gaps.push({ source: "pull requests", reason: pullRequests.unavailable });
+  gaps.push(...github.gaps);
 
   const laneBranches = new Set([...hot, ...archived].map((pipeline) => pipeline.branch).filter(Boolean));
   const origin = delegatusMessageOrigin(BOARD_REPORT_ORIGIN_ROLE, project);
@@ -380,13 +410,9 @@ async function gatherBoardReportFacts(seat: BoardReportSeat, deadlineMs: number)
     agents,
     revokedSeats,
     agentStarted,
-    pullRequests: !repository ? null : pullRequests === "timed-out" || pullRequests === null ? { ok: false, unavailable: "timed-out" } : pullRequests,
+    pullRequests: github.pullRequests,
     laneBranches,
-    github: !repository
-      ? { kind: "not-configured" }
-      : issues === "timed-out" || issues === null
-        ? { kind: "unavailable", reason: "timed-out" }
-        : issues.ok ? { kind: "ranked", ranking: issues.ranking } : { kind: "unavailable", reason: issues.unavailable },
+    github: github.github,
     gaps,
   };
 }

@@ -326,14 +326,23 @@ export type RankedIssuesResult =
   | { ok: false; unavailable: OpenPullRequestsUnavailable };
 
 const ISSUE_PAGE_SIZE = 100;
+const REPOSITORY_LABEL_LIMIT = 100;
 const ISSUE_TITLE_LIMIT = 200;
 
-function issuesQuery(withProjects: boolean): string {
+/**
+ * A page of open issues, newest update first. `newest` pages also read the
+ * repository's label names, so the priority labels it records are known without
+ * another call; `labelled` reads only the issues carrying any of `$labels`
+ * (GitHub matches any one of them).
+ */
+function issuesQuery(withProjects: boolean, kind: "newest" | "labelled" = "newest"): string {
   const projects = withProjects
     ? " projectItems(first: 3) { nodes { fieldValues(first: 20) { nodes { ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } } } } } }"
     : "";
-  return "query($owner: String!, $name: String!, $after: String) { repository(owner: $owner, name: $name) {"
-    + ` issues(states: OPEN, first: ${ISSUE_PAGE_SIZE}, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}) {`
+  const labelled = kind === "labelled";
+  return `query($owner: String!, $name: String!, $after: String${labelled ? ", $labels: [String!]" : ""}) { repository(owner: $owner, name: $name) {`
+    + (labelled ? "" : ` labels(first: ${REPOSITORY_LABEL_LIMIT}) { nodes { name } }`)
+    + ` issues(states: OPEN, first: ${ISSUE_PAGE_SIZE}, after: $after,${labelled ? " labels: $labels," : ""} orderBy: {field: UPDATED_AT, direction: DESC}) {`
     + " totalCount pageInfo { hasNextPage endCursor } nodes { number title createdAt updatedAt"
     + " labels(first: 10) { nodes { name } } milestone { title dueOn }"
     + " issueDependenciesSummary { blockedBy }"
@@ -355,6 +364,8 @@ interface IssuePage {
   issues: OpenIssueRow[];
   endCursor: string | null;
   hasNextPage: boolean;
+  /** The repository's labels that record a priority, when the page read them. */
+  priorityLabels: { name: string; tier: number }[];
 }
 
 /** Null when the answer is not a page of issues at all. A response that also
@@ -368,7 +379,8 @@ function parseIssuePage(raw: string): IssuePage | null {
   }
   const body = record(parsed);
   if (!body || (Array.isArray(body.errors) && body.errors.length > 0)) return null;
-  const issues = record(record(record(body.data)?.repository)?.issues);
+  const repository = record(record(body.data)?.repository);
+  const issues = record(repository?.issues);
   if (!issues || typeof issues.totalCount !== "number" || !Array.isArray(issues.nodes)) return null;
   const rows: OpenIssueRow[] = [];
   for (const entry of issues.nodes) {
@@ -409,6 +421,11 @@ function parseIssuePage(raw: string): IssuePage | null {
     issues: rows,
     endCursor: typeof pageInfo?.endCursor === "string" ? pageInfo.endCursor : null,
     hasNextPage: pageInfo?.hasNextPage === true,
+    priorityLabels: nodesOf(repository?.labels).flatMap((label) => {
+      const name = record(label)?.name;
+      const tier = typeof name === "string" ? labelTier(name) : null;
+      return typeof name === "string" && tier !== null ? [{ name, tier }] : [];
+    }),
   };
 }
 
@@ -514,7 +531,14 @@ function compareRanked(left: RankedIssue, right: RankedIssue): number {
  */
 export function rankOpenIssues(
   issues: readonly OpenIssueRow[],
-  options: { totalCount: number; onBoard: ReadonlySet<number>; projectFieldsUnreadable?: boolean },
+  options: {
+    totalCount: number;
+    onBoard: ReadonlySet<number>;
+    projectFieldsUnreadable?: boolean;
+    /** How many of `issues` are the most recently updated, read in order;
+        the rest were read by their priority label. All of them by default. */
+    newestRead?: number;
+  },
 ): IssueRanking {
   let excluded = 0;
   const ranked: RankedIssue[] = [];
@@ -539,7 +563,7 @@ export function rankOpenIssues(
   ];
   return {
     totalCount: options.totalCount,
-    read: issues.length,
+    read: options.newestRead ?? issues.length,
     excluded,
     ranked,
     unranked,
@@ -563,11 +587,13 @@ export async function openIssuesRanked(options: {
   const [owner, name] = options.repository.split("/");
   if (!owner || !name) return { ok: false, unavailable: "command-failed" };
   const run = options.run ?? githubRunner(options.cwd, options.timeoutMs ?? 20_000);
-  const page = async (withProjects: boolean, after: string | null): Promise<IssuePage | OpenPullRequestsUnavailable> => {
+  const page = async (withProjects: boolean, after: string | null, labels: readonly string[] = []): Promise<IssuePage | OpenPullRequestsUnavailable> => {
     let raw: string;
     try {
       raw = await run(["api", "graphql", "-F", `owner=${owner}`, "-F", `name=${name}`,
-        ...(after ? ["-F", `after=${after}`] : []), "-f", `query=${issuesQuery(withProjects)}`]);
+        ...(after ? ["-F", `after=${after}`] : []),
+        ...labels.flatMap((label) => ["-f", `labels[]=${label}`]),
+        "-f", `query=${issuesQuery(withProjects, labels.length ? "labelled" : "newest")}`]);
     } catch (error) {
       return githubUnavailableFromError(error);
     }
@@ -583,14 +609,36 @@ export async function openIssuesRanked(options: {
     first = await page(false, null);
   }
   if (typeof first === "string") return { ok: false, unavailable: first };
-  let issues = first.issues;
-  const rank = () => rankOpenIssues(issues, { totalCount: first.totalCount, onBoard: options.onBoard, projectFieldsUnreadable: !withProjects });
+  let newest = first.issues;
+  let labelled: OpenIssueRow[] = [];
+  const rank = () => {
+    const seen = new Set(newest.map((issue) => issue.number));
+    return rankOpenIssues([...newest, ...labelled.filter((issue) => !seen.has(issue.number))], {
+      totalCount: first.totalCount,
+      onBoard: options.onBoard,
+      projectFieldsUnreadable: !withProjects,
+      newestRead: newest.length,
+    });
+  };
+  const nothingAbove = (ranking: IssueRanking) => !ranking.ranked.some((issue) => (issue.tier ?? 4) <= 1);
   let ranking = rank();
-  /* A second page only when the first ranked nothing above medium. */
-  if (first.hasNextPage && first.endCursor && !ranking.ranked.some((issue) => (issue.tier ?? 4) <= 1)) {
+  /* The newest page ranked nothing above medium. A label the repository
+     records as a priority finds its issues wherever they sit by update time,
+     so they are read by label: the labels at critical or high when the
+     repository has any, otherwise every priority label it has. */
+  if (nothingAbove(ranking) && first.hasNextPage && first.priorityLabels.length) {
+    const high = first.priorityLabels.filter((label) => label.tier <= 1);
+    const byLabel = await page(withProjects, null, (high.length ? high : first.priorityLabels).map((label) => label.name));
+    if (typeof byLabel !== "string") {
+      labelled = byLabel.issues;
+      ranking = rank();
+    }
+  }
+  /* A second newest page for what only a Project field or a milestone records. */
+  if (nothingAbove(ranking) && first.hasNextPage && first.endCursor) {
     const second = await page(withProjects, first.endCursor);
     if (typeof second !== "string") {
-      issues = [...issues, ...second.issues];
+      newest = [...newest, ...second.issues];
       ranking = rank();
     }
   }

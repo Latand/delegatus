@@ -141,7 +141,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   28: "90819032b795f74b3ac4f5bf0699f5443cf31353e95c1ad19ef87b16e8e1ab60",
   29: "220722434e6ce6a265155097b000d1ec5cbf6461e67e7d39193b61cae5b6318a",
   30: "9743e8688175e3e08fd07d54df961ff363b8798b049d50ff11973e7bf2624e69",
-  31: "89ab7a8c911bfa7599ddcf0f0ad8c514e8942846151828ec81886158d1ab0225",
+  31: "e1583b032cf61e67f50b486172f974ae2a2ae03649cc666b0738b010247c106d",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -521,7 +521,11 @@ Read the report, then ask me before closing anything.`;
   /* The operator's decisions of 2026-09-27: their own cards close on their
      word (D3), and a missing priority is never a request to label (D2). */
   expect(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE).toContain('a card marked "ask first" only when the operator agrees');
-  expect(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE).toContain("never ask the operator to label issues or add fields");
+  expect(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE).toContain("never ask for labels or fields");
+  /* The report replaces the board walk of the first turn only; the clock
+     contract's per-wake pass stands beside it. */
+  expect(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE).toContain("Your first turn gives status and leaves the board walk to it; later wakes still make their own pass.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("make ONE bounded pass over this project's whole board");
   expect(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE).toContain("start none unasked");
 });
 

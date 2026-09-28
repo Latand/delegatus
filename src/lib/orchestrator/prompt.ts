@@ -246,7 +246,7 @@ export const ORCHESTRATOR_BOARD_REPORT_HEADING = "## Board maintenance report";
  * a missing priority is stated, never turned into a request to label (D2).
  */
 export const ORCHESTRATOR_BOARD_REPORT_DIRECTIVE = `${ORCHESTRATOR_BOARD_REPORT_HEADING}
-When you are seated, fresh or by rotation, Delegatus makes one read-only pass over this board and sends it after your first turn as a message headed "[Delegatus] Board maintenance report". Leave the board walk to it: take its sections in order and re-read each item before you change it. You alone change this board: close items one by one with the reason, and a card marked "ask first" only when the operator agrees. Offer its suggested issues with suggest_replies and start none unasked; where it finds no recorded priority, say so once and never ask the operator to label issues or add fields. Cover an unavailable section or a missing report with your own reads.`;
+Each time you are seated, Delegatus makes one read-only pass over this board and sends it after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Take its sections in order and re-read each item before you change it. You alone change this board: close items one by one with the reason, and a card marked "ask first" only when the operator agrees. Offer its suggested issues with suggest_replies and start none unasked; where it finds no recorded priority, say so once and never ask for labels or fields. Cover an unavailable section or a missing report with your own reads.`;
 
 /** Identifies the task-ownership section below inside a mandate, however its
     body was edited — the same reason the clock heading exists: a caller who
