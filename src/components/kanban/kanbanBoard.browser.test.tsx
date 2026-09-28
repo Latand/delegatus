@@ -12507,9 +12507,10 @@ describe("an empty column folds to a strip; an open agent keeps its minimum widt
    * Assigned card's worker open (the open-agents rail then stands beside the
    * columns), in English and Ukrainian; and at 390×844 on a phone, which
    * draws its own layout and no strip. What is gated: the empty column is a
-   * strip no wider than 48 px that still names itself and its count; it opens
-   * to a shelf under the mouse and under a dragged card, and a card dropped
-   * on it lands there; the open agent's column is never narrower than
+   * strip no wider than 48 px that still names itself and its count and draws
+   * no menu button; a pointer passing across it leaves it shut; it opens to a
+   * shelf under a resting mouse (whose menu then opens) and under a dragged
+   * card, and a card dropped on it lands there; the open agent's column is never narrower than
    * `--agent-min` (clamp(520px, 40vw, 760px)), and when the columns do not
    * fit the board scrolls sideways instead. Frames go to
    * EMPTY_STRIP_PNG_DIR.
@@ -12610,13 +12611,38 @@ describe("an empty column folds to a strip; an open agent keeps its minimum widt
               }
               if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
               if (width === 1440) {
-                /* Under the mouse the strip opens to a shelf, and folds back when it leaves. */
+                /* A pointer passing across the strip leaves it shut: moved from
+                   Assigned to the first Done card, it ends on Done. */
+                if (!agent) {
+                  const assigned = (await page.locator('[data-kanban-board] .column[data-status="assigned"]').boundingBox())!;
+                  const doneCard = (await page.locator('[data-kanban-board] .column[data-status="done"] .card[data-id]').first().boundingBox())!;
+                  const end = { x: doneCard.x + 40, y: doneCard.y + doneCard.height / 2 };
+                  await page.mouse.move(assigned.x + assigned.width / 2, end.y);
+                  await page.waitForTimeout(400);
+                  await page.mouse.move(end.x, end.y, { steps: 20 });
+                  const passed = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest<HTMLElement>(".column[data-status]")?.dataset.status ?? null, end);
+                  const after = await readBoard(page);
+                  (readings[label] as Record<string, unknown>).passage = { under: passed, blocked: after.columns.blocked?.width };
+                  if (passed !== "done" || (after.columns.blocked?.width ?? 999) > 48) failures.push(`${label}: a pointer passing to Done ends on ${passed}, Blocked ${after.columns.blocked?.width}px`);
+                  await page.mouse.move(700, 10);
+                  await page.waitForTimeout(500);
+                }
+                /* The strip draws no menu button of its own. */
+                const menuOnStrip = (await page.locator('[data-kanban-board] [data-colmenu="blocked"]').boundingBox())!;
+                if (menuOnStrip.width > 1 || menuOnStrip.height > 1) failures.push(`${label}: the strip draws its menu at ${menuOnStrip.width}x${menuOnStrip.height}`);
+                /* Under a resting mouse the strip opens to a shelf, and folds back when it leaves. */
                 const box = (await page.locator('[data-kanban-board] .column[data-status="blocked"]').boundingBox())!;
                 await page.mouse.move(box.x + box.width / 2, box.y + 200);
-                await page.waitForTimeout(500);
+                await page.waitForTimeout(700);
                 await page.screenshot({ path: path.join(pngDir, `${label}-hover.png`) });
                 const hovered = await readBoard(page);
                 if ((hovered.columns.blocked?.width ?? 0) < 200) failures.push(`${label}: hovered, the strip is ${hovered.columns.blocked?.width}px`);
+                /* Opened, its menu is where it is drawn and opens under a press. */
+                await page.locator('[data-kanban-board] [data-colmenu="blocked"]').click();
+                const menuOpened = await page.waitForSelector(".menu", { timeout: 3_000 }).then(() => true, () => false);
+                if (!menuOpened) failures.push(`${label}: the opened strip's menu does not open`);
+                await page.keyboard.press("Escape");
+                await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
                 await page.mouse.move(700, 10);
                 await page.waitForTimeout(500);
                 const left = await readBoard(page);

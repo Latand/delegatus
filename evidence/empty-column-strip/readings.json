@@ -155,6 +155,10 @@
         "clientWidth": 1192
       },
       "pageErrors": [],
+      "passage": {
+        "under": "done",
+        "blocked": 48
+      },
       "hovered": {
         "width": 280,
         "strip": true,
@@ -492,6 +496,10 @@
         "clientWidth": 1192
       },
       "pageErrors": [],
+      "passage": {
+        "under": "done",
+        "blocked": 48
+      },
       "hovered": {
         "width": 280,
         "strip": true,

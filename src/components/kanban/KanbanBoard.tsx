@@ -28,7 +28,7 @@ import { KanbanColumnsSkeleton } from "@/components/skeletons";
 import { reachLineText, useServerReach } from "@/hooks/serverReach";
 import { useKanbanSeat } from "./kanbanSeatStore";
 import { useKanbanWide, type KanbanWideState } from "./kanbanWideStore";
-import { useColumnDwell } from "./useColumnDwell";
+import { DWELL_CUE_MS, useColumnDwell } from "./useColumnDwell";
 import { cleanTitle } from "@/components/utils";
 import { canHandoff } from "@/components/HandoffHandle";
 
@@ -2859,7 +2859,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   reading: boolean;
   /** Holds an open agent conversation, which keeps its minimum width. */
   agent: boolean;
-  /** Empty: drawn as a narrow strip until hovered, focused or dragged over. */
+  /** Empty: drawn as a narrow strip until a mouse rests on it, focused or dragged over. */
   strip: boolean;
   readerKeysByCard: ReadonlyMap<string, string>;
   panelsByCard: ReadonlyMap<string, string>;
@@ -2910,9 +2910,25 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   const isWide = widths ? (widths.wide ? widths.wide === status : status === "assigned") : false;
   const gaveShare = widths !== null && widths.wide !== null && status === "assigned";
   const label = statusLabel(t, status);
+  /* A strip opens under a mouse that rests on it, never under one passing
+     through, so the columns beside it stay where the pointer is headed. */
+  const [stripOpen, setStripOpen] = useState(false);
+  const stripTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeStrip = useCallback(() => {
+    if (stripTimer.current) clearTimeout(stripTimer.current);
+    stripTimer.current = null;
+    setStripOpen(false);
+  }, []);
+  useEffect(() => { if (!strip) closeStrip(); }, [strip, closeStrip]);
+  useEffect(() => closeStrip, [closeStrip]);
   return (
     <section
-      className={`column${mode === "tabs" && activeTab === status ? " active" : ""}${reading ? " reading" : ""}${agent ? " agent" : ""}${strip ? " strip" : ""}${widths?.wide && isWide ? " wide" : ""}${gaveShare ? " shelf" : ""}`}
+      onPointerEnter={strip ? (event) => {
+        if (event.pointerType !== "mouse" || stripTimer.current) return;
+        stripTimer.current = setTimeout(() => { stripTimer.current = null; setStripOpen(true); }, DWELL_CUE_MS);
+      } : undefined}
+      onPointerLeave={strip ? closeStrip : undefined}
+      className={`column${mode === "tabs" && activeTab === status ? " active" : ""}${reading ? " reading" : ""}${agent ? " agent" : ""}${strip ? " strip" : ""}${strip && stripOpen ? " open" : ""}${widths?.wide && isWide ? " wide" : ""}${gaveShare ? " shelf" : ""}`}
       data-wide={widths ? (isWide ? "1" : "0") : undefined}
       data-status={status}
       id={`kb-col-${status}`}
