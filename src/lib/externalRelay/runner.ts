@@ -96,7 +96,7 @@ async function complete(
   body: ExternalRelayCompletion,
   lastHeartbeat: () => number,
   stallMs: number,
-): Promise<void> {
+): Promise<ExternalRelayCompletion> {
   let wait = 1000;
   while (true) {
     try {
@@ -108,14 +108,16 @@ async function complete(
         relay.credential,
         { timeoutMs: 5000, maxBytes: relay.limits.max_response_bytes },
       );
-      return;
+      return body;
     } catch (error) {
-      if (
-        error instanceof ExternalRelayError &&
-        [400, 401, 404, 409, 413, 426].includes(error.status)
-      )
-        return;
-      if (Date.now() - lastHeartbeat() > stallMs) return;
+      if (error instanceof ExternalRelayError) {
+        if (error.status === 413 && body.outcome === "answered") {
+          body = failed(body.lease_id, "invalid_answer");
+          continue;
+        }
+        if ([400, 401, 404, 409, 413, 426].includes(error.status)) return body;
+      }
+      if (Date.now() - lastHeartbeat() > stallMs) return body;
       await new Promise((resolve) => setTimeout(resolve, wait));
       wait = Math.min(wait * 2, 5000);
     }
@@ -125,7 +127,7 @@ export async function runClaimedRequest(
   relay: PairedRelay,
   raw: unknown,
   onFreed?: () => void,
-  runtime?: HeadlessReviewRuntime,
+  runtime?: HeadlessReviewRuntime & { timeoutMs?: number },
 ): Promise<ExternalRelayCompletion | null> {
   const parsed = requestSchema.safeParse(raw);
   const request = parsed.success ? parsed.data : null;
@@ -143,8 +145,7 @@ export async function runClaimedRequest(
   const leaseId = request?.lease_id ?? (rawLease as string);
   let heartbeatAt = Date.now();
   const finish = async (body: ExternalRelayCompletion, stallMs = 45_000) => {
-    await complete(relay, requestId, body, () => heartbeatAt, stallMs);
-    return body;
+    return complete(relay, requestId, body, () => heartbeatAt, stallMs);
   };
   if (readRunLedger().runs.some((run) => run.requestId === requestId)) return null;
   if (!request)
@@ -202,7 +203,7 @@ export async function runClaimedRequest(
           leaseId,
           "no_capacity",
           selection.kind === "exhausted" && selection.resetsAt
-            ? Math.max(0, Math.ceil((selection.resetsAt - Date.now()) / 1000))
+            ? Math.max(0, selection.resetsAt - Math.floor(Date.now() / 1000))
             : null,
         ),
       );
@@ -259,15 +260,16 @@ export async function runClaimedRequest(
       if (beatBusy || leaseLost) return;
       beatBusy = true;
       try {
+        const sentProgress = newestProgress;
         await relayCall(
           relay.api_base,
           `/requests/${encodeURIComponent(requestId)}/heartbeat`,
           "POST",
-          { lease_id: leaseId, seq: ++seq, progress: newestProgress },
+          { lease_id: leaseId, seq: ++seq, progress: sentProgress },
           relay.credential,
           { timeoutMs: 5000, maxBytes: relay.limits.max_response_bytes },
         );
-        newestProgress = null;
+        if (newestProgress === sentProgress) newestProgress = null;
         heartbeatAt = Date.now();
         nextBeatAt = heartbeatAt + request.liveness.heartbeat_interval_s * 1000;
       } catch (error) {

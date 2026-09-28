@@ -159,9 +159,6 @@ export function checkedAnswer(
         : null,
   };
 }
-export function normalizePairCode(value: string): string {
-  return value.toUpperCase().replace(/[IL]/g, "1").replace(/O/g, "0");
-}
 export type ExternalRelayProgress = {
   kind: "note" | "tool_start" | "tool_done";
   label: string;

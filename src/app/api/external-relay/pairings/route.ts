@@ -7,7 +7,7 @@ import { startRelayPairing } from "@/lib/externalRelay/pairing";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export async function POST(req: NextRequest) {
-  const denied = guardRelayRoute(req, true);
+  const denied = guardRelayRoute(req);
   if (denied) return denied;
   try {
     const body = await req.json();

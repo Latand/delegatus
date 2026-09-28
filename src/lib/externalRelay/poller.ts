@@ -159,14 +159,26 @@ export function ensureExternalRelayPollers(): void {
   if (isStagingMode()) return;
   if (!controller.armed) {
     controller.armed = true;
-    void sweepExternalRelayOrphans().then(() => refreshExternalRelayPollers());
+    void sweepAndRefresh();
     controller.sweepTimer = setInterval(() => {
-      void sweepExternalRelayOrphans();
+      void sweepAndRefresh();
     }, 60_000);
     controller.sweepTimer.unref();
     return;
   }
   refreshExternalRelayPollers();
+}
+async function sweepAndRefresh(): Promise<void> {
+  try {
+    await sweepExternalRelayOrphans();
+  } catch (error) {
+    console.error("External relay orphan sweep failed", error instanceof Error ? error.name : "unknown");
+  }
+  try {
+    refreshExternalRelayPollers();
+  } catch (error) {
+    console.error("External relay poller refresh failed", error instanceof Error ? error.name : "unknown");
+  }
 }
 export function refreshExternalRelayPollers(changedId?: string): void {
   if (!controller.armed || isStagingMode()) return;

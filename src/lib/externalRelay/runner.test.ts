@@ -304,3 +304,117 @@ test("newly confirmed targets default to a 30 minute hard cap", async () => {
     await server.close();
   }
 });
+test("exhausted account sends a retry hint in seconds", async () => {
+  const completions: any[] = [];
+  const server = await startTestRelay((_req, body) => {
+    completions.push(body);
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  accountManager.resolveHeadlessSpawn = (() => ({
+    kind: "exhausted", resetsAt: Math.floor(Date.now() / 1000) + 3600,
+  })) as typeof original;
+  try {
+    const outcome = await runClaimedRequest(relay(`${server.origin}/v1`), {
+      ...sampleRequest, request_id: "rq_exhausted",
+    });
+    expect(outcome).toMatchObject({ outcome: "declined", reason: "no_capacity" });
+    expect(outcome?.outcome === "declined" && outcome.retry_after_s).toBeGreaterThanOrEqual(3598);
+    expect(outcome?.outcome === "declined" && outcome.retry_after_s).toBeLessThanOrEqual(3600);
+    expect(completions).toHaveLength(1);
+  } finally {
+    accountManager.resolveHeadlessSpawn = (() => ({ kind: "available", account })) as typeof original;
+    await server.close();
+  }
+});
+test("a note arriving during a heartbeat is sent on the next beat", async () => {
+  const beats: any[] = [];
+  const server = await startTestRelay(async (req, body) => {
+    if (req.url?.endsWith("/heartbeat")) {
+      beats.push(body);
+      if (beats.length === 1) await Bun.sleep(450);
+    }
+    return { body: { status: "ok" } };
+  });
+  const script = stub(`await Bun.stdin.text();await Bun.sleep(100);console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'Still working'}}));await Bun.sleep(3000);const a=process.argv.slice(2);await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`);
+  try {
+    const outcome = await runClaimedRequest(relay(`${server.origin}/v1`), {
+      ...sampleRequest, request_id: "rq_progress_race",
+      liveness: { ...sampleRequest.liveness, heartbeat_interval_s: 2 },
+    }, undefined, { command: script });
+    expect(outcome?.outcome).toBe("answered");
+    expect(beats[0].progress).toBeNull();
+    expect(beats.some((beat) => beat.progress?.label === "Still working")).toBe(true);
+  } finally {
+    await server.close();
+  }
+});
+test("413 on an answer completes failed invalid_answer immediately", async () => {
+  const completions: any[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/heartbeat")) return { body: { status: "ok" } };
+    completions.push(body);
+    return completions.length === 1
+      ? { status: 413, body: { error: { code: "too_large", message: "large" } } }
+      : { body: { status: "accepted", duplicate: false } };
+  });
+  const script = stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`);
+  try {
+    const outcome = await runClaimedRequest(relay(`${server.origin}/v1`), {
+      ...sampleRequest, request_id: "rq_too_large",
+    }, undefined, { command: script });
+    expect(completions.map((body) => [body.outcome, body.reason])).toEqual([
+      ["answered", undefined], ["failed", "invalid_answer"],
+    ]);
+    expect(outcome).toMatchObject({ outcome: "failed", reason: "invalid_answer" });
+  } finally {
+    await server.close();
+  }
+});
+for (const engine of ["codex", "claude"] as const)
+  test(`${engine} forbidden tool cancels the child and completes profile_violation`, async () => {
+    const completions: any[] = [];
+    const server = await startTestRelay((req, body) => {
+      if (req.url?.endsWith("/heartbeat")) return { body: { status: "ok" } };
+      completions.push(body);
+      return { body: { status: "accepted", duplicate: false } };
+    });
+    const script = stub(engine === "codex"
+      ? `await Bun.stdin.text();console.log(JSON.stringify({type:'item.started',item:{type:'command_execution',command:'false'}}));await Bun.sleep(5000);`
+      : `await Bun.stdin.text();console.log(JSON.stringify({type:'system',subtype:'init',tools:['StructuredOutput','Bash'],mcp_servers:[]}));await Bun.sleep(5000);`);
+    const start = Date.now();
+    try {
+      const paired = relay(`${server.origin}/v1`);
+      paired.targets[0].engine = engine;
+      const outcome = await runClaimedRequest(paired, {
+        ...sampleRequest, request_id: `rq_violation_${engine}`,
+      }, undefined, { command: script });
+      expect(outcome).toMatchObject({ outcome: "failed", reason: "profile_violation" });
+      expect(completions).toHaveLength(1);
+      expect(Date.now() - start).toBeLessThan(4000);
+      expect(readRunLedger().runs).toEqual([]);
+      expect(runningCount(paired.id, "target_1")).toBe(0);
+    } finally {
+      await server.close();
+    }
+  });
+test("hard cap kills the child and completes failed hard_cap", async () => {
+  const completions: any[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/heartbeat")) return { body: { status: "ok" } };
+    completions.push(body);
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const script = stub(`await Bun.stdin.text();await Bun.sleep(5000);`);
+  try {
+    const paired = relay(`${server.origin}/v1`);
+    const outcome = await runClaimedRequest(paired, {
+      ...sampleRequest, request_id: "rq_hard_cap",
+    }, undefined, { command: script, timeoutMs: 300 });
+    expect(outcome).toMatchObject({ outcome: "failed", reason: "hard_cap" });
+    expect(completions).toHaveLength(1);
+    expect(readRunLedger().runs).toEqual([]);
+    expect(runningCount(paired.id, "target_1")).toBe(0);
+  } finally {
+    await server.close();
+  }
+});

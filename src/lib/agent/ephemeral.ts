@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { resolveBinary } from "@/lib/agent/cli";
 import {
   claudeManagedEnvironment,
@@ -38,7 +39,8 @@ export type EphemeralAgentRequest = {
   runDir: string;
   hardCapMs: number;
   onEvent?: (event: EphemeralAgentEvent) => void;
-  runtime?: HeadlessReviewRuntime;
+  /** A test runtime may shorten the timer without weakening the configured cap. */
+  runtime?: HeadlessReviewRuntime & { timeoutMs?: number };
 };
 export type EphemeralAgentResult = {
   status: "done" | "failed" | "timeout" | "violation" | "cancelled";
@@ -249,6 +251,7 @@ export function runEphemeralAgent(
   const stderr = path.join(request.runDir, "stderr.txt");
   let offset = 0;
   let remainder = "";
+  const decoder = new StringDecoder("utf8");
   let resultEvent: Record<string, unknown> | null = null;
   let timedOut = false;
   let cancelled = false;
@@ -278,8 +281,12 @@ export function runEphemeralAgent(
     } catch {
       return;
     }
-    const lines = (remainder + content.toString("utf8")).split("\n");
-    remainder = final ? "" : (lines.pop() ?? "");
+    const lines = (remainder + decoder.write(content) + (final ? decoder.end() : "")).split("\n");
+    remainder = lines.pop() ?? "";
+    if (final && remainder) {
+      lines.push(remainder);
+      remainder = "";
+    }
     for (const line of lines) {
       if (!line.trim()) continue;
       try {
@@ -311,7 +318,7 @@ export function runEphemeralAgent(
     cwd: path.join(request.runDir, "cwd"),
     stdoutPath: stdout,
     stderrPath: stderr,
-    timeoutMs: request.hardCapMs,
+    timeoutMs: request.runtime?.timeoutMs ?? request.hardCapMs,
     runtime: request.runtime,
     onTimeout: () => {
       timedOut = true;

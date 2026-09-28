@@ -9,7 +9,7 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export function GET(req: NextRequest) {
-  const denied = guardRelayRoute(req, false);
+  const denied = guardRelayRoute(req);
   if (denied) return denied;
   const store = readRelayStore();
   return NextResponse.json({

@@ -16,7 +16,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ id: string }> };
 export async function PATCH(req: NextRequest, context: Context) {
-  const denied = guardRelayRoute(req, true);
+  const denied = guardRelayRoute(req);
   if (denied) return denied;
   try {
     const id = (await context.params).id;
@@ -104,7 +104,7 @@ export async function PATCH(req: NextRequest, context: Context) {
   }
 }
 export async function DELETE(req: NextRequest, context: Context) {
-  const denied = guardRelayRoute(req, true);
+  const denied = guardRelayRoute(req);
   if (denied) return denied;
   try {
     const result = await unpairRelay((await context.params).id);

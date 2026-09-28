@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   dropRun,
-  putRun,
+  reserveRun,
   readRunLedger,
   readRelayStore,
   updateRelayStore,
@@ -25,8 +25,8 @@ test("ledger records a request once and removes it", () => {
     runDir: root,
     startedAt: new Date().toISOString(),
   };
-  expect(putRun(row)).toBe(true);
-  expect(putRun(row)).toBe(false);
+  expect(reserveRun(row)).toBe("added");
+  expect(reserveRun(row)).toBe("duplicate");
   expect(readRunLedger().runs).toHaveLength(1);
   dropRun(row.requestId);
   expect(readRunLedger().runs).toHaveLength(0);
@@ -47,7 +47,7 @@ test("two Viewer processes cannot reserve the same target slot", async () => {
   const modulePath = path.join(process.cwd(), "src/lib/externalRelay/store.ts");
   fs.writeFileSync(
     childFile,
-    `import { putRun } from ${JSON.stringify(modulePath)};\nconst id = process.env.RELAY_TEST_ID!;\nconsole.log(putRun({ requestId: id, leaseId: id, relayId: "shared", targetId: "target", childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity: "child", runDir: "", startedAt: new Date().toISOString() }, 1));\n`,
+    `import { reserveRun } from ${JSON.stringify(modulePath)};\nconst id = process.env.RELAY_TEST_ID!;\nconsole.log(reserveRun({ requestId: id, leaseId: id, relayId: "shared", targetId: "target", childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity: "child", runDir: "", startedAt: new Date().toISOString() }, 1));\n`,
   );
   const children = ["first", "second"].map((id) =>
     Bun.spawn([process.execPath, childFile], {
@@ -65,8 +65,8 @@ test("two Viewer processes cannot reserve the same target slot", async () => {
   );
   expect(outputs.map((item) => item.code)).toEqual([0, 0]);
   expect(outputs.map((item) => item.text.trim()).sort()).toEqual([
-    "false",
-    "true",
+    "added",
+    "full",
   ]);
   expect(
     readRunLedger().runs.filter((run) => run.relayId === "shared"),

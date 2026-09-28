@@ -13,7 +13,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ id: string }> };
 export async function GET(req: NextRequest, context: Context) {
-  const denied = guardRelayRoute(req, false);
+  const denied = guardRelayRoute(req);
   if (denied) return denied;
   try {
     return NextResponse.json({
@@ -24,7 +24,7 @@ export async function GET(req: NextRequest, context: Context) {
   }
 }
 export async function POST(req: NextRequest, context: Context) {
-  const denied = guardRelayRoute(req, true);
+  const denied = guardRelayRoute(req);
   if (denied) return denied;
   try {
     const body = await req.json();
@@ -41,7 +41,7 @@ export async function POST(req: NextRequest, context: Context) {
   }
 }
 export async function DELETE(req: NextRequest, context: Context) {
-  const denied = guardRelayRoute(req, true);
+  const denied = guardRelayRoute(req);
   if (denied) return denied;
   try {
     await cancelRelayPairing((await context.params).id);

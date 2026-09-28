@@ -4,10 +4,7 @@ import { accessKeyWithheld } from "@/lib/team";
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
 import { isStagingMode } from "@/lib/staging";
 import { ExternalRelayError } from "./client";
-export function guardRelayRoute(
-  request: NextRequest,
-  _mutate: boolean,
-): NextResponse | null {
+export function guardRelayRoute(request: NextRequest): NextResponse | null {
   const origin = rejectCrossOrigin(request);
   if (origin) return origin;
   if (accessKeyWithheld(request))

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { checkedAnswer, normalizePairCode, requestSchema } from "./protocol";
+import { checkedAnswer, requestSchema } from "./protocol";
 export const sampleRequest = {
   request_id: "rq_1",
   lease_id: "ls_Zq3vN8bY1xKp4LmT0aW9rE",
@@ -54,9 +54,8 @@ test("request limits and additive fields", () => {
     }).success,
   ).toBe(false);
 });
-test("answer checks and code normalization", () => {
+test("answer checks", () => {
   const request = requestSchema.parse(sampleRequest);
-  expect(normalizePairCode("io-lL")).toBe("10-11");
   expect(
     checkedAnswer({ action: "reply", text: " ", reply_to: null }, request),
   ).toBeNull();

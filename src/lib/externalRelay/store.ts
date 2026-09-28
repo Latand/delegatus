@@ -210,9 +210,6 @@ export function reserveRun(
   });
   return outcome;
 }
-export function putRun(record: RunRecord, maxConcurrent?: number): boolean {
-  return reserveRun(record, maxConcurrent) === "added";
-}
 export function changeRun(
   requestId: string,
   change: (record: RunRecord) => RunRecord,

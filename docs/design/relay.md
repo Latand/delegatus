@@ -1,8 +1,9 @@
 # External relay: an outside service asks, this install answers
 
-Status: specification, 2026-09-28, written by the architect stage of the
-Phase 1 lane. Nothing here is built yet. Every code claim was checked at
-`7a679e42` on `main`. Part A is the wire protocol and is normative for both
+Status: Phase 1 backend implemented; the settings UI in §B.9 is deferred.
+This specification was written by the architect stage of the Phase 1 lane on
+2026-09-28. Baseline code claims were checked at `7a679e42` on `main`.
+Part A is the wire protocol and is normative for both
 sides, so the relay service and this install can be built against it
 independently. Part B is how Delegatus implements its side.
 
@@ -953,7 +954,7 @@ New files:
 | `src/lib/externalRelay/progress.ts` | Maps engine events to `Progress` (§B.7). |
 | `src/lib/agent/ephemeral.ts` | `runEphemeralAgent` and the answer-profile command builders (§B.5, §B.6). |
 | `src/app/api/external-relay/**` | Operator routes (§B.9). |
-| `src/components/externalRelay/ExternalRelaySection.tsx` | The settings section (§B.9). |
+| `src/components/externalRelay/ExternalRelaySection.tsx` | Deferred settings section (§B.9). |
 
 ## B.2 Configuration and state
 
@@ -1340,7 +1341,7 @@ Target settings are validated against the existing catalogs:
 `effortScale` (`src/lib/agent/efforts.ts:75` [code]). Engines are `claude` and
 `codex`.
 
-**UI.** An "External relay" section in the settings dialog that holds linked
+**Deferred UI.** An "External relay" section in the settings dialog that holds linked
 installs (`src/components/links/LinkedSettingsDialog.tsx`, mounted at
 `src/components/Viewer.tsx:1749` [code]). It shows: a connect form (the service's
 URL); then the code, the link and the expiry while waiting; then "The relay
@@ -1391,7 +1392,7 @@ Bun pin are untouched, so `scripts/verify-runtime-host.ts` is not needed.
 
 | # | File | Proves |
 |---|---|---|
-| 1 | `src/lib/externalRelay/protocol.test.ts` | The §A.5 schema accepts the §A.5 examples and refuses each violated limit; unknown fields are ignored; codes normalize (`I`, `L`, `O`); the answer checks of §A.8 (empty reply, over-long text, foreign `reply_to` replaced by null). |
+| 1 | `src/lib/externalRelay/protocol.test.ts` | The §A.5 schema accepts the §A.5 examples and refuses each violated limit; unknown fields are ignored; the answer checks of §A.8 (empty reply, over-long text, foreign `reply_to` replaced by null). |
 | 2 | `src/lib/externalRelay/client.test.ts` against `testRelay.ts`, an in-process fake relay service like `src/lib/links/testServer.ts` | Pairing to `completed`, including the owner echo, `owner_changed`, `expired` and `denied`; claim 200 and 204; heartbeat 409 stops the run; completion retried after a dropped response is accepted once (`duplicate: true`); 401 parks `credential_rejected`; 426 parks `unsupported_version`; 429 honours `Retry-After`; HTTP to a public address, a cross-origin `api_base`, a redirect and a body over 1 MiB are refused; every socket has its error handler before the first write. |
 | 3 | `src/lib/agent/ephemeral.test.ts` | The exact argument list per engine; no `--settings`, `--mcp-config`, `--session-id` or `--dangerously-*`; the prompt only on stdin; the environment without `LLV_TOKEN`, `LLV_STATE_OWNER`, `LLV_SPAWN_CAPABILITY` or the credential; the answer home holds only the `auth.json` link; the catalog drops both keys and keeps the rest; a missing catalog entry and a missing `auth.json` both give `profile_error`; a hard cap of `2**31`, `Infinity` or 30 000 is refused. |
 | 4 | `src/lib/externalRelay/runner.test.ts`, with a stub CLI through `launchDetached`'s `runtime.command` seam (`headless.ts:368` [code]) that replays synthetic Codex JSONL and Claude stream-json | Heartbeats keep their interval while the stub prints nothing (L3); one label per heartbeat, the newest; the final JSON never becomes progress; a `command_execution` item and a Claude init with an extra tool each end as `profile_violation`; a clean exit with a written answer is `answered`, a non-zero exit after writing it is `agent_error`; the hard cap fires `hard_cap`; the run directory is gone on every path; slots are freed on every path; a request for a full target is `busy`. |
@@ -1399,7 +1400,7 @@ Bun pin are untouched, so `scripts/verify-runtime-host.ts` is not needed.
 | 6 | `src/app/api/external-relay/route.test.ts` | Each guard: cross-origin, access key withheld, agent caller, staging; no response carries the credential or the poll secret. |
 | 7 | `src/lib/agent/ephemeral.probe.test.ts`, run only with `LLV_ANSWER_PROFILE_PROBE=1` | The real installed `codex` and `claude`, driven by the built profile against a loopback stub model endpoint that records what they send, with dummy credentials and temp homes holding marker lines in `AGENTS.md`, `CLAUDE.md`, an ancestor `.claude/CLAUDE.md` and a settings hook. It asserts the offered tools (Codex: `exec` nesting only the clock, `wait`, `request_user_input_async`; Claude: `StructuredOutput`), that no marker reached the request, that no hook ran, and that the answer format is a JSON schema. It uses no model quota; it re-runs on every CLI upgrade. It is the method of the Evidence section, made repeatable. |
 | 8 | manual, once per engine, in the implementing stage | A live marker probe on a real signed-in account at the lowest effort. Codex: a temp account home whose `auth.json` links to a real account's file and whose `AGENTS.md` holds a marker, run through the real launch path. Claude: the real account, with the marker in a `.claude/CLAUDE.md` above the cwd. The prompt asks the agent to repeat any marker word it was given; the answer must not contain it, and Claude's init event must list only `StructuredOutput` and no MCP servers. The PR records the outcome without identities. |
-| 9 | `src/components/externalRelay/ExternalRelaySection.*.test.tsx` and the phone-driver case | The rendered states of §B.9. |
+| 9 | `src/components/externalRelay/ExternalRelaySection.*.test.tsx` and the phone-driver case | Deferred with the settings UI in §B.9. |
 
 ---
 
@@ -1439,8 +1440,10 @@ on a model whose catalog says `multi_agent_version: v2` that switch leaves the
 (`spawnPolicy.ts:46`) still asks the agent not to use them. It deserves its
 own issue; this lane does not change spawns.
 
-## Deferred — not currently justified
+## Deferred
 
+- **The settings UI of §B.9.** Phase 1 exposes operator routes; a later UI
+  change will provide the pairing and target controls described there.
 - **Trusted identities and work on the owner's machine** (the last sentence
   of the 2026-09-28 quote; Phase 2): a `work` request kind, a trusted-identity
   list seeded with the paired owner, a separate launch profile. The protocol

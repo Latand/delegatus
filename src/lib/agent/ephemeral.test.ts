@@ -149,3 +149,30 @@ test("stub CLI emits progress before a structured answer for each engine", async
     expect(events).toContain("note");
   }
 });
+test("Claude keeps UTF-8 intact across tail reads in progress and answer", async () => {
+  const script = path.join(root, "stub-utf8");
+  fs.writeFileSync(script, `#!/usr/bin/env bun
+await Bun.stdin.text();
+process.stdout.write(JSON.stringify({type:'system',subtype:'init',tools:['StructuredOutput'],mcp_servers:[]})+'\\n');
+const note=Buffer.from(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'Привіт'}]}})+'\\n');
+const noteCut=note.indexOf(Buffer.from('Привіт'))+1;
+process.stdout.write(note.subarray(0,noteCut));
+await Bun.sleep(700);
+process.stdout.write(note.subarray(noteCut));
+const result=Buffer.from(JSON.stringify({type:'result',subtype:'success',structured_output:{action:'reply',text:'Привіт',reply_to:null}})+'\\n');
+const cut=result.indexOf(Buffer.from('Привіт'))+1;
+process.stdout.write(result.subarray(0,cut));
+await Bun.sleep(700);
+process.stdout.write(result.subarray(cut));
+`);
+  fs.chmodSync(script, 0o700);
+  const notes: string[] = [];
+  const run = runEphemeralAgent({
+    ...fixture("claude"), runtime: { command: script },
+    onEvent: (event) => { if (event.type === "note") notes.push(event.text); },
+  });
+  const result = await run.done;
+  expect(result.status).toBe("done");
+  expect(result.answer).toMatchObject({ text: "Привіт" });
+  expect(notes).toEqual(["Привіт"]);
+});

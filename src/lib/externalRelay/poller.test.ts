@@ -9,7 +9,7 @@ import {
   stopExternalRelayPollers,
   sweepExternalRelayOrphans,
 } from "./poller";
-import { putRun, readRunLedger, updateRelayStore } from "./store";
+import { externalRelayFile, reserveRun, readRunLedger, updateRelayStore } from "./store";
 import { startTestRelay } from "./testRelay";
 const root = fs.mkdtempSync(path.join(externalRelayTempRoot(), "relay-poller-test-"));
 process.env.LLV_STATE_DIR = root;
@@ -71,8 +71,8 @@ test("boot sweep settles dead owners, keeps live owners, and removes run directo
       runDir: staleDir,
       startedAt: new Date().toISOString(),
     };
-    putRun(row);
-    putRun({
+    reserveRun(row);
+    reserveRun({
       ...row,
       requestId: "live",
       ownerPid: process.pid,
@@ -229,3 +229,39 @@ test("route module copy controls the instrumentation poller", async () => {
     await changedServer.close();
   }
 });
+test("a corrupt run ledger logs the sweep failure and still starts polling", async () => {
+  let claims = 0;
+  const server = await startTestRelay(() => (
+    claims++,
+    { status: 401, body: { error: { code: "unauthorized", message: "refused" } } }
+  ));
+  const errors: string[] = [];
+  const originalError = console.error;
+  console.error = (...args) => { errors.push(args.join(" ")); };
+  try {
+    updateRelayStore((store) => ({
+      ...store,
+      relays: [{
+        id: "corrupt_ledger", origin: server.origin, api_base: `${server.origin}/v1`,
+        name: "Test", description: "", credential: "x".repeat(43),
+        owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
+        pairedAt: new Date().toISOString(), paused: false,
+        limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
+        targets: [],
+      }],
+    }));
+    fs.writeFileSync(externalRelayFile("runs"), "{broken");
+    ensureExternalRelayPollers();
+    for (let i = 0; i < 30 && errors.length === 0; i++) await Bun.sleep(20);
+    expect(errors.some((error) => error.startsWith("External relay orphan sweep failed SyntaxError"))).toBe(true);
+    expect(relayPollerStatus("corrupt_ledger").state).toBe("unreachable");
+    fs.writeFileSync(externalRelayFile("runs"), '{"v":1,"runs":[]}');
+    for (let i = 0; i < 60 && claims === 0; i++) await Bun.sleep(100);
+    expect(claims).toBeGreaterThan(0);
+  } finally {
+    console.error = originalError;
+    fs.writeFileSync(externalRelayFile("runs"), '{"v":1,"runs":[]}');
+    stopExternalRelayPollers();
+    await server.close();
+  }
+}, 10_000);
