@@ -133,12 +133,20 @@ export class GreenReader {
         entries.push({ ...item, startedAt: item.started_at });
         runGroups.set(group, entries);
       }
+      // The statuses endpoint returns newest first. Keep that order when
+      // created_at ties; rollupChecks cannot distinguish statuses within a second.
+      const seenStatuses = new Set<string>();
+      const latestStatuses = statuses.flatMap((status) => {
+        if (!status || typeof status !== "object") return [];
+        const item = status as Record<string, unknown>;
+        const context = typeof item.context === "string" ? item.context : "";
+        if (!context || seenStatuses.has(context)) return [];
+        seenStatuses.add(context);
+        return [{ ...item, startedAt: item.created_at }];
+      });
       const checks = [
         ...[...runGroups].flatMap(([appId, entries]) => rollupChecks(entries).map((check) => ({ ...check, kind: "run" as const, appId }))),
-        ...rollupChecks(statuses.map((status) => {
-          const item = status as Record<string, unknown>;
-          return { ...item, startedAt: item.created_at };
-        })).map((check) => ({ ...check, kind: "status" as const, appId: null })),
+        ...rollupChecks(latestStatuses).map((check) => ({ ...check, kind: "status" as const, appId: null })),
       ];
       if (!checks.length) return finish({ state: "no-checks" });
       const red = checks.find((check) => check.verdict === "red");

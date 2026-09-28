@@ -57,6 +57,18 @@ describe("green merge evidence", () => {
     expect(await h.subject.read("github.com/example/project", "main", SHA, "/checkout")).toMatchObject({ state: "red", detail: "optional" });
   });
 
+  test.each([
+    ["failure", "success", "red"],
+    ["pending", "success", "pending"],
+    ["success", "failure", "green"],
+  ] as const)("the latest %s status wins over an older %s with the same timestamp", async (latest, older, expected) => {
+    const h = reader({ runs: [], required: ["build"], statuses: [
+      { id: 20, context: "build", state: latest, created_at: "2026-01-01T00:00:00Z" },
+      { id: 10, context: "build", state: older, created_at: "2026-01-01T00:00:00Z" },
+    ] });
+    expect(await h.subject.read("github.com/example/project", "main", SHA, "/checkout", undefined, true)).toMatchObject({ state: expected });
+  });
+
   test("a newer successful status cannot erase a failed same-name required check run", async () => {
     const h = reader({ required: ["build"], runs: [
       { name: "build", status: "completed", conclusion: "failure", started_at: "2026-01-01T00:00:00Z" },

@@ -9,6 +9,7 @@ import type { LauncherRecord } from "./launcher";
 import { headOf } from "./release";
 import { watchRestartRequests } from "../../../bin/self-update-supervisor.mjs";
 import { activeRestartGate, restartGateFile } from "./restartGate";
+import { GreenReader } from "./green";
 import { proxy } from "../../proxy";
 import { POST as postPresence } from "../../app/api/view/presence/route";
 import { listPresence, resetPresenceForTest } from "../view/presenceStore";
@@ -236,6 +237,32 @@ test.each(["pending", "red", "unknown"] as const)("a cached green changed to %s 
   expect(existsSync(h.record.requestFile)).toBe(false);
   expect(h.pending()).toBeNull();
   service.stop();
+});
+
+test.each(["failure", "pending"] as const)("a latest %s status with a tied timestamp issues no automatic restart", async (latest) => {
+  const h = scenario();
+  const fetcher = async (input: string | URL | Request) => {
+    const url = String(input);
+    const body = url.includes("/pulls") ? [{ merged_at: "2026-01-01", merge_commit_sha: TARGET, base: { ref: "main" }, head: { sha: OLD } }]
+      : url.includes("/check-runs") ? { check_runs: [] }
+      : url.includes("/statuses") ? [
+        { id: 20, context: "build", state: latest, created_at: "2026-01-01T00:00:00Z" },
+        { id: 10, context: "build", state: "success", created_at: "2026-01-01T00:00:00Z" },
+      ]
+      : url.includes("/branches/") ? { protected: true, protection: { required_status_checks: { contexts: ["build"] } } }
+      : { commit: { tree: { sha: "c".repeat(40) } } };
+    return Response.json(body);
+  };
+  h.deps.green = new GreenReader({ fetch: fetcher as typeof fetch, treeOf: async () => "c".repeat(40), now: h.deps.now });
+  const service = h.service();
+  try {
+    await service.autoTick();
+    h.advance(60_000);
+    await service.autoTick();
+    expect(readAuto(join(h.dir, "auto.json")).green[TARGET]?.state).toBe(latest === "failure" ? "red" : "pending");
+    expect(h.pending()).toBeNull();
+    expect(existsSync(h.record.requestFile)).toBe(false);
+  } finally { service.stop(); }
 });
 
 test.each([["web", "turn"], ["web", "stage"], ["runtime-host", "turn"], ["runtime-host", "stage"]] as const)("%s restart defers when a %s starts before launcher consumption", async (role, work) => {
