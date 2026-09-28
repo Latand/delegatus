@@ -54,13 +54,15 @@
 /* Every figure keeps one silhouette from frame to frame: it turns, sways or
    changes phase slowly, and never grows or shrinks by more than 8%. */
 @media (prefers-reduced-motion: no-preference) {
-  .mglyph[data-live="1"]::before { animation: mg-halo var(--mg-period) var(--ease-standard, ease-in-out) infinite; }
+  .mglyph[data-live="1"]::before { animation: mg-halo var(--mg-period) ease-in-out infinite; }
   .mglyph[data-live="1"] .mg-turn { animation: mg-turn calc(var(--mg-period) * 4) linear infinite; }
-  .mglyph[data-live="1"] .mg-breathe { animation: mg-breathe var(--mg-period) var(--ease-standard, ease-in-out) infinite; }
+  .mglyph[data-live="1"] .mg-breathe { animation: mg-breathe var(--mg-period) ease-in-out infinite; }
   .mglyph[data-live="1"] .mg-write { animation: mg-write var(--mg-period) ease-in-out infinite; }
   .mglyph[data-live="1"] .mg-sway { animation: mg-sway var(--mg-period) ease-in-out infinite; }
   .mglyph[data-live="1"] .mg-tilt { animation: mg-tilt var(--mg-period) ease-in-out infinite; }
-  .mglyph[data-live="1"] .mg-corona { animation: mg-turn calc(var(--mg-period) * 6) linear infinite; }
+  /* Astra's star holds its axes: turned off them, eight points at 14 px blur
+     into a cog. It breathes with its flaring core instead. */
+  .mglyph[data-live="1"] .mg-corona { animation: mg-breathe var(--mg-period) ease-in-out infinite; }
   .mglyph[data-live="1"] .mg-core { animation: mg-flare var(--mg-period) ease-in-out infinite; }
   .mglyph[data-live="1"] .mg-spin { animation: mg-spin calc(var(--mg-period) * 2) linear infinite; }
   .mglyph[data-live="1"] .mg-phase { animation: mg-phase calc(var(--mg-period) * 2) ease-in-out infinite; }

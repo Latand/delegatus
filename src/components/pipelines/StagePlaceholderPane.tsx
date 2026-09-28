@@ -255,6 +255,7 @@ export function StagePlaceholderPane({ slot, interactive }: { slot: StageSlot; i
           model={{ engine: stage.effectiveRole.engine, model: effectiveModel }}
           fallback="tone"
           named
+          badge={false}
           title={t(`pipelineChipState.${state}`)}
         />
         {configOpen ? (

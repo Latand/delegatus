@@ -105,11 +105,15 @@ test("each Claude model draws an object of its own", () => {
   ]);
 });
 
-test("Astra is a sun: a filled disc, a white-hot core and a corona of twelve rays", () => {
+test("Astra is a star: a filled disc, a white-hot core and eight rays, long and short in turn", () => {
   const host = mount(<StageGlyph state="running" model={{ engine: "codex", model: "gpt-6-astra" }} fallback="mark" />);
   const corona = host.querySelector(".mg-corona")!.getAttribute("d")!;
-  /* A star of twelve points is twenty-four vertices. */
-  expect(corona.split("L")).toHaveLength(24);
+  /* A star of eight points is sixteen vertices, the points at even places. */
+  const vertices = corona.slice(1, -1).split("L").map((pair) => pair.split(" ").map(Number));
+  expect(vertices).toHaveLength(16);
+  const reach = vertices.filter((_, index) => index % 2 === 0).map(([x, y]) => Math.round(Math.hypot(x - 8, y - 8) * 10) / 10);
+  /* Twelve equal teeth read as a cog at 1×: the rays alternate, long then short. */
+  expect(reach).toEqual([8.2, 6.9, 8.2, 6.9, 8.2, 6.9, 8.2, 6.9]);
   expect(host.querySelectorAll("circle.mg-fill")).toHaveLength(1);
   const core = host.querySelector("circle.mg-core")!;
   expect(core.getAttribute("fill")).toBe(`url(#${host.querySelector("radialGradient")!.id})`);

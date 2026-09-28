@@ -490,10 +490,11 @@ const glyphPipelines: Pipeline[] = GLYPHS ? (() => {
       [ran("design", "passed", 90, done(90)), ran("build", "passed", 70, done(70)), ran("critique", "failed", 50, done(50)), ran("verify", "needs_decision", 30)],
       { stageId: "verify", state: "needs_decision", input: null, activatedBy: null }, { createdAt: iso(100 * MIN) }),
     /* The other four models settled, the round ones among them: passed, passed,
-       passed, failed, and the uncatalogued model not yet run. */
-    pipeline("p-glyphs-settled-more", L("Ship the export guide", "Випустити посібник з експорту"), "t-glyphs", "failed", lane(["docs", "tidy", "migrate", "test", "fix"]),
+       passed, failed, and the uncatalogued model not yet run. The lane waits on
+       the operator after the failure. */
+    pipeline("p-glyphs-settled-more", L("Ship the export guide", "Випустити посібник з експорту"), "t-glyphs", "needs_decision", lane(["docs", "tidy", "migrate", "test", "fix"]),
       [ran("docs", "passed", 120, done(120)), ran("tidy", "passed", 100, done(100)), ran("migrate", "passed", 80, done(80)), ran("test", "failed", 60, done(60))],
-      null, { createdAt: iso(130 * MIN), closedAt: iso(50 * MIN) }),
+      { stageId: "test", state: "needs_decision", input: null, activatedBy: null }, { createdAt: iso(130 * MIN) }),
     /* The live states the old dot told apart by colour: a review stage at work,
        a stage landing its commit, and a passed stage whose conversation works again. */
     pipeline("p-glyphs-review", L("Review the export dialog", "Переглянути діалог експорту"), "t-glyphs-live", "running", [

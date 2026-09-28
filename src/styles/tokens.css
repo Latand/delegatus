@@ -156,7 +156,7 @@
      at its heart. Astra, the brightest sun, takes the strong peak. */
   --glyph-halo-reach: 3px;
   --glyph-halo-peak: 40%;
-  --glyph-halo-peak-strong: 60%;
+  --glyph-halo-peak-strong: 50%;
 
   /* Activity chart marks (docs/design/activity-dashboard-v2.md, "Colour"):
      you are the accent, agents the info teal, each with one lighter step
@@ -269,7 +269,7 @@
     --glyph-luna-glow: #c9d6f2;
     --glyph-halo-reach: 5px;
     --glyph-halo-peak: 45%;
-    --glyph-halo-peak-strong: 75%;
+    --glyph-halo-peak-strong: 55%;
 
     /* The app's dark accent and info sit above the chart lightness band;
        these steps are inside it. */
@@ -354,7 +354,7 @@
   --glyph-luna-glow: #c9d6f2;
   --glyph-halo-reach: 5px;
   --glyph-halo-peak: 45%;
-  --glyph-halo-peak-strong: 75%;
+  --glyph-halo-peak-strong: 55%;
 
   --mark-you: #7f79e6;
   --mark-you-half: #4a4786;

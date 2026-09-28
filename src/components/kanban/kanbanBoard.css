@@ -1196,6 +1196,9 @@
 .kb .pnode .prow.ident { height: 14px; }
 .kb .pnode .pstate { display: inline-flex; align-items: center; gap: 5px; font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); white-space: nowrap; }
 .kb .pnode.tone-active .pstate { color: var(--color-success); }
+/* The glyph draws no badge beside the word (StageGlyph), so a passed stage's
+   word keeps the green its dot used to carry. */
+.kb .pnode.tone-ok .pstate { color: var(--color-success); }
 .kb .pnode.tone-review .pstate { color: var(--color-info); }
 .kb .pnode.tone-needs .pstate { color: var(--color-warning); }
 .kb .pnode.tone-bad .pstate { color: var(--color-danger); }
@@ -1324,6 +1327,9 @@
 .kb .navchip { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px 0 4px; border-radius: 999px; border: 1px solid var(--border-default); background: var(--surface-card); font-size: var(--text-ui); font-weight: 600; color: var(--color-primary); }
 .kb .navchip .nlbl { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 3ch; }
 .kb .navchip .nidx { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: var(--text-caption); font-weight: 700; color: var(--color-muted); background: var(--surface-well); }
+/* A review at work takes the full review tone on its border: its glyph moves
+   like a running one, so the border is what tells the two apart. */
+.kb .navchip.tone-review { border-color: var(--color-info); }
 .kb .navchip.in-view { border-color: color-mix(in srgb, var(--color-accent) 40%, var(--border-default)); }
 .kb .navchip[aria-current="true"] { border-color: var(--color-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 18%, transparent); }
 .kb .navchip[aria-current="true"] .nidx { color: #fff; background: var(--color-accent); }
@@ -1370,6 +1376,7 @@
 .kb .pane-title .prole .prole-role, .kb .pane-title .prole .prole-kind { flex-shrink: 0; }
 .kb .pane-head .pstate { display: inline-flex; align-items: center; gap: 5px; font-size: var(--text-label); font-weight: 600; color: var(--color-muted); white-space: nowrap; flex-shrink: 0; }
 .kb .pane.tone-active .pane-head .pstate { color: var(--color-success); }
+.kb .pane.tone-ok .pane-head .pstate { color: var(--color-success); }
 .kb .pane.tone-review .pane-head .pstate { color: var(--color-info); }
 .kb .pane.tone-needs .pane-head .pstate { color: var(--color-warning); }
 .kb .pane.tone-bad .pane-head .pstate { color: var(--color-danger); }

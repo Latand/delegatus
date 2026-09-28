@@ -372,7 +372,8 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
       <section className={className} data-stage={stage.id} data-collapsed="1" tabIndex={-1} role="region" aria-label={aria}>
         <button type="button" className="pane-strip" data-pane-fold={stage.id} aria-label={t("kanban.stages.expandPane", { stage: name })} onClick={() => props.onFold(stage.id, false)}>
           {glyph}
-          <StageGlyph state={state} model={ran} fallback="dot" badge={false} />
+          {/* The strip's state word sits in its grey label, so the badge says it. */}
+          <StageGlyph state={state} model={ran} fallback="dot" />
           <span className="vlabel"><span className="num">{index + 1}</span> {name} · {word}</span>
         </button>
       </section>

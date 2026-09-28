@@ -70,9 +70,10 @@ export interface GlyphModel {
  * gives the glyph its own name ("Opus 5.5: running") where no host does.
  *
  * A settled state rides the glyph's corner as a badge. A host that prints the
- * state word beside the glyph (the graph node, the pane, the phone's stage
- * row) passes `badge={false}`: the word and the host's border say it, and the
- * glyph keeps all of its ink.
+ * state word in the state's colour beside the glyph (the graph node, the pane
+ * head, the phone's stage row), or whose border is the state's colour (a
+ * stage card), passes `badge={false}`: the word and the host's border say it,
+ * and the glyph keeps all of its ink.
  */
 export function StageGlyph({ state, model, live = false, fallback, named = false, badge = true, title, className }: {
   state: StageChipState;
@@ -181,8 +182,9 @@ function onQuill(s: number, w: number): string {
 }
 const quill = (points: ReadonlyArray<readonly [number, number]>) => `M${points.map(([s, w]) => onQuill(s, w)).join("L")}Z`;
 const SONNET = [
-  /* The vane: broad on the upper side, a barb split on the lower. */
-  quill([[5.4, -0.55], [7, -2], [9.4, -2.95], [12, -3.2], [14.6, -2.7], [16.7, -1.5], [18.3, 0], [16.9, 1.05], [14.6, 1.75], [12, 2.05], [10.4, 1.8], [9.5, 0.8], [9.1, 1.75], [7.3, 1.25], [5.4, 0.55]]),
+  /* The vane: broad on the upper side, a barb split on the lower, wide enough
+     to keep its ink beside the other three at 1×. */
+  quill([[5.4, -0.55], [7, -2.5], [9.4, -3.69], [12, -4], [14.6, -3.38], [16.7, -1.88], [18.3, 0], [16.9, 1.31], [14.6, 2.19], [12, 2.56], [10.4, 2.25], [9.5, 1], [9.1, 2.19], [7.3, 1.56], [5.4, 0.55]]),
   /* The shaft down to the nib's shoulder, then the nib to its point. */
   quill([[5.6, -0.5], [3.4, -0.5], [3.1, -0.95], [0, 0], [3.1, 0.95], [3.4, 0.5], [5.6, 0.5]]),
 ].join("");
@@ -203,10 +205,12 @@ const FOX_MASK = "M2.8 8.55L6.35 8.2L5.3 10.35ZM13.2 8.55L9.65 8.2L10.7 10.35Z";
 /* Sol: a round sun and eight detached, rounded rays. */
 const SOL_RAYS = every(8, 22.5).map((degrees) => [at(5.3, degrees), at(7.3, degrees)]);
 
-/* Astra: a blue sun brighter than Sol. A filled disc with a white-hot centre
-   and a corona of twelve sharp rays out to the grid's edge: pointed and
-   attached where Sol's are rounded and detached, so the two part by shape. */
-const ASTRA_CORONA = star(Array.from({ length: 12 }, () => 7.9), 4.1);
+/* Astra: a blue star brighter than Sol. A filled disc with a white-hot centre
+   and eight pointed rays grown out of it, four long on the cardinals and four
+   shorter between: a star's flare, where twelve equal teeth read as a cog at
+   1×, and pointed and attached where Sol's are rounded and detached, so the
+   two part by shape. */
+const ASTRA_CORONA = star(Array.from({ length: 8 }, (_, index) => (index % 2 ? 6.9 : 8.2)), 3.9);
 
 /* Terra: land drawn twice across one turn, so it can slide round the disc. */
 const TERRA_LAND = "M1.4 4.6Q3.6 3.4 5.3 4.4Q6.1 5.7 4.9 6.9Q3.6 7.6 4.1 9.2Q4.6 10.9 3.3 11.9Q1.8 11.2 1.2 8.9ZM8.2 2.4Q10.6 2 12.2 3.6Q11.6 5 10 5Q9.2 6.2 10.4 7.4Q12.2 7.6 12.6 9.4Q12 11.8 10.2 13.3Q9 12 9.3 10.3Q8.3 9 7.3 8.1Q6.9 6.2 8 5.2Q7.4 3.6 8.2 2.4Z";
@@ -257,8 +261,8 @@ function GlyphDrawing({ kind }: { kind: ModelGlyphKind }) {
             </radialGradient>
           </defs>
           <path className="mg-fill mg-corona" d={ASTRA_CORONA} />
-          <circle className="mg-fill" cx="8" cy="8" r="4.1" />
-          <circle className="mg-core" cx="8" cy="8" r="2.3" fill={`url(#${id})`} />
+          <circle className="mg-fill" cx="8" cy="8" r="4.5" />
+          <circle className="mg-core" cx="8" cy="8" r="1.8" fill={`url(#${id})`} />
         </svg>
       );
     case "terra":

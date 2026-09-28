@@ -36,8 +36,9 @@ pipeline strip and the scheme canvas open, and `StageCompletedCard`). So the
 desktop card, the task row, the scheme and the phone's task and pipeline
 screens all draw the same component. A stage pane's header prints no state
 word, so there the glyph is named "{model}: {state}" and keeps the state as
-its hover title, as the dot did; a model with no glyph keeps the small tone
-dot it had (`fallback="tone"`).
+its hover title, as the dot did; the pane's border is in the state's colour, so
+the glyph draws no badge there. A model with no glyph keeps the small tone dot
+it had (`fallback="tone"`).
 
 One stage, one mark. The node, the Stages chip, the pane and the phone's stage
 row used to draw the engine mark in their identity line as well, and beside a
@@ -69,21 +70,22 @@ at 14 px nobody could see the count: Opus and Sonnet were the same asterisk.
 | Glyph | Idea | Drawing |
 |---|---|---|
 | Opus | the Claude spark itself, the family's reference | eight broad petals round a solid core, the heaviest of the four |
-| Sonnet | the poet's quill | one feather on the diagonal, the broad vane up, a barb split below, the rachis cut through it, and a nib at the lower left |
+| Sonnet | the poet's quill | one feather on the diagonal, the broad vane up, a barb split below, the rachis cut through it, and a nib at the lower left; the vane is wide enough to keep its ink beside the other three at 1× |
 | Haiku | the season word of the form: cherry blossom | a sakura, five round petals each notched at its tip |
 | Fable | the fox of Aesop's and Krylov's and Hlibov's fables | a fox's head: tall ears, flared cheek tufts, a long muzzle to a clear point, and the white cheek mask cut out; no eye cuts, which did not survive 1× |
 | Sol | the sun | a yellow disc and eight detached, rounded rays |
-| Astra | a blazing blue sun, brighter than Sol | a filled blue disc with a white-hot core and a corona of twelve sharp rays to the grid's edge |
+| Astra | a blazing blue star, brighter than Sol | a filled blue disc with a white-hot core and eight pointed rays grown out of it, four long on the cardinals and four shorter between |
 | Terra | the Earth | a blue sea disc with green land and a rim |
 | Luna | the Moon | a crescent, with the unlit part a faint earthshine |
 
 Silhouettes differ as well as colours, so the eight stay apart for a
 colour-blind reader and in the waiting state, where colour drains: a spark, a
-quill, a blossom, a head, a sun with detached rays, a sun with an attached
-corona, a filled disc, and a crescent. Astra and Sol part by shape as well as
-hue: Sol's eight rays are rounded and stand off the disc, Astra's twelve are
-pointed and grow out of it. Astra draws at least as much ink as Sol, which the
-driver measures.
+quill, a blossom, a head, a sun with detached rays, a star, a filled disc, and
+a crescent. Astra and Sol part by shape as well as hue: Sol's eight rays are
+rounded, equal and stand off the disc, Astra's eight are pointed, long and
+short in turn, and grow out of it. The second round's twelve equal teeth read
+as a cog at 1×; alternating the lengths is what makes a star of it. Astra draws
+at least as much ink as Sol, which the driver measures.
 
 ## Colours per theme
 
@@ -104,7 +106,7 @@ Tokens live in `src/styles/tokens.css` (light block, the dark media block and
 | `--glyph-luna-glow` | `#9fb3d9` | `#c9d6f2` |
 | `--glyph-halo-reach` | `3px` | `5px` |
 | `--glyph-halo-peak` | `40%` | `45%` |
-| `--glyph-halo-peak-strong` (Astra) | `60%` | `75%` |
+| `--glyph-halo-peak-strong` (Astra) | `50%` | `55%` |
 
 Astra's dark disc is a saturated blue so the sun does not wash to white, and
 only its small core is near white. Luna glows a cool silver-blue: its slate
@@ -124,9 +126,9 @@ state moves to the glyph's treatment, its corner and its host:
 | Stage state | Reading | Drawn as |
 |---|---|---|
 | running, committing | running | full colour, a halo in the glyph's own tone, the glyph's motion; the pill's border in the active tone |
-| reviewing | running | the same, with the pill's border in the review tone (blue), as the dot was |
+| reviewing | running | the same, with the pill's and the Stages chip's border in the full review tone (blue), where running keeps a softened green |
 | pending, skipped | waiting | the colour drained (`saturate(0.35)`) at full ink, still, no halo; the pill's border dashed |
-| passed | passed | full colour, still, a green badge with a tick |
+| passed | passed | full colour, still, a green badge with a tick, or the state word in green where the word is printed |
 | failed | failed | full colour, still, a red badge with a cross |
 | needs_decision | needs | full colour, still, an amber badge with a bang |
 
@@ -146,12 +148,16 @@ The badge is 8 px, in the stage's `STAGE_TONE` (the one tone map), with the
 shapes the stage mark already used, cut out of the glyph by a ring of the
 surface and set out past the glyph's corner (−4 px), so it covers at most 7%
 of any glyph's ink (the driver measures each one and fails above 15%). It is
-drawn only where no state word is printed: on the pill, the Stages chip, the
-docked fix strip and a stage pane's header. The graph node, the Stages pane
-head and folded strip, and the phone's stage row print the state word beside
-the glyph, so there the word and the host's border carry the state and the
-glyph keeps all of its ink. A settled stage whose conversation works again
-(#1744) keeps its badge and moves.
+drawn only where no state word says the state in its colour: on the pill, the
+Stages chip, the docked fix strip and a folded Stages pane strip (whose grey
+label holds the word). The graph node, the Stages pane head and the phone's
+stage row print the state word beside the glyph in the state's colour (green,
+red, amber), and a stage card's border is in it, so there the word and the
+border carry the state and the glyph keeps all of its ink. The second round
+dropped the badge on the node and the pane head while their word stayed grey
+for a passed stage, so passed lost its green; the word is green now, and the
+driver compares each settled word's colour with its state's token. A settled
+stage whose conversation works again (#1744) keeps its badge and moves.
 
 ## Animation
 
@@ -166,12 +172,15 @@ frame to frame:
 - Haiku's blossom sways ±6°.
 - Fable tilts its head ±5°.
 - Sol's rays turn round the disc.
-- Astra's corona turns slowly and its white-hot core flares.
+- Astra's star breathes (to 93%) and its white-hot core flares. It does not
+  turn: off its axes an eight-point star blurs into a cog at 14 px.
 - Terra's land slides round the globe as the planet spins.
 - Luna waxes and wanes between a thin crescent and a fat one, and never
   reaches a half moon.
 
-Behind every running glyph a radial halo in the glyph's tone breathes: tight
+Behind every running glyph a radial halo in the glyph's tone breathes, on an
+ease-in-out curve that is symmetric about each extreme (the UI's ease-out
+dropped it in the first 300 ms and then crept): tight
 on the light paper, where the first round's wide glow was a stain, and wider
 on the dark, where it barely registered. It is faint behind the drawing and
 strongest just past the glyph's rim, so the glow shows round the glyph while
@@ -224,9 +233,10 @@ glyph on a pill:
 It draws light and dark:
 
 - the legend: the three cards with every word hidden, at 1× and at 2×, and
-  the running card in eight frames 200 ms apart;
+  the running card in eight frames with every animation paused and seeked to
+  0, 200 … 1400 ms, so they are 200 ms apart whatever a screenshot costs;
 - on the desktop: the cards, the cards' graphs, and the Stages sheet with its
-  graph, pane heads and chips;
+  graph, pane heads, folded pane strips and chips;
 - on the phone: the board cards, the task screens and the pipeline screens.
 
 There is a reduced-motion pass and Ukrainian cards and task screens. It
@@ -234,7 +244,10 @@ measures each glyph's model, reading, motion, badge, size and box, the host's
 tone and accessible text, and that no stage draws the glyph and an engine mark
 both; that with the words hidden no two states look alike; and, with each
 settled glyph's badge hidden, how much of its ink the badge covers and that
-Astra draws at least as much as Sol. It fails on any mismatch.
+Astra draws at least as much as Sol; that every passed, failed and
+needs-you word on a graph node and a pane head is in its state's colour; and
+that each running halo, sampled at tenths of its period, is symmetric about
+its extremes. It fails on any mismatch.
 
 Readings are committed at `evidence/model-glyphs/design/readings.json`. The
 PNGs are written beside it and stay out of the commit, as
@@ -267,3 +280,29 @@ changed for each finding:
   A shared cool rim would muddy Sol's yellow, and the sky theme already ties
   them.
 - A drop-shadow repainting every frame: removed.
+
+## The second critique, answered
+
+`evidence/model-glyphs/critique/critique.md` failed the second build on two
+P2s and listed six P3s. What changed for each:
+
+- A passed stage lost its green on the graph node, the Stages pane head and
+  the folded strip: the node's and the head's word is green for passed, as it
+  is red and amber for failed and needs-you; the folded strip draws the badge
+  again. The driver checks every settled word's colour.
+- Astra a cog at 1×: eight pointed rays, long and short in turn, over a
+  larger disc with a smaller white-hot core. Running, the star holds its axes
+  and breathes, and its halo is softer (50% light, 55% dark), since the
+  turning star and the strong halo made a blob of it at 1×.
+- Motion frames not 200 ms apart: every animation is paused and seeked to the
+  frame's time before the shot.
+- The halo on the UI ease-out: ease-in-out, sampled and checked symmetric.
+- Reviewing and running pills alike: reviewing takes the full review tone on
+  the pill's and the chip's border.
+- A raw i18n key in the fixture: the fourth lane waits on the operator
+  (`needs_decision`) after its failed Test stage, a real pipeline state.
+- Sonnet faint: the vane is 25% wider.
+- The stage cards' badge unrendered: `StageCompletedCard` and
+  `StagePlaceholderPane` draw no badge, as a started stage's card has its
+  border in the state's colour and the completed card prints its state in its
+  body.
