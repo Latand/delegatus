@@ -8,11 +8,13 @@
  * report already knows its destination, and is optional: a skipped optional
  * step is settled, so the guide never reopens on it. A marker written before a
  * step existed reads it as null, the "not visited" state; the retired Tour id
- * is ignored on read.
+ * is ignored on read. "Answer for a relay service" (docs/design/relay.md §B.9)
+ * is the last "Later" step: pairing with an outside service is never on the
+ * way to a first orchestrator.
  */
 export const ONBOARDING_GUIDE_STEP_IDS = ["engines", "project", "telegram", "orchestrator"] as const;
 export const ONBOARDING_OPTIONAL_STEP_IDS = ["telegram"] as const;
-export const ONBOARDING_LATER_STEP_IDS = ["agents", "phone", "voice", "check"] as const;
+export const ONBOARDING_LATER_STEP_IDS = ["agents", "phone", "voice", "check", "relay"] as const;
 export const ONBOARDING_STEP_IDS = [...ONBOARDING_GUIDE_STEP_IDS, ...ONBOARDING_LATER_STEP_IDS] as const;
 export type OnboardingStepId = typeof ONBOARDING_STEP_IDS[number];
 export type OnboardingGuideStepId = typeof ONBOARDING_GUIDE_STEP_IDS[number];

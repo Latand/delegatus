@@ -33,6 +33,15 @@ describe("reconfigurationFromBody", () => {
     });
   });
 
+  test("keeps the pinned Sonnet 5.5 id so the pill can confirm the applied model", () => {
+    expect(reconfigurationFromBody("claude", { model: "claude-sonnet-5-5", effort: "high" })).toEqual({
+      value: { model: "claude-sonnet-5-5", effort: "high", fast: null },
+    });
+    expect(reconfigurationFromBody("claude", { model: "claude-sonnet-5", effort: "high" })).toEqual({
+      value: { model: "sonnet", effort: "high", fast: null },
+    });
+  });
+
   test("rejects cross-engine and invalid combinations", () => {
     expect(reconfigurationFromBody("claude", { model: "gpt-5.6-sol", effort: "high" }).error).toContain("model");
     expect(reconfigurationFromBody("codex", { model: "gpt-5.6-terra", effort: "minimal", fast: false }).error).toContain("effort");

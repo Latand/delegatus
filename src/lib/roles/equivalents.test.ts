@@ -29,6 +29,7 @@ test("with Codex out, every mapping row lands on its approved Claude runtime", (
     [{ roleId: "verifier" }, { engine: "codex", model: "gpt-6-astra", effort: "high" }, { engine: "claude", model: "opus", effort: "high" }],
     [{ roleId: "builder" }, { engine: "codex", model: "gpt-6-sol", effort: "high" }, { engine: "claude", model: "opus", effort: "high" }],
     [{ roleId: "builder", variant: "apply-fixes" }, { engine: "codex", model: "gpt-6-luna", effort: "high" }, { engine: "claude", model: "opus", effort: "medium" }],
+    [{ roleId: "builder", variant: "frontend" }, { engine: "codex", model: "gpt-6-astra", effort: "high" }, { engine: "claude", model: "claude-sonnet-5-5", effort: "high" }],
     [{ roleId: "cleaner" }, { engine: "codex", model: "gpt-6-luna", effort: "medium" }, { engine: "claude", model: "sonnet", effort: "high" }],
     [{ roleId: "prod-auditor" }, { engine: "codex", model: "gpt-6-astra", effort: "high" }, { engine: "claude", model: "opus", effort: "high" }],
     [{ roleId: "deployer" }, { engine: "codex", model: "gpt-6-sol", effort: "medium" }, { engine: "claude", model: "opus", effort: "high" }],

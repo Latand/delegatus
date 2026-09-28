@@ -19,7 +19,7 @@ describe("normalizeModelKey", () => {
 
 describe("registryWindow", () => {
   test("contains the frozen documented registry seed", () => {
-    expect(MODEL_REGISTRY_VERSION).toBe("2026-09-22");
+    expect(MODEL_REGISTRY_VERSION).toBe("2026-09-28");
     expect(registryWindow("fable-5", "standard")).toBe(1_000_000);
     expect(registryWindow("opus-4-8", "standard")).toBe(1_000_000);
     expect(registryWindow("sonnet-4-5", "standard")).toBe(200_000);
@@ -50,5 +50,12 @@ describe("registryWindow", () => {
     expect(registryWindow("opus-5-5", "1m")).toBe(1_000_000);
     expect(registryWindow("opus-5", "standard")).toBe(1_000_000);
     expect(resolveRegistryKey("opus")).toBe("opus-5-5");
+  });
+
+  test("Sonnet 5.5 is known at 1M, and the sonnet alias resolves to it", () => {
+    expect(normalizeModelKey("claude-sonnet-5-5")).toEqual({ key: "sonnet-5-5", mode: "standard" });
+    expect(registryWindow("sonnet-5-5", "standard")).toBe(1_000_000);
+    expect(resolveRegistryKey("sonnet")).toBe("sonnet-5-5");
+    expect(registryWindow("sonnet-5", "standard")).toBe(1_000_000);
   });
 });

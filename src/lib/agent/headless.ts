@@ -55,7 +55,7 @@ export interface LiveRun {
 
 export const headlessRuns = new Map<string, LiveRun>();
 
-function reviewerEnvironment(base: NodeJS.ProcessEnv, spawnCapability?: string): NodeJS.ProcessEnv {
+export function reviewerEnvironment(base: NodeJS.ProcessEnv, spawnCapability?: string, omitKeys: readonly string[] = []): NodeJS.ProcessEnv {
   const env = withoutWakatimeCredential(base);
   delete env.LLV_TOKEN;
   /* A headless reviewer is no owner of the operator's state. The Viewer's own
@@ -64,8 +64,25 @@ function reviewerEnvironment(base: NodeJS.ProcessEnv, spawnCapability?: string):
      minted two placeholder tasks there. The Viewer MCP server claims its own
      owner at its entry point, so nothing the reviewer needs is lost. */
   delete env[STATE_OWNER_ENV];
+  for (const key of omitKeys) delete env[key];
   if (spawnCapability) env.LLV_SPAWN_CAPABILITY = spawnCapability;
   return env;
+}
+
+export function claudeProviderCommand(
+  accountHome: string,
+  provider: NonNullable<ReturnType<typeof claudeProviderForHome>> | null,
+  args: string[],
+): { command: string; args: string[] } {
+  return provider
+    ? {
+        command: "bun",
+        args: [claudeProviderLauncherPath(accountHome), "--home", accountHome,
+          "--base-url", provider.baseUrl, "--default-model", provider.model,
+          "--small-model", provider.smallFastModel ?? "", "--header-names",
+          JSON.stringify(provider.customHeaderNames ?? []), "--", resolveHostBinary("claude"), ...args],
+      }
+    : { command: resolveBinary("claude"), args };
 }
 
 export function pidAlive(pid: number | null | undefined): boolean {
@@ -308,10 +325,7 @@ export function reviewerCommand(
       : null;
     if (settings) args.push("--settings", settings);
     const baseEnv = claudeAccount?.managed ? claudeManagedEnvironment(claudeAccount.home) : process.env;
-    return { command: provider ? "bun" : resolveBinary("claude"),
-      args: provider ? [claudeProviderLauncherPath(claudeAccount!.home), "--home", claudeAccount!.home,
-        "--base-url", provider.baseUrl, "--default-model", provider.model, "--small-model", provider.smallFastModel ?? "",
-        "--header-names", JSON.stringify(provider.customHeaderNames ?? []), "--", resolveHostBinary("claude"), ...args] : args,
+    return { ...claudeProviderCommand(claudeAccount?.home ?? "", provider, args),
       env: reviewerEnvironment(baseEnv, spawnCapability), stdin: null, outputPath: null, sessionId,
       reviewerPath: claudeTranscriptPath(cwd, sessionId, claudeAccount?.projectsDir) };
   }

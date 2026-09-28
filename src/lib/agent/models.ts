@@ -47,6 +47,9 @@ export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly Agen
     { id: "opus", label: "Opus 5.5", shortLabel: "Opus 5.5", use: "review" },
     { id: "fable", label: "Fable", shortLabel: "Fable", use: "general" },
     { id: "sonnet", label: "Sonnet", shortLabel: "Sonnet", use: "implement" },
+    // Pinned id of the Sonnet the `sonnet` alias resolves to in Claude Code
+    // 2.1.284. The alias moves when the next Sonnet ships; this row does not.
+    { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", shortLabel: "Sonnet 5.5", use: "implement" },
     { id: "haiku", label: "Haiku", shortLabel: "Haiku", use: "general" },
   ],
   codex: [
@@ -115,6 +118,18 @@ export function normalizeClaudeLaunchModel(value: string | null | undefined): Cl
     if (model === family || new RegExp(`(?:^|[-_.])${family}(?:[-_.]|$)`).test(model)) return family;
   }
   return null;
+}
+
+/** The catalog row a Claude model id names. A pinned id the catalog carries
+    (`claude-sonnet-5-5`, with or without a dated suffix) keeps itself, so a
+    runtime pill compares the id the conversation was launched with; every other
+    id falls back to its family alias (`sonnet`), as normalizeClaudeLaunchModel
+    does. */
+export function claudeCatalogModelId(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const model = value.trim().toLowerCase().replace(/-20\d{6}$/, "");
+  const pinned = ENGINE_MODELS.claude.find((option) => option.id === model);
+  return pinned ? pinned.id : normalizeClaudeLaunchModel(value);
 }
 
 /* A versioned Claude id as the scanner keeps it (`opus-5-5`, `claude-opus-5`,

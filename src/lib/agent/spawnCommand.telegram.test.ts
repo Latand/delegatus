@@ -543,7 +543,6 @@ for (const mode of ["off", "sqlite"] as const) test(`the ${mode} seat builder re
       },
       deliver: async () => ({ ok: true }),
       conversationTarget: () => null,
-      projectTasks: () => [],
       summarizeHandoffs: async () => ({ kind: "fallback", reason: "unavailable" }),
       launchSettlement: () => ({ kind: "unknown" }),
       stampRegistryIdentity: () => {},

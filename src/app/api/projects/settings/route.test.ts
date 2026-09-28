@@ -90,14 +90,20 @@ test("the Telegram report destination is refused for a chat the bot may not post
   }
 });
 
-test("topic links resolve only known postable chats and preserve topics only for forums", async () => {
-  const { setTelegramBotServiceForTests } = await import("@/lib/telegram/bot/service");
+test("topic links preserve topics only for forums", async () => {
+  const { TelegramBotError, setTelegramBotServiceForTests } = await import("@/lib/telegram/bot/service");
+  const chats = [
+    { chat: "reports", chatId: "-1002470529049", alias: "reports", username: "public_reports", isForum: true, postAllowed: true },
+    { chat: "plain", chatId: "-10077", alias: "plain", username: "plain_group", isForum: false, postAllowed: true },
+    { chat: "blocked", chatId: "-10088", alias: "blocked", username: "blocked_group", isForum: true, postAllowed: false },
+  ];
   setTelegramBotServiceForTests({
-    listChats: () => ({ chats: [
-      { chat: "reports", chatId: "-1002470529049", alias: "reports", username: "public_reports", isForum: true, postAllowed: true },
-      { chat: "plain", chatId: "-10077", alias: "plain", username: "plain_group", isForum: false, postAllowed: true },
-      { chat: "blocked", chatId: "-10088", alias: "blocked", username: "blocked_group", isForum: true, postAllowed: false },
-    ] }),
+    addChat: async (reference: string) => {
+      const chat = chats.find((entry) => entry.chatId === reference || `@${entry.username}` === reference);
+      if (!chat || !chat.postAllowed) throw new TelegramBotError("chat_unknown", "no such chat");
+      return { chat: chat.alias, chatId: chat.chatId, status: { chats } };
+    },
+    listChats: () => ({ chats }),
   } as never);
   try {
     const privateLink = await put({ project: "repo-topic", reportTelegram: { link: "https://t.me/c/2470529049/51865", name: "Topic" } });
@@ -110,11 +116,52 @@ test("topic links resolve only known postable chats and preserve topics only for
     expect(plain.status).toBe(200);
     expect((await plain.json()).reportTelegram).not.toHaveProperty("topicId");
     for (const link of ["t.me/unknown_group/42", "t.me/blocked_group/42"]) {
-      expect((await put({ project: "repo-topic", reportTelegram: { link, name: "Topic" } })).status).toBe(409);
+      expect((await put({ project: "repo-topic", reportTelegram: { link, name: "Topic" } })).status).toBe(404);
     }
     expect((await put({ project: "repo-topic", reportTelegram: { chat: "reports", name: "Topic", topicId: 0 } })).status).toBe(400);
     expect((await put({ project: "repo-topic", reportTelegram: { chat: "reports", name: "Topic", topicId: 77 } })).status).toBe(200);
   } finally {
+    setTelegramBotServiceForTests(null);
+  }
+});
+
+test("a pasted topic link discovers a post-only bot's chat, refreshes forum state, and explains a 403", async () => {
+  const { TelegramBotService, productionTelegramBotDependencies, setTelegramBotServiceForTests } = await import("@/lib/telegram/bot/service");
+  const { FakeBotTransport, fakeBotToken, ok, refused } = await import("@/lib/telegram/bot/fakeTransport");
+  const transport = new FakeBotTransport();
+  transport.handlers.getWebhookInfo = () => ok({ url: "https://example.invalid/hook" });
+  const service = new TelegramBotService({ ...productionTelegramBotDependencies(), transportFor: () => transport, sleep: async () => {} });
+  setTelegramBotServiceForTests(service);
+  try {
+    transport.script("getMe", ok({ id: 4242424, is_bot: true, first_name: "Report Bot" }));
+    await service.connect(fakeBotToken());
+    const link = "https://t.me/c/9876543210/51865";
+    transport.script("getChat", ok({ id: -1009876543210, type: "supergroup", title: "Reports", is_forum: true }));
+    transport.script("getChatMember", ok({ status: "member" }));
+    const created = await put({ project: "repo-new-topic", reportTelegram: { link, name: "Reports" } });
+    expect(created.status).toBe(200);
+    expect(await created.json()).toMatchObject({ reportTelegram: { chat: "reports", topicId: 51865 }, reportDestination: { chat: "reports", topicId: 51865 } });
+
+    transport.script("getChat", ok({ id: -1009876543212, type: "supergroup", title: "Fresh Reports", username: "fresh_reports", is_forum: false }));
+    transport.script("getChatMember", ok({ status: "member" }));
+    const byUsername = await put({ project: "repo-new-username", reportTelegram: { chat: "@fresh_reports", name: "Fresh" } });
+    expect(byUsername.status).toBe(200);
+    expect((await byUsername.json()).reportTelegram.chat).toBe("fresh-reports");
+
+    transport.script("getChat", ok({ id: -1009876543210, type: "supergroup", title: "Reports", is_forum: false }), ok({ id: -1009876543210, type: "supergroup", title: "Reports", is_forum: true }));
+    transport.script("getChatMember", ok({ status: "member" }), ok({ status: "member" }));
+    await service.addChat("-1009876543210");
+    expect(service.listChats().chats.find((chat) => chat.chatId === "-1009876543210")?.isForum).toBe(false);
+    const refreshed = await put({ project: "repo-new-topic", reportTelegram: { link, name: "Reports" } });
+    expect(refreshed.status).toBe(200);
+    expect((await refreshed.json()).reportTelegram.topicId).toBe(51865);
+
+    transport.script("getChat", refused(403, "Forbidden"));
+    const denied = await put({ project: "repo-denied-topic", reportTelegram: { link: "https://t.me/c/9876543211/51865", name: "Reports" } });
+    expect(denied.status).toBe(409);
+    expect(await denied.json()).toMatchObject({ code: "bot_not_in_chat", message: expect.stringContaining("add it to the chat first") });
+  } finally {
+    await service.remove();
     setTelegramBotServiceForTests(null);
   }
 });

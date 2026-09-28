@@ -156,7 +156,6 @@ test("rotation revokes A's pipeline control while B, its builder and a live depu
     conversationTarget: id => ({ kind: "eligible", conversationId: id, path: id === a.conversationId ? a.path : b.path, cwd: process.cwd(), project: "proj-a", engine: "codex" }),
     resolvedConversation: id => ({ conversationId: id, path: id === a.conversationId ? a.path : b.path, holdsTurns: true, cwd: process.cwd() }),
     stampRegistryIdentity: () => {},
-    projectTasks: () => [],
     summarizeHandoffs: async () => ({ kind: "fallback", reason: "unavailable" }),
     launchSettlement: () => ({ kind: "unknown" }),
     runtimeIdentity: () => ({ engine: null, model: null }),

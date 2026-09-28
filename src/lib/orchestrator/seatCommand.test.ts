@@ -13,6 +13,7 @@ import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection } from "@/lib/telegram/sessionStore";
 
 import {
+  HANDOFF_BOARD_REPORT_POINTER,
   HANDOFF_HEADING,
   HISTORY_BUDGET_BYTES,
   HISTORY_HEADING,
@@ -83,7 +84,6 @@ function dependencies(overrides: Partial<SeatCommandDependencies> = {}): { deps:
       engine: "claude",
     }),
     stampRegistryIdentity: (seat) => { recorded.identityStamps.push(seat); },
-    projectTasks: () => [],
     /* No test in this file reaches the real summarizer: the seam is injected,
        so nothing here spawns a process, opens a socket, or reads an account. */
     summarizeHandoffs: async (request) => {
@@ -712,12 +712,15 @@ test("rotation composes a bounded handoff, switches designation atomically, and 
       recorded2.push(body);
       return { status: 200, body: { ok: true, conversationId: SUCCESSOR, path: "/tmp/successor.jsonl" } };
     },
-    projectTasks: () => [
-      { id: "task_1", status: "doing", text: "Ship the handoff", },
-      { id: "task_2", status: "inbox", text: "Review the successor", },
-    ],
+    /* The report's own work never settles here: the rotation must answer
+       without it (docs/design/board-maintenance-report.md §5.1). */
+    startBoardReport: (seat) => {
+      reports.push(seat);
+      void new Promise<never>(() => {});
+    },
   });
   const recorded2: Record<string, unknown>[] = [];
+  const reports: Parameters<NonNullable<SeatCommandDependencies["startBoardReport"]>>[0][] = [];
   const result = await executeOrchestratorRotation({
     project: "proj-a",
     clientRequestId: "req_00000010",
@@ -728,15 +731,20 @@ test("rotation composes a bounded handoff, switches designation atomically, and 
   expect(result.body.rotatedFrom).toMatchObject({ conversationId: NEW_ID });
   const spawnedPrompt = String(recorded2[0]!.prompt);
   /* Successor mandate = incumbent mandate + bounded handoff naming the
-     predecessor, its MCP read, the open tasks and the caller's notes. */
+     predecessor, its MCP read, where the board report comes from and the
+     caller's notes. */
   expect(spawnedPrompt).toStartWith("own the board");
   expect(spawnedPrompt).toContain(NEW_ID);
   expect(spawnedPrompt).toContain(`conversation_messages({"clientRequestId":"rotation-predecessor-recent-turns-${NEW_ID}","conversationId":"${NEW_ID}","roles":["user","assistant"],"limit":40})`);
   expect(spawnedPrompt).not.toContain(`/tmp/${NEW_ID.slice(-4)}.jsonl`);
-  expect(spawnedPrompt).toContain("[doing] Ship the handoff (task_1)");
+  /* The open-task list moved into the board maintenance report (§5.5). */
+  expect(spawnedPrompt).toContain(HANDOFF_BOARD_REPORT_POINTER);
+  expect(spawnedPrompt).not.toContain("Open board tasks for this project");
   expect(spawnedPrompt).toContain("Prioritize the review queue.");
 
   const { active } = orchestratorSeatFor("proj-a");
+  /* The successor's epoch starts one report, and only the successor's. */
+  expect(reports).toEqual([{ project: "proj-a", seatEpoch: active!.seatEpoch, conversationId: SUCCESSOR, path: "/tmp/successor.jsonl" }]);
   expect(active?.conversationId).toBe(SUCCESSOR);
   /* Bidirectional lineage, both cards preserved: the seat names its
      predecessor, the revocation names its successor, and nothing killed or
@@ -1556,7 +1564,7 @@ test("rotation rejects an explicit successor model outside the engine catalog be
   }, deps);
 
   expect(rotated.status).toBe(400);
-  expect(rotated.body.error).toBe("invalid claude model id \"claude-fable-5\"; valid claude model ids: opus, fable, sonnet, haiku");
+  expect(rotated.body.error).toBe("invalid claude model id \"claude-fable-5\"; valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku");
   expect(recorded.spawns).toHaveLength(1);
   expect(orchestratorSeatFor("proj-a")).toMatchObject({ active: { conversationId: NEW_ID }, pending: null });
 });
@@ -1615,6 +1623,30 @@ async function seatIncumbent(mandate: string, clientRequestId: string): Promise<
   const seeded = await executeOrchestratorSeatRequest({ ...spawnRequest(clientRequestId), mandate }, deps);
   expect(seeded.status).toBe(200);
 }
+
+/* docs/design/board-maintenance-report.md §5.5: the handoff's open-task list —
+   twelve rows of about 200 bytes on a busy board — went into the board
+   maintenance report, and the bytes it took are what a rotation of the default
+   mandate now keeps for its history. A 2 000-byte history beside a full task
+   list did not fit the envelope; beside the one pointer line it does. */
+test("a rotation of the default mandate keeps a history section the old task list pushed out", async () => {
+  await seatIncumbent(stackedMandate(ORCHESTRATOR_SYSTEM_PROMPT, 1), "req_00002301");
+  const prompts: string[] = [];
+  const { deps } = dependencies({
+    spawn: async (body) => {
+      prompts.push(String(body.prompt));
+      return { status: 200, body: { ok: true, conversationId: successorId(2301), path: "/tmp/successor.jsonl" } };
+    },
+    summarizeHandoffs: async () => ({ kind: "digest", text: "d".repeat(2_000) }),
+  });
+  const rotated = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00002302" }, deps);
+
+  expect(rotated.status).toBe(200);
+  expect((rotated.body.handoff as { historyDropped?: boolean }).historyDropped).toBe(false);
+  expect(historySection(prompts[0]!)).toContain("d".repeat(2_000));
+  expect(prompts[0]).toContain(HANDOFF_BOARD_REPORT_POINTER);
+  expect(launchBytes(prompts[0]!)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
+});
 
 test("AC1: three stacked handoffs compact into ONE rotation history section", async () => {
   const core = "own the board";
@@ -2035,11 +2067,6 @@ async function rotateTwelveTimes(
         prompts.push(String(body.prompt));
         return { status: 200, body: { ok: true, conversationId: successorId(100 + rotation), path: "/tmp/successor.jsonl" } };
       },
-      projectTasks: () => Array.from({ length: 12 }, (_, index) => ({
-        id: `task_${index + 1}`,
-        status: "doing",
-        text: "t".repeat(200),
-      })),
       summarizeHandoffs,
     });
     const rotated = await executeOrchestratorRotation({

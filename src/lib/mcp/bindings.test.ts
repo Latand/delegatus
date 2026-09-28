@@ -3004,7 +3004,7 @@ test("create_pipeline batches every invalid stage model with each engine catalog
     "stages[1].model",
   ]);
   expect(refusal?.message).toContain("valid codex model ids: gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna");
-  expect(refusal?.message).toContain("valid claude model ids: opus, fable, sonnet, haiku");
+  expect(refusal?.message).toContain("valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku");
 });
 
 /* ------------------------------------------------------------------------- *

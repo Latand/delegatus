@@ -71,7 +71,7 @@ function ProjectLine({ line, postable, onSaved }: {
   const [name, setName] = useState("");
   const [link, setLink] = useState("");
   const [saving, setSaving] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
   const value = picked ?? stored;
   /* A chosen chat agents may not post in now stays listed, so the line still
      says where the project reports. */
@@ -80,20 +80,23 @@ function ProjectLine({ line, postable, onSaved }: {
 
   const write = async (chat: string, reportName: string | null, pastedLink?: string) => {
     setSaving(true);
-    setFailed(false);
+    setFailed(null);
     try {
       const response = await fetch("/api/projects/settings", {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ project: line.project, reportTelegram: pastedLink ? { link: pastedLink, name: reportName } : chat === LOG_ONLY ? null : { chat, name: reportName } }),
       });
-      if (!response.ok) throw new Error(String(response.status));
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { message?: unknown };
+        throw new Error(pastedLink && typeof body.message === "string" ? body.message : "");
+      }
       setPicked(null);
       setName("");
       setLink("");
       await onSaved();
-    } catch {
-      setFailed(true);
+    } catch (error) {
+      setFailed(error instanceof Error ? error.message : "");
     } finally {
       setSaving(false);
     }
@@ -157,7 +160,7 @@ function ProjectLine({ line, postable, onSaved }: {
         </form>
       ) : null}
       {needsName ? <p className="text-[10px] leading-snug text-muted">{t("onboarding.telegram.nameHint")}</p> : null}
-      {failed ? <p role="alert" className="text-[10px] font-semibold leading-snug text-danger">{t("telegram.bot.projectFailed")}</p> : null}
+      {failed !== null ? <p role="alert" className="text-[10px] font-semibold leading-snug text-danger">{failed || t("telegram.bot.projectFailed")}</p> : null}
     </li>
   );
 }

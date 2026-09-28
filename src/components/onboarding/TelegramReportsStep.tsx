@@ -77,7 +77,7 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
   const [link, setLink] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<TelegramReportsOutcome | undefined>(undefined);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
   const [settings, setSettings] = useState<ProjectReportSettings | null>(null);
 
   useEffect(() => {
@@ -118,7 +118,7 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
   const save = async () => {
     if (!canSave) return;
     setSaving(true);
-    setFailed(false);
+    setFailed(null);
     const outcome: TelegramReportsOutcome = link.trim() ? { link: link.trim(), name: name.trim() }
       : chatChosen ? { chat: choice!, name: name.trim(), ...(choice === inUse && settings?.reportTelegram?.topicId ? { topicId: settings.reportTelegram.topicId } : {}) } : null;
     try {
@@ -127,15 +127,18 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ project: project.project, reportTelegram: outcome }),
       });
-      if (!response.ok) throw new Error(String(response.status));
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { message?: unknown };
+        throw new Error("link" in (outcome ?? {}) && typeof body.message === "string" ? body.message : "");
+      }
       const updated = settingsOf(await response.json().catch(() => ({})) as Partial<ProjectReportSettings>);
       setSettings(updated);
       setLink("");
       setPicked(updated.reportTelegram?.chat ?? LOG_ONLY);
       setSaved(updated.reportTelegram?.chat ? { chat: updated.reportTelegram.chat, name: updated.reportTelegram.name ?? name.trim(), topicId: updated.reportTelegram.topicId } : null);
       onSaved(outcome);
-    } catch {
-      setFailed(true);
+    } catch (error) {
+      setFailed(error instanceof Error ? error.message : "");
     } finally {
       setSaving(false);
     }
@@ -247,7 +250,7 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
 
       <p className="max-w-[520px] text-ui leading-[1.45] text-secondary">{t("onboarding.telegram.rule")}</p>
 
-      {failed ? <p role="alert" className="text-ui font-semibold text-danger">{t("onboarding.telegram.failed")}</p> : null}
+      {failed !== null ? <p role="alert" className="text-ui font-semibold text-danger">{failed || t("onboarding.telegram.failed")}</p> : null}
       {saved !== undefined ? (
         <p role="status" data-onboarding-report-saved="" className="text-ui font-semibold text-success">
           {saved && "chat" in saved ? t("onboarding.telegram.savedChat", { chat: `${saved.chat}${saved.topicId ? ` · ${t("telegram.reportTopic", { id: saved.topicId })}` : ""}` }) : t("onboarding.telegram.savedLog")}

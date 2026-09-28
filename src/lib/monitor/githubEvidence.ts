@@ -260,3 +260,387 @@ export async function openIssuesForProposal(options: {
     return [];
   }
 }
+
+/* ------------------------------------------------------------------------- *
+ * Open issues ranked by the priority a project records, for the board
+ * maintenance report (docs/design/board-maintenance-report.md §7).
+ *
+ * The fourth question asked of the same `gh` seam. Priority lives in a
+ * different place per project — a Project's single-select field, a label, a
+ * milestone — and in some repositories barely at all, so the ranking uses only
+ * what a project actually recorded, names the signal on every row, and says in
+ * one neutral line when there is none. It invents no order for the rest and
+ * never suggests how a project should record priority (operator decision D2).
+ *
+ * One `gh api graphql` call in the common case. A token without Project scope
+ * answers with an error for `projectItems`; the call is repeated once without
+ * them and the ranking says the fields were unreadable. Like the pull-request
+ * read above, a failure is carried out as a failure, never as an empty list.
+ *
+ * Read-only. Nothing here labels, comments on, closes or opens an issue.
+ * ------------------------------------------------------------------------- */
+
+export interface OpenIssueRow {
+  number: number;
+  title: string;
+  createdAt: string;
+  updatedAt: string | null;
+  labels: string[];
+  milestone: { title: string; dueOn: string | null } | null;
+  /** Open issues recorded as blocking this one. */
+  openBlockers: number;
+  /** Open pull requests that close this issue when they merge. */
+  closingPullRequests: number;
+  /** Single-select field values of the issue's Project items, by field name;
+      the first Project that sets a field wins. */
+  projectFields: Record<string, string>;
+}
+
+export interface RankedIssue extends OpenIssueRow {
+  /** 0 (critical) to 3 (low); null when no priority signal names one. */
+  tier: number | null;
+  /** The signal the tier came from, as printed. */
+  tierSignal: string | null;
+  ready: boolean;
+  status: string | null;
+}
+
+export interface IssueRanking {
+  /** Open issues the repository has, and how many of them were read. */
+  totalCount: number;
+  read: number;
+  /** Excluded before ranking: already on the board, closed by an open pull
+      request, blocked, or in a Project status that is not open for work. */
+  excluded: number;
+  /** Issues with a tier or a milestone, in rank order. */
+  ranked: RankedIssue[];
+  /** The rest, newest update first. Nothing orders them further. */
+  unranked: RankedIssue[];
+  /** The signals the ranked issues were ranked by, in the order they apply. */
+  signals: string[];
+  projectFieldsUnreadable: boolean;
+}
+
+export type RankedIssuesResult =
+  | { ok: true; ranking: IssueRanking }
+  | { ok: false; unavailable: OpenPullRequestsUnavailable };
+
+const ISSUE_PAGE_SIZE = 100;
+const REPOSITORY_LABEL_LIMIT = 100;
+const ISSUE_TITLE_LIMIT = 200;
+
+/**
+ * A page of open issues, newest update first. `newest` pages also read the
+ * repository's label names, so the priority labels it records are known without
+ * another call; `labelled` reads only the issues carrying any of `$labels`
+ * (GitHub matches any one of them).
+ */
+function issuesQuery(withProjects: boolean, kind: "newest" | "labelled" = "newest"): string {
+  const projects = withProjects
+    ? " projectItems(first: 3) { nodes { fieldValues(first: 20) { nodes { ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } } } } } }"
+    : "";
+  const labelled = kind === "labelled";
+  return `query($owner: String!, $name: String!, $after: String${labelled ? ", $labels: [String!]" : ""}) { repository(owner: $owner, name: $name) {`
+    + (labelled ? "" : ` labels(first: ${REPOSITORY_LABEL_LIMIT}) { nodes { name } }`)
+    + ` issues(states: OPEN, first: ${ISSUE_PAGE_SIZE}, after: $after,${labelled ? " labels: $labels," : ""} orderBy: {field: UPDATED_AT, direction: DESC}) {`
+    + " totalCount pageInfo { hasNextPage endCursor } nodes { number title createdAt updatedAt"
+    + " labels(first: 10) { nodes { name } } milestone { title dueOn }"
+    + " issueDependenciesSummary { blockedBy }"
+    + " closedByPullRequestsReferences(first: 1, includeClosedPrs: false) { totalCount }"
+    + `${projects} } } } }`;
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function nodesOf(value: unknown): unknown[] {
+  const nodes = record(value)?.nodes;
+  return Array.isArray(nodes) ? nodes : [];
+}
+
+interface IssuePage {
+  totalCount: number;
+  issues: OpenIssueRow[];
+  endCursor: string | null;
+  hasNextPage: boolean;
+  /** The repository's labels that record a priority, when the page read them. */
+  priorityLabels: { name: string; tier: number }[];
+}
+
+/** Null when the answer is not a page of issues at all. A response that also
+    carries `errors` is refused, so a partial answer never reads as whole. */
+function parseIssuePage(raw: string): IssuePage | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    return null;
+  }
+  const body = record(parsed);
+  if (!body || (Array.isArray(body.errors) && body.errors.length > 0)) return null;
+  const repository = record(record(body.data)?.repository);
+  const issues = record(repository?.issues);
+  if (!issues || typeof issues.totalCount !== "number" || !Array.isArray(issues.nodes)) return null;
+  const rows: OpenIssueRow[] = [];
+  for (const entry of issues.nodes) {
+    const node = record(entry);
+    if (!node || typeof node.number !== "number" || !Number.isSafeInteger(node.number)) return null;
+    if (typeof node.createdAt !== "string" || !Number.isFinite(Date.parse(node.createdAt))) return null;
+    const milestone = record(node.milestone);
+    const projectFields: Record<string, string> = {};
+    for (const item of nodesOf(node.projectItems)) {
+      for (const value of nodesOf(record(item)?.fieldValues)) {
+        const field = record(record(value)?.field)?.name;
+        const name = record(value)?.name;
+        if (typeof field === "string" && typeof name === "string" && !(field in projectFields)) projectFields[field] = name.slice(0, 60);
+      }
+    }
+    const blockers = record(node.issueDependenciesSummary)?.blockedBy;
+    const closing = record(node.closedByPullRequestsReferences)?.totalCount;
+    rows.push({
+      number: node.number,
+      title: typeof node.title === "string" ? node.title.slice(0, ISSUE_TITLE_LIMIT) : "",
+      createdAt: node.createdAt,
+      updatedAt: typeof node.updatedAt === "string" ? node.updatedAt : null,
+      labels: nodesOf(node.labels).flatMap((label) => {
+        const name = record(label)?.name;
+        return typeof name === "string" ? [name.slice(0, 60)] : [];
+      }),
+      milestone: milestone && typeof milestone.title === "string"
+        ? { title: milestone.title.slice(0, 60), dueOn: typeof milestone.dueOn === "string" ? milestone.dueOn : null }
+        : null,
+      openBlockers: typeof blockers === "number" ? blockers : 0,
+      closingPullRequests: typeof closing === "number" ? closing : 0,
+      projectFields,
+    });
+  }
+  const pageInfo = record(issues.pageInfo);
+  return {
+    totalCount: issues.totalCount,
+    issues: rows,
+    endCursor: typeof pageInfo?.endCursor === "string" ? pageInfo.endCursor : null,
+    hasNextPage: pageInfo?.hasNextPage === true,
+    priorityLabels: nodesOf(repository?.labels).flatMap((label) => {
+      const name = record(label)?.name;
+      const tier = typeof name === "string" ? labelTier(name) : null;
+      return typeof name === "string" && tier !== null ? [{ name, tier }] : [];
+    }),
+  };
+}
+
+/** Lower-cased words of an option name, with emoji and punctuation removed. */
+function optionWords(name: string): string {
+  return name.normalize("NFKD").replace(/[^\p{L}\p{N}]+/gu, " ").trim().toLowerCase();
+}
+
+const TIER_WORDS: Readonly<Record<string, number>> = {
+  critical: 0, urgent: 0, blocker: 0, p0: 0,
+  high: 1, soon: 1, p1: 1,
+  medium: 2, normal: 2, p2: 2,
+  low: 3, whenever: 3, p3: 3,
+};
+
+/** The tier an option names; an option outside the list ranks as medium. */
+function tierOf(name: string): number {
+  for (const word of optionWords(name).split(" ")) {
+    const tier = TIER_WORDS[word];
+    if (tier !== undefined) return tier;
+  }
+  return 2;
+}
+
+/** A label that records priority, and the level it names. */
+function labelTier(label: string): number | null {
+  const words = optionWords(label);
+  const level = /^priority (\S+)$/.exec(words)?.[1];
+  if (level) return tierOf(level);
+  if (/^p[0-3]$/.test(words)) return TIER_WORDS[words]!;
+  if (words === "critical" || words === "urgent") return 0;
+  return null;
+}
+
+/** Project fields are matched by name, whatever the project capitalized. */
+function fieldValue(fields: Record<string, string>, wanted: string): string | null {
+  for (const [field, value] of Object.entries(fields)) if (optionWords(field) === wanted) return value;
+  return null;
+}
+
+const STATUS_CLOSED_FOR_WORK = ["done", "complete", "completed", "closed", "shipped", "cancelled", "canceled", "blocked", "on hold", "hold", "paused", "in progress", "doing", "in review", "review"];
+
+function statusClosedForWork(status: string): boolean {
+  const words = optionWords(status);
+  return STATUS_CLOSED_FOR_WORK.some((phrase) => words === phrase || words.startsWith(`${phrase} `) || words.endsWith(` ${phrase}`));
+}
+
+function statusReady(status: string | null, labels: readonly string[]): boolean {
+  if (status) {
+    const words = optionWords(status);
+    if (/\bready\b/.test(words) || /\btodo\b/.test(words) || /\bto do\b/.test(words)) return true;
+  }
+  return labels.some((label) => {
+    const words = optionWords(label);
+    return words === "ready" || words === "ready for agent";
+  });
+}
+
+function rankedIssue(issue: OpenIssueRow): RankedIssue {
+  const priority = fieldValue(issue.projectFields, "priority");
+  const urgency = fieldValue(issue.projectFields, "urgency");
+  const status = fieldValue(issue.projectFields, "status");
+  let tier: number | null = null;
+  let tierSignal: string | null = null;
+  if (priority) {
+    tier = tierOf(priority);
+    tierSignal = `Priority ${priority}`;
+  } else if (urgency) {
+    tier = tierOf(urgency);
+    tierSignal = `Urgency ${urgency}`;
+  } else {
+    for (const label of issue.labels) {
+      const labelled = labelTier(label);
+      if (labelled === null) continue;
+      tier = labelled;
+      tierSignal = `label ${label}`;
+      break;
+    }
+  }
+  return { ...issue, tier, tierSignal, ready: statusReady(status, issue.labels), status };
+}
+
+function dueMs(issue: RankedIssue): number {
+  if (!issue.milestone) return Number.POSITIVE_INFINITY;
+  const due = issue.milestone.dueOn ? Date.parse(issue.milestone.dueOn) : Number.NaN;
+  /* A milestone with no date sorts after every dated one, and before none. */
+  return Number.isFinite(due) ? due : Number.MAX_SAFE_INTEGER;
+}
+
+/** Tier, then readiness, then the soonest milestone, then the longest wait. */
+function compareRanked(left: RankedIssue, right: RankedIssue): number {
+  return (left.tier ?? 4) - (right.tier ?? 4)
+    || Number(right.ready) - Number(left.ready)
+    || dueMs(left) - dueMs(right)
+    || Date.parse(left.createdAt) - Date.parse(right.createdAt)
+    || left.number - right.number;
+}
+
+/**
+ * Pure: rank what was read. Only an issue carrying a tier or a milestone is
+ * ranked; readiness orders ranked issues and never ranks one by itself, since it
+ * records state and says nothing about priority.
+ */
+export function rankOpenIssues(
+  issues: readonly OpenIssueRow[],
+  options: {
+    totalCount: number;
+    onBoard: ReadonlySet<number>;
+    projectFieldsUnreadable?: boolean;
+    /** How many of `issues` are the most recently updated, read in order;
+        the rest were read by their priority label. All of them by default. */
+    newestRead?: number;
+  },
+): IssueRanking {
+  let excluded = 0;
+  const ranked: RankedIssue[] = [];
+  const unranked: RankedIssue[] = [];
+  for (const issue of issues) {
+    const row = rankedIssue(issue);
+    if (options.onBoard.has(issue.number) || issue.closingPullRequests > 0 || issue.openBlockers > 0
+      || (row.status !== null && statusClosedForWork(row.status))) {
+      excluded += 1;
+      continue;
+    }
+    (row.tier !== null || row.milestone ? ranked : unranked).push(row);
+  }
+  ranked.sort(compareRanked);
+  unranked.sort((left, right) => Date.parse(right.updatedAt ?? right.createdAt) - Date.parse(left.updatedAt ?? left.createdAt));
+  const used = new Set(ranked.map((issue) => issue.tierSignal?.split(" ", 1)[0] ?? "milestone"));
+  const signals = [
+    ...(used.has("Priority") ? ["Project Priority field"] : []),
+    ...(used.has("Urgency") ? ["Project Urgency field"] : []),
+    ...(used.has("label") ? ["priority label"] : []),
+    ...(ranked.some((issue) => issue.milestone) ? ["milestone"] : []),
+  ];
+  return {
+    totalCount: options.totalCount,
+    read: options.newestRead ?? issues.length,
+    excluded,
+    ranked,
+    unranked,
+    signals,
+    projectFieldsUnreadable: options.projectFieldsUnreadable === true,
+  };
+}
+
+/**
+ * The open issues of `repository` (`owner/name` on github.com), ranked. The
+ * caller has already established that the project's origin is on GitHub; a
+ * project that is not runs no `gh` at all.
+ */
+export async function openIssuesRanked(options: {
+  cwd: string;
+  repository: string;
+  onBoard: ReadonlySet<number>;
+  run?: GithubRunner;
+  timeoutMs?: number;
+}): Promise<RankedIssuesResult> {
+  const [owner, name] = options.repository.split("/");
+  if (!owner || !name) return { ok: false, unavailable: "command-failed" };
+  const run = options.run ?? githubRunner(options.cwd, options.timeoutMs ?? 20_000);
+  const page = async (withProjects: boolean, after: string | null, labels: readonly string[] = []): Promise<IssuePage | OpenPullRequestsUnavailable> => {
+    let raw: string;
+    try {
+      raw = await run(["api", "graphql", "-F", `owner=${owner}`, "-F", `name=${name}`,
+        ...(after ? ["-F", `after=${after}`] : []),
+        ...labels.flatMap((label) => ["-f", `labels[]=${label}`]),
+        "-f", `query=${issuesQuery(withProjects, labels.length ? "labelled" : "newest")}`]);
+    } catch (error) {
+      return githubUnavailableFromError(error);
+    }
+    return parseIssuePage(raw) ?? "malformed-output";
+  };
+  let withProjects = true;
+  let first = await page(true, null);
+  /* A token without Project scope fails the whole query on `projectItems`;
+     one retry without them still ranks by labels and milestones. A timeout is
+     not retried: the budget it spent is the budget the report has. */
+  if (typeof first === "string" && first !== "timed-out") {
+    withProjects = false;
+    first = await page(false, null);
+  }
+  if (typeof first === "string") return { ok: false, unavailable: first };
+  let newest = first.issues;
+  let labelled: OpenIssueRow[] = [];
+  const rank = () => {
+    const seen = new Set(newest.map((issue) => issue.number));
+    return rankOpenIssues([...newest, ...labelled.filter((issue) => !seen.has(issue.number))], {
+      totalCount: first.totalCount,
+      onBoard: options.onBoard,
+      projectFieldsUnreadable: !withProjects,
+      newestRead: newest.length,
+    });
+  };
+  const nothingAbove = (ranking: IssueRanking) => !ranking.ranked.some((issue) => (issue.tier ?? 4) <= 1);
+  let ranking = rank();
+  /* The newest page ranked nothing above medium. A label the repository
+     records as a priority finds its issues wherever they sit by update time,
+     so they are read by label: the labels at critical or high when the
+     repository has any, otherwise every priority label it has. */
+  if (nothingAbove(ranking) && first.hasNextPage && first.priorityLabels.length) {
+    const high = first.priorityLabels.filter((label) => label.tier <= 1);
+    const byLabel = await page(withProjects, null, (high.length ? high : first.priorityLabels).map((label) => label.name));
+    if (typeof byLabel !== "string") {
+      labelled = byLabel.issues;
+      ranking = rank();
+    }
+  }
+  /* A second newest page for what only a Project field or a milestone records. */
+  if (nothingAbove(ranking) && first.hasNextPage && first.endCursor) {
+    const second = await page(withProjects, first.endCursor);
+    if (typeof second !== "string") {
+      newest = [...newest, ...second.issues];
+      ranking = rank();
+    }
+  }
+  return { ok: true, ranking };
+}

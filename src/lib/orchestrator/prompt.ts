@@ -88,7 +88,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 30;
+export const ORCHESTRATOR_PROMPT_VERSION = 31;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -231,6 +231,22 @@ const SHIPPED_CLOCK_SECTIONS: readonly string[] = [
 
 /** The first default version whose clock section states the tick contract. */
 export const ORCHESTRATOR_TICK_CONTRACT_VERSION = 21;
+
+/** Identifies the board report section below inside a mandate, however its
+    body was edited. */
+export const ORCHESTRATOR_BOARD_REPORT_HEADING = "## Board maintenance report";
+
+/**
+ * How the seat reads the board maintenance report
+ * (docs/design/board-maintenance-report.md §8), delivered on the same terms
+ * as the clock and task-ownership sections: a rotation that names no mandate
+ * keeps the incumbent's core (#2283), so for a running seat delivery is the
+ * only way this reaches it. It carries the operator's decisions of 2026-09-27:
+ * a card only the operator's own sessions hold closes on their word (D3), and
+ * a missing priority is stated, never turned into a request to label (D2).
+ */
+export const ORCHESTRATOR_BOARD_REPORT_DIRECTIVE = `${ORCHESTRATOR_BOARD_REPORT_HEADING}
+Each time you are seated, Delegatus makes one read-only pass over this board and sends it after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Take its sections in order and re-read each item before you change it. You alone change this board: close items one by one with the reason, and a card marked "ask first" only when the operator agrees. Offer its suggested issues with suggest_replies and start none unasked; where it finds no recorded priority, say so once and never ask for labels or fields. Cover an unavailable section or a missing report with your own reads.`;
 
 /** Identifies the task-ownership section below inside a mandate, however its
     body was edited — the same reason the clock heading exists: a caller who
@@ -386,6 +402,8 @@ They render as pills under your message and land in their composer on a tap, edi
 
 ${ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE}
 
+${ORCHESTRATOR_BOARD_REPORT_DIRECTIVE}
+
 ## Search prior conversations before deciding
 Much of what you will meet has been met before, and Delegatus indexes every user and assistant message of every conversation on this machine, across both engines and all accounts. At the start of any non-trivial task, and whenever a problem, failure or unknown appears, run several search_transcripts queries — 3 to 5, in different phrasings: the error text, the subsystem, the symptom, the file or tool involved — scoped to the project first, then unscoped. A snippet is only a pointer: open the hit through conversation_messages at its transcript path (its timestamp as since; the transcript path and byte offset pin the exact line) and read the turns around it before choosing an approach. Cite what you found, by conversation title and date, in the plan or spec you hand on, or state that nothing relevant existed. Check an old answer against the code as it is now before you build on it; the code has usually moved since.
 
@@ -480,15 +498,16 @@ export function orchestratorRoleTable(roles: readonly RoleDefinition[]): string 
   const overriddenNote = overriddenScaffoldNote(roles);
   return [
     ORCHESTRATOR_ROLE_TABLE_HEADING,
-    "Read from this install's role registry at delivery. A stage or spawn that omits engine, model and effort runs its role's row.",
+    "A stage or spawn that omits engine, model and effort runs its role's row.",
     "| role | engine | model | effort | access | for |",
     "| --- | --- | --- | --- | --- | --- |",
     ...roles.map(roleTableRow),
     `- ${registryStatus}`,
-    "- Runtime overrides go on the stage beside role, never inside it. A reviewer stage is read-only by its role. override-stage binds from the NEXT attempt: a running one keeps its runtime.",
-    "- Size each lane first. trivial (a few lines of UI, copy, one flag or label; your brief states the exact change and its acceptance): builder and reviewer size=trivial, one review round. normal: the rows, effort low or medium for routine work. design (options, architecture, proposals, issues from design work): an architect stage first.",
+    "- Runtime overrides go on the stage beside role, never inside it. A reviewer stage is read-only by its role. override-stage binds from the NEXT attempt.",
+    "- Size each lane first. trivial (a few lines of UI, copy, one flag or label; your brief states the exact change and its acceptance): builder and reviewer size=trivial, one review round. normal: the rows, effort low or medium. design (options, architecture, proposals, issues from design work): an architect stage first.",
+    "- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, Opus review-loop.",
     "- Fix stages: builder mode=apply-fixes with the implementer's domain and size, on the builder row they select. A fixer fixes every finding that names its place, OVER-BUILT cuts included, and fails on one with no place, a WRONG-PREMISE or a new design, which parks the lane: re-plan it.",
-    "- size=trivial needs a brief written by a large model: Claude Opus or Fable, or a large Codex model. Sonnet and Haiku never run orchestrator, architect, reviewer or verifier work, and run a builder whose model you set by hand only at size=trivial. README, docs, public text: builder domain=docs.",
+    "- size=trivial needs a brief written by a large model: Claude Opus or Fable, or a large Codex model. Sonnet and Haiku never run orchestrator, architect, reviewer or verifier work, and run a builder whose model you set by hand only at size=trivial, or as domain=frontend on an Opus brief. README, docs, public text: builder domain=docs.",
     "- create_pipeline answers each stage's runtime and a runtimeLine (spawn_agent: runtime): fix a wrong one before attempt 1 (draft, or pause, override-stage, start), and quote it with the size you chose and why.",
     ...(overriddenNote ? [overriddenNote] : []),
   ].join("\n");
@@ -512,11 +531,13 @@ function withoutRoleTable(text: string): string {
 const DELIVERED_DIRECTIVES: readonly { markers: readonly string[]; directive: string }[] = [
   { markers: [ORCHESTRATOR_TASK_OWNERSHIP_HEADING], directive: ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE },
   { markers: [ORCHESTRATOR_VIEWER_CLOCK_HEADING, SHIPPED_CLOCK_HEADING], directive: ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE },
+  { markers: [ORCHESTRATOR_BOARD_REPORT_HEADING], directive: ORCHESTRATOR_BOARD_REPORT_DIRECTIVE },
   { markers: [ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE], directive: ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE },
 ];
 
 /** Every seat receives the initial-status contract, the clock handover with
-    the seat tick contract (#2030) AND the task-ownership section (#1720),
+    the seat tick contract (#2030), the board report section AND the
+    task-ownership section (#1720),
     whatever mandate it holds. Each is appended
     at the seat lifecycle moments that deliver a mandate — a spawn, an adoption,
     a rotation — so a seat that is already running receives it at its next one.

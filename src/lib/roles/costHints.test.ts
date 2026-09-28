@@ -28,3 +28,14 @@ test("headroom reads the tightest window the model draws on", () => {
   expect(tightestHeadroom("claude", "haiku", limits)).toEqual({ window: "weekly", percentLeft: 62 });
   expect(tightestHeadroom("codex", "gpt-6-astra", null)).toBeNull();
 });
+
+test("a pinned Claude id with the claude- prefix lands on its family's size class", () => {
+  expect(modelSizeClass("claude-sonnet-5-5")).toBe(2);
+  expect(modelSizeClass("claude-sonnet-5")).toBe(2);
+  expect(modelSizeClass("claude-haiku-4-5")).toBe(1);
+  expect(modelSizeClass("claude-opus-5-5")).toBe(3);
+  expect(modelSizeClass("claude-fable-5-1")).toBe(3);
+  expect(costClass({ model: "claude-sonnet-5-5", effort: "high" })).toBe(costClass({ model: "sonnet", effort: "high" }));
+  const limits = { weekly: { usedPercent: 10 }, tiers: [{ tier: "seven_day_sonnet", usedPercent: 80 }] };
+  expect(tightestHeadroom("claude", "claude-sonnet-5-5", limits)).toEqual(tightestHeadroom("claude", "sonnet", limits));
+});

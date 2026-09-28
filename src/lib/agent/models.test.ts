@@ -9,6 +9,7 @@ import {
   CODEX_LUNA_MODEL,
   codexModelSupportsImages,
   defaultModelFor,
+  claudeCatalogModelId,
   ENGINE_MODELS,
   modelDisplayName,
   modelFromBody,
@@ -131,4 +132,30 @@ test("the provider's own label names the row, and a codenamed bucket is never sh
   // An empty or blank label is no label: the tier key still names the row.
   expect(claudeTierDisplayName("opus", "   ")).toBe("Opus");
   expect(claudeTierDisplayName("opus", null)).toBe("Opus");
+});
+
+test("Claude Sonnet 5.5 is a pinned catalog row that launches and displays as Sonnet 5.5", () => {
+  const ids = ENGINE_MODELS.claude.map((option) => option.id);
+  expect(ids).toEqual(["opus", "fable", "sonnet", "claude-sonnet-5-5", "haiku"]);
+  expect(ENGINE_MODELS.claude.find((option) => option.id === "claude-sonnet-5-5")).toEqual({
+    id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", shortLabel: "Sonnet 5.5", use: "implement",
+  });
+  expect(validateLaunchModel("claude", "claude-sonnet-5-5")).toEqual({ model: "claude-sonnet-5-5" });
+  expect(validateLaunchModel("claude", " claude-sonnet-5-5 ")).toEqual({ model: "claude-sonnet-5-5" });
+  expect(modelDisplayName("claude", "claude-sonnet-5-5")).toBe("Sonnet 5.5");
+  expect(modelDisplayName("claude", "sonnet-5-5")).toBe("Sonnet 5.5");
+  expect(modelDisplayName("claude", "sonnet-5-5[1m]")).toBe("Sonnet 5.5 (1M)");
+  expect(claudeSpawnTier("claude-sonnet-5-5")).toBe("sonnet");
+});
+
+test("claudeCatalogModelId keeps a pinned catalog id and folds every other id to its family", () => {
+  expect(claudeCatalogModelId("claude-sonnet-5-5")).toBe("claude-sonnet-5-5");
+  expect(claudeCatalogModelId(" Claude-Sonnet-5-5 ")).toBe("claude-sonnet-5-5");
+  expect(claudeCatalogModelId("claude-sonnet-5-5-20260928")).toBe("claude-sonnet-5-5");
+  expect(claudeCatalogModelId("sonnet")).toBe("sonnet");
+  expect(claudeCatalogModelId("claude-sonnet-5")).toBe("sonnet");
+  expect(claudeCatalogModelId("claude-opus-5-5")).toBe("opus");
+  expect(claudeCatalogModelId("gpt-5.6-sol")).toBeNull();
+  expect(claudeCatalogModelId(null)).toBeNull();
+  expect(claudeCatalogModelId(undefined)).toBeNull();
 });

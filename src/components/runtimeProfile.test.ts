@@ -8,6 +8,7 @@ import {
   adoptRuntimeProfile,
   defaults,
   effectiveProfile,
+  observedModelId,
   readProfile,
   readResumeDraft,
   savedResumeProfile,
@@ -140,4 +141,13 @@ test("adoptRuntimeProfile carries the live reconfigure :phase so pending/confirm
 test("defaults synthesize a catalog model and lowest in-scale effort for unknown observed runtimes", () => {
   const unknown: FileEntry = { ...file, model: "gpt-9-experimental", effort: "warp" };
   expect(defaults(unknown)).toEqual({ model: "gpt-6-astra", effort: "low", fast: false });
+});
+
+test("a conversation launched on the pinned Sonnet 5.5 id observes that id, so its runtime pill confirms", () => {
+  const pinned: FileEntry = { ...claudeFile, model: "claude-sonnet-5-5", launchModel: "claude-sonnet-5-5" };
+  expect(observedModelId(pinned)).toBe("claude-sonnet-5-5");
+  expect(defaults(pinned).model).toBe("claude-sonnet-5-5");
+  /* The alias launch and a dated transcript id still read as the family alias. */
+  expect(observedModelId({ ...claudeFile, model: "claude-sonnet-5-5-20260928", launchModel: "sonnet" })).toBe("sonnet");
+  expect(observedModelId({ ...claudeFile, model: "claude-opus-5-5", launchModel: undefined })).toBe("opus");
 });

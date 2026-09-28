@@ -21,7 +21,7 @@ import {
   type ReportTelegramChoice,
 } from "@/lib/projects/settings";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
-import { telegramBotService } from "@/lib/telegram/bot/service";
+import { TelegramBotError, telegramBotService } from "@/lib/telegram/bot/service";
 import { parseTelegramChatReference } from "@/lib/telegram/chatReference";
 
 export const runtime = "nodejs";
@@ -128,18 +128,31 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
       const parsed = input.link ? parseTelegramChatReference(input.link) : null;
       if (input.link && !parsed) return NextResponse.json({ error: "INVALID_CHAT_REFERENCE", message: "enter a chat ID, @username or Telegram link" }, { status: 400, headers });
       const reference = parsed?.chat ?? input.chat!.trim();
-      let match: { chat: string; chatId: string; alias: string | null; username?: string | null; isForum?: boolean; postAllowed: boolean } | undefined;
+      let match: { chat?: string; chatId: string; alias: string | null; username?: string | null; isForum?: boolean; postAllowed: boolean } | undefined;
+      const service = telegramBotService();
       try {
-        match = telegramBotService().listChats().chats.find((entry) => entry.postAllowed && (
+        match = service.listChats().chats.find((entry) => (
           entry.chat === reference || entry.chatId === reference || entry.alias === reference
           || (reference.startsWith("@") && entry.username?.toLowerCase() === reference.slice(1).toLowerCase())
         ));
       } catch {
         // No connected bot or no known postable chat.
       }
-      if (!match) return NextResponse.json({ error: "CHAT_NOT_ALLOWED", message: "the bot is not in that chat or posting is not allowed" }, { status: 409, headers });
+      if (input.link || (!match && (/^-?\d+$/.test(reference) || reference.startsWith("@")))) {
+        try {
+          const added = await service.addChat(reference);
+          match = added.status.chats.find((entry) => entry.chatId === added.chatId);
+        } catch (error) {
+          if (error instanceof TelegramBotError) {
+            const statuses: Record<string, number> = { bot_not_in_chat: 409, chat_unknown: 404, rate_limited: 429, network_failed: 503 };
+            return NextResponse.json({ error: error.code, code: error.code, message: error.message }, { status: statuses[error.code] ?? 409, headers });
+          }
+          return NextResponse.json({ error: "TELEGRAM_FAILED", message: "could not verify the chat with Telegram" }, { status: 503, headers });
+        }
+      }
+      if (!match?.postAllowed) return NextResponse.json({ error: "CHAT_NOT_ALLOWED", message: "the bot is not in that chat or posting is not allowed" }, { status: 409, headers });
       const topicId = match.isForum ? (input.topicId ?? parsed?.topicId) : undefined;
-      const written = setReportTelegram(project, { chat: match.alias ?? match.chat, name: input.name.trim(), ...(topicId ? { topicId } : {}) }, "operator");
+      const written = setReportTelegram(project, { chat: match.alias ?? match.chat ?? match.chatId, name: input.name.trim(), ...(topicId ? { topicId } : {}) }, "operator");
       if (written === false) return NextResponse.json({ error: "INTERNAL_ERROR", message: "could not persist the setting" }, { status: 500, headers });
     } else {
       if (setReportTelegram(project, null, "operator") === false) return NextResponse.json({ error: "INTERNAL_ERROR", message: "could not persist the setting" }, { status: 500, headers });

@@ -37,7 +37,7 @@ test("roles route returns all merged role definitions with scaffold previews and
   const builder = body.roles.find((role) => role.id === "builder")!;
   expect(builder.variants).toEqual({
     trivial: { engine: "claude", model: "sonnet", effort: "high" },
-    frontend: { engine: "claude", model: "opus", effort: "high" },
+    frontend: { engine: "claude", model: "claude-sonnet-5-5", effort: "high" },
     docs: { engine: "claude", model: "opus", effort: "medium" },
     "apply-fixes": { engine: "codex", model: "gpt-6-luna", effort: "high" },
     "frontend-fixes": { engine: "claude", model: "sonnet", effort: "high" },
@@ -80,7 +80,7 @@ test("GET marks a malformed registry degraded while showing the shipped catalog"
   const body = await (await GET()).json() as Catalog & { revision: string; health: { state: string; reason?: string } };
   expect(body.health).toEqual({ state: "degraded", reason: "preset unavailable" });
   expect(body.revision).toMatch(/^roles-1-/);
-  expect(body.roles.find((role) => role.id === "builder")?.variants?.frontend).toEqual({ engine: "claude", model: "opus", effort: "high" });
+  expect(body.roles.find((role) => role.id === "builder")?.variants?.frontend).toEqual({ engine: "claude", model: "claude-sonnet-5-5", effort: "high" });
 });
 
 test("PUT maps a role and a builder variant, keeps a scaffold override, and answers the merged catalog", async () => {

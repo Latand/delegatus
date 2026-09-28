@@ -9,14 +9,15 @@ import type { RoleEngine } from "./types";
 export type CostClass = "light" | "moderate" | "heavy" | "very-heavy";
 
 /* Small = 1, mid = 2, large = 3. Codex slugs match by prefix so a dated or
-   suffixed id lands on its family. */
+   suffixed id lands on its family; a Claude id may carry the `claude-` prefix
+   of its pinned form (`claude-sonnet-5-5`). */
 const MODEL_SIZE: readonly (readonly [RegExp, 1 | 2 | 3])[] = [
-  [/^haiku\b/, 1],
+  [/^(?:claude-)?haiku\b/, 1],
   [/^gpt-5\.6-luna\b/, 1],
   [/^gpt-6-luna\b/, 1],
-  [/^sonnet\b/, 2],
+  [/^(?:claude-)?sonnet\b/, 2],
   [/^gpt-5\.6-terra\b/, 2],
-  [/^(opus|fable)\b/, 3],
+  [/^(?:claude-)?(opus|fable)\b/, 3],
   [/^gpt-5\.6-sol\b/, 3],
   [/^gpt-6-(astra|sol)\b/, 3],
 ];
@@ -66,7 +67,7 @@ export function tightestHeadroom(
   } | null | undefined,
 ): { window: string; percentLeft: number } | null {
   if (!limits) return null;
-  const family = engine === "claude" ? model.trim().toLowerCase().split(/[-\s]/)[0]! : model.trim().toLowerCase();
+  const family = engine === "claude" ? model.trim().toLowerCase().replace(/^claude-/, "").split(/[-\s]/)[0]! : model.trim().toLowerCase();
   const candidates: { window: string; used: number }[] = [];
   if (limits.session) candidates.push({ window: "session", used: limits.session.usedPercent });
   if (limits.weekly) candidates.push({ window: "weekly", used: limits.weekly.usedPercent });
