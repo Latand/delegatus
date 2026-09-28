@@ -7,6 +7,8 @@ on:
     types: [created, edited]
   pull_request_target:
     types: [opened, edited, synchronize, reopened]
+  merge_group:
+    types: [checks_requested]
   pull_request_review:
     types: [submitted, edited, dismissed]
   pull_request_review_comment:
@@ -25,6 +27,9 @@ permissions:
 
 jobs:
   privacy-tracker-audit:
+    # The merge group has no issue or pull-request number, and creates no new
+    # tracker publication. The PR and publication events audit those surfaces.
+    if: github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     steps:
       - name: Check out trusted audit implementation
