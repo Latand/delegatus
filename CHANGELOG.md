@@ -128,9 +128,11 @@ guarantees for the 1.x series.
   as an agent card with its sender's role, project and a link to the
   sender, never as your own turn ([#2265]).
 - **Models are sized to the task.** Builders and reviewers take a small-change
-  tier that runs a lighter model, and writing work (README, docs, public
-  text) stays on Claude Opus. Orchestrator, architect, reviewer and verifier
-  work never runs on Sonnet or Haiku ([#2246]).
+  tier that runs a lighter model. A docs builder (README, docs, public text)
+  starts on Claude Opus, and its fix rounds run a lighter model. An
+  orchestrator, architect, reviewer or verifier that an agent launches never
+  runs on Sonnet or Haiku; a launch you make yourself keeps the model you
+  chose ([#2246]).
 - **Agent prompts fit any project.** Every role's standing instructions
   now describe practices and name no language, framework or deploy of their
   own, GitHub issues are used only where GitHub is set up, and each stage
@@ -149,6 +151,10 @@ guarantees for the 1.x series.
 - **A failed web restart no longer stops your agents.** If a new release
   and the one before it both fail to start, the web server reports failed
   and the runtime host that runs every agent stays up ([#2289]).
+- **Finished agent hosts free their resources again.** A host whose agent
+  finished long ago used to stay running because of its old launch record.
+  Once its launch has settled and it has been idle past the age threshold,
+  it is retired like any other idle host ([#2291]).
 - **Accounts.** An account whose Codex usage limit was reset early is
   usable again right away rather than refused until the old reset. A
   conversation stuck in a migration that could never start finishes, and
@@ -1399,6 +1405,7 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2287]: https://github.com/Latand/delegatus/pull/2287
 [#2288]: https://github.com/Latand/delegatus/pull/2288
 [#2289]: https://github.com/Latand/delegatus/pull/2289
+[#2291]: https://github.com/Latand/delegatus/pull/2291
 [#2293]: https://github.com/Latand/delegatus/pull/2293
 [#2294]: https://github.com/Latand/delegatus/pull/2294
 [#2295]: https://github.com/Latand/delegatus/pull/2295
