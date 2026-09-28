@@ -1556,7 +1556,7 @@ test("rotation rejects an explicit successor model outside the engine catalog be
   }, deps);
 
   expect(rotated.status).toBe(400);
-  expect(rotated.body.error).toBe("invalid claude model id \"claude-fable-5\"; valid claude model ids: opus, fable, sonnet, haiku");
+  expect(rotated.body.error).toBe("invalid claude model id \"claude-fable-5\"; valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku");
   expect(recorded.spawns).toHaveLength(1);
   expect(orchestratorSeatFor("proj-a")).toMatchObject({ active: { conversationId: NEW_ID }, pending: null });
 });

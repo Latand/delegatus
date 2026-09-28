@@ -241,7 +241,7 @@ test("create_orchestrator rejects an explicit fresh-launch model outside the eng
     project: "proj-a",
     engine: "claude",
     model: "claude-fable-5",
-  })).rejects.toThrow("invalid claude model id \"claude-fable-5\"; valid claude model ids: opus, fable, sonnet, haiku");
+  })).rejects.toThrow("invalid claude model id \"claude-fable-5\"; valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku");
 
   expect(posts).toEqual([]);
 });

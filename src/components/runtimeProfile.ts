@@ -1,6 +1,6 @@
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { clampEffortToScale, effortScale } from "@/lib/agent/efforts";
-import { ENGINE_MODELS, normalizeClaudeLaunchModel } from "@/lib/agent/models";
+import { ENGINE_MODELS, claudeCatalogModelId } from "@/lib/agent/models";
 import type { FileEntry } from "@/lib/types";
 
 /** A concrete, fully-resolved runtime selection (model + effort + fast). Used by
@@ -46,7 +46,7 @@ export function profileKey(file: FileEntry): string {
 export function observedModelId(file: FileEntry): string | null {
   const engine = file.engine as "claude" | "codex" | "copilot";
   return engine === "claude"
-    ? normalizeClaudeLaunchModel(file.launchModel ?? file.model) ?? file.model ?? null
+    ? claudeCatalogModelId(file.launchModel ?? file.model) ?? file.model ?? null
     : file.model ?? null;
 }
 

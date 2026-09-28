@@ -79,7 +79,7 @@ test("builder parameters select the cheap fixer and the frontend implementation 
   expect(applyFixes).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6-luna", effort: "high" } } });
 
   const frontend = resolveRole("builder", { mode: "plain", domain: "frontend" });
-  expect(frontend).toMatchObject({ ok: true, value: { config: { engine: "claude", model: "opus", effort: "high" } } });
+  expect(frontend).toMatchObject({ ok: true, value: { config: { engine: "claude", model: "claude-sonnet-5-5", effort: "high" } } });
   expect(frontend.ok && frontend.value.prompt).toContain("UI/frontend implementation guidance");
   expect(frontend.ok && frontend.value.prompt).toContain("add no new colour, font, pill or card shape");
 });
@@ -197,7 +197,7 @@ test("spawn role resolution enumerates the selected engine catalog for an invali
     model: "mythos-1",
   })).toEqual({
     ok: false,
-    error: "invalid claude model id \"mythos-1\"; valid claude model ids: opus, fable, sonnet, haiku",
+    error: "invalid claude model id \"mythos-1\"; valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku",
   });
 });
 

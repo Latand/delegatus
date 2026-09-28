@@ -633,12 +633,14 @@ test("the role table keeps the delivered default inside the structured envelope"
   /* Leave the orchestrator scaffold and a rotation's history room beside it.
      The sizing rule (docs/design/model-sizing-tiers.md §4) takes 200 bytes of
      that room, and keeping the review-loop read-only rule beside it another
-     100; a rotation trims its history to what is left. v30 takes 2 850 more
+     100; the UI-lane recipe (Opus brief, Sonnet build, Opus review) another
+     100 net of the table words trimmed to make room; a rotation trims its
+     history to what is left. v30 takes 2 850 more
      for one contract every agent reads (docs/design/agent-prompt-contract.md:
      how work runs, the stage contract, the fix rows) and the seat's
      personality; its scaffold gave 200 back, and handoffDigest.test.ts pins
      that the room left still holds a full history budget. */
-  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 4_900);
+  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 4_800);
 });
 
 /* docs/design/model-sizing-tiers.md §4: the seat sizes every lane, reads each
@@ -654,12 +656,13 @@ test("the role table tells the seat to size lanes, lists every variant and names
   });
   const table = orchestratorRoleTable(roles);
   const builderRow = table.split("\n").find((line) => line.startsWith("| builder |"))!;
-  expect(builderRow).toContain("size=trivial: claude/sonnet/high; domain=frontend: claude/opus/high; domain=docs: claude/opus/medium; mode=apply-fixes: codex/gpt-6-luna/high; domain=frontend mode=apply-fixes: claude/sonnet/high; domain=docs mode=apply-fixes: claude/sonnet/high.");
+  expect(builderRow).toContain("size=trivial: claude/sonnet/high; domain=frontend: claude/claude-sonnet-5-5/high; domain=docs: claude/opus/medium; mode=apply-fixes: codex/gpt-6-luna/high; domain=frontend mode=apply-fixes: claude/sonnet/high; domain=docs mode=apply-fixes: claude/sonnet/high.");
   const reviewerRow = table.split("\n").find((line) => line.startsWith("| reviewer |"))!;
   expect(reviewerRow).toContain("size=trivial: codex/gpt-6-luna/high.");
   expect(table).toContain("- Size each lane first. trivial (a few lines of UI, copy, one flag or label; your brief states the exact change and its acceptance): builder and reviewer size=trivial, one review round.");
   expect(table).toContain("design (options, architecture, proposals, issues from design work): an architect stage first");
-  expect(table).toContain("- size=trivial needs a brief written by a large model: Claude Opus or Fable, or a large Codex model. Sonnet and Haiku never run orchestrator, architect, reviewer or verifier work, and run a builder whose model you set by hand only at size=trivial.");
+  expect(table).toContain("- size=trivial needs a brief written by a large model: Claude Opus or Fable, or a large Codex model. Sonnet and Haiku never run orchestrator, architect, reviewer or verifier work, and run a builder whose model you set by hand only at size=trivial, or as domain=frontend on an Opus brief.");
+  expect(table).toContain("- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, Opus review-loop.");
   /* §3 (a): the fix stage's params select its row. */
   expect(table).toContain("- Fix stages: builder mode=apply-fixes with the implementer's domain and size, on the builder row they select.");
   /* Review of #2301: a fix round takes what names its place, an OVER-BUILT cut

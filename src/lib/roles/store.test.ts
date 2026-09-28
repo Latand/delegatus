@@ -113,7 +113,7 @@ test("builder variants round-trip under schema 2, and a schema 1 file still read
     expect(JSON.parse(fs.readFileSync(file, "utf8")).schemaVersion).toBe(2);
     const builder = loadRoleDefinitions().find((role) => role.id === "builder")!;
     expect(builder.variants?.["apply-fixes"]).toEqual(variant);
-    expect(builder.variants?.frontend).toEqual({ engine: "claude", model: "opus", effort: "high" });
+    expect(builder.variants?.frontend).toEqual({ engine: "claude", model: "claude-sonnet-5-5", effort: "high" });
     expect(resolveRole("builder", { mode: "apply-fixes" })).toMatchObject({ ok: true, value: { config: variant } });
 
     /* Variants belong to the builder alone, and an invalid variant fails closed. */
@@ -155,7 +155,7 @@ test("a mapping patch drops rows equal to the shipped value and keeps scaffold o
     {
       reviewer: { config: { engine: "codex", model: "gpt-6-astra", effort: "xhigh" } },
       cleaner: { config: null },
-      builder: { variants: { frontend: { engine: "claude", model: "opus", effort: "high" } } },
+      builder: { variants: { frontend: { engine: "claude", model: "claude-sonnet-5-5", effort: "high" } } },
     },
   );
   expect(next).toEqual({ reviewer: { promptScaffold: "mine" } });
@@ -277,7 +277,7 @@ test("a retirement resets only an exact match, records it once, and is not re-ap
       overrides: {},
       retirements: { [RETIREMENT.id]: { at: "2026-09-27T08:00:00.000Z", reset: { row: "builder:frontend", from: xhigh } } },
     });
-    expect(resolveRole("builder", { domain: "frontend" })).toMatchObject({ ok: true, value: { config: { engine: "claude", model: "opus", effort: "high" } } });
+    expect(resolveRole("builder", { domain: "frontend" })).toMatchObject({ ok: true, value: { config: { engine: "claude", model: "claude-sonnet-5-5", effort: "high" } } });
     expect(loadRoleRegistrySnapshot().resets).toEqual([{ id: RETIREMENT.id, row: "builder:frontend", from: xhigh, at: "2026-09-27T08:00:00.000Z" }]);
 
     /* The operator restores the old value: the reset notice clears, the retirement stays applied. */

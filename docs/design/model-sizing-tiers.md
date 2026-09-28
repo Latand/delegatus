@@ -118,14 +118,15 @@ way stay pinned: this machine's live file carries `orchestrator` and
 those roles on Opus high if the repo default moved. A row that differs from
 shipped is indistinguishable from an operator's choice; the file records no
 provenance. `builder.frontend = claude/opus/xhigh` was never a shipped value
-(`BUILDER_FRONTEND_CONFIG` has been `opus/high` since `e0f418e3b`); it exists
+(`BUILDER_FRONTEND_CONFIG` was `opus/high` from `e0f418e3b` until the Sonnet 5.5 change below); it exists
 only as a written row. The file's existence is also the onboarding marker
 (`src/app/api/onboarding/route.ts:22`).
 
 **Cost classes.** `modelSizeClass`: haiku and both Lunas 1, Sonnet and Terra 2,
 Opus, Fable, both Sols and Astra 3; an uncatalogued id counts as 3
 (`src/lib/roles/costHints.ts:13-28`). A dated Claude id such as
-`claude-sonnet-5` is uncatalogued there, so it reads as 3.
+`claude-sonnet-5` was uncatalogued there, so it read as 3; the patterns now
+accept an optional `claude-` prefix, so `claude-sonnet-5-5` reads as 2.
 `normalizeClaudeLaunchModel` maps any Claude id to its family
 (`src/lib/agent/models.ts:110-118`).
 
@@ -242,6 +243,20 @@ launches (UI drafts, operator capability) are the authority and pass:
   the mapping (the fix-round variant, or an install that mapped its base
   builder to Luna) passes: that is the operator's own choice. R3 is what makes
   the lighter builder available "ONLY" through the small-change tier.
+  *Exception (Sonnet 5.5 for UI lanes):* a builder with `domain=frontend`
+  may run Claude Sonnet by explicit override without `size=trivial` when the
+  briefer is Opus class (`isOpusClass`). This is the pattern Opus writes the
+  description, Sonnet builds, Opus reviews. Haiku, the light Codex models and
+  any other domain keep R3 as written, R1 (no Sonnet on orchestrator,
+  architect, reviewer, verifier or a review gate) is unchanged, and a brief
+  from an agent that is not Opus class is refused as before. The shipped
+  `builder:frontend` row on Claude is `claude/claude-sonnet-5-5/high`, so a
+  frontend builder launched from the mapping runs Sonnet whoever wrote the
+  brief (a mapping row passes R3); the Codex rows are untouched. The row pins
+  the versioned id because the `sonnet` alias moves when Anthropic ships the
+  next Sonnet. The seat is told to write UI lanes as a read-only Opus brief
+  stage (files, components, states, 390px and desktop expectations, what not to
+  touch), a `domain=frontend` build stage, and an Opus review-loop.
   *Built:* "explicit" is judged on the resolved values, not on which input
   fields are present: a stage's runtime is explicit when its engine or model
   differs from what the install's row gives that role and those params

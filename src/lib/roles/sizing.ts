@@ -69,6 +69,15 @@ export function runtimeName(runtime: LaunchRuntime | null): string {
   return `${runtime.engine}/${runtime.model ?? "default"}`;
 }
 
+/** Claude Sonnet, the one light builder that runs a frontend lane without
+    size=trivial when a large model wrote the brief. Haiku and the light Codex
+    models are not part of that exception. */
+function isClaudeSonnet(config: LaunchRuntime): boolean {
+  return config.engine === "claude" && normalizeClaudeLaunchModel(config.model) === "sonnet";
+}
+
+const FRONTEND_SONNET_HINT = " (a domain=frontend builder may run Claude Sonnet when a large model briefs it)";
+
 /**
  * The refusal for one launch, or null when it may run.
  *
@@ -78,7 +87,10 @@ export function runtimeName(runtime: LaunchRuntime | null): string {
  * - R2: `size=trivial` needs a brief from a large model (`isOpusClass`).
  * - R3: a builder (or a role-less run stage) reaches a light runtime through an
  *   explicit engine/model override only with `size=trivial`. A light runtime
- *   the mapping chose (the fix round, an install's own row) passes.
+ *   the mapping chose (the fix round, an install's own row) passes. One
+ *   exception: a `domain=frontend` builder may run Claude Sonnet by override
+ *   without `size=trivial` when an Opus-class runtime wrote its brief (Opus
+ *   writes the description, Sonnet builds, Opus reviews).
  *
  * The operator's own launches pass every rule.
  */
@@ -109,7 +121,9 @@ export function launchSizingRefusal(input: {
     return `size=trivial runs a light model and needs a brief written by a large model (Claude Opus or Fable, or a large Codex model); this brief comes from ${runtimeName(input.briefer.runtime)}.`;
   }
   if (roleId === "builder" && !trivial && input.explicitRuntime && isLightRuntime(input.config)) {
-    return `a builder runs ${runtimeName(input.config)} only as size=trivial; drop the explicit model to use the builder's row, or brief the change precisely and set size=trivial.`;
+    const sonnet = isClaudeSonnet(input.config);
+    if (sonnet && input.params?.domain === "frontend" && isOpusClass(input.briefer.runtime)) return null;
+    return `a builder runs ${runtimeName(input.config)} only as size=trivial${sonnet ? FRONTEND_SONNET_HINT : ""}; drop the explicit model to use the builder's row, or brief the change precisely and set size=trivial.`;
   }
   return null;
 }

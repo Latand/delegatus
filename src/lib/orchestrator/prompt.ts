@@ -480,15 +480,16 @@ export function orchestratorRoleTable(roles: readonly RoleDefinition[]): string 
   const overriddenNote = overriddenScaffoldNote(roles);
   return [
     ORCHESTRATOR_ROLE_TABLE_HEADING,
-    "Read from this install's role registry at delivery. A stage or spawn that omits engine, model and effort runs its role's row.",
+    "A stage or spawn that omits engine, model and effort runs its role's row.",
     "| role | engine | model | effort | access | for |",
     "| --- | --- | --- | --- | --- | --- |",
     ...roles.map(roleTableRow),
     `- ${registryStatus}`,
-    "- Runtime overrides go on the stage beside role, never inside it. A reviewer stage is read-only by its role. override-stage binds from the NEXT attempt: a running one keeps its runtime.",
-    "- Size each lane first. trivial (a few lines of UI, copy, one flag or label; your brief states the exact change and its acceptance): builder and reviewer size=trivial, one review round. normal: the rows, effort low or medium for routine work. design (options, architecture, proposals, issues from design work): an architect stage first.",
+    "- Runtime overrides go on the stage beside role, never inside it. A reviewer stage is read-only by its role. override-stage binds from the NEXT attempt.",
+    "- Size each lane first. trivial (a few lines of UI, copy, one flag or label; your brief states the exact change and its acceptance): builder and reviewer size=trivial, one review round. normal: the rows, effort low or medium. design (options, architecture, proposals, issues from design work): an architect stage first.",
+    "- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, Opus review-loop.",
     "- Fix stages: builder mode=apply-fixes with the implementer's domain and size, on the builder row they select. A fixer fixes every finding that names its place, OVER-BUILT cuts included, and fails on one with no place, a WRONG-PREMISE or a new design, which parks the lane: re-plan it.",
-    "- size=trivial needs a brief written by a large model: Claude Opus or Fable, or a large Codex model. Sonnet and Haiku never run orchestrator, architect, reviewer or verifier work, and run a builder whose model you set by hand only at size=trivial. README, docs, public text: builder domain=docs.",
+    "- size=trivial needs a brief written by a large model: Claude Opus or Fable, or a large Codex model. Sonnet and Haiku never run orchestrator, architect, reviewer or verifier work, and run a builder whose model you set by hand only at size=trivial, or as domain=frontend on an Opus brief. README, docs, public text: builder domain=docs.",
     "- create_pipeline answers each stage's runtime and a runtimeLine (spawn_agent: runtime): fix a wrong one before attempt 1 (draft, or pause, override-stage, start), and quote it with the size you chose and why.",
     ...(overriddenNote ? [overriddenNote] : []),
   ].join("\n");

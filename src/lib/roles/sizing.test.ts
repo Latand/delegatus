@@ -13,7 +13,7 @@ const OPUS = { engine: "claude", model: "opus" };
 const LUNA = { engine: "codex", model: "gpt-6-luna" };
 
 test("a dated Sonnet id is light and not Opus class, and a null Claude model is Opus", () => {
-  for (const model of ["sonnet", "claude-sonnet-5", "haiku", "claude-haiku-4-5"]) {
+  for (const model of ["sonnet", "claude-sonnet-5", "claude-sonnet-5-5", "haiku", "claude-haiku-4-5"]) {
     expect({ model, light: isLightRuntime({ engine: "claude", model }), opus: isOpusClass({ engine: "claude", model }) }).toEqual({ model, light: true, opus: false });
   }
   expect(isOpusClass({ engine: "claude", model: null })).toBe(true);
@@ -62,6 +62,29 @@ test("R3: a builder reaches a light model by hand only through size=trivial; the
   expect(launchSizingRefusal({ ...builder, roleId: null, config: SONNET, explicitRuntime: true })).toContain("only as size=trivial");
   /* Other roles are not builders; the cleaner may run light by hand. */
   expect(launchSizingRefusal({ ...builder, roleId: "cleaner", config: SONNET, explicitRuntime: true })).toBeNull();
+});
+
+test("R3 exception: a domain=frontend builder runs Claude Sonnet by hand when an Opus-class runtime briefs it", () => {
+  const frontend = { roleId: "builder", params: { domain: "frontend" }, explicitRuntime: true };
+  for (const model of ["sonnet", "claude-sonnet-5-5"]) {
+    const config = { engine: "claude", model };
+    expect(launchSizingRefusal({ ...frontend, config, briefer: OPUS_AGENT })).toBeNull();
+    expect(launchSizingRefusal({ ...frontend, config, briefer: ASTRA_AGENT })).toBeNull();
+    expect(launchSizingRefusal({ ...frontend, config, briefer: SONNET_AGENT })).toContain("only as size=trivial");
+    expect(launchSizingRefusal({ ...frontend, config, briefer: UNREADABLE_AGENT })).toContain("only as size=trivial");
+    /* Another domain, or none, keeps R3. */
+    expect(launchSizingRefusal({ ...frontend, config, params: { domain: "docs" }, briefer: OPUS_AGENT })).toContain("only as size=trivial");
+    expect(launchSizingRefusal({ ...frontend, config, params: {}, briefer: OPUS_AGENT })).toContain("only as size=trivial");
+  }
+  /* Haiku and the light Codex models are not in the exception. */
+  expect(launchSizingRefusal({ ...frontend, config: { engine: "claude", model: "haiku" }, briefer: OPUS_AGENT })).toContain("only as size=trivial");
+  expect(launchSizingRefusal({ ...frontend, config: { engine: "codex", model: "gpt-5.6-terra" }, briefer: OPUS_AGENT })).toContain("only as size=trivial");
+  /* R1 is unchanged: the domain never lets Sonnet judge or orchestrate. */
+  expect(launchSizingRefusal({ roleId: "reviewer", params: { domain: "frontend" }, config: SONNET, explicitRuntime: true, briefer: OPUS_AGENT })).toBe(LIGHT_DENIED_ROLE_MESSAGE);
+  expect(launchSizingRefusal({ ...frontend, config: SONNET, briefer: OPUS_AGENT, reviewGate: true })).toContain("review gate");
+  /* A spawn of a role-less Sonnet carries no domain. */
+  expect(spawnSizingRefusal({ role: null, engine: "claude", model: "claude-sonnet-5-5", briefer: OPUS_AGENT })).toContain("only as size=trivial");
+  expect(spawnSizingRefusal({ role: { role: "builder", params: { domain: "frontend" }, config: { engine: "claude", model: "claude-sonnet-5-5" }, explicitRuntime: true }, briefer: OPUS_AGENT })).toBeNull();
 });
 
 test("the operator passes every rule", () => {

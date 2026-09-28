@@ -1,5 +1,5 @@
 import { effortScale } from "./efforts";
-import { ENGINE_MODELS, isCodexLaunchModel, normalizeClaudeLaunchModel, validateLaunchModel, type AgentModelOption } from "./models";
+import { ENGINE_MODELS, claudeCatalogModelId, isCodexLaunchModel, validateLaunchModel, type AgentModelOption } from "./models";
 
 export interface AgentReconfiguration {
   model: string;
@@ -14,7 +14,7 @@ export function reconfigurationFromBody(
   copilotModelEfforts?: readonly string[] | null,
 ): { value?: AgentReconfiguration; error?: string } {
   const model = typeof body.model === "string" ? body.model.trim() : "";
-  const validModel = engine === "claude" ? normalizeClaudeLaunchModel(model)
+  const validModel = engine === "claude" ? claudeCatalogModelId(model)
     : engine === "codex" ? isCodexLaunchModel(model) ? model : null
       : (() => {
           const result = validateLaunchModel("copilot", model);

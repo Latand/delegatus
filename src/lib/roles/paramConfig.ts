@@ -8,7 +8,9 @@ import type { RoleConfig, RoleId, RoleParamValues, RoleVariantId } from "./types
  * role table and the launch line share `variantForParams` with the registry.
  */
 export const BUILDER_TRIVIAL_CONFIG: RoleConfig = { engine: "claude", model: "sonnet", effort: "high" };
-export const BUILDER_FRONTEND_CONFIG: RoleConfig = { engine: "claude", model: "opus", effort: "high" };
+/* A UI lane's builder runs Sonnet 5.5 pinned by id (the `sonnet` alias moves
+   with the next Sonnet); an Opus brief states what to build and Opus reviews. */
+export const BUILDER_FRONTEND_CONFIG: RoleConfig = { engine: "claude", model: "claude-sonnet-5-5", effort: "high" };
 export const BUILDER_DOCS_CONFIG: RoleConfig = { engine: "claude", model: "opus", effort: "medium" };
 /* docs/design/agent-prompt-contract.md §3 (a): a fix round runs a light model
    by its lane's domain, and its brief is a list of findings, each with a place. */
