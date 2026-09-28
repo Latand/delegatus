@@ -877,8 +877,9 @@ export async function gatePhoneAccessBeforeServing(
   exit: (code: number) => never = process.exit,
   log: (line: string) => void = console.error,
 ): Promise<void> {
-  const { PhoneGateRefusal, restorePhoneAccessGate } = await import("@/lib/access/phoneAccess");
+  const { PhoneGateRefusal, restorePhoneAccessGate, restoreLinksGate } = await import("@/lib/access/phoneAccess");
   try {
+    await restoreLinksGate();
     await restorePhoneAccessGate();
   } catch (error) {
     if (!(error instanceof PhoneGateRefusal)) throw error;
