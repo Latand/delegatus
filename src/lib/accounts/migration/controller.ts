@@ -2,7 +2,7 @@ import { activeClaudeAccountId, setActiveClaudeAccount } from "@/lib/accounts/cl
 import { activeCodexAccountId, codexAccountsMutationLocked, codexLoginPaneStatus, listCodexAccounts, setActiveCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
 import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
-import { agentRegistry, conversationLookupFromSnapshot, type AgentRegistry } from "@/lib/agent/registry";
+import { agentRegistry, conversationLookupFromSnapshot, readOnlyConversationLookupFromSnapshot, type AgentRegistry } from "@/lib/agent/registry";
 import { readTranscriptHosts } from "@/lib/agent/transcriptHost";
 import { yieldToRuntime } from "@/lib/cooperative";
 import type { ChildProcess } from "node:child_process";
@@ -172,7 +172,7 @@ const DEFAULT_CONTROLLER_CYCLE_PORTS: AccountMigrationControllerCyclePorts = {
   // The inventory sidecar consumes the completed snapshot published by the
   // Viewer. Process-wide coordination cannot cover a separate OS process.
   scan: () => accountControllerScan(),
-  reconcileInventory: reconcileMigrationInventory,
+  reconcileInventory: (registry, files) => reconcileMigrationInventory(registry, files, { readOnlySnapshot: true }),
   reconcileFlowOwnership: reconcileFlowConversationOwnershipCooperatively,
   reconcileWorkflowOwnership: reconcileWorkflowConversationOwnershipCooperatively,
   reconcileHandoffOwnership: reconcileHandoffConversationOwnershipCooperatively,
@@ -227,7 +227,7 @@ export class AccountMigrationController {
     await yieldToRuntime();
     const inventorySnapshot = await this.ports.reconcileInventory(this.registry, files);
     await yieldToRuntime();
-    const inventoryLookup = conversationLookupFromSnapshot(inventorySnapshot);
+    const inventoryLookup = readOnlyConversationLookupFromSnapshot(inventorySnapshot);
     await this.ports.reconcileFlowOwnership(inventoryLookup);
     await this.ports.reconcileWorkflowOwnership(inventoryLookup);
     await this.ports.reconcileHandoffOwnership(inventoryLookup);
