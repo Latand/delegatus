@@ -375,7 +375,7 @@ test("bounded promoted verification retains the real 503 startup phase and categ
 });
 
 async function runAction(options: {
-  action: "promote" | "retain-only" | "rollback" | "complete-host-handoff" | "reconcile-mcp-runtime" | "verify-candidate";
+  action: "promote" | "retain-only" | "rollback" | "complete-host-handoff" | "reconcile-mcp-runtime" | "verify-candidate" | "candidate-log";
   input: unknown;
   dockerScript: string;
   snapshots?: string[];
@@ -728,7 +728,7 @@ function successorPackage(prefix: string, options: { revision: string; bundle?: 
   fs.mkdirSync(path.join(packageRoot, "dist"), { recursive: true });
   fs.mkdirSync(state, { recursive: true });
   fs.copyFileSync(path.join(root, "bin", "mcp-server.mjs"), path.join(packageRoot, "bin", "mcp-server.mjs"));
-  for (const name of ["server-runtime.mjs", "appDir.mjs", "envAlias.mjs"]) {
+  for (const name of ["server-runtime.mjs", "appDir.mjs", "envAlias.mjs", "self-update-supervisor.mjs"]) {
     fs.copyFileSync(path.join(root, "bin", name), path.join(packageRoot, "bin", name));
   }
   if (options.bundle === undefined) fs.copyFileSync(path.join(root, "dist", "mcp-server.mjs"), path.join(packageRoot, "dist", "mcp-server.mjs"));
@@ -890,6 +890,9 @@ test("the first successor boot publishes and probes the MCP runtime after an old
 test("a failed first-boot MCP probe restores the old release target and retires the staged runtime", async () => {
   const revision = "7".repeat(40);
   const fixture = successorPackage("llv-mcp-successor-rollback-", { revision, bundle: "process.exit(1);\n" });
+  // A broken launcher closes the probe transport immediately. A broken bundle
+  // behind a healthy launcher reconnects indefinitely, testing a different gate.
+  fs.writeFileSync(path.join(fixture.packageRoot, "bin", "mcp-server.mjs"), "process.exit(1);\n");
 
   try {
     const { code, stderr } = await runReconcile(fixture, { revision });
@@ -1155,6 +1158,30 @@ exit 1
   const evidence = JSON.parse(result.stdout) as Record<string, unknown>;
   expect(evidence.detail).toBe("candidate container exited before readiness");
   expect(evidence).not.toHaveProperty("containerLog");
+});
+
+test("rollback forensics reads the candidate's last 200 lines before retirement", async () => {
+  const candidate = { ...release, container: "viewer-candidate" };
+  const result = await runAction({
+    action: "candidate-log",
+    input: { candidate },
+    dockerScript: `#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "logs" ]; then
+  i=1
+  while [ "$i" -le 230 ]; do printf 'line-%s\n' "$i"; i=$((i + 1)); done
+  exit 0
+fi
+exit 1
+`,
+  });
+  expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
+  expect(result.dockerCalls).toContain("logs --tail 200 viewer-candidate");
+  const lines = JSON.parse(result.stdout) as string[];
+  expect(lines).toHaveLength(200);
+  expect(lines[0]).toBe("line-31");
+  expect(lines.at(-1)).toBe("line-230");
 });
 
 test("rollback starts and health-checks the retained release before switching the stable target", async () => {

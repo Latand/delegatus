@@ -846,6 +846,9 @@ export interface ViewerDeploymentStatus {
   previous: ViewerReleaseIdentity | null;
   mcpRuntime: ViewerDeploymentMcpRuntimeStatus;
   health: ViewerHealthEvidence[];
+  /** Captured before rollback retires the candidate container. */
+  candidateLog?: string[];
+  candidateLogError?: string;
   runtimeHostHandoff?: ViewerRuntimeHostHandoffEvidence;
   error: string | null;
   owner: ViewerDeploymentOwner;
