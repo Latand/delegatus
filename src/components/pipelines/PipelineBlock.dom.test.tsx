@@ -121,10 +121,12 @@ test("every density says what the desktop says: the stage names, the stage state
   }
   /* The passed stages before the current one fold into one row; opened, every stage has its row. */
   click(screen.querySelector("[data-passed-fold]"));
-  expect(texts(screen, ".pb-stage[data-stage] .pb-name")).toEqual(names);
+  /* A stage row names its attempt from the second one, in the one caption (#1892). */
+  expect(texts(screen, ".pb-stage[data-stage] .pb-name")).toEqual(["Implement · 2", "Review", "Verify · 2", "Merge"]);
+  expect(texts(screen, ".pb-stage[data-stage] .pb-attempt")).toEqual([" · 2", " · 2"]);
   expect(texts(screen, ".pb-stage[data-stage] .pb-stage-state")).toEqual(["passed", "passed", "running", "pending"].map((word) => t(`kanban.graphState.${word}` as Parameters<typeof translate>[1])));
   expect(screen.querySelector<HTMLElement>('.pb-stage[data-stage="verify"] .pret')?.title).toContain(loop);
-  expect(texts(screen, ".pb-loops li")).toEqual([`↺ ${t("kanban.loopRest", { from: "Verify", to: "Implement", max: 2 })}`]);
+  expect(texts(screen, ".pb-loops li")).toEqual([`↺ ${t("kanban.loopRest", { from: "Verify", to: "Implement", count: 2 })}`]);
 });
 
 test("stage names stay the pipeline's in Ukrainian, and the state words are the desktop's Ukrainian words", () => {
@@ -291,12 +293,74 @@ test("the graph is the operator's toggle on the task row, and it replaces the ch
   expect(open.querySelector(".pb-chain")).toBeNull();
 });
 
+/* A completed lane whose Implement conversation took more work (#1744): the
+   phone's rows and pills say «working again» as the board's graph does. */
+test("a settled stage whose conversation works again says so on its row and its pill, in en and uk", () => {
+  const done = searchPipeline({
+    state: "completed", cursor: null,
+    runs: searchPipeline().runs.map((run) => ({ ...run, attempts: run.attempts.map((entry) => ({ ...entry, state: "passed", completedAt: iso(600) })) })),
+  } as Partial<Pipeline>);
+  const reworked = done.runs.find((run) => run.stageId === "implement")!.attempts[1]!;
+  const summary = summarizePipeline(done, new Map(), new Set([reworked.agentPath!]));
+  for (const lang of ["en", "uk"] as const) {
+    setLocale(lang);
+    const again = translate(lang, "kanban.graph.workingAgain");
+    const passed = translate(lang, "kanban.graphState.passed");
+    const screen = mount(<PipelineBlock summary={summary} density="screen" nowMs={NOW_MS} onOpenStage={() => {}} />);
+    const fold = screen.querySelector("[data-passed-fold]");
+    if (fold) click(fold);
+    const row = screen.querySelector<HTMLElement>('.pb-stage[data-stage="implement"]')!;
+    expect(row.dataset.stageRework).toBe("1");
+    expect(row.querySelector(".pb-stage-state")?.firstChild?.textContent).toBe(passed);
+    expect(row.querySelector(".pb-stage-state .pb-rework")?.textContent).toBe(again);
+    expect(row.querySelector(".pb-stage-title .pmark")?.getAttribute("data-live")).toBe("1");
+    expect(row.querySelector("[aria-label]")?.getAttribute("aria-label")).toContain(again);
+    expect(screen.querySelectorAll("[data-stage-rework]").length).toBe(1);
+    expect(screen.querySelectorAll(".pb-rework").length).toBe(1);
+    for (const density of ["card", "task"] as const) {
+      const host = mount(<PipelineBlock summary={summary} density={density} nowMs={NOW_MS} onOpenStage={() => {}} />);
+      const pill = host.querySelector<HTMLElement>('.pb-pill[data-stage="implement"]');
+      /* A card may fold its passed stages; the task row draws every pill. */
+      if (!pill && density === "card") continue;
+      expect(pill!.className).toContain("rework");
+      expect(pill!.title).toContain(again);
+      expect(pill!.querySelector(".pmark")?.getAttribute("data-live")).toBe("1");
+      expect(host.querySelector('.pb-pill[data-stage="review"]')?.className ?? "").not.toContain("rework");
+    }
+  }
+});
+
+/* Implement and Review passed, Verify runs, and Implement's latest
+   conversation works again: that is live work, so the passed stages do not
+   fold it away behind "2 passed". */
+test("the screen density keeps a reworking passed stage out of the passed fold", () => {
+  const lane = searchPipeline();
+  const reworked = lane.runs.find((run) => run.stageId === "implement")!.attempts.at(-1)!;
+  const summary = summarizePipeline(lane, new Map(), new Set([reworked.agentPath!]));
+  expect(summary.views.get("implement")?.rework).toBe(true);
+  for (const lang of ["en", "uk"] as const) {
+    setLocale(lang);
+    const screen = mount(<PipelineBlock summary={summary} density="screen" nowMs={NOW_MS} onOpenStage={() => {}} />);
+    expect(screen.querySelector("[data-passed-fold]")).toBeNull();
+    const row = screen.querySelector<HTMLElement>('.pb-stage[data-stage="implement"][data-stage-rework="1"]')!;
+    expect(row.querySelector(".pb-rework")?.textContent).toBe(translate(lang, "kanban.graph.workingAgain"));
+    expect(screen.querySelector('.pb-stage[data-stage="review"]')).toBeTruthy();
+    expect(screen.querySelector<HTMLElement>(".pb-stage[data-stage-current]")?.dataset.stage).toBe("verify");
+  }
+  setLocale("en");
+  /* The same lane with nothing reworking folds its two passed stages. */
+  const quiet = mount(<PipelineBlock summary={summarizePipeline(lane)} density="screen" nowMs={NOW_MS} onOpenStage={() => {}} />);
+  expect(quiet.querySelector("[data-passed-fold]")?.getAttribute("data-passed-fold")).toBe("2");
+  expect(quiet.querySelector('.pb-stage[data-stage="implement"]')).toBeNull();
+});
+
 test("the screen density numbers the stages, folds the passed ones before the current one, and answers inside the parked stage", () => {
   const answers: string[] = [];
   const host = mount(<PipelineBlock summary={summarizePipeline(parked())} density="screen" nowMs={NOW_MS} onOpenStage={() => {}} onAnswer={(_pipeline, answer) => answers.push(answer.action)} />);
   /* The screen's bar says where the lane stands; the body owns the title. */
   const bar = mount(<PipelineStateLine summary={summarizePipeline(parked())} nowMs={NOW_MS} />);
-  expect(bar.textContent).toBe(`${translate("en", "pipelineState.needs_decision")}·stage 3 of 4·41m`);
+  /* The stage it stands on in the one attempt caption, then where it sits (#1892). */
+  expect(bar.textContent).toBe(`${translate("en", "pipelineState.needs_decision")}·Verify · 2·stage 3 of 4·41m`);
   expect(host.querySelector(".pb-stateline")).toBeNull();
   expect(host.querySelector("h2[data-pipeline-heading]")?.textContent).toBe("Restore search results after the index rebuild");
   const fold = host.querySelector<HTMLElement>("[data-passed-fold]")!;

@@ -422,6 +422,13 @@ test("findings that carry no rank stay the array a fenced verdict always was", (
   });
 });
 
+test("a bare severity is not a finding in terminal JSON", () => {
+  for (const severity of ["P0", "P1", "P2", "P3"]) {
+    expect(stageVerdictFrom({ status: "fail", findings: [severity] })).toBeNull();
+    expect(parseStageVerdict(`\`\`\`json\n{"status":"fail","findings":["${severity}"]}\n\`\`\``)).toBeNull();
+  }
+});
+
 test("a completion call is refused for the shapes a fenced verdict is refused for", () => {
   expect(normalizeStageCompletion({ verdict: "approve" })).toMatchObject({ code: "STAGE_REPORT_INVALID" });
   expect(normalizeStageCompletion({ verdict: "pass", findings: [{ severity: "P2", text: "still open" }] })).toEqual({
@@ -455,13 +462,12 @@ test("a rankedFindings field in an agent's own fenced block is ignored, and a re
   expect(stageVerdictFrom(forged)).toEqual(forged!);
 });
 
-test("a finding already at the bound survives the rendering, and the record re-derives itself", () => {
-  /* `P1: ` renders as `P1 — `, which is one character longer: clamping the
-     rendering is what keeps the record loadable. */
-  const verdict = stageVerdictFrom({ status: "fail", findings: [`P1: ${"x".repeat(1_996)}`] })!;
+test("a long finding keeps its whole body and round-trips", () => {
+  const verdict = stageVerdictFrom({ status: "fail", findings: [`P1: ${"x".repeat(1_995)}`] })!;
   expect(verdict.findings![0]!.length).toBe(2_000);
   expect(verdict.rankedFindings).toEqual([{ severity: "P1", text: "x".repeat(1_995) }]);
   expect(stageVerdictFrom(verdict)).toEqual(verdict);
+  expect(stageVerdictFrom({ status: "fail", findings: [`P1: ${"x".repeat(1_996)}`] })).toBeNull();
 });
 
 test("prose that opens on a severity keeps its own words, and is recorded unranked", () => {
@@ -483,10 +489,8 @@ test("prose that opens on a severity keeps its own words, and is recorded unrank
   });
 });
 
-test("a finding text at the schema's own bound is accepted, clamped by the rank it is rendered with", () => {
-  /* The MCP schema bounds `text` at 2000; the record keeps `P1 — text`, five
-     characters longer. Refusing that call would name neither field nor bound. */
-  const called = normalizeStageCompletion({ verdict: "fail", findings: [{ severity: "P1", text: "x".repeat(2_000) }] });
+test("a completion finding at the schema bound keeps its whole body", () => {
+  const called = normalizeStageCompletion({ verdict: "fail", findings: [{ severity: "P1", text: "x".repeat(1_995) }] });
   expect(called).toEqual({
     verdict: {
       status: "fail",
@@ -499,4 +503,6 @@ test("a finding text at the schema's own bound is accepted, clamped by the rank 
   expect(verdict.findings![0]!.length).toBe(2_000);
   /* And the record it produced re-derives itself, byte for byte, on reload. */
   expect(stageVerdictFrom(verdict)).toEqual(verdict);
+  expect(normalizeStageCompletion({ verdict: "fail", findings: [{ severity: "P1", text: "x".repeat(1_996) }] }))
+    .toMatchObject({ code: "STAGE_REPORT_INVALID" });
 });

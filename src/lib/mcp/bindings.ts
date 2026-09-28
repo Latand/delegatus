@@ -108,6 +108,7 @@ import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orch
 import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies, spawnParentForCaller } from "@/lib/orchestrator/deputies";
 import { recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
@@ -1620,20 +1621,20 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
 /**
  * The pipeline mutations that share one idempotency receipt path (#1766).
  *
- * A registry lock that was never taken refused before anything was admitted:
- * no pipeline row, no task assignment, nothing reserved downstream. That
- * refusal is reported as unadmitted, so the receipt layer releases the claim
- * and the caller's retry under the SAME clientRequestId runs the operation
- * instead of replaying the refusal. Any other busy error keeps its ordinary
- * meaning — releasing the lease raises the same message after the write has
- * already committed, and such an answer must stay this request's answer.
+ * A registry lock refusal or unavailable seat revocations occurs before
+ * admission: no record or downstream reservation exists. Release the receipt
+ * claim so a retry under the SAME clientRequestId checks authority again. Any
+ * later busy error keeps its ordinary meaning because a write may already
+ * have committed.
  */
-async function unadmittedOnStoreBusy<T>(run: () => Promise<T>): Promise<T> {
+async function unadmittedBeforeMutation<T>(run: () => Promise<T>): Promise<T> {
   try {
     return await run();
   } catch (error) {
-    if (error instanceof StoreBusyBeforeAdmissionError) {
-      throw new McpUnadmittedRefusal(error.message, { code: "store_busy" });
+    if (error instanceof StoreBusyBeforeAdmissionError || error instanceof SeatRevocationStoreUnavailableError) {
+      throw new McpUnadmittedRefusal(error.message, {
+        code: error instanceof SeatRevocationStoreUnavailableError ? "orchestrator_seat_authority_unavailable" : "store_busy",
+      });
     }
     throw error;
   }
@@ -1648,7 +1649,17 @@ function deliveryAcknowledgement(pipeline: import("@/lib/pipelines/types").Pipel
 
 const PIPELINE_CREATION_QUEUED_NOTE = "Pipeline state is not writable right now (a Viewer deployment is handing over, or the store is busy), so this pipeline is queued under the pipelineId above. The serving release stores and starts it on its next controller pass; get_pipeline answers once it is stored. Do not create it again.";
 
+function assertPipelineSeatAuthority(dependencies: ViewerMcpDomainDependencies, src?: unknown): void {
+  const caller = attributionOf(dependencies).conversationId;
+  const snapshot = dependencies.registrySnapshot?.();
+  const lookup = snapshot ? readOnlyConversationLookupFromSnapshot(snapshot) : null;
+  const source = !caller && typeof src === "string" ? lookup?.conversationForPath(src.trim()) : null;
+  const refusal = revokedSeatPipelineRefusal(caller ?? source?.id ?? null, id => lookup?.canonicalConversationId(id as `conversation_${string}`) ?? id);
+  if (refusal) throw new McpToolRefusal(refusal, { code: "orchestrator_seat_revoked", status: 403 });
+}
+
 async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  if (dependencies) assertPipelineSeatAuthority(dependencies, args.src);
   const request = withoutKeys(args, ["clientRequestId", "recoveryOnly"]);
   if (context?.dispatch) context.dispatch.attempted = true;
   /* Every MCP caller is an agent; the sizing rules judge the attributed
@@ -1730,6 +1741,7 @@ function closeReportCounts(report: PipelineCloseReport) {
 }
 
 async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  assertPipelineSeatAuthority(dependencies);
   const pipelineId = required(args, "pipelineId");
   const action = required(args, "action") as PipelineAction;
   /* Clearing a lane off the operator's queue is the dismissal service's write
@@ -3990,12 +4002,8 @@ async function rotateOrchestrator(
     );
   }
   const project = canonicalOrchestratorProject(required(args, "project"));
-  /* #1452, #2030: with no mandate named, the route rebuilds the successor's
-     core from the CURRENT default whenever the incumbent's stored mandate is
-     based on an older version, and keeps its rotation history. Sending the
-     default from here instead dropped that history. `keepIncumbentMandate:
-     true` is the explicit way to carry the old text forward; a seat on the
-     current version, or on bespoke (unversioned) rules, keeps its own text. */
+  /* Omitting mandate preserves the incumbent's core and handoff history;
+     sending one explicitly replaces the core. */
   const fields = allowedSeatFields(args, ["mandate", "handoffNotes", "cwd", "engine", "model", "effort", "accountId", "keepIncumbentMandate"]);
   const result = await control.post("/api/orchestrator/rotate", {
     project,
@@ -4013,6 +4021,7 @@ async function rotateOrchestrator(
     triggeredBy: result.triggeredBy ?? null,
     /* Whether the prior handoffs were summarized or kept verbatim, and why. */
     handoff: result.handoff ?? null,
+    mandateDisposition: result.mandateDisposition ?? null,
     replayed: result.replayed === true,
   });
 }
@@ -6038,9 +6047,9 @@ export function viewerMcpBindings(
     message_receipt: (args) => messageReceipt(args),
     create_task: (args) => createBoardTask(args, domainDependencies),
     update_task: (args) => updateBoardTask(args, domainDependencies),
-    create_pipeline: (args, context) => unadmittedOnStoreBusy(() => createPipeline(args, context, domainDependencies)),
+    create_pipeline: (args, context) => unadmittedBeforeMutation(() => createPipeline(args, context, domainDependencies)),
     pipeline_action: Object.assign(
-      (args: McpToolArgs) => unadmittedOnStoreBusy(() => pipelineAction(args, domainDependencies)),
+      (args: McpToolArgs) => unadmittedBeforeMutation(() => pipelineAction(args, domainDependencies)),
       { authorizeReceipt: (args: McpToolArgs) => {
         if (!PIPELINE_RECEIPT_ACTIONS.has(args.action as PipelineAction)) return;
         const id = required(args, "pipelineId");
@@ -6056,8 +6065,8 @@ export function viewerMcpBindings(
         if (refusal) throw new Error(refusal.error);
       } },
     ),
-    stage_report: (args) => stageReport(args, domainDependencies),
-    link_task_to_pipeline: (args) => unadmittedOnStoreBusy(() => linkTaskToPipeline(args, linkTaskDependencies)),
+    stage_report: (args) => unadmittedBeforeMutation(() => stageReport(args, domainDependencies)),
+    link_task_to_pipeline: (args) => unadmittedBeforeMutation(() => linkTaskToPipeline(args, linkTaskDependencies)),
     list_conversations: (args, context) => budgeted("list_conversations", args, 12_000, cursor => listConversations({ ...args, cursor }, viewerControlForCall(controlDependencies, context))),
     search_transcripts: (args, context) => searchTranscripts(args, viewerControlForCall(controlDependencies, context)),
     get_conversation: (args, context) => getConversation(args, domainDependencies, context),

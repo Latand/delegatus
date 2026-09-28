@@ -771,6 +771,7 @@ test("a rotation onto the built-in default records the CURRENT version, whatever
   }, deps);
 
   expect(result.status).toBe(200);
+  expect(result.body.mandateDisposition).toBe("replaced");
   const active = orchestratorSeatFor("proj-a").active;
   expect(active).toMatchObject({ conversationId: successor, promptVersion: ORCHESTRATOR_PROMPT_VERSION });
   expect(active?.mandate).toStartWith(ORCHESTRATOR_SYSTEM_PROMPT);
@@ -821,12 +822,8 @@ test("a rotation that keeps a v20 incumbent's mandate still delivers every tick 
   expect(delivered).not.toContain("act on the items it lists first, then make one bounded pass over the rest of the board");
 });
 
-/* #2030: v20's text was rewritten without a bump, and every rotation after it
-   carried the incumbent's older core forward. With no mandate named, a stale
-   incumbent's core is rebuilt from the current default byte for byte, while
-   its rotation history — the part that is not a default at all — is kept. */
-test("a rotation that names no mandate over an older default rebuilds the core byte for byte and keeps the history", async () => {
-  const olderCore = "You are the viewer's built-in Manager.\n\nCall list_tasks for this project with NO status filter and limit: 200.";
+test("a no-mandate rotation preserves an edited older core and bounded handoff history", async () => {
+  const olderCore = "Edited seat rules: keep the operator's triage order and limit: 200.";
   const seeded = dependencies();
   await executeOrchestratorSeatRequest({
     ...spawnRequest("req_00000037"),
@@ -845,16 +842,14 @@ test("a rotation that names no mandate over an older default rebuilds the core b
 
   expect(result.status).toBe(200);
   const active = orchestratorSeatFor("proj-a").active;
-  expect(active).toMatchObject({ conversationId: successor, promptVersion: ORCHESTRATOR_PROMPT_VERSION });
-  expect(splitMandate(active!.mandate).core).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
-  expect(active!.mandate).not.toContain("limit: 200");
-  /* The history survives the rebuild: both prior sections were handed to the
-     summarizer, and its fallback kept their text. */
+  expect(active).toMatchObject({ conversationId: successor, promptVersion: ORCHESTRATOR_PROMPT_VERSION - 1 });
+  expect(splitMandate(active!.mandate).core).toBe(olderCore);
+  expect(result.body.mandateDisposition).toBe("preserved");
   expect(recorded.digests).toHaveLength(1);
   expect(active!.mandate).toContain("merged the exporter lane");
   expect(active!.mandate).toContain("digest lane parked on review");
   /* And what the successor was delivered opens with the same bytes. */
-  expect(String(recorded.spawns[0]!.prompt)).toContain(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(String(recorded.spawns[0]!.prompt)).toContain(olderCore);
 });
 
 test("an EDITED mandate over a stale seat records no version, so the successor is neither flagged stale nor prefilled over on the next rotation (#1452)", async () => {
@@ -2018,7 +2013,7 @@ test("AC5: retrying a failed existing-mode designation with its OWN key clears i
 async function rotateTwelveTimes(
   project: string,
   summarizeHandoffs: SeatCommandDependencies["summarizeHandoffs"],
-): Promise<string[]> {
+): Promise<{ prompts: string[]; historyDropped: boolean[] }> {
   const seeded = dependencies({
     conversationTarget: (conversationId) => ({ kind: "eligible", conversationId, path: "/tmp/incumbent.jsonl", cwd: "/workspace", project, engine: "claude" }),
   });
@@ -2030,6 +2025,7 @@ async function rotateTwelveTimes(
   expect(created.status).toBe(200);
 
   const prompts: string[] = [];
+  const historyDropped: boolean[] = [];
   for (let rotation = 1; rotation <= 12; rotation += 1) {
     const { deps } = dependencies({
       conversationTarget: (conversationId) => ({ kind: "eligible", conversationId, path: "/tmp/incumbent.jsonl", cwd: "/workspace", project, engine: "claude" }),
@@ -2050,24 +2046,27 @@ async function rotateTwelveTimes(
       handoffNotes: "n".repeat(2_000),
     }, deps);
     expect(rotated.status).toBe(200);
+    historyDropped.push((rotated.body.handoff as { historyDropped?: boolean } | undefined)?.historyDropped === true);
   }
-  return prompts;
+  return { prompts, historyDropped };
 }
 
 test("AC6: twelve rotations keep every successor mandate inside the structured envelope", async () => {
   const summarized = await rotateTwelveTimes("proj-a", async () => ({ kind: "digest", text: "d".repeat(3_800) }));
   const fellBack = await rotateTwelveTimes("proj-b", async () => ({ kind: "fallback", reason: "exhausted" }));
 
-  expect(summarized).toHaveLength(12);
-  expect(fellBack).toHaveLength(12);
-  for (const prompt of [...summarized, ...fellBack]) {
+  expect(summarized.prompts).toHaveLength(12);
+  expect(fellBack.prompts).toHaveLength(12);
+  for (const prompt of [...summarized.prompts, ...fellBack.prompts]) {
     expect(launchBytes(prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
     expect(prompt.split(HANDOFF_HEADING)).toHaveLength(2);
   }
-  /* The first rotation has nothing to compact; every later one carries exactly
-     one history section however many rotations preceded it. */
-  for (const prompt of [...summarized.slice(1), ...fellBack.slice(1)]) {
-    expect(prompt.split(HISTORY_HEADING)).toHaveLength(2);
+  /* A section is present once when it fits; an envelope trim reports that it
+     dropped the history instead of silently losing it. */
+  for (const result of [summarized, fellBack]) {
+    for (let index = 1; index < result.prompts.length; index += 1) {
+      expect(result.prompts[index]!.split(HISTORY_HEADING)).toHaveLength(result.historyDropped[index] ? 1 : 2);
+    }
   }
 });
 

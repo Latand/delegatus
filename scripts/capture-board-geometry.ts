@@ -4598,10 +4598,10 @@ async function activityMain(): Promise<void> {
   const heavyDay = [TODAY - 3, TODAY - 4, TODAY - 5, TODAY - 6].find(workday) ?? TODAY - 3;
   const planOf = (day: number): ActivityPlan => {
     if (day === TODAY) return ACTIVITY_PLANS.today;
-    if (weekday(day) === 6 && day >= TODAY - 6) return ACTIVITY_PLANS.saturday;
-    if (weekday(day) === 0 && day >= TODAY - 6) return ACTIVITY_PLANS.sunday;
     if (day === TODAY - 2) return ACTIVITY_PLANS.flagged;
     if (day === TODAY - 1) return ACTIVITY_PLANS.lower;
+    if (weekday(day) === 6 && day >= TODAY - 6) return ACTIVITY_PLANS.saturday;
+    if (weekday(day) === 0 && day >= TODAY - 6) return ACTIVITY_PLANS.sunday;
     if (day === heavyDay) return ACTIVITY_PLANS.heavy;
     if (day >= TODAY - 6) return ACTIVITY_PLANS.normal;
     return generatedActivityPlan(weekday(day), 7919 * (day + 1));
@@ -4704,7 +4704,7 @@ async function activityMain(): Promise<void> {
       }
     };
     writeStage([{ name: "month", from: days[0]!.start - 86_400_000, until: days[STAGE_UNREAD[0]!]!.start }, { name: "today", from: days[TODAY]!.start, until: endOfToday }]);
-    fs.writeFileSync(path.join(activityDir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation", label: "Workstation" }, hosts: [{ id: "stage", label: "Stage host", projects: ACTIVITY_STAGE_PROJECTS.map(keyOf) }] }));
+    fs.writeFileSync(path.join(activityDir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation", label: "Workstation" }, hosts: [{ id: "stage", label: "Stage host", mode: "solo", projects: ACTIVITY_STAGE_PROJECTS.map(keyOf) }] }));
     fs.writeFileSync(path.join(activityDir, "settings.json"), JSON.stringify({ v: 1, tz: ACTIVITY_TZ, billable: ACTIVITY_BILLABLE.map(keyOf) }));
 
     /* Wait for the Viewer's own index to carry every seeded conversation. */

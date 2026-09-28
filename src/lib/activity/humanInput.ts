@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText";
 import { isRecoveryNotice } from "@/lib/runtime/recoveryNotices";
 
-import type { ExclusionReason, Interval, RequestKind, Surface } from "./method";
+import type { ExclusionReason, RequestKind, Surface } from "./method";
 import { EXCLUSION_REASONS, REQUEST_KINDS, SURFACES } from "./method";
 
 /*
@@ -14,7 +14,7 @@ import { EXCLUSION_REASONS, REQUEST_KINDS, SURFACES } from "./method";
  * the pure half of that: which transcript records are human input at all, how
  * copies of one input collapse into one, and the export row format.
  *
- * Only real operator input counts. The positive signals are the Delegatus
+ * Only real human input counts. The positive signals are the Delegatus
  * structured-user marker with operator origin, the host's delivery provenance
  * naming the operator, and the engine's own record that a person typed the
  * prompt. Every other user record — scaffolds, stage templates, notifications,
@@ -48,6 +48,8 @@ export interface HumanInput {
   /** Canonical content hash, for the fallback rule across hosts. Null for a
       ledger row, which never saw the text. */
   hash: string | null;
+  /** Member id, `operator` on a solo host, or null when unknown. */
+  author?: string | null;
 }
 
 export { EXCLUSION_REASONS, type ExclusionReason } from "./method";
@@ -116,9 +118,10 @@ export interface TranscriptContext {
   conversation: string;
   session: SessionKind;
   launch: LaunchKind | null;
+  mode?: "solo" | "team";
   /** The origin of a Delegatus delivery, from the host's delivery provenance,
       and the ingress idempotency key it was admitted under when known. */
-  deliveryOrigin?(record: UserRecord): { origin: "operator" | "agent"; idempotencyKey?: string } | null;
+  deliveryOrigin?(record: UserRecord): { origin: "operator" | "agent"; idempotencyKey?: string; memberId?: string } | null;
 }
 
 /** The fields of one user record the classifier reads. `text` is transient. */
@@ -243,7 +246,7 @@ const INJECTED_PREFIXES = [
 const NOTIFICATION_PREFIXES = ["<task-notification", "This session is being continued from a previous conversation"];
 
 export type Verdict =
-  | { human: true; kind: RequestKind; surface: Surface; idempotencyKey?: string }
+  | { human: true; kind: RequestKind; surface: Surface; author?: string | null; idempotencyKey?: string }
   | { human: false; reason: ExclusionReason };
 
 /**
@@ -280,10 +283,11 @@ export function classifyUserRecord(rec: UserRecord, context: TranscriptContext, 
       human: true,
       kind: firstUserMessage && context.launch === "operator" ? "spawn" : "message",
       surface: "unknown",
+      author: context.mode === "team" ? provenance?.memberId ?? null : "operator",
       ...(provenance?.idempotencyKey ? { idempotencyKey: provenance.idempotencyKey } : {}),
     };
   }
-  if (rec.promptSource === "typed" || rec.turnOrigin === "human") return { human: true, kind: "message", surface: "terminal" };
+  if (rec.promptSource === "typed" || rec.turnOrigin === "human") return { human: true, kind: "message", surface: "terminal", author: context.mode === "team" ? null : "operator" };
   if (firstUserMessage && context.launch === "operator") return { human: false, reason: "scaffold" };
   return { human: false, reason: "unmarked" };
 }
@@ -304,10 +308,11 @@ export interface InputCandidate {
   /** Canonical text hash, for the fallback rule only. */
   textHash: string;
   conversation: string;
+  author?: string | null;
 }
 
 /** Build a candidate from a classified record. */
-export function candidateFor(rec: UserRecord, context: TranscriptContext, verdict: { kind: RequestKind; surface: Surface; idempotencyKey?: string }): InputCandidate {
+export function candidateFor(rec: UserRecord, context: TranscriptContext, verdict: { kind: RequestKind; surface: Surface; author?: string | null; idempotencyKey?: string }): InputCandidate {
   const ids: string[] = [];
   if (verdict.idempotencyKey) ids.push(requestKey(verdict.idempotencyKey));
   if (rec.promptId) ids.push(messageId("claude-prompt", rec.promptId));
@@ -322,6 +327,7 @@ export function candidateFor(rec: UserRecord, context: TranscriptContext, verdic
     ids,
     textHash: canonicalTextHash(rec.text),
     conversation: context.conversation,
+    author: verdict.author ?? null,
   };
 }
 
@@ -343,12 +349,13 @@ class Groups {
 }
 
 /** Join every pair of items that share an id. */
-function joinByIds(items: ReadonlyArray<{ ids: readonly string[] }>, groups: Groups): void {
+function joinByIds(items: ReadonlyArray<{ ids: readonly string[]; author?: string | null }>, groups: Groups): void {
   const byId = new Map<string, number>();
   items.forEach((item, index) => {
     for (const id of item.ids) {
-      const seen = byId.get(id);
-      if (seen === undefined) byId.set(id, index);
+      const identity = `${item.author ?? ""}\0${id}`;
+      const seen = byId.get(identity);
+      if (seen === undefined) byId.set(identity, index);
       else groups.join(seen, index);
     }
   });
@@ -405,7 +412,7 @@ export function dedupeCandidates(candidates: readonly InputCandidate[]): HumanIn
   joinByContent(
     sorted,
     groups,
-    (candidate) => `${candidate.host}\0${candidate.textHash}`,
+    (candidate) => `${candidate.host}\0${candidate.author ?? ""}\0${candidate.textHash}`,
     (earlier, later) => !(earlier.conversation === later.conversation && earlier.ids.length && later.ids.length),
   );
   const merged = new Map<number, { first: InputCandidate; ids: Set<string> }>();
@@ -424,29 +431,42 @@ export function dedupeCandidates(candidates: readonly InputCandidate[]): HumanIn
     kind: first.kind,
     surface: first.surface,
     hash: first.textHash,
+    author: first.author ?? null,
   })).sort((a, b) => a.at - b.at);
 }
 
 /**
- * Merge inputs from every source and host into one list.
+ * Merge member-scoped inputs from every source and host into one list. Each
+ * host has already selected the dashboard person's identity, which can have
+ * a different member id on another host.
  *
- * - Inside a span a host's request ledger covers, that host's transcript
- *   inputs that came through Delegatus (surface `unknown`) are dropped: the
- *   ledger recorded every Delegatus request there once, at ingress, fan-out
- *   included, and with its surface.
+ * - A host's transcript input is replaced by its ledger row only when they
+ *   share a request id. Ledger time coverage alone cannot identify a copy:
+ *   an unrelated request may fall in the same span.
  * - Inputs sharing an id are one: the same message in stores on both hosts.
  * - The fallback rule across hosts: the same content hash on two hosts within
  *   FALLBACK_WINDOW_MS, with no id in common, is one input.
  *
  * The earliest copy's time wins, and a ledger row wins a tie.
  */
-export function mergeHumanInputs(inputs: readonly HumanInput[], ledgerSpans: ReadonlyMap<string, readonly Interval[]>): HumanInput[] {
+export function mergeHumanInputs(inputs: readonly HumanInput[]): HumanInput[] {
+  const ledgerIds = new Set(inputs.filter((input) => input.source === "ledger")
+    .flatMap((input) => input.ids.map((id) => `${input.host}\0${id}`)));
   const kept = inputs.filter((input) => {
     if (input.source !== "transcripts" || input.surface !== "unknown") return true;
-    return !(ledgerSpans.get(input.host) ?? []).some((span) => input.at >= span.start && input.at <= span.end);
+    return !input.ids.some((id) => ledgerIds.has(`${input.host}\0${id}`));
   }).sort((a, b) => a.at - b.at || (a.source === b.source ? 0 : a.source === "ledger" ? -1 : 1));
   const groups = new Groups(kept.length);
   joinByIds(kept, groups);
+  const byId = new Map<string, number[]>();
+  kept.forEach((input, index) => {
+    for (const id of input.ids) {
+      const seen = byId.get(id) ?? [];
+      for (const other of seen) if (kept[other]!.host !== input.host) groups.join(other, index);
+      seen.push(index);
+      byId.set(id, seen);
+    }
+  });
   joinByContent(kept, groups, (input) => input.hash, (earlier, later) => earlier.host !== later.host);
   const out = new Map<number, HumanInput>();
   kept.forEach((input, index) => {
@@ -486,6 +506,7 @@ export interface ExportEvent {
   project: string | null;
   kind: RequestKind;
   surface: Surface;
+  author?: string | null;
 }
 
 const HOST_ID = /^[a-z0-9][a-z0-9._-]{0,62}$/;
@@ -540,6 +561,7 @@ export function parseExportLine(line: string): ExportManifest | ExportEvent | nu
     project: row.project as string | null,
     kind: row.kind as RequestKind,
     surface: row.surface as Surface,
+    author: typeof row.author === "string" && row.author.trim() && row.author.length <= 120 ? row.author : null,
   };
 }
 
@@ -555,6 +577,7 @@ export function exportLines(manifest: Omit<ExportManifest, "v" | "type">, inputs
     project: input.project,
     kind: input.kind,
     surface: input.surface,
+    author: input.author ?? null,
   }));
   return [head, ...rows].map((row) => JSON.stringify(row)).join("\n") + "\n";
 }

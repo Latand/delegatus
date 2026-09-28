@@ -1,9 +1,12 @@
 import { readOnlyConversationLookupFromSnapshot, type RegistryFile } from "@/lib/agent/registry";
+import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { conversationAgentRole } from "@/lib/agent/spawnAdmission";
 import { UNRESOLVED_PROJECT } from "@/lib/projects/identity";
 import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { submissionIdentities } from "@/lib/runtime/submissionIdentity";
+import { deliveryDedupToken, NATIVE_QUEUE_DELIVERY_KEY } from "@/lib/runtime/deliveryDedup";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
+import { existingTeamStore } from "@/lib/team/store";
 
 import type { TranscriptContext, UserRecord } from "./humanInput";
 import { NO_ROLE } from "./method";
@@ -18,9 +21,17 @@ import type { ConversationResolution, TranscriptFacts } from "./transcriptExport
  * host whose registry is unreadable or skipped: only the cwd decides the
  * project and no conversation is registered.
  */
-export function conversationResolver(snapshot: RegistryFile | null): (facts: TranscriptFacts) => ConversationResolution {
+export function conversationResolver(
+  snapshot: RegistryFile | null,
+  provenanceRegistrySnapshot?: () => RegistryFile,
+): (facts: TranscriptFacts) => ConversationResolution {
   const lookup = snapshot ? readOnlyConversationLookupFromSnapshot(snapshot) : null;
   return (facts) => {
+    let mode: "solo" | "team" = "team";
+    try {
+      const store = existingTeamStore();
+      mode = store?.members().length ? "team" : "solo";
+    } catch { /* An unreadable team store cannot name a person. */ }
     const conversation = lookup?.conversationForPath(facts.path) ?? null;
     const generation = conversation?.generations.at(-1);
     let project: string | null = null;
@@ -34,24 +45,52 @@ export function conversationResolver(snapshot: RegistryFile | null): (facts: Tra
       project = null;
     }
     if (project === UNRESOLVED_PROJECT) project = null;
-    if (!conversation || !snapshot) return { project, launch: null, registered: false };
+    if (!conversation || !snapshot) return { project, launch: null, registered: false, mode };
     const memberships = (snapshot.memberships[conversation.id] ?? []).filter((membership) => membership.kind === "pipeline");
     const pipeline = memberships.length > 0;
     const stage = [...memberships].sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
     const delegated = Boolean(snapshot.lineageEdges[conversation.id]) || (conversation.delegationDepth ?? 0) >= 1;
     let claude: ReturnType<typeof claudeMessageProvenance> | null = null;
     let codex: Record<string, string> | null = null;
+    let queuedAuthors: Map<string, string> | null = null;
+    const requestIdentity = (submission: string | undefined): string | undefined => {
+      if (!submission?.startsWith("spawn_")) return submission;
+      const receipt = snapshot.receipts[submission.slice("spawn_".length)];
+      return receipt?.conversationId === conversation.id && receipt.clientAttemptId
+        ? `spawn:${receipt.clientAttemptId}` : submission;
+    };
+    const authorFor = (submission: string | undefined, deliveryKey: string | null): string | undefined => {
+      if (mode !== "team") return undefined;
+      try {
+        const store = existingTeamStore();
+        if (!store) return undefined;
+        const author = submission ? store.messageAuthors([submission]).get(submission) : undefined;
+        if (author?.conversationId?.startsWith("conversation_")
+          && lookup?.canonicalConversationId(author.conversationId as ViewerConversationId) === conversation.id) return author.memberId;
+        if (!deliveryKey) return undefined;
+        queuedAuthors ??= new Map(store.messageAuthorsForConversation(conversation.id)
+          .filter((row) => NATIVE_QUEUE_DELIVERY_KEY.test(row.clientMessageId))
+          .map((row) => [deliveryDedupToken(row.clientMessageId), row.memberId]));
+        return queuedAuthors.get(deliveryKey);
+      } catch { return undefined; }
+    };
     const deliveryOrigin: TranscriptContext["deliveryOrigin"] = (rec: UserRecord) => {
       try {
         if (rec.engine === "claude") {
-          claude ??= claudeMessageProvenance(facts.path);
+          claude ??= claudeMessageProvenance(facts.path,
+            provenanceRegistrySnapshot ? { registrySnapshot: provenanceRegistrySnapshot } : {});
           const found = rec.messageId ? claude[rec.messageId] : undefined;
-          return found ? { origin: found.origin, ...(found.submissionId ? { idempotencyKey: found.submissionId } : {}) } : null;
+          if (!found) return null;
+          const memberId = authorFor(found.submissionId, null);
+          return { origin: found.origin, ...(found.submissionId ? { idempotencyKey: requestIdentity(found.submissionId) } : {}),
+            ...(memberId ? { memberId } : {}) };
         }
         if (!rec.markerOrigin) return null;
-        codex ??= submissionIdentities(facts.path);
+        codex ??= submissionIdentities(facts.path,
+          provenanceRegistrySnapshot ? { registrySnapshot: provenanceRegistrySnapshot } : {});
         const submission = rec.deliveryKey ? codex[rec.deliveryKey] : undefined;
-        return { origin: rec.markerOrigin, ...(submission ? { idempotencyKey: submission } : {}) };
+        const memberId = authorFor(submission, rec.deliveryKey);
+        return { origin: rec.markerOrigin, ...(submission ? { idempotencyKey: requestIdentity(submission) } : {}), ...(memberId ? { memberId } : {}) };
       } catch {
         return null;
       }
@@ -60,6 +99,7 @@ export function conversationResolver(snapshot: RegistryFile | null): (facts: Tra
       project,
       launch: pipeline ? "pipeline" : delegated ? "agent" : "operator",
       registered: true,
+      mode,
       conversation: conversation.id,
       deliveryOrigin,
       agent: {

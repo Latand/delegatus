@@ -4,11 +4,13 @@ import os from "node:os";
 import path from "node:path";
 
 import { turnConversations } from "./agentSource";
+import { conversationResolver } from "./conversationResolver";
 import { dedupeCandidates } from "./humanInput";
 import { ingestTranscripts, type IngestSource } from "./ingest";
 import { activityReport, clampMethodParams } from "./method";
 import { ActivityStore, LOCAL_HOST_KEY } from "./store";
 import type { ConversationResolution, TranscriptFacts } from "./transcriptExport";
+import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
 
 /* The continuous ingest over invented transcripts in a throw-away directory:
    invented projects, ids and text only. */
@@ -79,6 +81,27 @@ function stored<T>(read: (store: ActivityStore) => T): T {
 }
 
 describe("the continuous ingest", () => {
+  test("a resolver made before team claim attributes later ingest as team input", async () => {
+    const previous = process.env.LLV_STATE_DIR;
+    process.env.LLV_STATE_DIR = path.join(dir, "state");
+    resetTeamStoreForTests();
+    try {
+      const resolve = conversationResolver(null);
+      const team = teamStore();
+      team.insertMember({ id: "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", name: "Owner", role: "owner",
+        status: "active", color: "teal", telegram: null, createdAt: "2026-09-23T00:00:00Z",
+        createdBy: "claim", revokedAt: null });
+      const file = write("sessions/claimed-team.jsonl", [claudeTyped("2026-09-23T08:00:00Z", "claimed", "typed team input")]);
+      await ingest([source(file, "claude")], { resolver: () => resolve });
+      expect(stored((store) => store.localRowsAfter(0, 10).map((row) => row.author))).toEqual([null]);
+      expect(stored((store) => store.hostState(LOCAL_HOST_KEY)?.teamHistory)).toBeTrue();
+    } finally {
+      resetTeamStoreForTests();
+      if (previous === undefined) delete process.env.LLV_STATE_DIR;
+      else process.env.LLV_STATE_DIR = previous;
+    }
+  });
+
   test("writes one record per operator input and none for the excluded kinds, and no text", async () => {
     const file = write("sessions/rollout-a.jsonl", [
       codexMeta("2026-09-23T08:00:00Z"),
