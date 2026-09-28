@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { agentRegistry, type AgentHostStatus, type ProcessIdentity, type RegistryFile } from "@/lib/agent/registry";
+import { agentRegistry, type AgentHostStatus, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
@@ -205,6 +205,9 @@ export interface StructuredHostRetirementSubject {
   activeFlags: readonly string[];
   pendingAction: string | null;
   structuredHostOperationId: string | null;
+  /** The launch stamp outlives its receipt's work; null means the stamped
+      receipt is missing or there is no stamp. */
+  structuredHostOperationReceiptState: SpawnReceipt["state"] | null;
   /** Undetermined when the handoff queue could not be read: an unreadable
       queue is not a drained one. */
   undeliveredHandoffEntries: Determinable<number>;
@@ -345,7 +348,10 @@ const CLAUSE_CHECKS: Record<
 
   "no-open-operation": (subject) => {
     if (subject.pendingAction !== null) return refuses(`a ${subject.pendingAction} action is pending`);
-    if (subject.structuredHostOperationId !== null) return refuses("a structured host operation is still in flight");
+    if (subject.structuredHostOperationId !== null
+      && !TERMINAL_RECEIPT_STATES.has(subject.structuredHostOperationReceiptState ?? "")) {
+      return refuses("a structured host operation is still in flight");
+    }
     return subject.openOperations > 0
       ? refuses(`${subject.openOperations} spawn receipt(s) are pending or non-terminal`)
       : PASSES;
@@ -964,6 +970,7 @@ function retirementSubject(
   const memberships = conversation ? inputs.file.memberships[conversation.id] ?? [] : [];
   const pipeline = memberships.find((membership) => membership.kind === "pipeline") ?? null;
   const generation = conversation?.generations.find((candidate) => candidate.id === key.sessionId) ?? null;
+  const launchId = entry.structuredHostOperationId ?? null;
 
   return {
     key,
@@ -985,7 +992,8 @@ function retirementSubject(
     pendingAttention: columns.pendingAttention,
     activeFlags: columns.activeFlags,
     pendingAction: entry.pendingAction,
-    structuredHostOperationId: entry.structuredHostOperationId ?? null,
+    structuredHostOperationId: launchId,
+    structuredHostOperationReceiptState: launchId === null ? null : inputs.file.receipts[launchId]?.state ?? null,
     undeliveredHandoffEntries: mapDeterminable(inputs.undelivered,
       (index) => index.count(keyId, conversationId)),
     openOperations: inputs.openOperations.count(keyId, conversationId),

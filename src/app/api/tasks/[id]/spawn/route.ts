@@ -29,6 +29,7 @@ import { attachmentPath } from "@/lib/tasks/attachments";
 import { applyAssignmentPatches, pinnedAccountId, type AssignmentPatch, type TaskCommandResult } from "@/lib/tasks/commands";
 import { isoNow } from "@/lib/tasks/helpers";
 import { LaunchMembershipError } from "@/lib/tasks/launchMembership";
+import { runsElsewhere } from "@/lib/links/linked";
 import { loadTasks, mutateTasks } from "@/lib/tasks/store";
 import type { BoardTask, TaskAssignment } from "@/lib/tasks/types";
 import { isGenericSessionTitle } from "@/lib/title";
@@ -213,6 +214,10 @@ async function postTaskSpawn(
   const { id } = await ctx.params;
   const task = dependencies.loadTasks().find((item) => item.id === id);
   if (!task) return NextResponse.json({ error: "task not found" }, { status: 404 });
+  /* A task another linked machine runs is started by that machine
+     (docs/design/linked-installs.md M.4); launch admission checks it again. */
+  const elsewhere = runsElsewhere(task);
+  if (elsewhere) return NextResponse.json({ error: elsewhere.error, code: elsewhere.code }, { status: elsewhere.status });
 
   const registry = dependencies.registry();
   let retryOf: SpawnReceipt | null = null;
@@ -357,7 +362,7 @@ async function postTaskSpawn(
       taskIds: [task.id],
     });
   } catch (error) {
-    if (error instanceof LaunchMembershipError) return NextResponse.json({ error: error.message }, { status: error.status });
+    if (error instanceof LaunchMembershipError) return NextResponse.json({ error: error.message, ...(error.code ? { code: error.code } : {}) }, { status: error.status });
     throw error;
   }
   if (begun.kind === "conflict") {

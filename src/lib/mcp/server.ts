@@ -3332,6 +3332,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe(`Colour label for the card: none, ${TASK_COLORS.join(", ")}, picked by the rule in this tool's description. A value that is no colour is stored as no colour and the answer carries a note.`),
     priority: z.unknown().optional()
       .describe(`${TASK_PRIORITIES.join(", ")}; omitted is normal. Picked by the rule in this tool's description. A value that is no priority creates a normal task and the answer carries a note.`),
+    machine: z.literal("here").optional()
+      .describe("The machine that runs the task on a linked board; a new task always runs on the machine that creates it, so the only value is \"here\"."),
   }).passthrough(),
   update_task: z.object({
     clientRequestId: clientRequestIdSchema,

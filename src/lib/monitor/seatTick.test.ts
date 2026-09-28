@@ -913,6 +913,16 @@ test("an assigned task nothing has started wakes the seat once the wake interval
   expect(reasonsOf(decision.verdict)).toEqual(["unstarted-task"]);
 });
 
+/* docs/design/linked-installs.md M.4: another machine's orchestrator starts
+   its own tasks, so they are no wake reason here, unstarted or backlog. */
+test("an assigned task another linked machine runs wakes no seat", () => {
+  const decision = seatTickDecision(input({
+    tasks: [card({ runsOn: "beta" }), card({ id: "task_old", runsOn: "beta", updatedAt: new Date(NOW - 30 * 24 * 60 * MINUTE).toISOString() })],
+    state: stateWith({ lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString() }),
+  }));
+  expect(reasonsOf(decision.verdict)).toEqual([]);
+});
+
 /* #1262: the bound itself, at the layer that applies it. What the bound is FOR
    — a board of stale assigned cards that could never discharge the reason, and
    a movement that brings one back — is a claim about a real board under a real

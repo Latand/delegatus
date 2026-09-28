@@ -4,8 +4,10 @@ import type {
   AgentRegistryEntry,
   ProcessIdentity,
   RegistryConversation,
+  RegistryFile,
   StructuredHostColumns,
 } from "@/lib/agent/registry";
+import { adoptionRefusal } from "@/lib/links/adoptionGuard";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import {
   captureProcessIdentity,
@@ -537,6 +539,8 @@ export async function adoptCodexRegistryHosts(
     adoptHost?: (sessionId: string, options: CodexAppServerHostOptions) => Promise<CodexAppServerHost>;
     onAdopted?: (item: AdoptedCodexHost) => void;
     claimHost?: (entry: AgentRegistryEntry, owner: ProcessIdentity) => Promise<AgentRegistryEntry | null>;
+    /** The ownership check before `adopt`; production resolves the tasks. */
+    admit?: (entry: AgentRegistryEntry, snapshot: RegistryFile) => { error: string } | null;
   } = {},
 ): Promise<AdoptedCodexHost[]> {
   if (!structuredHostsEnabled(env)) return [];
@@ -570,6 +574,22 @@ export async function adoptCodexRegistryHosts(
         if (!claimed?.structuredHost) return;
         if (!shouldAdopt(claimed)) {
           registry.releaseStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch);
+          return;
+        }
+        /* M.4 seam 4: reopening the process is new work for every task the
+           conversation holds; one that runs on another linked machine leaves
+           the row stopped and opens nothing. */
+        const refused = (dependencies.admit ?? adoptionRefusal)(claimed, registry.readOnlySnapshot());
+        if (refused) {
+          console.error(`[linked boards] boot adoption of ${sessionKeyId(entry.key)} refused: ${refused.error}`);
+          registry.setStructuredHostClaimed(entry.key, {
+            ...claimed.structuredHost,
+            endpoint: "stdio:released",
+            process: null,
+            activeTurnRef: null,
+            pendingAttention: [],
+            activeFlags: [],
+          }, "dead", claimed.claimOwner!, claimed.claimEpoch, true);
           return;
         }
         try {
@@ -635,6 +655,8 @@ export async function adoptClaudeRegistryHosts(
     adoptHost?: (sessionId: string, options: ClaudeStreamBrokerHostOptions) => Promise<ClaudeStreamBrokerHost>;
     onAdopted?: (item: AdoptedClaudeHost) => void;
     claimHost?: (entry: AgentRegistryEntry, owner: ProcessIdentity) => Promise<AgentRegistryEntry | null>;
+    /** The ownership check before `adopt`; production resolves the tasks. */
+    admit?: (entry: AgentRegistryEntry, snapshot: RegistryFile) => { error: string } | null;
   } = {},
 ): Promise<AdoptedClaudeHost[]> {
   if (!structuredHostsEnabled(env)) return [];
@@ -668,6 +690,22 @@ export async function adoptClaudeRegistryHosts(
         if (!claimed?.structuredHost) return;
         if (!shouldAdopt(claimed)) {
           registry.releaseStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch);
+          return;
+        }
+        /* M.4 seam 4: reopening the process is new work for every task the
+           conversation holds; one that runs on another linked machine leaves
+           the row stopped and opens nothing. */
+        const refused = (dependencies.admit ?? adoptionRefusal)(claimed, registry.readOnlySnapshot());
+        if (refused) {
+          console.error(`[linked boards] boot adoption of ${sessionKeyId(entry.key)} refused: ${refused.error}`);
+          registry.setStructuredHostClaimed(entry.key, {
+            ...claimed.structuredHost,
+            endpoint: "stdio:released",
+            process: null,
+            activeTurnRef: null,
+            pendingAttention: [],
+            activeFlags: [],
+          }, "dead", claimed.claimOwner!, claimed.claimEpoch, true);
           return;
         }
         try {

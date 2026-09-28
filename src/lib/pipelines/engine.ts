@@ -88,6 +88,7 @@ import { collectStageProvenance } from "./stageProvenance";
 import { graphDigest, isStageDigest, stageDigest } from "./stageDigest";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
+import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
 import { pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, unclaimedPipelinePublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForProjection, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
@@ -6032,11 +6033,20 @@ function expectedStageRefusal(pipeline: Pipeline, req: PatchPipelineRequest): Pi
   return null;
 }
 
+/** M.4 seam 1: pipeline state that starts work refuses a task another linked
+    machine runs (docs/design/linked-installs.md). */
+function pipelineTasksRunElsewhere(taskIds: readonly string[], tasks: readonly BoardTask[]): PipelineMutationResult | null {
+  if (!taskIds.length) return null;
+  const wanted = new Set(taskIds);
+  const refusal = firstRunsElsewhere(tasks.filter((task) => wanted.has(task.id)));
+  return refusal ? { error: refusal.error, status: refusal.status, code: TASK_RUNS_ELSEWHERE } : null;
+}
+
 export type PipelineMutationResult = {
   pipeline?: Pipeline;
   error?: string;
   status?: number;
-  code?: PipelineRepoPreflightErrorCode | typeof ENGINE_NOT_CONNECTED;
+  code?: PipelineRepoPreflightErrorCode | typeof ENGINE_NOT_CONNECTED | typeof TASK_RUNS_ELSEWHERE;
   /** Set with ENGINE_NOT_CONNECTED: the stage, role and engine, and the two
       surfaces that resolve it (#1876). */
   details?: EngineNotConnectedDetails;
@@ -6353,8 +6363,11 @@ export async function createPipelineFromRequest(
     ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(targetInput?.rejectedHead ? { rejectedHead: targetInput.rejectedHead } : {}) };
   pipeline.creationRequest = options.creationRequest;
   if (!options.ensureTask) {
-    const taskLinkError = pipelineTaskLinkError(pipeline, taskIds, loadTasks());
+    const tasks = loadTasks();
+    const taskLinkError = pipelineTaskLinkError(pipeline, taskIds, tasks);
     if (taskLinkError) return { error: taskLinkError, status: 400 };
+    const elsewhere = pipelineTasksRunElsewhere(taskIds, tasks);
+    if (elsewhere) return elsewhere;
     let created: Pipeline;
     try {
       created = await createPipelineWithDelivery(pipeline, target, targetInput?.comparison);
@@ -6382,8 +6395,11 @@ export async function createPipelineFromRequest(
         return { pipeline: existing };
       }
     }
-    const taskLinkError = pipelineTaskLinkError(pipeline, taskIds, loadTasks());
+    const tasks = loadTasks();
+    const taskLinkError = pipelineTaskLinkError(pipeline, taskIds, tasks);
     if (taskLinkError) return { error: taskLinkError, status: 400 };
+    const elsewhere = pipelineTasksRunElsewhere(taskIds, tasks);
+    if (elsewhere) return elsewhere;
     assignPipelineDelivery(pipeline, target, targetInput?.comparison);
     pipelines.push(pipeline);
     persist();
@@ -7426,8 +7442,11 @@ export async function patchPipeline(
     } else if (req.action === "link-task") {
       const taskId = typeof req.taskId === "string" ? req.taskId.trim() : "";
       if (!taskId) return { error: "taskId is required", status: 400 };
-      const taskLinkError = pipelineTaskLinkError(pipeline, [taskId], loadTasks());
+      const tasks = loadTasks();
+      const taskLinkError = pipelineTaskLinkError(pipeline, [taskId], tasks);
       if (taskLinkError) return { error: taskLinkError, status: 400 };
+      const elsewhere = pipelineTasksRunElsewhere([taskId], tasks);
+      if (elsewhere) return elsewhere;
       if (req.finishes !== undefined && typeof req.finishes !== "boolean") return { error: "finishes must be a boolean", status: 400 };
       if (!pipeline.taskIds.includes(taskId)) pipeline.taskIds.push(taskId);
       /* An upsert (#2187 §5.1): on a task already linked it only sets or
@@ -7452,6 +7471,10 @@ export async function patchPipeline(
          nobody is signed in to. */
       const engineRefusal = stageEngineRefusal(pipeline.stages, pipeline.project, ports);
       if (engineRefusal) return engineRefusal;
+      /* A draft holds no task for a handover; its start is new work, so a task
+         that runs on another linked machine refuses it. */
+      const elsewhere = pipelineTasksRunElsewhere(pipeline.taskIds, loadTasks());
+      if (elsewhere) return elsewhere;
       const admission = ports.preflightRepo(pipeline.repoDir);
       if (!admission.ok) return preflightFailure(admission);
       if (admission.repoDir !== pipeline.repoDir) {
@@ -7735,6 +7758,8 @@ export async function patchPipeline(
       const survivorRefusal = pipelineSurvivorRefusal(pipeline);
       if (survivorRefusal) return survivorRefusal;
       if (pipeline.state !== "needs_decision") return { error: "pipeline does not have a stage awaiting retry", status: 409 };
+      const elsewhere = pipelineTasksRunElsewhere(pipeline.taskIds, loadTasks());
+      if (elsewhere) return elsewhere;
       const explicitReceiptRetry = req.stageId !== undefined || req.launchId !== undefined;
       if (explicitReceiptRetry && (typeof req.stageId !== "string" || typeof req.launchId !== "string")) {
         return { error: "receipt retry requires both stageId and launchId", status: 400 };

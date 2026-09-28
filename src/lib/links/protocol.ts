@@ -5,6 +5,7 @@ import { currentSelf, readSelf, checkSavedAddress, markOpenToInternet } from "@/
 import { forgetGrantCount, grantView, isSharedProject, readGrants, readPeers, safeEqual, sha, sharedProjects, usedGrant, writeGrants, writePeers, type Grant, type Link, type PairCode, type SharedProject } from "./state";
 export { remoteProjects, updateRemoteProjects } from "./boardLinks";
 import { dropRemoteProjects, ownBoardStoreId, remoteProjects, remoteStore, updateRemoteProjects } from "./boardLinks";
+import { serveTasks } from "./taskServe";
 
 const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const encode = (bytes: Uint8Array, count: number) => [...bytes].slice(0, count).map((value) => alphabet[value & 31]).join("");
@@ -143,8 +144,9 @@ export function incomingSync(grant: Grant, input: unknown): { status: number; bo
   if (!input || typeof input !== "object" || (input as Record<string, unknown>).v !== 1) return { status: 400, body: { error: "malformed" } };
   const wire = input as Record<string, unknown>;
   if (typeof wire.store !== "string" || !/^[0-9a-f-]{36}$/.test(wire.store) || typeof wire.now !== "number" || !Number.isSafeInteger(wire.now)) return { status: 400, body: { error: "malformed" } };
+  // A recreated store on A is rebuilt by A's own resync (M.8); B only records it.
   const heldStore = remoteStore(grant.id);
-  if (heldStore && heldStore !== wire.store) return { status: 409, body: { error: "store-changed" } };
+  if (heldStore && heldStore !== wire.store) updateRemoteProjects(grant.id, remoteProjects(grant.id), wire.store);
   if (typeof wire.s !== "string" || !/^[0-9a-f]{8}$/.test(wire.s) || typeof wire.have !== "string" || !/^[0-9a-f]{8}$/.test(wire.have)) return { status: 400, body: { error: "malformed" } };
   const list = wire.shared;
   if (list !== undefined) {
@@ -162,15 +164,19 @@ export function incomingSync(grant: Grant, input: unknown): { status: number; bo
       partialShared.delete(grant.id);
     }
   }
-  // M1 exchanges metadata only. M.10 counts durable work only when a later
-  // slice moves a task, tombstone, fence or nonempty activity page.
-  usedGrant(grant, false);
   const local = sharedProjects();
   const localHash = sharedDigest(local);
   const want = typeof wire.want === "number" && Number.isInteger(wire.want) && wire.want >= 0 && wire.want <= local.length ? wire.want : 0;
   const sendLocal = wire.have !== localHash;
   const remoteHash = sharedDigest(remoteProjects(grant.id));
+  const served = serveTasks(grant, wire, wire.s === remoteHash && !sendLocal);
+  if ("error" in served) {
+    usedGrant(grant, false);
+    return { status: served.error === "quota" ? 429 : served.error === "clock" ? 409 : 400, body: { error: served.error } };
+  }
+  // M.10: request counts reach grants.json only for hours that moved data.
+  usedGrant(grant, served.moved);
   return { status: 200, body: { v: 1, now: Date.now(), store: ownBoardStoreId(), s: localHash,
     ...(wire.s !== remoteHash ? { need: true } : {}),
-    ...(sendLocal ? { shared: local.slice(want, want + 100), index: want, total: local.length } : {}) } };
+    ...(sendLocal ? { shared: local.slice(want, want + 100), index: want, total: local.length } : {}), ...served.parts } };
 }

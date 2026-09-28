@@ -2,11 +2,11 @@ import { afterAll, expect, test } from "bun:test";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import http from "node:http";
 import fs from "node:fs";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
+import { meter as openMeter, WIRE_BUDGET, type Meter } from "./wireMeter";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pairing-test-"));
 const remote = "code.example.test/acme/widget";
@@ -58,31 +58,13 @@ test("a fresh outbound install pairs without saving its own public address", asy
   expect(JSON.parse(fs.readFileSync(selfFile, "utf8")).installId).toBe(self.installId);
 });
 
-/** Counts every byte on the TCP connections the sender opens to the receiver, both directions, headers included. */
-type Meter = { url: string; up: number; down: number; connections: number; requests: Buffer[] };
-const meters: net.Server[] = [];
-afterAll(() => { for (const server of meters) server.close(); });
+const meters: Meter[] = [];
+afterAll(() => { for (const counts of meters) counts.close(); });
 async function meter(target: string): Promise<Meter> {
-  const port = Number(new URL(target).port);
-  const counts: Meter = { url: "", up: 0, down: 0, connections: 0, requests: [] };
-  const server = net.createServer((client) => {
-    counts.connections++;
-    const index = counts.requests.push(Buffer.alloc(0)) - 1;
-    const upstream = net.connect(port, "127.0.0.1");
-    client.on("data", (chunk: Buffer) => { counts.up += chunk.length; counts.requests[index] = Buffer.concat([counts.requests[index]!, chunk]); upstream.write(chunk); });
-    upstream.on("data", (chunk: Buffer) => { counts.down += chunk.length; client.write(chunk); });
-    client.on("end", () => upstream.end());
-    upstream.on("end", () => client.end());
-    client.on("error", () => upstream.destroy());
-    upstream.on("error", () => client.destroy());
-  });
-  meters.push(server);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  counts.url = `http://127.0.0.1:${(server.address() as net.AddressInfo).port}`;
+  const counts = await openMeter(target);
+  meters.push(counts);
   return counts;
 }
-// M.9: an idle exchange costs at most 1 KiB on the wire, request and answer together.
-const WIRE_BUDGET = 1024;
 const withinWireBudget = (bytesPerCall: number) => expect(bytesPerCall).toBeLessThanOrEqual(WIRE_BUDGET);
 
 async function request(base: string, route: string, method = "GET", body?: object) {

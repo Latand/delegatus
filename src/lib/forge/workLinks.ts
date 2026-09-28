@@ -103,9 +103,23 @@ export type WorkLinkInputResult = { ok: true; link: NormalizedWorkLink } | { ok:
 
 const REPOSITORY_PART = /^[A-Za-z0-9_.-]+$/;
 
+/** GitHub's own limits: an owner of at most 39 characters, a repository of
+    at most 100. A linked board sends a task's links, so each has a bound. */
+export const MAX_REPOSITORY_OWNER = 39;
+export const MAX_REPOSITORY_NAME = 100;
+
 function repositoryName(owner: string, repo: string): string | null {
   const name = repo.replace(/\.git$/i, "");
-  return REPOSITORY_PART.test(owner) && REPOSITORY_PART.test(name) ? `${owner}/${name}`.toLowerCase() : null;
+  return REPOSITORY_PART.test(owner) && REPOSITORY_PART.test(name) && owner.length <= MAX_REPOSITORY_OWNER && name.length <= MAX_REPOSITORY_NAME
+    ? `${owner}/${name}`.toLowerCase() : null;
+}
+
+/** A stored `owner/repo` within the characters and the length bound. */
+export function boundedRepository(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const [owner, name, extra] = value.split("/");
+  return extra === undefined && !!owner && !!name && REPOSITORY_PART.test(owner) && REPOSITORY_PART.test(name)
+    && owner.length <= MAX_REPOSITORY_OWNER && name.length <= MAX_REPOSITORY_NAME;
 }
 
 /** `<owner>/<repo>` of a GitHub remote in any form git or this repository

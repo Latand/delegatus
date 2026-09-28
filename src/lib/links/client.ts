@@ -8,8 +8,15 @@ import { findPeer, grantRows, markPeerCall, peerRows, putPeer, remoteProjects, r
 import { isSharedProject, readPeers, sharedProjects, type Link, type SharedProject } from "./state";
 import { LOOPBACK_PROBE_HOSTS } from "@/runtime-host/deploymentProxy";
 import { ownBoardStoreId } from "./boardLinks";
+import { linkedContext } from "./linked";
+import { taskExchange, TaskSyncError } from "./taskExchange";
 
 export class LinkError extends Error { constructor(readonly code: string) { super(code); } }
+/** Shared-list pages, task pages both ways and scans, bounded per sync. */
+const MAX_SYNC_CALLS = 1_000;
+const lastMoved = new Map<string, number>();
+/** Rows the last completed sync with this link moved, for A's schedule. */
+export function lastSyncMoved(id: string): number { return lastMoved.get(id) ?? 0; }
 const lastSent = new Map<string, string>();
 const syncQueues = new Map<string, Promise<void>>();
 const sameLink = (current: Link | undefined, expected: Link): current is Link => !!current &&
@@ -120,14 +127,17 @@ export async function syncPeer(id: string): Promise<{ peer: Link; remote: Shared
 }
 
 async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProject[] }> {
-  const peer = findPeer(id);
+  let peer = findPeer(id);
   if (!peer) throw new LinkError("not-found");
   const stillLinked = (): Link => {
     const current = findPeer(id);
-    if (!sameLink(current, peer)) throw new LinkError("not-found");
-    if (current.state === "revoked" && peer.state !== "revoked") throw new LinkError("revoked");
+    if (!sameLink(current, peer!)) throw new LinkError("not-found");
+    if (current.state === "revoked" && peer!.state !== "revoked") throw new LinkError("revoked");
     return current;
   };
+  const self = linkedContext().self;
+  let exchange = self ? taskExchange({ id, install: peer.install, store: peer.store }, self) : null;
+  exchange?.begin();
   try {
     const target = await peerTarget(peer.url);
     stillLinked();
@@ -143,7 +153,7 @@ async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProj
     let receivingHash: string | null = null;
     let remoteRestarts = 0;
     let store = peer.store;
-    for (let calls = 0; calls < 206; calls++) {
+    for (let calls = 0; calls < MAX_SYNC_CALLS; calls++) {
       stillLinked();
       if (calls > 0) {
         const currentLocal = sharedProjects();
@@ -157,19 +167,39 @@ async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProj
         }
       }
       const batch = send ? local.slice(sent, sent + 100) : undefined;
+      const remoteKeys = new Set(remote.map((project) => project.key));
+      const linked = new Set(local.map((project) => project.key).filter((key) => remoteKeys.has(key)));
+      const taskParts = exchange?.request(linked) ?? {};
       const answer = await call(target, "/api/peer/v1/boards/sync", "POST", { v: 1, store: ownBoardStoreId(), now: Date.now(), s: localHash, have: remoteHash,
         ...(batch ? { shared: batch, index: sent, total: local.length } : {}),
-        ...(remoteTotal !== null ? { want: received.length } : {}) }, { "x-delegatus-peer": `${peer.grantId}.${peer.token}` });
+        ...(remoteTotal !== null ? { want: received.length } : {}), ...taskParts }, { "x-delegatus-peer": `${peer.grantId}.${peer.token}` });
       const live = stillLinked();
       if (answer.status === 401) {
         putPeer({ ...live, state: "revoked", error: "revoked" });
         throw new LinkError("revoked");
       }
-      if (answer.status === 409 && answer.body.error === "store-changed") throw new LinkError("store-changed");
+      if (answer.status === 429 && answer.body.error === "quota") throw new LinkError("quota");
+      if (answer.status === 409 && answer.body.error === "clock") throw new LinkError("clock");
+      if (answer.status === 400 && answer.body.error === "malformed") throw new LinkError("malformed");
       if (answer.status !== 200 || answer.body.v !== 1 || typeof answer.body.s !== "string" || !/^[0-9a-f]{8}$/.test(answer.body.s)) throw new LinkError("not-delegatus");
       if (typeof answer.body.store !== "string" || !/^[0-9a-f-]{36}$/.test(answer.body.store)) throw new LinkError("malformed");
-      if (answer.body.store !== peer.store) throw new LinkError("store-changed");
+      if (answer.body.store !== peer.store) {
+        // M.8: a recreated store on B is rebuilt by a resync in both directions.
+        peer = { ...live, store: answer.body.store };
+        putPeer(peer);
+        exchange = self ? taskExchange({ id, install: peer.install, store: peer.store }, self) : null;
+        exchange?.begin();
+        store = answer.body.store;
+        continue;
+      }
       store = answer.body.store;
+      try {
+        exchange?.accept(answer.body, linked);
+      } catch (error) {
+        if (error instanceof TaskSyncError) throw new LinkError(error.code);
+        throw error;
+      }
+      exchange?.save();
       if (batch) {
         sent += batch.length;
         if (sent === local.length) { send = false; lastSent.set(sentKey, localHash); }
@@ -203,9 +233,16 @@ async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProj
       if (answer.body.need === true && !send && sent === local.length) {
         send = true; sent = 0; lastSent.delete(sentKey);
       }
-      if (!send && remoteTotal === null && answer.body.s === remoteHash && answer.body.need !== true) break;
-      if (calls === 205) throw new LinkError("malformed");
+      // A shared list that changed in this answer can link a project whose
+      // rows have not moved yet; one more call carries them.
+      const localKeys = new Set(local.map((project) => project.key));
+      const linkedAfter = new Set(remote.map((project) => project.key).filter((key) => localKeys.has(key)));
+      const linkedSame = linkedAfter.size === linked.size && [...linkedAfter].every((key) => linked.has(key));
+      if (!send && remoteTotal === null && answer.body.s === remoteHash && answer.body.need !== true && !exchange?.pending() && (linkedSame || !exchange)) break;
+      if (calls === MAX_SYNC_CALLS - 1) throw new LinkError("malformed");
     }
+    exchange?.save();
+    lastMoved.set(id, exchange?.movedRows ?? 0);
     const live = stillLinked();
     const current = { ...live, state: "active" as const, lastCall: Date.now(), error: null };
     if (live.state !== "active" || live.error !== null) putPeer(current);
