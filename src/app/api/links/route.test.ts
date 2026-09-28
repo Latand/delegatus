@@ -10,6 +10,7 @@ import { claimInstall } from "@/lib/team/members";
 import { MEMBER_COOKIE } from "@/lib/team/sessions";
 import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
 import { proxy } from "@/proxy";
+import { POST as selfCheckRoute } from "@/app/api/peer/v1/self-check/route";
 
 import { GET, POST } from "./route";
 
@@ -35,6 +36,14 @@ afterEach(() => {
 const request = (body: object) => new NextRequest("http://localhost/api/links", {
   method: "POST", headers: { host: "localhost", "content-type": "application/json" }, body: JSON.stringify(body),
 });
+
+async function answerSelfCheck(incoming: http.IncomingMessage, outgoing: http.ServerResponse): Promise<void> {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(incoming.headers)) if (typeof value === "string") headers.set(name, value);
+  const reply = selfCheckRoute(new NextRequest(`http://localhost${incoming.url}`, { method: "POST", headers }));
+  outgoing.writeHead(reply.status, Object.fromEntries(reply.headers));
+  outgoing.end(Buffer.from(await reply.arrayBuffer()));
+}
 
 test("the settings route refuses a network address until its key is on", async () => {
   const before = await GET(new NextRequest("http://localhost/api/links", { headers: { host: "localhost" } }));
@@ -103,10 +112,7 @@ test("an older Save cannot overwrite a newer Save that clears the address", asyn
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const server = http.createServer((incoming, response) => {
     arrived();
-    void gate.then(() => {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ host: incoming.headers.host, vouched: false }));
-    });
+    void gate.then(() => answerSelfCheck(incoming, response));
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -136,12 +142,8 @@ test("a newer Save reports a conflict when an older Save finishes first", async 
     const gate = new Promise<void>((resolve) => { release = resolve; });
     let first = true;
     const server = http.createServer((incoming, response) => {
-      const answer = () => {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ host: incoming.headers.host, vouched: false }));
-      };
-      if (first) { first = false; arrived(); void gate.then(answer); }
-      else answer();
+      if (first) { first = false; arrived(); void gate.then(() => answerSelfCheck(incoming, response)); }
+      else void answerSelfCheck(incoming, response);
     });
     server.listen(0, "127.0.0.1");
     await once(server, "listening");
