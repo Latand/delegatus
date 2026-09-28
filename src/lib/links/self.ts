@@ -31,6 +31,12 @@ export function readSelf(): LinkSelf | null {
   } catch { return null; }
 }
 
+/** A pairing probe saw the public entry vouched as the operator. */
+export function markOpenToInternet(): void {
+  const current = readSelf();
+  if (current) writeSelf({ ...current, check: { code: "open-to-internet", at: new Date().toISOString() } });
+}
+
 export function linksNeedGate(): boolean {
   const self = readSelf();
   if (!self && fs.existsSync(selfFile())) return true;

@@ -38,6 +38,48 @@ type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
+describe("linked boards M1 settings", () => {
+  browserTest("pairing and shared projects fit at desktop and 390 px", async () => {
+    const out = path.resolve(".artifacts/linked-boards-m1");
+    fs.mkdirSync(out, { recursive: true });
+    const key = `repo-${"a".repeat(32)}`;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/links": { self: { label: "Machine A", publicUrl: "https://board.example.test", check: { code: "ok", at: "2026-09-28T00:00:00Z" } }, state: "ok", entry: { port: 8897, publishable: true }, keyOn: true },
+      "/api/links/shared": { shared: { v: 1, all: false, projects: [key] }, known: [{ key, name: "widget" }], states: [{ id: "fixture-peer", label: "Machine B", projects: [{ key, state: "linked" }] }] },
+      "/api/links/peers": { peers: [{ id: "fixture-peer", label: "Machine B", url: "https://peer.example.test", state: "active", error: null }] },
+      "/api/links/grants": { grants: [{ id: "fixture-grant", label: "Machine B", requests: 12, today: 3, sevenDays: 12, lastUsed: null }] },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, { width: number; viewport: number; overflow: boolean; linked: boolean; controls: number }> = {};
+    try {
+      for (const [tag, width] of [["desktop", 1280], ["phone", 390]] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, server.base, { width, height: 844 }, "light", "en", "reduce", width === 390);
+        try {
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-linked-settings")));
+          await page.waitForSelector('[data-share-state="linked"]');
+          const reading = await page.evaluate(() => {
+            const dialog = document.querySelector('[data-linked-settings]') as HTMLElement;
+            const box = dialog.getBoundingClientRect();
+            return { width: Math.round(box.width), viewport: innerWidth, overflow: dialog.scrollWidth > dialog.clientWidth + 1, linked: !!dialog.querySelector('[data-share-state="linked"]'), controls: dialog.querySelectorAll("button, input").length };
+          });
+          readings[tag] = reading;
+          expect(reading.width).toBeLessThanOrEqual(width);
+          expect(reading.overflow).toBe(false);
+          expect(reading.linked).toBe(true);
+          expect(reading.controls).toBeGreaterThan(8);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${tag}.png`) });
+          await page.locator('[data-share-state="linked"]').scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${tag}-shared.png`) });
+        } finally { await context.close(); }
+      }
+      const evidence = path.resolve("evidence/linked-boards-m1/geometry.json");
+      fs.mkdirSync(path.dirname(evidence), { recursive: true });
+      fs.writeFileSync(evidence, JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  });
+});
+
 describe("#1695 K1+K2 kanban board", () => {
   /*
    * Rendered evidence for the kanban desktop board (#1695 K1+K2): the real

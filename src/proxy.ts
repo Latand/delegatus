@@ -58,7 +58,7 @@ function forbidden(request: NextRequest): NextResponse {
 export function proxy(request: NextRequest): NextResponse {
   const perimeter = perimeterCheck(request);
   if (perimeter.response) return perimeter.response;
-  if (request.nextUrl.pathname === "/api/peer/v1/self-check") return NextResponse.next();
+  if (request.nextUrl.pathname.startsWith(PEER_PREFIX)) return NextResponse.next();
   const gated = teamGate(request, { bearerAuthenticated: perimeter.bearer });
   if (gated) return gated;
   const response = NextResponse.next();
@@ -77,8 +77,9 @@ const PASS: PerimeterResult = { response: null, bearer: false };
 
 function perimeterCheck(request: NextRequest): PerimeterResult {
   if (request.nextUrl.pathname.startsWith(PEER_PREFIX)) {
-    if (request.nextUrl.pathname === "/api/peer/v1/self-check" && request.method === "POST") return PASS;
-    return { response: NextResponse.json({ error: "unauthorized" }, { status: 401 }), bearer: false };
+    // Every peer handler has its own uniform token guard; operator credentials
+    // and team cookies have no authority on this route family.
+    return PASS;
   }
   const token = process.env.LLV_TOKEN;
   if (!token) {

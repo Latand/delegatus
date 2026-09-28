@@ -228,7 +228,8 @@ test("self-check route is closed without a one-time nonce", () => {
   expect(proxy(request).headers.get("x-middleware-next")).toBe("1");
   expect(selfCheckRoute(request).status).toBe(401);
   const unknown = new NextRequest("http://localhost/api/peer/v1/other", { method: "GET" });
-  expect(proxy(unknown).status).toBe(401);
+  // The proxy admits the family; each peer route now applies its own token guard.
+  expect(proxy(unknown).headers.get("x-middleware-next")).toBe("1");
   for (const host of LOOPBACK_PROBE_HOSTS("443")) expect(isLoopbackHost(host)).toBe(true);
 });
 
