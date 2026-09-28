@@ -23,7 +23,7 @@ import type { RoleConfig, RoleEngine, RoleId, RoleMappingReset, RoleVariantId } 
  */
 
 export type MappingCatalogItem = RoleCatalogItem & {
-  shipped?: { config: RoleConfig; variants?: Partial<Record<RoleVariantId, RoleConfig>> };
+  shipped?: { config: RoleConfig; promptScaffold?: string; variants?: Partial<Record<RoleVariantId, RoleConfig>> };
 };
 
 export type EngineStatus = {
@@ -54,6 +54,8 @@ const GROUPS: readonly { id: "build" | "review" | "design" | "coordinate" | "rar
     { roleId: "builder", variant: "frontend" },
     { roleId: "builder", variant: "docs" },
     { roleId: "builder", variant: "apply-fixes" },
+    { roleId: "builder", variant: "frontend-fixes" },
+    { roleId: "builder", variant: "docs-fixes" },
   ] },
   { id: "review", rows: [{ roleId: "reviewer" }, { roleId: "reviewer", variant: "trivial" }, { roleId: "verifier" }] },
   { id: "design", rows: [{ roleId: "architect" }] },
@@ -73,6 +75,8 @@ function rowLabel(row: RowKey, t: TFunction): string {
   if (row.variant === "frontend") return t("onboarding.agents.role.builderFrontend");
   if (row.variant === "docs") return t("onboarding.agents.role.builderDocs");
   if (row.variant === "apply-fixes") return t("onboarding.agents.role.builderFixes");
+  if (row.variant === "frontend-fixes") return t("onboarding.agents.role.builderFrontendFixes");
+  if (row.variant === "docs-fixes") return t("onboarding.agents.role.builderDocsFixes");
   const keys: Record<RoleId, Parameters<TFunction>[0]> = {
     builder: "onboarding.agents.role.builder",
     reviewer: "onboarding.agents.role.reviewer",
@@ -96,6 +100,14 @@ function shippedOf(roles: readonly MappingCatalogItem[], row: RowKey): RoleConfi
   const role = roles.find((candidate) => candidate.id === row.roleId);
   if (!role?.shipped) return null;
   return row.variant ? role.shipped.variants?.[row.variant] ?? null : role.shipped.config;
+}
+
+/** A role row whose prompt text this install replaced (docs/design/agent-prompt-contract.md
+    §2.10 I): shipped prompt changes stop at it until the operator restores it. */
+function customPrompt(roles: readonly MappingCatalogItem[], row: RowKey): boolean {
+  if (row.variant) return false;
+  const role = roles.find((candidate) => candidate.id === row.roleId);
+  return !!role?.shipped?.promptScaffold && role.promptScaffold !== role.shipped.promptScaffold;
 }
 
 function same(left: RoleConfig | null, right: RoleConfig | null): boolean {
@@ -222,15 +234,18 @@ function modelOptions(row: RowKey, engine: RoleEngine) {
   return models.filter((option) => option.id !== "sonnet" && option.id !== "haiku");
 }
 
-function RowControls({ row, config, shipped, reset, statuses, layout, onChange }: {
+function RowControls({ row, config, shipped, reset, promptCustom, statuses, layout, onChange, onResetPrompt }: {
   row: RowKey;
   config: RoleConfig;
   shipped: RoleConfig | null;
   /** A retirement set this row back to its default and nobody has touched it since. */
   reset: RoleMappingReset | null;
+  /** This install replaced the role's prompt text. */
+  promptCustom: boolean;
   statuses: Record<RoleEngine, EngineStatus>;
   layout: "table" | "card";
   onChange: (config: RoleConfig | null) => void;
+  onResetPrompt: () => void;
 }) {
   const { t } = useLocale();
   const label = rowLabel(row, t);
@@ -287,6 +302,14 @@ function RowControls({ row, config, shipped, reset, statuses, layout, onChange }
           </button>
         </span>
       ) : <span className="sr-only">{t("onboarding.agents.stateDefault")}</span>}
+      {promptCustom ? (
+        <span data-mapping-custom-prompt={rowId(row)} className="flex items-center gap-1 text-label text-secondary">
+          {t("onboarding.agents.customPrompt")} ·
+          <button type="button" data-mapping-prompt-reset={rowId(row)} onClick={onResetPrompt} className="shrink-0 rounded-[6px] px-0.5 font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:-my-3.5 max-sm:min-h-11">
+            {t("onboarding.agents.useShippedPrompt")}
+          </button>
+        </span>
+      ) : null}
     </span>
   );
   const nudgeLine = nudge ? (
@@ -363,16 +386,18 @@ export function AgentMappingTable({ statuses, layout, onConnect }: {
   }, []);
   useEffect(load, [load]);
 
-  const save = useCallback(async (changes: { row: RowKey; config: RoleConfig | null }[]): Promise<boolean> => {
+  /** One write through `PUT /api/roles`, rendered optimistically as `optimistic`
+      and rolled back with the reason on failure. */
+  const put = useCallback(async (request: unknown, optimistic: MappingCatalogItem[]): Promise<boolean> => {
     if (!roles) return false;
     const before = roles;
-    setRoles(applyLocally(roles, changes));
+    setRoles(optimistic);
     setSaveError(null);
     try {
       const response = await fetch("/api/roles", {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(patchBody(changes)),
+        body: JSON.stringify(request),
       });
       const body = await response.json().catch(() => null) as { roles?: MappingCatalogItem[]; resets?: RoleMappingReset[]; error?: string } | null;
       if (!response.ok || !body?.roles) throw new Error(body?.error || `HTTP ${response.status}`);
@@ -386,6 +411,14 @@ export function AgentMappingTable({ statuses, layout, onConnect }: {
       return false;
     }
   }, [roles]);
+  const save = useCallback((changes: { row: RowKey; config: RoleConfig | null }[]): Promise<boolean> =>
+    roles ? put(patchBody(changes), applyLocally(roles, changes)) : Promise.resolve(false), [roles, put]);
+  const resetPrompt = useCallback((roleId: RoleId): Promise<boolean> =>
+    roles
+      ? put({ overrides: { [roleId]: { promptScaffold: null } } }, roles.map((role) => role.id === roleId && role.shipped?.promptScaffold
+        ? { ...role, promptScaffold: role.shipped.promptScaffold, promptPreview: role.shipped.promptScaffold }
+        : role))
+      : Promise.resolve(false), [roles, put]);
 
   if (loadFailed) {
     return (
@@ -487,9 +520,11 @@ export function AgentMappingTable({ statuses, layout, onConnect }: {
                       config={config}
                       shipped={shippedOf(roles, row)}
                       reset={resets.find((candidate) => candidate.row === rowId(row)) ?? null}
+                      promptCustom={customPrompt(roles, row)}
                       statuses={statuses}
                       layout={layout}
                       onChange={(next) => { setReceipt(null); void save([{ row, config: next }]); }}
+                      onResetPrompt={() => { setReceipt(null); void resetPrompt(row.roleId); }}
                     />
                   );
                 })}

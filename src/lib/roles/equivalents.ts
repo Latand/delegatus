@@ -43,7 +43,7 @@ const CLAUDE_TO_CODEX: Record<string, string> = {
 const OPUS_HIGH: RoleConfig = { engine: "claude", model: "opus", effort: "high" };
 
 /** Per row, the runtime on each target engine. Moving to Claude, every row runs
-    Opus high except the fix round, the cleaner and the small-change and docs
+    Opus high except the fix rounds, the cleaner and the small-change and docs
     rows; moving to Codex, only the rows that live on Claude by default (and the
     trivial reviewer, which lives on Luna) have an approved target. No row that
     Sonnet may not run (orchestrator, architect, reviewer, verifier) lands on it. */
@@ -57,6 +57,8 @@ const ROW_TARGETS: Record<RoleEngine, Readonly<Record<string, RoleConfig>>> = {
     "builder:apply-fixes": { engine: "claude", model: "opus", effort: "medium" },
     "builder:trivial": { engine: "claude", model: "sonnet", effort: "high" },
     "builder:docs": { engine: "claude", model: "opus", effort: "medium" },
+    "builder:frontend-fixes": { engine: "claude", model: "sonnet", effort: "high" },
+    "builder:docs-fixes": { engine: "claude", model: "sonnet", effort: "high" },
     "reviewer:trivial": { engine: "claude", model: "opus", effort: "medium" },
     architect: OPUS_HIGH,
     cleaner: { engine: "claude", model: "sonnet", effort: "high" },
@@ -69,6 +71,9 @@ const ROW_TARGETS: Record<RoleEngine, Readonly<Record<string, RoleConfig>>> = {
     "builder:frontend": { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "high" },
     "builder:trivial": { engine: "codex", model: CODEX_GPT6_LUNA_MODEL, effort: "high" },
     "builder:docs": { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "medium" },
+    /* The Sonnet fix rows land where CLAUDE_TO_CODEX puts Sonnet. */
+    "builder:frontend-fixes": { engine: "codex", model: CODEX_GPT6_SOL_MODEL, effort: "high" },
+    "builder:docs-fixes": { engine: "codex", model: CODEX_GPT6_SOL_MODEL, effort: "high" },
     "reviewer:trivial": { engine: "codex", model: CODEX_GPT6_LUNA_MODEL, effort: "high" },
   },
 };

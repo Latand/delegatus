@@ -19,10 +19,10 @@
       "renderBack": {
         "worstTileMean": 3.173,
         "changedTileShare": 0,
-        "meanDifference": 0.209,
+        "meanDifference": 0.205,
         "ringsClipped": 0
       },
-      "sha256": "27e9fdad2356cbd6f40be770ef2364e39d219b8a1a8466279190179c93bf4c9a"
+      "sha256": "44620e94162135bff9c2acc034527838f7e846514e247f8dcf4acd80b23430b2"
     },
     {
       "path": "orchestrator.svg",
@@ -34,12 +34,12 @@
       "colorScheme": "dark",
       "rasterTiles": 12,
       "renderBack": {
-        "worstTileMean": 3.714,
+        "worstTileMean": 3.609,
         "changedTileShare": 0,
-        "meanDifference": 0.321,
+        "meanDifference": 0.314,
         "ringsClipped": 1
       },
-      "sha256": "03d362a704848c51a13e435bf5e68c1687b88f6cb06db816b0d64fc5700ac2fa"
+      "sha256": "1655b1e8d2d500455a9cb3e0c6239cd191d2c7b0a6e83ff0ae2e4bb8023879d5"
     },
     {
       "path": "conversation.svg",
@@ -49,14 +49,14 @@
         "height": 960
       },
       "colorScheme": "dark",
-      "rasterTiles": 17,
+      "rasterTiles": 16,
       "renderBack": {
         "worstTileMean": 3.591,
         "changedTileShare": 0,
-        "meanDifference": 0.325,
+        "meanDifference": 0.326,
         "ringsClipped": 2
       },
-      "sha256": "bea023f39b0bd19e05b40e76dd46365f8ad026e4cb6bc1b68a1e728ea2e32e63"
+      "sha256": "4625e177227baf2326ceff0d6a2ee8347987453f9a9d083d1ca98058a6155d8d"
     },
     {
       "path": "pipeline.svg",
@@ -70,10 +70,10 @@
       "renderBack": {
         "worstTileMean": 4.015,
         "changedTileShare": 0,
-        "meanDifference": 0.287,
+        "meanDifference": 0.289,
         "ringsClipped": 0
       },
-      "sha256": "084576fccc276c2ea50c49842681aef20bdcfcc7b428531223f6d0657e6b6739"
+      "sha256": "59b9f7afc61e51a0f07516496e30779c686219c2ed17fd75fc8588d18c556b07"
     },
     {
       "path": "accounts.svg",
@@ -85,12 +85,12 @@
       "colorScheme": "dark",
       "rasterTiles": 15,
       "renderBack": {
-        "worstTileMean": 3.005,
+        "worstTileMean": 2.931,
         "changedTileShare": 0,
-        "meanDifference": 0.241,
+        "meanDifference": 0.239,
         "ringsClipped": 0
       },
-      "sha256": "6dc43244090481e9414e60ce8305d2c48caf880fe6b681ee09370ae562460a7b"
+      "sha256": "12e2ec1b4c8274679080d135dbaaaec44d525486b27f822f2c676eb9ac2ef74c"
     },
     {
       "path": "phone-conversation.svg",
@@ -107,7 +107,7 @@
         "meanDifference": 0.453,
         "ringsClipped": 0
       },
-      "sha256": "e02443bb797a661a03a909ff145be4a9790371ba20f995b048ab27c4394ced0e"
+      "sha256": "57132de490998c92e42312b231f0daeb43baec0199f3e2e4dd7fe12ce0354849"
     },
     {
       "path": "phone-board.svg",
@@ -124,7 +124,7 @@
         "meanDifference": 0.163,
         "ringsClipped": 0
       },
-      "sha256": "14ef07c85db632f0a2937d3278982e4a4428a69a4e496b51b869863845d37cf0"
+      "sha256": "53d1fb281451156334f6a2c074b95edca4f651a5e54d82a76fda041360870606"
     }
   ]
 }

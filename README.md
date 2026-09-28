@@ -27,6 +27,8 @@ Delegatus runs on your own machine with your own agent accounts. What it adds:
   and the other way round.
 - **Telegram built in.** Agents post to chats you allow through a bot, and
   read your own Telegram account through a read-only MCP server.
+- **Made for a team.** People sign in as themselves, and two machines can
+  share one board.
 
 <a id="run"></a>
 
@@ -90,7 +92,7 @@ the orchestrator can also start single agents, Copilot included. Delegatus
 shows every agent conversation on your machine as a chat, including the ones
 it did not start.
 
-![A pipeline opened from its task: Build, Review and Verify stages with the fail edge from Review back to Build, and the builder's and the reviewer's conversations side by side](docs/media/readme/pipeline.svg)
+![A pipeline opened from its task: Build, Review and Verify stages, with Review's loop back to Build folded under it, and the builder's and the reviewer's conversations side by side](docs/media/readme/pipeline.svg)
 
 ## How it works
 
@@ -119,17 +121,21 @@ task's card up to date. Delegatus wakes it whenever something is owed: a new
 pipeline event, a stage waiting on a decision, a task nobody started. It
 answers in its chat and can move your screen to the card where something
 landed. A decision it cannot make alone reaches you in its chat and on the
-board's **Needs you** counter. [docs/orchestrator.md](docs/orchestrator.md)
-covers the rest.
+board's **Waiting** counter. While it is busy with a turn, **Ask in
+parallel** in its composer sends a side question to a copy of it, which
+answers in its own block inside the same chat.
+[docs/orchestrator.md](docs/orchestrator.md) covers the rest.
 
 The **Reports** log beside its chat lists what it reported, newest first: a
 stage that passed or failed, a review verdict, a blocked pipeline, a
 question. Each entry shows its time and kind, and the issue numbers, pull
 requests and cards in it are links. New reports arrive live. A toggle in the
 orchestrator bar's header hides the log; on a phone the log opens from the
-orchestrator chat's bar. Reports can also go to a Telegram chat, which you pick
-per project in the setup guide's Telegram step. The **Bridge reports**
-switch in the board's ⋯ menu turns reports off for a project.
+orchestrator chat's bar. Reports can also go to a Telegram chat or forum
+topic. Only a project you turn on posts there: use the setup guide's
+Telegram step or the **Reports** section in the orchestrator's own row. The
+**Bridge reports** switch in the board's ⋯ menu turns reports off for a
+project.
 
 ![A project's orchestrator on top of its board: its chat with you, and beside it the Reports log of what it filed](docs/media/readme/orchestrator.svg)
 
@@ -140,13 +146,17 @@ The board shows every task in a project and what it is waiting for.
 Each task is a card in one of four columns: Inbox, Assigned, Blocked and
 Done. A card shows its icon and colour, the agents working on it, and each
 pipeline with its stages and pull request. Cards with a working agent sit at
-the top of their column.
+the top of their column. A task can be high, normal or low priority, and high
+tasks lead the Inbox. **Images** on a card opens every screenshot and render
+its agents made. Ctrl+Z undoes your own moves, edits and hides on the board,
+and Ctrl+Shift+Z redoes them.
 
 When a task needs you, the foot of its card says why. It can be a question
 from an agent, a plan to approve, a permission prompt, a message that did not
 arrive, or a stage waiting on your decision. ✓ clears it until something new
-comes up. **Needs you** at the top of the board steps through every waiting
-card.
+comes up. **Waiting** at the top of the board counts what waits across all
+projects. Its panel lists each item by project, with the waiting agent's
+role, and lets you dismiss an item or answer a permission prompt in place.
 
 The Overview board shows what is running across all projects. A rail beside
 the columns lists the agents you have open in cards; click one to jump to
@@ -185,7 +195,7 @@ orchestrator tells you it is ready. Turn it on and Delegatus merges each
 pipeline whose reviews passed, one at a time per repository, once every
 check on the head has finished green. It updates a branch that fell behind
 and leaves conflicts to you. The pipeline shows "waiting for checks", "merge
-stopped" or "merged". A stopped merge appears under **Needs you** with **Try
+stopped" or "merged". A stopped merge appears under **Waiting** with **Try
 the merge again**.
 
 Mark a pipeline **Finishes the task** and its task moves to Done when the
@@ -218,10 +228,15 @@ login. The sidebar shows the active account's usage windows: five-hour and
 weekly for Claude and Codex, the monthly allowance for Copilot. Each window
 shows the share left and when it resets. Switch to another account before
 one runs out, or move a single agent to a different account. Agents you
-start after a switch use the new active account.
+start after a switch use the new active account. When a Claude pipeline
+stage hits a usage limit, Delegatus moves it to another of the project's
+accounts and it carries on. A Claude account can also point at any service
+that speaks the Anthropic Messages API: **Add compatible provider** takes its
+address, token and models.
 
 The **Activity** page, in the rail menu, shows your time and your agents'
-time, per day and per project.
+time, per day and per project. On a team install it counts each member's
+own time.
 
 ![Claude accounts with their five-hour, weekly and per-model limits](docs/media/readme/accounts.svg)
 
@@ -378,6 +393,31 @@ delegatus team recover --origin https://your-delegatus.example
 It prints a one-time owner link that works for 15 minutes.
 `delegatus team revoke-sessions` signs everyone out everywhere. The design and
 its reasoning are in [docs/design/sign-in-and-team.md](docs/design/sign-in-and-team.md).
+
+## Linked installs
+
+Two Delegatus installs, for example your laptop and a server, can share one
+board for the projects you choose. Open **Linked installs** from the rail
+menu (the board's ⋯ menu on a phone).
+
+- **This install.** Enter the address other machines use to reach this one.
+  A public address needs HTTPS, and the access key must be on. **Check this
+  address** confirms that it reaches this machine and that the proxy in front
+  of it does not open the board to anyone.
+- **Pair.** On one install press **Allow a connection** to get a pairing code
+  that works once. On the other, **Connect to another install** takes that
+  address and code.
+- **Share projects.** Nothing is shared until you choose. Share projects one
+  at a time, here or from the board's ⋯ menu, or share every project,
+  including new ones. A project needs a git remote to be shared, and it is
+  linked once both machines share it.
+- **Tasks sync both ways.** A task created, changed or deleted on one machine
+  appears on the other within seconds while the board is open. Each task
+  belongs to the machine that runs it, and the other machine will not start
+  agents or pipelines for it.
+- **Revoke** or **Remove** a link at any time from the same dialog.
+
+The design is in [docs/design/linked-installs.md](docs/design/linked-installs.md).
 
 <a id="connect-an-orchestrator-through-mcp"></a>
 

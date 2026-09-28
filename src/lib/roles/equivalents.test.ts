@@ -60,3 +60,13 @@ test("the small-change and docs rows have approved targets, and no denied row la
     }
   }
 });
+
+/* docs/design/agent-prompt-contract.md §3 (a): the two fix rows run Sonnet on
+   Claude and land where Sonnet maps on Codex, GPT-6 Sol, in both directions. */
+test("the frontend and docs fix rows have approved targets on both engines", () => {
+  for (const variant of ["frontend-fixes", "docs-fixes"] as const) {
+    const row = { roleId: "builder", variant } as const;
+    expect(equivalentConfig({ engine: "claude", model: "sonnet", effort: "high" }, "codex", row)).toEqual({ engine: "codex", model: "gpt-6-sol", effort: "high" });
+    expect(equivalentConfig({ engine: "codex", model: "gpt-6-sol", effort: "high" }, "claude", row)).toEqual({ engine: "claude", model: "sonnet", effort: "high" });
+  }
+});

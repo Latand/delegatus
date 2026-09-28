@@ -41,9 +41,12 @@ export const VIEWER_SPAWN_CAPABILITY_ENV = "LLV_SPAWN_CAPABILITY";
    here so every existing importer is unaffected. */
 export { VIEWER_SPAWN_CAPABILITY_HEADER } from "./capabilityHeader";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "./capabilityHeader";
-const SPAWN_AUTH_GUIDANCE = `Send header ${VIEWER_SPAWN_CAPABILITY_HEADER}: $${VIEWER_SPAWN_CAPABILITY_ENV}.`;
-export const NATIVE_SUBAGENT_DENY_MESSAGE = `Sub-agents are disabled on this surface. Spawn через POST ${VIEWER_SPAWN_ENDPOINT} with {engine, model, cwd, prompt, src: <your transcript path>, role, reviews?} and ${SPAWN_AUTH_GUIDANCE} The worker then appears on the board with correct lineage.`;
-export const VIEWER_SPAWN_PROMPT_FENCE = `Viewer spawn policy: avoid native sub-agent, collaboration, and background-agent features. Spawn every helper through POST ${VIEWER_SPAWN_ENDPOINT} with {engine, model, cwd, prompt, src: <your transcript path>, role, reviews?}. ${SPAWN_AUTH_GUIDANCE} The worker appears on the board with correct lineage.`;
+/* docs/design/agent-prompt-contract.md §2.10 D: agent-facing text names the
+   Delegatus tool, never this install's port or endpoint. The fence keeps its
+   "Viewer spawn policy:" label while the review-flow tests pin it; the task
+   that removes flows renames it with them. */
+export const NATIVE_SUBAGENT_DENY_MESSAGE = "Sub-agents are disabled on this surface. Launch a helper with the Delegatus spawn_agent tool; it then appears on the board with correct lineage.";
+export const VIEWER_SPAWN_PROMPT_FENCE = "Viewer spawn policy: do not start helpers with your engine's own sub-agent, collaboration or background-agent features. When you need a helper, launch it with the Delegatus spawn_agent tool so it appears on the board with its lineage.";
 
 export const CODEX_VIEWER_SPAWN_FEATURES = {
   plugins: false,

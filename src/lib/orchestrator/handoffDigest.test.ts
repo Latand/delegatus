@@ -7,6 +7,7 @@ import type { AccountContext } from "@/lib/accounts/contracts";
 import { CODEX_LUNA_MODEL } from "@/lib/agent/models";
 import type { HeadlessCodexRunRequest, HeadlessRunResult } from "@/lib/flows/exec";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
+import { loadRoleDefinitionsOrDefaults } from "@/lib/roles/store";
 
 import {
   composeSuccessorMandate,
@@ -460,8 +461,12 @@ test("the delivered default mandate fits the delivery bound with room for a rota
    20 000 bytes left still hold two history budgets, which the second
    assertion below pins. Raised to 12 500 for the sizing rule and the variant
    runtimes in the role table (docs/design/model-sizing-tiers.md §4); main
-   already measured 12 080 before it, and 19 500 bytes still hold two. */
-const DELIVERED_DIRECTIVE_BUDGET_BYTES = 12_500;
+   already measured 12 080 before it, and 19 500 bytes still hold two. Raised
+   to 12 800 for the fix rows and the fix-stage note in the role table and the
+   greeting that says what a proactive seat starts
+   (docs/design/agent-prompt-contract.md, mandate v30), which measured 12 703;
+   19 200 bytes still hold two. */
+const DELIVERED_DIRECTIVE_BUDGET_BYTES = 12_800;
 
 test("what delivery appends stays inside its share of the envelope", () => {
   const appended = Buffer.byteLength(orchestratorMandateForDelivery(""));
@@ -477,7 +482,10 @@ test("what delivery appends stays inside its share of the envelope", () => {
    delivery's cost is added to the mandate before the bound is applied, and
    that `excess` reports the real overshoot a caller is asked to shorten by. */
 test("a bespoke mandate landing exactly on the envelope is admitted, and one byte past it is refused", () => {
-  const room = MAX_STRUCTURED_TEXT_BYTES - Buffer.byteLength(orchestratorMandateForDelivery(""));
+  /* Measured against the registry preflight reads: its role table names the
+     registry revision, a line four bytes longer than the one a caller without
+     a snapshot gets. */
+  const room = MAX_STRUCTURED_TEXT_BYTES - Buffer.byteLength(orchestratorMandateForDelivery("", loadRoleDefinitionsOrDefaults()));
   expect(room).toBeGreaterThan(0);
 
   const atBound = mandatePreflight("c".repeat(room), "existing", { mode: "standard" });

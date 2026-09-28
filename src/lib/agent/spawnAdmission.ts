@@ -7,7 +7,6 @@ import { statePath } from "@/lib/configDir";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
 import type { RegistryFile, SpawnReceipt } from "./registry";
-import { VIEWER_SPAWN_ENDPOINT } from "./spawnPolicy";
 
 /** Roles with zero child-spawn capability (#393). A hardcoded contract
     constant: role overrides only carry config/promptScaffold, so no
@@ -248,11 +247,12 @@ export class SpawnAdmissionError extends Error {
 
 export function reviewerOriginSpawnGuidance(role: string | null): string {
   const label = role === "verifier" ? "Verifier" : "Reviewer";
-  return `${label} sessions run every check in-session — filesystem, shell, GitHub, and browser access stay available, but child agents do not. For more perspectives, report the need to your parent so an operator or orchestrator adds a visible reviewer stage (POST /api/pipelines or POST ${VIEWER_SPAWN_ENDPOINT}).`;
+  /* Agent-facing: names no endpoint or forge (docs/design/agent-prompt-contract.md C7). */
+  return `${label} sessions run every check in-session — filesystem, shell, network and browser access stay available; child agents are the one thing they cannot start. For more perspectives, report the need to your parent so an operator or orchestrator adds a visible reviewer stage.`;
 }
 
 export function nestingDepthGuidance(childDepth: number, maxDepth: number): string {
-  return `Agent nesting is capped at depth ${maxDepth} and this launch would create a depth-${childDepth} child. Finish delegated work in-session or report the need to your parent. An operator can raise maxAgentNestingDepth in Viewer spawn settings (PATCH /api/spawn/policy).`;
+  return `Agent nesting is capped at depth ${maxDepth} and this launch would create a depth-${childDepth} child. Finish delegated work in-session or report the need to your parent. An operator can raise maxAgentNestingDepth in Delegatus's spawn settings.`;
 }
 
 type AdmissionFileView = Pick<RegistryFile, "conversations" | "conversationAliases" | "lineageEdges" | "memberships">;

@@ -1643,9 +1643,9 @@ function quiet(state: SeatTickProjectState, at: string): SeatTickProjectState {
 export function seatTickTranscriptGapClause(reason: SeatTickTranscriptGap | undefined): string {
   switch (reason) {
     case "no-transcript": return "the registry holds no transcript for it";
-    case "outside-roots": return "its transcript path is outside every folder this Viewer scans";
+    case "outside-roots": return "its transcript path is outside every folder Delegatus scans";
     case "missing": return "the transcript file is no longer on disk";
-    default: return "the Viewer cannot resolve its transcript";
+    default: return "Delegatus cannot resolve its transcript";
   }
 }
 
