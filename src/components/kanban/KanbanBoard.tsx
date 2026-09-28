@@ -299,7 +299,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const [query, setQuery] = useState("");
   const [linkQuery, setLinkQuery] = useState("");
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(EMPTY_SET);
-  const [remoteAgents, setRemoteAgents] = useState<RemoteAgentView[]>([]);
+  const [remoteAgentFeed, setRemoteAgentFeed] = useState<{ project: string; rows: RemoteAgentView[] } | null>(null);
+  const remoteAgents = !props.overview && remoteAgentFeed?.project === project
+    ? remoteAgentFeed.rows.filter((row) => row.p === project)
+    : [];
   useEffect(() => {
     if (!/^repo-[0-9a-f]{32}$/.test(project) || props.overview) return;
     let live = true;
@@ -308,7 +311,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         const answer = await fetch(`/api/links/agents?project=${encodeURIComponent(project)}`);
         if (!answer.ok) return;
         const payload = await answer.json() as { agents?: RemoteAgentView[] };
-        if (live) setRemoteAgents(Array.isArray(payload.agents) ? payload.agents : []);
+        if (live) setRemoteAgentFeed({ project, rows: Array.isArray(payload.agents) ? payload.agents : [] });
       } catch { /* Keep the last in-memory rows until the next local read. */ }
     };
     void refresh();

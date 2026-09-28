@@ -118,18 +118,18 @@ function Receipt() {
 
 interface Opened { tasks: string[]; conversations: string[]; pipelines: string[]; shown: string[][] }
 
-function mount(input: { files: FileEntry[]; tasks: BoardTask[]; pipelines?: Pipeline[]; attention?: string[]; ports?: TaskMutationPorts; onHiddenCount?: (count: number) => void; nav?: MobileNav; onNewTask?: () => void; onTellOrchestrator?: () => void }) {
+function mount(input: { files: FileEntry[]; tasks: BoardTask[]; project?: string; pipelines?: Pipeline[]; attention?: string[]; ports?: TaskMutationPorts; onHiddenCount?: (count: number) => void; nav?: MobileNav; onNewTask?: () => void; onTellOrchestrator?: () => void }) {
   const host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
   const root = createRoot(host as unknown as Element);
   roots.push(root);
   const opened: Opened = { tasks: [], conversations: [], pipelines: [], shown: [] };
   const { nav, pushes } = input.nav ? { nav: input.nav, pushes: () => 0 } : fakeNav();
-  const render = (tasks: BoardTask[]) => flushSync(() => root.render(
+  const render = (tasks: BoardTask[], project = input.project ?? "fixture") => flushSync(() => root.render(
     <MobileNavContext.Provider value={nav}>
       <MobileKanban
         layout={layout(input.files)}
-        project="fixture"
+        project={project}
         groups={[]}
         manual={[]}
         files={input.files}
@@ -164,6 +164,37 @@ const click = (element: HTMLElement | null) => {
   flushSync(() => element.click());
 };
 const cardsIn = (host: HTMLElement, status: TaskStatus) => qa(host, `[data-phone-kanban-column="${status}"] [data-phone-card]`).map((card) => card.getAttribute("data-phone-card"));
+
+test("phone remote agents stay on their own project while another board loads or fails", async () => {
+  const first = `repo-${"a".repeat(32)}`;
+  const second = `repo-${"b".repeat(32)}`;
+  const row = (project: string) => ({ k: `a:${(project === first ? "1" : "2").repeat(16)}`, p: project, t: "claude agent", e: "claude", m: "model", st: "working", at: Date.now(), peer: "Machine B", asOf: Date.now(), stale: false });
+  const originalFetch = globalThis.fetch;
+  let failSecond: (() => void) | undefined;
+  globalThis.fetch = (async (input) => {
+    const project = new URL(String(input), "http://localhost").searchParams.get("project");
+    if (project === first) return Response.json({ agents: [row(first), row(second)] });
+    if (project === second) return new Promise<Response>((resolve) => { failSecond = () => resolve(new Response(null, { status: 503 })); });
+    throw new Error(`Unexpected agent request for ${project}`);
+  }) as typeof fetch;
+  try {
+    const { host, render } = mount({ files: [], tasks: [], project: first });
+    await sleep(5);
+    expect(qa(host, "[data-remote-agent]")).toHaveLength(1);
+    render([], "dir-local");
+    expect(qa(host, "[data-remote-agents]")).toHaveLength(0);
+    render([], first);
+    expect(qa(host, "[data-remote-agent]")).toHaveLength(1);
+    render([], second);
+    expect(qa(host, "[data-remote-agents]")).toHaveLength(0);
+    expect(failSecond).toBeDefined();
+    failSecond!();
+    await sleep(5);
+    expect(qa(host, "[data-remote-agents]")).toHaveLength(0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 async function longPress(element: HTMLElement) {
   const init = { bubbles: true, cancelable: true, pointerId: 7, pointerType: "touch", clientX: 40, clientY: 40, button: 0 };

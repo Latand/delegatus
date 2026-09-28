@@ -704,7 +704,10 @@ export function MobileKanban(props: MobileKanbanProps) {
   const nav = useMobileNavStore();
   const navState = useMobileNav();
   const ids = useId().replace(/:/g, "");
-  const [remoteAgents, setRemoteAgents] = useState<RemoteAgentView[]>([]);
+  const [remoteAgentFeed, setRemoteAgentFeed] = useState<{ project: string; rows: RemoteAgentView[] } | null>(null);
+  const remoteAgents = remoteAgentFeed?.project === project
+    ? remoteAgentFeed.rows.filter((row) => row.p === project)
+    : [];
   useEffect(() => {
     if (!/^repo-[0-9a-f]{32}$/.test(project)) return;
     let live = true;
@@ -713,7 +716,7 @@ export function MobileKanban(props: MobileKanbanProps) {
         const answer = await fetch(`/api/links/agents?project=${encodeURIComponent(project)}`);
         if (!answer.ok) return;
         const payload = await answer.json() as { agents?: RemoteAgentView[] };
-        if (live) setRemoteAgents(Array.isArray(payload.agents) ? payload.agents : []);
+        if (live) setRemoteAgentFeed({ project, rows: Array.isArray(payload.agents) ? payload.agents : [] });
       } catch { /* Preserve the last rows while the Viewer is unavailable. */ }
     };
     void refresh();
