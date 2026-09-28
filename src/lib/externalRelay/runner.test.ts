@@ -3,9 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { accountManager } from "@/lib/accounts/manager";
+import { procBackend } from "@/lib/proc";
+import { processMatches, terminateHeadlessReviewerGroup } from "@/lib/agent/headless";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { advertisedSlots, runClaimedRequest, runningCount } from "./runner";
-import { readRunLedger, updateRelayStore, type PairedRelay } from "./store";
+import { dropRun, externalRelayFile, readRunLedger, updateRelayStore, type PairedRelay } from "./store";
 import { confirmRelayPairing } from "./pairing";
 import { sampleRequest } from "./protocol.test";
 import { startTestRelay } from "./testRelay";
@@ -210,6 +212,132 @@ test("unacknowledged heartbeats stop the child after the stall window", async ()
     expect(completes).toBe(0);
     expect(readRunLedger().runs).toEqual([]);
     expect(runningCount(paired.id, "target_1")).toBe(0);
+  } finally {
+    await server.close();
+  }
+}, 20_000);
+test("a ledger failure after launch stops the child before failed completion", async () => {
+  let childPid: number | null = null;
+  let childIdentity: string | null = null;
+  let aliveAtCompletion = true;
+  let groupAliveAtCompletion = true;
+  let slotsAtCompletion = -1;
+  let injected = false;
+  const server = await startTestRelay((req) => {
+    if (req.url?.endsWith("/heartbeat")) return { body: { status: "ok" } };
+    aliveAtCompletion = processMatches(childPid, childIdentity);
+    try {
+      process.kill(-childPid!, 0);
+    } catch {
+      groupAliveAtCompletion = false;
+    }
+    slotsAtCompletion = advertisedSlots(paired)[0]?.free ?? -1;
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  const script = stub(`await Bun.stdin.text();await Bun.sleep(30000);`);
+  try {
+    const outcome = await runClaimedRequest(paired, {
+      ...sampleRequest, request_id: "rq_ledger_failure",
+    }, undefined, {
+      command: script,
+      processIdentity: (pid) => {
+        const identity = procBackend.processIdentity(pid);
+        if (!injected) {
+          injected = true;
+          childPid = pid;
+          childIdentity = identity;
+          const file = externalRelayFile("runs");
+          const original = fs.readFileSync(file, "utf8");
+          fs.writeFileSync(file, "{broken");
+          setTimeout(() => fs.writeFileSync(file, original), 0);
+        }
+        return identity;
+      },
+    });
+    expect(injected).toBe(true);
+    expect(outcome).toMatchObject({ outcome: "failed", reason: "agent_error" });
+    expect(aliveAtCompletion).toBe(false);
+    expect(groupAliveAtCompletion).toBe(false);
+    expect(slotsAtCompletion).toBe(0);
+    expect(readRunLedger().runs).toEqual([]);
+    expect(runningCount(paired.id, "target_1")).toBe(0);
+  } finally {
+    if (processMatches(childPid, childIdentity))
+      terminateHeadlessReviewerGroup(childPid!, childIdentity);
+    await server.close();
+  }
+}, 10_000);
+test("a persistent ledger read error still releases the local slot", async () => {
+  const requestId = "rq_ledger_unreadable";
+  const ledgerFile = externalRelayFile("runs");
+  let originalLedger: string | null = null;
+  let childPid: number | null = null;
+  let childIdentity: string | null = null;
+  let completions = 0;
+  const pairedServer = await startTestRelay((req) => {
+    if (req.url?.endsWith("/heartbeat")) return { body: { status: "ok" } };
+    completions++;
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const paired = relay(`${pairedServer.origin}/v1`);
+  const originalError = console.error;
+  const errors: string[] = [];
+  console.error = (...args) => { errors.push(args.join(" ")); };
+  try {
+    const outcome = await runClaimedRequest(paired, {
+      ...sampleRequest, request_id: requestId,
+    }, undefined, {
+      command: stub(`await Bun.stdin.text();await Bun.sleep(30000);`),
+      processIdentity: (pid) => {
+        const identity = procBackend.processIdentity(pid);
+        if (originalLedger === null) {
+          childPid = pid;
+          childIdentity = identity;
+          originalLedger = fs.readFileSync(ledgerFile, "utf8");
+          fs.writeFileSync(ledgerFile, "{broken");
+        }
+        return identity;
+      },
+    });
+    expect(outcome).toMatchObject({ outcome: "failed", reason: "agent_error" });
+    expect(completions).toBe(1);
+    expect(runningCount(paired.id, "target_1")).toBe(0);
+    expect(errors.some((message) => message.startsWith("External relay run ledger cleanup failed"))).toBe(true);
+  } finally {
+    console.error = originalError;
+    if (originalLedger !== null) {
+      fs.writeFileSync(ledgerFile, originalLedger);
+      dropRun(requestId);
+    }
+    if (processMatches(childPid, childIdentity))
+      terminateHeadlessReviewerGroup(childPid!, childIdentity);
+    await pairedServer.close();
+  }
+}, 10_000);
+test("an acknowledged heartbeat still keeps the run alive after a delayed response", async () => {
+  const completions: unknown[] = [];
+  const started = Date.now();
+  const server = await startTestRelay(async (req, body) => {
+    if (req.url?.endsWith("/heartbeat")) {
+      if (Date.now() - started < 8000)
+        return { status: 503, body: { error: { code: "unavailable", message: "later" } } };
+      await Bun.sleep(3000);
+      return { body: { status: "ok" } };
+    }
+    completions.push(body);
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const script = stub(
+    `const a=process.argv.slice(2);await Bun.stdin.text();await Bun.sleep(12000);await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`,
+  );
+  try {
+    const outcome = await runClaimedRequest(relay(`${server.origin}/v1`), {
+      ...sampleRequest, request_id: "rq_late_ack",
+      liveness: { ...sampleRequest.liveness, heartbeat_interval_s: 2, stall_window_s: 10 },
+    }, undefined, { command: script, timeoutMs: 18000 });
+    expect(outcome?.outcome).toBe("answered");
+    expect(completions).toHaveLength(1);
   } finally {
     await server.close();
   }

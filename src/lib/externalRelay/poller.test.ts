@@ -5,12 +5,14 @@ import { externalRelayTempRoot } from "./runner";
 import { procBackend } from "@/lib/proc";
 import {
   ensureExternalRelayPollers,
+  refreshExternalRelayPollers,
   relayPollerStatus,
   stopExternalRelayPollers,
   sweepExternalRelayOrphans,
 } from "./poller";
-import { externalRelayFile, reserveRun, readRunLedger, updateRelayStore } from "./store";
+import { externalRelayFile, reserveRun, readRelayStore, readRunLedger, updateRelayStore } from "./store";
 import { startTestRelay } from "./testRelay";
+import { sampleRequest } from "./protocol.test";
 const root = fs.mkdtempSync(path.join(externalRelayTempRoot(), "relay-poller-test-"));
 process.env.LLV_STATE_DIR = root;
 const runDirs: string[] = [];
@@ -157,6 +159,63 @@ test("429 waits for Retry-After before another claim", async () => {
     expect(claims).toBeGreaterThanOrEqual(2);
   } finally {
     stopExternalRelayPollers();
+    await server.close();
+  }
+});
+test("a refresh after receiving a claim completes its lease as declined", async () => {
+  let claimAnswered = false;
+  let refreshed = false;
+  const completions: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/requests/claim")) {
+      if (claimAnswered) return { status: 204 };
+      claimAnswered = true;
+      return { body: { request: { ...sampleRequest, request_id: "rq_refresh" } } };
+    }
+    if (req.url?.endsWith("/complete")) {
+      completions.push(body);
+      return { body: { status: "accepted", duplicate: false } };
+    }
+    return { status: 404 };
+  });
+  const originalRead = fs.readFileSync;
+  const originalRelays = readRelayStore().relays;
+  try {
+    updateRelayStore((store) => ({
+      ...store,
+      relays: [{
+        id: "refresh_relay", origin: server.origin, api_base: `${server.origin}/v1`,
+        name: "Test", description: "", credential: "x".repeat(43),
+        owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
+        pairedAt: new Date().toISOString(), paused: false,
+        limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
+        targets: [{
+          id: "target_1", name: "Target", answered_by: "install", fallback: "service",
+          enabled: true, engine: "codex", model: "gpt-6-sol", effort: "low",
+          project: null, concurrency: 1, hardCapMinutes: 1,
+        }],
+      }],
+    }));
+    // Refresh at the store read between the received claim and dispatch.
+    fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => {
+      if (claimAnswered && !refreshed && String(args[0]) === externalRelayFile("relays")) {
+        refreshed = true;
+        updateRelayStore((store) => ({
+          ...store,
+          relays: store.relays.map((relay) => ({ ...relay, paused: true })),
+        }));
+        refreshExternalRelayPollers("refresh_relay");
+      }
+      return originalRead(...args);
+    }) as typeof fs.readFileSync;
+    ensureExternalRelayPollers();
+    for (let i = 0; i < 50 && completions.length === 0; i++) await Bun.sleep(20);
+    expect(refreshed).toBe(true);
+    expect(completions).toMatchObject([{ lease_id: sampleRequest.lease_id, outcome: "declined", reason: "disabled" }]);
+  } finally {
+    fs.readFileSync = originalRead;
+    stopExternalRelayPollers();
+    updateRelayStore((store) => ({ ...store, relays: originalRelays }));
     await server.close();
   }
 });

@@ -120,9 +120,8 @@ async function poll(
       loop.state = "polling";
       backoff = 5000;
       const current = readRelayStore().relays.find((item) => item.id === relay.id);
-      if (loop.stopped || !current) break;
       if (result.status === 200 && result.body?.request)
-        void runClaimedRequest(current, result.body.request, () =>
+        void runClaimedRequest(current ?? { ...relay, paused: true }, result.body.request, () =>
           wakeExternalRelayPoller(relay.id),
         )
           .then((outcome) => {
@@ -133,6 +132,7 @@ async function poll(
           .catch(() => {
             loop.lastOutcome = "local_error";
           });
+      if (loop.stopped || !current) break;
     } catch (error) {
       if (loop.stopped) break;
       if (loop.abort.signal.aborted) continue;

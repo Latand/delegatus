@@ -166,6 +166,8 @@ export async function runClaimedRequest(
     return finish(declined(leaseId, "disabled"));
   let runDir: string | null = null;
   let recorded = false;
+  let run: ReturnType<typeof runEphemeralAgent> | null = null;
+  let runFinished = false;
   const identityTimers: ReturnType<typeof setTimeout>[] = [];
   try {
     runDir = fs.mkdtempSync(
@@ -214,7 +216,6 @@ export async function runClaimedRequest(
     let seq = 0;
     let nextBeatAt = 0;
     const started = Date.now();
-    let run: ReturnType<typeof runEphemeralAgent>;
     try {
       run = runEphemeralAgent({
         key: `external-relay:${requestId}`,
@@ -233,20 +234,23 @@ export async function runClaimedRequest(
             newestProgress = progress;
         },
       });
+      void run.done.then(() => { runFinished = true; });
     } catch (error) {
       if (error instanceof EphemeralProfileError)
         return await finish(declined(leaseId, "profile_error"));
       throw error;
     }
+    const launchedRun = run;
+    if (!launchedRun) throw new Error("external relay launch unavailable");
     changeRun(requestId, (current) => ({
       ...current,
-      childPid: run.pid,
-      childIdentity: run.identity,
+      childPid: launchedRun.pid,
+      childIdentity: launchedRun.identity,
     }));
-    if (run.pid && !run.identity)
+    if (launchedRun.pid && !launchedRun.identity)
       for (const delay of [100, 500, 2000]) {
         const timer = setTimeout(() => {
-          const identity = procBackend.processIdentity(run.pid!);
+          const identity = procBackend.processIdentity(launchedRun.pid!);
           if (identity)
             changeRun(requestId, (current) => ({
               ...current,
@@ -260,7 +264,7 @@ export async function runClaimedRequest(
     const cancelStalledRun = () => {
       if (!leaseUnavailable && Date.now() - heartbeatAt > stallMs) {
         leaseUnavailable = true;
-        run.cancel();
+        launchedRun.cancel();
       }
     };
     const beat = async () => {
@@ -276,8 +280,6 @@ export async function runClaimedRequest(
           relay.credential,
           { timeoutMs: 5000, maxBytes: relay.limits.max_response_bytes },
         );
-        cancelStalledRun();
-        if (leaseUnavailable) return;
         if (newestProgress === sentProgress) newestProgress = null;
         heartbeatAt = Date.now();
         nextBeatAt = heartbeatAt + request.liveness.heartbeat_interval_s * 1000;
@@ -288,25 +290,25 @@ export async function runClaimedRequest(
             (error.status === 409 && error.code === "lease_lost"))
         ) {
           leaseUnavailable = true;
-          run.cancel();
+          launchedRun.cancel();
         }
-        cancelStalledRun();
       } finally {
         if (nextBeatAt <= Date.now()) nextBeatAt = Date.now() + 1000;
         beatBusy = false;
+        cancelStalledRun();
       }
     };
     pendingBeat = beat();
     await pendingBeat;
     const timer = setInterval(() => {
-      cancelStalledRun();
+      if (!beatBusy) cancelStalledRun();
       if (!beatBusy && !leaseUnavailable && Date.now() >= nextBeatAt)
         pendingBeat = beat();
     }, 1000);
     timer.unref();
     let result;
     try {
-      result = await run.done;
+      result = await launchedRun.done;
     } finally {
       clearInterval(timer);
     }
@@ -336,14 +338,26 @@ export async function runClaimedRequest(
         );
     return await finish(body, request.liveness.stall_window_s * 1000);
   } catch {
+    if (run) {
+      if (!runFinished) run.cancel();
+      await run.done;
+    }
     return await finish(
       failed(leaseId, "agent_error"),
       request.liveness.stall_window_s * 1000,
     );
   } finally {
     for (const timer of identityTimers) clearTimeout(timer);
-    if (recorded) dropRun(requestId);
-    if (runDir) fs.rmSync(runDir, { recursive: true, force: true });
+    try {
+      if (recorded) dropRun(requestId);
+    } catch (error) {
+      console.error("External relay run ledger cleanup failed", error instanceof Error ? error.name : "unknown");
+    }
+    try {
+      if (runDir) fs.rmSync(runDir, { recursive: true, force: true });
+    } catch (error) {
+      console.error("External relay run directory cleanup failed", error instanceof Error ? error.name : "unknown");
+    }
     if (recorded) free(relay, target);
     onFreed?.();
   }

@@ -117,6 +117,58 @@ test("descriptor refuses cross origin and public HTTP", async () => {
     await server.close();
   }
 });
+test("a prefixed API pairs and carries claims and heartbeats under its prefix", async () => {
+  let origin = "";
+  const paths: string[] = [];
+  const server = await startTestRelay((req) => {
+    paths.push(req.url ?? "");
+    if (req.url === "/.well-known/delegatus-relay.json")
+      return { body: { ...descriptor(origin), api_base: `${origin}/relay/v1` } };
+    if (req.url === "/relay/v1/pairings")
+      return { status: 201, body: {
+        pairing_id: "prefixed", poll_secret: secret, code: "1234-5678",
+        verify_url: null, expires_at: "2026-09-28T12:10:00Z", poll_interval_s: 2,
+      } };
+    if (req.url === "/relay/v1/requests/claim") return { status: 204 };
+    if (req.url === "/relay/v1/requests/request_1/heartbeat")
+      return { body: { status: "ok" } };
+    return { status: 404, body: { error: { code: "not_found", message: "missing" } } };
+  });
+  origin = server.origin;
+  try {
+    const pending = await startRelayPairing(origin);
+    expect(pending.api_base).toBe(`${origin}/relay/v1`);
+    await relayCall(pending.api_base, "/requests/claim", "POST", { wait_s: 0 });
+    await relayCall(pending.api_base, "/requests/request_1/heartbeat", "POST", {
+      lease_id: "lease_1", seq: 1, progress: null,
+    });
+    expect(paths).toContain("/relay/v1/pairings");
+    expect(paths).toContain("/relay/v1/requests/claim");
+    expect(paths).toContain("/relay/v1/requests/request_1/heartbeat");
+  } finally {
+    await server.close();
+  }
+});
+test("descriptor reports a same-origin API path mismatch separately", async () => {
+  let origin = "";
+  let suffix = "/relay/v2";
+  const server = await startTestRelay(() => ({
+    body: { ...descriptor(origin), api_base: `${origin}${suffix}` },
+  }));
+  origin = server.origin;
+  try {
+    for (const [path, code] of [
+      ["/relay/v2", "invalid_api_path"],
+      ["/relay/v1?query=1", "invalid_address"],
+      ["/relay/v1#fragment", "invalid_address"],
+    ]) {
+      suffix = path;
+      await expect(discoverRelay(origin)).rejects.toMatchObject({ code });
+    }
+  } finally {
+    await server.close();
+  }
+});
 test("claim 204, redirect and oversized body", async () => {
   const server = await startTestRelay((req) =>
     req.url === "/v1/requests/claim"

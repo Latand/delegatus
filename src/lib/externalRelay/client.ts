@@ -206,7 +206,9 @@ export async function discoverRelay(
   if (!parsed.data.versions.includes(1))
     throw new ExternalRelayError("unsupported_version", 426);
   const api = new URL(parsed.data.api_base);
-  if (api.origin !== origin || api.pathname !== "/v1" || api.search || api.hash)
-    throw new ExternalRelayError("cross_origin");
+  if (api.origin !== origin) throw new ExternalRelayError("cross_origin");
+  if (!api.pathname.endsWith("/v1"))
+    throw new ExternalRelayError("invalid_api_path");
+  if (api.search || api.hash) throw new ExternalRelayError("invalid_address");
   return { origin, descriptor: parsed.data };
 }
