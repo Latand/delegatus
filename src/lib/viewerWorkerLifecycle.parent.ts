@@ -1,7 +1,8 @@
 import path from "node:path";
 import { spawnViewerResidentWorker } from "./viewerWorkerLifecycle";
 
-const child = spawnViewerResidentWorker(process.execPath, [path.join(import.meta.dir, "viewerWorkerLifecycle.child.ts")], {
+const entry = process.env.LLV_TEST_WORKER_ENTRY || path.join(import.meta.dir, "viewerWorkerLifecycle.child.ts");
+const child = spawnViewerResidentWorker(process.execPath, [entry], {
   cwd: process.cwd(),
   env: process.env,
 });

@@ -1,4 +1,8 @@
-import { startWakatimeSync } from "./wakatime/sync";
+import { exitWhenViewerOwnershipEnds } from "./viewerWorkerLifecycle";
+
+exitWhenViewerOwnershipEnds();
+
+const { startWakatimeSync } = await import("./wakatime/sync");
 
 startWakatimeSync();
 

@@ -624,14 +624,13 @@ async function startWakatimeWorker(): Promise<void> {
           workerPath: bundled,
         }
       : { executable: process.execPath, workerPath: source };
-  const { spawn } = await import("node:child_process");
+  const { spawnViewerResidentWorker } = await import("./viewerWorkerLifecycle");
   const useNice = fs.existsSync("/usr/bin/nice");
-  const child = spawn(useNice ? "/usr/bin/nice" : launch.executable, [
+  const child = spawnViewerResidentWorker(useNice ? "/usr/bin/nice" : launch.executable, [
     ...(useNice ? ["-n", "10", launch.executable] : []),
     launch.workerPath,
   ], {
     cwd,
-    stdio: ["ignore", "inherit", "inherit"],
     env: {
       ...withoutWakatimeCredential(process.env),
       LLV_WAKATIME_SYNC_WORKER: "1",
