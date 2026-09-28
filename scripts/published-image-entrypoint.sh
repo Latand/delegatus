@@ -13,9 +13,11 @@ esac
 
 uid=$(id -u)
 gid=$(id -g)
+name=$(awk -F: -v uid="$uid" '$3 == uid { print $1; exit }' /etc/passwd)
+name=${name:-delegatus-runtime}
 identity_dir=$(mktemp -d /tmp/delegatus-identity.XXXXXX)
 awk -F: -v uid="$uid" '$3 != uid' /etc/passwd > "$identity_dir/passwd"
-printf 'delegatus-runtime:x:%s:%s::%s:/bin/sh\n' "$uid" "$gid" "$HOME" >> "$identity_dir/passwd"
+printf '%s:x:%s:%s::%s:/bin/sh\n' "$name" "$uid" "$gid" "$HOME" >> "$identity_dir/passwd"
 cp /etc/group "$identity_dir/group"
 if ! awk -F: -v gid="$gid" '$3 == gid { found = 1 } END { exit !found }' "$identity_dir/group"; then
   printf 'delegatus-runtime:x:%s:\n' "$gid" >> "$identity_dir/group"
