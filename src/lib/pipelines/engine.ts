@@ -62,7 +62,7 @@ import { requestPipelineTick } from "./controllerSignal";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
 import { FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed } from "./failEdgeBudget";
-import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
+import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -2433,6 +2433,13 @@ function retryTerminalStagePublication(
   attempt: PipelineStageAttempt,
   ports: PipelinePorts,
 ): void {
+  const current = currentPipelineBranchHead(pipeline, ports.exec);
+  if (!current.ok || current.sha !== pipeline.lastPassedCommit) {
+    park(pipeline, current.ok
+      ? `the worktree moved to ${current.sha} after accepting ${pipeline.lastPassedCommit}; commit and publish the current head before completing this stage`
+      : `the accepted head cannot be verified before completion: ${current.error}`, attempt);
+    return;
+  }
   if (!publishesRemoteBranch(pipeline)) {
     attempt.error = null;
     advancePipeline(pipeline, stage, ports, attempt);
@@ -2562,6 +2569,13 @@ function commitPassedStage(
       attempt,
     );
     return;
+  }
+  if (pipeline.lastPassedCommit && result.sha !== pipeline.lastPassedCommit) {
+    const ancestor = ports.exec("git", ["merge-base", "--is-ancestor", pipeline.lastPassedCommit, result.sha], pipeline.worktreeDir);
+    if (ancestor.code !== 0) {
+      park(pipeline, `stage head ${result.sha} does not descend from accepted head ${pipeline.lastPassedCommit}; reconcile the commits in this worktree before continuing`, attempt);
+      return;
+    }
   }
   /* #1938: a handoff recorded before reviewed heads were captured names none.
      Its review committed nothing, so the head this fix started from is the
@@ -3387,7 +3401,7 @@ async function tickRunStage(
     }
   }
 
-  if (attempt.state === "passed" && pipeline.cursor?.state === "committing") {
+  if ((attempt.state === "passed" || attempt.state === "skipped") && pipeline.cursor?.state === "committing") {
     retryTerminalStagePublication(pipeline, stage, attempt, ports);
     return;
   }
@@ -3941,7 +3955,7 @@ async function tickReviewStage(
     ? newAttempt(pipeline, stage)
     : prior ?? newAttempt(pipeline, stage);
   if (!attempt || pipeline.state === "needs_decision") return;
-  if (attempt.state === "passed" && pipeline.cursor?.state === "committing") {
+  if ((attempt.state === "passed" || attempt.state === "skipped") && pipeline.cursor?.state === "committing") {
     retryTerminalStagePublication(pipeline, stage, attempt, ports);
     return;
   }
@@ -4195,6 +4209,8 @@ interface PipelineProvisionOutcome {
       failed: a retry of a parked provisioning provisions the SAME commit the
       lane was parked on rather than whatever the base has moved to since. */
   base: { baseBranch: string; baseRef: string } | null;
+  /** The checked-out head can already contain commits on an existing delivery branch. */
+  head: string | null;
   /** What stopped the lane, or null when it is provisioned. */
   error: string | null;
 }
@@ -4220,11 +4236,11 @@ async function provisionPipelineOutsideLease(pipeline: Pipeline, exec: Provision
        records what the caller asked for and resolves nothing, so this is the
        only place that reads it (#1799). */
     const resolved = await resolvePipelineBaseAsync(pipeline.repoDir, { baseBranch: pipeline.baseBranch }, exec, signal);
-    if (!resolved.ok) return { id: pipeline.id, fence, base: null, error: resolved.error };
+    if (!resolved.ok) return { id: pipeline.id, fence, base: null, head: null, error: resolved.error };
     base = { baseBranch: resolved.baseBranch, baseRef: resolved.baseRef };
   }
   const provisioned = await provisionPipelineWorktreeAsync({ ...pipeline, ...base }, exec, signal);
-  return { id: pipeline.id, fence, base, error: provisioned.ok ? null : provisioned.error };
+  return { id: pipeline.id, fence, base, head: provisioned.ok ? provisioned.sha : null, error: provisioned.ok ? null : provisioned.error };
 }
 
 /**
@@ -4286,7 +4302,7 @@ async function provisionPendingPipelines(ports: PipelinePorts): Promise<Map<stri
         const common = await guardedExec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], job.pipeline.repoDir, job.abort.signal);
         if (common.code !== 0 || !common.stdout.trim()) {
           if (!job.abort.signal.aborted) outcomes.set(job.pipeline.id, {
-            id: job.pipeline.id, fence: provisionFence(job.pipeline), base: null,
+            id: job.pipeline.id, fence: provisionFence(job.pipeline), base: null, head: null,
             error: `resolving the pipeline Git directory: ${common.stderr || "no common directory"}`,
           });
           return;
@@ -4301,7 +4317,7 @@ async function provisionPendingPipelines(ports: PipelinePorts): Promise<Map<stri
       } catch (error) {
         revalidate();
         if (!job.abort.signal.aborted) outcomes.set(job.pipeline.id, {
-          id: job.pipeline.id, fence: provisionFence(job.pipeline), base: null,
+          id: job.pipeline.id, fence: provisionFence(job.pipeline), base: null, head: null,
           error: `pipeline provisioning failed: ${String(error)}`,
         });
       } finally { releaseRepository?.(); }
@@ -4326,6 +4342,7 @@ function applyProvisionOutcome(pipeline: Pipeline, outcome: PipelineProvisionOut
     park(pipeline, outcome.error);
     return true;
   }
+  if (outcome.head) pipeline.lastPassedCommit = outcome.head;
   pipeline.state = "running";
   pipeline.stateDetail = null;
   return true;
@@ -6362,71 +6379,6 @@ async function orphanAgentPane(
   return { error: `stage agent may still be running in pane ${attempt.paneId}; wait for it to exit or kill the pane first`, status: 409 };
 }
 
-/** What a parked stage's reset may do with a worktree that has moved past the
-    last-passed commit: nothing to decide, adopt the head as the stage's result,
-    or refuse and keep the work. */
-type VerdictRecoveryReset =
-  | { kind: "clear" }
-  | { kind: "adopt"; sha: string }
-  | { kind: "refuse"; error: string; status: number };
-
-/**
- * A park without a readable verdict says nothing about what the stage did, so
- * an action that resets the worktree under committed work is refused — unless
- * the work is published at exactly that head (#1756).
- *
- * A pushed branch whose tip IS the worktree HEAD is a finished stage by
- * evidence: nothing is lost by moving on, because everything the stage produced
- * is on the remote. `skip-stage` therefore adopts that commit as the stage's
- * result and the lane goes on to its review, which is what production lane
- * d0cf20f0 needed and could only get by starting a successor pipeline. Work
- * that was never pushed is still refused, and `retry-stage` is refused
- * throughout: it would run the stage again over the head it was told to keep.
- */
-function verdictRecoveryStageReset(
-  pipeline: Pipeline,
-  attempt: PipelineStageAttempt | null,
-  ports: PipelinePorts,
-  action: "retry-stage" | "skip-stage",
-): VerdictRecoveryReset {
-  if (attempt?.verdictRecovery?.state !== "exhausted") {
-    /* #1871: however the stage ended — a deploy cut, a lost host, a verdict
-       that never came — a skip over a clean worktree whose HEAD is pushed is
-       the same finished stage by evidence, and resetting under it would move
-       the branch behind its own remote. */
-    const published = action === "skip-stage" ? publishedStageHead(pipeline, ports) : null;
-    return published ? { kind: "adopt", sha: published } : { kind: "clear" };
-  }
-  const refusal = (reason: string, remedy = "Preserve the work or use close"): VerdictRecoveryReset => ({
-    kind: "refuse",
-    error: `automatic verdict recovery exhausted; retry-stage and skip-stage require a reset-safe worktree: ${reason}. ${remedy}`,
-    status: 409,
-  });
-  if (!pipeline.lastPassedCommit) return refusal("the pipeline has no passed-stage commit");
-  const local = currentPipelineBranchHead(pipeline, ports.exec);
-  if (!local.ok) return refusal(local.error);
-  if (local.sha === pipeline.lastPassedCommit) return { kind: "clear" };
-  if (action === "skip-stage") {
-    const remote = currentPipelineRemoteBranchHead(pipeline, ports.exec);
-    if (remote.ok && remote.sha === local.sha) return { kind: "adopt", sha: local.sha };
-  }
-  return refusal(
-    `the worktree HEAD ${local.sha} differs from the last-passed commit ${pipeline.lastPassedCommit}`,
-    "Push the branch at that HEAD and skip-stage adopts it as the stage's result, or preserve the work and use close",
-  );
-}
-
-/** The clean local HEAD when it has moved past the last passed commit and the
-    remote branch holds exactly it; null otherwise. The remote is read only
-    once the cheap local read found a moved head. */
-function publishedStageHead(pipeline: Pipeline, ports: PipelinePorts): string | null {
-  if (!pipeline.lastPassedCommit) return null;
-  const local = currentPipelineBranchHead(pipeline, ports.exec);
-  if (!local.ok || local.sha === pipeline.lastPassedCommit) return null;
-  const remote = currentPipelineRemoteBranchHead(pipeline, ports.exec);
-  return remote.ok && remote.sha === local.sha ? local.sha : null;
-}
-
 /** One line of the provider's own words, for the close report and the board. */
 function providerNoticeSummary(text: string): string {
   const line = text.split("\n").map((part) => part.trim()).find(Boolean) ?? text.trim();
@@ -7734,8 +7686,6 @@ export async function patchPipeline(
       const survivorRefusal = pipelineSurvivorRefusal(pipeline);
       if (survivorRefusal) return survivorRefusal;
       if (pipeline.state !== "needs_decision") return { error: "pipeline does not have a stage awaiting retry", status: 409 };
-      const recoveryReset = verdictRecoveryStageReset(pipeline, attempt, ports, "retry-stage");
-      if (recoveryReset.kind === "refuse") return { error: recoveryReset.error, status: recoveryReset.status };
       const explicitReceiptRetry = req.stageId !== undefined || req.launchId !== undefined;
       if (explicitReceiptRetry && (typeof req.stageId !== "string" || typeof req.launchId !== "string")) {
         return { error: "receipt retry requires both stageId and launchId", status: 400 };
@@ -7851,8 +7801,8 @@ export async function patchPipeline(
         }
         pipeline.state = "running";
       } else if (pipeline.lastPassedCommit) {
-        const reset = resetPipelineStage(pipeline, ports.exec);
-        if (!reset.ok) return { error: reset.error, status: 409 };
+        // Retry is a continuation of this checkout. Committed and dirty work
+        // belong to the next attempt until an explicit rollback is chosen.
         pipeline.state = "running";
       } else {
         pipeline.state = "provisioning";
@@ -7870,9 +7820,7 @@ export async function patchPipeline(
       if (expectation) return expectation;
       const survivorRefusal = pipelineSurvivorRefusal(pipeline);
       if (survivorRefusal) return survivorRefusal;
-      if (pipeline.state !== "needs_decision" || !stage) return { error: "pipeline does not have a stage awaiting a decision", status: 409 };
-      const recoveryReset = verdictRecoveryStageReset(pipeline, attempt, ports, "skip-stage");
-      if (recoveryReset.kind === "refuse") return { error: recoveryReset.error, status: recoveryReset.status };
+      if (pipeline.state !== "needs_decision" || !stage || !attempt) return { error: "pipeline does not have a stage attempt awaiting a decision", status: 409 };
       const orphan = await orphanAgentPane(attempt, ports);
       if (orphan) return orphan;
       if (flow && flow.state !== "closed") {
@@ -7884,19 +7832,41 @@ export async function patchPipeline(
         }
       }
       if (!pipeline.lastPassedCommit) return { error: "pipeline worktree has not been provisioned", status: 409 };
-      /* The stage's own published head becomes what the lane carries forward,
-         so the reset below holds it and the next stage reviews it (#1756). */
-      if (recoveryReset.kind === "adopt") pipeline.lastPassedCommit = recoveryReset.sha;
-      const reset = resetPipelineStage(pipeline, ports.exec);
-      if (!reset.ok) return { error: reset.error, status: 409 };
+      const outputs = attemptStage(stage, attempt).outputs ?? [];
+      const carried = stage.kind === "run" && attempt?.effectiveRole.access === "read-only"
+        && outputs.length > 0
+        ? commitPipelineStage(pipeline, stage.id, false, ports.exec, outputs, pipeline.lastPassedCommit)
+        : currentPipelineBranchHead(pipeline, ports.exec);
+      if (!carried.ok) return { error: `${carried.error}; commit the stage's work or retry it before skipping`, status: 409 };
+      if (carried.sha !== pipeline.lastPassedCommit) {
+        const ancestor = ports.exec("git", ["merge-base", "--is-ancestor", pipeline.lastPassedCommit, carried.sha], pipeline.worktreeDir);
+        if (ancestor.code !== 0) return { error: "the current head does not descend from the last accepted head; reconcile the commits in this worktree before skipping", status: 409 };
+      }
+      const previousHead = pipeline.lastPassedCommit;
+      pipeline.lastPassedCommit = carried.sha;
       if (attempt) {
         attempt.state = "skipped";
         attempt.completedAt = ports.now();
-        attempt.output = recoveryReset.kind === "adopt"
-          ? `Skipped by operator; the stage's pushed head ${recoveryReset.sha} was adopted as its result.`
+        attempt.output = carried.sha !== previousHead
+          ? `Skipped by operator; current head ${carried.sha} was accepted as its result.`
           : "Skipped by operator.";
       }
-      advancePipeline(pipeline, stage, ports, attempt);
+      if (publishesRemoteBranch(pipeline) && pipeline.publishedCommit !== carried.sha) {
+        const published = queuePipelinePublication(pipeline, ports.exec, {
+          acceptedSha: carried.sha, publishedSha: pipeline.publishedCommit ?? null,
+        });
+        if (!published.ok) {
+          park(pipeline, `publishing the skipped stage: ${published.error}`, attempt);
+        } else if (published.remote === "unreachable") {
+          setCursorState(pipeline, stage.id, "committing");
+          keepPassedStageUnpublished(pipeline, attempt, published.detail);
+        } else {
+          pipeline.publishedCommit = published.remote === "published" ? published.sha : null;
+          advancePipeline(pipeline, stage, ports, attempt);
+        }
+      } else {
+        advancePipeline(pipeline, stage, ports, attempt);
+      }
     } else if (req.action === "override-stage") {
       const closed = closedGraphRefusal(pipeline);
       if (closed) return closed;
@@ -8393,8 +8363,9 @@ export async function reportStageCompletion(
     : preview, ports);
   if (heldWork) return heldWork;
   const previewStage = preview.pipeline.stages.find((candidate) => candidate.id === preview.stageId);
+  const checkedOut = ports.exec("git", ["branch", "--show-current"], preview.pipeline.worktreeDir);
   const provenance = collectStageProvenance(
-    preview.pipeline,
+    { ...preview.pipeline, branch: checkedOut.code === 0 && checkedOut.stdout.trim() ? checkedOut.stdout.trim() : preview.pipeline.branch },
     previewStage ? attemptStage(previewStage, preview.attempt).outputs ?? [] : [],
     ports.exec,
   );
