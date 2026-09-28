@@ -39,7 +39,7 @@ export type ProjectReportSettings = {
 export type ProjectReportsRead = {
   settings: ProjectReportSettings | null;
   saving: boolean;
-  failed: boolean;
+  failed: string | null;
   /** Writes the choice; null stores "Log only". True once stored. */
   save(outcome: { chat: string; name: string; topicId?: number } | { link: string; name: string } | null): Promise<boolean>;
   /** Reads the stored choice again: the overview may have moved it. */
@@ -54,7 +54,7 @@ export function useProjectReports(project: string): ProjectReportsRead {
   /* Keyed by project, so a project switch never shows the previous one's. */
   const [read, setRead] = useState<{ project: string; settings: ProjectReportSettings } | null>(null);
   const [saving, setSaving] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
   const [generation, setGeneration] = useState(0);
   useEffect(() => {
     let cancelled = false;
@@ -73,18 +73,21 @@ export function useProjectReports(project: string): ProjectReportsRead {
   const reload = useCallback(() => setGeneration((value) => value + 1), []);
   const save = useCallback(async (outcome: { chat: string; name: string; topicId?: number } | { link: string; name: string } | null) => {
     setSaving(true);
-    setFailed(false);
+    setFailed(null);
     try {
       const response = await fetch("/api/projects/settings", {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ project, reportTelegram: outcome }),
       });
-      if (!response.ok) throw new Error(String(response.status));
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { message?: unknown };
+        throw new Error(outcome && "link" in outcome && typeof body.message === "string" ? body.message : "");
+      }
       setRead({ project, settings: settingsOf(await response.json().catch(() => ({})) as Partial<ProjectReportSettings>) });
       return true;
-    } catch {
-      setFailed(true);
+    } catch (error) {
+      setFailed(error instanceof Error ? error.message : "");
       return false;
     } finally {
       setSaving(false);
@@ -285,8 +288,8 @@ export function SeatReportsBody({ project, projectName, reports, surface }: {
         </>
       ) : null}
 
-      {reports.failed ? <p role="alert" className="text-ui font-semibold text-danger">{t("seatReports.failed")}</p> : null}
-      {saved && !reports.failed ? (
+      {reports.failed !== null ? <p role="alert" className="text-ui font-semibold text-danger">{reports.failed || t("seatReports.failed")}</p> : null}
+      {saved && reports.failed === null ? (
         <p data-seat-reports-saved="" className="text-ui font-semibold text-success">
           {stored ? t("onboarding.telegram.savedChat", { chat: title(stored) }) : t("onboarding.telegram.savedLog")}
         </p>

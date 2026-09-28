@@ -182,6 +182,21 @@ test("the picker saves a pasted topic link and shows a stored topic on the chip"
   expect(seatReportsReading({ reportTelegram: { chat: "team-reports", name: "Beta", topicId: 51865 }, reportChatTitle: "Team Reports", reportNameSuggestion: null }, t).face).toBe("Team Reports · topic 51865");
 });
 
+test("a rejected topic link shows Telegram's reason in the picker", async () => {
+  const fetchBeforeRefusal = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "PUT" && String(input).includes("/api/projects/settings")) {
+      return json({ code: "bot_not_in_chat", message: "the bot is not in that chat; add it to the chat first" }, 409);
+    }
+    return fetchBeforeRefusal(input, init);
+  }) as typeof fetch;
+  const section = await mount("repo-beta");
+  const input = q<HTMLInputElement>(section, '[aria-label="Chat or topic link, @username or ID"]')!;
+  await act(async () => reactProps(input).onChange!({ target: { value: "https://t.me/c/9876543210/51865" } }));
+  await click(q(section, "[data-seat-reports-save]"));
+  expect(q(section, '[role="alert"]')?.textContent).toContain("add it to the chat first");
+});
+
 /* The closed chip names a chat by the title the picker shows: two aliases
    that share their first fifteen characters truncate alike, their titles do
    not. Without a known title it falls back to the alias. */
