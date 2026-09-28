@@ -151,7 +151,7 @@ function fixerPrompt(reviewId: string): string {
     "Review findings:",
     "{{prev.output}}",
     "",
-    "Fix each finding at the place it names in this pipeline's worktree, add or adjust the test that shows it, commit, and report what changed. A finding you judge wrong stays unfixed: give the evidence in your summary, which the next reviewer reads. The review runs again on your result unless its budget is spent. The pinned specification below is what the whole lane must achieve, and the reviewer judges the lane against it; this round fixes the findings, and the specification's steps for the first build (where to branch, whether to open a pull request) are already done.",
+    "Fix each finding at the place it names in this pipeline's worktree, add or adjust the check that shows it where the project has one, commit, and report what changed. A finding you judge wrong stays unfixed: give the evidence in your summary, which the next reviewer reads. The review runs again on your result unless its budget is spent. The pinned specification below is what the whole lane must achieve, and the reviewer judges the lane against it; this round fixes the findings, and the specification's steps for the first build (where to branch, whether to open a pull request) are already done.",
   ].join("\n");
 }
 

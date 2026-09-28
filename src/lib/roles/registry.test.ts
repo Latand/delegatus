@@ -300,6 +300,17 @@ test("the verifier names a verdict for every combination of claim labels", () =>
   expect(verifier.value.prompt).toContain("the verdict is fail when any claim is WRONG (each one a finding), needs_decision when none is WRONG and any is UNCONFIRMED, and pass only when every claim is CONFIRMED.");
 });
 
+/* Review of #2301: a deployer's stop for approval is needs_decision, so the ask
+   sweep surfaces it, and a prod-auditor passes on a gap only when no access
+   would close it (the missing-access rule). */
+test("the deployer and the prod-auditor name their verdicts", () => {
+  const deployer = resolveRole("deployer", { sha: "a".repeat(40) });
+  const auditor = resolveRole("prod-auditor", { questions: "Which jobs failed last night?" });
+  if (!deployer.ok || !auditor.ok) throw new Error("role did not resolve");
+  expect(deployer.value.prompt).toContain("Verdict: needs_decision when you stop for approval");
+  expect(auditor.value.prompt).toContain("a stated gap that no access would close; needs_decision when access you lack would answer one");
+});
+
 /* §3 (a): a fix round tells a light fixer to fix only what names its place
    and hand anything else back as fail. */
 test("a builder fix round carries the apply-fixes guidance", () => {

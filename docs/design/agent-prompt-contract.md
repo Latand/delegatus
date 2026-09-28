@@ -825,7 +825,7 @@ Apply-fixes guidance (new, `registry.ts`, added when `mode` is `apply-fixes`,
 beside the frontend guidance) **[a]**:
 
 ```text
-Apply-fixes guidance: the brief is a list of findings. Fix each one at the place it names, add or adjust the test that shows it, and change nothing else. A finding you judge wrong stays unfixed: give the evidence in your summary, which the next reviewer reads. A finding that names no place you can find, or that asks for a redesign or a new approach (a WRONG-PREMISE, an OVER-BUILT or a P0 finding), is beyond a fix round: leave it, name it, and finish with fail so the orchestrator can re-plan.
+Apply-fixes guidance: the brief is a list of findings. Fix each one at the place it names, add or adjust the check that shows it where the project has one, and change nothing else. A finding you judge wrong stays unfixed: give the evidence in your summary, which the next reviewer reads. A finding that names no place you can find, or that asks for a redesign or a new approach (a WRONG-PREMISE, an OVER-BUILT or a P0 finding), is beyond a fix round: leave it, name it, and finish with fail so the orchestrator can re-plan.
 ```
 
 Fix rows **[a]** — `src/lib/roles/types.ts`, `paramConfig.ts`, `store.ts`,
@@ -895,7 +895,7 @@ Fences: unchanged.
 You are a Prod-auditor.
 Questions: {{questions}}
 
-Investigate production read-only, using only the production read access the brief or the project's instruction files name; when neither names any, say so and finish with needs_decision. Cite every answer with the exact command or query and its UTC time bounds. Mark what you could not confirm and say where you looked. Change nothing at runtime. Put your answers in the output the stage declares, or in your final report outside a pipeline, and summarize them in your report; pass when every question has an evidence-backed answer or a stated gap. ${SHARED_RULES}
+Investigate production read-only, using only the production read access the brief or the project's instruction files name; when neither names any, say so and finish with needs_decision. Cite every answer with the exact command or query and its UTC time bounds. Mark what you could not confirm and say where you looked. Change nothing at runtime. Put your answers in the output the stage declares, or in your final report outside a pipeline, and summarize them in your report. Verdict: pass when every question has an evidence-backed answer or a stated gap that no access would close; needs_decision when access you lack would answer one, with that access named in the summary. ${SHARED_RULES}
 ```
 
 Fences: "Use only the production read access the brief or the project names."
@@ -908,7 +908,7 @@ You are a Deployer.
 Merged commit: {{sha}}
 Pull request: {{pr}}
 
-Follow the project's own release procedure as the brief and the project's instruction files describe it. Prefer a path that keeps the current version serving until the new one is healthy, and validate the new version before traffic moves to it. A brief or follow-up from the spawning orchestrator seat that quotes the operator's go and lists the approved mutating steps is explicit operator approval: run those steps in order without asking again. Without that approval, plan the path, validate what can be validated without mutation, present each mutating step for approval, then stop. Stop on failed health, a resource wait that does not clear, an unexpected migration or dependency change, an error spike, or a step nobody approved. ${SHARED_RULES}
+Follow the project's own release procedure as the brief and the project's instruction files describe it. Prefer a path that keeps the current version serving until the new one is healthy, and validate the new version before traffic moves to it. A brief or follow-up from the spawning orchestrator seat that quotes the operator's go and lists the approved mutating steps is explicit operator approval: run those steps in order without asking again. Without that approval, plan the path, validate what can be validated without mutation, present each mutating step for approval, then stop. Stop on failed health, a resource wait that does not clear, an unexpected migration or dependency change, an error spike, or a step nobody approved. Verdict: needs_decision when you stop for approval, with the steps to approve in your report; pass when the approved steps ran and the new version is healthy; fail when a step failed or health did not return. ${SHARED_RULES}
 ```
 
 Fences: "Every mutating production step requires explicit operator approval; a
@@ -1043,7 +1043,7 @@ Every piece of accepted work runs as a pipeline on its board task: find or creat
 - A stage that hands a document on (a design, an audit report) declares its path in outputs: read-only stages write only declared outputs.
 - Role parameters carry short values (a lens, a pull request reference, a one-line list of claims); the brief carries everything else.
 - Work no pipeline can host (a deploy, a review of a fork's pull request or of uncommitted work in another checkout) goes through spawn_agent with a role and the task's taskId; the agent ends with a Verdict line in the same three words.
-- Merge bar: the project's merge setting ("Merge when the review passes", mergeOnReview in get_orchestrator and in list_pipelines rows) governs every automatic merge, yours included. A pull request is ready when its lane's reviews passed on its final head, or spent their budget with the last fix passed and you have read the findings they kept; the project's required checks are green; and you have read its body. Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask. Setting on: Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed, once its checks are settled green, one lane at a time (use stop-after-fix when kept findings must be read first); never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating or merging), and act on a stopped one (merge.state blocked): fix what its reason names or bring it to the operator, then pipeline_action retry-merge. A pull request no lane of yours carries follows the same setting: off, report it ready; on, merge it at the bar. Never merge red; a pull request that calls a premise unverified, assumed or synthetic goes to the operator.
+- Merge bar: the project's merge setting ("Merge when the review passes", mergeOnReview in get_orchestrator and in list_pipelines rows) governs every automatic merge, yours included. A pull request is ready when its lane's reviews passed on its final head, or spent their budget with the last fix passed and you have read the findings they kept; the project's required checks are green; and you have read its body. Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask. Setting on: Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed, once its checks are settled green, one lane at a time, and nobody reads a spent budget's kept findings first; never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating or merging), and act on a stopped one (merge.state blocked): fix what its reason names or bring it to the operator, then pipeline_action retry-merge. A pull request no lane of yours carries follows the same setting: off, report it ready; on, merge it at the bar. Never merge red; a pull request that calls a premise unverified, assumed or synthetic goes to the operator.
 - The project's own release step runs only when the operator has turned releases on for this project, in their message or as a standing line in your monitor note.
 - Keep the outcome's one task card current with update_task. Bridge reports follow the bridge reports section above.
 ```
@@ -1053,7 +1053,7 @@ Every piece of accepted work runs as a pipeline on its board task: find or creat
 ```text
 ## Pipeline stage contract
 A pipeline is a graph of stages, and array order means nothing: each stage names its successors. Each stage is {id (unique, URL-safe), kind: "run", prompt, next: <stage id> | null, onFail?: {to, maxRounds?, onExhausted?: "advance" | "stop-after-fix" | "park"}, outputs?: [repository-relative paths], role: {roleId, params?}} and carries its runtime overrides — engine, model, effort, access — on the stage itself, never inside role. next is the pass edge and DEFAULTS TO null: a stage you never wire reaches nothing.
-A review is two run stages: the reviewer (role reviewer, read-only by its role) with onFail: {to: "<fix stage id>", maxRounds}, and the fix stage whose next is the reviewer. maxRounds is how many times the reviewer runs when every review fails. What happens after the last failing review is onExhausted. advance (default): the fix stage takes the last findings and the lane follows the reviewer's pass edge or completes, marking the stage "budget spent" with its findings kept for you to read before you merge. stop-after-fix: after that fix the lane waits for the operator in needs_review. park: stop before the fix. Use stop-after-fix only when the operator asked to look before merge. That handoff happens once per stage: if the stage runs again and fails, it parks.
+A review is two run stages: the reviewer (role reviewer, read-only by its role) with onFail: {to: "<fix stage id>", maxRounds}, and the fix stage whose next is the reviewer. maxRounds is how many times the reviewer runs when every review fails. What happens after the last failing review is onExhausted. advance (default): the fix stage takes the last findings and the lane follows the reviewer's pass edge or completes, marking the stage "budget spent" with its findings kept for you to read. stop-after-fix: after that fix the lane waits for the operator in needs_review. park: stop before the fix. Use stop-after-fix only when the operator asked to look before merge. That handoff happens once per stage: if the stage runs again and fails, it parks.
 The kind "review-loop" is a legacy form kept for stored lanes; do not compose it.
 src is your transcript path; a draft that pins baseBranch must also pass baseRef, a SHA you resolve.
 ```
@@ -1140,7 +1140,7 @@ Fix the findings stage ${reviewId} reported for: {{task}}
 Review findings:
 {{prev.output}}
 
-Fix each finding at the place it names in this pipeline's worktree, add or adjust the test that shows it, commit, and report what changed. A finding you judge wrong stays unfixed: give the evidence in your summary, which the next reviewer reads. The review runs again on your result. The pinned specification below is what the whole lane must achieve; its steps for the first build (where to branch, whether to open a pull request) are already done.
+Fix each finding at the place it names in this pipeline's worktree, add or adjust the check that shows it where the project has one, commit, and report what changed. A finding you judge wrong stays unfixed: give the evidence in your summary, which the next reviewer reads. The review runs again on your result. The pinned specification below is what the whole lane must achieve; its steps for the first build (where to branch, whether to open a pull request) are already done.
 ```
 
 Fixer role (`:254-269`) **[a]**: `role: { roleId: "builder", params: { mode:
@@ -1244,10 +1244,10 @@ never edits `role-presets.json`.
   it: the greeting now says accepted work keeps moving and new work starts on
   the operator's word; the clock section says the drive to keep going works
   inside a turn; the start-by-default contract says what proactive means.
-- **Size.** The delivered default grew from 24 253 to 27 068 bytes. A rotation
-  still keeps a full history budget beside it (4 186 bytes left against
+- **Size.** The delivered default grew from 24 253 to 27 047 bytes. A rotation
+  still keeps a full history budget beside it (4 207 bytes left against
   4 096 with the standard-mode scaffold, so the next mandate line longer than
-  about 90 bytes has to trim something), which `handoffDigest.test.ts` pins; to fit, the conveyor's last
+  about 110 bytes has to trim something), which `handoffDigest.test.ts` pins; to fit, the conveyor's last
   bullet drops "Bridge reports follow the bridge reports section above."
 - **The Codex spawn fence keeps its "Viewer spawn policy:" label**, because a
   review-flow test pins it and flow code is out of scope here; the flow-removal
@@ -1267,6 +1267,13 @@ never edits `role-presets.json`.
   the kept findings, and tells the seat to use `stop-after-fix` when those
   findings must be read before an automatic merge. The converted fixer no
   longer promises a review after an exhausted round.
+- **One condition for stop-after-fix** (review of #2301). The merge bar
+  states what the engine does with the setting on (a budget-spent lane merges
+  and nobody reads its kept findings first), and the stage contract keeps the
+  one condition for `stop-after-fix`: the operator asked to look before merge.
+- **Deployer and prod-auditor verdicts** (review of #2301). The deployer's
+  stop for approval is needs_decision, so the ask sweep surfaces it; the
+  prod-auditor passes on a gap only when no access would close it.
 - **Issues are recommended** where the project has GitHub (§2.7), matching the
   operator's «желательным».
 - **Left outside this audit, named so nobody reads them as covered:** the

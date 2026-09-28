@@ -124,6 +124,8 @@ describe("askSkipReason", () => {
     expect(askSkipReason("Checked the release plan; every step validated.\n\nVerdict: pass")).toBe("structured");
     expect(askSkipReason("Two findings stand, listed above with their places.\n\nVerdict: fail")).toBe("structured");
     expect(askSkipReason("Blue or in-place? I recommend in-place for this change.\n\nVerdict: needs_decision")).toBeNull();
+    /* A deployer stopping for approval ends in needs_decision, which reaches the operator. */
+    expect(askSkipReason("Step 1: switch traffic to the new version. Approve step 1?\n\nVerdict: needs_decision")).toBeNull();
     /* Only as the closing line, as the verdict card reads it. */
     expect(askSkipReason("Verdict: fail\n\nBefore I retry: should I switch to the in-place path or keep the current one?")).toBeNull();
     expect(askSkipReason("Two findings stand, listed above with their places.\n\n**Verdict: fail**")).toBe("structured");

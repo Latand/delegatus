@@ -135,7 +135,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   27: "1135c1274c1dc36fcc1f595035837e13f0913a818ed7d59ce1db79791de01a37",
   28: "90819032b795f74b3ac4f5bf0699f5443cf31353e95c1ad19ef87b16e8e1ab60",
   29: "220722434e6ce6a265155097b000d1ec5cbf6461e67e7d39193b61cae5b6318a",
-  30: "21cc2a0de69e58e1d0829d1100022556602874daf4eadbd3f00d7b4ce1ebd9f8",
+  30: "690aa8b228c1ea29e7e2214214edc06447c817af0c6692776549b420be42ff06",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -698,7 +698,10 @@ test("the delivered default names no stack and teaches one verdict vocabulary (v
      the last fix passed, whose kept findings the seat reads. */
   expect(delivered).toContain("or spent their budget with the last fix passed and you have read the findings they kept");
   expect(delivered).toContain("Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed");
-  expect(delivered).toContain("use stop-after-fix when kept findings must be read first");
+  expect(delivered).toContain("and nobody reads a spent budget's kept findings first;");
+  /* One condition for stop-after-fix, stated once (review of #2301). */
+  expect(delivered.match(/stop-after-fix only when|use stop-after-fix when/g)).toEqual(["stop-after-fix only when"]);
+  expect(delivered).not.toContain("kept for you to read before you merge");
   /* The worker cap holds in every mode, in the scaffold's words. */
   /* A seat designated onto an existing conversation gets no scaffold, so the
      mandate names the default cap itself (review of #2301). */
