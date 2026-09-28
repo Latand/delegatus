@@ -34,6 +34,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "links.noProxyTarget": "Безпечного входу для проксі немає. Спочатку налаштуйте окремий вхід без довіри до локальних запитів.",
   "links.label": "Назва машини",
   "links.address": "Публічна адреса",
+  "links.httpLanWarning": "Ця LAN-адреса HTTP не шифрує дані. Будь-хто в цій мережі може прочитати передане.",
   "links.usePage": "Цю сторінку відкрито за адресою {address} — використати її?",
   "links.useTailnet": "Використати адресу Tailscale {address}",
   "links.turnOnKey": "Увімкнути ключ доступу",

@@ -52,7 +52,7 @@ browserTest("linked installs: this install renders at 390 and desktop widths in 
   fs.mkdirSync(out, { recursive: true });
   const readings: Array<{ width: number; locale: string; mode: string; state: string; overflow: boolean }> = [];
   try {
-    for (const mode of ["safe", "unsafe", "keyoff"] as const) for (const locale of ["en", "uk"] as const) for (const width of [390, 1440]) {
+    for (const mode of ["safe", "unsafe", "keyoff", "lan-dns"] as const) for (const locale of ["en", "uk"] as const) for (const width of [390, 1440]) {
       const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: "dark" });
       try {
         await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
@@ -65,7 +65,15 @@ browserTest("linked installs: this install renders at 390 and desktop widths in 
         const overflow = await dialog.evaluate((element) => element.scrollWidth > window.innerWidth);
         const state = await page.locator(`[data-linked-state="${expected}"]`).innerText();
         expect(overflow).toBe(false);
-        expect(await dialog.locator('input[type="url"]').inputValue()).toBe("https://delegatus.example.com");
+        const savedAddress = mode === "lan-dns" ? "http://board.internal.test:8897" : "https://delegatus.example.com";
+        expect(await dialog.locator('input[type="url"]').inputValue()).toBe(savedAddress);
+        const warning = dialog.locator("[data-linked-http-warning]");
+        if (mode === "lan-dns") {
+          expect(await warning.isVisible()).toBe(true);
+          expect(await warning.innerText()).toBe(locale === "uk"
+            ? "Ця LAN-адреса HTTP не шифрує дані. Будь-хто в цій мережі може прочитати передане."
+            : "This LAN HTTP address is unencrypted. Anyone on this network can read what is sent.");
+        } else expect(await warning.count()).toBe(0);
         expect(state.length).toBeGreaterThan(0);
         if (mode === "unsafe") expect((await dialog.innerText())).not.toContain("127.0.0.1:8898");
         if (mode === "keyoff") expect(await dialog.getByRole("button", { name: locale === "uk" ? "Увімкнути ключ доступу" : "Turn on the access key" }).count()).toBe(1);

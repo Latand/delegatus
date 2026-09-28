@@ -35,6 +35,7 @@ export const en = {
   "links.noProxyTarget": "No safe proxy target is available. Configure a non-vouching remote entry first.",
   "links.label": "Machine name",
   "links.address": "Public address",
+  "links.httpLanWarning": "This LAN HTTP address is unencrypted. Anyone on this network can read what is sent.",
   "links.usePage": "This page was opened at {address} — use it?",
   "links.useTailnet": "Use Tailscale address {address}",
   "links.turnOnKey": "Turn on the access key",

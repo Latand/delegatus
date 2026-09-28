@@ -13,7 +13,7 @@ import { LOOPBACK_PROBE_HOSTS } from "@/runtime-host/deploymentProxy";
 
 export type CheckCode = "ok" | "needs-access-key" | "needs-remote-entry" | "http-public" | "open-to-internet" | "host-rewritten" | "tls-failure" | "unverified";
 export type SelfCheck = { code: CheckCode; at: string };
-export type LinkSelf = { v: 1; installId: string; label: string; publicUrl: string | null; check: SelfCheck | null; revision?: string };
+export type LinkSelf = { v: 1; installId: string; label: string; publicUrl: string | null; check: SelfCheck | null; revision?: string; saveRevision?: string };
 export type SaveRefusal = "needs-access-key" | "needs-remote-entry" | "http-public" | "invalid-address";
 
 export const selfFile = () => statePath("links/self.json");
@@ -26,7 +26,8 @@ export function readSelf(): LinkSelf | null {
     if (value.v !== 1 || typeof value.installId !== "string" || typeof value.label !== "string" ||
         (value.publicUrl !== null && typeof value.publicUrl !== "string")) return null;
     return { v: 1, installId: value.installId, label: value.label, publicUrl: value.publicUrl ?? null, check: value.check ?? null,
-      revision: typeof value.revision === "string" ? value.revision : undefined };
+      revision: typeof value.revision === "string" ? value.revision : undefined,
+      saveRevision: typeof value.saveRevision === "string" ? value.saveRevision : undefined };
   } catch { return null; }
 }
 
@@ -115,7 +116,7 @@ export async function saveAddress(input: string, label?: string): Promise<{ self
   const old = readSelf();
   const self: LinkSelf = {
     v: 1, installId: old?.installId ?? randomUUID(), label: label?.trim().slice(0, 100) || old?.label || os.hostname(),
-    publicUrl: url ? url.origin : null, check: null,
+    publicUrl: url ? url.origin : null, check: null, saveRevision: randomUUID(),
   };
   if (url) {
     self.check = await checkAddress(url);
@@ -124,6 +125,10 @@ export async function saveAddress(input: string, label?: string): Promise<{ self
   // Disable reads self.json synchronously before lifting the key. Once the
   // key is checked here, the write below runs without yielding to Disable.
   if (url && !isLoopbackAddress(url.hostname) && !process.env.LLV_TOKEN) return { refusal: "needs-access-key" };
+  // A later Save wins even when its probe finishes first. Check writes keep
+  // saveRevision, so a Check finishing during this probe does not cancel Save.
+  const current = readSelf();
+  if (current?.saveRevision !== old?.saveRevision) return { self: current ?? undefined };
   writeSelf(self);
   process.env.LLV_PUBLIC_HOST = url?.hostname ?? "";
   return { self };
@@ -151,6 +156,10 @@ export type Probe = { status: number; host?: string; vouched?: boolean };
 export function probeSelfAddress(url: URL, host: string, options: { certificateAuthority?: string; connectionHost?: string } = {}): Promise<Probe> {
   const nonce = newNonce();
   return new Promise<Probe>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout>;
+    let settled = false;
+    const fail = (error: Error) => { if (settled) return; settled = true; clearTimeout(timer); reject(error); };
+    const finish = (probe: Probe) => { if (settled) return; settled = true; clearTimeout(timer); resolve(probe); };
     const request = (url.protocol === "https:" ? https : http).request({
       hostname: options.connectionHost ?? url.hostname.replace(/^\[|\]$/g, ""), port: url.port || (url.protocol === "https:" ? 443 : 80),
       servername: url.protocol === "https:" ? url.hostname.replace(/^\[|\]$/g, "") : undefined,
@@ -159,14 +168,19 @@ export function probeSelfAddress(url: URL, host: string, options: { certificateA
       headers: { host, "x-delegatus-self": nonce, "content-length": "0" },
     }, (response) => {
       let body = "";
-      response.on("data", (chunk: Buffer) => { if (body.length < 1024) body += chunk.toString(); });
+      response.on("data", (chunk: Buffer) => { if (body.length < 1024) body += chunk.toString().slice(0, 1024 - body.length); });
       response.on("end", () => {
-        try { resolve({ status: response.statusCode ?? 0, ...JSON.parse(body) }); }
-        catch { resolve({ status: response.statusCode ?? 0 }); }
+        if (!response.complete) { fail(new Error("incomplete self-check response")); return; }
+        try { finish({ status: response.statusCode ?? 0, ...JSON.parse(body) }); }
+        catch { finish({ status: response.statusCode ?? 0 }); }
       });
+      response.on("error", fail);
+      response.on("aborted", () => fail(new Error("aborted self-check response")));
+      response.on("close", () => fail(new Error("closed self-check response")));
     });
+    timer = setTimeout(() => request.destroy(new Error("timeout")), 3000);
     request.on("timeout", () => request.destroy(new Error("timeout")));
-    request.on("error", reject);
+    request.on("error", fail);
     request.end();
   }).finally(() => pending.delete(nonce));
 }
@@ -188,12 +202,16 @@ export async function checkAddress(url: URL): Promise<SelfCheck> {
       ["UNABLE_TO_VERIFY_LEAF_SIGNATURE", "DEPTH_ZERO_SELF_SIGNED_CERT", "SELF_SIGNED_CERT_IN_CHAIN"].includes(code ?? "")
       ? "tls-failure" : "unverified");
   }
-  if (reach.status === 200 && reach.vouched) return result("open-to-internet");
-  if (reach.status !== 200 || !reach.host) return result("unverified");
+  if (reach.status === 200 && reach.vouched === true) return result("open-to-internet");
+  if (reach.status !== 200 || typeof reach.host !== "string" || reach.vouched !== false) return result("unverified");
   if (reach.host.toLowerCase() !== url.host.toLowerCase()) return result("host-rewritten");
   const port = url.port || (url.protocol === "https:" ? "443" : "80");
   for (const host of LOOPBACK_PROBE_HOSTS(port)) {
-    try { const reply = await probeSelfAddress(url, host, { connectionHost: pinnedHost }); if (reply.status === 200 && reply.vouched) return result("open-to-internet"); }
+    try {
+      const reply = await probeSelfAddress(url, host, { connectionHost: pinnedHost });
+      if (reply.status === 200 && reply.vouched === true) return result("open-to-internet");
+      if (reply.status === 200 && reply.vouched !== false) return result("unverified");
+    }
     catch { /* A proxy closing unknown hosts is safe. */ }
   }
   return result("ok");

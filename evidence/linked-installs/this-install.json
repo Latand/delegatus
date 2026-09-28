@@ -83,6 +83,34 @@
       "mode": "keyoff",
       "state": "Спочатку увімкніть ключ доступу.",
       "overflow": false
+    },
+    {
+      "width": 390,
+      "locale": "en",
+      "mode": "lan-dns",
+      "state": "Reachable at this address.",
+      "overflow": false
+    },
+    {
+      "width": 1440,
+      "locale": "en",
+      "mode": "lan-dns",
+      "state": "Reachable at this address.",
+      "overflow": false
+    },
+    {
+      "width": 390,
+      "locale": "uk",
+      "mode": "lan-dns",
+      "state": "Адреса доступна.",
+      "overflow": false
+    },
+    {
+      "width": 1440,
+      "locale": "uk",
+      "mode": "lan-dns",
+      "state": "Адреса доступна.",
+      "overflow": false
     }
   ]
 }

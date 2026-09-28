@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { currentSelf, saveAddress, checkSavedAddress } from "@/lib/links/self";
 import { tokensMatch } from "@/lib/authToken";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
-import { accessKeyWithheld } from "@/lib/team";
+import { accessKeyWithheld, teamActor } from "@/lib/team";
 import { isStagingMode } from "@/lib/staging";
 import { getToken } from "../../../../bin/tailscale.mjs";
 
@@ -23,7 +23,11 @@ function settingsRejection(req: NextRequest): NextResponse | null {
   if (currentSelf().self?.publicUrl || !process.env.LLV_TOKEN) return rejection;
   const key = process.env.LLV_TOKEN;
   const bearer = req.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
-  if (!tokensMatch(req.cookies.get("llv_auth")?.value ?? "", key) && !tokensMatch(bearer ?? "", key)) return rejection;
+  const keyAuthenticated = tokensMatch(req.cookies.get("llv_auth")?.value ?? "", key) || tokensMatch(bearer ?? "", key);
+  if (!keyAuthenticated) {
+    const actor = teamActor(req);
+    if (actor.kind !== "member" || accessKeyWithheld(req)) return rejection;
+  }
   const host = req.headers.get("host");
   if (!host) return rejection;
   const origin = req.headers.get("origin");

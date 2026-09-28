@@ -852,7 +852,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const linked = new URLSearchParams(location.search).get("linked");
     if (linked === "error") return json({ error: "forbidden" }, 403);
     return json({
-    self: { v: 1, installId: "fixture-install", label: "Example server", publicUrl: "https://delegatus.example.com", check: { code: "ok", at: "2026-09-28T12:00:00.000Z" } },
+    self: { v: 1, installId: "fixture-install", label: "Example server",
+      publicUrl: linked === "lan-dns" ? "http://board.internal.test:8897" : "https://delegatus.example.com",
+      check: { code: "ok", at: "2026-09-28T12:00:00.000Z" } },
     state: linked === "unsafe" ? "needs-remote-entry" : linked === "keyoff" ? "needs-access-key" : "ok",
     entry: { port: linked === "unsafe" ? 8898 : 8897, publishable: linked !== "unsafe" },
     keyOn: linked !== "keyoff", tailnetUrl: "https://example.tailnet.ts.net",
