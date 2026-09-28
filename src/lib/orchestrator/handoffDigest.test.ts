@@ -12,6 +12,7 @@ import { loadRoleDefinitionsOrDefaults } from "@/lib/roles/store";
 import {
   composeSuccessorMandate,
   fallbackHistory,
+  HANDOFF_BOARD_REPORT_POINTER,
   HANDOFF_HEADING,
   HANDOFF_DIGEST_TIMEOUT_MS,
   HISTORY_BUDGET_BYTES,
@@ -443,7 +444,15 @@ test("the delivered default mandate fits the delivery bound with room for a rota
      leave at least that much behind. */
   if (preflight.ok) {
     const remaining = MAX_STRUCTURED_TEXT_BYTES - preflight.bytes - preflight.overhead;
-    expect(remaining).toBeGreaterThan(HISTORY_BUDGET_BYTES);
+    /* v31 (docs/design/board-maintenance-report.md §5.5) moved the handoff's
+       open-task list — up to twelve rows, about 2 400 bytes — into the board
+       maintenance report, and spent part of what that freed on the core
+       section that says how to read it. So the history budget is measured
+       beside the handoff a rotation carries now: the room the core leaves,
+       plus the task list the handoff no longer carries, less the one pointer
+       line that replaced it, still holds a full history section. */
+    const retiredTaskListBytes = 2_400;
+    expect(remaining + retiredTaskListBytes - Buffer.byteLength(HANDOFF_BOARD_REPORT_POINTER)).toBeGreaterThan(HISTORY_BUDGET_BYTES);
   }
   /* Delivery appends only the role table (#1880) to the current default, and
      preflight measured the delivered text, table included. */
@@ -465,8 +474,10 @@ test("the delivered default mandate fits the delivery bound with room for a rota
    to 12 800 for the fix rows and the fix-stage note in the role table and the
    greeting that says what a proactive seat starts
    (docs/design/agent-prompt-contract.md, mandate v30), which measured 12 703;
-   19 200 bytes still hold two. */
-const DELIVERED_DIRECTIVE_BUDGET_BYTES = 12_800;
+   19 200 bytes still hold two. Raised to 13 500 for the board maintenance
+   report section (docs/design/board-maintenance-report.md §8), which measured
+   13 399; 18 500 bytes still hold two. */
+const DELIVERED_DIRECTIVE_BUDGET_BYTES = 13_500;
 
 test("what delivery appends stays inside its share of the envelope", () => {
   const appended = Buffer.byteLength(orchestratorMandateForDelivery(""));

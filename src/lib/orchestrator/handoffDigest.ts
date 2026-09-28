@@ -154,6 +154,12 @@ export function splitMandate(mandate: string): SplitMandate {
   };
 }
 
+/** Where the successor finds the board (docs/design/board-maintenance-report.md
+    §5.5). The handoff used to list up to twelve open tasks by title and status;
+    the report lists every open task with its state, and the bytes that list
+    took pay for the mandate section that says how to read it. */
+export const HANDOFF_BOARD_REPORT_POINTER = "The board maintenance report, a separate message Delegatus sends after this mandate, lists this project's open tasks and their state.";
+
 /** The fresh handoff, in pieces, so compose can trim the caller's notes
     without re-deriving the rest. */
 export interface HandoffParts {

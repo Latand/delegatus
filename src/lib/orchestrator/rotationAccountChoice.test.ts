@@ -232,7 +232,6 @@ function dependencies(): { asks: SpawnAsk[]; resolved: string[] } {
       project: PROJECT,
       engine: "codex",
     }),
-    projectTasks: () => [],
     summarizeHandoffs: async () => ({ kind: "fallback", reason: "unavailable" }),
     launchSettlement: () => ({ kind: "unknown" }),
     stampRegistryIdentity: () => {},

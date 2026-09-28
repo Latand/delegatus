@@ -41,11 +41,11 @@ function operatorTelegramConnected(): boolean {
   }
 }
 
-import { loadTasks } from "@/lib/tasks/store";
 import {
   boundHistoryBody,
   composeSuccessorMandate,
   fallbackHistory,
+  HANDOFF_BOARD_REPORT_POINTER,
   launchOverheadBytes,
   mandatePreflight,
   mandateTooLargeBody,
@@ -121,8 +121,12 @@ export interface SeatCommandDependencies {
   deliver(input: { conversationId: string; path: string | null; clientMessageId: string; text: string }): Promise<{ ok: boolean; error?: string; outcome?: string }>;
   /** Registry-backed eligibility of a conversation offered for adoption. */
   conversationTarget(conversationId: string): ExistingConversationTarget | null;
-  /** Bounded open work for a rotation handoff; empty when unknown. */
-  projectTasks(project: string): { id: string; status: string; text: string }[];
+  /** Start the board maintenance report for a seat epoch that just became
+      active (docs/design/board-maintenance-report.md §5.1), and return at
+      once: the report is never awaited, and nothing it does reaches the seat
+      command. Absent starts nothing, which is how a harness that does not
+      model it stays exactly as it was. */
+  startBoardReport?(seat: { project: string; seatEpoch: number; conversationId: string; path: string | null }): void;
   /** Compact the predecessor's prior handoffs into ONE bounded history
       section. Never blocks rotation: every unhappy path — no account, timeout,
       error, empty or over-budget output — answers `fallback` with its reason,
@@ -332,9 +336,11 @@ export const productionSeatCommandDependencies: SeatCommandDependencies = {
       model: generation?.launchProfile.model?.trim() || defaultModelFor(conversation.engine),
     };
   },
-  projectTasks: (project) => loadTasks()
-    .filter((task) => task.project === project && task.status !== "done")
-    .map((task) => ({ id: task.id, status: task.status, text: task.text })),
+  startBoardReport: (seat) => {
+    void import("./boardReportRun").then(({ startBoardReport }) => startBoardReport(seat), (error: unknown) => {
+      console.error("[board report] could not load", error instanceof Error ? error.name : "unknown");
+    });
+  },
   summarizeHandoffs: (request) => summarizeHandoffsHeadless(request),
   launchSettlement: ({ launchId, clientRequestId }) => {
     /* The seat spawn path always sends the intent's clientRequestId as the
@@ -498,7 +504,19 @@ async function activate(
     return result;
   });
   if (completed.kind === "missing") return null;
-  return { seat: projectedSeat ?? completed.seat };
+  const seat: OrchestratorSeat = projectedSeat ?? completed.seat;
+  /* Once per new seat epoch — a fresh seat, an adopted conversation, a
+     rotation — whatever produced it; the report's own claim makes a second
+     activation of the same epoch a no-op. Never awaited, so the seat command
+     answers exactly as fast as it did. */
+  if (seat.state === "active" && seat.conversationId) {
+    try {
+      dependencies.startBoardReport?.({ project: seat.project, seatEpoch: seat.seatEpoch, conversationId: seat.conversationId, path: seat.path });
+    } catch (error) {
+      console.error("[board report] could not start", error instanceof Error ? error.name : "unknown");
+    }
+  }
+  return { seat };
 }
 
 function reconcileAuthorityProjections(
@@ -1180,8 +1198,6 @@ function readablePredecessor(
   return null;
 }
 
-const HANDOFF_TASK_CAP = 12;
-const HANDOFF_TASK_TEXT_CAP = 140;
 const HANDOFF_NOTES_CAP = 2_000;
 
 /**
@@ -1240,7 +1256,7 @@ function rotationTrigger(actor: ViewerActor): OrchestratorSeatTrigger {
  * prompt carries the incumbent's core mandate, the predecessor's identity and
  * exact bounded message-read call (available whether the incumbent is alive or
  * dead, which matters because a dead incumbent is a common reason to rotate),
- * the project's open board tasks, and any caller notes. Designation switches
+ * a pointer to the board maintenance report, and any caller notes. Designation switches
  * atomically with the successor's activation; the predecessor loses
  * MANAGER-LEVEL authority only — its session, host, card and
  * ordinary Viewer access are untouched (axis 1) — and both cards stay linked
@@ -1323,7 +1339,6 @@ async function runOrchestratorRotation(
      they are not: the handover named that stillborn link anyway, and the
      successor's one instruction was to read a transcript that does not exist. */
   const readable = readablePredecessor(project, incumbent, dependencies);
-  const tasks = dependencies.projectTasks(project).slice(0, HANDOFF_TASK_CAP);
   const notes = text(rawBody.handoffNotes).slice(0, HANDOFF_NOTES_CAP);
   const handoff: HandoffParts = {
     header: [
@@ -1335,12 +1350,10 @@ async function runOrchestratorRotation(
             : `The seat you are replacing holds no readable turns, so it is not what you read. The last predecessor in this lineage that does is ${readable.conversationId}: ${predecessorReadCall(readable.conversationId)}. Records are newest first; pass the returned cursor with a fresh clientRequestId for each older page. Read them before acting, and never open the transcript file.`,
         ]
         : [
-          `No conversation in this seat's lineage holds readable turns — the seat you are replacing has none, and neither does any predecessor on record. There is no handover transcript to read: reconstruct state from the board tasks below and from the notes in this mandate, and do not go looking for the predecessor's transcript file.`,
+          `No conversation in this seat's lineage holds readable turns — the seat you are replacing has none, and neither does any predecessor on record. There is no handover transcript to read: reconstruct state from the board maintenance report and from the notes in this mandate, and do not go looking for the predecessor's transcript file.`,
         ]),
     ],
-    tasks: tasks.length
-      ? `Open board tasks for this project:\n${tasks.map((task) => `- [${task.status}] ${task.text.slice(0, HANDOFF_TASK_TEXT_CAP)} (${task.id})`).join("\n")}`
-      : "No open board tasks are recorded for this project.",
+    tasks: HANDOFF_BOARD_REPORT_POINTER,
     notes: notes || null,
   };
 
