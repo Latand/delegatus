@@ -70,7 +70,7 @@ test("GET answers the rows a retirement reset, and a write to the row clears it"
 test("PUT refuses Sonnet or Haiku on the reviewer, the architect, the orchestrator or the verifier, in words", async () => {
   const refused = await put({ overrides: { reviewer: { variants: { trivial: { engine: "claude", model: "sonnet", effort: "high" } } } } });
   expect(refused.status).toBe(400);
-  expect((await refused.json() as { error: string }).error).toBe("reviewer: Sonnet and Haiku do not run orchestrator, architect, reviewer or verifier work; name an Opus-class model or use the role's row.");
+  expect((await refused.json() as { error: string }).error).toBe("reviewer: Sonnet and Haiku do not run orchestrator, architect, reviewer or verifier work; name a large model (Claude Opus or Fable, or a large Codex model) or use the role's row.");
   expect((await put({ overrides: { architect: { config: { engine: "claude", model: "haiku", effort: "high" } } } })).status).toBe(400);
   expect(fs.existsSync(file)).toBe(false);
 });

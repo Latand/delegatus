@@ -4179,7 +4179,7 @@ test("an agent on Sonnet spawning a trivial builder is refused, and a Sonnet rev
 
   const trivial = await post({ role: "builder", roleParams: { size: "trivial" } });
   expect(trivial.status).toBe(400);
-  expect(await trivial.json()).toEqual({ error: "size=trivial runs a light model and needs a brief written by an Opus-class agent; this brief comes from claude/sonnet." });
+  expect(await trivial.json()).toEqual({ error: "size=trivial runs a light model and needs a brief written by a large model (Claude Opus or Fable, or a large Codex model); this brief comes from claude/sonnet." });
 
   const reviewer = await post({ role: "reviewer", roleParams: { diffSource: "#1" }, reviews: "#1", engine: "claude", model: "sonnet" });
   expect(reviewer.status).toBe(400);

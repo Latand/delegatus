@@ -3103,10 +3103,13 @@ const SEVERED_TURN_PARK_DETAIL =
   "the stage turn was cut when the runtime host was replaced, and one controller continuation did not resume it";
 const SEVERED_TURN_RESUMED_DETAIL = "stage turn cut by a deploy; the controller sent one continuation";
 const SEVERED_TURN_CONTINUATION_TEXT =
-  "A Viewer deploy replaced the runtime host and cut this turn in the middle of its work."
+  "A Delegatus deploy replaced the runtime host and cut this turn in the middle of its work."
   + " Nothing answered it, so the pipeline controller is resuming you once."
   + " Every background command, monitor and tool call that was in flight died with the previous host:"
-  + " re-run whatever you still need, then finish the stage and end your turn with its fenced JSON verdict.";
+  + " re-run whatever you still need, then report the stage's completion with stage_report."
+  /* The attempt is still open, so the call works: the fenced block stays the
+     fallback in the stage wrapper's own terms (#1797, agent-prompt-contract.md C1). */
+  + " Only if that call returns an error or the tool is absent, end the turn with the fenced JSON block instead.";
 
 async function reconcileSeveredStageTurn(
   pipeline: Pipeline,

@@ -5590,7 +5590,7 @@ test("a finished child whose transcript the Viewer cannot resolve is listed with
      know whether or not a word of either can be read (#1881). */
   expect(record).toMatchObject({ verdict: "wake", reasons: ["own-lane-settled", "child-terminal"], items: 3 });
   const text = rig.sent[0]!.text;
-  expect(text).toContain(`${unscanned.id} — worker outside the roots — spawned child finished, transcript not readable: its transcript path is outside every folder this Viewer scans`);
+  expect(text).toContain(`${unscanned.id} — worker outside the roots — spawned child finished, transcript not readable: its transcript path is outside every folder Delegatus scans`);
   expect(text).toContain(`${gone.id} — worker whose transcript is gone — spawned child finished, transcript not readable: the transcript file is no longer on disk`);
   expect(text).not.toContain("cannot resolve their transcript");
   expect(fixture.acknowledged().sort()).toEqual([unscanned.id, gone.id].sort());
@@ -5734,7 +5734,7 @@ test("an unreadable child is listed when it finished and named once when it stal
   /* The ended turn is owed and listed with its reason (#1881). The open turn
      under a dead host is not work, and is named beside the agenda with why. */
   const shown = first.sent[0]!.text;
-  expect(shown).toContain(`${owed.id} — unscanned worker — spawned child failed, transcript not readable: its transcript path is outside every folder this Viewer scans`);
+  expect(shown).toContain(`${owed.id} — unscanned worker — spawned child failed, transcript not readable: its transcript path is outside every folder Delegatus scans`);
   expect(shown).toContain(`- ${stalled.id} — vanished worker: the transcript file is no longer on disk`);
   expect(fixture.acknowledged()).toEqual([owed.id]);
 

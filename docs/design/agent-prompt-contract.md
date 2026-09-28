@@ -1290,6 +1290,14 @@ never edits `role-presets.json`.
   which the review flows share; a spawned reviewer's `Verdict:` line shows on
   its card's verdict chip instead. Teaching the feed card the new line belongs
   with the flow removal, which frees that parser.
+- **The resume after a cut turn uses the one channel** (review of #2301). The
+  controller's continuation for a stage whose turn a deploy cut
+  (`pipelines/engine.ts`) asked for "its fenced JSON verdict" while the
+  attempt was still open. It now asks for `stage_report`, with the fenced
+  block as the fallback in the wrapper's terms, and names Delegatus.
+- **Sizing refusals name the class the role table names**: "a large model
+  (Claude Opus or Fable, or a large Codex model)", in `roles/sizing.ts` and
+  the `create_pipeline` violation in `mcp/bindings.ts`.
 - **A fix stage keeps the implementer's account only on the same engine**
   (review of #2301): a pinned account belongs to one engine, and the fix row
   may run the other.
