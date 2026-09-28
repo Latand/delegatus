@@ -7,6 +7,11 @@
 .kb {
   --shelf-w: 264px;
   --work-min: 520px;
+  /* An open agent conversation is never narrower than this, whichever column
+     holds it; past it the board scrolls sideways. It follows the screen. */
+  --agent-min: clamp(520px, 40vw, 760px);
+  /* An empty column's strip: its count, its name on end and its menu. */
+  --strip-w: 48px;
   /* A balanced shelf on a large screen: 264 px plus a third of 35 % of what
      Assigned would hold beside three 264 px shelves and their three 16 px
      gaps. Assigned keeps the other 65 %. `100%` is the board's content width:
@@ -1007,6 +1012,23 @@
    board then scrolls sideways inside itself, never the page. */
 .kb .board.reading { overflow-x: auto; }
 .kb .board.scroll .column.reading { flex-basis: 460px; }
+
+.kb .board.scroll .column.agent { flex-basis: var(--agent-min); }
+
+/* An empty column folds to a strip. Hovered, focused or under a dragged card
+   (`.drop`) it opens to the track it would have had, which KanbanBoard writes
+   as `--kb-track-<status>`; the scroller opens it to its flex basis. */
+.kb .board:has(> .column.strip[data-status="inbox"]:is(:hover, :focus-within, .drop)) { --kb-open-inbox: var(--kb-track-inbox); }
+.kb .board:has(> .column.strip[data-status="assigned"]:is(:hover, :focus-within, .drop)) { --kb-open-assigned: var(--kb-track-assigned); }
+.kb .board:has(> .column.strip[data-status="blocked"]:is(:hover, :focus-within, .drop)) { --kb-open-blocked: var(--kb-track-blocked); }
+.kb .board:has(> .column.strip[data-status="done"]:is(:hover, :focus-within, .drop)) { --kb-open-done: var(--kb-track-done); }
+.kb .board.scroll .column.strip:not(:hover, :focus-within, .drop) { flex-basis: var(--strip-w); }
+.kb .column.strip:not(:hover, :focus-within, .drop) { overflow: hidden; }
+.kb .column.strip:not(:hover, :focus-within, .drop) > .col-head { flex-direction: column; align-items: center; gap: 8px; padding: 12px 0 8px; }
+.kb .column.strip:not(:hover, :focus-within, .drop) > .col-head > :not(h2, .n, [data-colmenu]) { display: none; }
+.kb .column.strip:not(:hover, :focus-within, .drop) > .col-head > .n { order: -1; }
+.kb .column.strip:not(:hover, :focus-within, .drop) > .col-head > h2 { writing-mode: vertical-rl; max-height: 240px; }
+.kb .column.strip:not(:hover, :focus-within, .drop) > .col-body { display: none; }
 
 /* One reader may take the window; it is the same reader, moved. */
 .kb .reader-full { position: fixed; inset: 0; z-index: 64; display: flex; justify-content: center; padding: 24px; background: color-mix(in srgb, var(--color-primary) 28%, transparent); }

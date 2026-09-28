@@ -26,16 +26,29 @@ export function kanbanLayoutMode(width: number): KanbanLayoutMode {
     A shelf holding reading (an open conversation, an agent draft, `+ Task`
     composing) gets at least the reading width and never less than a balanced
     shelf. The wide share (#1841) goes to the shelf the operator widened, and
-    Assigned takes a shelf's track. */
+    Assigned takes a shelf's track.
+
+    A column holding an open agent conversation (`agents`) is never narrower
+    than `--agent-min`, which follows the screen; past that the board scrolls
+    sideways. An empty column (`strips`) that holds neither the wide share nor
+    reading is a `--strip-w` strip: its track reads `--kb-open-<status>`, which
+    the stylesheet points at the track it would have had (`--kb-track-<status>`)
+    while the strip is hovered, focused or under a dragged card. */
 export function kanbanColumnTracks(
   mode: KanbanLayoutMode,
-  { overview, wide, reading }: { overview: boolean; wide: TaskStatus | null; reading: ReadonlySet<TaskStatus> },
-): Record<`--c-${TaskStatus}`, string> | null {
+  { overview, wide, reading, agents, strips }: {
+    overview: boolean;
+    wide: TaskStatus | null;
+    reading: ReadonlySet<TaskStatus>;
+    agents?: ReadonlySet<TaskStatus>;
+    strips?: ReadonlySet<TaskStatus>;
+  },
+): (Record<`--c-${TaskStatus}`, string> & Partial<Record<`--kb-track-${TaskStatus}`, string>>) | null {
   if (mode !== "wide" && mode !== "narrow") return null;
   const balanced = mode === "wide" && !overview;
   const shelf = mode === "narrow" ? "220px" : balanced ? "minmax(232px, var(--shelf-balanced))" : "minmax(232px, var(--shelf-w))";
   const work = mode === "narrow" ? "minmax(440px, 1fr)" : "minmax(var(--work-min), 1fr)";
-  const tracks: Record<`--c-${TaskStatus}`, string> = { "--c-inbox": shelf, "--c-assigned": work, "--c-blocked": shelf, "--c-done": shelf };
+  const tracks: Record<`--c-${TaskStatus}`, string> & Partial<Record<`--kb-track-${TaskStatus}`, string>> = { "--c-inbox": shelf, "--c-assigned": work, "--c-blocked": shelf, "--c-done": shelf };
   if (reading.size) {
     tracks["--c-assigned"] = "minmax(440px, 1fr)";
     for (const status of reading) tracks[`--c-${status}`] = balanced ? "minmax(420px, max(460px, var(--shelf-balanced)))" : "minmax(420px, 460px)";
@@ -43,6 +56,17 @@ export function kanbanColumnTracks(
   if (wide) {
     tracks["--c-assigned"] = shelf;
     tracks[`--c-${wide}`] = work;
+  }
+  const workStatus = wide ?? "assigned";
+  for (const status of agents ?? []) {
+    tracks[`--c-${status}`] = status === workStatus
+      ? "minmax(var(--agent-min), 1fr)"
+      : balanced ? "minmax(var(--agent-min), max(460px, var(--shelf-balanced)))" : "var(--agent-min)";
+  }
+  for (const status of strips ?? []) {
+    if (status === workStatus || reading.has(status) || agents?.has(status)) continue;
+    tracks[`--kb-track-${status}`] = tracks[`--c-${status}`];
+    tracks[`--c-${status}`] = `var(--kb-open-${status}, var(--strip-w))`;
   }
   return tracks;
 }
