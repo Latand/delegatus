@@ -189,6 +189,20 @@ describe("automatic updates", () => {
     expect(text(section(el, "auto"))).toContain("managed install");
   });
 
+  test("an older launcher shows restart guidance in both languages", () => {
+    const s = snapshot();
+    s.auto = { availability: "launcher-upgrade", enabled: false, off: null, phase: "idle", target: null, green: null, blockers: null, waitingSince: null, longWait: false };
+    const en = render(s);
+    expect(button(en, "toggle-auto")?.disabled).toBe(true);
+    expect(text(section(en, "auto"))).toContain("Restart Delegatus from the terminal");
+    flushSync(() => root!.unmount());
+    host?.remove();
+    setLocale("uk");
+    const uk = render(s);
+    expect(button(uk, "toggle-auto")?.disabled).toBe(true);
+    expect(text(section(uk, "auto"))).toContain("Перезапустіть Delegatus із термінала");
+  });
+
   test("the update card names an automatic build after it finishes", () => {
     const s = snapshot();
     s.update = { ...idleUpdate(), state: "done", target: "a".repeat(40), targetShort: "aaaaaaa", trigger: "auto", finishedAt: new Date(NOW).toISOString() };

@@ -4582,6 +4582,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "selfUpdate.auto.outcome.fell-back": "повернуто попередню версію",
   "selfUpdate.auto.unavailable.managed": "Керована інсталяція використовує свій механізм розгортання.",
   "selfUpdate.auto.unavailable.packaged": "Автооновлення недоступне для цієї інсталяції.",
+  "selfUpdate.auto.unavailable.launcher-upgrade": "Перезапустіть Delegatus із термінала, щоб оновити лаунчер перед увімкненням автооновлень.",
   "selfUpdate.auto.unavailable.not-github": "Для автооновлення потрібен GitHub remote.",
   "selfUpdate.auto.unavailable.hand-managed": "Чекаут змінився після публікації релізу. Оновіть його з цього вікна, щоб продовжити.",
   "selfUpdate.auto.unavailable.diverged": "У чекауті є локальні коміти поза відстежуваною гілкою.",

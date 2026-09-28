@@ -34,7 +34,7 @@ export interface AutoState {
   rollbackCaptured: boolean;
 }
 export interface AutoView {
-  availability: "available" | "managed" | "packaged" | "not-github" | "hand-managed" | "diverged";
+  availability: "available" | "managed" | "packaged" | "launcher-upgrade" | "not-github" | "hand-managed" | "diverged";
   enabled: boolean;
   off: AutoState["off"];
   phase: AutoPhase;

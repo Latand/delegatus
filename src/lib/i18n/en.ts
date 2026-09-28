@@ -4692,6 +4692,7 @@ export const en = {
   "selfUpdate.auto.outcome.fell-back": "fell back",
   "selfUpdate.auto.unavailable.managed": "A managed install uses its deployment flow.",
   "selfUpdate.auto.unavailable.packaged": "Automatic updates are unavailable for this install.",
+  "selfUpdate.auto.unavailable.launcher-upgrade": "Restart Delegatus from the terminal to upgrade its launcher before enabling automatic updates.",
   "selfUpdate.auto.unavailable.not-github": "Automatic updates require a GitHub remote.",
   "selfUpdate.auto.unavailable.hand-managed": "The checkout moved since Delegatus published the release. Update it from this dialog to resume.",
   "selfUpdate.auto.unavailable.diverged": "The checkout has local commits outside the tracked branch.",

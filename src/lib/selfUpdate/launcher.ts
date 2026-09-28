@@ -25,7 +25,7 @@ export interface LauncherProcess {
 
 export interface LauncherRecord {
   version: 1;
-  launcher: { pid: number; startIdentity: string | null };
+  launcher: { pid: number; startIdentity: string | null; autoAdmission?: 1 };
   /** null for a packaged install: it is updated by its package manager. */
   checkout: string | null;
   releasesDir: string;
@@ -63,14 +63,15 @@ export function readLauncherRecord(file: string): LauncherRecord | null {
   } catch {
     return null;
   }
-  const launcher = parsed.launcher as { pid?: unknown; startIdentity?: unknown } | undefined;
+  const launcher = parsed.launcher as { pid?: unknown; startIdentity?: unknown; autoAdmission?: unknown } | undefined;
   const web = processEntry(parsed.web);
   const runtimeHost = processEntry(parsed.runtimeHost);
   if (parsed.version !== 1 || !launcher || typeof launcher.pid !== "number" || !web || !runtimeHost) return null;
   for (const key of ["releasesDir", "releasePointer", "requestFile", "socket"]) if (typeof parsed[key] !== "string") return null;
   return {
     version: 1,
-    launcher: { pid: launcher.pid, startIdentity: typeof launcher.startIdentity === "string" ? launcher.startIdentity : null },
+    launcher: { pid: launcher.pid, startIdentity: typeof launcher.startIdentity === "string" ? launcher.startIdentity : null,
+      ...(launcher.autoAdmission === 1 ? { autoAdmission: 1 as const } : {}) },
     checkout: typeof parsed.checkout === "string" ? parsed.checkout : null,
     releasesDir: parsed.releasesDir as string,
     releasePointer: parsed.releasePointer as string,

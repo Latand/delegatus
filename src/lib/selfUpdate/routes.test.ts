@@ -475,7 +475,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     const entry = (revision: string) => ({ state: "healthy", pid, startIdentity, startedAt: new Date().toISOString(), revision, error: null, requestId: null });
     writeFileSync(recordFile, JSON.stringify({
       version: 1,
-      launcher: { pid, startIdentity },
+      launcher: { pid, startIdentity, autoAdmission: 1 },
       checkout,
       releasesDir: join(dir, "releases"),
       releasePointer: join(state, "release.json"),
@@ -537,6 +537,20 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     const managed = new SelfUpdateService(baseDeps(mkdtempSync(join(root, "auto-managed-")), { mode: async () => ({ mode: "managed", reason: null, record: null }) }));
     setSelfUpdateServiceForTests(managed);
     expect((await postAuto(post("/auto", { enabled: true }))).status).toBe(409);
+  });
+
+  test.each([undefined, 2])("a launcher without supported final admission (%s) cannot enable auto-apply", async (autoAdmission) => {
+    const h = harness({ remote: "https://github.com/example/project.git" });
+    setSelfUpdateServiceForTests(h.service);
+    expect((await snapshot()).auto?.availability).toBe("available");
+    const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
+    if (autoAdmission === undefined) delete record.launcher.autoAdmission;
+    else record.launcher.autoAdmission = autoAdmission;
+    writeFileSync(h.recordFile, JSON.stringify(record));
+    const response = await postAuto(post("/auto", { enabled: true }));
+    expect(response.status).toBe(409);
+    expect((await snapshot()).auto).toMatchObject({ availability: "launcher-upgrade", enabled: false });
+    expect(existsSync(record.requestFile)).toBe(false);
   });
 
   test("a hand-managed checkout at the tracked tip can be rebuilt from the dialog", async () => {

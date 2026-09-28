@@ -144,6 +144,7 @@ describe("the launcher record", () => {
     expect(written.version).toBe(1);
     expect(written.launcher.pid).toBe(process.pid);
     expect(written.launcher.startIdentity).toBe(readStartIdentity(process.pid));
+    expect(written.launcher.autoAdmission).toBe(1);
     expect(written.checkout).toBe(checkout);
     expect(written.web).toMatchObject({ state: "healthy", pid: process.pid, revision: second.slice(0, 7), startedAt: "2026-09-22T12:00:00.000Z" });
     expect(written.web.startIdentity).toBe(readStartIdentity(process.pid));

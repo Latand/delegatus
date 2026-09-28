@@ -214,7 +214,7 @@ response is an `unknown` verdict and waits for a later try.
 | --- | --- | --- | --- |
 | **web** (`next start` from the release directory) | request file → `restartWeb` (`bin/cli.mjs:1192`): SIGTERM, SIGKILL after 2 s, start from the pointer, readiness plus page-and-chunk probe, fallback to the previous release | every engine process of every engine, since their stdio belongs to the web process; with them any turn in flight. Also the in-process controllers (pipeline controller, seat tick, Telegram poller, sweeps), open pages' event streams, any HTTP request in flight (a send, a voice upload), and the self-update service's memory | every conversation (adopted again by id), the runtime host and its durable queue, pipelines, tasks and the board (the state store), composer state in the open page |
 | **runtime host** | request file → `createRuntimeHostSupervisor.restart` (`bin/cli.mjs:727`): SIGTERM (`stop()` closes the socket server, journal and fence), SIGKILL after 2 s, start from the pointer, readiness, fallback | the host socket for a few seconds. Every web→host call in that gap fails: runtime snapshots, sends, operation appends, agent MCP calls that go through the host. A host still draining long polls when the 2 s run out is killed, and its journal is recovered as after a crash | every engine process (never signalled), the journal and durable queue (recovered by the next generation), the web process, which rebinds its delivery queue on the new generation |
-| **launcher** (`bin/cli.mjs`) | never | — | everything; it keeps running the version it started as |
+| **launcher** (`bin/cli.mjs`) | only when the operator restarts Delegatus itself | all children stop as in a normal shutdown | the next launch reads the installed release; a running launcher keeps the version it started as |
 
 Two consequences shape the rule:
 
@@ -513,7 +513,7 @@ operator can restart onto by hand, and a restart already requested completes.
 
 ```ts
 auto: {
-  availability: "available" | "managed" | "packaged" | "not-github" | "hand-managed" | "diverged";
+  availability: "available" | "managed" | "packaged" | "launcher-upgrade" | "not-github" | "hand-managed" | "diverged";
   enabled: boolean;
   off: { at: string; target: string; stage: "build" | "restart-web" | "restart-host"; reason: AutoOffReason } | null;
   phase: "idle" | "checks" | "not-green" | "building" | "waiting" | "restarting-web" | "restarting-host";
@@ -574,6 +574,7 @@ Ukrainian plurals in `one`/`few`/`many`/`other`):
 | reason: host fell back | the runtime host did not start on {sha}, so {old} runs again | runtime host не запустився на {sha}, тож знову працює {old} |
 | reason: not taken | the launcher did not take the restart request | лаунчер не прийняв запит на перезапуск |
 | unavailable: managed | Not available on a managed install: each update is a deployment you start. | Недоступно для керованої інсталяції: кожне оновлення — це розгортання, яке запускаєте ви. |
+| unavailable: launcher upgrade | Restart Delegatus from the terminal to upgrade its launcher before enabling automatic updates. | Перезапустіть Delegatus із термінала, щоб оновити лаунчер перед увімкненням автооновлень. |
 | unavailable: not GitHub | Not available: checks can only be read from a GitHub remote, and this install tracks {remote}. | Недоступно: перевірки можна прочитати лише з GitHub, а ця інсталяція стежить за {remote}. |
 | paused: hand-managed | Paused: the checkout moved since Delegatus last updated it, so it is updated by hand. Update once from this window to resume. | Призупинено: чекаут змінився після останнього оновлення з Delegatus, тож його оновлюють вручну. Оновіть один раз із цього вікна, щоб продовжити. |
 | paused: diverged | Paused: this checkout has commits that are not on {branch}. | Призупинено: у цьому чекауті є коміти, яких немає в {branch}. |
@@ -645,9 +646,15 @@ No new driver. The build adds:
   `fetch` calls, the quiet probe uses the existing runtime-host client, and
   the presence change adds one field to an existing answer. The rule "a
   failing socket write is a connection event" has nothing new to cover.
-- The launcher is untouched, so the feature works under a launcher that is
-  already running. The first update onto a release containing this feature
-  is a manual one; after that the operator can turn the switch on.
+- The launcher advertises `launcher.autoAdmission: 1` in its record only when
+  it checks `autoGateId` and calls the final admission endpoint before either
+  restart. The web service refuses to enable or issue an automatic request
+  without that exact capability. A manual web or host update leaves the
+  already-running launcher on its old code, so the dialog asks the operator
+  to restart Delegatus from the terminal once. The web service never restarts
+  the launcher itself. Presence heartbeats still reach the authenticated route
+  while admission is held, so typing during the final GitHub read blocks the
+  restart; other new work remains held by the gate.
 
 ## 10. Test plan
 

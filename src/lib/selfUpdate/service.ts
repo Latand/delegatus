@@ -194,6 +194,8 @@ export class SelfUpdateService {
   }
 
   async setAuto(enabled: boolean): Promise<ActionResult> {
+    // A prior snapshot may have cached a different launcher generation.
+    if (enabled) this.decision = null;
     const decision = await this.decide();
     const availability = this.autoAvailability(decision);
     if (enabled && availability !== "available") return refuse(409, "auto-unavailable", `Automatic updates unavailable: ${availability}`);
@@ -209,6 +211,7 @@ export class SelfUpdateService {
   private autoAvailability(decision: ModeDecision): AutoView["availability"] {
     if (decision.mode === "managed") return "managed";
     if (decision.mode !== "checkout" || !decision.record?.checkout) return "packaged";
+    if (decision.record.launcher.autoAdmission !== 1) return "launcher-upgrade";
     try {
       const raw = JSON.parse(readFileSync(decision.record.releasePointer, "utf8")) as { checkoutHead?: string };
       if (!raw.checkoutHead || raw.checkoutHead !== headOf(decision.record.checkout)) return "hand-managed";
@@ -253,6 +256,17 @@ export class SelfUpdateService {
     const now = this.deps.now();
     const at = new Date(now).toISOString();
     const pending = this.auto.pending;
+    if (record.launcher.autoAdmission !== 1) {
+      const entry = pending?.role === "web" ? record.web : record.runtimeHost;
+      if (pending && entry.requestId !== pending.requestId) {
+        cancelUntakenRequest(record, pending.requestId);
+        this.auto = { ...this.auto, pending: null, quietSince: null };
+        this.saveAuto();
+      }
+      // A request taken by a previous release still needs outcome and rollback
+      // tracking; no new request may be filed under this launcher.
+      if (!pending || entry.requestId !== pending.requestId) return;
+    }
     if (pending) {
       const entry = pending.role === "web" ? record.web : record.runtimeHost;
       if (pending.launcherPid !== record.launcher.pid) {
@@ -374,6 +388,13 @@ export class SelfUpdateService {
         this.changes.emit();
         return;
       }
+      // The launcher may have been replaced while GitHub and activity were read.
+      // Re-read the record before filing anything an older watcher would take.
+      this.decision = null;
+      const current = await this.decide();
+      if (current.mode !== "checkout" || current.record?.launcher.autoAdmission !== 1
+        || current.record.launcher.pid !== record.launcher.pid
+        || current.record.launcher.startIdentity !== record.launcher.startIdentity) return;
       this.auto = { ...this.auto, rollbackPointer, rollbackCaptured: true, quietSince: null };
       requestAutoRestart(record, role, target.sha, rollbackPointer, now, gateId, (request) => {
         this.auto = { ...this.auto, pending: request };

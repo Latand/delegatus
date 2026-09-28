@@ -9,6 +9,12 @@ import type { LauncherRecord } from "./launcher";
 import { headOf } from "./release";
 import { watchRestartRequests } from "../../../bin/self-update-supervisor.mjs";
 import { activeRestartGate, restartGateFile } from "./restartGate";
+import { proxy } from "../../proxy";
+import { POST as postPresence } from "../../app/api/view/presence/route";
+import { listPresence, resetPresenceForTest } from "../view/presenceStore";
+import { statePath } from "../configDir";
+import { NextRequest } from "next/server";
+import { watchRestartRequests as watchOldRestartRequests } from "./__fixtures__/preAutoLauncher.mjs";
 
 const root = mkdtempSync("/var/tmp/self-update-auto-");
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -18,7 +24,7 @@ const OLD = "b".repeat(40);
 function scenario() {
   const dir = mkdtempSync(join(root, "run-"));
   const record: LauncherRecord = {
-    version: 1, launcher: { pid: 100, startIdentity: "launch" }, checkout: process.cwd(),
+    version: 1, launcher: { pid: 100, startIdentity: "launch", autoAdmission: 1 }, checkout: process.cwd(),
     releasesDir: join(dir, "releases"), releasePointer: join(dir, "release.json"), requestFile: join(dir, "request.json"), port: 0, socket: join(dir, "host.sock"), updatedAt: "",
     web: { state: "healthy", pid: 101, startIdentity: "web", startedAt: "", revision: OLD.slice(0, 7), error: null, requestId: null },
     runtimeHost: { state: "healthy", pid: 102, startIdentity: "host", startedAt: "", revision: OLD.slice(0, 7), error: null, requestId: null },
@@ -52,8 +58,130 @@ function scenario() {
     return instance;
   };
   const pending = () => (JSON.parse(readFileSync(join(dir, "state.json"), "utf8")) as { autoPending?: { role: string; requestId: string } | null }).autoPending ?? null;
-  return { dir, record, service, pending, prunes: () => prunes, advance: (ms: number) => { now += ms; }, setGreen: (state: typeof greenState) => { greenState = state; }, setTurn: (running: boolean) => { turnRunning = running; }, setStage: (running: boolean) => { stageRunning = running; } };
+  return { dir, record, deps, service, pending, prunes: () => prunes, advance: (ms: number) => { now += ms; }, setGreen: (state: typeof greenState) => { greenState = state; }, setTurn: (running: boolean) => { turnRunning = running; }, setStage: (running: boolean) => { stageRunning = running; } };
 }
+
+async function postTypingPresence(role: string): Promise<void> {
+  const payload = { schemaVersion: 1, viewSessionId: `typing-${role}`, deviceId: "device-1", device: { kind: "desktop", browser: "chrome" }, visibility: "visible", sequence: 1, inputSequence: 1,
+    project: null, mode: "scheme", viewport: { width: 800, height: 600, dpr: 1 }, camera: null, focusedPath: null, selectedPaths: [], visiblePaths: [], board: { renderedRevision: 1, durableRevision: 1, sync: "current" } };
+  const request = new NextRequest("http://127.0.0.1:3000/api/view/presence", { method: "POST", headers: { host: "127.0.0.1:3000", origin: "http://127.0.0.1:3000", "content-type": "application/json" }, body: JSON.stringify(payload) });
+  expect(proxy(request).headers.get("x-middleware-next")).toBe("1");
+  expect((await postPresence(request)).status).toBe(200);
+  expect(listPresence().some((session) => session.viewSessionId === payload.viewSessionId)).toBe(true);
+}
+
+test.each(["web", "runtime-host"] as const)("an old launcher cannot receive an automatic %s request", async (role) => {
+  const h = scenario();
+  delete (h.record.launcher as { autoAdmission?: number }).autoAdmission;
+  if (role === "runtime-host") h.record.web.revision = TARGET.slice(0, 7);
+  const service = h.service();
+  expect(await service.setAuto(true)).toMatchObject({ ok: false, code: "auto-unavailable", error: "Automatic updates unavailable: launcher-upgrade" });
+  await service.autoTick();
+  h.advance(60_000);
+  await service.autoTick();
+  let restarted = 0;
+  const watcher = watchOldRestartRequests(h.record.requestFile, async () => { restarted += 1; }, { intervalMs: 60_000 });
+  try {
+    await watcher.poll();
+    expect(restarted).toBe(0);
+    expect(existsSync(h.record.requestFile)).toBe(false);
+    expect(h.pending()).toBeNull();
+    // The frozen older watcher would have restarted for this extra field.
+    writeFileSync(h.record.requestFile, JSON.stringify({ requestId: "control", role, autoGateId: "ignored" }));
+    await watcher.poll();
+    expect(restarted).toBe(1);
+  } finally { watcher.stop(); service.stop(); }
+});
+
+test.each(["web", "runtime-host"] as const)("typing through proxy and presence during a delayed green read blocks %s", async (role) => {
+  resetPresenceForTest();
+  const h = scenario();
+  if (role === "runtime-host") h.record.web.revision = TARGET.slice(0, 7);
+  h.record.requestFile = join(statePath("self-update"), `request-${role}.json`);
+  h.deps.quiet!.presence = (now) => listPresence(now);
+  const service = h.service();
+  await service.autoTick();
+  h.advance(60_000);
+  let releaseGreen: (() => void) | undefined;
+  h.deps.green = { read: () => new Promise((resolve) => { releaseGreen = () => resolve({ state: "green" }); }) } as unknown as ServiceDeps["green"];
+  // The service holds the admission gate while its fresh GitHub read is pending.
+  const deferredService = h.service();
+  const tick = deferredService.autoTick();
+  for (let i = 0; i < 100 && !activeRestartGate(restartGateFile(h.record.requestFile)); i++) await Bun.sleep(1);
+  expect(activeRestartGate(restartGateFile(h.record.requestFile))).not.toBeNull();
+  try {
+    await postTypingPresence(role);
+    releaseGreen?.();
+    await tick;
+    let restarted = 0;
+    const watcher = watchRestartRequests(h.record.requestFile, async () => { restarted += 1; }, { intervalMs: 60_000, admitAuto: ({ requestId, autoGateId }) => deferredService.admitAutoRestart(requestId, autoGateId) });
+    try { await watcher.poll(); } finally { watcher.stop(); }
+    expect(restarted).toBe(0);
+    expect(h.pending()).toBeNull();
+    expect(existsSync(h.record.requestFile)).toBe(false);
+  } finally { releaseGreen?.(); resetPresenceForTest(); deferredService.stop(); service.stop(); }
+});
+
+test.each(["web", "runtime-host"] as const)("typing before launcher admission blocks %s", async (role) => {
+  resetPresenceForTest();
+  const h = scenario();
+  if (role === "runtime-host") h.record.web.revision = TARGET.slice(0, 7);
+  h.record.requestFile = join(statePath("self-update"), `request-final-${role}.json`);
+  h.deps.quiet!.presence = (now) => listPresence(now);
+  const service = h.service();
+  try {
+    await service.autoTick();
+    h.advance(60_000);
+    await service.autoTick();
+    expect(h.pending()?.role).toBe(role);
+    await postTypingPresence(`final-${role}`);
+    let restarted = 0;
+    const watcher = watchRestartRequests(h.record.requestFile, async () => { restarted += 1; }, {
+      intervalMs: 60_000, admitAuto: ({ requestId, autoGateId }) => service.admitAutoRestart(requestId, autoGateId),
+    });
+    try { await watcher.poll(); } finally { watcher.stop(); }
+    expect(restarted).toBe(0);
+    expect(h.pending()).toBeNull();
+    expect(existsSync(h.record.requestFile)).toBe(false);
+    expect(activeRestartGate(restartGateFile(h.record.requestFile))).toBeNull();
+  } finally { resetPresenceForTest(); service.stop(); }
+});
+
+test("launcher capability is rechecked after the delayed green read", async () => {
+  const h = scenario();
+  const service = h.service();
+  await service.autoTick();
+  h.advance(60_000);
+  let releaseGreen: (() => void) | undefined;
+  h.deps.green = { read: () => new Promise((resolve) => { releaseGreen = () => resolve({ state: "green" }); }) } as unknown as ServiceDeps["green"];
+  const current = h.service();
+  const tick = current.autoTick();
+  for (let i = 0; i < 100 && !activeRestartGate(restartGateFile(h.record.requestFile)); i++) await Bun.sleep(1);
+  expect(activeRestartGate(restartGateFile(h.record.requestFile))).not.toBeNull();
+  delete (h.record.launcher as { autoAdmission?: number }).autoAdmission;
+  try {
+    releaseGreen?.();
+    await tick;
+    expect(existsSync(h.record.requestFile)).toBe(false);
+    expect(h.pending()).toBeNull();
+    expect(activeRestartGate(restartGateFile(h.record.requestFile))).toBeNull();
+  } finally { releaseGreen?.(); current.stop(); service.stop(); }
+});
+
+test("a previously taken request still records failure when launcher capability is absent", async () => {
+  const h = scenario();
+  const service = h.service();
+  await service.autoTick();
+  h.advance(60_000);
+  await service.autoTick();
+  const pending = h.pending()!;
+  delete (h.record.launcher as { autoAdmission?: number }).autoAdmission;
+  h.record.web = { ...h.record.web, requestId: pending.requestId, state: "healthy", error: { kind: "fell-back", revision: OLD.slice(0, 7), detail: "health probe failed" } };
+  await service.autoTick();
+  expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ enabled: false, off: { stage: "restart-web", reason: "health probe failed" } });
+  expect(h.pending()).toBeNull();
+  service.stop();
+});
 
 test("two quiet probes persist a web request; a fresh process continues with the host", async () => {
   const h = scenario();

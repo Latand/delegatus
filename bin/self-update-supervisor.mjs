@@ -125,7 +125,7 @@ function emptyProcess() {
 export function createLauncherRecord(file, base, clock = () => Date.now()) {
   const record = {
     version: RECORD_VERSION,
-    launcher: { pid: process.pid, startIdentity: readStartIdentity(process.pid) },
+    launcher: { pid: process.pid, startIdentity: readStartIdentity(process.pid), autoAdmission: 1 },
     ...base,
     web: emptyProcess(),
     runtimeHost: emptyProcess(),

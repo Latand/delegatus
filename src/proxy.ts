@@ -53,6 +53,7 @@ function forbidden(request: NextRequest): NextResponse {
 
 function handoffBlock(request: NextRequest): NextResponse | null {
   if (["GET", "HEAD", "OPTIONS"].includes(request.method)
+    || (request.method === "POST" && request.nextUrl.pathname === "/api/view/presence")
     || !activeRestartGate(statePath("self-update", "auto-admission.json"))) return null;
   return NextResponse.json({ error: "Automatic update handoff in progress. Retry shortly." }, { status: 503, headers: { "Retry-After": "2" } });
 }
