@@ -12595,6 +12595,18 @@ describe("an empty column folds to a strip; an open agent keeps its minimum widt
                 if (!reading.agent) failures.push(`${label}: no open agent`);
                 else if (reading.agent.columnWidth < reading.agentMin - 1) failures.push(`${label}: the agent's column is ${reading.agent.columnWidth}px under its ${reading.agentMin}px minimum`);
                 if (reading.rail === null) failures.push(`${label}: no open-agents rail`);
+                if (width === 1280) {
+                  /* Inbox widened, Assigned gives the wide share away and turns
+                     a shelf; the agent it holds keeps its minimum all the same. */
+                  await page.locator('[data-kanban-board] [data-col-width="inbox"][data-col-width-action="widen"]').click();
+                  await page.mouse.move(700, 10);
+                  await page.waitForTimeout(700);
+                  await page.screenshot({ path: path.join(pngDir, `${label}-inbox-wide.png`) });
+                  const widened = await readBoard(page);
+                  (readings[label] as Record<string, unknown>).inboxWide = { mode: widened.mode, agentMin: widened.agentMin, agent: widened.agent, assigned: widened.columns.assigned };
+                  if (!widened.agent) failures.push(`${label}: Inbox widened, no open agent`);
+                  else if (widened.agent.columnWidth < widened.agentMin - 1) failures.push(`${label}: Inbox widened, the agent's column is ${widened.agent.columnWidth}px under its ${widened.agentMin}px minimum`);
+                }
               }
               if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
               if (width === 1440) {

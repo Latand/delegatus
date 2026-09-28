@@ -92,7 +92,24 @@
         "scrollWidth": 1196,
         "clientWidth": 832
       },
-      "pageErrors": []
+      "pageErrors": [],
+      "inboxWide": {
+        "mode": "scroll",
+        "agentMin": 520,
+        "agent": {
+          "column": "assigned",
+          "columnWidth": 520,
+          "readerWidth": 468
+        },
+        "assigned": {
+          "width": 520,
+          "strip": false,
+          "title": "Assigned",
+          "count": "8",
+          "headOverflows": false,
+          "cards": 8
+        }
+      }
     },
     "1440x900-none-en": {
       "mode": "scroll",
@@ -412,7 +429,24 @@
         "scrollWidth": 1196,
         "clientWidth": 832
       },
-      "pageErrors": []
+      "pageErrors": [],
+      "inboxWide": {
+        "mode": "scroll",
+        "agentMin": 520,
+        "agent": {
+          "column": "assigned",
+          "columnWidth": 520,
+          "readerWidth": 468
+        },
+        "assigned": {
+          "width": 520,
+          "strip": false,
+          "title": "Призначені",
+          "count": "8",
+          "headOverflows": false,
+          "cards": 8
+        }
+      }
     },
     "1440x900-none-uk": {
       "mode": "scroll",

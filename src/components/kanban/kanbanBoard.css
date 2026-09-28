@@ -1013,7 +1013,10 @@
 .kb .board.reading { overflow-x: auto; }
 .kb .board.scroll .column.reading { flex-basis: 460px; }
 
-.kb .board.scroll .column.agent { flex-basis: var(--agent-min); }
+/* Written as specific as the Assigned shelf's 280 px basis above, and after
+   it, so an Assigned column that gave the wide share away keeps the agent's
+   minimum too. */
+.kb .board.scroll .column[data-status].agent { flex-basis: var(--agent-min); }
 
 /* An empty column folds to a strip. Hovered, focused or under a dragged card
    (`.drop`) it opens to the track it would have had, which KanbanBoard writes
