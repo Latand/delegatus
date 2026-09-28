@@ -571,7 +571,7 @@ function harness() {
 /** Publication is opt-in (#1692): the tests of the remote-branch contract ask for it. */
 const REMOTE_BRANCH = { publication: "remote-branch" } as const;
 
-async function realWorktreeLane(name: string, stages: unknown[], publication?: "remote-branch") {
+async function realWorktreeLane(name: string, stages: unknown[], publication?: "remote-branch", legacyReview = false) {
   savePipelines([]);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `llv-${name}-`));
   const origin = path.join(root, "origin.git");
@@ -601,6 +601,7 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   const created = await createPipelineFromRequest({ task: name, repoDir: repo, baseRef: base, stages: stages as never,
     ...(publication ? { publication } : {}) }, h.ports);
   if (!created.pipeline) throw new Error(created.error);
+  if (legacyReview) savePipelines([asStoredLegacyReviewLane(created.pipeline, created.convertedStages)]);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   return { root, origin, repo, base, h, git, id: created.pipeline.id, worktree: created.pipeline.worktreeDir };
@@ -739,6 +740,40 @@ test("a read-only architect pass commits its declared fix output through settlem
     expect(current.lastPassedCommit).not.toBe(fixture.base);
     expect(fixture.git(fixture.worktree, "show", "--name-only", "--format=", "HEAD")).toBe("reports/fix.md");
     expect(fs.readFileSync(path.join(fixture.worktree, "sentinel.tmp"), "utf8")).toBe("untouched\n");
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a skipped legacy architect publishes its declared output to the review flow", async () => {
+  const fixture = await realWorktreeLane("legacy-architect-skip-review", [
+    { id: "architect", kind: "run", role: { roleId: "architect" }, access: "read-only", outputs: ["fix.txt"], prompt: "Write fix", next: "review" },
+    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review fix", next: null },
+  ], "remote-branch", true);
+  try {
+    const { git, h, id, origin, worktree } = fixture;
+    expect(loadPipelines().find((item) => item.id === id)!.stages[1]!.kind).toBe("review-loop");
+    fs.writeFileSync(path.join(worktree, "fix.txt"), "accepted fix\n");
+    fs.writeFileSync(path.join(worktree, "sentinel.tmp"), "untouched\n");
+    h.setConversationActive(false);
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "needs_decision")], h.ports);
+    expect((await patchPipeline(id, { action: "skip-stage" }, h.ports)).error).toBeUndefined();
+    await tickPipelines([], h.ports);
+    const skipped = loadPipelines().find((item) => item.id === id)!;
+    const accepted = git(worktree, "rev-parse", "HEAD");
+    expect(accepted).not.toBe(fixture.base);
+    expect(skipped).toMatchObject({ lastPassedCommit: accepted, cursor: { stageId: "review" } });
+    expect(skipped.runs[0]!.attempts[0]!.state).toBe("skipped");
+    expect(git(worktree, "show", "--name-only", "--format=", "HEAD")).toBe("fix.txt");
+    expect(git(origin, "rev-parse", `refs/heads/${skipped.branch}`)).toBe(accepted);
+    await tickPipelines([], h.ports);
+    const review = loadPipelines().find((item) => item.id === id)!;
+    expect(review.state).toBe("running");
+    expect(review.runs[1]!.attempts[0]).toMatchObject({ expectedReviewHeadSha: accepted, flowId: "flow-1" });
+    expect(h.flowRequests).toHaveLength(1);
+    expect(h.flowRequests[0]).toMatchObject({ implementerPath: "/codex/stage-1.jsonl", targetSha: accepted, headRef: skipped.branch, requireRemoteHead: true });
+    expect(fs.readFileSync(path.join(worktree, "sentinel.tmp"), "utf8")).toBe("untouched\n");
   } finally {
     savePipelines([]);
     fs.rmSync(fixture.root, { recursive: true, force: true });
@@ -10829,8 +10864,8 @@ test("retrying a parked review stage republishes a local repair before the revie
 
 /* --- exact-head publication is a precondition of EVERY review ingress ------ */
 
-/* A review stage needs a passed run session to review, so both the skip path
-   and the fail-edge path reach ingress only behind an earlier passed stage. */
+/* These synthetic routes have an earlier passed run; the real-git legacy
+   architect case above covers a skipped run as the review producer. */
 const SKIP_STAGES = [
   { id: "plan", kind: "run", role: { roleId: "builder" }, ["prompt"]: "plan", next: "build" },
   { id: "build", kind: "run", role: { roleId: "builder" }, ["prompt"]: "build", next: "review" },

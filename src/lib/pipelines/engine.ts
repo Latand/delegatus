@@ -1753,15 +1753,16 @@ function latestCompletedAgentPath(pipeline: Pipeline, beforeStageId?: string): s
   return pipeline.srcPath;
 }
 
-/** The run whose session a review-loop stage reviews (#353): the nearest passed
+/** The run whose session a review-loop stage reviews (#353): the nearest accepted
     run ancestor along the activation graph, so a merge or jump review binds to
     the run that activated it. The positional scan resumes at the migration
     boundary and for an anchor with no provenance, so migrated and mixed v2/v3
-    histories keep the legacy implementer selection. */
-function latestPassedRun(pipeline: Pipeline, stageId: string): PipelineStageAttempt | null {
+    histories keep the legacy implementer selection. A skipped run is accepted
+    only after skip-stage carries its head into lastPassedCommit. */
+function latestAcceptedRun(pipeline: Pipeline, stageId: string): PipelineStageAttempt | null {
   let atBoundary = true;
   for (const step of activationLineage(pipeline, stageId)) {
-    if (step.stage.kind === "run" && step.attempt.state === "passed" && step.attempt.agentPath) return step.attempt;
+    if (step.stage.kind === "run" && (step.attempt.state === "passed" || step.attempt.state === "skipped") && step.attempt.agentPath) return step.attempt;
     atBoundary = step.boundary;
   }
   if (!atBoundary) return null;
@@ -1770,7 +1771,7 @@ function latestPassedRun(pipeline: Pipeline, stageId: string): PipelineStageAtte
     const stage = pipeline.stages[index]!;
     if (stage.kind !== "run") continue;
     const attempt = currentAttempt(pipeline, stage.id);
-    if (attempt?.state === "passed" && attempt.agentPath) return attempt;
+    if ((attempt?.state === "passed" || attempt?.state === "skipped") && attempt.agentPath) return attempt;
   }
   return null;
 }
@@ -2231,7 +2232,7 @@ export function reconcileEmbeddedReviewFlows(
       if (stage.kind !== "review-loop") continue;
       const attempt = currentAttempt(pipeline, stage.id);
       if (!attempt || attempt.flowId || !attempt.expectedReviewHeadSha) continue;
-      const implementer = latestPassedRun(pipeline, stage.id);
+      const implementer = latestAcceptedRun(pipeline, stage.id);
       if (!implementer?.agentPath) continue;
       const candidates = flows.filter((flow) =>
         !claimedFlowIds.has(flow.id)
@@ -2627,7 +2628,7 @@ export async function preparePipelineReviewRepair(flowId: string): Promise<{ ok:
     if (reviewStage?.kind !== "review-loop" || pipeline.state !== "running") {
       return { ok: false as const, detail: "the pipeline review stage no longer owns this repair" };
     }
-    const implementer = latestPassedRun(pipeline, reviewStage.id);
+    const implementer = latestAcceptedRun(pipeline, reviewStage.id);
     if (!implementer) return { ok: false as const, detail: "the review flow has no accepted producer stage" };
     const source = pipeline.stages.find((stage) => runFor(pipeline, stage.id)?.attempts.includes(implementer));
     if (!source || source.kind !== "run") return { ok: false as const, detail: "the accepted producer stage is missing" };
@@ -4003,9 +4004,9 @@ async function tickReviewStage(
     if (approvedReviewHeadHolds(pipeline, attempt, ports)) commitPassedStage(pipeline, stage, attempt, ports);
     return;
   }
-  const implementer = latestPassedRun(pipeline, stage.id);
+  const implementer = latestAcceptedRun(pipeline, stage.id);
   if (!implementer?.agentPath) {
-    park(pipeline, "review-loop stage requires a passed run session", attempt);
+    park(pipeline, "review-loop stage requires an accepted run session", attempt);
     return;
   }
   if (attempt.state === "pending") bindAttemptDefinition(stage, attempt, ports);
