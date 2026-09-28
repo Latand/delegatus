@@ -8455,7 +8455,8 @@ test("a Claude session limit preserves dirty work, stage identity and review rou
     h.ports.requestConversationReseat = async (conversationId, accountId) => {
       reseats.push({ conversationId, accountId });
     };
-    h.ports.conversationMigrationTarget = () => reseats.length && currentPath !== successorPath ? SPARE_ACCOUNT : null;
+    h.ports.conversationMigration = () => reseats.length && currentPath !== successorPath
+      ? { targetId: SPARE_ACCOUNT, retry: false } : null;
     h.ports.resumeSeveredTurn = async (input) => {
       continuations.push({ conversationId: input.conversationId, clientMessageId: input.clientMessageId, path: input.transcriptPath });
       return true;
@@ -8674,8 +8675,9 @@ test("a previously limited Claude account becomes available for a later stage re
   h.ports.pathForConversation = () => currentPath;
   const reseats: string[] = [];
   h.ports.requestConversationReseat = async (_id, target) => { reseats.push(target); };
-  h.ports.conversationMigrationTarget = () =>
-    reseats.at(-1) === LIMITED_ACCOUNT && currentPath === "/codex/stage-2.jsonl" ? LIMITED_ACCOUNT : null;
+  h.ports.conversationMigration = () =>
+    reseats.at(-1) === LIMITED_ACCOUNT && currentPath === "/codex/stage-2.jsonl"
+      ? { targetId: LIMITED_ACCOUNT, retry: false } : null;
   h.ports.resumeSeveredTurn = async () => true;
   h.ports.resolveProjectSpawn = (_engine, input) => {
     const available = [LIMITED_ACCOUNT, SPARE_ACCOUNT].find((id) => !input.unavailableIds?.includes(id));
@@ -8823,7 +8825,8 @@ test("a recorded Claude limit moves the stage's real registry conversation and s
   };
   setAgentRegistryForTests(registry);
   try {
-    h.ports.conversationMigrationTarget = defaultPipelinePorts().conversationMigrationTarget;
+    h.ports.conversationMigration = defaultPipelinePorts().conversationMigration;
+    h.ports.conversationDeliveryCompleted = defaultPipelinePorts().conversationDeliveryCompleted;
   } finally {
     setAgentRegistryForTests(null);
   }
@@ -8896,6 +8899,120 @@ test("a recorded Claude limit moves the stage's real registry conversation and s
     verdict: { status: "pass" },
   });
   expect(h.spawnInputs).toHaveLength(1);
+});
+
+test("a failed Claude migration retries its original operation and held continuation", async () => {
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { advanceConversationMigration } = await import("@/lib/accounts/migration/coordinator");
+  const { enqueueStructuredMessage } = await import("@/lib/runtime/structuredMessageDelivery");
+  const h = harness();
+  const pipeline = await create(h.ports, [{ ...usageLimitStage()[0], engine: "claude", model: "fable" }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const sourcePath = limitInterruptedTranscript("claude-failed-migration");
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "claude-failed-migration-registry.json"));
+  registry.reconcileConversations([{
+    engine: "claude", path: sourcePath, accountId: LIMITED_ACCOUNT,
+    launchProfile: emptyLaunchProfile({ cwd: pipeline.worktreeDir, project: pipeline.project, model: "fable", effort: "high" }),
+    turn: { state: "terminal", source: "lifecycle", terminalAt: "2026-08-27T09:41:00.000Z" },
+    observedAt: "2026-08-27T09:41:01.000Z",
+  }]);
+  const conversation = registry.conversationForPath(sourcePath)!;
+  registry.setEngineRouting("claude", "account-previously-limited");
+  const running = loadPipelines()[0]!;
+  Object.assign(running.runs[0]!.attempts[0]!, {
+    conversationId: conversation.id, agentPath: sourcePath, accountId: LIMITED_ACCOUNT, paneId: null,
+  });
+  savePipelines([running]);
+  setAgentRegistryForTests(registry);
+  try {
+    const defaults = defaultPipelinePorts();
+    h.ports.requestConversationReseat = defaults.requestConversationReseat;
+    h.ports.conversationMigration = defaults.conversationMigration;
+    h.ports.durableTurnEvidence = durableStageTurnEvidence;
+    h.ports.resolveProjectSpawn = () => ({ kind: "available", account: {
+      engine: "claude", accountId: SPARE_ACCOUNT, kind: "managed",
+      home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" },
+    } });
+    h.ports.accountForTranscript = () => ({ accountId: LIMITED_ACCOUNT, label: LIMITED_ACCOUNT_LABEL });
+    h.ports.pathForConversation = (id) => id === conversation.id ? sourcePath : null;
+    h.ports.resumeSeveredTurn = async (input) => (await enqueueStructuredMessage({
+      path: input.transcriptPath, conversationId: input.conversationId,
+      clientMessageId: input.clientMessageId, text: input.text,
+    }, {
+      enabled: () => true, client: () => null, registry: () => registry,
+      requestMigrationTick: () => {}, kick: async () => {},
+      executeSwitch: async () => registry.conversation(conversation.id)!,
+    }))?.ok === true;
+
+    await tickPipelines([], h.ports);
+    const first = registry.conversation(conversation.id)!.migration!;
+    expect(first).toMatchObject({ phase: "requested", targetId: SPARE_ACCOUNT });
+    expect(registry.pendingDeliveries(conversation.id)).toHaveLength(1);
+    const failed = await advanceConversationMigration(conversation.id, registry, {
+      virtualSource: true,
+      async create() { throw new Error("provider temporarily unavailable"); },
+      async verify() {},
+    });
+    expect(failed.migration).toMatchObject({ phase: "failed-recoverable", operationId: first.operationId });
+
+    await tickPipelines([], h.ports);
+    expect(registry.conversation(conversation.id)!.migration).toMatchObject({
+      phase: "requested", operationId: first.operationId, targetId: SPARE_ACCOUNT,
+    });
+    expect(registry.pendingDeliveries(conversation.id)).toHaveLength(1);
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  } finally {
+    setAgentRegistryForTests(null);
+  }
+});
+
+test("a delivered Claude limit continuation releases later dead-host recovery", async () => {
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const h = harness();
+  const pipeline = await create(h.ports, [{ ...usageLimitStage()[0], engine: "claude", model: "fable" }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const sourcePath = limitInterruptedTranscript("claude-delivered-then-dead");
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "claude-delivered-then-dead-registry.json"));
+  registry.reconcileConversations([{
+    engine: "claude", path: sourcePath, accountId: LIMITED_ACCOUNT,
+    launchProfile: emptyLaunchProfile({ cwd: pipeline.worktreeDir, project: pipeline.project, model: "fable", effort: "high" }),
+    turn: { state: "terminal", source: "lifecycle", terminalAt: "2026-08-27T09:41:00.000Z" },
+    observedAt: "2026-08-27T09:41:01.000Z",
+  }]);
+  const conversation = registry.conversationForPath(sourcePath)!;
+  const running = loadPipelines()[0]!;
+  Object.assign(running.runs[0]!.attempts[0]!, {
+    conversationId: conversation.id, agentPath: sourcePath, accountId: LIMITED_ACCOUNT, paneId: null,
+  });
+  savePipelines([running]);
+  readFixtures(h, { [sourcePath]: sourcePath });
+  usageLimitPorts(h, { kind: "exhausted", resetsAt: null, allowedAccountIds: [LIMITED_ACCOUNT] });
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+
+  h.ports.claudeAccountRecovered = () => true;
+  h.ports.resumeSeveredTurn = async (input) => {
+    const receipt = registry.holdDelivery(conversation.id, input.text, input.clientMessageId);
+    registry.recordDeliveryOutcome(receipt.id, "delivered");
+    return true;
+  };
+  setAgentRegistryForTests(registry);
+  try {
+    h.ports.conversationDeliveryCompleted = defaultPipelinePorts().conversationDeliveryCompleted;
+  } finally {
+    setAgentRegistryForTests(null);
+  }
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  h.ports.durableTurnEvidence = async () => null;
+  h.ports.conversationHostUnavailableSince = async () => new Date(1).toISOString();
+  await tickPipelines([], h.ports);
+  const recovered = loadPipelines()[0]!;
+  expect(recovered.state).toBe("needs_decision");
+  expect(recovered.stateDetail).not.toContain("Claude limit: continuing");
+  expect(h.calls.some((call) => call.startsWith("stop-host:build:1:"))).toBe(true);
 });
 
 test("a failover attempt edited to another engine launches there with none of the old engine's limits (graph slice 1)", async () => {

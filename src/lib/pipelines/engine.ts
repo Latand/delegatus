@@ -288,8 +288,10 @@ export interface PipelinePorts {
   }): Promise<boolean>;
   /** Enrolls this stage's existing conversation in ordinary account migration. */
   requestConversationReseat?(conversationId: string, targetAccountId: string): Promise<void>;
-  /** The target of an ordinary reseat already in flight for this conversation. */
-  conversationMigrationTarget?(conversationId: string): string | null;
+  /** An ordinary reseat still owed by this conversation, including a retryable failure. */
+  conversationMigration?(conversationId: string): { targetId: string; retry: boolean } | null;
+  /** Whether the limit continuation's durable send has completed. */
+  conversationDeliveryCompleted?(conversationId: string, clientMessageId: string): boolean;
   /** A fresh live quota reading after the limit proves the source recovered. */
   claudeAccountRecovered?(accountId: string, limitedAt: number, model: string | null): boolean;
   /** Confirmed reset of the source account's governing exhausted quota window. */
@@ -1306,12 +1308,26 @@ export function defaultPipelinePorts(
       return result?.ok === true;
     },
     requestConversationReseat: async (conversationId, targetAccountId) => {
-      registry.requestConversationReseat(conversationId as ViewerConversationId, targetAccountId);
+      const id = conversationId as ViewerConversationId;
+      const migration = registry.conversation(id)?.migration;
+      if (migration?.phase === "failed-recoverable" && migration.targetId === targetAccountId) {
+        registry.retryConversationMigration(id, migration.revision);
+      } else {
+        registry.requestConversationReseat(id, targetAccountId);
+      }
       requestAccountMigrationTick();
       invalidateRegistryProjection();
     },
-    conversationMigrationTarget: (conversationId) => {
-      return registry.conversationMigrationTargetWithPendingDelivery(conversationId as ViewerConversationId);
+    conversationMigration: (conversationId) => {
+      const id = conversationId as ViewerConversationId;
+      const migration = registry.conversation(id)?.migration;
+      if (migration?.phase === "failed-recoverable") return { targetId: migration.targetId, retry: true };
+      const targetId = registry.conversationMigrationTargetWithPendingDelivery(id);
+      return targetId ? { targetId, retry: false } : null;
+    },
+    conversationDeliveryCompleted: (conversationId, clientMessageId) => {
+      const evidence = registry.deliveryAdmissionForKey(conversationId, clientMessageId);
+      return evidence.outcome === "admitted" && evidence.state === "delivered";
     },
     claudeAccountRecovered: (accountId, limitedAt, model) => {
       const observation = registry.quotaObservations("claude").find((item) => item.accountId === accountId);
@@ -1732,6 +1748,11 @@ function recoverUsageLimitedAttempt(
 const CLAUDE_LIMIT_CONTINUATION_TEXT =
   "This stage turn stopped at the Claude usage limit. Continue the same stage from its current worktree and report its verdict when the work is complete.";
 
+function claudeLimitContinuationKey(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): string {
+  const limited = usageLimitsOn(attempt, "claude");
+  return `stage-limit-continuation-${pipeline.id}-${stage.id}-${attempt.n}-${limited.at(-1)?.turnId ?? limited.length}`;
+}
+
 function claudeSourceCapacityReturned(
   project: string,
   source: { accountId: string; resetsAt: number | null } | null,
@@ -1808,8 +1829,16 @@ async function continueUsageLimitedClaudeAttempt(
     park(pipeline, detail, attempt);
     return true;
   }
-  const migratingTo = attempt.conversationId ? ports.conversationMigrationTarget?.(attempt.conversationId) ?? null : null;
-  if (stillLimited && !migratingTo) {
+  const migration = attempt.conversationId ? ports.conversationMigration?.(attempt.conversationId) ?? null : null;
+  if (stillLimited && migration?.retry && attempt.conversationId && ports.requestConversationReseat) {
+    try {
+      await ports.requestConversationReseat(attempt.conversationId, migration.targetId);
+    } catch (error) {
+      pipeline.stateDetail = `account switch pending: ${error instanceof Error ? error.message : String(error)}`;
+      return true;
+    }
+  }
+  if (stillLimited && !migration) {
     let resolution: ReturnType<typeof accountManager.resolveProjectSpawn>;
     try {
       resolution = ports.resolveProjectSpawn?.("claude", {
@@ -1848,7 +1877,7 @@ async function continueUsageLimitedClaudeAttempt(
   const delivered = await ports.resumeSeveredTurn({
     conversationId: attempt.conversationId,
     transcriptPath: attempt.agentPath,
-    clientMessageId: `stage-limit-continuation-${pipeline.id}-${stage.id}-${attempt.n}-${limited.at(-1)?.turnId ?? limited.length}`,
+    clientMessageId: claudeLimitContinuationKey(pipeline, stage, attempt),
     text: CLAUDE_LIMIT_CONTINUATION_TEXT,
     project: pipeline.project,
     cwd: pipeline.repoDir,
@@ -3923,11 +3952,16 @@ async function tickRunStage(
     && terminalProviderMessage.ts > unixMs(attempt.startedAt)
     ? terminalProviderMessage.usageLimit ?? null
     : null;
+  const claudeLimits = attempt.effectiveRole.engine === "claude" ? usageLimitsOn(attempt, "claude") : [];
+  const recordedLimitTurn = terminalUsageLimit && claudeLimits.some((item) => item.limitedAt === terminalProviderMessage?.ts);
+  const completedLimitContinuation = claudeLimits.length > 0 && attempt.conversationId
+    && ports.conversationDeliveryCompleted?.(attempt.conversationId, claudeLimitContinuationKey(pipeline, stage, attempt)) === true;
   if (attempt.effectiveRole.engine === "claude"
-    && (terminalUsageLimit || (usageLimitsOn(attempt, "claude").length > 0 && durable?.turn !== "busy" && !durable?.message))) {
+    && ((terminalUsageLimit && !recordedLimitTurn)
+      || (!completedLimitContinuation && (terminalUsageLimit || (claudeLimits.length > 0 && durable?.turn !== "busy" && !durable?.message))))) {
     if (await continueUsageLimitedClaudeAttempt(pipeline, stage, attempt, terminalUsageLimit, terminalProviderMessage?.ts ?? null, ports, persist)) return;
   }
-  if (terminalUsageLimit) {
+  if (terminalUsageLimit && !(recordedLimitTurn && completedLimitContinuation)) {
     recoverUsageLimitedAttempt(pipeline, stage, attempt, terminalUsageLimit, ports);
     return;
   }
