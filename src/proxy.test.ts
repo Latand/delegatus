@@ -15,6 +15,16 @@ function remote(authorization: string): NextRequest {
   return new NextRequest("http://viewer.example/api/agent/snapshot", { headers: { host: "viewer.example", "x-forwarded-for": "203.0.113.10", authorization } });
 }
 
+test("the self-check alone is reachable under the peer prefix without the Viewer key", async () => {
+  process.env.LLV_TOKEN = "viewer-token";
+  const check = new NextRequest("http://localhost/api/peer/v1/self-check", { method: "POST", headers: { host: "board.example.test" } });
+  expect(proxy(check).headers.get("x-middleware-next")).toBe("1");
+  const unknown = new NextRequest("http://localhost/api/peer/v1/unknown", { headers: { host: "board.example.test" } });
+  const response = proxy(unknown);
+  expect(response.status).toBe(401);
+  expect(await response.json()).toEqual({ error: "unauthorized" });
+});
+
 function nonLoopbackIpv4Address(): string {
   for (const addresses of Object.values(networkInterfaces())) {
     for (const address of addresses ?? []) {

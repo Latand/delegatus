@@ -1,14 +1,20 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import http from "node:http";
+import dns from "node:dns/promises";
+import { once } from "node:events";
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
 
 import { PhoneGateRefusal, restorePhoneAccessGate, type AccessResponse, type PhoneActionFailure } from "@/lib/access/phoneAccess";
 import { internalServiceHeaders, spawnCapabilityDigest } from "@/lib/agent/callerClaims";
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { statePath } from "@/lib/configDir";
+import { linksNeedGate, readSelf, selfFile } from "@/lib/links/self";
+import { POST as postLinks } from "@/app/api/links/route";
+import { POST as selfCheckRoute } from "@/app/api/peer/v1/self-check/route";
 import { claimInstall, createInvite, redeemJoin } from "@/lib/team/members";
 import { MEMBER_COOKIE } from "@/lib/team/sessions";
 import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
@@ -21,6 +27,7 @@ import { recordViewerEntries, VIEWER_ENTRIES_FILE } from "@/runtime-host/viewerE
 import { createTailscaleStub, STUB_DNS_NAME, type TailscaleStub } from "@/test-helpers/tailscaleStub";
 
 import { detectTailscale } from "../../../../../bin/tailscale.mjs";
+import { appDirIn } from "../../../../../bin/appDir.mjs";
 
 import { GET } from "../route";
 import { POST } from "./route";
@@ -33,7 +40,7 @@ import { POST } from "./route";
 
 const PORT = 4310;
 const GATE = ["LLV_TOKEN", "LLV_TS_HOST", "LLV_TS_URL"] as const;
-const SAVED = ["PATH", "XDG_CONFIG_HOME", "PORT", "HOSTNAME", "LLV_DOCKER_NSENTER_SHIMS", "LLV_DOCKER_TAILSCALE_SHIM", "LLV_VIEWER_PORT", "LLV_STAGING", ...GATE] as const;
+const SAVED = ["PATH", "XDG_CONFIG_HOME", "LLV_STATE_DIR", "PORT", "HOSTNAME", "LLV_DOCKER_NSENTER_SHIMS", "LLV_DOCKER_TAILSCALE_SHIM", "LLV_VIEWER_PORT", "LLV_STAGING", ...GATE] as const;
 const saved: Record<string, string | undefined> = {};
 
 let stub: TailscaleStub;
@@ -64,6 +71,7 @@ beforeEach(() => {
   setEnv("LLV_DOCKER_TAILSCALE_SHIM", canaryShim());
   setEnv("LLV_STAGING", undefined);
   setEnv("XDG_CONFIG_HOME", config);
+  setEnv("LLV_STATE_DIR", path.join(config, "state"));
   setEnv("PATH", stub.dir);
   setEnv("PORT", undefined);
   setEnv("HOSTNAME", "127.0.0.1");
@@ -86,7 +94,7 @@ afterEach(() => {
 const gatewayFile = () => statePath(VIEWER_GATEWAY_FILE);
 const entriesFile = () => statePath(VIEWER_ENTRIES_FILE);
 
-const appDir = () => path.join(config, "agent-log-viewer");
+const appDir = () => appDirIn(config);
 const flagFile = () => path.join(appDir(), "phone-access");
 const tokenFile = () => path.join(appDir(), "token");
 
@@ -101,6 +109,50 @@ function press(action: "enable" | "disable") {
     body: JSON.stringify({ action }),
   }));
 }
+
+test("Disable during the first address Save leaves no ungated public address", async () => {
+  expect((await press("enable")).status).toBe(200);
+  let arrived!: () => void;
+  let release!: () => void;
+  const arrival = new Promise<void>((resolve) => { arrived = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let held = false;
+  const server = http.createServer((incoming, outgoing) => {
+    const answer = async () => {
+      const headers = new Headers();
+      for (const [name, value] of Object.entries(incoming.headers)) if (typeof value === "string") headers.set(name, value);
+      const response = selfCheckRoute(new NextRequest(`http://localhost${incoming.url}`, { method: "POST", headers }));
+      outgoing.writeHead(response.status, Object.fromEntries(response.headers));
+      outgoing.end(Buffer.from(await response.arrayBuffer()));
+    };
+    if (!held) { held = true; arrived(); void gate.then(answer); }
+    else void answer();
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("no port");
+  const lookup = spyOn(dns, "lookup").mockImplementation((async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as typeof dns.lookup);
+  try {
+    const saving = postLinks(new NextRequest(`http://127.0.0.1:${PORT}/api/links`, {
+      method: "POST", headers: { host: `127.0.0.1:${PORT}`, "content-type": "application/json" },
+      body: JSON.stringify({ action: "save", publicUrl: `http://board.example.test:${address.port}` }),
+    }));
+    await arrival;
+    expect(fs.existsSync(selfFile())).toBe(false);
+    expect((await press("disable")).status).toBe(200);
+    expect(process.env.LLV_TOKEN).toBeUndefined();
+    release();
+    const saved = await saving;
+    expect(saved.status).toBe(409);
+    expect((await saved.json()).error).toBe("needs-access-key");
+    expect(fs.existsSync(selfFile())).toBe(false);
+  } finally {
+    release();
+    lookup.mockRestore();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
 
 const gateUntouched = () => GATE.every((name) => process.env[name] === undefined);
 
@@ -276,6 +328,9 @@ describe("POST /api/access/phone disable", () => {
   test("takes the mapping down, forgets the choice, lifts the gate and keeps the key", async () => {
     expect((await press("enable")).status).toBe(200);
     const key = fs.readFileSync(tokenFile(), "utf8");
+    expect(readSelf()).toBeNull();
+    expect(fs.existsSync(statePath("links/grants.json"))).toBe(false);
+    expect(linksNeedGate()).toBe(false);
     const response = await press("disable");
     expect(response.status).toBe(200);
     expect(stub.calls()).toContain(`serve --https=443 ${PORT} off`);
@@ -312,6 +367,15 @@ describe("POST /api/access/phone disable", () => {
     expect((await press("disable")).status).toBe(200);
     expect(process.env.LLV_TOKEN).toMatch(/^[0-9a-f]{32}$/);
     expect(process.env.LLV_TS_URL).toBeUndefined();
+  });
+
+  test("a loopback Viewer keeps its key while a public address is saved", async () => {
+    expect((await press("enable")).status).toBe(200);
+    fs.mkdirSync(path.dirname(selfFile()), { recursive: true });
+    fs.writeFileSync(selfFile(), JSON.stringify({ v: 1, installId: "install-a", label: "server", publicUrl: "https://board.example.test", check: null }));
+    expect((await press("disable")).status).toBe(200);
+    expect(process.env.LLV_TOKEN).toMatch(/^[0-9a-f]{32}$/);
+    expect(fs.existsSync(flagFile())).toBe(false);
   });
 
   test("an unknown action is refused", async () => {

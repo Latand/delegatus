@@ -6,6 +6,7 @@ import { isTeamAuthPage, teamGate, teamPerimeter } from "@/lib/team/gate";
 
 const AUTH_COOKIE = "llv_auth";
 const FRAME_PREFIX = "/api/artifact/frame/";
+const PEER_PREFIX = "/api/peer/";
 const COOKIE_MAX_AGE_SECONDS = 2_592_000;
 
 function tokenMatches(candidate: string | undefined, token: string): boolean {
@@ -57,6 +58,7 @@ function forbidden(request: NextRequest): NextResponse {
 export function proxy(request: NextRequest): NextResponse {
   const perimeter = perimeterCheck(request);
   if (perimeter.response) return perimeter.response;
+  if (request.nextUrl.pathname === "/api/peer/v1/self-check") return NextResponse.next();
   const gated = teamGate(request, { bearerAuthenticated: perimeter.bearer });
   if (gated) return gated;
   const response = NextResponse.next();
@@ -74,6 +76,10 @@ type PerimeterResult = { response: NextResponse | null; bearer: boolean };
 const PASS: PerimeterResult = { response: null, bearer: false };
 
 function perimeterCheck(request: NextRequest): PerimeterResult {
+  if (request.nextUrl.pathname.startsWith(PEER_PREFIX)) {
+    if (request.nextUrl.pathname === "/api/peer/v1/self-check" && request.method === "POST") return PASS;
+    return { response: NextResponse.json({ error: "unauthorized" }, { status: 401 }), bearer: false };
+  }
   const token = process.env.LLV_TOKEN;
   if (!token) {
     return PASS;
