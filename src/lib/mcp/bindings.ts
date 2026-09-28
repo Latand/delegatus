@@ -108,6 +108,7 @@ import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orch
 import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies, spawnParentForCaller } from "@/lib/orchestrator/deputies";
 import { recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { revokedSeatPipelineRefusal } from "@/lib/orchestrator/seatAuthority";
 import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
@@ -1648,7 +1649,17 @@ function deliveryAcknowledgement(pipeline: import("@/lib/pipelines/types").Pipel
 
 const PIPELINE_CREATION_QUEUED_NOTE = "Pipeline state is not writable right now (a Viewer deployment is handing over, or the store is busy), so this pipeline is queued under the pipelineId above. The serving release stores and starts it on its next controller pass; get_pipeline answers once it is stored. Do not create it again.";
 
+function assertPipelineSeatAuthority(dependencies: ViewerMcpDomainDependencies): void {
+  const caller = attributionOf(dependencies).conversationId;
+  if (!caller) return;
+  const snapshot = dependencies.registrySnapshot?.();
+  const lookup = snapshot ? readOnlyConversationLookupFromSnapshot(snapshot) : null;
+  const refusal = revokedSeatPipelineRefusal(caller, id => lookup?.canonicalConversationId(id as `conversation_${string}`) ?? id);
+  if (refusal) throw new McpToolRefusal(refusal, { code: "orchestrator_seat_revoked", status: 403 });
+}
+
 async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  if (dependencies) assertPipelineSeatAuthority(dependencies);
   const request = withoutKeys(args, ["clientRequestId", "recoveryOnly"]);
   if (context?.dispatch) context.dispatch.attempted = true;
   /* Every MCP caller is an agent; the sizing rules judge the attributed
@@ -1730,6 +1741,7 @@ function closeReportCounts(report: PipelineCloseReport) {
 }
 
 async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  assertPipelineSeatAuthority(dependencies);
   const pipelineId = required(args, "pipelineId");
   const action = required(args, "action") as PipelineAction;
   /* Clearing a lane off the operator's queue is the dismissal service's write
@@ -3990,12 +4002,8 @@ async function rotateOrchestrator(
     );
   }
   const project = canonicalOrchestratorProject(required(args, "project"));
-  /* #1452, #2030: with no mandate named, the route rebuilds the successor's
-     core from the CURRENT default whenever the incumbent's stored mandate is
-     based on an older version, and keeps its rotation history. Sending the
-     default from here instead dropped that history. `keepIncumbentMandate:
-     true` is the explicit way to carry the old text forward; a seat on the
-     current version, or on bespoke (unversioned) rules, keeps its own text. */
+  /* Omitting mandate preserves the incumbent's core and handoff history;
+     sending one explicitly replaces the core. */
   const fields = allowedSeatFields(args, ["mandate", "handoffNotes", "cwd", "engine", "model", "effort", "accountId", "keepIncumbentMandate"]);
   const result = await control.post("/api/orchestrator/rotate", {
     project,
@@ -4013,6 +4021,7 @@ async function rotateOrchestrator(
     triggeredBy: result.triggeredBy ?? null,
     /* Whether the prior handoffs were summarized or kept verbatim, and why. */
     handoff: result.handoff ?? null,
+    mandateDisposition: result.mandateDisposition ?? null,
     replayed: result.replayed === true,
   });
 }

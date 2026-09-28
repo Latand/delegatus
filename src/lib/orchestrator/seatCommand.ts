@@ -1344,26 +1344,12 @@ async function runOrchestratorRotation(
     notes: notes || null,
   };
 
-  /* The successor's core mandate is whatever the caller sent, else the
-     incumbent's. The recorded version follows the TEXT (#1452): a rotation
-     onto the built-in default is the current version whatever the incumbent
-     ran on — otherwise a v3 seat rotated onto v13 text would still read v3.
-     Text that is neither the default nor the incumbent's own is the caller's
-     edit; over a STALE incumbent it records no version, the spawn rule for an
-     edited mandate — inheriting v3 would flag a seat running edited v13 rules
-     as stale and hand the next rotation's default prefill its edit to drop.
-     A seat on the current version keeps its version on an override.
-
-     #2030: a rotation that names no mandate over an incumbent whose core is an
-     OLDER default rebuilds the core from the current default, byte for byte,
-     and keeps the incumbent's rotation history and handoffs behind it. Leaving
-     that choice to each caller is how every seat after an unbumped prompt edit
-     kept running the text the edit removed. `keepIncumbentMandate: true` is
-     the explicit way to carry the old text forward. */
+  /* An omitted mandate preserves the incumbent's core and bounded history,
+     even when its prompt version is older. Only an explicit mandate replaces
+     the core. The recorded version follows that choice (#1452). */
   const requested = text(rawBody.mandate);
-  const rebuildCore = !requested && rawBody.keepIncumbentMandate !== true && orchestratorMandateStale(incumbent.promptVersion);
   const base = requested || incumbent.mandate;
-  const promptVersion = base === ORCHESTRATOR_SYSTEM_PROMPT || rebuildCore
+  const promptVersion = base === ORCHESTRATOR_SYSTEM_PROMPT
     ? ORCHESTRATOR_PROMPT_VERSION
     : base !== incumbent.mandate && orchestratorMandateStale(incumbent.promptVersion)
       ? null
@@ -1375,7 +1361,6 @@ async function runOrchestratorRotation(
     project,
     clientRequestId,
     base,
-    ...(rebuildCore ? { core: ORCHESTRATOR_SYSTEM_PROMPT } : {}),
     handoff,
     predecessor: predecessor ? { path: predecessor.path, engine: predecessor.engine } : null,
     roleParams: rawBody.roleParams,
@@ -1447,6 +1432,7 @@ async function runOrchestratorRotation(
       /* Who ordered it, on the answer as well as on the durable record, so the
          caller reads back the attribution its rotation was recorded under. */
       triggeredBy: attributedTrigger(outcome.body, triggeredBy),
+      mandateDisposition: requested ? "replaced" : "preserved",
       ...(composed.handoff ? { handoff: composed.handoff } : {}),
     },
   };
@@ -1495,8 +1481,6 @@ interface RotationComposition {
   project: string;
   clientRequestId: string;
   base: string;
-  /** Replaces the base's core, keeping its history and handoffs (#2030). */
-  core?: string;
   handoff: HandoffParts;
   predecessor: { path: string; engine: "claude" | "codex" } | null;
   roleParams: unknown;
@@ -1513,8 +1497,7 @@ function composeRotationMandate(
   if (pending && pending.intent.clientRequestId === input.clientRequestId && pending.intent.error === null) {
     return { kind: "composed", mandate: pending.mandate, handoff: null };
   }
-  const parts = splitMandate(input.base);
-  const split = input.core === undefined ? parts : { ...parts, core: input.core };
+  const split = splitMandate(input.base);
   /* First rotation: no prior handoffs to compact, so no summarizer run — the
      fresh handoff already names the predecessor and its bounded message read. */
   if (split.history === null && split.handoffs.length === 0) {

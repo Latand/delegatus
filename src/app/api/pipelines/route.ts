@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { authenticatedAgentSpawnCaller, isAgentInitiatedSpawn } from "@/app/api/spawn/admission";
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { agentRegistry } from "@/lib/agent/registry";
+import { revokedSeatPipelineRefusal } from "@/lib/orchestrator/seatAuthority";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { conversationAgentRole, isSpawnDeniedRole, reviewerOriginSpawnGuidance, type SpawnRejectionCode } from "@/lib/agent/spawnAdmission";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
@@ -21,7 +22,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type PipelineApiError = ApiError & {
-  code?: PipelineRepoPreflightErrorCode | SpawnRejectionCode | "store_busy" | typeof ENGINE_NOT_CONNECTED;
+  code?: PipelineRepoPreflightErrorCode | SpawnRejectionCode | "orchestrator_seat_revoked" | "store_busy" | typeof ENGINE_NOT_CONNECTED;
   /** With ENGINE_NOT_CONNECTED: the stage, role and engine (#1876). */
   details?: EngineNotConnectedDetails;
   /** #1766: set when the registry lock refused before anything was admitted, so
@@ -90,6 +91,8 @@ function pipelineOrigin(req: NextRequest, body: CreatePipelineRequest): NextResp
        own capability is the operator (docs/design/model-sizing-tiers.md §2). */
     if (caller.kind === "operator") return { kind: "operator" };
     if (caller.kind === "agent") {
+      const revoked = revokedSeatPipelineRefusal(caller.conversationId, id => registry.canonicalConversationId(id as `conversation_${string}`));
+      if (revoked) return NextResponse.json({ error: revoked, code: "orchestrator_seat_revoked" }, { status: 403 });
       const role = conversationAgentRole(registry.readOnlySnapshot(), caller.conversationId);
       if (isSpawnDeniedRole(role)) {
         return NextResponse.json({ error: reviewerOriginSpawnGuidance(role), code: "reviewer_origin_spawn" }, { status: 403 });
@@ -108,6 +111,8 @@ function pipelineOrigin(req: NextRequest, body: CreatePipelineRequest): NextResp
   const srcPath = typeof body.src === "string" && body.src.trim() ? body.src.trim() : null;
   const srcConversation = srcPath ? registry.conversationForPath(srcPath) : null;
   if (srcConversation) {
+    const revoked = revokedSeatPipelineRefusal(srcConversation.id, id => registry.canonicalConversationId(id as `conversation_${string}`));
+    if (revoked) return NextResponse.json({ error: revoked, code: "orchestrator_seat_revoked" }, { status: 403 });
     const role = conversationAgentRole(registry.readOnlySnapshot(), srcConversation.id);
     if (isSpawnDeniedRole(role)) {
       return NextResponse.json({ error: reviewerOriginSpawnGuidance(role), code: "reviewer_origin_spawn" }, { status: 403 });
