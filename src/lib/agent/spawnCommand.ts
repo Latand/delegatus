@@ -1333,7 +1333,7 @@ export async function executeSpawnRequest(
       deleteInboxImages(imagePaths);
     }
     if (error instanceof SpawnParentError) return NextResponse.json({ error: error.message }, { status: error.status });
-    if (error instanceof LaunchMembershipError) return NextResponse.json({ error: error.message }, { status: error.status });
+    if (error instanceof LaunchMembershipError) return NextResponse.json({ error: error.message, ...(error.code ? { code: error.code } : {}) }, { status: error.status });
     if (error instanceof SpawnAdmissionFenceConflictError) return NextResponse.json({ error: error.message }, { status: 409 });
     if (error instanceof SpawnAdmissionFenceError) return NextResponse.json({ error: error.fence.error, code: "spawn_admission_refused" }, { status: error.fence.status });
     /* Typed terminal admission rejection (#393): the durable receipt already

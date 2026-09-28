@@ -251,7 +251,7 @@ function childStallToken(child: SeatTickChildInput): string {
  * out on its own once nobody touches it.
  */
 function isUnstarted(task: SeatTickTaskInput, now: number, backlogAfterMs: number): boolean {
-  if (task.status !== "assigned" || task.owned) return false;
+  if (task.status !== "assigned" || task.owned || task.runsOn) return false;
   const movedAt = task.updatedAt ? Date.parse(task.updatedAt) : Number.NaN;
   /* A card with no readable movement instant cannot be shown to be recent, and
      the whole failure being fixed here is a reason that can never stop being
@@ -1187,7 +1187,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   const persistedChildStalls = offeredChildStalls.filter((entry) => input.state.stalledSeen.includes(childStallId(entry.child)));
   const unknownChildren = input.children.filter((child) => child.status === "unknown").length;
   const unstarted = input.tasks.filter((task) => isUnstarted(task, input.now, input.policy.backlogAfterMs));
-  const backlog = input.tasks.filter((task) => task.status === "assigned" && !task.owned).length - unstarted.length;
+  const backlog = input.tasks.filter((task) => task.status === "assigned" && !task.owned && !task.runsOn).length - unstarted.length;
   const openWork = hasOpenWork(input);
   /* The bound shortens while the seat's own children are moving (#1881): a
      child that settled or stalled since the last wake is due at the next

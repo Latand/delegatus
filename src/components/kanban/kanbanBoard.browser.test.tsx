@@ -12499,3 +12499,266 @@ describe("readable pipeline graph: loops fold into their sources, nodes say what
     expect(failures).toEqual([]);
   }, 900_000);
 });
+
+describe("an empty column folds to a strip; an open agent keeps its minimum width", () => {
+  /*
+   * The `stages` scenario with Blocked emptied (`&empty=blocked`), at
+   * 1280×900, 1440×900 and 1600×900, with no conversation open and with the
+   * Assigned card's worker open (the open-agents rail then stands beside the
+   * columns), in English and Ukrainian; and at 390×844 on a phone, which
+   * draws its own layout and no strip. What is gated: the empty column is a
+   * strip no wider than 48 px that still names itself and its count and draws
+   * no menu button; a pointer passing across it leaves it shut; it opens to a
+   * shelf under a resting mouse (whose menu then opens) and under a dragged
+   * card, and a card dropped on it lands there; it stays open while its own
+   * menu is, with the pointer on the menu or focus in it; a search typed on
+   * the full board folds no column; the open agent's column is never narrower than
+   * `--agent-min` (clamp(520px, 40vw, 760px)), and when the columns do not
+   * fit the board scrolls sideways instead. Frames go to
+   * EMPTY_STRIP_PNG_DIR.
+   *
+   *   CHROME_BIN=/usr/bin/google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "folds to a strip"
+   */
+  const AGENT = "search-ver-2";
+  const seedReaders = `try { localStorage.setItem("llv:kanban-readers:v1:atlas", ${JSON.stringify(JSON.stringify([{ key: `conversation_${AGENT}`, path: `/repo/${AGENT}.jsonl`, folded: false }]))}); } catch {}`;
+  const readBoard = (page: Page) => page.evaluate(() => {
+    const board = document.querySelector<HTMLElement>("[data-kanban-board] [data-board]");
+    const columns = Object.fromEntries([...document.querySelectorAll<HTMLElement>("[data-kanban-board] .column[data-status]")].map((column) => {
+      const head = column.querySelector<HTMLElement>(".col-head");
+      const title = column.querySelector<HTMLElement>(".col-head h2");
+      const count = column.querySelector<HTMLElement>(".col-head .n");
+      return [column.dataset.status!, {
+        width: Math.round(column.getBoundingClientRect().width),
+        strip: column.classList.contains("strip"),
+        title: title && title.getBoundingClientRect().height > 0 ? title.textContent : null,
+        count: count && count.getBoundingClientRect().width > 0 ? count.textContent : null,
+        headOverflows: head ? head.scrollWidth > head.clientWidth + 1 : false,
+        cards: column.querySelectorAll(".card[data-id]").length,
+      }];
+    }));
+    const reader = document.querySelector<HTMLElement>("[data-kanban-reader]");
+    const agentColumn = reader?.closest<HTMLElement>(".column[data-status]") ?? null;
+    const probe = document.createElement("div");
+    probe.style.width = "var(--agent-min)";
+    document.querySelector("[data-kanban-board]")?.appendChild(probe);
+    const agentMin = Math.round(probe.getBoundingClientRect().width);
+    probe.remove();
+    return {
+      mode: board?.dataset.mode ?? null,
+      rail: document.querySelector<HTMLElement>("[data-open-rail]")?.dataset.openRail ?? null,
+      columns,
+      agentMin,
+      agent: reader ? { column: agentColumn?.dataset.status ?? null, columnWidth: Math.round(agentColumn!.getBoundingClientRect().width), readerWidth: Math.round(reader.getBoundingClientRect().width) } : null,
+      scroll: board ? { scrollWidth: board.scrollWidth, clientWidth: board.clientWidth } : null,
+    };
+  });
+
+  browserTest("1280, 1440 and 1600 with and without an open agent, the strip under the mouse and a drag, and the phone", async () => {
+    const pngDir = process.env.EMPTY_STRIP_PNG_DIR ?? "/var/tmp/llv-empty-strip-evidence";
+    const out = path.resolve(".artifacts/empty-strip");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const url = `${server.base}?scenario=stages&empty=blocked`;
+    const open = async (viewport: { width: number; height: number }, lang: "en" | "uk", agent: boolean) => {
+      const opened = await openFixture(browser, url, viewport, "light", lang);
+      if (agent) {
+        await opened.context.addInitScript(seedReaders);
+        await opened.page.reload();
+        await opened.page.waitForSelector("[data-kanban-reader]", { timeout: 30_000 });
+      }
+      await opened.page.waitForSelector('[data-kanban-board] .column[data-status="blocked"]', { timeout: 30_000 });
+      await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      if (await opened.page.locator('[data-seat-collapse][aria-expanded="true"]').count()) await opened.page.keyboard.press("o");
+      await opened.page.mouse.move(700, 10);
+      await opened.page.waitForTimeout(700);
+      return opened;
+    };
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const width of [1280, 1440, 1600] as const) {
+          for (const agent of [false, true]) {
+            const label = `${width}x900-${agent ? "agent" : "none"}-${lang}`;
+            const { context, page, pageErrors } = await open({ width, height: 900 }, lang, agent);
+            try {
+              if (agent) await page.locator("[data-kanban-reader]").first().scrollIntoViewIfNeeded();
+              await page.waitForTimeout(300);
+              await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
+              const reading = await readBoard(page);
+              readings[label] = { ...reading, pageErrors };
+              const blocked = reading.columns.blocked;
+              if (!blocked?.strip || blocked.width > 48) failures.push(`${label}: Blocked is ${blocked?.width}px, strip ${blocked?.strip}`);
+              if (!blocked?.title || blocked.count !== "0") failures.push(`${label}: the strip reads «${blocked?.title}» «${blocked?.count}»`);
+              for (const status of ["inbox", "assigned", "done"]) if (reading.columns[status]?.strip) failures.push(`${label}: ${status} holds cards and folded`);
+              if (agent) {
+                if (!reading.agent) failures.push(`${label}: no open agent`);
+                else if (reading.agent.columnWidth < reading.agentMin - 1) failures.push(`${label}: the agent's column is ${reading.agent.columnWidth}px under its ${reading.agentMin}px minimum`);
+                if (reading.rail === null) failures.push(`${label}: no open-agents rail`);
+                if (width === 1280) {
+                  /* Inbox widened, Assigned gives the wide share away and turns
+                     a shelf; the agent it holds keeps its minimum all the same. */
+                  await page.locator('[data-kanban-board] [data-col-width="inbox"][data-col-width-action="widen"]').click();
+                  await page.mouse.move(700, 10);
+                  await page.waitForTimeout(700);
+                  await page.screenshot({ path: path.join(pngDir, `${label}-inbox-wide.png`) });
+                  const widened = await readBoard(page);
+                  (readings[label] as Record<string, unknown>).inboxWide = { mode: widened.mode, agentMin: widened.agentMin, agent: widened.agent, assigned: widened.columns.assigned };
+                  if (!widened.agent) failures.push(`${label}: Inbox widened, no open agent`);
+                  else if (widened.agent.columnWidth < widened.agentMin - 1) failures.push(`${label}: Inbox widened, the agent's column is ${widened.agent.columnWidth}px under its ${widened.agentMin}px minimum`);
+                }
+              }
+              if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+              if (width !== 1280) {
+                /* A pointer passing across the strip leaves it shut: moved from
+                   Assigned to the first Done card, it ends on Done. */
+                if (!agent) {
+                  const assigned = (await page.locator('[data-kanban-board] .column[data-status="assigned"]').boundingBox())!;
+                  const doneCard = (await page.locator('[data-kanban-board] .column[data-status="done"] .card[data-id]').first().boundingBox())!;
+                  const end = { x: doneCard.x + 40, y: doneCard.y + doneCard.height / 2 };
+                  await page.mouse.move(assigned.x + assigned.width / 2, end.y);
+                  await page.waitForTimeout(400);
+                  await page.mouse.move(end.x, end.y, { steps: 20 });
+                  const passed = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest<HTMLElement>(".column[data-status]")?.dataset.status ?? null, end);
+                  const after = await readBoard(page);
+                  (readings[label] as Record<string, unknown>).passage = { under: passed, blocked: after.columns.blocked?.width };
+                  if (passed !== "done" || (after.columns.blocked?.width ?? 999) > 48) failures.push(`${label}: a pointer passing to Done ends on ${passed}, Blocked ${after.columns.blocked?.width}px`);
+                  await page.mouse.move(700, 10);
+                  await page.waitForTimeout(500);
+                }
+                /* The strip draws no menu button of its own. */
+                const menuOnStrip = (await page.locator('[data-kanban-board] [data-colmenu="blocked"]').boundingBox())!;
+                if (menuOnStrip.width > 1 || menuOnStrip.height > 1) failures.push(`${label}: the strip draws its menu at ${menuOnStrip.width}x${menuOnStrip.height}`);
+                /* Under a resting mouse the strip opens to a shelf, and folds back when it leaves. */
+                const box = (await page.locator('[data-kanban-board] .column[data-status="blocked"]').boundingBox())!;
+                await page.mouse.move(box.x + box.width / 2, box.y + 200);
+                await page.waitForTimeout(700);
+                await page.screenshot({ path: path.join(pngDir, `${label}-hover.png`) });
+                const hovered = await readBoard(page);
+                if ((hovered.columns.blocked?.width ?? 0) < 200) failures.push(`${label}: hovered, the strip is ${hovered.columns.blocked?.width}px`);
+                /* Opened, its menu is where it is drawn and opens under a press;
+                   the strip stays open while its menu is, under the pointer on
+                   the menu's first row and under the keyboard alike. */
+                const menuHolds = async (how: string) => {
+                  const menuOpened = await page.waitForSelector(".menu", { timeout: 3_000 }).then(() => true, () => false);
+                  if (!menuOpened) { failures.push(`${label}: the opened strip's menu does not open (${how})`); return; }
+                  if (how === "pointer") {
+                    const row = (await page.locator('.menu [role^="menuitem"]').first().boundingBox())!;
+                    await page.mouse.move(row.x + row.width / 2, row.y + row.height / 2, { steps: 6 });
+                  }
+                  await page.waitForTimeout(700);
+                  await page.screenshot({ path: path.join(pngDir, `${label}-menu-${how}.png`) });
+                  const held = await readBoard(page);
+                  const column = (await page.locator('[data-kanban-board] .column[data-status="blocked"]').boundingBox())!;
+                  const menuBox = (await page.locator(".menu").boundingBox())!;
+                  const inside = menuBox.x >= column.x - 1 && menuBox.x <= column.x + column.width;
+                  (readings[label] as Record<string, unknown>)[`menu-${how}`] = { blocked: held.columns.blocked?.width, column: { x: Math.round(column.x), width: Math.round(column.width) }, menuX: Math.round(menuBox.x) };
+                  if ((held.columns.blocked?.width ?? 0) < 200 || !inside) failures.push(`${label}: with its menu open (${how}) Blocked is ${held.columns.blocked?.width}px and the menu starts at ${Math.round(menuBox.x)} outside ${Math.round(column.x)}-${Math.round(column.x + column.width)}`);
+                  await page.keyboard.press("Escape");
+                };
+                await page.locator('[data-kanban-board] [data-colmenu="blocked"]').click();
+                await menuHolds("pointer");
+                await page.mouse.move(box.x + box.width / 2, box.y + 200);
+                await page.waitForTimeout(700);
+                await page.locator('[data-kanban-board] [data-colmenu="blocked"]').focus();
+                await page.keyboard.press("Enter");
+                await menuHolds("keyboard");
+                await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+                await page.mouse.move(700, 10);
+                await page.waitForTimeout(500);
+                const left = await readBoard(page);
+                if ((left.columns.blocked?.width ?? 999) > 48) failures.push(`${label}: after the mouse left, Blocked is ${left.columns.blocked?.width}px`);
+                (readings[label] as Record<string, unknown>).hovered = hovered.columns.blocked;
+                if (!agent) {
+                  /* A card dragged over the strip opens it, and dropped there lands in Blocked. */
+                  const source = page.locator('[data-kanban-board] .card[data-id="task:t-links"]');
+                  await source.scrollIntoViewIfNeeded();
+                  const from = (await source.boundingBox())!;
+                  const strip = (await page.locator('[data-kanban-board] .column[data-status="blocked"]').boundingBox())!;
+                  /* Pressed in the card's own padding: a press on its title or a button never drags. */
+                  await page.mouse.move(from.x + 5, from.y + from.height / 2);
+                  await page.mouse.down();
+                  await page.mouse.move(from.x + 25, from.y + from.height / 2 + 10, { steps: 4 });
+                  await page.mouse.move(strip.x + strip.width / 2, strip.y + 300, { steps: 12 });
+                  await page.waitForTimeout(500);
+                  if (!(await page.locator("[data-kanban-board] .card.dragging").count())) failures.push(`${label}: no drag started`);
+                  const over = await readBoard(page);
+                  await page.screenshot({ path: path.join(pngDir, `${label}-drag.png`) });
+                  if ((over.columns.blocked?.width ?? 0) < 200) failures.push(`${label}: under a dragged card the strip is ${over.columns.blocked?.width}px`);
+                  const target = (await page.locator('[data-kanban-board] .column[data-status="blocked"]').boundingBox())!;
+                  await page.mouse.move(target.x + target.width / 2, target.y + 300, { steps: 3 });
+                  await page.mouse.up();
+                  await page.waitForTimeout(900);
+                  await page.mouse.move(700, 10);
+                  await page.waitForTimeout(600);
+                  const dropped = await readBoard(page);
+                  await page.screenshot({ path: path.join(pngDir, `${label}-dropped.png`) });
+                  if (dropped.columns.blocked?.cards !== 1 || dropped.columns.blocked?.strip) failures.push(`${label}: after the drop Blocked holds ${dropped.columns.blocked?.cards} cards, strip ${dropped.columns.blocked?.strip}`);
+                  (readings[label] as Record<string, unknown>).drag = { over: over.columns.blocked, dropped: dropped.columns.blocked };
+                }
+              }
+            } finally {
+              await context.close();
+            }
+          }
+        }
+        {
+          /* A search never folds a column that holds cards: typed key by key
+             on the board with no column emptied, every column stays open and
+             Assigned stays where it stood. */
+          const label = `1440x900-search-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, { width: 1440, height: 900 }, "light", lang);
+          try {
+            await page.waitForSelector('[data-kanban-board] .column[data-status="blocked"]', { timeout: 30_000 });
+            await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+            if (await page.locator('[data-seat-collapse][aria-expanded="true"]').count()) await page.keyboard.press("o");
+            await page.mouse.move(700, 10);
+            await page.waitForTimeout(700);
+            const assignedX = async () => Math.round((await page.locator('[data-kanban-board] .column[data-status="assigned"]').boundingBox())!.x);
+            const before = await assignedX();
+            const steps: Record<string, unknown> = {};
+            await page.locator("[data-kanban-search]").focus();
+            for (const typed of ["R", "Re", "Res", "Rest"]) {
+              await page.keyboard.type(typed.slice(-1));
+              await page.waitForTimeout(500);
+              const reading = await readBoard(page);
+              const x = await assignedX();
+              const strips = Object.entries(reading.columns).filter(([, column]) => column.strip).map(([status]) => status);
+              steps[typed] = { strips, assignedX: x };
+              if (strips.length || Math.abs(x - before) > 1) failures.push(`${label}: after «${typed}» ${strips.join(", ") || "no column"} folded and Assigned moved ${before} -> ${x}`);
+            }
+            await page.screenshot({ path: path.join(pngDir, `${label}-Rest.png`) });
+            readings[label] = { before, steps, pageErrors };
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+        {
+          const label = `390x844-phone-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, { width: 390, height: 844 }, "light", lang, "no-preference", true);
+          try {
+            await page.waitForTimeout(1500);
+            await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
+            const strips = await page.locator(".column.strip").count();
+            readings[label] = { strips, pageErrors };
+            if (strips) failures.push(`${label}: the phone draws ${strips} strips`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/empty-column-strip", { recursive: true });
+    fs.writeFileSync("evidence/empty-column-strip/readings.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 900_000);
+});

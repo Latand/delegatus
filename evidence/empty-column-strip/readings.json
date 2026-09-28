@@ -1,0 +1,935 @@
+{
+  "readings": {
+    "1280x900-none-en": {
+      "mode": "scroll",
+      "rail": null,
+      "columns": {
+        "inbox": {
+          "width": 280,
+          "strip": false,
+          "title": "Inbox",
+          "count": "3",
+          "headOverflows": false,
+          "cards": 4
+        },
+        "assigned": {
+          "width": 480,
+          "strip": false,
+          "title": "Assigned",
+          "count": "8",
+          "headOverflows": false,
+          "cards": 8
+        },
+        "blocked": {
+          "width": 48,
+          "strip": true,
+          "title": "Blocked",
+          "count": "0",
+          "headOverflows": false,
+          "cards": 0
+        },
+        "done": {
+          "width": 280,
+          "strip": false,
+          "title": "Done",
+          "count": "7",
+          "headOverflows": false,
+          "cards": 7
+        }
+      },
+      "agentMin": 520,
+      "agent": null,
+      "scroll": {
+        "scrollWidth": 1156,
+        "clientWidth": 1032
+      },
+      "pageErrors": []
+    },
+    "1280x900-agent-en": {
+      "mode": "scroll",
+      "rail": "full",
+      "columns": {
+        "inbox": {
+          "width": 280,
+          "strip": false,
+          "title": "Inbox",
+          "count": "3",
+          "headOverflows": false,
+          "cards": 4
+        },
+        "assigned": {
+          "width": 520,
+          "strip": false,
+          "title": "Assigned",
+          "count": "8",
+          "headOverflows": false,
+          "cards": 8
+        },
+        "blocked": {
+          "width": 48,
+          "strip": true,
+          "title": "Blocked",
+          "count": "0",
+          "headOverflows": false,
+          "cards": 0
+        },
+        "done": {
+          "width": 280,
+          "strip": false,
+          "title": "Done",
+          "count": "7",
+          "headOverflows": false,
+          "cards": 7
+        }
+      },
+      "agentMin": 520,
+      "agent": {
+        "column": "assigned",
+        "columnWidth": 520,
+        "readerWidth": 468
+      },
+      "scroll": {
+        "scrollWidth": 1196,
+        "clientWidth": 832
+      },
+      "pageErrors": [],
+      "inboxWide": {
+        "mode": "scroll",
+        "agentMin": 520,
+        "agent": {
+          "column": "assigned",
+          "columnWidth": 520,
+          "readerWidth": 468
+        },
+        "assigned": {
+          "width": 520,
+          "strip": false,
+          "title": "Assigned",
+          "count": "8",
+          "headOverflows": false,
+          "cards": 8
+        }
+      }
+    },
+    "1440x900-none-en": {
+      "mode": "scroll",
+      "rail": null,
+      "columns": {
+        "inbox": {
+          "width": 280,
+          "strip": false,
+          "title": "Inbox",
+          "count": "3",
+          "headOverflows": false,
+          "cards": 4
+        },
+        "assigned": {
+          "width": 480,
+          "strip": false,
+          "title": "Assigned",
+          "count": "8",
+          "headOverflows": false,
+          "cards": 8
+        },
+        "blocked": {
+          "width": 48,
+          "strip": true,
+          "title": "Blocked",
+          "count": "0",
+          "headOverflows": false,
+          "cards": 0
+        },
+        "done": {
+          "width": 280,
+          "strip": false,
+          "title": "Done",
+          "count": "7",
+          "headOverflows": false,
+          "cards": 7
+        }
+      },
+      "agentMin": 576,
+      "agent": null,
+      "scroll": {
+        "scrollWidth": 1192,
+        "clientWidth": 1192
+      },
+      "pageErrors": [],
+      "passage": {
+        "under": "done",
+        "blocked": 48
+      },
+      "menu-pointer": {
+        "blocked": 280,
+        "column": {
+          "x": 1048,
+          "width": 280
+        },
+        "menuX": 1115
+      },
+      "menu-keyboard": {
+        "blocked": 280,
+        "column": {
+          "x": 1048,
+          "width": 280
+        },
+        "menuX": 1115
+      },
+      "hovered": {
+        "width": 280,
+        "strip": true,
+        "title": "Blocked",
+        "count": "0",
+        "headOverflows": false,
+        "cards": 0
+      },
+      "drag": {
+        "over": {
+          "width": 280,
+          "strip": true,
+          "title": "Blocked",
+          "count": "0",
+          "headOverflows": false,
+          "cards": 0
+        },
+        "dropped": {
+          "width": 280,
+          "strip": false,
+          "title": "Blocked",
+          "count": "1",
+          "headOverflows": false,
+          "cards": 1
+        }
+      }
+    },
+    "1440x900-agent-en": {
+      "mode": "scroll",
+      "rail": "full",
+      "columns": {
+        "inbox": {
+          "width": 280,
+          "strip": false,
+          "title": "Inbox",
+          "count": "3",
+          "headOverflows": false,
+          "cards": 4
+        },
+        "assigned": {
+          "width": 576,
+          "strip": false,
+          "title": "Assigned",
+          "count": "8",
+          "headOverflows": false,
+          "cards": 8
+        },
+        "blocked": {
+          "width": 48,
+          "strip": true,
+          "title": "Blocked",
+          "count": "0",
+          "headOverflows": false,
+          "cards": 0
+        },
+        "done": {
+          "width": 280,
+          "strip": false,
+          "title": "Done",
+          "count": "7",
+          "headOverflows": false,
+          "cards": 7
+        }
+      },
+      "agentMin": 576,
+      "agent": {
+        "column": "assigned",
+        "columnWidth": 576,
+        "readerWidth": 524
+      },
+      "scroll": {
+        "scrollWidth": 1252,
+        "clientWidth": 992
+      },
+      "pageErrors": [],
+      "menu-pointer": {
+        "blocked": 280,
+        "column": {
+          "x": 852,
+          "width": 280
+        },
+        "menuX": 919
+      },
+      "menu-keyboard": {
+        "blocked": 280,
+        "column": {
+          "x": 852,
+          "width": 280
+        },
+        "menuX": 919
+      },
+      "hovered": {
+        "width": 280,
+        "strip": true,
+        "title": "Blocked",
+        "count": "0",
+        "headOverflows": false,
+        "cards": 0
+      }
+    },
+    "1600x900-none-en": {
+      "mode": "narrow",
+      "rail": null,
+      "columns": {
+        "inbox": {
+          "width": 220,
+          "strip": false,
+          "title": "Inbox",
+          "count": "3",
+          "headOverflows": false,
+          "cards": 4
+        },
+        "assigned": {
+          "width": 776,
+          "strip": false,
+          "title": "Assigned",
+          "count": "8",
+          "headOverflows": false,
+          "cards": 8
+        },
+        "blocked": {
+          "width": 48,
+          "strip": true,
+          "title": "Blocked",
+          "count": "0",
+          "headOverflows": false,
+          "cards": 0
+        },
+        "done": {
+          "width": 220,
+          "strip": false,
+          "title": "Done",
+          "count": "7",
+          "headOverflows": false,
+          "cards": 7
+        }
+      },
+      "agentMin": 640,
+      "agent": null,
+      "scroll": {
+        "scrollWidth": 1352,
+        "clientWidth": 1352
+      },
+      "pageErrors": [],
+      "passage": {
+        "under": "done",
+        "blocked": 48
+      },
+      "menu-pointer": {
+        "blocked": 220,
+        "column": {
+          "x": 1124,
+          "width": 220
+        },
+        "menuX": 1131
+      },
+      "menu-keyboard": {
+        "blocked": 220,
+        "column": {
+          "x": 1124,
+          "width": 220
+        },
+        "menuX": 1131
+      },
+      "hovered": {
+        "width": 220,
+        "strip": true,
+        "title": "Blocked",
+        "count": "0",
+        "headOverflows": false,
+        "cards": 0
+      },
+      "drag": {
+        "over": {
+          "width": 220,
+          "strip": true,
+          "title": "Blocked",
+          "count": "0",
+          "headOverflows": false,
+          "cards": 0
+        },
+        "dropped": {
+          "width": 220,
+          "strip": false,
+          "title": "Blocked",
+          "count": "1",
+          "headOverflows": false,
+          "cards": 1
+        }
+      }
+    },
+    "1600x900-agent-en": {
+      "mode": "narrow",
+      "rail": "compact",
+      "columns": {
+        "inbox": {
+          "width": 220,
+          "strip": false,
+          "title": "Inbox",
+          "count": "3",
+          "headOverflows": false,
+          "cards": 4
+        },
+        "assigned": {
+          "width": 720,
+          "strip": false,
+          "title": "Assigned",
+          "count": "8",
+          "headOverflows": false,
+          "cards": 8
+        },
+        "blocked": {
+          "width": 48,
+          "strip": true,
+          "title": "Blocked",
+          "count": "0",
+          "headOverflows": false,
+          "cards": 0
+        },
+        "done": {
+          "width": 220,
+          "strip": false,
+          "title": "Done",
+          "count": "7",
+          "headOverflows": false,
+          "cards": 7
+        }
+      },
+      "agentMin": 640,
+      "agent": {
+        "column": "assigned",
+        "columnWidth": 720,
+        "readerWidth": 668
+      },
+      "scroll": {
+        "scrollWidth": 1296,
+        "clientWidth": 1296
+      },
+      "pageErrors": [],
+      "menu-pointer": {
+        "blocked": 220,
+        "column": {
+          "x": 1216,
+          "width": 220
+        },
+        "menuX": 1223
+      },
+      "menu-keyboard": {
+        "blocked": 220,
+        "column": {
+          "x": 1216,
+          "width": 220
+        },
+        "menuX": 1223
+      },
+      "hovered": {
+        "width": 220,
+        "strip": true,
+        "title": "Blocked",
+        "count": "0",
+        "headOverflows": false,
+        "cards": 0
+      }
+    },
+    "1440x900-search-en": {
+      "before": 556,
+      "steps": {
+        "R": {
+          "strips": [],
+          "assignedX": 556
+        },
+        "Re": {
+          "strips": [],
+          "assignedX": 556
+        },
+        "Res": {
+          "strips": [],
+          "assignedX": 556
+        },
+        "Rest": {
+          "strips": [],
+          "assignedX": 556
+        }
+      },
+      "pageErrors": []
+    },
+    "390x844-phone-en": {
+      "strips": 0,
+      "pageErrors": []
+    },
+    "1280x900-none-uk": {
+      "mode": "scroll",
+      "rail": null,
+      "columns": {
+        "inbox": {
+          "width": 280,
+          "strip": false,
+          "title": "Вхідні",
+          "count": "3",
+          "headOverflows": false,
+          "cards": 4
+        },
+        "assigned": {
+          "width": 480,
+          "strip": false,
+          "title": "Призначені",
+          "count": "8",
+          "headOverflows": false,
+          "cards": 8
+        },
+        "blocked": {
+          "width": 48,
+          "strip": true,
+          "title": "Заблоковані",
+          "count": "0",
+          "headOverflows": false,
+          "cards": 0
+        },
+        "done": {
+          "width": 280,
+          "strip": false,
+          "title": "Готові",
+          "count": "7",
+          "headOverflows": false,
+          "cards": 7
+        }
+      },
+      "agentMin": 520,
+      "agent": null,
+      "scroll": {
+        "scrollWidth": 1156,
+        "clientWidth": 1032
+      },
+      "pageErrors": []
+    },
+    "1280x900-agent-uk": {
+      "mode": "scroll",
+      "rail": "full",
+      "columns": {
+        "inbox": {
+          "width": 280,
+          "strip": false,
+          "title": "Вхідні",
+          "count": "3",
+          "headOverflows": false,
+          "cards": 4
+        },
+        "assigned": {
+          "width": 520,
+          "strip": false,
+          "title": "Призначені",
+          "count": "8",
+          "headOverflows": false,
+          "cards": 8
+        },
+        "blocked": {
+          "width": 48,
+          "strip": true,
+          "title": "Заблоковані",
+          "count": "0",
+          "headOverflows": false,
+          "cards": 0
+        },
+        "done": {
+          "width": 280,
+          "strip": false,
+          "title": "Готові",
+          "count": "7",
+          "headOverflows": false,
+          "cards": 7
+        }
+      },
+      "agentMin": 520,
+      "agent": {
+        "column": "assigned",
+        "columnWidth": 520,
+        "readerWidth": 468
+      },
+      "scroll": {
+        "scrollWidth": 1196,
+        "clientWidth": 832
+      },
+      "pageErrors": [],
+      "inboxWide": {
+        "mode": "scroll",
+        "agentMin": 520,
+        "agent": {
+          "column": "assigned",
+          "columnWidth": 520,
+          "readerWidth": 468
+        },
+        "assigned": {
+          "width": 520,
+          "strip": false,
+          "title": "Призначені",
+          "count": "8",
+          "headOverflows": false,
+          "cards": 8
+        }
+      }
+    },
+    "1440x900-none-uk": {
+      "mode": "scroll",
+      "rail": null,
+      "columns": {
+        "inbox": {
+          "width": 280,
+          "strip": false,
+          "title": "Вхідні",
+          "count": "3",
+          "headOverflows": false,
+          "cards": 4
+        },
+        "assigned": {
+          "width": 480,
+          "strip": false,
+          "title": "Призначені",
+          "count": "8",
+          "headOverflows": false,
+          "cards": 8
+        },
+        "blocked": {
+          "width": 48,
+          "strip": true,
+          "title": "Заблоковані",
+          "count": "0",
+          "headOverflows": false,
+          "cards": 0
+        },
+        "done": {
+          "width": 280,
+          "strip": false,
+          "title": "Готові",
+          "count": "7",
+          "headOverflows": false,
+          "cards": 7
+        }
+      },
+      "agentMin": 576,
+      "agent": null,
+      "scroll": {
+        "scrollWidth": 1192,
+        "clientWidth": 1192
+      },
+      "pageErrors": [],
+      "passage": {
+        "under": "done",
+        "blocked": 48
+      },
+      "menu-pointer": {
+        "blocked": 280,
+        "column": {
+          "x": 1048,
+          "width": 280
+        },
+        "menuX": 1115
+      },
+      "menu-keyboard": {
+        "blocked": 280,
+        "column": {
+          "x": 1048,
+          "width": 280
+        },
+        "menuX": 1115
+      },
+      "hovered": {
+        "width": 280,
+        "strip": true,
+        "title": "Заблоковані",
+        "count": "0",
+        "headOverflows": false,
+        "cards": 0
+      },
+      "drag": {
+        "over": {
+          "width": 280,
+          "strip": true,
+          "title": "Заблоковані",
+          "count": "0",
+          "headOverflows": false,
+          "cards": 0
+        },
+        "dropped": {
+          "width": 280,
+          "strip": false,
+          "title": "Заблоковані",
+          "count": "1",
+          "headOverflows": false,
+          "cards": 1
+        }
+      }
+    },
+    "1440x900-agent-uk": {
+      "mode": "scroll",
+      "rail": "full",
+      "columns": {
+        "inbox": {
+          "width": 280,
+          "strip": false,
+          "title": "Вхідні",
+          "count": "3",
+          "headOverflows": false,
+          "cards": 4
+        },
+        "assigned": {
+          "width": 576,
+          "strip": false,
+          "title": "Призначені",
+          "count": "8",
+          "headOverflows": false,
+          "cards": 8
+        },
+        "blocked": {
+          "width": 48,
+          "strip": true,
+          "title": "Заблоковані",
+          "count": "0",
+          "headOverflows": false,
+          "cards": 0
+        },
+        "done": {
+          "width": 280,
+          "strip": false,
+          "title": "Готові",
+          "count": "7",
+          "headOverflows": false,
+          "cards": 7
+        }
+      },
+      "agentMin": 576,
+      "agent": {
+        "column": "assigned",
+        "columnWidth": 576,
+        "readerWidth": 524
+      },
+      "scroll": {
+        "scrollWidth": 1252,
+        "clientWidth": 992
+      },
+      "pageErrors": [],
+      "menu-pointer": {
+        "blocked": 280,
+        "column": {
+          "x": 852,
+          "width": 280
+        },
+        "menuX": 919
+      },
+      "menu-keyboard": {
+        "blocked": 280,
+        "column": {
+          "x": 852,
+          "width": 280
+        },
+        "menuX": 919
+      },
+      "hovered": {
+        "width": 280,
+        "strip": true,
+        "title": "Заблоковані",
+        "count": "0",
+        "headOverflows": false,
+        "cards": 0
+      }
+    },
+    "1600x900-none-uk": {
+      "mode": "narrow",
+      "rail": null,
+      "columns": {
+        "inbox": {
+          "width": 220,
+          "strip": false,
+          "title": "Вхідні",
+          "count": "3",
+          "headOverflows": false,
+          "cards": 4
+        },
+        "assigned": {
+          "width": 776,
+          "strip": false,
+          "title": "Призначені",
+          "count": "8",
+          "headOverflows": false,
+          "cards": 8
+        },
+        "blocked": {
+          "width": 48,
+          "strip": true,
+          "title": "Заблоковані",
+          "count": "0",
+          "headOverflows": false,
+          "cards": 0
+        },
+        "done": {
+          "width": 220,
+          "strip": false,
+          "title": "Готові",
+          "count": "7",
+          "headOverflows": false,
+          "cards": 7
+        }
+      },
+      "agentMin": 640,
+      "agent": null,
+      "scroll": {
+        "scrollWidth": 1352,
+        "clientWidth": 1352
+      },
+      "pageErrors": [],
+      "passage": {
+        "under": "done",
+        "blocked": 48
+      },
+      "menu-pointer": {
+        "blocked": 220,
+        "column": {
+          "x": 1124,
+          "width": 220
+        },
+        "menuX": 1131
+      },
+      "menu-keyboard": {
+        "blocked": 220,
+        "column": {
+          "x": 1124,
+          "width": 220
+        },
+        "menuX": 1131
+      },
+      "hovered": {
+        "width": 220,
+        "strip": true,
+        "title": "Заблоковані",
+        "count": "0",
+        "headOverflows": false,
+        "cards": 0
+      },
+      "drag": {
+        "over": {
+          "width": 220,
+          "strip": true,
+          "title": "Заблоковані",
+          "count": "0",
+          "headOverflows": false,
+          "cards": 0
+        },
+        "dropped": {
+          "width": 220,
+          "strip": false,
+          "title": "Заблоковані",
+          "count": "1",
+          "headOverflows": false,
+          "cards": 1
+        }
+      }
+    },
+    "1600x900-agent-uk": {
+      "mode": "narrow",
+      "rail": "compact",
+      "columns": {
+        "inbox": {
+          "width": 220,
+          "strip": false,
+          "title": "Вхідні",
+          "count": "3",
+          "headOverflows": false,
+          "cards": 4
+        },
+        "assigned": {
+          "width": 720,
+          "strip": false,
+          "title": "Призначені",
+          "count": "8",
+          "headOverflows": false,
+          "cards": 8
+        },
+        "blocked": {
+          "width": 48,
+          "strip": true,
+          "title": "Заблоковані",
+          "count": "0",
+          "headOverflows": false,
+          "cards": 0
+        },
+        "done": {
+          "width": 220,
+          "strip": false,
+          "title": "Готові",
+          "count": "7",
+          "headOverflows": false,
+          "cards": 7
+        }
+      },
+      "agentMin": 640,
+      "agent": {
+        "column": "assigned",
+        "columnWidth": 720,
+        "readerWidth": 668
+      },
+      "scroll": {
+        "scrollWidth": 1296,
+        "clientWidth": 1296
+      },
+      "pageErrors": [],
+      "menu-pointer": {
+        "blocked": 220,
+        "column": {
+          "x": 1216,
+          "width": 220
+        },
+        "menuX": 1223
+      },
+      "menu-keyboard": {
+        "blocked": 220,
+        "column": {
+          "x": 1216,
+          "width": 220
+        },
+        "menuX": 1223
+      },
+      "hovered": {
+        "width": 220,
+        "strip": true,
+        "title": "Заблоковані",
+        "count": "0",
+        "headOverflows": false,
+        "cards": 0
+      }
+    },
+    "1440x900-search-uk": {
+      "before": 556,
+      "steps": {
+        "R": {
+          "strips": [],
+          "assignedX": 556
+        },
+        "Re": {
+          "strips": [],
+          "assignedX": 556
+        },
+        "Res": {
+          "strips": [],
+          "assignedX": 556
+        },
+        "Rest": {
+          "strips": [],
+          "assignedX": 556
+        }
+      },
+      "pageErrors": []
+    },
+    "390x844-phone-uk": {
+      "strips": 0,
+      "pageErrors": []
+    }
+  },
+  "failures": []
+}

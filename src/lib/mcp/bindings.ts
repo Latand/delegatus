@@ -166,6 +166,7 @@ import { resolveProjectAttribution } from "@/lib/session/projectResolution";
 import { overlaySessionTitles } from "@/lib/session/titleProjection";
 import { recordReplySuggestions } from "@/lib/suggestions/store";
 import { ReplySuggestionValidationError } from "@/lib/suggestions/types";
+import { withOwnership } from "@/lib/links/linked";
 import { applyAssignmentPatches, createTask, patchTask, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskSeatHolding } from "@/lib/tasks/seatHolding";
 import { recordAuthors, type RecordAuthor } from "@/lib/team";
@@ -1553,13 +1554,18 @@ function taskTextLanguageWarnings(value: unknown, dependencies?: ViewerMcpDomain
 }
 
 async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  /* A new task runs on the machine that creates it (M.4); "here" is the only
+     machine a create names. */
+  if (args.machine !== undefined && args.machine !== "here") {
+    throw new McpToolRefusal("machine accepts only \"here\": a new task runs on the machine that creates it", { code: "TASK_INVALID_FIELD", field: "machine", status: 400 });
+  }
   const input: CreateTaskInput = {
     ...args,
     placement: args.placement ?? "unplaced",
     clientRequestId: requestId(args),
   };
   const result = mutateTasksFile((state) => {
-    const outcome = createTask(state.tasks, input, state.recentCreates);
+    const outcome = createTask(state.tasks, input, state.recentCreates, { explicit: true });
     return {
       state: outcome.ok && !outcome.replay ? { tasks: outcome.tasks, recentCreates: outcome.recentCreates } : undefined,
       result: outcome,
@@ -1609,7 +1615,7 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
   let changedFields: string[] = [];
   const result = mutateTasks((tasks) => {
     const before = fieldValues(tasks.find(task => task.id === taskId));
-    const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", seatHolding: taskSeatHolding,
+    const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", seatHolding: taskSeatHolding, explicit: true,
       workLinks: taskWorkLinkContext(() => dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? []) });
     if (outcome.ok) changedFields = changedFieldNames(before, outcome.task);
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
@@ -4329,7 +4335,7 @@ function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies)
     openOnly: args.openOnly === true, updatedSince: sinceTime(args.updatedSince), ids: stringSet(args.ids), query: text(args.query).trim().toLowerCase(),
     priorities: stringSet(args.priority, [...TASK_PRIORITIES]) };
   const source = dependencies.taskSelectionSource?.();
-  const project = (task: TaskPipelineReadModel) => args.full === true ? task : args.compact === false ? listTaskRow(task) : compactTask(task);
+  const project = (task: TaskPipelineReadModel) => args.full === true ? withOwnership(task) : args.compact === false ? withOwnership(listTaskRow(task)) : compactTask(task);
   const page = source ? boardSelection(source.filename, "tasks").page(source, scope, args.cursor,
     Math.max(1, Math.min(200, integer(args.limit, 100))), task => project(taskWithLinks(task, dependencies)))
     : listPage(taskReadModel(dependencies), {
@@ -4342,7 +4348,7 @@ function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies)
       && (!scope.updatedSince || task.updatedAt >= scope.updatedSince)
       && (!scope.ids.length || scope.ids.includes(task.id))
       && (!scope.query || task.text.toLowerCase().includes(scope.query)),
-    project: task => args.full === true ? task : args.compact === false ? listTaskRow(task) : compactTask(task),
+    project,
   });
   const { rows: tasks, ...pagination } = page;
   return redactPayload({ ...pagination, tasks, compact: !fullAnswer(args),
@@ -4369,7 +4375,7 @@ function getTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): 
     : taskById.get(taskReadModel(dependencies))!.get(taskId);
   if (!task) throw new Error("task not found");
   const workLinks = args.compact === true ? null : taskWorkLinks(task, carriedPipelines(task.pipelineIds, dependencies));
-  return redactPayload({ taskId, task: args.compact === true ? compactTask(task) : task, ...(workLinks ? { workLinks } : {}),
+  return redactPayload({ taskId, task: args.compact === true ? compactTask(task) : withOwnership(task), ...(workLinks ? { workLinks } : {}),
     ...(args.compact === true ? { omittedRecordCount: 1, readMore: "get_task without compact reads the full task." } : {}) });
 }
 

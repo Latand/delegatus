@@ -28,7 +28,7 @@ import { KanbanColumnsSkeleton } from "@/components/skeletons";
 import { reachLineText, useServerReach } from "@/hooks/serverReach";
 import { useKanbanSeat } from "./kanbanSeatStore";
 import { useKanbanWide, type KanbanWideState } from "./kanbanWideStore";
-import { useColumnDwell } from "./useColumnDwell";
+import { DWELL_CUE_MS, useColumnDwell } from "./useColumnDwell";
 import { cleanTitle } from "@/components/utils";
 import { canHandoff } from "@/components/HandoffHandle";
 
@@ -2370,11 +2370,15 @@ export function KanbanBoard(props: KanbanBoardProps) {
     .slice(0, 50) : [];
   /* A shelf column holding an open conversation widens to reading width. */
   const readingStatuses = new Set<TaskStatus>();
+  /* Any column holding an open conversation, Assigned included, keeps the agent's minimum width. */
+  const agentStatuses = new Set<TaskStatus>();
   for (const view of readerViews) {
     /* A conversation standing in the Stages sheet is not in its column. */
     if (view.folded || !view.owner || view.inSheet) continue;
     const card = cardsById.get(view.owner.cardId);
-    if (card && card.status !== "assigned" && !collapsed.has(card.id)) readingStatuses.add(card.status);
+    if (!card || collapsed.has(card.id)) continue;
+    agentStatuses.add(card.status);
+    if (card.status !== "assigned") readingStatuses.add(card.status);
   }
   /* So does one holding an agent draft, and Inbox while `+ Task` composes in it. */
   for (const card of cardsById.values()) {
@@ -2382,13 +2386,23 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }
   if (composingTask) readingStatuses.add("inbox");
   const wideShelf = widthControls ? wideColumns.wide : null;
-  const columnTracks = kanbanColumnTracks(mode, { overview: Boolean(props.overview), wide: wideShelf, reading: readingStatuses });
+  /* A column holding no cards at all folds to a strip beside the columns (never
+     in tabs), unless it holds the wide share; a search never folds one. */
+  const stripStatuses = new Set<TaskStatus>();
+  if (mode !== "tabs") {
+    for (const status of KANBAN_STATUSES) {
+      if (status === (wideShelf ?? "assigned") || readingStatuses.has(status)) continue;
+      if (model.columns[status].cards.length || (status === "inbox" && (model.unlinked.length || composingTask))) continue;
+      stripStatuses.add(status);
+    }
+  }
+  const columnTracks = kanbanColumnTracks(mode, { overview: Boolean(props.overview), wide: wideShelf, reading: readingStatuses, agents: agentStatuses, strips: stripStatuses });
   const boardStyle = columnTracks ? (columnTracks as CSSProperties) : undefined;
   /* The mouse resting in a narrow column widens it, never over a pin and never
      while a drag, a menu or the Stages sheet has the pointer. */
   useColumnDwell(rootRef, {
     enabled: widthControls,
-    canWiden: (status) => !wideColumns.pinned && (wideShelf ? wideShelf !== status : status !== "assigned"),
+    canWiden: (status) => !wideColumns.pinned && !stripStatuses.has(status) && (wideShelf ? wideShelf !== status : status !== "assigned"),
     busy: () => menuOpenRef.current || sheetOpen.current || dragHint,
     widen: wideColumns.widenIfNarrow,
   });
@@ -2449,6 +2463,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
       incomingEdits={incomingEdits}
       onHideIdle={() => hideIdle(status)}
       reading={readingStatuses.has(status)}
+      agent={agentStatuses.has(status)}
+      strip={stripStatuses.has(status)}
+      menuOpen={menu.open?.value.kind === "column" && menu.open.value.status === status}
       widths={widthControls ? { state: wideColumns, wide: wideShelf } : null}
       readerKeysByCard={readerKeysByCard}
       panelsByCard={panelsByCard}
@@ -2682,7 +2699,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
             </div>
           ) : null}
           <div
-            className={`board${mode === "tabs" ? " tabs" : mode === "scroll" ? " scroll" : mode === "narrow" ? " narrow" : ""}${(mode === "wide" || mode === "narrow") && readingStatuses.size ? " reading" : ""}`}
+            className={`board${mode === "tabs" ? " tabs" : mode === "scroll" ? " scroll" : mode === "narrow" ? " narrow" : ""}${(mode === "wide" || mode === "narrow") && (readingStatuses.size || agentStatuses.size) ? " reading" : ""}`}
             data-board=""
             data-mode={mode}
             style={boardStyle}
@@ -2830,7 +2847,7 @@ type CardHandlers = Pick<
   | "projectNames" | "onOpenProject"
 >;
 
-function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, widths, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, onColumnMenu, cardProps }: {
+function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, onColumnMenu, cardProps }: {
   status: TaskStatus;
   /** Which column holds the wide share and the controls that move it (#1841);
       null where every column is already full width. */
@@ -2842,6 +2859,12 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   incomingEdits: ReadonlyMap<string, { field: EditField; value: string }>;
   onHideIdle: () => void;
   reading: boolean;
+  /** Holds an open agent conversation, which keeps its minimum width. */
+  agent: boolean;
+  /** Empty: drawn as a narrow strip until a mouse rests on it, focused or dragged over. */
+  strip: boolean;
+  /** Its own column menu is open, which keeps an opened strip open. */
+  menuOpen: boolean;
   readerKeysByCard: ReadonlyMap<string, string>;
   panelsByCard: ReadonlyMap<string, string>;
   actingByCard: ReadonlyMap<string, string>;
@@ -2891,9 +2914,25 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   const isWide = widths ? (widths.wide ? widths.wide === status : status === "assigned") : false;
   const gaveShare = widths !== null && widths.wide !== null && status === "assigned";
   const label = statusLabel(t, status);
+  /* A strip opens under a mouse that rests on it, never under one passing
+     through, so the columns beside it stay where the pointer is headed. */
+  const [stripOpen, setStripOpen] = useState(false);
+  const stripTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeStrip = useCallback(() => {
+    if (stripTimer.current) clearTimeout(stripTimer.current);
+    stripTimer.current = null;
+    setStripOpen(false);
+  }, []);
+  useEffect(() => { if (!strip) closeStrip(); }, [strip, closeStrip]);
+  useEffect(() => closeStrip, [closeStrip]);
   return (
     <section
-      className={`column${mode === "tabs" && activeTab === status ? " active" : ""}${reading ? " reading" : ""}${widths?.wide && isWide ? " wide" : ""}${gaveShare ? " shelf" : ""}`}
+      onPointerEnter={strip ? (event) => {
+        if (event.pointerType !== "mouse" || stripTimer.current) return;
+        stripTimer.current = setTimeout(() => { stripTimer.current = null; setStripOpen(true); }, DWELL_CUE_MS);
+      } : undefined}
+      onPointerLeave={strip ? closeStrip : undefined}
+      className={`column${mode === "tabs" && activeTab === status ? " active" : ""}${reading ? " reading" : ""}${agent ? " agent" : ""}${strip ? " strip" : ""}${strip && (stripOpen || menuOpen) ? " open" : ""}${widths?.wide && isWide ? " wide" : ""}${gaveShare ? " shelf" : ""}`}
       data-wide={widths ? (isWide ? "1" : "0") : undefined}
       data-status={status}
       id={`kb-col-${status}`}

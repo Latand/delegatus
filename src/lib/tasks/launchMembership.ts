@@ -1,7 +1,9 @@
 import { loadPipelinesForProjection } from "@/lib/pipelines/store";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 
-import { commitFailedLaunchMembership, commitTaskMembership, type FailedLaunchIdentity, type MembershipIdentity, type MembershipInput, type MembershipResult } from "./membership";
+import { firstRunsElsewhere } from "@/lib/links/linked";
+
+import { commitFailedLaunchMembership, commitTaskMembership, type FailedLaunchIdentity, type MembershipAdmission, type MembershipIdentity, type MembershipInput, type MembershipResult } from "./membership";
 
 /**
  * Task membership at the shared launch boundary (#1586).
@@ -57,11 +59,17 @@ export interface ReservedReceipt {
 }
 
 export class LaunchMembershipError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly code?: string) {
     super(message);
     this.name = "LaunchMembershipError";
   }
 }
+
+/** M.4 seam 2: no agent process starts here for a task another machine runs. */
+export const launchAdmission: MembershipAdmission = (tasks) => {
+  const refusal = firstRunsElsewhere(tasks);
+  return refusal ? { error: refusal.error, status: refusal.status, code: refusal.code } : null;
+};
 
 const engineOf = (engine: string): "claude" | "codex" | null => (engine === "claude" || engine === "codex" ? engine : null);
 
@@ -134,7 +142,7 @@ export function admitReservedLaunch(
   fail: (reason: string) => void,
   ports: LaunchMembershipPorts = productionLaunchMembershipPorts,
 ): MembershipResult {
-  let input = launchMembershipInput(launch, receipt, ports.pipelineTaskIds, ports.projectForCwd);
+  let input: MembershipInput = { ...launchMembershipInput(launch, receipt, ports.pipelineTaskIds, ports.projectForCwd), admit: launchAdmission };
   let result: MembershipResult;
   try {
     result = ports.commit(input);
@@ -151,7 +159,7 @@ export function admitReservedLaunch(
   }
   if (!result.ok) {
     fail(result.error);
-    throw new LaunchMembershipError(result.error, result.status);
+    throw new LaunchMembershipError(result.error, result.status, result.code);
   }
   return result;
 }

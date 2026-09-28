@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { taskOwnership } from "@/lib/links/linked";
 import { taskRevision } from "@/lib/tasks/revision";
 import type { BoardTask } from "@/lib/tasks/types";
 
@@ -20,6 +21,7 @@ export function compactTask(task: BoardTask & { pipelineIds?: string[] }) {
     ...(task.priority === "high" || task.priority === "low" ? { priority: task.priority } : {}),
     ...(task.icon ? { icon: task.icon } : {}),
     ...(task.pos ? { pos: task.pos } : {}),
+    ...taskOwnership(task),
   };
 }
 

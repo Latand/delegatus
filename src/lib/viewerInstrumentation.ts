@@ -111,6 +111,7 @@ interface CurrentReleaseControllerLoaders {
   loadWorktreeSweep?: () => Promise<{ startWorktreeSweep: () => void }>;
   /** Optional for the same reason. */
   loadAsksClassifier?: () => Promise<{ startAsksClassifier: () => void }>;
+  loadLinkedBoardSync?: () => Promise<{ startLinkedBoardSync: () => void }>;
 }
 
 interface ViewerRuntimeActivationSteps {
@@ -402,6 +403,7 @@ export async function startCurrentReleaseControllers(
     loadDeputySweep: () => import("@/lib/orchestrator/deputySweep"),
     loadRoleMappingRetirements: () => import("@/lib/roles/retirements"),
     loadAsksClassifier: () => import("@/lib/asks/controller"),
+    loadLinkedBoardSync: () => import("@/lib/links/schedule"),
   },
 ): Promise<void> {
   /* Stale role mapping rows (docs/design/model-sizing-tiers.md §5) are reset
@@ -518,6 +520,15 @@ export async function startCurrentReleaseControllers(
     deputySweep?.startDeputySweep();
   } catch (error) {
     console.error("[deputy] sweep start failed", error instanceof Error ? error.name : "unknown");
+  }
+  /* Linked boards (docs/design/linked-installs.md M.5): the machine that
+     typed a pairing code calls each linked install on its own schedule. With
+     no link a tick reads two small files and stops. */
+  try {
+    const linkedBoards = await loaders.loadLinkedBoardSync?.();
+    linkedBoards?.startLinkedBoardSync();
+  } catch (error) {
+    console.error("[linked boards] sync start failed", error instanceof Error ? error.name : "unknown");
   }
   if (env.LLV_ACCOUNT_CONTROLLER_DISABLED === "1") return;
   const { startAccountMigrationController } = await loaders.loadAccountMigrationController();

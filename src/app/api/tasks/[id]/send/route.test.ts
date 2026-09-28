@@ -174,3 +174,44 @@ test("a corrupt WakaTime state file does not refuse an authorized task fan-out",
     fs.rmSync(stateDirectory, { recursive: true, force: true });
   }
 });
+
+/* docs/design/linked-installs.md M.4 seam 3: handing a task to agents is
+   work on it, so only the machine the task names does it. */
+test("a task another linked machine runs is refused before any delivery; its own machine delivers", async () => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-task-send-elsewhere-"));
+  const prior = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = state;
+  const self = ["0a0a0a0a", "1111", "4111", "8111", "111111111111"].join("-");
+  const peer = ["0b0b0b0b", "2222", "4222", "8222", "222222222222"].join("-");
+  const writeSelf = (installId: string) => {
+    fs.mkdirSync(path.join(state, "links"), { recursive: true });
+    fs.writeFileSync(path.join(state, "links/self.json"), JSON.stringify({ v: 1, installId, label: "fixture", publicUrl: null, check: null }));
+  };
+  const task = { id: "task-on-peer", project: "project-fixture", status: "inbox", text: "Runs on the peer", machine: peer,
+    placement: "unplaced", assignments: [], createdAt: "2026-09-26T00:00:00.000Z", updatedAt: "2026-09-26T00:00:00.000Z" } as BoardTask;
+  let deliveries = 0;
+  const dependencies = {
+    loadTasks: () => [task], listFiles: async () => [entry(path.join(state, "recipient.jsonl"), "codex")],
+    deliverConversationMessage: async () => { deliveries++; return { ok: true as const, outcome: "delivered-to-live" as const, target: "pane" }; },
+    mutateTasks: <R,>(mutator: (tasks: BoardTask[]) => { tasks?: BoardTask[]; result: R }) => mutator([task]).result,
+    recordOperatorActivity: () => ({ key: "a".repeat(64), engine: "codex" as const, project: task.project, atMs: 1 }),
+  };
+  const send = () => POST.withDependencies(new NextRequest("http://127.0.0.1/api/tasks/task-on-peer/send", {
+    method: "POST",
+    headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+    body: JSON.stringify({ paths: [path.join(state, "recipient.jsonl")] }),
+  }), { params: Promise.resolve({ id: task.id }) }, dependencies);
+  try {
+    writeSelf(self);
+    const refused = await send();
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ code: "TASK_RUNS_ELSEWHERE" });
+    expect(deliveries).toBe(0);
+    writeSelf(peer);
+    expect((await send()).status).toBe(200);
+    expect(deliveries).toBe(1);
+  } finally {
+    if (prior === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = prior;
+    fs.rmSync(state, { recursive: true, force: true });
+  }
+});

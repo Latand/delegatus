@@ -1285,6 +1285,11 @@ const tasks: BoardTask[] = [
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
 
+/* `&empty=<status>` empties one column: its tasks move to Done, so the
+   column's strip can be read beside the others (an empty column folds). */
+const EMPTY_COLUMN = new URLSearchParams(location.search).get("empty");
+if (EMPTY_COLUMN) for (const entry of tasks) if (entry.status === EMPTY_COLUMN) entry.status = "done";
+
 if (FLAT) {
   const retitle: Record<string, [string, string, string, string]> = {
     "t-review-spent": ["GitHub Copilot as a third engine the Viewer can launch", "The last review failed, and the fix after it was never reviewed.", "GitHub Copilot як третій рушій, який Viewer уміє запускати", "Останнє рев’ю не пройшло, а виправлення після нього ніхто не перевірив."],
