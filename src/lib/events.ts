@@ -69,9 +69,10 @@ export function logQuotaEvent(fields: {
   accountKind: "legacy" | "managed";
   envelope?: "headerless" | "jsonrpc-2.0" | null;
   /** Which reader produced the observation: the controller's periodic probe,
-      an operator's per-account re-read (#1418), or the re-read after a
-      redeemed reset credit (#1373). */
-  probePhase: "account-rate-limits" | "operator-refresh" | "reset-credit-redeem";
+      an operator's per-account re-read (#1418), the re-read after a
+      redeemed reset credit (#1373), or spawn admission's re-read of an
+      exhaustion that may be history (task 8feee404). */
+  probePhase: "account-rate-limits" | "operator-refresh" | "reset-credit-redeem" | "spawn-admission";
   provenance: "live" | "transcript" | "cache" | "unavailable";
   reasonCode: string | null;
 }): void {

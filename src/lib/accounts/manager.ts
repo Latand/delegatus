@@ -4,12 +4,13 @@ import { claudeLoginSupervisor, LIVE_CLAUDE_LOGIN_PHASES } from "./claudeLogin";
 import { managedCodexRuntime } from "./codexRuntime";
 import { activeCopilotAccountId, copilotAccountContext, copilotAccountForSpawn, copilotConfigCheckedAt, copilotHomeOwningSessionPath, copilotLoginCommand, copilotSignedInUser, createManagedCopilotAccount, listCopilotAccounts, setActiveCopilotAccount, UnknownCopilotAccountError } from "./copilot";
 import { copilotLoginSupervisor } from "./copilotLogin";
-import type { AccountContext, AccountEngineName, AccountManager, AccountSummary, CopilotAccountSummary, ProjectSpawnResolution } from "./contracts";
+import type { AccountContext, AccountEngineName, AccountManager, AccountSummary, CopilotAccountSummary, ProjectSpawnRequest, ProjectSpawnResolution } from "./contracts";
 import { unavailableLimits } from "./contracts";
 import { withAccountMutationLockAsync } from "./accountMutation";
 import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
 import { AccountProjectBindingsUnreadableError, accountProjectBindings, allowedAccountIdsForProject, projectAccountRefusalDetail, type AccountProjectBinding } from "./projectBindings";
 import { selectProjectAccount } from "./projectSelection";
+import { refreshStaleExhaustion, type LiveLimitsDeps } from "./liveLimits";
 import { selectHealthyClaudeAccount } from "./spawnHealth";
 import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 import { classifySpawnAccountAdmission, type SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
@@ -124,7 +125,13 @@ export async function resolveHealthySpawnAccount(
      even when an account IS named, because it is also the fallback the branches
      below reach for, and a fallback that skipped the rule would be the same
      defect one level down. */
-  const automatic = selectProjectAccount(selectionInput);
+  const firstPick = selectProjectAccount(selectionInput);
+  /* A pool refused on a Codex exhaustion that may be history is read live
+     once before the launch is turned away (task 8feee404). */
+  const automatic = named === null && firstPick.kind === "exhausted" && engine === "codex"
+    && await refreshStaleExhaustion(engine, firstPick.allowedAccountIds, { model })
+    ? selectProjectAccount({ ...selectionInput, observations: registry.quotaObservations(engine) })
+    : firstPick;
   if (named === null && automatic.kind !== "available") {
     throw new ProjectAccountRefusedError(automatic, engine, project);
   }
@@ -287,6 +294,30 @@ export function resolveProjectSpawnAccount(
     throw new ProjectAccountRefusedError(resolution, engine, project);
   }
   return resolution.account;
+}
+
+/**
+ * `accountManager.resolveProjectSpawn` for a launch that can wait on a
+ * provider read (task 8feee404). When every allowed Codex account is refused
+ * as exhausted, an exhaustion that may be history — a transcript-reconciled
+ * reading, or a live one whose reset has passed — is read live once, bounded
+ * per account, and the pool is decided again on what the provider answered.
+ * A recorded 100% therefore never refuses launches for longer than one read,
+ * while a live 100% with its reset still ahead refuses with that reset.
+ */
+export async function resolveProjectSpawnAfterLiveRead(
+  engine: AccountEngineName,
+  request: ProjectSpawnRequest,
+  deps: LiveLimitsDeps = {},
+): Promise<ProjectSpawnResolution> {
+  const first = accountManager.resolveProjectSpawn(engine, request);
+  if (first.kind !== "exhausted" || engine !== "codex") return first;
+  /* An excluded account is still a last-resort candidate; an unavailable one
+     is not, so reading it would decide nothing. */
+  const unavailable = new Set(request.unavailableIds ?? []);
+  const candidates = first.allowedAccountIds.filter((accountId) => !unavailable.has(accountId));
+  if (!await refreshStaleExhaustion(engine, candidates, { ...deps, model: request.model })) return first;
+  return accountManager.resolveProjectSpawn(engine, request);
 }
 
 /**

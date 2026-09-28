@@ -30,7 +30,9 @@ process.env.LLV_CLAUDE_HOME = path.join(SANDBOX, "legacy-claude");
 
 const { createManagedCodexAccount, listCodexAccounts } = await import("./codex");
 const { createManagedClaudeAccount, listClaudeAccounts } = await import("./claude");
-const { accountManager, resolveContinuityAccount, resolveHealthySpawnAccount, resolveResumeAccountId } = await import("./manager");
+const { accountManager, resolveContinuityAccount, resolveHealthySpawnAccount, resolveProjectSpawnAfterLiveRead, resolveResumeAccountId } = await import("./manager");
+const { resetAdmissionReadsForTests } = await import("./liveLimits");
+const { codexObservationFromProbe } = await import("./migration/quotaController");
 const { AccountProjectBindingsUnreadableError } = await import("./projectBindings");
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { resetProjectAliasesForTests } = await import("@/lib/projects/aliases");
@@ -89,7 +91,7 @@ function observation(accountId: string, usedPercent: number) {
 
 function registryWith(
   routedTo: string,
-  observations: ReturnType<typeof observation>[],
+  observations: (ReturnType<typeof observation> | ReturnType<typeof transcriptExhaustion>)[],
   claudeRoutedTo?: string,
 ): void {
   const registry = new AgentRegistry(path.join(SANDBOX, "registry.json"), undefined, undefined, { sqliteMode: "off" });
@@ -121,6 +123,7 @@ beforeEach(() => {
   setAgentRegistryForTests(null);
   resetProjectAliasesForTests();
   resetAccountCollectionsForTests();
+  resetAdmissionReadsForTests();
   seedAccounts();
 });
 
@@ -545,4 +548,117 @@ test("an unbound project keeps the resume-spec builder's own fallback, offered n
   registryWith(spare, [observation(spare, 5)]);
 
   expect(resolveResumeAccountId("codex", null, ATLAS)).toBeNull();
+});
+
+/* Task 8feee404: after a redeemed reset the Viewer kept a transcript's 100%
+   for the account and refused every Codex launch on it, while the provider
+   answered 0%. These drive the launch seam with the production Codex reader
+   (`codexObservationFromProbe`, transcript reconciliation included) and a
+   stubbed app-server answer, so no real provider is ever asked. */
+const WEEK_S = 7 * 86_400;
+
+function exhaustedTranscript(accountId: string, resetsAt: number): void {
+  const account = listCodexAccounts().find((candidate) => candidate.id === accountId)!;
+  const session = path.join(account.sessionsDir, "2026", "09", "27", "exhausted.jsonl");
+  fs.mkdirSync(path.dirname(session), { recursive: true });
+  fs.writeFileSync(session, JSON.stringify({
+    timestamp: new Date(NOW - 3_600_000).toISOString(),
+    payload: { type: "token_count", rate_limits: { limit_id: "codex", primary: { used_percent: 100, window_minutes: 10_080, resets_at: resetsAt }, secondary: null, plan_type: "prolite" } },
+  }) + "\n");
+}
+
+/** The reading the controller recorded from that transcript: reconciled, not
+    live, and fresh enough that the capacity gate believes its 100%. */
+function transcriptExhaustion(accountId: string, resetsAt: number) {
+  return {
+    ...observation(accountId, 100),
+    limits: {
+      session: null,
+      weekly: { usedPercent: 100, resetsAt, windowMinutes: 10_080 },
+      plan: "prolite",
+      capturedAt: Math.floor((NOW - 3_600_000) / 1_000),
+    },
+    provenance: { source: "transcript" as const, reason: "transcript-reconciled", staleSince: null },
+  };
+}
+
+function providerStub(answer: () => { usedPercent: number; resetsAt: number } | Error) {
+  let reads = 0;
+  return {
+    get reads() { return reads; },
+    port: {
+      list: () => listCodexAccounts(),
+      active: () => reserved,
+      async probe(_engine: string, account: unknown, now: number) {
+        reads += 1;
+        const reading = answer();
+        if (reading instanceof Error) throw reading;
+        return await codexObservationFromProbe(account as ReturnType<typeof listCodexAccounts>[number], {
+          account: { account: { type: "chatgpt", planType: "prolite" }, requiresOpenaiAuth: true },
+          rateLimits: {
+            primary: { usedPercent: reading.usedPercent, resetsAt: reading.resetsAt, windowDurationMins: 10_080 },
+            secondary: null,
+            planType: "prolite",
+          },
+          resetCredits: null,
+          authenticated: true,
+          envelope: null,
+        }, now);
+      },
+    },
+  };
+}
+
+test("a stale exhausted Codex observation is read once and the launch lands when the provider says 0% (8feee404)", async () => {
+  const oldReset = Math.floor(NOW / 1_000) + 3 * 86_400;
+  exhaustedTranscript(reserved, oldReset);
+  registryWith(spare, [transcriptExhaustion(reserved, oldReset), observation(spare, 5)]);
+  bind(reserved);
+  expect(accountManager.resolveProjectSpawn("codex", { project: ATLAS }).kind).toBe("exhausted");
+
+  /* The redeemed reset opened a new weekly cycle just now. */
+  const provider = providerStub(() => ({ usedPercent: 0, resetsAt: Math.floor(Date.now() / 1_000) + WEEK_S }));
+  const resolution = await resolveProjectSpawnAfterLiveRead("codex", { project: ATLAS }, { probe: provider.port });
+
+  expect(resolution.kind).toBe("available");
+  expect(resolution.kind === "available" && resolution.account.accountId).toBe(reserved);
+  expect(provider.reads).toBe(1);
+  /* What the read recorded is the provider's live word, so the plain seam
+     agrees without reading again. */
+  expect(accountManager.resolveProjectSpawn("codex", { project: ATLAS }).kind).toBe("available");
+});
+
+test("a provider still at 100% refuses with its own reset, and a live 100% is not read again (8feee404)", async () => {
+  const oldReset = Math.floor(NOW / 1_000) + 3 * 86_400;
+  exhaustedTranscript(reserved, oldReset);
+  registryWith(spare, [transcriptExhaustion(reserved, oldReset), observation(spare, 5)]);
+  bind(reserved);
+
+  const provider = providerStub(() => ({ usedPercent: 100, resetsAt: oldReset }));
+  const refused = await resolveProjectSpawnAfterLiveRead("codex", { project: ATLAS }, { probe: provider.port });
+  expect(refused).toEqual({ kind: "exhausted", resetsAt: oldReset, allowedAccountIds: [reserved] });
+  expect(provider.reads).toBe(1);
+
+  /* The recorded 100% is now live with its reset ahead: the provider's answer,
+     refused as it stands with no second read even once the interval passes. */
+  resetAdmissionReadsForTests();
+  expect(await resolveProjectSpawnAfterLiveRead("codex", { project: ATLAS }, { probe: provider.port })).toEqual(refused);
+  expect(provider.reads).toBe(1);
+});
+
+test("launches racing on a stale exhaustion share one read per account and interval (8feee404)", async () => {
+  const oldReset = Math.floor(NOW / 1_000) + 3 * 86_400;
+  exhaustedTranscript(reserved, oldReset);
+  registryWith(spare, [transcriptExhaustion(reserved, oldReset), observation(spare, 5)]);
+  bind(reserved);
+
+  /* A provider that cannot answer leaves the stale reading in place, which is
+     exactly when an unbounded re-read would storm. */
+  const provider = providerStub(() => new Error("app-server unavailable"));
+  const launches = await Promise.all(Array.from({ length: 5 }, () =>
+    resolveProjectSpawnAfterLiveRead("codex", { project: ATLAS }, { probe: provider.port })));
+  const later = await resolveProjectSpawnAfterLiveRead("codex", { project: ATLAS }, { probe: provider.port });
+
+  expect([...launches, later].every((resolution) => resolution.kind === "exhausted")).toBe(true);
+  expect(provider.reads).toBe(1);
 });
