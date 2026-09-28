@@ -185,6 +185,55 @@ test("a lost lease cancels the child and never completes", async () => {
     await server.close();
   }
 });
+test("unacknowledged heartbeats stop the child after the stall window", async () => {
+  let completes = 0;
+  let beats = 0;
+  const server = await startTestRelay((req) => {
+    if (req.url?.endsWith("/heartbeat")) {
+      beats++;
+      return { status: 503, body: { error: { code: "unavailable", message: "later" } } };
+    }
+    completes++;
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const script = stub(`await Bun.stdin.text();await Bun.sleep(30000);`);
+  try {
+    const paired = relay(`${server.origin}/v1`);
+    const start = Date.now();
+    const outcome = await runClaimedRequest(paired, {
+      ...sampleRequest, request_id: "rq_stalled",
+      liveness: { ...sampleRequest.liveness, heartbeat_interval_s: 2, stall_window_s: 10 },
+    }, undefined, { command: script, timeoutMs: 15000 });
+    expect(outcome).toBeNull();
+    expect(Date.now() - start).toBeLessThan(14000);
+    expect(beats).toBeGreaterThanOrEqual(2);
+    expect(completes).toBe(0);
+    expect(readRunLedger().runs).toEqual([]);
+    expect(runningCount(paired.id, "target_1")).toBe(0);
+  } finally {
+    await server.close();
+  }
+}, 20_000);
+test("Claude startup failure without init completes agent_error", async () => {
+  const completions: any[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/heartbeat")) return { body: { status: "ok" } };
+    completions.push(body);
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const script = stub(`await Bun.stdin.text();process.exit(2);`);
+  try {
+    const paired = relay(`${server.origin}/v1`);
+    paired.targets[0].engine = "claude";
+    const outcome = await runClaimedRequest(paired, {
+      ...sampleRequest, request_id: "rq_claude_startup",
+    }, undefined, { command: script });
+    expect(outcome).toMatchObject({ outcome: "failed", reason: "agent_error" });
+    expect(completions).toHaveLength(1);
+  } finally {
+    await server.close();
+  }
+});
 test("completion retry reuses the identical body after a lost response", async () => {
   const bodies: unknown[] = [];
   const server = await startTestRelay((req, body) => {

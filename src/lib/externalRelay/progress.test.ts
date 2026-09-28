@@ -61,3 +61,13 @@ test("maps only commentary and redacts credentials", () => {
   expect(progress?.label).not.toContain("abc123");
   expect(progress?.label).not.toContain("\n");
 });
+test("note progress uses the first non-empty line and preserves code points", () => {
+  expect(
+    progressForEvent({ type: "note", text: "  \n  First line  \nSecond line" })?.label,
+  ).toBe("First line");
+  const label = progressForEvent({
+    type: "note",
+    text: "😀".repeat(161) + "\nLater",
+  })?.label;
+  expect(label).toBe("😀".repeat(160));
+});

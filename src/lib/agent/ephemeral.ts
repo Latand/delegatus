@@ -76,11 +76,17 @@ function answerHome(account: AccountContext): string {
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   const link = path.join(home, "auth.json");
   try {
-    if (fs.readlinkSync(link) !== source) fs.rmSync(link, { force: true });
+    if (fs.readlinkSync(link) === source) return home;
   } catch {
-    fs.rmSync(link, { force: true });
+    // A missing or non-symlink auth path is replaced atomically below.
   }
-  if (!fs.existsSync(link)) fs.symlinkSync(source, link);
+  const temporary = path.join(home, `.auth-${crypto.randomUUID()}`);
+  try {
+    fs.symlinkSync(source, temporary);
+    fs.renameSync(temporary, link);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
   return home;
 }
 function writeCatalog(
@@ -89,21 +95,34 @@ function writeCatalog(
   model: string,
   runDir: string,
 ): string {
-  const cache = [
+  const caches = [
     path.join(home, "models_cache.json"),
     path.join(account.home, "models_cache.json"),
-  ].find((file) => fs.existsSync(file));
-  if (!cache) throw new EphemeralProfileError("model catalog unavailable");
-  let models: unknown;
-  try {
-    models = JSON.parse(fs.readFileSync(cache, "utf8")).models;
-  } catch {
-    throw new EphemeralProfileError("model catalog invalid");
+  ];
+  let found: Record<string, unknown> | null = null;
+  let sawCache = false;
+  let validCache = false;
+  for (const cache of caches) {
+    if (!fs.existsSync(cache)) continue;
+    sawCache = true;
+    try {
+      const models = JSON.parse(fs.readFileSync(cache, "utf8")).models;
+      if (!Array.isArray(models)) continue;
+      validCache = true;
+      const entry = models.find(
+        (item) => item && typeof item === "object" && item.slug === model,
+      );
+      if (entry) {
+        found = entry;
+        break;
+      }
+    } catch {
+      // A stale or invalid answer-home cache must not hide the account cache.
+    }
   }
-  const found = Array.isArray(models)
-    ? models.find((item) => item && item.slug === model)
-    : null;
-  if (!found || typeof found !== "object")
+  if (!sawCache) throw new EphemeralProfileError("model catalog unavailable");
+  if (!validCache) throw new EphemeralProfileError("model catalog invalid");
+  if (!found)
     throw new EphemeralProfileError("model absent from catalog");
   const {
     multi_agent_version: _agents,
@@ -340,7 +359,11 @@ export function runEphemeralAgent(
       }
       const exit = run.exit;
       const status: EphemeralAgentResult["status"] =
-        violation || (request.engine === "claude" && !sawClaudeInit)
+        violation ||
+        (request.engine === "claude" &&
+          !sawClaudeInit &&
+          exit?.code === 0 &&
+          exit.signal === null)
           ? "violation"
           : timedOut
             ? "timeout"

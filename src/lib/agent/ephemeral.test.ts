@@ -36,7 +36,7 @@ function fixture(engine: "codex" | "claude"): EphemeralAgentRequest {
     effort: "low",
     account: {
       engine,
-      accountId: `${engine}_a`,
+      accountId: `${engine}_${crypto.randomUUID().replaceAll("-", "")}`,
       kind: "managed",
       home,
       transcriptRoot: home,
@@ -84,6 +84,48 @@ test("Codex answer profile is closed and the answer home links only auth", () =>
     fs.readFileSync(path.join(request.runDir, "catalog.json"), "utf8"),
   );
   expect(catalog).toEqual({ models: [{ slug: "gpt-6-sol", preserved: 1 }] });
+});
+test("Codex finds a new account model when the answer-home cache is stale", () => {
+  const request = fixture("codex");
+  buildEphemeralCommand(request);
+  const answerHome = path.join(
+    process.env.LLV_STATE_DIR!,
+    "external-relay/codex-homes",
+    request.account.accountId,
+  );
+  fs.writeFileSync(
+    path.join(answerHome, "models_cache.json"),
+    JSON.stringify({
+      models: [{ slug: "old", multi_agent_version: "v2", apply_patch_tool_type: "freeform" }],
+    }),
+  );
+  fs.writeFileSync(
+    path.join(request.account.home, "models_cache.json"),
+    JSON.stringify({
+      models: [
+        { slug: "old" },
+        { slug: "new", multi_agent_version: "v2", apply_patch_tool_type: "freeform", preserved: 2 },
+      ],
+    }),
+  );
+  const built = buildEphemeralCommand({ ...request, model: "new" });
+  expect(built.args).toContain("new");
+  expect(
+    JSON.parse(fs.readFileSync(path.join(request.runDir, "catalog.json"), "utf8")),
+  ).toEqual({ models: [{ slug: "new", preserved: 2 }] });
+  expect(() => buildEphemeralCommand({ ...request, model: "unknown" })).toThrow(
+    "model absent from catalog",
+  );
+});
+test("Codex replaces a stale auth link without leaving a temporary link", () => {
+  const request = fixture("codex");
+  const built = buildEphemeralCommand(request);
+  const link = path.join(built.env.CODEX_HOME!, "auth.json");
+  fs.rmSync(link);
+  fs.symlinkSync(path.join(root, "stale-auth"), link);
+  buildEphemeralCommand(request);
+  expect(fs.readlinkSync(link)).toBe(path.join(request.account.home, "auth.json"));
+  expect(fs.readdirSync(built.env.CODEX_HOME!)).toEqual(["auth.json"]);
 });
 test("Claude answer profile excludes settings, connectors, and instruction marker", () => {
   const request = fixture("claude");

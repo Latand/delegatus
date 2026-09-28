@@ -208,7 +208,7 @@ export async function runClaimedRequest(
         ),
       );
     let newestProgress: ExternalRelayProgress | null = null;
-    let leaseLost = false;
+    let leaseUnavailable = false;
     let beatBusy = false;
     let pendingBeat: Promise<void> | null = null;
     let seq = 0;
@@ -256,8 +256,15 @@ export async function runClaimedRequest(
         timer.unref();
         identityTimers.push(timer);
       }
+    const stallMs = request.liveness.stall_window_s * 1000;
+    const cancelStalledRun = () => {
+      if (!leaseUnavailable && Date.now() - heartbeatAt > stallMs) {
+        leaseUnavailable = true;
+        run.cancel();
+      }
+    };
     const beat = async () => {
-      if (beatBusy || leaseLost) return;
+      if (beatBusy || leaseUnavailable) return;
       beatBusy = true;
       try {
         const sentProgress = newestProgress;
@@ -269,6 +276,8 @@ export async function runClaimedRequest(
           relay.credential,
           { timeoutMs: 5000, maxBytes: relay.limits.max_response_bytes },
         );
+        cancelStalledRun();
+        if (leaseUnavailable) return;
         if (newestProgress === sentProgress) newestProgress = null;
         heartbeatAt = Date.now();
         nextBeatAt = heartbeatAt + request.liveness.heartbeat_interval_s * 1000;
@@ -278,9 +287,10 @@ export async function runClaimedRequest(
           (error.status === 404 ||
             (error.status === 409 && error.code === "lease_lost"))
         ) {
-          leaseLost = true;
+          leaseUnavailable = true;
           run.cancel();
         }
+        cancelStalledRun();
       } finally {
         if (nextBeatAt <= Date.now()) nextBeatAt = Date.now() + 1000;
         beatBusy = false;
@@ -289,7 +299,9 @@ export async function runClaimedRequest(
     pendingBeat = beat();
     await pendingBeat;
     const timer = setInterval(() => {
-      if (!beatBusy && Date.now() >= nextBeatAt) pendingBeat = beat();
+      cancelStalledRun();
+      if (!beatBusy && !leaseUnavailable && Date.now() >= nextBeatAt)
+        pendingBeat = beat();
     }, 1000);
     timer.unref();
     let result;
@@ -299,7 +311,8 @@ export async function runClaimedRequest(
       clearInterval(timer);
     }
     if (pendingBeat) await pendingBeat;
-    if (leaseLost) return null;
+    cancelStalledRun();
+    if (leaseUnavailable) return null;
     const completion =
       result.status === "done" ? checkedAnswer(result.answer, request) : null;
     const body = completion

@@ -1164,9 +1164,10 @@ cache there; after the probe runs they held no prompt text [observed].
   home, which would load its `AGENTS.md`. An API-key login kept in `auth.json`
   works the same as a subscription login; the builder does not look inside.
 
-**The per-run catalog.** Read `models_cache.json` from the answer home, else
-from the account home. Take the entry whose `slug` equals the target's model,
-delete `multi_agent_version` and `apply_patch_tool_type`, write
+**The per-run catalog.** Look for the target model in `models_cache.json` from
+the answer home, then in the account home if the first cache lacks a usable
+entry. Take the entry whose `slug` equals the target's model, delete
+`multi_agent_version` and `apply_patch_tool_type`, write
 `{ "models": [entry] }` to `<runDir>/catalog.json`, and pass it with
 `-c model_catalog_json=…`. Everything else in the entry stays as the
 account's service sent it. A model missing from the cache is declined as

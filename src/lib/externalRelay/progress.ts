@@ -65,12 +65,15 @@ export function progressForEvent(
   event: EphemeralAgentEvent,
 ): ExternalRelayProgress | null {
   if (event.type === "violation") return null;
-  const raw = event.type === "note" ? event.text : event.tool;
+  const raw =
+    event.type === "note"
+      ? (event.text.split(/\r\n|\r|\n/).find((line) => line.trim()) ?? "")
+      : event.tool;
   const label = redactTranscriptText(raw)
     .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 160);
-  if (!label) return null;
+    .trim();
+  const shortened = Array.from(label).slice(0, 160).join("");
+  if (!shortened) return null;
   return {
     kind:
       event.type === "note"
@@ -78,8 +81,11 @@ export function progressForEvent(
         : event.phase === "start"
           ? "tool_start"
           : "tool_done",
-    label,
-    tool: event.type === "tool" ? event.tool.slice(0, 64) : null,
+    label: shortened,
+    tool:
+      event.type === "tool"
+        ? Array.from(event.tool).slice(0, 64).join("")
+        : null,
     status:
       event.type === "tool"
         ? event.phase === "start"
