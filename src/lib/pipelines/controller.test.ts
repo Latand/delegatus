@@ -17,6 +17,21 @@ import {
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-pipeline-controller-"));
 
+test("an automatic handoff holds a new controller cycle until the next tick", async () => {
+  let held = true;
+  let stages = 0;
+  const controller = new FlowPipelineController({
+    handoffHeld: () => held,
+    tickPipelines: async () => { stages += 1; return { changed: false }; },
+    tickFlows: async () => ({ changed: false }),
+  }, { maxPasses: 1 });
+  await controller.tick();
+  expect(stages).toBe(0);
+  held = false;
+  await controller.tick();
+  expect(stages).toBe(1);
+});
+
 afterAll(() => {
   fs.rmSync(sandbox, { recursive: true, force: true });
 });

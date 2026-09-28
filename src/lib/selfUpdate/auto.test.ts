@@ -1,12 +1,14 @@
 import { afterAll, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { decideAuto, initialAuto, pruneReleaseWorktrees, readAuto, writeAuto } from "./auto";
+import { initialAuto, pruneReleaseWorktrees, readAuto, writeAuto } from "./auto";
 import { initialCheck } from "./checkState";
 import { SelfUpdateService, type ServiceDeps } from "./service";
 import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "./types";
 import type { LauncherRecord } from "./launcher";
 import { headOf } from "./release";
+import { watchRestartRequests } from "../../../bin/self-update-supervisor.mjs";
+import { activeRestartGate, restartGateFile } from "./restartGate";
 
 const root = mkdtempSync("/var/tmp/self-update-auto-");
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -23,6 +25,9 @@ function scenario() {
   };
   let now = Date.parse("2026-01-01T00:00:00Z");
   let prunes = 0;
+  let greenState: "green" | "pending" | "red" | "unknown" = "green";
+  let turnRunning = false;
+  let stageRunning = false;
   const state = { ...initialAuto(), enabled: true, changedAt: new Date(now).toISOString(), green: { [TARGET]: { state: "green" as const } }, rollbackCaptured: true };
   writeAuto(join(dir, "auto.json"), state);
   writeFileSync(join(dir, "state.json"), JSON.stringify({ slice: initialCheck(), update: null, autoPending: null, autoRollbackPointer: null, autoRollbackCaptured: true }));
@@ -36,7 +41,9 @@ function scenario() {
   const deps = {
     now: () => now, env: {}, dir, remote: "https://github.com/example/project", branch: "main", pollMinutes: 15, bun: "bun",
     mode: async () => ({ mode: "checkout", reason: null, record }),
-    quiet: { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: () => [], presence: () => [], memoryAvailableMb: () => 8_192 },
+    quiet: { runtimeSnapshot: async () => ({ sessions: turnRunning ? [{ turn: "running", host: "hosted" }] : [] }),
+      pipelines: () => stageRunning ? [{ state: "running", cursor: { state: "spawning" } }] : [], presence: () => [], memoryAvailableMb: () => 8_192 },
+    green: { read: async () => ({ state: greenState }) },
     prune: async () => { prunes += 1; },
   } as unknown as ServiceDeps;
   const service = () => {
@@ -45,18 +52,8 @@ function scenario() {
     return instance;
   };
   const pending = () => (JSON.parse(readFileSync(join(dir, "state.json"), "utf8")) as { autoPending?: { role: string; requestId: string } | null }).autoPending ?? null;
-  return { dir, record, service, pending, prunes: () => prunes, advance: (ms: number) => { now += ms; } };
+  return { dir, record, service, pending, prunes: () => prunes, advance: (ms: number) => { now += ms; }, setGreen: (state: typeof greenState) => { greenState = state; }, setTurn: (running: boolean) => { turnRunning = running; }, setStage: (running: boolean) => { stageRunning = running; } };
 }
-
-test("the decision table preserves green and quiet gates", () => {
-  const facts = { enabled: true, available: true, relation: "behind", green: { state: "green" as const }, built: false, webCurrent: false, hostCurrent: false, busy: false };
-  expect(decideAuto({ ...facts, enabled: false })).toBe("none");
-  expect(decideAuto({ ...facts, green: null })).toBe("read-green");
-  expect(decideAuto(facts)).toBe("build");
-  expect(decideAuto({ ...facts, built: true })).toBe("wait-web");
-  expect(decideAuto({ ...facts, built: true, webCurrent: true })).toBe("wait-host");
-  expect(decideAuto({ ...facts, built: true, webCurrent: true, hostCurrent: true })).toBe("done");
-});
 
 test("two quiet probes persist a web request; a fresh process continues with the host", async () => {
   const h = scenario();
@@ -69,8 +66,12 @@ test("two quiet probes persist a web request; a fresh process continues with the
   expect(web.role).toBe("web");
   expect(JSON.parse(readFileSync(join(h.dir, "auto.json"), "utf8"))).not.toHaveProperty("pending");
   expect(JSON.parse(readFileSync(h.record.requestFile, "utf8")).requestId).toBe(web.requestId);
-  h.record.web = { ...h.record.web, revision: TARGET.slice(0, 7), requestId: web.requestId };
-  rmSync(h.record.requestFile);
+  let watcher = watchRestartRequests(h.record.requestFile, async ({ requestId, role }) => {
+    expect(role).toBe("web");
+    h.record.web = { ...h.record.web, revision: TARGET.slice(0, 7), requestId };
+  }, { intervalMs: 60_000, admitAuto: ({ requestId, autoGateId }) => service.admitAutoRestart(requestId, autoGateId) });
+  await watcher.poll();
+  watcher.stop();
   service = h.service();
   await service.autoTick();
   expect(h.pending()).toBeNull();
@@ -78,14 +79,81 @@ test("two quiet probes persist a web request; a fresh process continues with the
   h.advance(60_000);
   await service.autoTick();
   expect(h.pending()?.role).toBe("runtime-host");
-  const host = h.pending()!;
-  h.record.runtimeHost = { ...h.record.runtimeHost, revision: TARGET.slice(0, 7), requestId: host.requestId };
-  rmSync(h.record.requestFile);
+  watcher = watchRestartRequests(h.record.requestFile, async ({ requestId, role }) => {
+    expect(role).toBe("runtime-host");
+    h.record.runtimeHost = { ...h.record.runtimeHost, revision: TARGET.slice(0, 7), requestId };
+  }, { intervalMs: 60_000, admitAuto: ({ requestId, autoGateId }) => service.admitAutoRestart(requestId, autoGateId) });
+  await watcher.poll();
+  watcher.stop();
   service = h.service();
   await service.autoTick();
   await service.autoTick();
   expect(h.prunes()).toBe(1);
   expect(readAuto(join(h.dir, "auto.json")).waitingSince).toBeNull();
+  service.stop();
+});
+
+test.each(["pending", "red", "unknown"] as const)("a cached green changed to %s during the quiet wait cannot restart, even after reconstruction", async (state) => {
+  const h = scenario();
+  let service = h.service();
+  await service.autoTick();
+  h.setGreen(state);
+  h.advance(60_000);
+  await service.autoTick();
+  expect(existsSync(h.record.requestFile)).toBe(false);
+  expect(h.pending()).toBeNull();
+  service.stop();
+  service = h.service();
+  await service.autoTick();
+  expect(existsSync(h.record.requestFile)).toBe(false);
+  expect(h.pending()).toBeNull();
+  service.stop();
+});
+
+test.each([["web", "turn"], ["web", "stage"], ["runtime-host", "turn"], ["runtime-host", "stage"]] as const)("%s restart defers when a %s starts before launcher consumption", async (role, work) => {
+  const h = scenario();
+  if (role === "runtime-host") h.record.web.revision = TARGET.slice(0, 7);
+  const service = h.service();
+  await service.autoTick();
+  h.advance(60_000);
+  await service.autoTick();
+  expect(h.pending()?.role).toBe(role);
+  if (work === "turn") h.setTurn(true);
+  else h.setStage(true);
+  let restarted = false;
+  const watcher = watchRestartRequests(h.record.requestFile, async () => { restarted = true; }, {
+    intervalMs: 60_000,
+    admitAuto: ({ requestId, autoGateId }) => service.admitAutoRestart(requestId, autoGateId),
+  });
+  await watcher.poll();
+  watcher.stop();
+  expect(restarted).toBe(false);
+  expect(h.pending()).toBeNull();
+  expect(existsSync(h.record.requestFile)).toBe(false);
+  h.setTurn(false);
+  h.setStage(false);
+  service.stop();
+});
+
+test.each(["pending", "red", "unknown"] as const)("launcher admission refuses a newly %s check after service reconstruction", async (state) => {
+  const h = scenario();
+  let service = h.service();
+  await service.autoTick();
+  h.advance(60_000);
+  await service.autoTick();
+  service.stop();
+  h.setGreen(state);
+  service = h.service();
+  let restarted = false;
+  const watcher = watchRestartRequests(h.record.requestFile, async () => { restarted = true; }, {
+    intervalMs: 60_000,
+    admitAuto: ({ requestId, autoGateId }) => service.admitAutoRestart(requestId, autoGateId),
+  });
+  await watcher.poll();
+  watcher.stop();
+  expect(restarted).toBe(false);
+  expect(h.pending()).toBeNull();
+  expect(existsSync(h.record.requestFile)).toBe(false);
   service.stop();
 });
 
@@ -131,6 +199,7 @@ test("an untaken request times out, is removed, and disables auto-apply", async 
   await service.autoTick();
   expect(h.pending()).toBeNull();
   expect(existsSync(h.record.requestFile)).toBe(false);
+  expect(activeRestartGate(restartGateFile(h.record.requestFile))).toBeNull();
   expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ enabled: false, off: { stage: "restart-web", reason: "the launcher did not take the restart request" } });
   service.stop();
 });
@@ -145,6 +214,7 @@ test("a new launcher generation drops its old request and re-reads facts", async
   await service.autoTick();
   expect(h.pending()).toBeNull();
   expect(existsSync(h.record.requestFile)).toBe(false);
+  expect(activeRestartGate(restartGateFile(h.record.requestFile))).toBeNull();
   expect(readAuto(join(h.dir, "auto.json")).enabled).toBe(true);
   service.stop();
 });

@@ -15,6 +15,7 @@ import { cancelUntakenRequest, readAuto, requestAutoRestart, restorePointer, wri
 import { GreenReader, type GreenVerdict } from "./green";
 import { appendHistory, readHistory } from "./history";
 import { probeQuiet, type QuietBlockers, type QuietPorts } from "./quiet";
+import { activeRestartGate, beginRestartGate, endRestartGate, restartGateFile } from "./restartGate";
 import { headOf, releaseDirFor } from "./release";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { memAvailableMb } from "./steps";
@@ -269,6 +270,11 @@ export class SelfUpdateService {
         this.finishAutoRestart(pending, "done", undefined, record);
         return;
       }
+      if (entry.requestId !== pending.requestId && !existsSync(record.requestFile) && now - Date.parse(pending.at) > 2_000) {
+        this.auto = { ...this.auto, pending: null, quietSince: null };
+        this.saveAuto();
+        return;
+      }
       const deadline = pending.role === "web" ? 5 * 60_000 : 3 * 60_000;
       if (now - Date.parse(pending.at) >= deadline) {
         this.finishAutoRestart(pending, "failed", "the launcher did not take the restart request", record);
@@ -290,6 +296,8 @@ export class SelfUpdateService {
     if (green.state !== "green") return;
     if (snapshot.installed.sha !== target.sha) {
       if (snapshot.busy || this.checking || snapshot.check.state === "checking" || memAvailableMb() < 4_096) return;
+      green = await this.refreshGreen(target.sha, record.checkout!, green);
+      if (green.state !== "green") return;
       const runner = this.runnerFor(record);
       if (!this.auto.rollbackCaptured) {
         this.auto = { ...this.auto, rollbackPointer: existsSync(record.releasePointer) ? readFileSync(record.releasePointer, "utf8") : null, rollbackCaptured: true };
@@ -340,19 +348,68 @@ export class SelfUpdateService {
       return;
     }
     if (now - Date.parse(this.auto.quietSince) < 60_000) return;
-    const role: LauncherRole = serves(snapshot.serving.web) ? "runtime-host" : "web";
-    const rollbackPointer = this.auto.rollbackCaptured ? this.auto.rollbackPointer : this.pointerForServing(record, snapshot);
-    if (rollbackPointer === undefined) {
-      this.autoBlockers = { ...probe.blockers, unreadable: "the release now served by web cannot be identified" };
+    const gateFile = restartGateFile(record.requestFile);
+    const gateId = beginRestartGate(gateFile);
+    if (!gateId) return;
+    let requested = false;
+    try {
+      green = await this.refreshGreen(target.sha, record.checkout!, green);
+      if (green.state !== "green") {
+        this.auto = { ...this.auto, quietSince: null };
+        this.saveAuto();
+        return;
+      }
+      const finalSnapshot = await this.snapshot();
+      const finalProbe = await probeQuiet(finalSnapshot, this.deps.quiet, this.deps.now());
+      this.autoBlockers = finalProbe.blockers;
+      if (!finalProbe.quiet || finalSnapshot.installed.sha !== target.sha || existsSync(record.requestFile)) {
+        this.auto = { ...this.auto, quietSince: null, lastBlockers: finalProbe.blockers };
+        this.saveAuto();
+        return;
+      }
+      const role: LauncherRole = serves(finalSnapshot.serving.web) ? "runtime-host" : "web";
+      const rollbackPointer = this.auto.rollbackCaptured ? this.auto.rollbackPointer : this.pointerForServing(record, finalSnapshot);
+      if (rollbackPointer === undefined) {
+        this.autoBlockers = { ...finalProbe.blockers, unreadable: "the release now served by web cannot be identified" };
+        this.changes.emit();
+        return;
+      }
+      this.auto = { ...this.auto, rollbackPointer, rollbackCaptured: true, quietSince: null };
+      requestAutoRestart(record, role, target.sha, rollbackPointer, now, gateId, (request) => {
+        this.auto = { ...this.auto, pending: request };
+        this.persistNow();
+      });
+      requested = true;
       this.changes.emit();
-      return;
+    } finally {
+      if (!requested) endRestartGate(gateFile, gateId);
     }
-    this.auto = { ...this.auto, rollbackPointer, rollbackCaptured: true, quietSince: null };
-    requestAutoRestart(record, role, target.sha, rollbackPointer, now, (request) => {
-      this.auto = { ...this.auto, pending: request };
-      this.persistNow();
-    });
-    this.changes.emit();
+  }
+
+  private async refreshGreen(target: string, checkout: string, prior: GreenVerdict): Promise<GreenVerdict> {
+    const verdict = await this.greenReader.read(this.deps.remote, this.deps.branch, target, checkout, prior.firstReadAt, true);
+    this.auto = { ...this.auto, green: { ...this.auto.green, [target]: verdict } };
+    this.saveAuto();
+    return verdict;
+  }
+
+  /** The launcher calls this under the held admission gate, immediately before
+      taking an automatic request. It is the final read for both restart roles. */
+  async admitAutoRestart(requestId: string, gateId: string): Promise<boolean> {
+    const pending = this.auto.pending;
+    const decision = await this.decide();
+    const record = decision.record;
+    if (!pending || pending.requestId !== requestId || !record || decision.mode !== "checkout"
+      || activeRestartGate(restartGateFile(record.requestFile)) !== gateId) return false;
+    const green = await this.refreshGreen(pending.target, record.checkout!, this.auto.green[pending.target] ?? { state: "unknown" });
+    const snapshot = await this.snapshot();
+    const quiet = this.deps.quiet ? await probeQuiet(snapshot, this.deps.quiet, this.deps.now()) : null;
+    if (this.auto.enabled && green.state === "green" && quiet?.quiet && snapshot.installed.sha === pending.target
+      && record.launcher.pid === pending.launcherPid && this.autoAvailability(decision) === "available") return true;
+    this.autoBlockers = quiet?.blockers ?? null;
+    this.auto = { ...this.auto, pending: null, quietSince: null, lastBlockers: quiet?.blockers ?? this.auto.lastBlockers };
+    this.saveAuto();
+    return false;
   }
 
   private pointerForServing(record: LauncherRecord, snapshot: Snapshot): string | null | undefined {

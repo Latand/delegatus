@@ -67,21 +67,27 @@ export class GreenReader {
     if (next) throw new Error("GitHub returned too many check runs");
     return all;
   }
-  private async requiredChecks(repository: string, branch: string): Promise<string[]> {
+  private async requiredChecks(repository: string, branch: string, fresh: boolean): Promise<string[]> {
     const key = `${repository}:${branch}`;
     const cached = this.required.get(key);
-    if (cached && this.ports.now() - cached.at < 30 * 60_000) return cached.names;
-    const branchView = (await this.page(`https://api.github.com/repos/${repository}/branches/${encodeURIComponent(branch)}`)).body as { protection?: { required_status_checks?: { contexts?: unknown } } };
+    if (!fresh && cached && this.ports.now() - cached.at < 30 * 60_000) return cached.names;
+    const branchView = (await this.page(`https://api.github.com/repos/${repository}/branches/${encodeURIComponent(branch)}`)).body as { protected?: unknown; protection?: { required_status_checks?: { contexts?: unknown } } };
+    if (typeof branchView?.protected !== "boolean" || (branchView.protected && (!branchView.protection || typeof branchView.protection !== "object"))) {
+      throw new Error("GitHub returned an invalid branch protection response");
+    }
     const contexts = branchView?.protection?.required_status_checks?.contexts;
-    const names = Array.isArray(contexts) && contexts.every((name) => typeof name === "string") ? contexts as string[] : [];
+    if (contexts !== undefined && (!Array.isArray(contexts) || !contexts.every((name) => typeof name === "string"))) {
+      throw new Error("GitHub returned invalid required checks");
+    }
+    const names = (contexts as string[] | undefined) ?? [];
     this.required.set(key, { at: this.ports.now(), names });
     return names;
   }
-  async read(remote: string, branch: string, target: string, checkout: string, firstReadAt?: string): Promise<GreenVerdict> {
+  async read(remote: string, branch: string, target: string, checkout: string, firstReadAt?: string, fresh = false): Promise<GreenVerdict> {
     const repository = githubRepositoryOfRemote(remote);
     if (!repository) return { state: "unavailable" };
     const cached = this.final.get(target);
-    if (cached) return cached;
+    if (cached && !fresh) return cached;
     const finish = (verdict: GreenVerdict) => {
       if (!["pending", "unknown"].includes(verdict.state)) {
         this.final.set(target, verdict);
@@ -105,7 +111,7 @@ export class GreenReader {
       const [runs, statuses, required] = await Promise.all([
         this.checkRuns(`${api}/commits/${head}/check-runs?per_page=100`),
         this.list(`${api}/commits/${head}/statuses?per_page=100`),
-        this.requiredChecks(repository, branch),
+        this.requiredChecks(repository, branch, fresh),
       ]);
       const checks = rollupChecks([
         ...runs.map((run) => {

@@ -17,6 +17,7 @@ export interface QuietPorts {
   pipelines(): readonly Pipeline[];
   presence(now: number): readonly StoredViewSession[];
   memoryAvailableMb?(): number;
+  controllerIdle?(): Promise<boolean>;
 }
 export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: number): Promise<{ quiet: boolean; blockers: QuietBlockers }> {
   const blockers: QuietBlockers = { turns: 0, stages: 0, operatorActiveAt: null, busy: snapshot.busy !== null || snapshot.processes.web.state !== "healthy" || snapshot.processes.runtimeHost.state !== "healthy", unreadable: null, memoryMb: null };
@@ -32,6 +33,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
   }
   try {
     blockers.stages = ports.pipelines().filter((pipeline) => pipeline.state === "running" && pipeline.cursor && ["spawning", "running", "reviewing", "committing"].includes(pipeline.cursor.state)).length;
+    if (ports.controllerIdle && !await ports.controllerIdle()) blockers.busy = true;
     const latest = ports.presence(now).filter((session) => now - session.lastInteractionAt < 10 * 60_000).sort((a, b) => b.lastInteractionAt - a.lastInteractionAt)[0];
     blockers.operatorActiveAt = latest ? new Date(latest.lastInteractionAt).toISOString() : null;
   } catch (error) {

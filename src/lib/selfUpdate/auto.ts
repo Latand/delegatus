@@ -6,6 +6,7 @@ import type { LauncherRecord, LauncherRole } from "./launcher";
 import type { QuietBlockers } from "./quiet";
 import type { Revision } from "./types";
 import { runGit } from "./git";
+import { endRestartGate, restartGateFile } from "./restartGate";
 
 export type AutoPhase = "idle" | "checks" | "not-green" | "building" | "waiting" | "restarting-web" | "restarting-host";
 export interface AutoPending {
@@ -59,17 +60,8 @@ export function writeAuto(file: string, value: AutoState): void {
   writeFileSync(temporary, `${JSON.stringify(setting)}\n`, { mode: 0o600 });
   renameSync(temporary, file);
 }
-export function decideAuto(facts: { enabled: boolean; available: boolean; relation: string | null; green: GreenVerdict | null; built: boolean; webCurrent: boolean; hostCurrent: boolean; busy: boolean }): "none" | "read-green" | "build" | "wait-web" | "wait-host" | "done" {
-  if (!facts.enabled || !facts.available || (facts.relation !== "behind" && !(facts.relation === "equal" && facts.built))) return "none";
-  if (!facts.green) return "read-green";
-  if (facts.green.state !== "green") return "none";
-  if (!facts.built) return facts.busy ? "none" : "build";
-  if (!facts.webCurrent) return "wait-web";
-  if (!facts.hostCurrent) return "wait-host";
-  return "done";
-}
 /** Persist the intent before the launcher sees the request. */
-export function requestAutoRestart(record: LauncherRecord, role: LauncherRole, target: string, rollbackPointer: string | null, now: number, persist: (pending: AutoPending) => void): AutoPending {
+export function requestAutoRestart(record: LauncherRecord, role: LauncherRole, target: string, rollbackPointer: string | null, now: number, gateId: string, persist: (pending: AutoPending) => void): AutoPending {
   const pending: AutoPending = {
     role, requestId: randomUUID(), at: new Date(now).toISOString(), launcherPid: record.launcher.pid,
     rollbackPointer, from: role === "web" ? record.web.revision : record.runtimeHost.revision, target,
@@ -77,7 +69,7 @@ export function requestAutoRestart(record: LauncherRecord, role: LauncherRole, t
   persist(pending);
   mkdirSync(dirname(record.requestFile), { recursive: true, mode: 0o700 });
   const temporary = `${record.requestFile}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify({ requestId: pending.requestId, role, requestedAt: pending.at })}\n`, { mode: 0o600 });
+  writeFileSync(temporary, `${JSON.stringify({ requestId: pending.requestId, role, requestedAt: pending.at, autoGateId: gateId })}\n`, { mode: 0o600 });
   renameSync(temporary, record.requestFile);
   return pending;
 }
@@ -90,8 +82,11 @@ export function restorePointer(file: string, raw: string | null): void {
 
 export function cancelUntakenRequest(record: LauncherRecord, requestId: string): void {
   try {
-    const request = JSON.parse(readFileSync(record.requestFile, "utf8")) as { requestId?: string };
-    if (request.requestId === requestId) rmSync(record.requestFile, { force: true });
+    const request = JSON.parse(readFileSync(record.requestFile, "utf8")) as { requestId?: string; autoGateId?: string };
+    if (request.requestId === requestId) {
+      rmSync(record.requestFile, { force: true });
+      if (request.autoGateId) endRestartGate(restartGateFile(record.requestFile), request.autoGateId);
+    }
   } catch { /* the launcher already took it */ }
 }
 

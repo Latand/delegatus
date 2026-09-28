@@ -2,8 +2,22 @@ import { afterEach, expect, test } from "bun:test";
 import http from "node:http";
 import { networkInterfaces } from "node:os";
 import { NextRequest } from "next/server";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { statePath } from "@/lib/configDir";
 
 import { proxy } from "./proxy";
+
+test("automatic handoff defers new write requests while reads remain available", () => {
+  const file = statePath("self-update", "auto-admission.json");
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify({ id: "handoff", until: Date.now() + 60_000 }));
+  try {
+    const request = (method: string) => new NextRequest("http://localhost/api/pipelines", { method });
+    expect(proxy(request("POST")).status).toBe(503);
+    expect(proxy(request("GET")).headers.get("x-middleware-next")).toBe("1");
+  } finally { rmSync(file, { force: true }); }
+});
 
 const originalToken = process.env.LLV_TOKEN;
 afterEach(() => {

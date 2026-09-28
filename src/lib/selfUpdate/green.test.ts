@@ -5,7 +5,7 @@ const SHA = "a".repeat(40);
 const HEAD = "b".repeat(40);
 const TREE = "c".repeat(40);
 
-function reader(options: { runs?: Record<string, unknown>[]; statuses?: Record<string, unknown>[]; required?: string[]; pull?: boolean; mergeSha?: string; tree?: string; response?: number } = {}) {
+function reader(options: { runs?: Record<string, unknown>[]; statuses?: Record<string, unknown>[]; required?: string[]; pull?: boolean; mergeSha?: string; tree?: string; response?: number; invalidBranch?: boolean } = {}) {
   let reads = 0;
   let now = 1_000;
   const calls: string[] = [];
@@ -17,7 +17,7 @@ function reader(options: { runs?: Record<string, unknown>[]; statuses?: Record<s
     const body = url.includes("/pulls") ? (options.pull === false ? [] : [{ merged_at: "2026-01-01", merge_commit_sha: options.mergeSha ?? SHA, base: { ref: "main" }, head: { sha: HEAD } }])
       : url.includes("/check-runs") ? { check_runs: options.runs ?? [{ name: "test", status: "completed", conclusion: "success", started_at: "2026-01-01" }] }
       : url.includes("/statuses") ? options.statuses ?? []
-      : url.includes("/branches/") ? { protection: { required_status_checks: { contexts: options.required ?? [] } } }
+      : url.includes("/branches/") ? (options.invalidBranch ? {} : { protected: true, protection: { required_status_checks: { contexts: options.required ?? [] } } })
       : { commit: { tree: { sha: options.tree ?? TREE } } };
     return Response.json(body);
   };
@@ -32,6 +32,24 @@ describe("green merge evidence", () => {
     const count = h.reads();
     await h.subject.read("https://github.com/example/project.git", "main", SHA, "/checkout");
     expect(h.reads()).toBe(count);
+  });
+
+  test("fresh authorization rereads check runs and required contexts after a cached green", async () => {
+    const options: { runs: { name: string; status: string; conclusion: string | null }[]; required: string[] } = { runs: [{ name: "privacy", status: "completed", conclusion: "success" }], required: ["privacy"] };
+    const h = reader(options);
+    expect((await h.subject.read("github.com/example/project", "main", SHA, "/checkout")).state).toBe("green");
+    const count = h.reads();
+    options.runs[0]!.status = "in_progress";
+    options.runs[0]!.conclusion = null;
+    expect((await h.subject.read("github.com/example/project", "main", SHA, "/checkout", undefined, true)).state).toBe("pending");
+    expect(h.reads()).toBeGreaterThan(count);
+    expect(h.calls.slice(count).some((url) => url.includes("/branches/main"))).toBe(true);
+    options.runs[0]!.status = "completed";
+    options.runs[0]!.conclusion = "failure";
+    expect((await h.subject.read("github.com/example/project", "main", SHA, "/checkout", undefined, true)).state).toBe("red");
+    options.runs[0]!.conclusion = "success";
+    options.required.push("new-required-check");
+    expect((await h.subject.read("github.com/example/project", "main", SHA, "/checkout", undefined, true)).state).toBe("pending");
   });
 
   test("a red optional status blocks an unattended update", async () => {
@@ -63,6 +81,7 @@ describe("green merge evidence", () => {
 
   test("an unreadable API and a non-GitHub remote remain unavailable", async () => {
     expect((await reader({ response: 404 }).subject.read("github.com/example/project", "main", SHA, "/checkout")).state).toBe("unknown");
+    expect((await reader({ invalidBranch: true }).subject.read("github.com/example/project", "main", SHA, "/checkout")).state).toBe("unknown");
     expect((await reader().subject.read("/var/git/project", "main", SHA, "/checkout")).state).toBe("unavailable");
   });
 
@@ -74,7 +93,7 @@ describe("green merge evidence", () => {
       if (url.includes("/check-runs")) return new Response(JSON.stringify({ check_runs: url.includes("page=2") ? [{ name: "late", status: "completed", conclusion: "failure" }] : first }),
         { headers: url.includes("page=2") ? {} : { link: `<https://api.github.com/repos/example/project/commits/${HEAD}/check-runs?per_page=100&page=2>; rel="next"` } });
       if (url.includes("/statuses")) return Response.json([]);
-      if (url.includes("/branches/")) return Response.json({ protection: { required_status_checks: { contexts: [] } } });
+      if (url.includes("/branches/")) return Response.json({ protected: true, protection: { required_status_checks: { contexts: [] } } });
       return Response.json({ commit: { tree: { sha: TREE } } });
     };
     const subject = new GreenReader({ fetch: fetcher as typeof fetch, treeOf: async () => TREE, now: () => 1_000 });

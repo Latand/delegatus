@@ -106,6 +106,8 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
         return client.snapshot(undefined, { timeoutMs: 10_000 });
       },
       pipelines: loadPipelinesForList,
+      controllerIdle: async () => (await import("@/lib/pipelines/controller")).flowPipelineController().idle()
+        && (await import("@/lib/monitor/seatTickController")).seatTickIdle(),
       presence: listPresence,
       memoryAvailableMb: memAvailableMb,
     },

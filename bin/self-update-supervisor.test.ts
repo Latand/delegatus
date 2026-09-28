@@ -154,6 +154,48 @@ describe("the launcher record", () => {
 });
 
 describe("restart requests", () => {
+  test("an automatic request without a final admission callback is discarded", async () => {
+    const file = join(root, "request-auto-unadmitted.json");
+    const gateFile = join(root, "auto-admission.json");
+    let restarted = false;
+    writeFileSync(gateFile, JSON.stringify({ id: "unadmitted", until: Date.now() + 60_000 }));
+    writeFileSync(file, JSON.stringify({ requestId: "unadmitted", role: "web", autoGateId: "unadmitted" }));
+    const watcher = watchRestartRequests(file, async () => { restarted = true; }, { intervalMs: 60_000 });
+    try {
+      await watcher.poll();
+      expect(restarted).toBe(false);
+      expect(existsSync(file)).toBe(false);
+      expect(existsSync(gateFile)).toBe(false);
+    } finally { watcher.stop(); }
+  });
+
+  for (const role of ["web", "runtime-host"] as const) {
+    test(`automatic ${role} admission defers work that started after the web probe`, async () => {
+      const file = join(root, `request-auto-${role}.json`);
+      const gateFile = join(root, "auto-admission.json");
+      const seen: string[] = [];
+      let working = true;
+      const watcher = watchRestartRequests(file, async (request) => { seen.push(request.role); }, {
+        intervalMs: 60_000,
+        admitAuto: async () => !working,
+      });
+      try {
+        writeFileSync(gateFile, JSON.stringify({ id: "gate", until: Date.now() + 60_000 }));
+        writeFileSync(file, JSON.stringify({ requestId: "busy", role, autoGateId: "gate" }));
+        await watcher.poll();
+        expect(seen).toEqual([]);
+        expect(existsSync(file)).toBe(false);
+        expect(existsSync(gateFile)).toBe(false);
+        working = false;
+        writeFileSync(gateFile, JSON.stringify({ id: "gate-2", until: Date.now() + 60_000 }));
+        writeFileSync(file, JSON.stringify({ requestId: "quiet", role, autoGateId: "gate-2" }));
+        await watcher.poll();
+        expect(seen).toEqual([role]);
+        expect(existsSync(gateFile)).toBe(false);
+      } finally { watcher.stop(); }
+    });
+  }
+
   test("a request is consumed once and handed over; malformed ones are dropped", async () => {
     const file = join(root, "request.json");
     const seen: string[] = [];

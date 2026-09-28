@@ -45,7 +45,10 @@ Everything below is validated against the quote. What it does not demand is in
   restart or build is in progress. The rule must hold on two probes a minute
   apart. Web restarts first and the runtime host second, each only when the
   install is quiet.
-- **The wait** never interrupts and never holds work back. After 24 hours the
+- **The wait** never interrupts running work. Admission is held briefly while
+  the launcher rechecks a restart. Durable queued work resumes after the
+  handoff; an incoming write receives a retry response.
+  After 24 hours the
   dialog says so, and the orchestrator seat of the install's own project gets
   a signal. On this host, stretches without ten quiet minutes reached 22 hours.
 - **The setting** is `<state>/self-update/auto.json`, written only by the web
@@ -61,9 +64,8 @@ Everything below is validated against the quote. What it does not demand is in
 - **Managed installs** keep today's behaviour. There, one deployment couples the
   build and the switch, so a quiet moment at request time does not hold at
   promotion time.
-- Nothing changes in the launcher (`bin/cli.mjs`,
-  `bin/self-update-supervisor.mjs`). Everything the automatic path needs from
-  it already exists.
+- The launcher checks the final quiet and green authorization before consuming
+  an automatic request. Manual restarts keep their existing path.
 
 ## Prior work consulted
 
@@ -198,11 +200,11 @@ automatically" (merge policy §4.3). **When GitHub cannot be read**
 (`unknown`), nothing is applied and GitHub's own words are shown with the
 time of the next try. `unknown` never counts as green.
 
-Budget: each new tip costs at most five requests, plus one protection read
-every 30 minutes. With the automatic poll every 15 minutes (§4.1) and a new
-tip at every poll, that is at most 22 requests an hour, under the 60-request
-anonymous limit. Final verdicts are cached per target in `auto.json` (the last
-eight), so a tip is never read twice once settled.
+Final verdicts are cached per target in `auto.json` (the last eight) for the
+waiting display. The build boundary and both restart admissions bypass that
+cache and the required-context cache. A changed or unreadable check defers the
+apply. These additional reads can meet GitHub's anonymous rate limit; a limit
+response is an `unknown` verdict and waits for a later try.
 
 ## 2. What an update restarts, what survives, and the quiet rule
 
@@ -252,8 +254,9 @@ Two consequences shape the rule:
    member, desktop and phone. A closed page drops out after 120 s.
 
 The install is **quiet** when there are no blockers. A restart is requested
-only when two probes at least 60 s apart were both quiet, and the second of
-them is taken immediately before the request file is written.
+only when two probes at least 60 s apart were both quiet. The web process then
+holds new admission, refreshes green, and makes one more quiet probe. The
+launcher repeats both reads before consuming the automatic request.
 
 ### 2.3 Why this is safe
 
@@ -276,12 +279,12 @@ them is taken immediately before the request file is written.
   between two turns of a sequence (a stage settling and the next one
   spawning, a flow between rounds, a seat relaying a message).
 
-What remains is the moment between the authorizing probe and the launcher's
-SIGTERM: the launcher's poll interval (500 ms) plus its stop. A turn that
-starts inside it, for example from a Telegram message arriving at that
-instant, is severed and repaired by the existing recovery path above. This
-window is accepted because closing it would mean a global admission hold on
-every source of turns.
+The admission gate stays in the state directory through the restart. The
+proxy defers new writes, the pipeline and seat controllers pause their ticks,
+and structured delivery leaves new turns in its durable queue. Work already
+admitted before the gate is checked by the final quiet reads. If it began, the
+launcher discards the request and releases the gate; the next quiet window can
+try again. A gate has a five-minute upper bound if the launcher disappears.
 
 ### 2.4 Order: web first, then the runtime host
 
@@ -338,8 +341,8 @@ Two alternatives were weighed and left out:
 
 ### 4.1 Where it runs
 
-`src/lib/selfUpdate/auto.ts` (new) holds a pure `decideAuto(facts, now)` →
-`action` and a small loop around it in the service. The loop starts from
+`src/lib/selfUpdate/auto.ts` holds the durable setting and request helpers;
+the decision loop is in the service. The loop starts from
 `startCurrentReleaseControllers` through a new loader,
 `loadSelfUpdateAuto: () => import("@/lib/selfUpdate/auto")`. Only the process
 that owns the release runs it: never a lane's `next build`, an MCP stdio
@@ -676,7 +679,8 @@ that from the dialog.
    → `untested-tree`; zero checks → `no-checks`; 403 with
    `x-ratelimit-remaining: 0` → `unknown` with the reset time; 404 →
    `unknown`; a path remote and a non-GitHub host → `unavailable`;
-   pagination over 100 check runs; a cached final verdict is never re-read.
+   pagination over 100 check runs; a normal cached read stays cached, while a
+   fresh admission read bypasses it and refreshes required contexts.
 3. `src/lib/selfUpdate/quiet.test.ts` (new). A `running`, an
    `interrupt_requested`, a `registering` and a `recovering` session each
    block. `idle`, `unhosted`, `dead`, and `unknown` on a hosted session do
@@ -685,8 +689,7 @@ that from the dialog.
    with a stale running attempt does not. Presence 9 minutes old blocks, 11
    minutes old does not. A snapshot read that throws blocks with its message.
    An outstanding request and a launcher entry in `starting` block.
-4. `src/lib/selfUpdate/auto.test.ts` (new), the `decideAuto` table of §4.2
-   row by row, then sequences on a fake clock. Off → nothing. Green and not
+4. `src/lib/selfUpdate/auto.test.ts` (new), sequences on a fake clock. Off → nothing. Green and not
    built → build with `trigger: "auto"`. Built and busy → wait with the
    blockers and `waitingSince`. One quiet probe → no request; two probes 60 s
    apart → a web request persisted **before** the request file exists. A fresh
