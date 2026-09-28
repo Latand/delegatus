@@ -1195,6 +1195,27 @@ test("legacy synchronization rejects structured command semantics before fallbac
   expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
 });
 
+test("a seat wake's queue policy is refused by a legacy pane owner, never pasted into the pane", async () => {
+  const { registry, conversation } = registryWithConversation();
+  recordLegacyOwner(registry, conversation);
+  const result = await enqueueStructuredMessage({
+    path: artifactPath,
+    conversationId: conversation.id,
+    clientMessageId: "seat-tick:legacy:1",
+    text: "wake text",
+    hasImages: false,
+    policy: "queue",
+  }, {
+    enabled: () => true,
+    client: () => null,
+    registry: () => registry,
+  });
+
+  expect(result).toMatchObject({ ok: false, structured: true, outcome: "failed", status: 409,
+    error: "legacy delivery cannot preserve structured command semantics" });
+  expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
+});
+
 test("a durable legacy host wins over retained structured adapter metadata during runtime client absence", async () => {
   const { registry, conversation } = registryWithConversation();
   recordLegacyOwner(registry, conversation);

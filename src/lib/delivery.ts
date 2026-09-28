@@ -691,7 +691,10 @@ export interface ConversationMessage {
   origin?: MessageOrigin;
   /** How a structured host treats a turn already running. Absent keeps the
       send default, which interrupts it; `queue` waits until the host is idle,
-      which is what a seat tick wake asks for. A pane has no such choice. */
+      which is what a seat tick wake asks for. A pane cannot wait for idle, so
+      a conversation whose current owner is a legacy pane host refuses a
+      `queue` send with 409, the same refusal a deputy note gets there; it is
+      never pasted into the pane instead. */
   policy?: "queue";
 }
 

@@ -1776,16 +1776,14 @@ function wakeItems(context: {
      stall, and the line says what is being asked. */
   items.push(...pendingPermissionItems(input));
   /* A stall the last delivered wake already reported, on a lane or child that
-     has not moved since, gives its place to a task assigned after that wake.
-     Ahead of it, the same stall filled the item window on every wake and the
-     new task was only ever counted as deferred. It is still listed, after the
-     new tasks and ahead of the older ones. */
+     has not moved since, gives its place to every unstarted task. Ahead of
+     them, the same stall filled the item window on every wake and a task was
+     only ever counted as deferred, including one assigned before the wake
+     that first reported the stall. It is still listed, after the tasks. */
   const lastWakeAt = input.state.lastWakeAt ? Date.parse(input.state.lastWakeAt) : Number.NaN;
   const stallsReported = Number.isFinite(lastWakeAt) && input.state.lastWakeReasons.includes("stalled");
   const unmovedSinceWake = (at: string | null | undefined): boolean =>
     stallsReported && !!at && Date.parse(at) <= lastWakeAt;
-  const assignedSinceWake = (task: SeatTickTaskInput): boolean =>
-    !Number.isFinite(lastWakeAt) || !task.updatedAt || Date.parse(task.updatedAt) > lastWakeAt;
   const owned = new Set(context.ownLanes.map((lane) => lane.id));
   const laneStall = (entry: { pipeline: SeatTickPipelineInput; reason: string }): void => {
     if (owned.has(entry.pipeline.id)) return;
@@ -1810,13 +1808,11 @@ function wakeItems(context: {
   };
   const unmovedLanes = context.stalled.filter((entry) => unmovedSinceWake(entry.pipeline.updatedAt));
   const unmovedChildren = context.stalledChildren.filter((entry) => unmovedSinceWake(entry.child.lastRecordAt));
-  const newTasks = unmovedLanes.length + unmovedChildren.length > 0 ? context.unstarted.filter(assignedSinceWake) : [];
   for (const entry of context.stalled) if (!unmovedLanes.includes(entry)) laneStall(entry);
   for (const entry of context.stalledChildren) if (!unmovedChildren.includes(entry)) childStall(entry);
-  for (const entry of newTasks) task(entry);
+  for (const entry of context.unstarted) task(entry);
   for (const entry of unmovedLanes) laneStall(entry);
   for (const entry of unmovedChildren) childStall(entry);
-  for (const entry of context.unstarted) if (!newTasks.includes(entry)) task(entry);
   /* On an interval wake the open lanes are the agenda; they carry no reason of
      their own, so they come last and only when nothing sharper displaced them. */
   for (const pipeline of input.pipelines) {

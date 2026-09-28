@@ -253,7 +253,7 @@ test("a stall wakes only once it has persisted across two consecutive checks", (
   expect(reasonsOf(second.verdict)).toEqual(["stalled"]);
 });
 
-test("a stall the last wake reported and that has not moved gives its place to a task assigned since", () => {
+test("a stall the last wake reported and that has not moved gives its place to every unstarted task", () => {
   const stuckSince = new Date(NOW - 120 * MINUTE).toISOString();
   const stalls = [1, 2, 3, 4, 5].map((n) => lane({ id: `pipeline_s${n}`, title: `stuck ${n}`, updatedAt: stuckSince,
     stageActivity: { lifecycle: "stalled", reason: "host_alive_transcript_silent" } }));
@@ -264,7 +264,7 @@ test("a stall the last wake reported and that has not moved gives its place to a
 
   const reported = seatTickDecision(input({ pipelines: stalls, tasks: [older, fresh], state: stateWith({ ...seen, lastWakeReasons: ["stalled"] }) }));
   expect(reasonsOf(reported.verdict)).toEqual(["stalled", "unstarted-task"]);
-  expect(idsOf(reported.verdict)).toEqual(["task_new", "pipeline_s1", "pipeline_s2", "pipeline_s3", "pipeline_s4"]);
+  expect(idsOf(reported.verdict)).toEqual(["task_old", "task_new", "pipeline_s1", "pipeline_s2", "pipeline_s3"]);
 
   /* Never reported, the stalls keep the head of the agenda. */
   const unreported = seatTickDecision(input({ pipelines: stalls, tasks: [older, fresh], state: stateWith(seen) }));
@@ -273,7 +273,31 @@ test("a stall the last wake reported and that has not moved gives its place to a
   /* A stalled lane that moved since the wake is news again and stays ahead. */
   const moved = stalls.map((stall, index) => index === 0 ? { ...stall, updatedAt: new Date(NOW - 30 * MINUTE).toISOString() } : stall);
   const again = seatTickDecision(input({ pipelines: moved, tasks: [older, fresh], state: stateWith({ ...seen, lastWakeReasons: ["stalled"] }) }));
-  expect(idsOf(again.verdict)).toEqual(["pipeline_s1", "task_new", "pipeline_s2", "pipeline_s3", "pipeline_s4"]);
+  expect(idsOf(again.verdict)).toEqual(["pipeline_s1", "task_old", "task_new", "pipeline_s2", "pipeline_s3"]);
+});
+
+test("a task assigned before the wake that first reported a stall is not deferred behind it on the next wake", () => {
+  const W1 = NOW - 90 * MINUTE;
+  const stalls = [1, 2, 3, 4, 5].map((n) => lane({ id: `pipeline_s${n}`, title: `stuck ${n}`,
+    updatedAt: new Date(NOW - 240 * MINUTE).toISOString(),
+    stageActivity: { lifecycle: "stalled", reason: "host_alive_transcript_silent" } }));
+  const assigned = card({ id: "task_early", title: "assigned before the stalls were reported",
+    updatedAt: new Date(W1 - 30 * MINUTE).toISOString() });
+  const idsOf = (verdict: SeatTickVerdict) => verdict.kind === "wake" ? verdict.items.map((item) => item.id) : [];
+
+  /* W1: the stalls pass their second check; the wake before carried no stall. */
+  const first = seatTickDecision(input({ now: W1, pipelines: stalls, tasks: [assigned],
+    state: stateWith({ lastWakeAt: new Date(W1 - 61 * MINUTE).toISOString(), lastWakeReasons: ["interval"],
+      stalledSeen: stalls.map((stall) => stall.id) }) }));
+  expect(reasonsOf(first.verdict)).toEqual(["stalled", "unstarted-task"]);
+  expect(idsOf(first.verdict)).toEqual(stalls.map((stall) => stall.id));
+  const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-w1", 0), W1);
+  expect(landed.lastWakeReasons).toContain("stalled");
+
+  /* W2: the stalls have not moved, and the task, older than W1, now leads. */
+  const second = seatTickDecision(input({ pipelines: stalls, tasks: [assigned], changeFingerprint: "fp-w2", state: landed }));
+  expect(reasonsOf(second.verdict)).toContain("unstarted-task");
+  expect(idsOf(second.verdict)).toEqual(["task_early", "pipeline_s1", "pipeline_s2", "pipeline_s3", "pipeline_s4"]);
 });
 
 test("a stage or child held on a permission request is listed as a permission item, never as a stall (#2215)", () => {
