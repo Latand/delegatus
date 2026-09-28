@@ -32,8 +32,7 @@ process.env.LLV_STATE_OWNER = "viewer";
 process.env.LLV_TOKEN = "key";
 fs.mkdirSync(dir, { recursive: true });
 let syncCalls = 0;
-let syncRead = 0;
-let syncWritten = 0;
+let padSync = 0;
 let maxSyncBody = 0;
 let failSync: number | null = null;
 let badInfo = false;
@@ -58,7 +57,7 @@ const server = http.createServer(async (request, response) => {
     const path = new URL(request.url ?? "/", "http://localhost").pathname;
     if (path === "/test/metrics") {
       response.setHeader("content-type", "application/json");
-      response.end(JSON.stringify({ syncCalls, syncRead, syncWritten, maxSyncBody, maxSyncBodyLast100: Math.max(...syncBodySizes.slice(-100), 0), maxSyncAnswerLast100: Math.max(...syncAnswerSizes.slice(-100), 0) }));
+      response.end(JSON.stringify({ syncCalls, maxSyncBody, maxSyncBodyLast100: Math.max(...syncBodySizes.slice(-100), 0), maxSyncAnswerLast100: Math.max(...syncAnswerSizes.slice(-100), 0) }));
       return;
     }
     const query = new URL(request.url ?? "/", "http://localhost").searchParams;
@@ -120,6 +119,12 @@ const server = http.createServer(async (request, response) => {
       failSync = on === "401" ? 401 : on === "1" ? 503 : null;
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ failSync }));
+      return;
+    }
+    if (path === "/test/pad-sync") {
+      padSync = Math.min(Math.max(Number(new URL(request.url ?? "/", "http://localhost").searchParams.get("bytes")) || 0, 0), 65_536);
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ padSync }));
       return;
     }
     if (path === "/test/bad-info") {
@@ -219,14 +224,13 @@ const server = http.createServer(async (request, response) => {
       syncHeld = false;
       releaseSync = null;
     }
-    response.writeHead(result.status, Object.fromEntries(result.headers));
+    // Wire bytes are counted by the test's TCP proxy; padding proves extra headers reach that count.
+    response.writeHead(result.status, { ...Object.fromEntries(result.headers), ...(path === "/api/peer/v1/boards/sync" && padSync ? { "x-test-pad": "p".repeat(padSync) } : {}) });
     response.end(resultBody, () => {
       if (path === "/api/peer/v1/boards/sync") {
         if (capturing) captured.push({ request: Buffer.concat(chunks).toString("utf8"), response: resultBody.toString("utf8"), read: request.socket.bytesRead, written: request.socket.bytesWritten });
         if (captured.length > 5_000) captured.shift();
         syncCalls++;
-        syncRead += request.socket.bytesRead;
-        syncWritten += request.socket.bytesWritten;
         maxSyncBody = Math.max(maxSyncBody, Buffer.concat(chunks).byteLength);
         syncBodySizes.push(Buffer.concat(chunks).byteLength);
         syncAnswerSizes.push(resultBody.byteLength);

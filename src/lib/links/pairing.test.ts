@@ -2,6 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import http from "node:http";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
@@ -57,6 +58,33 @@ test("a fresh outbound install pairs without saving its own public address", asy
   expect(JSON.parse(fs.readFileSync(selfFile, "utf8")).installId).toBe(self.installId);
 });
 
+/** Counts every byte on the TCP connections the sender opens to the receiver, both directions, headers included. */
+type Meter = { url: string; up: number; down: number; connections: number; requests: Buffer[] };
+const meters: net.Server[] = [];
+afterAll(() => { for (const server of meters) server.close(); });
+async function meter(target: string): Promise<Meter> {
+  const port = Number(new URL(target).port);
+  const counts: Meter = { url: "", up: 0, down: 0, connections: 0, requests: [] };
+  const server = net.createServer((client) => {
+    counts.connections++;
+    const index = counts.requests.push(Buffer.alloc(0)) - 1;
+    const upstream = net.connect(port, "127.0.0.1");
+    client.on("data", (chunk: Buffer) => { counts.up += chunk.length; counts.requests[index] = Buffer.concat([counts.requests[index]!, chunk]); upstream.write(chunk); });
+    upstream.on("data", (chunk: Buffer) => { counts.down += chunk.length; client.write(chunk); });
+    client.on("end", () => upstream.end());
+    upstream.on("end", () => client.end());
+    client.on("error", () => upstream.destroy());
+    upstream.on("error", () => client.destroy());
+  });
+  meters.push(server);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  counts.url = `http://127.0.0.1:${(server.address() as net.AddressInfo).port}`;
+  return counts;
+}
+// M.9: an idle exchange costs at most 1 KiB on the wire, request and answer together.
+const WIRE_BUDGET = 1024;
+const withinWireBudget = (bytesPerCall: number) => expect(bytesPerCall).toBeLessThanOrEqual(WIRE_BUDGET);
+
 async function request(base: string, route: string, method = "GET", body?: object) {
   const response = await fetch(base + route, { method, headers: body ? { "content-type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
   return { status: response.status, body: await response.json() as Record<string, unknown>, raw: response };
@@ -77,12 +105,13 @@ function fileMarks(directory: string): Record<string, { size: number; mtimeMs: n
 test("two installs pair, share only chosen network repos, then revoke; 100 idle exchanges stay within wire budget", async () => {
   const a = await install("A");
   const b = await install("B");
+  const wire = await meter(b);
   expect(fs.existsSync(path.join(root, "A", "links/shared.json"))).toBe(false);
   expect((await request(a, "/api/links/shared")).body.shared).toEqual({ v: 1, all: false, projects: [] });
   const minted = await request(b, "/api/links/codes", "POST");
   expect(minted.status).toBe(200);
   const code = String(minted.body.code);
-  const connected = await request(a, "/api/links/peers", "POST", { url: b, code, name: "B" });
+  const connected = await request(a, "/api/links/peers", "POST", { url: wire.url, code, name: "B" });
   expect(connected.status).toBe(200);
   expect(JSON.stringify(connected.body)).not.toContain("token");
   const aPeers = await request(a, "/api/links/peers");
@@ -129,20 +158,51 @@ test("two installs pair, share only chosen network repos, then revoke; 100 idle 
   const lan = [192, 168, 1, 9].join(".");
   expect((await request(a, "/api/links/peers", "POST", { url: `http://${lan}:8898`, code: "ABCDEF-ABCDE-ABCDE" })).body.error).toBe("http-public");
 
-  const before = (await request(b, "/test/metrics")).body as { syncCalls: number; syncRead: number; syncWritten: number };
+  const before = (await request(b, "/test/metrics")).body as { syncCalls: number };
+  const wireBefore = { up: wire.up, down: wire.down, connections: wire.connections, requests: wire.requests.length };
   const diskA = fileMarks("A");
   const diskB = fileMarks("B");
   for (let i = 0; i < 100; i++) {
     const response = await request(a, `/api/links/peers/${peerId}`, "POST");
     expect(response.status).toBe(200);
   }
-  const after = (await request(b, "/test/metrics")).body as { syncCalls: number; syncRead: number; syncWritten: number; maxSyncBodyLast100: number; maxSyncAnswerLast100: number };
+  const after = (await request(b, "/test/metrics")).body as { syncCalls: number; maxSyncBodyLast100: number; maxSyncAnswerLast100: number };
   expect(after.syncCalls - before.syncCalls).toBe(100);
   expect(after.maxSyncBodyLast100).toBeLessThanOrEqual(200);
   expect(after.maxSyncAnswerLast100).toBeLessThanOrEqual(200);
-  expect((after.syncRead - before.syncRead + after.syncWritten - before.syncWritten) / 100).toBeLessThanOrEqual(1024);
+  expect(wire.connections - wireBefore.connections).toBe(100);
+  // The upstream count is each whole request: request line, headers and body.
+  const idleRequests = wire.requests.slice(wireBefore.requests);
+  expect(idleRequests).toHaveLength(100);
+  for (const raw of idleRequests) {
+    const head = raw.subarray(0, raw.indexOf("\r\n\r\n")).toString("latin1");
+    expect(head).toStartWith("POST /api/peer/v1/boards/sync HTTP/1.1\r\n");
+    expect(head.toLowerCase()).toContain("\r\nx-delegatus-peer: ");
+    expect(raw.length).toBe(head.length + 4 + Number(/\r\ncontent-length: (\d+)/i.exec(head)![1]));
+  }
+  const up = wire.up - wireBefore.up, down = wire.down - wireBefore.down;
+  expect(up).toBe(idleRequests.reduce((sum, raw) => sum + raw.length, 0));
+  expect(up / 100).toBeGreaterThan(after.maxSyncBodyLast100);
+  expect(down / 100).toBeGreaterThan(after.maxSyncAnswerLast100);
+  withinWireBudget((up + down) / 100);
   expect(fileMarks("A")).toEqual(diskA);
   expect(fileMarks("B")).toEqual(diskB);
+  // An added answer header raises the measured count by at least its size, and
+  // enough of them turns the same budget check red.
+  const idleDown = down / 100;
+  const padded = async (bytes: number) => {
+    expect((await request(b, `/test/pad-sync?bytes=${bytes}`)).body.padSync).toBe(bytes);
+    const start = { up: wire.up, down: wire.down };
+    expect((await request(a, `/api/links/peers/${peerId}`, "POST")).status).toBe(200);
+    return { up: wire.up - start.up, down: wire.down - start.down };
+  };
+  const small = await padded(64);
+  expect(small.down).toBeGreaterThanOrEqual(idleDown + 64);
+  withinWireBudget(small.up + small.down);
+  const large = await padded(WIRE_BUDGET);
+  expect(large.down).toBeGreaterThanOrEqual(idleDown + WIRE_BUDGET);
+  expect(() => withinWireBudget(large.up + large.down)).toThrow();
+  expect((await request(b, "/test/pad-sync?bytes=0")).body.padSync).toBe(0);
   const counts = ((await request(b, "/api/links/grants")).body.grants as { today: number; sevenDays: number }[])[0]!;
   expect(counts.today).toBeGreaterThanOrEqual(100);
   expect(counts.sevenDays).toBeGreaterThanOrEqual(counts.today);
@@ -168,8 +228,9 @@ test("share-all pages more than 100 projects and the next idle exchange is one c
   }
   const a = await install("pages-A", remotes);
   const b = await install("pages-B", remotes);
+  const wire = await meter(b);
   const code = String((await request(b, "/api/links/codes", "POST")).body.code);
-  expect((await request(a, "/api/links/peers", "POST", { url: b, code })).status).toBe(200);
+  expect((await request(a, "/api/links/peers", "POST", { url: wire.url, code })).status).toBe(200);
   const peerId = ((await request(a, "/api/links/peers")).body.peers as { id: string }[])[0]!.id;
   expect((await request(a, "/api/links/shared", "POST", { v: 1, all: true, projects: [] })).status).toBe(200);
   expect((await request(b, "/api/links/shared", "POST", { v: 1, all: true, projects: [] })).status).toBe(200);
@@ -177,11 +238,13 @@ test("share-all pages more than 100 projects and the next idle exchange is one c
   const states = ((await request(b, "/api/links/shared")).body.states as { projects: { state: string }[] }[])[0]!.projects;
   expect(states).toHaveLength(206);
   expect(states.every((row) => row.state === "linked")).toBe(true);
-  const before = (await request(b, "/test/metrics")).body as { syncCalls: number; syncRead: number; syncWritten: number };
+  const before = (await request(b, "/test/metrics")).body as { syncCalls: number };
+  const wireBefore = { total: wire.up + wire.down, connections: wire.connections };
   expect((await request(a, `/api/links/peers/${peerId}`, "POST")).status).toBe(200);
-  const after = (await request(b, "/test/metrics")).body as { syncCalls: number; syncRead: number; syncWritten: number };
+  const after = (await request(b, "/test/metrics")).body as { syncCalls: number };
   expect(after.syncCalls - before.syncCalls).toBe(1);
-  expect(after.syncRead - before.syncRead + after.syncWritten - before.syncWritten).toBeLessThanOrEqual(1024);
+  expect(wire.connections - wireBefore.connections).toBe(1);
+  withinWireBudget(wire.up + wire.down - wireBefore.total);
 });
 
 test("unsharing between announcement pages resets the next HTTP request and receiver list", async () => {

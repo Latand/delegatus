@@ -38,6 +38,14 @@ type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
+/* The loading leaf draws its own header bar until the Board mounts and draws
+   the same bar itself, so a ⋯ menu opened before then is thrown away with the
+   bar it opened in. Open the Board's own menu and wait until it is open. */
+async function openBoardMenu(page: Page) {
+  await page.locator('[data-kanban-board] [data-bar="project"] [data-bar-more]').click();
+  await page.locator('[data-kanban-board] [data-bar-more][aria-expanded="true"]').waitFor();
+}
+
 describe("linked boards M1 settings", () => {
   browserTest("a mounted project row preserves sharing changed in Settings", async () => {
     const out = path.resolve(".artifacts/linked-boards-m1");
@@ -59,7 +67,7 @@ describe("linked boards M1 settings", () => {
           }
           await route.fulfill({ json: { shared: { v: 1, all: false, projects: selected }, known: [{ key: "atlas", name: "atlas" }], states: [] } });
         });
-        await page.locator('[data-bar-more]').click();
+        await openBoardMenu(page);
         await page.locator('[data-share-project-switch]').waitFor();
         selected = [];
         await page.locator('[data-share-project-switch]').click();
@@ -79,17 +87,22 @@ describe("linked boards M1 settings", () => {
     try {
       const { context, page, pageErrors } = await openFixture(browser, server.base, { width: 1280, height: 844 }, "light", "en", "reduce");
       let fail = true;
+      const reads: number[] = [];
       try {
-        await page.route("**/api/links/shared", (route) => route.fulfill(fail ? { status: 503, json: { error: "unavailable" } } : {
-          json: { shared: { v: 1, all: false, projects: [] }, known: [{ key: "atlas", name: "atlas" }], states: [] },
-        }));
-        await page.locator('[data-bar-more]').click();
+        await page.route("**/api/links/shared", (route) => {
+          reads.push(fail ? 503 : 200);
+          return route.fulfill(fail ? { status: 503, json: { error: "unavailable" } } : {
+            json: { shared: { v: 1, all: false, projects: [] }, known: [{ key: "atlas", name: "atlas" }], states: [] },
+          });
+        });
+        await openBoardMenu(page);
         const retry = page.getByRole("button", { name: "Retry sharing settings" });
         await retry.waitFor();
         expect(await page.locator('[data-share-project]').textContent()).toContain("Could not load or save sharing");
         fail = false;
         await retry.click();
         await page.locator('[data-share-project-switch]:not([disabled])').waitFor();
+        expect(reads).toEqual([503, 200]);
         expect(pageErrors).toEqual([]);
       } finally { await context.close(); }
     } finally { await browser.close(); server.stop(); }
