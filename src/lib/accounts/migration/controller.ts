@@ -5,7 +5,7 @@ import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
 import { agentRegistry, conversationLookupFromSnapshot, type AgentRegistry } from "@/lib/agent/registry";
 import { readTranscriptHosts } from "@/lib/agent/transcriptHost";
 import { yieldToRuntime } from "@/lib/cooperative";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { loadFlows, reconcileFlowConversationOwnershipCooperatively } from "@/lib/flows/store";
@@ -21,6 +21,7 @@ import { mutateTasks } from "@/lib/tasks/store";
 import { reconcileWorkflowConversationOwnershipCooperatively } from "@/lib/workflows/store";
 import { paneInfo } from "@/lib/tmux";
 import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
+import { spawnViewerResidentWorker } from "@/lib/viewerWorkerLifecycle";
 
 import { reconcileMigrationInventory, reconcileMigrations, type HeldDeliveryPort } from "./coordinator";
 import { createMigrationDeliveryPort } from "./deliveryPort";
@@ -295,12 +296,11 @@ function startInventoryControllerWorker(): void {
   if (globalController.__llvAccountMigrationInventoryWorker) return;
   const launch = inventoryWorkerLaunch();
   const useNice = fs.existsSync("/usr/bin/nice");
-  const child = spawn(useNice ? "/usr/bin/nice" : launch.executable, [
+  const child = spawnViewerResidentWorker(useNice ? "/usr/bin/nice" : launch.executable, [
     ...(useNice ? ["-n", "10", launch.executable] : []),
     launch.workerPath,
   ], {
     cwd: process.cwd(),
-    stdio: ["ignore", "inherit", "inherit"],
     env: {
       ...withoutWakatimeCredential(process.env),
       LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER: "1",
