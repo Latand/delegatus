@@ -34,6 +34,7 @@ const dist = process.env.LANDING_DIST_DIR ?? path.join(here, "dist");
 const out = process.env.LANDING_RENDER_DIR ?? path.join(os.homedir(), "Pictures/delegatus-review/landing/final");
 const only = process.argv.find((arg) => arg.startsWith("--only="))?.slice("--only=".length) ?? null;
 const checkRuns = Number(process.argv.find((arg) => arg.startsWith("--check-request="))?.slice("--check-request=".length) ?? 0);
+const swipeCheck = process.argv.find((arg) => arg.startsWith("--check-swipe="))?.slice("--check-swipe=".length);
 if (!fs.existsSync(path.join(dist, "demo/demo.js"))) throw new Error("landing/site/dist is not built: run bun landing/site/build.ts first");
 fs.mkdirSync(out, { recursive: true });
 
@@ -118,6 +119,96 @@ async function checkRequest(lang: Locale, viewport: (typeof VIEWPORTS)[number], 
   }
   await context.close();
   return failures;
+}
+
+/* A compositor touch gesture, aimed at the same visible surface a visitor touches.
+   "before" records the published or unchanged build; "after" also asserts that
+   the outer page moves in the finger's expected direction. */
+async function checkSwipe() {
+  if (swipeCheck !== "before" && swipeCheck !== "after") throw new Error("use --check-swipe=before or --check-swipe=after");
+  const rows: { lang: Locale; surface: string; direction: string; before: number; after: number; delta: number }[] = [];
+  const surfaces = [
+    ["install-prompt", '.hero [data-install="hero"] .prompt pre'],
+    ["hero-composer", ".live-hero iframe"],
+    ["hero-demo", ".live-hero iframe"],
+    ["run-demo", ".live-run iframe"],
+    ["open-demo", ".live-open iframe"],
+    ["phone-demo", ".live-phone iframe"],
+    ["plain-text", ".sec-run .sec-head h2"],
+  ] as const;
+  for (const lang of ["en", "uk"] as Locale[]) {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3 });
+    const page = await context.newPage();
+    const cdp = await context.newCDPSession(page);
+    await page.goto(`${base}?lang=${lang}`);
+    for (const [surface, selector] of surfaces) {
+      if (surface.endsWith("demo") || surface === "hero-composer") {
+        await page.locator(selector.replace(" iframe", "")).scrollIntoViewIfNeeded();
+        await frameOf(page, selector.replace(" iframe", ""));
+      }
+      for (const direction of ["down", "up"] as const) {
+        const element = page.locator(selector).first();
+        await element.scrollIntoViewIfNeeded();
+        let point = await page.evaluate((selector) => {
+          const rect = document.querySelector(selector)!.getBoundingClientRect();
+          const max = document.documentElement.scrollHeight - innerHeight;
+          const center = rect.top + Math.min(rect.height, 520) / 2;
+          scrollTo(0, Math.max(0, Math.min(max, scrollY + center - 420)));
+          const positioned = document.querySelector(selector)!.getBoundingClientRect();
+          return { x: Math.round(positioned.left + positioned.width / 2), y: Math.round(Math.max(positioned.top + 12, Math.min(positioned.bottom - 12, 420))) };
+        }, selector);
+        if (surface === "hero-composer") {
+          const field = (await frameOf(page, ".live-hero")).locator("textarea").first();
+          await field.waitFor({ state: "visible" });
+          let rect = await field.boundingBox();
+          if (!rect) throw new Error("hero composer has no box");
+          await page.evaluate((dy) => scrollBy(0, dy), rect.y + rect.height / 2 - 420);
+          rect = await field.boundingBox();
+          if (!rect) throw new Error("hero composer moved out of view");
+          point = { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) };
+        }
+        await settle(page, 250);
+        const before = await page.evaluate(() => scrollY);
+        const travel = direction === "down" ? -300 : 300;
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: point.x, y: point.y, id: 1 }] });
+        for (let step = 1; step <= 12; step += 1) {
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: point.x, y: point.y + Math.round(travel * step / 12), id: 1 }] });
+          await settle(page, 16);
+        }
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await settle(page, 450);
+        const after = await page.evaluate(() => scrollY);
+        rows.push({ lang, surface, direction, before, after, delta: after - before });
+      }
+    }
+    if (swipeCheck === "after") {
+      const hero = await frameOf(page, ".live-hero");
+      const composer = hero.locator("textarea").first();
+      await composer.fill("A visitor can still type in this field");
+      if (await composer.inputValue() !== "A visitor can still type in this field") throw new Error(`${lang}: composer did not accept typing`);
+
+      const phone = await frameOf(page, ".live-phone");
+      const columns = phone.locator(".snap-x").first();
+      await columns.scrollIntoViewIfNeeded();
+      await phone.locator("[data-phone-kanban-tab]").nth(1).click();
+      await settle(page, 300);
+      const horizontal = await columns.evaluate((element) => element.scrollLeft);
+      console.log(`${lang} phone tab navigation: scrollLeft ${horizontal}`);
+      if (horizontal < 300) throw new Error(`${lang}: phone tab navigation did not move`);
+    }
+    await context.close();
+  }
+  fs.writeFileSync(path.join(out, `swipe-${swipeCheck}.json`), `${JSON.stringify({ url: base, viewport: "390x844 touch DPR3", rows }, null, 2)}\n`);
+  for (const row of rows) console.log(`${row.lang} ${row.surface} ${row.direction}: ${row.before} -> ${row.after} (${row.delta})`);
+  if (swipeCheck === "after") {
+    const failed = rows.filter((row) => row.direction === "down" ? row.delta < 40 : row.delta > -40);
+    if (failed.length) throw new Error(`outer page did not scroll for ${failed.map((row) => `${row.lang}/${row.surface}/${row.direction}`).join(", ")}`);
+  }
+}
+
+if (swipeCheck) {
+  try { await checkSwipe(); } finally { await browser.close(); server.stop(true); }
+  process.exit(0);
 }
 
 

@@ -148,6 +148,8 @@ retry without acknowledging readiness, and retry must recover three results
 in the same iframe. Acknowledgements are checked against the rendered DOM.
 `--search-failure-only` isolates the empty-response and retry check.
 
+To check phone swipes, run `CHROME_BIN=/usr/bin/google-chrome-stable bun landing/site/capture.ts --check-swipe=after` after building. It drives 390×844 touch gestures at DPR 3 over the hero composer, each demo frame, the install prompt and plain text in both languages. The check writes `swipe-after.json` to `LANDING_RENDER_DIR` and fails if the outer page does not scroll in either direction. Use `--check-swipe=before` to record an unchanged or published baseline without asserting it.
+
 The driver records load, manual steps, automatic playback, tabs and repeated
 EN/UK switches after visiting the lower sections. Chrome traces record script
 evaluation, layout, paint and long tasks; JSON records click-to-state and

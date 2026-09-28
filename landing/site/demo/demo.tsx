@@ -69,6 +69,34 @@ let filesRevision = 1;
 function post(message: Record<string, unknown>) {
   if (window.parent !== window) window.parent.postMessage(message, "*");
 }
+
+/* A phone iframe has its own scroll root. Its feed, board and textarea can
+   consume a vertical pan before the landing gets it, even at their edges.
+   Forward only vertical finger travel; leave taps and horizontal navigation
+   to the real Viewer inside the frame. */
+if (PHONE && window.parent !== window) {
+  let touch: { x: number; y: number; lastY: number; axis: "pending" | "vertical" | "horizontal" } | null = null;
+  document.addEventListener("touchstart", (event) => {
+    const point = event.touches[0];
+    touch = event.touches.length === 1 && point ? { x: point.clientX, y: point.clientY, lastY: point.clientY, axis: "pending" } : null;
+  }, { passive: true, capture: true });
+  document.addEventListener("touchmove", (event) => {
+    const point = event.touches[0];
+    if (!touch || !point || event.touches.length !== 1) return;
+    if (touch.axis === "pending") {
+      const dx = Math.abs(point.clientX - touch.x);
+      const dy = Math.abs(point.clientY - touch.y);
+      if (Math.max(dx, dy) < 8) return;
+      touch.axis = dy > dx * 1.2 ? "vertical" : "horizontal";
+    }
+    if (touch.axis !== "vertical") return;
+    if (event.cancelable) event.preventDefault();
+    post({ type: "dlg:vertical-pan", deltaY: touch.lastY - point.clientY });
+    touch.lastY = point.clientY;
+  }, { passive: false, capture: true });
+  document.addEventListener("touchend", () => { touch = null; }, { passive: true, capture: true });
+  document.addEventListener("touchcancel", () => { touch = null; }, { passive: true, capture: true });
+}
 function announce() {
   document.documentElement.dataset.demoStep = String(step);
   post({ type: "dlg:state", step, lang: LANG, playing, nextInMs: playing ? STEP_DELAY_MS[step + 1] ?? 0 : 0 });

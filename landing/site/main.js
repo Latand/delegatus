@@ -477,6 +477,10 @@
     const live = lives.find((entry) => entry.iframe && entry.iframe.contentWindow === event.source);
     const data = event.data;
     if (!live || !data || typeof data.type !== "string") return;
+    if (data.type === "dlg:vertical-pan") {
+      if (live.phone && Number.isFinite(data.deltaY)) window.scrollBy(0, Math.max(-100, Math.min(100, data.deltaY)));
+      return;
+    }
     if (data.type === "dlg:view-error") {
       if (live.view && data.view !== live.view) {
         send(live, { type: "dlg:view", view: live.view });
