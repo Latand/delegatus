@@ -49,6 +49,11 @@ test("refuses non-loopback addresses without a key and public HTTP with a key", 
   recordViewerEntries(statePath("viewer-entries.json"), { stablePort: 8898, stableEntry: "local-entry", remoteEntryPort: null });
   fs.writeFileSync(statePath("viewer-gateway.json"), JSON.stringify({ localEntry: "trusted" }));
   expect((await saveAddress("https://203.0.113.10")).refusal).toBe("needs-remote-entry");
+  const lookup = spyOn(dns, "lookup").mockImplementation((async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as typeof dns.lookup);
+  try {
+    expect((await saveAddress("https://board.example.test")).refusal).toBe("needs-remote-entry");
+    expect(fs.existsSync(selfFile())).toBe(false);
+  } finally { lookup.mockRestore(); }
 });
 
 test("a saved public host is pinned only while the access key exists", () => {
@@ -138,6 +143,48 @@ test("a slow Check cannot restore an address cleared by a newer Save", async () 
     expect(currentSelf().self).toMatchObject({ publicUrl: null, label: "new label", check: null });
     expect(process.env.LLV_PUBLIC_HOST).toBe("");
   } finally { release(); await close(server); }
+});
+
+test("a slow Check cannot replace a newer unsafe Save of the same address", async () => {
+  process.env.LLV_TOKEN = "test-access-key";
+  let unsafe = false;
+  let holdOldSpoof = false;
+  let arrived!: () => void;
+  let release!: () => void;
+  const arrival = new Promise<void>((resolve) => { arrived = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let finalSpoofHost: string;
+  const server = http.createServer((incoming, outgoing) => {
+    const vouched = unsafe && incoming.headers.host !== `board.example.test:${port}`;
+    const answer = async () => {
+      const headers = new Headers();
+      for (const [name, value] of Object.entries(incoming.headers)) if (typeof value === "string") headers.set(name, value);
+      if (vouched) headers.set("authorization", "Bearer test-access-key");
+      const response = selfCheckRoute(new NextRequest(`http://localhost${incoming.url}`, { method: "POST", headers }));
+      outgoing.writeHead(response.status, Object.fromEntries(response.headers));
+      outgoing.end(Buffer.from(await response.arrayBuffer()));
+    };
+    if (holdOldSpoof && incoming.headers.host === finalSpoofHost) {
+      holdOldSpoof = false;
+      arrived();
+      void gate.then(answer);
+    } else void answer();
+  });
+  const port = await listen(server);
+  finalSpoofHost = LOOPBACK_PROBE_HOSTS(String(port)).at(-1)!;
+  const lookup = spyOn(dns, "lookup").mockImplementation((async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as typeof dns.lookup);
+  try {
+    const url = `http://board.example.test:${port}`;
+    expect((await saveAddress(url, "old label")).self?.check?.code).toBe("ok");
+    holdOldSpoof = true;
+    const checking = checkSavedAddress();
+    await arrival;
+    unsafe = true;
+    expect((await saveAddress(url, "new label")).self?.check?.code).toBe("open-to-internet");
+    release();
+    expect((await checking).code).toBe("ok");
+    expect(currentSelf().self).toMatchObject({ publicUrl: url, label: "new label", check: { code: "open-to-internet" } });
+  } finally { release(); lookup.mockRestore(); await close(server); }
 });
 
 test("a gateway changed after save creates a standing refusal without rewriting self.json", () => {

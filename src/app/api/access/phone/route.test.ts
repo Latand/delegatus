@@ -1,8 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import http from "node:http";
+import dns from "node:dns/promises";
+import { once } from "node:events";
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
 
 import { PhoneGateRefusal, restorePhoneAccessGate, type AccessResponse, type PhoneActionFailure } from "@/lib/access/phoneAccess";
@@ -10,6 +13,8 @@ import { internalServiceHeaders, spawnCapabilityDigest } from "@/lib/agent/calle
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { statePath } from "@/lib/configDir";
 import { linksNeedGate, readSelf, selfFile } from "@/lib/links/self";
+import { POST as postLinks } from "@/app/api/links/route";
+import { POST as selfCheckRoute } from "@/app/api/peer/v1/self-check/route";
 import { claimInstall, createInvite, redeemJoin } from "@/lib/team/members";
 import { MEMBER_COOKIE } from "@/lib/team/sessions";
 import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
@@ -104,6 +109,50 @@ function press(action: "enable" | "disable") {
     body: JSON.stringify({ action }),
   }));
 }
+
+test("Disable during the first address Save leaves no ungated public address", async () => {
+  expect((await press("enable")).status).toBe(200);
+  let arrived!: () => void;
+  let release!: () => void;
+  const arrival = new Promise<void>((resolve) => { arrived = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let held = false;
+  const server = http.createServer((incoming, outgoing) => {
+    const answer = async () => {
+      const headers = new Headers();
+      for (const [name, value] of Object.entries(incoming.headers)) if (typeof value === "string") headers.set(name, value);
+      const response = selfCheckRoute(new NextRequest(`http://localhost${incoming.url}`, { method: "POST", headers }));
+      outgoing.writeHead(response.status, Object.fromEntries(response.headers));
+      outgoing.end(Buffer.from(await response.arrayBuffer()));
+    };
+    if (!held) { held = true; arrived(); void gate.then(answer); }
+    else void answer();
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("no port");
+  const lookup = spyOn(dns, "lookup").mockImplementation((async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as typeof dns.lookup);
+  try {
+    const saving = postLinks(new NextRequest(`http://127.0.0.1:${PORT}/api/links`, {
+      method: "POST", headers: { host: `127.0.0.1:${PORT}`, "content-type": "application/json" },
+      body: JSON.stringify({ action: "save", publicUrl: `http://board.example.test:${address.port}` }),
+    }));
+    await arrival;
+    expect(fs.existsSync(selfFile())).toBe(false);
+    expect((await press("disable")).status).toBe(200);
+    expect(process.env.LLV_TOKEN).toBeUndefined();
+    release();
+    const saved = await saving;
+    expect(saved.status).toBe(409);
+    expect((await saved.json()).error).toBe("needs-access-key");
+    expect(fs.existsSync(selfFile())).toBe(false);
+  } finally {
+    release();
+    lookup.mockRestore();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
 
 const gateUntouched = () => GATE.every((name) => process.env[name] === undefined);
 

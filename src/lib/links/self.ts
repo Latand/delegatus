@@ -13,7 +13,7 @@ import { LOOPBACK_PROBE_HOSTS } from "@/runtime-host/deploymentProxy";
 
 export type CheckCode = "ok" | "needs-access-key" | "needs-remote-entry" | "http-public" | "open-to-internet" | "host-rewritten" | "tls-failure" | "unverified";
 export type SelfCheck = { code: CheckCode; at: string };
-export type LinkSelf = { v: 1; installId: string; label: string; publicUrl: string | null; check: SelfCheck | null };
+export type LinkSelf = { v: 1; installId: string; label: string; publicUrl: string | null; check: SelfCheck | null; revision?: string };
 export type SaveRefusal = "needs-access-key" | "needs-remote-entry" | "http-public" | "invalid-address";
 
 export const selfFile = () => statePath("links/self.json");
@@ -25,7 +25,8 @@ export function readSelf(): LinkSelf | null {
     const value = data as Partial<LinkSelf>;
     if (value.v !== 1 || typeof value.installId !== "string" || typeof value.label !== "string" ||
         (value.publicUrl !== null && typeof value.publicUrl !== "string")) return null;
-    return { v: 1, installId: value.installId, label: value.label, publicUrl: value.publicUrl ?? null, check: value.check ?? null };
+    return { v: 1, installId: value.installId, label: value.label, publicUrl: value.publicUrl ?? null, check: value.check ?? null,
+      revision: typeof value.revision === "string" ? value.revision : undefined };
   } catch { return null; }
 }
 
@@ -45,7 +46,7 @@ function writeSelf(value: LinkSelf): void {
   fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
   const temporary = `${filename}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    fs.writeFileSync(temporary, `${JSON.stringify(value)}\n`, { mode: 0o600, flag: "wx" });
+    fs.writeFileSync(temporary, `${JSON.stringify({ ...value, revision: randomUUID() })}\n`, { mode: 0o600, flag: "wx" });
     fs.renameSync(temporary, filename);
   } catch (error) {
     fs.rmSync(temporary, { force: true });
@@ -110,7 +111,7 @@ export async function saveAddress(input: string, label?: string): Promise<{ self
   if (url && !isLoopbackAddress(url.hostname) && !process.env.LLV_TOKEN) return { refusal: "needs-access-key" };
   const kind = url ? (await resolvedAddress(url.hostname))?.kind ?? "public" : "loopback";
   if (kind === "public" && url?.protocol === "http:") return { refusal: "http-public" };
-  if (kind !== "loopback" && !publicEntry().publishable) return { refusal: "needs-remote-entry" };
+  if (url && !isLoopbackAddress(url.hostname) && !publicEntry().publishable) return { refusal: "needs-remote-entry" };
   const old = readSelf();
   const self: LinkSelf = {
     v: 1, installId: old?.installId ?? randomUUID(), label: label?.trim().slice(0, 100) || old?.label || os.hostname(),
@@ -120,6 +121,9 @@ export async function saveAddress(input: string, label?: string): Promise<{ self
     self.check = await checkAddress(url);
     if (self.check.code === "http-public") return { refusal: "http-public" };
   }
+  // Disable reads self.json synchronously before lifting the key. Once the
+  // key is checked here, the write below runs without yielding to Disable.
+  if (url && !isLoopbackAddress(url.hostname) && !process.env.LLV_TOKEN) return { refusal: "needs-access-key" };
   writeSelf(self);
   process.env.LLV_PUBLIC_HOST = url?.hostname ?? "";
   return { self };
@@ -200,6 +204,7 @@ export async function checkSavedAddress(): Promise<SelfCheck> {
   if (!self?.publicUrl) return { code: "unverified", at: new Date().toISOString() };
   const check = await checkAddress(new URL(self.publicUrl));
   const current = readSelf();
-  if (current?.installId === self.installId && current.publicUrl === self.publicUrl) writeSelf({ ...current, check });
+  if (current?.installId === self.installId && current.publicUrl === self.publicUrl && current.revision === self.revision)
+    writeSelf({ ...current, check });
   return check;
 }
