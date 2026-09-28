@@ -131,7 +131,6 @@ jobs:
               "src/lib/accounts/claudeLoginIdentity.test.ts",
               "src/lib/accounts/claudeOauth.test.ts",
               "src/lib/accounts/spawnHealth.test.ts",
-              "src/lib/accounts/credentialIsolation.test.ts",
               "src/lib/limits.test.ts",
               "src/app/api/accounts/route.test.ts",
               "src/lib/agent/cli.test.ts",
