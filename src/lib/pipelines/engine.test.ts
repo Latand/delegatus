@@ -14,6 +14,9 @@ import { laneMovedAt } from "@/lib/pipelines/laneMovement";
 import type { AgentRegistry as AgentRegistryType } from "@/lib/agent/registry";
 import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 import { accountManager } from "@/lib/accounts/manager";
+import { selectProjectAccount } from "@/lib/accounts/projectSelection";
+import { forkClaudeHistory } from "@/lib/accounts/migration/safeHistoryCopy";
+import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
 const engineModule = await import("./engine");
@@ -8426,12 +8429,22 @@ test("a Claude session limit preserves dirty work, stage identity and review rou
     const dirtyDiff = git("diff", "--", "work.txt");
     expect(dirtyDiff).toContain("unfinished Claude edit");
     const successorPath = "/codex/stage-3-successor.jsonl";
-    readFixtures(h, {
-      "/codex/stage-3.jsonl": limitInterruptedTranscript("claude-controller-session-limit", "You've hit your session limit · resets 2:30pm (Europe/Kyiv)"),
-      [successorPath]: stageTranscript("claude-controller-successor", [
-        { type: "user", timestamp: "2026-08-27T09:42:00.000Z", message: { role: "user", content: "continue after limit" } },
-      ]),
+    const sourceId = "019f423a-d6e9-\x34903-b597-3e676b6ff3d4";
+    const forkId = "7d1c2b3a-4e5f-\x34a6b-8c7d-9e0f1a2b3c4d";
+    const sourceRoot = path.join(root, "claude-source");
+    const targetRoot = path.join(root, "claude-target");
+    fs.mkdirSync(sourceRoot);
+    fs.mkdirSync(targetRoot);
+    const sourcePath = path.join(sourceRoot, `${sourceId}.jsonl`);
+    const sourceFixture = limitInterruptedTranscript("claude-controller-session-limit", "You've hit your session limit · resets 2:30pm (Europe/Kyiv)");
+    fs.writeFileSync(sourcePath, fs.readFileSync(sourceFixture, "utf8").trimEnd().split("\n")
+      .map((line) => JSON.stringify({ ...JSON.parse(line), sessionId: sourceId })).join("\n") + "\n");
+    const fork = forkClaudeHistory({
+      sourcePath, sourceRoot, targetRoot, destination: path.join(targetRoot, `${forkId}.jsonl`),
+      sourceSessionId: sourceId, sessionId: forkId, operationId: "stage-limit-copy",
     });
+    expect(fork.rewritten).toBeGreaterThan(0);
+    readFixtures(h, { "/codex/stage-3.jsonl": sourcePath, [successorPath]: fork.path });
     usageLimitPorts(h, { kind: "available", account: {
       engine: "claude", accountId: SPARE_ACCOUNT, kind: "managed",
       home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" },
@@ -8483,6 +8496,10 @@ test("a Claude session limit preserves dirty work, stage identity and review rou
     expect(resumed.runs.find((run) => run.stageId === "build")!.attempts[1]).toMatchObject({
       state: "running", conversationId: limited.conversationId, agentPath: successorPath, accountId: SPARE_ACCOUNT,
     });
+    expect(resumed.runs.find((run) => run.stageId === "build")!.attempts[1]!.usageLimitedAccounts).toEqual(
+      switching.runs.find((run) => run.stageId === "build")!.attempts[1]!.usageLimitedAccounts,
+    );
+    expect(resumed.state).toBe("running");
     expect(h.spawnInputs).toHaveLength(3);
     expect(continuations.every((item) => item.conversationId === limited.conversationId
       && item.clientMessageId === continuations[0]!.clientMessageId)).toBe(true);
@@ -8528,6 +8545,75 @@ test("a Claude stage parks without a free allowed account and resumes its conver
   expect(resumed.runs[0]!.attempts[0]).toMatchObject({ conversationId: attempt.conversationId, state: "running" });
   expect(reseats).toEqual([`${attempt.conversationId}:${SPARE_ACCOUNT}`]);
   expect(continuations).toHaveLength(1);
+});
+
+test("a Claude stage retains the source account's confirmed reset when no allowed account is free", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports, [{ ...usageLimitStage()[0], engine: "claude", model: "fable" }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const running = loadPipelines().find((item) => item.id === pipeline.id)!;
+  const attempt = running.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([running]);
+  readFixtures(h, { "/codex/stage-1.jsonl": limitInterruptedTranscript("claude-known-reset") });
+
+  const now = Date.now();
+  const resetsAt = Math.floor(now / 1_000) + 15 * 60;
+  const observation: DurableQuotaObservation = {
+    engine: "claude", accountId: LIMITED_ACCOUNT, authenticated: true,
+    authCheckedAt: new Date(now - 1_000).toISOString(),
+    limits: { session: { usedPercent: 100, resetsAt }, weekly: null, plan: "max", capturedAt: Math.floor(now / 1_000) },
+    provenance: { source: "live", reason: null, staleSince: null },
+    observedAt: new Date(now - 1_000).toISOString(), bootId: "known-reset",
+  };
+  const selection = (unavailableIds: string[] = []) => selectProjectAccount({
+    project: pipeline.project, engine: "claude", model: "fable",
+    accounts: [{ id: LIMITED_ACCOUNT, authPresent: true }, { id: SPARE_ACCOUNT, authPresent: true }],
+    observations: [observation],
+    bindings: [{ engine: "claude", accountId: LIMITED_ACCOUNT, project: pipeline.project, createdAt: new Date(now).toISOString() }],
+    unavailableIds, now,
+  });
+  expect(selection()).toMatchObject({ kind: "exhausted", resetsAt });
+  h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT];
+  h.ports.accountLabel = () => LIMITED_ACCOUNT_LABEL;
+  h.ports.resolveProjectSpawn = (_engine, request) => {
+    const selected = selection(request.unavailableIds ?? []);
+    return selected.kind === "available"
+      ? { kind: "unavailable", allowedAccountIds: [LIMITED_ACCOUNT] }
+      : selected;
+  };
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "known-reset-registry.json"));
+  registry.recordQuotaObservation(observation);
+  setAgentRegistryForTests(registry);
+  try {
+    h.ports.claudeAccountReset = defaultPipelinePorts().claudeAccountReset;
+  } finally {
+    setAgentRegistryForTests(null);
+  }
+  expect(h.ports.claudeAccountReset?.(LIMITED_ACCOUNT, "fable")).toBe(resetsAt);
+
+  await tickPipelines([], h.ports);
+  const parked = loadPipelines().find((item) => item.id === pipeline.id)!;
+  expect(parked).toMatchObject({
+    state: "needs_decision",
+    stateDetail: `rate limited until ${new Date(resetsAt * 1_000).toISOString()}, account ${LIMITED_ACCOUNT_LABEL}`,
+  });
+  expect(parked.runs[0]!.attempts[0]!.usageLimitedAccounts).toMatchObject([
+    { accountId: LIMITED_ACCOUNT, resetsAt },
+  ]);
+
+  const dateNow = spyOn(Date, "now").mockImplementation(() => (resetsAt + 1) * 1_000);
+  try {
+    h.ports.resumeSeveredTurn = async () => true;
+    await tickPipelines([], h.ports);
+    const resumed = loadPipelines().find((item) => item.id === pipeline.id)!;
+    expect(resumed.state).toBe("running");
+    expect(resumed.runs[0]!.attempts).toHaveLength(1);
+    expect(resumed.runs[0]!.attempts[0]).toMatchObject({ state: "running", conversationId: attempt.conversationId });
+  } finally {
+    dateNow.mockRestore();
+  }
 });
 
 test("a parked Claude stage continues its original conversation after that account's capacity returns", async () => {

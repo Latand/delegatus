@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { accountManager } from "@/lib/accounts/manager";
+import { selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
 import { AccountProjectBindingsUnreadableError, allowedAccountIdsForProject, projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
 import {
   ENGINE_NOT_CONNECTED,
@@ -291,6 +292,8 @@ export interface PipelinePorts {
   conversationMigrationTarget?(conversationId: string): string | null;
   /** A fresh live quota reading after the limit proves the source recovered. */
   claudeAccountRecovered?(accountId: string, limitedAt: number, model: string | null): boolean;
+  /** Confirmed reset of the source account's governing exhausted quota window. */
+  claudeAccountReset?(accountId: string, model: string | null): number | null;
   sleep?(milliseconds: number): Promise<void>;
   durableTurnEvidence(engine: EffectivePipelineRole["engine"], transcriptPath: string): Promise<StageTurnEvidence | null>;
   headCwd(transcriptPath: string): string | null;
@@ -1326,6 +1329,17 @@ export function defaultPipelinePorts(
       }, Date.now(), { model });
       return remaining !== null && remaining.percent > 0;
     },
+    claudeAccountReset: (accountId, model) => {
+      const selection = selectHeadlessAccount(
+        [{ id: accountId, authPresent: true }],
+        registry.quotaObservations("claude").filter((item) => item.accountId === accountId),
+        accountId,
+        [],
+        Date.now(),
+        model,
+      );
+      return selection.kind === "exhausted" ? selection.resetsAt : null;
+    },
     sleep: (milliseconds) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)),
     durableTurnEvidence: durableStageTurnEvidence,
     headCwd: (transcriptPath) => headCwd(transcriptPath),
@@ -1649,7 +1663,13 @@ function recoverUsageLimitedAttempt(
   let accountLabel = "unknown";
   if (fromTranscript?.accountId === accountId) accountLabel = fromTranscript.label;
   else if (accountId) accountLabel = ports.accountLabel?.(attempt.effectiveRole.engine, accountId) ?? accountId;
-  const terminalDetail = rateLimitParkDetail(knownReset(usageLimit.resetsAt), accountLabel);
+  const limitedEngine = attempt.effectiveRole.engine;
+  const previousLimit = usageLimitsOn(attempt, limitedEngine).find((limited) => limited.accountId === accountId);
+  const terminalReset = limitedEngine === "claude"
+    ? knownReset(usageLimit.resetsAt, previousLimit?.resetsAt,
+      accountId ? ports.claudeAccountReset?.(accountId, attempt.effectiveRole.model) : null)
+    : knownReset(usageLimit.resetsAt);
+  const terminalDetail = rateLimitParkDetail(terminalReset, accountLabel);
   attempt.state = "failed";
   attempt.completedAt = ports.now();
   attempt.error = terminalDetail;
@@ -1659,11 +1679,9 @@ function recoverUsageLimitedAttempt(
     return;
   }
 
-  const limitedEngine = attempt.effectiveRole.engine;
-  const previousLimit = usageLimitsOn(attempt, limitedEngine).find((limited) => limited.accountId === accountId);
   attempt.usageLimitedAccounts = [
     ...(attempt.usageLimitedAccounts ?? []).filter((limited) => !(limited.accountId === accountId && (limited.engine ?? limitedEngine) === limitedEngine)),
-    { ...previousLimit, accountId, engine: limitedEngine, resetsAt: knownReset(usageLimit.resetsAt) },
+    { ...previousLimit, accountId, engine: limitedEngine, resetsAt: terminalReset },
   ];
   const retryWithLimits = () => {
     pipeline.state = "running";
@@ -1760,11 +1778,18 @@ async function continueUsageLimitedClaudeAttempt(
   const pinnedAccount = attemptStage(stage, attempt).account?.trim() || null;
   const accountId = current?.accountId ?? attempt.accountId ?? pinnedAccount;
   let limited = usageLimitsOn(attempt, "claude");
-  const previousLimit = limited.find((item) => item.accountId === accountId);
-  if (usageLimit && accountId && (!previousLimit || previousLimit.limitedAt !== limitedAt)) {
+  /* A Claude fork copies the source's terminal API-error and timestamp into
+     the successor before its held continuation is delivered. That copied turn
+     still belongs to its source account and keeps the same delivery receipt. */
+  const recordedTurn = limitedAt === null ? null : limited.find((item) => item.limitedAt === limitedAt);
+  if (usageLimit && accountId && !recordedTurn) {
+    const resetsAt = knownReset(
+      usageLimit.resetsAt,
+      ports.claudeAccountReset?.(accountId, attempt.effectiveRole.model),
+    );
     attempt.usageLimitedAccounts = [
       ...(attempt.usageLimitedAccounts ?? []).filter((item) => item.accountId !== accountId || (item.engine ?? "claude") !== "claude"),
-      { accountId, engine: "claude", resetsAt: usageLimit.resetsAt, limitedAt, turnId: crypto.randomUUID() },
+      { accountId, engine: "claude", resetsAt, limitedAt, turnId: crypto.randomUUID() },
     ];
     limited = usageLimitsOn(attempt, "claude");
     persist();
