@@ -1,7 +1,7 @@
 import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { externalRelayTempRoot } from "./runner";
 import { procBackend } from "@/lib/proc";
 import {
   ensureExternalRelayPollers,
@@ -11,9 +11,14 @@ import {
 } from "./poller";
 import { putRun, readRunLedger, updateRelayStore } from "./store";
 import { startTestRelay } from "./testRelay";
-const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-poller-test-"));
+const root = fs.mkdtempSync(path.join(externalRelayTempRoot(), "relay-poller-test-"));
 process.env.LLV_STATE_DIR = root;
-afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+const runDirs: string[] = [];
+afterAll(() => {
+  stopExternalRelayPollers();
+  for (const dir of runDirs) fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true });
+});
 test("boot sweep settles dead owners, keeps live owners, and removes run directories", async () => {
   let completed = 0;
   const server = await startTestRelay(
@@ -48,11 +53,12 @@ test("boot sweep settles dead owners, keeps live owners, and removes run directo
       ],
     }));
     const staleDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "llv-external-relay-test-"),
+      path.join(externalRelayTempRoot(), "llv-external-relay-test-"),
     );
     const liveDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "llv-external-relay-test-"),
+      path.join(externalRelayTempRoot(), "llv-external-relay-test-"),
     );
+    runDirs.push(staleDir, liveDir);
     const row = {
       requestId: "stale",
       leaseId: "lease",
@@ -78,7 +84,6 @@ test("boot sweep settles dead owners, keeps live owners, and removes run directo
     expect(fs.existsSync(staleDir)).toBe(false);
     expect(fs.existsSync(liveDir)).toBe(true);
     expect(readRunLedger().runs.map((run) => run.requestId)).toEqual(["live"]);
-    fs.rmSync(liveDir, { recursive: true });
   } finally {
     await server.close();
   }
@@ -153,5 +158,74 @@ test("429 waits for Retry-After before another claim", async () => {
   } finally {
     stopExternalRelayPollers();
     await server.close();
+  }
+});
+test("route module copy controls the instrumentation poller", async () => {
+  const routeCopy = await import("./poller.ts" + "?route-copy") as typeof import("./poller");
+  const server = await startTestRelay(() => ({
+    status: 401,
+    body: { error: { code: "unauthorized", message: "refused" } },
+  }));
+  let changedClaims = 0;
+  const changedServer = await startTestRelay(() => (
+    changedClaims++,
+    { status: 426, body: { error: { code: "unsupported_version", message: "upgrade" } } }
+  ));
+  try {
+    updateRelayStore((store) => ({
+      ...store,
+      relays: store.relays.map((relay) => ({
+        ...relay,
+        api_base: `${server.origin}/v1`,
+        paused: false,
+      })),
+    }));
+    ensureExternalRelayPollers();
+    for (
+      let i = 0;
+      i < 30 && relayPollerStatus("relay").state !== "credential_rejected";
+      i++
+    )
+      await Bun.sleep(20);
+    expect(routeCopy.relayPollerStatus("relay").state).toBe(
+      "credential_rejected",
+    );
+    updateRelayStore((store) => ({
+      ...store,
+      relays: store.relays.map((relay) => ({ ...relay, paused: true })),
+    }));
+    routeCopy.refreshExternalRelayPollers("relay");
+    expect(relayPollerStatus("relay").state).toBe("paused");
+    updateRelayStore((store) => ({
+      ...store,
+      relays: store.relays.map((relay) => ({
+        ...relay, api_base: `${changedServer.origin}/v1`, paused: false,
+      })),
+    }));
+    routeCopy.refreshExternalRelayPollers("relay");
+    for (
+      let i = 0;
+      i < 30 && relayPollerStatus("relay").state !== "unsupported_version";
+      i++
+    )
+      await Bun.sleep(20);
+    expect(relayPollerStatus("relay").state).toBe("unsupported_version");
+    const priorClaims = changedClaims;
+    updateRelayStore((store) => ({
+      ...store,
+      relays: [...store.relays, { ...store.relays[0], id: "new_relay" }],
+    }));
+    routeCopy.refreshExternalRelayPollers("new_relay");
+    for (let i = 0; i < 30 && changedClaims === priorClaims; i++) await Bun.sleep(20);
+    expect(changedClaims).toBeGreaterThan(priorClaims);
+    expect(relayPollerStatus("new_relay").state).toBe("unsupported_version");
+    updateRelayStore((store) => ({ ...store, relays: [] }));
+    routeCopy.refreshExternalRelayPollers();
+    expect(relayPollerStatus("relay").state).toBe("paused");
+    expect(relayPollerStatus("new_relay").state).toBe("paused");
+  } finally {
+    routeCopy.stopExternalRelayPollers();
+    await server.close();
+    await changedServer.close();
   }
 });

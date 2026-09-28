@@ -116,9 +116,12 @@ export function readRelayStore(): RelayStore {
 export function updateRelayStore(
   change: (store: RelayStore) => RelayStore,
 ): RelayStore {
-  const next = change(readRelayStore());
-  write(externalRelayFile("relays"), next);
-  return next;
+  const file = externalRelayFile("relays");
+  return withFileLock(file, () => {
+    const next = change(readRelayStore());
+    write(file, next);
+    return next;
+  });
 }
 export function readRunLedger(): RunLedger {
   const ledger = read(externalRelayFile("runs"), () => ({
@@ -133,6 +136,13 @@ export function updateRunLedger(
   change: (ledger: RunLedger) => RunLedger,
 ): RunLedger {
   const file = externalRelayFile("runs");
+  return withFileLock(file, () => {
+    const next = change(readRunLedger());
+    write(file, next);
+    return next;
+  });
+}
+function withFileLock<T>(file: string, action: () => T): T {
   const lock = `${file}.lock`;
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   let fd: number | null = null;
@@ -159,7 +169,7 @@ export function updateRunLedger(
           fs.rmSync(lock, { force: true });
         }
       }
-      if (Date.now() >= deadline) throw new Error("relay run ledger is busy");
+      if (Date.now() >= deadline) throw new Error("relay store is busy");
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
     }
   }
@@ -171,19 +181,22 @@ export function updateRunLedger(
         identity: procBackend.processIdentity(process.pid),
       }),
     );
-    const next = change(readRunLedger());
-    write(file, next);
-    return next;
+    return action();
   } finally {
     fs.closeSync(fd);
     fs.rmSync(lock, { force: true });
   }
 }
-export function putRun(record: RunRecord, maxConcurrent?: number): boolean {
-  let added = false;
+export function reserveRun(
+  record: RunRecord,
+  maxConcurrent?: number,
+): "added" | "duplicate" | "full" {
+  let outcome: "added" | "duplicate" | "full" = "full";
   updateRunLedger((ledger) => {
-    if (ledger.runs.some((run) => run.requestId === record.requestId))
+    if (ledger.runs.some((run) => run.requestId === record.requestId)) {
+      outcome = "duplicate";
       return ledger;
+    }
     if (
       maxConcurrent !== undefined &&
       ledger.runs.filter(
@@ -192,10 +205,13 @@ export function putRun(record: RunRecord, maxConcurrent?: number): boolean {
       ).length >= maxConcurrent
     )
       return ledger;
-    added = true;
+    outcome = "added";
     return { ...ledger, runs: [...ledger.runs, record] };
   });
-  return added;
+  return outcome;
+}
+export function putRun(record: RunRecord, maxConcurrent?: number): boolean {
+  return reserveRun(record, maxConcurrent) === "added";
 }
 export function changeRun(
   requestId: string,

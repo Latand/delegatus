@@ -1,17 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveBinary, resolveHostBinary } from "@/lib/agent/cli";
+import { resolveBinary } from "@/lib/agent/cli";
 import {
   claudeManagedEnvironment,
   claudeProviderForHome,
-  claudeProviderLauncherPath,
 } from "@/lib/accounts/claude";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { statePath } from "@/lib/configDir";
-import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 import {
+  claudeProviderCommand,
   launchDetached,
   headlessRuns,
+  reviewerEnvironment,
   terminateHeadlessReviewerGroup,
   type HeadlessReviewRuntime,
   type LiveRun,
@@ -62,17 +62,8 @@ export type EphemeralCommand = {
   sessionId: null;
   reviewerPath: null;
 };
-function scrub(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const env = withoutWakatimeCredential(base);
-  for (const key of [
-    "LLV_TOKEN",
-    "LLV_STATE_OWNER",
-    "LLV_SPAWN_CAPABILITY",
-    "LLV_RELAY_CREDENTIAL",
-  ])
-    delete env[key];
-  return env;
-}
+const answerEnvironment = (base: NodeJS.ProcessEnv) =>
+  reviewerEnvironment(base, undefined, ["LLV_SPAWN_CAPABILITY", "LLV_RELAY_CREDENTIAL"]);
 function answerHome(account: AccountContext): string {
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(account.accountId))
     throw new EphemeralProfileError("invalid account id");
@@ -162,26 +153,8 @@ export function buildEphemeralCommand(
       ...(request.effort ? ["--effort", request.effort] : []),
     ];
     return {
-      command: provider ? "bun" : resolveBinary("claude"),
-      args: provider
-        ? [
-            claudeProviderLauncherPath(request.account.home),
-            "--home",
-            request.account.home,
-            "--base-url",
-            provider.baseUrl,
-            "--default-model",
-            provider.model,
-            "--small-model",
-            provider.smallFastModel ?? "",
-            "--header-names",
-            JSON.stringify(provider.customHeaderNames ?? []),
-            "--",
-            resolveHostBinary("claude"),
-            ...args,
-          ]
-        : args,
-      env: scrub(baseEnv),
+      ...claudeProviderCommand(request.account.home, provider, args),
+      env: answerEnvironment(baseEnv),
       stdin: request.prompt,
       outputPath: null,
       sessionId: null,
@@ -261,7 +234,7 @@ export function buildEphemeralCommand(
   return {
     command: resolveBinary("codex"),
     args,
-    env: scrub({ ...request.account.env, CODEX_HOME: home }),
+    env: answerEnvironment({ ...request.account.env, CODEX_HOME: home }),
     stdin: request.prompt,
     outputPath: output,
     sessionId: null,

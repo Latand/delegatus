@@ -22,13 +22,16 @@ import { progressForEvent } from "./progress";
 import {
   changeRun,
   dropRun,
-  putRun,
+  reserveRun,
   readRunLedger,
   type PairedRelay,
   type RelayTargetSettings,
 } from "./store";
 
-const active = new Map<string, number>();
+const globalRelay = globalThis as typeof globalThis & {
+  __llvExternalRelayActive?: Map<string, number>;
+};
+const active = (globalRelay.__llvExternalRelayActive ??= new Map<string, number>());
 export function externalRelayTempRoot(): string {
   const temporary = path.resolve(os.tmpdir());
   const home = path.resolve(os.homedir());
@@ -61,12 +64,10 @@ export function advertisedSlots(
       ),
     }));
 }
-function reserve(relay: PairedRelay, target: RelayTargetSettings): boolean {
+function markActive(relay: PairedRelay, target: RelayTargetSettings): void {
   const key = countKey(relay.id, target.id);
   const count = active.get(key) ?? 0;
-  if (count >= target.concurrency) return false;
   active.set(key, count + 1);
-  return true;
 }
 function free(relay: PairedRelay, target: RelayTargetSettings) {
   const key = countKey(relay.id, target.id);
@@ -145,34 +146,27 @@ export async function runClaimedRequest(
     await complete(relay, requestId, body, () => heartbeatAt, stallMs);
     return body;
   };
-  if (!request) return finish(declined(leaseId, "invalid_request"));
+  if (readRunLedger().runs.some((run) => run.requestId === requestId)) return null;
+  if (!request)
+    return finish(
+      declined(
+        leaseId,
+        raw && typeof raw === "object" &&
+          typeof (raw as Record<string, unknown>).kind === "string" &&
+          (raw as Record<string, unknown>).kind !== "answer"
+          ? "unsupported_kind"
+          : "invalid_request",
+      ),
+    );
   const target = relay.targets.find((item) => item.id === request.target_id);
   if (!target || !target.engine || !target.model)
     return finish(declined(leaseId, "not_configured"));
   if (relay.paused || !target.enabled)
     return finish(declined(leaseId, "disabled"));
-  if (!reserve(relay, target)) return finish(declined(leaseId, "busy"));
   let runDir: string | null = null;
   let recorded = false;
   const identityTimers: ReturnType<typeof setTimeout>[] = [];
   try {
-    const selection = accountManager.resolveHeadlessSpawn(
-      target.engine,
-      null,
-      [],
-      target.project,
-      target.model,
-    );
-    if (selection.kind !== "available")
-      return await finish(
-        declined(
-          leaseId,
-          "no_capacity",
-          selection.kind === "exhausted" && selection.resetsAt
-            ? Math.max(0, Math.ceil((selection.resetsAt - Date.now()) / 1000))
-            : null,
-        ),
-      );
     runDir = fs.mkdtempSync(
       path.join(externalRelayTempRoot(), "llv-external-relay-"),
     );
@@ -190,9 +184,28 @@ export async function runClaimedRequest(
       runDir,
       startedAt: new Date().toISOString(),
     };
-    if (!putRun(record, target.concurrency))
-      return await finish(declined(leaseId, "busy"));
+    const admission = reserveRun(record, target.concurrency);
+    if (admission === "duplicate") return null;
+    if (admission === "full") return await finish(declined(leaseId, "busy"));
     recorded = true;
+    markActive(relay, target);
+    const selection = accountManager.resolveHeadlessSpawn(
+      target.engine,
+      null,
+      [],
+      target.project,
+      target.model,
+    );
+    if (selection.kind !== "available")
+      return await finish(
+        declined(
+          leaseId,
+          "no_capacity",
+          selection.kind === "exhausted" && selection.resetsAt
+            ? Math.max(0, Math.ceil((selection.resetsAt - Date.now()) / 1000))
+            : null,
+        ),
+      );
     let newestProgress: ExternalRelayProgress | null = null;
     let leaseLost = false;
     let beatBusy = false;
@@ -260,8 +273,8 @@ export async function runClaimedRequest(
       } catch (error) {
         if (
           error instanceof ExternalRelayError &&
-          error.status === 409 &&
-          error.code === "lease_lost"
+          (error.status === 404 ||
+            (error.status === 409 && error.code === "lease_lost"))
         ) {
           leaseLost = true;
           run.cancel();
@@ -316,7 +329,7 @@ export async function runClaimedRequest(
     for (const timer of identityTimers) clearTimeout(timer);
     if (recorded) dropRun(requestId);
     if (runDir) fs.rmSync(runDir, { recursive: true, force: true });
-    free(relay, target);
+    if (recorded) free(relay, target);
     onFreed?.();
   }
 }

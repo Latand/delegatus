@@ -76,3 +76,33 @@ test("two Viewer processes cannot reserve the same target slot", async () => {
   ))
     dropRun(run.requestId);
 });
+test("concurrent relay settings updates retain both changes", async () => {
+  const childFile = path.join(root, "update-child.ts");
+  const modulePath = path.join(process.cwd(), "src/lib/externalRelay/store.ts");
+  fs.writeFileSync(childFile, `import { updateRelayStore } from ${JSON.stringify(modulePath)};
+updateRelayStore((store) => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  return { ...store, pending: [...store.pending, {
+    id: process.env.RELAY_TEST_ID!, origin: "https://example.test",
+    api_base: "https://example.test/v1", name: "Test", description: "",
+    limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
+    pairing_id: "pair", poll_secret: "x".repeat(43), code: "1234-5678",
+    verify_url: null, expires_at: new Date().toISOString(), poll_interval_s: 2,
+  }] };
+});
+`);
+  const children = ["update_a", "update_b"].map((id) =>
+    Bun.spawn([process.execPath, childFile], {
+      env: { ...process.env, LLV_STATE_DIR: root, RELAY_TEST_ID: id },
+      stdout: "pipe", stderr: "pipe",
+    }),
+  );
+  const outputs = await Promise.all(children.map(async (child) => ({
+    code: await child.exited,
+    error: await new Response(child.stderr).text(),
+  })));
+  expect(outputs.map((item) => item.code)).toEqual([0, 0]);
+  expect(readRelayStore().pending.map((item) => item.id).sort()).toEqual([
+    "update_a", "update_b",
+  ]);
+});

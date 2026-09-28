@@ -5,7 +5,8 @@ import path from "node:path";
 import { accountManager } from "@/lib/accounts/manager";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { advertisedSlots, runClaimedRequest, runningCount } from "./runner";
-import { readRunLedger, type PairedRelay } from "./store";
+import { readRunLedger, updateRelayStore, type PairedRelay } from "./store";
+import { confirmRelayPairing } from "./pairing";
 import { sampleRequest } from "./protocol.test";
 import { startTestRelay } from "./testRelay";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-runner-test-"));
@@ -206,6 +207,99 @@ test("completion retry reuses the identical body after a lost response", async (
     expect(outcome?.outcome).toBe("answered");
     expect(bodies).toHaveLength(2);
     expect(bodies[0]).toEqual(bodies[1]);
+  } finally {
+    await server.close();
+  }
+});
+test("unknown request kind is declined as unsupported", async () => {
+  const completions: any[] = [];
+  const server = await startTestRelay((_req, body) => {
+    completions.push(body);
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  try {
+    const outcome = await runClaimedRequest(
+      relay(`${server.origin}/v1`),
+      { ...sampleRequest, kind: "summarize", request_id: "rq_kind" },
+    );
+    expect(outcome).toMatchObject({ outcome: "declined", reason: "unsupported_kind" });
+    expect(completions).toHaveLength(1);
+  } finally {
+    await server.close();
+  }
+});
+test("404 heartbeat drops the lease and cancels the child", async () => {
+  let completes = 0;
+  const server = await startTestRelay((req) =>
+    req.url?.endsWith("/heartbeat")
+      ? { status: 404, body: { error: { code: "not_found", message: "gone" } } }
+      : (completes++, { body: { status: "accepted", duplicate: false } }),
+  );
+  const script = stub(`await Bun.stdin.text();await Bun.sleep(5000);`);
+  try {
+    const outcome = await runClaimedRequest(
+      relay(`${server.origin}/v1`),
+      { ...sampleRequest, request_id: "rq_404" },
+      undefined,
+      { command: script },
+    );
+    expect(outcome).toBeNull();
+    expect(completes).toBe(0);
+  } finally {
+    await server.close();
+  }
+});
+test("a duplicate claim leaves the held lease alone", async () => {
+  const completions: any[] = [];
+  const server = await startTestRelay((req, body) =>
+    req.url?.endsWith("/heartbeat")
+      ? { body: { status: "ok" } }
+      : (completions.push(body), { body: { status: "accepted", duplicate: false } }),
+  );
+  const script = stub(
+    `const a=process.argv.slice(2);await Bun.stdin.text();await Bun.sleep(500);await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`,
+  );
+  try {
+    const paired = relay(`${server.origin}/v1`);
+    const request = { ...sampleRequest, request_id: "rq_duplicate" };
+    const first = runClaimedRequest(paired, request, undefined, { command: script });
+    for (let i = 0; i < 30 && readRunLedger().runs.length === 0; i++) await Bun.sleep(20);
+    expect(readRunLedger().runs.map((run) => run.requestId)).toContain(request.request_id);
+    const routeCopy = await import("./runner.ts" + "?route-copy") as typeof import("./runner");
+    expect(routeCopy.runningCount(paired.id, "target_1")).toBe(1);
+    expect(await runClaimedRequest({ ...paired, paused: true }, request, undefined, { command: script })).toBeNull();
+    expect(readRunLedger().runs.map((run) => run.requestId)).toContain(request.request_id);
+    expect((await first)?.outcome).toBe("answered");
+    expect(completions).toHaveLength(1);
+  } finally {
+    await server.close();
+  }
+});
+test("newly confirmed targets default to a 30 minute hard cap", async () => {
+  const owner = {
+    namespace: "test", id: "owner", display_name: "Owner", handle: null,
+  };
+  const target = {
+    target_id: "target", name: "Target", answered_by: "install" as const,
+    fallback: "service" as const,
+  };
+  const server = await startTestRelay(() => ({
+    body: { credential: "x".repeat(43), version: 1, owner, targets: [target] },
+  }));
+  try {
+    updateRelayStore((store) => ({
+      ...store,
+      pending: [{
+        id: "pending_cap", origin: server.origin, api_base: `${server.origin}/v1`,
+        name: "Test", description: "", limits: relay(`${server.origin}/v1`).limits,
+        pairing_id: "pair_cap", poll_secret: "x".repeat(43),
+        code: "1234-5678", verify_url: null,
+        expires_at: new Date(Date.now() + 60_000).toISOString(),
+        poll_interval_s: 2, owner, targets: [target],
+      }],
+    }));
+    const confirmed = await confirmRelayPairing("pending_cap", owner.id);
+    expect(confirmed.targets[0].hardCapMinutes).toBe(30);
   } finally {
     await server.close();
   }

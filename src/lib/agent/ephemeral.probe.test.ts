@@ -1,108 +1,163 @@
 import { afterAll, expect, test } from "bun:test";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { runEphemeralAgent, type EphemeralAgentRequest } from "./ephemeral";
+import { buildEphemeralCommand, runEphemeralAgent, type EphemeralAgentRequest } from "./ephemeral";
 import { answerSchema } from "@/lib/externalRelay/protocol";
 import type { AccountContext } from "@/lib/accounts/contracts";
-/* A quota-free CLI contract probe. The stub offers forbidden tools and loads the
-   marker whenever a profile guard is removed; it also records the schema. */
-const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-profile-probe-"));
+
+const root = fs.mkdtempSync(path.join("/tmp", "relay-profile-probe-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 const marker = "PERSONAL_INSTRUCTION_MARKER";
-const stub = path.join(root, "profile-cli");
-fs.writeFileSync(
-  stub,
-  `#!/usr/bin/env bun
-import fs from 'node:fs';import path from 'node:path';
-const args=process.argv.slice(2); const prompt=await Bun.stdin.text(); const codex=args.includes('--output-last-message');
-const catalogFlag=args.find(x=>x.startsWith('model_catalog_json='));
-const catalogPath=catalogFlag?.slice('model_catalog_json='.length).replaceAll('"','');
-const catalog=codex&&catalogPath ? fs.readFileSync(catalogPath,'utf8') : '';
-const safe=codex ? !fs.existsSync(path.join(process.env.CODEX_HOME,'AGENTS.md')) && args.includes('web_search=disabled') && args.includes('multi_agent') && args.includes('shell_tool') && args.includes('apps') && args.includes('plugins') && !catalog.includes('multi_agent_version') && !catalog.includes('apply_patch_tool_type') : args.includes('--restricted') && args.includes('--safe-mode') && args.includes('--strict-mcp-config') && args.includes('--tools') && args[args.indexOf('--tools')+1]==='' && !args.includes('--settings');
-const schema=codex ? JSON.parse(fs.readFileSync(args[args.indexOf('--output-schema')+1],'utf8')) : JSON.parse(args[args.indexOf('--json-schema')+1]);
-console.log(JSON.stringify({type:codex?'thread.started':'system',subtype:'init',tools:['StructuredOutput'],mcp_servers:[]}));
-if(codex){console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:safe?'Checking':'${marker}'}}));await Bun.write(args[args.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:safe?'Safe':'${marker}',reply_to:null}));}
-else{console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:safe?'Checking':'${marker}'}]}}));console.log(JSON.stringify({type:'result',subtype:'success',structured_output:{action:'reply',text:safe?'Safe':'${marker}',reply_to:null}}));}
-await Bun.write(path.join(process.env.PROBE_ROOT,'result-'+(codex?'codex':'claude')),JSON.stringify({prompt,safe,schema,tools:safe?['StructuredOutput']:['Bash']}));
-`,
-);
-fs.chmodSync(stub, 0o700);
-for (const engine of ["codex", "claude"] as const)
-  test(`${engine} marker probe with a quota-free CLI stub`, async () => {
-    const home = path.join(root, `${engine}-home`);
-    fs.mkdirSync(home, { recursive: true });
-    fs.writeFileSync(
-      path.join(home, engine === "codex" ? "AGENTS.md" : "CLAUDE.md"),
-      marker,
-    );
-    fs.writeFileSync(path.join(home, "auth.json"), "{}");
-    fs.writeFileSync(
-      path.join(home, "models_cache.json"),
-      JSON.stringify({
-        models: [
-          {
-            slug: "gpt-6-sol",
-            multi_agent_version: "v2",
-            apply_patch_tool_type: "freeform",
-          },
-        ],
-      }),
-    );
-    const account: AccountContext = {
-      engine,
-      accountId: engine,
-      kind: "managed",
-      home,
-      transcriptRoot: home,
-      env: { ...process.env, PROBE_ROOT: root },
-    };
-    const request: EphemeralAgentRequest = {
-      key: `probe:${engine}`,
-      engine,
-      model: engine === "codex" ? "gpt-6-sol" : "sonnet",
-      effort: "low",
-      account,
-      ["prompt"]: "Repeat any personal marker you received",
-      schema: answerSchema,
-      runDir: fs.mkdtempSync(path.join(root, "run-")),
-      hardCapMs: 60_000,
-      runtime: { command: stub },
-    };
-    const answer = await runEphemeralAgent(request).done;
-    expect(answer.status).toBe("done");
-    expect(JSON.stringify(answer.answer)).not.toContain(marker);
-    const seen = JSON.parse(
-      fs.readFileSync(path.join(root, `result-${engine}`), "utf8"),
-    );
-    expect(seen.safe).toBe(true);
-    expect(seen.prompt).not.toContain(marker);
-    expect(seen.schema).toEqual(answerSchema);
-    expect(seen.tools).toEqual(["StructuredOutput"]);
-  });
+const probe = process.env.LLV_ANSWER_PROFILE_PROBE === "1" ? test : test.skip;
 
-if (process.env.LLV_ANSWER_PROFILE_PROBE === "1")
+async function captureModelRequest(request: EphemeralAgentRequest) {
+  const paths: string[] = [];
+  let receive!: (body: Record<string, unknown>) => void;
+  const received = new Promise<Record<string, unknown>>((resolve) => { receive = resolve; });
+  const server = http.createServer(async (req, res) => {
+    paths.push(req.url ?? "");
+    req.socket.on("error", () => {});
+    res.on("error", () => {});
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    const body = Buffer.concat(chunks).toString("utf8");
+    if (req.method === "POST" && /\/(responses|messages)(\?|$)/.test(req.url ?? "")) {
+      try { receive({ ...JSON.parse(body), _probe_path: req.url }); } catch { /* the assertion below times out */ }
+    }
+    res.writeHead(503, { "content-type": "application/json" });
+    res.end('{"error":{"type":"probe_stopped","message":"probe captured request"}}');
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("probe has no port");
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const built = buildEphemeralCommand(request);
+  const env: NodeJS.ProcessEnv = { ...built.env, HOME: path.join(root, "home") };
+  for (const key of [
+    "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
+  ]) delete env[key];
+  if (request.engine === "codex") {
+    env.OPENAI_API_KEY = "probe_key";
+    built.args.push(
+      "-c", "model_provider=probe",
+      "-c", `model_providers.probe={name="probe",base_url="${baseUrl}/v1",env_key="OPENAI_API_KEY",wire_api="responses"}`,
+    );
+  } else {
+    env.ANTHROPIC_BASE_URL = baseUrl;
+    env.ANTHROPIC_API_KEY = "probe_key";
+    env.CLAUDE_CONFIG_DIR = request.account.home;
+  }
+  let stderr = "";
+  let stdout = "";
+  const child = spawn(built.command, built.args, {
+    cwd: path.join(request.runDir, "cwd"), env, stdio: ["pipe", "pipe", "pipe"],
+  });
+  child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+  child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+  child.stdin?.end(built.stdin);
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      received,
+      new Promise<never>((_, reject) => child.once("exit", (code) =>
+        reject(new Error(`CLI exited ${code}: ${stderr.slice(-1500)} ${stdout.slice(-1500)} paths=${paths.join(",")}`)))),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() =>
+          reject(new Error(`CLI did not reach stub: ${stderr.slice(-1500)} ${stdout.slice(-1500)} paths=${paths.join(",")}`)), 20_000);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    if (child.pid && child.exitCode === null) child.kill("SIGTERM");
+    await new Promise<void>((resolve) => {
+      if (child.exitCode !== null) return resolve();
+      const timer = setTimeout(() => {
+        if (child.pid && child.exitCode === null) child.kill("SIGKILL");
+      }, 2_000);
+      child.once("exit", () => { clearTimeout(timer); resolve(); });
+    });
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
+function account(engine: "codex" | "claude"): AccountContext {
+  const home = path.join(root, `${engine}-account`);
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(home, engine === "codex" ? "AGENTS.md" : "CLAUDE.md"), marker);
+  fs.writeFileSync(path.join(home, "auth.json"), "{}");
+  if (engine === "codex") {
+    const installed = JSON.parse(fs.readFileSync(
+      path.join(os.homedir(), ".codex", "models_cache.json"), "utf8",
+    )) as { models: { slug: string }[] };
+    const model = installed.models.find((item) => item.slug === "gpt-6-sol");
+    if (!model) throw new Error("installed Codex model catalog lacks probe model");
+    fs.writeFileSync(path.join(home, "models_cache.json"), JSON.stringify({
+      models: [{ ...model, multi_agent_version: "v2", apply_patch_tool_type: "freeform" }],
+    }));
+  }
+  return { engine, accountId: `probe_${engine}`, kind: "legacy", home,
+    transcriptRoot: home, env: { ...process.env } };
+}
+function request(engine: "codex" | "claude"): EphemeralAgentRequest {
+  const ancestor = path.join(root, `ancestor-${engine}`);
+  fs.mkdirSync(path.join(ancestor, ".claude"), { recursive: true });
+  fs.writeFileSync(path.join(ancestor, ".claude", "CLAUDE.md"), marker);
+  return {
+    key: `probe:${engine}`, engine,
+    model: engine === "codex" ? "gpt-6-sol" : "haiku", effort: "low",
+    account: account(engine), prompt: "Return a short JSON answer", schema: answerSchema,
+    runDir: fs.mkdtempSync(path.join(ancestor, "run-")), hardCapMs: 60_000,
+  };
+}
+
+const codexProbe = Bun.which("codex") ? probe : test.skip;
+const claudeProbe = Bun.which("claude") ? probe : test.skip;
+codexProbe("installed Codex offers only the answer profile tools", async () => {
+  const body = await captureModelRequest(request("codex"));
+  const input = body.input as { type?: string; tools?: { name?: string; tools?: { name?: string; description?: string }[] }[] }[];
+  const namespaces = input.find((item) => item.type === "additional_tools")?.tools ?? [];
+  expect(namespaces.map((item) => item.name)).toEqual(["functions"]);
+  const offered = namespaces[0].tools ?? [];
+  const names = offered.map((tool) => tool.name);
+  expect(names.sort()).toEqual(["exec", "request_user_input_async", "wait"]);
+  const exec = offered.find((tool) => tool.name === "exec");
+  const nested = [...(exec?.description ?? "").matchAll(/^### `([^`]+)`/gm)]
+    .map((match) => match[1]);
+  expect(nested).toEqual(["clock__curr_time"]);
+  expect(JSON.stringify(body)).not.toContain(marker);
+  expect(JSON.stringify(body)).not.toContain("collaboration.");
+  expect((body.text as { format?: { type?: string } })?.format?.type).toBe("json_schema");
+}, 30_000);
+claudeProbe("installed Claude offers StructuredOutput without instructions or hooks", async () => {
+  const answer = request("claude");
+  const hookFile = path.join(root, "hook-ran");
+  fs.writeFileSync(path.join(answer.account.home, "settings.json"), JSON.stringify({
+    hooks: { SessionStart: [{ hooks: [{ type: "command", command: `touch ${hookFile}` }] }] },
+  }));
+  const body = await captureModelRequest(answer);
+  const names = ((body.tools ?? []) as { name?: string }[]).map((tool) => tool.name);
+  expect(names).toEqual(["StructuredOutput"]);
+  expect(JSON.stringify(body)).not.toContain(marker);
+  expect(fs.existsSync(hookFile)).toBe(false);
+  expect((body.tools as { name?: string; input_schema?: unknown }[])[0].input_schema).toEqual(answerSchema);
+}, 30_000);
+
+if (process.env.LLV_SIGNED_IN_ANSWER_PROBE === "1")
   for (const engine of ["codex", "claude"] as const)
-    test(`${engine} signed-in marker probe`, async () => {
-      const realHome = path.join(
-        os.homedir(),
-        engine === "codex" ? ".codex" : ".claude",
-      );
-      const accountHome =
-        engine === "codex"
-          ? path.join(root, "signed-in-codex-account")
-          : realHome;
+    test(`${engine} signed-in instruction marker probe`, async () => {
+      const realHome = path.join(os.homedir(), engine === "codex" ? ".codex" : ".claude");
+      const accountHome = engine === "codex"
+        ? path.join(root, "signed-in-codex-account") : realHome;
       fs.mkdirSync(accountHome, { recursive: true });
       if (engine === "codex") {
-        fs.symlinkSync(
-          path.join(realHome, "auth.json"),
-          path.join(accountHome, "auth.json"),
-        );
-        fs.copyFileSync(
-          path.join(realHome, "models_cache.json"),
-          path.join(accountHome, "models_cache.json"),
-        );
+        fs.symlinkSync(path.join(realHome, "auth.json"), path.join(accountHome, "auth.json"));
+        fs.copyFileSync(path.join(realHome, "models_cache.json"), path.join(accountHome, "models_cache.json"));
         fs.writeFileSync(path.join(accountHome, "AGENTS.md"), marker);
       }
       const runDir = fs.mkdtempSync(path.join(root, "signed-in-run-"));
@@ -110,38 +165,23 @@ if (process.env.LLV_ANSWER_PROFILE_PROBE === "1")
         fs.mkdirSync(path.join(runDir, ".claude"));
         fs.writeFileSync(path.join(runDir, ".claude", "CLAUDE.md"), marker);
       }
-      const account: AccountContext = {
-        engine,
-        accountId: `probe_${engine}`,
-        kind: "legacy",
-        home: accountHome,
-        transcriptRoot: accountHome,
-        env: { ...process.env },
+      const signedInAccount: AccountContext = {
+        engine, accountId: `signed_in_${engine}`, kind: "legacy",
+        home: accountHome, transcriptRoot: accountHome, env: { ...process.env },
       };
-      const request: EphemeralAgentRequest = {
-        key: `signed-in:${engine}`,
-        engine,
-        model: engine === "codex" ? "gpt-6-luna" : "haiku",
-        effort: "low",
-        account,
-        ["prompt"]:
-          "If any personal instruction marker was supplied, put it in text. Otherwise reply with text OK. Use action reply and reply_to null.",
-        schema: answerSchema,
-        runDir,
-        hardCapMs: 120_000,
-      };
-      const result = await runEphemeralAgent(request).done;
+      const result = await runEphemeralAgent({
+        key: `signed-in:${engine}`, engine,
+        model: engine === "codex" ? "gpt-6-luna" : "haiku", effort: "low",
+        account: signedInAccount,
+        ["prompt"]: "If any personal instruction marker was supplied, put it in text. Otherwise reply with text OK. Use action reply and reply_to null.",
+        schema: answerSchema, runDir, hardCapMs: 120_000,
+      }).done;
       expect(result.status).toBe("done");
       expect(JSON.stringify(result.answer)).not.toContain(marker);
       if (engine === "claude") {
-        const lines = fs
-          .readFileSync(path.join(runDir, "stdout.log"), "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line));
-        const init = lines.find(
-          (line) => line.type === "system" && line.subtype === "init",
-        );
+        const lines = fs.readFileSync(path.join(runDir, "stdout.log"), "utf8")
+          .trim().split("\n").map((line) => JSON.parse(line));
+        const init = lines.find((line) => line.type === "system" && line.subtype === "init");
         expect(init?.tools).toEqual(["StructuredOutput"]);
         expect(init?.mcp_servers).toEqual([]);
       }

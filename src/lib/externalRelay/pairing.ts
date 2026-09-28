@@ -108,7 +108,7 @@ export async function confirmRelayPairing(
       effort: null,
       project: null,
       concurrency: 1,
-      hardCapMinutes: 240,
+      hardCapMinutes: 30,
     })),
   };
   updateRelayStore((store) => ({

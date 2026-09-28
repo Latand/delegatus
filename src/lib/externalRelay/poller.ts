@@ -28,17 +28,26 @@ export type PollerState =
   | "credential_rejected"
   | "unsupported_version"
   | "paused";
-const loops = new Map<
-  string,
-  {
-    abort: AbortController;
-    stopped: boolean;
-    state: PollerState;
-    lastOutcome: string | null;
-  }
->();
-let sweepTimer: ReturnType<typeof setInterval> | null = null;
-let controllerArmed = false;
+type PollLoop = {
+  abort: AbortController;
+  stopped: boolean;
+  state: PollerState;
+  lastOutcome: string | null;
+};
+type PollerController = {
+  loops: Map<string, PollLoop>;
+  sweepTimer: ReturnType<typeof setInterval> | null;
+  armed: boolean;
+};
+const globalRelay = globalThis as typeof globalThis & {
+  __llvExternalRelayPoller?: PollerController;
+};
+const controller = (globalRelay.__llvExternalRelayPoller ??= {
+  loops: new Map(),
+  sweepTimer: null,
+  armed: false,
+});
+const loops = controller.loops;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export function relayPollerStatus(id: string) {
   const loop = loops.get(id);
@@ -86,12 +95,7 @@ export async function sweepExternalRelayOrphans(): Promise<void> {
 }
 async function poll(
   relay: PairedRelay,
-  loop: {
-    abort: AbortController;
-    stopped: boolean;
-    state: PollerState;
-    lastOutcome: string | null;
-  },
+  loop: PollLoop,
 ) {
   let backoff = 5000;
   while (!loop.stopped) {
@@ -115,8 +119,10 @@ async function poll(
       );
       loop.state = "polling";
       backoff = 5000;
+      const current = readRelayStore().relays.find((item) => item.id === relay.id);
+      if (loop.stopped || !current) break;
       if (result.status === 200 && result.body?.request)
-        void runClaimedRequest(relay, result.body.request, () =>
+        void runClaimedRequest(current, result.body.request, () =>
           wakeExternalRelayPoller(relay.id),
         )
           .then((outcome) => {
@@ -151,19 +157,19 @@ async function poll(
 }
 export function ensureExternalRelayPollers(): void {
   if (isStagingMode()) return;
-  if (!controllerArmed) {
-    controllerArmed = true;
+  if (!controller.armed) {
+    controller.armed = true;
     void sweepExternalRelayOrphans().then(() => refreshExternalRelayPollers());
-    sweepTimer = setInterval(() => {
+    controller.sweepTimer = setInterval(() => {
       void sweepExternalRelayOrphans();
     }, 60_000);
-    sweepTimer.unref();
+    controller.sweepTimer.unref();
     return;
   }
   refreshExternalRelayPollers();
 }
 export function refreshExternalRelayPollers(changedId?: string): void {
-  if (!controllerArmed || isStagingMode()) return;
+  if (!controller.armed || isStagingMode()) return;
   const relays = readRelayStore().relays;
   for (const [id, loop] of loops)
     if (
@@ -187,9 +193,9 @@ export function refreshExternalRelayPollers(changedId?: string): void {
     }
 }
 export function stopExternalRelayPollers(): void {
-  controllerArmed = false;
-  if (sweepTimer) clearInterval(sweepTimer);
-  sweepTimer = null;
+  controller.armed = false;
+  if (controller.sweepTimer) clearInterval(controller.sweepTimer);
+  controller.sweepTimer = null;
   for (const loop of loops.values()) {
     loop.stopped = true;
     loop.abort.abort();
