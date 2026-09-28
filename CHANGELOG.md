@@ -131,6 +131,10 @@ guarantees for the 1.x series.
   tier that runs a lighter model, and writing work (README, docs, public
   text) stays on Claude Opus. Orchestrator, architect, reviewer and verifier
   work never runs on Sonnet or Haiku ([#2246]).
+- **Agent prompts fit any project.** Every role's standing instructions
+  now describe practices and name no language, framework or deploy of their
+  own, GitHub issues are used only where GitHub is set up, and each stage
+  reports with one shared set of verdicts ([#2301]).
 - The orchestrator's wakes wait until it is idle instead of arriving in
   the middle of a turn ([#2293]).
 - The README is rewritten in plain language on the same structure ([#2239]).
@@ -1401,4 +1405,5 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2297]: https://github.com/Latand/delegatus/pull/2297
 [#2298]: https://github.com/Latand/delegatus/pull/2298
 [#2300]: https://github.com/Latand/delegatus/pull/2300
+[#2301]: https://github.com/Latand/delegatus/pull/2301
 [#2303]: https://github.com/Latand/delegatus/pull/2303
