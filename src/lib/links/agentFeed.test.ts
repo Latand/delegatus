@@ -40,6 +40,11 @@ test("agent summaries are bounded per project and globally, hide scanned prompts
   while (page.more) { page = feed.page(null, projects, rows); rows += page.rows?.length ?? 0; }
   expect(rows).toBe(100);
   expect(feed.page(page.cursor, projects).rows).toBeUndefined();
+  const twenty = new Set(Array.from({ length: 20 }, (_, n) => `repo-${(n + 1).toString(16).padStart(32, "0")}`));
+  const many = Array.from({ length: 500 }, (_, n) => file(n + 1_000, [...twenty][n % 20]!));
+  const global = new AgentFeed("global-bound", () => many, () => []);
+  global.refresh(twenty);
+  expect(global.sizes()).toEqual({ rows: 200, markers: 0 });
 });
 
 test("receiver drops a row for a project outside this link", () => {
@@ -51,6 +56,19 @@ test("receiver drops a row for a project outside this link", () => {
   // A receiver's project view is additionally fenced by its live link, so an
   // unpaired fixture has no visible remote row.
   expect(remoteAgents(a)).toEqual([]);
+});
+
+test("supported agent engines publish only neutral bounded summaries", () => {
+  const snapshot = (["claude", "codex", "copilot", "openclaw", "shell"] as const).map((engine, index) => ({ ...file(index + 900), engine, model: `model-${engine}` })) as FileEntry[];
+  const rows = new AgentFeed("engines", () => snapshot, () => []).page(null, projects).rows as AgentRow[];
+  expect(rows.map((row) => row.e).sort()).toEqual(["claude", "codex", "copilot", "openclaw"]);
+  for (const row of rows) {
+    expect(row.t).toBe(`${row.e} agent`);
+    expect(Buffer.byteLength(JSON.stringify(row))).toBeLessThanOrEqual(1536);
+    expect(Object.keys(row).sort()).toEqual(["at", "e", "k", "m", "p", "st", "t"]);
+  }
+  expect(JSON.stringify(rows)).not.toContain("PROMPT-CANARY");
+  expect(JSON.stringify(rows)).not.toContain("/sandbox/");
 });
 
 test("ten thousand start and stop cycles retain at most 200 markers", () => {
@@ -77,6 +95,7 @@ test("200 summaries reset in four 50-row pages, and the receiver swaps only on t
     expect(page.rows).toHaveLength(50);
     expect(page.rows!.every((row) => Buffer.byteLength(JSON.stringify(row)) <= 1536)).toBe(true);
     expect(acceptAgents(id, { ...page, cursor: encodeCursor(page.cursor) }, linked)).toBe(true);
+    if (count === 1) expect(acceptAgents(id, { rows: page.rows, cursor: "ffffffffffffffff:1", more: true }, linked)).toBe(false);
     if (page.more) expect(receivedAgentRows(id)).toHaveLength(0);
     else { expect(count).toBe(4); break; }
   }

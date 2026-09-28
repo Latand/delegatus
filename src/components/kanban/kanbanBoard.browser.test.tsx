@@ -39,6 +39,32 @@ type Scheme = "light" | "dark";
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
 describe("linked boards M3 remote agents", () => {
+  browserTest("an unbound remote agent remains visible in an empty phone Inbox", async () => {
+    const out = path.resolve(".artifacts/linked-boards-m3-empty-inbox");
+    fs.mkdirSync(out, { recursive: true });
+    const project = `repo-${"a".repeat(32)}`;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/links/agents": { agents: [{ k: `a:${"3".repeat(16)}`, p: project, t: "copilot agent", e: "copilot", m: "model", st: "working", at: Date.now(), peer: "Machine B", stale: false }] },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const locale of ["en", "uk"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=linked-agents&empty=inbox`, { width: 390, height: 844 }, "light", locale, "reduce", true);
+        try {
+          await page.locator('[data-phone-kanban-tab="inbox"]').click();
+          const group = page.locator('[data-phone-kanban-column="inbox"] [data-remote-agents]');
+          await group.waitFor();
+          expect(await group.locator("summary").textContent()).toContain("Machine B");
+          await group.locator("summary").click();
+          expect(await group.locator("[data-remote-agent]").count()).toBe(1);
+          expect(await group.locator("button, a, input").count()).toBe(0);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 90_000);
+
   browserTest("collapsed read-only rows fit desktop and phone in en and uk", async () => {
     const out = path.resolve(".artifacts/linked-boards-m3");
     fs.mkdirSync(out, { recursive: true });

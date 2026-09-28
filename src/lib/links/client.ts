@@ -222,7 +222,7 @@ async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProj
       if (pushAgents) {
         if (answer.body.agentAck !== pushAgents.cursor) throw new LinkError("malformed");
         const resetting = agentState.pushOffset > 0 || pushAgents.reset === true;
-        if (pushAgents.more && resetting) agentState.pushOffset += pushAgents.rows?.length ?? 0;
+        if (pushAgents.more && resetting) agentState.pushOffset = (pushAgents.reset ? 0 : agentState.pushOffset) + (pushAgents.rows?.length ?? 0);
         else { agentState.pushed = decodeCursor(pushAgents.cursor)!; agentState.pushOffset = 0; }
         agentMore = pushAgents.more === true;
       }
@@ -235,7 +235,7 @@ async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProj
         remoteAgentEpoch.set(id, nextEpoch);
         if (!agentCapable.has(id)) { agentCapable.add(id); agentMore = true; }
         const resetting = agentState.pullOffset > 0 || part.reset === true;
-        if (part.more === true && resetting) agentState.pullOffset += part.rows?.length ?? 0;
+        if (part.more === true && resetting) agentState.pullOffset = (part.reset ? 0 : agentState.pullOffset) + (part.rows?.length ?? 0);
         else { agentState.pull = decodeCursor(part.cursor)!; agentState.pullOffset = 0; }
         agentMore ||= part.more === true;
       }

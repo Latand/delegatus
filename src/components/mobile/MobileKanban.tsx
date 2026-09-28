@@ -1062,7 +1062,7 @@ export function MobileKanban(props: MobileKanbanProps) {
               className="h-full w-full min-w-full shrink-0 snap-start snap-always overflow-y-auto overflow-x-hidden overscroll-y-contain"
               onScroll={(event) => writePlace(project, { offsets: { [status]: event.currentTarget.scrollTop } })}
             >
-              {columnEmpty(column) ? (
+              {columnEmpty(column) && !(status === "inbox" && remoteAgents.some((row) => !row.task)) ? (
                 <EmptyColumn column={column} columns={phone.columns} copy={props.emptyCopy} onJump={choose} onNewTask={props.onNewTask} onTellOrchestrator={props.onTellOrchestrator} />
               ) : (
                 <div className="flex flex-col gap-2 px-3 pb-3 pt-2">

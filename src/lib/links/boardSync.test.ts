@@ -19,6 +19,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-board-sync-test-"));
 const remote = "code.example.test/acme/widget";
 const key = projectIdentityFromRemote(`https://${remote}`, "/")!.project;
 const processes: ChildProcessWithoutNullStreams[] = [];
+const installProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 const meters: Meter[] = [];
 afterAll(() => {
   for (const counts of meters) counts.close();
@@ -49,7 +50,17 @@ async function install(name: string, extraRemotes: Record<string, string> = {}):
     child.on("exit", (code) => reject(new Error(`test server exited ${code}: ${errors}`)));
     setTimeout(() => reject(new Error(`test server did not start: ${errors}`)), 15_000).unref();
   });
-  return `http://127.0.0.1:${port}`;
+  const url = `http://127.0.0.1:${port}`;
+  installProcesses.set(url, child);
+  return url;
+}
+
+async function stopInstall(url: string): Promise<void> {
+  const child = installProcesses.get(url);
+  if (!child) return;
+  installProcesses.delete(url);
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise<void>((resolve) => { child.once("exit", () => resolve()); child.kill("SIGTERM"); });
 }
 
 async function request(base: string, route: string, method = "GET", body?: object) {
@@ -197,6 +208,30 @@ test("one agent change adds one bounded row on the measured sync transport", asy
   expect(bodies[0]!.request + bodies[0]!.response).not.toContain("PROMPT-CANARY");
 });
 
+test("B's state flip returns one agent row and agent exchange writes no disk state", async () => {
+  const a = await install("agent-flip-A");
+  const b = await install("agent-flip-B");
+  const peerId = await link(a, b);
+  seedTranscript("agent-flip-B", "PROMPT-CANARY-state", remote, "session-flip");
+  await request(b, "/test/scan");
+  await sync(a, peerId);
+  expect(((await request(a, `/test/agents?project=${key}`)).body as unknown as { st: string }[])[0]!.st).toBe("done");
+  await request(b, "/test/agent-state?state=running");
+  await request(b, "/test/scan");
+  const diskA = fileMarks("agent-flip-A");
+  const diskB = fileMarks("agent-flip-B");
+  await captured(b);
+  await sync(a, peerId);
+  const calls = await captured(b);
+  const changed = calls.map((call) => (JSON.parse(call.response) as { agents?: { rows?: { st: string }[] } }).agents?.rows ?? []).flat();
+  expect(changed).toHaveLength(1);
+  expect(changed[0]!.st).toBe("working");
+  expect(((await request(a, `/test/agents?project=${key}`)).body as unknown as { st: string }[])[0]!.st).toBe("working");
+  expect(fileMarks("agent-flip-A")).toEqual(diskA);
+  expect(fileMarks("agent-flip-B")).toEqual(diskB);
+  expect(calls.map((call) => call.response).join("\n")).not.toContain("PROMPT-CANARY");
+});
+
 test("200 agents reset over the real link in four bounded transport pages", async () => {
   const origins = Array.from({ length: 4 }, (_, n) => `code.example.test/acme/agent-batch-${n}`);
   const remotes = Object.fromEntries(origins.map((origin) => [projectIdentityFromRemote(`https://${origin}`, "/")!.project, origin]));
@@ -227,6 +262,28 @@ test("200 agents reset over the real link in four bounded transport pages", asyn
     expect(page.wire.response).not.toContain("PROMPT-CANARY");
   }
   expect(bytes).toBeLessThan(100_000);
+});
+
+test("a feed restart between transport reset pages restarts at row zero without mixing epochs", async () => {
+  const origins = Array.from({ length: 4 }, (_, n) => `code.example.test/acme/restart-${n}`);
+  const remotes = Object.fromEntries(origins.map((origin) => [projectIdentityFromRemote(`https://${origin}`, "/")!.project, origin]));
+  const keys = Object.keys(remotes);
+  const a = await install("agent-restart-A", remotes);
+  const b = await install("agent-restart-B", remotes);
+  const peerId = await link(a, b, { projects: keys });
+  for (const origin of origins) for (let n = 0; n < 50; n++) seedTranscript("agent-restart-B", `PROMPT-CANARY-${n}`, origin, `session-${origin.at(-1)}-${n}`);
+  expect(((await request(b, "/test/scan")).body.files as unknown[])).toHaveLength(200);
+  await sync(a, peerId);
+  const grantId = ((await request(b, "/api/links/grants")).body.grants as { id: string }[])[0]!.id;
+  await request(a, `/test/agent-reset?id=${peerId}`);
+  await request(b, `/test/agent-feed-restart?id=${grantId}`);
+  await captured(b);
+  await sync(a, peerId);
+  const pages = (await captured(b)).map((call) => (JSON.parse(call.response) as { agents?: { cursor: string; reset?: boolean; rows?: { k: string }[] } }).agents).filter(Boolean);
+  expect(pages.filter((page) => page!.reset)).toHaveLength(2);
+  expect(pages[0]!.cursor).not.toBe(pages[1]!.cursor);
+  expect(pages[1]!.rows?.map((row) => row.k)).toEqual(pages[0]!.rows?.map((row) => row.k));
+  for (const project of keys) expect(((await request(a, `/test/agents?project=${project}`)).body as unknown as unknown[])).toHaveLength(50);
 });
 
 test("tasks created, changed in every group and deleted on either machine show on the other after one call; prompts never cross; an idle link costs next to nothing", async () => {
@@ -388,6 +445,78 @@ test("an idle call costs at most 2 ms of CPU on each side, and 1 000 calls grow 
   expect(heapAfter[0]! - heapBefore[0]!).toBeLessThan(256 * 1024);
   expect(heapAfter[1]! - heapBefore[1]!).toBeLessThan(256 * 1024);
 }, 120_000);
+
+test("M3 link RSS and heap stay bounded with 2 000 tasks, 200 agents per side, edits and churn", async () => {
+  const origins = Array.from({ length: 3 }, (_, n) => `code.example.test/acme/memory-${n}`);
+  const remotes = Object.fromEntries(origins.map((origin) => [projectIdentityFromRemote(`https://${origin}`, "/")!.project, origin]));
+  const projectKeys = Object.keys(remotes);
+  const heap = async (sides: readonly string[]) => Promise.all(sides.map(async (side) => (await request(side, "/test/heap")).body as { rss: number; heapUsed: number }));
+  const populated = async (run: number, mode: "off" | "on") => {
+    const names = [`memory-${run}-${mode}-A`, `memory-${run}-${mode}-B`];
+    const sides = await Promise.all(names.map((name) => install(name, remotes)));
+    const editIds: string[] = [];
+    for (const [index, side, name] of sides.map((side, index) => [index, side, names[index]!] as const)) {
+      // The capture harness retains whole sync bodies; exclude that test-only
+      // memory from the link's RSS measurement.
+      await request(side, "/test/measure-memory");
+      for (let project = 0; project < 3; project++) {
+        if (mode === "off" || index === 0) {
+          const ids = (await request(side, "/test/bulk", "POST", { project: projectKeys[project]!, count: project === 2 ? 666 : 667 })).body.ids as string[];
+          if (project === 0) editIds[index] = ids[0]!;
+        }
+        for (let agent = 0; agent < (project === 2 ? 66 : 67); agent++) seedTranscript(name, `PROMPT-CANARY-${agent}`, origins[project]!, `session-${project}-${agent}`);
+      }
+      expect(((await request(side, "/test/scan")).body.files as unknown as unknown[])).toHaveLength(200);
+    }
+    if (mode === "on") editIds[1] = editIds[0]!;
+    return { sides, editIds };
+  };
+  const work = async (sides: readonly string[], editIds: readonly string[], start: number, end: number, peerId?: string) => {
+    const [a, b] = sides as [string, string];
+    for (let call = start; call < end; call++) {
+      if (call % 100 === 0) {
+        expect((await patchOn(a, editIds[0]!, { text: `Edit ${Math.floor(call / 100) % 2}` })).status).toBe(200);
+        expect((await patchOn(b, editIds[1]!, { text: `Edit ${Math.floor(call / 100) % 2}` })).status).toBe(200);
+      }
+      if (call % 200 === 0) for (const side of sides) {
+        await request(side, `/test/agent-state?state=${call % 400 === 0 ? "running" : "done"}`);
+        await request(side, "/test/scan");
+      }
+      if (peerId) await sync(a, peerId);
+      else { await request(a, "/test/metrics"); await request(b, "/test/metrics"); }
+    }
+  };
+  const deltas: number[][] = [];
+  for (let run = 0; run < 3; run++) {
+    const off = await populated(run, "off");
+    let offRss: number[];
+    try {
+      const offPeerId = await link(off.sides[0]!, off.sides[1]!, { projects: [] });
+      await work(off.sides, off.editIds, 0, 1_000, offPeerId);
+      const samples = await heap(off.sides);
+      offRss = samples.map((sample) => sample.rss);
+    } finally { await Promise.all(off.sides.map(stopInstall)); }
+    const on = await populated(run, "on");
+    try {
+      const peerId = await link(on.sides[0]!, on.sides[1]!, { projects: projectKeys });
+      await work(on.sides, on.editIds, 0, 1_000, peerId);
+      const onSamples = await heap(on.sides);
+      const onRss = onSamples.map((sample) => sample.rss);
+      deltas.push(onRss.map((rss, index) => rss - offRss[index]!));
+      if (run === 0) {
+        await work(on.sides, on.editIds, 1_000, 3_100, peerId);
+        const before = await heap(on.sides);
+        await work(on.sides, on.editIds, 3_100, 4_100, peerId);
+        const after = await heap(on.sides);
+        for (let side = 0; side < 2; side++) expect(after[side]!.heapUsed - before[side]!.heapUsed).toBeLessThan(256 * 1024);
+      }
+    } finally { await Promise.all(on.sides.map(stopInstall)); }
+  }
+  for (let side = 0; side < 2; side++) {
+    const median = deltas.map((pair) => pair[side]!).sort((a, b) => a - b)[1]!;
+    expect(median).toBeLessThanOrEqual(3 * 1024 * 1024);
+  }
+}, 600_000);
 
 test("1 000 tasks arrive in 5 pages of at most 512 KB; 1 100 writes on B while A is away push A below the change floor, and the resync converges without a duplicate", async () => {
   const a = await install("pages-A");

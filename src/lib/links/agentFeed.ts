@@ -4,7 +4,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { lastScannedFiles } from "@/lib/scanner/scanCache";
 import { loadTasksForList } from "@/lib/tasks/store";
 import { findPipelineRecord } from "@/lib/pipelines/store";
-import type { FileEntry } from "@/lib/types";
+import type { Engine, FileEntry } from "@/lib/types";
 import { linkedContext } from "./linked";
 
 export type AgentRow = { k: string; p: string; t: string; e: string; m: string; st: "working" | "waiting" | "done"; task?: string; at: number; pl?: { id: string; state: string; stage: string; stageState: string } };
@@ -14,13 +14,13 @@ type Marker = { k: string; version: number; at: number };
 export type Cursor = { epoch: string; version: number };
 type Part = { after: Cursor | null; rows?: Change[]; reset?: true; more?: true; cursor: Cursor };
 const PROJECT = /^repo-[0-9a-f]{32}$/;
-const epoch = randomBytes(8).toString("hex");
+const AGENT_ENGINES: ReadonlySet<Engine> = new Set(["claude", "codex", "copilot", "openclaw"]);
 const feeds = new Map<string, AgentFeed>();
 const received = new Map<string, { rows: Map<string, AgentRow>; at: number; reset?: { cursor: Cursor; rows: Map<string, AgentRow> } }>();
 
 function safeId(value: unknown): string | null { return typeof value === "string" && /^[a-zA-Z0-9._-]{1,64}$/.test(value) ? value : null; }
 function rowFor(file: FileEntry, tasks: ReturnType<typeof loadTasksForList>, projects: ReadonlySet<string>): AgentRow | null {
-  if (file.engine !== "claude" && file.engine !== "codex") return null;
+  if (!AGENT_ENGINES.has(file.engine)) return null;
   const identity = file.conversationId ?? file.path;
   if (!identity) return null;
   const task = tasks.find((item) => item.assignments.some((assignment) => assignment.conversationId === file.conversationId || assignment.path === file.path));
@@ -58,6 +58,7 @@ export function decodeAgentRow(value: unknown, projects: ReadonlySet<string>): A
 }
 
 export class AgentFeed {
+  private readonly epoch = randomBytes(8).toString("hex");
   private rows = new Map<string, Versioned>();
   private markers: Marker[] = [];
   private version = 0;
@@ -117,15 +118,18 @@ export class AgentFeed {
 
   page(after: Cursor | null, projects: ReadonlySet<string>, offset = 0): Part {
     this.refresh(projects);
-    const reset = !after || after.epoch !== epoch || after.version < this.floor || after.version > this.version;
+    const reset = !after || after.epoch !== this.epoch || after.version < this.floor || after.version > this.version;
     if (reset) {
       const key = after ? `${after.epoch}:${after.version}` : "initial";
-      if (!this.resetSnapshot || this.resetSnapshot.key !== key) this.resetSnapshot = {
-        key, rows: [...this.rows.values()].sort((a, b) => b.row.at - a.row.at).map((item) => item.row), cursor: { epoch, version: this.version },
+      const changedSnapshot = !this.resetSnapshot || this.resetSnapshot.key !== key;
+      if (changedSnapshot) this.resetSnapshot = {
+        key, rows: [...this.rows.values()].sort((a, b) => b.row.at - a.row.at).map((item) => item.row), cursor: { epoch: this.epoch, version: this.version },
       };
-      const rows = this.resetSnapshot.rows.slice(offset, offset + 50);
-      const more = offset + rows.length < this.resetSnapshot.rows.length;
-      return { after, rows, ...(offset === 0 ? { reset: true as const } : {}), ...(more ? { more: true as const } : {}), cursor: this.resetSnapshot.cursor };
+      const snapshot = this.resetSnapshot!;
+      const start = changedSnapshot ? 0 : offset;
+      const rows = snapshot.rows.slice(start, start + 50);
+      const more = start + rows.length < snapshot.rows.length;
+      return { after, rows, ...(start === 0 ? { reset: true as const } : {}), ...(more ? { more: true as const } : {}), cursor: snapshot.cursor };
     }
     this.resetSnapshot = null;
     const changes = [...this.rows.values()].filter((item) => item.version > after.version).map((item) => ({ version: item.version, row: item.row as Change }))
@@ -133,7 +137,7 @@ export class AgentFeed {
       .sort((a, b) => a.version - b.version);
     const page = changes.slice(0, 50);
     return { after, ...(page.length ? { rows: page.map((item) => item.row) } : {}), ...(changes.length > page.length ? { more: true as const } : {}),
-      cursor: { epoch, version: page.at(-1)?.version ?? this.version } };
+      cursor: { epoch: this.epoch, version: page.at(-1)?.version ?? this.version } };
   }
 }
 
@@ -175,6 +179,7 @@ export function acceptAgents(id: string, part: unknown, projects: ReadonlySet<st
   const cursor = decodeCursor(wire.cursor);
   if (!cursor || !Array.isArray(wire.rows) && wire.rows !== undefined || (wire.rows?.length ?? 0) > 50) return false;
   const held = received.get(id) ?? { rows: new Map<string, AgentRow>(), at: 0 };
+  if (!wire.reset && held.reset && (held.reset.cursor.epoch !== cursor.epoch || held.reset.cursor.version !== cursor.version)) return false;
   if (wire.reset) held.reset = { cursor, rows: new Map() };
   const target = held.reset?.rows ?? held.rows;
   for (const value of wire.rows ?? []) {
