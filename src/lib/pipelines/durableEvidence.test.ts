@@ -67,6 +67,28 @@ for (const engine of ["claude", "codex"] as const) {
         .toMatchObject({ turn: "terminal", message: { text: "Done." }, reportProse: brief });
     });
   }
+
+  test(`${engine} recovers an oversized final message after stage_report`, async () => {
+    const brief = `BEGIN FINAL BRIEF\n${"f".repeat(150_000)}\nEND FINAL BRIEF`;
+    const file = writeTranscript(`${engine}-large-final-brief.jsonl`, engine === "claude" ? [
+      { type: "user", timestamp: "2026-07-18T10:01:00.000Z", message: { role: "user", content: "Write the brief." } },
+      { type: "assistant", timestamp: "2026-07-18T10:02:00.000Z", message: { role: "assistant", content: [{ type: "text", text: "Short report prose." }] } },
+      { type: "user", timestamp: "2026-07-18T10:03:00.000Z", message: { role: "user", content: [{ type: "tool_result", content: "Report accepted." }] } },
+      { type: "assistant", timestamp: "2026-07-18T10:05:00.000Z", message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: brief }] } },
+    ] : [
+      { timestamp: "2026-07-18T10:01:00.000Z", payload: { type: "task_started" } },
+      { timestamp: "2026-07-18T10:02:00.000Z", payload: { type: "agent_message", message: "Short report prose." } },
+      { timestamp: "2026-07-18T10:03:00.000Z", payload: { type: "function_call_output", output: "Report accepted." } },
+      { timestamp: "2026-07-18T10:05:00.000Z", payload: { type: "agent_message", message: brief } },
+      { timestamp: "2026-07-18T10:06:00.000Z", payload: { type: "task_complete" } },
+    ]);
+
+    const tail = await readStableTailRecords(file);
+    expect(tail).toMatchObject({ integrity: "complete", prefixTruncated: true });
+    expect(tail.records.some((record) => JSON.stringify(record).includes("BEGIN FINAL BRIEF"))).toBe(false);
+    expect(await durableStageTurnEvidence(engine, file, "2026-07-18T10:04:00.000Z", "2026-07-18T10:01:00.000Z"))
+      .toMatchObject({ turn: "terminal", message: { text: brief }, reportProse: "Short report prose." });
+  });
 }
 
 test("a one-record Codex launch transcript reports no agent progress (#1325)", async () => {
