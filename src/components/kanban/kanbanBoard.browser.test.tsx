@@ -115,6 +115,30 @@ describe("linked boards M3 remote agents", () => {
   }, 90_000);
 });
 
+describe("self-update reload notice", () => {
+  browserTest("a desktop page open across a release switch offers a reload", async () => {
+    const out = path.resolve(".artifacts/self-update-reload");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?self-update-reload=1`, VIEWPORT, "light", "en", "reduce");
+      try {
+        await page.waitForFunction(() => (window as typeof window & { evidence?: { presence?: unknown[] } }).evidence?.presence?.length);
+        await page.keyboard.press("Shift");
+        const notice = page.locator("[data-release-reload]");
+        await notice.waitFor({ timeout: 10_000 });
+        expect(await notice.innerText()).toContain("Web now runs bbbbbbb");
+        const box = await notice.boundingBox();
+        expect(box).not.toBeNull();
+        expect(box!.x).toBeGreaterThanOrEqual(0);
+        expect(box!.x + box!.width).toBeLessThanOrEqual(VIEWPORT.width);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 30_000);
+});
+
 /* The loading leaf draws its own header bar until the Board mounts and draws
    the same bar itself, so a ⋯ menu opened before then is thrown away with the
    bar it opened in. Open the Board's own menu and wait until it is open. */

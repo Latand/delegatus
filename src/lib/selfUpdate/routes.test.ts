@@ -16,7 +16,7 @@ import { checkForUpdate, readRevision, runGit } from "./git";
 import { readLauncherRecord, requestRestart } from "./launcher";
 import { deploymentsEnabled, detectMode } from "./mode";
 import { readStartIdentity, sameProcess } from "./pid";
-import { getEvents, getSnapshot, getStepLog, postCheck, postRestart, postUpdate } from "./routes";
+import { getEvents, getSnapshot, getStepLog, postAuto, postCheck, postRestart, postUpdate } from "./routes";
 import { prepareManagedCheckRepo, setSelfUpdateServiceForTests } from "./instance";
 import { SelfUpdateService, type ServiceDeps } from "./service";
 import { UpdateRunner, type StepPorts } from "./steps";
@@ -130,6 +130,7 @@ describe("the operator gate", () => {
       await postCheck(post("/check", undefined, agent)),
       await postUpdate(post("/update", { key: "press-1" }, agent)),
       await postRestart(post("/restart", { role: "runtime-host", confirm: true }, agent)),
+      await postAuto(post("/auto", { enabled: true }, agent)),
     ]) {
       expect(response.status).toBe(403);
     }
@@ -162,6 +163,7 @@ describe("the operator gate", () => {
     const foreign = { ...browser, origin: "https://elsewhere.example", "sec-fetch-site": "cross-site" };
     expect((await postUpdate(post("/update", { key: "press-1" }, foreign))).status).toBe(403);
     expect((await postRestart(post("/restart", { role: "web" }, foreign))).status).toBe(403);
+    expect((await postAuto(post("/auto", { enabled: true }, foreign))).status).toBe(403);
   });
 });
 
@@ -523,6 +525,34 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     return h;
   }
 
+  test("the operator can enable checkout auto-apply; invalid bodies and managed installs are refused", async () => {
+    const h = harness({ remote: "https://github.com/example/project.git" });
+    h.deps.check = async () => ({ ok: false, error: "fixture", installed: null });
+    h.service = new SelfUpdateService(h.deps);
+    setSelfUpdateServiceForTests(h.service);
+    expect((await postAuto(post("/auto", { enabled: "yes" }))).status).toBe(400);
+    expect((await postAuto(post("/auto", { enabled: true }))).status).toBe(202);
+    expect((await snapshot()).auto?.enabled).toBe(true);
+    expect(JSON.parse(readFileSync(join(h.deps.dir, "auto.json"), "utf8")).enabled).toBe(true);
+    const managed = new SelfUpdateService(baseDeps(mkdtempSync(join(root, "auto-managed-")), { mode: async () => ({ mode: "managed", reason: null, record: null }) }));
+    setSelfUpdateServiceForTests(managed);
+    expect((await postAuto(post("/auto", { enabled: true }))).status).toBe(409);
+  });
+
+  test("a hand-managed checkout at the tracked tip can be rebuilt from the dialog", async () => {
+    const h = harness();
+    const record = JSON.parse(readFileSync(h.recordFile, "utf8")) as { releasePointer: string };
+    writeFileSync(record.releasePointer, JSON.stringify({ sha: firstSha, dir: checkout, checkoutHead: tipSha }));
+    h.deps.check = async () => ({ ok: true, installed: await readRevision(checkout, "HEAD"), available: null, relation: "equal", ahead: 0, behind: 0, delta: null });
+    h.service = new SelfUpdateService(h.deps);
+    setSelfUpdateServiceForTests(h.service);
+    await postCheck(post("/check"));
+    await until((next) => next.check.state === "up-to-date");
+    expect((await snapshot()).auto?.availability).toBe("hand-managed");
+    expect((await postUpdate(post("/update", { key: "rebuild" }))).status).toBe(202);
+    await until((next) => next.update.state === "failed");
+  });
+
   /** The launcher's side, played by its own request watcher: each request
       moves the recorded process onto the published release. */
   function launcher(h: Harness) {
@@ -572,6 +602,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       expect((await snapshot()).busy).toBe("restart-web");
       /* One restart at a time. */
       expect((await postRestart(post("/restart", { role: "runtime-host", confirm: true }))).status).toBe(409);
+      setSelfUpdateServiceForTests(new SelfUpdateService(h.deps));
       await watcher.poll();
       s = await until((next) => next.busy === null);
       expect(s.serving.web?.short).toBe(tipSha.slice(0, 7));
@@ -581,6 +612,9 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       await watcher.poll();
       s = await until((next) => next.busy === null && next.serving.runtimeHost?.short === tipSha.slice(0, 7));
       expect(s.processes.runtimeHost.state).toBe("healthy");
+      expect(s.history?.map((entry) => [entry.kind, entry.by, entry.outcome])).toEqual([
+        ["restart-host", "operator", "done"], ["restart-web", "operator", "done"], ["build", "operator", "done"],
+      ]);
     } finally {
       watcher.stop();
     }

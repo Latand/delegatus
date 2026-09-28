@@ -90,6 +90,7 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   }, [feed]);
 
   const actions: ViewActions = {
+    toggleAuto: () => { if (s?.auto) void act("auto", "/api/self-update/auto", { enabled: !s.auto.enabled }); },
     check: () => { void act("check", "/api/self-update/check"); },
     update: () => { void act("update", "/api/self-update/update", { key: newKey() }); },
     retry: () => { void act("update", "/api/self-update/update", { key: newKey(), retry: true }); },

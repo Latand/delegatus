@@ -118,6 +118,7 @@ function steps(states: Step["state"][], extra: Partial<Record<number, Partial<St
 
 const calls: string[] = [];
 const actions = {
+  toggleAuto: () => calls.push("toggle-auto"),
   check: () => calls.push("check"),
   update: () => calls.push("update"),
   retry: () => calls.push("retry"),
@@ -157,6 +158,54 @@ function render(s: Snapshot, state: Partial<{ armed: boolean; openLogs: Set<stri
 const text = (element: Element | null) => (element?.textContent ?? "").replace(/\s+/g, " ").trim();
 const section = (el: HTMLElement, name: string) => el.querySelector<HTMLElement>(`[data-section="${name}"]`);
 const button = (el: HTMLElement, action: string) => el.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
+
+describe("automatic updates", () => {
+  test("the switch, blockers, serving revisions and history are visible", () => {
+    const s = snapshot();
+    s.auto = { availability: "available", enabled: true, off: null, phase: "waiting", target: { sha: "a".repeat(40), short: "aaaaaaa", version: "1", date: "" }, green: { state: "green" },
+      blockers: { turns: 2, stages: 1, operatorActiveAt: null, busy: false, memoryMb: null, unreadable: null }, waitingSince: new Date(NOW - 60_000).toISOString(), longWait: false };
+    s.history = [{ at: new Date(NOW).toISOString(), by: "auto", kind: "build", target: "a".repeat(40), from: null, outcome: "done" }];
+    const el = render(s);
+    expect(text(section(el, "auto"))).toContain("Agent turns running: 2");
+    expect(text(section(el, "auto"))).toContain("Pipeline stages running: 1");
+    expect(text(section(el, "auto"))).toContain("Built aaaaaaa; web serves");
+    expect(button(el, "toggle-auto")?.disabled).toBe(false);
+    click(button(el, "toggle-auto"));
+    expect(calls).toEqual(["toggle-auto"]);
+    flushSync(() => root!.unmount());
+    host?.remove();
+    setLocale("uk");
+    const uk = render(s);
+    expect(text(section(uk, "auto"))).toContain("Автооновлення");
+    expect(text(section(uk, "auto"))).toContain("Працюють ходи агентів: 2");
+  });
+
+  test("managed installs explain why the switch is unavailable", () => {
+    const s = snapshot();
+    s.mode = "managed";
+    s.auto = { availability: "managed", enabled: false, off: null, phase: "idle", target: null, green: null, blockers: null, waitingSince: null, longWait: false };
+    const el = render(s);
+    expect(button(el, "toggle-auto")?.disabled).toBe(true);
+    expect(text(section(el, "auto"))).toContain("managed install");
+  });
+
+  test("the update card names an automatic build after it finishes", () => {
+    const s = snapshot();
+    s.update = { ...idleUpdate(), state: "done", target: "a".repeat(40), targetShort: "aaaaaaa", trigger: "auto", finishedAt: new Date(NOW).toISOString() };
+    const el = render(s);
+    expect(text(section(el, "update"))).toContain("Started automatically.");
+  });
+
+  test("a hand-managed checkout at the tracked tip offers a manual rebuild", () => {
+    const s = snapshot();
+    s.check = { ...s.check, state: "up-to-date", relation: "equal" };
+    s.available = null;
+    s.auto = { availability: "hand-managed", enabled: true, off: null, phase: "idle", target: null, green: null, blockers: null, waitingSince: null, longWait: false };
+    const el = render(s);
+    expect(text(section(el, "update"))).toContain("Build this checkout");
+    expect(button(el, "update")?.disabled).toBe(false);
+  });
+});
 const click = (element: Element | null) => element!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
 
 describe("check", () => {
@@ -449,7 +498,8 @@ describe("process blocks", () => {
     expect(text(section(el, "web"))).toContain("PID 48213·port 45123");
     expect(text(section(el, "web"))).toContain("up 2 h 14 m·checked 12:04:31");
     expect(text(section(el, "host"))).toContain("PID 48190·runtime-host.sock");
-    expect(text(section(el, "host"))).toContain("Restarting the runtime host drops the agents it supervises. Restart web first if you only changed the web app.");
+    expect(text(section(el, "host"))).toContain("Restarting the runtime host briefly pauses message delivery. Agents keep running.");
+    expect(text(section(el, "web"))).toContain("Restarting web ends agent turns in progress.");
     expect(section(el, "web")!.querySelector("[data-badge]")!.getAttribute("data-badge")).toBe("healthy");
     click(button(el, "restart-web"));
     click(button(el, "arm-host"));
@@ -459,7 +509,7 @@ describe("process blocks", () => {
   test("the runtime host restart asks first, inline", () => {
     const el = render(snapshot(), { armed: true });
     const confirm = el.querySelector('[data-confirm][role="alertdialog"]')!;
-    expect(text(confirm)).toContain("Restarting the runtime host stops every agent it supervises. Sessions that are mid-turn are interrupted, and not all of them will come back after the restart.");
+    expect(text(confirm)).toContain("Message delivery pauses for a few seconds while the runtime host restarts. Agents keep running.");
     expect(button(el, "arm-host")).toBeNull();
     click(button(el, "confirm-host"));
     click(button(el, "cancel-host"));

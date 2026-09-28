@@ -41,6 +41,8 @@ import type { BoardProjectStateV1 } from "@/lib/view/types";
 
 const PROJECT = new URLSearchParams(location.search).get("scenario") === "linked-agents" ? `repo-${"a".repeat(32)}` : "atlas";
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
+const SELF_UPDATE_RELOAD = new URLSearchParams(location.search).has("self-update-reload");
+let presenceAnswers = 0;
 /* #2102: stored icons on some tasks; the others draw the title's suggestion or the quiet default. */
 const ICONS = new URLSearchParams(location.search).get("icons") === "1";
 const EDITING = SCENARIO === "editing";
@@ -1941,7 +1943,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/view/presence" && method === "POST") {
     const body = JSON.parse(String(init?.body)) as { mode: string; visiblePaths: string[]; focusedPath?: string | null };
     evidence.presence.push({ mode: body.mode, visiblePaths: body.visiblePaths, focusedPath: body.focusedPath ?? null });
-    return json({ ok: true });
+    return json({ ok: true, ...(SELF_UPDATE_RELOAD ? { serving: ++presenceAnswers === 1 ? "aaaaaaa" : "bbbbbbb" } : {}) });
   }
   if (TELEGRAM_STEP && url.pathname === "/api/telegram/bot") return json({ bot: TELEGRAM_BOT_STATUS });
   if (TELEGRAM_STEP && url.pathname === "/api/onboarding") {

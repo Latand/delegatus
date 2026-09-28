@@ -80,6 +80,7 @@ export type StepFailure =
   | { kind: "head-mismatch"; head: string; expected: string }
   | { kind: "build-id-missing" }
   | { kind: "interrupted" }
+  | { kind: "timeout"; minutes: number }
   /** The runtime host kept answering that it knows no such deployment. */
   | { kind: "deployment-lost" }
   | { kind: "exit"; code: number }
@@ -111,6 +112,8 @@ export interface UpdateState {
   steps: Step[];
   startedAt: string | null;
   finishedAt: string | null;
+  /** Who initiated this checkout build. Older records default to operator. */
+  trigger?: "operator" | "auto" | null;
 }
 
 export type ProcessStateName = "stopped" | "stopping" | "starting" | "healthy" | "failed";
@@ -161,11 +164,12 @@ export type RefusalCode =
   | "deployment-refused"
   | "bad-key"
   | "bad-role"
-  | "confirm-required";
+  | "confirm-required"
+  | "auto-unavailable";
 
 export const REFUSAL_CODES: readonly RefusalCode[] = [
   "busy-update", "busy-restart-web", "busy-restart-runtime-host", "no-update", "not-failed", "cannot-check",
-  "cannot-update", "cannot-restart", "managed-restart", "deployment-busy", "deployment-refused", "bad-key", "bad-role", "confirm-required",
+  "cannot-update", "cannot-restart", "managed-restart", "deployment-busy", "deployment-refused", "bad-key", "bad-role", "confirm-required", "auto-unavailable",
 ];
 
 export interface Snapshot {
@@ -181,6 +185,8 @@ export interface Snapshot {
   update: UpdateState;
   processes: { web: ProcessView; runtimeHost: ProcessView };
   busy: Busy;
+  auto?: import("./auto").AutoView;
+  history?: import("./history").HistoryEntry[];
   meta: {
     branch: string;
     remote: string;
@@ -209,6 +215,7 @@ export function idleUpdate(names: readonly StepName[] = CHECKOUT_STEPS): UpdateS
     steps: pendingSteps(names),
     startedAt: null,
     finishedAt: null,
+    trigger: null,
   };
 }
 

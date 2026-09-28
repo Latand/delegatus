@@ -5,6 +5,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { runtimeHostClient } from "@/lib/runtime/client";
+import { loadPipelinesForList } from "@/lib/pipelines/store";
+import { listPresence } from "@/lib/view/presenceStore";
 import { requestViewerDeployment } from "@/lib/runtime/deploymentRuntime";
 import { stateDir, statePath } from "@/lib/configDir";
 import { readHotStateReleaseTarget } from "@/lib/state/hotStateAuthority";
@@ -15,7 +17,7 @@ import { requestRestart } from "./launcher";
 import { detectMode, productionModePorts } from "./mode";
 import { sameProcess } from "./pid";
 import { SelfUpdateService, type ServiceDeps } from "./service";
-import { realPorts, UpdateRunner } from "./steps";
+import { memAvailableMb, realPorts, UpdateRunner } from "./steps";
 import type { Snapshot } from "./types";
 
 const POLL_MINUTES = 60;
@@ -96,6 +98,16 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
       pid: process.pid,
       port: Number.isInteger(port) && port > 0 ? port : null,
       startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+    },
+    quiet: {
+      runtimeSnapshot: async () => {
+        const client = runtimeHostClient();
+        if (!client) throw new Error("runtime host is unavailable");
+        return client.snapshot(undefined, { timeoutMs: 10_000 });
+      },
+      pipelines: loadPipelinesForList,
+      presence: listPresence,
+      memoryAvailableMb: memAvailableMb,
     },
   };
 }
