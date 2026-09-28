@@ -6,7 +6,7 @@ x-viewer-common: &viewer-common
     dockerfile: Dockerfile
     args:
       LLV_RUNTIME_HOME: ${HOME:-/home/user}
-  image: agent-log-viewer:node22
+  image: ${DELEGATUS_IMAGE:-agent-log-viewer:node22}
   network_mode: host
   pid: host
   privileged: true

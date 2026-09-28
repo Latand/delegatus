@@ -542,6 +542,15 @@ APIs refuse paths outside the known transcript folders.
 
 ## Docker
 
+The published image is `ghcr.io/latand/delegatus` for `linux/amd64` and
+`linux/arm64`. Use `edge` for the latest main build or a version tag to pin a
+release. From a repository checkout, start a test instance on port 8901:
+
+```bash
+DELEGATUS_IMAGE=ghcr.io/latand/delegatus:edge docker compose --profile test pull viewer-test
+DELEGATUS_IMAGE=ghcr.io/latand/delegatus:edge docker compose --profile test up -d --no-build viewer-test
+```
+
 The Docker setup is how the maintainer runs Delegatus as a long-running
 service.
 

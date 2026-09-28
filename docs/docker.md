@@ -1,16 +1,38 @@
 # Docker
 
+## Run the published image
+
+`ghcr.io/latand/delegatus` supports `linux/amd64` and `linux/arm64`.
+`edge` tracks main; release tags provide versioned images and `latest`.
+From a repository checkout, select the image, pull it, and start a test Viewer
+on `127.0.0.1:8901`:
+
+```bash
+export DELEGATUS_IMAGE=ghcr.io/latand/delegatus:edge
+docker compose --profile test pull viewer-test
+docker compose --profile test up -d --no-build viewer-test
+```
+
+Set `DELEGATUS_UID`, `DELEGATUS_GID`, and `DELEGATUS_DOCKER_GID` for your host
+when their defaults differ. Compose passes the host `HOME` and mounts it at
+the same path. The image's build-time home is only the default for its `node`
+account; the running processes use Compose's `HOME` and UID/GID. Host CLI
+shims use that runtime home. For a production instance, pull `runtime-host`
+with the same image override, then follow [Production instance](#production-instance)
+for its bootstrap. The runtime host still builds each Viewer release locally
+from its exact revision.
+
 The npm/bunx CLI includes its own supervised runtime host, so pipelines and the
 orchestrator do not require Docker. Compose keeps a separate production
 ownership model: the `runtime-host` profile owns the stable listener, journal,
 deployment coordinator, and socket configured below. CLI supervision does not
 change this profile.
 
-The Docker image pins Node 22 and builds the Next.js app inside the image from a clean environment. It keeps the viewer host-coupled by design: Compose uses the host network, host PID namespace, privileged `nsenter` shims, the real `/home/user` tree, and the host tmux socket.
+The Docker image pins Node 22 and builds the Next.js app inside the image from a clean environment. It keeps the viewer host-coupled by design: Compose uses the host network, host PID namespace, privileged `nsenter` shims, the runtime user's home tree, and the host tmux socket.
 
-Runtime tools are split by coupling. The image owns stable runtimes: Node 22, Git, GitHub CLI, OpenSSH client, curl, CA certificates, Python 3, and a faster-whisper venv at `/opt/llv-whisper-venv`. Compose mounts the full host home at `/home/user`, so SSH keys, Git config, GitHub CLI auth, Claude/Codex state, app cache, Hugging Face cache, and workspace roots line up with host paths. `GIT_SSH_COMMAND` points image Git/OpenSSH at the mounted host SSH config, known hosts, and default GitHub identity.
+Runtime tools are split by coupling. The image owns stable runtimes: Node 22, Git, GitHub CLI, OpenSSH client, curl, CA certificates, Python 3, and a faster-whisper venv at `/opt/llv-whisper-venv`. Compose mounts the full host home at its original path, so SSH keys, Git config, GitHub CLI auth, Claude/Codex state, app cache, Hugging Face cache, and workspace roots line up with host paths.
 
-Host developer CLIs run through `nsenter` shims in `/usr/local/bin`, ahead of mounted user bins in `PATH`. The shims enter the host mount and PID namespaces, use the caller uid/gid, preserve host-visible cwd values, and fall back to `$HOME` for container-only paths such as `/app`. They execute the exact host paths: `claude`, `codex`, and `bun` from `/home/user/.bun/bin`; `uv` from `/home/user/.local/bin`; `just`, `tmux` and `tailscale` from `/usr/bin`. `LLV_DOCKER_NSENTER_SHIMS=1` also makes direct Claude/Codex resolver calls, and the Setup guide's phone step, choose `/usr/local/bin` shims. The image contains the app, Node dependencies, the local transcription helper script, and the prebuilt `.next` output.
+Host developer CLIs run through `nsenter` shims in `/usr/local/bin`, ahead of mounted user bins in `PATH`. The shims enter the host mount and PID namespaces, use the caller uid/gid, preserve host-visible cwd values, and fall back to `$HOME` for container-only paths such as `/app`. They execute the exact host paths: `claude`, `codex`, and `bun` from `$HOME/.bun/bin`; `uv` from `$HOME/.local/bin`; `just`, `tmux` and `tailscale` from `/usr/bin`. `LLV_DOCKER_NSENTER_SHIMS=1` also makes direct Claude/Codex resolver calls, and the Setup guide's phone step, choose `/usr/local/bin` shims. The image contains the app, Node dependencies, the local transcription helper script, and the prebuilt `.next` output.
 
 ## Production instance
 
