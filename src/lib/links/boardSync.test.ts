@@ -490,5 +490,209 @@ test("a reinstalled peer receives the tasks of its earlier install with their ol
   const refusedOnA = (await request(a, `/test/runs-here?id=${task.id}`)).body.refusal as { code: string; error: string };
   expect(refusedOnB2.code).toBe("TASK_RUNS_ELSEWHERE");
   expect(refusedOnA.code).toBe("TASK_RUNS_ELSEWHERE");
-  expect(refusedOnA.error).toContain("(not linked)");
+  expect(refusedOnA.error).toContain("which is not linked");
+  // The refusal names the owner only; it points at no control this slice lacks.
+  for (const refusal of [refusedOnA, refusedOnB2]) expect(refusal.error).not.toMatch(/Run here|Copy here|copy is made/);
 }, 60_000);
+
+type Figures = { rowReads: number; writes: number; revisions: Record<string, number | null>; bytes: Record<string, { rows: number; bytes: number; largest: number }>; changes: Record<string, number> };
+const figures = async (base: string, reset = false) => (await request(base, `/test/store${reset ? "?reset=1" : ""}`)).body as unknown as Figures;
+const otherRemote = "code.example.test/acme/unlinked";
+const otherKey = projectIdentityFromRemote(`https://${otherRemote}`, "/")!.project;
+
+test("idle calls read no task row and write nothing on either side; 100 calls while an unlinked project takes writes cost at most one board_links write", async () => {
+  const a = await install("work-A", { [otherKey]: otherRemote });
+  const b = await install("work-B", { [otherKey]: otherRemote });
+  await request(a, "/test/bulk", "POST", { project: key, count: 50 });
+  await request(b, "/test/bulk", "POST", { project: key, count: 50 });
+  const peerId = await link(a, b);
+  // Edits and deletes on both sides have synced before the idle run starts.
+  const fromA = await createOn(a, "Made on A");
+  const fromB = await createOn(b, "Made on B");
+  await sync(a, peerId);
+  expect((await patchOn(a, fromB.id, { status: "blocked" })).status).toBe(200);
+  expect((await request(b, `/api/tasks/${fromA.id}`, "DELETE")).status).toBe(200);
+  await sync(a, peerId);
+  await sync(a, peerId);
+  expect(await taskOn(a, fromA.id)).toBeUndefined();
+  expect((await taskOn(b, fromB.id))?.status).toBe("blocked");
+
+  const before = await Promise.all([figures(a, true), figures(b, true)]);
+  for (let i = 0; i < 100; i++) await sync(a, peerId);
+  const idle = await Promise.all([figures(a), figures(b)]);
+  for (const side of [0, 1]) {
+    expect([side, idle[side]!.rowReads, idle[side]!.writes]).toEqual([side, 0, 0]);
+    expect(idle[side]!.revisions).toEqual(before[side]!.revisions);
+  }
+
+  // Another project takes a write on both sides before every call: the
+  // cursors pass it in memory and the linked rows stay where they are.
+  await captured(b);
+  for (let i = 0; i < 100; i++) {
+    for (const side of [a, b]) await request(side, "/test/bulk", "POST", { project: otherKey, count: 1 });
+    await sync(a, peerId);
+  }
+  const busy = await Promise.all([figures(a), figures(b)]);
+  for (const side of [0, 1]) {
+    // The same spies see the other project's writes, so the zeros above are real.
+    expect(busy[side]!.writes).toBeGreaterThan(0);
+    expect(busy[side]!.revisions.tasks! - idle[side]!.revisions.tasks!).toBe(100);
+    expect(busy[side]!.revisions.board_links! - idle[side]!.revisions.board_links!).toBeLessThanOrEqual(1);
+    expect(busy[side]!.revisions.task_tombstones).toEqual(idle[side]!.revisions.task_tombstones);
+  }
+  for (const call of await captured(b)) {
+    const sent = JSON.parse(call.request) as { push?: { rows?: unknown[] } };
+    const answered = JSON.parse(call.response) as { tasks?: { rows?: unknown[] } };
+    expect([sent.push?.rows?.length ?? 0, answered.tasks?.rows?.length ?? 0]).toEqual([0, 0]);
+  }
+  // Ten minutes on, the cursor that only passed other projects is saved once.
+  await request(a, `/test/clock?offset=${11 * 60_000}`);
+  const saved = (await figures(a)).revisions.board_links!;
+  await request(a, "/test/bulk", "POST", { project: otherKey, count: 1 });
+  await sync(a, peerId);
+  await sync(a, peerId);
+  expect((await figures(a)).revisions.board_links! - saved).toBe(1);
+}, 120_000);
+
+test("each applied page commits one tasks revision and at most one board_links revision; a delete writes its tombstone in the same commit", async () => {
+  const a = await install("disk-A");
+  const b = await install("disk-B");
+  const peerId = await link(a, b);
+  const task = await createOn(a, "Measured task");
+  await sync(a, peerId);
+  await sync(a, peerId);
+  const change = async (run: () => Promise<void>) => {
+    const start = await Promise.all([figures(a), figures(b)]);
+    await captured(b);
+    await run();
+    const end = await Promise.all([figures(a), figures(b)]);
+    const calls = await captured(b);
+    const delta = (side: number, name: string) => end[side]!.revisions[name]! - (start[side]!.revisions[name] ?? 0);
+    return {
+      pulled: calls.filter((call) => (JSON.parse(call.response) as { tasks?: { rows?: unknown[] } }).tasks?.rows?.length).length,
+      pushed: calls.filter((call) => (JSON.parse(call.request) as { push?: { rows?: unknown[] } }).push?.rows?.length).length,
+      a: { tasks: delta(0, "tasks"), links: delta(0, "board_links"), tombstones: delta(0, "task_tombstones") },
+      b: { tasks: delta(1, "tasks"), links: delta(1, "board_links"), tombstones: delta(1, "task_tombstones") },
+      end,
+    };
+  };
+
+  // B's edit reaches A as one page.
+  const pulled = await change(async () => {
+    expect((await patchOn(b, task.id, { status: "blocked" })).status).toBe(200);
+    await sync(a, peerId);
+  });
+  expect(pulled.pulled).toBe(1);
+  expect(pulled.a.tasks).toBe(1);
+  expect(pulled.a.links).toBeLessThanOrEqual(1);
+  expect(pulled.b.tasks).toBe(1); // B's own edit
+  expect(pulled.b.links).toBe(0);
+
+  // A's edit reaches B as one page.
+  const pushed = await change(async () => {
+    expect((await patchOn(a, task.id, { text: "Renamed on A" })).status).toBe(200);
+    await sync(a, peerId);
+  });
+  expect(pushed.pushed).toBe(1);
+  expect(pushed.b.tasks).toBe(1);
+  expect(pushed.b.links).toBe(0);
+  expect(pushed.a.tasks).toBe(1); // A's own edit
+  expect(pushed.a.links).toBeLessThanOrEqual(1);
+
+  // One transaction of 201 tasks on B reaches A as two pages: one commit each.
+  const paged = await change(async () => {
+    await request(b, "/test/bulk", "POST", { project: key, count: 201 });
+    await sync(a, peerId);
+  });
+  expect(paged.pulled).toBe(2);
+  expect(paged.a.tasks).toBe(2);
+  expect(paged.a.links).toBeLessThanOrEqual(2);
+
+  // A delete on A: B commits the removal and its tombstone together.
+  const deleted = await change(async () => {
+    expect((await request(a, `/api/tasks/${task.id}`, "DELETE")).status).toBe(200);
+    await sync(a, peerId);
+  });
+  expect(deleted.pushed).toBe(1);
+  expect(deleted.b.tasks).toBe(1);
+  expect(deleted.b.tombstones).toBe(1);
+  expect(deleted.b.links).toBe(0);
+  expect(await taskOn(b, task.id)).toBeUndefined();
+  for (const side of deleted.end) expect(side.bytes.task_tombstones!.largest).toBeLessThanOrEqual(200);
+}, 120_000);
+
+test("1 000 synced edits and 100 deletes grow the two new collections by at most 20 KB on each side", async () => {
+  const a = await install("growth-A");
+  const b = await install("growth-B");
+  const ids = (await request(a, "/test/bulk", "POST", { project: key, count: 100 })).body.ids as string[];
+  const peerId = await link(a, b);
+  await sync(a, peerId);
+  for (const side of [a, b]) await request(side, "/test/capture?on=0");
+  const start = await Promise.all([figures(a), figures(b)]);
+  const statuses = ["assigned", "blocked", "done", "inbox"];
+  for (let i = 0; i < 1_000; i++) {
+    expect((await patchOn(i % 2 ? b : a, ids[i % ids.length]!, { status: statuses[i % statuses.length] })).status).toBe(200);
+    await sync(a, peerId);
+  }
+  for (let i = 0; i < 100; i++) {
+    expect((await request(i % 2 ? b : a, `/api/tasks/${ids[i]}`, "DELETE")).status).toBe(200);
+    await sync(a, peerId);
+  }
+  await sync(a, peerId);
+  for (const side of [a, b]) expect((await tasksOf(side)).filter((task) => task.project === key)).toHaveLength(0);
+  const end = await Promise.all([figures(a), figures(b)]);
+  const grown = end.map((side, index) => ["board_links", "task_tombstones"].reduce((sum, name) => sum + side.bytes[name]!.bytes - (start[index]!.bytes[name]?.bytes ?? 0), 0));
+  for (const [index, side] of end.entries()) {
+    expect(side.bytes.task_tombstones!.rows).toBeGreaterThanOrEqual(100);
+    expect(grown[index]!).toBeLessThanOrEqual(20 * 1024);
+  }
+}, 300_000);
+
+test("a sync body of 1 MiB + 1 B or a shared page of 101 entries is malformed and applies nothing, in both directions", async () => {
+  const a = await install("caps-A");
+  const b = await install("caps-B");
+  const peerId = await link(a, b);
+  const task = await createOn(a, "Before");
+  await sync(a, peerId);
+  await sync(a, peerId);
+  expect((await taskOn(b, task.id))?.text).toBe("Before");
+
+  // The body A would send for an edit, kept by B while it refuses the call.
+  expect((await patchOn(a, task.id, { text: "Pushed edit" })).status).toBe(200);
+  await captured(b);
+  await request(b, "/test/fail-sync?on=1");
+  expect((await request(a, `/api/links/peers/${peerId}`, "POST")).status).toBe(409);
+  await request(b, "/test/fail-sync?on=0");
+  const held = (await captured(b)).map((call) => call.request).find((body) => (JSON.parse(body) as { push?: { rows?: unknown[] } }).push?.rows?.length)!;
+  expect(held).toBeDefined();
+  const stored = JSON.parse(fs.readFileSync(path.join(root, "caps-A", "links/peers.json"), "utf8")).peers[0] as { token: string; grantId: string };
+  const send = (body: string) => fetch(b + "/api/peer/v1/boards/sync", { method: "POST", body,
+    headers: { "content-type": "application/json", "x-delegatus-peer": `${stored.grantId}.${stored.token}` } });
+  const revision = (await figures(b)).revisions;
+
+  const padded = held + " ".repeat(1_048_577 - Buffer.byteLength(held));
+  expect(Buffer.byteLength(padded)).toBe(1_048_577);
+  const tooLarge = await send(padded);
+  expect([tooLarge.status, await tooLarge.json()]).toEqual([400, { error: "malformed" }]);
+  const shared = Array.from({ length: 101 }, (_, index) => ({ key: `repo-${index.toString(16).padStart(32, "0")}`, name: `project-${index}` }));
+  const tooMany = await send(JSON.stringify({ ...JSON.parse(held), shared, index: 0, total: 101 }));
+  expect([tooMany.status, await tooMany.json()]).toEqual([400, { error: "malformed" }]);
+  expect((await taskOn(b, task.id))?.text).toBe("Before");
+  expect((await figures(b)).revisions).toEqual(revision);
+  // The same body within the bounds applies.
+  expect((await send(held)).status).toBe(200);
+  expect((await taskOn(b, task.id))?.text).toBe("Pushed edit");
+  await sync(a, peerId);
+
+  // B's answer of 1 MiB + 1 B: A refuses it unparsed and applies nothing.
+  expect((await patchOn(b, task.id, { text: "Pulled edit" })).status).toBe(200);
+  const before = (await figures(a)).revisions;
+  await request(b, "/test/pad-answer?to=1048577");
+  const refused = await request(a, `/api/links/peers/${peerId}`, "POST");
+  expect([refused.status, refused.body.error]).toEqual([409, "malformed"]);
+  expect((await taskOn(a, task.id))?.text).toBe("Pushed edit");
+  expect((await figures(a)).revisions.tasks).toBe(before.tasks);
+  await request(b, "/test/pad-answer?to=0");
+  await sync(a, peerId);
+  expect((await taskOn(a, task.id))?.text).toBe("Pulled edit");
+}, 120_000);

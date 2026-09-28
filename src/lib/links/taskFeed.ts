@@ -9,7 +9,7 @@ import { taskFeedSource, TASKS_FILE } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { encodeTask, type WireRow } from "./taskWire";
-import { isTombstone, tombstoneCollection, tombstoneKey } from "./tombstones";
+import { isTombstone, tombstoneCollection, tombstoneKey, tombstoneRowKey } from "./tombstones";
 
 /** Everything in the change log up to and including this has been sent:
     `[revision]` covers the whole revision, `[revision, key]` stops inside it. */
@@ -157,7 +157,7 @@ export function readScanPage(after: string, filter: FeedFilter): ScanPage {
         const gone = { id: tomb.id, project: tomb.project, gone: tomb.gone };
         if (!page.add(gone, Buffer.byteLength(JSON.stringify(gone)), tomb.id, false)) return { rows: page.rows, next: cursor, withheld: page.withheld };
       }
-      cursor = tomb.key;
+      cursor = tombstoneRowKey(tomb);
     }
     if (batch.length < SCAN_BATCH) return { rows: page.rows, next: null, withheld: page.withheld };
   }

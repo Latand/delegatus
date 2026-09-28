@@ -75,7 +75,7 @@ export function projectWatermark(tasks: readonly BoardTask[], project: string, w
 
 export function raiseFloor(write: TaskSyncWrite, project: string, stamp: string): void {
   const floor = write.read(floorKey(project));
-  if (!isFloor(floor) || floor.floor < stamp) write.put({ key: floorKey(project), project, floor: stamp });
+  if (!isFloor(floor) || floor.floor < stamp) write.put({ project, floor: stamp });
 }
 
 export function stampLinkedRows(tasks: BoardTask[], before: ReadonlyMap<string, GroupSnapshot>, write: TaskSyncWrite, fingerprint: (task: BoardTask) => string): void {
@@ -108,7 +108,7 @@ export function stampLinkedRows(tasks: BoardTask[], before: ReadonlyMap<string, 
     if (present.has(id) || isTombstone(write.read(tombstoneKey(id)))) continue;
     const last = Object.values(prior.stamps).reduce<string>((newest, stamp) => stamp! > newest ? stamp! : newest, derivedStamp(prior.updatedAt, write.self.prefix));
     const gone = fresh(prior.project);
-    write.put({ key: tombstoneKey(id), id, project: prior.project, gone, last, o: write.self.prefix });
+    write.put({ id, project: prior.project, gone, ...(last > gone ? { last } : {}), o: write.self.prefix });
     raiseFloor(write, prior.project, gone);
   }
 }

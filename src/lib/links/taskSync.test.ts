@@ -129,9 +129,10 @@ test("deleting a linked task writes its tombstone and the project floor in the s
     if (!removed.ok) throw new Error(removed.error);
     return { tasks: removed.tasks, result: null };
   }, file);
-  const tomb = tombstones.get(`g:${task.id}`) as { gone: string; last: string; o: string } | null;
+  const tomb = tombstones.get(`g:${task.id}`) as { gone: string; last?: string; o: string } | null;
   expect(tomb?.o).toBe(installPrefix(SELF));
-  expect(tomb!.gone > tomb!.last).toBe(true);
+  // `gone` is above every stamp the row held, so `last` is not stored.
+  expect(tomb!.last).toBeUndefined();
   expect((tombstones.get(`floor:${key}`) as { floor: string }).floor).toBe(tomb!.gone);
   expect(readStateCollectionRevision(db, "tasks")).toBe(tasksBefore + 1);
   // A later row of the deleted id is dropped whatever its stamp.

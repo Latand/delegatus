@@ -28,16 +28,30 @@ function collection(create: boolean): SqliteStateCollection<BoardLink> | null {
   return opened;
 }
 
+/* Point reads are answered from memory while the collection revision holds;
+   the revision comes from the store's cached file signature, so an idle sync
+   call reads no row on either side (M.9 "Idle call, work"). */
+const rows = new WeakMap<SqliteStateCollection<BoardLink>, { revision: number; rows: Map<string, BoardLink | null> }>();
+function readRow(key: string, opened = collection(false)): BoardLink | null {
+  if (!opened) return null;
+  const revision = opened.revision();
+  let held = rows.get(opened);
+  if (held?.revision !== revision) { held = { revision, rows: new Map() }; rows.set(opened, held); }
+  if (!held.rows.has(key)) held.rows.set(key, opened.get(key));
+  const row = held.rows.get(key)!;
+  return row && structuredClone(row);
+}
+
 /** Changes whenever a link row does; the linked-project cache keys on it. */
 export function boardLinksRevision(): number { return collection(false)?.revision() ?? -1; }
 
-export function remoteProjects(id: string): SharedProject[] { return collection(false)?.get(`peer:${id}`)?.shared ?? []; }
-export function remoteStore(id: string): string | null { return collection(false)?.get(`peer:${id}`)?.store ?? null; }
+export function remoteProjects(id: string): SharedProject[] { return readRow(`peer:${id}`)?.shared ?? []; }
+export function remoteStore(id: string): string | null { return readRow(`peer:${id}`)?.store ?? null; }
 
 /** The board store has its own identity, separate from the install's self.json id. */
 export function ownBoardStoreId(): string {
   const opened = collection(true)!;
-  const held = opened.get("self");
+  const held = readRow("self", opened);
   if (held) return held.store;
   return opened.boundedPatch(2, (tx) => {
     const current = tx.get("self");
@@ -51,7 +65,7 @@ export function ownBoardStoreId(): string {
 /** The first exchange records the store; an identical idle exchange writes nothing. */
 export function updateRemoteProjects(id: string, list: SharedProject[], store: string): boolean {
   const key = `peer:${id}`;
-  const current = collection(false)?.get(key);
+  const current = readRow(key);
   if (current?.store === store && JSON.stringify(current.shared) === JSON.stringify(list)) return false;
   const opened = collection(true)!;
   return opened.boundedPatch(2, (tx) => {
@@ -65,12 +79,12 @@ export function updateRemoteProjects(id: string, list: SharedProject[], store: s
 export function dropRemoteProjects(id: string): void {
   const keys = [`peer:${id}`, `tasks:${id}`];
   const opened = collection(false);
-  if (!keys.some((key) => opened?.get(key))) return;
+  if (!keys.some((key) => readRow(key, opened))) return;
   opened!.boundedPatch(4, (tx) => { for (const key of keys) if (tx.get(key)) tx.delete(key); });
 }
 
 export function readTaskCursor(id: string, store: string): TaskCursor | null {
-  const row = collection(false)?.get(`tasks:${id}`);
+  const row = readRow(`tasks:${id}`);
   return row?.cursor && row.store === store ? row.cursor : null;
 }
 
@@ -78,7 +92,7 @@ export function readTaskCursor(id: string, store: string): TaskCursor | null {
 export function writeTaskCursor(id: string, store: string, cursor: TaskCursor): void {
   const key = `tasks:${id}`;
   const next: BoardLink = { key, store, shared: [], cursor };
-  const held = collection(false)?.get(key);
+  const held = readRow(key);
   if (held && JSON.stringify(held) === JSON.stringify(next)) return;
   collection(true)!.boundedPatch(2, (tx) => {
     const current = tx.get(key);

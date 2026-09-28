@@ -21,7 +21,7 @@ import { readStateImport, SqliteStateCollection, type StateImportRecord, type St
 
 import { linkedContext } from "@/lib/links/linked";
 import { snapshotGroups, stampLinkedRows, type GroupSnapshot, type TaskSyncWrite } from "@/lib/links/taskStamp";
-import { tombstoneCollection, type TombstoneRow } from "@/lib/links/tombstones";
+import { tombstoneCollection, tombstoneRowKey, type TombstoneRow } from "@/lib/links/tombstones";
 
 import { snapshotTasks, stampTaskRevisions, taskFingerprint, taskRevision } from "./revision";
 import { isTaskAttachment } from "./attachments";
@@ -532,7 +532,7 @@ function taskSyncWrite(filePath: string): { write: TaskSyncWrite; companion: Non
   const write: TaskSyncWrite = {
     linked: context.all, self: context.self, now: Date.now,
     read: (key) => puts.get(key) ?? (removed.has(key) ? null : companion.get(key)),
-    put: (row) => { puts.set(row.key, row); removed.delete(row.key); },
+    put: (row) => { const key = tombstoneRowKey(row); puts.set(key, row); removed.delete(key); },
     remove: (key) => { puts.delete(key); removed.add(key); },
   };
   return { write, companion, pending: () => ({ records: [...puts.values()], deleteKeys: [...removed] }) };

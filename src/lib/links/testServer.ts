@@ -28,6 +28,7 @@ import { listFiles } from "@/lib/scanner";
 import { admitScannedConversations } from "@/lib/tasks/membership";
 import { admitRecoveredLaunch, admitReservedLaunch } from "@/lib/tasks/launchMembership";
 import { applyTaskCuratorProposals, collectTaskCuratorInputs } from "@/lib/tasks/curator";
+import { Database, Statement } from "bun:sqlite";
 
 const dir = process.argv[2]!;
 process.env.LLV_STATE_DIR = dir;
@@ -53,6 +54,55 @@ const realNow = Date.now.bind(Date);
 let clockOffset = 0;
 Date.now = () => realNow() + clockOffset;
 let capturing = true;
+/** A sync answer padded to this many bytes. */
+let padAnswer = 0;
+/* Store spies (M.9 "Idle call, work"): every statement this process runs on
+   any SQLite database, counted as a `state_rows` read or as a write. */
+const store = { rowReads: 0, writes: 0 };
+let spying = true;
+const wrapped = new WeakSet<object>();
+const kindOf = (sql: string) => /^\s*(INSERT|UPDATE|DELETE|REPLACE)\b/i.test(sql) ? "write" : /\bFROM\s+state_rows\b/i.test(sql) ? "read" : null;
+const count = (kind: "read" | "write" | null) => {
+  if (!spying || !kind) return;
+  if (kind === "read") store.rowReads++; else store.writes++;
+};
+// A statement's `get`, `all`, `run`… are its own properties, so each statement
+// is wrapped once when it is prepared (`query` hands back cached ones).
+for (const method of ["query", "prepare"] as const) {
+  const original = Database.prototype[method] as (this: Database, sql: string, ...rest: unknown[]) => Statement;
+  (Database.prototype as unknown as Record<string, unknown>)[method] = function (this: Database, sql: string, ...rest: unknown[]) {
+    const statement = original.call(this, sql, ...rest);
+    const kind = kindOf(sql);
+    if (kind && !wrapped.has(statement)) {
+      wrapped.add(statement);
+      const own = statement as unknown as Record<string, (...args: unknown[]) => unknown>;
+      for (const run of ["all", "get", "run", "values", "iterate", "raw"]) {
+        const bound = own[run];
+        if (typeof bound === "function") own[run] = (...args: unknown[]) => { count(kind); return bound.apply(statement, args); };
+      }
+    }
+    return statement;
+  };
+}
+for (const method of ["run", "exec"] as const) {
+  const original = (Database.prototype as unknown as Record<string, (...args: unknown[]) => unknown>)[method];
+  if (!original) continue;
+  (Database.prototype as unknown as Record<string, unknown>)[method] = function (this: Database, sql: string, ...args: unknown[]) { count(kindOf(sql)); return original.call(this, sql, ...args); };
+}
+/** The revision and byte size of the collections M2 adds, read outside the spies. */
+function storeFigures() {
+  spying = false;
+  try {
+    const db = new Database(statePath("state.sqlite"), { readonly: true });
+    try {
+      const names = ["tasks", "board_links", "task_tombstones"];
+      const revisions = Object.fromEntries(names.map((name) => [name, (db.query("SELECT revision FROM state_collections WHERE collection = ?").get(name) as { revision: number } | null)?.revision ?? null]));
+      const bytes = Object.fromEntries(names.map((name) => [name, (db.query("SELECT COUNT(*) AS rows, COALESCE(SUM(length(CAST(row_key AS BLOB)) + length(CAST(value_json AS BLOB))), 0) AS bytes, COALESCE(MAX(length(CAST(value_json AS BLOB))), 0) AS largest FROM state_rows WHERE collection = ?").get(name))]));
+      const changes = Object.fromEntries(names.map((name) => [name, (db.query("SELECT COUNT(*) AS rows FROM state_changes WHERE collection = ?").get(name) as { rows: number }).rows]));
+      return { revisions, bytes, changes };
+    } finally { db.close(); }
+  } finally { spying = true; }
+}
 const json = (response: http.ServerResponse, value: unknown) => { response.setHeader("content-type", "application/json"); response.end(JSON.stringify(value)); };
 const server = http.createServer(async (request, response) => {
   try {
@@ -77,6 +127,13 @@ const server = http.createServer(async (request, response) => {
       json(response, task ? { refusal: runsElsewhere(task) } : { error: "not found" });
       return;
     }
+    if (path === "/test/store") {
+      const counts = { ...store };
+      if (query.get("reset") === "1") { store.rowReads = 0; store.writes = 0; }
+      json(response, { ...counts, ...storeFigures() });
+      return;
+    }
+    if (path === "/test/pad-answer") { padAnswer = Math.max(Number(query.get("to")) || 0, 0); json(response, { padAnswer }); return; }
     if (path === "/test/revision") { json(response, { revision: taskFeedSource()?.revision() ?? 0 }); return; }
     if (path === "/test/bulk") {
       // Many tasks in one transaction, as a test fixture.
@@ -180,6 +237,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     if (path === "/api/peer/v1/boards/sync" && failSync) {
+      if (capturing) captured.push({ request: Buffer.concat(chunks).toString("utf8"), response: "" });
       response.writeHead(failSync, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: "unavailable" }));
       return;
@@ -236,7 +294,9 @@ const server = http.createServer(async (request, response) => {
       result = method === "DELETE" ? await taskOne.DELETE(req, context) : await taskOne.PATCH(req, context);
     }
     else result = Response.json({ error: "not found" }, { status: 404 });
-    const resultBody = Buffer.from(await result.arrayBuffer());
+    let resultBody = Buffer.from(await result.arrayBuffer());
+    // Whitespace after the JSON keeps it valid; only the size cap refuses it.
+    if (path === "/api/peer/v1/boards/sync" && padAnswer > resultBody.byteLength) resultBody = Buffer.concat([resultBody, Buffer.alloc(padAnswer - resultBody.byteLength, " ")]);
     if (path.startsWith("/api/peer/v1/") && wire.length < 30) wire.push({ path, request: Buffer.concat(chunks).toString("utf8"), response: resultBody.toString("utf8") });
     if (path === "/api/peer/v1/boards/sync" && holdNextSync &&
         JSON.parse((holdNextSync === "response" ? resultBody : Buffer.concat(chunks)).toString("utf8")).index === 0) {
@@ -247,7 +307,9 @@ const server = http.createServer(async (request, response) => {
       releaseSync = null;
     }
     // Wire bytes are counted by the test's TCP proxy; padding proves extra headers reach that count.
-    response.writeHead(result.status, { ...Object.fromEntries(result.headers), ...(path === "/api/peer/v1/boards/sync" && padSync ? { "x-test-pad": "p".repeat(padSync) } : {}) });
+    const answerHeaders = Object.fromEntries(result.headers);
+    delete answerHeaders["content-length"];
+    response.writeHead(result.status, { ...answerHeaders, ...(path === "/api/peer/v1/boards/sync" && padSync ? { "x-test-pad": "p".repeat(padSync) } : {}) });
     response.end(resultBody, () => {
       if (path === "/api/peer/v1/boards/sync") {
         if (capturing) captured.push({ request: Buffer.concat(chunks).toString("utf8"), response: resultBody.toString("utf8") });

@@ -85,9 +85,11 @@ export function runsElsewhere(task: Pick<BoardTask, "id" | "text" | "machine">, 
   const { label, linked } = machineLabel(task.machine!, context);
   const title = task.text.split("\n", 1)[0]!.slice(0, 80);
   return { code: TASK_RUNS_ELSEWHERE, status: 409, taskId: task.id, machine: label,
+    // The doc's text adds "Use Run here to ask for it"; that control ships
+    // with the M2 UI, so until then the refusal names the owner only.
     error: linked
-      ? `${TASK_RUNS_ELSEWHERE}: "${title}" runs on ${label}; its own orchestrator starts it there. Use Run here to ask for it.`
-      : `${TASK_RUNS_ELSEWHERE}: "${title}" runs on ${label} (not linked); no machine launches it until a copy is made here.` };
+      ? `${TASK_RUNS_ELSEWHERE}: "${title}" runs on ${label}; its own orchestrator starts it there.`
+      : `${TASK_RUNS_ELSEWHERE}: "${title}" runs on ${label}, which is not linked; this machine does not launch it.` };
 }
 
 /** The first refusal among tasks a seam resolved, or null. */

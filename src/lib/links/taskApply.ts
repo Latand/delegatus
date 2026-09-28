@@ -11,7 +11,7 @@ import { deleteTask } from "@/lib/tasks/commands";
 import { mutateLinkedTasks, TASKS_FILE } from "@/lib/tasks/store";
 import { TASK_SYNC_GROUPS, type BoardTask, type TaskSyncGroup } from "@/lib/tasks/types";
 
-import { maxStamp, stampMs } from "./stamp";
+import { stampMs } from "./stamp";
 import { effectiveStamp, newestStamp, raiseFloor, type TaskSyncWrite } from "./taskStamp";
 import { encodeTask, isWireGone, isWireStub, MalformedRow, wireGroup, type WireRow, type WireTask } from "./taskWire";
 import { isTombstone, stubKey, tombstoneKey } from "./tombstones";
@@ -107,8 +107,8 @@ export function applyTaskRows(rows: readonly WireRow[], link: ApplyLink, options
       const tomb = write.read(tombstoneKey(row.id));
       if (isWireGone(row)) {
         if (isTombstone(tomb)) continue;
-        write.put({ key: tombstoneKey(row.id), id: row.id, project: row.project, gone: row.gone,
-          last: maxStamp(row.gone, local ? newestStamp(local, write.self.prefix) : null)!, o: link.prefix });
+        const last = local ? newestStamp(local, write.self.prefix) : null;
+        write.put({ id: row.id, project: row.project, gone: row.gone, ...(last && last > row.gone ? { last } : {}), o: link.prefix });
         raiseFloor(write, row.project, row.gone);
         if (write.read(stubKey(row.id))) write.remove(stubKey(row.id));
         if (local) {
@@ -124,7 +124,7 @@ export function applyTaskRows(rows: readonly WireRow[], link: ApplyLink, options
       if (isWireStub(row)) {
         const held = write.read(stubKey(row.id));
         if (!held || (held as { withheld?: string }).withheld !== row.withheld) {
-          write.put({ key: stubKey(row.id), id: row.id, project: row.project, withheld: row.withheld });
+          write.put({ id: row.id, project: row.project, withheld: row.withheld });
         }
         continue;
       }
