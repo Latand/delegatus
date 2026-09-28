@@ -11,6 +11,7 @@ import { ownBoardStoreId } from "./boardLinks";
 
 export class LinkError extends Error { constructor(readonly code: string) { super(code); } }
 const lastSent = new Map<string, string>();
+const syncQueues = new Map<string, Promise<void>>();
 const sameLink = (current: Link | undefined, expected: Link): current is Link => !!current &&
   current.id === expected.id && current.grantId === expected.grantId && current.token === expected.token &&
   current.store === expected.store && current.url === expected.url;
@@ -78,18 +79,24 @@ export async function connectPeer(input: { url: string; code: string; name?: str
   const grant = answer.body.grant as { id?: unknown; token?: unknown; scopes?: unknown } | undefined;
   if (typeof remote?.id !== "string" || !/^[0-9a-f-]{36}$/.test(remote.id) || typeof remote.label !== "string" || typeof grant?.id !== "string" || !/^[0-9a-f-]{36}$/.test(grant.id) || typeof grant.token !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(grant.token) || !Array.isArray(grant.scopes)) throw new LinkError("not-delegatus");
   const credential = { "x-delegatus-peer": `${grant.id}.${grant.token}` };
-  const info = await call(target, "/api/peer/v1/info", "GET", undefined, credential);
+  const rejectGrant = async (code: string): Promise<never> => {
+    try {
+      const removed = await call(target, "/api/peer/v1/grant", "DELETE", undefined, credential);
+      if (removed.status !== 200) throw new Error("grant revocation unconfirmed");
+    } catch { throw new LinkError("grant-cleanup-needed"); }
+    throw new LinkError(code);
+  };
+  let info: Awaited<ReturnType<typeof call>>;
+  try { info = await call(target, "/api/peer/v1/info", "GET", undefined, credential); }
+  catch (error) { return rejectGrant(error instanceof LinkError ? error.code : "unreachable"); }
   if (info.status !== 200 || info.body.v !== 1 || (info.body.feeds as { boards?: unknown } | undefined)?.boards !== 1 || !grant.scopes.includes("board:sync")) {
-    await call(target, "/api/peer/v1/grant", "DELETE", undefined, credential).catch(() => {});
-    throw new LinkError("version");
+    return rejectGrant("version");
   }
   if (typeof answer.body.storeId !== "string" || !/^[0-9a-f-]{36}$/.test(answer.body.storeId)) {
-    await call(target, "/api/peer/v1/grant", "DELETE", undefined, credential).catch(() => {});
-    throw new LinkError("not-delegatus");
+    return rejectGrant("not-delegatus");
   }
   if (remote.id === self.installId || answer.body.storeId === ownStore || readPeers().peers.some((peer) => peer.install === remote.id || peer.store === answer.body.storeId)) {
-    await call(target, "/api/peer/v1/grant", "DELETE", undefined, credential).catch(() => {});
-    throw new LinkError("already-linked");
+    return rejectGrant("already-linked");
   }
   const link: Link = { id: remote.id, url: target.url.origin, token: grant.token, grantId: grant.id, install: remote.id,
     label: input.name?.trim().slice(0, 100) || remote.label.slice(0, 100), store: answer.body.storeId, state: "active", lastCall: null, error: null };
@@ -99,20 +106,33 @@ export async function connectPeer(input: { url: string; code: string; name?: str
 }
 
 export async function syncPeer(id: string): Promise<{ peer: Link; remote: SharedProject[] }> {
+  const previous = syncQueues.get(id);
+  let release = () => {};
+  const current = new Promise<void>((resolve) => { release = resolve; });
+  syncQueues.set(id, current);
+  try {
+    if (previous) await previous;
+    return await runSyncPeer(id);
+  } finally {
+    release();
+    if (syncQueues.get(id) === current) syncQueues.delete(id);
+  }
+}
+
+async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProject[] }> {
   const peer = findPeer(id);
   if (!peer) throw new LinkError("not-found");
-  if (peer.state === "revoked") throw new LinkError("revoked");
   const stillLinked = (): Link => {
     const current = findPeer(id);
     if (!sameLink(current, peer)) throw new LinkError("not-found");
-    if (current.state === "revoked") throw new LinkError("revoked");
+    if (current.state === "revoked" && peer.state !== "revoked") throw new LinkError("revoked");
     return current;
   };
   try {
     const target = await peerTarget(peer.url);
     stillLinked();
-    const local = sharedProjects();
-    const localHash = sharedDigest(local);
+    let local = sharedProjects();
+    let localHash = sharedDigest(local);
     const sentKey = `${peer.url}:${id}`;
     let send = lastSent.get(sentKey) !== localHash;
     let sent = send ? 0 : local.length;
@@ -120,9 +140,22 @@ export async function syncPeer(id: string): Promise<{ peer: Link; remote: Shared
     let remote = remoteProjects(id);
     let remoteHash = sharedDigest(remote);
     let remoteTotal: number | null = null;
+    let receivingHash: string | null = null;
+    let remoteRestarts = 0;
     let store = peer.store;
-    for (let calls = 0; calls < 202; calls++) {
+    for (let calls = 0; calls < 206; calls++) {
       stillLinked();
+      if (calls > 0) {
+        const currentLocal = sharedProjects();
+        const currentHash = sharedDigest(currentLocal);
+        if (currentHash !== localHash) {
+          local = currentLocal;
+          localHash = currentHash;
+          send = true;
+          sent = 0;
+          lastSent.delete(sentKey);
+        }
+      }
       const batch = send ? local.slice(sent, sent + 100) : undefined;
       const answer = await call(target, "/api/peer/v1/boards/sync", "POST", { v: 1, store: ownBoardStoreId(), now: Date.now(), s: localHash, have: remoteHash,
         ...(batch ? { shared: batch, index: sent, total: local.length } : {}),
@@ -141,10 +174,18 @@ export async function syncPeer(id: string): Promise<{ peer: Link; remote: Shared
         sent += batch.length;
         if (sent === local.length) { send = false; lastSent.set(sentKey, localHash); }
       }
-      if (answer.body.shared !== undefined) {
+      const changedRemote = remoteTotal !== null && answer.body.s !== receivingHash;
+      if (changedRemote) {
+        if (++remoteRestarts > 2) throw new LinkError("malformed");
+        remoteTotal = null;
+        receivingHash = null;
+        received = [];
+      }
+      if (!changedRemote && answer.body.shared !== undefined) {
         const page = answer.body.shared;
         if (!Array.isArray(page) || page.length > 100 || !page.every(isSharedProject) ||
             answer.body.index !== received.length || typeof answer.body.total !== "number" || answer.body.total > 10_000 || received.length + page.length > answer.body.total) throw new LinkError("malformed");
+        if (remoteTotal === null) receivingHash = answer.body.s;
         remoteTotal = answer.body.total;
         received.push(...page);
         if (received.length === remoteTotal) {
@@ -153,6 +194,7 @@ export async function syncPeer(id: string): Promise<{ peer: Link; remote: Shared
           remoteHash = sharedDigest(remote);
           updateRemoteProjects(id, remote, store);
           remoteTotal = null;
+          receivingHash = null;
           received = [];
         }
       } else if (remoteTotal === null && answer.body.s === remoteHash) {
@@ -162,7 +204,7 @@ export async function syncPeer(id: string): Promise<{ peer: Link; remote: Shared
         send = true; sent = 0; lastSent.delete(sentKey);
       }
       if (!send && remoteTotal === null && answer.body.s === remoteHash && answer.body.need !== true) break;
-      if (calls === 201) throw new LinkError("malformed");
+      if (calls === 205) throw new LinkError("malformed");
     }
     const live = stillLinked();
     const current = { ...live, state: "active" as const, lastCall: Date.now(), error: null };
@@ -187,7 +229,7 @@ export async function removeConnectedPeer(id: string): Promise<{ warned: boolean
   try {
     const target = await peerTarget(peer.url);
     const answer = await call(target, "/api/peer/v1/grant", "DELETE", undefined, { "x-delegatus-peer": `${peer.grantId}.${peer.token}` });
-    warned = answer.status !== 200 && answer.status !== 401;
+    warned = answer.status !== 200;
   } catch { warned = true; }
   const live = findPeer(id);
   if (sameLink(live, peer)) {
@@ -204,6 +246,7 @@ export function projectLinkStates() {
     ...grantRows().map((grant) => ({ id: grant.id, label: grant.label, state: "active" })),
   ];
   return linked.map((peer) => {
+    if (peer.state === "revoked") return { ...peer, projects: [] };
     const remoteRows = remoteProjects(peer.id);
     const remote = new Set(remoteRows.map((project) => project.key));
     const names = new Map([...sharedProjects(), ...remoteRows].map((project) => [project.key, project.name]));

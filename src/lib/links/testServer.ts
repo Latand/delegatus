@@ -27,7 +27,12 @@ let syncCalls = 0;
 let syncRead = 0;
 let syncWritten = 0;
 let maxSyncBody = 0;
-let failSync = false;
+let failSync: number | null = null;
+let badInfo = false;
+let grantDeleteStatus: number | null = null;
+let holdNextSync: "request" | "response" | null = null;
+let syncHeld = false;
+let releaseSync: (() => void) | null = null;
 const syncBodySizes: number[] = [];
 const syncAnswerSizes: number[] = [];
 const wire: { path: string; request: string; response: string }[] = [];
@@ -42,13 +47,54 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     if (path === "/test/fail-sync") {
-      failSync = new URL(request.url ?? "/", "http://localhost").searchParams.get("on") === "1";
+      const on = new URL(request.url ?? "/", "http://localhost").searchParams.get("on");
+      failSync = on === "401" ? 401 : on === "1" ? 503 : null;
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ failSync }));
       return;
     }
+    if (path === "/test/bad-info") {
+      badInfo = new URL(request.url ?? "/", "http://localhost").searchParams.get("on") === "1";
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ badInfo }));
+      return;
+    }
+    if (path === "/test/fail-grant-delete") {
+      const status = Number(new URL(request.url ?? "/", "http://localhost").searchParams.get("on"));
+      grantDeleteStatus = status === 401 || status === 503 ? status : null;
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ grantDeleteStatus }));
+      return;
+    }
+    if (path === "/test/hold-sync") {
+      holdNextSync = new URL(request.url ?? "/", "http://localhost").searchParams.get("side") === "response" ? "response" : "request";
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ holdNextSync }));
+      return;
+    }
+    if (path === "/test/sync-held") {
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ held: syncHeld }));
+      return;
+    }
+    if (path === "/test/release-sync") {
+      releaseSync?.();
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ released: syncHeld }));
+      return;
+    }
     if (path === "/api/peer/v1/boards/sync" && failSync) {
-      response.writeHead(503, { "content-type": "application/json" });
+      response.writeHead(failSync, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "unavailable" }));
+      return;
+    }
+    if (path === "/api/peer/v1/info" && badInfo) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{");
+      return;
+    }
+    if (path === "/api/peer/v1/grant" && request.method === "DELETE" && grantDeleteStatus) {
+      response.writeHead(grantDeleteStatus, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: "unavailable" }));
       return;
     }
@@ -87,10 +133,18 @@ const server = http.createServer(async (request, response) => {
       const context = { params: Promise.resolve({ id: path.slice("/api/links/peers/".length) }) };
       result = method === "DELETE" ? await peerOne.DELETE(req, context) : await peerOne.POST(req, context);
     } else if (path === "/api/links/grants") result = method === "GET" ? grants.GET(req) : grants.DELETE(req);
-    else if (path === "/api/links/shared") result = method === "GET" ? shared.GET(req) : await shared.POST(req);
+    else if (path === "/api/links/shared") result = method === "GET" ? shared.GET(req) : method === "PATCH" ? await shared.PATCH(req) : await shared.POST(req);
     else result = Response.json({ error: "not found" }, { status: 404 });
     const resultBody = Buffer.from(await result.arrayBuffer());
     if (path.startsWith("/api/peer/v1/") && wire.length < 30) wire.push({ path, request: Buffer.concat(chunks).toString("utf8"), response: resultBody.toString("utf8") });
+    if (path === "/api/peer/v1/boards/sync" && holdNextSync &&
+        JSON.parse((holdNextSync === "response" ? resultBody : Buffer.concat(chunks)).toString("utf8")).index === 0) {
+      holdNextSync = null;
+      syncHeld = true;
+      await new Promise<void>((resolve) => { releaseSync = resolve; });
+      syncHeld = false;
+      releaseSync = null;
+    }
     response.writeHead(result.status, Object.fromEntries(result.headers));
     response.end(resultBody, () => {
       if (path === "/api/peer/v1/boards/sync") {

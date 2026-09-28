@@ -23,6 +23,7 @@ export async function mintCode(): Promise<{ code?: string; expiresAt?: number; e
   if (check.code !== "ok") return { error: check.code };
   const file = readGrants();
   file.codes = file.codes.filter((entry) => entry.expires > Date.now() - 86_400_000);
+  for (const entry of file.codes) if (!entry.used && entry.expires > Date.now()) entry.used = true;
   let id: string;
   do { id = encode(randomBytes(6), 6); } while (file.codes.some((entry) => entry.id === id));
   const tail = encode(randomBytes(10), 10);

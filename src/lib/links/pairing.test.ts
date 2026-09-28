@@ -157,6 +157,7 @@ test("two installs pair, share only chosen network repos, then revoke; 100 idle 
   expect((await request(b, `/api/links/grants?id=${grantId}`, "DELETE")).status).toBe(200);
   expect((await request(a, `/api/links/peers/${peerId}`, "POST")).body.error).toBe("revoked");
   expect(((await request(a, "/api/links/peers")).body.peers as { state: string }[])[0]!.state).toBe("revoked");
+  expect(((await request(a, "/api/links/shared")).body.states as { projects: unknown[] }[])[0]!.projects).toEqual([]);
 });
 
 test("share-all pages more than 100 projects and the next idle exchange is one call", async () => {
@@ -181,6 +182,165 @@ test("share-all pages more than 100 projects and the next idle exchange is one c
   const after = (await request(b, "/test/metrics")).body as { syncCalls: number; syncRead: number; syncWritten: number };
   expect(after.syncCalls - before.syncCalls).toBe(1);
   expect(after.syncRead - before.syncRead + after.syncWritten - before.syncWritten).toBeLessThanOrEqual(1024);
+});
+
+test("unsharing between announcement pages resets the next HTTP request and receiver list", async () => {
+  const remotes: Record<string, string> = {};
+  for (let index = 0; index < 100; index++) {
+    const remote = `code.example.test/acme/paged-${index}`;
+    remotes[projectIdentityFromRemote(`https://${remote}`, "/")!.project] = remote;
+  }
+  const withheldKey = [...Object.keys(remotes), key].sort().at(-1)!;
+  const a = await install("unshare-A", remotes);
+  const b = await install("unshare-B");
+  const code = String((await request(b, "/api/links/codes", "POST")).body.code);
+  expect((await request(a, "/api/links/peers", "POST", { url: b, code })).status).toBe(200);
+  const peerId = ((await request(a, "/api/links/peers")).body.peers as { id: string }[])[0]!.id;
+  expect((await request(a, "/api/links/shared", "POST", { v: 1, all: true, projects: [] })).status).toBe(200);
+  const before = ((await request(b, "/test/wire")).body as unknown as { path: string }[]).length;
+  await request(b, "/test/hold-sync");
+  const inFlight = request(a, `/api/links/peers/${peerId}`, "POST");
+  try {
+    const deadline = Date.now() + 5_000;
+    while ((await request(b, "/test/sync-held")).body.held !== true) {
+      if (Date.now() > deadline) throw new Error("first announcement page was not held");
+      await Bun.sleep(10);
+    }
+    expect((await request(a, "/api/links/shared", "POST", { v: 1, all: false, projects: [] })).status).toBe(200);
+  } finally {
+    await request(b, "/test/release-sync");
+  }
+  expect((await inFlight).status).toBe(200);
+  const sent = (((await request(b, "/test/wire")).body as unknown as { path: string; request: string }[]).slice(before)
+    .filter((entry) => entry.path === "/api/peer/v1/boards/sync")
+    .map((entry) => JSON.parse(entry.request) as { index?: number; total?: number; shared?: { key: string }[] }));
+  expect(sent[0]).toMatchObject({ index: 0, total: 101 });
+  expect(sent[0]!.shared).toHaveLength(100);
+  expect(sent[0]!.shared!.some((project) => project.key === withheldKey)).toBe(false);
+  expect(sent[1]).toMatchObject({ index: 0, total: 0, shared: [] });
+  expect(sent.slice(1).some((page) => page.shared?.some((project) => project.key === withheldKey))).toBe(false);
+  const states = ((await request(b, "/api/links/shared")).body.states as { projects: { key: string }[] }[])[0]!.projects;
+  expect(states).toEqual([]);
+});
+
+test("a changed peer digest restarts received pages within the same sync", async () => {
+  const remotes: Record<string, string> = {};
+  for (let index = 0; index < 100; index++) {
+    const remote = `code.example.test/acme/peer-page-${index}`;
+    remotes[projectIdentityFromRemote(`https://${remote}`, "/")!.project] = remote;
+  }
+  const a = await install("receive-A");
+  const b = await install("receive-B", remotes);
+  const code = String((await request(b, "/api/links/codes", "POST")).body.code);
+  expect((await request(a, "/api/links/peers", "POST", { url: b, code })).status).toBe(200);
+  const peerId = ((await request(a, "/api/links/peers")).body.peers as { id: string }[])[0]!.id;
+  expect((await request(b, "/api/links/shared", "POST", { v: 1, all: false, projects: [key] })).status).toBe(200);
+  expect((await request(a, `/api/links/peers/${peerId}`, "POST")).status).toBe(200);
+  expect((await request(b, "/api/links/shared", "POST", { v: 1, all: true, projects: [] })).status).toBe(200);
+  const before = ((await request(b, "/test/wire")).body as unknown as { path: string }[]).length;
+  await request(b, "/test/hold-sync?side=response");
+  const inFlight = request(a, `/api/links/peers/${peerId}`, "POST");
+  try {
+    const deadline = Date.now() + 5_000;
+    while ((await request(b, "/test/sync-held")).body.held !== true) {
+      if (Date.now() > deadline) throw new Error("first received page was not held");
+      await Bun.sleep(10);
+    }
+    expect((await request(b, "/api/links/shared", "POST", { v: 1, all: false, projects: [] })).status).toBe(200);
+  } finally {
+    await request(b, "/test/release-sync");
+  }
+  expect((await inFlight).status).toBe(200);
+  const sent = (((await request(b, "/test/wire")).body as unknown as { path: string; request: string }[]).slice(before)
+    .filter((entry) => entry.path === "/api/peer/v1/boards/sync")
+    .map((entry) => JSON.parse(entry.request) as { want?: number }));
+  expect(sent[1]!.want).toBe(100);
+  expect(sent[2]!.want).toBeUndefined();
+  expect(((await request(a, "/api/links/shared")).body.states as { projects: unknown[] }[])[0]!.projects).toEqual([]);
+  expect(((await request(a, "/api/links/peers")).body.peers as { state: string }[])[0]!.state).toBe("active");
+});
+
+test("two simultaneous manual syncs serialize their shared-list pages", async () => {
+  const remotes: Record<string, string> = {};
+  for (let index = 0; index < 100; index++) {
+    const remote = `code.example.test/acme/overlap-${index}`;
+    remotes[projectIdentityFromRemote(`https://${remote}`, "/")!.project] = remote;
+  }
+  const a = await install("overlap-A", remotes);
+  const b = await install("overlap-B");
+  const code = String((await request(b, "/api/links/codes", "POST")).body.code);
+  expect((await request(a, "/api/links/peers", "POST", { url: b, code })).status).toBe(200);
+  const id = ((await request(a, "/api/links/peers")).body.peers as { id: string }[])[0]!.id;
+  expect((await request(a, "/api/links/shared", "POST", { v: 1, all: true, projects: [] })).status).toBe(200);
+  await request(b, "/test/hold-sync");
+  const first = request(a, `/api/links/peers/${id}`, "POST");
+  try {
+    const deadline = Date.now() + 5_000;
+    while ((await request(b, "/test/sync-held")).body.held !== true) {
+      if (Date.now() > deadline) throw new Error("first overlapping page was not held");
+      await Bun.sleep(10);
+    }
+    const second = request(a, `/api/links/peers/${id}`, "POST");
+    await Bun.sleep(100);
+    await request(b, "/test/release-sync");
+    expect((await first).status).toBe(200);
+    expect((await second).status).toBe(200);
+  } finally {
+    await request(b, "/test/release-sync");
+  }
+  const states = ((await request(b, "/api/links/shared")).body.states as { projects: unknown[] }[])[0]!.projects;
+  expect(states).toHaveLength(101);
+});
+
+test("project patches preserve sharing changes made after a row loaded", async () => {
+  const remote = "code.example.test/acme/second";
+  const second = projectIdentityFromRemote(`https://${remote}`, "/")!.project;
+  const a = await install("patch-A", { [second]: remote });
+  const stale = (await request(a, "/api/links/shared")).body.shared;
+  expect(stale).toEqual({ v: 1, all: false, projects: [] });
+  expect((await request(a, "/api/links/shared", "POST", { v: 1, all: false, projects: [second] })).status).toBe(200);
+  expect((await request(a, "/api/links/shared", "PATCH", { project: key, enabled: true })).status).toBe(200);
+  expect((await request(a, "/api/links/shared")).body.shared).toEqual({ v: 1, all: false, projects: [key, second].sort() });
+  expect((await request(a, "/api/links/shared", "PATCH", { project: second, enabled: false })).status).toBe(200);
+  expect((await request(a, "/api/links/shared")).body.shared).toEqual({ v: 1, all: false, projects: [key] });
+  expect((await request(a, "/api/links/shared", "PATCH", { project: localKey, enabled: true })).status).toBe(400);
+});
+
+test("a null pairing request is rejected as malformed", async () => {
+  const a = await install("null-pair-A");
+  const response = await fetch(`${a}/api/links/peers`, { method: "POST", headers: { "content-type": "application/json" }, body: "null" });
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ error: "malformed" });
+});
+
+test("failed post-pair verification revokes the grant or reports that cleanup is unconfirmed", async () => {
+  const a = await install("info-A");
+  const b = await install("info-B");
+  await request(b, "/test/bad-info?on=1");
+  const first = String((await request(b, "/api/links/codes", "POST")).body.code);
+  expect((await request(a, "/api/links/peers", "POST", { url: b, code: first })).body.error).toBe("not-delegatus");
+  expect(((await request(b, "/api/links/grants")).body.grants as unknown[])).toEqual([]);
+  await request(b, "/test/fail-grant-delete?on=503");
+  const second = String((await request(b, "/api/links/codes", "POST")).body.code);
+  expect((await request(a, "/api/links/peers", "POST", { url: b, code: second })).body.error).toBe("grant-cleanup-needed");
+  expect(((await request(b, "/api/links/grants")).body.grants as unknown[])).toHaveLength(1);
+  expect(((await request(a, "/api/links/peers")).body.peers as unknown[])).toEqual([]);
+  await request(b, "/test/fail-grant-delete?on=401");
+  const third = String((await request(b, "/api/links/codes", "POST")).body.code);
+  expect((await request(a, "/api/links/peers", "POST", { url: b, code: third })).body.error).toBe("grant-cleanup-needed");
+  expect(((await request(b, "/api/links/grants")).body.grants as unknown[])).toHaveLength(2);
+});
+
+test("a denied grant deletion warns when removing the local link", async () => {
+  const a = await install("remove-401-A");
+  const b = await install("remove-401-B");
+  const code = String((await request(b, "/api/links/codes", "POST")).body.code);
+  expect((await request(a, "/api/links/peers", "POST", { url: b, code })).status).toBe(200);
+  const id = ((await request(a, "/api/links/peers")).body.peers as { id: string }[])[0]!.id;
+  await request(b, "/test/fail-grant-delete?on=401");
+  expect((await request(a, `/api/links/peers/${id}`, "DELETE")).body.warned).toBe(true);
+  expect(((await request(a, "/api/links/peers")).body.peers as unknown[])).toEqual([]);
+  expect(((await request(b, "/api/links/grants")).body.grants as unknown[])).toHaveLength(1);
 });
 
 test("remote-only project keeps its announced name and cannot be shared locally", async () => {
@@ -211,6 +371,16 @@ test("another code pairs while the first code is rate limited", async () => {
   expect(((await request(b, "/api/links/grants")).body.grants as unknown[]).length).toBe(1);
 });
 
+test("minting a replacement retires the previous visible pairing code", async () => {
+  const a = await install("rotate-A");
+  const b = await install("rotate-B");
+  const first = String((await request(b, "/api/links/codes", "POST")).body.code);
+  const second = String((await request(b, "/api/links/codes", "POST")).body.code);
+  expect((await request(b, "/api/peer/v1/pair", "POST", { code: first, install: "00000000-0000-0000-0000-000000000000", label: "A" })).status).toBe(410);
+  expect((await request(a, "/api/links/peers", "POST", { url: b, code: second })).status).toBe(200);
+  expect(((await request(b, "/api/links/grants")).body.grants as unknown[])).toHaveLength(1);
+});
+
 test("a failed link recovers durably after a successful sync", async () => {
   const a = await install("recover-A");
   const b = await install("recover-B");
@@ -224,6 +394,20 @@ test("a failed link recovers durably after a successful sync", async () => {
   expect((await request(a, `/api/links/peers/${id}`, "POST")).status).toBe(200);
   expect(((await request(a, "/api/links/peers")).body.peers as { state: string; error: string | null }[])[0]).toMatchObject({ state: "active", error: null });
   expect(JSON.parse(fs.readFileSync(path.join(root, "recover-A", "links/peers.json"), "utf8")).peers[0]).toMatchObject({ state: "active", error: null });
+});
+
+test("a temporarily denied peer can recover on an explicit later sync", async () => {
+  const a = await install("denied-A");
+  const b = await install("denied-B");
+  const code = String((await request(b, "/api/links/codes", "POST")).body.code);
+  expect((await request(a, "/api/links/peers", "POST", { url: b, code })).status).toBe(200);
+  const id = ((await request(a, "/api/links/peers")).body.peers as { id: string }[])[0]!.id;
+  await request(b, "/test/fail-sync?on=401");
+  expect((await request(a, `/api/links/peers/${id}`, "POST")).body.error).toBe("revoked");
+  expect(((await request(a, "/api/links/peers")).body.peers as { state: string }[])[0]!.state).toBe("revoked");
+  await request(b, "/test/fail-sync?on=0");
+  expect((await request(a, `/api/links/peers/${id}`, "POST")).status).toBe(200);
+  expect(((await request(a, "/api/links/peers")).body.peers as { state: string }[])[0]!.state).toBe("active");
 });
 
 test("all unauthenticated peer paths return the same status, headers and body", async () => {

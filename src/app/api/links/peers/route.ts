@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
   if (isStagingMode()) return NextResponse.json({ error: "staging" }, { status: 409 });
   let body: { url?: unknown; code?: unknown; name?: unknown };
   try { body = await req.json(); } catch { return NextResponse.json({ error: "malformed" }, { status: 400 }); }
-  if (typeof body.url !== "string" || typeof body.code !== "string" || (body.name !== undefined && typeof body.name !== "string")) return NextResponse.json({ error: "malformed" }, { status: 400 });
+  if (!body || typeof body !== "object" || Array.isArray(body) || typeof body.url !== "string" || typeof body.code !== "string" || (body.name !== undefined && typeof body.name !== "string")) return NextResponse.json({ error: "malformed" }, { status: 400 });
   try {
     const peer = await connectPeer({ url: body.url, code: body.code, name: body.name });
     const { token: _token, ...publicPeer } = peer;

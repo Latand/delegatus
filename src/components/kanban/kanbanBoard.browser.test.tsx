@@ -39,6 +39,96 @@ type Scheme = "light" | "dark";
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
 describe("linked boards M1 settings", () => {
+  browserTest("a mounted project row preserves sharing changed in Settings", async () => {
+    const out = path.resolve(".artifacts/linked-boards-m1");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, server.base, { width: 1280, height: 844 }, "light", "en", "reduce");
+      const other = `repo-${"b".repeat(32)}`;
+      let selected = [other];
+      let patch: { project: string; enabled: boolean } | null = null;
+      try {
+        await page.route("**/api/links/shared", async (route) => {
+          if (route.request().method() === "PATCH") {
+            patch = route.request().postDataJSON() as { project: string; enabled: boolean };
+            selected = patch.enabled ? [...selected, patch.project] : selected.filter((key) => key !== patch!.project);
+          } else if (route.request().method() === "POST") {
+            selected = (route.request().postDataJSON() as { projects: string[] }).projects;
+          }
+          await route.fulfill({ json: { shared: { v: 1, all: false, projects: selected }, known: [{ key: "atlas", name: "atlas" }], states: [] } });
+        });
+        await page.locator('[data-bar-more]').click();
+        await page.locator('[data-share-project-switch]').waitFor();
+        selected = [];
+        await page.locator('[data-share-project-switch]').click();
+        await page.locator('[data-share-project="on"]').waitFor();
+        expect(patch as unknown).toEqual({ project: "atlas", enabled: true });
+        expect(selected).toEqual(["atlas"]);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 15_000);
+
+  browserTest("a failed sharing read offers a retry in the project row", async () => {
+    const out = path.resolve(".artifacts/linked-boards-m1");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, server.base, { width: 1280, height: 844 }, "light", "en", "reduce");
+      let fail = true;
+      try {
+        await page.route("**/api/links/shared", (route) => route.fulfill(fail ? { status: 503, json: { error: "unavailable" } } : {
+          json: { shared: { v: 1, all: false, projects: [] }, known: [{ key: "atlas", name: "atlas" }], states: [] },
+        }));
+        await page.locator('[data-bar-more]').click();
+        const retry = page.getByRole("button", { name: "Retry sharing settings" });
+        await retry.waitFor();
+        expect(await page.locator('[data-share-project]').textContent()).toContain("Could not load or save sharing");
+        fail = false;
+        await retry.click();
+        await page.locator('[data-share-project-switch]:not([disabled])').waitFor();
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 15_000);
+
+  browserTest("a failed code cancellation keeps the code and retry control visible", async () => {
+    const out = path.resolve(".artifacts/linked-boards-m1");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/links": { self: { label: "Machine B", publicUrl: "https://board.example.test", check: null }, state: "ok", entry: { port: 8897, publishable: true }, keyOn: true },
+      "/api/links/shared": { shared: { v: 1, all: false, projects: [] }, known: [], states: [] },
+      "/api/links/peers": { peers: [] },
+      "/api/links/grants": { grants: [] },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, server.base, { width: 390, height: 844 }, "light", "en", "reduce", true);
+      let failDelete = true;
+      try {
+        await page.route("**/api/links/codes*", (route) => {
+          if (route.request().method() === "POST") return route.fulfill({ json: { code: "ABCDEF-01234-56789", expiresAt: Date.now() + 600_000 } });
+          if (route.request().method() === "DELETE") return route.fulfill(failDelete ? { status: 503, json: { error: "unavailable" } } : { json: { removed: true } });
+          return route.fulfill({ json: { codes: [{ id: "ABCDEF", expiresAt: Date.now() + 600_000, wrongAttempts: 0, used: false, burned: false }] } });
+        });
+        await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-linked-settings")));
+        await page.getByRole("button", { name: "Allow a connection" }).click();
+        const code = page.locator('[data-pair-code]');
+        await code.waitFor();
+        await page.getByRole("button", { name: "Cancel code" }).click();
+        await page.locator('[data-linked-state="unavailable"]').waitFor();
+        expect(await code.textContent()).toContain("ABCDEF-01234-56789");
+        failDelete = false;
+        await page.getByRole("button", { name: "Cancel code" }).click();
+        await code.waitFor({ state: "detached" });
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 15_000);
+
   browserTest("a used pairing code reveals the new grant in the open receiver dialog", async () => {
     const out = path.resolve(".artifacts/linked-boards-m1");
     fs.mkdirSync(out, { recursive: true });
@@ -116,7 +206,7 @@ describe("linked boards M1 settings", () => {
         expect(await remote.textContent()).toContain("alpha");
         await page.locator('[data-linked-peer="active"] button').first().click();
         await page.locator('[data-linked-peer="revoked"]').waitFor();
-        expect(await page.locator('[data-linked-peer="revoked"] button').first().isDisabled()).toBe(true);
+        expect(await page.locator('[data-linked-peer="revoked"] button').first().isDisabled()).toBe(false);
         await page.getByRole("button", { name: "Allow a connection" }).click();
         await page.locator('[data-pair-code]').waitFor();
         await page.locator('[data-code-state="open"]').waitFor();

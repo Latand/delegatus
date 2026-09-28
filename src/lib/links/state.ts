@@ -74,6 +74,16 @@ export function setShared(next: Shared): Shared {
   return normalized;
 }
 
+export function patchShared(change: unknown): Shared {
+  if (!object(change)) throw new Error("cannot-share");
+  const current = readShared();
+  if (Object.keys(change).length === 1 && typeof change.all === "boolean") return setShared({ ...current, all: change.all });
+  if (Object.keys(change).length === 2 && typeof change.project === "string" && typeof change.enabled === "boolean" && shareable(change.project)) {
+    return setShared({ ...current, projects: change.enabled ? [...current.projects, change.project] : current.projects.filter((key) => key !== change.project) });
+  }
+  throw new Error("cannot-share");
+}
+
 export function sharedProjects(): SharedProject[] {
   const settings = readShared();
   const keys = settings.all ? Object.keys(recordedProjectRemotes()) : settings.projects;

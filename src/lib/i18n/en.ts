@@ -87,7 +87,8 @@ export const en = {
   "links.shareProject": "Share with linked machines",
   "links.shareOn": "Shared from this machine",
   "links.shareOff": "Private to this machine",
-  "links.shareFailed": "Could not save sharing. Try again.",
+  "links.shareFailed": "Could not load or save sharing. Try again.",
+  "links.retryShare": "Retry sharing settings",
   "links.error.invalidCode": "Enter the full pairing code.",
   "links.error.peerOpen": "The other install's public entry grants operator access. Fix its proxy before pairing.",
   "links.error.unreachable": "Could not reach the other install.",
@@ -97,6 +98,7 @@ export const en = {
   "links.error.rateLimited": "Too many wrong attempts. Wait a minute or make a new code.",
   "links.error.revoked": "Access was revoked on the other install.",
   "links.error.storeChanged": "The other install's board store changed. Pair it again.",
+  "links.error.grantCleanupNeeded": "Pairing did not finish and the other install could not confirm revocation. Revoke this machine in its Linked settings.",
   "links.error.unauthorized": "The code or peer credential was not accepted.",
 
   // Language toggle
