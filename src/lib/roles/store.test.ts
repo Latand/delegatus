@@ -41,7 +41,7 @@ test("role overrides fail closed and preserve malformed or future-schema bytes",
   try {
     for (const content of [
       "{",
-      JSON.stringify({ schemaVersion: 4, overrides: {} }),
+      JSON.stringify({ schemaVersion: 5, overrides: {} }),
       JSON.stringify({ schemaVersion: 1, overrides: { builder: { config: { engine: "invalid" } } } }),
       JSON.stringify({ schemaVersion: 1, overrides: { builder: { config: { model: "fable", effort: "banana" } } } }),
       JSON.stringify({ schemaVersion: 1, overrides: { builder: { unexpected: true } } }),
@@ -253,7 +253,7 @@ test("the boot pass drops rows equal to shipped, keeps the rest and every scaffo
     fs.writeFileSync(file, JSON.stringify({ schemaVersion: 2, overrides: {
       orchestrator: { config: { engine: "claude", model: "opus", effort: "high" } },
       architect: { config: { engine: "claude", model: "opus", effort: "high" }, promptScaffold: "mine {{mode}}" },
-      builder: { config: { engine: "codex", model: "gpt-6-sol", effort: "high" }, variants: { "apply-fixes": { engine: "codex", model: "gpt-5.6-terra", effort: "low" } } },
+      builder: { config: { engine: "codex", model: "gpt-6-sol", effort: "high" }, variants: { "apply-fixes": { engine: "codex", model: "gpt-6-luna", effort: "high" } } },
       reviewer: { config: { model: "gpt-6-astra" } },
     } }));
     expect(applyRoleMappingRetirements([], () => "2026-09-27T08:00:00.000Z")).toEqual({ state: "written", normalized: ["orchestrator", "architect", "builder:apply-fixes", "reviewer"], reset: [] });

@@ -46,7 +46,7 @@ test("R2: size=trivial needs an Opus-class briefer; an unreadable agent is not o
   const trivial = { roleId: "builder", params: { size: "trivial" }, config: SONNET, explicitRuntime: false };
   expect(launchSizingRefusal({ ...trivial, briefer: OPUS_AGENT })).toBeNull();
   expect(launchSizingRefusal({ ...trivial, briefer: ASTRA_AGENT })).toBeNull();
-  expect(launchSizingRefusal({ ...trivial, briefer: SONNET_AGENT })).toBe("size=trivial runs a light model and needs a brief written by an Opus-class agent; this brief comes from claude/claude-sonnet-5.");
+  expect(launchSizingRefusal({ ...trivial, briefer: SONNET_AGENT })).toBe("size=trivial runs a light model and needs a brief written by a large model (Claude Opus or Fable, or a large Codex model); this brief comes from claude/claude-sonnet-5.");
   expect(launchSizingRefusal({ ...trivial, briefer: UNREADABLE_AGENT })).toContain("an agent whose runtime cannot be read");
   expect(launchSizingRefusal({ ...trivial, roleId: "reviewer", config: LUNA, briefer: SONNET_AGENT })).toContain("size=trivial");
 });

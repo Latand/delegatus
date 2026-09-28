@@ -34,6 +34,7 @@ const dist = process.env.LANDING_DIST_DIR ?? path.join(here, "dist");
 const out = process.env.LANDING_RENDER_DIR ?? path.join(os.homedir(), "Pictures/delegatus-review/landing/final");
 const only = process.argv.find((arg) => arg.startsWith("--only="))?.slice("--only=".length) ?? null;
 const checkRuns = Number(process.argv.find((arg) => arg.startsWith("--check-request="))?.slice("--check-request=".length) ?? 0);
+const swipeCheck = process.argv.find((arg) => arg.startsWith("--check-swipe="))?.slice("--check-swipe=".length);
 if (!fs.existsSync(path.join(dist, "demo/demo.js"))) throw new Error("landing/site/dist is not built: run bun landing/site/build.ts first");
 fs.mkdirSync(out, { recursive: true });
 
@@ -118,6 +119,188 @@ async function checkRequest(lang: Locale, viewport: (typeof VIEWPORTS)[number], 
   }
   await context.close();
   return failures;
+}
+
+/* A compositor touch gesture, aimed at the same visible surface a visitor touches.
+   "before" records the published or unchanged build; "after" also asserts that
+   the outer page moves in the finger's expected direction. */
+async function checkSwipe() {
+  if (swipeCheck !== "before" && swipeCheck !== "after") throw new Error("use --check-swipe=before or --check-swipe=after");
+  const rows: { lang: Locale; surface: string; direction: string; before: number; after: number; delta: number; available: number }[] = [];
+  const surfaces = [
+    ["install-prompt", '.hero [data-install="hero"] .prompt pre'],
+    ["hero-composer", ".live-hero iframe"],
+    ["hero-demo", ".live-hero iframe"],
+    ["run-demo", ".live-run iframe"],
+    ["open-demo", ".live-open iframe"],
+    ["phone-demo", ".live-phone iframe"],
+    ["plain-text", ".sec-run .sec-head h2"],
+  ] as const;
+  for (const lang of ["en", "uk"] as Locale[]) {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3 });
+    const page = await context.newPage();
+    const cdp = await context.newCDPSession(page);
+    await page.goto(`${base}?lang=${lang}`);
+    for (const [surface, selector] of surfaces) {
+      if (surface.endsWith("demo") || surface === "hero-composer") {
+        await page.locator(selector.replace(" iframe", "")).scrollIntoViewIfNeeded();
+        await frameOf(page, selector.replace(" iframe", ""));
+      }
+      for (const direction of ["down", "up"] as const) {
+        if (swipeCheck === "after" && (surface.endsWith("demo") || surface === "hero-composer")) {
+          const frame = await frameOf(page, selector.replace(" iframe", ""));
+          await frame.evaluate((direction) => {
+            for (const node of document.querySelectorAll<HTMLElement>("*")) {
+              if (/auto|scroll/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight + 1) {
+                node.scrollTop = direction === "down" ? node.scrollHeight : 0;
+              }
+            }
+          }, direction);
+        }
+        const element = page.locator(selector).first();
+        await element.scrollIntoViewIfNeeded();
+        let point = await page.evaluate((selector) => {
+          const rect = document.querySelector(selector)!.getBoundingClientRect();
+          const max = document.documentElement.scrollHeight - innerHeight;
+          const center = rect.top + Math.min(rect.height, 520) / 2;
+          scrollTo(0, Math.max(0, Math.min(max, scrollY + center - 420)));
+          const positioned = document.querySelector(selector)!.getBoundingClientRect();
+          return { x: Math.round(positioned.left + positioned.width / 2), y: Math.round(Math.max(positioned.top + 12, Math.min(positioned.bottom - 12, 420))) };
+        }, selector);
+        if (surface === "hero-composer") {
+          const field = (await frameOf(page, ".live-hero")).locator("textarea").first();
+          await field.waitFor({ state: "visible" });
+          let rect = await field.boundingBox();
+          if (!rect) throw new Error("hero composer has no box");
+          await page.evaluate((dy) => scrollBy(0, dy), rect.y + rect.height / 2 - 420);
+          rect = await field.boundingBox();
+          if (!rect) throw new Error("hero composer moved out of view");
+          point = { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) };
+        }
+        await settle(page, 250);
+        const { before, available } = await page.evaluate((direction) => ({ before: scrollY, available: direction === "down" ? document.documentElement.scrollHeight - innerHeight - scrollY : scrollY }), direction);
+        const travel = direction === "down" ? -300 : 300;
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: point.x, y: point.y, id: 1 }] });
+        for (let step = 1; step <= 12; step += 1) {
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: point.x, y: point.y + Math.round(travel * step / 12), id: 1 }] });
+          await settle(page, 16);
+        }
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await settle(page, 450);
+        const after = await page.evaluate(() => scrollY);
+        rows.push({ lang, surface, direction, before, after, delta: after - before, available });
+      }
+    }
+    if (swipeCheck === "after") {
+      const hero = await frameOf(page, ".live-hero");
+      const composer = hero.locator("textarea").first();
+      await composer.fill("A visitor can still type in this field");
+      if (await composer.inputValue() !== "A visitor can still type in this field") throw new Error(`${lang}: composer did not accept typing`);
+
+      // A short flick must keep moving after release, unlike an immediate scrollBy.
+      await page.locator(".live-hero").scrollIntoViewIfNeeded();
+      await hero.evaluate(() => {
+        for (const node of document.querySelectorAll<HTMLElement>("*")) {
+          if (/auto|scroll/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight + 1) node.scrollTop = node.scrollHeight;
+        }
+      });
+      const heroBox = await page.locator(".live-hero iframe").boundingBox();
+      if (!heroBox) throw new Error("hero frame has no box");
+      const flickX = Math.round(heroBox.x + heroBox.width / 2);
+      const flickY = Math.round(heroBox.y + Math.min(heroBox.height / 2, 400));
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: flickX, y: flickY, id: 2 }] });
+      for (let step = 1; step <= 4; step += 1) {
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: flickX, y: flickY - step * 40, id: 2 }] });
+        await settle(page, 10);
+      }
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await settle(page, 25);
+      const atRelease = await page.evaluate(() => scrollY);
+      await settle(page, 300);
+      const afterCoast = await page.evaluate(() => scrollY);
+      console.log(`${lang} hero flick coast: ${atRelease} -> ${afterCoast} (${afterCoast - atRelease})`);
+      if (afterCoast - atRelease < 40) throw new Error(`${lang}: hero flick stopped without momentum`);
+
+      // A new gesture on the landing must take over from a forwarded iframe flick.
+      for (const interruption of ["touch", "wheel"] as const) {
+        await page.locator(".live-hero").scrollIntoViewIfNeeded();
+        const box = await page.locator(".live-hero iframe").boundingBox();
+        if (!box) throw new Error("hero frame has no box");
+        const x = Math.round(box.x + box.width / 2);
+        const y = Math.round(box.y + Math.min(box.height / 2, 400));
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y, id: 4 }] });
+        for (let step = 1; step <= 4; step += 1) {
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y - step * 40, id: 4 }] });
+          await settle(page, 10);
+        }
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        const releasePosition = await page.evaluate(() => scrollY);
+        await settle(page, 25);
+        const coastPosition = await page.evaluate(() => scrollY);
+        if (coastPosition - releasePosition < 2) throw new Error(`${lang}: ${interruption} probe had no active flick to interrupt`);
+        if (interruption === "touch") {
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 8, y: 8, id: 5 }] });
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        } else {
+          await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: 8, y: 8, deltaX: 0, deltaY: 0 });
+        }
+        await settle(page, 25);
+        const interruptedAt = await page.evaluate(() => scrollY);
+        await settle(page, 250);
+        const afterInterruption = await page.evaluate(() => scrollY);
+        console.log(`${lang} ${interruption} stopped flick: ${interruptedAt} -> ${afterInterruption}`);
+        if (Math.abs(afterInterruption - interruptedAt) > 5) throw new Error(`${lang}: ${interruption} did not stop iframe flick`);
+      }
+
+      // A long draft still scrolls inside its textarea until it reaches an edge.
+      await composer.fill(Array.from({ length: 30 }, (_, index) => `Draft line ${index + 1}`).join("\n"));
+      const draftSize = await composer.evaluate((element) => ({ height: element.clientHeight, scrollHeight: element.scrollHeight }));
+      if (draftSize.scrollHeight <= draftSize.height + 40) throw new Error(`${lang}: long composer draft did not overflow`);
+      await composer.evaluate((element) => { element.scrollTop = 0; });
+      await composer.scrollIntoViewIfNeeded();
+      const composerBox = await composer.boundingBox();
+      if (!composerBox) throw new Error("composer has no box");
+      const draftX = Math.round(composerBox.x + composerBox.width / 2);
+      const draftY = Math.round(composerBox.y + composerBox.height / 2);
+      const pageBeforeDraft = await page.evaluate(() => scrollY);
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: draftX, y: draftY, id: 3 }] });
+      for (let step = 1; step <= 4; step += 1) {
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: draftX, y: draftY - step * 25, id: 3 }] });
+        await settle(page, 20);
+      }
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await settle(page, 200);
+      const draftScroll = await composer.evaluate((element) => element.scrollTop);
+      const pageAfterDraft = await page.evaluate(() => scrollY);
+      console.log(`${lang} long draft scroll: inner ${draftScroll}, page ${pageAfterDraft - pageBeforeDraft}`);
+      if (draftScroll < 40 || Math.abs(pageAfterDraft - pageBeforeDraft) > 20) throw new Error(`${lang}: long composer draft did not retain inner scrolling`);
+
+      const phone = await frameOf(page, ".live-phone");
+      const columns = phone.locator(".snap-x").first();
+      await columns.scrollIntoViewIfNeeded();
+      await phone.locator("[data-phone-kanban-tab]").nth(1).click();
+      await settle(page, 300);
+      const horizontal = await columns.evaluate((element) => element.scrollLeft);
+      console.log(`${lang} phone tab navigation: scrollLeft ${horizontal}`);
+      if (horizontal < 300) throw new Error(`${lang}: phone tab navigation did not move`);
+    }
+    await context.close();
+  }
+  fs.writeFileSync(path.join(out, `swipe-${swipeCheck}.json`), `${JSON.stringify({ url: base, viewport: "390x844 touch DPR3", rows }, null, 2)}\n`);
+  for (const row of rows) console.log(`${row.lang} ${row.surface} ${row.direction}: ${row.before} -> ${row.after} (${row.delta})`);
+  if (swipeCheck === "after") {
+    const failed = rows.filter((row) => {
+      const control = rows.find((candidate) => candidate.lang === row.lang && candidate.surface === "plain-text" && candidate.direction === row.direction)!;
+      const required = Math.min(300, Math.abs(control.delta), row.available) * 0.8;
+      return Math.abs(row.delta) < required || Math.sign(row.delta) !== Math.sign(control.delta);
+    });
+    if (failed.length) throw new Error(`outer page moved less than 80% of the plain-text control for ${failed.map((row) => `${row.lang}/${row.surface}/${row.direction}`).join(", ")}`);
+  }
+}
+
+if (swipeCheck) {
+  try { await checkSwipe(); } finally { await browser.close(); server.stop(true); }
+  process.exit(0);
 }
 
 

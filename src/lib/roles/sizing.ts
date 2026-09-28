@@ -23,7 +23,7 @@ export type LaunchRuntime = { engine: string; model: string | null };
 export const LIGHT_DENIED_ROLE_IDS: readonly RoleId[] = ["orchestrator", "architect", "reviewer", "verifier"];
 
 export const LIGHT_DENIED_ROLE_MESSAGE =
-  "Sonnet and Haiku do not run orchestrator, architect, reviewer or verifier work; name an Opus-class model or use the role's row.";
+  "Sonnet and Haiku do not run orchestrator, architect, reviewer or verifier work; name a large model (Claude Opus or Fable, or a large Codex model) or use the role's row.";
 
 /** A stage that judges another stage's work (a review-loop stage, or a stage
     whose fail verdict routes to a fix stage) is reviewer work under R1,
@@ -75,7 +75,7 @@ export function runtimeName(runtime: LaunchRuntime | null): string {
  * - R1: orchestrator, architect, reviewer and verifier never resolve to Claude
  *   Sonnet or Haiku, whether the runtime came from the mapping or an override.
  *   A review gate counts as reviewer work whatever role it names.
- * - R2: `size=trivial` needs a brief from an Opus-class agent.
+ * - R2: `size=trivial` needs a brief from a large model (`isOpusClass`).
  * - R3: a builder (or a role-less run stage) reaches a light runtime through an
  *   explicit engine/model override only with `size=trivial`. A light runtime
  *   the mapping chose (the fix round, an install's own row) passes.
@@ -106,7 +106,7 @@ export function launchSizingRefusal(input: {
   }
   const trivial = input.params?.size === "trivial";
   if (trivial && !isOpusClass(input.briefer.runtime)) {
-    return `size=trivial runs a light model and needs a brief written by an Opus-class agent; this brief comes from ${runtimeName(input.briefer.runtime)}.`;
+    return `size=trivial runs a light model and needs a brief written by a large model (Claude Opus or Fable, or a large Codex model); this brief comes from ${runtimeName(input.briefer.runtime)}.`;
   }
   if (roleId === "builder" && !trivial && input.explicitRuntime && isLightRuntime(input.config)) {
     return `a builder runs ${runtimeName(input.config)} only as size=trivial; drop the explicit model to use the builder's row, or brief the change precisely and set size=trivial.`;

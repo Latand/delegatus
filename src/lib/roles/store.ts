@@ -9,13 +9,13 @@ import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { ROLE_DEFAULTS } from "./defaults";
 import { ROLE_VARIANT_DEFAULTS, shippedVariantConfig } from "./paramConfig";
 import { mappingRowRefusal } from "./sizing";
-import { ROLE_IDS, ROLE_VARIANT_IDS, SCHEMA_2_VARIANT_IDS, type RegistryRoleDefinitions, type RoleConfig, type RoleDefinition, type RoleId, type RoleMappingReset, type RoleMappingRetirementRecord, type RoleOverride, type RoleOverridesFile, type RoleRegistryHealth, type RoleRegistrySnapshot, type RoleVariantId, type VariantRoleId } from "./types";
+import { ROLE_IDS, ROLE_VARIANT_IDS, SCHEMA_2_VARIANT_IDS, SCHEMA_3_VARIANT_IDS, type RegistryRoleDefinitions, type RoleConfig, type RoleDefinition, type RoleId, type RoleMappingReset, type RoleMappingRetirementRecord, type RoleOverride, type RoleOverridesFile, type RoleRegistryHealth, type RoleRegistrySnapshot, type RoleVariantId, type VariantRoleId } from "./types";
 
 /** The newest schema this build reads and writes. A file is written at the
     lowest schema that holds its rows (see RoleOverridesFile). */
-export const ROLE_OVERRIDES_SCHEMA_VERSION = 3;
+export const ROLE_OVERRIDES_SCHEMA_VERSION = 4;
 const ROLE_REGISTRY_REVISION_VERSION = 1;
-const READABLE_SCHEMA_VERSIONS: readonly unknown[] = [1, 2, 3];
+const READABLE_SCHEMA_VERSIONS: readonly unknown[] = [1, 2, 3, 4];
 
 /** Shipped runtime of each builder variant; a saved variant mapping merges over it. */
 export const BUILDER_VARIANT_DEFAULTS = ROLE_VARIANT_DEFAULTS.builder;
@@ -150,10 +150,12 @@ export function loadRoleOverrides(): RoleOverridesFile {
   return { schemaVersion: schemaVersionFor(overrides), overrides, ...(retirements ? { retirements } : {}) };
 }
 
-function schemaVersionFor(overrides: Partial<Record<RoleId, RoleOverride>>): 1 | 2 | 3 {
+function schemaVersionFor(overrides: Partial<Record<RoleId, RoleOverride>>): 1 | 2 | 3 | 4 {
   const variantKeys = Object.values(overrides).flatMap((override) => override?.variants ? Object.keys(override.variants) : []);
   const anyVariants = Object.values(overrides).some((override) => override?.variants !== undefined);
   if (!anyVariants) return 1;
+  /* A fix row (frontend-fixes, docs-fixes) is schema 4, for the same reason. */
+  if (variantKeys.some((key) => !SCHEMA_3_VARIANT_IDS.includes(key))) return 4;
   /* A newer variant, or any variant on a role other than the builder, is
      schema 3, so an older build refuses the file instead of misreading it. */
   const reviewerVariants = overrides.reviewer?.variants !== undefined;
@@ -198,10 +200,13 @@ export function roleMappingResets(file: Pick<RoleOverridesFile, "retirements">):
 }
 
 /** One role's runtime mapping as `PUT /api/roles` carries it: a full config sets
-    the row, `null` resets it to the shipped value, an absent key leaves it. */
+    the row, `null` resets it to the shipped value, an absent key leaves it.
+    `promptScaffold: null` restores the shipped prompt text; setting a scaffold
+    stays outside the product (docs/design/agent-prompt-contract.md §2.10 I). */
 export type RoleMappingPatch = {
   config?: RoleConfig | null;
   variants?: Partial<Record<RoleVariantId, RoleConfig | null>>;
+  promptScaffold?: null;
 };
 
 export function sameConfig(left: RoleConfig, right: RoleConfig): boolean {
@@ -221,8 +226,12 @@ export function parseRoleMappingPatch(raw: unknown): Partial<Record<RoleId, Role
     if (!isRoleId(id)) return `unknown role: ${id}`;
     if (!value || typeof value !== "object" || Array.isArray(value)) return `overrides.${id} must be an object`;
     const entry = value as Record<string, unknown>;
-    if (Object.keys(entry).some((key) => key !== "config" && key !== "variants")) return `overrides.${id} carries config and variants only`;
+    if (Object.keys(entry).some((key) => key !== "config" && key !== "variants" && key !== "promptScaffold")) return `overrides.${id} carries config, variants and promptScaffold only`;
     const row: RoleMappingPatch = {};
+    if (entry.promptScaffold !== undefined) {
+      if (entry.promptScaffold !== null) return "promptScaffold can only be reset to the shipped text";
+      row.promptScaffold = null;
+    }
     if (entry.config !== undefined) {
       if (entry.config !== null && !isFullConfig(entry.config)) return `overrides.${id}.config must be { engine, model, effort } or null`;
       row.config = entry.config as RoleConfig | null;
@@ -252,7 +261,8 @@ export function parseRoleMappingPatch(raw: unknown): Partial<Record<RoleId, Role
 
 /**
  * Apply a mapping change to the stored overrides (#1876). The stored file is
- * the base, so a `promptScaffold` override survives an edit of the runtime; a
+ * the base, so a `promptScaffold` override survives an edit of the runtime and
+ * goes only when the patch resets it; a
  * row equal to the shipped value is dropped, so "default" is a real state and a
  * later change to the shipped defaults reaches every role nobody touched.
  */
@@ -264,6 +274,7 @@ export function applyRoleMappingPatch(
   for (const [id, change] of Object.entries(patch) as [RoleId, RoleMappingPatch][]) {
     const shipped = ROLE_DEFAULTS.find((role) => role.id === id)!.config;
     const row: RoleOverride = { ...next[id] };
+    if (change.promptScaffold === null) delete row.promptScaffold;
     if (change.config !== undefined) {
       if (change.config === null || sameConfig(change.config, shipped)) delete row.config;
       else row.config = { engine: change.config.engine, model: change.config.model, effort: change.config.effort };

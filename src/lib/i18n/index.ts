@@ -91,11 +91,14 @@ function clientTimeZone(): { timeZone?: string } {
 async function writeOperatorSettings(body: Record<string, unknown>): Promise<void> {
   if (typeof fetch !== "function") return;
   try {
-    await fetch(OPERATOR_SETTINGS_URL, {
+    const response = await fetch(OPERATOR_SETTINGS_URL, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+    /* Read the answer to its end: Chrome keeps a request whose body nobody
+       reads open for the life of the page. */
+    await response.text();
   } catch {
     /* The next toggle, or the next page load, writes it again. */
   }

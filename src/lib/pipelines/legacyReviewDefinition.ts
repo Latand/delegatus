@@ -1,6 +1,7 @@
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
 
 import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_STAGES } from "./limits";
+import { pipelineRoleLookup, resolvePipelineRole, type PipelineRoleLookup } from "./roles";
 import { graphDigest } from "./stageDigest";
 import type {
   Pipeline,
@@ -86,6 +87,8 @@ export type LegacyReviewConversionContext = {
   flowRoundLimit?: number | null;
   /** The authoritative graph validator, so a preview is startable only when it holds. */
   graphError?: (stages: PipelineStage[]) => string | null;
+  /** The registry the fix stage's runtime resolves against; the install's own by default. */
+  roleLookup?: PipelineRoleLookup | null;
 };
 
 export type LegacyReviewRefusalCode =
@@ -100,6 +103,7 @@ export type LegacyReviewRefusalCode =
   | "limit-out-of-range"
   | "stage-count"
   | "fixer-id"
+  | "fixer-role"
   | "graph-invalid"
   /* Pipeline-level refusals the engine adds; the pure preview never reads them. */
   | "pipeline-settled"
@@ -137,15 +141,28 @@ export type LegacyReviewPreview =
 const SETTLED_ATTEMPT_STATES: ReadonlySet<PipelineStageAttempt["state"]> = new Set(["passed", "failed", "needs_decision", "skipped"]);
 const STAGE_ID_MAX = 64;
 
+/* agent-prompt-contract.md §2.10 G. The stage id is named as one, since it is
+   almost always `review` (N16); the last sentence answers N17: the pinned
+   specification the fixer shares with the implementer carries first-build steps. */
 function fixerPrompt(reviewId: string): string {
   return [
-    `Fix the findings the ${reviewId} review reported for: {{task}}`,
+    `Fix the findings stage ${reviewId} reported for: {{task}}`,
     "",
     "Review findings:",
     "{{prev.output}}",
     "",
-    "Address every finding in this pipeline's worktree, commit the fix, and report what changed. The review runs again on your result.",
+    "Fix each finding at the place it names in this pipeline's worktree, add or adjust the check that shows it where the project has one, commit, and report what changed. A finding you judge wrong stays unfixed: give the evidence in your summary, which the next reviewer reads. The review runs again on your result unless its budget is spent. The pinned specification below is what the whole lane must achieve, and the reviewer judges the lane against it; this round fixes the findings, and the specification's steps for the first build (where to branch, whether to open a pull request) are already done.",
   ].join("\n");
+}
+
+/** A fix stage is a builder fix round with its implementer's domain and size,
+    so the fix row they select decides its runtime (agent-prompt-contract.md
+    §3 (a)). A role-less implementer, or one that is no builder, gives the
+    fixer neither, which selects the general fix row. */
+function fixerRole(implementer: PipelineStage): NonNullable<PipelineStage["role"]> {
+  const params = implementer.role?.roleId === "builder" ? implementer.role.params : undefined;
+  const carried = Object.fromEntries((["domain", "size"] as const).flatMap((key) => params?.[key] !== undefined ? [[key, params[key]!]] : []));
+  return { roleId: "builder", params: { mode: "apply-fixes", ...carried } };
 }
 
 /** `<review>-fix`, then `-2`…, the first id no stage holds. */
@@ -169,8 +186,9 @@ function resolveLimit(options: LegacyReviewConversionOptions, context: LegacyRev
 /**
  * Pure preview of converting one legacy review-loop stage: the reviewer
  * becomes a run stage with the old id, prompt, role and pass successor, and a
- * fail edge to one new fixer run stage that carries the implementer's role
- * snapshot and the findings input and passes back to the reviewer. Every
+ * fail edge to one new fixer run stage, a builder fix round with the
+ * implementer's domain and size, that takes the findings input and passes back
+ * to the reviewer. Its runtime resolves from the role registry it is handed. Every
  * condition that would need a guess is refused, all of them at once, so the
  * caller can edit the preview instead of discovering them one by one.
  */
@@ -252,20 +270,29 @@ export function previewLegacyReviewConversion(
     onFail: { to: fixerId, maxRounds: reviewLimit, onExhausted: "advance" },
   };
   const source = structuredClone(implementer);
+  /* Access and sandbox still come from the implementer; engine, model and
+     effort do not, so the fix row decides them. A pinned account belongs to
+     one engine, so it carries over only when the fix row runs that engine;
+     otherwise the fix stage resolves an account the usual way. */
+  const fixerInput = {
+    role: fixerRole(source),
+    ...(source.access !== undefined ? { access: source.access } : {}),
+  };
+  const resolved = resolvePipelineRole(fixerInput, "run", context.roleLookup === undefined ? pipelineRoleLookup : context.roleLookup);
+  if (!resolved.role) {
+    refusals.push({ code: "fixer-role", message: `the fix stage's role does not resolve: ${resolved.error ?? "unknown error"}` });
+    return refuse(stageId, reviewLimit, candidateIds);
+  }
   const fixer: PipelineStage = {
     id: fixerId,
     kind: "run",
-    ...(source.role ? { role: source.role } : {}),
-    ...(source.engine !== undefined ? { engine: source.engine } : {}),
-    ...(source.model !== undefined ? { model: source.model } : {}),
-    ...(source.effort !== undefined ? { effort: source.effort } : {}),
-    ...(source.access !== undefined ? { access: source.access } : {}),
+    ...fixerInput,
     ...(source.sandbox !== undefined ? { sandbox: source.sandbox } : {}),
-    ...(source.account !== undefined ? { account: source.account } : {}),
+    ...(source.account !== undefined && resolved.role.engine === source.effectiveRole.engine ? { account: source.account } : {}),
     "prompt": fixerPrompt(stageId),
     next: stageId,
     onFail: null,
-    effectiveRole: source.effectiveRole,
+    effectiveRole: resolved.role,
   };
   const stages: PipelineStage[] = [];
   for (const stage of pipeline.stages) {
@@ -407,12 +434,13 @@ export function convertNewLegacyReviewStages(
   stages: PipelineStage[],
   preserved: ReadonlyMap<string, PipelineStage> | undefined,
   graphError: (stages: PipelineStage[]) => string | null,
+  roleLookup?: PipelineRoleLookup | null,
 ): { stages: PipelineStage[] } & NewLegacyReviewOutcome {
   let current = stages;
   const outcome: NewLegacyReviewOutcome = { convertedStages: [], legacyReview: [] };
   const added = stages.filter((stage) => isLegacyReviewLoopStage(stage) && !preserved?.has(stage.id)).map((stage) => stage.id);
   for (const stageId of added) {
-    const preview = previewLegacyReviewConversion({ stages: current, runs: [] }, { stageId }, { graphError });
+    const preview = previewLegacyReviewConversion({ stages: current, runs: [] }, { stageId }, { graphError, ...(roleLookup !== undefined ? { roleLookup } : {}) });
     if (preview.ok) {
       current = preview.stages;
       outcome.convertedStages.push({ reviewer: stageId, fixer: preview.fixerStageId });

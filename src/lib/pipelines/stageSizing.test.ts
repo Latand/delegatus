@@ -69,7 +69,7 @@ test("a trivial lane briefed by a Sonnet-run agent is refused at create, its fix
   expect(created.pipeline).toBeUndefined();
   expect(created.status).toBe(400);
   expect(created.violations?.map((violation) => violation.field)).toEqual(["stages[0].role", "stages[1].role", "stages[2].role"]);
-  expect(created.violations?.[0]?.message).toBe("stage build: size=trivial runs a light model and needs a brief written by an Opus-class agent; this brief comes from claude/claude-sonnet-5.");
+  expect(created.violations?.[0]?.message).toBe("stage build: size=trivial runs a light model and needs a brief written by a large model (Claude Opus or Fable, or a large Codex model); this brief comes from claude/claude-sonnet-5.");
 });
 
 test("an Opus-run agent's trivial lane is admitted, its fix stage inherits size=trivial, and the answer states each runtime", async () => {
@@ -100,7 +100,10 @@ test("an explicit Sonnet builder without size=trivial, and an explicit Sonnet re
     build: { role: { roleId: "builder" }, engine: "claude", model: "sonnet", effort: "high" },
     review: { role: { roleId: "reviewer" } },
   }), ports(), { briefer: { kind: "agent", conversationId: OPUS_SEAT.conversationId } });
-  expect(lightBuilder.violations?.map((violation) => violation.field)).toEqual(["stages[0].role", "stages[2].role"]);
+  /* The converted fix stage runs its own fix row and copies no explicit
+     runtime (docs/design/agent-prompt-contract.md §3 (a)), so only the
+     builder that set Sonnet by hand is refused. */
+  expect(lightBuilder.violations?.map((violation) => violation.field)).toEqual(["stages[0].role"]);
   expect(lightBuilder.violations?.[0]?.message).toContain("a builder runs claude/sonnet only as size=trivial");
 
   const sonnetReviewer = await createPipelineFromRequest(trivialLane(OPUS_SEAT.src, {
@@ -130,7 +133,7 @@ test("override-stage and add-stage by an agent actor are checked, and by the ope
   expect(byAgent.status).toBe(400);
   expect(byAgent.error).toContain("a builder runs claude/sonnet only as size=trivial");
   const trivialByAgent = await patchPipeline(id, { action: "override-stage", stageId: "build", role: { roleId: "builder", params: { size: "trivial" } } }, ports(), sonnetAgent);
-  expect(trivialByAgent.error).toContain("needs a brief written by an Opus-class agent");
+  expect(trivialByAgent.error).toContain("needs a brief written by a large model (Claude Opus or Fable, or a large Codex model)");
 
   const addedByAgent = await patchPipeline(id, {
     action: "add-stage",

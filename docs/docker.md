@@ -1,16 +1,38 @@
 # Docker
 
+## Run the published image
+
+`ghcr.io/latand/delegatus` supports `linux/amd64` and `linux/arm64`.
+`edge` tracks main; release tags provide versioned images and `latest`.
+From a repository checkout, select the image, pull it, and start a test Viewer
+on `127.0.0.1:8901`:
+
+```bash
+export DELEGATUS_IMAGE=ghcr.io/latand/delegatus:edge
+docker compose --profile test pull viewer-test
+docker compose --profile test up -d --no-build viewer-test
+```
+
+Set `DELEGATUS_UID`, `DELEGATUS_GID`, and `DELEGATUS_DOCKER_GID` for your host
+when their defaults differ. Compose passes the host `HOME` and mounts it at
+the same path. The image's build-time home is only the default for its `node`
+account; the published target supplies a runtime passwd entry for Compose's
+`HOME` and UID/GID. Host CLI shims use that runtime home. For a production
+instance, follow [Production instance](#production-instance) with the same
+image override. The runtime host still builds each Viewer release locally from
+its exact revision.
+
 The npm/bunx CLI includes its own supervised runtime host, so pipelines and the
 orchestrator do not require Docker. Compose keeps a separate production
 ownership model: the `runtime-host` profile owns the stable listener, journal,
 deployment coordinator, and socket configured below. CLI supervision does not
 change this profile.
 
-The Docker image pins Node 22 and builds the Next.js app inside the image from a clean environment. It keeps the viewer host-coupled by design: Compose uses the host network, host PID namespace, privileged `nsenter` shims, the real `/home/user` tree, and the host tmux socket.
+The Docker image pins Node 22 and builds the Next.js app inside the image from a clean environment. It keeps the viewer host-coupled by design: Compose uses the host network, host PID namespace, privileged `nsenter` shims, the runtime user's home tree, and the host tmux socket.
 
-Runtime tools are split by coupling. The image owns stable runtimes: Node 22, Git, GitHub CLI, OpenSSH client, curl, CA certificates, Python 3, and a faster-whisper venv at `/opt/llv-whisper-venv`. Compose mounts the full host home at `/home/user`, so SSH keys, Git config, GitHub CLI auth, Claude/Codex state, app cache, Hugging Face cache, and workspace roots line up with host paths. `GIT_SSH_COMMAND` points image Git/OpenSSH at the mounted host SSH config, known hosts, and default GitHub identity.
+Runtime tools are split by coupling. The image owns stable runtimes: Node 22, Git, GitHub CLI, OpenSSH client, curl, CA certificates, Python 3, and a faster-whisper venv at `/opt/llv-whisper-venv`. Compose mounts the full host home at its original path, so SSH keys, Git config, GitHub CLI auth, Claude/Codex state, app cache, Hugging Face cache, and workspace roots line up with host paths.
 
-Host developer CLIs run through `nsenter` shims in `/usr/local/bin`, ahead of mounted user bins in `PATH`. The shims enter the host mount and PID namespaces, use the caller uid/gid, preserve host-visible cwd values, and fall back to `$HOME` for container-only paths such as `/app`. They execute the exact host paths: `claude`, `codex`, and `bun` from `/home/user/.bun/bin`; `uv` from `/home/user/.local/bin`; `just`, `tmux` and `tailscale` from `/usr/bin`. `LLV_DOCKER_NSENTER_SHIMS=1` also makes direct Claude/Codex resolver calls, and the Setup guide's phone step, choose `/usr/local/bin` shims. The image contains the app, Node dependencies, the local transcription helper script, and the prebuilt `.next` output.
+Host developer CLIs run through `nsenter` shims in `/usr/local/bin`, ahead of mounted user bins in `PATH`. The shims enter the host mount and PID namespaces, use the caller uid/gid, preserve host-visible cwd values, and fall back to `$HOME` for container-only paths such as `/app`. They execute the exact host paths: `claude`, `codex`, and `bun` from `$HOME/.bun/bin`; `uv` from `$HOME/.local/bin`; `just`, `tmux` and `tailscale` from `/usr/bin`. `LLV_DOCKER_NSENTER_SHIMS=1` also makes direct Claude/Codex resolver calls, and the Setup guide's phone step, choose `/usr/local/bin` shims. The image contains the app, Node dependencies, the local transcription helper script, and the prebuilt `.next` output.
 
 ## Production instance
 
@@ -19,33 +41,43 @@ Runtime-host owns production releases and the stable listener on
 candidate ports. Complete the bootstrap migration below before activating
 runtime-host.
 
+Compose reads the app dir from `DELEGATUS_CONFIG_DIR`. An install from before
+the rename keeps its data in `~/.config/agent-log-viewer`; the socket, journal,
+and release-target paths must keep that spelling. Without the override Compose
+defaults to `~/.config/delegatus`.
+
+Select and pull the published image for both bootstrap services. Keep
+these exports in every shell that runs the Compose commands; otherwise Compose
+selects its local image tag and may use a different app dir. Use a version
+tag instead of `edge` to pin the bootstrap image to a release.
+
+```bash
+export DELEGATUS_CONFIG_DIR="$(bun scripts/app-config-dir.mjs)"
+export LLV_DOCKER_GID="$(stat -c %g /var/run/docker.sock)"
+export DELEGATUS_IMAGE=ghcr.io/latand/delegatus:edge
+docker compose --profile legacy-viewer-migration --profile runtime-host pull viewer runtime-host
+```
+
 ### Bootstrap listener ownership
 
 Keep the legacy Viewer serving port 8898 while the first managed release is
 prepared. Skip this command when the legacy service is already running:
 
 ```bash
-LLV_ALLOW_LEGACY_VIEWER=1 docker compose --profile legacy-viewer-migration up -d --build viewer
+LLV_ALLOW_LEGACY_VIEWER=1 docker compose --profile legacy-viewer-migration up -d --no-build viewer
 ```
 
-Build the runtime-host image and run its one-time bootstrap action. The action
+Run the one-time bootstrap action from the pulled runtime-host image. The action
 resolves `origin/main` from the canonical mirror, builds and starts a candidate
 on an available alternate port, runs the full health gate, and atomically
 writes `state/viewer-release.json`. It retires the candidate when verification
-fails and leaves the legacy listener in place.
-
-Compose reads the app dir from `DELEGATUS_CONFIG_DIR`. Export it first, in
-every shell that runs `docker compose` here: an install from before the rename
-keeps its data in `~/.config/agent-log-viewer`, and the socket, journal and
-release-target paths the runtime host is given have to keep that spelling.
-Without it Compose defaults to `~/.config/delegatus`.
+fails and leaves the legacy listener in place. Compose `run` has no
+`--no-build` option; the preceding pull supplies its image, and `--pull never`
+keeps this bootstrap invocation on that local copy.
 
 ```bash
-export DELEGATUS_CONFIG_DIR="$(bun scripts/app-config-dir.mjs)"
-export LLV_DOCKER_GID="$(stat -c %g /var/run/docker.sock)"
-docker compose --profile runtime-host build runtime-host
 printf '%s\n' '{"revision":"origin/main"}' | \
-  docker compose --profile runtime-host run --rm -T \
+  docker compose --profile runtime-host run --rm -T --pull never \
     -e LLV_DEPLOYMENT_ADAPTER_PROTOCOL=1 \
     runtime-host \
     bun-container run scripts/runtime-host-viewer-adapter.ts bootstrap-release
@@ -65,7 +97,7 @@ docker compose --profile legacy-viewer-migration rm -f viewer
 Activate runtime-host and verify the stable listener:
 
 ```bash
-LLV_RUNTIME_EVENTS=1 LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-host up -d runtime-host
+LLV_RUNTIME_EVENTS=1 LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-host up -d --no-build runtime-host
 curl --fail --silent --show-error http://127.0.0.1:8898/ >/dev/null
 scripts/rebuild.sh
 ```

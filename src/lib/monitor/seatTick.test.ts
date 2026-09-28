@@ -1382,7 +1382,7 @@ test("an unreadable settled child is listed with its reason, and an unreadable r
   const verdict = first.verdict as Extract<SeatTickVerdict, { kind: "wake" }>;
   expect(verdict.items.find((item) => item.id === settled.conversationId)?.label)
     .toContain("spawned child finished, transcript not readable: the transcript file is no longer on disk");
-  expect(verdict.unreadableChildren).toEqual([expect.objectContaining({ conversationId: SECOND_CHILD, title: "silent worker", reason: "its transcript path is outside every folder this Viewer scans" })]);
+  expect(verdict.unreadableChildren).toEqual([expect.objectContaining({ conversationId: SECOND_CHILD, title: "silent worker", reason: "its transcript path is outside every folder Delegatus scans" })]);
   expect(verdict.skippedChildren.unreadable).toBe(0);
   /* Landed, the running child's reason is not named again while it stands. */
   const plan = seatTickWakeCommitPlan(first.verdict, { fingerprint: "fp-2", eventsThrough: 0, terminalChildren: [settled.conversationId] })!;

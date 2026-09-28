@@ -1,6 +1,9 @@
 import { effortScale } from "@/lib/agent/efforts";
 import { validateLaunchModel } from "@/lib/agent/models";
 
+import { ORCHESTRATOR_TASK_OWNERSHIP_HEADING } from "@/lib/orchestrator/prompt";
+
+import { BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE, ORCHESTRATOR_WITHOUT_MANDATE_RULES } from "./defaults";
 import { configForVariant } from "./paramConfig";
 import { defaultRoleParameterValue } from "./parameters";
 import { loadRoleDefinitions } from "./store";
@@ -71,24 +74,71 @@ export function validateRoleParams(
   return { ok: true, value: values };
 }
 
-function renderScaffold(template: string, params: RoleParamValues): string {
-  return template
-    .replace(/\{\{([A-Za-z][A-Za-z0-9]*)\}\}/g, (_match, key: string) => String(params[key] ?? ""))
-    .replace(/^(Repository|Issue query|Urgent list):\s*\n/gm, "");
+/** Labelled parameter lines a scaffold drops when their value is empty, so an
+    optional parameter never renders as a dangling label. */
+const OPTIONAL_PARAMETER_LINES = ["Repository", "Issue query", "Urgent list", "Merge policy", "Completion policy", "Change under review", "Pull request", "Claims", "Questions"];
+/** The orchestrator lines that belong to backlog-campaign mode alone; in any
+    other mode they would read as standing rules (agent-prompt-contract.md N6). */
+const BACKLOG_CAMPAIGN_LINES = ["Repository", "Issue query", "Urgent list", "Merge policy", "Completion policy", "Backlog campaign"];
+
+function withoutLines(text: string, labels: readonly string[], emptyOnly: boolean): string {
+  const value = emptyOnly ? "[ \\t]*" : "[^\\n]*";
+  return text.replace(new RegExp(`^(?:${labels.join("|")}):${value}(?:\\n|$)`, "gm"), "");
 }
+
+function renderScaffold(definition: RoleDefinition, params: RoleParamValues): string {
+  const rendered = definition.promptScaffold.replace(/\{\{([A-Za-z][A-Za-z0-9]*)\}\}/g, (_match, key: string) => String(params[key] ?? ""));
+  const scoped = definition.id === "orchestrator" && params.mode !== "backlog-campaign"
+    ? withoutLines(rendered, BACKLOG_CAMPAIGN_LINES, false)
+    : rendered;
+  return withoutLines(scoped, OPTIONAL_PARAMETER_LINES, true);
+}
+
+/** Added to a builder in a fix round (agent-prompt-contract.md §3 (a)): a light
+    fix row runs what names its place, an OVER-BUILT cut and a P0 included, and
+    hands back only what needs a new plan. A fix stage has no fail edge, so
+    that hand-back parks the lane for the seat, which the role table says. */
+export const APPLY_FIXES_GUIDANCE = "Apply-fixes guidance: the brief is a list of findings. Fix each one at the place it names, add or adjust the check that shows it where the project has one, and change nothing else; an OVER-BUILT finding is a cut at the place it names, and a P0 is fixed like any other. A finding you judge wrong stays unfixed: give the evidence in your summary, which the next reviewer reads. A finding that names no place you can find, a WRONG-PREMISE finding, or one that asks for a new design is beyond a fix round: leave it, name it, and finish with fail so the orchestrator can re-plan.";
 
 /**
  * The rendered scaffold body — parameter substitution plus any role-specific
- * guidance (Builder's domain=frontend contract) — with the safety-fence block
+ * guidance (Builder's domain=frontend contract and its fix-round rules) — with the safety-fence block
  * kept separate so a length-capped caller (the pipeline lookup) can trim the
  * body without ever cutting a fence. This is the single source of the frontend
  * guidance; the pipeline reuses it, so a re-render can't drop it.
  */
 export function roleScaffoldBody(definition: RoleDefinition, params: RoleParamValues): string {
   const frontendGuidance = definition.id === "builder" && params.domain === "frontend"
-    ? "\n\nUI/frontend implementation guidance: follow the approved interaction and visual contract, preserve accessible semantics, responsive behavior, and English/Ukrainian parity. Reuse the colours, type, spacing and components the surrounding UI already uses; add no new colour, font, pill or card shape, or decorative label the issue does not ask for."
+    ? "\n\nUI/frontend implementation guidance: follow the approved interaction and visual contract, preserve accessible semantics and responsive behaviour, and keep every language the project ships in step. Reuse the colours, type, spacing and components the surrounding UI already uses; add no new colour, font, pill or card shape, or decorative label the brief does not ask for."
     : "";
-  return renderScaffold(definition.promptScaffold, params) + frontendGuidance;
+  const fixRound = definition.id === "builder" && params.mode === "apply-fixes";
+  /* A fix round has one finish line, scoped to its findings. */
+  const rendered = fixRound ? renderScaffold(definition, params).replace(BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE) : renderScaffold(definition, params);
+  return rendered + frontendGuidance + (fixRound ? `\n\n${APPLY_FIXES_GUIDANCE}` : "");
+}
+
+/** How a spawned role agent ends (docs/design/agent-prompt-contract.md §2.2):
+    it has no stage to report to, so it ends in a line the seat reads, in the
+    same three words a stage uses. The orchestrator reports outcomes and never
+    gets it. */
+export const SPAWN_COMPLETION = "When you finish, end your final message with one line: Verdict: pass, Verdict: fail or Verdict: needs_decision. They mean what they mean for a pipeline stage: pass when the brief's contract is complete, with any notes above that line; fail with the findings listed above it; needs_decision with the question, the options and your recommendation above it. That line replaces any other ending the brief asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS).";
+
+/** Whether a brief carries the seat mandate: every delivered mandate carries
+    the task-ownership section, since delivery appends it when missing. */
+function carriesSeatMandate(text: string): boolean {
+  return text.includes(ORCHESTRATOR_TASK_OWNERSHIP_HEADING);
+}
+
+/** The first message of a role spawn: the scaffold, the caller's brief and the
+    completion line; a spawn without a role is the brief alone. An orchestrator
+    reports outcomes and gets no completion line; one launched without the
+    mandate gets the shared rules its scaffold leaves to the mandate. */
+export function roleSpawnPrompt(role: { role: RoleId; scaffold: string } | null, userPrompt: string): string {
+  if (!role) return userPrompt;
+  const ending = role.role !== "orchestrator"
+    ? SPAWN_COMPLETION
+    : carriesSeatMandate(userPrompt) ? "" : ORCHESTRATOR_WITHOUT_MANDATE_RULES;
+  return [role.scaffold, userPrompt, ending].filter(Boolean).join("\n\n");
 }
 
 /** The trailing safety-fence block for a role, or "" when it declares none. */

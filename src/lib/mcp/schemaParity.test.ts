@@ -718,13 +718,15 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
       expect(stage?.[field]?.description).toContain(expected);
     }
 
-    /* Reachability, the draft baseRef rule and the review-loop runtime default
-       are graph-level facts no per-field schema can carry. */
+    /* Reachability, the draft baseRef rule and the shape of a review are
+       graph-level facts no per-field schema can carry. A review is a reviewer
+       and a fix stage; review-loop is the legacy kind stored lanes keep
+       (docs/design/agent-prompt-contract.md §2.10 F). */
     expect(tool?.description).toContain("pass-reachable from a run stage");
     expect(tool?.description).toContain("`next` defaults to null");
     expect(tool?.description).toContain("must also pass `baseRef`");
-    expect(tool?.description).toContain("always read-only");
-    expect(tool?.description).toContain("Codex");
+    expect(tool?.description).toContain("A review is a run stage with role reviewer (read-only by its role) whose onFail names a fix stage");
+    expect(tool?.description).toContain("`review-loop` is a legacy kind kept for stored lanes");
     expect(tool?.description).toContain("access is the repository-mutation policy enforced at settlement");
     expect(stage?.access?.description).toContain("does not select the sandbox");
     expect(stage?.sandbox?.description).toContain("independent from access");
@@ -1032,4 +1034,24 @@ test("declaring the task binding fields refuses nothing the launch surfaces alre
     expect(parsed.success).toBe(false);
     expect(parsed.error?.issues.some((issue) => issue.path[0] === "taskId")).toBe(true);
   }
+});
+
+/* docs/design/agent-prompt-contract.md N13 and review of #2301: the schema an
+   agent reads when it calls stage_report gives the same three meanings as the
+   stage wrapper, and asks every finding for its place, forbidding only the
+   provenance the server reads itself. */
+test("stage_report's field descriptions match the stage contract", async () => {
+  await withProtocolClient(inertBindings(), async (client) => {
+    const listed = await client.listTools();
+    const tool = listed.tools.find((candidate) => candidate.name === "stage_report");
+    const properties = tool?.inputSchema.properties as Record<string, { description?: string; items?: { properties?: Record<string, { description?: string }> } }> | undefined;
+    const verdict = properties?.verdict?.description ?? "";
+    expect(verdict).not.toContain("retryable stage failure");
+    expect(verdict).toContain("for a review, the findings that stand");
+    expect(verdict).toContain("no findings");
+    const text = properties?.findings?.items?.properties?.text?.description ?? "";
+    expect(text).toContain("file:line, or the surface and viewport");
+    expect(text).not.toMatch(/no SHAs, paths/i);
+    expect(text).toContain("Claim no head, pull request or declared output");
+  });
 });
