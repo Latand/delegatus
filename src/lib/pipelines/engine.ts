@@ -1311,9 +1311,7 @@ export function defaultPipelinePorts(
       invalidateRegistryProjection();
     },
     conversationMigrationTarget: (conversationId) => {
-      const migration = registry.conversation(conversationId as ViewerConversationId)?.migration;
-      return migration && !["committed", "rolled-back", "failed-recoverable"].includes(migration.phase)
-        ? migration.targetId : null;
+      return registry.conversationMigrationTargetWithPendingDelivery(conversationId as ViewerConversationId);
     },
     claudeAccountRecovered: (accountId, limitedAt, model) => {
       const observation = registry.quotaObservations("claude").find((item) => item.accountId === accountId);

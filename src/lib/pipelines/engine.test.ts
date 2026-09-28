@@ -8821,10 +8821,12 @@ test("a recorded Claude limit moves the stage's real registry conversation and s
     const generation = registry.conversationForPath(transcriptPath)?.generations.find((item) => item.path === transcriptPath);
     return generation?.accountId ? { accountId: generation.accountId, label: generation.accountId } : null;
   };
-  h.ports.conversationMigrationTarget = () => {
-    const migration = registry.conversation(conversation.id)?.migration;
-    return migration && !["committed", "rolled-back", "failed-recoverable"].includes(migration.phase) ? migration.targetId : null;
-  };
+  setAgentRegistryForTests(registry);
+  try {
+    h.ports.conversationMigrationTarget = defaultPipelinePorts().conversationMigrationTarget;
+  } finally {
+    setAgentRegistryForTests(null);
+  }
   let reseatOperationId: string | null = null;
   h.ports.requestConversationReseat = async (id, target) => {
     reseatOperationId = registry.requestConversationReseat(id as never, target).migration?.operationId ?? null;
@@ -8870,11 +8872,21 @@ test("a recorded Claude limit moves the stage's real registry conversation and s
   expect(advanced.migration?.phase).toBe("committed");
   expect(advanced.id).toBe(conversation.id);
   expect(advanced.generations.at(-1)).toMatchObject({ path: successorPath, accountId: SPARE_ACCOUNT });
+  const successorContents = fs.readFileSync(successorPath, "utf8");
+  fs.writeFileSync(successorPath, fs.readFileSync(sourcePath, "utf8"));
+  await tickPipelines([], h.ports);
+  expect(registry.conversation(conversation.id)?.migration).toMatchObject({
+    phase: "committed", targetId: SPARE_ACCOUNT, operationId: reseatOperationId,
+  });
+  expect(registry.conversationMigrationTargetWithPendingDelivery(conversation.id)).toBe(SPARE_ACCOUNT);
+  expect(registry.pendingDeliveries(conversation.id)).toHaveLength(1);
+  fs.writeFileSync(successorPath, successorContents);
   const delivered: string[] = [];
   await reconcileMigrations(provider, {
     async deliver({ path: target }) { delivered.push(target); return "delivered"; },
   }, registry);
   expect(delivered).toEqual([successorPath]);
+  expect(registry.conversationMigrationTargetWithPendingDelivery(conversation.id)).toBeNull();
 
   await tickPipelines([], h.ports);
   const settled = loadPipelines().find((item) => item.id === pipeline.id)!;
