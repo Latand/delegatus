@@ -18,9 +18,9 @@ when their defaults differ. Compose passes the host `HOME` and mounts it at
 the same path. The image's build-time home is only the default for its `node`
 account; the published target supplies a runtime passwd entry for Compose's
 `HOME` and UID/GID. Host CLI shims use that runtime home. For a production
-instance, pull `runtime-host` with the same image override, then follow
-[Production instance](#production-instance) for its bootstrap. The runtime host
-still builds each Viewer release locally from its exact revision.
+instance, follow [Production instance](#production-instance) with the same
+image override. The runtime host still builds each Viewer release locally from
+its exact revision.
 
 The npm/bunx CLI includes its own supervised runtime host, so pipelines and the
 orchestrator do not require Docker. Compose keeps a separate production
@@ -41,33 +41,43 @@ Runtime-host owns production releases and the stable listener on
 candidate ports. Complete the bootstrap migration below before activating
 runtime-host.
 
+Compose reads the app dir from `DELEGATUS_CONFIG_DIR`. An install from before
+the rename keeps its data in `~/.config/agent-log-viewer`; the socket, journal,
+and release-target paths must keep that spelling. Without the override Compose
+defaults to `~/.config/delegatus`.
+
+Select and pull the published image for both bootstrap services. Keep
+these exports in every shell that runs the Compose commands; otherwise Compose
+selects its local image tag and may use a different app dir. Use a version
+tag instead of `edge` to pin the bootstrap image to a release.
+
+```bash
+export DELEGATUS_CONFIG_DIR="$(bun scripts/app-config-dir.mjs)"
+export LLV_DOCKER_GID="$(stat -c %g /var/run/docker.sock)"
+export DELEGATUS_IMAGE=ghcr.io/latand/delegatus:edge
+docker compose --profile legacy-viewer-migration --profile runtime-host pull viewer runtime-host
+```
+
 ### Bootstrap listener ownership
 
 Keep the legacy Viewer serving port 8898 while the first managed release is
 prepared. Skip this command when the legacy service is already running:
 
 ```bash
-LLV_ALLOW_LEGACY_VIEWER=1 docker compose --profile legacy-viewer-migration up -d --build viewer
+LLV_ALLOW_LEGACY_VIEWER=1 docker compose --profile legacy-viewer-migration up -d --no-build viewer
 ```
 
-Build the runtime-host image and run its one-time bootstrap action. The action
+Run the one-time bootstrap action from the pulled runtime-host image. The action
 resolves `origin/main` from the canonical mirror, builds and starts a candidate
 on an available alternate port, runs the full health gate, and atomically
 writes `state/viewer-release.json`. It retires the candidate when verification
-fails and leaves the legacy listener in place.
-
-Compose reads the app dir from `DELEGATUS_CONFIG_DIR`. Export it first, in
-every shell that runs `docker compose` here: an install from before the rename
-keeps its data in `~/.config/agent-log-viewer`, and the socket, journal and
-release-target paths the runtime host is given have to keep that spelling.
-Without it Compose defaults to `~/.config/delegatus`.
+fails and leaves the legacy listener in place. Compose `run` has no
+`--no-build` option; the preceding pull supplies its image, and `--pull never`
+keeps this bootstrap invocation on that local copy.
 
 ```bash
-export DELEGATUS_CONFIG_DIR="$(bun scripts/app-config-dir.mjs)"
-export LLV_DOCKER_GID="$(stat -c %g /var/run/docker.sock)"
-docker compose --profile runtime-host build runtime-host
 printf '%s\n' '{"revision":"origin/main"}' | \
-  docker compose --profile runtime-host run --rm -T \
+  docker compose --profile runtime-host run --rm -T --pull never \
     -e LLV_DEPLOYMENT_ADAPTER_PROTOCOL=1 \
     runtime-host \
     bun-container run scripts/runtime-host-viewer-adapter.ts bootstrap-release
@@ -87,7 +97,7 @@ docker compose --profile legacy-viewer-migration rm -f viewer
 Activate runtime-host and verify the stable listener:
 
 ```bash
-LLV_RUNTIME_EVENTS=1 LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-host up -d runtime-host
+LLV_RUNTIME_EVENTS=1 LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-host up -d --no-build runtime-host
 curl --fail --silent --show-error http://127.0.0.1:8898/ >/dev/null
 scripts/rebuild.sh
 ```
