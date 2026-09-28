@@ -1041,7 +1041,7 @@ async function reconcileOutstandingWake(context: {
     let outcome: DeliveryOutcome | null = null;
     try {
       outcome = await context.deliver({ pid: null, path: authority.path ?? context.seat?.path ?? "", conversationId: wake.conversationId,
-        clientMessageId: wake.clientMessageId, text: wake.text!, images: [], origin: delegatusMessageOrigin("seat-tick", context.project) });
+        clientMessageId: wake.clientMessageId, text: wake.text!, images: [], origin: delegatusMessageOrigin("seat-tick", context.project), policy: "queue" });
       redispatched = deliveryOutcomeLabel(outcome);
       redispatchReason = sendRefusalDetail(outcome);
     } catch (error) {
@@ -1549,8 +1549,10 @@ async function check(
           let outcome: DeliveryOutcome | null = null;
           try {
             if (accounting && !token) throw new Error("wake dispatch already claimed");
+            /* A wake waits for the seat to go idle: the default policy would
+               interrupt a turn the seat or the operator has running. */
             outcome = await deliver({ pid: null, path: authority.path ?? input.seat.path ?? "", conversationId: authority.conversationId,
-              clientMessageId, text, images: [], origin: delegatusMessageOrigin("seat-tick", input.project) });
+              clientMessageId, text, images: [], origin: delegatusMessageOrigin("seat-tick", input.project), policy: "queue" });
             delivery = { clientMessageId, outcome: deliveryOutcomeLabel(outcome) };
             sendDetail = sendRefusalDetail(outcome);
           } catch (error) {

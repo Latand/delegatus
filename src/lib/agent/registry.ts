@@ -18,7 +18,7 @@ import { withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/acc
 import { retiredAccountIds } from "@/lib/accounts/accountsStore";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { accountProjectBindings, projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
-import { admitAutomaticAccountTarget } from "@/lib/accounts/projectSelection";
+import { admitAutomaticAccountTarget, placedAccountHolds } from "@/lib/accounts/projectSelection";
 import {
   emptyLaunchProfile,
   normalizeProjectOwnership,
@@ -7869,6 +7869,17 @@ export class AgentRegistry {
         observations: Object.values(file.quotaObservations[conversation.engine]),
         bindings,
       }).kind !== "available") return clone(conversation);
+      /* Past its first message the same holds: the pool placed this thread by
+         room, and while that account is still allowed and still has room a
+         send keeps it there rather than following routing into a migration. */
+      if (placedAccountHolds({
+        project: conversationProjectKey(conversation.projectOwnership, source.launchProfile),
+        engine: conversation.engine,
+        accountId: source.accountId,
+        model: source.launchProfile.model,
+        observations: Object.values(file.quotaObservations[conversation.engine]),
+        bindings,
+      })) return clone(conversation);
       /* A failed-recoverable migration stays parked (#708). Re-arming it from a
          lazy active-account request minted a fresh operation identity on every
          later touch of the conversation, and a fresh identity means a fresh

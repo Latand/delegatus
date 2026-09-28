@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { listCodexAccounts } from "@/lib/accounts/codex";
-import { accountManager } from "@/lib/accounts/manager";
+import { accountManager, resolveProjectSpawnAfterLiveRead } from "@/lib/accounts/manager";
 import { selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
 import { AccountProjectBindingsUnreadableError, allowedAccountIdsForProject, projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
 import {
@@ -518,7 +518,7 @@ async function spawnPipelineAgent(
      outside it is refused, and an allowed set with no capacity left is
      REPORTED. Neither case falls back onto an account the project forbids;
      the throw parks the stage with the reason on the record. */
-  const resolution = accountManager.resolveProjectSpawn(input.role.engine, {
+  const resolution = await resolveProjectSpawnAfterLiveRead(input.role.engine, {
     project: input.project,
     requestedId: input.requestedAccountId,
     /* The model this stage will actually launch, so the account's capacity is

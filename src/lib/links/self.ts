@@ -31,6 +31,33 @@ export function readSelf(): LinkSelf | null {
   } catch { return null; }
 }
 
+/** Mint the local identity for an outbound pair without publishing an address. */
+export function ensureSelf(): LinkSelf | null {
+  const existing = readSelf();
+  if (existing || fs.existsSync(selfFile())) return existing;
+  const filename = selfFile();
+  fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
+  const temporary = `${filename}.${process.pid}.${randomUUID()}.tmp`;
+  const self: LinkSelf = { v: 1, installId: randomUUID(), label: os.hostname(), publicUrl: null,
+    check: null, revision: randomUUID(), saveRevision: randomUUID() };
+  try {
+    fs.writeFileSync(temporary, `${JSON.stringify(self)}\n`, { mode: 0o600, flag: "wx" });
+    // link is atomic and refuses to replace an identity another request saved.
+    fs.linkSync(temporary, filename);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+  return readSelf();
+}
+
+/** A pairing probe saw the public entry vouched as the operator. */
+export function markOpenToInternet(): void {
+  const current = readSelf();
+  if (current) writeSelf({ ...current, check: { code: "open-to-internet", at: new Date().toISOString() } });
+}
+
 export function linksNeedGate(): boolean {
   const self = readSelf();
   if (!self && fs.existsSync(selfFile())) return true;

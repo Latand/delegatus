@@ -118,6 +118,21 @@ test("an exhausted observation stops governing after its reset", () => {
   expect(reconciled.weekly?.value.usedPercent).toBe(21);
 });
 
+test("an exhaustion with a known reset yields to a rival whose cycle opened after it (8feee404)", () => {
+  /* A redeemed reset opens a new weekly cycle before the old reset arrives. */
+  const exhausted = quota(100, 1_000);
+  exhausted.weekly = { usedPercent: 100, resetsAt: 3_000 + 10_080 * 60, windowMinutes: 10_080 };
+  const rolled = quota(0, 5_000);
+  rolled.weekly = { usedPercent: 0, resetsAt: 4_000 + 10_080 * 60, windowMinutes: 10_080 };
+  const reconciled = reconcileQuotaReadings(
+    { limits: exhausted, observedAt: 1_000, stale: false, source: "transcript" },
+    { limits: rolled, observedAt: 5_000, stale: false, source: "live" },
+    5_100,
+  );
+
+  expect(reconciled.weekly).toMatchObject({ value: { usedPercent: 0 }, source: "live" });
+});
+
 test("a cached payload keeps its original stale-since observation time", () => {
   const limits = quota(40, 0);
   limits.capturedAt = null;

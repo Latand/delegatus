@@ -18,8 +18,12 @@ import { LOOPBACK_PROBE_HOSTS, isLoopbackHost, serveViewerLocalEntry } from "@/r
 import { recordViewerEntries } from "@/runtime-host/viewerEntries";
 import { proxy } from "@/proxy";
 import { POST as selfCheckRoute } from "@/app/api/peer/v1/self-check/route";
+import { POST as peerRoute } from "@/app/api/peer/v1/[...path]/route";
+import { listCodes } from "./protocol";
+import { readGrants, sha, writeGrants } from "./state";
 
 import { checkAddress, checkSavedAddress, currentSelf, probeSelfAddress, saveAddress, selfFile } from "./self";
+import { peerTarget } from "./client";
 
 const names = ["LLV_STATE_DIR", "XDG_CONFIG_HOME", "LLV_TOKEN", "LLV_PUBLIC_HOST", "LLV_DOCKER_NSENTER_SHIMS", "PORT"] as const;
 const original = Object.fromEntries(names.map((name) => [name, process.env[name]]));
@@ -53,6 +57,16 @@ test("refuses non-loopback addresses without a key and public HTTP with a key", 
   try {
     expect((await saveAddress("https://board.example.test")).refusal).toBe("needs-remote-entry");
     expect(fs.existsSync(selfFile())).toBe(false);
+  } finally { lookup.mockRestore(); }
+});
+
+test("board grants reject mixed loopback and public DNS answers before connecting", async () => {
+  const lookup = spyOn(dns, "lookup").mockImplementation((async () => [
+    { address: "127.0.0.1", family: 4 }, { address: "203.0.113.9", family: 4 },
+  ]) as unknown as typeof dns.lookup);
+  try {
+    await expect(peerTarget("http://board.example.test:8898")).rejects.toMatchObject({ code: "http-public" });
+    expect(lookup).toHaveBeenCalledTimes(1);
   } finally { lookup.mockRestore(); }
 });
 
@@ -228,7 +242,8 @@ test("self-check route is closed without a one-time nonce", () => {
   expect(proxy(request).headers.get("x-middleware-next")).toBe("1");
   expect(selfCheckRoute(request).status).toBe(401);
   const unknown = new NextRequest("http://localhost/api/peer/v1/other", { method: "GET" });
-  expect(proxy(unknown).status).toBe(401);
+  // The proxy admits the family; each peer route now applies its own token guard.
+  expect(proxy(unknown).headers.get("x-middleware-next")).toBe("1");
   for (const host of LOOPBACK_PROBE_HOSTS("443")) expect(isLoopbackHost(host)).toBe(true);
 });
 
@@ -297,6 +312,65 @@ test("pass-through proxy to a remote entry passes all spoof probes; a trusted en
     await close(viewer);
   }
   expect((await checkAddress(publicUrl)).code).toBe("http-public");
+});
+
+test("pairing probe through remote and trusted gateway entries burns the vouched code", async () => {
+  process.env.LLV_TOKEN = "key";
+  fs.mkdirSync(path.dirname(selfFile()), { recursive: true });
+  fs.writeFileSync(selfFile(), JSON.stringify({ v: 1, installId: "00000000-0000-0000-0000-000000000001", label: "B", publicUrl: "http://127.0.0.1", check: null }));
+  const viewer = http.createServer(async (incoming, outgoing) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of incoming) chunks.push(Buffer.from(chunk));
+    const headers = new Headers();
+    for (const [name, value] of Object.entries(incoming.headers)) if (typeof value === "string") headers.set(name, value);
+    const request = new NextRequest(`http://localhost${incoming.url}`, { method: "POST", headers, body: Buffer.concat(chunks) });
+    const result = await peerRoute(request, { params: Promise.resolve({ path: ["pair", "probe"] }) });
+    outgoing.writeHead(result.status, Object.fromEntries(result.headers));
+    outgoing.end(Buffer.from(await result.arrayBuffer()));
+  });
+  const viewerPort = await listen(viewer);
+  const target = path.join(root, "pair-target.json");
+  fs.writeFileSync(target, JSON.stringify({ revision: "test", image: "viewer:test", container: "viewer-test", endpoint: `http://127.0.0.1:${viewerPort}` }));
+  const gatewayFile = path.join(root, "pair-gateway.json");
+  fs.writeFileSync(gatewayFile, JSON.stringify({ localEntry: "trusted" }));
+  const trusted = serveViewerLocalEntry(target, 0, "127.0.0.1", { gatewayFile, releaseCredential: () => "key" });
+  await once(trusted, "listening");
+  const trustedPort = (trusted.address() as { port: number }).port;
+  let upstreamPort = viewerPort;
+  const front = http.createServer((incoming, outgoing) => {
+    const upstream = http.request({ host: "127.0.0.1", port: upstreamPort, path: incoming.url, method: incoming.method, headers: incoming.headers }, (reply) => {
+      outgoing.writeHead(reply.statusCode ?? 502, reply.headers);
+      reply.pipe(outgoing);
+    });
+    upstream.on("error", () => { outgoing.writeHead(502); outgoing.end(); });
+    incoming.pipe(upstream);
+  });
+  const frontPort = await listen(front);
+  const probe = (host: string, id: string) => new Promise<{ status: number; body: { vouched?: boolean } }>((resolve, reject) => {
+    const request = http.request({ host: "127.0.0.1", port: frontPort, path: "/api/peer/v1/pair/probe", method: "POST",
+      headers: { host, "content-type": "application/json" } }, (reply) => {
+      const chunks: Buffer[] = [];
+      reply.on("data", (chunk: Buffer) => chunks.push(chunk));
+      reply.on("end", () => resolve({ status: reply.statusCode ?? 0, body: JSON.parse(Buffer.concat(chunks).toString()) }));
+    });
+    request.on("error", reject);
+    request.end(JSON.stringify({ id }));
+  });
+  try {
+    const hosts = LOOPBACK_PROBE_HOSTS(String(frontPort));
+    for (const [index, host] of hosts.entries()) {
+      const id = `A${String(index).padStart(5, "0")}`;
+      const grants = readGrants();
+      grants.codes.push({ id, hash: sha("0123456789"), expires: Date.now() + 600_000, attempts: 20, failures: [], scopes: ["board:sync"], used: false });
+      writeGrants(grants);
+      expect(await probe(host, id)).toEqual({ status: 200, body: { vouched: false } });
+      upstreamPort = trustedPort;
+      expect(await probe(host, id)).toEqual({ status: 200, body: { vouched: true } });
+      expect(listCodes().find((code) => code.id === id)).toMatchObject({ used: true, burned: false });
+      upstreamPort = viewerPort;
+    }
+    expect(currentSelf().self?.check?.code).toBe("open-to-internet");
+  } finally { await close(front); await close(trusted); await close(viewer); }
 });
 
 test("HTTPS probes keep the public SNI while sending a spoofed Host under Bun", async () => {
