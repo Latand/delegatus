@@ -25,6 +25,8 @@ import { createTask } from "@/lib/tasks/commands";
 import { loadTasks, mutateTasks, taskFeedSource } from "@/lib/tasks/store";
 import { runsElsewhere } from "./linked";
 import { listFiles } from "@/lib/scanner";
+import { currentFileScan } from "@/lib/scanner/scanCache";
+import { agentCursors, remoteAgents } from "./agentFeed";
 import { admitScannedConversations } from "@/lib/tasks/membership";
 import { admitRecoveredLaunch, admitReservedLaunch } from "@/lib/tasks/launchMembership";
 import { applyTaskCuratorProposals, collectTaskCuratorInputs } from "@/lib/tasks/curator";
@@ -122,6 +124,9 @@ const server = http.createServer(async (request, response) => {
     if (path === "/test/capture") { capturing = query.get("on") !== "0"; captured = []; json(response, { capturing }); return; }
     if (path === "/test/captured") { json(response, captured); if (query.get("reset") === "1") captured = []; return; }
     if (path === "/test/tasks") { json(response, loadTasks()); return; }
+    if (path === "/test/scan") { const scan = await currentFileScan({ fresh: true }); json(response, { files: scan.snapshot.files.map((file) => ({ project: file.project, engine: file.engine, conversationId: file.conversationId, proc: file.proc })), generation: scan.generation }); return; }
+    if (path === "/test/agents") { json(response, remoteAgents(query.get("project") ?? "")); return; }
+    if (path === "/test/agent-reset") { const cursor = agentCursors(`peer:${query.get("id") ?? ""}`); cursor.pull = null; cursor.pullOffset = 0; json(response, { ok: true }); return; }
     if (path === "/test/runs-here") {
       const task = loadTasks().find((row) => row.id === query.get("id"));
       json(response, task ? { refusal: runsElsewhere(task) } : { error: "not found" });

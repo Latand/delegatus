@@ -39,7 +39,7 @@ import type { BoardProjectStateV1 } from "@/lib/view/types";
  * or a state directory. Driven by the `issue1695*.browser.test.tsx` files.
  */
 
-const PROJECT = "atlas";
+const PROJECT = new URLSearchParams(location.search).get("scenario") === "linked-agents" ? `repo-${"a".repeat(32)}` : "atlas";
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
 /* #2102: stored icons on some tasks; the others draw the title's suggestion or the quiet default. */
 const ICONS = new URLSearchParams(location.search).get("icons") === "1";

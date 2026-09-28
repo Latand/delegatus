@@ -100,24 +100,134 @@ function fileMarks(name: string): Record<string, { size: number; mtimeMs: number
 }
 
 /** A Claude transcript on A whose first prompt carries a canary, in a checkout of the linked repository. */
-function seedTranscript(name: string, prompt: string): void {
-  const checkout = path.join(root, name, "checkout", "widget");
+function seedTranscript(name: string, prompt: string, origin = remote, sessionId = "session-canary"): void {
+  const checkout = path.join(root, name, "checkout", origin.split("/").at(-1)!);
   fs.mkdirSync(checkout, { recursive: true });
-  for (const args of [["init", "-q"], ["remote", "add", "origin", `https://${remote}`]]) {
+  for (const args of fs.existsSync(path.join(checkout, ".git")) ? [] : [["init", "-q"], ["remote", "add", "origin", `https://${origin}`]]) {
     const git = Bun.spawnSync(["git", ...args], { cwd: checkout, env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
     if (git.exitCode !== 0) throw new Error(`git ${args[0]} failed: ${git.stderr.toString()}`);
   }
   const projects = path.join(root, name, "home", ".claude", "projects", checkout.replace(/[/.]/g, "-"));
   fs.mkdirSync(projects, { recursive: true });
   const at = (offset: number) => new Date(Date.now() - 60_000 + offset).toISOString();
-  const envelope = { isSidechain: false, userType: "external", entrypoint: "sdk-cli", cwd: checkout, sessionId: "session-canary", version: "2.1.0", gitBranch: "main" };
+  const envelope = { isSidechain: false, userType: "external", entrypoint: "sdk-cli", cwd: checkout, sessionId, version: "2.1.0", gitBranch: "main" };
   const records = [
     { ...envelope, parentUuid: null, uuid: "rec-prompt", timestamp: at(0), type: "user", message: { role: "user", content: [{ type: "text", text: prompt }] } },
     { ...envelope, parentUuid: "rec-prompt", uuid: "rec-answer", timestamp: at(1_000), type: "assistant", requestId: "req-1",
       message: { id: "msg-1", model: "claude-opus-5", role: "assistant", type: "message", stop_reason: "end_turn", stop_sequence: null, content: [{ type: "text", text: "Done." }] } },
   ];
-  fs.writeFileSync(path.join(projects, "session-canary.jsonl"), records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+  fs.writeFileSync(path.join(projects, `${sessionId}.jsonl`), records.map((record) => JSON.stringify(record)).join("\n") + "\n");
 }
+
+test("remote agents travel both ways as prompt-free summaries and stay in their linked project", async () => {
+  const secondRemote = "code.example.test/acme/other";
+  const thirdRemote = "code.example.test/acme/local-only";
+  const secondKey = projectIdentityFromRemote(`https://${secondRemote}`, "/")!.project;
+  const thirdKey = projectIdentityFromRemote(`https://${thirdRemote}`, "/")!.project;
+  const extra = { [secondKey]: secondRemote, [thirdKey]: thirdRemote };
+  const a = await install("agents-A", extra);
+  const b = await install("agents-B", extra);
+  const peerId = await link(a, b, { projects: [key, secondKey] });
+  expect((await request(a, "/api/links/shared", "POST", { v: 1, all: false, projects: [key, secondKey, thirdKey] })).status).toBe(200);
+  await sync(a, peerId);
+  seedTranscript("agents-A", "PROMPT-CANARY-A-remote-agent");
+  seedTranscript("agents-A", "PROMPT-CANARY-A-other-project", secondRemote, "session-other");
+  seedTranscript("agents-A", "PROMPT-CANARY-A-local-only", thirdRemote, "session-local-only");
+  seedTranscript("agents-B", "PROMPT-CANARY-B-remote-agent");
+  const bound = await request(b, "/test/prompts", "POST", { project: key, launch: "PROMPT-CANARY-launch", goal: "PROMPT-CANARY-stage", curator: "PROMPT-CANARY-curator" });
+  expect(bound.status).toBe(200);
+  const scanA = await request(a, "/test/scan");
+  const scanB = await request(b, "/test/scan");
+  expect(scanA.status).toBe(200);
+  expect(scanB.status).toBe(200);
+  expect((scanA.body.files as { project: string }[]).map((file) => file.project).sort()).toEqual([key, secondKey, thirdKey].sort());
+  await captured(b);
+  await sync(a, peerId);
+  const onA = (await request(a, `/test/agents?project=${key}`)).body as unknown as { t: string; peer: string; p: string; task?: string }[];
+  const onB = (await request(b, `/test/agents?project=${key}`)).body as unknown as { t: string; peer: string; p: string; task?: string }[];
+  expect(onA).toHaveLength(1);
+  expect(onB).toHaveLength(1);
+  expect(((await request(b, `/test/agents?project=${secondKey}`)).body as unknown as unknown[])).toHaveLength(1);
+  expect(((await request(b, `/test/agents?project=${thirdKey}`)).body as unknown as unknown[])).toHaveLength(0);
+  expect(onA[0]).toMatchObject({ t: "claude agent", p: key });
+  expect(onB[0]).toMatchObject({ t: "claude agent", p: key });
+  expect(onA[0]!.task).toBeTruthy();
+  expect(onB[0]!.task).toBeUndefined();
+  await request(b, "/test/clock?offset=960000");
+  expect(((await request(b, `/test/agents?project=${key}`)).body as unknown as { stale: boolean }[])[0]!.stale).toBe(true);
+  await request(b, "/test/clock?offset=0");
+  await sync(a, peerId);
+  expect(((await request(b, `/test/agents?project=${key}`)).body as unknown as { stale: boolean }[])[0]!.stale).toBe(false);
+  const bodies = (await captured(b)).flatMap((item) => [item.request, item.response]).join("\n");
+  for (const forbidden of ["PROMPT-CANARY", "session-canary", "/checkout/", "/home/"]) expect(bodies).not.toContain(forbidden);
+  const grant = ((await request(b, "/api/links/grants")).body.grants as { id: string }[])[0]!;
+  expect((await request(b, `/api/links/grants?id=${grant.id}`, "DELETE")).body.removed).toBe(true);
+  expect((await request(b, `/test/agents?project=${key}`)).body as unknown).toEqual([]);
+  expect(await request(a, `/api/links/peers/${peerId}`, "POST")).toMatchObject({ status: 409, body: { error: "revoked" } });
+  expect((await request(a, `/test/agents?project=${key}`)).body as unknown).toEqual([]);
+});
+
+test("one agent change adds one bounded row on the measured sync transport", async () => {
+  const a = await install("agent-meter-A");
+  const b = await install("agent-meter-B");
+  const wire = await meter(b);
+  meters.push(wire);
+  const peerId = await link(a, b, { projects: [key] }, wire.url);
+  await sync(a, peerId);
+  await captured(b);
+  const idleUp = wire.up, idleDown = wire.down;
+  await sync(a, peerId);
+  const idleBytes = wire.up - idleUp + wire.down - idleDown;
+  const idle = (await captured(b))[0]!;
+  expect(Buffer.byteLength(idle.request)).toBeLessThanOrEqual(200);
+  expect(Buffer.byteLength(idle.response)).toBeLessThanOrEqual(200);
+  expect(idleBytes).toBeLessThanOrEqual(WIRE_BUDGET);
+  seedTranscript("agent-meter-A", "PROMPT-CANARY-agent-meter");
+  await request(a, "/test/scan");
+  const changedUp = wire.up, changedDown = wire.down;
+  await sync(a, peerId);
+  const changedBytes = wire.up - changedUp + wire.down - changedDown;
+  const bodies = await captured(b);
+  expect(bodies).toHaveLength(1);
+  const pushed = (JSON.parse(bodies[0]!.request) as { push?: { agents?: { rows?: unknown[] } } }).push?.agents;
+  expect(pushed?.rows).toHaveLength(1);
+  const rowBytes = Buffer.byteLength(JSON.stringify(pushed!.rows![0]));
+  expect(rowBytes).toBeLessThanOrEqual(1536);
+  expect(changedBytes - idleBytes).toBeLessThanOrEqual(rowBytes + 300);
+  expect(bodies[0]!.request + bodies[0]!.response).not.toContain("PROMPT-CANARY");
+});
+
+test("200 agents reset over the real link in four bounded transport pages", async () => {
+  const origins = Array.from({ length: 4 }, (_, n) => `code.example.test/acme/agent-batch-${n}`);
+  const remotes = Object.fromEntries(origins.map((origin) => [projectIdentityFromRemote(`https://${origin}`, "/")!.project, origin]));
+  const keys = Object.keys(remotes);
+  const a = await install("agent-pages-A", remotes);
+  const b = await install("agent-pages-B", remotes);
+  const wire = await meter(b);
+  meters.push(wire);
+  const peerId = await link(a, b, { projects: keys }, wire.url);
+  for (const origin of origins) for (let n = 0; n < 50; n++) seedTranscript("agent-pages-B", `PROMPT-CANARY-${n}`, origin, `session-${origin.at(-1)}-${n}`);
+  const scan = await request(b, "/test/scan");
+  expect((scan.body.files as unknown as unknown[]).length).toBe(200);
+  await sync(a, peerId);
+  for (const key of keys) expect(((await request(a, `/test/agents?project=${key}`)).body as unknown as unknown[])).toHaveLength(50);
+  await request(a, `/test/agent-reset?id=${peerId}`);
+  await captured(b);
+  const before = wire.up + wire.down;
+  await sync(a, peerId);
+  const bytes = wire.up + wire.down - before;
+  const calls = await captured(b);
+  const pages = calls.map((call) => ({ wire: call, agents: (JSON.parse(call.response) as { agents?: { rows?: unknown[]; reset?: boolean; more?: boolean } }).agents }))
+    .filter((entry) => entry.agents?.rows?.length);
+  expect(pages).toHaveLength(4);
+  expect(pages[0]!.agents!.reset).toBe(true);
+  for (const page of pages) {
+    expect(page.agents!.rows).toHaveLength(50);
+    expect(Buffer.byteLength(page.wire.response)).toBeLessThan(512 * 1024);
+    expect(page.wire.response).not.toContain("PROMPT-CANARY");
+  }
+  expect(bytes).toBeLessThan(100_000);
+});
 
 test("tasks created, changed in every group and deleted on either machine show on the other after one call; prompts never cross; an idle link costs next to nothing", async () => {
   const a = await install("both-A");

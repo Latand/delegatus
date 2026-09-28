@@ -38,6 +38,7 @@ import { HiddenTray } from "./HiddenTray";
 import { KanbanDraftContext, KanbanTaskComposer, type KanbanDraftActions } from "./KanbanDrafts";
 import type { CardEditField } from "./CardInlineText";
 import { KanbanCard, resurfaceText, statusLabel, TASK_COLOR_HEX } from "./KanbanCard";
+import { RemoteAgents, type RemoteAgentView } from "./RemoteAgents";
 import { MoreGlyph } from "./kanbanGlyphs";
 import { buildKanbanModel, KANBAN_STATUSES, type KanbanCard as KanbanCardModel, type KanbanModel } from "./kanbanModel";
 import { KanbanMenu, KanbanPopover, useOverlay, type KanbanMenuItem } from "./kanbanMenus";
@@ -298,6 +299,22 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const [query, setQuery] = useState("");
   const [linkQuery, setLinkQuery] = useState("");
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(EMPTY_SET);
+  const [remoteAgents, setRemoteAgents] = useState<RemoteAgentView[]>([]);
+  useEffect(() => {
+    if (!/^repo-[0-9a-f]{32}$/.test(project) || props.overview) return;
+    let live = true;
+    const refresh = async () => {
+      try {
+        const answer = await fetch(`/api/links/agents?project=${encodeURIComponent(project)}`);
+        if (!answer.ok) return;
+        const payload = await answer.json() as { agents?: RemoteAgentView[] };
+        if (live) setRemoteAgents(Array.isArray(payload.agents) ? payload.agents : []);
+      } catch { /* Keep the last in-memory rows until the next local read. */ }
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 15_000);
+    return () => { live = false; window.clearInterval(timer); };
+  }, [project, props.overview]);
   const [dragHint, setDragHint] = useState(false);
   const menu = useOverlay<
     { kind: "status" | "card" | "colour" | "icon"; cardId: string } | { kind: "column"; status: TaskStatus } | { kind: "tray" } | { kind: "create" } | { kind: "reader"; key: string; stop: ReaderStop } | { kind: "link"; key: string } | { kind: "stop"; key: string }
@@ -2457,6 +2474,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       emptyFiltered={emptyFiltered}
       collapsed={collapsed}
       nowMs={modelNow * 1000}
+      remoteAgents={remoteAgents}
       pendingIds={controller}
       editing={editing}
       failedEdits={failedEdits}
@@ -2847,7 +2865,7 @@ type CardHandlers = Pick<
   | "projectNames" | "onOpenProject"
 >;
 
-function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, onColumnMenu, cardProps }: {
+function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, remoteAgents, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, onColumnMenu, cardProps }: {
   status: TaskStatus;
   /** Which column holds the wide share and the controls that move it (#1841);
       null where every column is already full width. */
@@ -2877,6 +2895,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   emptyFiltered: { title: string; body: string } | null;
   collapsed: ReadonlySet<string>;
   nowMs: number;
+  remoteAgents: readonly RemoteAgentView[];
   pendingIds: { pending(id: string): boolean };
   onColumnMenu: (anchor: HTMLElement) => void;
   cardProps: CardHandlers;
@@ -2892,6 +2911,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
       pending={card.task ? pendingIds.pending(card.task.id) : false}
       collapsed={collapsed.has(card.id)}
       nowMs={nowMs}
+      remoteAgents={card.task ? remoteAgents.filter((row) => row.task === card.task!.id) : []}
       readerKeys={readerKeysByCard.get(card.id) ?? ""}
       stagePanels={panelsByCard.get(card.id) ?? ""}
       acting={actingByCard.get(card.id) ?? ""}
@@ -2909,7 +2929,8 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   const active = shown.slice(0, split);
   const idle = shown.slice(split);
   const unlinked = status === "inbox" ? model.unlinkedShown : [];
-  const empty = shown.length === 0 && unlinked.length === 0 && !newTask;
+  const unboundRemote = status === "inbox" ? remoteAgents.filter((row) => !row.task) : [];
+  const empty = shown.length === 0 && unlinked.length === 0 && unboundRemote.length === 0 && !newTask;
   /* This column holds the wide share, or gave it to a widened shelf. */
   const isWide = widths ? (widths.wide ? widths.wide === status : status === "assigned") : false;
   const gaveShare = widths !== null && widths.wide !== null && status === "assigned";
@@ -3010,6 +3031,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
             {unlinked.map(renderCard)}
           </>
         ) : null}
+        {unboundRemote.length ? <div className="remote-unbound"><RemoteAgents rows={unboundRemote} nowMs={nowMs} /></div> : null}
       </div>
     </section>
   );
@@ -3052,4 +3074,3 @@ function fly(element: HTMLElement, from: DOMRect, root: HTMLElement): void {
     element.classList.add("landed");
   }, duration + 30);
 }
-

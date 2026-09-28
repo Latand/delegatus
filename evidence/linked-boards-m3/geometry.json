@@ -1,0 +1,30 @@
+{
+  "desktop-en": {
+    "viewport": 1440,
+    "groupWidth": 428,
+    "overflow": false,
+    "bound": 1,
+    "unbound": 1
+  },
+  "desktop-uk": {
+    "viewport": 1280,
+    "groupWidth": 428,
+    "overflow": false,
+    "bound": 1,
+    "unbound": 1
+  },
+  "phone-en": {
+    "viewport": 390,
+    "groupWidth": 342,
+    "overflow": false,
+    "bound": 1,
+    "unbound": 1
+  },
+  "phone-uk": {
+    "viewport": 390,
+    "groupWidth": 342,
+    "overflow": false,
+    "bound": 1,
+    "unbound": 1
+  }
+}

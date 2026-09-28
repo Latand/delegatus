@@ -1532,3 +1532,16 @@
 @media (pointer: coarse) {
   .kb .ch-account.acct-trigger, .kb .acct-row, .kb .acct-now .kv .btn { min-height: 44px; }
 }
+:is(.kb, [data-phone-kanban]) .remote-agents { margin: 6px 0; border-top: 1px solid var(--color-border); color: var(--color-muted); font-size: 12px; }
+:is(.kb, [data-phone-kanban]) .remote-agents summary { cursor: pointer; padding: 7px 2px; list-style-position: inside; }
+:is(.kb, [data-phone-kanban]) .remote-agent-list { display: grid; gap: 3px; padding: 0 2px 5px; }
+:is(.kb, [data-phone-kanban]) .remote-agent { display: grid; grid-template-columns: 7px minmax(0, 1fr) auto; gap: 3px 7px; align-items: center; padding: 4px 2px; min-width: 0; }
+:is(.kb, [data-phone-kanban]) .remote-agent[data-stale] { opacity: .55; }
+:is(.kb, [data-phone-kanban]) .remote-agent-dot { width: 7px; height: 7px; border-radius: 50%; background: #999; }
+:is(.kb, [data-phone-kanban]) .remote-agent[data-remote-agent="working"] .remote-agent-dot { background: #50a875; }
+:is(.kb, [data-phone-kanban]) .remote-agent[data-remote-agent="waiting"] .remote-agent-dot { background: #d5a23d; }
+:is(.kb, [data-phone-kanban]) .remote-agent-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-primary); }
+:is(.kb, [data-phone-kanban]) .remote-agent-meta { grid-column: 2 / -1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:is(.kb, [data-phone-kanban]) .remote-agent time { grid-column: 3; grid-row: 1; white-space: nowrap; }
+:is(.kb, [data-phone-kanban]) .remote-agent-asof { grid-column: 2 / -1; }
+.kb .remote-unbound { padding: 4px 10px; }

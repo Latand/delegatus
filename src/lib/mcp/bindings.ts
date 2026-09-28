@@ -166,7 +166,8 @@ import { resolveProjectAttribution } from "@/lib/session/projectResolution";
 import { overlaySessionTitles } from "@/lib/session/titleProjection";
 import { recordReplySuggestions } from "@/lib/suggestions/store";
 import { ReplySuggestionValidationError } from "@/lib/suggestions/types";
-import { withOwnership } from "@/lib/links/linked";
+import { linkedContext, withOwnership } from "@/lib/links/linked";
+import { remoteAgents } from "@/lib/links/agentFeed";
 import { applyAssignmentPatches, createTask, patchTask, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskSeatHolding } from "@/lib/tasks/seatHolding";
 import { recordAuthors, type RecordAuthor } from "@/lib/team";
@@ -4174,9 +4175,11 @@ async function boardSnapshot(
       };
     });
   const board = project ? dependencies.boardFor(project) : null;
+  const remote = project ? await readRemoteAgentRows(project) : { rows: [], unavailable: false };
   return redactPayload({
     count: conversations.length,
     conversations,
+    ...(project ? { remoteAgents: remote.rows, ...(remote.unavailable ? { remoteAgentsUnavailable: true } : {}) } : {}),
     hiddenCount: board?.prefs.hidden.length ?? null,
     board,
   });
@@ -4367,7 +4370,17 @@ function carriedPipelines(ids: readonly string[], dependencies: ViewerMcpDomainD
   return (dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? []).filter((pipeline) => wanted.has(pipeline.id));
 }
 
-function getTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
+async function readRemoteAgentRows(project: string): Promise<{ rows: ReturnType<typeof remoteAgents>; unavailable: boolean }> {
+  const local = remoteAgents(project);
+  if (local.length || !linkedContext().all.has(project)) return { rows: local, unavailable: false };
+  try {
+    const { response, parsed } = await requestViewerControl(`/api/links/agents?project=${encodeURIComponent(project)}`, { method: "GET" });
+    if (response.ok && objectRecord(parsed) && Array.isArray(parsed.agents)) return { rows: parsed.agents as ReturnType<typeof remoteAgents>, unavailable: false };
+  } catch { /* The task read still works while the Viewer control endpoint is down. */ }
+  return { rows: [], unavailable: true };
+}
+
+async function getTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const taskId = required(args, "taskId");
   const source = dependencies.taskSelectionSource?.();
   const stored = source?.read(taskId);
@@ -4375,7 +4388,9 @@ function getTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): 
     : taskById.get(taskReadModel(dependencies))!.get(taskId);
   if (!task) throw new Error("task not found");
   const workLinks = args.compact === true ? null : taskWorkLinks(task, carriedPipelines(task.pipelineIds, dependencies));
-  return redactPayload({ taskId, task: args.compact === true ? compactTask(task) : withOwnership(task), ...(workLinks ? { workLinks } : {}),
+  const remote = await readRemoteAgentRows(task.project);
+  return redactPayload({ taskId, task: args.compact === true ? compactTask(task) : withOwnership(task), remoteAgents: remote.rows.filter((row) => row.task === task.id),
+    ...(remote.unavailable ? { remoteAgentsUnavailable: true } : {}), ...(workLinks ? { workLinks } : {}),
     ...(args.compact === true ? { omittedRecordCount: 1, readMore: "get_task without compact reads the full task." } : {}) });
 }
 
@@ -6086,7 +6101,7 @@ export function viewerMcpBindings(
     flow_action: (args) => flowAction(args, domainDependencies),
     list_pipelines: (args, context) => listPipelines(args, domainDependencies, context),
     list_tasks: (args) => Promise.resolve(listTasks(args, domainDependencies)),
-    get_task: (args) => Promise.resolve(getTask(args, domainDependencies)),
+    get_task: (args) => getTask(args, domainDependencies),
     operator_snapshot: (args) => operatorSnapshot(args, domainDependencies),
     deployment_status: (args, context) => deploymentStatus(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     resources: (args) => resources(args, domainDependencies),

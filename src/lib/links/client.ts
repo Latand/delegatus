@@ -10,6 +10,7 @@ import { LOOPBACK_PROBE_HOSTS } from "@/runtime-host/deploymentProxy";
 import { ownBoardStoreId } from "./boardLinks";
 import { linkedContext } from "./linked";
 import { taskExchange, TaskSyncError } from "./taskExchange";
+import { acceptAgents, agentCursors, agentPart, decodeCursor, dropAgents, encodeCursor } from "./agentFeed";
 
 export class LinkError extends Error { constructor(readonly code: string) { super(code); } }
 /** Shared-list pages, task pages both ways and scans, bounded per sync. */
@@ -18,6 +19,10 @@ const lastMoved = new Map<string, number>();
 /** Rows the last completed sync with this link moved, for A's schedule. */
 export function lastSyncMoved(id: string): number { return lastMoved.get(id) ?? 0; }
 const lastSent = new Map<string, string>();
+/** A pre-M3 board peer ignores the optional agents request. Never send it a
+    push-only payload, which its task parser would reject. */
+const agentCapable = new Set<string>();
+const remoteAgentEpoch = new Map<string, string>();
 const syncQueues = new Map<string, Promise<void>>();
 const sameLink = (current: Link | undefined, expected: Link): current is Link => !!current &&
   current.id === expected.id && current.grantId === expected.grantId && current.token === expected.token &&
@@ -153,6 +158,8 @@ async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProj
     let receivingHash: string | null = null;
     let remoteRestarts = 0;
     let store = peer.store;
+    const agentState = agentCursors(`peer:${id}`);
+    let agentMore = false;
     for (let calls = 0; calls < MAX_SYNC_CALLS; calls++) {
       stillLinked();
       if (calls > 0) {
@@ -169,13 +176,26 @@ async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProj
       const batch = send ? local.slice(sent, sent + 100) : undefined;
       const remoteKeys = new Set(remote.map((project) => project.key));
       const linked = new Set(local.map((project) => project.key).filter((key) => remoteKeys.has(key)));
+      const agentProjectsKey = [...linked].sort().join("|");
+      if (agentState.projectsKey !== agentProjectsKey) {
+        agentState.projectsKey = agentProjectsKey;
+        agentState.pull = null; agentState.pushed = null;
+        agentState.pullOffset = 0; agentState.pushOffset = 0;
+      }
       const taskParts = exchange?.request(linked) ?? {};
+      const outboundAgents = linked.size && agentCapable.has(id) ? agentPart(`peer:${id}`, agentState.pushed, linked, agentState.pushOffset) : null;
+      const pushAgents = outboundAgents && ("rows" in outboundAgents || "reset" in outboundAgents) ? outboundAgents : null;
+      const push = pushAgents ? { ...(taskParts.push ?? {}), agents: pushAgents } : taskParts.push;
       const answer = await call(target, "/api/peer/v1/boards/sync", "POST", { v: 1, store: ownBoardStoreId(), now: Date.now(), s: localHash, have: remoteHash,
         ...(batch ? { shared: batch, index: sent, total: local.length } : {}),
-        ...(remoteTotal !== null ? { want: received.length } : {}), ...taskParts }, { "x-delegatus-peer": `${peer.grantId}.${peer.token}` });
+        ...(remoteTotal !== null ? { want: received.length } : {}), ...taskParts,
+        ...(linked.size ? { agents: encodeCursor(agentState.pull), ...(agentState.pullOffset ? { agentPage: agentState.pullOffset } : {}) } : {}), ...(push ? { push } : {}) }, { "x-delegatus-peer": `${peer.grantId}.${peer.token}` });
       const live = stillLinked();
       if (answer.status === 401) {
         putPeer({ ...live, state: "revoked", error: "revoked" });
+        dropAgents(`peer:${id}`);
+        agentCapable.delete(id);
+        remoteAgentEpoch.delete(id);
         throw new LinkError("revoked");
       }
       if (answer.status === 429 && answer.body.error === "quota") throw new LinkError("quota");
@@ -198,6 +218,26 @@ async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProj
       } catch (error) {
         if (error instanceof TaskSyncError) throw new LinkError(error.code);
         throw error;
+      }
+      if (pushAgents) {
+        if (answer.body.agentAck !== pushAgents.cursor) throw new LinkError("malformed");
+        const resetting = agentState.pushOffset > 0 || pushAgents.reset === true;
+        if (pushAgents.more && resetting) agentState.pushOffset += pushAgents.rows?.length ?? 0;
+        else { agentState.pushed = decodeCursor(pushAgents.cursor)!; agentState.pushOffset = 0; }
+        agentMore = pushAgents.more === true;
+      }
+      if (answer.body.agents !== undefined) {
+        const part = answer.body.agents as { cursor?: unknown; more?: unknown; reset?: unknown; rows?: unknown[] };
+        if (!acceptAgents(`peer:${id}`, part, linked)) throw new LinkError("malformed");
+        const nextEpoch = decodeCursor(part.cursor)!.epoch;
+        const previousEpoch = remoteAgentEpoch.get(id);
+        if (previousEpoch && previousEpoch !== nextEpoch) { agentState.pushed = null; agentState.pushOffset = 0; agentMore = true; }
+        remoteAgentEpoch.set(id, nextEpoch);
+        if (!agentCapable.has(id)) { agentCapable.add(id); agentMore = true; }
+        const resetting = agentState.pullOffset > 0 || part.reset === true;
+        if (part.more === true && resetting) agentState.pullOffset += part.rows?.length ?? 0;
+        else { agentState.pull = decodeCursor(part.cursor)!; agentState.pullOffset = 0; }
+        agentMore ||= part.more === true;
       }
       exchange?.save();
       if (batch) {
@@ -238,7 +278,8 @@ async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProj
       const localKeys = new Set(local.map((project) => project.key));
       const linkedAfter = new Set(remote.map((project) => project.key).filter((key) => localKeys.has(key)));
       const linkedSame = linkedAfter.size === linked.size && [...linkedAfter].every((key) => linked.has(key));
-      if (!send && remoteTotal === null && answer.body.s === remoteHash && answer.body.need !== true && !exchange?.pending() && (linkedSame || !exchange)) break;
+      if (!send && remoteTotal === null && answer.body.s === remoteHash && answer.body.need !== true && !exchange?.pending() && !agentMore && (linkedSame || !exchange)) break;
+      agentMore = false;
       if (calls === MAX_SYNC_CALLS - 1) throw new LinkError("malformed");
     }
     exchange?.save();
@@ -271,6 +312,8 @@ export async function removeConnectedPeer(id: string): Promise<{ warned: boolean
   const live = findPeer(id);
   if (sameLink(live, peer)) {
     removePeer(id);
+    agentCapable.delete(id);
+    remoteAgentEpoch.delete(id);
     lastSent.delete(`${peer.url}:${id}`);
   }
   return { warned };
