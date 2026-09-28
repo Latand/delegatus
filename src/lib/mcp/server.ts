@@ -3448,14 +3448,14 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   stage_report: z.object({
     clientRequestId: clientRequestIdSchema,
     verdict: z.enum(["pass", "fail", "needs_decision"])
-      .describe("pass when the stage contract is complete, fail for a retryable stage failure, needs_decision when operator judgment is required."),
+      .describe("pass when the stage's contract is complete, notes that block nothing going in the summary. fail when the work is not done: for a review, the findings that stand; for any other stage, what stopped it. needs_decision when only the operator can unblock the stage, with the question in the summary and no findings."),
     findings: z.array(z.object({
       severity: z.enum(STAGE_FINDING_SEVERITIES).describe("P0 highest, P3 lowest. Findings are ranked by it."),
       text: z.string().min(1).max(MAX_STAGE_FINDING_CHARS - 5).describe(
-        `What is wrong, in plain words. No SHAs, paths or links from memory: the server reads provenance itself. A finding is recorded in its rendered form "P1 — text", so text is limited to ${MAX_STAGE_FINDING_CHARS - 5} characters to preserve it in the ${MAX_STAGE_FINDING_CHARS}-character record.`,
+        `What is wrong and where (file:line, or the surface and viewport), how to show it fails, the fix intent and its acceptance. Claim no head, pull request or declared output: the server reads that provenance itself. A finding is recorded in its rendered form "P1 — text", so text is limited to ${MAX_STAGE_FINDING_CHARS - 5} characters to preserve it in the ${MAX_STAGE_FINDING_CHARS}-character record.`,
       ),
     })).max(MAX_STAGE_REPORT_FINDINGS).optional()
-      .describe("Unresolved work, ranked. Empty or omitted for pass, which cannot carry findings."),
+      .describe("Unresolved work, ranked. Empty or omitted for pass, which cannot carry findings, and for needs_decision, whose findings would send a stage with a fail edge to its fix stage."),
     summary: z.string().max(MAX_STAGE_REPORT_SUMMARY_CHARS).optional()
       .describe("What was done, in a few sentences, with any notes that block nothing; for needs_decision, the question, the options and your recommendation. Shown on the card and relayed to the next stage."),
     stageId: z.string().min(1).optional()

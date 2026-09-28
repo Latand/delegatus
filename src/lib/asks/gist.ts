@@ -51,8 +51,10 @@ const STRUCTURED_ENDING = /(?:^|\n)\s*(?:REVIEW_READY\b|VERDICT\s*:|APPROVE\b|RE
 /** A spawned role agent's closing line (docs/design/agent-prompt-contract.md
     §2.2). pass and fail settle the agent's work for the seat that reads it;
     `Verdict: needs_decision` is left out on purpose: the agent is asking the
-    operator a question, and that is what the ask sweep exists to surface. */
-const SPAWN_SETTLED_ENDING = /(?:^|\n)\s*[*_`]*\s*verdict\s*:\s*[*_`]*\s*(?:pass|fail)\b/i;
+    operator a question, and that is what the ask sweep exists to surface.
+    Only the closing line counts, as the verdict card reads it: prose after
+    it can still ask something. */
+const SPAWN_SETTLED_ENDING = /(?:^|\n)\s*[*_`]*\s*verdict\s*:\s*[*_`]*\s*(?:pass|fail)\s*[*_`.]*\s*$/i;
 /** Engine error strings: a deterministic state, never an ask (§6). */
 const ENGINE_ERROR = /^(?:API Error\b|Session limit reached|Claude AI usage limit reached|You've hit your (?:usage )?limit|OAuth (?:token )?(?:refresh )?(?:has )?(?:expired|failed)|Invalid API key|Credit balance is too low|stream disconnected|Request timed out|unexpected status \d{3})/i;
 export const MIN_ASK_BODY_CHARS = 30;
