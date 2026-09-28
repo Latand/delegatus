@@ -168,6 +168,8 @@ function isAttempt(value: unknown, index: number): boolean {
         && limited.accountId.length > 0
         && (limited.engine === undefined || limited.engine === "claude" || limited.engine === "codex")
         && (limited.resetsAt === null || (Number.isSafeInteger(limited.resetsAt) && limited.resetsAt >= 0))
+        && (limited.limitedAt === undefined || limited.limitedAt === null || (Number.isSafeInteger(limited.limitedAt) && limited.limitedAt >= 0))
+        && (limited.turnId === undefined || (typeof limited.turnId === "string" && limited.turnId.length > 0 && limited.turnId.length <= 100))
       ))
       && new Set(attempt.usageLimitedAccounts.map((limited) => `${limited.engine ?? ""}:${limited.accountId}`)).size === attempt.usageLimitedAccounts.length
     )) &&

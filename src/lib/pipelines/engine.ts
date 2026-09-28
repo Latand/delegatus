@@ -1679,7 +1679,10 @@ function recoverUsageLimitedAttempt(
     return;
   }
   const usageLimitedAccounts = usageLimitsOn(attempt, limitedEngine);
-  const unavailableAccountIds = usageLimitedAccounts.map((limited) => limited.accountId);
+  const unavailableLimits = limitedEngine === "claude"
+    ? unavailableClaudeLimits(pipeline, attempt, ports)
+    : usageLimitedAccounts;
+  const unavailableAccountIds = unavailableLimits.map((limited) => limited.accountId);
   let resolution: ReturnType<typeof accountManager.resolveProjectSpawn>;
   try {
     resolution = ports.resolveProjectSpawn?.(attempt.effectiveRole.engine, {
@@ -1703,7 +1706,7 @@ function recoverUsageLimitedAttempt(
   }
 
   const earliestReset = knownReset(
-    ...usageLimitedAccounts.map((limited) => limited.resetsAt),
+    ...unavailableLimits.map((limited) => limited.resetsAt),
     resolution.kind === "exhausted" ? resolution.resetsAt : null,
   );
   park(pipeline, rateLimitParkDetail(earliestReset, accountLabel), attempt);
@@ -1730,6 +1733,15 @@ function claudeSourceCapacityReturned(
     || (limitedAt !== null && ports.claudeAccountRecovered?.(source.accountId, limitedAt, model) === true);
 }
 
+function unavailableClaudeLimits(
+  pipeline: Pipeline,
+  attempt: PipelineStageAttempt,
+  ports: PipelinePorts,
+): NonNullable<PipelineStageAttempt["usageLimitedAccounts"]> {
+  return usageLimitsOn(attempt, "claude").filter((limited) =>
+    !claudeSourceCapacityReturned(pipeline.project, limited, limited.limitedAt ?? null, attempt.effectiveRole.model, ports));
+}
+
 /** A Claude limit resumes through the conversation's ordinary reseat. The
     stable delivery key lets the migration hold and replay this one continuation
     across controller ticks without making another stage attempt. */
@@ -1744,10 +1756,15 @@ async function continueUsageLimitedClaudeAttempt(
 ): Promise<boolean> {
   if (attempt.effectiveRole.engine !== "claude") return false;
   const current = attempt.agentPath ? ports.accountForTranscript?.("claude", attempt.agentPath) ?? null : null;
-  const accountId = current?.accountId ?? attempt.accountId ?? null;
+  const pinnedAccount = attemptStage(stage, attempt).account?.trim() || null;
+  const accountId = current?.accountId ?? attempt.accountId ?? pinnedAccount;
   let limited = usageLimitsOn(attempt, "claude");
-  if (usageLimit && accountId && !limited.some((item) => item.accountId === accountId)) {
-    attempt.usageLimitedAccounts = [...(attempt.usageLimitedAccounts ?? []), { accountId, engine: "claude", resetsAt: usageLimit.resetsAt }];
+  const previousLimit = limited.find((item) => item.accountId === accountId);
+  if (usageLimit && accountId && (!previousLimit || previousLimit.limitedAt !== limitedAt)) {
+    attempt.usageLimitedAccounts = [
+      ...(attempt.usageLimitedAccounts ?? []).filter((item) => item.accountId !== accountId || (item.engine ?? "claude") !== "claude"),
+      { accountId, engine: "claude", resetsAt: usageLimit.resetsAt, limitedAt, turnId: crypto.randomUUID() },
+    ];
     limited = usageLimitsOn(attempt, "claude");
     persist();
   }
@@ -1755,7 +1772,18 @@ async function continueUsageLimitedClaudeAttempt(
     if (usageLimit) recoverUsageLimitedAttempt(pipeline, stage, attempt, usageLimit, ports);
     return Boolean(usageLimit);
   }
-  const stillLimited = accountId === null || limited.some((item) => item.accountId === accountId);
+  const unavailable = unavailableClaudeLimits(pipeline, attempt, ports);
+  const stillLimited = accountId === null || unavailable.some((item) => item.accountId === accountId);
+  if (pinnedAccount && stillLimited) {
+    const source = unavailable.find((item) => item.accountId === pinnedAccount);
+    const accountLabel = ports.accountLabel?.("claude", pinnedAccount) ?? pinnedAccount;
+    const detail = rateLimitParkDetail(knownReset(source?.resetsAt ?? usageLimit?.resetsAt), accountLabel);
+    attempt.state = "failed";
+    attempt.completedAt = ports.now();
+    attempt.error = detail;
+    park(pipeline, detail, attempt);
+    return true;
+  }
   const migratingTo = attempt.conversationId ? ports.conversationMigrationTarget?.(attempt.conversationId) ?? null : null;
   if (stillLimited && !migratingTo) {
     let resolution: ReturnType<typeof accountManager.resolveProjectSpawn>;
@@ -1763,19 +1791,19 @@ async function continueUsageLimitedClaudeAttempt(
       resolution = ports.resolveProjectSpawn?.("claude", {
         project: pipeline.project,
         model: attempt.effectiveRole.model,
-        unavailableIds: limited.map((item) => item.accountId),
+        unavailableIds: unavailable.map((item) => item.accountId),
       }) ?? accountManager.resolveProjectSpawn("claude", {
         project: pipeline.project,
         model: attempt.effectiveRole.model,
-        unavailableIds: limited.map((item) => item.accountId),
+        unavailableIds: unavailable.map((item) => item.accountId),
       });
     } catch (error) {
       pipeline.stateDetail = `account switch pending: ${error instanceof Error ? error.message : String(error)}`;
       return true;
     }
-    if (resolution.kind !== "available" || limited.some((item) => item.accountId === resolution.account.accountId)) {
+    if (resolution.kind !== "available" || unavailable.some((item) => item.accountId === resolution.account.accountId)) {
       const source = accountId ? limited.find((item) => item.accountId === accountId) : null;
-      if (!claudeSourceCapacityReturned(pipeline.project, source ?? null, limitedAt, attempt.effectiveRole.model, ports)) {
+      if (!claudeSourceCapacityReturned(pipeline.project, source ?? null, source?.limitedAt ?? limitedAt, attempt.effectiveRole.model, ports)) {
         recoverUsageLimitedAttempt(pipeline, stage, attempt, usageLimit ?? { resetsAt: limited.at(-1)?.resetsAt ?? null }, ports);
         return true;
       }
@@ -1796,7 +1824,7 @@ async function continueUsageLimitedClaudeAttempt(
   const delivered = await ports.resumeSeveredTurn({
     conversationId: attempt.conversationId,
     transcriptPath: attempt.agentPath,
-    clientMessageId: `stage-limit-continuation-${pipeline.id}-${stage.id}-${attempt.n}-${limited.length}`,
+    clientMessageId: `stage-limit-continuation-${pipeline.id}-${stage.id}-${attempt.n}-${limited.at(-1)?.turnId ?? limited.length}`,
     text: CLAUDE_LIMIT_CONTINUATION_TEXT,
     project: pipeline.project,
     cwd: pipeline.repoDir,
@@ -4927,27 +4955,33 @@ async function reconcileParkedClaudeLimit(pipeline: Pipeline, ports: PipelinePor
   const limited = attempt ? usageLimitsOn(attempt, "claude") : [];
   if (!attempt || attempt.effectiveRole.engine !== "claude" || attempt.state !== "failed"
     || !attempt.error?.startsWith("rate limited until ") || !limited.length) return false;
-  let resolution: ReturnType<typeof accountManager.resolveProjectSpawn>;
-  try {
-    resolution = ports.resolveProjectSpawn?.("claude", {
-      project: pipeline.project,
-      model: attempt.effectiveRole.model,
-      unavailableIds: limited.map((item) => item.accountId),
-    }) ?? accountManager.resolveProjectSpawn("claude", {
-      project: pipeline.project,
-      model: attempt.effectiveRole.model,
-      unavailableIds: limited.map((item) => item.accountId),
-    });
-  } catch {
-    return false;
-  }
-  if (resolution.kind !== "available" || limited.some((item) => item.accountId === resolution.account.accountId)) {
-    const accountId = attempt.agentPath
-      ? ports.accountForTranscript?.("claude", attempt.agentPath)?.accountId ?? attempt.accountId ?? null
-      : attempt.accountId ?? null;
-    const source = accountId ? limited.find((item) => item.accountId === accountId) ?? null : null;
-    const durable = attempt.agentPath ? await ports.durableTurnEvidence("claude", attempt.agentPath) : null;
-    if (!claudeSourceCapacityReturned(pipeline.project, source, durable?.terminalProviderMessage?.ts ?? null, attempt.effectiveRole.model, ports)) return false;
+  const pinnedAccount = attemptStage(stage, attempt).account?.trim() || null;
+  const unavailable = unavailableClaudeLimits(pipeline, attempt, ports);
+  if (pinnedAccount) {
+    if (unavailable.some((item) => item.accountId === pinnedAccount)) return false;
+  } else {
+    let resolution: ReturnType<typeof accountManager.resolveProjectSpawn>;
+    try {
+      resolution = ports.resolveProjectSpawn?.("claude", {
+        project: pipeline.project,
+        model: attempt.effectiveRole.model,
+        unavailableIds: unavailable.map((item) => item.accountId),
+      }) ?? accountManager.resolveProjectSpawn("claude", {
+        project: pipeline.project,
+        model: attempt.effectiveRole.model,
+        unavailableIds: unavailable.map((item) => item.accountId),
+      });
+    } catch {
+      return false;
+    }
+    if (resolution.kind !== "available" || unavailable.some((item) => item.accountId === resolution.account.accountId)) {
+      const accountId = attempt.agentPath
+        ? ports.accountForTranscript?.("claude", attempt.agentPath)?.accountId ?? attempt.accountId ?? null
+        : attempt.accountId ?? null;
+      const source = accountId ? limited.find((item) => item.accountId === accountId) ?? null : null;
+      const durable = attempt.agentPath ? await ports.durableTurnEvidence("claude", attempt.agentPath) : null;
+      if (!claudeSourceCapacityReturned(pipeline.project, source, source?.limitedAt ?? durable?.terminalProviderMessage?.ts ?? null, attempt.effectiveRole.model, ports)) return false;
+    }
   }
   attempt.state = "running";
   attempt.completedAt = null;
