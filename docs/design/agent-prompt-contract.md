@@ -1243,8 +1243,8 @@ never edits `role-presets.json`.
   it: the greeting now says accepted work keeps moving and new work starts on
   the operator's word; the clock section says the drive to keep going works
   inside a turn; the start-by-default contract says what proactive means.
-- **Size.** The delivered default grew from 24 253 to 27 093 bytes. A rotation
-  still keeps a full history budget beside it (4 138 bytes left against
+- **Size.** The delivered default grew from 24 253 to 26 908 bytes. A rotation
+  still keeps a full history budget beside it (4 151 bytes left against
   4 096), which `handoffDigest.test.ts` pins; to fit, the conveyor's last
   bullet drops "Bridge reports follow the bridge reports section above."
 - **The Codex spawn fence keeps its "Viewer spawn policy:" label**, because a
@@ -1254,6 +1254,25 @@ never edits `role-presets.json`.
   so the review check's grep holds on the seat mandate.
 - **The reviewer-spawn refusal** (`agent/spawnAdmission.ts`) no longer names
   the install's endpoint or the forge.
+- **Two readers learned the spawn line** (review of #2301). The reviewer's
+  verdict chip (`review/reviewOutcome.ts`) already parsed a spawned reviewer's
+  last message: `Verdict: pass` reads as an approval with no findings, `fail`
+  as requested changes, `needs_decision` as the decision state. The ask sweep
+  (`asks/gist.ts`) treats `Verdict: pass` and `Verdict: fail` as settled and
+  sends `Verdict: needs_decision` on as an ask, because it is a question for
+  the operator. The retired markers still parse, for history.
+- **Which findings a fix round takes** (review of #2301). §2.10 B handed back
+  every OVER-BUILT, WRONG-PREMISE and P0 finding, which parked the lane on the
+  very cut frame rule (2) asks for, and on a precise P0. A fixer now fixes
+  every finding that names its place, OVER-BUILT cuts and P0s included, and
+  fails only on a finding with no place, a WRONG-PREMISE or a call for a new
+  design. Frame rule (2) asks for OVER-BUILT findings that name the place to
+  cut, and the role table tells the seat that such a fail parks the lane for
+  it to re-plan.
+- **The clock section names Delegatus** (review of #2301): "Delegatus's clock",
+  "Delegatus wakes you. A controller checks this project's seat…". Delivery
+  still recognizes the heading and opening that shipped up to v29, and the
+  wake names the section by the words both headings share.
 
 ---
 
@@ -1395,7 +1414,6 @@ No question in this document remains for the operator.
 - Enforced file ownership (option (b)2).
 - Per-round escalation of the fix runtime by findings (option (a)2).
 - A new generic role id (option (a)3).
-- A machine-parsed `Verdict:` line for spawned agents; the seat reads it.
 - P3 findings allowed on pass.
 - Text changes to the flow and workflow prompts (`flows/prompts.ts`,
   `reviewHistory/relayPrompt.ts`, `workflows/prompts.ts`): flow code is

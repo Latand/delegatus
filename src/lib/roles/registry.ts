@@ -92,8 +92,10 @@ function renderScaffold(definition: RoleDefinition, params: RoleParamValues): st
 }
 
 /** Added to a builder in a fix round (agent-prompt-contract.md §3 (a)): a light
-    fix row runs only what names its place, and hands back anything else. */
-export const APPLY_FIXES_GUIDANCE = "Apply-fixes guidance: the brief is a list of findings. Fix each one at the place it names, add or adjust the test that shows it, and change nothing else. A finding you judge wrong stays unfixed: give the evidence in your summary, which the next reviewer reads. A finding that names no place you can find, or that asks for a redesign or a new approach (a WRONG-PREMISE, an OVER-BUILT or a P0 finding), is beyond a fix round: leave it, name it, and finish with fail so the orchestrator can re-plan.";
+    fix row runs what names its place, an OVER-BUILT cut and a P0 included, and
+    hands back only what needs a new plan. A fix stage has no fail edge, so
+    that hand-back parks the lane for the seat, which the role table says. */
+export const APPLY_FIXES_GUIDANCE = "Apply-fixes guidance: the brief is a list of findings. Fix each one at the place it names, add or adjust the test that shows it, and change nothing else; an OVER-BUILT finding is a cut at the place it names, and a P0 is fixed like any other. A finding you judge wrong stays unfixed: give the evidence in your summary, which the next reviewer reads. A finding that names no place you can find, a WRONG-PREMISE finding, or one that asks for a new design is beyond a fix round: leave it, name it, and finish with fail so the orchestrator can re-plan.";
 
 /**
  * The rendered scaffold body — parameter substitution plus any role-specific

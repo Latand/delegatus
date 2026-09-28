@@ -48,6 +48,11 @@ export function askGist(text: string): string {
 
 /** Stage endings that already settle through their own channel (§6). */
 const STRUCTURED_ENDING = /(?:^|\n)\s*(?:REVIEW_READY\b|VERDICT\s*:|APPROVE\b|REQUEST_CHANGES\b|NO FINDINGS\b)|```json\s*\{\s*"status"\s*:/;
+/** A spawned role agent's closing line (docs/design/agent-prompt-contract.md
+    §2.2). pass and fail settle the agent's work for the seat that reads it;
+    `Verdict: needs_decision` is left out on purpose: the agent is asking the
+    operator a question, and that is what the ask sweep exists to surface. */
+const SPAWN_SETTLED_ENDING = /(?:^|\n)\s*[*_`]*\s*verdict\s*:\s*[*_`]*\s*(?:pass|fail)\b/i;
 /** Engine error strings: a deterministic state, never an ask (§6). */
 const ENGINE_ERROR = /^(?:API Error\b|Session limit reached|Claude AI usage limit reached|You've hit your (?:usage )?limit|OAuth (?:token )?(?:refresh )?(?:has )?(?:expired|failed)|Invalid API key|Credit balance is too low|stream disconnected|Request timed out|unexpected status \d{3})/i;
 export const MIN_ASK_BODY_CHARS = 30;
@@ -56,7 +61,7 @@ export const MIN_ASK_BODY_CHARS = 30;
 export function askSkipReason(text: string): "short" | "structured" | "engine-error" | null {
   const body = text.trim();
   if (body.length < MIN_ASK_BODY_CHARS) return "short";
-  if (STRUCTURED_ENDING.test(body)) return "structured";
+  if (STRUCTURED_ENDING.test(body) || SPAWN_SETTLED_ENDING.test(body)) return "structured";
   if (ENGINE_ERROR.test(body)) return "engine-error";
   return null;
 }

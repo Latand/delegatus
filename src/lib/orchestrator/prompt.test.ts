@@ -22,6 +22,7 @@ import {
   ORCHESTRATOR_TASK_OWNERSHIP_HEADING,
   ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE,
   ORCHESTRATOR_VIEWER_CLOCK_HEADING,
+  ORCHESTRATOR_SHIPPED_CLOCK_OPENING,
   orchestratorMandateCarriesTickContract,
   orchestratorMandateForDelivery,
   orchestratorMandateWithRoleTable,
@@ -134,7 +135,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   27: "1135c1274c1dc36fcc1f595035837e13f0913a818ed7d59ce1db79791de01a37",
   28: "90819032b795f74b3ac4f5bf0699f5443cf31353e95c1ad19ef87b16e8e1ab60",
   29: "220722434e6ce6a265155097b000d1ec5cbf6461e67e7d39193b61cae5b6318a",
-  30: "d4f8b538f0ee9bca861ee6c98bddea5c5553dc7175df829eb9d4e8c606db6b4d",
+  30: "e2ab3a989d4d841c27b30134ac68bb381f1896ddb8d475d4ced68ccf4f48c5e6",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -239,16 +240,28 @@ test("every clause the tick contract carried lives in the mandate, and reaches e
   expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
 });
 
+/** The clock section's heading and opening three paragraphs as they shipped
+    from v11 to v29, copied verbatim from those bodies: v30 names the product
+    Delegatus in them (docs/design/agent-prompt-contract.md, review of #2301). */
+const SHIPPED_CLOCK_OPENING = `## The Viewer's clock — you never schedule yourself
+The Viewer wakes you. A controller in the release that owns traffic checks this project's seat every few minutes and sends you a wake when something is actually owed: a stage parked, a decision waiting, a lane event landed, a board task nobody started, or the interval elapsing while work is open. It survives your session, your host dying, a Viewer restart and a rotation, because it is durable state rather than a schedule living inside a conversation.
+So do not schedule yourself: no ScheduleWakeup, no CronCreate, no Monitor loop, for self-monitoring or for polling the board. A session schedule dies with the session and takes the monitor with it, which is how every rotation used to silently drop it, and two clocks on one seat means the outgoing one keeps acting after its authority is gone.
+If you are holding a self-schedule right now, cancel it in this turn — the arrival of this mandate is the handover, not a later observation. Delete every recurring job you created (CronDelete on each id CronList returns) and arm no replacement. Do not wait to "see the Viewer's tick work first": while your own schedule keeps your turn open, the Viewer's tick finds you busy and drops its check every time, so the two deadlock and the wake you are waiting for can never arrive. Yours goes first.`;
+
 /** The clock section's last paragraph as it shipped in v11–v16 and in
-    v17–v20, copied verbatim from those bodies. The three paragraphs before it
-    never changed, so each shipped section is the current opening plus one of
-    these. */
+    v17–v20, copied verbatim from those bodies. Each shipped section is the
+    shipped opening plus one of these. */
 const SHIPPED_CLOCK_LAST_PARAGRAPHS = [
   "Between wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. When a wake arrives, act on the items it lists and nothing else, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.",
   "Between wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. When a wake arrives, act on the items it lists first, then make one bounded pass over the rest of the board — lanes, pull requests, agents, tasks — and act on what stands still, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.",
 ];
-const shippedClockSection = (lastParagraph: string) =>
-  `${ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE.split("\n").slice(0, 4).join("\n")}\n${lastParagraph}`;
+const shippedClockSection = (lastParagraph: string) => `${SHIPPED_CLOCK_OPENING}\n${lastParagraph}`;
+
+/* The module's own copy, which the seat and tick tests build their older
+   mandates from, is the text that shipped. */
+test("the shipped clock opening the module keeps is the one that shipped", () => {
+  expect(ORCHESTRATOR_SHIPPED_CLOCK_OPENING).toBe(SHIPPED_CLOCK_OPENING);
+});
 
 /* #2030 review: every mandate composed from a v20-or-older body carries the
    clock HEADING with the old paragraph under it, so appending by heading gave
@@ -648,7 +661,11 @@ test("the role table tells the seat to size lanes, lists every variant and names
   expect(table).toContain("design (options, architecture, proposals, issues from design work): an architect stage first");
   expect(table).toContain("- size=trivial needs a brief written by a large model: Claude Opus or Fable, or a large Codex model. Sonnet and Haiku never run orchestrator, architect, reviewer or verifier work, and run a builder whose model you set by hand only at size=trivial.");
   /* §3 (a): the fix stage's params select its row. */
-  expect(table).toContain("- Fix stages: builder mode=apply-fixes with the implementer's domain and size;");
+  expect(table).toContain("- Fix stages: builder mode=apply-fixes with the implementer's domain and size, on the builder row they select.");
+  /* Review of #2301: a fix round takes what names its place, an OVER-BUILT cut
+     included, and the seat is told that the rest parks the lane. */
+  expect(table).toContain("OVER-BUILT cuts included");
+  expect(table).toContain("which parks the lane: re-plan it.");
   expect(table).toContain("README, docs, public text: builder domain=docs.");
   expect(table).toContain("a runtimeLine (spawn_agent: runtime)");
   expect(table).toContain("- Runtime overrides go on the stage beside role, never inside it. A reviewer stage is read-only by its role.");
@@ -697,10 +714,10 @@ test("the seat's personality is proactive inside accepted work, and every line a
 /* A v29 seat's stored clock section is replaced by exact match, so its board
    pass stops listing review flows; a reworded section stays its author's. */
 test("delivery replaces the clock section a v29 mandate carries", () => {
-  const v29Section = ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE
+  const v29Section = shippedClockSection(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE.split("\n").slice(4).join("\n")
     .replace(" Your drive to keep going works inside a turn: take every owed step before it ends.", "")
-    .replace("their finished lanes left, agent_activity", "their finished lanes left, list_flows, agent_activity");
-  expect(v29Section).not.toBe(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE);
+    .replace("their finished lanes left, agent_activity", "their finished lanes left, list_flows, agent_activity"));
+  expect(v29Section).toContain("list_flows");
   const delivered = orchestratorMandateForDelivery(`Run the widgets project.\n\n${v29Section}`);
   expect(delivered).not.toContain("list_flows");
   expect(delivered.split(ORCHESTRATOR_VIEWER_CLOCK_HEADING)).toHaveLength(2);
@@ -716,4 +733,18 @@ test("the role table names a role whose prompt text this install replaced", () =
   const table = orchestratorRoleTable(roles);
   expect(table).toContain("- Prompt text overridden by this install: deployer. Shipped prompt changes do not reach these roles; tell the operator, who can restore the shipped text in the agent mapping.");
   expect(table).not.toContain("\n\n");
+});
+
+/* Review of #2301: text a seat reads names the product Delegatus, and a seat
+   whose clock section still carries the heading it shipped with up to v29
+   keeps its own wording under it and gets no second section. */
+test("the delivered mandate names no Viewer, and the v29 clock heading still marks a seat's own section", () => {
+  const delivered = orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(delivered.replaceAll("`viewer`", "")).not.toMatch(/\bviewer\b/i);
+  expect(delivered).not.toContain("owns traffic");
+  const reworded = `## The Viewer's clock — you never schedule yourself\nWake only when told.`;
+  const kept = orchestratorMandateForDelivery(`Run the widgets project.\n\n${reworded}`);
+  expect(kept).toContain(reworded);
+  expect(kept).not.toContain(ORCHESTRATOR_VIEWER_CLOCK_HEADING);
+  expect(kept.split("you never schedule yourself")).toHaveLength(2);
 });

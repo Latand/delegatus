@@ -116,4 +116,13 @@ describe("askSkipReason", () => {
     expect(askSkipReason("Session limit reached ∙ resets 5pm for this account")).toBe("engine-error");
     expect(askSkipReason("The branch is ready. Should I open the pull request now?")).toBeNull();
   });
+
+  /* docs/design/agent-prompt-contract.md §2.2: a spawned role agent's closing
+     line. pass and fail settle through the seat that reads them;
+     needs_decision is a question for the operator, so it stays an ask. */
+  test("reads a spawned agent's Verdict line: pass and fail settle, needs_decision is sent", () => {
+    expect(askSkipReason("Checked the release plan; every step validated.\n\nVerdict: pass")).toBe("structured");
+    expect(askSkipReason("Two findings stand, listed above with their places.\n\nVerdict: fail")).toBe("structured");
+    expect(askSkipReason("Blue or in-place? I recommend in-place for this change.\n\nVerdict: needs_decision")).toBeNull();
+  });
 });

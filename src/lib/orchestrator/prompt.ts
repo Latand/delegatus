@@ -128,7 +128,12 @@ Use the actual project name in place of {project}. For a ROTATION, when work rem
     reworded the paragraph and kept the heading meant their wording, and
     appending the canonical copy beside it would put two clock instructions in
     one mandate — the very shape #1245 exists to end. */
-export const ORCHESTRATOR_VIEWER_CLOCK_HEADING = "## The Viewer's clock — you never schedule yourself";
+export const ORCHESTRATOR_VIEWER_CLOCK_HEADING = "## Delegatus's clock — you never schedule yourself";
+
+/** The heading as it shipped up to v29, before text an agent reads named the
+    product Delegatus. Delivery still recognizes the section by it, so a seat
+    that reworded its clock section under that heading keeps its wording. */
+const SHIPPED_CLOCK_HEADING = "## The Viewer's clock — you never schedule yourself";
 
 /**
  * The contract every seat tick wake used to end with (#1245, #1275, #1749), as
@@ -185,12 +190,18 @@ export const ORCHESTRATOR_SEAT_TICK_CONTRACT: readonly string[] = [
  * records.
  */
 /** The clock section's opening — who wakes the seat, the ban on scheduling
-    itself, and the handover — unchanged since v11, and shared by every text
-    of the section that has shipped. */
-const CLOCK_OPENING = `${ORCHESTRATOR_VIEWER_CLOCK_HEADING}
+    itself, and the handover — as it shipped from v11 to v29, and shared by
+    every text of the section that has shipped. */
+export const ORCHESTRATOR_SHIPPED_CLOCK_OPENING = `${SHIPPED_CLOCK_HEADING}
 The Viewer wakes you. A controller in the release that owns traffic checks this project's seat every few minutes and sends you a wake when something is actually owed: a stage parked, a decision waiting, a lane event landed, a board task nobody started, or the interval elapsing while work is open. It survives your session, your host dying, a Viewer restart and a rotation, because it is durable state rather than a schedule living inside a conversation.
 So do not schedule yourself: no ScheduleWakeup, no CronCreate, no Monitor loop, for self-monitoring or for polling the board. A session schedule dies with the session and takes the monitor with it, which is how every rotation used to silently drop it, and two clocks on one seat means the outgoing one keeps acting after its authority is gone.
 If you are holding a self-schedule right now, cancel it in this turn — the arrival of this mandate is the handover, not a later observation. Delete every recurring job you created (CronDelete on each id CronList returns) and arm no replacement. Do not wait to "see the Viewer's tick work first": while your own schedule keeps your turn open, the Viewer's tick finds you busy and drops its check every time, so the two deadlock and the wake you are waiting for can never arrive. Yours goes first.`;
+/* v30: the same opening in the words an agent reads, naming the product
+   Delegatus and no release topology of its own. */
+const CLOCK_OPENING = `${ORCHESTRATOR_VIEWER_CLOCK_HEADING}
+Delegatus wakes you. A controller checks this project's seat every few minutes and sends you a wake when something is actually owed: a stage parked, a decision waiting, a lane event landed, a board task nobody started, or the interval elapsing while work is open. It survives your session, your host dying, a Delegatus restart and a rotation, because it is durable state rather than a schedule living inside a conversation.
+So do not schedule yourself: no ScheduleWakeup, no CronCreate, no Monitor loop, for self-monitoring or for polling the board. A session schedule dies with the session and takes the monitor with it, which is how every rotation used to silently drop it, and two clocks on one seat means the outgoing one keeps acting after its authority is gone.
+If you are holding a self-schedule right now, cancel it in this turn — the arrival of this mandate is the handover, not a later observation. Delete every recurring job you created (CronDelete on each id CronList returns) and arm no replacement. Do not wait to "see Delegatus's tick work first": while your own schedule keeps your turn open, Delegatus's tick finds you busy and drops its check every time, so the two deadlock and the wake you are waiting for can never arrive. Yours goes first.`;
 const CLOCK_IDLE_V11 = "Between wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing.";
 /* v30: the seat is told to be proactive (its personality section), and this
    says where that drive lives: inside the turns it is given. */
@@ -211,11 +222,11 @@ ${CLOCK_IDLE} ${ORCHESTRATOR_SEAT_TICK_CONTRACT.join(" ")} ${CLOCK_OUTRANKS}`;
  */
 const SHIPPED_CLOCK_SECTIONS: readonly string[] = [
   /* v29, whose board pass still listed review flows. */
-  `${CLOCK_OPENING}\n${CLOCK_IDLE_V11} ${SEAT_TICK_CONTRACT_V29.join(" ")} ${CLOCK_OUTRANKS}`,
+  `${ORCHESTRATOR_SHIPPED_CLOCK_OPENING}\n${CLOCK_IDLE_V11} ${SEAT_TICK_CONTRACT_V29.join(" ")} ${CLOCK_OUTRANKS}`,
   /* v21–v28, before the report clause joined the contract. */
-  `${CLOCK_OPENING}\n${CLOCK_IDLE_V11} ${SEAT_TICK_CONTRACT_V21.join(" ")} ${CLOCK_OUTRANKS}`,
-  `${CLOCK_OPENING}\n${CLOCK_IDLE_V11} When a wake arrives, act on the items it lists and nothing else, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. ${CLOCK_OUTRANKS}`,
-  `${CLOCK_OPENING}\n${CLOCK_IDLE_V11} When a wake arrives, act on the items it lists first, then make one bounded pass over the rest of the board — lanes, pull requests, agents, tasks — and act on what stands still, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. ${CLOCK_OUTRANKS}`,
+  `${ORCHESTRATOR_SHIPPED_CLOCK_OPENING}\n${CLOCK_IDLE_V11} ${SEAT_TICK_CONTRACT_V21.join(" ")} ${CLOCK_OUTRANKS}`,
+  `${ORCHESTRATOR_SHIPPED_CLOCK_OPENING}\n${CLOCK_IDLE_V11} When a wake arrives, act on the items it lists and nothing else, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. ${CLOCK_OUTRANKS}`,
+  `${ORCHESTRATOR_SHIPPED_CLOCK_OPENING}\n${CLOCK_IDLE_V11} When a wake arrives, act on the items it lists first, then make one bounded pass over the rest of the board — lanes, pull requests, agents, tasks — and act on what stands still, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. ${CLOCK_OUTRANKS}`,
 ];
 
 /** The first default version whose clock section states the tick contract. */
@@ -305,7 +316,7 @@ THE TEXT IS FOR THE HUMAN; AGENT CONTEXT GOES IN details. text is a title and at
 CARRY THE TASK INTO THE LAUNCH ITSELF. Delegatus binds an agent to its task when the launch is reserved, from what the CALL carried. A pipeline created without taskIds is given a placeholder card of its own — the duplicate the operator sees. A spawn without a task joins the cards of its parent and of the work it reviews, or gets a placeholder card when neither holds one; spawn_agent sets a parent only when the call names one. None of these is the outcome's card. So:
 - create_pipeline — pass taskIds: ["<board task id>"] in the SAME call as stages and autoStart. Every launch of that pipeline — each stage, retry and fail branch — then joins that task, since each launch reads it off the pipeline. Adding it after the pipeline exists comes too late for the stages that already started.
 - spawn_agent — pass taskId: "<board task id>" beside the prompt and the title on EVERY spawn, reviewers included: an explicit id wins over inheritance, and a reviewer with a parent otherwise joins your seat's card too.
-- A pipeline's reviewer and fix stages join the pipeline's task like every other stage. Pass nothing more, create nothing.
+- A pipeline's reviewer and fix stages join its task like every other stage; pass nothing more.
 - Use the exact id THIS project's board gave you. An id naming no task refuses the launch before any agent starts, on either tool; create_pipeline also refuses a task belonging to another project, while spawn_agent takes the id as given and binds the agent to that other project's card.
 
 EXTEND THE WORK THAT EXISTS. When an outcome needs another stage and its pipeline can still take one, add it there. A started pipeline's graph is fixed; when it cannot take one, create the successor pipeline with the SAME taskIds, so one card carries both.
@@ -476,7 +487,7 @@ export function orchestratorRoleTable(roles: readonly RoleDefinition[]): string 
     `- ${registryStatus}`,
     "- Runtime overrides go on the stage beside role, never inside it. A reviewer stage is read-only by its role. override-stage binds from the NEXT attempt: a running one keeps its runtime.",
     "- Size each lane first. trivial (a few lines of UI, copy, one flag or label; your brief states the exact change and its acceptance): builder and reviewer size=trivial, one review round. normal: the rows, effort low or medium for routine work. design (options, architecture, proposals, issues from design work): an architect stage first.",
-    "- Fix stages: builder mode=apply-fixes with the implementer's domain and size; the builder row above lists what each combination runs. A light fix row takes only findings that name their place; its fixer hands back anything else as fail.",
+    "- Fix stages: builder mode=apply-fixes with the implementer's domain and size, on the builder row they select. A fixer fixes every finding that names its place, OVER-BUILT cuts included, and fails on one with no place, a WRONG-PREMISE or a new design, which parks the lane: re-plan it.",
     "- size=trivial needs a brief written by a large model: Claude Opus or Fable, or a large Codex model. Sonnet and Haiku never run orchestrator, architect, reviewer or verifier work, and run a builder whose model you set by hand only at size=trivial. README, docs, public text: builder domain=docs.",
     "- create_pipeline answers each stage's runtime and a runtimeLine (spawn_agent: runtime): fix a wrong one before attempt 1 (draft, or pause, override-stage, start), and quote it with the size you chose and why.",
     ...(overriddenNote ? [overriddenNote] : []),
@@ -498,10 +509,10 @@ function withoutRoleTable(text: string): string {
     reworded the body under it keeps their wording; the initial-status contract
     has no heading of its own and is recognized by its whole text. Adding a
     directive is one entry here. */
-const DELIVERED_DIRECTIVES: readonly { marker: string; directive: string }[] = [
-  { marker: ORCHESTRATOR_TASK_OWNERSHIP_HEADING, directive: ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE },
-  { marker: ORCHESTRATOR_VIEWER_CLOCK_HEADING, directive: ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE },
-  { marker: ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE, directive: ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE },
+const DELIVERED_DIRECTIVES: readonly { markers: readonly string[]; directive: string }[] = [
+  { markers: [ORCHESTRATOR_TASK_OWNERSHIP_HEADING], directive: ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE },
+  { markers: [ORCHESTRATOR_VIEWER_CLOCK_HEADING, SHIPPED_CLOCK_HEADING], directive: ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE },
+  { markers: [ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE], directive: ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE },
 ];
 
 /** Every seat receives the initial-status contract, the clock handover with
@@ -549,7 +560,7 @@ export function orchestratorMandateWithRoleTable(mandate: string, roleTable: str
     ),
   );
   const withDirectives = DELIVERED_DIRECTIVES.reduce(
-    (text, { marker, directive }) => (text.includes(marker) ? text : `${text}\n\n${directive}`),
+    (text, { markers, directive }) => (markers.some((marker) => text.includes(marker)) ? text : `${text}\n\n${directive}`),
     withoutRoleTable(withoutShipped),
   );
   return roleTable === null ? withDirectives : `${withDirectives}\n\n${roleTable}`;

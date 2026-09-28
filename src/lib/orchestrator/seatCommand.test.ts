@@ -24,6 +24,7 @@ import {
   ORCHESTRATOR_PROMPT_VERSION,
   ORCHESTRATOR_SEAT_TICK_CONTRACT,
   ORCHESTRATOR_SYSTEM_PROMPT,
+  ORCHESTRATOR_SHIPPED_CLOCK_OPENING,
   ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE,
   orchestratorMandateForDelivery,
   orchestratorMandateStale,
@@ -801,7 +802,8 @@ test("a rotation asked to keep the incumbent's mandate keeps its text and versio
    heading with the v17–v20 paragraph under it. Delivery replaces that shipped
    section, so the successor reads every tick contract clause once. */
 test("a rotation that keeps a v20 incumbent's mandate still delivers every tick contract clause once", async () => {
-  const v20Clock = `${ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE.split("\n").slice(0, 4).join("\n")}\nBetween wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. When a wake arrives, act on the items it lists first, then make one bounded pass over the rest of the board — lanes, pull requests, agents, tasks — and act on what stands still, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.`;
+  /* A v20 seat carries the opening as it shipped, heading included. */
+  const v20Clock = `${ORCHESTRATOR_SHIPPED_CLOCK_OPENING}\nBetween wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. When a wake arrives, act on the items it lists first, then make one bounded pass over the rest of the board — lanes, pull requests, agents, tasks — and act on what stands still, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.`;
   const v20Core = ORCHESTRATOR_SYSTEM_PROMPT.replace(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE, v20Clock);
   const seeded = dependencies();
   await executeOrchestratorSeatRequest({ ...spawnRequest("req_00000039"), mandate: v20Core, promptVersion: 20 }, seeded.deps);

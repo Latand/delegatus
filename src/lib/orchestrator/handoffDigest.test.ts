@@ -464,7 +464,7 @@ test("the delivered default mandate fits the delivery bound with room for a rota
    already measured 12 080 before it, and 19 500 bytes still hold two. Raised
    to 12 800 for the fix rows and the fix-stage note in the role table and the
    greeting that says what a proactive seat starts
-   (docs/design/agent-prompt-contract.md, mandate v30), which measured 12 716;
+   (docs/design/agent-prompt-contract.md, mandate v30), which measured 12 703;
    19 200 bytes still hold two. */
 const DELIVERED_DIRECTIVE_BUDGET_BYTES = 12_800;
 
