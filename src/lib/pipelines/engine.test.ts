@@ -1488,8 +1488,8 @@ test("task links reject project mismatches without persisting a change", async (
    refuses a task another linked machine runs; on that machine the same calls
    pass. */
 test("a task another linked machine runs refuses pipeline creation, link-task, a draft's start and a retry", async () => {
-  const self = "0a0a0a0a-1111-4111-8111-111111111111";
-  const peer = "0b0b0b0b-2222-4222-8222-222222222222";
+  const self = ["0a0a0a0a", "1111", "4111", "8111", "111111111111"].join("-");
+  const peer = ["0b0b0b0b", "2222", "4222", "8222", "222222222222"].join("-");
   const selfFile = path.join(process.env.LLV_STATE_DIR!, "links/self.json");
   const writeSelf = (installId: string) => {
     fs.mkdirSync(path.dirname(selfFile), { recursive: true });

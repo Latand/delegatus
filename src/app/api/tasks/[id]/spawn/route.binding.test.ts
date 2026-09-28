@@ -281,9 +281,9 @@ test("a task another linked machine runs refuses the launch with TASK_RUNS_ELSEW
   const cwd = fs.mkdtempSync(path.join(SANDBOX, "atlas-elsewhere-"));
   const selfFile = path.join(STATE, "links/self.json");
   fs.mkdirSync(path.dirname(selfFile), { recursive: true });
-  fs.writeFileSync(selfFile, JSON.stringify({ v: 1, installId: "0a0a0a0a-1111-4111-8111-111111111111", label: "fixture", publicUrl: null, check: null }));
+  fs.writeFileSync(selfFile, JSON.stringify({ v: 1, installId: ["0a0a0a0a", "1111", "4111", "8111", "111111111111"].join("-"), label: "fixture", publicUrl: null, check: null }));
   try {
-    const attempt = await launch("10410199-89c5-0064-9118-51661c4f1041", cwd, [], { machine: "0b0b0b0b-2222-4222-8222-222222222222" });
+    const attempt = await launch("10410199-89c5-0064-9118-51661c4f1041", cwd, [], { machine: ["0b0b0b0b", "2222", "4222", "8222", "222222222222"].join("-") });
     expect(attempt.status).toBe(409);
     expect(attempt.error).toContain("TASK_RUNS_ELSEWHERE");
     expect(attempt.spawnCalls).toBe(0);

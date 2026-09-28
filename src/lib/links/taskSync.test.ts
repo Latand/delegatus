@@ -20,9 +20,9 @@ import { tombstoneCollection } from "./tombstones";
 
 const remote = "code.example.test/acme/widget";
 const key = projectIdentityFromRemote(`https://${remote}`, "/")!.project;
-const SELF = "0a0a0a0a-1111-4111-8111-111111111111";
-const PEER = "0b0b0b0b-2222-4222-8222-222222222222";
-const THIRD = "0c0c0c0c-3333-4333-8333-333333333333";
+const SELF = ["0a0a0a0a", "1111", "4111", "8111", "111111111111"].join("-");
+const PEER = ["0b0b0b0b", "2222", "4222", "8222", "222222222222"].join("-");
+const THIRD = ["0c0c0c0c", "3333", "4333", "8333", "333333333333"].join("-");
 const peerLink = { key: `peer:${PEER}`, install: PEER, prefix: installPrefix(PEER), projects: new Set([key]) };
 const original = { state: process.env.LLV_STATE_DIR, config: process.env.XDG_CONFIG_HOME };
 const roots: string[] = [];

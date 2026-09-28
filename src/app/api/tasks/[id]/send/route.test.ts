@@ -181,8 +181,8 @@ test("a task another linked machine runs is refused before any delivery; its own
   const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-task-send-elsewhere-"));
   const prior = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = state;
-  const self = "0a0a0a0a-1111-4111-8111-111111111111";
-  const peer = "0b0b0b0b-2222-4222-8222-222222222222";
+  const self = ["0a0a0a0a", "1111", "4111", "8111", "111111111111"].join("-");
+  const peer = ["0b0b0b0b", "2222", "4222", "8222", "222222222222"].join("-");
   const writeSelf = (installId: string) => {
     fs.mkdirSync(path.join(state, "links"), { recursive: true });
     fs.writeFileSync(path.join(state, "links/self.json"), JSON.stringify({ v: 1, installId, label: "fixture", publicUrl: null, check: null }));

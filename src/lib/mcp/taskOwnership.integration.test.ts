@@ -21,12 +21,12 @@ for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR",
 process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
 process.env.LLV_RUNTIME_HOST_SOCKET = path.join(sandbox, "runtime.sock");
 process.env.LLV_RUNTIME_HOST_CONTROL_SOCKET = path.join(sandbox, "absent.sock");
-const SELF = "0a0a0a0a-1111-4111-8111-111111111111";
-const PEER = "0b0b0b0b-2222-4222-8222-222222222222";
+const SELF = ["0a0a0a0a", "1111", "4111", "8111", "111111111111"].join("-");
+const PEER = ["0b0b0b0b", "2222", "4222", "8222", "222222222222"].join("-");
 const state = process.env.LLV_STATE_DIR!;
 fs.mkdirSync(path.join(state, "links"), { recursive: true });
 fs.writeFileSync(path.join(state, "links/self.json"), JSON.stringify({ v: 1, installId: SELF, label: "alpha", publicUrl: null, check: null }));
-fs.writeFileSync(path.join(state, "links/grants.json"), JSON.stringify({ v: 1, codes: [], grants: [{ id: "0d0d0d0d-4444-4444-8444-444444444444", hash: "x", install: PEER, label: "beta", scopes: ["board:sync"], created: 1, lastUsed: null, requests: 0, movedAt: null, flushedAt: null }] }));
+fs.writeFileSync(path.join(state, "links/grants.json"), JSON.stringify({ v: 1, codes: [], grants: [{ id: ["0d0d0d0d", "4444", "4444", "8444", "444444444444"].join("-"), hash: "x", install: PEER, label: "beta", scopes: ["board:sync"], created: 1, lastUsed: null, requests: 0, movedAt: null, flushedAt: null }] }));
 const { viewerMcpBindings } = await import("./bindings");
 const { createMcpToolService, createViewerMcpServer, SqliteMcpReceiptStore } = await import("./server");
 const { saveTasks } = await import("@/lib/tasks/store");

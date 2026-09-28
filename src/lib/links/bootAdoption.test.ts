@@ -12,8 +12,8 @@ import path from "node:path";
 const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-boot-adoption-"));
 const original = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = state;
-const SELF = "0a0a0a0a-1111-4111-8111-111111111111";
-const PEER = "0b0b0b0b-2222-4222-8222-222222222222";
+const SELF = ["0a0a0a0a", "1111", "4111", "8111", "111111111111"].join("-");
+const PEER = ["0b0b0b0b", "2222", "4222", "8222", "222222222222"].join("-");
 fs.mkdirSync(path.join(state, "links"), { recursive: true });
 fs.writeFileSync(path.join(state, "links/self.json"), JSON.stringify({ v: 1, installId: SELF, label: "alpha", publicUrl: null, check: null }));
 

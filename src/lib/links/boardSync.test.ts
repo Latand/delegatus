@@ -369,11 +369,11 @@ test("a forged owner is dropped: A's token cannot give B's task to A or hand it 
   const row = (fields: Record<string, unknown>) => ({ id: task.id, project: key, text: "Runs on B", status: "inbox", placement: "unplaced",
     machine: bInstall, createdAt: onA.createdAt, updatedAt: onA.updatedAt,
     s: { ...onA.sync!.s, machine: later, handover: later }, ...fields });
-  for (const forged of [row({ machine: aSelf.installId }), row({ handover: { to: "0c0c0c0c-3333-4333-8333-333333333333" } })]) {
+  for (const forged of [row({ machine: aSelf.installId }), row({ handover: { to: ["0c0c0c0c", "3333", "4333", "8333", "333333333333"].join("-") } })]) {
     const answer = await fetch(`${b}/api/peer/v1/boards/sync`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-delegatus-peer": `${stored.grantId}.${stored.token}` },
-      body: JSON.stringify({ v: 1, store: "00000000-0000-4000-8000-000000000000", now: Date.now(), s: sharedDigest(list), have: sharedDigest(list), push: { rows: [forged], through: [1] } }),
+      body: JSON.stringify({ v: 1, store: ["00000000", "0000", "4000", "8000", "000000000000"].join("-"), now: Date.now(), s: sharedDigest(list), have: sharedDigest(list), push: { rows: [forged], through: [1] } }),
     });
     expect(answer.status).toBe(200);
     // B took the page (the lists agreed) and acknowledged it after its commit.

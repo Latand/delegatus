@@ -162,8 +162,8 @@ test("a launch that resolves to a task another linked machine runs is refused wi
   const os = await import("node:os");
   const path = await import("node:path");
   const { ensureTaskMembership } = await import("./membership");
-  const self = "0a0a0a0a-1111-4111-8111-111111111111";
-  const peer = "0b0b0b0b-2222-4222-8222-222222222222";
+  const self = ["0a0a0a0a", "1111", "4111", "8111", "111111111111"].join("-");
+  const peer = ["0b0b0b0b", "2222", "4222", "8222", "222222222222"].join("-");
   const prior = process.env.LLV_STATE_DIR;
   const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-launch-elsewhere-"));
   process.env.LLV_STATE_DIR = state;

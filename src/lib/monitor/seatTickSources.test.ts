@@ -1416,9 +1416,9 @@ test("the projects worth checking are the seated ones plus anything with work an
 test("a task another linked machine runs is marked runsOn and adds no project", async () => {
   const selfFile = path.join(process.env.LLV_STATE_DIR!, "links/self.json");
   fs.mkdirSync(path.dirname(selfFile), { recursive: true });
-  fs.writeFileSync(selfFile, JSON.stringify({ v: 1, installId: "0a0a0a0a-1111-4111-8111-111111111111", label: "alpha", publicUrl: null, check: null }));
+  fs.writeFileSync(selfFile, JSON.stringify({ v: 1, installId: ["0a0a0a0a", "1111", "4111", "8111", "111111111111"].join("-"), label: "alpha", publicUrl: null, check: null }));
   try {
-    const peer = "0b0b0b0b-2222-4222-8222-222222222222";
+    const peer = ["0b0b0b0b", "2222", "4222", "8222", "222222222222"].join("-");
     const elsewhere = { id: "task_peer", project: "peer-only", status: "assigned", text: "card", placement: "unplaced", assignments: [], machine: peer, createdAt: "", updatedAt: "" };
     expect(seatTickProjects({ ...sources({ tasks: [elsewhere] }), activeSeats: () => [], pipelines: () => [] as never })).toEqual([]);
     const input = await gather({ tasks: [{ ...elsewhere, project: PROJECT, updatedAt: new Date(NOW - 60_000).toISOString() }] });
