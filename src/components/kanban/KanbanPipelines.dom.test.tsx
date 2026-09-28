@@ -191,19 +191,26 @@ test("the opened graph shows each stage's state, the pass edges, the fail edge b
   /* A waiting stage opens its first message (K5b), so its node is a live control. */
   expect(nodes[3]!.getAttribute("aria-disabled")).toBeNull();
   expect(nodes[3]!.getAttribute("aria-label")).toContain("Open its first message");
-  expect(nodes[0]!.querySelector(".pdetail")?.textContent).toBe("attempt 2");
-  expect(nodes[2]!.querySelector(".pdetail")?.textContent).toBe("attempt 2 · 2 retries");
+  /* One attempt caption (#1892): the number rides the name from the second attempt. */
+  expect(nodes.map((node) => node.querySelector(".pattempt")?.textContent ?? null)).toEqual([" · 2", null, " · 2", null]);
+  expect(nodes[0]!.querySelector(".pdetail")).toBeNull();
   expect(nodes[1]!.querySelector(".rounds-mark")?.getAttribute("data-rounds")).toBe("1");
+  /* Only the pass chain is wired; the fail edge back folds into Verify's strip
+     (docs/design/pipeline-graph-loops.md), so no wire runs back around the graph. */
   const edges = [...section.querySelectorAll<SVGPathElement>(".pedge")];
-  expect(edges.map((edge) => edge.getAttribute("data-edge"))).toEqual(["implement:pass:review", "review:pass:verify", "verify:pass:merge", "verify:fail:implement"]);
-  expect(edges[3]!.getAttribute("class")).toContain("fail back taken");
+  expect(edges.map((edge) => edge.getAttribute("data-edge"))).toEqual(["implement:pass:review", "review:pass:verify", "verify:pass:merge"]);
+  expect(section.querySelector(".pedge.back")).toBeNull();
   /* Counts come from `activatedBy` and nothing else: this record carries the
-     provenance of the one fail return only, so that is the one edge with a
-     number on it. The branching source still names its pass side (#1743). */
-  expect([...section.querySelectorAll<HTMLElement>(".pelabel")].map((label) => [label.dataset.edgeLabel, label.dataset.edgeFired]))
-    .toEqual([["verify:pass:merge", "0"], ["verify:fail:implement", "1"]]);
-  expect(section.querySelector('[data-edge-label="verify:fail:implement"] .ccircle')?.getAttribute("data-count")).toBe("1");
-  expect(section.querySelector('[data-edge-label="verify:fail:implement"]')?.className).not.toContain("spent");
+     provenance of the one fail return only, so no wire has a number, and a
+     source whose only other exit is its strip no longer names its pass side. */
+  expect(section.querySelectorAll(".pelabel")).toHaveLength(0);
+  const strip = section.querySelector<HTMLElement>('[data-strip="verify:fail:implement"]')!;
+  expect([strip.dataset.stripShape, strip.dataset.stripFired, strip.dataset.stripMax]).toEqual(["return", "1", "2"]);
+  expect(strip.querySelector(".sname")?.textContent).toBe("back to Implement");
+  /* One round fired, the next under way while Verify runs, none left after it. */
+  expect(strip.querySelector(".sdots")?.getAttribute("data-dots")).toBe("bad next");
+  expect(strip.className).not.toContain("spent");
+  expect(nodes[2]!.className).toContain("has-strip");
 });
 
 test("with a helper conversation adopted last on Implement, the graph keeps the engine's budget and attempt count, and the node a click opens is the one marked", async () => {
@@ -218,8 +225,8 @@ test("with a helper conversation adopted last on Implement, the graph keeps the 
     expect(card(host).querySelector('.pb-pills [data-stage-return="verify:fail:implement"]')?.getAttribute("data-arc-fired")).toBe("1");
     click(toggle(host));
     await tick();
-    expect(card(host).querySelector<HTMLElement>('[data-edge-label="verify:fail:implement"]')?.dataset.edgeFired).toBe("1");
-    expect(card(host).querySelector('.pnode[data-stage="implement"] .pdetail')?.textContent).toBe("attempt 2");
+    expect(card(host).querySelector<HTMLElement>('[data-strip="verify:fail:implement"]')?.dataset.stripFired).toBe("1");
+    expect(card(host).querySelector('.pnode[data-stage="implement"] .pattempt')?.textContent).toBe(" · 2");
     click(card(host).querySelector('.pnode[data-stage="implement"]'));
     await tick();
     expect(card(host).querySelector("[data-kanban-reader]")?.getAttribute("data-kanban-reader")).toBe("conversation_implement-2");
@@ -239,10 +246,11 @@ test("Past attempts lists every finished attempt and settled round, the latest o
   const past = card(host).querySelector<HTMLDetailsElement>("details.history")!;
   const labels = [...past.querySelectorAll('[data-past-kind] .lbl')].map((node) => node.textContent);
   /* Named by stage id, which says more than the role here (#1765). */
-  expect(labels.sort()).toEqual(["Implement · attempt 1", "Implement · attempt 2", "Review · attempt 1", "Review · round 1", "Verify · attempt 1"]);
+  /* The one attempt caption (#1892): a stage that ran once is its name alone. */
+  expect(labels.sort()).toEqual(["Implement · 1", "Implement · 2", "Review", "Review · round 1", "Verify · 1"]);
   expect(past.querySelector(".hl")?.textContent).toBe("Past attempts · 5");
-  expect(labels).not.toContain("Verify · attempt 2");
-  const verify = [...past.querySelectorAll("li")].find((row) => row.querySelector(".lbl")?.textContent === "Verify · attempt 1")!;
+  expect(labels).not.toContain("Verify · 2");
+  const verify = [...past.querySelectorAll("li")].find((row) => row.querySelector(".lbl")?.textContent === "Verify · 1")!;
   expect(verify.querySelector(".verdict")?.textContent).toBe("failed");
   click(verify.querySelector(".hopen"));
   await tick();
@@ -256,25 +264,27 @@ test("an edge is marked live only when the stage's own new attempt arrives throu
   await tick();
   render([searchPipeline()]);
   await tick();
-  expect(card(host).querySelector(".pedge.live")).toBeNull();
+  expect(card(host).querySelector(".pstrip.live")).toBeNull();
 
   /* A helper adopted with the fail edge's provenance copied onto it. */
   const adopted = searchPipeline();
   adopted.runs[0]!.attempts.push(helperAttempt(3, conversation("implement-helper"), 900) as never);
   render([adopted]);
   await tick();
-  expect(card(host).querySelector(".pedge.live")).toBeNull();
+  expect(card(host).querySelector(".pstrip.live")).toBeNull();
 
   /* Implement's own third attempt, activated by Verify failing. */
   const retried = searchPipeline();
   retried.runs[0]!.attempts.push(helperAttempt(3, conversation("implement-helper"), 900) as never, attempt(4, "running", conversation("implement-4"), 10, { activatedBy: { stageId: "verify", attempt: 2, edge: "fail" } }) as never);
   render([retried]);
   await tick();
-  expect(card(host).querySelector(".pedge.live")?.getAttribute("data-edge")).toBe("verify:fail:implement");
-  /* The second return spends the budget, so the label reads as exhausted. */
-  const liveLabel = card(host).querySelector<HTMLElement>(".pelabel.live")!;
-  expect(liveLabel.dataset.edgeFired).toBe("2");
-  expect(liveLabel.className).toContain("spent");
+  /* The fail edge folds into Verify's strip, which takes the live mark. */
+  const liveStrip = card(host).querySelector<HTMLElement>(".pstrip.live")!;
+  expect(liveStrip.dataset.strip).toBe("verify:fail:implement");
+  /* The second return spends the budget: no hollow dot is left. */
+  expect(liveStrip.dataset.stripFired).toBe("2");
+  expect(liveStrip.className).toContain("spent");
+  expect(liveStrip.querySelector(".sdots")?.getAttribute("data-dots")).toBe("bad bad");
 
   /* Within the window the record changes again with nothing attributed. */
   await tick(400);
@@ -283,9 +293,9 @@ test("an edge is marked live only when the stage's own new attempt arrives throu
   later.runs[1]!.attempts.push(attempt(2, "running", conversation("review-2"), 5) as never);
   render([later]);
   await tick();
-  expect(card(host).querySelector(".pedge.live")).toBeTruthy();
+  expect(card(host).querySelector(".pstrip.live")).toBeTruthy();
   await tick(2_300);
-  expect(card(host).querySelector(".pedge.live")).toBeNull();
+  expect(card(host).querySelector(".pstrip.live")).toBeNull();
 });
 
 test("a review stage with five rounds draws the latest round and a count of the earlier ones, and names every round in its label", async () => {
@@ -512,7 +522,7 @@ test("a fail edge takes no slot in the lane row: silent at rest, and a suffix on
   expect(once.dataset.arcState).toBe("fired");
   expect(once.dataset.arcLive).toBe("1");
   expect(once.textContent).toBe("↺1/3");
-  expect(pill(fired.host, "review")?.title).toContain("Fired 1 of 3 times");
+  expect(pill(fired.host, "review")?.title).toContain("Used 1 of 3.");
   /* A return that is over is not marked as one still running. */
   const over = mount([arcPipeline({ max: 3, fired: 1 })]);
   await tick();

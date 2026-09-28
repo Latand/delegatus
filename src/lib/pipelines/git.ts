@@ -172,19 +172,57 @@ export async function resolvePipelineBaseAsync(
 export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: ProvisionExecPort, signal?: AbortSignal): Promise<PipelineGitResult> {
   if (!pipeline.baseBranch || !/^[0-9a-f]{40}$/i.test(pipeline.baseRef)) return { ok: false, error: "the pipeline base is unresolved" };
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
-  const add = await exec("git", ["worktree", "add", "-b", pipeline.branch, pipeline.worktreeDir, pipeline.baseRef], pipeline.repoDir, signal);
+  const legacy = await exec("git", ["show-ref", "--verify", "--quiet", `refs/heads/${pipeline.branch}`], pipeline.repoDir, signal);
+  if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+  const deliveryBranch = pipeline.delivery?.disposition === "owner"
+    ? pipeline.delivery.target.branch.replace(/^refs\/heads\//, "") : pipeline.branch;
+  // A pre-existing pipeline ref identifies an older checkout. New owners use
+  // the delivery ref directly, so no second branch can become a review fence.
+  const branch = legacy.code === 0 ? pipeline.branch : deliveryBranch;
+  if (!validPipelineBranch(branch)) return { ok: false, error: "the pipeline branch is invalid" };
+  const localRef = await exec("git", ["rev-parse", "--verify", `refs/heads/${branch}^{commit}`], pipeline.repoDir, signal);
+  const localSha = localRef.code === 0 ? localRef.stdout.trim() : null;
+  let remoteSha: string | null = null;
+  if (branch !== pipeline.branch && pipeline.delivery?.target.remote) {
+    const remote = pipeline.delivery.target.remote;
+    const ref = pipeline.delivery.target.branch;
+    const probe = await exec("git", ["ls-remote", "--heads", remote, ref], pipeline.repoDir, signal);
+    if (probe.code !== 0) return failure("checking the delivery branch before checkout", probe);
+    remoteSha = probe.stdout.trim().split(/\s+/)[0] || null;
+    if (remoteSha && !/^[0-9a-f]{40}$/i.test(remoteSha)) return { ok: false, error: "the delivery branch has no exact commit SHA" };
+    if (remoteSha && remoteSha !== localSha) {
+      const fetched = await exec("git", ["fetch", "--no-tags", remote, ref], pipeline.repoDir, signal);
+      if (fetched.code !== 0) return failure("fetching the delivery branch before checkout", fetched);
+      const present = await exec("git", ["cat-file", "-e", `${remoteSha}^{commit}`], pipeline.repoDir, signal);
+      if (present.code !== 0) return { ok: false, error: "the delivery branch moved during fetch; retry provisioning at its current head" };
+      if (localSha) {
+        const localContainsRemote = await exec("git", ["merge-base", "--is-ancestor", remoteSha, localSha], pipeline.repoDir, signal);
+        const remoteContainsLocal = await exec("git", ["merge-base", "--is-ancestor", localSha, remoteSha], pipeline.repoDir, signal);
+        if (localContainsRemote.code !== 0 && remoteContainsLocal.code !== 0) {
+          return { ok: false, error: `delivery branch ${branch} has divergent local and remote commits; merge or choose the preserved tip before starting the lane` };
+        }
+      }
+    }
+  }
+  if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+  const start = localSha ?? remoteSha ?? pipeline.baseRef;
+  let expectedHead = start;
+  const addArgs = localSha
+    ? ["worktree", "add", pipeline.worktreeDir, branch]
+    : ["worktree", "add", "-b", branch, pipeline.worktreeDir, start];
+  const add = await exec("git", addArgs, pipeline.repoDir, signal);
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   if (killedAtBound(add)) return { ok: false, error: "git worktree add: checkout interrupted or timed out after 60s" };
   if (add.signal || add.code === null) return failure("git worktree add interrupted", add);
   if (add.code !== 0) {
     const probe = await exec("git", ["rev-parse", "--abbrev-ref", "HEAD"], pipeline.worktreeDir, signal);
-    if (probe.code !== 0 || probe.stdout.trim() !== pipeline.branch) return failure("git worktree add", add);
+    if (probe.code !== 0 || probe.stdout.trim() !== branch) return failure("git worktree add", add);
     // Git writes the branch and HEAD before checkout finishes. A killed
     // checkout leaves its initialization lock, even when no files were written.
     const listing = await exec("git", ["worktree", "list", "--porcelain", "-z"], pipeline.worktreeDir, signal);
     if (listing.code !== 0) return failure("checking pipeline worktree initialization", listing);
     const entry = listing.stdout.split("\0\0").map((record) => record.split("\0"))
-      .find((fields) => fields.includes(`branch refs/heads/${pipeline.branch}`));
+      .find((fields) => fields.includes(`branch refs/heads/${branch}`));
     if (!entry || entry.includes("locked initializing") || entry.some((field) => field.startsWith("prunable"))) {
       return { ok: false, error: "the pipeline worktree has not finished initializing" };
     }
@@ -195,11 +233,24 @@ export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: P
     if (tracked.code !== 0) return failure("checking pipeline worktree tracked files", tracked);
   }
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+  if (localSha && remoteSha && localSha !== remoteSha) {
+    const remoteContainsLocal = await exec("git", ["merge-base", "--is-ancestor", localSha, remoteSha], pipeline.worktreeDir, signal);
+    if (remoteContainsLocal.code === 0) {
+      const merged = await exec("git", ["merge", "--ff-only", "--no-overwrite-ignore", remoteSha], pipeline.worktreeDir, signal);
+      if (merged.code !== 0) return failure("fast-forwarding the delivery branch before production", merged);
+      expectedHead = remoteSha;
+    }
+  }
   const base = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir, signal);
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   if (base.code !== 0 || !base.stdout.trim()) return failure("resolving the pipeline base ref", base);
-  if (base.stdout.trim() !== pipeline.baseRef) return { ok: false, error: "the pipeline worktree does not match its persisted base" };
-  return { ok: true, sha: pipeline.baseRef, baseBranch: pipeline.baseBranch };
+  if (branch === pipeline.branch && base.stdout.trim() !== pipeline.baseRef) {
+    return { ok: false, error: "the pipeline worktree does not match its persisted base" };
+  }
+  if (base.stdout.trim() !== expectedHead) {
+    return { ok: false, error: "the pipeline worktree does not match its selected start commit" };
+  }
+  return { ok: true, sha: base.stdout.trim(), baseBranch: pipeline.baseBranch };
 }
 
 function changedWorktreePaths(
@@ -219,7 +270,11 @@ function changedWorktreePaths(
       cwd,
     );
     if (ignored.code !== 0) return failure("checking ignored declared stage output paths", ignored);
-    ignoredOutputs = ignored.stdout;
+    // A directory declaration does not opt every ignored descendant into a
+    // commit. Only a file named exactly by the stage may bypass .gitignore.
+    ignoredOutputs = ignored.stdout.split("\0")
+      .filter((candidate) => declaredOutputs.includes(candidate))
+      .join("\0");
   }
   const paths = `${tracked.stdout}\0${untracked.stdout}\0${ignoredOutputs}`.split("\0").filter(Boolean);
   return { ok: true, paths: [...new Set(paths)] };
@@ -259,7 +314,7 @@ export function commitPipelineStage(
   }
   const add = exec(
     "git",
-    ["add", ...(allowCommit ? ["-A"] : ["-f", "-A", "--", ...declaredOutputs])],
+    ["add", ...(allowCommit ? ["-A"] : ["-f", "-A", "--", ...changedOutputPaths])],
     pipeline.worktreeDir,
   );
   if (add.code !== 0) return failure("staging the passed stage", add);
@@ -334,7 +389,12 @@ export function currentPipelineBranchHead(pipeline: Pipeline, exec: ExecPort): P
   if (status.stdout.trim()) return { ok: false, error: "the pipeline worktree has uncommitted changes; choose whether to commit or discard them before retrying review" };
   const branch = exec("git", ["branch", "--show-current"], pipeline.worktreeDir);
   if (branch.code !== 0) return failure("checking the pipeline branch", branch);
-  if (branch.stdout.trim() !== pipeline.branch) return { ok: false, error: "the pipeline worktree is not checked out on its persisted branch" };
+  const checkedOut = branch.stdout.trim();
+  const deliveryBranch = pipeline.delivery?.disposition === "owner"
+    ? pipeline.delivery.target.branch.replace(/^refs\/heads\//, "") : null;
+  if (checkedOut !== pipeline.branch && checkedOut !== deliveryBranch) {
+    return { ok: false, error: "the pipeline worktree is not checked out on its pipeline or delivery branch" };
+  }
   const head = exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
   if (head.code !== 0) return failure("resolving the pipeline branch HEAD", head);
   const sha = head.stdout.trim();
@@ -643,7 +703,7 @@ function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, request:
        discard work, so the pipeline parks and lets the operator choose. */
     const remoteIsAncestor = exec("git", ["merge-base", "--is-ancestor", remoteSha, acceptedSha], pipeline.worktreeDir);
     if (remoteIsAncestor.code === 1) {
-      return { ok: false, error: "the local and remote pipeline branches diverged; choose which revision to publish before the review stage can start" };
+      return { ok: false, error: "the local and remote pipeline branches diverged; fetch and merge the remote commits into this worktree, then retry publication; both tips are preserved" };
     }
     if (remoteIsAncestor.code !== 0) return failure("comparing local and remote pipeline revisions", remoteIsAncestor);
   }
@@ -662,8 +722,7 @@ function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, request:
 /**
  * Resolves the exact revision a retried reviewer will receive. A remote repair
  * fast-forwards the shared worktree; a local repair stays intact; divergence
- * parks for an operator and preserves both repair tips. Failed write-stage
- * retries continue to use resetPipelineStage.
+ * parks for an operator and preserves both repair tips.
  */
 export function synchronizePipelineRetryHead(pipeline: Pipeline, exec: ExecPort): PipelineGitResult {
   const local = currentPipelineBranchHead(pipeline, exec);
@@ -676,19 +735,19 @@ export function synchronizePipelineRetryHead(pipeline: Pipeline, exec: ExecPort)
 
   const fetch = exec(
     "git",
-    ["fetch", "--no-tags", pipeline.delivery?.target.remote || "origin", `+${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}:refs/remotes/origin/${pipeline.branch}`],
+    ["fetch", "--no-tags", pipeline.delivery?.target.remote || "origin", pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`],
     pipeline.worktreeDir,
   );
   if (fetch.code !== 0) return failure("fetching the remote pipeline branch", fetch);
-  const remote = exec("git", ["rev-parse", `refs/remotes/origin/${pipeline.branch}`], pipeline.worktreeDir);
-  if (remote.code !== 0) return failure("resolving the remote pipeline branch", remote);
-  const remoteSha = remote.stdout.trim();
+  const remoteSha = remoteProbe.stdout.trim().split(/\s+/)[0] ?? "";
   if (!/^[0-9a-f]{40}$/i.test(remoteSha)) return { ok: false, error: "resolving the remote pipeline branch: expected an exact commit SHA" };
+  const present = exec("git", ["cat-file", "-e", `${remoteSha}^{commit}`], pipeline.worktreeDir);
+  if (present.code !== 0) return { ok: false, error: "the remote pipeline branch moved during fetch; retry review at its current head" };
   if (remoteSha === local.sha) return local;
 
   const localIsAncestor = exec("git", ["merge-base", "--is-ancestor", local.sha, remoteSha], pipeline.worktreeDir);
   if (localIsAncestor.code === 0) {
-    const merge = exec("git", ["merge", "--ff-only", `refs/remotes/origin/${pipeline.branch}`], pipeline.worktreeDir);
+    const merge = exec("git", ["merge", "--ff-only", "--no-overwrite-ignore", remoteSha], pipeline.worktreeDir);
     if (merge.code !== 0) return failure("fast-forwarding the pipeline worktree to its remote repair", merge);
     return { ok: true, sha: remoteSha };
   }
@@ -697,5 +756,5 @@ export function synchronizePipelineRetryHead(pipeline: Pipeline, exec: ExecPort)
   const remoteIsAncestor = exec("git", ["merge-base", "--is-ancestor", remoteSha, local.sha], pipeline.worktreeDir);
   if (remoteIsAncestor.code === 0) return local;
   if (remoteIsAncestor.code !== 1) return failure("comparing local and remote pipeline revisions", remoteIsAncestor);
-  return { ok: false, error: "the local and remote pipeline branches diverged; choose which repair to keep before retrying review" };
+  return { ok: false, error: "the local and remote pipeline branches diverged; fetch and merge the remote commits into this worktree before retrying review; both tips are preserved" };
 }

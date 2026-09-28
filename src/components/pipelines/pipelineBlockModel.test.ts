@@ -16,7 +16,7 @@ import type { StageChipState } from "./pipelineModel";
 
 const t: TFunction = (key, params) => translate("en", key, params);
 const stage = (id: string): PipelineStage => ({ id, kind: "run", role: { roleId: "builder" }, prompt: "", next: null, onFail: null }) as unknown as PipelineStage;
-const chip = (id: string, state: StageChipState, branch = false): KanbanStageChip => ({ stage: stage(id), state, rounds: 0, branch });
+const chip = (id: string, state: StageChipState, branch = false): KanbanStageChip => ({ stage: stage(id), state, rounds: 0, branch, rework: false });
 const read = (level: ChainItem[]) => level.map((item) => (item.kind === "stage" ? item.chip.stage.id : item.kind === "passed" ? `✓${item.n}` : `+${item.n}`)).join(" ");
 
 test("the card's chain folds in the design's order, and every fold keeps the current stage (§3.13)", () => {

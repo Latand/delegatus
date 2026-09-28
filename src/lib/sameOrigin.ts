@@ -35,6 +35,8 @@ function allowedHostNames(): Set<string> {
   if (tailnetHost) {
     allowedHosts.add(hostWithoutPort(tailnetHost));
   }
+  const publicHost = process.env.LLV_PUBLIC_HOST;
+  if (publicHost && process.env.LLV_TOKEN) allowedHosts.add(hostWithoutPort(publicHost));
   return allowedHosts;
 }
 

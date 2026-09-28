@@ -89,6 +89,119 @@ test("a real stale dirty checkout provisions from the freshly fetched origin/mai
   }
 });
 
+test("new owner checkout starts from an existing delivery head and keeps a divergent remote", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-delivery-checkout-"));
+  const origin = path.join(root, "origin.git");
+  const repo = path.join(root, "repo");
+  const other = path.join(root, "other");
+  try {
+    fs.mkdirSync(repo);
+    git(root, "init", "--bare", "--initial-branch=main", origin);
+    git(repo, "init", "--initial-branch=main");
+    git(repo, "config", "user.name", "Fixture");
+    git(repo, "config", "user.email", "noreply@example.com");
+    git(repo, "config", "commit.gpgSign", "false");
+    fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
+    git(repo, "add", "base.txt");
+    git(repo, "commit", "-m", "base");
+    git(repo, "remote", "add", "origin", origin);
+    git(repo, "push", "origin", "main");
+    const base = git(repo, "rev-parse", "HEAD");
+    git(root, "clone", origin, other);
+    git(other, "config", "user.name", "Fixture");
+    git(other, "config", "user.email", "noreply@example.com");
+    git(other, "config", "commit.gpgSign", "false");
+    git(other, "checkout", "-b", "feature/shared");
+    fs.writeFileSync(path.join(other, "earlier.txt"), "earlier work\n");
+    git(other, "add", "earlier.txt");
+    git(other, "commit", "-m", "earlier work");
+    git(other, "push", "origin", "feature/shared");
+    const earlier = git(other, "rev-parse", "HEAD");
+
+    const subject = pipeline();
+    Object.assign(subject, { repoDir: repo, worktreeDir: path.join(root, "repo-pipeline-12345678"), baseBranch: "main", baseRef: base, lastPassedCommit: base });
+    subject.delivery!.target = { repository: "repo-fixture", remote: origin, branch: "refs/heads/feature/shared" };
+    savePipelines([subject]);
+    expect(await provisionPipelineWorktreeAsync(subject, realProvisionExec)).toMatchObject({ ok: true, sha: earlier });
+    expect(git(subject.worktreeDir, "branch", "--show-current")).toBe("feature/shared");
+    expect(fs.existsSync(path.join(subject.worktreeDir, "earlier.txt"))).toBe(true);
+    expect(realExec("git", ["show-ref", "--verify", "--quiet", `refs/heads/${subject.branch}`], repo).code).not.toBe(0);
+
+    git(repo, "worktree", "remove", subject.worktreeDir);
+    fs.writeFileSync(path.join(other, "remote-next.txt"), "next accepted head\n");
+    git(other, "add", "remote-next.txt");
+    git(other, "commit", "-m", "advance delivery");
+    git(other, "push", "origin", "feature/shared");
+    const advanced = git(other, "rev-parse", "HEAD");
+    expect(await provisionPipelineWorktreeAsync(subject, realProvisionExec)).toMatchObject({ ok: true, sha: advanced });
+    expect(git(subject.worktreeDir, "rev-parse", "HEAD")).toBe(advanced);
+
+    fs.writeFileSync(path.join(subject.worktreeDir, "local.txt"), "local work\n");
+    git(subject.worktreeDir, "add", "local.txt");
+    git(subject.worktreeDir, "commit", "-m", "local work");
+    const local = git(subject.worktreeDir, "rev-parse", "HEAD");
+    fs.writeFileSync(path.join(other, "remote.txt"), "remote work\n");
+    git(other, "add", "remote.txt");
+    git(other, "commit", "-m", "remote work");
+    git(other, "push", "origin", "feature/shared");
+    const remote = git(other, "rev-parse", "HEAD");
+    const published = await publishPipelineBranch(subject, realExec, { acceptedSha: local });
+    expect(published.ok).toBe(false);
+    expect(!published.ok && published.error).toContain("fetch and merge the remote commits");
+    expect(git(origin, "rev-parse", "refs/heads/feature/shared")).toBe(remote);
+    expect(git(subject.worktreeDir, "rev-parse", "HEAD")).toBe(local);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("provisioning preserves an ignored declared output when the delivery branch starts tracking it", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-delivery-ignored-collision-"));
+  const origin = path.join(root, "origin.git");
+  const repo = path.join(root, "repo");
+  const other = path.join(root, "other");
+  const worktree = path.join(root, "lane");
+  try {
+    fs.mkdirSync(repo);
+    git(root, "init", "--bare", "--initial-branch=main", origin);
+    git(repo, "init", "--initial-branch=main");
+    git(repo, "config", "user.name", "Fixture");
+    git(repo, "config", "user.email", "noreply");
+    git(repo, "config", "commit.gpgSign", "false");
+    fs.writeFileSync(path.join(repo, ".gitignore"), "report.md\n");
+    git(repo, "add", ".gitignore");
+    git(repo, "commit", "-m", "base");
+    const base = git(repo, "rev-parse", "HEAD");
+    git(repo, "remote", "add", "origin", origin);
+    git(repo, "push", "origin", "main");
+    git(repo, "branch", "feature/shared");
+    git(repo, "push", "origin", "feature/shared");
+    git(repo, "worktree", "add", worktree, "feature/shared");
+    fs.writeFileSync(path.join(worktree, "report.md"), "local declared output\n");
+    expect(git(worktree, "status", "--porcelain")).toBe("");
+
+    git(root, "clone", origin, other);
+    git(other, "config", "user.name", "Fixture");
+    git(other, "config", "user.email", "noreply");
+    git(other, "config", "commit.gpgSign", "false");
+    git(other, "checkout", "feature/shared");
+    fs.writeFileSync(path.join(other, "report.md"), "remote report\n");
+    git(other, "add", "-f", "report.md");
+    git(other, "commit", "-m", "publish report");
+    git(other, "push", "origin", "feature/shared");
+
+    const subject = pipeline();
+    Object.assign(subject, { repoDir: repo, worktreeDir: worktree, baseBranch: "main", baseRef: base, lastPassedCommit: base });
+    subject.delivery!.target = { repository: "repo-fixture", remote: origin, branch: "refs/heads/feature/shared" };
+    const result = await provisionPipelineWorktreeAsync(subject, realProvisionExec);
+    expect(result.ok).toBe(false);
+    expect(fs.readFileSync(path.join(worktree, "report.md"), "utf8")).toBe("local declared output\n");
+    expect(git(worktree, "rev-parse", "HEAD")).toBe(base);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("async provisioning preserves the synchronous base and adoption decisions", async () => {
   const sha = "a".repeat(40);
   for (const input of [{}, { baseBranch: "release" }, { baseBranch: "release", baseRef: sha }, { baseBranch: "../bad" }]) {
@@ -401,6 +514,31 @@ test("read-only stage records an ignored declared report", () => {
   }
 });
 
+test("a declared output directory leaves ignored descendants alone", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-output-directory-"));
+  try {
+    git(root, "init", "--initial-branch=main");
+    git(root, "config", "user.email", "pipeline-test");
+    git(root, "config", "user.name", "Pipeline Test");
+    git(root, "config", "commit.gpgSign", "false");
+    fs.writeFileSync(path.join(root, ".gitignore"), "reports/private/\n");
+    git(root, "add", ".gitignore");
+    git(root, "commit", "-m", "initial");
+    const subject = pipeline();
+    subject.worktreeDir = root;
+    subject.lastPassedCommit = git(root, "rev-parse", "HEAD");
+    fs.mkdirSync(path.join(root, "reports", "private"), { recursive: true });
+    fs.writeFileSync(path.join(root, "reports", "audit.md"), "audited\n");
+    fs.writeFileSync(path.join(root, "reports", "private", "sentinel.txt"), "leave alone\n");
+
+    expect(commitPipelineStage(subject, "audit", false, realExec, ["reports"])).toMatchObject({ ok: true });
+    expect(git(root, "show", "--name-only", "--format=", "HEAD")).toBe("reports/audit.md");
+    expect(fs.readFileSync(path.join(root, "reports", "private", "sentinel.txt"), "utf8")).toBe("leave alone\n");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("read-only stage refuses source edits beside a declared report", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-read-only-source-"));
   try {
@@ -497,6 +635,37 @@ test("issue 533: manual review retry never resets clean remote 8232d71 to stale 
   expect(synchronizePipelineRetryHead(subject, exec)).toEqual({ ok: true, sha: synchronizedHead });
   expect(calls.some((call) => call.includes("reset --hard"))).toBe(false);
   expect(calls.some((call) => call.startsWith("git merge "))).toBe(false);
+});
+
+test("review retry preserves an ignored declared output when the remote repair starts tracking it", async () => {
+  const box = publishSandbox();
+  const other = path.join(box.root, "other");
+  try {
+    fs.writeFileSync(path.join(box.subject.worktreeDir, ".gitignore"), "report.md\n");
+    git(box.subject.worktreeDir, "add", ".gitignore");
+    git(box.subject.worktreeDir, "commit", "-m", "ignore report");
+    const local = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: local })).toMatchObject({ ok: true });
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "report.md"), "local declared output\n");
+    expect(git(box.subject.worktreeDir, "status", "--porcelain")).toBe("");
+
+    git(box.root, "clone", box.origin, other);
+    git(other, "config", "user.name", "Fixture");
+    git(other, "config", "user.email", "noreply");
+    git(other, "config", "commit.gpgSign", "false");
+    git(other, "checkout", box.subject.branch);
+    fs.writeFileSync(path.join(other, "report.md"), "remote repair\n");
+    git(other, "add", "-f", "report.md");
+    git(other, "commit", "-m", "publish repair");
+    git(other, "push", "origin", box.subject.branch);
+
+    const result = synchronizePipelineRetryHead(box.subject, realExec);
+    expect(result.ok).toBe(false);
+    expect(fs.readFileSync(path.join(box.subject.worktreeDir, "report.md"), "utf8")).toBe("local declared output\n");
+    expect(git(box.subject.worktreeDir, "rev-parse", "HEAD")).toBe(local);
+  } finally {
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
 });
 
 test("a real dirty worktree reports its uncommitted paths and keeps every one of them", () => {
@@ -691,7 +860,7 @@ test("publishPipelineBranch refuses a diverged remote and leaves both revisions 
 
     expect(refused).toEqual({
       ok: false,
-      error: "the local and remote pipeline branches diverged; choose which revision to publish before the review stage can start",
+      error: "the local and remote pipeline branches diverged; fetch and merge the remote commits into this worktree, then retry publication; both tips are preserved",
     });
     expect(box.originHead()).toBe(remoteRepair);
     expect(git(box.subject.worktreeDir, "rev-parse", "HEAD")).toBe(local);

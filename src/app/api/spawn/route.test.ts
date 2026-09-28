@@ -22,6 +22,15 @@ import { executeOrchestratorSeatRequest, type SeatCommandDependencies } from "@/
 import { beginDeputy, recordDeputyFork } from "@/lib/orchestrator/deputies";
 import { authenticatedAgentSpawnCaller, isAgentInitiatedSpawn, spawnLineageSelectorForCaller } from "./admission";
 import { POST } from "./route";
+import { conversationResolver } from "@/lib/activity/conversationResolver";
+import { readHumanInputs } from "@/lib/activity/hostSources";
+import { requestKey } from "@/lib/activity/humanInput";
+import { ingestTranscripts } from "@/lib/activity/ingest";
+import { readRequests, recordOperatorRequest } from "@/lib/activity/requestLedger";
+import { ActivityStore } from "@/lib/activity/store";
+import { FileClaudeDeliveryLedger } from "@/lib/runtime/claudeStreamBrokerHost";
+import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
+import { mintSession } from "@/lib/team/sessions";
 
 const previousStateDir = process.env.LLV_STATE_DIR;
 const routeSandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-spawn-route-tests-"));
@@ -184,6 +193,142 @@ test("direct spawn records one durable operator gesture while MCP service spawn 
     idempotencyKey: "spawn:operator_spawn_gesture_20260815",
     resolvedAttribution: expect.objectContaining({ engine: "claude" }),
   })]);
+});
+
+test("a team member's accepted spawn records the first delivery's author", async () => {
+  const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+  const { mintSession } = await import("@/lib/team/sessions");
+  const cwd = fs.mkdtempSync(path.join(routeSandbox, "member-spawn-author-"));
+  const store = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const previous = {
+    state: process.env.LLV_STATE_DIR,
+    transport: process.env.LLV_SPAWN_TRANSPORT,
+    hosts: process.env.LLV_STRUCTURED_HOSTS,
+    events: process.env.LLV_RUNTIME_EVENTS,
+    socket: process.env.LLV_RUNTIME_HOST_SOCKET,
+    ui: process.env.NEXT_PUBLIC_RUNTIME_UI,
+  };
+  process.env.LLV_STATE_DIR = path.join(cwd, "state");
+  process.env.LLV_SPAWN_TRANSPORT = "structured";
+  process.env.LLV_STRUCTURED_HOSTS = "1";
+  process.env.LLV_RUNTIME_EVENTS = "1";
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(cwd, "runtime.sock");
+  process.env.NEXT_PUBLIC_RUNTIME_UI = "1";
+  try {
+    const ownerId = "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const memberId = "m_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const team = teamStore();
+    team.insertMember({ id: ownerId, name: "Owner", role: "owner", status: "active", color: "teal",
+      telegram: null, createdAt: new Date().toISOString(), createdBy: "claim", revokedAt: null });
+    team.insertMember({ id: memberId, name: "Member", role: "member", status: "active", color: "sky",
+      telegram: null, createdAt: new Date().toISOString(), createdBy: "join", revokedAt: null });
+    const session = mintSession(team, memberId, "claim", { surface: "desktop", browser: "chrome" });
+    const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+      method: "POST",
+      headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin",
+        "content-type": "application/json", cookie: `llv_member=${session.value}` },
+      body: JSON.stringify({ title: "Review the harbor work", engine: "claude", cwd, project: "harbor",
+        ["prompt"]: "inspect", clientAttemptId: "member_spawn_author_1" }),
+    }), { ...structuredRouteDependencies(cwd), registry: () => store, defer: () => {},
+      recordOperatorActivity: () => ({ key: "b".repeat(64), engine: "claude", project: "harbor", atMs: 1 }) });
+    expect(response.status).toBe(202);
+    const body = await response.json() as { launchId: string; conversationId: string };
+    expect(team.messageAuthors([`spawn_${body.launchId}`]).get(`spawn_${body.launchId}`))
+      .toEqual({ memberId, conversationId: body.conversationId });
+  } finally {
+    resetTeamStoreForTests();
+    for (const [key, value] of Object.entries(previous)) {
+      const envKey = ({ state: "LLV_STATE_DIR", transport: "LLV_SPAWN_TRANSPORT", hosts: "LLV_STRUCTURED_HOSTS",
+        events: "LLV_RUNTIME_EVENTS", socket: "LLV_RUNTIME_HOST_SOCKET", ui: "NEXT_PUBLIC_RUNTIME_UI" } as const)[key as keyof typeof previous];
+      if (value === undefined) delete process.env[envKey];
+      else process.env[envKey] = value;
+    }
+  }
+});
+
+test("one accepted direct spawn produces one input after ledger and transcript ingest in solo and team", async () => {
+  const previous = Object.fromEntries(["LLV_STATE_DIR", "LLV_SPAWN_TRANSPORT", "LLV_STRUCTURED_HOSTS",
+    "LLV_RUNTIME_EVENTS", "LLV_RUNTIME_HOST_SOCKET", "NEXT_PUBLIC_RUNTIME_UI"].map((key) => [key, process.env[key]]));
+  try {
+    for (const mode of ["solo", "team"] as const) {
+      const cwd = fs.mkdtempSync(path.join(routeSandbox, `activity-${mode}-`));
+      const state = path.join(cwd, "state");
+      process.env.LLV_STATE_DIR = state;
+      process.env.LLV_SPAWN_TRANSPORT = "structured";
+      process.env.LLV_STRUCTURED_HOSTS = "1";
+      process.env.LLV_RUNTIME_EVENTS = "1";
+      process.env.LLV_RUNTIME_HOST_SOCKET = path.join(cwd, "runtime.sock");
+      process.env.NEXT_PUBLIC_RUNTIME_UI = "1";
+      const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+      const memberId = "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+      let cookie = "";
+      if (mode === "team") {
+        const team = teamStore();
+        team.insertMember({ id: memberId, name: "Owner", role: "owner", status: "active", color: "teal",
+          telegram: null, createdAt: new Date().toISOString(), createdBy: "claim", revokedAt: null });
+        cookie = `llv_member=${mintSession(team, memberId, "claim", { surface: "desktop", browser: "chrome" }).value}`;
+      }
+      const attempt = `activity_spawn_${mode}_20260928`;
+      const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+        method: "POST",
+        headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin",
+          "content-type": "application/json", "user-agent": "Mozilla/5.0", ...(cookie ? { cookie } : {}) },
+        body: JSON.stringify({ title: "Inspect harbor activity", engine: "claude", cwd, project: "harbor",
+          ["prompt"]: "inspect", clientAttemptId: attempt }),
+      }), { ...structuredRouteDependencies(cwd), registry: () => registry, defer: () => {},
+        recordOperatorRequest, recordOperatorActivity: () => ({ key: "b".repeat(64), engine: "claude", project: "harbor", atMs: 1 }) });
+      expect(response.status).toBe(202);
+      const body = await response.json() as { launchId: string; conversationId: string };
+      const activityDir = path.join(state, "activity");
+      const ledgerRows = readRequests(Date.now() - 60_000, Date.now() + 60_000,
+        { dir: () => activityDir }).rows;
+      expect(ledgerRows).toHaveLength(1);
+      expect(ledgerRows[0]?.author).toBe(mode === "team" ? memberId : "operator");
+      const file = path.join(cwd, "sessions", `${crypto.randomUUID()}.jsonl`);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const sessionId = path.basename(file, ".jsonl");
+      const settled = registry.settleSpawn(body.launchId, { key: { engine: "claude", sessionId },
+        artifactPath: file, cwd, accountId: "claude-test", status: "starting", host: null,
+        claimEpoch: 0, claimOwner: null, pendingAction: "spawn" });
+      expect(settled.kind).toBe("settled");
+      const operationId = `spawn_message_${body.launchId}`;
+      registry.holdDelivery(body.conversationId as `conversation_${string}`, "inspect", `spawn_${body.launchId}`,
+        "text", [], null, { operationId, kind: "send", policy: "queue" });
+      const delivery = new FileClaudeDeliveryLedger();
+      delivery.recordQueued(sessionId, { id: operationId, text: "inspect" }, "turn-started");
+      delivery.confirmDelivered(sessionId, operationId, "first-prompt");
+      const at = Date.now() + 12 * 60_000;
+      fs.writeFileSync(file, JSON.stringify({ type: "user", timestamp: new Date(at).toISOString(),
+        uuid: "first-prompt", sessionId, cwd, entrypoint: "sdk", message: { role: "user", content: "inspect" } }) + "\n");
+      const store = ActivityStore.open(path.join(activityDir, "records.sqlite"));
+      try {
+        const stat = fs.statSync(file);
+        await ingestTranscripts([{ path: file, engine: "claude", size: stat.size, mtimeMs: stat.mtimeMs }], {
+          complete: true, listedAt: at + 1_000, now: () => at + 1_000, store,
+          resolver: () => conversationResolver(registry.readOnlySnapshot(), () => registry.readOnlySnapshot()),
+        });
+        expect(store.localRowsAfter(0, 10)[0]?.ids).toContain(requestKey(`spawn:${attempt}`));
+      } finally { store.close(); }
+      const range = { start: ledgerRows[0]!.at - 60_000, end: at + 60_000 };
+      const read = readHumanInputs(range, at + 2_000, {
+        dir: () => activityDir,
+        readLedger: (from, to) => readRequests(from, to, { dir: () => activityDir }),
+        store: () => ActivityStore.openReadOnly(path.join(activityDir, "records.sqlite")),
+      }, { mode, memberId: mode === "team" ? memberId : null });
+      expect(read.inputs).toHaveLength(1);
+      expect(read.inputs[0]?.at).toBe(ledgerRows[0]!.at);
+      expect(read.inputs[0]?.author).toBe(mode === "team" ? memberId : "operator");
+      expect(read.unknownAuthors).toBe(0);
+      resetTeamStoreForTests();
+      registry.close();
+    }
+  } finally {
+    resetTeamStoreForTests();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });
 
 test("a corrupt WakaTime state file does not refuse an authorized direct spawn", async () => {

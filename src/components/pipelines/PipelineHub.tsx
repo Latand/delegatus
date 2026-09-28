@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { useLocale } from "@/lib/i18n";
 import type { Pipeline, PipelineAction } from "@/lib/pipelines/types";
 
-import { latestAttempt, patchPipeline, pipelineStateLabel, stageChipLabel } from "./pipelineModel";
+import { patchPipeline, pipelineStateLabel, stageChipLabel, stageLatestAttemptPlace } from "./pipelineModel";
 import { Z } from "@/components/layers";
 
 const TONES: Record<Pipeline["state"], string> = {
@@ -67,9 +67,10 @@ export function PipelineHub({
   const cursorStageId = pipeline.cursor?.stageId ?? pipeline.stages.at(-1)?.id ?? null;
   const stageIndex = cursorStageId ? pipeline.stages.findIndex((stage) => stage.id === cursorStageId) : -1;
   const stage = stageIndex >= 0 ? pipeline.stages[stageIndex]! : null;
-  const stageLabel = stage ? stageChipLabel(t, stage) : pipeline.id;
+  /* One attempt caption (#1892): «Review · 2» from the stage's second own attempt. */
+  const ownAttempts = stage ? stageLatestAttemptPlace(pipeline, stage.id).attempts : 0;
+  const stageLabel = stage ? (ownAttempts > 1 ? t("kanban.stageAttempt", { stage: stageChipLabel(t, stage), n: ownAttempts }) : stageChipLabel(t, stage)) : pipeline.id;
   const k = stageIndex >= 0 ? stageIndex + 1 : total;
-  const attempt = cursorStageId ? latestAttempt(pipeline, cursorStageId) : null;
   const finished = pipeline.state === "completed" || pipeline.state === "closed";
   const parked = pipeline.state === "needs_decision";
 
@@ -122,7 +123,6 @@ export function PipelineHub({
           </span>
           <span className="min-w-0 truncate text-[10.5px] font-semibold text-muted">
             {t("pipelineHub.stageOf", { stage: stageLabel, k, n: total })}
-            {attempt && attempt.n > 1 ? ` · ${t("pipelineHub.attempt", { n: attempt.n })}` : ""}
           </span>
           {pipeline.stateDetail ? <span className="truncate text-[10px] font-semibold text-warning" title={pipeline.stateDetail}>{pipeline.stateDetail}</span> : null}
           {error ? <span className="truncate text-[10.5px] font-semibold text-danger" title={error}>{error}</span> : null}

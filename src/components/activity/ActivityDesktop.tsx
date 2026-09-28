@@ -77,7 +77,7 @@ export function ActivityDesktop({ data, range, onRange, scope, onProject, loadin
   return (
     <div className="h-full overflow-y-auto bg-canvas" data-activity-page="" data-activity-layout="desktop">
       <MarkPatterns />
-      <div className="mx-auto max-w-[1328px] px-6 pb-4 pt-5">
+      <div className="mx-auto max-w-[1328px] px-6 pb-3 pt-5">
         <header className="flex h-9 items-center gap-3">
           <a
             href="/"

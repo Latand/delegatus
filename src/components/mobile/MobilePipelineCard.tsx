@@ -7,6 +7,7 @@ import type { Flow } from "@/lib/flows/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 
 import { summarizePipeline } from "../kanban/kanbanModel";
+import type { WorkingConversations } from "../kanban/pipelineGraph";
 import { pipelineTitle } from "../kanban/PipelineSection";
 import { PipelineBlock } from "../pipelines/PipelineBlock";
 import { pipelineEnded, pipelineNeedsYou } from "../pipelines/pipelineBlockModel";
@@ -31,11 +32,13 @@ const QUIET = "bg-quiet shadow-none ring-1 ring-inset ring-border";
 
 const NO_FLOWS: ReadonlyMap<string, Flow> = new Map();
 
-export function MobilePipelineCard({ pipeline, now, flowsById = NO_FLOWS, onOpen, label, quiet = false, dataAttributes }: {
+export function MobilePipelineCard({ pipeline, now, flowsById = NO_FLOWS, working, onOpen, label, quiet = false, dataAttributes }: {
   pipeline: Pipeline;
   /** Epoch seconds; the dashboard's ticking clock keeps the ages honest. */
   now: number;
   flowsById?: ReadonlyMap<string, Flow>;
+  /** The stage conversations working right now: a settled stage that works again says so (#1744). */
+  working?: WorkingConversations;
   /** Absent, the card is a statement rather than a button that does nothing. */
   onOpen?: (pipeline: Pipeline) => void;
   /** The button's accessible name. */
@@ -45,7 +48,7 @@ export function MobilePipelineCard({ pipeline, now, flowsById = NO_FLOWS, onOpen
   dataAttributes?: Record<string, string | undefined>;
 }) {
   const { t } = useLocale();
-  const summary = useMemo(() => summarizePipeline(pipeline, flowsById), [pipeline, flowsById]);
+  const summary = useMemo(() => summarizePipeline(pipeline, flowsById, working), [pipeline, flowsById, working]);
   const needs = pipelineNeedsYou(pipeline);
   const Tag = onOpen ? "button" : "div";
   return (

@@ -3409,6 +3409,22 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     /* #774: was `z.string().min(1)` while the route admitted a fixed set. */
     action: z.enum(PIPELINE_ACTIONS).describe("resolve-decision: the pipeline creator answers a settled needs_decision question, reserving a fresh attempt of the same stage. Requires answer, expectedStageId, expectedAttempt and expectedRevision from get_pipeline. Reuse clientRequestId only for the identical answer. continue-review (#1938): the creator or operator resumes a needs_review pipeline, whose spent review budget left an unreviewed head, by adding addRounds review rounds; the review stage then runs on the current head. Requires addRounds and expectedRevision from get_pipeline. accept-head (#2187): the creator or operator takes that unreviewed head as it is, and the lane follows the review stage's pass edge or completes; refused outside needs_review. Requires expectedRevision from get_pipeline. retry-merge (#2187): a completed lane whose automatic merge stopped (merge.state blocked or cancelled) goes back into its repository's merge queue; refused while the project's merge setting is off. preview-legacy-review: read-only; answers how a legacy review-loop stage would convert into a reviewer run stage plus one fix stage, or every reason it cannot, with a recommended finite reviewLimit. convert-legacy-review: the creator or operator applies that conversion explicitly; requires expectedRevision, and stageId, reviewLimit and implementerStageId when the preview asks for them; reuse clientRequestId only to replay it. revert-legacy-review: restores the original definition while nothing has run under the conversion; requires stageId and expectedRevision."),
     stageId: z.string().min(1).optional().describe("The stage a graph edit, a legacy-review conversion or a retry-stage names. retry-stage: the stage the pipeline waits on, retried whatever ended its attempt; without launchId it is sent as expectedStageId with that stage's current attempt as expectedAttempt, so a stage or attempt that moved on is refused with STAGE_CHANGED."),
+    stage: pipelineStageSchema.optional().describe("add-stage: the complete stage definition, with its object fields and null edges preserved."),
+    index: z.number().int().optional().describe("add-stage: insertion position in the displayed stage order."),
+    stageIds: z.array(z.string()).optional().describe("reorder-stage: stage ids in the new displayed order."),
+    toIndex: z.number().int().optional().describe("reorder-stage: destination index."),
+    expectedStageDigest: z.string().regex(/^[0-9a-f]{64}$/).optional().describe("Graph edit guard from get_pipeline: the stage digest for override-stage and set-edge, or the graph digest for add-stage, remove-stage and reorder-stage."),
+    edge: z.enum(["pass", "fail"]).optional().describe("set-edge: which successor to change."),
+    to: z.string().nullable().optional().describe("set-edge: successor stage id, or null to clear the edge."),
+    maxRounds: z.number().int().min(1).max(MAX_FAIL_EDGE_ROUNDS).optional().describe("set-edge fail edge: review budget."),
+    onExhausted: z.enum(PIPELINE_FAIL_EDGE_EXHAUSTIONS).optional().describe("set-edge fail edge: action when its review budget is spent."),
+    role: pipelineStageSchema.shape.role.nullable().describe("override-stage: role reference, or null to clear it."),
+    engine: pipelineStageSchema.shape.engine.describe("override-stage: runtime engine."),
+    model: pipelineStageSchema.shape.model.describe("override-stage: runtime model, or null to inherit."),
+    effort: pipelineStageSchema.shape.effort.describe("override-stage: reasoning effort, or null to inherit."),
+    access: pipelineStageSchema.shape.access.describe("override-stage: repository mutation policy."),
+    account: pipelineStageSchema.shape.account.describe("override-stage: account pin, or null to clear it."),
+    "prompt": z.string().optional().describe("override-stage: replacement prompt."),
     launchId: z.string().min(1).optional().describe("retry-stage only, optional, and only for an attempt whose launch failed: the launchId get_pipeline with stageId answers for it, sent with stageId. The engine then retries only a failed or conflicted launch receipt, so omit it for an agent that started and then failed or parked. A launch that is no longer the current attempt's is refused."),
     answer: z.string().min(1).max(12_000).optional(),
     addRounds: z.number().int().min(1).max(MAX_FAIL_EDGE_ROUNDS).optional().describe("continue-review only: review rounds to add to the spent fail edge. Each fail but the last loops to the fix stage; the last hands its findings to one fix, then parks in needs_review again if that fix writes a new head."),
@@ -3433,8 +3449,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("pass when the stage contract is complete, fail for a retryable stage failure, needs_decision when operator judgment is required."),
     findings: z.array(z.object({
       severity: z.enum(STAGE_FINDING_SEVERITIES).describe("P0 highest, P3 lowest. Findings are ranked by it."),
-      text: z.string().min(1).max(MAX_STAGE_FINDING_CHARS).describe(
-        `What is wrong, in plain words. No SHAs, paths or links from memory: the server reads provenance itself. A finding is recorded in its rendered form "P1 — text", and the ${MAX_STAGE_FINDING_CHARS}-character bound is on that form, so a text within five characters of it keeps its rank and loses that tail.`,
+      text: z.string().min(1).max(MAX_STAGE_FINDING_CHARS - 5).describe(
+        `What is wrong, in plain words. No SHAs, paths or links from memory: the server reads provenance itself. A finding is recorded in its rendered form "P1 — text", so text is limited to ${MAX_STAGE_FINDING_CHARS - 5} characters to preserve it in the ${MAX_STAGE_FINDING_CHARS}-character record.`,
       ),
     })).max(MAX_STAGE_REPORT_FINDINGS).optional()
       .describe("Unresolved work, ranked. Empty or omitted for pass, which cannot carry findings."),

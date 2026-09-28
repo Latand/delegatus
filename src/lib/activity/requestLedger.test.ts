@@ -2,8 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { NextRequest } from "next/server";
 
 import type { RegistryFile } from "@/lib/agent/registry";
+import { mintSession } from "@/lib/team/sessions";
+import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
 
 import { LEDGER_RETENTION_DAYS, readRequests, recordOperatorRequest, type RequestLedgerDependencies } from "./requestLedger";
 
@@ -40,6 +43,28 @@ afterEach(() => {
 });
 
 describe("recording operator requests", () => {
+  test("a team request records the signed-in member; an unowned request stays unknown", () => {
+    const previous = process.env.LLV_STATE_DIR;
+    process.env.LLV_STATE_DIR = path.join(root, "state");
+    try {
+      const store = teamStore();
+      const members = ["m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "m_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"];
+      for (const [index, id] of members.entries()) store.insertMember({ id, name: `Member ${index}`, role: index === 0 ? "owner" : "member",
+        status: "active", color: "teal", telegram: null, createdAt: new Date().toISOString(), createdBy: "claim", revokedAt: null });
+      const requests = members.map((id) => {
+        const session = mintSession(store, id, "claim", { surface: "desktop", browser: "chrome" });
+        return new NextRequest("http://localhost/api/tasks", { headers: { cookie: `llv_member=${session.value}`, "user-agent": DESKTOP } });
+      });
+      requests.push(new NextRequest("http://localhost/api/tasks", { headers: { "user-agent": DESKTOP } }));
+      for (const [index, req] of requests.entries()) recordOperatorRequest(req, { kind: "task", project: "harbor", idempotencyKey: `task-${index}` }, deps());
+      expect(readRequests(NOW, NOW, { dir: () => path.join(root, "activity") }).rows.map((row) => row.author)).toEqual([...members, null]);
+    } finally {
+      resetTeamStoreForTests();
+      if (previous === undefined) delete process.env.LLV_STATE_DIR;
+      else process.env.LLV_STATE_DIR = previous;
+    }
+  });
+
   test("a row is appended and read back, and a retry of the same request is one anchor", () => {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       recordOperatorRequest(request(DESKTOP), { kind: "message", idempotencyKey: "task-send:fanout-0001", project: "harbor" }, deps());
@@ -60,7 +85,7 @@ describe("recording operator requests", () => {
     expect(readRequests(NOW - DAY, NOW + DAY, { dir: () => path.join(root, "activity") }).rows).toHaveLength(2);
   });
 
-  test("a row carries exactly the six allowed keys and nothing that names the target", () => {
+  test("a row carries only the seven allowed fields and no target identity", () => {
     recordOperatorRequest(request(DESKTOP), {
       kind: "answer",
       idempotencyKey: "question:toolu_secret_id",
@@ -72,8 +97,8 @@ describe("recording operator requests", () => {
     expect(file).toBe("requests-2026-09-21.jsonl");
     const text = fs.readFileSync(path.join(root, "activity", file), "utf8");
     const row = JSON.parse(text.trim()) as Record<string, unknown>;
-    expect(Object.keys(row).sort()).toEqual(["at", "key", "kind", "project", "surface", "v"]);
-    expect(row).toMatchObject({ v: 1, at: NOW, kind: "answer", surface: "desktop", project: "harbor" });
+    expect(Object.keys(row).sort()).toEqual(["at", "author", "key", "kind", "project", "surface", "v"]);
+    expect(row).toMatchObject({ v: 2, at: NOW, kind: "answer", surface: "desktop", project: "harbor", author: "operator" });
     expect(row.key).toMatch(/^[0-9a-f]{64}$/);
     for (const leaked of ["toolu_secret_id", "conversation_", "/home/", "session.jsonl"]) expect(text).not.toContain(leaked);
     expect(fs.statSync(path.join(root, "activity", file)).mode & 0o777).toBe(0o600);
