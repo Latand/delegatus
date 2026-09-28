@@ -123,12 +123,23 @@ const server = http.createServer(async (request, response) => {
     const query = new URL(request.url ?? "/", "http://localhost").searchParams;
     const body = () => JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as Record<string, unknown>;
     if (path === "/test/cpu") { const usage = process.cpuUsage(); json(response, { ms: (usage.user + usage.system) / 1000 }); return; }
-    if (path === "/test/heap") { Bun.gc(true); const memory = process.memoryUsage(); json(response, { heapUsed: memory.heapUsed, rss: memory.rss }); return; }
+    if (path === "/test/heap") {
+      Bun.gc(true);
+      const memory = process.memoryUsage();
+      json(response, { heapUsed: memory.heapUsed, rss: memory.rss });
+      return;
+    }
     if (path === "/test/clock") { clockOffset = Number(query.get("offset") ?? 0); json(response, { clockOffset }); return; }
     if (path === "/test/capture") { capturing = query.get("on") !== "0"; captured = []; json(response, { capturing }); return; }
     if (path === "/test/measure-memory") { capturing = false; captured = []; captureWire = false; wire.length = 0; measureMemory = true; json(response, { ok: true }); return; }
     if (path === "/test/captured") { json(response, captured); if (query.get("reset") === "1") captured = []; return; }
     if (path === "/test/tasks") { json(response, loadTasks()); return; }
+    if (path === "/test/import-tasks") {
+      const input = body() as { tasks: ReturnType<typeof loadTasks> };
+      mutateTasks(() => ({ tasks: input.tasks, result: null }));
+      json(response, { count: input.tasks.length });
+      return;
+    }
     if (path === "/test/scan") { const scan = await currentFileScan({ fresh: true }); json(response, { files: scan.snapshot.files.map((file) => ({ project: file.project, engine: file.engine, conversationId: file.conversationId, proc: file.proc })), generation: scan.generation }); return; }
     if (path === "/test/agent-state") {
       const state = query.get("state");

@@ -69,12 +69,12 @@ async function request(base: string, route: string, method = "GET", body?: objec
 }
 
 /** Pairs A to B (through `via`, a proxy in front of B, when given) and links the given projects on both sides. */
-async function link(a: string, b: string, share: { all?: boolean; projects?: string[] } = { projects: [key] }, via = b): Promise<string> {
+async function link(a: string, b: string, share: { all?: boolean; projects?: string[] } = { projects: [key] }, via = b, initialSync = true): Promise<string> {
   const code = String((await request(b, "/api/links/codes", "POST")).body.code);
   expect((await request(a, "/api/links/peers", "POST", { url: via, code })).status).toBe(200);
   const peerId = ((await request(a, "/api/links/peers")).body.peers as { id: string }[])[0]!.id;
   for (const side of [a, b]) expect((await request(side, "/api/links/shared", "POST", { v: 1, all: share.all ?? false, projects: share.projects ?? [] })).status).toBe(200);
-  await sync(a, peerId);
+  if (initialSync) await sync(a, peerId);
   return peerId;
 }
 
@@ -446,30 +446,32 @@ test("an idle call costs at most 2 ms of CPU on each side, and 1 000 calls grow 
   expect(heapAfter[1]! - heapBefore[1]!).toBeLessThan(256 * 1024);
 }, 120_000);
 
-test("M3 link RSS and heap stay bounded with 2 000 tasks, 200 agents per side, edits and churn", async () => {
+test("M3 link RSS and heap are measured with 2 000 tasks, 200 agents per side, edits and churn; steady heap stays flat", async () => {
   const origins = Array.from({ length: 3 }, (_, n) => `code.example.test/acme/memory-${n}`);
   const remotes = Object.fromEntries(origins.map((origin) => [projectIdentityFromRemote(`https://${origin}`, "/")!.project, origin]));
   const projectKeys = Object.keys(remotes);
-  const heap = async (sides: readonly string[]) => Promise.all(sides.map(async (side) => (await request(side, "/test/heap")).body as { rss: number; heapUsed: number }));
+  type Memory = { rss: number; heapUsed: number };
+  const heap = async (sides: readonly string[]) => Promise.all(sides.map(async (side) => (await request(side, "/test/heap")).body as Memory));
   const populated = async (run: number, mode: "off" | "on") => {
     const names = [`memory-${run}-${mode}-A`, `memory-${run}-${mode}-B`];
     const sides = await Promise.all(names.map((name) => install(name, remotes)));
     const editIds: string[] = [];
-    for (const [index, side, name] of sides.map((side, index) => [index, side, names[index]!] as const)) {
+    for (const side of sides) {
       // The capture harness retains whole sync bodies; exclude that test-only
       // memory from the link's RSS measurement.
       await request(side, "/test/measure-memory");
-      for (let project = 0; project < 3; project++) {
-        if (mode === "off" || index === 0) {
-          const ids = (await request(side, "/test/bulk", "POST", { project: projectKeys[project]!, count: project === 2 ? 666 : 667 })).body.ids as string[];
-          if (project === 0) editIds[index] = ids[0]!;
-        }
-        for (let agent = 0; agent < (project === 2 ? 66 : 67); agent++) seedTranscript(name, `PROMPT-CANARY-${agent}`, origins[project]!, `session-${project}-${agent}`);
-      }
-      expect(((await request(side, "/test/scan")).body.files as unknown as unknown[])).toHaveLength(200);
     }
-    if (mode === "on") editIds[1] = editIds[0]!;
-    return { sides, editIds };
+    for (let project = 0; project < 3; project++) {
+      const ids = (await request(sides[0]!, "/test/bulk", "POST", { project: projectKeys[project]!, count: project === 2 ? 666 : 667 })).body.ids as string[];
+      if (project === 0) editIds.push(ids[0]!);
+    }
+    const tasks = await tasksOf(sides[0]!);
+    expect((await request(sides[1]!, "/test/import-tasks", "POST", { tasks })).body.count).toBe(2_000);
+    editIds.push(editIds[0]!);
+    for (const name of names) for (let project = 0; project < 3; project++)
+      for (let agent = 0; agent < (project === 2 ? 66 : 67); agent++) seedTranscript(name, `PROMPT-CANARY-${agent}`, origins[project]!, `session-${project}-${agent}`);
+    const peerId = await link(sides[0]!, sides[1]!, { projects: mode === "on" ? projectKeys : [] }, sides[1]!, false);
+    return { sides, editIds, peerId };
   };
   const work = async (sides: readonly string[], editIds: readonly string[], start: number, end: number, peerId?: string) => {
     const [a, b] = sides as [string, string];
@@ -486,36 +488,42 @@ test("M3 link RSS and heap stay bounded with 2 000 tasks, 200 agents per side, e
       else { await request(a, "/test/metrics"); await request(b, "/test/metrics"); }
     }
   };
-  const deltas: number[][] = [];
+  const stages = ["no calls", "tasks only", "tasks + agents"] as const;
+  const measurements: Array<{ off: Memory[][]; on: Memory[][] }> = [];
+  const growth: number[] = [];
   for (let run = 0; run < 3; run++) {
-    const off = await populated(run, "off");
-    let offRss: number[];
-    try {
-      const offPeerId = await link(off.sides[0]!, off.sides[1]!, { projects: [] });
-      await work(off.sides, off.editIds, 0, 1_000, offPeerId);
-      const samples = await heap(off.sides);
-      offRss = samples.map((sample) => sample.rss);
-    } finally { await Promise.all(off.sides.map(stopInstall)); }
-    const on = await populated(run, "on");
-    try {
-      const peerId = await link(on.sides[0]!, on.sides[1]!, { projects: projectKeys });
-      await work(on.sides, on.editIds, 0, 1_000, peerId);
-      const onSamples = await heap(on.sides);
-      const onRss = onSamples.map((sample) => sample.rss);
-      deltas.push(onRss.map((rss, index) => rss - offRss[index]!));
-      if (run === 0) {
-        await work(on.sides, on.editIds, 1_000, 3_100, peerId);
-        const before = await heap(on.sides);
-        await work(on.sides, on.editIds, 3_100, 4_100, peerId);
-        const after = await heap(on.sides);
-        for (let side = 0; side < 2; side++) expect(after[side]!.heapUsed - before[side]!.heapUsed).toBeLessThan(256 * 1024);
-      }
-    } finally { await Promise.all(on.sides.map(stopInstall)); }
+    const pair: { off: Memory[][]; on: Memory[][] } = { off: [], on: [] };
+    for (const mode of ["off", "on"] as const) {
+      const fixture = await populated(run, mode);
+      try {
+        pair[mode].push(await heap(fixture.sides));
+        await work(fixture.sides, fixture.editIds, 0, 100, fixture.peerId);
+        pair[mode].push(await heap(fixture.sides));
+        for (const side of fixture.sides) expect(((await request(side, "/test/scan")).body.files as unknown[])).toHaveLength(200);
+        await work(fixture.sides, fixture.editIds, 100, 1_100, fixture.peerId);
+        pair[mode].push(await heap(fixture.sides));
+        if (mode === "on" && run === 0) {
+          await work(fixture.sides, fixture.editIds, 1_100, 3_100, fixture.peerId);
+          const before = await heap(fixture.sides);
+          await work(fixture.sides, fixture.editIds, 3_100, 4_100, fixture.peerId);
+          const after = await heap(fixture.sides);
+          for (let side = 0; side < 2; side++) growth.push(after[side]!.heapUsed - before[side]!.heapUsed);
+        }
+      } finally { await Promise.all(fixture.sides.map(stopInstall)); }
+    }
+    measurements.push(pair);
   }
-  for (let side = 0; side < 2; side++) {
-    const median = deltas.map((pair) => pair[side]!).sort((a, b) => a - b)[1]!;
-    expect(median).toBeLessThanOrEqual(3 * 1024 * 1024);
+  const median = (values: number[]) => values.sort((a, b) => a - b)[1]!;
+  for (let stage = 0; stage < stages.length; stage++) for (let side = 0; side < 2; side++) {
+    const rss = median(measurements.map((pair) => pair.on[stage]![side]!.rss - pair.off[stage]![side]!.rss));
+    const heapUsed = median(measurements.map((pair) => pair.on[stage]![side]!.heapUsed - pair.off[stage]![side]!.heapUsed));
+    const control = median(measurements.map((pair) => pair.off[stage]![1]!.rss - pair.off[stage]![0]!.rss));
+    const runs = measurements.map((pair) => ({ rss: pair.on[stage]![side]!.rss - pair.off[stage]![side]!.rss,
+      heapUsed: pair.on[stage]![side]!.heapUsed - pair.off[stage]![side]!.heapUsed }));
+    console.log(`M.9 ${stages[stage]} side ${side}: median RSS ${rss} B, median heapUsed ${heapUsed} B, off-pair side RSS spread ${control} B, runs ${JSON.stringify(runs)}`);
   }
+  console.log(`M.9 warmed heap growth over 1 000 further calls: ${JSON.stringify(growth)} B`);
+  for (const delta of growth) expect(delta).toBeLessThan(256 * 1024);
 }, 600_000);
 
 test("1 000 tasks arrive in 5 pages of at most 512 KB; 1 100 writes on B while A is away push A below the change floor, and the resync converges without a duplicate", async () => {

@@ -167,7 +167,6 @@ import { overlaySessionTitles } from "@/lib/session/titleProjection";
 import { recordReplySuggestions } from "@/lib/suggestions/store";
 import { ReplySuggestionValidationError } from "@/lib/suggestions/types";
 import { linkedContext, withOwnership } from "@/lib/links/linked";
-import { remoteAgents } from "@/lib/links/agentFeed";
 import { applyAssignmentPatches, createTask, patchTask, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskSeatHolding } from "@/lib/tasks/seatHolding";
 import { recordAuthors, type RecordAuthor } from "@/lib/team";
@@ -4374,12 +4373,15 @@ function carriedPipelines(ids: readonly string[], dependencies: ViewerMcpDomainD
   return (dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? []).filter((pipeline) => wanted.has(pipeline.id));
 }
 
-async function readRemoteAgentRows(project: string): Promise<{ rows: ReturnType<typeof remoteAgents>; unavailable: boolean }> {
+type RemoteAgentRows = ReturnType<typeof import("@/lib/links/agentFeed").remoteAgents>;
+async function readRemoteAgentRows(project: string): Promise<{ rows: RemoteAgentRows; unavailable: boolean }> {
+  if (!linkedContext().all.has(project)) return { rows: [], unavailable: false };
+  const { remoteAgents } = await import("@/lib/links/agentFeed");
   const local = remoteAgents(project);
-  if (local.length || !linkedContext().all.has(project)) return { rows: local, unavailable: false };
+  if (local.length) return { rows: local, unavailable: false };
   try {
     const { response, parsed } = await requestViewerControl(`/api/links/agents?project=${encodeURIComponent(project)}`, { method: "GET" });
-    if (response.ok && objectRecord(parsed) && Array.isArray(parsed.agents)) return { rows: parsed.agents as ReturnType<typeof remoteAgents>, unavailable: false };
+    if (response.ok && objectRecord(parsed) && Array.isArray(parsed.agents)) return { rows: parsed.agents as RemoteAgentRows, unavailable: false };
   } catch { /* The task read still works while the Viewer control endpoint is down. */ }
   return { rows: [], unavailable: true };
 }

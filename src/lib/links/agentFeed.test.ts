@@ -100,6 +100,10 @@ test("200 summaries reset in four 50-row pages, and the receiver swaps only on t
     else { expect(count).toBe(4); break; }
   }
   expect(receivedAgentRows(id)).toHaveLength(200);
+  // A lost final response starts a fresh reset after its page array is freed.
+  const retriedFinal = feed.page(null, linked, 150);
+  expect(retriedFinal.reset).toBe(true);
+  expect(retriedFinal.rows).toHaveLength(50);
   let current = snapshot;
   const changing = new AgentFeed("delta-two-pages", () => current, () => []);
   const original = changing.page(null, linked);

@@ -9,7 +9,7 @@ import { linkedContext } from "./linked";
 
 export type AgentRow = { k: string; p: string; t: string; e: string; m: string; st: "working" | "waiting" | "done"; task?: string; at: number; pl?: { id: string; state: string; stage: string; stageState: string } };
 type Change = AgentRow | { k: string; gone: true };
-type Versioned = { row: AgentRow; version: number; encoded: string };
+type Versioned = { row: AgentRow; version: number };
 type Marker = { k: string; version: number; at: number };
 export type Cursor = { epoch: string; version: number };
 type Part = { after: Cursor | null; rows?: Change[]; reset?: true; more?: true; cursor: Cursor };
@@ -102,8 +102,8 @@ export class AgentFeed {
       this.markers.push({ k: key, version: ++this.version, at: Date.now() });
     }
     for (const [key, row] of wanted) {
-      const encoded = JSON.stringify(row);
-      if (this.rows.get(key)?.encoded !== encoded) this.rows.set(key, { row, version: ++this.version, encoded });
+      const previous = this.rows.get(key);
+      if (!previous || JSON.stringify(previous.row) !== JSON.stringify(row)) this.rows.set(key, { row, version: ++this.version });
     }
     this.pruneMarkers();
   }
@@ -129,6 +129,7 @@ export class AgentFeed {
       const start = changedSnapshot ? 0 : offset;
       const rows = snapshot.rows.slice(start, start + 50);
       const more = start + rows.length < snapshot.rows.length;
+      if (!more) this.resetSnapshot = null;
       return { after, rows, ...(start === 0 ? { reset: true as const } : {}), ...(more ? { more: true as const } : {}), cursor: snapshot.cursor };
     }
     this.resetSnapshot = null;
