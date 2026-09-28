@@ -14,7 +14,7 @@ import { LOOPBACK_PROBE_HOSTS } from "@/runtime-host/deploymentProxy";
 export type CheckCode = "ok" | "needs-access-key" | "needs-remote-entry" | "http-public" | "open-to-internet" | "host-rewritten" | "tls-failure" | "unverified";
 export type SelfCheck = { code: CheckCode; at: string };
 export type LinkSelf = { v: 1; installId: string; label: string; publicUrl: string | null; check: SelfCheck | null; revision?: string; saveRevision?: string };
-export type SaveRefusal = "needs-access-key" | "needs-remote-entry" | "http-public" | "invalid-address";
+export type SaveRefusal = "needs-access-key" | "needs-remote-entry" | "http-public" | "invalid-address" | "save-conflict";
 
 export const selfFile = () => statePath("links/self.json");
 
@@ -125,10 +125,11 @@ export async function saveAddress(input: string, label?: string): Promise<{ self
   // Disable reads self.json synchronously before lifting the key. Once the
   // key is checked here, the write below runs without yielding to Disable.
   if (url && !isLoopbackAddress(url.hostname) && !process.env.LLV_TOKEN) return { refusal: "needs-access-key" };
-  // A later Save wins even when its probe finishes first. Check writes keep
-  // saveRevision, so a Check finishing during this probe does not cancel Save.
+  // Check writes keep saveRevision, so a Check finishing during this probe
+  // does not cancel Save. A concurrent Save must be reported as a conflict:
+  // returning its record as this request's success would silently lose edits.
   const current = readSelf();
-  if (current?.saveRevision !== old?.saveRevision) return { self: current ?? undefined };
+  if (current?.saveRevision !== old?.saveRevision) return { refusal: "save-conflict" };
   writeSelf(self);
   process.env.LLV_PUBLIC_HOST = url?.hostname ?? "";
   return { self };

@@ -51,6 +51,7 @@ export const en = {
   "links.state.unverified": "This server could not reach its own address, so the proxy could not be checked here.",
   "links.state.http-public": "A public address needs HTTPS.",
   "links.state.invalid-address": "Enter an address with no path, query or credentials.",
+  "links.state.save-conflict": "Another save finished while this address was being checked. Try again to apply your edits.",
   "links.state.key-failed": "Could not turn on the access key.",
   "links.state.unavailable": "The server could not answer. Try again.",
 

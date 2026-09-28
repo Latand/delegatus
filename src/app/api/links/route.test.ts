@@ -118,11 +118,64 @@ test("an older Save cannot overwrite a newer Save that clears the address", asyn
     const newer = await POST(request({ action: "save", publicUrl: "", label: "newer" }));
     expect((await newer.json()).self).toMatchObject({ publicUrl: null, label: "newer", check: null });
     release();
-    expect((await older).status).toBe(200);
+    const olderReply = await older;
+    expect(olderReply.status).toBe(409);
+    expect((await olderReply.json()).error).toBe("save-conflict");
     const current = await GET(new NextRequest("http://localhost/api/links", { headers: { host: "localhost" } }));
     expect((await current.json()).self).toMatchObject({ publicUrl: null, label: "newer", check: null });
     expect(process.env.LLV_PUBLIC_HOST).toBe("");
   } finally { release(); await new Promise<void>((resolve) => server.close(() => resolve())); }
+}, 10_000);
+
+test("a newer Save reports a conflict when an older Save finishes first", async () => {
+  process.env.LLV_TOKEN = "test-access-key";
+  const heldServer = async () => {
+    let arrived!: () => void;
+    let release!: () => void;
+    const arrival = new Promise<void>((resolve) => { arrived = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let first = true;
+    const server = http.createServer((incoming, response) => {
+      const answer = () => {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ host: incoming.headers.host, vouched: false }));
+      };
+      if (first) { first = false; arrived(); void gate.then(answer); }
+      else answer();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const bound = server.address();
+    if (!bound || typeof bound === "string") throw new Error("missing test port");
+    return { server, port: bound.port, arrival, release };
+  };
+  const a = await heldServer();
+  const b = await heldServer();
+  try {
+    const olderUrl = `http://127.0.0.1:${a.port}`;
+    const newerUrl = `http://127.0.0.1:${b.port}`;
+    const older = POST(request({ action: "save", publicUrl: olderUrl, label: "older" }));
+    await a.arrival;
+    const newer = POST(request({ action: "save", publicUrl: newerUrl, label: "newer" }));
+    await b.arrival;
+    a.release();
+    const olderReply = await older;
+    expect(olderReply.status).toBe(200);
+    expect((await olderReply.json()).self).toMatchObject({ publicUrl: olderUrl, label: "older" });
+    b.release();
+    const newerReply = await newer;
+    expect(newerReply.status).toBe(409);
+    expect((await newerReply.json()).error).toBe("save-conflict");
+    const current = await GET(new NextRequest("http://localhost/api/links", { headers: { host: "localhost" } }));
+    expect((await current.json()).self).toMatchObject({ publicUrl: olderUrl, label: "older" });
+    expect(process.env.LLV_PUBLIC_HOST).toBe("127.0.0.1");
+    const retried = await POST(request({ action: "save", publicUrl: newerUrl, label: "newer" }));
+    expect(retried.status).toBe(200);
+    expect((await retried.json()).self).toMatchObject({ publicUrl: newerUrl, label: "newer" });
+  } finally {
+    a.release(); b.release();
+    await Promise.all([a.server, b.server].map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+  }
 }, 10_000);
 
 test("Save and Check finish when the self-check response closes after its headers", async () => {

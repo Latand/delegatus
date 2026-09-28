@@ -50,6 +50,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "links.state.unverified": "Сервер не зміг відкрити власну адресу, тому перевірити проксі тут не вдалося.",
   "links.state.http-public": "Для публічної адреси потрібен HTTPS.",
   "links.state.invalid-address": "Вкажіть адресу без шляху, параметрів чи облікових даних.",
+  "links.state.save-conflict": "Інше збереження завершилося під час перевірки адреси. Повторіть спробу, щоб застосувати свої зміни.",
   "links.state.key-failed": "Не вдалося увімкнути ключ доступу.",
   "links.state.unavailable": "Сервер не відповідає. Спробуйте ще раз.",
 

@@ -56,7 +56,7 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
     finally { setBusy(false); }
   };
   const state = error ?? value?.state;
-  const shown = state && ["needs-access-key", "needs-remote-entry", "http-public", "open-to-internet", "host-rewritten", "tls-failure", "unverified", "ok", "invalid-address", "key-failed", "unavailable"].includes(state) ? state : null;
+  const shown = state && ["needs-access-key", "needs-remote-entry", "http-public", "open-to-internet", "host-rewritten", "tls-failure", "unverified", "ok", "invalid-address", "save-conflict", "key-failed", "unavailable"].includes(state) ? state : null;
   const browserOrigin = typeof window !== "undefined" && !/^localhost$|^127\.|^\[::1\]$/.test(window.location.hostname) ? window.location.origin : null;
   return (
     <div className={`fixed inset-0 ${Z.modal} flex items-center justify-center bg-black/40 p-0 sm:p-8`} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
