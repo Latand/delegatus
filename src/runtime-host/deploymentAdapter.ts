@@ -33,7 +33,7 @@ import { runtimeHostSuccessorName } from "./hostSuccessor";
 import { parseRuntimeHostHandoffEvidence } from "./runtimeHostStartup";
 
 type CommandRunner = (action: string, input: Record<string, unknown>, signal?: AbortSignal) => Promise<unknown>;
-type AdapterAction = "resolve-revision" | "build-candidate" | "start-candidate" | "current-release" | "current-mcp-runtime" | "reconcile-mcp-runtime" | "verify-candidate" | "promote" | "verify-promoted" | "rollback" | "retire" | "retain-only" | "stage-host-successor" | "verify-host-successor" | "complete-host-handoff";
+type AdapterAction = "resolve-revision" | "build-candidate" | "start-candidate" | "current-release" | "current-mcp-runtime" | "reconcile-mcp-runtime" | "verify-candidate" | "promote" | "verify-promoted" | "candidate-log" | "rollback" | "retire" | "retain-only" | "stage-host-successor" | "verify-host-successor" | "complete-host-handoff";
 
 const ACTION_TIMEOUTS: Record<AdapterAction, number | null> = {
   "resolve-revision": 110_000,
@@ -53,6 +53,7 @@ const ACTION_TIMEOUTS: Record<AdapterAction, number | null> = {
   // Healthy startup has taken 176s at history scale. Allow five minutes for
   // serving and MCP readiness, then join the adapter and enter rollback.
   "verify-promoted": 5 * 60_000,
+  "candidate-log": 10_000,
   rollback: 90_000,
   retire: 60_000,
   "retain-only": 60_000,
@@ -649,6 +650,14 @@ export class HostCommandViewerDeploymentAdapter implements ViewerDeploymentAdapt
 
   async verifyPromoted(candidate: ViewerReleaseIdentity, signal?: AbortSignal): Promise<ViewerHealthEvidence> {
     return evidence(await this.run("verify-promoted", { candidate }, signal));
+  }
+
+  async candidateLog(candidate: ViewerReleaseIdentity): Promise<string[]> {
+    const result = await this.run("candidate-log", { candidate });
+    if (!Array.isArray(result) || result.some((line) => typeof line !== "string")) {
+      throw new Error("candidate log response is invalid");
+    }
+    return candidateLogExcerpt(result.join("\n"), { maxLines: 200, maxChars: 500 });
   }
 
   async rollback(

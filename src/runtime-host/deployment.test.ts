@@ -76,6 +76,7 @@ class FakeDeploymentAdapter implements ViewerDeploymentAdapter {
   verifyHostFailure: Error | null = null;
   promoteFailure: Error | null = null;
   hotStateHandOver: string | null = null;
+  candidateOutput = ["startup failed before hot-state activation"];
   servingProgress(): string | null { return "waiting for serving readiness; HTTP rejection pending"; }
   calls: string[] = [];
 
@@ -175,6 +176,10 @@ class FakeDeploymentAdapter implements ViewerDeploymentAdapter {
     };
   }
   async verifyPromoted(candidate: ViewerReleaseIdentity, _signal?: AbortSignal): Promise<ViewerHealthEvidence> { this.calls.push(`verify-promoted:${candidate.container}`); return this.promotedHealth; }
+  async candidateLog(candidate: ViewerReleaseIdentity): Promise<string[]> {
+    this.calls.push(`candidate-log:${candidate.container}`);
+    return this.candidateOutput;
+  }
   async rollback(previous: ViewerReleaseIdentity, candidate: ViewerReleaseIdentity): Promise<ViewerMcpRuntimePublicationEvidence> {
     this.calls.push(`rollback:${candidate.container}`);
     this.current = previous;
@@ -452,6 +457,9 @@ test("a post-promotion failure restores the previous healthy release", async () 
   expect(adapter.calls.findIndex((call) => call.startsWith("promote:"))).toBeLessThan(adapter.calls.findIndex((call) => call.startsWith("rollback:")));
   expect(adapter.calls).toContain(`retire:${status?.candidate?.container}`);
   expect(status?.health).toHaveLength(2);
+  expect(status?.candidateLog).toEqual(adapter.candidateOutput);
+  expect(adapter.calls.findIndex((call) => call.startsWith("candidate-log:")))
+    .toBeLessThan(adapter.calls.findIndex((call) => call.startsWith("rollback:")));
   store.close();
 });
 
@@ -614,7 +622,10 @@ test("issue 1216: a promote that times out never reaches runtime-host successor 
     phase: "rolled-back",
     terminal: true,
     error: "deployment adapter promote timed out while waiting for hot-state activation",
+    candidateLog: ["startup failed before hot-state activation"],
   });
+  expect(adapter.calls.findIndex((call) => call.startsWith("candidate-log:")))
+    .toBeLessThan(adapter.calls.findIndex((call) => call.startsWith("rollback:")));
   /* The runtime host is left on whatever generation it was already running:
      the deployment that carried the promote repair never staged a successor
      that could execute it. */

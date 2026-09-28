@@ -58,6 +58,7 @@ export interface ViewerDeploymentAdapter {
   verifyCandidate(candidate: ViewerReleaseIdentity): Promise<ViewerHealthEvidence>;
   promote(candidate: ViewerReleaseIdentity): Promise<ViewerMcpRuntimePublicationEvidence>;
   verifyPromoted(candidate: ViewerReleaseIdentity, signal?: AbortSignal): Promise<ViewerHealthEvidence>;
+  candidateLog(candidate: ViewerReleaseIdentity): Promise<string[]>;
   rollback(
     previous: ViewerReleaseIdentity,
     candidate: ViewerReleaseIdentity,
@@ -309,6 +310,15 @@ export class ViewerDeploymentCoordinator {
     this.tasks.set(status.deploymentId, task);
   }
 
+  private async recordCandidateLog(status: ViewerDeploymentStatus): Promise<ViewerDeploymentStatus> {
+    if (!status.candidate || status.candidateLog !== undefined || status.candidateLogError !== undefined) return status;
+    let update: Pick<ViewerDeploymentStatus, "candidateLog"> | Pick<ViewerDeploymentStatus, "candidateLogError">;
+    try { update = { candidateLog: await this.adapter.candidateLog(status.candidate) }; }
+    catch (error) { update = { candidateLogError: safeError(error) }; }
+    try { return this.journal.updateViewerDeployment(status.deploymentId, update); }
+    catch { return status; } // A diagnostic write must never prevent rollback.
+  }
+
   private async run(initial: ViewerDeploymentStatus): Promise<void> {
     let status = initial;
     try {
@@ -439,10 +449,11 @@ export class ViewerDeploymentCoordinator {
         }
         if (status.phase === "rolling-back") {
           if (!status.previous || !status.candidate) throw new Error("rollback release identity is missing");
+          status = await this.recordCandidateLog(status);
           const runtime = mcpRuntimeStatus(status);
           if (!runtime.previous) throw new Error("rollback MCP runtime identity is missing");
-          const publication = await this.adapter.rollback(status.previous, status.candidate, runtime.previous);
-          await this.adapter.retire(status.candidate);
+          const publication = await this.adapter.rollback(status.previous!, status.candidate!, runtime.previous);
+          await this.adapter.retire(status.candidate!);
           status = this.journal.updateViewerDeployment(status.deploymentId, {
             phase: "rolled-back",
             terminal: true,
@@ -473,11 +484,12 @@ export class ViewerDeploymentCoordinator {
           const rolling = latest.phase === "rolling-back"
             ? latest
             : this.journal.updateViewerDeployment(latest.deploymentId, { phase: "rolling-back", error: message });
-          const runtime = mcpRuntimeStatus(rolling);
+          const recorded = await this.recordCandidateLog(rolling);
+          const runtime = mcpRuntimeStatus(recorded);
           if (!runtime.previous) throw new Error("rollback MCP runtime identity is missing");
-          const publication = await this.adapter.rollback(rolling.previous!, rolling.candidate!, runtime.previous);
-          await this.adapter.retire(rolling.candidate!);
-          this.journal.updateViewerDeployment(rolling.deploymentId, {
+          const publication = await this.adapter.rollback(recorded.previous!, recorded.candidate!, runtime.previous);
+          await this.adapter.retire(recorded.candidate!);
+          this.journal.updateViewerDeployment(recorded.deploymentId, {
             phase: "rolled-back",
             terminal: true,
             error: message,

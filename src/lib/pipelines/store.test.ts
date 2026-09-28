@@ -7,6 +7,7 @@ import path from "node:path";
 import { archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, pipelineGraphError, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
 import type { Pipeline, PipelineStage } from "./types";
 import { createPipelineWithDelivery, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
+import { stageVerdictFrom } from "./verdict";
 
 const ARCHIVE_CHILD = path.join(import.meta.dir, "archive.sqliteChild.ts");
 
@@ -32,6 +33,38 @@ async function isolatedDelivery(run: (root: string) => Promise<void> | void): Pr
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
+
+test("promoted Viewer loads historical severity-only verdicts before hot-state activation", async () => isolatedDelivery(async (root) => {
+  const pipeline = deliveryFixture("legacy-verdict");
+  pipeline.state = "running";
+  pipeline.runs[0]!.attempts.push({
+    n: 1, state: "failed", effectiveRole: structuredClone(pipeline.stages[0]!.effectiveRole),
+    launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null,
+    flowId: null, startedAt: null, completedAt: null, input: null, activatedBy: null,
+    output: null, verdict: { status: "fail", findings: ["old finding"] }, error: null,
+  });
+  savePipelines([pipeline]);
+  const database = new Database(path.join(root, "state.sqlite"));
+  try {
+    const row = database.query<{ value_json: string }, [string]>(
+      "SELECT value_json FROM state_rows WHERE collection = 'pipelines' AND row_key = ?",
+    ).get(pipeline.id)!;
+    const stored = JSON.parse(row.value_json) as Pipeline;
+    stored.runs[0]!.attempts[0]!.verdict = { status: "fail", findings: ["P1", "P2"] };
+    database.query("UPDATE state_rows SET value_json = ? WHERE collection = 'pipelines' AND row_key = ?")
+      .run(JSON.stringify(stored), pipeline.id);
+  } finally { database.close(); }
+
+  expect(stageVerdictFrom({ status: "fail", findings: ["P1", "P2"] })).toBeNull();
+  const script = `import { initializeHotStateStoresAtStartup } from ${JSON.stringify(path.join(import.meta.dir, "../viewerInstrumentation.ts"))};
+    await initializeHotStateStoresAtStartup();`;
+  const child = Bun.spawn([process.execPath, "-e", script], {
+    env: { ...process.env, LLV_STATE_DIR: root, LLV_STATE_OWNER: "viewer" }, stdout: "pipe", stderr: "pipe",
+  });
+  const stderr = await new Response(child.stderr).text();
+  expect({ exit: await child.exited, stderr }).toEqual({ exit: 0, stderr: "" });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdict?.findings).toEqual(["P1", "P2"]);
+}));
 
 test("delivery ownership survives concurrent processes and original-key replay after restart", async () => isolatedDelivery(async (root) => {
   savePipelines([]);
