@@ -95,6 +95,19 @@ test("a record written before the gate carried evidence still reports what it ha
   ]);
 });
 
+test("rollback report shows the later candidate log captured before retirement", () => {
+  const deployment = status([{
+    checkedAt: "2026-08-28T00:00:33.000Z", endpoint: CANDIDATE,
+    processReady: true, rootStatus: 200, authenticatedStatus: 200,
+    unauthorizedStatus: 403, assets: [], ok: true,
+    containerLog: ["health gate log predates promotion"],
+  }]);
+  deployment.candidateLog = ["startup failed after promotion"];
+  expect(deploymentFailureReport(deployment).slice(-2)).toEqual([
+    "candidate output (last 1 lines):", "  startup failed after promotion",
+  ]);
+});
+
 test("a deployment that failed before any health check says so instead of rendering nothing", () => {
   expect(deploymentFailureReport(status([]))).toEqual([
     `candidate ${"b".repeat(12)} at ${CANDIDATE} (container llv-deploy-candidate)`,

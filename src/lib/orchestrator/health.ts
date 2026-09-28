@@ -15,9 +15,24 @@ import { ROTATION_THRESHOLD_FRACTION, type ContextWindowPolicy } from "./context
  * are separately injectable.
  */
 
-/** Bounded reads and total search depth for provider-reported usage records. */
+/** Bounded reads and total search depth for provider-reported usage records.
+    A row longer than USAGE_SCAN_OVERSIZED_ROW_BYTES is a pasted attachment
+    (one user message with 13 base64 images was a single 4.4 MB row): it is
+    stepped over without being buffered or counted against the search depth,
+    so the usage record just before it is still found. Stepping over costs
+    reads, and those are capped separately. */
 const USAGE_SCAN_CHUNK_BYTES = 256 * 1024;
 const USAGE_SCAN_MAX_BYTES = 4 * 1024 * 1024;
+const USAGE_SCAN_OVERSIZED_ROW_BYTES = 1024 * 1024;
+const USAGE_SCAN_MAX_READ_BYTES = 64 * 1024 * 1024;
+
+/** A run of base64 characters at least this long is an encoded image or
+    document, not text the model reads as text. */
+const ATTACHMENT_RUN_BYTES = 4 * 1024;
+/** What one inline image or document is counted as in the byte estimate: the
+    provider's per-image cost is bounded (about 1,600 tokens for a full-size
+    image), and nothing like its base64 length / 4. */
+export const ATTACHMENT_ESTIMATE_TOKENS = 1_600;
 
 export interface OrchestratorContextReading {
   /** Tokens currently in context, or null when nothing could be read at all. */
@@ -43,6 +58,10 @@ export interface OrchestratorTranscriptFacts {
   compactionCount: number | null;
   /** Provider-reported context tokens from the newest usage record, if any. */
   reportedContextTokens: number | null;
+  /** The byte-derived estimate, read only when no usage was reported: text
+      bytes / 4 plus a fixed cost per base64 attachment. Absent means
+      transcriptBytes / 4. */
+  estimatedContextTokens?: number | null;
 }
 
 /** Bytes and provider usage from the transcript on disk; null facts when the
@@ -59,12 +78,16 @@ export function readOrchestratorTranscriptFacts(
       bytes = null;
     }
   }
+  const reportedContextTokens = path && bytes !== null ? lastReportedContextTokens(path, bytes) : null;
   return {
     transcriptBytes: bytes,
     messageCount: session?.messages ?? null,
     toolCount: session?.tools ?? null,
     compactionCount: session?.compactions ?? null,
-    reportedContextTokens: path && bytes !== null ? lastReportedContextTokens(path, bytes) : null,
+    reportedContextTokens,
+    ...(path && bytes !== null && reportedContextTokens === null
+      ? { estimatedContextTokens: estimatedContextTokens(path, bytes) }
+      : {}),
   };
 }
 
@@ -81,37 +104,46 @@ export function lastReportedContextTokens(path: string, totalBytes: number): num
   try {
     const descriptor = fs.openSync(path, "r");
     try {
-      const scanStart = Math.max(0, totalBytes - USAGE_SCAN_MAX_BYTES);
-      const precedingByte = Buffer.alloc(1);
-      const scanStartsAtRowBoundary = scanStart === 0
-        || (fs.readSync(descriptor, precedingByte, 0, 1, scanStart - 1) === 1 && precedingByte[0] === 0x0a);
       let cursor = totalBytes;
+      let examinedBytes = 0;
+      let readBytes = 0;
       let newerRowSuffix = Buffer.alloc(0);
+      let skippingOversizedRow = false;
 
-      while (cursor > scanStart) {
-        const start = Math.max(scanStart, cursor - USAGE_SCAN_CHUNK_BYTES);
+      while (cursor > 0 && examinedBytes < USAGE_SCAN_MAX_BYTES && readBytes < USAGE_SCAN_MAX_READ_BYTES) {
+        const start = Math.max(0, cursor - USAGE_SCAN_CHUNK_BYTES);
         const buffer = Buffer.alloc(cursor - start);
         const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, start);
-        const combined = newerRowSuffix.length > 0
-          ? Buffer.concat([buffer.subarray(0, bytesRead), newerRowSuffix])
-          : buffer.subarray(0, bytesRead);
-        const firstNewline = combined.indexOf(0x0a);
-        const reachedCompleteRowBoundary = start === scanStart && scanStartsAtRowBoundary;
+        readBytes += bytesRead;
+        cursor = start;
+        let chunk = buffer.subarray(0, bytesRead);
 
-        if (reachedCompleteRowBoundary || firstNewline >= 0) {
-          const completeRows = reachedCompleteRowBoundary ? combined : combined.subarray(firstNewline + 1);
+        if (skippingOversizedRow) {
+          /* The oversized row starts after the nearest newline; everything
+             before that newline belongs to older rows. */
+          const rowStart = chunk.lastIndexOf(0x0a);
+          if (rowStart < 0) continue;
+          chunk = chunk.subarray(0, rowStart);
+          skippingOversizedRow = false;
+        }
+        examinedBytes += chunk.length;
+
+        const combined = newerRowSuffix.length > 0 ? Buffer.concat([chunk, newerRowSuffix]) : chunk;
+        const firstNewline = combined.indexOf(0x0a);
+        const atFileStart = start === 0;
+
+        if (atFileStart || firstNewline >= 0) {
+          const completeRows = atFileStart ? combined : combined.subarray(firstNewline + 1);
           const tokens = lastReportedContextTokensInRows(completeRows);
           if (tokens !== null) return tokens;
         }
+        if (atFileStart) break;
 
-        if (reachedCompleteRowBoundary) {
+        newerRowSuffix = firstNewline >= 0 ? combined.subarray(0, firstNewline) : combined;
+        if (newerRowSuffix.length > USAGE_SCAN_OVERSIZED_ROW_BYTES) {
           newerRowSuffix = Buffer.alloc(0);
-        } else if (firstNewline >= 0) {
-          newerRowSuffix = combined.subarray(0, firstNewline);
-        } else {
-          newerRowSuffix = combined;
+          skippingOversizedRow = true;
         }
-        cursor = start;
       }
     } finally {
       fs.closeSync(descriptor);
@@ -163,11 +195,93 @@ function codexUsageTokens(row: Record<string, unknown>): number | null {
   return tokenSum(usage, ["input_tokens", "cached_input_tokens"]);
 }
 
+/* Base64 alphabet (with padding): the bytes an encoded attachment is made of.
+   A JSON string escape starts with a backslash, which is outside it, so
+   ordinary text rarely builds a run anywhere near ATTACHMENT_RUN_BYTES. */
+const BASE64_BYTE = (() => {
+  const table = new Uint8Array(256);
+  for (const character of "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=") {
+    table[character.charCodeAt(0)] = 1;
+  }
+  return table;
+})();
+
+interface AttachmentScan {
+  ino: number;
+  scannedBytes: number;
+  /** Bytes outside finished attachment runs. */
+  textBytes: number;
+  attachments: number;
+  /** Length of the base64 run still open at scannedBytes. */
+  openRun: number;
+}
+
+/* Transcripts only grow, so each one is scanned once and then from where the
+   last scan stopped. Bounded so a long-lived Viewer does not collect them. */
+const attachmentScans = new Map<string, AttachmentScan>();
+const ATTACHMENT_SCAN_CACHE_LIMIT = 64;
+const ESTIMATE_CHUNK_BYTES = 1024 * 1024;
+
+/**
+ * The byte fallback, with inline attachments counted at their bounded cost
+ * instead of their encoded size: text bytes / 4 plus
+ * {@link ATTACHMENT_ESTIMATE_TOKENS} per base64 run of at least
+ * {@link ATTACHMENT_RUN_BYTES}. Null when the file cannot be read.
+ */
+export function estimatedContextTokens(path: string, totalBytes: number): number | null {
+  try {
+    const ino = fs.statSync(path).ino;
+    let scan = attachmentScans.get(path);
+    if (!scan || scan.ino !== ino || scan.scannedBytes > totalBytes) {
+      scan = { ino, scannedBytes: 0, textBytes: 0, attachments: 0, openRun: 0 };
+    }
+    if (scan.scannedBytes < totalBytes) {
+      const descriptor = fs.openSync(path, "r");
+      try {
+        const buffer = Buffer.alloc(Math.min(ESTIMATE_CHUNK_BYTES, totalBytes - scan.scannedBytes));
+        while (scan.scannedBytes < totalBytes) {
+          const bytesRead = fs.readSync(descriptor, buffer, 0, Math.min(buffer.length, totalBytes - scan.scannedBytes), scan.scannedBytes);
+          if (bytesRead <= 0) break;
+          let { textBytes, attachments, openRun } = scan;
+          for (let index = 0; index < bytesRead; index += 1) {
+            if (BASE64_BYTE[buffer[index]!]) {
+              openRun += 1;
+              continue;
+            }
+            if (openRun >= ATTACHMENT_RUN_BYTES) attachments += 1;
+            else textBytes += openRun;
+            openRun = 0;
+            textBytes += 1;
+          }
+          scan.textBytes = textBytes;
+          scan.attachments = attachments;
+          scan.openRun = openRun;
+          scan.scannedBytes += bytesRead;
+        }
+      } finally {
+        fs.closeSync(descriptor);
+      }
+    }
+    attachmentScans.delete(path);
+    attachmentScans.set(path, scan);
+    if (attachmentScans.size > ATTACHMENT_SCAN_CACHE_LIMIT) {
+      attachmentScans.delete(attachmentScans.keys().next().value!);
+    }
+    const openIsAttachment = scan.openRun >= ATTACHMENT_RUN_BYTES;
+    const textBytes = scan.textBytes + (openIsAttachment ? 0 : scan.openRun);
+    const attachments = scan.attachments + (openIsAttachment ? 1 : 0);
+    return Math.round(textBytes / 4) + attachments * ATTACHMENT_ESTIMATE_TOKENS;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The context reading, with its provenance. A provider-reported count is the
  * real number and always beats a derived one; with nothing reported, the
  * byte-derived guess is returned but LABELLED — `estimated: true`, basis
- * naming the arithmetic. The limit comes from the named window policy
+ * naming the arithmetic — and base64 attachments count at a fixed cost each,
+ * never at their encoded length. The limit comes from the named window policy
  * (`./contextPolicy`) and is never assumed for a model with no entry.
  */
 export function contextReading(input: {
@@ -184,6 +298,17 @@ export function contextReading(input: {
       percent: limit ? Math.min(100, Math.round((reported / limit) * 100)) : null,
       estimated: false,
       basis: "provider-reported usage from the transcript's newest turn",
+      policy,
+    };
+  }
+  const counted = input.facts.estimatedContextTokens;
+  if (counted !== undefined && counted !== null) {
+    return {
+      tokens: counted,
+      limit,
+      percent: limit ? Math.min(100, Math.round((counted / limit) * 100)) : null,
+      estimated: true,
+      basis: `ESTIMATE: transcript text bytes / 4, each inline image or document counted as ${ATTACHMENT_ESTIMATE_TOKENS.toLocaleString("en-US")} tokens — no provider-reported usage found`,
       policy,
     };
   }
@@ -209,8 +334,9 @@ export const STRONGLY_RECOMMEND_ROTATION = "STRONGLY_RECOMMEND_ROTATION" as cons
 export interface RotationRecommendation {
   /** A recommendation and NOTHING more: no caller may act on it automatically. */
   recommended: boolean;
-  /** `strongly_recommend` exactly when usage reached the configured threshold;
-      `recommend` for secondary wear signals; `none` otherwise. */
+  /** `strongly_recommend` exactly when provider-reported usage reached the
+      configured threshold; `recommend` for an estimate over it and for
+      secondary wear signals; `none` otherwise. */
   level: "none" | "recommend" | "strongly_recommend";
   /** {@link STRONGLY_RECOMMEND_ROTATION} at strongly_recommend, else null. */
   advisory: typeof STRONGLY_RECOMMEND_ROTATION | null;
@@ -234,7 +360,8 @@ const MAX_REASONS = 4;
  * The return value is plain serializable data with no action, no target and
  * no side effect on any path; rotation happens only when rotate_orchestrator
  * is explicitly called. Every reason names its threshold and whether the
- * number behind it is an estimate.
+ * number behind it is an estimate. An estimate over the threshold is an
+ * ordinary `recommend`: only a provider-reported count can make it strong.
  */
 export function rotationRecommendation(input: {
   context: OrchestratorContextReading;
@@ -246,7 +373,7 @@ export function rotationRecommendation(input: {
   let level: RotationRecommendation["level"] = "none";
 
   if (input.policy && input.context.tokens !== null && input.context.tokens >= input.policy.rotationThresholdTokens) {
-    level = "strongly_recommend";
+    if (!input.context.estimated) level = "strongly_recommend";
     reasons.push(
       `context usage ${input.context.tokens.toLocaleString("en-US")} tokens${input.context.estimated ? " (estimate)" : ""} has reached the rotation threshold of ${input.policy.rotationThresholdTokens.toLocaleString("en-US")} tokens (${input.policy.policy}: ${Math.round(ROTATION_THRESHOLD_FRACTION * 100)}% of a ${input.policy.windowTokens.toLocaleString("en-US")}-token window)`,
     );

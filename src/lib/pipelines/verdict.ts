@@ -96,7 +96,10 @@ export function verdictRoutesAsFail(parsed: ParsedStageVerdict): boolean {
 }
 export type RejectedStageVerdict = { failureReason: string; output: string };
 
-export function stageVerdictFrom(value: unknown): StageVerdict | null {
+export function stageVerdictFrom(
+  value: unknown,
+  options: { allowLegacySeverityOnly?: boolean } = {},
+): StageVerdict | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
   if (Object.keys(record).some((key) => !ALLOWED_KEYS.has(key))) return null;
@@ -109,7 +112,7 @@ export function stageVerdictFrom(value: unknown): StageVerdict | null {
       if (typeof finding !== "string") return null;
       const trimmed = finding.trim();
       if (!trimmed || trimmed.length > MAX_FINDING_CHARS) return null;
-      if ((STAGE_FINDING_SEVERITIES as readonly string[]).includes(trimmed)) return null;
+      if (!options.allowLegacySeverityOnly && (STAGE_FINDING_SEVERITIES as readonly string[]).includes(trimmed)) return null;
       findings.push(stageFindingFromText(trimmed));
     }
     /* Ranking is what the record keeps: the relay, the park detail and the

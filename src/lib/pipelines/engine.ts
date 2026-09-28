@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { listCodexAccounts } from "@/lib/accounts/codex";
-import { accountManager } from "@/lib/accounts/manager";
+import { accountManager, resolveProjectSpawnAfterLiveRead } from "@/lib/accounts/manager";
 import { AccountProjectBindingsUnreadableError, allowedAccountIdsForProject, projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
 import {
   ENGINE_NOT_CONNECTED,
@@ -505,7 +505,7 @@ async function spawnPipelineAgent(
      outside it is refused, and an allowed set with no capacity left is
      REPORTED. Neither case falls back onto an account the project forbids;
      the throw parks the stage with the reason on the record. */
-  const resolution = accountManager.resolveProjectSpawn(input.role.engine, {
+  const resolution = await resolveProjectSpawnAfterLiveRead(input.role.engine, {
     project: input.project,
     requestedId: input.requestedAccountId,
     /* The model this stage will actually launch, so the account's capacity is
@@ -2579,6 +2579,10 @@ function commitPassedStage(
      one that review judged. */
   const handoff = passSuccessor(pipeline, stage, attempt).handoff;
   if (handoff?.attempt && handoff.attempt.reviewedHead === undefined) handoff.attempt.reviewedHead = pipeline.lastPassedCommit;
+  if (stage.kind === "run" && !allowCommit && attemptStage(stage, attempt).outputs?.length
+    && result.sha !== pipeline.lastPassedCommit) {
+    attempt.outputBaseHead = pipeline.lastPassedCommit;
+  }
   pipeline.lastPassedCommit = result.sha;
   if (!publishesRemoteBranch(pipeline)) {
     attempt.state = "passed";

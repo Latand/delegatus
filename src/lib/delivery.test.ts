@@ -813,6 +813,43 @@ test("a legacy send's recovery runs outside the actuation section; its reservati
   expect(events).toEqual(["recovery checked", "actuated"]);
 });
 
+test("a queue send to a conversation a legacy pane host owns is typed into that host, never handed to the structured transport", async () => {
+  const sessionId = "019f4e76-66b4-\x37f87-94b2-cfa9bf722222";
+  const pathname = path.join(SANDBOX, `${sessionId}.jsonl`);
+  fs.writeFileSync(pathname, "");
+  const registry = new AgentRegistry(path.join(SANDBOX, "legacy-queue-policy-registry.json"));
+  setAgentRegistryForTests(registry);
+  const conversation = registry.ensureConversation("codex", pathname, "default");
+  registry.upsert({
+    key: { engine: "codex", sessionId }, artifactPath: pathname, cwd: SANDBOX, accountId: "default",
+    launchProfile: emptyLaunchProfile({ cwd: SANDBOX, role: "root" }), status: "idle",
+    host: KILL_HOST, claimEpoch: 1, claimOwner: null, pendingAction: null,
+  });
+  const entry: FileEntry = {
+    path: pathname, root: "codex-sessions", name: path.basename(pathname), project: "viewer", title: "seat",
+    engine: "codex", kind: "session", fmt: "codex", parent: null, mtime: 1, size: 0, activity: "live",
+    proc: "running", pid: KILL_HOST.agent.pid, model: "gpt-5.6-sol", effort: "high", fast: false,
+    pendingQuestion: null, waitingInput: null,
+  };
+  const typed: string[] = [];
+  const outcome = await deliverConversationMessage({
+    pid: null, path: pathname, conversationId: conversation.id, text: "seat wake", images: [], clientMessageId: "seat-tick:legacy-pane:1", policy: "queue",
+  }, {
+    /* The real recovery, which answers null for a legacy owner, so the policy never reaches a structured host. */
+    recover: (request) => recoverDeadStructuredConversation(request, { registry, client: {} as RuntimeHostClient, transport: () => "structured" }),
+    enqueueStructured: (async () => { throw new Error("a legacy owner must not reach the structured transport"); }) as never,
+    pathAllowed: () => true,
+    listFiles: async () => [entry],
+    resumeSpecFor: () => ({ command: "codex", args: [], cwd: SANDBOX, env: {} }) as never,
+    deliver: async ({ payload }) => { typed.push(payload); return { ok: true, outcome: "delivered-to-live" as const, target: "%7" }; },
+  });
+
+  expect(outcome).toMatchObject({ ok: true });
+  expect(typed).toEqual(["seat wake"]);
+  expect(Object.values(registry.readOnlySnapshot().heldDeliveries).map((item) => [item.clientMessageId, item.state]))
+    .toEqual([["seat-tick:legacy-pane:1", "delivered"]]);
+});
+
 test("a reservation the migration drain claimed recovers into a structured send that continues the drain's section with its lease (#1709)", async () => {
   const registry = new AgentRegistry(path.join(SANDBOX, "legacy-lease-registry.json"));
   setAgentRegistryForTests(registry);

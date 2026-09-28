@@ -24,6 +24,7 @@ function preparedPackage(): { root: string; source: string; state: string; stabl
   fs.writeFileSync(path.join(source, "bin", "server-runtime.mjs"), "export const fixture = true;\n");
   fs.writeFileSync(path.join(source, "bin", "appDir.mjs"), "export const fixture = true;\n");
   fs.writeFileSync(path.join(source, "bin", "envAlias.mjs"), "export const fixture = true;\n");
+  fs.writeFileSync(path.join(source, "bin", "self-update-supervisor.mjs"), "export const fixture = true;\n");
   fs.writeFileSync(path.join(source, "dist", "mcp-server.mjs"), "process.stdout.write('candidate\\n');\n");
   fs.writeFileSync(path.join(source, "node_modules", "fixture", "index.js"), "export {};\n");
   fs.writeFileSync(path.join(source, "package.json"), "{\"name\":\"fixture\",\"type\":\"module\"}\n");
@@ -134,6 +135,8 @@ test("stable launcher publication preserves the registered path across crash bou
       durable: true,
     });
     expect(fs.readFileSync(registeredPath, "utf8")).toBe("process.stdout.write('launcher\\n');\n");
+    expect(fs.readFileSync(path.join(fixture.stable, "bin", "self-update-supervisor.mjs"), "utf8"))
+      .toBe("export const fixture = true;\n");
     expect(fs.readdirSync(path.dirname(registeredPath)).filter((entry) => entry.includes(".tmp"))).toEqual([]);
   }
 });
