@@ -39,7 +39,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: dependabot-lockfile-${{ github.event.pull_request.number }}
+  # Queue events have no PR number; keep distinct groups from cancelling each
+  # other's skipped check while retaining the PR number for refresh runs.
+  group: dependabot-lockfile-${{ github.event_name == 'merge_group' && github.ref || github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
