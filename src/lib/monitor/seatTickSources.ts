@@ -1087,8 +1087,11 @@ export const RETIREMENT_STALL_REFUSALS = 1000;
     transcripts, flags, identities) that only a defect leaves unsettled on an
     idle host, so a new clause counts toward the stall until it is listed here.
     `no-open-operation` is one of those: the production registry held 64 spawn
-    receipts that had sat in a non-terminal state for months, and each refused
-    its host on every sweep. */
+    receipts that had sat in a non-terminal state since July, and the journal
+    counted about 3000 refusals on that clause in a day. The sweep now treats a
+    receipt unsettled for over a day as abandoned
+    (`RETIREMENT_ABANDONED_RECEIPT_MS`), so this signal only reports a receipt
+    that is still recent and still refusing. */
 const RETIREMENT_STALL_EXPECTED_CLAUSES = new Set([
   "seat-free",
   "turn-settled",
