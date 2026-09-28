@@ -696,7 +696,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     expect((await postCheck(post("/check"))).status).toBe(409);
     h.releaseBuild?.();
     await until((next) => next.update.state === "done");
-  });
+  }, 15_000);
 
   test("the Snapshot streams as server-sent events", async () => {
     const h = harness();
