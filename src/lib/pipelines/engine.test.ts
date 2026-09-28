@@ -666,6 +666,45 @@ test("remote skip publishes the accepted head before its reviewer can start", as
   }
 });
 
+for (const completion of ["pass", "skip"] as const) {
+  test(`an unreachable remote keeps a ${completion} successor behind the accepted head`, async () => {
+    const fixture = await realWorktreeLane(`remote-${completion}-outage`, [
+      { id: "fix", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Fix", next: "review" },
+      { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review", next: null },
+    ], "remote-branch");
+    const offline = `${fixture.origin}.offline`;
+    try {
+      fs.writeFileSync(path.join(fixture.worktree, "fix.txt"), "accepted\n");
+      if (completion === "skip") {
+        fixture.git(fixture.worktree, "add", "fix.txt");
+        fixture.git(fixture.worktree, "commit", "-m", "accepted fix");
+      }
+      fixture.h.setConversationActive(false);
+      fs.renameSync(fixture.origin, offline);
+      await tickPipelines([fixture.h.finish("/codex/stage-1.jsonl", completion === "pass" ? "pass" : "needs_decision")], fixture.h.ports);
+      if (completion === "skip") {
+        expect((await patchPipeline(fixture.id, { action: "skip-stage" }, fixture.h.ports)).error).toBeUndefined();
+      }
+      await tickPipelines([], fixture.h.ports);
+      const waiting = loadPipelines().find((item) => item.id === fixture.id)!;
+      const accepted = fixture.git(fixture.worktree, "rev-parse", "HEAD");
+      expect(waiting.lastPassedCommit).toBe(accepted);
+      expect(waiting.publishedCommit).toBeNull();
+      expect(waiting.cursor).toMatchObject({ stageId: "fix", state: "committing" });
+      expect(fixture.h.spawnInputs).toHaveLength(1);
+      fs.renameSync(offline, fixture.origin);
+      await tickPipelines([], fixture.h.ports);
+      await tickPipelines([], fixture.h.ports);
+      expect(fixture.git(fixture.origin, "rev-parse", `refs/heads/${waiting.branch}`)).toBe(accepted);
+      expect(fixture.h.spawnInputs).toHaveLength(2);
+    } finally {
+      savePipelines([]);
+      if (fs.existsSync(offline)) fs.renameSync(offline, fixture.origin);
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+}
+
 test("ordinary retry leaves dirty work for the next attempt", async () => {
   const fixture = await realWorktreeLane("retry-keeps-dirty", [
     { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: null },
@@ -705,6 +744,67 @@ test("a read-only architect pass commits its declared fix output through settlem
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
 });
+
+for (const publication of ["internal", "remote-branch"] as const) {
+test(`a legacy architect repair commits its declared output before ${publication} review`, async () => {
+  const fixture = await realWorktreeLane(`architect-review-repair-${publication}`, [
+    { id: "architect", kind: "run", role: { roleId: "architect" }, access: "read-only", outputs: ["report.md"], prompt: "Write report", next: "review" },
+    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review report", next: null },
+  ], publication === "remote-branch" ? publication : undefined);
+  const offline = `${fixture.origin}.offline`;
+  try {
+    fs.writeFileSync(path.join(fixture.worktree, "report.md"), "first report\n");
+    fixture.h.setConversationActive(false);
+    await tickPipelines([fixture.h.finish("/codex/stage-1.jsonl", "pass")], fixture.h.ports);
+    await tickPipelines([], fixture.h.ports);
+    const first = fixture.git(fixture.worktree, "rev-parse", "HEAD");
+    const flow = fixture.h.flows.get("flow-1")!;
+    expect(flow).toBeDefined();
+    const transcript = path.join(fixture.root, "architect-repair.jsonl");
+    const sessionId = ["059f421e", "02e1", "73e0", "9b77", "bebde063f529"].join("-");
+    fs.writeFileSync(transcript, `${JSON.stringify({ type: "session_meta", payload: { id: sessionId, cwd: fixture.worktree } })}\n${JSON.stringify({
+      timestamp: new Date(Date.now() + 1_000).toISOString(), type: "event_msg",
+      payload: { type: "task_complete", last_agent_message: "REVIEW_READY: repaired report" },
+    })}\n`);
+    const roles = { implementer: { engine: "codex" as const, model: null, effort: "high" }, reviewer: { engine: "codex" as const, model: null, effort: "high" } };
+    const firstRound = { ...newRound({ ...flow, roles, rounds: [] }, "marker", null), n: 1, startedAt: "2026-07-22T00:00:00Z", relayedAt: "2026-07-22T00:01:00Z" };
+    Object.assign(flow, {
+      cwd: fixture.worktree,
+      implementerPath: transcript,
+      requireRemoteHead: publication === "remote-branch",
+      roles,
+      mode: "auto", reviewerMode: "headless", state: "fixing", roundLimit: 5,
+      createdAt: "2026-07-21T00:00:00Z",
+      rounds: [firstRound],
+    });
+    fs.writeFileSync(path.join(fixture.worktree, "report.md"), "repaired report\n");
+    fs.writeFileSync(path.join(fixture.worktree, "sentinel.tmp"), "keep me\n");
+    const record = entry(transcript);
+    record.size = fs.statSync(transcript).size;
+    record.mtime = Date.now() / 1_000;
+    if (publication === "remote-branch") fs.renameSync(fixture.origin, offline);
+    expect(await tickFlow(flow, [record], new Map([[transcript, record]]), () => {})).toBe(true);
+    const repaired = fixture.git(fixture.worktree, "rev-parse", "HEAD");
+    expect(repaired).not.toBe(first);
+    if (publication === "remote-branch") {
+      expect(flow.state).toBe("fixing");
+      expect(flow.rounds).toHaveLength(1);
+      fs.renameSync(offline, fixture.origin);
+      expect(await tickFlow(flow, [record], new Map([[transcript, record]]), () => {})).toBe(true);
+      expect(fixture.git(fixture.origin, "rev-parse", `refs/heads/${loadPipelines().find((item) => item.id === fixture.id)!.branch}`)).toBe(repaired);
+    }
+    expect(flow.state).toBe("spawning");
+    expect(flow.rounds[1]!.reviewHeadSha).toBe(repaired);
+    expect(loadPipelines().find((item) => item.id === fixture.id)!.lastPassedCommit).toBe(repaired);
+    expect(fixture.git(fixture.worktree, "show", "--name-only", "--format=", "HEAD")).toBe("report.md");
+    expect(fs.readFileSync(path.join(fixture.worktree, "sentinel.tmp"), "utf8")).toBe("keep me\n");
+  } finally {
+    savePipelines([]);
+    if (fs.existsSync(offline)) fs.renameSync(offline, fixture.origin);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+}
 
 test("a new owner reviews the commit published after the producer turn ends", async () => {
   savePipelines([]);
@@ -10602,13 +10702,11 @@ test("an unreachable remote leaves the stage passed and records it as unpublishe
   expect(box.order).toEqual(["commit"]);
   expect(h.flows.size).toBe(0);
 
-  /* Review ingress still cannot fence a flow while GitHub is unreachable. It
-     keeps the lane retryable in place instead of turning infrastructure into
-     a second operator decision. */
+  /* A successor cannot run while the accepted head remains unpublished. */
   await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
   const waiting = loadPipelines()[0]!;
   expect(waiting.state).toBe("running");
-  expect(waiting.cursor?.stageId).toBe("review");
+  expect(waiting.cursor).toMatchObject({ stageId: "build", state: "committing" });
   expect(waiting.stateDetail).toContain("passed but unpublished");
   expect(waiting.runs.find((run) => run.stageId === "build")!.attempts[0]).toMatchObject({
     state: "passed",
@@ -10683,29 +10781,27 @@ test("a publication that cannot land parks the pass without losing the commit", 
   expect(h.flows.size).toBe(0);
 });
 
-test("a pipeline whose repo has no origin parks at review ingress instead of fencing on a remote it cannot have", async () => {
+test("a pipeline whose repo has no origin keeps its producer head before review ingress", async () => {
   const h = harness();
   const box = publishHarness(h, { origin: false });
   await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
-  /* The pass itself still advances — an unpublishable repo is not a reason to
-     lose the builder's commit. */
+  /* The builder's commit remains accepted while the successor waits. */
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-  expect(loadPipelines()[0]).toMatchObject({ state: "running", lastPassedCommit: box.passedSha, publishedCommit: null });
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", lastPassedCommit: box.passedSha, publishedCommit: null,
+    cursor: { stageId: "build", state: "committing" } });
 
   await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
 
-  const parked = loadPipelines()[0]!;
-  expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toBe(
-    `review stage requires a published pipeline branch, but this repository has no origin remote to publish ${box.passedSha} to`,
-  );
-  /* Parked BEFORE the flow exists: no reviewer is ever fenced on a remote head
-     that cannot be created. */
+  const waiting = loadPipelines()[0]!;
+  expect(waiting.state).toBe("running");
+  expect(waiting.cursor).toMatchObject({ stageId: "build", state: "committing" });
+  expect(waiting.stateDetail).toContain("configure it to publish this accepted head");
+  /* The flow is not created before the accepted head can be published. */
   expect(box.order).toEqual(["commit"]);
   expect(h.flows.size).toBe(0);
-  expect(parked.lastPassedCommit).toBe(box.passedSha);
+  expect(waiting.lastPassedCommit).toBe(box.passedSha);
 });
 
 test("retrying a parked review stage republishes a local repair before the reviewer relaunches", async () => {

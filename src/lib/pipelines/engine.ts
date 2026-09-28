@@ -2454,16 +2454,12 @@ function retryTerminalStagePublication(
     park(pipeline, attempt.error);
     return;
   }
-  if (published.remote === "unreachable") {
-    if (pipeline.delivery?.operation?.state === "settled" && passSuccessor(pipeline, stage, attempt).next !== null) {
-      advancePipeline(pipeline, stage, ports, attempt);
-      /* #1938: an unreviewed head parks; it is not a running lane to keep. */
-      if (pipeline.state === "needs_review") return;
-    }
-    keepPassedStageUnpublished(pipeline, attempt, published.detail);
+  if (published.remote !== "published") {
+    keepPassedStageUnpublished(pipeline, attempt, published.remote === "unreachable"
+      ? published.detail : "the delivery remote is unavailable; configure it to publish this accepted head");
     return;
   }
-  pipeline.publishedCommit = published.remote === "published" ? published.sha : null;
+  pipeline.publishedCommit = published.sha;
   attempt.error = null;
   advancePipeline(pipeline, stage, ports, attempt);
 }
@@ -2608,11 +2604,55 @@ function commitPassedStage(
   pipeline.publishedCommit = published.remote === "published" ? published.sha : null;
   attempt.state = "passed";
   attempt.completedAt = ports.now();
-  if (published.remote === "unreachable") {
-    keepPassedStageUnpublished(pipeline, attempt, published.detail);
+  if (published.remote !== "published") {
+    keepPassedStageUnpublished(pipeline, attempt, published.remote === "unreachable"
+      ? published.detail : "the delivery remote is unavailable; configure it to publish this accepted head");
     return;
   }
   advancePipeline(pipeline, stage, ports, attempt);
+}
+
+/** A legacy review flow can return to its read-only producer after a finding.
+    Its next ready marker reaches the flow before the pipeline's review tick,
+    so the controller must accept declared output before that marker captures
+    the next review head. The same stage committer enforces the declared paths
+    and preserves every other worktree path. */
+export async function preparePipelineReviewRepair(flowId: string): Promise<{ ok: true } | { ok: false; retryable: boolean; detail: string }> {
+  const accepted = await withPipelineMutation((pipelines, persist) => {
+    const pipeline = pipelines.find((candidate) => candidate.cursor?.stageId
+      && candidate.runs.some((run) => run.stageId === candidate.cursor!.stageId
+        && run.attempts.some((attempt) => attempt.flowId === flowId)));
+    if (!pipeline) return { ok: true as const, pipelineId: null, sha: null };
+    const reviewStage = currentStage(pipeline);
+    if (reviewStage?.kind !== "review-loop" || pipeline.state !== "running") {
+      return { ok: false as const, detail: "the pipeline review stage no longer owns this repair" };
+    }
+    const implementer = latestPassedRun(pipeline, reviewStage.id);
+    if (!implementer) return { ok: false as const, detail: "the review flow has no accepted producer stage" };
+    const source = pipeline.stages.find((stage) => runFor(pipeline, stage.id)?.attempts.includes(implementer));
+    if (!source || source.kind !== "run") return { ok: false as const, detail: "the accepted producer stage is missing" };
+    const outputs = attemptStage(source, implementer).outputs ?? [];
+    if (implementer.effectiveRole.access !== "read-only" || outputs.length === 0) {
+      return { ok: true as const, pipelineId: null, sha: null };
+    }
+    const result = commitPipelineStage(pipeline, source.id, false, realExec, outputs, pipeline.lastPassedCommit);
+    if (!result.ok) return { ok: false as const, detail: result.error };
+    if (result.sha !== pipeline.lastPassedCommit) {
+      pipeline.lastPassedCommit = result.sha;
+      persist([pipeline]);
+    }
+    return { ok: true as const, pipelineId: pipeline.id, sha: pipeline.lastPassedCommit };
+  });
+  if (!accepted.ok) return { ok: false, retryable: false, detail: accepted.detail };
+  if (!accepted.pipelineId || !accepted.sha) return { ok: true };
+  const pipeline = findPipelineRecord(accepted.pipelineId);
+  if (!pipeline) return { ok: false, retryable: false, detail: "the pipeline review stage disappeared before publication" };
+  if (!publishesRemoteBranch(pipeline)) return { ok: true };
+  const published = await publishPipelineBranch(pipeline, realExec, { acceptedSha: accepted.sha });
+  if (!published.ok) return { ok: false, retryable: false, detail: `publishing the repaired review head: ${published.error}` };
+  if (published.remote === "unreachable") return { ok: false, retryable: true, detail: `repaired review head is unpublished: ${published.detail}` };
+  if (published.remote === "unavailable") return { ok: false, retryable: false, detail: "the repaired review head has no delivery remote" };
+  return { ok: true };
 }
 
 /**
@@ -7857,11 +7897,12 @@ export async function patchPipeline(
         });
         if (!published.ok) {
           park(pipeline, `publishing the skipped stage: ${published.error}`, attempt);
-        } else if (published.remote === "unreachable") {
+        } else if (published.remote !== "published") {
           setCursorState(pipeline, stage.id, "committing");
-          keepPassedStageUnpublished(pipeline, attempt, published.detail);
+          keepPassedStageUnpublished(pipeline, attempt, published.remote === "unreachable"
+            ? published.detail : "the delivery remote is unavailable; configure it to publish this accepted head");
         } else {
-          pipeline.publishedCommit = published.remote === "published" ? published.sha : null;
+          pipeline.publishedCommit = published.sha;
           advancePipeline(pipeline, stage, ports, attempt);
         }
       } else {
