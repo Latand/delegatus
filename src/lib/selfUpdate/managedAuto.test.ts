@@ -6,7 +6,7 @@ import { RuntimeHostUnavailableError } from "@/lib/runtime/client";
 import type { ViewerDeploymentRequest, ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import { initialAuto, readAuto, writeAuto } from "./auto";
 import { initialCheck } from "./checkState";
-import { readManagedRecord, writeManagedRecord } from "./managed";
+import { readManagedRecord, writeManagedRecord, type ManagedRecord } from "./managed";
 import { SelfUpdateService, type ServiceDeps } from "./service";
 import { idleCheck, type Revision } from "./types";
 
@@ -29,6 +29,7 @@ function scenario(enabled = true) {
   let modeReadHook: ((read: number) => Promise<void>) | null = null;
   let status: ViewerDeploymentStatus | null = null;
   const requests: ViewerDeploymentRequest[] = [];
+  let receiptReads = 0;
   writeAuto(join(dir, "auto.json"), { ...initialAuto(), enabled });
   writeFileSync(join(dir, "state.json"), JSON.stringify({ slice: {
     ...initialCheck(), installed: revision(OLD), available: revision(TARGET),
@@ -62,9 +63,14 @@ function scenario(enabled = true) {
       return { state: "accepted", deploymentId: "deployment-1", revision: TARGET, replayed: requests.length > 1 };
     },
     readDeployment: async () => status,
+    findDeploymentByIdempotencyKey: async (idempotencyKey: string) => {
+      receiptReads += 1;
+      return status?.idempotencyKey === idempotencyKey ? status : null;
+    },
   } as unknown as ServiceDeps;
   return {
     dir, deps, requests, service: () => new SelfUpdateService(deps),
+    receiptReads: () => receiptReads,
     advance: (ms: number) => { now += ms; }, setTurns: (value: number) => { turns = value; },
     setStages: (value: number) => { stages = value; },
     setGreen: (value: "green" | "red") => { green = value; }, greenReads: () => greenReads,
@@ -131,7 +137,7 @@ test("a fresh red check at the end of the quiet minute vetoes managed deployment
   service.stop();
 });
 
-test("an unaccepted managed intent does not deploy after auto is disabled and policy changes", async () => {
+test("an unaccepted managed intent stays pending without deploying while auto is disabled", async () => {
   const h = scenario();
   h.deps.requestDeployment = async (body) => {
     h.requests.push(body);
@@ -167,7 +173,7 @@ test("an unaccepted managed intent does not deploy after auto is disabled and po
   service = disabled.service();
   await service.autoTick();
   expect(disabled.requests).toHaveLength(0);
-  expect(readAuto(join(disabled.dir, "auto.json"))).toMatchObject({ enabled: false, managedPending: null });
+  expect(readAuto(join(disabled.dir, "auto.json"))).toMatchObject({ enabled: false, managedPending: { clientKey: "unaccepted-key" } });
   service.stop();
 });
 
@@ -235,14 +241,14 @@ test.each(["succeeded", "rolled-back"] as const)("an accepted request with a los
   expect(readAuto(join(h.dir, "auto.json")).managedPending).not.toBeNull();
   service.stop();
 
-  // Current admission policy now blocks new requests. Reconciliation must
-  // still replay the saved key to recover the host's already accepted receipt.
+  // Current admission policy now blocks new requests. Reconciliation reads
+  // the accepted receipt without replaying a request that could create one.
   h.setGreen("red");
   h.setTurns(1);
   service = h.service();
   await service.autoTick();
-  expect(h.requests).toHaveLength(2);
-  expect(h.requests[1]?.idempotencyKey).toBe(h.requests[0]?.idempotencyKey);
+  expect(h.requests).toHaveLength(1);
+  expect(h.receiptReads()).toBeGreaterThan(0);
   expect(readManagedRecord(join(h.dir, "managed.json"))?.trigger).toBe("auto");
 
   h.finish(phase, phase === "succeeded" ? null : "candidate health failed");
@@ -253,6 +259,88 @@ test.each(["succeeded", "rolled-back"] as const)("an accepted request with a los
     expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ enabled: false, managedPending: null,
       off: { target: TARGET, reason: "candidate health failed" } });
   }
+  service.stop();
+});
+
+test("an uncertain request absent from the host must pass fresh green and quiet admission", async () => {
+  const h = scenario();
+  h.deps.requestDeployment = async (body) => {
+    h.requests.push(body);
+    throw new RuntimeHostUnavailableError("runtime host request timed out");
+  };
+  let service = h.service();
+  await service.autoTick();
+  h.advance(60_000);
+  await service.autoTick();
+  expect(h.requests).toHaveLength(1);
+  service.stop();
+
+  h.setGreen("red");
+  h.setTurns(1);
+  service = h.service();
+  await service.autoTick();
+  expect(h.receiptReads()).toBeGreaterThan(0);
+  expect(h.requests).toHaveLength(1);
+  expect(readAuto(join(h.dir, "auto.json")).managedPending).not.toBeNull();
+  service.stop();
+});
+
+test("a previous managed record does not hide recovery of a later accepted lost reply", async () => {
+  const h = scenario();
+  const old: ManagedRecord = {
+    deploymentId: "old-deployment", idempotencyKey: "old-key", trigger: "operator", target: OLD,
+    targetShort: OLD.slice(0, 7), targetVersion: "1", requestedAt: new Date(Date.parse("2025-12-31T23:00:00Z")).toISOString(),
+    observed: {}, lastStep: null, finishedAt: new Date(Date.parse("2025-12-31T23:01:00Z")).toISOString(),
+    phase: "succeeded", error: null, servingProgress: null,
+  };
+  writeManagedRecord(join(h.dir, "managed.json"), old);
+  const request = h.deps.requestDeployment;
+  h.deps.requestDeployment = async (body) => {
+    const receipt = await request(body);
+    throw new RuntimeHostUnavailableError("runtime host request timed out");
+  };
+  let service = h.service();
+  await service.autoTick();
+  h.advance(60_000);
+  await service.autoTick();
+  expect(h.requests).toHaveLength(1);
+  service.stop();
+
+  h.setGreen("red");
+  h.setTurns(1);
+  service = h.service();
+  await service.autoTick();
+  expect(h.requests).toHaveLength(1);
+  expect(readManagedRecord(join(h.dir, "managed.json"))).toMatchObject({ target: TARGET, trigger: "auto" });
+  expect(readAuto(join(h.dir, "auto.json")).managedPending).not.toBeNull();
+  h.finish("rolled-back", "candidate health failed");
+  await service.refreshManaged();
+  expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ enabled: false, managedPending: null,
+    off: { target: TARGET, reason: "candidate health failed" } });
+  service.stop();
+});
+
+test("an accepted lost reply is observed after auto is disabled and the service restarts", async () => {
+  const h = scenario();
+  const request = h.deps.requestDeployment;
+  h.deps.requestDeployment = async (body) => {
+    const receipt = await request(body);
+    throw new RuntimeHostUnavailableError("runtime host request timed out");
+  };
+  let service = h.service();
+  await service.autoTick();
+  h.advance(60_000);
+  await service.autoTick();
+  expect(h.requests).toHaveLength(1);
+  await service.setAuto(false);
+  service.stop();
+
+  service = h.service();
+  h.finish("rolled-back", "candidate health failed");
+  await service.autoTick();
+  expect(h.requests).toHaveLength(1);
+  expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ enabled: false, managedPending: null,
+    off: { target: TARGET, reason: "candidate health failed" } });
   service.stop();
 });
 
@@ -350,11 +438,14 @@ test("a saved failure settles after restart even while the host cannot answer", 
   service.stop();
 });
 
-test("an interrupted request immediately replays its persisted idempotency key", async () => {
+test("an interrupted unaccepted request waits for fresh green and quiet admission", async () => {
   const h = scenario();
   const pending = { target: revision(TARGET), clientKey: "saved-key", at: new Date(Date.parse("2026-01-01T00:00:00Z")).toISOString() };
   writeAuto(join(h.dir, "auto.json"), { ...initialAuto(), enabled: true, managedPending: pending });
   const service = h.service();
+  await service.autoTick();
+  expect(h.requests).toHaveLength(0);
+  h.advance(60_000);
   await service.autoTick();
   expect(h.requests).toHaveLength(1);
   expect(h.requests[0]?.idempotencyKey).toBe(`self-update-${TARGET.slice(0, 12)}-saved-key`);

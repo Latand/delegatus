@@ -52,6 +52,7 @@ function scenario() {
       pipelines: () => stageRunning ? [{ state: "running", cursor: { state: "spawning" } }] : [], presence: () => [], memoryAvailableMb: () => 8_192 },
     green: { read: async () => ({ state: greenState }) },
     prune: async () => { prunes += 1; },
+    findDeploymentByIdempotencyKey: async () => null,
   } as unknown as ServiceDeps;
   const service = () => {
     const instance = new SelfUpdateService(deps);

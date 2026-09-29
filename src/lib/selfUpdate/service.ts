@@ -87,6 +87,9 @@ export interface ServiceDeps {
   hostHealth(): Promise<RuntimeHostHealth | null>;
   requestDeployment(body: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt>;
   readDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null>;
+  /** Read-only idempotency lookup. Unlike replaying a request, this never
+      admits a deployment when the key is absent. */
+  findDeploymentByIdempotencyKey(idempotencyKey: string): Promise<ViewerDeploymentStatus | null>;
   releaseTarget(): { revision: string } | null;
   prepareCheckRepo(): Promise<string>;
   buildEnv(scratchRoot: string): Record<string, string>;
@@ -265,16 +268,6 @@ export class SelfUpdateService {
     // before it exited. Settle that durable result even if the host is away.
     if (this.auto.managedPending && this.managed && !managedActive(this.managed)) this.finishManagedAuto();
     if (!this.auto.enabled && !this.auto.pending && !this.auto.managedPending) return;
-    // A transport failure can hide an accepted host request. Replay its
-    // durable idempotency key before resolving policy for any new target.
-    // The host returns the original receipt for an accepted request, while
-    // an unaccepted intent remains safe to retry under the same key.
-    if (this.auto.enabled && this.auto.managedPending && !this.managed) {
-      const pending = this.auto.managedPending;
-      const result = await this.deploy(pending.target, pending.clientKey, "auto");
-      if (!result.ok && !result.deliveryUncertain) this.finishManagedAutoRefusal(pending.target, result.detail ?? result.error);
-      return;
-    }
     const decision = await this.decide();
     if (decision.mode === "managed") { await this.runManagedAutoTick(decision); return; }
     if (decision.mode !== "checkout" || !decision.record) return;
@@ -476,15 +469,30 @@ export class SelfUpdateService {
     const snapshot = await this.snapshot();
     const pending = this.auto.managedPending;
     if (pending) {
-      if (this.managed?.idempotencyKey === managedIdempotencyKey(pending.target.sha, pending.clientKey)) return;
-      // Only a durable managed.json record proves that the host accepted this
-      // intent. An unaccepted or uncertain request must pass current policy
-      // before it can be replayed after a restart.
-      if (!this.auto.enabled) {
-        this.auto = { ...this.auto, managedPending: null, quietSince: null };
-        this.saveAuto();
+      const idempotencyKey = managedIdempotencyKey(pending.target.sha, pending.clientKey);
+      if (this.managed?.idempotencyKey === idempotencyKey) return;
+      // A saved intent can outlive a lost reply and an unrelated prior
+      // managed.json record. Query the host without submitting a request:
+      // request replay itself creates a deployment for an unknown key.
+      let accepted: ViewerDeploymentStatus | null;
+      try { accepted = await this.deps.findDeploymentByIdempotencyKey(idempotencyKey); }
+      catch { return; }
+      if (accepted) {
+        const record: ManagedRecord = {
+          deploymentId: accepted.deploymentId, idempotencyKey, trigger: "auto",
+          target: accepted.revision, targetShort: shortSha(accepted.revision), targetVersion: pending.target.version || null,
+          requestedAt: accepted.createdAt, observed: {}, lastStep: null, finishedAt: null,
+          phase: null, error: null, servingProgress: null,
+        };
+        this.managed = observeDeployment(record, accepted);
+        writeManagedRecord(this.managedFile, this.managed);
+        this.finishManagedAuto();
+        this.changes.emit();
         return;
       }
+      // If the switch is off, retain the uncertain identity for observation
+      // and do not admit a request. Re-enabling will re-check current policy.
+      if (!this.auto.enabled) return;
     }
     if (!this.auto.enabled || this.autoAvailability(decision) !== "available" || managedActive(this.managed)
       || this.checking || snapshot.check.state === "checking") return;

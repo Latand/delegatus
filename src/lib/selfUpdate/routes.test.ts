@@ -113,6 +113,7 @@ function baseDeps(dir: string, overrides: Partial<ServiceDeps>): ServiceDeps {
     hostHealth: async () => null,
     requestDeployment: requestViewerDeployment,
     readDeployment: async () => null,
+    findDeploymentByIdempotencyKey: async () => null,
     releaseTarget: () => null,
     prepareCheckRepo: async () => { throw new Error("no check repository in this mode"); },
     buildEnv,
