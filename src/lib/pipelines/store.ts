@@ -1321,6 +1321,7 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
     pipeline.delivery = { target, disposition: "owner", publish: "enabled", active: true,
       ownerId: pipeline.id, epoch: expectedEpoch + 1, journal: pipeline.delivery.journal,
       settledFailure: terminalDeliveryFailure(pipeline) ?? pipeline.delivery.settledFailure };
+    pipeline.publication = "remote-branch";
     pipeline.publishedCommit = null;
     deliveryJournal(pipeline, "takeover", reason, conversationId);
     tx.put(pipeline);

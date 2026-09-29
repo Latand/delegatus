@@ -622,7 +622,7 @@ function harness() {
 /** Publication is opt-in (#1692): the tests of the remote-branch contract ask for it. */
 const REMOTE_BRANCH = { publication: "remote-branch" } as const;
 
-async function realWorktreeLane(name: string, stages: unknown[], publication?: "remote-branch", legacyReview = false) {
+async function realWorktreeLane(name: string, stages: unknown[], publication?: "remote-branch", legacyReview = false, defaultOwner = false) {
   savePipelines([]);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `llv-${name}-`));
   const origin = path.join(root, "origin.git");
@@ -650,13 +650,85 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   h.ports.exec = realExec;
   h.ports.provisionExec = realProvisionExec;
   const created = await createPipelineFromRequest({ task: name, repoDir: repo, baseRef: base, stages: stages as never,
-    ...(publication ? { publication } : {}) }, h.ports);
+    ...(publication ? { publication } : defaultOwner ? {} : { publication: "internal" as const }) }, h.ports);
   if (!created.pipeline) throw new Error(created.error);
   if (legacyReview) savePipelines([asStoredLegacyReviewLane(created.pipeline, created.convertedStages)]);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   return { root, origin, repo, base, h, git, id: created.pipeline.id, worktree: created.pipeline.worktreeDir };
 }
+
+test("an owner publishes a review-fix commit before the passing review starts", async () => {
+  const fixture = await realWorktreeLane("owner-review-fix", [
+    { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review", next: null, onFail: { to: "review-fix", maxRounds: 2 } },
+    { id: "review-fix", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Fix", next: "review" },
+  ], undefined, false, true);
+  try {
+    const { git, h, id, origin, worktree } = fixture;
+    const branch = loadPipelines().find((item) => item.id === id)!.branch;
+    h.setConversationActive(false);
+    fs.writeFileSync(path.join(worktree, "work.txt"), "build\n");
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+    const built = git(worktree, "rev-parse", "HEAD");
+    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(built);
+    for (let n = 0; n < 4 && h.spawnInputs.length < 2; n += 1) await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(2);
+    await tickPipelines([h.finish("/codex/stage-2.jsonl", "fail")], h.ports);
+    for (let n = 0; n < 4 && h.spawnInputs.length < 3; n += 1) await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(3);
+    fs.writeFileSync(path.join(worktree, "work.txt"), "fixed\n");
+    const offline = `${origin}.offline`;
+    fs.renameSync(origin, offline);
+    await tickPipelines([h.finish("/codex/stage-3.jsonl", "pass")], h.ports);
+    const fixed = git(worktree, "rev-parse", "HEAD");
+    expect(fixed).not.toBe(built);
+    expect(loadPipelines().find((item) => item.id === id)).toMatchObject({
+      state: "running", cursor: { stageId: "review-fix", state: "committing" }, lastPassedCommit: fixed,
+    });
+    expect(h.spawnInputs).toHaveLength(3);
+    fs.renameSync(offline, origin);
+    await tickPipelines([], h.ports);
+    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(fixed);
+    for (let n = 0; n < 4 && h.spawnInputs.length < 4; n += 1) await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(4);
+    await tickPipelines([h.finish("/codex/stage-4.jsonl", "pass")], h.ports);
+    const completed = loadPipelines().find((item) => item.id === id)!;
+    expect(completed).toMatchObject({ state: "completed", lastPassedCommit: fixed, publishedCommit: fixed });
+    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(completed.lastPassedCommit);
+  } finally {
+    savePipelines([]);
+    if (fs.existsSync(`${fixture.origin}.offline`)) fs.renameSync(`${fixture.origin}.offline`, fixture.origin);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("an owner keeps a terminal read-only declared output local after publishing its builder head", async () => {
+  const fixture = await realWorktreeLane("owner-review-output", [
+    { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", outputs: ["review.md"], prompt: "Review", next: null },
+  ], undefined, false, true);
+  try {
+    const { git, h, id, origin, worktree } = fixture;
+    const branch = loadPipelines().find((item) => item.id === id)!.branch;
+    h.setConversationActive(false);
+    fs.writeFileSync(path.join(worktree, "work.txt"), "build\n");
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+    const built = git(origin, "rev-parse", `refs/heads/${branch}`);
+    for (let n = 0; n < 4 && h.spawnInputs.length < 2; n += 1) await tickPipelines([], h.ports);
+    fs.writeFileSync(path.join(worktree, "review.md"), "approved\n");
+    await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
+    const completed = loadPipelines().find((item) => item.id === id)!;
+    expect(completed.state).toBe("completed");
+    expect(completed.lastPassedCommit).not.toBe(built);
+    expect(completed.publishedCommit).toBe(built);
+    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(built);
+    expect(completed.runs[1]!.attempts[0]!.outputBaseHead).toBe(built);
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
 
 test("skip carries a committed fix into review and completion without touching ignored work", async () => {
   const fixture = await realWorktreeLane("skip-keeps-fix", [
@@ -1051,7 +1123,7 @@ test("delivery creation clamps the second target lane and replays its original k
   expect(h.calls.some((call) => call.startsWith("git push"))).toBe(false);
   const takeover = await patchPipeline(second.pipeline!.id, { action: "takeover", expectedOwner: first.pipeline!.id, expectedEpoch: 1, reason: "comparison selected" }, h.ports,
     { kind: "agent", role: "builder", conversationId: "conversation_requester" });
-  expect(takeover.pipeline?.delivery).toMatchObject({ disposition: "owner", active: true, epoch: 2 });
+  expect(takeover.pipeline).toMatchObject({ publication: "remote-branch", delivery: { disposition: "owner", active: true, epoch: 2 } });
   expect(takeover.pipeline?.delivery?.journal.at(-1)?.conversationId).toBe("conversation_requester");
   expect((await patchPipeline(first.pipeline!.id, { action: "publish", acceptedSha: ORIGIN_MAIN_SHA }, h.ports)).error).toContain(second.pipeline!.id);
 });
@@ -1096,7 +1168,7 @@ test("a terminal failing verdict releases ownership and explicit takeover acknow
     older engine stored it. */
 async function create(ports: PipelinePorts, stages = RUN_STAGES as never, request: { publication?: "internal" | "remote-branch" } = {}) {
   savePipelines([]);
-  const result = await createPipelineFromRequest({ task: "Ship pipelines", spec: "AC1", repoDir: "/repo", stages, src: "/codex/creator.jsonl", ...request }, ports);
+  const result = await createPipelineFromRequest({ task: "Ship pipelines", spec: "AC1", repoDir: "/repo", stages, src: "/codex/creator.jsonl", publication: "internal", ...request }, ports);
   if (!result.pipeline) throw new Error(result.error);
   if (!result.convertedStages?.length) return result.pipeline;
   const lane = asStoredLegacyReviewLane(result.pipeline, result.convertedStages);
@@ -6597,7 +6669,7 @@ const NO_CODE_TEST_STAGES = [
 test("an internal pipeline runs every stage and settles its approved review with the network unreachable (#1692)", async () => {
   const h = harness();
   const pipeline = await create(h.ports, NO_CODE_TEST_STAGES as never);
-  expect(pipeline.publication).toBeUndefined();
+  expect(pipeline.publication).toBe("internal");
 
   /* The one remote read an internal lane makes is its base fetch, and since
      #1799 the controller makes it — so the network goes down after the lane is
@@ -6707,9 +6779,8 @@ test("an internal terminal pass an older build left waiting on publication close
   const publishAttempts = remoteCalls.length;
   expect(publishAttempts).toBeGreaterThan(0);
 
-  /* The same record without the explicit policy is what every pipeline
-     created before it looks like. */
-  delete waiting.publication;
+  /* An explicitly internal lane can settle a previously waiting pass locally. */
+  waiting.publication = "internal";
   savePipelines([waiting]);
   await tickPipelines([], h.ports);
 
@@ -10831,7 +10902,7 @@ test("create_pipeline stores a review-loop as a read-only reviewer, a fix stage 
 test("add-stage on a draft converts a review-loop, and that draft started and failed on every round completes after a last fix (#2187)", async () => {
   const h = movingHeadHarness();
   savePipelines([]);
-  const created = await createPipelineFromRequest({ task: "Draft with review", repoDir: "/repo", stages: BUILD_ONLY as never, autoStart: false }, h.ports);
+  const created = await createPipelineFromRequest({ task: "Draft with review", repoDir: "/repo", stages: BUILD_ONLY as never, autoStart: false, publication: "internal" }, h.ports);
   const id = created.pipeline!.id;
   const added = await patchPipeline(id, { action: "add-stage", stage: REVIEW_LOOP_STAGE as never }, h.ports);
   expect(added.error).toBeUndefined();

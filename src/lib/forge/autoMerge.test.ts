@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 
@@ -231,9 +232,54 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
     const pushed = harness({ lanes: [completed], prs: [openPr(11, { head: HEAD_B })] });
     await pushed.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 2, () => pushed.merges().length > 0);
     expect(pushed.merge("L1")).toMatchObject({ state: "merged", chain: [HEAD_B] });
+    completed.publishedCommit = HEAD_A;
+    const publishedProducer = harness({ lanes: [completed], prs: [openPr(11, { head: HEAD_A })] });
+    await publishedProducer.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 2, () => publishedProducer.merges().length > 0);
+    expect(publishedProducer.merge("L1")).toMatchObject({ state: "merged", chain: [HEAD_A] });
     const changed = harness({ lanes: [completed], prs: [openPr(11, { head: HEAD_X })] });
     await changed.sweep();
     expect(changed.merge("L1")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.headChanged });
+  });
+
+  test("a completed fail, writable fix, pass lane names an older PR head as behind", async () => {
+    const completed = lane("L1", { head: HEAD_B, reviews: [
+      { n: 1, state: "failed" }, { n: 2, state: "passed" },
+    ] });
+    completed.stages.push({ id: "review-fix", kind: "run", prompt: "fix", next: "review", effectiveRole: BUILDER } as Pipeline["stages"][number]);
+    completed.runs.push({ stageId: "review-fix", attempts: [{ n: 1, state: "passed", effectiveRole: BUILDER,
+      report: { provenance: { head: HEAD_B } } }] } as unknown as Pipeline["runs"][number]);
+    const reviews = completed.runs.find((run) => run.stageId === "review")!.attempts;
+    reviews[0]!.report = { provenance: { head: HEAD_A } } as typeof reviews[0]["report"];
+    reviews[1]!.report = { provenance: { head: HEAD_B } } as typeof reviews[1]["report"];
+    const h = harness({ lanes: [completed], prs: [openPr(11, { head: HEAD_A })] });
+    await h.sweep();
+    expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: `PR head is behind the reviewed head ${HEAD_B}` });
+    expect(h.merges()).toHaveLength(0);
+  });
+
+  test("a local reviewed descendant identifies a behind PR without stage reports", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "llv-merge-ancestor-"));
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+    try {
+      git("init", "--initial-branch=main");
+      git("config", "user.name", "Fixture");
+      git("config", "user.email", "fixture");
+      fs.writeFileSync(path.join(repo, "work.txt"), "build\n");
+      git("add", "work.txt");
+      git("commit", "-m", "build");
+      const oldHead = git("rev-parse", "HEAD");
+      fs.writeFileSync(path.join(repo, "work.txt"), "fix\n");
+      git("add", "work.txt");
+      git("commit", "-m", "fix");
+      const reviewedHead = git("rev-parse", "HEAD");
+      const completed = lane("L1", { head: reviewedHead });
+      completed.repoDir = repo;
+      const h = harness({ lanes: [completed], prs: [openPr(11, { head: oldHead })] });
+      await h.sweep();
+      expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: `PR head is behind the reviewed head ${reviewedHead}` });
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
   });
 
   test("CLEAN with settled green checks merges with --match-head-commit, and never before the checks settled", async () => {

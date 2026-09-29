@@ -1,4 +1,5 @@
 import os from "node:os";
+import { spawnSync } from "node:child_process";
 
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
 import { failEdgeExhaustion } from "@/lib/pipelines/failEdgeBudget";
@@ -244,7 +245,7 @@ function newMerge(pipeline: Pipeline, pr: { repository: string; number: number }
  * committed locally. New attempts record it at commit time; older reports
  * captured it before the controller commit. */
 function headBeforeLocalOutput(pipeline: Pipeline): string | null {
-  if (pipeline.publishedCommit || pipeline.delivery?.publish !== "disabled") return null;
+  if (pipeline.delivery?.publish !== "disabled") return null;
   const final = pipeline.stages.find((stage) => stage.next === null && stage.kind === "run" && stage.outputs?.length);
   if (!final) return null;
   const attempt = pipeline.runs.find((run) => run.stageId === final.id)?.attempts.filter((item) => !item.historical).at(-1);
@@ -252,7 +253,26 @@ function headBeforeLocalOutput(pipeline: Pipeline): string | null {
   const elapsed = Date.parse(pipeline.closedAt ?? "") - Date.parse(attempt.completedAt ?? "");
   if (!Number.isFinite(elapsed) || elapsed < 0 || elapsed > 5_000) return null;
   const baseHead = attempt.outputBaseHead ?? attempt.report?.provenance.head;
+  if (pipeline.publishedCommit && pipeline.publishedCommit !== baseHead) return null;
   return typeof baseHead === "string" && /^[0-9a-f]{40}$/i.test(baseHead) && baseHead !== pipeline.lastPassedCommit ? baseHead : null;
+}
+
+/** A former head reported by this lane is a known older PR revision when a
+ * later review passed on the lane's final head. This covers old internal
+ * delivery records whose writable fix was accepted locally but never pushed. */
+function prHeadBehindReviewedHead(pipeline: Pipeline, prHead: string): boolean {
+  if (prHead === pipeline.lastPassedCommit) return false;
+  if (pipeline.repoDir && /^[0-9a-f]{40}$/i.test(prHead) && /^[0-9a-f]{40}$/i.test(pipeline.lastPassedCommit)) {
+    const ancestor = spawnSync("git", ["merge-base", "--is-ancestor", prHead, pipeline.lastPassedCommit], {
+      cwd: pipeline.repoDir, timeout: 5_000, stdio: "ignore",
+    });
+    if (ancestor.status === 0) return true;
+  }
+  const attempts = pipeline.runs.flatMap((run) => run.attempts.filter((attempt) => !attempt.historical));
+  const reviewed = pipeline.runs.some((run) => pipeline.stages.some((stage) => stage.id === run.stageId && isReviewStage(pipeline, stage))
+    && run.attempts.some((attempt) => !attempt.historical && attempt.state === "passed"
+      && attempt.report?.provenance.head === pipeline.lastPassedCommit));
+  return reviewed && attempts.some((attempt) => attempt.report?.provenance.head === prHead);
 }
 
 type Step =
@@ -366,6 +386,11 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts): Promise<void> {
     if (view.state === "OPEN" && merge.updates.length === 0 && merge.chain.length === 1
       && merge.chain[0] === read.lastPassedCommit && view.headRefOid === headBeforeLocalOutput(read)) {
       merge.chain = [view.headRefOid];
+    }
+    if (view.state === "OPEN" && view.headRefOid !== merge.chain.at(-1)
+      && prHeadBehindReviewedHead(read, view.headRefOid)) {
+      await commit(ports, read, (live) => block(live, `PR head is behind the reviewed head ${read.lastPassedCommit}`, now));
+      return;
     }
     /* A head outside the chain is admitted only as the commit of our own
        update; anything else stays outside, and decideMerge blocks on it. */
