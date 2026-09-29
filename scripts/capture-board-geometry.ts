@@ -114,6 +114,10 @@
  * stage host carries the owner's input alone, so the member who works only
  * there reads "Not covered". It requires the members to add up to the total,
  * a member's request for everyone to answer 403, and no sideways overflow.
+ * Every capture of someone else's figures, or everyone's, must carry no
+ * "You"/"Your"/"Ви"/"Ваш" outside the filter and the cards, and a member who
+ * opens the owner's `?member=all` link lands on their own page with `member`
+ * gone from the address.
  *
  * With BOARD_CAPTURE_CASE=lightbox it walks the full-screen image viewer
  * through one conversation's 26 invented pictures (#2144): inbox attachments,
@@ -5192,7 +5196,21 @@ async function activityMembersMain(): Promise<void> {
       const reading = await page.evaluate(() => {
         const root = document.querySelector<HTMLElement>("[data-activity-page]")!;
         const trigger = document.querySelector<HTMLElement>("[data-activity-members-trigger]");
+        /* Words that name the viewer as the counted person, in the page's text
+           and its aria and title labels. The filter and the cards mark the
+           owner's own entry "(you)" on purpose, and the surface table speaks
+           of any surface in general. */
+        const skipped = "[data-activity-members], [data-activity-member-breakdown], [data-activity-coverage]";
+        const viewerWord = /\b(you|your|yours)\b|(?<!\p{L})(ви|вас|вам|вами|ваш\p{L}*)(?!\p{L})/iu;
+        const viewerWords: string[] = [];
+        for (const element of Array.from(root.querySelectorAll<HTMLElement>("*"))) {
+          if (element.closest(skipped)) continue;
+          const parts = [element.getAttribute("aria-label") ?? "", element.getAttribute("title") ?? "", ...Array.from(element.childNodes).filter((node) => node.nodeType === 3).map((node) => node.textContent ?? "")];
+          for (const part of parts) if (viewerWord.test(part)) viewerWords.push(part.trim());
+        }
         return {
+          search: location.search,
+          viewerWords,
           width: document.documentElement.clientWidth,
           scrollWidth: Math.max(document.documentElement.scrollWidth, root.scrollWidth),
           layout: root.dataset.activityLayout ?? "narrow",
@@ -5212,6 +5230,7 @@ async function activityMembersMain(): Promise<void> {
       must(reading.scrollWidth <= reading.width + 1, `${name}: the page runs ${reading.scrollWidth - reading.width}px sideways`);
       must(reading.layout === (options.phone ? "narrow" : "desktop"), `${name}: the ${reading.layout} layout at ${width}px`);
       must(reading.truncated.length === 0, `${name}: breakdown text cut: ${JSON.stringify(reading.truncated)}`);
+      if (/member=/.test(reading.search)) must(reading.viewerWords.length === 0, `${name}: someone else's figures read as the viewer's: ${JSON.stringify(reading.viewerWords)}`);
       if (options.phone && reading.trigger) must(reading.trigger.height >= 44, `${name}: the member filter is ${reading.trigger.height}px tall`);
       await context.close();
       return reading;
@@ -5231,6 +5250,16 @@ async function activityMembersMain(): Promise<void> {
     }
     const one = await capture("desktop-one-member", `range=7d&member=${TEAM_MEMBERS[1]!.id}`);
     must(one.hero.includes("Bo Tern") && one.cards.length === 0, `one member: hero ${one.hero}`);
+    await capture("desktop-one-member-uk", `range=7d&member=${TEAM_MEMBERS[1]!.id}`, { lang: "uk" });
+    for (const lang of ["en", "uk"] as const) {
+      const phoneOne = await capture(`phone-one-member-${lang}`, `range=7d&member=${TEAM_MEMBERS[1]!.id}`, { lang, phone: true });
+      must(phoneOne.hero.includes("Bo Tern"), `phone one member ${lang}: hero ${phoneOne.hero}`);
+    }
+    /* A member opening a link the owner shared lands on their own figures. */
+    for (const phone of [false, true]) {
+      const shared = await capture(`${phone ? "phone" : "desktop"}-member-shared-link`, "range=7d&member=all", { cookie: bo, phone });
+      must(!shared.search.includes("member=") && shared.trigger === null && shared.cards.length === 0, `a member's shared link (${phone ? "phone" : "desktop"}): ${shared.search}, trigger ${JSON.stringify(shared.trigger)}`);
+    }
     await capture("phone-filter-open-en", "range=7d", { phone: true, act: openFilter });
     const member = await capture("desktop-member-view", "range=7d", { cookie: bo });
     must(member.trigger === null && member.cards.length === 0, `a member's page: trigger ${JSON.stringify(member.trigger)}`);
