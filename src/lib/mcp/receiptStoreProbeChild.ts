@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import fs from "node:fs";
 import path from "node:path";
+import { awaitFixtureFile, waitForFixtureFile, waitUntilFixtureTime } from "./fixtureBarrier";
 
 import {
   MCP_TOOL_NAMES,
@@ -10,16 +11,10 @@ import {
   type McpToolBindings,
 } from "./server";
 
-function waitFor(filename: string): void {
-  while (!fs.existsSync(filename)) {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
-  }
-}
-
 /** The same barrier without blocking the listener's event loop, so a held
     response never stops the next request from being served. */
 async function awaitFile(filename: string): Promise<void> {
-  while (!fs.existsSync(filename)) await Bun.sleep(5);
+  await awaitFixtureFile(filename);
 }
 
 /**
@@ -280,13 +275,6 @@ async function runHttpHost(configPath: string): Promise<void> {
   await new Promise<never>(() => {});
 }
 
-/** Spin until a shared wall-clock instant so every cold process opens the
-    database in the same few microseconds, which is what a file barrier polled
-    every few milliseconds cannot line up. */
-function waitUntil(deadlineMs: number): void {
-  while (Date.now() < deadlineMs) { /* spin */ }
-}
-
 if (process.argv[2] === "http-host") {
   await runHttpHost(process.argv[3]!);
 } else if (process.argv[2] === "cold-start") {
@@ -303,8 +291,9 @@ if (process.argv[2] === "http-host") {
   const index = Number(process.argv[7]!);
   const key = process.argv[8]!;
   fs.writeFileSync(readyPath, String(index));
-  waitFor(startPath);
-  waitUntil(Number(fs.readFileSync(startPath, "utf8")));
+  waitForFixtureFile(startPath);
+  // Spin to keep the cold-start race aligned, checking parent/root every 25 ms.
+  waitUntilFixtureTime(Number(fs.readFileSync(startPath, "utf8")), startPath);
   let outcome: Record<string, unknown>;
   try {
     const store = new SqliteMcpReceiptStore(filename);
@@ -327,14 +316,14 @@ if (process.argv[2] === "http-host") {
   const store = new SqliteMcpReceiptStore(filename);
   let peakRssBytes = process.memoryUsage().rss;
   fs.writeFileSync(readyPath, JSON.stringify({ index, steadyRssBytes: peakRssBytes }));
-  waitFor(startPath);
+  waitForFixtureFile(startPath);
 
   const bindings = Object.fromEntries(MCP_TOOL_NAMES.map((toolName) => [toolName, async () => ({})])) as unknown as McpToolBindings;
   bindings.list_tasks = async () => {
     peakRssBytes = Math.max(peakRssBytes, process.memoryUsage().rss);
     fs.appendFileSync(ownerCountPath, `${index}\n`);
     fs.writeFileSync(ownerReadyPath, String(index), { flag: "wx" });
-    waitFor(ownerReleasePath);
+    waitForFixtureFile(ownerReleasePath);
     peakRssBytes = Math.max(peakRssBytes, process.memoryUsage().rss);
     return { ownerIndex: index, count: 1 };
   };

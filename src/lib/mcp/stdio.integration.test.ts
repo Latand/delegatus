@@ -1,7 +1,8 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import net from "node:net";
+import type { ChildProcess } from "node:child_process";
 
 const downstream = (tool: string, key: string) => `mcp_${tool === "send_message" ? "send" : "spawn"}_${crypto.createHash("sha256").update(key).digest("hex")}`;
 import os from "node:os";
@@ -20,6 +21,16 @@ import { createFeedSession } from "@/components/feed/parse";
 import { FeedItem } from "@/components/feed/FeedItem";
 import { MessageProvenanceProvider, provenanceLookupFor } from "@/components/feed/messageProvenance";
 import { heldDeliveryOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
+import { ownExternalFixtureChild, ownFixtureChild, reapFixtureChildren } from "./ownedFixtureChildren";
+
+class OwnedStdioClientTransport extends StdioClientTransport {
+  override async start(): Promise<void> {
+    await super.start();
+    const child = (this as unknown as { _process?: ChildProcess })._process;
+    if (!child) throw new Error("stdio fixture transport did not retain its child");
+    ownExternalFixtureChild(child, () => this.close());
+  }
+}
 
 /* Every process these tests start — the packaged MCP server, the controlled
    Viewer host — runs against a sandbox of its own: state, home, config, temp
@@ -27,9 +38,11 @@ import { heldDeliveryOccurrences } from "@/lib/runtime/deliveredMessageOccurrenc
    environment carries (a spawn capability, a control URL, a deploy target)
    reaches a child. */
 const sandboxes: string[] = [];
-afterEach(() => {
+afterEach(async () => {
+  await reapFixtureChildren();
   for (const sandbox of sandboxes.splice(0)) fs.rmSync(sandbox, { recursive: true, force: true });
 });
+afterAll(reapFixtureChildren);
 
 function sandboxDir(prefix: string): string {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -86,7 +99,7 @@ interface McpSession {
 }
 
 async function startMcp(environment: Record<string, string>, name: string): Promise<McpSession> {
-  const transport = new StdioClientTransport({
+  const transport = new OwnedStdioClientTransport({
     command: process.execPath,
     args: [path.join(process.cwd(), "bin", "mcp-server.mjs")],
     cwd: process.cwd(),
@@ -150,7 +163,7 @@ test("store reads stay independent of a slow host, held pipeline lease and same-
     LLV_RUNTIME_HOST_SOCKET: socketPath,
     LLV_VIEWER_CONTROL_URL: `http://127.0.0.1:${http.port}`,
   });
-  const seed = Bun.spawn([process.execPath, "-e", `
+  const seed = ownFixtureChild(Bun.spawn([process.execPath, "-e", `
     const { withPipelineMutation, buildPipeline } = await import('./src/lib/pipelines/store');
     const { mutateTasks } = await import('./src/lib/tasks/store');
     await withPipelineMutation((rows, persist) => {
@@ -162,7 +175,7 @@ test("store reads stay independent of a slow host, held pipeline lease and same-
       console.log('held');
       for await (const chunk of Bun.stdin.stream()) break;
     });
-  `], { cwd: process.cwd(), env: environment, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  `], { cwd: process.cwd(), env: environment, stdin: "pipe", stdout: "pipe", stderr: "pipe" }));
   let session: McpSession | undefined;
   try {
     const reader = seed.stdout.getReader();
@@ -542,7 +555,7 @@ async function causalFixture(prefix: string): Promise<CausalFixture> {
     startHost: async () => {
       hosts += 1;
       fs.rmSync(config.portFile, { force: true });
-      const child = Bun.spawn([
+      const child = ownFixtureChild(Bun.spawn([
         process.execPath,
         path.join(process.cwd(), "src", "lib", "mcp", "receiptStoreProbeChild.ts"),
         "http-host",
@@ -558,7 +571,7 @@ async function causalFixture(prefix: string): Promise<CausalFixture> {
         },
         stdout: "ignore",
         stderr: "pipe",
-      });
+      }));
       const deadline = Date.now() + 20_000;
       while (!fs.existsSync(config.portFile)) {
         if (child.exitCode !== null) throw new Error(`host ${hosts} exited: ${await new Response(child.stderr).text()}`);
