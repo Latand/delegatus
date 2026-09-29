@@ -22,7 +22,6 @@ import { procBackend } from "@/lib/proc";
 import { admitRuntimeImagePayload, type RuntimeImageAdmissionResult } from "@/lib/runtime/runtimeImageAdmission";
 import type { RuntimeImageUpload } from "@/lib/runtime/runtimeImageStore";
 import { spawnTransport, type SpawnTransport } from "@/lib/runtime/spawnTransport";
-import { listFiles } from "@/lib/scanner";
 import { agentProcesses, isHelperArgv, pidAlive, readArgv, readPpid, type AgentProcess } from "@/lib/scanner/process";
 import type { FileEntry } from "@/lib/types";
 import {
@@ -570,6 +569,9 @@ export function knownLivePidsFrom(entries: readonly FileEntry[]): Set<number> {
 }
 
 export async function knownLivePids(): Promise<Set<number>> {
+  /* Loaded on first use: the scanner's static graph reaches the account
+     stores, and the isolated resource worker imports this module (#2117). */
+  const { listFiles } = await import("@/lib/scanner");
   return knownLivePidsFrom(await listFiles());
 }
 

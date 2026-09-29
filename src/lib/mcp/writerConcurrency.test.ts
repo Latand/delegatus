@@ -1,15 +1,18 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { readStateCollectionRows } from "@/lib/state/sqliteStateStore";
+import { ownFixtureChild, reapFixtureChildren } from "./ownedFixtureChildren";
 
 const sandboxes: string[] = [];
 
-afterEach(() => {
+afterEach(async () => {
+  await reapFixtureChildren();
   for (const sandbox of sandboxes.splice(0)) fs.rmSync(sandbox, { recursive: true, force: true });
 });
+afterAll(reapFixtureChildren);
 
 async function waitFor(pathname: string, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -58,7 +61,7 @@ async function runConcurrentWriters(
   const writers = ["http", "mcp"].map((writer) => {
     const ready = path.join(sandbox, `${writer}.ready`);
     const release = path.join(sandbox, `${writer}.release`);
-    const child = Bun.spawn({
+    const child = ownFixtureChild(Bun.spawn({
       cmd: [process.execPath, fixture],
       cwd: process.cwd(),
       env: {
@@ -75,7 +78,7 @@ async function runConcurrentWriters(
       },
       stdout: "ignore",
       stderr: "pipe",
-    });
+    }));
     return { child, ready, release };
   });
 
@@ -203,7 +206,7 @@ test("an aged live writer without process identity retains the transaction until
   const spawnWriter = (writer: "http" | "mcp") => {
     const ready = path.join(sandbox, `${writer}.ready`);
     const release = path.join(sandbox, `${writer}.release`);
-    const child = Bun.spawn({
+    const child = ownFixtureChild(Bun.spawn({
       cmd: [process.execPath, fixture],
       cwd: process.cwd(),
       env: {
@@ -217,7 +220,7 @@ test("an aged live writer without process identity retains the transaction until
       },
       stdout: "ignore",
       stderr: "pipe",
-    });
+    }));
     return { child, ready, release };
   };
 

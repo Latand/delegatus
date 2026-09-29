@@ -646,6 +646,86 @@ test("post-promotion deadline reports serving readiness and host adoption progre
   );
 });
 
+/** A verify-promoted adapter whose body calls `report <n>` to publish the
+    promoted Viewer's adoption count; the body decides whether a count is new,
+    repeated, or never followed by the success evidence printed at the end. */
+function progressingAdapter(body: string): { executable: string; stateFile: string } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-adapter-progress-"));
+  sandboxes.push(dir);
+  const executable = path.join(dir, "adapter.sh");
+  const evidence = JSON.stringify({
+    checkedAt: "2026-09-29T20:26:34.457Z", endpoint: "http://127.0.0.1:8898", processReady: true,
+    rootStatus: 200, authenticatedStatus: 200, unauthorizedStatus: 403, assets: [], ok: true,
+  });
+  fs.writeFileSync(executable, `#!/bin/sh
+report() {
+  printf '{"action":"%s","phase":"waiting for promoted Viewer serving readiness - adoption %s of 8 - adopting Claude hosts"}' "$ACTION" "$1" > "$LLV_DEPLOYMENT_ADAPTER_PHASE_FILE.tmp"
+  mv "$LLV_DEPLOYMENT_ADAPTER_PHASE_FILE.tmp" "$LLV_DEPLOYMENT_ADAPTER_PHASE_FILE"
+}
+ACTION="$1"
+${body}
+printf '%s\\n' '${evidence}'
+`, { mode: 0o700 });
+  return { executable, stateFile: path.join(dir, "adapter-process.json") };
+}
+
+const promotedCandidate = {
+  image: "viewer:test", container: "viewer-candidate", endpoint: "http://127.0.0.1:18001", revision: "a".repeat(40),
+};
+
+test("issue 1482: a promoted Viewer still adopting live hosts past the stall window is not rolled back", async () => {
+  /* Eight adoption steps of 100 ms each outlast a 300 ms window three times
+     over. A fixed deadline rolled this release back mid-adoption; each new
+     step is progress, so the wait continues until the adapter answers. */
+  const fixture = progressingAdapter("i=1\nwhile [ $i -le 8 ]; do report $i; sleep 0.1; i=$((i+1)); done");
+  const adapter = HostCommandViewerDeploymentAdapter.fromExecutable(fixture.executable, {
+    stateFile: fixture.stateFile, phaseLogIntervalMs: 10, log: () => {},
+    timeouts: { "verify-promoted": 300 },
+  });
+  const started = Date.now();
+  const evidence = await adapter.verifyPromoted(promotedCandidate);
+  expect(evidence.ok).toBe(true);
+  expect(Date.now() - started).toBeGreaterThan(300);
+});
+
+test("issue 1482: a promoted Viewer whose startup stops progressing ends at the stall window", async () => {
+  const fixture = progressingAdapter("report 3\nsleep 60");
+  const adapter = HostCommandViewerDeploymentAdapter.fromExecutable(fixture.executable, {
+    stateFile: fixture.stateFile, phaseLogIntervalMs: 10, log: () => {},
+    timeouts: { "verify-promoted": 200 },
+  });
+  const started = Date.now();
+  await expect(adapter.verifyPromoted(promotedCandidate)).rejects.toThrow(
+    "deployment adapter verify-promoted timed out while waiting for promoted Viewer serving readiness - adoption 3 of 8 - adopting Claude hosts; no new progress for 1s",
+  );
+  expect(Date.now() - started).toBeLessThan(5_000);
+  expect(fs.existsSync(fixture.stateFile)).toBe(false);
+});
+
+test("issue 1482: phases that only recur, as a startup retry loop reports them, extend nothing", async () => {
+  const fixture = progressingAdapter("while true; do report 1; sleep 0.02; report 2; sleep 0.02; done");
+  const adapter = HostCommandViewerDeploymentAdapter.fromExecutable(fixture.executable, {
+    stateFile: fixture.stateFile, phaseLogIntervalMs: 5, log: () => {},
+    timeouts: { "verify-promoted": 300 },
+  });
+  const started = Date.now();
+  await expect(adapter.verifyPromoted(promotedCandidate)).rejects.toThrow("no new progress for 1s");
+  expect(Date.now() - started).toBeLessThan(5_000);
+});
+
+test("issue 1482: a promoted Viewer that keeps progressing is still bounded by the ceiling", async () => {
+  const fixture = progressingAdapter("i=1\nwhile true; do report $i; sleep 0.02; i=$((i+1)); done");
+  const adapter = HostCommandViewerDeploymentAdapter.fromExecutable(fixture.executable, {
+    stateFile: fixture.stateFile, phaseLogIntervalMs: 5, log: () => {},
+    timeouts: { "verify-promoted": 200 },
+    progressCeilings: { "verify-promoted": 800 },
+  });
+  const started = Date.now();
+  await expect(adapter.verifyPromoted(promotedCandidate)).rejects.toThrow("still progressing at the 1s ceiling");
+  const elapsed = Date.now() - started;
+  expect(elapsed).toBeGreaterThanOrEqual(790);
+  expect(elapsed).toBeLessThan(5_000);
+});
 
 test("serving action has a five minute default deadline and cancellation joins its process", async () => {
   const fixture = sleepingAdapter("waiting for serving readiness");

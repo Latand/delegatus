@@ -486,6 +486,14 @@ export class ViewerDeploymentCoordinator {
       }
       const promotionStarted = latest.phase === "promoting" || latest.phase === "post-promotion-health" || latest.phase === "rolling-back";
       if (promotionStarted && latest.previous && latest.candidate) {
+        /* #1077: a failure inside rolling-back is the rollback's own, and the
+           record already names why the candidate was reverted. Replacing that
+           reason with the rollback error ("rollback mirror did not converge")
+           blamed the revert on the rollback machinery and hid the failed
+           post-promotion probe that caused it. */
+        const cause = latest.phase === "rolling-back" && latest.error && latest.error !== message
+          ? `${latest.error}; first rollback attempt failed: ${message}`
+          : message;
         try {
           const rolling = latest.phase === "rolling-back"
             ? latest
@@ -498,7 +506,7 @@ export class ViewerDeploymentCoordinator {
           this.journal.updateViewerDeployment(recorded.deploymentId, {
             phase: "rolled-back",
             terminal: true,
-            error: message,
+            error: cause,
             mcpRuntime: { ...runtime, publications: [...runtime.publications, publication] },
           });
           return;
@@ -506,7 +514,7 @@ export class ViewerDeploymentCoordinator {
           this.journal.updateViewerDeployment(latest.deploymentId, {
             phase: "failed",
             terminal: true,
-            error: `${message}; rollback failed: ${safeError(rollbackError)}`,
+            error: `${cause}; rollback failed: ${safeError(rollbackError)}`,
           });
           return;
         }

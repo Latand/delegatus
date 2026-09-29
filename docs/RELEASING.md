@@ -41,7 +41,13 @@ shim restores the complete credential set before invoking the host CLI.
 
 The built-in host adapter lives at `/app/scripts/runtime-host-viewer-adapter.ts`. It maintains a clean canonical Git mirror under the durable state directory, resolves the requested branch ref or SHA to an exact commit (peeling `^{commit}`, which is what proves the object is actually present), creates a detached source worktree, builds a versioned Docker image, starts a distinct candidate container with the runtime-host socket configured, checks process readiness plus remote authorized/unauthorized behavior and every referenced CSS/JavaScript asset, and atomically changes the listener target. Post-promotion failure restores the journaled previous target. Successful cleanup retains the serving and immediate rollback containers; failed and superseded managed candidates are retired.
 
-Each adapter action has a fixed deadline. Runtime-host records the adapter PID
+Each adapter action has a deadline. `verify-promoted` waits for the promoted
+Viewer's own startup to report ready, and its five minutes count time without
+progress: each startup phase or adoption count the Viewer has not reported
+before in that wait restarts them, a phase that only recurs does not, and
+twenty minutes bound the whole wait. A Viewer still adopting live agent hosts
+keeps its promotion; one whose startup has stopped moving is rolled back.
+Runtime-host records the adapter PID
 and process-start identity durably, launches it with a parent-death signal, and
 reconciles that exact process group before replaying a journaled phase after a
 restart.
@@ -126,6 +132,33 @@ Compose projects, or shell text.
 Deployment state is available through `POST /api/runtime/deployments`, `GET /api/runtime/deployments/:id`, the runtime snapshot, and the existing SSE stream. The Viewer shows the latest phase in a compact status pill.
 
 The legacy direct Compose replacement workflow is unsupported after listener migration.
+
+### Compose schema changes ship in two deploys
+
+The deployer that builds a candidate is the adapter inside the **running**
+runtime-host image, not the revision being deployed. It reads the target's
+`docker-compose.yml` and turns the `viewer` service into the candidate's
+`docker run` arguments itself, through the keys it knows: `SERVICE_KEYS`,
+`ViewerComposeService` and `viewerCandidateDockerArgs` in
+`src/runtime-host/candidateContainer.ts`. A key it does not know is refused,
+because silently dropping it would start a candidate without a property the
+file declares. The refusal comes at the start of `build-candidate`, before any
+image is built, and reads `Viewer Compose service has uncovered fields: <key>;
+the running deployer cannot apply them to a candidate …`.
+
+So a change that adds a key to the `viewer` service, or a key to one of its
+volumes, ships in two deploys:
+
+1. Teach the deployer the key: add it to `SERVICE_KEYS` (or `VOLUME_KEYS`),
+   parse it in `viewerComposeServiceFromConfig`, and pass it on in
+   `viewerCandidateDockerArgs`, with a case in `candidateContainer.test.ts`.
+   Leave `docker-compose.yml` without the key. Deploy this revision and wait
+   for `succeeded`: that phase comes after `host-handoff`, when a runtime-host
+   generation built from this revision owns the listener and runs its adapter.
+2. Add the key to `docker-compose.yml` and deploy that revision.
+
+The same holds for any other change to how the deployer reads the service:
+the deploy that carries it is still built by the previous adapter.
 
 ## Dependency updates
 

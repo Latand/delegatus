@@ -470,6 +470,36 @@ test("a post-promotion failure restores the previous healthy release", async () 
   store.close();
 });
 
+test("issue 1077: a first rollback attempt that fails keeps the reason the candidate was reverted", async () => {
+  /* The 2026-08-21 sequence: the promoted MCP read probe failed, the first
+     rollback attempt threw while checkpointing a rollback mirror, and the retry
+     restored the previous release. The record then named only the mirror. */
+  const store = journal("rollback-cause");
+  const adapter = new FakeDeploymentAdapter();
+  const previous = adapter.current;
+  adapter.promotedHealth = { ...healthy("http://127.0.0.1:8898"), ok: false, detail: "MCP runtime read probes failed" };
+  const rollback = adapter.rollback.bind(adapter);
+  let attempts = 0;
+  adapter.rollback = async (...args: Parameters<FakeDeploymentAdapter["rollback"]>) => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("agent registry rollback mirror did not converge after 2 attempts");
+    return rollback(...args);
+  };
+  const coordinator = new ViewerDeploymentCoordinator(store, adapter, { pid: 10, startIdentity: "10:1" });
+  try {
+    const receipt = await coordinator.requestViewerDeployment({ idempotencyKey: "rollback-cause" });
+    if (receipt.state !== "accepted") throw new Error("deployment was not accepted");
+    const status = await coordinator.waitForDeployment(receipt.deploymentId);
+    expect(attempts).toBe(2);
+    expect(status).toMatchObject({
+      phase: "rolled-back",
+      terminal: true,
+      previous,
+      error: "MCP runtime read probes failed; first rollback attempt failed: agent registry rollback mirror did not converge after 2 attempts",
+    });
+  } finally { store.close(); }
+});
+
 test("a promoted verification deadline enters rollback and frees the deployment lane", async () => {
   const store = journal("startup-deadline");
   const adapter = new FakeDeploymentAdapter();
