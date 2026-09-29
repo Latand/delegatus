@@ -374,8 +374,11 @@ at the foot of the sidebar.
 - **A bot.** Paste a bot token from @BotFather and choose which chats agents
   may post to. Agents post to those chats and read what the bot receives
   through the MCP server. An agent can also send one photo or an album of
-  up to ten (JPEG or PNG, each up to 10 MB) with a caption for each image.
-  The orchestrator can send its reports to one of these chats.
+  up to ten (JPEG or PNG, each up to 10 MB) with a caption for each image,
+  or a report file up to 20 MB (Markdown, text, log, JSON, CSV, HTML, PDF
+  or an image). Files are sent only from the **Document folders** set in
+  the panel, `handoff/` in your home by default, and a text file holding a
+  password or a key is refused. The orchestrator can send its reports to one of these chats.
 - **Your own account.** Enter your `api_id` and `api_hash` from
   my.telegram.org, then scan a QR code with the Telegram app. Delegatus
   registers a read-only Telegram MCP server, named `telegram`, for Claude
