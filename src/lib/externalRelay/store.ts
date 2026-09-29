@@ -244,6 +244,48 @@ export function dropRun(requestId: string): void {
     runs: ledger.runs.filter((run) => run.requestId !== requestId),
   }));
 }
+/** A target this install has not configured: no engine, so it is not
+ * answered until the operator picks one (§B.9). */
+export function newTargetSettings(
+  target: ExternalRelayTarget,
+): RelayTargetSettings {
+  return {
+    id: target.target_id,
+    name: target.name,
+    answered_by: target.answered_by,
+    fallback: target.fallback,
+    enabled: true,
+    engine: null,
+    model: null,
+    effort: null,
+    project: null,
+    concurrency: 1,
+    hardCapMinutes: 30,
+  };
+}
+/**
+ * The service's list, in its order, over the stored settings: a target it
+ * still lists keeps the operator's settings and takes the service's name,
+ * `answered_by` and `fallback`; a new one arrives unconfigured; one it no
+ * longer lists is dropped.
+ */
+export function mergeRelayTargets(
+  stored: RelayTargetSettings[],
+  remote: ExternalRelayTarget[],
+): RelayTargetSettings[] {
+  const byId = new Map(stored.map((target) => [target.id, target]));
+  return remote.map((target) => {
+    const kept = byId.get(target.target_id);
+    return kept
+      ? {
+          ...kept,
+          name: target.name,
+          answered_by: target.answered_by,
+          fallback: target.fallback,
+        }
+      : newTargetSettings(target);
+  });
+}
 export function publicRelay(
   relay: PairedRelay,
 ): Omit<PairedRelay, "credential"> {

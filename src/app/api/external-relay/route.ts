@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { guardRelayRoute } from "@/lib/externalRelay/routeGuard";
-import { externalRelayRows } from "@/lib/externalRelay/poller";
+import {
+  externalRelayRows,
+  refreshTargetsForRead,
+} from "@/lib/externalRelay/poller";
 import {
   publicPending,
   publicRelay,
@@ -8,9 +11,10 @@ import {
 } from "@/lib/externalRelay/store";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export function GET(req: NextRequest) {
+export async function GET(req: NextRequest) {
   const denied = guardRelayRoute(req);
   if (denied) return denied;
+  await refreshTargetsForRead();
   const store = readRelayStore();
   return NextResponse.json({
     relays: store.relays.map(publicRelay),

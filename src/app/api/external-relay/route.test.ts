@@ -10,15 +10,25 @@ const { GET } = await import("./route");
 const { POST } = await import("./pairings/route");
 const origin = "http://127.0.0.1:8899";
 const local = { headers: { origin, host: "127.0.0.1:8899" } };
-test("status omits credential and poll secret", async () => {
+test("status refreshes the targets and omits credential and poll secret", async () => {
   const { updateRelayStore } = await import("@/lib/externalRelay/store");
+  const { startTestRelay } = await import("@/lib/externalRelay/testRelay");
+  const reads: (string | undefined)[] = [];
+  const service = await startTestRelay((req) => {
+    reads.push(req.headers.authorization);
+    return req.url === "/v1/targets"
+      ? { body: { targets: [{ target_id: "linked_later", name: "Linked later", answered_by: "service", fallback: "service" }] } }
+      : { status: 404 };
+  });
   updateRelayStore((store) => ({
     ...store,
     relays: [
       {
-        id: "relay",
-        origin,
-        api_base: `${origin}/v1`,
+        // Its own id: the targets rate limit is kept per relay id for the
+        // whole process, which other relay suites share.
+        id: "route_relay",
+        origin: service.origin,
+        api_base: `${service.origin}/v1`,
         name: "Test",
         description: "",
         credential: "secret_credential",
@@ -59,14 +69,22 @@ test("status omits credential and poll secret", async () => {
       },
     ],
   }));
-  const response = await GET(
-    new NextRequest(`${origin}/api/external-relay`, local),
-  );
-  expect(response.status).toBe(200);
-  const text = await response.text();
-  expect(text).toContain("pending");
-  expect(text).not.toContain("secret_credential");
-  expect(text).not.toContain("secret_poll");
+  try {
+    const response = await GET(
+      new NextRequest(`${origin}/api/external-relay`, local),
+    );
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(reads).toEqual(["Bearer secret_credential"]);
+    expect(JSON.parse(text).relays[0].targets).toMatchObject([
+      { id: "linked_later", name: "Linked later", engine: null },
+    ]);
+    expect(text).toContain("pending");
+    expect(text).not.toContain("secret_credential");
+    expect(text).not.toContain("secret_poll");
+  } finally {
+    await service.close();
+  }
 });
 test("mutation guards cross origin and staging", async () => {
   const foreign = await POST(
@@ -178,7 +196,7 @@ test("settings this install refuses answer with local codes, never the service's
   updateRelayStore((store) => ({
     ...store,
     relays: store.relays.map((relay) =>
-      relay.id === "relay"
+      relay.id === "route_relay"
         ? {
             ...relay,
             targets: [
@@ -202,12 +220,12 @@ test("settings this install refuses answer with local codes, never the service's
   }));
   const patch = (body: string) =>
     PATCH(
-      new NextRequest(`${origin}/api/external-relay/relays/relay`, {
+      new NextRequest(`${origin}/api/external-relay/relays/route_relay`, {
         method: "PATCH",
         headers: { ...local.headers, "content-type": "application/json" },
         body,
       }),
-      { params: Promise.resolve({ id: "relay" }) },
+      { params: Promise.resolve({ id: "route_relay" }) },
     );
   const answers = await Promise.all(
     [
@@ -229,7 +247,7 @@ test("settings this install refuses answer with local codes, never the service's
     [400, "refused_here"],
   ]);
   expect(
-    readRelayStore().relays.find((relay) => relay.id === "relay")?.targets[0]
+    readRelayStore().relays.find((relay) => relay.id === "route_relay")?.targets[0]
       ?.concurrency,
   ).toBe(1);
 });

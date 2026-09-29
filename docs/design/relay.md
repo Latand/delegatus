@@ -1012,6 +1012,27 @@ configured target. When a run ends and frees a slot, the loop aborts its open
 poll and opens a new one with fresh slots, so the relay service never goes on
 believing a target is busy.
 
+**Targets refresh.** The pairing's confirm is not the only source of the
+target list: a service can confirm with `targets: []` and link the owner's
+targets afterwards, and a target created later appears only through endpoint
+6. `refreshRelayTargets` in `poller.ts` reads `GET {api}/targets` for one
+relay: when `GET /api/external-relay` is served (at most once per 30 s per
+relay, the route waiting at most 2 s for it), at the top of the claim loop
+every 5 min (so also when the loop starts), and once inside the confirm when
+the confirm carried no targets, so the confirm's answer, and the setup step's
+default engine (§B.9), already see them. A refresh already on the wire is
+joined, never repeated. The list merges by target id through the locked store
+write (`mergeRelayTargets`, `store.ts`): a target the service still lists keeps
+its local settings and takes the service's name, `answered_by` and `fallback`;
+a new target arrives with no engine, so it is not answered until configured; a
+target the service no longer lists is dropped, and the relay's loop restarts so
+it is no longer in `slots`. A 401 parks the loop as `credential_rejected`. A
+network error, a 5xx, a 429 or a body that fails the `Targets` schema
+(`targetsSchema`, which also refuses a target id listed twice) keeps the stored
+list and records `targets:<code>` as the relay's last outcome, which the page
+words as "Could not refresh the targets". Only a valid list, including an empty
+one, replaces it.
+
 **Release succession and restarts.** During a succession two Viewer
 generations can poll at once; claim-once (§A.9) keeps them from sharing a
 request, and each completes only its own leases. A run's child is detached
@@ -1331,7 +1352,7 @@ and 409 in staging (`isStagingMode`):
 
 | Route | Does |
 |---|---|
-| `GET /api/external-relay` | Relays, targets, poller state, running counts, last outcome. No secrets. |
+| `GET /api/external-relay` | Refreshes each relay's targets from the service (§B.3, rate-limited), then returns relays, targets, poller state, running counts, last outcome. No secrets. |
 | `POST /api/external-relay/pairings` `{url, label?}` | Reads the descriptor, starts a pairing, returns code, link, expiry and the descriptor text. |
 | `GET /api/external-relay/pairings/[id]` | Polls the pairing once; returns its status and, when awaiting, the owner identity to confirm. |
 | `POST /api/external-relay/pairings/[id]` `{ownerId}` | Confirms; stores the credential; starts the loop. |
@@ -1400,7 +1421,10 @@ back to Engines, and the connect form stays disabled; it runs no check turn,
 and capacity is left to §B.4 step 3 at request time. With one, it renders the
 same `ExternalRelaySection`, and a confirmed pairing gives every target that
 has no engine yet the chosen engine and its default model, so the operator
-only has to switch "Answered by this install" on. Like the Phone step, the
+only has to switch "Answered by this install" on. That includes the targets
+the confirm itself fetched when the service confirmed with none (§B.3); a
+target that appears in a later refresh arrives with no engine and waits for
+the operator. Like the Phone step, the
 step's outcome comes from the live state: leaving it while `GET
 /api/external-relay` lists a paired relay, however and whenever it was
 paired, records it done and offers no Skip; leaving it with none records it
