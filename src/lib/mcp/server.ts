@@ -91,6 +91,7 @@ export const MCP_TOOL_NAMES = [
   "rotate_orchestrator",
   "seat_tick_settings",
   "account_project_binding",
+  "role_presets",
   "account_limits",
   "telegram_bot_chats",
   "telegram_bot_send",
@@ -161,6 +162,11 @@ const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
      (#1279), and the record it answers with outlives this process either way:
      a replayed clientRequestId must answer with what the first call recorded. */
   "account_project_binding",
+  /* Writes the durable role mapping and appends its audit line when it carries
+     `overrides` (#2019); a read of the same tool changes nothing, but the
+     receipt has to outlive this process either way: a replayed clientRequestId
+     must answer with what the first call recorded rather than write again. */
+  "role_presets",
   /* Posts into a Telegram chat. A replayed clientRequestId must answer with
      the message ids the first call posted, never post a second time. */
   "telegram_bot_send",
@@ -3090,6 +3096,14 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A project with no binding for an engine allows every account of that engine, which is exactly the behaviour it has always had; `restricted: false` on an engine's block says so. Binding a project to a subset fences every selection for its work, including the automatic switch under rate-limit pressure: when every allowed account is out of capacity that is reported and the work parks, and an account outside the set is never chosen.",
     "`project` defaults to your own on a list, and is required to add or remove.",
   ].join(" "),
+  role_presets: [
+    "Read — and change — which engine, model and effort each role runs on (builder, reviewer, verifier, architect, orchestrator, cleaner, prod-auditor, deployer, and the builder and reviewer variants such as `trivial`, `frontend` or `apply-fixes`), the mapping the Settings agent mapping edits and `PUT /api/roles` writes.",
+    "Called without `overrides` it is a read: per role its `config`, its `variants`, the `shipped` values beside them and whether its prompt text is overridden, plus the registry `revision`, its `health`, any `resets` a retirement made, and `choices`, every valid model per engine with the efforts each accepts.",
+    "`overrides` writes, in the shape of the PUT: `{ [roleId]: { config?, variants? } }`, where a full `{ engine, model, effort }` sets a row and `null` resets it to the shipped default; an absent key is left alone, and `promptScaffold: null` restores the shipped prompt text (a scaffold cannot be set from here). Example: `{ builder: { config: { engine: \"claude\", model: \"claude-sonnet-5-5\", effort: \"high\" } }, reviewer: { config: null } }`.",
+    "Only the designated orchestrator seat and the operator's own session write; any other caller reads, and its write is refused with `role_presets_write_refused` before anything else is checked.",
+    "The whole write is refused, and nothing is stored, when a row names an engine, model or effort outside the launch catalogue (`role_presets_invalid`, with the offending `violations` and `choices`) or when `expectedRevision` is not the current revision (`role_presets_stale_revision`, carrying the current registry to resend against). `expectedRevision` is optional.",
+    "A write answers `{changed, revision, previousRevision, health, rows, audited}`, each row as `{row, before, after}`; every write is also appended, with who made it, to `role-presets-audit.jsonl` beside role-presets.json. A change reaches launches that start after it; running agents keep the runtime they started on.",
+  ].join(" "),
   account_limits: "Read each account's last observed usage: per account `engine`, `accountId`, `active`, `fresh` (recent enough for the automatic switch to act on), `plan`, the `session` and `weekly` windows and every metered model tier as {usedPercent, resetsAt}, and `observedAt`. Narrow with `engine` and `accountId`. A read of the durable observations the accounts panel shows; it never asks a provider.",
   telegram_bot_chats: [
     "List the chats the operator's connected Telegram bot knows: per chat `chat` (the alias, else the chat id — the value the other telegram_bot_* tools take), `title`, `type`, `isForum`, `member`, `postAllowed` with `postRefusal` in words when false, `seesAllMessages` with `visibilityNote`, `lastMessageAt` and `storedMessages`; plus the bot's `receiving` state and note.",
@@ -3858,6 +3872,19 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Append one line to the stored note. Edits apply in the order replaceLine, removeLine, appendLine, under the monitorPrompt limit and redaction; not combined with monitorPrompt."),
     verbose: z.boolean().optional()
       .describe("true: return the stored note once, as monitorPrompt, with the full settings. Every answer carries monitorPromptLength."),
+  }).passthrough(),
+  role_presets: z.object({
+    clientRequestId: clientRequestIdSchema,
+    overrides: z.record(z.string(), z.object({
+      config: z.object({ engine: z.string(), model: z.string(), effort: z.string() }).nullable().optional()
+        .describe("A full { engine, model, effort } sets the role's row; null resets it to the shipped default."),
+      variants: z.record(z.string(), z.object({ engine: z.string(), model: z.string(), effort: z.string() }).nullable()).optional()
+        .describe("Builder and reviewer only, keyed by variant (trivial, frontend, docs, apply-fixes, frontend-fixes, docs-fixes; reviewer: trivial). A full config sets the variant, null resets it."),
+      promptScaffold: z.null().optional().describe("null restores the shipped prompt text. A scaffold cannot be set from here."),
+    }).passthrough()).optional()
+      .describe("The mapping change, keyed by role id. Omit to read the registry. Engine and model must be in the launch catalogue and the effort valid for them, or the whole write is refused."),
+    expectedRevision: z.string().trim().min(1).optional()
+      .describe("The registry revision this change was made against; a stale one is refused with the current registry. Only with overrides."),
   }).passthrough(),
   account_limits: z.object({
     clientRequestId: clientRequestIdSchema,

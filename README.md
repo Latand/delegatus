@@ -516,6 +516,11 @@ The tools, by area:
   `bridge_directive`;
 - **accounts:** `account_limits`, `account_project_binding`,
   `conversation_migration`;
+- **roles:** `role_presets` reads which engine, model and effort each role
+  runs on and, for the orchestrator seat and your own session, changes them
+  (the same patch as the Settings agent mapping; a model outside the launch
+  catalogue is refused, and every write is logged to `role-presets-audit.jsonl`
+  beside `role-presets.json`);
 - **Telegram bot:** `telegram_bot_chats`, `telegram_bot_send` (posts to a
   chat you allowed in the Telegram panel, signed with the calling
   conversation), `telegram_bot_send_document` (posts a report file from

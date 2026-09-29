@@ -131,8 +131,10 @@ import { pathAllowed, scanRootEntries } from "@/lib/scanner/roots";
 import { completedFileScan } from "@/lib/scanner/scanCache";
 import { readResources, readResourcesWithDiagnostic } from "@/lib/resources";
 import { adoptLiveRootSession, conversationRole, liveRootSession, type RootSessionSource } from "@/lib/root/adopt";
+import { appendRoleMappingAudit, changedMappingRows, roleLaunchChoices, roleMappingViolations, roleRegistryAnswer } from "@/lib/roles/mcpMapping";
 import { listRoles, resolveSpawnRole } from "@/lib/roles/registry";
 import { spawnSizingRefusal } from "@/lib/roles/sizing";
+import { loadRoleRegistrySnapshot, loadRoleRegistrySnapshotOrDefaults, parseRoleMappingPatch, saveRoleMapping } from "@/lib/roles/store";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import type { RoleDefinition, RoleParameter } from "@/lib/roles/types";
 import { readSpawnAdmissionFence, type SpawnAdmissionFence } from "@/lib/agent/spawnAdmission";
@@ -3745,6 +3747,94 @@ function seatTickFenceAnswer(project: string, wakeIntervalMs: number, now: numbe
 
 
 /**
+ * role_presets: read, and change, the role mapping (#2019).
+ *
+ * `PUT /api/roles` answers a seat "sign in required" and no other tool wrote
+ * the mapping, so a policy the operator gave in words (builders on Sonnet 5.5,
+ * reviewers on GPT-6.1-Sol) needed a hand edit of role-presets.json. This is the
+ * same patch and the same store, reached through the caller identity the MCP
+ * server derives:
+ *
+ * - **Who writes.** The designated orchestrator seat (a live deputy speaks as
+ *   its seat) and the operator's own session, the gateway. Every other caller
+ *   reads. A refused write says `role_presets_write_refused` and changes nothing.
+ * - **What is refused, whole.** A row naming an engine, model or effort outside
+ *   the launch catalogue, a shape the store would refuse, or a stale
+ *   `expectedRevision`. The refusal names the valid choices, or carries the
+ *   current registry, and nothing is written.
+ * - **What is recorded.** Every write appends who wrote it and each row's before
+ *   and after to `role-presets-audit.jsonl` beside role-presets.json.
+ */
+function rolePresetsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
+  if (args.overrides === undefined) {
+    if (args.expectedRevision !== undefined) throw new Error("expectedRevision applies to a write; send it with overrides");
+    return redactPayload({ ...roleRegistryAnswer(loadRoleRegistrySnapshotOrDefaults()), choices: roleLaunchChoices() });
+  }
+
+  const attribution = attributionOf(dependencies);
+  if ((attribution.kind !== "manager" && attribution.kind !== "gateway") || (attribution.kind === "manager" && !attribution.conversationId)) {
+    throw new McpToolRefusal(
+      "only the designated orchestrator seat and the operator's own session change the role mapping; this session reads it. Ask the orchestrator, or report the request over the bridge.",
+      { code: "role_presets_write_refused", callerKind: attribution.kind },
+    );
+  }
+
+  const expectedRevision = args.expectedRevision;
+  if (expectedRevision !== undefined && (typeof expectedRevision !== "string" || !expectedRevision.trim() || expectedRevision.length > 128)) {
+    throw new Error("expectedRevision must be a non-empty revision string");
+  }
+  const patch = parseRoleMappingPatch(args.overrides);
+  if (typeof patch === "string") throw new McpToolRefusal(patch, { code: "role_presets_invalid", choices: roleLaunchChoices() });
+  const violations = roleMappingViolations(patch);
+  if (violations.length > 0) {
+    throw new McpToolRefusal(
+      `role mapping refused, nothing written: ${violations.map((violation) => `${violation.field}: ${violation.message} (${violation.expected})`).join("; ")}`,
+      { code: "role_presets_invalid", violations, choices: roleLaunchChoices() },
+    );
+  }
+
+  const before = loadRoleRegistrySnapshot();
+  if (expectedRevision !== undefined && expectedRevision !== before.revision) {
+    throw new McpToolRefusal(
+      `the role mapping changed since revision ${expectedRevision}; nothing was written. The current registry is attached; resend against ${before.revision}.`,
+      { code: "role_presets_stale_revision", ...roleRegistryAnswer(before), choices: roleLaunchChoices() },
+    );
+  }
+  const merged = saveRoleMapping(patch);
+  const after = loadRoleRegistrySnapshot();
+  const rows = changedMappingRows(before.roles, merged);
+  let audited = true;
+  try {
+    appendRoleMappingAudit({
+      at: new Date().toISOString(),
+      actor: {
+        kind: attribution.kind,
+        conversationId: attribution.conversationId,
+        role: attribution.role,
+        ...(attribution.via ? { via: attribution.via } : {}),
+      },
+      clientRequestId: text(args.clientRequestId) || null,
+      revisionBefore: before.revision,
+      revisionAfter: after.revision,
+      rows,
+    });
+  } catch (error) {
+    /* The mapping is already written; a missing audit line costs the record and
+       nothing else, so the answer says so instead of failing the call. */
+    audited = false;
+    console.error(`[role_presets] could not record the audit entry for ${after.revision}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return redactPayload({
+    changed: rows.length > 0,
+    revision: after.revision,
+    previousRevision: before.revision,
+    health: after.health,
+    rows,
+    audited,
+  });
+}
+
+/**
  * account_project_binding: list, add and remove the bindings that decide which
  * accounts a project's work may run on (#1279).
  *
@@ -6203,6 +6293,7 @@ export function viewerMcpBindings(
     seat_tick_settings: async (args) => seatTickSettingsTool(args, domainDependencies),
     /* Same reason as above: this binding refuses by throwing. */
     account_project_binding: async (args) => accountProjectBindingTool(args, domainDependencies),
+    role_presets: async (args) => rolePresetsTool(args, domainDependencies),
     account_limits: async (args) => accountLimitsTool(args, domainDependencies),
     create_orchestrator: (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context)),
     send_message_to_orchestrator: (args, context) => sendMessageToOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
