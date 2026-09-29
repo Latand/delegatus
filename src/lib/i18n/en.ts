@@ -61,6 +61,7 @@ export const en = {
   "externalRelay.outcome.failed": "Failed: {reason}",
   "externalRelay.outcome.leaseLost": "The service took the request back",
   "externalRelay.outcome.localError": "Stopped by an error in this install",
+  "externalRelay.outcome.targets": "Could not refresh the targets. {reason}",
   "externalRelay.reason.invalidRequest": "the request was not valid",
   "externalRelay.reason.notConfigured": "the target has no engine or model",
   "externalRelay.reason.disabled": "the target is off here",

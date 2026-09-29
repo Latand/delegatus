@@ -6,11 +6,13 @@ import { procBackend } from "@/lib/proc";
 import {
   ensureExternalRelayPollers,
   refreshExternalRelayPollers,
+  refreshRelayTargets,
+  refreshTargetsForRead,
   relayPollerStatus,
   stopExternalRelayPollers,
   sweepExternalRelayOrphans,
 } from "./poller";
-import { externalRelayFile, reserveRun, readRelayStore, readRunLedger, updateRelayStore } from "./store";
+import { externalRelayFile, reserveRun, readRelayStore, readRunLedger, updateRelayStore, type PairedRelay, type RelayTargetSettings } from "./store";
 import { startTestRelay } from "./testRelay";
 import { noteRelayOutcome, noteRelayProgress } from "./activity";
 import { sampleRequest } from "./protocol.test";
@@ -133,8 +135,8 @@ for (const [status, code, expected] of [
 test("429 waits for Retry-After before another claim", async () => {
   let claims = 0;
   const server = await startTestRelay(
-    () => (
-      claims++,
+    (req) => (
+      req.url?.endsWith("/requests/claim") && claims++,
       {
         status: 429,
         headers: { "retry-after": "1" },
@@ -291,10 +293,13 @@ test("route module copy controls the instrumentation poller", async () => {
 });
 test("a corrupt run ledger logs the sweep failure and still starts polling", async () => {
   let claims = 0;
-  const server = await startTestRelay(() => (
-    claims++,
-    { status: 401, body: { error: { code: "unauthorized", message: "refused" } } }
-  ));
+  // The targets read succeeds, so only the claim meets the 401.
+  const server = await startTestRelay((req) => req.url?.endsWith("/targets")
+    ? { body: { targets: [] } }
+    : (
+      claims++,
+      { status: 401, body: { error: { code: "unauthorized", message: "refused" } } }
+    ));
   const errors: string[] = [];
   const originalError = console.error;
   console.error = (...args) => { errors.push(args.join(" ")); };
@@ -345,5 +350,163 @@ test("the last outcome and progress outlive a poll loop restarted by a settings 
   } finally {
     stopExternalRelayPollers();
     await server.close();
+  }
+});
+const configured = (id: string, name = id): RelayTargetSettings => ({
+  id, name, answered_by: "install", fallback: "service", enabled: true,
+  engine: "codex", model: "gpt-6-sol", effort: "low", project: "repo-x",
+  concurrency: 2, hardCapMinutes: 7,
+});
+function pairedRelay(id: string, origin: string, targets: RelayTargetSettings[]): PairedRelay {
+  return {
+    id, origin, api_base: `${origin}/v1`, name: "Test", description: "",
+    credential: "x".repeat(43),
+    owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
+    pairedAt: new Date().toISOString(), paused: false,
+    limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
+    targets,
+  };
+}
+const storedTargets = (id: string) =>
+  readRelayStore().relays.find((relay) => relay.id === id)?.targets;
+test("the claim loop refreshes targets first, merges them, and advertises slots from the new list", async () => {
+  const slots: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/targets"))
+      return { body: { targets: [
+        { target_id: "kept", name: "Renamed", answered_by: "install", fallback: "none" },
+        { target_id: "added", name: "New", answered_by: "service", fallback: "service" },
+      ] } };
+    if (req.url?.endsWith("/requests/claim")) {
+      slots.push((body as { slots: unknown }).slots);
+      return { status: 204 };
+    }
+    return { status: 404 };
+  });
+  try {
+    updateRelayStore((store) => ({
+      ...store,
+      relays: [pairedRelay("loop_refresh", server.origin, [configured("kept"), configured("gone")])],
+    }));
+    ensureExternalRelayPollers();
+    for (let i = 0; i < 50 && slots.length === 0; i++) await Bun.sleep(20);
+    expect(storedTargets("loop_refresh")).toEqual([
+      { ...configured("kept"), name: "Renamed", fallback: "none" },
+      {
+        id: "added", name: "New", answered_by: "service", fallback: "service",
+        enabled: true, engine: null, model: null, effort: null, project: null,
+        concurrency: 1, hardCapMinutes: 30,
+      },
+    ]);
+    // "gone" is no longer offered and "added" waits for its settings.
+    expect(slots[0]).toEqual([{ target_id: "kept", free: 2 }]);
+    expect(relayPollerStatus("loop_refresh").state).toBe("polling");
+  } finally {
+    stopExternalRelayPollers();
+    await server.close();
+  }
+});
+test("a settings read refreshes at most once per interval and joins a refresh on the wire", async () => {
+  let reads = 0;
+  let release: () => void = () => {};
+  let gate: Promise<void> | null = null;
+  const server = await startTestRelay(async (req) => {
+    if (!req.url?.endsWith("/targets")) return { status: 404 };
+    reads++;
+    if (gate) await gate;
+    return { body: { targets: [
+      { target_id: "kept", name: "Kept", answered_by: "install", fallback: "service" },
+    ] } };
+  });
+  try {
+    updateRelayStore((store) => ({
+      ...store,
+      relays: [{ ...pairedRelay("rate_limited_read", server.origin, [configured("kept", "Kept")]), paused: true }],
+    }));
+    await refreshTargetsForRead();
+    expect(reads).toBe(1);
+    await refreshTargetsForRead();
+    expect(await refreshRelayTargets("rate_limited_read", 30_000)).toBe("skipped");
+    expect(reads).toBe(1);
+    gate = new Promise((resolve) => { release = resolve; });
+    const first = refreshRelayTargets("rate_limited_read");
+    const joined = refreshRelayTargets("rate_limited_read");
+    expect(joined).toBe(first);
+    release();
+    expect(await first).toBe("unchanged");
+    expect(reads).toBe(2);
+    expect(storedTargets("rate_limited_read")).toEqual([configured("kept", "Kept")]);
+  } finally {
+    await server.close();
+  }
+});
+test("a 401 on the targets read parks the claim loop as credential_rejected", async () => {
+  let claims = 0;
+  const server = await startTestRelay((req) => {
+    if (req.url?.endsWith("/requests/claim")) claims++;
+    return { status: 401, body: { error: { code: "unauthorized", message: "revoked" } } };
+  });
+  try {
+    updateRelayStore((store) => ({
+      ...store,
+      relays: [pairedRelay("rejected_targets", server.origin, [configured("kept")])],
+    }));
+    ensureExternalRelayPollers();
+    for (
+      let i = 0;
+      i < 50 && relayPollerStatus("rejected_targets").state !== "credential_rejected";
+      i++
+    )
+      await Bun.sleep(20);
+    expect(relayPollerStatus("rejected_targets").state).toBe("credential_rejected");
+    await Bun.sleep(100);
+    expect(claims).toBe(0);
+    expect(storedTargets("rejected_targets")).toEqual([configured("kept")]);
+    expect(await refreshRelayTargets("rejected_targets")).toBe("credential_rejected");
+  } finally {
+    stopExternalRelayPollers();
+    await server.close();
+  }
+});
+test("a 5xx, an invalid body or a network error keeps the stored targets and says so on the activity line", async () => {
+  let reply: { status?: number; body?: unknown } = { status: 503 };
+  const server = await startTestRelay(() => reply);
+  const kept = [configured("kept"), configured("other")];
+  try {
+    updateRelayStore((store) => ({
+      ...store,
+      relays: [{ ...pairedRelay("failing_targets", server.origin, kept), paused: true }],
+    }));
+    expect(await refreshRelayTargets("failing_targets")).toBe("failed");
+    expect(storedTargets("failing_targets")).toEqual(kept);
+    expect(relayPollerStatus("failing_targets").lastOutcome).toBe("targets:unreachable");
+    for (const body of [{ targets: [{ target_id: "kept" }] }, { targets: "none" }]) {
+      reply = { body };
+      expect(await refreshRelayTargets("failing_targets")).toBe("failed");
+      expect(storedTargets("failing_targets")).toEqual(kept);
+      expect(relayPollerStatus("failing_targets").lastOutcome).toBe("targets:malformed");
+    }
+    reply = { status: 429, body: { error: { code: "rate_limited", message: "wait" } } };
+    expect(await refreshRelayTargets("failing_targets")).toBe("failed");
+    expect(relayPollerStatus("failing_targets").lastOutcome).toBe("targets:rate_limited");
+  } finally {
+    await server.close();
+  }
+  noteRelayOutcome("failing_targets", "answered");
+  expect(await refreshRelayTargets("failing_targets")).toBe("failed");
+  expect(storedTargets("failing_targets")).toEqual(kept);
+  expect(relayPollerStatus("failing_targets").lastOutcome).toBe("targets:unreachable");
+  // An empty list from the service is a real answer: every target goes.
+  const empty = await startTestRelay(() => ({ body: { targets: [] } }));
+  try {
+    updateRelayStore((store) => ({
+      ...store,
+      relays: store.relays.map((relay) =>
+        relay.id === "failing_targets" ? { ...relay, api_base: `${empty.origin}/v1` } : relay),
+    }));
+    expect(await refreshRelayTargets("failing_targets")).toBe("changed");
+    expect(storedTargets("failing_targets")).toEqual([]);
+  } finally {
+    await empty.close();
   }
 });

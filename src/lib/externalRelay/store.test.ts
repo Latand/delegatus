@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   dropRun,
+  mergeRelayTargets,
   reserveRun,
   readRunLedger,
   readRelayStore,
@@ -125,4 +126,35 @@ test("a pending pairing past its expiry leaves relays.json with its poll secret 
   const text = fs.readFileSync(file, "utf8");
   expect(text).not.toContain("lapsed-poll");
   expect(text).toContain("live-poll");
+});
+test("a target refresh keeps settings of listed targets, adds new ones unconfigured and drops the rest", () => {
+  const stored = [
+    {
+      id: "kept", name: "Old name", answered_by: "install" as const,
+      fallback: "service" as const, enabled: false, engine: "codex" as const,
+      model: "gpt-6-sol", effort: "low", project: "repo-x", concurrency: 3,
+      hardCapMinutes: 12,
+    },
+    {
+      id: "gone", name: "Gone", answered_by: "install" as const,
+      fallback: "service" as const, enabled: true, engine: "claude" as const,
+      model: "claude-sonnet-5", effort: null, project: null, concurrency: 1,
+      hardCapMinutes: 30,
+    },
+  ];
+  const merged = mergeRelayTargets(stored, [
+    { target_id: "added", name: "Added", answered_by: "install", fallback: "none" },
+    { target_id: "kept", name: "New name", answered_by: "service", fallback: "none" },
+  ]);
+  expect(merged).toEqual([
+    {
+      id: "added", name: "Added", answered_by: "install", fallback: "none",
+      enabled: true, engine: null, model: null, effort: null, project: null,
+      concurrency: 1, hardCapMinutes: 30,
+    },
+    {
+      ...stored[0]!, name: "New name", answered_by: "service", fallback: "none",
+    },
+  ]);
+  expect(mergeRelayTargets(stored, [])).toEqual([]);
 });

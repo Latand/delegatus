@@ -60,6 +60,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "externalRelay.outcome.failed": "Не вдалося: {reason}",
   "externalRelay.outcome.leaseLost": "Сервіс забрав запит назад",
   "externalRelay.outcome.localError": "Зупинено помилкою в цій інсталяції",
+  "externalRelay.outcome.targets": "Не вдалося оновити цілі. {reason}",
   "externalRelay.reason.invalidRequest": "запит був некоректний",
   "externalRelay.reason.notConfigured": "у цілі немає рушія чи моделі",
   "externalRelay.reason.disabled": "ціль тут вимкнено",

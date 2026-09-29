@@ -2,7 +2,13 @@ import dns from "node:dns/promises";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
-import { descriptorSchema, type ExternalRelayDescriptor } from "./protocol";
+import {
+  descriptorSchema,
+  targetsSchema,
+  type ExternalRelayDescriptor,
+  type ExternalRelayTarget,
+} from "./protocol";
+import type { PairedRelay } from "./store";
 
 export class ExternalRelayError extends Error {
   constructor(
@@ -211,4 +217,22 @@ export async function discoverRelay(
     throw new ExternalRelayError("invalid_api_path");
   if (api.search || api.hash) throw new ExternalRelayError("invalid_address");
   return { origin, descriptor: parsed.data };
+}
+/** Endpoint 6: the targets the service lists for this pairing now. A body
+ * that fails the schema is `malformed`, so the caller keeps what it stored. */
+export async function fetchRelayTargets(
+  relay: Pick<PairedRelay, "api_base" | "credential" | "limits">,
+): Promise<ExternalRelayTarget[]> {
+  const result = await relayCall(
+    relay.api_base,
+    "/targets",
+    "GET",
+    undefined,
+    relay.credential,
+    { maxBytes: relay.limits.max_response_bytes },
+  );
+  const parsed = targetsSchema.safeParse(result.body);
+  if (result.status !== 200 || !parsed.success)
+    throw new ExternalRelayError("malformed", result.status);
+  return parsed.data.targets;
 }
