@@ -325,6 +325,12 @@
     panAnimation = requestAnimationFrame(tick);
   }
   let heroManual = false;
+  // The frame that is showing full screen, and how: the browser's Fullscreen
+  // API where it exists, or the same layout as a fixed overlay where it does not.
+  let fsLive = null;
+  let fsNative = false;
+  let fsScroll = null;
+  let fsWatch = null;
   const heroViewFor = (step) => ((hero.fixed || phoneQuery.matches) ? HERO_PHONE_VIEW_FOR_STEP : HERO_VIEW_FOR_STEP)[step];
 
   function liveSrc(live) {
@@ -338,11 +344,14 @@
   function layout(live) {
     const phone = live.fixed || phoneQuery.matches;
     const d = live.el.dataset;
-    const width = live.el.clientWidth || 1;
-    const lw = phone ? Number(d.pw) : Math.max(Number(d.lw), width);
-    const lh = phone ? Number(d.ph) : Number(d.lh);
-    const scale = width / lw;
-    live.el.style.height = `${Math.round(lh * scale)}px`;
+    // Full screen runs the product at the size of the space it has, unscaled,
+    // so its own responsive layout decides what the visitor sees.
+    const full = fsLive === live;
+    const width = (full ? live.host.clientWidth : live.el.clientWidth) || 1;
+    const lw = full ? width : phone ? Number(d.pw) : Math.max(Number(d.lw), width);
+    const lh = full ? live.host.clientHeight || 1 : phone ? Number(d.ph) : Number(d.lh);
+    const scale = full ? 1 : width / lw;
+    live.el.style.height = full ? "" : `${Math.round(lh * scale)}px`;
     live.el.dataset.mode = phone ? "phone" : "desktop";
     if (live.iframe) {
       live.iframe.style.width = `${lw}px`;
@@ -359,6 +368,10 @@
     const iframe = document.createElement("iframe");
     iframe.title = live.el.getAttribute("aria-label") || "Delegatus";
     iframe.src = liveSrc(live);
+    // Esc inside the product reaches the page as well, for the overlay mode.
+    iframe.addEventListener("load", () => {
+      try { iframe.contentWindow.addEventListener("keydown", onEscape); } catch { /* cross-origin */ }
+    });
     return iframe;
   }
 
@@ -498,16 +511,18 @@
     const live = lives.find((entry) => entry.iframe && entry.iframe.contentWindow === event.source);
     const data = event.data;
     if (!live || !data || typeof data.type !== "string") return;
+    // A frame that fills the screen has no page to pan.
+    const pans = live.phone && fsLive !== live;
     if (data.type === "dlg:vertical-start") {
-      if (live.phone) stopPanMomentum();
+      if (pans) stopPanMomentum();
       return;
     }
     if (data.type === "dlg:vertical-pan") {
-      if (live.phone && Number.isFinite(data.deltaY)) window.scrollBy(0, Math.max(-100, Math.min(100, data.deltaY)));
+      if (pans && Number.isFinite(data.deltaY)) window.scrollBy(0, Math.max(-100, Math.min(100, data.deltaY)));
       return;
     }
     if (data.type === "dlg:vertical-end") {
-      if (live.phone) coastPan(data.velocity);
+      if (pans) coastPan(data.velocity);
       return;
     }
     if (data.type === "dlg:view-error") {
@@ -574,12 +589,114 @@
   }, { threshold: 0.1 });
   for (const live of lives) near.observe(live.el);
 
+
+  // ---------- Full screen ----------
+  //
+  // Every frame has a control that shows it at the size of the screen. The
+  // hero and the run frame go full screen inside their window, so the tabs and
+  // the hero's steps stay in reach; the other two take a strip of their own.
+  // Where the browser has no element fullscreen (iPhone), the same layout
+  // is a fixed overlay with the page behind it locked.
+
+  const ICON_ENTER = '<svg class="i i-enter" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
+  const ICON_EXIT = '<svg class="i i-exit" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg>';
+  const nativeElement = () => document.fullscreenElement || document.webkitFullscreenElement || null;
+
+  for (const live of lives) {
+    live.root = live.el.closest(".stage-wrap") || live.el;
+    live.fsButton = document.createElement("button");
+    live.fsButton.type = "button";
+    live.fsButton.className = "fs-btn";
+    live.fsButton.innerHTML = ICON_ENTER + ICON_EXIT;
+    live.fsButton.addEventListener("click", () => (fsLive === live ? leaveFullscreen() : enterFullscreen(live)));
+    const bar = live.root.querySelector(":scope > .stage-bar");
+    if (bar) bar.after(live.fsButton);
+    else live.root.appendChild(live.fsButton);
+  }
+
+  function labelFullscreen() {
+    for (const live of lives) {
+      const label = t(fsLive === live ? "demo.exitFullscreen" : "demo.fullscreen");
+      live.fsButton.setAttribute("aria-label", label);
+      live.fsButton.title = label;
+      live.fsButton.toggleAttribute("data-on", fsLive === live);
+    }
+  }
+
+  function enterFullscreen(live) {
+    if (fsLive) return;
+    fsLive = live;
+    fsNative = false;
+    fsScroll = { left: scrollX, top: scrollY };
+    live.root.setAttribute("data-fs", "");
+    root.classList.add("fs-lock");
+    labelFullscreen();
+    layout(live);
+    fsWatch = new ResizeObserver(() => layout(live));
+    fsWatch.observe(live.host);
+    live.fsButton.focus({ preventScroll: true });
+    const request = live.root.requestFullscreen || live.root.webkitRequestFullscreen;
+    if (request && document.fullscreenEnabled !== false) {
+      try { Promise.resolve(request.call(live.root)).catch(() => {}); } catch { /* the overlay stands */ }
+    }
+  }
+
+  // Leaving the browser's full screen is asynchronous; the page is put back
+  // once it has finished, so what moves during the exit cannot move the page.
+  function leaveFullscreen() {
+    if (!fsLive) return;
+    const live = fsLive;
+    if (nativeElement() === live.root) {
+      (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+      setTimeout(() => { if (fsLive === live) finishLeave(); }, 1000);
+      return;
+    }
+    finishLeave();
+  }
+
+  function finishLeave() {
+    const live = fsLive;
+    if (!live) return;
+    fsLive = null;
+    fsNative = false;
+    fsWatch?.disconnect();
+    fsWatch = null;
+    live.root.removeAttribute("data-fs");
+    root.classList.remove("fs-lock");
+    labelFullscreen();
+    lives.forEach(layout);
+    // The frame left the page's flow while it was full, which can move the page.
+    const back = () => window.scrollTo({ ...fsScroll, behavior: "instant" });
+    back();
+    requestAnimationFrame(() => { back(); requestAnimationFrame(back); });
+    live.fsButton.focus({ preventScroll: true });
+  }
+
+  function onFullscreenChange() {
+    if (!fsLive) return;
+    if (nativeElement() === fsLive.root) fsNative = true;
+    else if (fsNative) finishLeave();
+  }
+  document.addEventListener("fullscreenchange", onFullscreenChange);
+  document.addEventListener("webkitfullscreenchange", onFullscreenChange);
+
+  // The browser takes Esc itself in native full screen; the overlay needs it
+  // here. The demo also sends itself a synthetic Esc to close panels between
+  // views, which is not the visitor's.
+  function onEscape(event) {
+    if (event.key === "Escape" && event.isTrusted && fsLive && !fsNative && !event.defaultPrevented) leaveFullscreen();
+  }
+  document.addEventListener("keydown", onEscape);
+  window.addEventListener("resize", () => { if (fsLive) layout(fsLive); });
+  labelFullscreen();
+
   const relayout = () => lives.forEach(layout);
   new ResizeObserver(relayout).observe(document.body);
   phoneQuery.addEventListener("change", relayout);
 
   onLanguage = () => {
     renderSteps();
+    labelFullscreen();
     for (const live of lives) {
       live.el.querySelector(".demo-retry")?.remove();
       if (live.iframe) {

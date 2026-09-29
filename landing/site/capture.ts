@@ -13,6 +13,13 @@
  *
  * `--only=en-1440` limits the run to one language and width.
  *
+ * `--check-fullscreen` puts each demo frame full screen through its control, in
+ * both languages and widths, once with the browser's Fullscreen API and once
+ * as the overlay iPhone Safari gets. It asserts the frame's layout and scale, that the
+ * control clears the product's own controls, that Esc and the control leave,
+ * and that the page's scroll position comes back; PNGs go to
+ * LANDING_RENDER_DIR (default /tmp/landing-fullscreen-renders/).
+ *
  * `--check-request=10` renders nothing: it plays the hero's script that many
  * times in each language and width and fails unless every step shows the
  * visitor's request exactly once in the orchestrator's chat, above the reply.
@@ -34,6 +41,7 @@ const dist = process.env.LANDING_DIST_DIR ?? path.join(here, "dist");
 const out = process.env.LANDING_RENDER_DIR ?? path.join(os.homedir(), "Pictures/delegatus-review/landing/final");
 const only = process.argv.find((arg) => arg.startsWith("--only="))?.slice("--only=".length) ?? null;
 const checkRuns = Number(process.argv.find((arg) => arg.startsWith("--check-request="))?.slice("--check-request=".length) ?? 0);
+const fullscreenCheck = process.argv.includes("--check-fullscreen");
 const swipeCheck = process.argv.find((arg) => arg.startsWith("--check-swipe="))?.slice("--check-swipe=".length);
 if (!fs.existsSync(path.join(dist, "demo/demo.js"))) throw new Error("landing/site/dist is not built: run bun landing/site/build.ts first");
 fs.mkdirSync(out, { recursive: true });
@@ -296,6 +304,140 @@ async function checkSwipe() {
     });
     if (failed.length) throw new Error(`outer page moved less than 80% of the plain-text control for ${failed.map((row) => `${row.lang}/${row.surface}/${row.direction}`).join(", ")}`);
   }
+}
+
+
+/* Each frame full screen: the size the product runs at, the control's place,
+   the way out, and the page where the visitor left it. */
+async function checkFullscreen() {
+  const dir = process.env.LANDING_RENDER_DIR ?? "/tmp/landing-fullscreen-renders";
+  fs.mkdirSync(dir, { recursive: true });
+  const frames = [["hero", ".live-hero"], ["run", ".live-run"], ["open", ".live-open"], ["phone", ".live-phone"]] as const;
+  const LABELS = { en: { enter: "Full screen", exit: "Exit full screen" }, uk: { enter: "На весь екран", exit: "Вийти з повного екрана" } };
+  const failures: string[] = [];
+  const rows: Record<string, unknown>[] = [];
+  const modeOnly = process.argv.find((arg) => arg.startsWith("--fs-mode="))?.slice("--fs-mode=".length);
+  for (const mode of ["native", "overlay"] as const) {
+    if (modeOnly && modeOnly !== mode) continue;
+    for (const lang of ["en", "uk"] as Locale[]) {
+      for (const viewport of VIEWPORTS) {
+        if (only && only !== `${lang}-${viewport.name}`) continue;
+        const context = await browser.newContext({
+          viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, colorScheme: "dark",
+          ...(viewport.phone ? { hasTouch: true, isMobile: true } : {}),
+        });
+        /* iPhone Safari has no element fullscreen: the page must run without the API. */
+        if (mode === "overlay") await context.addInitScript(() => {
+          for (const name of ["requestFullscreen", "webkitRequestFullscreen"]) Object.defineProperty(Element.prototype, name, { value: undefined, configurable: true });
+        });
+        const page = await context.newPage();
+        const errors: string[] = [];
+        page.on("pageerror", (error) => errors.push(error.message));
+        await page.goto(`${base}?lang=${lang}`);
+        for (const [name, selector] of frames) {
+          const key = `${mode}-${lang}-${viewport.name}-${name}`;
+          const fail = (why: string) => failures.push(`${key}: ${why}`);
+          await page.locator(selector).scrollIntoViewIfNeeded();
+          await frameOf(page, selector);
+          await settle(page, 1200);
+          const button = page.locator(`${selector} > .fs-btn, .stage-wrap:has(> ${selector}) > .fs-btn`);
+          /* Where the page stood, and what the frame looked like, before. */
+          await page.evaluate((top) => window.scrollTo(0, top), (await page.evaluate(() => scrollY)) + 37);
+          await button.scrollIntoViewIfNeeded();
+          await settle(page, 200);
+          const measure = (selector: string) => page.evaluate((selector) => {
+            const live = document.querySelector<HTMLElement>(selector)!;
+            const iframe = live.querySelector<HTMLIFrameElement>("iframe")!;
+            const rect = iframe.getBoundingClientRect();
+            const host = live.querySelector<HTMLElement>(".live-frame")!;
+            const btn = (live.closest(".stage-wrap") ?? live).querySelector<HTMLElement>(":scope > .fs-btn, :scope > .live-frame ~ .fs-btn")!;
+            const b = btn.getBoundingClientRect();
+            /* The product's own controls, in page coordinates. */
+            const doc = iframe.contentDocument!;
+            const k = rect.width / iframe.offsetWidth;
+            const hits = [...doc.querySelectorAll<HTMLElement>("button, a[href], input, textarea, [role=button], [role=tab]")].filter((el) => {
+              const r = el.getBoundingClientRect();
+              if (r.width === 0 || r.height === 0) return false;
+              const left = rect.left + r.left * k, top = rect.top + r.top * k, right = left + r.width * k, bottom = top + r.height * k;
+              /* Only what a visitor can see: not clipped away by the frame. */
+              return left < b.right && right > b.left && top < b.bottom && bottom > b.top
+                && right > host.getBoundingClientRect().left && left < host.getBoundingClientRect().right
+                && bottom > host.getBoundingClientRect().top && top < host.getBoundingClientRect().bottom;
+            }).map((el) => el.getAttribute("aria-label") ?? el.textContent?.trim().slice(0, 20) ?? el.tagName);
+            return {
+              scrollY, src: iframe.src, layout: `${iframe.offsetWidth}x${iframe.offsetHeight}`, transform: getComputedStyle(iframe).transform,
+              viewport: `${innerWidth}x${innerHeight}`, host: `${host.clientWidth}x${host.clientHeight}`,
+              label: btn.getAttribute("aria-label"), button: { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height) },
+              covers: hits, native: Boolean(document.fullscreenElement), full: live.closest("[data-fs]") !== null,
+              rootBox: (() => { const r = (live.closest(".stage-wrap") ?? live).getBoundingClientRect(); return `${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)}`; })(),
+              chrome: (() => { const r = (live.closest(".stage-wrap") ?? live).getBoundingClientRect(); return Math.round(r.height - host.clientHeight); })(),
+            };
+          }, selector);
+          const before = await measure(selector);
+          if (before.covers.length) fail(`control covers ${before.covers.join(", ")} before full screen`);
+          if (mode === "native") await page.screenshot({ path: path.join(dir, `${lang}-${viewport.name}-${name}-page.png`) });
+          const handle = await page.locator(`${selector} iframe`).last().elementHandle();
+          await button.click();
+          await settle(page, 700);
+          const inside = await measure(selector);
+          const [vw, vh] = inside.viewport.split("x").map(Number);
+          const [lw, lh] = inside.layout.split("x").map(Number);
+          const [hw, hh] = inside.host.split("x").map(Number);
+          if (!inside.full) fail("root did not enter full screen");
+          if (mode === "native" && !inside.native) fail("native fullscreen did not start");
+          if (mode === "overlay" && inside.native) fail("overlay run went native");
+          if (lw !== vw || lh !== hh || hw !== vw) fail(`iframe ${inside.layout}, frame area ${inside.host}, viewport ${inside.viewport}`);
+          if (inside.chrome !== vh - hh || inside.rootBox !== `0,0 ${vw}x${vh}`) fail(`root ${inside.rootBox}, chrome ${inside.chrome}`);
+          if (inside.transform !== "none") fail(`scale is ${inside.transform}`);
+          if (inside.src !== before.src || (await page.locator(`${selector} iframe`).last().elementHandle().then((h) => h && handle && h.evaluate((a, b) => a === b, handle)).catch(() => false)) !== true) fail("iframe reloaded");
+          if (inside.covers.length) fail(`exit control covers ${inside.covers.join(", ")}`);
+          if (inside.label !== LABELS[lang].exit || before.label !== LABELS[lang].enter) fail(`labels "${before.label}" / "${inside.label}"`);
+          await page.screenshot({ path: path.join(dir, `${lang}-${viewport.name}-${name}-${mode}.png`) });
+          if (name === "hero" && mode === "overlay") {
+            /* The hero's step bar works from inside full screen. */
+            await page.locator('[data-step="3"]').click();
+            await settle(page, 800);
+            if ((await page.locator('[data-step="3"][aria-current="step"]').count()) !== 1) fail("hero step bar did not answer in full screen");
+            /* The window changing size while full screen. */
+            await page.setViewportSize({ width: viewport.width === 1440 ? 1100 : 360, height: viewport.height === 900 ? 700 : 640 });
+            await settle(page, 700);
+            const resized = await measure(selector);
+            const [rw, rh] = resized.viewport.split("x").map(Number);
+            const [w2, h2] = resized.layout.split("x").map(Number);
+            const [, hh2] = resized.host.split("x").map(Number);
+            if (w2 !== rw || h2 !== hh2 || resized.transform !== "none") fail(`after resize iframe ${resized.layout} in ${resized.viewport}`);
+            await page.setViewportSize({ width: viewport.width, height: viewport.height });
+            await settle(page, 500);
+          }
+          /* Out again: Esc in the overlay (also from inside the product), the control in the API mode. */
+          if (mode === "overlay") {
+            await page.evaluate((selector) => document.querySelector(selector)!.querySelector("iframe")!.contentDocument!.body.focus(), selector);
+            await page.keyboard.press("Escape");
+          } else await page.locator(`${selector} > .fs-btn, .stage-wrap:has(> ${selector}) > .fs-btn`).click();
+          await settle(page, 700);
+          const after = await measure(selector);
+          if (after.full || after.native) fail("still full screen after leaving");
+          if (Math.abs(after.scrollY - before.scrollY) > 1) fail(`scroll ${before.scrollY} -> ${after.scrollY}`);
+          if (after.layout !== before.layout || after.transform !== before.transform) fail(`size ${before.layout} ${before.transform} -> ${after.layout} ${after.transform}`);
+          if (after.label !== before.label) fail(`label ${before.label} -> ${after.label}`);
+          rows.push({ key, viewport: inside.viewport, layout: inside.layout, frameArea: inside.host, chromePx: inside.chrome, scale: inside.transform, native: inside.native, scrollBefore: before.scrollY, scrollAfter: after.scrollY, control: before.label, exit: inside.label });
+        }
+        if (errors.length) failures.push(`${mode}-${lang}-${viewport.name}: page errors ${errors.join("; ")}`);
+        await context.close();
+      }
+    }
+  }
+  fs.writeFileSync(path.join(dir, "fullscreen-check.json"), `${JSON.stringify({ rows, failures }, null, 2)}\n`);
+  for (const row of rows) console.log(JSON.stringify(row));
+  for (const failure of failures) console.error(failure);
+  console.log(failures.length ? `${failures.length} failure(s)` : `${rows.length} full-screen cases hold`);
+  return failures.length === 0;
+}
+
+if (fullscreenCheck) {
+  let ok = false;
+  try { ok = await checkFullscreen(); } finally { await browser.close(); server.stop(true); }
+  process.exit(ok ? 0 : 1);
 }
 
 if (swipeCheck) {
