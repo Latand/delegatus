@@ -606,17 +606,17 @@ export class TelegramBotStore {
     clientRequestId: string;
     chatId: string;
     conversationId: string | null;
-    sent: Array<{ messageId: number; date: number; text: string; replyToMessageId: number | null; topicId: number | null }>;
+    sent: Array<{ messageId: number; date: number; text: string; replyToMessageId: number | null; topicId: number | null; kind?: "text" | "photo" }>;
     now: Date;
   }): void {
     const at = input.now.toISOString();
     this.transaction(() => {
       const insert = this.db.query(`
         INSERT OR REPLACE INTO messages (chat_id, message_id, direction, date, kind, text, reply_to_message_id, topic_id, sent_by_conversation_id, sent_by_unidentified)
-        VALUES (?1, ?2, 'out', ?3, 'text', ?4, ?5, ?6, ?7, ?8)
+        VALUES (?1, ?2, 'out', ?3, ?4, ?5, ?6, ?7, ?8, ?9)
       `);
       for (const message of input.sent) {
-        insert.run(input.chatId, message.messageId, message.date, message.text, message.replyToMessageId, message.topicId, input.conversationId, input.conversationId ? 0 : 1);
+        insert.run(input.chatId, message.messageId, message.date, message.kind ?? "text", message.text, message.replyToMessageId, message.topicId, input.conversationId, input.conversationId ? 0 : 1);
       }
       this.db.query(`
         UPDATE chats SET last_post_at = ?2, last_post_conversation_id = ?3, last_post_unidentified = ?4 WHERE chat_id = ?1

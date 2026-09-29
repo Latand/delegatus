@@ -267,6 +267,61 @@ test("send attribution: the caller's conversation lands on the send, the outgoin
   expect(service.status().chats[0]!.lastPostBy).toEqual({ unidentified: true });
 });
 
+function mediaFile(name: string, bytes: Uint8Array): string {
+  const filename = path.join(SANDBOX, name);
+  fs.writeFileSync(filename, bytes);
+  return filename;
+}
+
+const JPEG = Uint8Array.from([0xff, 0xd8, 0xff, 0xd9]);
+const PNG = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 0, 0, 0, 0, 0]);
+
+test("media validates every local image before any Telegram call and refuses disallowed chats", async () => {
+  await allowedTeam();
+  const good = mediaFile("valid.jpg", JPEG);
+  const bad = mediaFile("invalid.jpg", Uint8Array.from([1, 2, 3]));
+  const send = (images: unknown, chat = "team-reports") => service.sendMedia({ conversationId: "conversation_writer", clientRequestId: "validate", chat, images });
+  expect((await refusal(() => send([{ path: good, caption: "ok" }], "unknown"))).code).toBe("chat_unknown");
+  expect((await refusal(() => send([{ path: good, caption: "ok" }, { path: bad, caption: "bad" }]))).code).toBe("photo_invalid");
+  expect((await refusal(() => send([{ path: good, caption: "ok" }, { path: "relative.jpg", caption: "bad" }]))).code).toBe("photo_invalid");
+  expect((await refusal(() => send([{ path: good, caption: "x".repeat(1025) }]))).code).toBe("text_too_long");
+  const large = mediaFile("large.jpg", new Uint8Array(10 * 1024 * 1024 + 1));
+  expect((await refusal(() => send([{ path: large, caption: "large" }]))).code).toBe("photo_invalid");
+  expect(transport.callsOf("sendPhoto")).toHaveLength(0);
+  expect(transport.callsOf("sendMediaGroup")).toHaveLength(0);
+});
+
+test("one photo uses sendPhoto, attributes its receipt and stores an outgoing photo", async () => {
+  await allowedTeam();
+  const filename = mediaFile("single.jpg", JPEG);
+  transport.script("sendPhoto", ok({ message_id: 70, date: T0 + 100 }));
+  const input = { conversationId: "conversation_writer", clientRequestId: "one", chat: "team-reports", images: [{ path: filename, caption: "<b>Step 1</b>" }], format: "html", topicId: 3, replyToMessageId: 1, silent: true };
+  expect(await service.sendMedia(input)).toMatchObject({ messageIds: [70], attributedTo: { conversationId: "conversation_writer" }, alreadySent: false });
+  expect(transport.callsOf("sendPhoto")[0]!.params).toMatchObject({ chat_id: TEAM.id, caption: "<b>Step 1</b>", parse_mode: "HTML", message_thread_id: 3, reply_parameters: { message_id: 1 }, disable_notification: true, photo: expect.any(Blob) });
+  expect(service.readMessages({ chat: "team-reports" }).messages[0]).toMatchObject({ messageId: 70, direction: "out", kind: "photo", text: "<b>Step 1</b>", sentBy: { conversationId: "conversation_writer" }, topicId: 3 });
+  expect(await service.sendMedia(input)).toMatchObject({ messageIds: [70], alreadySent: true });
+  expect(transport.callsOf("sendPhoto")).toHaveLength(1);
+});
+
+test("album sends per-image captions once and an unfinished claim replays send_uncertain", async () => {
+  await allowedTeam();
+  const images = [{ path: mediaFile("first.jpg", JPEG), caption: "First" }, { path: mediaFile("second.png", PNG), caption: "Second" }];
+  const input = { conversationId: "conversation_writer", clientRequestId: "album", chat: "team-reports", images, topicId: 5 };
+  transport.script("sendMediaGroup", ok([{ message_id: 80, date: T0 + 100 }, { message_id: 81, date: T0 + 101 }]));
+  expect(await service.sendMedia(input)).toMatchObject({ messageIds: [80, 81], parts: 2, alreadySent: false });
+  const params = transport.callsOf("sendMediaGroup")[0]!.params;
+  expect(JSON.parse(params.media as string)).toEqual([{ type: "photo", media: "attach://photo0", caption: "First" }, { type: "photo", media: "attach://photo1", caption: "Second" }]);
+  expect(params).toMatchObject({ chat_id: TEAM.id, message_thread_id: 5, photo0: expect.any(Blob), photo1: expect.any(Blob) });
+  expect(service.readMessages({ chat: "team-reports" }).messages.slice(0, 2)).toMatchObject([{ direction: "out", kind: "photo", text: "Second" }, { direction: "out", kind: "photo", text: "First" }]);
+  expect(await service.sendMedia(input)).toMatchObject({ messageIds: [80, 81], alreadySent: true });
+
+  transport.script("sendMediaGroup", unreachable("timed_out"));
+  const uncertainInput = { ...input, clientRequestId: "uncertain" };
+  expect((await refusal(() => service.sendMedia(uncertainInput))).code).toBe("send_uncertain");
+  expect((await refusal(() => service.sendMedia(uncertainInput))).code).toBe("send_uncertain");
+  expect(transport.callsOf("sendMediaGroup")).toHaveLength(2);
+});
+
 test("a repeated clientRequestId answers the first post and never posts again; an unfinished one is uncertain", async () => {
   await allowedTeam();
   transport.script("sendMessage", ok({ message_id: 60, date: T0 + 100 }));

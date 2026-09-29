@@ -94,10 +94,16 @@ export function createBotApiTransport(token: string, fetchImpl: FetchLike = (inp
     try {
       /* The URL is built here and goes nowhere else: not into an error, a
          log line, or a returned value. */
+      const multipart = Object.values(params).some((value) => value instanceof Blob);
+      const form = multipart ? new FormData() : null;
+      if (form) for (const [key, value] of Object.entries(params)) {
+        if (value instanceof Blob) form.append(key, value, `${key}.${value.type === "image/png" ? "png" : "jpg"}`);
+        else form.append(key, typeof value === "string" ? value : JSON.stringify(value));
+      }
       response = await fetchImpl(`${API_ORIGIN}/bot${token}/${method}`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(params),
+        ...(form ? {} : { headers: { "content-type": "application/json" } }),
+        body: form ?? JSON.stringify(params),
         redirect: "error",
         signal: controller.signal,
       });

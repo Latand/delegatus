@@ -94,6 +94,7 @@ export const MCP_TOOL_NAMES = [
   "account_limits",
   "telegram_bot_chats",
   "telegram_bot_send",
+  "telegram_bot_send_media",
   "telegram_bot_messages",
 ] as const;
 
@@ -162,6 +163,7 @@ const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
   /* Posts into a Telegram chat. A replayed clientRequestId must answer with
      the message ids the first call posted, never post a second time. */
   "telegram_bot_send",
+  "telegram_bot_send_media",
 ]);
 
 /**
@@ -2854,7 +2856,7 @@ export function createMcpToolService(
           /* bridge_report's one refusal (a report with nothing left after the
              privacy scrub) names its code the same way: the same call fails the
              same way, so it is not retryable as sent. */
-          const botRefusal = (typedTool === "telegram_bot_send" || typedTool === "bridge_report") && error instanceof McpToolRefusal
+          const botRefusal = (typedTool === "telegram_bot_send" || typedTool === "telegram_bot_send_media" || typedTool === "bridge_report") && error instanceof McpToolRefusal
             && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
             ? { code: error.details.code, retryable: error.details.retryable } : null;
           unadmitted = error instanceof McpUnadmittedRefusal;
@@ -3092,6 +3094,10 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "The post is attributed in Delegatus to your conversation, resolved server-side. A chat outside the allowlist is refused before anything is sent (chat_not_allowed, bot_not_in_chat, chat_unknown, bot_not_connected); Telegram's own refusals come back as forbidden (blocked, removed, or a user who never wrote to the bot), format_invalid, or rate_limited with retryAfterSeconds.",
     "A refusal answers ok:false with the bot's code as `code` and `retryable` saying whether a retry under a NEW clientRequestId may help (true only for rate_limited, network_failed, timed_out, telegram_failed); send_partial adds `details.sentMessageIds`.",
     "Idempotent by clientRequestId: a repeat answers the first post's message ids; a repeat of a send that never finished, or one whose connection was cut or timed out, answers send_uncertain (not retryable) instead of posting twice.",
+  ].join(" "),
+  telegram_bot_send_media: [
+    "Send a JPEG or PNG photo, or an album of 2–10 photos, through the operator's Telegram bot into an allowlisted chat. `images` is an array of {path, caption}; each path is absolute on the Viewer host. Every file is checked and loaded before Telegram is called; photos are limited to 10 MB and captions to 1024 characters.",
+    "`format` is plain (default) or html for captions. `replyToMessageId`, `topicId`, `silent`, chat links, attribution and clientRequestId work like telegram_bot_send. The answer returns messageIds in image order. A completed send replays its receipt; an unfinished or unconfirmed send answers send_uncertain instead of sending twice. Sent images appear in telegram_bot_messages with direction out and kind photo.",
   ].join(" "),
   telegram_bot_messages: [
     "Read recent messages the operator's Telegram bot received in one chat, newest first, from Delegatus's local store — a bot has no history API, so only what arrived while it was connected exists.",
@@ -3854,6 +3860,18 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     replyToMessageId: z.number().int().positive().optional().describe("Reply to this message in the same chat. Sent anyway if it no longer exists."),
     topicId: z.number().int().positive().optional().describe("Forum topic (message_thread_id) to post into."),
     silent: z.boolean().optional().describe("Send without a notification sound."),
+  }).passthrough(),
+  telegram_bot_send_media: z.object({
+    clientRequestId: clientRequestIdSchema,
+    chat: z.string().trim().min(1).describe("The allowlisted chat's alias, id, @username or t.me chat/topic link."),
+    images: z.array(z.object({
+      path: z.string().startsWith("/").describe("Absolute JPEG or PNG path on the Viewer host."),
+      caption: z.string().max(1024).describe("Caption for this image, up to 1024 characters."),
+    })).min(1).max(10).describe("One image sends sendPhoto; 2–10 images send one album."),
+    format: z.enum(["plain", "html"]).optional().describe("Caption format; plain by default."),
+    replyToMessageId: z.number().int().positive().optional(),
+    topicId: z.number().int().positive().optional(),
+    silent: z.boolean().optional(),
   }).passthrough(),
   telegram_bot_messages: z.object({
     clientRequestId: clientRequestIdSchema,

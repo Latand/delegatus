@@ -80,6 +80,26 @@ test("telegram_bot_send forwards links for the agent route to decide whether a t
   expect(dispatched[2]!.body).not.toHaveProperty("topicId");
 });
 
+test("telegram_bot_send_media forwards album paths and captions with the caller capability", async () => {
+  const images = [{ path: "/sandbox/one.jpg", caption: "One" }, { path: "/sandbox/two.png", caption: "Two" }];
+  await bindings().telegram_bot_send_media({ clientRequestId: "media-1", chat: "team-reports", images, format: "html", topicId: 5, silent: true, conversationId: "forged" });
+  expect(dispatched[0]).toMatchObject({ pathname: "/api/telegram/bot/agent", body: { op: "send_media", clientRequestId: "media-1", chat: "team-reports", images, format: "html", topicId: 5, silent: true }, headers: { [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY } });
+  expect(dispatched[0]!.body).not.toHaveProperty("conversationId");
+});
+
+test("media send preserves send_uncertain through MCP and replays the refusal", async () => {
+  const viewer = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => telegramBotFailure(new TelegramBotError("send_uncertain", "Telegram did not confirm the album")) });
+  process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${viewer.port}`;
+  try {
+    const service = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true)), new MemoryMcpReceiptStore());
+    const args = { clientRequestId: "media-uncertain", chat: "team-reports", images: [{ path: "/sandbox/one.jpg", caption: "One" }] };
+    expect(await service.callTool("telegram_bot_send_media", args)).toMatchObject({ ok: false, code: "send_uncertain", retryable: false });
+    expect(await service.callTool("telegram_bot_send_media", args)).toMatchObject({ ok: false, code: "send_uncertain", replayed: true });
+  } finally {
+    viewer.stop(true);
+  }
+});
+
 test("a route refusal keeps its code, whether a new key may retry, and Telegram's wait", async () => {
   dispatchAnswer = async () => { throw new McpDispatchVerdictError("the operator has not allowed posting to Team Reports", { status: 403, code: "chat_not_allowed" }); };
   const notAllowed = await bindings().telegram_bot_send({ clientRequestId: "req-2", chat: "team-reports", text: "x" }).catch((error: unknown) => error);
