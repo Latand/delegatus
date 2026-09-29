@@ -23,7 +23,7 @@ test("the GPT-6 models have Claude equivalents, and Sonnet no longer lands on a 
   expect(equivalentModel("haiku", "codex")).toBe("gpt-6-luna");
 });
 
-/* The Sonnet 5.5 / Opus 5.5 table (docs/design/model-sizing-tiers.md §1): with
+/* The Sonnet 5.5 / Opus 5.5 table (docs/design/model-sizing-tiers.md §7): with
    Codex out, Sonnet 5.5 runs the well-scoped rows and Opus the judgment rows. */
 test("with Codex out, every mapping row lands on its Sonnet 5.5 or Opus runtime", () => {
   const sonnet = (effort: string): RoleConfig => ({ engine: "claude", model: "claude-sonnet-5-5", effort });

@@ -47,7 +47,7 @@ const SONNET_HIGH: RoleConfig = { engine: "claude", model: "claude-sonnet-5-5", 
 const SONNET_MEDIUM: RoleConfig = { ...SONNET_HIGH, effort: "medium" };
 
 /** Per row, the runtime on each target engine. Moving to Claude follows the
-    Sonnet 5.5 / Opus 5.5 table (docs/design/model-sizing-tiers.md §1): Sonnet
+    Sonnet 5.5 / Opus 5.5 table (docs/design/model-sizing-tiers.md §7): Sonnet
     5.5 runs the well-scoped rows (every builder row, the cleaner, the verifier
     and the trivial reviewer), Opus the rows that need judgment (orchestrator,
     architect, reviewer, prod-auditor, deployer). Moving to Codex, only the rows

@@ -63,7 +63,7 @@ test("R1: Sonnet runs the verifier and a size=trivial review, pinned or by alias
   }
 });
 
-test("R1 on a review gate: Sonnet gates a size=trivial stage only, Haiku never", () => {
+test("R1 on a review gate: Sonnet gates a size=trivial stage or a verifier, Haiku never", () => {
   const gate = { roleId: "builder", explicitRuntime: false, briefer: OPUS_AGENT, reviewGate: true };
   expect(launchSizingRefusal({ ...gate, params: {}, config: SONNET })).toContain("review gate");
   expect(launchSizingRefusal({ ...gate, params: { size: "trivial" }, config: SONNET })).toBeNull();
@@ -71,6 +71,13 @@ test("R1 on a review gate: Sonnet gates a size=trivial stage only, Haiku never",
   expect(reviewGateRefusal(SONNET)).toContain("review gate");
   expect(reviewGateRefusal(SONNET, { size: "trivial" })).toBeNull();
   expect(reviewGateRefusal(OPUS)).toBeNull();
+  /* The verifier has no size parameter, so its gate is admitted by role. */
+  const verifierGate = { roleId: "verifier", params: { claims: "x" }, explicitRuntime: false, briefer: OPUS_AGENT, reviewGate: true };
+  expect(launchSizingRefusal({ ...verifierGate, config: SONNET })).toBeNull();
+  expect(launchSizingRefusal({ ...verifierGate, config: { engine: "claude", model: "haiku" } })).toBe(LIGHT_DENIED_ROLE_MESSAGE);
+  expect(reviewGateRefusal(SONNET, {}, "verifier")).toBeNull();
+  expect(reviewGateRefusal({ engine: "claude", model: "haiku" }, {}, "verifier")).toContain("review gate");
+  expect(reviewGateRefusal(SONNET, {}, "reviewer")).toContain("review gate");
 });
 
 test("R2: size=trivial needs an Opus-class briefer; an unreadable agent is not one", () => {

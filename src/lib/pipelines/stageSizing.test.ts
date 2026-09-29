@@ -221,3 +221,35 @@ test("a fail edge set by an agent cannot turn a full-size Sonnet stage into a re
   if (!trivialId) throw new Error(`create refused: ${trivial.error}`);
   expect((await patchPipeline(trivialId, edge, ports(), opusAgent)).error).toBeUndefined();
 });
+
+test("a Sonnet verifier stage with a fail edge is an admitted gate at create and at set-edge; a Haiku verifier gate and a Sonnet full-size reviewer gate stay refused", async () => {
+  const lane = (verifier: Partial<StageInput>, withEdge: boolean): CreatePipelineRequest => ({
+    task: "Verify the label",
+    repoDir: REPO,
+    autoStart: false as const,
+    src: OPUS_SEAT.src,
+    stages: [
+      { id: "build", kind: "run" as const, role: { roleId: "builder" as const, params: { domain: "frontend" } }, ["prompt"]: "Change the label", next: "check" },
+      { id: "check", kind: "run" as const, role: { roleId: "verifier" as const, params: { claims: "the label reads Save" } }, engine: "claude", model: "claude-sonnet-5-5", effort: "medium", ["prompt"]: "Check it", next: null, ...(withEdge ? { onFail: { to: "build", maxRounds: 2 } } : {}), ...verifier },
+    ],
+  });
+  const opusBriefer = { briefer: { kind: "agent" as const, conversationId: OPUS_SEAT.conversationId } };
+  const opusAgent = { kind: "agent" as const, role: "orchestrator", conversationId: OPUS_SEAT.conversationId };
+
+  const created = await createPipelineFromRequest(lane({}, true), ports(), opusBriefer);
+  expect(created.error).toBeUndefined();
+  expect(created.pipeline?.stages.find((stage) => stage.id === "check")?.onFail?.to).toBe("build");
+
+  const haikuGate = await createPipelineFromRequest(lane({ model: "haiku", effort: "low" }, true), ports(), opusBriefer);
+  expect(haikuGate.pipeline).toBeUndefined();
+  expect(haikuGate.violations?.[0]?.message).toContain("Haiku runs none of");
+
+  const reviewerGate = await createPipelineFromRequest(lane({ role: { roleId: "reviewer" as const, params: {} } }, true), ports(), opusBriefer);
+  expect(reviewerGate.violations?.[0]?.message).toContain("Sonnet does not run");
+
+  const plain = await createPipelineFromRequest(lane({}, false), ports(), opusBriefer);
+  const id = plain.pipeline?.id;
+  if (!id) throw new Error(`create refused: ${plain.error}`);
+  const edge = await patchPipeline(id, { action: "set-edge", stageId: "check", edge: "fail", to: "build", maxRounds: 2 }, ports(), opusAgent);
+  expect(edge.error).toBeUndefined();
+});

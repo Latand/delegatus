@@ -694,7 +694,7 @@ test("the role table tells the seat to size lanes, lists every variant and names
   expect(reviewerRow).toContain("size=trivial: codex/gpt-6-luna/high.");
   expect(table).toContain("- Size each lane first. trivial (a few lines of UI, copy, one flag or label; your brief states the exact change and its acceptance): builder and reviewer size=trivial, one review round.");
   expect(table).toContain("design (options, architecture, proposals, issues from design work): an architect stage first");
-  /* The Sonnet 5.5 / Opus 5.5 table (docs/design/model-sizing-tiers.md §1). */
+  /* The Sonnet 5.5 / Opus 5.5 table (docs/design/model-sizing-tiers.md §7). */
   expect(table).toContain("- Sonnet 5.5 for well-scoped build, fix, docs, verification, repeated work. Opus 5.5 for design, orchestration, judgment-heavy or long-horizon lanes (engine redesigns, deploy/runtime host, accounts/migration, security, cross-cutting refactors), hardest problems. Review backend on Codex, frontend on Opus.");
   expect(table).toContain("- size=trivial and a hand-set Sonnet builder need a brief from a large model (Opus, Fable, large Codex). Sonnet never orchestrates, architects or reviews above size=trivial.");
   expect(table).toContain("- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, Opus review-loop.");

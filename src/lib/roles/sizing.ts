@@ -36,10 +36,11 @@ function sonnetMayRun(roleId: string, params: RoleParamValues | undefined): bool
   return roleId === "verifier" || (roleId === "reviewer" && params?.size === "trivial");
 }
 
-/** R1 for a review gate: Sonnet gates only a size=trivial stage; Haiku never. */
-export function reviewGateRefusal(runtime: LaunchRuntime, params?: RoleParamValues): string | null {
+/** R1 for a review gate: Sonnet gates a size=trivial stage and a verifier
+    stage (the verifier role has no size); Haiku never. */
+export function reviewGateRefusal(runtime: LaunchRuntime, params?: RoleParamValues, roleId?: RoleId | string | null): string | null {
   if (!isLightClaudeRuntime(runtime)) return null;
-  return isClaudeSonnet(runtime) && params?.size === "trivial" ? null : REVIEW_GATE_MESSAGE;
+  return isClaudeSonnet(runtime) && (params?.size === "trivial" || roleId === "verifier") ? null : REVIEW_GATE_MESSAGE;
 }
 
 /** Whether a Claude runtime is Sonnet or Haiku. A dated id such as
@@ -96,7 +97,7 @@ function lightRoleRefusal(roleId: string, params: RoleParamValues | undefined, r
  *   to Claude Sonnet, and Haiku runs none of those four roles plus the
  *   verifier, whether the runtime came from the mapping or an override. Sonnet
  *   may run the verifier and a size=trivial reviewer. A review gate counts as
- *   reviewer work whatever role it names; Sonnet gates a size=trivial stage.
+ *   reviewer work whatever role it names; Sonnet gates a size=trivial stage or a verifier.
  * - R2: `size=trivial` needs a brief from a large model (`isOpusClass`).
  * - R3: a builder (or a role-less run stage) reaches a light runtime through an
  *   explicit engine/model override only with `size=trivial`, except Claude
@@ -124,7 +125,7 @@ export function launchSizingRefusal(input: {
   const denied = lightRoleRefusal(roleId, input.params, input.config);
   if (denied) return denied;
   if (input.reviewGate) {
-    const gate = reviewGateRefusal(input.config, input.params);
+    const gate = reviewGateRefusal(input.config, input.params, roleId);
     if (gate) return gate;
   }
   const trivial = input.params?.size === "trivial";

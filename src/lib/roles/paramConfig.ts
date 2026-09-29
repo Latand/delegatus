@@ -8,7 +8,7 @@ import type { RoleConfig, RoleId, RoleParamValues, RoleVariantId } from "./types
  * role table and the launch line share `variantForParams` with the registry.
  */
 /* Sonnet 5.5 runs the well-scoped rows, pinned by id (the `sonnet` alias moves
-   with the next Sonnet): docs/design/model-sizing-tiers.md §1. */
+   with the next Sonnet): docs/design/model-sizing-tiers.md §7. */
 export const BUILDER_TRIVIAL_CONFIG: RoleConfig = { engine: "claude", model: "claude-sonnet-5-5", effort: "high" };
 export const BUILDER_FRONTEND_CONFIG: RoleConfig = { engine: "claude", model: "claude-sonnet-5-5", effort: "high" };
 export const BUILDER_DOCS_CONFIG: RoleConfig = { engine: "claude", model: "claude-sonnet-5-5", effort: "high" };
