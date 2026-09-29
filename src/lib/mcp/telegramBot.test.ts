@@ -9,7 +9,7 @@ import { TelegramBotError } from "@/lib/telegram/bot/service";
 import { telegramBotFailure } from "@/lib/telegram/bot/http";
 
 import { productionViewerControlDependencies, viewerMcpBindings, type ViewerControlDependencies } from "./bindings";
-import { createMcpToolService, McpDispatchVerdictError, McpToolRefusal, MemoryMcpReceiptStore } from "./server";
+import { createMcpToolService, McpDispatchVerdictError, McpToolRefusal, MemoryMcpReceiptStore, SqliteMcpReceiptStore } from "./server";
 
 /* The three Telegram bot tools reach the Viewer's agent route and nothing
    else (docs/design/telegram-bot-account.md, Decision 6). */
@@ -78,6 +78,105 @@ test("telegram_bot_send forwards links for the agent route to decide whether a t
   await bindings().telegram_bot_send({ clientRequestId: "link-3", chat: "t.me/plain_group/42", text: "Report" });
   expect(dispatched[2]!.body.chat).toBe("t.me/plain_group/42");
   expect(dispatched[2]!.body).not.toHaveProperty("topicId");
+});
+
+test("telegram_bot_send_media forwards album paths and captions with the caller capability", async () => {
+  const images = [{ path: "/sandbox/one.jpg", caption: "One" }, { path: "/sandbox/two.png", caption: "Two" }];
+  await bindings().telegram_bot_send_media({ clientRequestId: "media-1", chat: "team-reports", images, format: "html", topicId: 5, silent: true, conversationId: "forged" });
+  expect(dispatched[0]).toMatchObject({ pathname: "/api/telegram/bot/agent", body: { op: "send_media", clientRequestId: "media-1", chat: "team-reports", images, format: "html", topicId: 5, silent: true }, headers: { [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY } });
+  expect(dispatched[0]!.body).not.toHaveProperty("conversationId");
+});
+
+test("media send preserves send_uncertain through MCP and replays the refusal", async () => {
+  const viewer = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => telegramBotFailure(new TelegramBotError("send_uncertain", "Telegram did not confirm the album")) });
+  process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${viewer.port}`;
+  try {
+    const service = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true)), new MemoryMcpReceiptStore());
+    const args = { clientRequestId: "media-uncertain", chat: "team-reports", images: [{ path: "/sandbox/one.jpg", caption: "One" }] };
+    expect(await service.callTool("telegram_bot_send_media", args)).toMatchObject({ ok: false, code: "send_uncertain", retryable: false });
+    expect(await service.callTool("telegram_bot_send_media", args)).toMatchObject({ ok: false, code: "send_uncertain", replayed: true });
+  } finally {
+    viewer.stop(true);
+  }
+});
+
+test("reopened MCP media receipt rechecks the downstream send claim without repeating HTTP", async () => {
+  const receiptDir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-media-reopen-"));
+  const filename = path.join(receiptDir, "receipts.sqlite");
+  let dispatches = 0;
+  let httpSends = 0;
+  let sendState: "pending" | "sent" = "pending";
+  const barrier = () => {
+    let enter!: () => void;
+    let release!: () => void;
+    return {
+      entered: new Promise<void>((resolve) => { enter = resolve; }),
+      arrive: () => enter(),
+      wait: new Promise<void>((resolve) => { release = resolve; }),
+      release: () => release(),
+    };
+  };
+  let currentBarrier = barrier();
+  const stores: SqliteMcpReceiptStore[] = [];
+  const controlForRestart = (): ViewerControlDependencies => ({
+    get: async () => ({ chats: [], limits: [] }),
+    post: async () => ({}),
+    dispatch: async () => {
+      dispatches += 1;
+      if (dispatches === 1 || dispatches === 3) {
+        httpSends += 1;
+        if (dispatches === 1) {
+          currentBarrier.arrive();
+          await currentBarrier.wait;
+          return { chat: "team-reports", messageIds: [71], attributedTo: { conversationId: "conversation_writer" } };
+        }
+        sendState = "sent";
+        currentBarrier.arrive();
+        await currentBarrier.wait;
+        return { chat: "team-reports", messageIds: [72], attributedTo: { conversationId: "conversation_writer" } };
+      }
+      if (sendState === "pending") throw new McpDispatchVerdictError("the downstream Telegram send is still pending", { status: 502, code: "send_uncertain" });
+      return { chat: "team-reports", messageIds: [72], attributedTo: { conversationId: "conversation_writer" } };
+    },
+  });
+  const args = { clientRequestId: "media-reopen-uncertain", chat: "team-reports", images: [{ path: "/sandbox/one.jpg", caption: "One" }] };
+  const firstStore = new SqliteMcpReceiptStore(filename);
+  stores.push(firstStore);
+  const first = createMcpToolService(viewerMcpBindings(undefined, controlForRestart()), firstStore);
+  const pending = first.callTool("telegram_bot_send_media", args);
+  try {
+    await currentBarrier.entered;
+    const reopenedStore = new SqliteMcpReceiptStore(filename);
+    stores.push(reopenedStore);
+    const reopened = createMcpToolService(viewerMcpBindings(undefined, controlForRestart()), reopenedStore);
+    expect(await reopened.callTool("telegram_bot_send_media", args)).toMatchObject({ ok: false, code: "send_uncertain", retryable: false });
+    expect(await reopened.callTool("telegram_bot_send_media", args)).toMatchObject({ ok: false, code: "send_uncertain", replayed: true });
+    expect({ dispatches, httpSends }).toEqual({ dispatches: 2, httpSends: 1 });
+    currentBarrier.release();
+    await pending;
+
+    /* A second restart boundary replays a completed downstream receipt. */
+    currentBarrier = barrier();
+    const completedStore = new SqliteMcpReceiptStore(filename);
+    stores.push(completedStore);
+    const completed = createMcpToolService(viewerMcpBindings(undefined, controlForRestart()), completedStore);
+    const completedArgs = { ...args, clientRequestId: "media-reopen-completed" };
+    const pendingCompleted = completed.callTool("telegram_bot_send_media", completedArgs);
+    await currentBarrier.entered;
+    const completedReopenedStore = new SqliteMcpReceiptStore(filename);
+    stores.push(completedReopenedStore);
+    const completedReopened = createMcpToolService(viewerMcpBindings(undefined, controlForRestart()), completedReopenedStore);
+    sendState = "sent";
+    expect(await completedReopened.callTool("telegram_bot_send_media", completedArgs)).toMatchObject({ ok: true, messageIds: [72] });
+    expect(await completedReopened.callTool("telegram_bot_send_media", completedArgs)).toMatchObject({ ok: true, messageIds: [72], replayed: true });
+    expect({ dispatches, httpSends }).toEqual({ dispatches: 4, httpSends: 2 });
+    currentBarrier.release();
+    await pendingCompleted;
+  } finally {
+    currentBarrier.release();
+    for (const store of stores) store.close();
+    fs.rmSync(receiptDir, { recursive: true, force: true });
+  }
 });
 
 test("a route refusal keeps its code, whether a new key may retry, and Telegram's wait", async () => {

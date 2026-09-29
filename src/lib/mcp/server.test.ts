@@ -1763,6 +1763,7 @@ describe("MCP tool service", () => {
         "account_limits",
         "telegram_bot_chats",
         "telegram_bot_send",
+        "telegram_bot_send_media",
         "telegram_bot_messages",
       ]);
       for (const tool of listed.tools) {

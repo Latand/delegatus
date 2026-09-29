@@ -44,6 +44,7 @@ export type TelegramBotErrorCode =
   | "alias_taken"
   | "text_empty"
   | "text_too_long"
+  | "photo_invalid"
   | "format_invalid"
   | "forbidden"
   | "rate_limited"
@@ -250,6 +251,8 @@ export type TelegramBotSendAnswer = {
   /** True when this clientRequestId had already posted: nothing was sent again. */
   alreadySent: boolean;
 };
+
+export type TelegramBotMediaInput = { path: string; caption: string };
 
 /** Bounds the tools clamp to. */
 export const BOT_MESSAGES_LIMIT = { min: 1, max: 100, fallback: 20 } as const;

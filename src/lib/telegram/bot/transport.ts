@@ -91,17 +91,28 @@ export function createBotApiTransport(token: string, fetchImpl: FetchLike = (inp
     if (options.signal?.aborted) controller.abort();
     let response: Response;
     let body: unknown;
+    let bodyUnreadable = false;
     try {
       /* The URL is built here and goes nowhere else: not into an error, a
          log line, or a returned value. */
+      const multipart = Object.values(params).some((value) => value instanceof Blob);
+      const form = multipart ? new FormData() : null;
+      if (form) for (const [key, value] of Object.entries(params)) {
+        if (value instanceof Blob) form.append(key, value, `${key}.${value.type === "image/png" ? "png" : "jpg"}`);
+        else form.append(key, typeof value === "string" ? value : JSON.stringify(value));
+      }
       response = await fetchImpl(`${API_ORIGIN}/bot${token}/${method}`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(params),
+        ...(form ? {} : { headers: { "content-type": "application/json" } }),
+        body: form ?? JSON.stringify(params),
         redirect: "error",
         signal: controller.signal,
       });
-      body = await response.json().catch(() => null);
+      try {
+        body = await response.json();
+      } catch {
+        bodyUnreadable = true;
+      }
     } catch (error) {
       /* Whatever was thrown may quote the request URL. It is dropped whole;
          only its code is read. */
@@ -112,10 +123,14 @@ export function createBotApiTransport(token: string, fetchImpl: FetchLike = (inp
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", onAbort);
     }
+    if (bodyUnreadable) return failure("network_failed");
     const envelope = body && typeof body === "object" ? body as { ok?: unknown; result?: unknown; error_code?: unknown; description?: unknown; parameters?: unknown } : null;
-    if (envelope?.ok === true) return { ok: true, result: envelope.result as T };
+    if (envelope?.ok === true && Object.hasOwn(envelope, "result")) return { ok: true, result: envelope.result as T };
+    /* Only Telegram's explicit negative envelope confirms that a send was
+       rejected. An unreadable body or a malformed success response may follow
+       a post that Telegram completed, so callers must keep the claim pending. */
+    if (envelope?.ok !== false) return failure("network_failed");
     const status = typeof envelope?.error_code === "number" ? envelope.error_code : response.status;
-    if (!envelope && status >= 500) return failure("http", status, null);
     const description = typeof envelope?.description === "string" ? scrubTokenText(envelope.description, token) : null;
     return failure("http", status, description, envelope?.parameters);
   };
