@@ -111,12 +111,12 @@ Changed rules:
 |---|---|
 | §A.2 rules 10–11 | New. The descriptor's `name` and `icon_url` brand the install's surface; `icon_url` must share the descriptor's origin and serve PNG, JPEG or WebP of at most 256 KiB. New optional `verify_channel` and `features`. |
 | §A.3 rule 1 | A code lives at most 30 minutes (was 10), and 30 is recommended. The install treats a code as expired 30 minutes after receiving it at the latest, whatever `expires_at` says. |
-| §A.3 rule 3 | Rewritten. The owner confirms once, in the service. The install completes by itself when the service declares `one_tap_pairing` and the redeemer is not a stranger to an owner this install already knows. The operator's click remains the fallback. Replaces "confirmed at both ends". |
+| §A.3 rule 3 | Rewritten. The owner confirms once, in the service. The install completes by itself when the service declares `one_tap_pairing` and the redeemer is no stranger to this origin: not an identity the operator rejected with "Not me", and either the origin's first pairing or a known owner or the previous pairing's owner. The operator's click remains the fallback. Replaces "confirmed at both ends". |
 | §A.3 rule 5 | `expired` means the code's own expiry passed (was "10 minutes passed"). |
 | §A.3 rules 7–9 | New. A code is spent at its first redemption, and a later redeemer is told so. The service notifies the owner when a pairing completes. The install applies defaults on completion. |
 | §A.3 rule 10 | New. Every live pairing of an owner lists all of the owner's active targets, with no separate attach step, so completion never lists `targets: []` for an owner who has any. A target created later is attached at once, and the install applies the defaults of rule 9 to it. A target answered through another pairing of the same owner (a second install) stays there: it is routed to one pairing at most, and other pairings see `answered_elsewhere: true`. |
 | §A.3.1 | New. The threat model of one-tap pairing. |
-| §A.4 | New endpoints 12 and 13 (below). Routing now takes both the target switch and the chat switch into account. The install may switch a target on after pairing defaults give it an engine and a model. Rows 6 and 7 follow rule 10 across pairings. Unpair (row 11) switches back only the targets the unpaired pairing answers. |
+| §A.4 | New endpoints 12 and 13 (below). Routing now takes both the target switch and the chat switch into account. The install may switch a target on after pairing defaults give it an engine and a model. Rows 6 and 7 follow rule 10 across pairings. A chat's switch belongs to the target, and a pairing that sees `answered_elsewhere` changes neither a chat's switch (row 13) nor a target's `fallback` (row 7). Unpair (row 11) switches back only the targets the unpaired pairing answers. |
 | §A.5 | New optional fields `Descriptor.verify_channel`, `Descriptor.features`, `ClaimRequest.features`, `Request.chat` and `Target.answered_elsewhere`. New definitions `Feature`, `ChatKey`, `RequestChat`, `Chat`, `Chats` and `ChatPatch`. |
 | §A.6 | New row F7: a request is held while its chat has a live lease; its claim window starts when that lease ends. New rule L6. |
 | §A.8 | New: the chat key, and how the prompt of each turn of a conversation is built. |
@@ -295,7 +295,7 @@ the code:
 | Names | `src/lib/externalRelay/`, `/api/external-relay/`, `ExternalRelay*`. **[delta]** Code names stay. Text a person reads uses the service's own name (§B.12). |
 | State | Two JSON files and one answer home per account under `<state>/external-relay/`. Chat text lives only in a per-run temp directory that is removed when the run settles. **[delta]** A chat's conversation keeps its chat text in that conversation's engine transcript (§B.14). |
 | **[delta]** Branding | The descriptor's `name` and a same-origin `icon_url`. The install fetches the icon, checks it and serves its own copy. A monogram stands in when there is none. |
-| **[delta]** One-tap pairing | "Connect in <channel>" and a QR code. The owner confirms once, in the service. A watcher in the Viewer completes the pairing without a click unless the redeemer is a stranger to a known owner. Codes live up to 30 minutes and refresh while the dialog is open. |
+| **[delta]** One-tap pairing | "Connect in <channel>" and a QR code. The owner confirms once, in the service. A watcher in the Viewer completes the pairing without a click unless the redeemer is a stranger to this service's pairing history on the install (known owners, the previous owner, identities rejected with "Not me"). Codes live up to 30 minutes and refresh while the dialog is open. |
 | **[delta]** Conversations | One engine session per (pairing, target, chat key), resumed once per request by a fresh process in the same locked profile, and compacted by the engine. The service holds a chat's next request until the current turn's lease ends. |
 | **[delta]** Chats | Two new endpoints list a target's chats and switch each one. A chat is answered here only when both its target and the chat are switched on. |
 | **[delta]** Targets | Every live pairing lists all of the owner's active targets, including ones created later. Each target is routed to one pairing at most, and the others see `answered_elsewhere`. |
@@ -388,7 +388,7 @@ in Phase 1.
                                                         (<handle>)?"; the owner confirms once
  ◄─── {status: "awaiting_install", owner, targets}
  one_tap_pairing listed and the owner is no
- stranger to a known owner (rule 3): no click.
+ stranger to this origin (rule 3): no click.
  Otherwise: "The relay service says this is
  <name> (<handle>). Is this you?", and the
  operator confirms
@@ -429,18 +429,32 @@ Rules:
    That is the only confirmation a person has to give. The install then
    calls `confirm` by itself, with no click, when both of these hold:
    - the descriptor lists `one_tap_pairing`, so rules 7 and 8 are in force;
-   - the owner is no stranger: the install holds no known owner for this
-     service's origin, or the owner is one of them (same `namespace` and
-     `id`). A known owner is one the operator confirmed by click or
-     acknowledged after an automatic completion (§B.13). An identity the
-     operator disconnected as "Not me" never becomes one.
+   - the owner is no stranger to this service's origin. The install keeps
+     three records per origin, all kept after unpair (§B.2):
+     - **known owners**: identities the operator confirmed by click or
+       acknowledged ("That's me") after an automatic completion (§B.13);
+     - **the previous owner**: the owner of the last pairing with this
+       origin that completed, by click or automatically, acknowledged or
+       not;
+     - **rejected identities**: every identity the operator disconnected as
+       "Not me".
+
+     The redeemer is no stranger when it is not a rejected identity, and
+     either the origin has no record of any of the three kinds (the first
+     pairing with this service), or the redeemer is a known owner or the
+     previous owner (same `namespace` and `id`). The previous owner counts
+     only while it is not a rejected identity. So the click comes back on
+     the next pairing after any "Not me", and whenever the redeemer differs
+     from the previous owner, even when nobody acknowledged that owner.
 
    Otherwise the install shows the identity to its operator: "The relay
-   service says this is <name> (<handle>). Is this you?", and, when a known
-   owner exists, the name it was connected as before. It calls `confirm`
-   only after the operator confirms, as Phase 1 always did. The `owner_id`
-   in the confirm body names the identity the install read from the
-   pairing's status. If it differs from the pairing's owner, the relay
+   service says this is <name> (<handle>). Is this you?", and, when one
+   exists, the previous owner's name ("Last connected as <name>"), else the
+   newest known owner's. It calls `confirm` only after the operator
+   confirms, as Phase 1 always did. Confirming by click makes the identity
+   a known owner and removes it from the rejected identities. The
+   `owner_id` in the confirm body names the identity the install read from
+   the pairing's status. If it differs from the pairing's owner, the relay
    service answers 409 `owner_changed` and issues nothing. Starting,
    refreshing and confirming a pairing is always the operator's act, because
    those install routes refuse agent callers (§B.9). §A.3.1 describes the
@@ -547,11 +561,23 @@ The defences that replace the second click:
    and they normally tap it seconds after the code appears. If a stranger
    redeemed first, the operator's own tap fails with "already used by
    another account", in the channel they are looking at.
-2. **The stranger check (rule 3).** A redeemer who differs from a known
-   owner of this service is never completed silently. This covers the case
-   the race-loss message can miss: an install re-paired after it was paired
-   before, often after a credential was rejected, when the operator may not
-   be watching the dialog.
+2. **The stranger check (rule 3).** Once an origin has any history on this
+   install, a redeemer is completed silently only when it is a known owner
+   or the previous owner, and never when it is an identity rejected with
+   "Not me". This covers the case the race-loss message can miss: an
+   install re-paired after it was paired before, often after a credential
+   was rejected, when the operator may not be watching the dialog. It holds
+   in the two cases a known-owner list alone would miss:
+   - **After "Not me".** The first pairing completed automatically for a
+     stranger and the operator disconnected it. The stranger is now a
+     rejected identity and there is no previous owner to match, so the
+     next pairing on that origin waits for the click, whoever redeems. That
+     is when a snooper on the same stream is most likely to try again.
+   - **After an unacknowledged automatic pairing.** The operator left the
+     banner and the dot alone, so no known owner exists. The previous owner
+     still counts, so a re-pairing after a rejected credential by a
+     different identity waits for the click, and the prompt names the
+     previous identity.
 3. **The identity in view (§B.13).** After an automatic completion, the
    service's card shows "Connected as <name> (<handle>)" and the menu row
    shows a badge until the operator acknowledges it or presses "Not me —
@@ -576,13 +602,17 @@ match. Completing silently *only* for a known identity would require the
 click on every first pairing, because an install knows no owner before its
 first one. The operator's decision of 2026-09-29, a single confirmation,
 would then hold only for re-pairings. The stranger check keeps that
-suggestion's protection where it adds something (a known owner exists), and
-the race-loss message covers the first pairing.
+suggestion's protection where it adds something (the origin has history),
+and the race-loss message covers the first pairing.
 
 The accepted residual risk: on a first pairing, a stranger who snoops the
 code and wins the race in the seconds before the operator's own tap stays
 connected until the operator reads the race-loss message or the identity
 line. The operator accepted that price when deciding on one confirmation.
+Such a stranger is then the previous owner, so a later re-pairing that the
+same stranger redeems is silent as well. The operator's own re-pairing is
+not: its prompt reads "Last connected as <the stranger's name>", which is
+where an unnoticed stranger surfaces, and "Not me" ends it.
 
 ## A.4 Endpoints
 
@@ -647,16 +677,28 @@ Semantics beyond the schemas:
   is 1 to 100 and defaults to 50. The order is stable and the service
   chooses it. `next_cursor` is null on the last page. A cursor stays valid
   for at least 10 minutes; a stale one answers 400 `cursor_expired`, and the
-  install then lists from the start. A chat leaves the list once the target
-  is no longer in it. `title` is the display title the owner would see in
+  install then lists from the start. A chat that the target has for the
+  whole of a pass from the first page to the last MUST appear on one of its
+  pages, even when chats are added or removed during the pass, because the
+  install deletes a chat's conversation when a complete pass misses its key
+  (§B.14). A chat leaves the list once the target is no longer in it. `title` is the display title the owner would see in
   the service's own channel, as plain text. `member_count` is a count, or
   null when the service does not know it. Neither field carries a platform
   user or chat id, and the service MUST NOT embed one in a title.
   `chat_key` is the key of §A.8, the same one the chat's requests carry.
   Row 13 sets the chat's `answered_by`. Sending the value the chat already
   has answers 200 with the current `Chat`, so the call is idempotent. A
-  `target_id` that is not this pairing's, or a `chat_key` the target does
-  not have, answers 404.
+  `target_id` the calling pairing does not list, or a `chat_key` the target
+  does not have, answers 404.
+- **[delta] Chat switches belong to the target.** A chat's `answered_by` is
+  kept once per (target, chat), and never per pairing. Row 12 lists a
+  target's chats, with that one value, to every pairing that lists the
+  target, including a pairing that sees `answered_elsewhere: true`. Row 13
+  from a pairing that sees `answered_elsewhere: true` for the target changes
+  nothing and answers 200 with the chat's current `Chat`, as row 7 does for
+  such a pairing (below). When no pairing answers the target, any pairing
+  of the owner may set its chats' switches, so the owner can prepare them
+  before switching the target on.
 - **[delta] Routing with chats.** A request from chat C of target T goes to
   the install only when T's `answered_by` is `"install"` and C's is
   `"install"`. Otherwise the service answers it itself. A chat the owner
@@ -673,7 +715,15 @@ Semantics beyond the schemas:
   whichever pairing had it. `PATCH` with `answered_by: "service"` from a
   pairing that does not answer the target changes nothing and answers 200
   with the target as that pairing sees it. So a stale install cannot switch
-  off a target that another install answers.
+  off a target that another install answers. The same holds for
+  `fallback`: from a pairing that sees `answered_elsewhere: true`, a `PATCH`
+  that sets only `fallback` changes nothing and answers 200 with the target
+  as that pairing sees it. A body that also sets `answered_by: "install"`
+  first routes the target to the caller, which then answers it, and then
+  applies `fallback`. When no pairing answers the target, any pairing may
+  set its `fallback`, as in v1. In short, a pairing may change a target's
+  `fallback` or a chat's switch only while it answers the target or nobody
+  does.
 - **Unpair (11)** revokes the credential. The relay service MUST switch every
   target of the pairing to `answered_by: "service"`. **[delta]** That means
   every target this pairing answers. Targets another live pairing of the
@@ -1457,7 +1507,7 @@ to version 1. The path, the header and `Descriptor.versions` stay at 1.
 | Code TTL (§A.3 rule 1) | A code may live up to 30 minutes (was 10) | v1. It widens what a service may do, and a 10-minute code still conforms | Honours 30 minutes already: it compares `expires_at` as sent (O7). | Caps any code at 30 minutes locally. |
 | One-tap pairing (§A.3 rules 3, 7, 8) | Service obligations behind `one_tap_pairing`. No new endpoint; `confirm` is unchanged | v1, additive | The operator clicks, as today. The owner confirms once in the service, as today. | Without the feature the install keeps the click. |
 | Defaults on completion (§A.3 rule 9) | None: the install uses row 7 as today | install only | — | Applies to every service. |
-| Target attachment (§A.3 rule 10) | A service behaviour, plus the optional `Target.answered_elsewhere` | v1, additive: no body changes shape, and a longer target list is still a `Targets` | Receives every active target at completion. It never reads row 6 (O8), so later targets reach it only once the separate refresh fix lands. It ignores `answered_elsewhere`, so it shows a target another install answers as switched off, and switching it on moves the target to it. That is the owner's explicit act. | A Phase 1 service that lists only attached targets still works; late targets appear when attached. |
+| Target attachment (§A.3 rule 10) | A service behaviour, plus the optional `Target.answered_elsewhere` | v1, additive: no body changes shape, and a longer target list is still a `Targets`. Refusing a `fallback` change from a pairing that sees `answered_elsewhere` affects only a second pairing of the same owner, which v1 never had | Receives every active target at completion. It never reads row 6 (O8), so later targets reach it only once the separate refresh fix lands. It ignores `answered_elsewhere`, so it shows a target another install answers as switched off, and switching it on moves the target to it. That is the owner's explicit act. | A Phase 1 service that lists only attached targets still works; late targets appear when attached. |
 | Chat conversations (§A.6 F7, §A.8) | Optional `Request.chat` and the `chat_conversations` claim feature | v1, additive | Ignores `chat` (rule A.2.6) and does not list the feature, so the service does not hold (F7) and the install answers one-shot. | No `chat`: answers one-shot. |
 | Chat management (§A.4 rows 12, 13) | Two new endpoints behind `chat_list`, and the new error code `cursor_expired` | v1, additive (new endpoints the install discovers) | Never calls them. The routing rule leaves every chat on, so this install answers the chats the owner did not switch off. | Hides the chat list. |
 
@@ -1493,6 +1543,10 @@ pairing.
 - **[delta]** Attach every active target of the owner to each live pairing,
   including targets created later, and route each target to one pairing at
   most (§A.3 rule 10).
+- **[delta]** Keep a chat's `answered_by` once per target and chat. For a
+  pairing that sees `answered_elsewhere: true`, change neither a chat's
+  switch (row 13) nor the target's `fallback` (row 7), and answer 200 with
+  the current value (§A.4).
 - **[delta]** Derive chat keys as §A.8 says. Put only that chat's messages
   into a request that carries a key. Hold a chat's next request while its
   lease lives, for pairings that list `chat_conversations` (§A.6 F7). Keep
@@ -1547,7 +1601,7 @@ New files:
 | `<state>/external-relay/runs.json` | 0600 | In-flight runs only: request id, lease id, relay id, target id, child pid and process identity, owning Viewer pid and identity, run directory, start time. No chat text. |
 | `<state>/external-relay/codex-homes/<account id>/` | 0700 | The Codex answer home of §B.6.2. |
 | `<os temp root>/llv-external-relay-XXXXXX/` | 0700 (`mkdtemp`) | One run: `cwd/`, `schema.json`, `catalog.json` (Codex), `stdout.log`, `stderr.txt`, `answer.json` (Codex). Removed when the run settles, on every path. |
-| **[delta]** `relays.json`, new optional fields | as above | Per relay: `features`, `verify_channel`, `icon` (`{type, sha256, source, fetchedAt}`) and `connected` (`{at, via: "auto" \| "click", acknowledged}`). Per pending pairing: `startedAt` (when the operator clicked Connect, carried across refreshes) and the watcher's last status. At the top level: `knownOwners` (`{origin, namespace, id, display_name, addedAt}`, kept after unpair, at most 20 per origin). Readers accept the file without these fields, so `v` stays 1. |
+| **[delta]** `relays.json`, new optional fields | as above | Per relay: `features`, `verify_channel`, `icon` (`{type, sha256, source, fetchedAt}`) and `connected` (`{at, via: "auto" \| "click", acknowledged}`). Per pending pairing: `startedAt` (when the operator clicked Connect, carried across refreshes) and the watcher's last status. At the top level, per origin and kept after unpair: `knownOwners` (`{origin, namespace, id, display_name, addedAt}`, at most 20 per origin); `previousOwners` (`{origin, namespace, id, display_name, at}`, one per origin, overwritten by each completion); and `rejectedOwners` (`{origin, namespace, id, display_name, rejectedAt}`, at most 20 per origin, the oldest dropped first). Together they are the stranger check of §A.3 rule 3. Readers accept the file without these fields, so `v` stays 1. |
 | **[delta]** `<state>/external-relay/conversations.json` | 0600 | The chat conversation map (§B.14). Per conversation: id, relay id, target id, chat key, engine, engine session id, the account last used, cwd, turns, created and last-turn times, the ids of messages seen since the last compaction (at most 1 000), the frame digest, the last prompt size, compactions, and `state` (`idle`, `running` with its request id, or `broken`). It holds no chat text. |
 | **[delta]** `<state>/external-relay/conversations/<conversation id>/codex/` | 0700 | A Codex conversation's own `CODEX_HOME`: the `auth.json` link of the account that runs the turn, and the conversation's rollout and CLI state. |
 | **[delta]** `<Claude transcript store>/<encoded cwd>/` | the CLI's | A Claude conversation's transcript, in the account's transcript store, under the reserved project directory that the scanner skips (§B.14). |
@@ -2173,10 +2227,10 @@ No new driver.
   "external-relay-conversation-sweep")` and runs only in the release that
   owns traffic. Its deletions are limited to three kinds of path: a
   conversation directory under `<state>/external-relay/conversations/`, a
-  reserved Claude project directory that matches `-llv-relay-conv-<uuid>`
-  exactly, and a `llv-relay-conv-<uuid>` cwd. Each must belong to a
-  conversation that is deleted or has no record. It touches nothing else in
-  an account's transcript store.
+  Claude project directory that is reserved by the one predicate of §B.14
+  ("Hidden from Delegatus"), and a `llv-relay-conv-<uuid>` cwd under the OS
+  temp root. Each must belong to a conversation that is deleted or has no
+  record. It touches nothing else in an account's transcript store.
 - **[delta]** A corrupt `conversations.json` is moved aside to
   `conversations.json.corrupt-<time>`, and an empty map is written. Every
   chat then starts fresh, and the relay keeps answering with only the
@@ -2207,13 +2261,13 @@ Bun pin are untouched, so `scripts/verify-runtime-host.ts` is not needed.
 | 9 | `src/components/externalRelay/ExternalRelaySection.dom.test.tsx`, the relay case in `OnboardingDialog.dom.test.tsx`, and the phone driver's "external relay" case | Every state of §B.9: the connect form, the code and link, the identity to confirm, a pairing ended in the service, a relay-provided link that is not a web address left out, a paired relay with poller state, last outcome and last progress, per-target settings, the answer switch held off without an engine, a model or a signed-in account, a staging refusal; the guide step pairing only with an account of the chosen engine signed in, recording done while a relay is paired and a skip otherwise; a pairing ended in the service leaving `relays.json` after one check (`src/app/api/external-relay/route.test.ts`); Ukrainian times in `uk-UA`; the entry rows in the rail and the menu sheet; no sideways scroll and 44 px controls on the phone. |
 | 10 | **[delta]** `src/lib/externalRelay/protocol.test.ts` | The new definitions accept the §A.5 examples and refuse a `ChatKey` under 16 characters or with `/`, a `Feature` with capitals, a `verify_channel` with a control character and a `next_cursor` with a space. A Phase 1 body without any new field still parses. A target list whose `answered_by` is a third value is refused, which is why §A.11 adds a boolean. |
 | 11 | **[delta]** `src/lib/externalRelay/icon.test.ts` against `testRelay.ts` | An icon on another origin, behind a redirect, over 256 KiB, SVG, GIF, or with bytes that do not match its type is refused and the monogram stays. A failed refetch keeps the previous copy. The route answers with the stored type, `nosniff`, a `default-src 'none'; sandbox` policy and an ETag, and loads through the relay guards as an `<img>` request. |
-| 12 | **[delta]** `src/lib/externalRelay/pairingWatch.test.ts` against `testRelay.ts` | With `one_tap_pairing`: completes with no click and with the settings dialog closed; applies the defaults (Claude first, then Codex, then none) and switches on only targets with a signed-in account and without `answered_elsewhere`; sends one push notice; records no known owner until "That's me". A redeemer who differs from a known owner waits for the click. Without the feature, the click is required. An `expires_at` two hours ahead expires locally after 30 minutes. A refresh of an `awaiting_install` pairing answers 409 `not_pending`. "Not me" unpairs and records nothing. Nothing runs in staging. |
-| 13 | **[delta]** `src/lib/externalRelay/conversations.test.ts` | One conversation per (relay, target, chat key); two targets in one chat get two. A second turn while one runs is declined `chat busy`, and so is one from an overlapping Viewer generation. Seen ids and the frame digest shrink later turns, and a compaction (the event, or a smaller prompt than the last turn) brings back the full frame and window. A broken resume starts fresh on the next request. Every deletion trigger of §B.14 deletes the record, the Codex home, the Claude reserved directory and the cwd, and nothing else. A corrupt map is set aside. A Claude transcript under another account's store moves to the chosen account's store. |
+| 12 | **[delta]** `src/lib/externalRelay/pairingWatch.test.ts` against `testRelay.ts` | With `one_tap_pairing`: completes with no click and with the settings dialog closed; applies the defaults (Claude first, then Codex, then none) and switches on only targets with a signed-in account and without `answered_elsewhere`; sends one push notice; records no known owner until "That's me", and records the previous owner at once. A redeemer who differs from a known owner waits for the click. After "Not me" on an automatic completion, the next pairing on that origin waits for the click, whether the same identity or another one redeems. After an automatic completion nobody acknowledged, a re-pairing by a different identity waits for the click and the prompt names the previous identity; a re-pairing by the same identity completes by itself. A click on a rejected identity makes it known again. Without the feature, the click is required. An `expires_at` two hours ahead expires locally after 30 minutes. A refresh of an `awaiting_install` pairing answers 409 `not_pending`. "Not me" unpairs and records the identity as rejected, and nothing else. Nothing runs in staging. |
+| 13 | **[delta]** `src/lib/externalRelay/conversations.test.ts` | One conversation per (relay, target, chat key); two targets in one chat get two. The Claude transcript stores hold reserved directories under an encoded temp-root prefix, such as `-tmp-llv-relay-conv-<uuid>` and `-var-folders-x-T-llv-relay-conv-<uuid>`, and the deletions below find them there. A second turn while one runs is declined `chat busy`, and so is one from an overlapping Viewer generation. Seen ids and the frame digest shrink later turns, and a compaction (the event, or a smaller prompt than the last turn) brings back the full frame and window. A broken resume starts fresh on the next request. Every deletion trigger of §B.14 deletes the record, the Codex home, the Claude reserved directory and the cwd, and nothing else. A corrupt map is set aside. A Claude transcript under another account's store moves to the chosen account's store. |
 | 14 | **[delta]** `src/lib/agent/ephemeral.test.ts` | The start and resume argument lists per engine. They equal the one-shot list except for the session flags of §B.5. Neither `--ephemeral` nor `--no-session-persistence` is dropped without a session. A Codex resume carries `-c sandbox_mode="read-only"`. The conversation's `CODEX_HOME` holds only the `auth.json` link before the first turn. |
 | 15 | **[delta]** `src/lib/agent/ephemeral.probe.test.ts` (`LLV_ANSWER_PROFILE_PROBE=1`) | Two turns per engine against the recording stub. The second request carries the first turn's text; it offers the same tools as one-shot; no marker reaches it. A forced compaction (a small auto-compact limit) shows the event the runner detects, and the test records the Codex item type the tripwire must admit. |
-| 16 | **[delta]** `src/lib/scanner/discover.test.ts` and `src/lib/scanner/roots.claude.test.ts` | A reserved `-llv-relay-conv-<uuid>` directory in a Claude transcript store is not discovered, not indexed for search, and refused by `pathAllowed`. A project directory that only contains the words elsewhere is unaffected. |
-| 17 | **[delta]** `src/lib/externalRelay/client.test.ts`, `src/app/api/external-relay/route.test.ts` | Endpoints 12 and 13 against `testRelay.ts`: paging to the end, `cursor_expired` restarting, an idempotent `PATCH`, 404 for another pairing's target. The chat routes keep every guard and pass no platform id. "Start fresh" deletes only that chat's conversation. |
-| 18 | **[delta]** `ExternalRelaySection.dom.test.tsx`, the phone driver's "external relay" case | The service's name and avatar, and the monogram, in the menu rows and the dialog title; the one-tap panel (button, QR, folded code, countdown, refresh, "Show a new code"); the "Connected as" banner with both actions and the menu badge; the click fallback naming the known owner; a target answered by another install; the chat list with switches, member counts, "Start fresh", "Show more" and the disabled state. At 390 and 1440, in both languages, no sideways scroll and 44 px controls on the phone. The readings go to `evidence/external-relay/settings.json`. No new driver. |
+| 16 | **[delta]** `src/lib/scanner/discover.test.ts` and `src/lib/scanner/roots.claude.test.ts` | `isRelayConversationDir` is the predicate both use. A reserved directory under an encoded temp-root prefix (`-tmp-llv-relay-conv-<uuid>`, and one equal to the encoding of a recorded cwd) in a Claude transcript store is not discovered, not indexed for search, and refused by `pathAllowed`. A project directory that contains the words elsewhere, or ends in them followed by something that is not a UUID, is unaffected. |
+| 17 | **[delta]** `src/lib/externalRelay/client.test.ts`, `src/app/api/external-relay/route.test.ts` | Endpoints 12 and 13 against `testRelay.ts`: paging to the end, `cursor_expired` restarting, an idempotent `PATCH`, 404 for a target the pairing does not list. With two pairings of one owner, where the second sees the target `answered_elsewhere`: row 12 lists the same chats and switch values to both; a row 13 `PATCH` to `"service"` from the second answers 200 with `answered_by: "install"` and the chat still routes to the first; a row 7 `PATCH` of only `fallback` from the second answers 200 and leaves `fallback` unchanged. The chat routes keep every guard and pass no platform id. "Start fresh" deletes only that chat's conversation. |
+| 18 | **[delta]** `ExternalRelaySection.dom.test.tsx`, the phone driver's "external relay" case | The service's name and avatar, and the monogram, in the menu rows and the dialog title; the one-tap panel (button, QR, folded code, countdown, refresh, "Show a new code"); the "Connected as" banner with both actions and the menu badge; the click fallback naming the previous owner; a target answered by another install; the chat list with switches, member counts, "Start fresh", "Show more" and the disabled state. At 390 and 1440, in both languages, no sideways scroll and 44 px controls on the phone. The readings go to `evidence/external-relay/settings.json`. No new driver. |
 | 19 | **[delta]** manual, once per engine, in the implementing stage | A live two-turn conversation on a real signed-in account at the lowest effort. The second turn answers from a fact given only in the first. The marker probe of test 8 still holds on the resume. The PR records the outcome without identities. |
 
 ## B.12 [delta] Branding: the service's name and look
@@ -2309,7 +2363,8 @@ from there. On `awaiting_install` it applies §A.3 rule 3:
 - **Automatic.** It confirms (`confirmRelayPairing`), applies the defaults
   below, sets `connected = {at, via: "auto", acknowledged: false}`, starts
   the poll loop and sends the notice.
-- **Click.** It stores the owner, and the known owner's name when there is
+- **Click.** It stores the owner, and the previous owner's name (else the
+  newest known owner's) when there is
   one, for the prompt, and sends the notice "Confirm who is connecting to
   <name>". The prompt appears when the dialog opens.
 
@@ -2366,7 +2421,13 @@ now both cancel that entry at the service first.
 
 - "That's me" sends `PATCH /api/external-relay/relays/[id]` `{acknowledged:
   true}`. The banner goes, and the owner joins `knownOwners`.
-- "Not me — disconnect" calls the unpair route and records nothing.
+- "Not me — disconnect" calls the unpair route and adds the identity to
+  `rejectedOwners` for this origin. It records no known owner.
+
+Every completion, automatic or by click, writes the owner to
+`previousOwners` for the origin, before the banner shows. A click also adds
+the owner to `knownOwners` and removes it from `rejectedOwners`. The watcher
+evaluates the stranger check of §A.3 rule 3 on these three records.
 
 The menu rows show a dot until one of the two is pressed. A pairing
 confirmed by click is known at once, and its card shows the Phase 1 "Paired
@@ -2450,14 +2511,32 @@ is in §A.8: a key's requests carry only that chat's messages.
 **Hidden from Delegatus.** Codex conversation homes lie outside every
 scanner root, which are only the accounts' own `sessions` directories
 (`src/lib/scanner/roots.ts:80-90` [code]). Claude transcripts do land in a
-scanner root, so discovery skips every project directory whose name ends in
-`-llv-relay-conv-<uuid>`, and `pathAllowed` refuses paths under one. A
+scanner root. Claude names a project directory by encoding its cwd: each
+path segment becomes `-` followed by the segment with every character
+outside `[A-Za-z0-9]` replaced by `-` (as `src/lib/scanner/describe.ts:269`
+[code] decodes it). The cwd `/tmp/llv-relay-conv-<uuid>` is therefore stored
+as `-tmp-llv-relay-conv-<uuid>`, and a different temp root gives a
+different prefix. One predicate, `isRelayConversationDir(name)` in
+`conversations.ts`, decides which project directories are reserved, and
+both discovery and the retention sweep of §B.10 call it. A name is
+reserved when either holds:
+
+- it equals the encoding of a cwd recorded in `conversations.json`;
+- it ends in `-llv-relay-conv-` followed by a lowercase UUID, the pattern
+  `-llv-relay-conv-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`.
+  This covers orphans that have no record and a temp root that changed.
+
+Discovery skips every reserved directory, and `pathAllowed` refuses paths
+under one. The sweep deletes a reserved directory only when its UUID names
+a deleted conversation or no record at all. A
 conversation therefore never appears in the sidebar, in
 `search_transcripts` or `conversation_messages`, or to a composer or a
 flow, and nothing can resume it with tools.
 
 **Restart.** A turn is a run. The sweep of §B.3 ends an orphaned turn with
-`install_restarted` and sets its conversation back to `idle`. The next turn
+`install_restarted` and sets its conversation back to `idle`. It also sets
+back to `idle` any `running` conversation that no entry in `runs.json`
+names, which a crash between the two files' writes can leave. The next turn
 resumes the transcript as the interrupted turn left it.
 
 **Retention and deletion.** The install deletes a conversation (its record,
@@ -2470,7 +2549,8 @@ when:
 - the owner presses "Start fresh" on the chat's row (§B.15);
 - a complete listing of the target's chats no longer contains the key. A
   listing is complete when every page was read in one pass, by the daily
-  refresh of §B.3 or by the dialog;
+  refresh of §B.3 or by the dialog. This assumes what row 12 promises: a
+  chat the target had for the whole pass appears on one of its pages;
 - it has had no turn for 30 days.
 
 Switching the chat or the target to the service keeps the conversation, so
@@ -2501,7 +2581,9 @@ conversations do not carry across a re-pairing (see Deferred).
     reloads from the first page. When a pass reads the last page, the route
     runs the reconciliation of §B.14.
   - PATCH checks the key against `ChatKey` and checks the body, then
-    forwards row 13.
+    forwards row 13. The row shows the value the service returns, which
+    differs from the one sent when another install answers the target
+    (§A.4).
   - DELETE is local and deletes only that chat's conversation.
   - Errors are worded as in §B.9: the service's codes through
     `relayErrorText`, and Delegatus's own as `refused_here`, `not_found` and
@@ -2518,7 +2600,7 @@ The service can build all of Part A at once.
 |---|---|---|---|---|
 | 1. Branding and one-tap pairing | `protocol.ts` (new descriptor fields, `Target.answered_elsewhere`); `icon.ts`; `store.ts` (new `relays.json` fields, the 30-minute cap); `pairing.ts` (completion routine with defaults, cancel before replace, refresh); `pairingWatch.ts`; `poller.ts` (starts the watcher, descriptor refresh); `push.ts` (`notifyOperatorNotice`) | icons, pairing refresh, acknowledge; GET pairing reads the store | `ServiceBadge.tsx`; menu rows and dialog title (`ProjectRail.tsx`, `ProjectDashboard.tsx`, `ExternalRelaySettingsDialog.tsx`); the pairing panel with button, QR and folded code; the banner and dot; "Answered by another install"; the setup guide's heading | 10, 11, 12, 18 (branding and pairing) |
 | 2. Chat management | `protocol.ts` (`Chat`, `Chats`, `ChatPatch`); `chats.ts`; `testRelay.ts` gains rows 12 and 13 | chats GET and PATCH | `RelayChats.tsx` inside `TargetRow` | 17, 18 (chats) |
-| 3. Chat conversations | `conversations.ts`; `agent/ephemeral.ts` (session options, `thread.started`, usage, compaction, the Codex allowlist entry from test 15); `progress.ts` (the new events); `prompt.ts` (turn prompt); `runner.ts` (step 5a); `poller.ts` (claim `features`, sweep, retention); `store.ts` (`conversationId` on run records); `scanner/discover.ts` and `scanner/roots.ts` (reserved directories) | chat conversation DELETE | "Start fresh" and the last-turn time in `RelayChats.tsx` | 13, 14, 15, 16, 19 |
+| 3. Chat conversations | `conversations.ts`; `agent/ephemeral.ts` (session options, `thread.started`, usage, compaction, the Codex allowlist entry from test 15); `progress.ts` (the new events); `prompt.ts` (turn prompt); `runner.ts` (step 5a); `poller.ts` (claim `features`, sweep, retention); `store.ts` (`conversationId` on run records); `scanner/discover.ts` and `scanner/roots.ts` (reserved directories, through `isRelayConversationDir`) | chat conversation DELETE | "Start fresh" and the last-turn time in `RelayChats.tsx` | 13, 14, 15, 16, 19 |
 
 Strings, in `en.ts` and `uk.ts`: `externalRelay.menu.none`,
 `externalRelay.menu.many`, `externalRelay.pairing.connectIn`,
@@ -2654,8 +2736,9 @@ observations cannot settle is left to tests 15 and 19.
 - **[delta] A link from the service** that opens the install's pairing with
   the address filled in. The operator still types or pastes the address.
 - **[delta] A setting to always ask for the install-side confirmation**, and
-  a way to remove a known owner. The stranger check and one click cover
-  both needs for now.
+  a way to remove a known owner or a rejected identity. The stranger check
+  and one click cover both needs for now, and a click on a rejected
+  identity clears it.
 - **[delta] More than 100 targets per owner.** The v1 target list has no
   pagination (§A.3 rule 10).
 - **[delta] Tidying the CLI's own record of conversation directories.**
