@@ -166,7 +166,7 @@ function version(fixture: ReturnType<typeof install>, extraEnv: Record<string, s
 }
 
 type Entry = { state: string; pid: number | null; revision: string | null; requestId: string | null; error: { kind: string; revision?: string } | null };
-type Record = { launcher: { pid: number; autoAdmission?: number }; checkout: string | null; releasePointer: string; requestFile: string; socket: string; web: Entry; runtimeHost: Entry };
+type LauncherRecord = { launcher: { pid: number; autoAdmission?: number }; checkout: string | null; releasePointer: string; requestFile: string; socket: string; web: Entry; runtimeHost: Entry };
 
 async function until<T>(read: () => T | null | undefined | false, timeoutMs = 20_000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
@@ -184,8 +184,8 @@ async function until<T>(read: () => T | null | undefined | false, timeoutMs = 20
   throw new Error(`timed out; last read ${String(last)}`);
 }
 
-function readRecord(state: string): Record {
-  return JSON.parse(readFileSync(recordFile(state), "utf8")) as Record;
+function readRecord(state: string): LauncherRecord {
+  return JSON.parse(readFileSync(recordFile(state), "utf8")) as LauncherRecord;
 }
 
 async function served(port: number): Promise<string> {
@@ -218,7 +218,7 @@ function socketAnswers(socketPath: string): Promise<boolean> {
   });
 }
 
-function request(record: Record, role: "web" | "runtime-host", requestId: string): void {
+function request(record: LauncherRecord, role: "web" | "runtime-host", requestId: string): void {
   writeFileSync(record.requestFile, JSON.stringify({ requestId, role }));
 }
 
@@ -372,7 +372,7 @@ test.each([0, 1])("a release launcher exiting %i before recording itself falls b
     return current.web.state === "healthy" && current.runtimeHost.state === "healthy" ? current : null;
   });
   expect(running.output()).toContain("installed launcher could not start");
-  expect(record.launcher.pid).toBe(running.child.pid);
+  expect(record.launcher.pid).toBe(running.child.pid as number);
   expect(await served(running.port)).toBe(broken.dir);
   expect(await socketAnswers(record.socket)).toBe(true);
 }, 60_000);
