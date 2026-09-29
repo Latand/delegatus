@@ -4757,7 +4757,7 @@ export const en = {
   "selfUpdate.auto.outcome.fell-back": "fell back",
   "selfUpdate.auto.unavailable.no-release-target": "The installed release target is unavailable.",
   "selfUpdate.auto.unavailable.packaged": "Automatic updates are unavailable for this install.",
-  "selfUpdate.auto.unavailable.launcher-upgrade": "One-time launcher setup: in the install checkout, run `git checkout <installed-release-sha> -- bin/cli.mjs`, then restart Delegatus. Leave the checkout HEAD in place; later launcher changes come from installed releases.",
+  "selfUpdate.auto.unavailable.launcher-upgrade": "One-time launcher setup: find the full SHA in the release pointer named by the launcher's `releasePointer` record field. Build a release containing the checkout launcher bootstrap (this update or later) first. In the install checkout, run `git show HEAD:bin/cli.mjs > bin/cli-checkout.mjs`, then `git checkout <installed-release-sha> -- bin/cli.mjs`, then restart Delegatus. Keep the backup and leave checkout HEAD in place; later launcher changes come from installed releases.",
   "selfUpdate.auto.unavailable.not-github": "Automatic updates require a GitHub remote.",
   "selfUpdate.auto.unavailable.hand-managed": "The checkout moved since Delegatus published the release. Update it from this dialog to resume.",
   "selfUpdate.auto.unavailable.diverged": "The checkout has local commits outside the tracked branch.",

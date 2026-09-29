@@ -70,7 +70,7 @@ process.on("SIGTERM", stop);
 
 const BROKEN_HOST = "process.exit(3);\n";
 
-function install(options: { oldSupervisor?: boolean } = {}) {
+function install(options: { oldSupervisor?: boolean; oldServerRuntime?: boolean } = {}) {
   const root = mkdtempSync("/var/tmp/llv-cli-self-update-");
   roots.push(root);
   const checkout = path.join(root, "checkout");
@@ -86,6 +86,10 @@ function install(options: { oldSupervisor?: boolean } = {}) {
   if (options.oldSupervisor) {
     const supervisor = path.join(checkout, "bin", "self-update-supervisor.mjs");
     writeFileSync(supervisor, readFileSync(supervisor, "utf8").replace(", autoAdmission: 1", ""));
+  }
+  if (options.oldServerRuntime) {
+    const runtime = path.join(checkout, "bin", "server-runtime.mjs");
+    writeFileSync(runtime, readFileSync(runtime, "utf8").replace("export function discardUnsupportedApiCredentials(", "function discardUnsupportedApiCredentials("));
   }
   writeFileSync(path.join(checkout, "package.json"), JSON.stringify({ type: "module", version: "0.0.0" }));
   writeFileSync(path.join(checkout, "node_modules", ".bin", "next"), STUB_NEXT(false));
@@ -112,10 +116,11 @@ function install(options: { oldSupervisor?: boolean } = {}) {
 }
 
 /** A built release of a new commit, as the Viewer's step runner leaves it. */
-function release(fixture: ReturnType<typeof install>, name: string, options: { broken?: boolean; brokenHost?: boolean; upgradeSupervisor?: boolean; launcher?: string } = {}): { dir: string; sha: string } {
+function release(fixture: ReturnType<typeof install>, name: string, options: { broken?: boolean; brokenHost?: boolean; upgradeSupervisor?: boolean; upgradeServerRuntime?: boolean; launcher?: string } = {}): { dir: string; sha: string } {
   git(fixture.checkout, "checkout", "--quiet", "--detach", fixture.first);
   writeFileSync(path.join(fixture.checkout, "notes.txt"), `${name}\n`);
   if (options.upgradeSupervisor) copyFileSync(path.resolve("bin", "self-update-supervisor.mjs"), path.join(fixture.checkout, "bin", "self-update-supervisor.mjs"));
+  if (options.upgradeServerRuntime) copyFileSync(path.resolve("bin", "server-runtime.mjs"), path.join(fixture.checkout, "bin", "server-runtime.mjs"));
   if (options.launcher) writeFileSync(path.join(fixture.checkout, "bin", "cli.mjs"), options.launcher);
   if (options.broken) writeFileSync(path.join(fixture.checkout, "node_modules", ".bin", "next"), STUB_NEXT(true));
   if (options.brokenHost) writeFileSync(path.join(fixture.checkout, "dist", "runtime-host.mjs"), BROKEN_HOST);
@@ -248,8 +253,14 @@ test("one service restart runs the installed launcher and its admission-capable 
   });
   expect(afterRequest.web.revision).toBe(next.sha.slice(0, 7));
   expect(afterRequest.runtimeHost.pid).toBe(record.runtimeHost.pid);
+  /* systemd's control-group kill reaches both processes; the bootstrap also
+     forwards its signal, so the launcher may see SIGTERM twice. */
+  process.kill(record.launcher.pid, "SIGTERM");
   restarted.child.kill("SIGTERM");
   await new Promise<void>((resolve) => restarted.child.once("exit", () => resolve()));
+  expect(restarted.child.exitCode).toBe(0);
+  expect(existsSync(`/proc/${record.web.pid}`)).toBe(false);
+  expect(existsSync(`/proc/${record.runtimeHost.pid}`)).toBe(false);
   expect(readdirSync(path.join(fixture.state, "self-update")).some((name) => name.startsWith("launcher-"))).toBe(false);
 }, 60_000);
 
@@ -257,7 +268,7 @@ test("release handoff forwards argv, environment and signals, and the marker pre
   const fixture = install();
   const probeFile = path.join(fixture.root, "probe.json");
   const signalFile = path.join(fixture.root, "signal.txt");
-  const probe = `// delegatus-checkout-launcher-v1\nimport { writeFileSync } from "node:fs";\nwriteFileSync(process.env.LLV_TEST_PROBE_FILE, JSON.stringify({ argv: process.argv.slice(2), marker: process.env.LLV_LAUNCHER_REEXEC, checkout: process.env.LLV_LAUNCHER_CHECKOUT, value: process.env.LLV_TEST_VALUE, cwd: process.cwd() }));\nprocess.on("SIGTERM", () => { writeFileSync(process.env.LLV_TEST_SIGNAL_FILE, "SIGTERM"); process.exit(0); });\nsetInterval(() => {}, 1000);\n`;
+  const probe = `// delegatus-checkout-launcher-v2\nimport { writeFileSync } from "node:fs";\nwriteFileSync(process.env.LLV_TEST_PROBE_FILE, JSON.stringify({ argv: process.argv.slice(2), marker: process.env.LLV_LAUNCHER_REEXEC, checkout: process.env.LLV_LAUNCHER_CHECKOUT, value: process.env.LLV_TEST_VALUE, cwd: process.cwd() }));\nprocess.on("SIGTERM", () => { writeFileSync(process.env.LLV_TEST_SIGNAL_FILE, "SIGTERM"); process.exit(0); });\nsetInterval(() => {}, 1000);\n`;
   const next = release(fixture, "probe-launcher", { launcher: probe });
   mkdirSync(path.dirname(pointerFile(fixture)), { recursive: true });
   writeFileSync(pointerFile(fixture), JSON.stringify({ sha: next.sha, dir: next.dir, checkoutHead: fixture.first }));
@@ -289,34 +300,99 @@ test("missing and invalid release pointers use the checkout launcher", () => {
   expect(version(fixture)).toMatchObject({ status: 0, stdout: "0.0.0\n" });
 });
 
-test("a pre-bootstrap release keeps the checkout supervisor as fallback", () => {
+test("an older handoff protocol keeps the checkout supervisor as fallback", () => {
   const fixture = install();
-  const legacy = release(fixture, "legacy-launcher", { launcher: "process.stdout.write('legacy\\n');\n" });
+  const legacy = release(fixture, "legacy-launcher", { launcher: "// delegatus-checkout-launcher-v1\nprocess.stdout.write('legacy\\n');\n" });
   mkdirSync(path.dirname(pointerFile(fixture)), { recursive: true });
   writeFileSync(pointerFile(fixture), JSON.stringify({ sha: legacy.sha, dir: legacy.dir, checkoutHead: fixture.first }));
   expect(version(fixture)).toMatchObject({ status: 0, stdout: "0.0.0\n" });
 });
 
-test("the one-time file checkout leaves HEAD old and makes release launcher code reachable", () => {
-  const fixture = install({ oldSupervisor: true });
+test("the one-time file checkout links against an older checkout and retains its own launcher fallback", async () => {
+  const fixture = install({ oldSupervisor: true, oldServerRuntime: true });
   const checkoutCli = path.join(fixture.checkout, "bin", "cli.mjs");
-  writeFileSync(checkoutCli, "process.stdout.write('old launcher\\n');\n");
+  writeFileSync(checkoutCli, "import './server-runtime.mjs';\nprocess.stdout.write('old launcher\\n');\n");
   git(fixture.checkout, "add", "bin/cli.mjs");
   git(fixture.checkout, "commit", "--amend", "--quiet", "--no-edit");
   fixture.first = git(fixture.checkout, "rev-parse", "HEAD");
   const next = release(fixture, "bootstrap-release", {
     launcher: readFileSync(path.resolve("bin", "cli.mjs"), "utf8"),
     upgradeSupervisor: true,
+    upgradeServerRuntime: true,
   });
+  writeFileSync(path.join(fixture.checkout, "bin", "cli-checkout.mjs"), git(fixture.checkout, "show", "HEAD:bin/cli.mjs") + "\n");
   mkdirSync(path.dirname(pointerFile(fixture)), { recursive: true });
   writeFileSync(pointerFile(fixture), JSON.stringify({ sha: next.sha, dir: next.dir, checkoutHead: fixture.first }));
   expect(version(fixture).stdout.trim()).toBe("old launcher");
 
   git(fixture.checkout, "checkout", next.sha, "--", "bin/cli.mjs");
   expect(git(fixture.checkout, "rev-parse", "HEAD")).toBe(fixture.first);
-  expect(version(fixture, { LLV_LAUNCHER_REEXEC: "1" }).stdout.trim()).toBe("0.0.0");
+  expect(version(fixture, { LLV_LAUNCHER_REEXEC: "1" }).stdout.trim()).toBe("old launcher");
   expect(version(fixture).stdout.trim()).toBe("0.0.0");
+  rmSync(pointerFile(fixture));
+  expect(version(fixture).stdout.trim()).toBe("old launcher");
+  writeFileSync(pointerFile(fixture), JSON.stringify({ sha: next.sha, dir: next.dir, checkoutHead: fixture.first }));
+  const running = await start(fixture);
+  const record = await until(() => {
+    const current = readRecord(fixture.state);
+    return current.web.state === "healthy" && current.runtimeHost.state === "healthy" ? current : null;
+  });
+  expect(record.launcher.autoAdmission).toBe(1);
+  expect(record.checkout).toBe(fixture.checkout);
+  expect(await served(running.port)).toBe(next.dir);
+}, 60_000);
+
+test.each([0, 1])("a release launcher exiting %i before recording itself falls back to a healthy checkout launcher", async (exitCode) => {
+  const fixture = install();
+  const broken = release(fixture, "broken-launcher", { launcher: `// delegatus-checkout-launcher-v2\nprocess.exit(${exitCode});\n` });
+  mkdirSync(path.dirname(pointerFile(fixture)), { recursive: true });
+  writeFileSync(pointerFile(fixture), JSON.stringify({ sha: broken.sha, dir: broken.dir, checkoutHead: fixture.first }));
+  const running = await start(fixture);
+  const record = await until(() => {
+    const current = readRecord(fixture.state);
+    return current.web.state === "healthy" && current.runtimeHost.state === "healthy" ? current : null;
+  });
+  expect(running.output()).toContain("installed launcher could not start");
+  expect(record.launcher.pid).toBe(running.child.pid);
+  expect(await served(running.port)).toBe(broken.dir);
+  expect(await socketAnswers(record.socket)).toBe(true);
+}, 60_000);
+
+test("a one-shot team command keeps the release launcher's exit result", () => {
+  const fixture = install();
+  const broken = release(fixture, "team-command", { launcher: "// delegatus-checkout-launcher-v2\nprocess.exit(1);\n" });
+  mkdirSync(path.dirname(pointerFile(fixture)), { recursive: true });
+  writeFileSync(pointerFile(fixture), JSON.stringify({ sha: broken.sha, dir: broken.dir, checkoutHead: fixture.first }));
+  const result = spawnSync(process.execPath, ["--bun", path.join(fixture.checkout, "bin", "cli.mjs"), "team", "status"], {
+    cwd: fixture.checkout, env: fixture.env, encoding: "utf8", timeout: 5_000,
+  });
+  expect(result.status).toBe(1);
+  expect(result.stderr).not.toContain("using the checkout launcher");
 });
+
+test("saved checkout launcher handles a group signal once and finishes shutdown", async () => {
+  const fixture = install();
+  const started = path.join(fixture.root, "backup-started");
+  const stopped = path.join(fixture.root, "backup-stopped");
+  writeFileSync(path.join(fixture.checkout, "bin", "cli-checkout.mjs"), `
+import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(started)}, "started");
+process.once("SIGTERM", () => setTimeout(() => {
+  writeFileSync(${JSON.stringify(stopped)}, "stopped");
+  process.exit(0);
+}, 200));
+setInterval(() => {}, 1000);
+`);
+  const child = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "bin", "cli.mjs")], {
+    cwd: fixture.checkout, env: fixture.env, stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  await until(() => existsSync(started));
+  child.kill("SIGTERM");
+  await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  expect(child.exitCode).toBe(0);
+  expect(readFileSync(stopped, "utf8")).toBe("stopped");
+}, 10_000);
 
 test("a checkout records both children, and a restart request moves each one onto the published release", async () => {
   const fixture = install();

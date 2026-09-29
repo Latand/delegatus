@@ -229,14 +229,19 @@ describe("automatic updates", () => {
     const en = render(s);
     expect(button(en, "toggle-auto")?.disabled).toBe(true);
     expect(text(section(en, "auto"))).toContain("git checkout <installed-release-sha> -- bin/cli.mjs");
-    expect(text(section(en, "auto"))).toContain("Leave the checkout HEAD in place");
+    expect(text(section(en, "auto"))).toContain("git show HEAD:bin/cli.mjs > bin/cli-checkout.mjs");
+    expect(text(section(en, "auto"))).toContain("releasePointer");
+    expect(text(section(en, "auto"))).toContain("containing the checkout launcher bootstrap");
+    expect(text(section(en, "auto"))).toContain("leave checkout HEAD in place");
     flushSync(() => root!.unmount());
     host?.remove();
     setLocale("uk");
     const uk = render(s);
     expect(button(uk, "toggle-auto")?.disabled).toBe(true);
     expect(text(section(uk, "auto"))).toContain("git checkout <sha-встановленого-релізу> -- bin/cli.mjs");
-    expect(text(section(uk, "auto"))).toContain("Не змінюйте HEAD checkout");
+    expect(text(section(uk, "auto"))).toContain("git show HEAD:bin/cli.mjs > bin/cli-checkout.mjs");
+    expect(text(section(uk, "auto"))).toContain("releasePointer");
+    expect(text(section(uk, "auto"))).toContain("не змінюйте HEAD checkout");
   });
 
   test("the update card names an automatic build after it finishes", () => {

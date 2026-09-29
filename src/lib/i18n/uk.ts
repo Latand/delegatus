@@ -4647,7 +4647,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "selfUpdate.auto.outcome.fell-back": "повернуто попередню версію",
   "selfUpdate.auto.unavailable.no-release-target": "Не вдалося визначити встановлений реліз.",
   "selfUpdate.auto.unavailable.packaged": "Автооновлення недоступне для цієї інсталяції.",
-  "selfUpdate.auto.unavailable.launcher-upgrade": "Одноразове налаштування лаунчера: у каталозі інсталяційного checkout виконайте `git checkout <sha-встановленого-релізу> -- bin/cli.mjs`, потім перезапустіть Delegatus. Не змінюйте HEAD checkout; наступні зміни лаунчера надходитимуть із встановлених релізів.",
+  "selfUpdate.auto.unavailable.launcher-upgrade": "Одноразове налаштування лаунчера: повний SHA є у файлі вказівника релізу, шлях до якого записано в полі `releasePointer` запису лаунчера. Спочатку зберіть реліз із bootstrap лаунчера для checkout (це оновлення або новіше). У каталозі інсталяційного checkout виконайте `git show HEAD:bin/cli.mjs > bin/cli-checkout.mjs`, потім `git checkout <sha-встановленого-релізу> -- bin/cli.mjs`, потім перезапустіть Delegatus. Збережіть резервний файл і не змінюйте HEAD checkout; наступні зміни лаунчера надходитимуть із встановлених релізів.",
   "selfUpdate.auto.unavailable.not-github": "Для автооновлення потрібен GitHub remote.",
   "selfUpdate.auto.unavailable.hand-managed": "Чекаут змінився після публікації релізу. Оновіть його з цього вікна, щоб продовжити.",
   "selfUpdate.auto.unavailable.diverged": "У чекауті є локальні коміти поза відстежуваною гілкою.",

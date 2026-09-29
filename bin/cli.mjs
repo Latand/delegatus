@@ -1,55 +1,34 @@
 #!/usr/bin/env node
 
-/* FIRST: fold DELEGATUS_* into LLV_* before anything below reads the
-   environment (docs/design/rename-delegatus.md §5). */
-import "./envAlias.mjs";
-
-import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import { constants, homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import {
-  detectTailscale,
-  getToken,
-  OPERATOR_HINT,
-  OPERATOR_PATTERN,
-  phoneAccessFlagPath,
-  readPhoneAccessFlag,
-  readStatus,
-  serve as serveTailscale,
-  serveBackground,
-  TailscaleError,
-} from "./tailscale.mjs";
-import {
-  browserOpenCommand,
-  cliRuntimeHostConfig,
-  cliRuntimeHostEnvironment,
-  discardUnsupportedApiCredentials,
-  newlyBoundNonLoopbackAddress,
-  readNonLoopbackBindState,
-  viewerChildProcessOptions,
-  viewerServerBunRuntime,
-} from "./server-runtime.mjs";
+/* The checkout may be older than this file. No checkout sibling is linked
+   until the release decision has completed. */
+for (const name of Object.keys(process.env)) {
+  if (!name.startsWith("DELEGATUS_") || name.length === 10) continue;
+  const old = `LLV_${name.slice(10)}`;
+  if (process.env[old] !== undefined && process.env[old] !== process.env[name]) {
+    console.warn(`[delegatus] ${name} and ${old} are both set and differ; using ${name}.`);
+  }
+  process.env[old] = process.env[name];
+  delete process.env[name];
+}
 
-discardUnsupportedApiCredentials();
-import {
-  createLauncherRecord,
-  exitError,
-  hostEntrypoint,
-  installedRelease,
-  isGitCheckout,
-  probePageAndChunk,
-  selfUpdatePaths,
-  watchRestartRequests,
-} from "./self-update-supervisor.mjs";
-import { probeHeadersFrom } from "./internalService.mjs";
-import { findLegacySystemdUnits, legacySystemdNotice } from "./legacySystemd.mjs";
-import { linkSkills } from "./skillLinks.mjs";
-
+let detectTailscale, getToken, OPERATOR_HINT, OPERATOR_PATTERN, phoneAccessFlagPath,
+  readPhoneAccessFlag, readStatus, serveTailscale, serveBackground, TailscaleError;
+let browserOpenCommand, cliRuntimeHostConfig, cliRuntimeHostEnvironment,
+  newlyBoundNonLoopbackAddress, readNonLoopbackBindState, viewerChildProcessOptions,
+  viewerServerBunRuntime;
+let createLauncherRecord, exitError, hostEntrypoint, installedRelease, isGitCheckout,
+  probePageAndChunk, selfUpdatePaths, watchRestartRequests;
+let probeHeadersFrom, findLegacySystemdUnits, legacySystemdNotice, linkSkills;
 
 /* The launcher is one of the process kinds that may resolve the operator's own
    config and state directories (#1905); everything it starts inherits the
@@ -78,7 +57,7 @@ const RESTART_READINESS_TIMEOUT_MS = 90_000;
 
 const cliPath = fileURLToPath(import.meta.url);
 const cliDir = dirname(cliPath);
-const LAUNCHER_HANDOFF_PROTOCOL = "delegatus-checkout-launcher-v1";
+const LAUNCHER_HANDOFF_PROTOCOL = "delegatus-checkout-launcher-v2";
 const launcherCheckout = process.env.LLV_LAUNCHER_REEXEC === "1" ? process.env.LLV_LAUNCHER_CHECKOUT : undefined;
 
 /* Dependency-free CLI localization: English by default, Ukrainian when
@@ -915,14 +894,17 @@ async function stopAll(serverProcess, tailscaleProcess, runtimeHostSupervisor) {
 /* `serverRef.current` is whichever web process runs at shutdown: a
    self-update restart (#2007) replaces the one startup launched. */
 function installSignalHandlers(serverRef, tailscaleProcessRef, runtimeHostSupervisor, onShutdown = () => {}) {
+  let stopping = false;
   const shutdown = async () => {
+    if (stopping) return;
+    stopping = true;
     onShutdown();
     await stopAll(serverRef.current, tailscaleProcessRef.current, runtimeHostSupervisor);
     process.exit(0);
   };
 
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
 async function prepareRuntime(options) {
@@ -1289,48 +1271,123 @@ async function main() {
    small: the release pointer selects code, while the checkout remains the
    install identity and the fallback when no published build is valid. The
    marker makes the release's own cli.mjs run its body without another hop. */
+function headRevision(dir) {
+  const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd: dir, stdio: ["ignore", "pipe", "ignore"], encoding: "utf8" });
+  return result.status === 0 ? result.stdout.trim() : null;
+}
+
+function isRealDirectory(dir) {
+  try { return lstatSync(dir).isDirectory(); } catch { return false; }
+}
+
+function isDirectory(dir) {
+  try { return statSync(dir).isDirectory(); } catch { return false; }
+}
+
+function stateDirectory() {
+  if (process.env.LLV_STATE_DIR?.trim()) return process.env.LLV_STATE_DIR.trim();
+  const config = process.env.XDG_CONFIG_HOME?.trim() || join(homedir(), ".config");
+  const preferred = join(config, "delegatus");
+  const legacy = join(config, "agent-log-viewer");
+  const app = isRealDirectory(preferred) ? preferred : isDirectory(legacy) ? legacy : preferred;
+  return join(app, "state");
+}
+
 function releaseLauncher() {
   if (process.env.LLV_LAUNCHER_REEXEC === "1") return null;
   const checkout = findPackageRoot(cliDir);
-  if (!isGitCheckout(checkout)) return null;
-  const config = cliRuntimeHostConfig(checkout);
-  const paths = selfUpdatePaths({
-    stateDirectory: config.stateDirectory,
-    cacheDirectory: process.env.XDG_CACHE_HOME?.trim() || join(homedir(), ".cache"),
-    installId: config.installId,
-  });
-  const release = installedRelease(paths.releasePointer, checkout);
-  const entry = join(release.dir, "bin", "cli.mjs");
-  if (!release.published || entry === cliPath || !existsSync(entry)) return null;
+  if (!existsSync(join(checkout, ".git"))) return null;
+  const installId = createHash("sha256").update(resolve(checkout)).digest("hex").slice(0, 16);
+  const state = stateDirectory();
+  const record = join(state, "self-update", `launcher-${installId}.json`);
+  const pointer = join(state, "self-update", `release-${installId}.json`);
+  let entry;
+  try {
+    const parsed = JSON.parse(readFileSync(pointer, "utf8"));
+    const rootHead = headRevision(checkout);
+    if (typeof parsed?.sha !== "string" || !/^[0-9a-f]{40}$/.test(parsed.sha)
+      || typeof parsed?.dir !== "string"
+      || (typeof parsed.checkoutHead === "string" && parsed.checkoutHead !== rootHead)
+      || !existsSync(join(parsed.dir, ".next", "BUILD_ID"))
+      || headRevision(parsed.dir) !== parsed.sha) return null;
+    entry = join(parsed.dir, "bin", "cli.mjs");
+  } catch { return null; }
+  if (entry === cliPath || !existsSync(entry)) return null;
   /* A rollback may point at a pre-bootstrap release. Its CLI cannot retain
      the checkout as the install identity, so keep supervising it locally. */
   try {
     if (!readFileSync(entry, "utf8").includes(LAUNCHER_HANDOFF_PROTOCOL)) return null;
   } catch { return null; }
-  return { checkout, entry };
+  return { checkout, entry, record };
 }
 
-function handOffLauncher({ checkout, entry }) {
-  const child = spawn(process.execPath, [...process.execArgv, entry, ...process.argv.slice(2)], {
-    cwd: checkout,
-    env: { ...process.env, LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_CHECKOUT: checkout },
-    stdio: "inherit",
+function handOffLauncher({ checkout, entry, record }) {
+  return new Promise((done) => {
+    const env = { ...process.env, LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_CHECKOUT: checkout };
+    const child = spawn(process.execPath, [...process.execArgv, entry, ...process.argv.slice(2)], {
+      cwd: checkout, env, stdio: "inherit",
+    });
+    let forwarded = false;
+    const forward = (signal) => {
+      if (forwarded) return;
+      forwarded = true;
+      if (child.exitCode === null && child.signalCode === null) child.kill(signal);
+    };
+    process.on("SIGINT", forward);
+    process.on("SIGTERM", forward);
+    let spawnError = null;
+    child.once("error", (error) => { spawnError = error; });
+    child.once("close", (code, signal) => {
+      process.off("SIGINT", forward);
+      process.off("SIGTERM", forward);
+      const status = code ?? (signal ? 128 + (constants.signals[signal] ?? 0) : 1);
+      let recorded = false;
+      if (child.pid) {
+        try { recorded = JSON.parse(readFileSync(record, "utf8"))?.launcher?.pid === child.pid; } catch { /* no record */ }
+      }
+      const oneShot = process.argv[2] === "team" || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
+      if (!recorded && !forwarded && !oneShot) {
+        console.error(`[self-update] installed launcher could not start (${spawnError?.message || `exit ${status}`}); using the checkout launcher.`);
+        done(false);
+      } else {
+        process.exitCode = status;
+        done(true);
+      }
+    });
   });
-  for (const signal of ["SIGINT", "SIGTERM"]) {
-    process.on(signal, () => child.kill(signal));
+}
+
+async function checkoutLauncher() {
+  const checkout = findPackageRoot(cliDir);
+  const original = join(cliDir, "cli-checkout.mjs");
+  if (!launcherCheckout && existsSync(original)) {
+    delete process.env.LLV_LAUNCHER_REEXEC;
+    delete process.env.LLV_LAUNCHER_CHECKOUT;
+    await import("./cli-checkout.mjs");
+    return;
   }
-  child.once("error", (error) => fail(`Could not start the installed launcher: ${error.message}`));
-  child.once("exit", (code, signal) => {
-    process.exitCode = code ?? (signal ? 128 + (constants.signals[signal] ?? 0) : 1);
-  });
+  const tailscale = await import("./tailscale.mjs");
+  ({ detectTailscale, getToken, OPERATOR_HINT, OPERATOR_PATTERN, phoneAccessFlagPath,
+    readPhoneAccessFlag, readStatus, serveBackground, TailscaleError } = tailscale);
+  serveTailscale = tailscale.serve;
+  const runtime = await import("./server-runtime.mjs");
+  ({ browserOpenCommand, cliRuntimeHostConfig, cliRuntimeHostEnvironment,
+    newlyBoundNonLoopbackAddress, readNonLoopbackBindState, viewerChildProcessOptions,
+    viewerServerBunRuntime } = runtime);
+  runtime.discardUnsupportedApiCredentials();
+  ({ createLauncherRecord, exitError, hostEntrypoint, installedRelease, isGitCheckout,
+    probePageAndChunk, selfUpdatePaths, watchRestartRequests } = await import("./self-update-supervisor.mjs"));
+  ({ probeHeadersFrom } = await import("./internalService.mjs"));
+  ({ findLegacySystemdUnits, legacySystemdNotice } = await import("./legacySystemd.mjs"));
+  ({ linkSkills } = await import("./skillLinks.mjs"));
+  delete process.env.LLV_LAUNCHER_REEXEC;
+  delete process.env.LLV_LAUNCHER_CHECKOUT;
+  await main();
 }
 
 const selectedLauncher = releaseLauncher();
-if (selectedLauncher) handOffLauncher(selectedLauncher);
-else {
-  delete process.env.LLV_LAUNCHER_REEXEC;
-  delete process.env.LLV_LAUNCHER_CHECKOUT;
-  main().catch((error) => {
-    fail(error instanceof Error ? error.message : String(error));
-  });
+try {
+  if (!selectedLauncher || !(await handOffLauncher(selectedLauncher))) await checkoutLauncher();
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error));
 }
