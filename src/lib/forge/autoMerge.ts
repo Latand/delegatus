@@ -262,6 +262,12 @@ function headBeforeLocalOutput(pipeline: Pipeline): string | null {
  * delivery records whose writable fix was accepted locally but never pushed. */
 function prHeadBehindReviewedHead(pipeline: Pipeline, prHead: string): boolean {
   if (prHead === pipeline.lastPassedCommit) return false;
+  const reviewed = pipeline.runs.some((run) => pipeline.stages.some((stage) => stage.id === run.stageId && isReviewStage(pipeline, stage))
+    && run.attempts.some((attempt) => !attempt.historical && attempt.state === "passed"
+      && (attempt.report?.provenance.head === pipeline.lastPassedCommit
+        || (attempt.completedAt && pipeline.closedAt
+          && Math.abs(Date.parse(pipeline.closedAt) - Date.parse(attempt.completedAt)) <= 5_000))));
+  if (!reviewed) return false;
   if (pipeline.repoDir && /^[0-9a-f]{40}$/i.test(prHead) && /^[0-9a-f]{40}$/i.test(pipeline.lastPassedCommit)) {
     const ancestor = spawnSync("git", ["merge-base", "--is-ancestor", prHead, pipeline.lastPassedCommit], {
       cwd: pipeline.repoDir, timeout: 5_000, stdio: "ignore",
@@ -269,10 +275,7 @@ function prHeadBehindReviewedHead(pipeline: Pipeline, prHead: string): boolean {
     if (ancestor.status === 0) return true;
   }
   const attempts = pipeline.runs.flatMap((run) => run.attempts.filter((attempt) => !attempt.historical));
-  const reviewed = pipeline.runs.some((run) => pipeline.stages.some((stage) => stage.id === run.stageId && isReviewStage(pipeline, stage))
-    && run.attempts.some((attempt) => !attempt.historical && attempt.state === "passed"
-      && attempt.report?.provenance.head === pipeline.lastPassedCommit));
-  return reviewed && attempts.some((attempt) => attempt.report?.provenance.head === prHead);
+  return attempts.some((attempt) => attempt.report?.provenance.head === prHead);
 }
 
 type Step =

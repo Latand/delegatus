@@ -274,9 +274,20 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
       const reviewedHead = git("rev-parse", "HEAD");
       const completed = lane("L1", { head: reviewedHead });
       completed.repoDir = repo;
+      completed.runs[1]!.attempts[0]!.completedAt = completed.closedAt;
       const h = harness({ lanes: [completed], prs: [openPr(11, { head: oldHead })] });
       await h.sweep();
       expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: `PR head is behind the reviewed head ${reviewedHead}` });
+
+      const unreviewed = lane("L2", { head: reviewedHead, reviews: [{ n: 1, state: "failed", budgetSpent: true }] });
+      unreviewed.repoDir = repo;
+      unreviewed.stages[1]!.onFail = { to: "review-fix", maxRounds: 1 };
+      unreviewed.stages.push({ id: "review-fix", kind: "run", prompt: "fix", next: "review", effectiveRole: BUILDER } as Pipeline["stages"][number]);
+      unreviewed.runs.push({ stageId: "review-fix", attempts: [{ n: 1, state: "passed", effectiveRole: BUILDER,
+        activatedBy: { stageId: "review", attempt: 1, edge: "fail", budgetSpent: true } }] } as unknown as Pipeline["runs"][number]);
+      const earlierReview = harness({ lanes: [unreviewed], prs: [openPr(11, { head: oldHead })] });
+      await earlierReview.sweep();
+      expect(earlierReview.merge("L2")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.headChanged });
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
     }
