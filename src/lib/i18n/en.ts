@@ -1226,7 +1226,7 @@ export const en = {
   "telegram.bot.err.rate_limited": "Telegram is rate-limiting the bot. Try again in a moment.",
   "telegram.bot.err.document_roots_invalid": "Each document folder must be an absolute path outside dot-folders and the Delegatus state folder.",
   "telegram.bot.documentsTitle": "Document folders",
-  "telegram.bot.documentsHint": "Agents may send a file as a document only from under these folders, one absolute path per line. Files in dot-folders and in the Delegatus state folder are never sent. Leave it empty to use the default.",
+  "telegram.bot.documentsHint": "Agents may send documents and photos only from under these folders, one absolute path per line. Files in dot-folders and in the Delegatus state folder are never sent. Leave it empty to use the default.",
   "telegram.bot.documentsDefault": "Using the default folder.",
   "telegram.bot.documentsLabel": "Document folders, one per line",
   "telegram.bot.documentsSave": "Save folders",

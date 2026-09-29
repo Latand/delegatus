@@ -3098,14 +3098,14 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Idempotent by clientRequestId: a repeat answers the first post's message ids; a repeat of a send that never finished, or one whose connection was cut or timed out, answers send_uncertain (not retryable) instead of posting twice.",
   ].join(" "),
   telegram_bot_send_media: [
-    "Send a JPEG or PNG photo, or an album of 2–10 photos, through the operator's Telegram bot into an allowlisted chat. `images` is an array of {path, caption}; each path is absolute on the Viewer host. Every file is checked and loaded before Telegram is called; photos are limited to 10 MB and captions to 1024 characters.",
+    "Send a JPEG or PNG photo, or an album of 2–10 photos, through the operator's Telegram bot into an allowlisted chat. `images` is an array of {path, caption}; each path is absolute on the Viewer host and must resolve, symlinks followed, under the same document roots as telegram_bot_send_document (by default `handoff/` in the Viewer host's home), never through a dot-directory or the Delegatus state directory. Every file is checked and loaded before Telegram is called; photos are limited to 10 MB and captions to 1024 characters. Refusals: photo_invalid, document_outside_roots, document_forbidden_path.",
     "`format` is plain (default) or html for captions. `replyToMessageId`, `topicId`, `silent`, chat links, attribution and clientRequestId work like telegram_bot_send. The answer returns messageIds in image order. A completed send replays its receipt; an unfinished or unconfirmed send answers send_uncertain instead of sending twice. Sent images appear in telegram_bot_messages with direction out and kind photo.",
   ].join(" "),
   telegram_bot_send_document: [
     "Post one file as a Telegram document (sendDocument) through the operator's Telegram bot into an allowlisted chat — the way to share a report: markdown and long text read badly as messages. The chat must be allowlisted by the operator, as for telegram_bot_send.",
     "`document.path` is absolute on the Viewer host and must resolve, symlinks followed, under a document root the operator set in the Telegram panel (by default `handoff/` in the Viewer host's home), so write reports there first. Paths through a dot-directory or the Delegatus state directory are refused even inside a root.",
-    "Types: .md .markdown .txt .log .json .csv .pdf .png .jpg .jpeg .html, non-empty, at most 20 MB; text files are scanned for private keys, tokens and credentials and refused with document_secret naming the class (`details.secretClass`). Other refusals: document_invalid, document_outside_roots, document_forbidden_path, document_type, document_too_large.",
-    "`document.filename` is the shown name (default the file's own name); `document.caption` up to 1024 characters, plain or html by `format`. `replyToMessageId`, `topicId`, `silent`, chat links, attribution and clientRequestId work like telegram_bot_send: a completed send replays its receipt, an unconfirmed one answers send_uncertain instead of sending twice. The post appears in telegram_bot_messages with kind document and its filename.",
+    "Types: .md .markdown .txt .log .json .csv .pdf .png .jpg .jpeg .html, non-empty, at most 20 MB; text files are scanned, as UTF-8 and UTF-16, for private keys, tokens and credentials (including `password: word` assignments) and refused with document_secret naming the class (`details.secretClass`). Other refusals: document_invalid, document_outside_roots, document_forbidden_path, document_type, document_too_large.",
+    "`document.filename` is the shown name (default the file's own name) and must keep the file's type class (text, PDF or image: a .md may be shown as .txt, never as .pdf); `document.caption` up to 1024 characters, plain or html by `format`. `replyToMessageId`, `topicId`, `silent`, chat links, attribution and clientRequestId work like telegram_bot_send: a completed send replays its receipt, an unconfirmed one answers send_uncertain instead of sending twice. The post appears in telegram_bot_messages with kind document and its filename.",
   ].join(" "),
   telegram_bot_messages: [
     "Read recent messages the operator's Telegram bot received in one chat, newest first, from Delegatus's local store — a bot has no history API, so only what arrived while it was connected exists.",
@@ -3873,7 +3873,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     clientRequestId: clientRequestIdSchema,
     chat: z.string().trim().min(1).describe("The allowlisted chat's alias, id, @username or t.me chat/topic link."),
     images: z.array(z.object({
-      path: z.string().min(1).describe("Absolute JPEG or PNG path on the Viewer host."),
+      path: z.string().min(1).describe("Absolute JPEG or PNG path on the Viewer host, under a document root (by default handoff/ in the Viewer host's home)."),
       caption: z.string().max(1024).describe("Caption for this image, up to 1024 characters."),
     })).min(1).max(10).describe("One image sends sendPhoto; 2–10 images send one album."),
     format: z.enum(["plain", "html"]).optional().describe("Caption format; plain by default."),

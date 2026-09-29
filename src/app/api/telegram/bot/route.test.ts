@@ -100,7 +100,9 @@ test("token never serialised: connect, status, chat edits and every agent answer
 test("agent media route uses the caller capability and topic link for an album", async () => {
   await connected();
   service.setChat(String(TEAM.id), "team-reports", true);
-  const image = path.join(SANDBOX, "route-photo.jpg");
+  /* Photos come from under the document roots: the default one here. */
+  const image = path.join(HOME, "handoff", "route-photo.jpg");
+  fs.mkdirSync(path.dirname(image), { recursive: true });
   fs.writeFileSync(image, Uint8Array.from([0xff, 0xd8, 0xff, 0xd9]));
   transport.script("sendMediaGroup", ok([{ message_id: 71, date: 5 }, { message_id: 72, date: 6 }]));
   const response = await agentRoute.POST(request("/api/telegram/bot/agent", { method: "POST", headers: AGENT, body: { op: "send_media", clientRequestId: "media-route", chat: "team-reports", topicId: 5, images: [{ path: image, caption: "First" }, { path: image, caption: "Second" }], conversationId: "forged" } }));

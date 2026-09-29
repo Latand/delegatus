@@ -34,7 +34,7 @@ import {
   type TelegramBotSendAnswer,
   type TelegramBotStatusPayload,
 } from "./contracts";
-import { defaultDocumentRoots, DocumentRefusal, loadDocument, normalizeDocumentRoots, type DocumentEnvironment } from "./documents";
+import { defaultDocumentRoots, DocumentRefusal, loadDocument, normalizeDocumentRoots, readUnderRoots, type DocumentEnvironment } from "./documents";
 import { TelegramBotStore, type BotRow, type ChatRow, type TgChat, type TgUpdate, type TgUser } from "./store";
 import {
   createBotApiTransport,
@@ -94,17 +94,24 @@ const GET_UPDATES_TIMEOUT_S = 50;
 const PHOTO_MAX_BYTES = 10_000_000;
 const PHOTO_CAPTION_MAX_CHARS = 1024;
 
-function photoBlob(filename: string, index: number): Blob {
+/**
+ * One photo, loaded from under the operator's document roots by the same
+ * rule a document follows. A JPEG or PNG signature says what a file is, never
+ * whose it is: without the roots any image the Viewer can read (a screenshot
+ * in the state directory, a cached QR code in a dot-directory) would be one
+ * call from a chat.
+ */
+function photoBlob(filename: string, index: number, roots: readonly string[], environment: DocumentEnvironment): Blob {
   if (!path.isAbsolute(filename)) throw new TelegramBotError("photo_invalid", `photo ${index + 1} needs an absolute local path`);
   let bytes: Buffer;
   try {
-    const stat = fs.statSync(filename);
-    if (!stat.isFile() || stat.size === 0 || stat.size > PHOTO_MAX_BYTES) throw new Error("invalid size");
-    bytes = fs.readFileSync(filename);
-  } catch {
+    bytes = readUnderRoots(filename, roots, environment, PHOTO_MAX_BYTES).bytes;
+  } catch (error) {
+    if (error instanceof DocumentRefusal && (error.code === "document_outside_roots" || error.code === "document_forbidden_path")) {
+      throw new TelegramBotError(error.code, `photo ${index + 1}: ${error.message}`);
+    }
     throw new TelegramBotError("photo_invalid", `photo ${index + 1} must be a readable file of at most 10 MB`);
   }
-  if (bytes.length === 0 || bytes.length > PHOTO_MAX_BYTES) throw new TelegramBotError("photo_invalid", `photo ${index + 1} exceeds the photo size limit`);
   const jpeg = bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes.at(-2) === 0xff && bytes.at(-1) === 0xd9;
   const png = bytes.length >= 24 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) && bytes.toString("ascii", 12, 16) === "IHDR";
   if (!jpeg && !png) throw new TelegramBotError("photo_invalid", `photo ${index + 1} must be a JPEG or PNG image`);
@@ -910,6 +917,8 @@ export class TelegramBotService {
 
     let images: Array<TelegramBotMediaInput & { blob: Blob }>;
     try {
+      const roots = this.documentRoots(store).roots;
+      const environment = this.deps.documentEnvironment();
       if (!Array.isArray(input.images) || input.images.length < 1 || input.images.length > 10) throw new TelegramBotError("photo_invalid", "send 1 photo or an album of 2–10 photos");
       images = input.images.map((image: unknown, index: number) => {
         if (!image || typeof image !== "object" || typeof (image as TelegramBotMediaInput).path !== "string" || typeof (image as TelegramBotMediaInput).caption !== "string") {
@@ -917,7 +926,7 @@ export class TelegramBotService {
         }
         const { path: filename, caption } = image as TelegramBotMediaInput;
         if (caption.length > PHOTO_CAPTION_MAX_CHARS) throw new TelegramBotError("text_too_long", `photo ${index + 1} caption exceeds 1024 characters`);
-        return { path: filename, caption, blob: photoBlob(filename, index) };
+        return { path: filename, caption, blob: photoBlob(filename, index, roots, environment) };
       });
     } catch (error) {
       store.failSend(callerKey, clientRequestId, error instanceof TelegramBotError ? error.code : "photo_invalid", []);

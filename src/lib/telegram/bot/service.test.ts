@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -275,8 +275,10 @@ test("send attribution: the caller's conversation lands on the send, the outgoin
   expect(service.status().chats[0]!.lastPostBy).toEqual({ unidentified: true });
 });
 
-function mediaFile(name: string, bytes: Uint8Array): string {
-  const filename = path.join(SANDBOX, name);
+/* Photos follow the document roots, so fixtures live under the default one. */
+function mediaFile(name: string, bytes: Uint8Array, directory = HANDOFF): string {
+  const filename = path.join(directory, name);
+  fs.mkdirSync(path.dirname(filename), { recursive: true });
   fs.writeFileSync(filename, bytes);
   return filename;
 }
@@ -328,6 +330,25 @@ test("album sends per-image captions once and an unfinished claim replays send_u
   expect((await refusal(() => service.sendMedia(uncertainInput))).code).toBe("send_uncertain");
   expect((await refusal(() => service.sendMedia(uncertainInput))).code).toBe("send_uncertain");
   expect(transport.callsOf("sendMediaGroup")).toHaveLength(2);
+});
+
+test("a photo must come from under the document roots, like a document", async () => {
+  await allowedTeam();
+  const send = (images: unknown, clientRequestId = "rooted") => service.sendMedia({ conversationId: "conversation_writer", clientRequestId, chat: "team-reports", images });
+  const code = async (filename: string) => (await refusal(() => send([{ path: filename, caption: "" }]))).code;
+  const outside = mediaFile("shot.png", PNG, path.join(SANDBOX, "elsewhere"));
+  expect(await code(outside)).toBe("document_outside_roots");
+  expect(await code(mediaFile("qr.png", PNG, path.join(HANDOFF, ".cache")))).toBe("document_forbidden_path");
+  fs.symlinkSync(outside, path.join(HANDOFF, "linked.png"));
+  expect(await code(path.join(HANDOFF, "linked.png"))).toBe("document_outside_roots");
+  /* A root that contains the state directory still never reaches into it. */
+  service.setDocumentRoots([SANDBOX]);
+  expect(await code(mediaFile("screen.png", PNG, process.env.LLV_STATE_DIR!))).toBe("document_forbidden_path");
+  expect(transport.callsOf("sendPhoto")).toHaveLength(0);
+  /* The same file sends once the operator makes its folder a root. */
+  service.setDocumentRoots([path.join(SANDBOX, "elsewhere")]);
+  transport.script("sendPhoto", ok({ message_id: 71, date: T0 + 100 }));
+  expect((await send([{ path: outside, caption: "" }], "rooted-2")).messageIds).toEqual([71]);
 });
 
 /* ---- documents ------------------------------------------------------------ */
@@ -446,6 +467,172 @@ test("dot components, symlinks out of a root, hard links and the state directory
   const stateFile = documentFile(path.join(process.env.LLV_STATE_DIR!, "notes.json"), "{}\n");
   expect(await code({ path: stateFile })).toBe("document_forbidden_path");
   expect(transport.callsOf("sendDocument")).toHaveLength(0);
+});
+
+test("a parent directory swapped for a link after the path is checked is caught on the opened file", async () => {
+  await allowedTeam();
+  const inside = documentFile(path.join(HANDOFF, "weekly", "report.md"), REPORT);
+  documentFile(path.join(SANDBOX, "elsewhere", "weekly", "report.md"), "# Not for the chat\n");
+  const open = fs.openSync;
+  /* The swap lands between realpath and open: the last component is still
+     a plain file, so O_NOFOLLOW alone would open the file outside. */
+  const swap = spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
+    if (args[0] === inside) {
+      fs.renameSync(path.join(HANDOFF, "weekly"), path.join(HANDOFF, "weekly-kept"));
+      fs.symlinkSync(path.join(SANDBOX, "elsewhere", "weekly"), path.join(HANDOFF, "weekly"));
+    }
+    return open(...args);
+  }) as typeof fs.openSync);
+  try {
+    expect((await refusal(() => sendDocument({ path: inside }))).code).toBe("document_outside_roots");
+  } finally {
+    swap.mockRestore();
+  }
+  expect(transport.callsOf("sendDocument")).toHaveLength(0);
+});
+
+test("without /proc the swap is caught by resolving the path again against the opened file", async () => {
+  await allowedTeam();
+  const inside = documentFile(path.join(HANDOFF, "weekly", "report.md"), REPORT);
+  documentFile(path.join(SANDBOX, "elsewhere", "weekly", "report.md"), "# Not for the chat\n");
+  const open = fs.openSync;
+  const readlink = fs.readlinkSync;
+  let swapped = false;
+  const swap = spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
+    if (args[0] === inside && !swapped) {
+      swapped = true;
+      fs.renameSync(path.join(HANDOFF, "weekly"), path.join(HANDOFF, "weekly-kept"));
+      fs.symlinkSync(path.join(SANDBOX, "elsewhere", "weekly"), path.join(HANDOFF, "weekly"));
+    }
+    return open(...args);
+  }) as typeof fs.openSync);
+  const noProc = spyOn(fs, "readlinkSync").mockImplementation(((...args: Parameters<typeof fs.readlinkSync>) => {
+    if (String(args[0]).startsWith("/proc/self/fd/")) throw Object.assign(new Error("no /proc"), { code: "ENOENT" });
+    return readlink(...args);
+  }) as typeof fs.readlinkSync);
+  try {
+    expect((await refusal(() => sendDocument({ path: inside }))).code).toBe("document_forbidden_path");
+    /* Swapped back before the second resolution: the path names the inside
+       file again, but the descriptor holds the outside one. */
+    fs.rmSync(path.join(HANDOFF, "weekly"));
+    fs.renameSync(path.join(HANDOFF, "weekly-kept"), path.join(HANDOFF, "weekly"));
+    swapped = false;
+    const realpath = fs.realpathSync.native;
+    let resolutions = 0;
+    const back = spyOn(fs.realpathSync, "native").mockImplementation(((...args: Parameters<typeof fs.realpathSync.native>) => {
+      if (args[0] === inside && ++resolutions === 2) {
+        fs.rmSync(path.join(HANDOFF, "weekly"));
+        fs.renameSync(path.join(HANDOFF, "weekly-kept"), path.join(HANDOFF, "weekly"));
+      }
+      return realpath(...args);
+    }) as typeof fs.realpathSync.native);
+    try {
+      expect((await refusal(() => sendDocument({ path: inside }, { clientRequestId: "doc-back" }))).code).toBe("document_forbidden_path");
+    } finally {
+      back.mockRestore();
+    }
+    /* Nothing swapped: the fallback admits the file. */
+    swapped = true;
+    transport.script("sendDocument", ok({ message_id: 97, date: T0 + 100 }));
+    expect((await sendDocument({ path: inside }, { clientRequestId: "doc-still" })).messageIds).toEqual([97]);
+  } finally {
+    swap.mockRestore();
+    noProc.mockRestore();
+  }
+  expect(transport.callsOf("sendDocument")).toHaveLength(1);
+});
+
+test("a FIFO in a root is refused at once instead of holding the Viewer at the open", async () => {
+  await allowedTeam();
+  const pipe = path.join(HANDOFF, "pipe.md");
+  fs.mkdirSync(HANDOFF, { recursive: true });
+  expect(Bun.spawnSync(["mkfifo", pipe]).exitCode).toBe(0);
+  expect((await refusal(() => sendDocument({ path: pipe }))).code).toBe("document_invalid");
+  expect(transport.callsOf("sendDocument")).toHaveLength(0);
+}, 5_000);
+
+test("the shown filename keeps the file's type class, and a text file is scanned whatever it is shown as", async () => {
+  await allowedTeam();
+  const code = async (document: unknown) => (await refusal(() => sendDocument(document))).code;
+  const png = documentFile(path.join(HANDOFF, "chart.png"), PNG);
+  const markdown = documentFile(path.join(HANDOFF, "notes.md"), REPORT);
+  expect(await code({ path: png, filename: "notes.txt" })).toBe("document_type");
+  expect(await code({ path: markdown, filename: "invoice.pdf" })).toBe("document_type");
+  expect(await code({ path: markdown, filename: "chart.png" })).toBe("document_type");
+  expect(await code({ path: documentFile(path.join(HANDOFF, "brief.pdf"), "%PDF-1.7\n"), filename: "brief.md" })).toBe("document_type");
+  const leaky = documentFile(path.join(HANDOFF, "leaky.md"), `${REPORT}\n${FORGE_TOKEN}\n`);
+  expect(await code({ path: leaky, filename: "leaky.txt" })).toBe("document_secret");
+  expect(transport.callsOf("sendDocument")).toHaveLength(0);
+  /* Within a class the name may change. */
+  transport.script("sendDocument", ok({ message_id: 98, date: T0 + 100 }));
+  expect((await sendDocument({ path: markdown, filename: "notes.txt" }, { clientRequestId: "same-class" })).messageIds).toEqual([98]);
+  transport.script("sendDocument", ok({ message_id: 99, date: T0 + 101 }));
+  expect((await sendDocument({ path: png, filename: "chart.jpg" }, { clientRequestId: "same-class-image" })).messageIds).toEqual([99]);
+});
+
+/* Credential keywords, assembled so no source line reads as an assignment
+   to the publication gate. */
+const PASSWORD = ["pass", "word"].join("");
+const API_KEY = ["api", "_key"].join("");
+
+function utf16(text: string, order: "le" | "be", bom: boolean): Uint8Array {
+  const little = Buffer.from(text, "utf16le");
+  const bytes = order === "le" ? little : Buffer.from(little.map((_, index) => little[index ^ 1]!));
+  const mark = order === "le" ? [0xff, 0xfe] : [0xfe, 0xff];
+  return Uint8Array.from([...(bom ? mark : []), ...bytes]);
+}
+
+test("a text document in UTF-16, with or without a byte-order mark, is scanned as text", async () => {
+  await allowedTeam();
+  const cases: Array<[string, Uint8Array, string]> = [
+    ["le-bom.txt", utf16(`notes\n${FORGE_TOKEN}\n`, "le", true), "api_token"],
+    ["be-bom.md", utf16(`${REPORT}\n${PRIVATE_KEY}`, "be", true), "private_key"],
+    ["le.log", utf16(`started\n${PASSWORD}=Zq81mR02kLx7Tw45\n`, "le", false), "credential_assignment"],
+    ["be.csv", utf16(`name,value\ndeploy,${FORGE_TOKEN}\n`, "be", false), "api_token"],
+  ];
+  for (const [name, content, secretClass] of cases) {
+    const error = await refusal(() => sendDocument({ path: documentFile(path.join(HANDOFF, name), content) }, { clientRequestId: name }));
+    expect([name, error.code, error.extra.secretClass]).toEqual([name, "document_secret", secretClass]);
+    expect(error.message).not.toContain(FORGE_TOKEN);
+    expect(error.message).not.toContain("Zq81mR02kLx7Tw45");
+  }
+  expect(transport.callsOf("sendDocument")).toHaveLength(0);
+  /* A clean UTF-16 report still sends. */
+  transport.script("sendDocument", ok({ message_id: 100, date: T0 + 100 }));
+  expect((await sendDocument({ path: documentFile(path.join(HANDOFF, "clean.md"), utf16(REPORT, "le", true)) }, { clientRequestId: "clean" })).messageIds).toEqual([100]);
+});
+
+test("a credential assigned a plain word is caught; prose, placeholders and references are not", async () => {
+  await allowedTeam();
+  /* Word secrets are assembled so no source line reads as an assignment. */
+  const word = ["sword", "fish"].join("");
+  for (const [name, content] of [
+    ["env.txt", `DB_HOST=db\nDB_PASSWORD=${word}\n`],
+    ["config.json", `{\n  "${PASSWORD}": "${word}"\n}\n`],
+    ["notes.md", `Login:\n\nsecret: ${word}\n`],
+    ["app.log", `login user=bob passwd=${word} status=ok\n`],
+  ]) {
+    const error = await refusal(() => sendDocument({ path: documentFile(path.join(HANDOFF, name!), content!) }, { clientRequestId: name }));
+    expect([name, error.code, error.extra.secretClass]).toEqual([name, "document_secret", "credential_assignment"]);
+    expect(error.message).not.toContain(word);
+  }
+  expect(transport.callsOf("sendDocument")).toHaveLength(0);
+
+  expect(documentSecret(`${["sec", "ret"].join("")}=${word}`)).toEqual({ secretClass: "credential_assignment", line: 1 });
+  expect(documentSecret(`a\n${API_KEY}: ${word}`)).toEqual({ secretClass: "credential_assignment", line: 2 });
+  for (const prose of [
+    `${PASSWORD}: reset by the operator on Monday.`,
+    "token: expired",
+    "Token: see the panel",
+    `${PASSWORD}: none`,
+    "secret: [redacted]",
+    `${PASSWORD}: YOUR_PASSWORD`,
+    `${API_KEY} = os.environ["API_KEY"]`,
+    `${PASSWORD}: process.env.DB_PASSWORD`,
+    "pwd: /srv/app",
+    "max_token: 4096",
+    `**${PASSWORD}:** stored in the vault`,
+  ]) expect([prose, documentSecret(prose)]).toEqual([prose, null]);
 });
 
 test("a text document carrying a secret is refused with its class, never its value", async () => {

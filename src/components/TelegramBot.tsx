@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 
 import type { TelegramBotState } from "@/hooks/useTelegramBot";
 import { type TFunction, useLocale } from "@/lib/i18n";
@@ -247,9 +247,11 @@ export function AddChatForm({ state, onAdded, compact = false }: { state: Telegr
 }
 
 /**
- * The folders agents may send documents from, one absolute path per line.
- * The draft follows the server's list until the operator edits it; saving an
- * empty field returns to the default.
+ * The folders agents may send documents and photos from, one absolute path
+ * per line. The draft follows the server's list until the operator edits it;
+ * saving an empty field returns to the default. The field grows to hold every
+ * line, wrapped ones included: a long root wraps on a phone, and a fixed two
+ * rows then hid the root after it.
  */
 export function DocumentRootsForm({ state }: { state: TelegramBotState }) {
   const { t } = useLocale();
@@ -258,6 +260,14 @@ export function DocumentRootsForm({ state }: { state: TelegramBotState }) {
   const [draft, setDraft] = useState<string | null>(null);
   const value = draft ?? stored;
   const roots = value.split("\n").map((line) => line.trim()).filter(Boolean);
+  const field = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const element = field.current;
+    /* No layout (a server render, a DOM without one): the rows stand. */
+    if (!element || element.scrollHeight === 0) return;
+    element.style.height = "auto";
+    element.style.height = `${element.scrollHeight + element.offsetHeight - element.clientHeight}px`;
+  }, [value]);
   const submit = async () => {
     if (state.busy) return;
     if (await state.setDocumentRoots(roots)) setDraft(null);
@@ -270,16 +280,17 @@ export function DocumentRootsForm({ state }: { state: TelegramBotState }) {
     >
       <p className="text-[10.5px] leading-snug text-muted">{t("telegram.bot.documentsHint")}</p>
       <textarea
+        ref={field}
         value={value}
         disabled={state.busy}
-        rows={2}
+        rows={Math.max(2, value.split("\n").length, documents && !documents.custom && value === "" ? documents.roots.length : 0)}
         autoComplete="off"
         spellCheck={false}
         data-telegram-document-roots-input=""
         aria-label={t("telegram.bot.documentsLabel")}
         placeholder={documents && !documents.custom ? documents.roots.join("\n") : t("telegram.bot.documentsLabel")}
         onChange={(event) => setDraft(event.target.value)}
-        className="min-h-[44px] min-w-0 resize-y rounded-[8px] border border-border bg-canvas px-2 py-1.5 font-mono text-[11px] leading-snug outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        className="min-h-[44px] min-w-0 resize-none overflow-hidden break-all rounded-[8px] border border-border bg-canvas px-2 py-1.5 font-mono text-[11px] leading-snug outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       />
       <div className="flex min-w-0 items-center gap-1.5">
         {documents && !documents.custom && draft === null ? (

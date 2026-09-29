@@ -26,9 +26,13 @@ import {
  * A document can be any file, so the path an agent names is never trusted: it
  * must resolve (symlinks followed) under a document root the operator set, it
  * may not pass through a dot-directory or the Delegatus state directory even
- * when a root contains them, its type and size are bounded, and a text file
- * is scanned with the redactor's own secret patterns. A refusal names the
- * class of what it found and never the value.
+ * when a root contains them, and the file actually opened is checked again,
+ * so a directory swapped for a link between the check and the open cannot
+ * carry it out. Its type and size are bounded, the name it is shown under
+ * keeps its type, and a text file is scanned, in UTF-8 and UTF-16, with the
+ * redactor's own secret patterns. A refusal names the class of what it found
+ * and never the value. `telegram_bot_send_media` opens its photos through the
+ * same {@link readUnderRoots}.
  */
 
 export class DocumentRefusal extends Error {
@@ -59,8 +63,27 @@ const MIME: Record<(typeof DOCUMENT_EXTENSIONS)[number], string> = {
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
 };
-const TEXT_EXTENSIONS: ReadonlySet<string> = new Set([".md", ".markdown", ".txt", ".log", ".json", ".csv", ".html"]);
+/* What a file is, by its extension. The shown name may change the extension
+   only within its class: a text file is never shown as a PDF or an image,
+   and an image is never shown as text, which would skip the text scan. */
+const TYPE_CLASS: Record<(typeof DOCUMENT_EXTENSIONS)[number], "text" | "pdf" | "image"> = {
+  ".md": "text",
+  ".markdown": "text",
+  ".txt": "text",
+  ".log": "text",
+  ".json": "text",
+  ".csv": "text",
+  ".html": "text",
+  ".pdf": "pdf",
+  ".png": "image",
+  ".jpg": "image",
+  ".jpeg": "image",
+};
 const ALLOWED: ReadonlySet<string> = new Set(DOCUMENT_EXTENSIONS);
+
+function typeClass(extension: string): "text" | "pdf" | "image" | null {
+  return ALLOWED.has(extension) ? TYPE_CLASS[extension as keyof typeof TYPE_CLASS] : null;
+}
 
 /** `<home>/handoff`, the one root when the operator has set none. */
 export function defaultDocumentRoots(home: string): string[] {
@@ -142,7 +165,7 @@ export function documentSecret(text: string): { secretClass: string; line: numbe
     ?? first(BEARER_TOKEN, "bearer_token")
     ?? first(AUTHORIZATION_HEADER, "authorization_header", (match) => credentialShaped(match[0].slice(match[0].indexOf(":") + 1)))
     ?? first(COOKIE_HEADER, "cookie_header", (match) => match[0].slice(match[0].indexOf(":") + 1).trim().length >= 8)
-    ?? first(SECRET_VALUE_RE, "credential_assignment", (match) => credentialShaped(match[0].slice(match[1]!.length + match[2]!.length + match[3]!.length)), unquotedKeys);
+    ?? first(SECRET_VALUE_RE, "credential_assignment", (match) => assignedCredential(match, unquotedKeys), unquotedKeys);
   if (found) return found;
   let scrubbed: string;
   try { scrubbed = redactKnownProviderSecrets(text); } catch { scrubbed = ""; }
@@ -161,6 +184,76 @@ function credentialShaped(raw: string): boolean {
   return /[A-Za-z]/.test(value) && /\d/.test(value);
 }
 
+/* Words a report writes after a credential keyword that say something about
+   the credential rather than being it. */
+const NOT_A_CREDENTIAL = new Set([
+  "none", "null", "nil", "true", "false", "yes", "no", "undefined", "empty", "unset", "blank",
+  "required", "optional", "redacted", "hidden", "masked", "omitted", "removed", "rotated",
+  "revoked", "expired", "invalid", "valid", "missing", "present", "set", "not", "never",
+  "same", "default", "unknown", "n/a", "tbd", "todo", "string", "text", "value", "example",
+  "placeholder",
+]);
+
+/**
+ * `SECRET_VALUE_RE` matched `key: value`. A value shaped like a credential
+ * (letters and digits) is one wherever it stands. A bare word counts too, as
+ * the redactor's own pattern does (`password: hunter`, `secret=swordfish`),
+ * unless the key is only `token`/`authorization`/`bearer`, which prose uses
+ * loosely, or the word is a placeholder, a reference to a variable or a path.
+ * The word must stand where a value stands, at the end of its line or before
+ * the next assignment, so prose such as `Password: reset by the operator`
+ * reads as prose.
+ */
+function assignedCredential(match: RegExpExecArray, subject: string): boolean {
+  const key = match[1]!;
+  const raw = match[0].slice(key.length + match[2]!.length + match[3]!.length);
+  if (credentialShaped(raw)) return true;
+  if (/^(?:token|authorization|bearer)$/i.test(key)) return false;
+  const value = /^`?([^&;`]*)/.exec(raw)![1]!.replace(/[.,:;!?)\]]+$/, "");
+  if (value.length < 4 || /^[[<{$*%/~]/.test(value) || /^x+$/i.test(value)) return false;
+  if (NOT_A_CREDENTIAL.has(value.toLowerCase()) || /^\d{1,5}$/.test(value)) return false;
+  /* `process.env.KEY`, `config.secret`, `YOUR_API_KEY`, `os.environ[…]`. */
+  if (/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$/.test(value) || /^[A-Z0-9]+(?:_[A-Z0-9]+)+$/.test(value) || /[([]/.test(value)) return false;
+  const after = raw.slice(raw.indexOf(value) + value.length) + subject.slice(match.index + match[0].length).split("\n")[0];
+  return /^[`"'.,;:!?)\]}\s]*$/.test(after) || /^[`"']?[\s,;&]+[\w.-]+\s*[:=]/.test(after);
+}
+
+/**
+ * Every way the bytes of a text file may be read as text: UTF-8 always;
+ * UTF-16 when a byte-order mark or the zero bytes of mostly-ASCII UTF-16
+ * say so; and, when the bytes hold zeros at all, the bytes with the zeros
+ * dropped, which reads the ASCII in UTF-16 or UTF-32 of either byte order
+ * whatever the heuristic concluded.
+ */
+function documentTexts(bytes: Buffer): string[] {
+  const texts = [new TextDecoder("utf-8").decode(bytes)];
+  const sample = bytes.subarray(0, 64 * 1024);
+  let evenZeros = 0;
+  let oddZeros = 0;
+  for (let index = 0; index < sample.length; index += 1) {
+    if (sample[index] === 0) {
+      if (index % 2 === 0) evenZeros += 1;
+      else oddZeros += 1;
+    }
+  }
+  const pairs = Math.max(1, Math.floor(sample.length / 2));
+  const bom = bytes[0] === 0xff && bytes[1] === 0xfe ? "utf-16le" : bytes[0] === 0xfe && bytes[1] === 0xff ? "utf-16be" : null;
+  const guessed = oddZeros > pairs / 4 && evenZeros < oddZeros / 4 ? "utf-16le" : evenZeros > pairs / 4 && oddZeros < evenZeros / 4 ? "utf-16be" : null;
+  const encoding = bom ?? guessed;
+  if (encoding) texts.push(new TextDecoder(encoding).decode(bytes));
+  if (evenZeros + oddZeros > 0) texts.push(bytes.toString("latin1").replace(/\u0000/g, ""));
+  return texts;
+}
+
+/** {@link documentSecret} over every reading of a text file's bytes. */
+export function documentBytesSecret(bytes: Buffer): { secretClass: string; line: number } | null {
+  for (const text of documentTexts(bytes)) {
+    const hit = documentSecret(text);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 function firstDifferentLine(left: string, right: string): number {
   const a = left.split("\n");
   const b = right.split("\n");
@@ -170,6 +263,97 @@ function firstDifferentLine(left: string, right: string): number {
 
 function extensionOf(name: string): string {
   return path.extname(name).toLowerCase();
+}
+
+/** Where a checked path may not be: a dot-directory, the state directory, or
+    anywhere but strictly under a root. */
+function refusePlace(real: string, requested: string, realRoots: readonly string[], roots: readonly string[], environment: DocumentEnvironment): void {
+  const realDot = dotSegment(real);
+  if (realDot !== null) throw new DocumentRefusal("document_forbidden_path", `${requested} resolves through ${realDot}; files in dot-directories are never sent`);
+  if (forbiddenDirectories(environment).some((forbidden) => within(real, forbidden))) {
+    throw new DocumentRefusal("document_forbidden_path", `${requested} is inside the Delegatus state directory, which is never sent`);
+  }
+  if (!realRoots.some((root) => within(real, root) && real !== root)) {
+    throw new DocumentRefusal("document_outside_roots", `${requested} is not under a document root (${roots.join(", ")}); write the file under one of them`);
+  }
+}
+
+/**
+ * The path the kernel holds for an open descriptor, or null where the
+ * platform cannot say (no `/proc`). A file unlinked after the open reads with
+ * a ` (deleted)` suffix, which then matches no checked path.
+ */
+function openedPath(descriptor: number): string | null {
+  try { return fs.readlinkSync(`/proc/self/fd/${descriptor}`); } catch { return null; }
+}
+
+/**
+ * Opens `requested` and reads it when it lives under one of `roots`: the path
+ * is checked as resolved, then the descriptor actually opened is checked
+ * again. `O_NOFOLLOW` covers only the last component, so a parent directory
+ * swapped for a link after `realpath` would otherwise open a file anywhere.
+ * On Linux the opened path is read back from `/proc/self/fd`; elsewhere the
+ * path is resolved again and must still name the opened file (device and
+ * inode). `O_NONBLOCK` keeps a FIFO from holding the Viewer at the open.
+ */
+export function readUnderRoots<Admitted = void>(
+  requested: string,
+  roots: readonly string[],
+  environment: DocumentEnvironment,
+  maxBytes: number,
+  /** Refuses by the resolved path, after the place checks and before the open. */
+  admit: (real: string) => Admitted = () => undefined as Admitted,
+): { real: string; bytes: Buffer; admitted: Admitted } {
+  /* `..` starts with a dot too, so traversal is refused by the same rule. */
+  const requestedDot = dotSegment(requested);
+  if (requestedDot !== null) throw new DocumentRefusal("document_forbidden_path", `${requested} passes through ${requestedDot}; files in dot-directories are never sent`);
+
+  let real: string;
+  try {
+    real = fs.realpathSync.native(requested);
+  } catch {
+    throw new DocumentRefusal("document_invalid", `${requested} does not exist or cannot be read on the Viewer host`);
+  }
+  const realRoots = roots.map((root) => realOrSelf(root));
+  refusePlace(real, requested, realRoots, roots, environment);
+  const admitted = admit(real);
+
+  let descriptor: number | null = null;
+  try {
+    descriptor = fs.openSync(real, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+    const stat = fs.fstatSync(descriptor);
+    const opened = openedPath(descriptor);
+    if (opened !== null) {
+      refusePlace(opened, requested, realRoots, roots, environment);
+      if (opened !== real) throw new DocumentRefusal("document_forbidden_path", `${requested} changed while it was being opened`);
+    } else {
+      let again: string | null;
+      try { again = fs.realpathSync.native(requested); } catch { again = null; }
+      const named = again === real ? fs.statSync(again) : null;
+      if (!named || named.dev !== stat.dev || named.ino !== stat.ino) throw new DocumentRefusal("document_forbidden_path", `${requested} changed while it was being opened`);
+    }
+    if (!stat.isFile()) throw new DocumentRefusal("document_invalid", `${requested} is not a regular file`);
+    /* A second name for a file elsewhere would carry it past the root check. */
+    if (stat.nlink > 1) throw new DocumentRefusal("document_forbidden_path", `${requested} is hard-linked to another name, so where it lives cannot be checked`);
+    if (stat.size === 0) throw new DocumentRefusal("document_invalid", `${requested} is empty`);
+    if (stat.size > maxBytes) throw new DocumentRefusal("document_too_large", `${requested} is larger than ${maxBytes / 1024 / 1024} MB`);
+    /* Read to the bound, never past it: the file may grow after the fstat. */
+    const chunks: Buffer[] = [];
+    const chunk = Buffer.allocUnsafe(64 * 1024);
+    let total = 0;
+    for (let read = fs.readSync(descriptor, chunk, 0, chunk.length, null); read > 0; read = fs.readSync(descriptor, chunk, 0, chunk.length, null)) {
+      total += read;
+      if (total > maxBytes) throw new DocumentRefusal("document_too_large", `${requested} is larger than ${maxBytes / 1024 / 1024} MB`);
+      chunks.push(Buffer.from(chunk.subarray(0, read)));
+    }
+    if (total === 0) throw new DocumentRefusal("document_invalid", `${requested} is empty`);
+    return { real, bytes: Buffer.concat(chunks, total), admitted };
+  } catch (error) {
+    if (error instanceof DocumentRefusal) throw error;
+    throw new DocumentRefusal("document_invalid", `${requested} cannot be read on the Viewer host`);
+  } finally {
+    if (descriptor !== null) try { fs.closeSync(descriptor); } catch { /* already closed */ }
+  }
 }
 
 /**
@@ -188,58 +372,30 @@ export function loadDocument(input: unknown, roots: readonly string[], environme
   if (typeof caption === "string" && caption.length > DOCUMENT_CAPTION_MAX_CHARS) {
     throw new DocumentRefusal("text_too_long", `document caption exceeds ${DOCUMENT_CAPTION_MAX_CHARS} characters`);
   }
-
   /* `..` starts with a dot too, so traversal is refused by the same rule. */
   const requestedDot = dotSegment(requested);
   if (requestedDot !== null) throw new DocumentRefusal("document_forbidden_path", `${requested} passes through ${requestedDot}; files in dot-directories are never sent`);
-
-  let real: string;
-  try {
-    real = fs.realpathSync.native(requested);
-  } catch {
-    throw new DocumentRefusal("document_invalid", `${requested} does not exist or cannot be read on the Viewer host`);
-  }
-  const realDot = dotSegment(real);
-  if (realDot !== null) throw new DocumentRefusal("document_forbidden_path", `${requested} resolves through ${realDot}; files in dot-directories are never sent`);
-  if (forbiddenDirectories(environment).some((forbidden) => within(real, forbidden))) {
-    throw new DocumentRefusal("document_forbidden_path", `${requested} is inside the Delegatus state directory, which is never sent`);
-  }
-  const realRoots = roots.map((root) => realOrSelf(root));
-  if (!realRoots.some((root) => within(real, root) && real !== root)) {
-    throw new DocumentRefusal("document_outside_roots", `${requested} is not under a document root (${roots.join(", ")}); write the report under one of them`);
-  }
-
-  const extension = extensionOf(real);
-  if (!ALLOWED.has(extension)) {
-    throw new DocumentRefusal("document_type", `${extension || "a file without an extension"} is not a document type the bot sends; allowed: ${DOCUMENT_EXTENSIONS.join(" ")}`);
-  }
   const filename = shown === undefined || shown === null ? path.basename(requested) : shown;
   if (typeof filename !== "string" || filename.trim() === "" || filename.length > 255 || /[\\/\u0000-\u001f\u007f]/.test(filename) || filename.startsWith(".")) {
     throw new DocumentRefusal("document_invalid", "document.filename must be a plain file name without slashes or a leading dot");
   }
-  if (!ALLOWED.has(extensionOf(filename))) {
-    throw new DocumentRefusal("document_type", `the shown filename must end in one of ${DOCUMENT_EXTENSIONS.join(" ")}`);
-  }
 
-  let bytes: Buffer;
-  let descriptor: number | null = null;
-  try {
-    descriptor = fs.openSync(real, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
-    const stat = fs.fstatSync(descriptor);
-    if (!stat.isFile()) throw new DocumentRefusal("document_invalid", `${requested} is not a regular file`);
-    /* A second name for a file elsewhere would carry it past the root check. */
-    if (stat.nlink > 1) throw new DocumentRefusal("document_forbidden_path", `${requested} is hard-linked to another name, so where it lives cannot be checked`);
-    if (stat.size === 0) throw new DocumentRefusal("document_invalid", `${requested} is empty`);
-    if (stat.size > DOCUMENT_MAX_BYTES) throw new DocumentRefusal("document_too_large", `${requested} is larger than ${DOCUMENT_MAX_BYTES / 1024 / 1024} MB`);
-    bytes = fs.readFileSync(descriptor);
-  } catch (error) {
-    if (error instanceof DocumentRefusal) throw error;
-    throw new DocumentRefusal("document_invalid", `${requested} cannot be read on the Viewer host`);
-  } finally {
-    if (descriptor !== null) try { fs.closeSync(descriptor); } catch { /* already closed */ }
-  }
-  if (bytes.length === 0) throw new DocumentRefusal("document_invalid", `${requested} is empty`);
-  if (bytes.length > DOCUMENT_MAX_BYTES) throw new DocumentRefusal("document_too_large", `${requested} is larger than ${DOCUMENT_MAX_BYTES / 1024 / 1024} MB`);
+  const { bytes, admitted: { extension, kind } } = readUnderRoots(requested, roots, environment, DOCUMENT_MAX_BYTES, (real) => {
+    /* The resolved name decides the type, so a link cannot lend another. */
+    const extension = extensionOf(real);
+    const realKind = typeClass(extension);
+    if (realKind === null) {
+      throw new DocumentRefusal("document_type", `${extension || "a file without an extension"} is not a document type the bot sends; allowed: ${DOCUMENT_EXTENSIONS.join(" ")}`);
+    }
+    const shownKind = typeClass(extensionOf(filename));
+    if (shownKind === null) {
+      throw new DocumentRefusal("document_type", `the shown filename must end in one of ${DOCUMENT_EXTENSIONS.join(" ")}`);
+    }
+    if (shownKind !== realKind) {
+      throw new DocumentRefusal("document_type", `the shown filename must keep the file's type: ${extension} is ${realKind} and ${extensionOf(filename)} is ${shownKind}`);
+    }
+    return { extension, kind: realKind };
+  });
 
   const signature = extension === ".pdf" ? bytes.subarray(0, 5).toString("latin1") === "%PDF-"
     : extension === ".png" ? bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
@@ -247,8 +403,9 @@ export function loadDocument(input: unknown, roots: readonly string[], environme
         : true;
   if (!signature) throw new DocumentRefusal("document_type", `${requested} does not hold what its ${extension} extension says`);
 
-  if (TEXT_EXTENSIONS.has(extension)) {
-    const hit = documentSecret(bytes.toString("utf8"));
+  /* By the real file's class, so no shown name can skip it. */
+  if (kind === "text") {
+    const hit = documentBytesSecret(bytes);
     if (hit) {
       throw new DocumentRefusal(
         "document_secret",

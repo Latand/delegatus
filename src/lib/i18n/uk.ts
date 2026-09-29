@@ -1201,7 +1201,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "telegram.bot.err.rate_limited": "Telegram обмежує частоту для бота. Спробуйте трохи згодом.",
   "telegram.bot.err.document_roots_invalid": "Кожна тека для документів має бути абсолютним шляхом поза прихованими теками й текою стану Delegatus.",
   "telegram.bot.documentsTitle": "Теки для документів",
-  "telegram.bot.documentsHint": "Агенти можуть надсилати файл документом лише з цих тек, один абсолютний шлях на рядок. Файли з прихованих тек і з теки стану Delegatus не надсилаються ніколи. Залиште порожнім, щоб діяла типова тека.",
+  "telegram.bot.documentsHint": "Агенти можуть надсилати документи й фото лише з цих тек, один абсолютний шлях на рядок. Файли з прихованих тек і з теки стану Delegatus не надсилаються ніколи. Залиште порожнім, щоб діяла типова тека.",
   "telegram.bot.documentsDefault": "Діє типова тека.",
   "telegram.bot.documentsLabel": "Теки для документів, одна на рядок",
   "telegram.bot.documentsSave": "Зберегти теки",

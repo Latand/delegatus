@@ -185,3 +185,27 @@ test("document folders: operator roots fill the field, and emptying it returns t
   await act(async () => section.querySelector<HTMLButtonElement>("[data-telegram-document-roots-save]")!.click());
   expect(rootSaves).toEqual([[]]);
 });
+
+test("document folders: the field shows every root, a wrapped one included, instead of a fixed two rows", async () => {
+  const roots = ["/fixture-home/handoff", "/fixture-home/reports/weekly-summaries-for-the-team", "/fixture-home/exports"];
+  const { section } = await mount({ roots, custom: true });
+  const field = section.querySelector<HTMLTextAreaElement>("[data-telegram-document-roots-input]")!;
+  /* Without layout, one row per root. */
+  expect(field.getAttribute("rows")).toBe("3");
+  await type(field, `${roots.join("\n")}\n/fixture-home/drafts`);
+  expect(field.getAttribute("rows")).toBe("4");
+
+  /* With layout, the height follows the content, so a root that wraps at
+     390 px keeps the next one in view. The DOM reports the wrapped height. */
+  const prototype = dom.HTMLTextAreaElement.prototype as unknown as HTMLTextAreaElement;
+  const scrollHeight = Object.getOwnPropertyDescriptor(prototype, "scrollHeight");
+  Object.defineProperty(prototype, "scrollHeight", { configurable: true, get() { return 6 * 15; } });
+  try {
+    await type(field, roots.join("\n"));
+    expect(field.style.height).toBe("90px");
+  } finally {
+    if (scrollHeight) Object.defineProperty(prototype, "scrollHeight", scrollHeight);
+    else delete (prototype as unknown as Record<string, unknown>).scrollHeight;
+  }
+  expect(field.className).not.toContain("resize-y");
+});
