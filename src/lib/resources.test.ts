@@ -513,6 +513,51 @@ describe("resource observation", () => {
     }
   });
 
+  test("the collector child creates nothing in a state directory that holds only a registry, as the Viewer's own owner too", async () => {
+    /* #2117: the worker loaded the scanner, whose graph reaches the Claude
+       login supervisor (accounts/claudeLogin.ts) — a module-scope singleton
+       that creates the account stores and the SQLite file while it loads. The
+       worker inherits the Viewer's environment in production, so the
+       Viewer's owner token is part of the condition, not an extra. */
+    for (const owner of [undefined, "viewer"]) {
+      const directory = mkdtempSync(path.join(os.tmpdir(), "llv-resource-state-purity-"));
+      const home = path.join(directory, "home");
+      const state = path.join(directory, "state");
+      mkdirSync(home, { recursive: true });
+      mkdirSync(state, { recursive: true });
+      writeFileSync(path.join(state, "agent-registry.json"), "{}\n");
+      const before = directorySnapshot(state);
+      const env: Record<string, string | undefined> = { ...process.env, HOME: home, LLV_STATE_DIR: state, LLV_STATE_OWNER: owner };
+      delete env.LLV_AGENT_REGISTRY_SQLITE;
+      delete env.LLV_RESOURCE_COLLECTOR_IN_PROCESS;
+      delete env.LLV_RESOURCE_OBSERVATION_WORKER;
+      const child = Bun.spawn([process.execPath, path.join(process.cwd(), "src/lib/resourceCollector.worker.ts")], {
+        cwd: process.cwd(),
+        env,
+        stdin: new Blob(["{\"type\":\"collect\",\"fresh\":false,\"identityEpoch\":null,\"files\":[],\"hosts\":[]}\n"]),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const timer = setTimeout(() => child.kill("SIGKILL"), 20_000);
+      try {
+        const [exit, stdout, stderr] = await Promise.all([
+          child.exited,
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+        ]);
+        expect(exit, `owner ${owner ?? "none"}: ${stderr}`).toBe(0);
+        expect(JSON.parse(stdout), `owner ${owner ?? "none"}`).toMatchObject({ type: "observation", diagnostic: { status: "complete" } });
+        expect(readdirSync(state), `owner ${owner ?? "none"}`).toEqual(["agent-registry.json"]);
+        expect(directorySnapshot(state), `owner ${owner ?? "none"}`).toEqual(before);
+      } finally {
+        clearTimeout(timer);
+        child.kill("SIGKILL");
+        await child.exited;
+        rmSync(directory, { recursive: true, force: true });
+      }
+    }
+  });
+
   test("builds host ownership and metadata from one shared transcript generation", async () => {
     let scans = 0;
     let processTableReads = 0;

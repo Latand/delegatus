@@ -7,7 +7,6 @@ import { agentRegistry, type AgentRegistry, type AgentRegistryEntry, type SpawnR
 import { sessionKeyFromTranscript } from "@/lib/agent/sessionKey";
 import { procBackend } from "@/lib/proc";
 import { descendantPids } from "@/lib/proc/memory";
-import { listFiles } from "@/lib/scanner";
 import { agentProcesses, argvEngine, pidAlive, pidWritesPath, readArgv, readPpid, type AgentProcess } from "@/lib/scanner/process";
 import { isClaudeSubagentLeafPath } from "@/lib/scanner/claudeNative";
 import {
@@ -840,8 +839,19 @@ async function serializeRegistryDelivery(entry: FileEntry, task: () => Promise<H
   }
 }
 
+/* The scanner is loaded on first use, never with this module. Its static
+   graph reaches the flow engine, the account manager and the Claude login
+   supervisor, whose module-scope constructor creates the account stores under
+   the state directory (accounts/claudeLogin.ts). The isolated resource worker
+   loads this module for its observer and must write nothing (#1870), and it
+   supplies its own file list, so it never reaches this call. */
+async function scannedFiles(): Promise<FileEntry[]> {
+  const { listFiles } = await import("@/lib/scanner");
+  return listFiles();
+}
+
 const runtimeResolver = createTranscriptHostResolver({
-  listFiles,
+  listFiles: scannedFiles,
   panes: panePidMap,
   ppidMap: () => procBackend.ppidMap(),
   agents: agentProcesses,
