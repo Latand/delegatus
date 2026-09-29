@@ -12,7 +12,7 @@ afterEach(async () => {
 });
 afterAll(reapFixtureChildren);
 
-async function runProbe(mode: "failure" | "killed"): Promise<{ childPid: number; runnerExit: number }> {
+async function runProbe(mode: "failure" | "killed"): Promise<{ childPid: number; runnerExit: number; root: string }> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-owned-child-probe-"));
   roots.push(root);
   const runner = ownFixtureChild(Bun.spawn({
@@ -35,13 +35,18 @@ async function runProbe(mode: "failure" | "killed"): Promise<{ childPid: number;
   const survivorDeadline = Date.now() + 2_000;
   while (fixturePidAlive(childPid) && Date.now() < survivorDeadline) await Bun.sleep(20);
   expect(fixturePidAlive(childPid)).toBeFalse();
-  return { childPid, runnerExit };
+  return { childPid, runnerExit, root };
 }
 
 test("failed readiness assertion reaps its recorded child before removing the root", async () => {
-  const { childPid, runnerExit } = await runProbe("failure");
+  const { childPid, runnerExit, root } = await runProbe("failure");
   expect(runnerExit).not.toBe(0);
   expect(fixturePidAlive(childPid)).toBeFalse();
+  const afterReap = JSON.parse(fs.readFileSync(path.join(root, "after-reap.json"), "utf8")) as
+    Array<{ pid: number; startTime: string | null; alive: boolean }>;
+  expect(afterReap.map((entry) => entry.pid)).toEqual([childPid]);
+  expect(afterReap[0]!.startTime).not.toBeNull();
+  expect(afterReap.filter((entry) => entry.alive)).toEqual([]);
 }, 15_000);
 
 test("SIGKILLed parent leaves no recorded waiting child", async () => {
