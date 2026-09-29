@@ -8,7 +8,7 @@
 import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 
 import { modelSizeClass } from "./costHints";
-import type { RoleId, RoleParamValues } from "./types";
+import type { RoleId, RoleParamValues, RoleVariantId } from "./types";
 
 /** Who wrote the brief a launch runs on. The operator's own launches are the
     authority; an agent is judged by the runtime it runs on, null when that
@@ -19,20 +19,28 @@ export type Briefer =
 
 export type LaunchRuntime = { engine: string; model: string | null };
 
-/** The roles Sonnet and Haiku never run (rule 3 of the requirement). */
+/** The roles Haiku never runs, and Sonnet runs only where `sonnetMayRun` says
+    (rule 3 of the requirement, relaxed for Sonnet 5.5 by the model table). */
 export const LIGHT_DENIED_ROLE_IDS: readonly RoleId[] = ["orchestrator", "architect", "reviewer", "verifier"];
 
 export const LIGHT_DENIED_ROLE_MESSAGE =
-  "Sonnet and Haiku do not run orchestrator, architect, reviewer or verifier work; name a large model (Claude Opus or Fable, or a large Codex model) or use the role's row.";
+  "Sonnet does not run orchestrator, architect or a reviewer above size=trivial, and Haiku runs none of orchestrator, architect, reviewer or verifier; name a large model (Claude Opus or Fable, or a large Codex model) or use the role's row.";
 
 /** A stage that judges another stage's work (a review-loop stage, or a stage
     whose fail verdict routes to a fix stage) is reviewer work under R1,
     whatever role it names. */
 export const REVIEW_GATE_MESSAGE = `a review gate is reviewer work whatever role it names: ${LIGHT_DENIED_ROLE_MESSAGE}`;
 
-/** R1 for a review gate. */
-export function reviewGateRefusal(runtime: LaunchRuntime): string | null {
-  return isLightClaudeRuntime(runtime) ? REVIEW_GATE_MESSAGE : null;
+/** What Sonnet may judge: any verifier, and a review of a size=trivial change. */
+function sonnetMayRun(roleId: string, params: RoleParamValues | undefined): boolean {
+  return roleId === "verifier" || (roleId === "reviewer" && params?.size === "trivial");
+}
+
+/** R1 for a review gate: Sonnet gates a size=trivial stage and a verifier
+    stage (the verifier role has no size); Haiku never. */
+export function reviewGateRefusal(runtime: LaunchRuntime, params?: RoleParamValues, roleId?: RoleId | string | null): string | null {
+  if (!isLightClaudeRuntime(runtime)) return null;
+  return isClaudeSonnet(runtime) && (params?.size === "trivial" || roleId === "verifier") ? null : REVIEW_GATE_MESSAGE;
 }
 
 /** Whether a Claude runtime is Sonnet or Haiku. A dated id such as
@@ -69,28 +77,33 @@ export function runtimeName(runtime: LaunchRuntime | null): string {
   return `${runtime.engine}/${runtime.model ?? "default"}`;
 }
 
-/** Claude Sonnet, the one light builder that runs a frontend lane without
-    size=trivial when a large model wrote the brief. Haiku and the light Codex
-    models are not part of that exception. */
+/** Claude Sonnet, the one light model with standing work: a builder at any size
+    when a large model briefs it, a verifier, a size=trivial reviewer. Haiku and
+    the light Codex models keep the size=trivial rule. */
 function isClaudeSonnet(config: LaunchRuntime): boolean {
   return config.engine === "claude" && normalizeClaudeLaunchModel(config.model) === "sonnet";
 }
 
-const FRONTEND_SONNET_HINT = " (a domain=frontend builder may run Claude Sonnet when a large model briefs it)";
+/** R1 for one role on one runtime: the refusal, or null when the runtime may run it. */
+function lightRoleRefusal(roleId: string, params: RoleParamValues | undefined, runtime: LaunchRuntime): string | null {
+  if (!(LIGHT_DENIED_ROLE_IDS as readonly string[]).includes(roleId) || !isLightClaudeRuntime(runtime)) return null;
+  return isClaudeSonnet(runtime) && sonnetMayRun(roleId, params) ? null : LIGHT_DENIED_ROLE_MESSAGE;
+}
 
 /**
  * The refusal for one launch, or null when it may run.
  *
- * - R1: orchestrator, architect, reviewer and verifier never resolve to Claude
- *   Sonnet or Haiku, whether the runtime came from the mapping or an override.
- *   A review gate counts as reviewer work whatever role it names.
+ * - R1: orchestrator, architect and a reviewer above size=trivial never resolve
+ *   to Claude Sonnet, and Haiku runs none of those four roles plus the
+ *   verifier, whether the runtime came from the mapping or an override. Sonnet
+ *   may run the verifier and a size=trivial reviewer. A review gate counts as
+ *   reviewer work whatever role it names; Sonnet gates a size=trivial stage or a verifier.
  * - R2: `size=trivial` needs a brief from a large model (`isOpusClass`).
  * - R3: a builder (or a role-less run stage) reaches a light runtime through an
- *   explicit engine/model override only with `size=trivial`. A light runtime
- *   the mapping chose (the fix round, an install's own row) passes. One
- *   exception: a `domain=frontend` builder may run Claude Sonnet by override
- *   without `size=trivial` when an Opus-class runtime wrote its brief (Opus
- *   writes the description, Sonnet builds, Opus reviews).
+ *   explicit engine/model override only with `size=trivial`, except Claude
+ *   Sonnet, which builds at any size when an Opus-class runtime wrote the brief
+ *   (Opus writes the description, Sonnet builds). A light runtime the mapping
+ *   chose (the fix round, an install's own row) passes.
  *
  * The operator's own launches pass every rule.
  */
@@ -109,11 +122,10 @@ export function launchSizingRefusal(input: {
 }): string | null {
   if (input.briefer.kind === "operator") return null;
   const roleId = input.roleId ?? "builder";
-  if ((LIGHT_DENIED_ROLE_IDS as readonly string[]).includes(roleId) && isLightClaudeRuntime(input.config)) {
-    return LIGHT_DENIED_ROLE_MESSAGE;
-  }
+  const denied = lightRoleRefusal(roleId, input.params, input.config);
+  if (denied) return denied;
   if (input.reviewGate) {
-    const gate = reviewGateRefusal(input.config);
+    const gate = reviewGateRefusal(input.config, input.params, roleId);
     if (gate) return gate;
   }
   const trivial = input.params?.size === "trivial";
@@ -121,18 +133,20 @@ export function launchSizingRefusal(input: {
     return `size=trivial runs a light model and needs a brief written by a large model (Claude Opus or Fable, or a large Codex model); this brief comes from ${runtimeName(input.briefer.runtime)}.`;
   }
   if (roleId === "builder" && !trivial && input.explicitRuntime && isLightRuntime(input.config)) {
-    const sonnet = isClaudeSonnet(input.config);
-    if (sonnet && input.params?.domain === "frontend" && isOpusClass(input.briefer.runtime)) return null;
-    return `a builder runs ${runtimeName(input.config)} only as size=trivial${sonnet ? FRONTEND_SONNET_HINT : ""}; drop the explicit model to use the builder's row, or brief the change precisely and set size=trivial.`;
+    if (isClaudeSonnet(input.config)) {
+      if (isOpusClass(input.briefer.runtime)) return null;
+      return `a builder runs Claude Sonnet when a large model (Claude Opus or Fable, or a large Codex model) or the operator wrote its brief; this brief comes from ${runtimeName(input.briefer.runtime)}.`;
+    }
+    return `a builder runs ${runtimeName(input.config)} only as size=trivial; drop the explicit model to use the builder's row, or brief the change precisely and set size=trivial.`;
   }
   return null;
 }
 
-/** R1 alone, for a mapping row: a row is a standing default agents then launch. */
-export function mappingRowRefusal(roleId: RoleId, runtime: LaunchRuntime): string | null {
-  return (LIGHT_DENIED_ROLE_IDS as readonly string[]).includes(roleId) && isLightClaudeRuntime(runtime)
-    ? `${roleId}: ${LIGHT_DENIED_ROLE_MESSAGE}`
-    : null;
+/** R1 alone, for a mapping row: a row is a standing default agents then launch.
+    The `trivial` variant of a role is the size=trivial row. */
+export function mappingRowRefusal(roleId: RoleId, runtime: LaunchRuntime, variant?: RoleVariantId | null): string | null {
+  const refusal = lightRoleRefusal(roleId, variant === "trivial" ? { size: "trivial" } : undefined, runtime);
+  return refusal ? `${roleId}: ${refusal}` : null;
 }
 
 /**

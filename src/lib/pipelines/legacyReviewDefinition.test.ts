@@ -112,7 +112,7 @@ describe("preview", () => {
     const preview = ok(previewLegacyReviewConversion(definition([implementer, review("review", null)]), {}));
     const fixer = preview.stages.find((stage) => stage.id === "review-fix")!;
     expect(fixer.role).toEqual({ roleId: "builder", params: { mode: "apply-fixes", domain: "docs", size: "normal" } });
-    expect(fixer).toMatchObject({ sandbox: "restricted", effectiveRole: { engine: "claude", model: "sonnet", effort: "high" } });
+    expect(fixer).toMatchObject({ sandbox: "restricted", effectiveRole: { engine: "claude", model: "claude-sonnet-5-5", effort: "high" } });
     /* The implementer's account runs Codex; the docs fix row runs Claude. */
     expect(fixer).not.toHaveProperty("account");
     expect(fixer.engine).toBeUndefined();

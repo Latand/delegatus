@@ -3893,6 +3893,26 @@ async function telegramBotSend(args: McpToolArgs, control: ViewerControlDependen
   return redactPayload(result);
 }
 
+async function telegramBotSendMedia(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
+  const result = await dispatchControl(control)("/api/telegram/bot/agent", {
+    op: "send_media",
+    clientRequestId: requestId(args),
+    chat: required(args, "chat"),
+    images: args.images,
+    ...(args.format === "html" || args.format === "plain" ? { format: args.format } : {}),
+    ...(typeof args.replyToMessageId === "number" ? { replyToMessageId: args.replyToMessageId } : {}),
+    ...(typeof args.topicId === "number" ? { topicId: args.topicId } : {}),
+    ...(args.silent === true ? { silent: true } : {}),
+  }, callerCapabilityHeaders()).catch((error: unknown) => {
+    if (error instanceof McpDispatchVerdictError && typeof error.details.code === "string") {
+      const code = error.details.code;
+      throw new McpToolRefusal(error.message, { code, retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode) });
+    }
+    throw error;
+  });
+  return redactPayload(result);
+}
+
 /** create_orchestrator: atomically create, designate and deliver the ONE
     approved versioned default mandate (or the caller's edited text based on
     it). The seat route owns the durable intent, so a retry replays. */
@@ -6134,6 +6154,7 @@ export function viewerMcpBindings(
     rotate_orchestrator: (args, context) => rotateOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     telegram_bot_chats: (args, context) => telegramBotChats(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send: (args, context) => telegramBotSend(args, viewerControlForCall(controlDependencies, context)),
+    telegram_bot_send_media: (args, context) => telegramBotSendMedia(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),
   };
 }

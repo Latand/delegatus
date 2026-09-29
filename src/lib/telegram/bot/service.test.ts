@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import sharp from "sharp";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-telegram-bot-service-"));
 const OLD_STATE = process.env.LLV_STATE_DIR;
@@ -9,7 +10,7 @@ process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 
 const { TelegramBotError, TelegramBotService, productionTelegramBotDependencies, splitMessageText } = await import("./service");
 const { FakeBotTransport, fakeBotToken, ok, refused, unreachable } = await import("./fakeTransport");
-const { telegramBotTokenPath } = await import("./transport");
+const { createBotApiTransport, telegramBotTokenPath } = await import("./transport");
 const { statePath } = await import("@/lib/configDir");
 
 import type { TgUpdate } from "./store";
@@ -265,6 +266,138 @@ test("send attribution: the caller's conversation lands on the send, the outgoin
   expect(anonymous.attributedTo).toEqual({ unidentified: true });
   expect(service.readMessages({ chat: "team-reports" }).messages[0]!.sentBy).toEqual({ unidentified: true });
   expect(service.status().chats[0]!.lastPostBy).toEqual({ unidentified: true });
+});
+
+function mediaFile(name: string, bytes: Uint8Array): string {
+  const filename = path.join(SANDBOX, name);
+  fs.writeFileSync(filename, bytes);
+  return filename;
+}
+
+async function validImage(name: string, format: "jpeg" | "png", width = 1, height = 1): Promise<string> {
+  const bytes = await sharp({ create: { width, height, channels: 3, background: { r: 12, g: 34, b: 56 } } })[format]().toBuffer();
+  return mediaFile(name, bytes);
+}
+
+test("media validates every local image before any Telegram call and refuses disallowed chats", async () => {
+  await allowedTeam();
+  const good = await validImage("valid.jpg", "jpeg");
+  const bad = mediaFile("invalid.jpg", Uint8Array.from([1, 2, 3]));
+  const send = (images: unknown, chat = "team-reports") => service.sendMedia({ conversationId: "conversation_writer", clientRequestId: "validate", chat, images });
+  expect((await refusal(() => send([{ path: good, caption: "ok" }], "unknown"))).code).toBe("chat_unknown");
+  expect((await refusal(() => send([{ path: good, caption: "ok" }, { path: bad, caption: "bad" }]))).code).toBe("photo_invalid");
+  expect((await refusal(() => send([{ path: good, caption: "ok" }, { path: "relative.jpg", caption: "bad" }]))).code).toBe("photo_invalid");
+  expect((await refusal(() => send([{ path: good, caption: "x".repeat(1025) }]))).code).toBe("text_too_long");
+  const large = mediaFile("large.jpg", new Uint8Array(10 * 1024 * 1024 + 1));
+  expect((await refusal(() => send([{ path: large, caption: "large" }]))).code).toBe("photo_invalid");
+  expect(transport.callsOf("sendPhoto")).toHaveLength(0);
+  expect(transport.callsOf("sendMediaGroup")).toHaveLength(0);
+});
+
+test("media rejects truncated, excessive-dimension and extreme-aspect images before single or album transport", async () => {
+  await allowedTeam();
+  const valid = await validImage("dimension-valid.png", "png");
+  const truncated = mediaFile("truncated.jpg", Uint8Array.from([0xff, 0xd8, 0xff, 0xd9]));
+  const tooWide = await validImage("aspect.png", "png", 21, 1);
+  const tooLarge = await validImage("dimensions.png", "png", 6000, 4001);
+  const rejected = (clientRequestId: string, images: Array<{ path: string; caption: string }>) => refusal(() => service.sendMedia({
+    conversationId: "conversation_writer", clientRequestId, chat: "team-reports", images,
+  }));
+
+  for (const [id, filename] of [["truncated", truncated], ["aspect", tooWide], ["dimensions", tooLarge]] as const) {
+    expect((await rejected(id, [{ path: filename, caption: "invalid" }])).code).toBe("photo_invalid");
+  }
+  expect((await rejected("album-invalid", [{ path: valid, caption: "valid" }, { path: tooWide, caption: "invalid" }])).code).toBe("photo_invalid");
+  expect(transport.callsOf("sendPhoto")).toHaveLength(0);
+  expect(transport.callsOf("sendMediaGroup")).toHaveLength(0);
+});
+
+test("one photo uses sendPhoto, attributes its receipt and stores an outgoing photo", async () => {
+  await allowedTeam();
+  const filename = await validImage("single.jpg", "jpeg");
+  transport.script("sendPhoto", ok({ message_id: 70, date: T0 + 100 }));
+  const input = { conversationId: "conversation_writer", clientRequestId: "one", chat: "team-reports", images: [{ path: filename, caption: "<b>Step 1</b>" }], format: "html", topicId: 3, replyToMessageId: 1, silent: true };
+  expect(await service.sendMedia(input)).toMatchObject({ messageIds: [70], attributedTo: { conversationId: "conversation_writer" }, alreadySent: false });
+  expect(transport.callsOf("sendPhoto")[0]!.params).toMatchObject({ chat_id: TEAM.id, caption: "<b>Step 1</b>", parse_mode: "HTML", message_thread_id: 3, reply_parameters: { message_id: 1 }, disable_notification: true, photo: expect.any(Blob) });
+  expect(service.readMessages({ chat: "team-reports" }).messages[0]).toMatchObject({ messageId: 70, direction: "out", kind: "photo", text: "<b>Step 1</b>", sentBy: { conversationId: "conversation_writer" }, topicId: 3 });
+  expect(await service.sendMedia(input)).toMatchObject({ messageIds: [70], alreadySent: true });
+  expect(transport.callsOf("sendPhoto")).toHaveLength(1);
+});
+
+test("album sends per-image captions once and an unfinished claim replays send_uncertain", async () => {
+  await allowedTeam();
+  const images = [{ path: await validImage("first.jpg", "jpeg"), caption: "First" }, { path: await validImage("second.png", "png"), caption: "Second" }];
+  const input = { conversationId: "conversation_writer", clientRequestId: "album", chat: "team-reports", images, topicId: 5 };
+  transport.script("sendMediaGroup", ok([{ message_id: 80, date: T0 + 100 }, { message_id: 81, date: T0 + 101 }]));
+  expect(await service.sendMedia(input)).toMatchObject({ messageIds: [80, 81], parts: 2, alreadySent: false });
+  const params = transport.callsOf("sendMediaGroup")[0]!.params;
+  expect(JSON.parse(params.media as string)).toEqual([{ type: "photo", media: "attach://photo0", caption: "First" }, { type: "photo", media: "attach://photo1", caption: "Second" }]);
+  expect(params).toMatchObject({ chat_id: TEAM.id, message_thread_id: 5, photo0: expect.any(Blob), photo1: expect.any(Blob) });
+  expect(service.readMessages({ chat: "team-reports" }).messages.slice(0, 2)).toMatchObject([{ direction: "out", kind: "photo", text: "Second" }, { direction: "out", kind: "photo", text: "First" }]);
+  expect(await service.sendMedia(input)).toMatchObject({ messageIds: [80, 81], alreadySent: true });
+
+  transport.script("sendMediaGroup", unreachable("timed_out"));
+  const uncertainInput = { ...input, clientRequestId: "uncertain" };
+  expect((await refusal(() => service.sendMedia(uncertainInput))).code).toBe("send_uncertain");
+  expect((await refusal(() => service.sendMedia(uncertainInput))).code).toBe("send_uncertain");
+  expect(transport.callsOf("sendMediaGroup")).toHaveLength(2);
+});
+
+test("a truncated HTTP success stays pending across a service restart", async () => {
+  await allowedTeam();
+  await service.stopPoller();
+  Reflect.get(service, "storeCache")?.close();
+
+  let httpCalls = 0;
+  const dependencies = {
+    ...productionTelegramBotDependencies(),
+    transportFor: () => createBotApiTransport(TOKEN, async () => {
+      httpCalls += 1;
+      return new Response('{"ok":true,"result":[', { status: 200 });
+    }),
+    now: () => NOW,
+    sleep: async () => {},
+    conversationTitle: () => "Weekly report writer",
+  };
+  const input = {
+    conversationId: "conversation_writer",
+    clientRequestId: "truncated-body",
+    chat: "team-reports",
+    images: [{ path: await validImage("truncated-response.jpg", "jpeg"), caption: "Step" }],
+  };
+
+  service = new TelegramBotService(dependencies);
+  expect((await refusal(() => service.sendMedia(input))).code).toBe("send_uncertain");
+  expect(httpCalls).toBe(1);
+  Reflect.get(service, "storeCache")?.close();
+
+  service = new TelegramBotService(dependencies);
+  const retry = await refusal(() => service.sendMedia(input));
+  expect(retry.code).toBe("send_uncertain");
+  expect(retry.retryable).toBe(false);
+  expect(httpCalls).toBe(1);
+});
+
+test("text and media receipts use separate namespaces for both call orders and prefixed user keys", async () => {
+  await allowedTeam();
+  const image = await validImage("collision.jpg", "jpeg");
+  transport.script("sendMessage", ok({ message_id: 90, date: T0 + 100 }));
+  const textFirst = await service.send({ conversationId: "conversation_writer", clientRequestId: "media:album", chat: "team-reports", text: "text first" });
+  transport.script("sendMediaGroup", ok([{ message_id: 91, date: T0 + 101 }, { message_id: 92, date: T0 + 102 }]));
+  const albumSecond = await service.sendMedia({ conversationId: "conversation_writer", clientRequestId: "album", chat: "team-reports", images: [{ path: image, caption: "One" }, { path: image, caption: "Two" }] });
+  expect(textFirst.messageIds).toEqual([90]);
+  expect(albumSecond.messageIds).toEqual([91, 92]);
+  expect((await service.send({ conversationId: "conversation_writer", clientRequestId: "media:album", chat: "team-reports", text: "text first" })).messageIds).toEqual([90]);
+  expect((await service.sendMedia({ conversationId: "conversation_writer", clientRequestId: "album", chat: "team-reports", images: [{ path: image, caption: "One" }, { path: image, caption: "Two" }] })).messageIds).toEqual([91, 92]);
+
+  transport.script("sendMediaGroup", ok([{ message_id: 93, date: T0 + 103 }, { message_id: 94, date: T0 + 104 }]));
+  const prefixedMedia = await service.sendMedia({ conversationId: "conversation_other", clientRequestId: "media:album", chat: "team-reports", images: [{ path: image, caption: "A" }, { path: image, caption: "B" }] });
+  transport.script("sendMessage", ok({ message_id: 95, date: T0 + 105 }));
+  const textSecond = await service.send({ conversationId: "conversation_other", clientRequestId: "media:album", chat: "team-reports", text: "text second" });
+  expect(prefixedMedia.messageIds).toEqual([93, 94]);
+  expect(textSecond.messageIds).toEqual([95]);
+  expect(transport.callsOf("sendMessage")).toHaveLength(2);
+  expect(transport.callsOf("sendMediaGroup")).toHaveLength(2);
 });
 
 test("a repeated clientRequestId answers the first post and never posts again; an unfinished one is uncertain", async () => {

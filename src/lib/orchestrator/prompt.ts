@@ -463,11 +463,15 @@ function runtimeLabel(config: RoleConfig): string {
     default `pipelineRoleLookup` derives from the same capabilities. */
 function roleTableRow(role: RoleDefinition): string {
   const access = role.capabilities.includes("read-only") ? "read-only" : "read-write";
-  /* Each variant the role has, resolved the way a launch resolves it. */
+  /* Each variant the role has, resolved the way a launch resolves it; the
+     variants that share a runtime are listed once under it. */
   const variantIds = (ROLE_VARIANT_IDS as Partial<Record<string, readonly RoleVariantId[]>>)[role.id] ?? [];
-  const variants = variantIds.length
-    ? ` ${variantIds.map((variant) => `${variantParamLabel(variant)}: ${runtimeLabel(configForVariant(role, VARIANT_PARAMS[variant]))}`).join("; ")}.`
-    : "";
+  const byRuntime = new Map<string, string[]>();
+  for (const variant of variantIds) {
+    const runtime = runtimeLabel(configForVariant(role, VARIANT_PARAMS[variant]));
+    byRuntime.set(runtime, [...(byRuntime.get(runtime) ?? []), variantParamLabel(variant)]);
+  }
+  const variants = byRuntime.size ? ` ${[...byRuntime].map(([runtime, labels]) => `${labels.join(", ")}: ${runtime}`).join("; ")}.` : "";
   return `| ${role.id} | ${role.config.engine} | ${role.config.model} | ${role.config.effort} | ${access} | ${role.description}${variants} |`;
 }
 
@@ -503,12 +507,13 @@ export function orchestratorRoleTable(roles: readonly RoleDefinition[]): string 
     "| --- | --- | --- | --- | --- | --- |",
     ...roles.map(roleTableRow),
     `- ${registryStatus}`,
-    "- Runtime overrides go on the stage beside role, never inside it. A reviewer stage is read-only by its role. override-stage binds from the NEXT attempt.",
+    "- Runtime overrides go on the stage, not in role. override-stage binds from the NEXT attempt.",
     "- Size each lane first. trivial (a few lines of UI, copy, one flag or label; your brief states the exact change and its acceptance): builder and reviewer size=trivial, one review round. normal: the rows, effort low or medium. design (options, architecture, proposals, issues from design work): an architect stage first.",
     "- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, Opus review-loop.",
     "- Fix stages: builder mode=apply-fixes with the implementer's domain and size, on the builder row they select. A fixer fixes every finding that names its place, OVER-BUILT cuts included, and fails on one with no place, a WRONG-PREMISE or a new design, which parks the lane: re-plan it.",
-    "- size=trivial needs a brief written by a large model: Claude Opus or Fable, or a large Codex model. Sonnet and Haiku never run orchestrator, architect, reviewer or verifier work, and run a builder whose model you set by hand only at size=trivial, or as domain=frontend on an Opus brief. README, docs, public text: builder domain=docs.",
-    "- create_pipeline answers each stage's runtime and a runtimeLine (spawn_agent: runtime): fix a wrong one before attempt 1 (draft, or pause, override-stage, start), and quote it with the size you chose and why.",
+    "- Sonnet 5.5 for well-scoped build, fix, docs, verification, repeated work. Opus 5.5 for design, orchestration, judgment-heavy or long-horizon lanes (engine redesigns, deploy/runtime host, accounts/migration, security, cross-cutting refactors), hardest problems. Review backend on Codex, frontend on Opus.",
+    "- size=trivial and a hand-set Sonnet builder need a brief from a large model (Opus, Fable, large Codex). Sonnet never orchestrates, architects or reviews above size=trivial. README, docs, public text: builder domain=docs.",
+    "- create_pipeline answers each stage's runtime and a runtimeLine (spawn_agent: runtime): fix a wrong one before attempt 1 and quote it with the size you chose and why.",
     ...(overriddenNote ? [overriddenNote] : []),
   ].join("\n");
 }

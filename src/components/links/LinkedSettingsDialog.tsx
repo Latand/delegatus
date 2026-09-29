@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 
 import { useLocale } from "@/lib/i18n";
@@ -8,18 +8,22 @@ import { Z } from "@/components/layers";
 
 import { OPEN_LINKED_SETTINGS_EVENT } from "./openLinkedSettings";
 import { LinkConnectForm } from "./LinkConnectForm";
+import { LinkCopyButton } from "./LinkCopyButton";
+import { LinkStep } from "./LinkStep";
+import { connectErrorMessage, isDrawnState, linkSeverity, peerErrorMessage, requestErrorMessage } from "./linkSeverity";
 import { mintRefusalMessage } from "./mintRefusal";
 
 type State = {
   self: { label: string; publicUrl: string | null; check: { code: string; at: string } | null } | null;
   state: string | null;
-  entry: { port: number; publishable: boolean };
+  entry: { port: number; publishable: boolean; localVouches?: boolean };
   keyOn: boolean;
   tailnetUrl?: string | null;
 };
 type SharedState = { shared: { v: 1; all: boolean; projects: string[] }; known: { key: string; name: string }[]; states: { id: string; label: string; projects: { key: string; name: string; state: string }[] }[] };
 type PeerState = { peers: { id: string; label: string; url: string; state: string; error: string | null; lastCall: number | null }[] };
-type GrantState = { grants: { id: string; label: string; requests: number; today: number; sevenDays: number; lastUsed: number | null }[] };
+type GrantState = { grants: { id: string; label: string; created: number; requests: number; today: number; sevenDays: number; lastUsed: number | null }[] };
+type Role = "accept" | "connect";
 type CodeState = { id: string; expiresAt: number; wrongAttempts: number; used: boolean; burned: boolean };
 
 function savedLanHttpAddress(publicUrl: string | null | undefined): boolean {
@@ -36,14 +40,21 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
   const [address, setAddress] = useState("");
   const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // One error per source, so each answer shows where the action was taken.
+  const [loadError, setLoadError] = useState(false);
+  const [selfError, setSelfError] = useState<string | null>(null);
+  const [connectError, setConnectError] = useState<string | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const [connectedTo, setConnectedTo] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [shared, setShared] = useState<SharedState | null>(null);
   const [peers, setPeers] = useState<PeerState | null>(null);
   const [grants, setGrants] = useState<GrantState | null>(null);
-  const [code, setCode] = useState<{ code: string; expiresAt: number } | null>(null);
+  const [code, setCode] = useState<{ code: string; expiresAt: number; address: string | null } | null>(null);
   const [codeStatus, setCodeStatus] = useState<CodeState | null>(null);
   const [mintRefusal, setMintRefusal] = useState<string | null>(null);
+  const [role, setRole] = useState<Role | null>(null);
+  const grantsAtMint = useRef<Set<string>>(new Set());
   const [now, setNow] = useState(() => Date.now());
   const codeFinished = code !== null && (codeStatus?.used === true || now >= code.expiresAt);
   useEffect(() => {
@@ -60,7 +71,7 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
           const status = result.codes.find((row) => row.id === id) ?? null;
           if (status?.used && !refreshed) {
             refreshed = true;
-            void refresh().catch(() => setError("unavailable"));
+            void refresh().catch(() => setLoadError(true));
           }
           setCodeStatus(status);
         }
@@ -88,37 +99,56 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
       setValue(state);
       setAddress(state.self?.publicUrl ?? "");
       setLabel(state.self?.label ?? "");
-    }).catch(() => { if (active) setError("unavailable"); });
-    void refresh().catch(() => { if (active) setError("unavailable"); });
+    }).catch(() => { if (active) setLoadError(true); });
+    void refresh().catch(() => { if (active) setLoadError(true); });
     return () => { active = false; };
   }, []);
+  // The role is picked once, when the first answers are in: a machine with a
+  // saved address or someone connected to it accepts, any other connects.
+  const ready = loadError || (value !== null && grants !== null);
+  useEffect(() => {
+    if (role === null && ready) setRole(value?.self?.publicUrl || grants?.grants.length ? "accept" : "connect");
+  }, [ready]);
   const act = async (body: object) => {
     setBusy(true);
-    setError(null);
+    setSelfError(null);
     try {
       const response = await fetch("/api/links", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       const result = await response.json();
-      if (!response.ok) { setError(result.error ?? "unavailable"); await refresh().catch(() => {}); return; }
+      if (!response.ok) { setSelfError(result.error ?? "unavailable"); await refresh().catch(() => {}); return; }
       setValue(result);
-    } catch { setError("unavailable"); }
+    } catch { setSelfError("unavailable"); }
     finally { setBusy(false); }
   };
   const linkedAction = async (url: string, method: "POST" | "PATCH" | "DELETE", body?: object): Promise<boolean> => {
-    setBusy(true); setError(null); setNotice(null);
+    setBusy(true); setLinkError(null); setNotice(null);
     try {
       const response = await fetch(url, { method, headers: body ? { "content-type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
       const result = await response.json();
-      if (!response.ok) { setError(result.error ?? "unavailable"); await refresh().catch(() => {}); return false; }
+      if (!response.ok) { setLinkError(result.error ?? "unavailable"); await refresh().catch(() => {}); return false; }
       if (result.warned === true) setNotice("remove-warning");
       await refresh();
       return true;
-    } catch { setError("unavailable"); return false; }
+    } catch { setLinkError("unavailable"); return false; }
+    finally { setBusy(false); }
+  };
+  // A failed connect is answered under the connect form, never in the line that
+  // reports this install's own address.
+  const connect = async (input: { url: string; code: string; name: string }) => {
+    setBusy(true); setConnectError(null); setConnectedTo(null); setLinkError(null); setNotice(null);
+    try {
+      const response = await fetch("/api/links/peers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input) });
+      const result = await response.json() as { peer?: { label?: string }; error?: string };
+      if (!response.ok) { setConnectError(result.error ?? "unavailable"); await refresh().catch(() => {}); return; }
+      setConnectedTo(result.peer?.label ?? input.name ?? input.url);
+      await refresh().catch(() => {});
+    } catch { setConnectError("unavailable"); }
     finally { setBusy(false); }
   };
   // A refused mint is answered next to the button that asked, and the saved
   // address's state is re-read because the mint ran a fresh check.
   const allow = async () => {
-    setBusy(true); setError(null); setNotice(null); setMintRefusal(null);
+    setBusy(true); setLinkError(null); setNotice(null); setMintRefusal(null);
     try {
       const response = await fetch("/api/links/codes", { method: "POST" });
       const result = await response.json() as { code?: string; expiresAt?: number; error?: string };
@@ -128,7 +158,8 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
         if (view) setValue(view);
         return;
       }
-      setCodeStatus(null); setCode({ code: result.code, expiresAt: result.expiresAt }); setNow(Date.now());
+      grantsAtMint.current = new Set(grants?.grants.map((grant) => grant.id));
+      setCodeStatus(null); setCode({ code: result.code, expiresAt: result.expiresAt, address: value?.self?.publicUrl ?? null }); setNow(Date.now());
       await refresh().catch(() => {});
     } catch { setMintRefusal("unavailable"); }
     finally { setBusy(false); }
@@ -138,23 +169,24 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
     ...shared.states.flatMap((peer) => peer.projects.map((project) => [project.key, { key: project.key, name: project.name, local: false }] as const)),
     ...shared.known.map((project) => [project.key, { ...project, local: true }] as const),
   ]).values()].sort((a, b) => a.name.localeCompare(b.name)) : [];
-  const state = error ?? value?.state;
-  const shown = state && ["needs-access-key", "needs-remote-entry", "http-public", "open-to-internet", "host-rewritten", "tls-failure", "unverified", "ok", "invalid-address", "save-conflict", "key-failed", "unavailable"].includes(state) ? state : null;
-  const linkError = error && !shown ? (
-    error === "invalid-code" ? t("links.error.invalidCode") :
-    error === "peer-open" ? t("links.error.peerOpen") :
-    error === "unreachable" ? t("links.error.unreachable") :
-    error === "not-delegatus" || error === "version" ? t("links.error.version") :
-    error === "already-linked" ? t("links.error.alreadyLinked") :
-    error === "code-spent" ? t("links.error.codeSpent") :
-    error === "rate-limited" ? t("links.error.rateLimited") :
-    error === "revoked" ? t("links.error.revoked") :
-    error === "store-changed" ? t("links.error.storeChanged") :
-    error === "grant-cleanup-needed" ? t("links.error.grantCleanupNeeded") :
-    error === "cannot-share" ? t("links.cannotShare") :
-    error === "unauthorized" ? t("links.error.unauthorized") : t("links.state.unavailable")
-  ) : null;
+  const state = selfError ?? value?.state;
+  const shown = isDrawnState(state) ? state : null;
+  const severity = shown ? linkSeverity(shown, value?.entry.localVouches) : null;
+  const savedAddress = value?.self?.publicUrl ?? null;
+  const selfRequestError = selfError && !shown ? requestErrorMessage(t, selfError) : null;
   const browserOrigin = typeof window !== "undefined" && !/^localhost$|^127\.|^\[::1\]$/.test(window.location.hostname) ? window.location.origin : null;
+  const codeState = codeStatus?.burned ? "burned" : codeStatus?.used ? "used" : code && now >= code.expiresAt ? "expired" : "open";
+  const newGrant = code && codeStatus?.used ? (grants?.grants ?? []).filter((grant) => !grantsAtMint.current.has(grant.id)).sort((a, b) => b.created - a.created)[0] ?? null : null;
+  const stateText = shown === "unverified" && severity === "warning" ? t("links.state.unverified")
+    : shown === "unverified" ? t("links.state.unverifiedBlocking", { port: value?.entry.port ?? 0 })
+    : shown ? t(`links.state.${shown}` as "links.state.ok") : null;
+  const stateStyle = severity === "ok" ? "bg-success-soft text-success" : severity === "warning" ? "bg-warning-soft text-warning" : "bg-danger-soft text-danger";
+  const pickRole = (next: Role) => setRole(next);
+  const roles: { id: Role; title: string; hint: string }[] = [
+    { id: "accept", title: t("links.role.accept"), hint: t("links.role.acceptHint") },
+    { id: "connect", title: t("links.role.connect"), hint: t("links.role.connectHint") },
+  ];
+  const noGrantsOrPeers = peers !== null && grants !== null && !peers.peers.length && !grants.grants.length;
   return (
     <div className={`fixed inset-0 ${Z.modal} flex items-center justify-center bg-black/40 p-0 sm:p-8`} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section role="dialog" aria-modal="true" aria-label={t("links.title")} data-linked-settings="" className="flex h-full w-full max-w-[640px] flex-col overflow-hidden bg-canvas shadow-2 sm:h-auto sm:max-h-[90vh] sm:rounded-[12px] sm:border sm:border-border">
@@ -163,36 +195,115 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
           <button type="button" aria-label={t("common.close")} onClick={onClose} className="flex h-11 w-11 items-center justify-center rounded-[8px] text-muted hover:bg-sunken"><X className="h-5 w-5" /></button>
         </header>
         <div className="space-y-5 overflow-y-auto px-4 py-5 sm:px-6">
-          <div><h3 className="text-body font-semibold text-primary">{t("links.thisInstall")}</h3><p className="mt-1 text-ui text-muted">{t("links.intro")}</p></div>
-          {value ? <p className="rounded-[8px] border border-border bg-sunken px-3 py-2 text-ui text-primary">{value.entry.publishable ? t("links.proxyTarget", { port: value.entry.port }) : t("links.noProxyTarget")}</p> : error ? null : <p className="text-ui text-muted">{t("common.loading")}</p>}
-          <label className="block text-ui font-semibold text-primary">{t("links.label")}<input value={label} onChange={(event) => setLabel(event.target.value)} className="mt-1 block h-11 w-full rounded-[8px] border border-border bg-raised px-3 font-normal text-primary" /></label>
-          <label className="block text-ui font-semibold text-primary">{t("links.address")}<input value={address} onChange={(event) => setAddress(event.target.value)} type="url" placeholder="https://delegatus.example.com" className="mt-1 block h-11 w-full rounded-[8px] border border-border bg-raised px-3 font-normal text-primary" /></label>
-          {savedLanHttpAddress(value?.self?.publicUrl) ? <p data-linked-http-warning="" role="note" className="rounded-[8px] bg-warning-soft px-3 py-2 text-ui text-warning">{t("links.httpLanWarning")}</p> : null}
-          {browserOrigin ? <button type="button" className="block text-left text-ui text-accent hover:underline" onClick={() => setAddress(browserOrigin)}>{t("links.usePage", { address: browserOrigin })}</button> : null}
-          {value?.tailnetUrl ? <button type="button" className="block text-left text-ui text-accent hover:underline" onClick={() => setAddress(value.tailnetUrl!)}>{t("links.useTailnet", { address: value.tailnetUrl })}</button> : null}
-          {shown ? <p role="status" data-linked-state={shown} className={`rounded-[8px] px-3 py-2 text-ui ${["needs-access-key", "needs-remote-entry", "open-to-internet", "http-public"].includes(shown) ? "bg-danger/10 text-danger" : "bg-sunken text-primary"}`}>{t(`links.state.${shown}` as "links.state.ok")}</p> : null}
-          {linkError ? <p role="alert" className="rounded-[8px] bg-danger/10 px-3 py-2 text-ui text-danger">{linkError}</p> : null}
-          {notice ? <p role="status" className="rounded-[8px] bg-warning-soft px-3 py-2 text-ui text-warning">{t("links.removeWarning")}</p> : null}
-          {value?.self?.check?.at ? <p className="text-ui text-muted">{t("links.checkedAt", { date: new Date(value.self.check.at).toLocaleString() })}</p> : null}
-          <div className="flex flex-wrap gap-2">
-            {!value?.keyOn ? <button type="button" disabled={busy} onClick={() => void act({ action: "key" })} className="min-h-11 rounded-[8px] bg-accent px-4 text-ui font-semibold text-white disabled:opacity-50">{t("links.turnOnKey")}</button> : null}
-            <button type="button" disabled={busy || !value} onClick={() => void act({ action: "save", publicUrl: address, label })} className="min-h-11 rounded-[8px] bg-accent px-4 text-ui font-semibold text-white disabled:opacity-50">{t("links.save")}</button>
-            <button type="button" disabled={busy || !value?.self?.publicUrl} onClick={() => void act({ action: "check" })} className="min-h-11 rounded-[8px] border border-border px-4 text-ui font-semibold text-primary disabled:opacity-50">{t("links.check")}</button>
+          <p className="text-ui text-muted">{t("links.intro")}</p>
+          {loadError ? <p role="alert" data-linked-state="unavailable" data-linked-severity="error" className="rounded-[8px] bg-danger-soft px-3 py-2 text-ui text-danger">{t("links.state.unavailable")}</p> : null}
+          {shown === "open-to-internet" ? <p data-linked-banner="" role="note" className="rounded-[8px] bg-danger-soft px-3 py-2 text-ui text-danger">{t("links.state.open-to-internet")}</p> : null}
+          <div role="radiogroup" aria-label={t("links.role.label")} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {roles.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                role="radio"
+                aria-checked={role === option.id}
+                data-linked-role={option.id}
+                tabIndex={role === option.id || (role === null && option.id === "accept") ? 0 : -1}
+                disabled={role === null}
+                onClick={() => pickRole(option.id)}
+                onKeyDown={(event) => {
+                  if (["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp"].includes(event.key)) {
+                    event.preventDefault();
+                    pickRole(option.id === "accept" ? "connect" : "accept");
+                    (event.currentTarget.parentElement?.querySelector<HTMLElement>(`[data-linked-role="${option.id === "accept" ? "connect" : "accept"}"]`))?.focus();
+                  }
+                }}
+                className={`min-h-11 rounded-[8px] border px-3 py-2 text-left ${role === option.id ? "border-accent bg-accent/5" : "border-border"}`}
+              >
+                <span className="block text-body font-semibold text-primary">{option.title}</span>
+                <span className="mt-1 block text-ui text-muted">{option.hint}</span>
+              </button>
+            ))}
           </div>
-          <section className="space-y-3 border-t border-border pt-5" aria-label={t("links.pairing")}>
-            <h3 className="text-body font-semibold text-primary">{t("links.pairing")}</h3>
-            <p className="text-ui text-muted">{t("links.pairingDescription")}</p>
-            <button type="button" disabled={busy || !value?.keyOn || !value.self?.publicUrl || ["needs-remote-entry", "http-public", "open-to-internet"].includes(value.state ?? "")} onClick={() => void allow()} className="min-h-11 rounded-[8px] bg-accent px-4 text-ui font-semibold text-white disabled:opacity-50">{t("links.allow")}</button>
-            {mintRefusal ? <p role="alert" data-linked-mint-refusal={mintRefusal} className="rounded-[8px] bg-danger/10 px-3 py-2 text-ui text-danger">{mintRefusalMessage(t, mintRefusal)}</p> : null}
-            {code ? <div className="rounded-[8px] border border-border bg-sunken p-3 text-ui" data-pair-code=""><p>{t("links.codePrompt")}</p><code className="mt-2 block select-all text-title font-bold tracking-wide text-primary">{code.code}</code><p className="mt-2 text-muted">{t("links.codeExpires", { date: new Date(code.expiresAt).toLocaleTimeString() })}</p><p role="status" data-code-state={codeStatus?.burned ? "burned" : codeStatus?.used ? "used" : now >= code.expiresAt ? "expired" : "open"} className="mt-2 text-muted">{codeStatus?.burned ? t("links.codeBurned") : codeStatus?.used ? t("links.codeUsed") : now >= code.expiresAt ? t("links.codeExpired") : codeStatus?.wrongAttempts ? t("links.wrongAttempts", { count: codeStatus.wrongAttempts }) : t("links.noWrongAttempts")}</p><button type="button" disabled={busy} onClick={() => { void linkedAction(`/api/links/codes?id=${encodeURIComponent(code.code.slice(0, 6))}`, "DELETE").then((removed) => { if (removed) { setCode(null); setCodeStatus(null); } }); }} className="mt-2 min-h-11 rounded-[8px] border border-border px-3">{t("links.cancelCode")}</button></div> : null}
-            <LinkConnectForm busy={busy} onConnect={(input) => void linkedAction("/api/links/peers", "POST", input)} />
+          {role === null && !loadError ? <p className="text-ui text-muted">{t("common.loading")}</p> : null}
+          <div hidden={role !== "accept"} data-linked-panel="accept">
+            <ol className="space-y-5" aria-label={t("links.pairing")}>
+              <LinkStep n={1} title={t("links.accept.step1")}>
+                <p className="text-ui text-muted">{t("links.accept.step1Body")}</p>
+                {value ? <p className="rounded-[8px] border border-border bg-sunken px-3 py-2 text-ui text-primary">{value.entry.publishable ? t("links.proxyTarget", { port: value.entry.port }) : t("links.noProxyTarget")}</p> : loadError ? null : <p className="text-ui text-muted">{t("common.loading")}</p>}
+                <label className="block text-ui font-semibold text-primary">{t("links.label")}<input value={label} onChange={(event) => setLabel(event.target.value)} className="mt-1 block h-11 w-full rounded-[8px] border border-border bg-raised px-3 font-normal text-primary" /></label>
+                <label className="block text-ui font-semibold text-primary">{t("links.address")}<input value={address} onChange={(event) => setAddress(event.target.value)} type="url" placeholder="https://delegatus.example.com" className="mt-1 block h-11 w-full rounded-[8px] border border-border bg-raised px-3 font-normal text-primary" /></label>
+                {savedLanHttpAddress(savedAddress) ? <p data-linked-http-warning="" role="note" className="rounded-[8px] bg-warning-soft px-3 py-2 text-ui text-warning">{t("links.httpLanWarning")}</p> : null}
+                {browserOrigin ? <button type="button" className="block text-left text-ui text-accent hover:underline" onClick={() => setAddress(browserOrigin)}>{t("links.usePage", { address: browserOrigin })}</button> : null}
+                {value?.tailnetUrl ? <button type="button" className="block text-left text-ui text-accent hover:underline" onClick={() => setAddress(value.tailnetUrl!)}>{t("links.useTailnet", { address: value.tailnetUrl })}</button> : null}
+                {shown && severity && stateText ? <div role={severity === "error" ? "alert" : "status"} data-linked-state={shown} data-linked-severity={severity} className={`space-y-1 rounded-[8px] px-3 py-2 text-ui ${stateStyle}`}>
+                  {severity === "blocking" ? <p className="font-semibold">{t("links.severity.blocking")}</p> : severity === "warning" ? <p className="font-semibold">{t("links.severity.warning")}</p> : null}
+                  <p>{stateText}</p>
+                  {severity === "warning" && savedAddress ? <div className="flex flex-wrap items-center gap-2"><p className="min-w-0 flex-1 break-words">{t("links.checkFromOther", { address: savedAddress })}</p><LinkCopyButton text={savedAddress} label={t("links.copyAddress")} /></div> : null}
+                </div> : null}
+                {selfRequestError ? <p role="alert" data-linked-severity="error" className="rounded-[8px] bg-danger-soft px-3 py-2 text-ui text-danger">{selfRequestError}</p> : null}
+                {value?.self?.check?.at ? <p className="text-ui text-muted">{t("links.checkedAt", { date: new Date(value.self.check.at).toLocaleString() })}</p> : null}
+                <div className="flex flex-wrap gap-2">
+                  {!value?.keyOn ? <button type="button" disabled={busy} onClick={() => void act({ action: "key" })} className="min-h-11 rounded-[8px] bg-accent px-4 text-ui font-semibold text-white disabled:opacity-50">{t("links.turnOnKey")}</button> : null}
+                  <button type="button" disabled={busy || !value} onClick={() => void act({ action: "save", publicUrl: address, label })} className="min-h-11 rounded-[8px] bg-accent px-4 text-ui font-semibold text-white disabled:opacity-50">{t("links.save")}</button>
+                  <button type="button" disabled={busy || !value?.self?.publicUrl} onClick={() => void act({ action: "check" })} className="min-h-11 rounded-[8px] border border-border px-4 text-ui font-semibold text-primary disabled:opacity-50">{t("links.check")}</button>
+                </div>
+              </LinkStep>
+              <LinkStep n={2} title={t("links.accept.step2")} waiting={value !== null && !savedAddress}>
+                <p className="text-ui text-muted">{value !== null && !savedAddress ? t("links.accept.step2Waiting") : t("links.accept.step2Body")}</p>
+                <p className="text-ui text-muted">{t("links.pairingDescription")}</p>
+                <button type="button" disabled={busy || !value?.keyOn || !value.self?.publicUrl || ["needs-remote-entry", "http-public", "open-to-internet"].includes(value.state ?? "")} onClick={() => void allow()} className="min-h-11 rounded-[8px] bg-accent px-4 text-ui font-semibold text-white disabled:opacity-50">{t("links.allow")}</button>
+                {mintRefusal ? <p role="alert" data-linked-mint-refusal={mintRefusal} className="rounded-[8px] bg-danger-soft px-3 py-2 text-ui text-danger">{mintRefusalMessage(t, mintRefusal)}</p> : null}
+              </LinkStep>
+              <LinkStep n={3} title={t("links.accept.step3")} waiting={!code}>
+                {code ? <>
+                  <p className="text-ui text-muted">{t("links.accept.step3Body")}</p>
+                  <div className="space-y-2 rounded-[8px] border border-border bg-sunken p-3 text-ui" data-pair-code="">
+                    <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2">
+                      {code.address ? <>
+                        <span className="text-muted">{t("links.codeAddress")}</span>
+                        <span data-pair-address="" className="break-all font-mono select-all text-primary">{code.address}</span>
+                        <LinkCopyButton text={code.address} label={t("links.copyAddress")} />
+                      </> : null}
+                      <span className="text-muted">{t("links.codeLabel")}</span>
+                      <code data-pair-code-value="" className="break-all select-all text-title font-bold tracking-wide text-primary">{code.code}</code>
+                      <LinkCopyButton text={code.code} label={t("links.copyCode")} />
+                    </div>
+                    <p className="text-muted">{t("links.codeExpires", { date: new Date(code.expiresAt).toLocaleTimeString() })}</p>
+                    {newGrant ? <p role="status" data-code-state="used" data-linked-connected="" className="rounded-[8px] bg-success-soft px-3 py-2 text-success">{t("links.connectedHere", { name: newGrant.label })}</p>
+                      : <p role="status" data-code-state={codeState} className="text-muted">{codeState === "burned" ? t("links.codeBurned") : codeState === "used" ? t("links.codeUsed") : codeState === "expired" ? t("links.codeExpired") : codeStatus?.wrongAttempts ? t("links.wrongAttempts", { count: codeStatus.wrongAttempts }) : t("links.noWrongAttempts")}</p>}
+                    <button type="button" disabled={busy} onClick={() => { void linkedAction(`/api/links/codes?id=${encodeURIComponent(code.code.slice(0, 6))}`, "DELETE").then((removed) => { if (removed) { setCode(null); setCodeStatus(null); } }); }} className="min-h-11 rounded-[8px] border border-border px-3">{t("links.cancelCode")}</button>
+                  </div>
+                </> : <p className="text-ui text-muted">{t("links.accept.step3Waiting")}</p>}
+              </LinkStep>
+            </ol>
+          </div>
+          <div hidden={role !== "connect"} data-linked-panel="connect">
+            <ol className="space-y-5" aria-label={t("links.pairing")}>
+              <LinkStep n={1} title={t("links.connectStep.step1")}>
+                <p className="text-ui text-muted">{t("links.connectStep.step1Body")}</p>
+              </LinkStep>
+              <LinkStep n={2} title={t("links.connectStep.step2")}>
+                <p className="text-ui text-muted">{t("links.connectStep.step2Body")}</p>
+                <LinkConnectForm busy={busy} onConnect={(input) => void connect(input)} />
+                {connectError ? <p role="alert" data-linked-connect-error={connectError} className="rounded-[8px] bg-danger-soft px-3 py-2 text-ui text-danger">{connectErrorMessage(t, connectError)}</p> : null}
+              </LinkStep>
+              <LinkStep n={3} title={t("links.connectStep.step3")} waiting={!connectedTo}>
+                {connectedTo ? <p role="status" data-linked-connected="" className="rounded-[8px] bg-success-soft px-3 py-2 text-ui text-success">{t("links.connectedThere", { name: connectedTo })}</p> : <p className="text-ui text-muted">{t("links.connectStep.step3Waiting")}</p>}
+              </LinkStep>
+            </ol>
+          </div>
+          <section className="space-y-3 border-t border-border pt-5" aria-label={t("links.connectedMachines")}>
+            <h3 className="text-body font-semibold text-primary">{t("links.connectedMachines")}</h3>
+            {linkError ? <p role="alert" className="rounded-[8px] bg-danger-soft px-3 py-2 text-ui text-danger">{requestErrorMessage(t, linkError)}</p> : null}
+            {notice ? <p role="status" className="rounded-[8px] bg-warning-soft px-3 py-2 text-ui text-warning">{t("links.removeWarning")}</p> : null}
+            {noGrantsOrPeers ? <p className="text-ui text-muted">{t("links.connectedMachinesEmpty")}</p> : null}
             {peers?.peers.map((peer) => <div key={peer.id} className="rounded-[8px] border border-border p-3 text-ui" data-linked-peer={peer.state}>
-              <p className="font-semibold text-primary">{peer.label} · {peer.state === "revoked" ? t("links.revoked") : peer.url}</p>
+              <p className="font-semibold text-primary">{t("links.peerRow", { name: peer.label })}</p>
+              <p className="text-muted">{peer.state === "revoked" ? t("links.revoked") : peer.url}</p>
               {peer.lastCall ? <p className="mt-1 text-muted">{t("links.syncedAt", { date: new Date(peer.lastCall).toLocaleString() })}</p> : null}
-              {peer.error ? <p className="text-danger">{peer.error}</p> : null}
+              {peer.error ? <p className="mt-1 text-danger" data-linked-peer-error={peer.error}>{peerErrorMessage(t, peer.error, peer.label)}</p> : null}
               <div className="mt-2 flex gap-2"><button type="button" disabled={busy} onClick={() => void linkedAction(`/api/links/peers/${encodeURIComponent(peer.id)}`, "POST")} className="min-h-11 rounded-[8px] border border-border px-3 text-primary disabled:opacity-50">{t("links.syncNow")}</button><button type="button" disabled={busy} onClick={() => void linkedAction(`/api/links/peers/${encodeURIComponent(peer.id)}`, "DELETE")} className="min-h-11 rounded-[8px] border border-border px-3 text-primary">{t("links.remove")}</button></div>
             </div>)}
-            {grants?.grants.map((grant) => <div key={grant.id} className="flex items-center justify-between gap-2 rounded-[8px] border border-border p-3 text-ui"><span>{grant.label} · {t("links.counts", { today: grant.today, seven: grant.sevenDays })}</span><button type="button" disabled={busy} onClick={() => void linkedAction(`/api/links/grants?id=${encodeURIComponent(grant.id)}`, "DELETE")} className="min-h-11 rounded-[8px] border border-border px-3">{t("links.revoke")}</button></div>)}
+            {grants?.grants.map((grant) => <div key={grant.id} data-linked-grant="" className="flex items-center justify-between gap-2 rounded-[8px] border border-border p-3 text-ui"><span>{t("links.grantRow", { name: grant.label })} · {t("links.counts", { today: grant.today, seven: grant.sevenDays })}</span><button type="button" disabled={busy} onClick={() => void linkedAction(`/api/links/grants?id=${encodeURIComponent(grant.id)}`, "DELETE")} className="min-h-11 rounded-[8px] border border-border px-3">{t("links.revoke")}</button></div>)}
           </section>
           <section className="space-y-3 border-t border-border pt-5" aria-label={t("links.sharedProjects")}>
             <h3 className="text-body font-semibold text-primary">{t("links.sharedProjects")}</h3>

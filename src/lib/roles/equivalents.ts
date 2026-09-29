@@ -32,36 +32,43 @@ const CODEX_TO_CLAUDE: Record<string, string> = {
   [CODEX_LUNA_MODEL]: "haiku",
 };
 
-// The GPT-6 line has no Terra, so Sonnet lands on GPT-6 Sol.
+// The GPT-6 line has no Terra, so Sonnet, pinned or by alias, lands on GPT-6 Sol.
 const CLAUDE_TO_CODEX: Record<string, string> = {
   opus: CODEX_ASTRA_MODEL,
   fable: CODEX_ASTRA_MODEL,
   sonnet: CODEX_GPT6_SOL_MODEL,
+  "claude-sonnet-5-5": CODEX_GPT6_SOL_MODEL,
   haiku: CODEX_GPT6_LUNA_MODEL,
 };
 
 const OPUS_HIGH: RoleConfig = { engine: "claude", model: "opus", effort: "high" };
+/* Sonnet 5.5 pinned by id: the `sonnet` alias moves with the next Sonnet. */
+const SONNET_HIGH: RoleConfig = { engine: "claude", model: "claude-sonnet-5-5", effort: "high" };
+const SONNET_MEDIUM: RoleConfig = { ...SONNET_HIGH, effort: "medium" };
 
-/** Per row, the runtime on each target engine. Moving to Claude, every row runs
-    Opus high except the fix rounds, the cleaner, the small-change and docs
-    rows and the frontend builder (Sonnet 5.5, briefed by Opus); moving to Codex, only the rows that live on Claude by default (and the
-    trivial reviewer, which lives on Luna) have an approved target. No row that
-    Sonnet may not run (orchestrator, architect, reviewer, verifier) lands on it. */
+/** Per row, the runtime on each target engine. Moving to Claude follows the
+    Sonnet 5.5 / Opus 5.5 table (docs/design/model-sizing-tiers.md §7): Sonnet
+    5.5 runs the well-scoped rows (every builder row, the cleaner, the verifier
+    and the trivial reviewer), Opus the rows that need judgment (orchestrator,
+    architect, reviewer, prod-auditor, deployer). Moving to Codex, only the rows
+    that live on Claude by default (and the trivial reviewer, which lives on
+    Luna) have an approved target. Sonnet never lands on the orchestrator, the
+    architect or a reviewer above size=trivial. */
 const ROW_TARGETS: Record<RoleEngine, Readonly<Record<string, RoleConfig>>> = {
   claude: {
     orchestrator: OPUS_HIGH,
     reviewer: OPUS_HIGH,
-    verifier: OPUS_HIGH,
-    builder: OPUS_HIGH,
-    "builder:frontend": { engine: "claude", model: "claude-sonnet-5-5", effort: "high" },
-    "builder:apply-fixes": { engine: "claude", model: "opus", effort: "medium" },
-    "builder:trivial": { engine: "claude", model: "sonnet", effort: "high" },
-    "builder:docs": { engine: "claude", model: "opus", effort: "medium" },
-    "builder:frontend-fixes": { engine: "claude", model: "sonnet", effort: "high" },
-    "builder:docs-fixes": { engine: "claude", model: "sonnet", effort: "high" },
-    "reviewer:trivial": { engine: "claude", model: "opus", effort: "medium" },
+    verifier: SONNET_MEDIUM,
+    builder: SONNET_HIGH,
+    "builder:frontend": SONNET_HIGH,
+    "builder:apply-fixes": SONNET_HIGH,
+    "builder:trivial": SONNET_HIGH,
+    "builder:docs": SONNET_HIGH,
+    "builder:frontend-fixes": SONNET_HIGH,
+    "builder:docs-fixes": SONNET_HIGH,
+    "reviewer:trivial": SONNET_MEDIUM,
     architect: OPUS_HIGH,
-    cleaner: { engine: "claude", model: "sonnet", effort: "high" },
+    cleaner: SONNET_HIGH,
     "prod-auditor": OPUS_HIGH,
     deployer: OPUS_HIGH,
   },

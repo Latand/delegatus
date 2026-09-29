@@ -4257,7 +4257,7 @@ test("spawn_agent applies the sizing rules on the service's bound first dispatch
 
   const sonnet = serviceFor("sonnet");
   expect(await sonnet.service.callTool("spawn_agent", launch("sizing-r1", { role: "reviewer", roleParams: { diffSource: "PR #1" }, engine: "claude", model: "sonnet" })))
-    .toMatchObject({ ok: false, error: expect.stringContaining("Sonnet and Haiku do not run orchestrator, architect, reviewer or verifier work") });
+    .toMatchObject({ ok: false, error: expect.stringContaining("Sonnet does not run orchestrator, architect or a reviewer above size=trivial") });
   expect(await sonnet.service.callTool("spawn_agent", launch("sizing-r2", { role: "builder", roleParams: { size: "trivial" } })))
     .toMatchObject({ ok: false, error: expect.stringContaining("needs a brief written by a large model (Claude Opus or Fable, or a large Codex model); this brief comes from claude/sonnet") });
   expect(sonnet.dispatched).toEqual([]);

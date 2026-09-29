@@ -3,6 +3,7 @@ import { DELETE as cancelDeploymentRoute } from "@/app/api/runtime/deployments/[
 
 import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
@@ -17,6 +18,12 @@ import type {
   ViewerRuntimeHostStartupPhase,
 } from "@/lib/runtime/contracts";
 import { runtimeHostClient, UnixRuntimeHostClient } from "@/lib/runtime/client";
+import { initialAuto, readAuto, writeAuto } from "@/lib/selfUpdate/auto";
+import { initialCheck } from "@/lib/selfUpdate/checkState";
+import { productionDeps } from "@/lib/selfUpdate/instance";
+import { managedIdempotencyKey, readManagedRecord } from "@/lib/selfUpdate/managed";
+import { SelfUpdateService, type ServiceDeps } from "@/lib/selfUpdate/service";
+import { idleCheck, type Revision } from "@/lib/selfUpdate/types";
 
 import { ViewerDeploymentCoordinator, type ViewerDeploymentAdapter } from "./deployment";
 import { viewerCandidateDockerArgs, viewerComposeServiceFromConfig } from "./candidateContainer";
@@ -1070,6 +1077,124 @@ test("Viewer socket admission outlives the ordinary client timeout during delaye
     if (receipt.state === "accepted") await coordinator.waitForDeployment(receipt.deploymentId);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    store.close();
+  }
+});
+
+test("a disconnected deployment remains visible to a read-only key lookup after late admission", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-deploy-late-admission-"));
+  sandboxes.push(dir);
+  const store = new RuntimeJournal(path.join(dir, "runtime.sqlite"), { now: () => 1_000 });
+  const adapter = new FakeDeploymentAdapter();
+  let releaseResolution!: () => void;
+  adapter.resolveGate = new Promise<void>((resolve) => { releaseResolution = resolve; });
+  const coordinator = new ViewerDeploymentCoordinator(store, adapter, { pid: 10, startIdentity: "10:1" });
+  const socketPath = path.join(dir, "runtime.sock");
+  const server = serveRuntimeHost(socketPath, new RuntimeHost(store, undefined, coordinator));
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  const client = new UnixRuntimeHostClient(socketPath);
+  try {
+    const disconnected = net.createConnection(socketPath);
+    await new Promise<void>((resolve) => disconnected.once("connect", resolve));
+    disconnected.write(JSON.stringify({ id: "lost-reply", method: "viewer-deployment-request", params: { idempotencyKey: "late-admission" } }) + "\n");
+    while (!adapter.calls.includes("resolve:origin/main")) await Bun.sleep(1);
+    disconnected.destroy();
+    const lookup = client.findViewerDeploymentByIdempotencyKey("late-admission");
+    let settled = false;
+    void lookup.then(() => { settled = true; });
+    await Bun.sleep(5);
+    expect(settled).toBe(false);
+    releaseResolution();
+    const accepted = await lookup;
+    expect(accepted).toMatchObject({ idempotencyKey: "late-admission" });
+    if (accepted) await coordinator.waitForDeployment(accepted.deploymentId);
+    expect(await client.findViewerDeploymentByIdempotencyKey("unknown-key")).toBeNull();
+    expect(store.listViewerDeployments().deployments).toHaveLength(1);
+  } finally {
+    releaseResolution();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    store.close();
+  }
+});
+
+test("managed auto retains a disconnected request through late admission and a newer main", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-managed-late-admission-"));
+  sandboxes.push(dir);
+  const store = new RuntimeJournal(path.join(dir, "runtime.sqlite"), { now: () => Date.now() });
+  const adapter = new FakeDeploymentAdapter();
+  let releaseResolution!: () => void;
+  adapter.resolveGate = new Promise<void>((resolve) => { releaseResolution = resolve; });
+  adapter.buildCandidate = async () => { throw new Error("late build failed"); };
+  const coordinator = new ViewerDeploymentCoordinator(store, adapter, { pid: 10, startIdentity: "10:1" });
+  const socketPath = path.join(dir, "runtime.sock");
+  const server = serveRuntimeHost(socketPath, new RuntimeHost(store, undefined, coordinator));
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  const oldSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  const oldState = process.env.LLV_STATE_DIR;
+  process.env.LLV_RUNTIME_HOST_SOCKET = socketPath;
+  process.env.LLV_STATE_DIR = path.join(dir, "state");
+  let service: SelfUpdateService | null = null;
+  try {
+    const a = "a".repeat(40);
+    const b = "b".repeat(40);
+    const revision = (sha: string): Revision => ({ sha, short: sha.slice(0, 7), version: "1", date: "" });
+    const clientKey = "lost-request";
+    const key = managedIdempotencyKey(a, clientKey);
+    const production = productionDeps();
+    fs.mkdirSync(production.dir, { recursive: true });
+    writeAuto(path.join(production.dir, "auto.json"), { ...initialAuto(), enabled: true,
+      managedPending: { target: revision(a), clientKey, at: new Date().toISOString() } });
+    fs.writeFileSync(path.join(production.dir, "state.json"), JSON.stringify({ slice: {
+      ...initialCheck(), installed: revision("c".repeat(40)), available: revision(b),
+      check: { ...idleCheck(), state: "update-available", relation: "behind", at: new Date().toISOString() },
+    }, update: null }));
+
+    const disconnected = net.createConnection(socketPath);
+    await new Promise<void>((resolve) => disconnected.once("connect", resolve));
+    disconnected.write(JSON.stringify({ id: "lost-reply", method: "viewer-deployment-request",
+      params: { revision: a, idempotencyKey: key } }) + "\n");
+    while (!adapter.calls.includes(`resolve:${a}`)) await Bun.sleep(1);
+    disconnected.destroy();
+
+    let lookupStarted!: () => void;
+    const lookupEntered = new Promise<void>((resolve) => { lookupStarted = resolve; });
+    const deps = { ...production,
+      findDeploymentByIdempotencyKey: (idempotencyKey: string) => {
+        lookupStarted();
+        return production.findDeploymentByIdempotencyKey(idempotencyKey);
+      },
+      mode: async () => ({ mode: "managed" as const, reason: null, record: null }),
+      releaseTarget: () => ({ revision: "c".repeat(40) }),
+      hostHealth: async () => null,
+      prepareCheckRepo: async () => dir,
+      green: { read: async () => ({ state: "red" as const }) },
+      quiet: { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: () => [], presence: () => [], memoryAvailableMb: () => 8_192 },
+    } as unknown as ServiceDeps;
+    service = new SelfUpdateService(deps);
+    const tick = service.autoTick();
+    await lookupEntered;
+    expect(await Promise.race([tick.then(() => true), Bun.sleep(10).then(() => false)])).toBe(false);
+    expect(readAuto(path.join(production.dir, "auto.json")).managedPending?.clientKey).toBe(clientKey);
+    expect(store.viewerDeploymentByIdempotencyKey(key)).toBeNull();
+
+    releaseResolution();
+    await tick;
+    const accepted = store.viewerDeploymentByIdempotencyKey(key);
+    expect(accepted).not.toBeNull();
+    await coordinator.waitForDeployment(accepted!.deploymentId);
+    await service.refreshManaged();
+    expect(readAuto(path.join(production.dir, "auto.json"))).toMatchObject({ enabled: false, managedPending: null,
+      off: { target: a, reason: "late build failed" } });
+    expect(readManagedRecord(path.join(production.dir, "managed.json"))).toMatchObject({ idempotencyKey: key, phase: "failed" });
+    expect(store.listViewerDeployments().deployments).toHaveLength(1);
+  } finally {
+    service?.stop();
+    releaseResolution();
+    if (oldSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+    else process.env.LLV_RUNTIME_HOST_SOCKET = oldSocket;
+    if (oldState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = oldState;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     store.close();
   }
 });
