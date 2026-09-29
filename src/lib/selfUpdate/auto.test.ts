@@ -343,6 +343,23 @@ test("a 24-hour wait records one notice while still allowing future quiet probes
   service.stop();
 });
 
+test("a checkout target change preserves the cumulative wait and its recorded notice", async () => {
+  const h = scenario();
+  const file = join(h.dir, "auto.json");
+  const waitingSince = "2025-12-30T23:00:00.000Z";
+  const noticeAt = "2025-12-31T23:30:00.000Z";
+  writeAuto(file, { ...readAuto(file), waitingSince, waitingTarget: OLD, noticeAt });
+  h.setTurn(true);
+  const service = h.service();
+  const snapshot = await service.snapshot();
+  const waitForAutoQuiet = (service as unknown as {
+    waitForAutoQuiet(snapshot: Snapshot, target: string, now: number): Promise<boolean>;
+  }).waitForAutoQuiet.bind(service);
+  await waitForAutoQuiet(snapshot, TARGET, Date.parse("2026-01-01T00:00:00.000Z"));
+  expect(readAuto(file)).toMatchObject({ waitingSince, waitingTarget: TARGET, noticeAt });
+  service.stop();
+});
+
 test("an untaken request times out, is removed, and disables auto-apply", async () => {
   const h = scenario();
   const service = h.service();

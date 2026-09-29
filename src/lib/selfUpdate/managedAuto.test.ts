@@ -215,6 +215,47 @@ test("an uncertain host response retries after restart with the saved idempotenc
   service.stop();
 });
 
+test.each(["succeeded", "rolled-back"] as const)("an accepted request with a lost reply is reconciled before current policy for %s", async (phase) => {
+  const h = scenario();
+  const request = h.deps.requestDeployment;
+  let loseReply = true;
+  h.deps.requestDeployment = async (body) => {
+    const receipt = await request(body);
+    if (loseReply) {
+      loseReply = false;
+      throw new RuntimeHostUnavailableError("runtime host request timed out");
+    }
+    return receipt;
+  };
+  let service = h.service();
+  await service.autoTick();
+  h.advance(60_000);
+  await service.autoTick();
+  expect(h.requests).toHaveLength(1);
+  expect(readAuto(join(h.dir, "auto.json")).managedPending).not.toBeNull();
+  service.stop();
+
+  // Current admission policy now blocks new requests. Reconciliation must
+  // still replay the saved key to recover the host's already accepted receipt.
+  h.setGreen("red");
+  h.setTurns(1);
+  service = h.service();
+  await service.autoTick();
+  expect(h.requests).toHaveLength(2);
+  expect(h.requests[1]?.idempotencyKey).toBe(h.requests[0]?.idempotencyKey);
+  expect(readManagedRecord(join(h.dir, "managed.json"))?.trigger).toBe("auto");
+
+  h.finish(phase, phase === "succeeded" ? null : "candidate health failed");
+  await service.refreshManaged();
+  if (phase === "succeeded") {
+    expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ enabled: true, managedPending: null, off: null });
+  } else {
+    expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ enabled: false, managedPending: null,
+      off: { target: TARGET, reason: "candidate health failed" } });
+  }
+  service.stop();
+});
+
 test.each(["turn", "stage"] as const)("a running %s that starts during the final mode read blocks managed admission", async (work) => {
   const h = scenario();
   const service = h.service();
@@ -309,14 +350,11 @@ test("a saved failure settles after restart even while the host cannot answer", 
   service.stop();
 });
 
-test("an interrupted request replays its persisted idempotency key", async () => {
+test("an interrupted request immediately replays its persisted idempotency key", async () => {
   const h = scenario();
   const pending = { target: revision(TARGET), clientKey: "saved-key", at: new Date(Date.parse("2026-01-01T00:00:00Z")).toISOString() };
   writeAuto(join(h.dir, "auto.json"), { ...initialAuto(), enabled: true, managedPending: pending });
   const service = h.service();
-  await service.autoTick();
-  expect(h.requests).toHaveLength(0);
-  h.advance(60_000);
   await service.autoTick();
   expect(h.requests).toHaveLength(1);
   expect(h.requests[0]?.idempotencyKey).toBe(`self-update-${TARGET.slice(0, 12)}-saved-key`);

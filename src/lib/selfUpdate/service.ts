@@ -265,6 +265,16 @@ export class SelfUpdateService {
     // before it exited. Settle that durable result even if the host is away.
     if (this.auto.managedPending && this.managed && !managedActive(this.managed)) this.finishManagedAuto();
     if (!this.auto.enabled && !this.auto.pending && !this.auto.managedPending) return;
+    // A transport failure can hide an accepted host request. Replay its
+    // durable idempotency key before resolving policy for any new target.
+    // The host returns the original receipt for an accepted request, while
+    // an unaccepted intent remains safe to retry under the same key.
+    if (this.auto.enabled && this.auto.managedPending && !this.managed) {
+      const pending = this.auto.managedPending;
+      const result = await this.deploy(pending.target, pending.clientKey, "auto");
+      if (!result.ok && !result.deliveryUncertain) this.finishManagedAutoRefusal(pending.target, result.detail ?? result.error);
+      return;
+    }
     const decision = await this.decide();
     if (decision.mode === "managed") { await this.runManagedAutoTick(decision); return; }
     if (decision.mode !== "checkout" || !decision.record) return;
@@ -400,13 +410,15 @@ export class SelfUpdateService {
     return green;
   }
 
-  private async waitForAutoQuiet(snapshot: Snapshot, target: string, now: number): Promise<boolean> {
+  private async waitForAutoQuiet(snapshot: Snapshot, target: string, now: number, resetOnTargetChange = false): Promise<boolean> {
     const at = new Date(now).toISOString();
     if (!this.auto.waitingSince) {
       this.auto = { ...this.auto, waitingSince: at, waitingTarget: target };
       this.saveAuto();
     } else if (this.auto.waitingTarget && this.auto.waitingTarget !== target) {
-      this.auto = { ...this.auto, waitingSince: at, waitingTarget: target, quietSince: null, noticeAt: null };
+      this.auto = resetOnTargetChange
+        ? { ...this.auto, waitingSince: at, waitingTarget: target, quietSince: null, noticeAt: null }
+        : { ...this.auto, waitingTarget: target, quietSince: null };
       this.saveAuto();
     } else if (!this.auto.waitingTarget) {
       this.auto = { ...this.auto, waitingTarget: target };
@@ -484,7 +496,7 @@ export class SelfUpdateService {
     const repo = await this.deps.prepareCheckRepo();
     let green = await this.autoGreen(target.sha, repo, now);
     if (green.state !== "green") return;
-    if (!await this.waitForAutoQuiet(snapshot, target.sha, now)) return;
+    if (!await this.waitForAutoQuiet(snapshot, target.sha, now, true)) return;
     green = await this.refreshGreen(target.sha, repo, green);
     if (green.state !== "green") { this.auto = { ...this.auto, quietSince: null }; this.saveAuto(); return; }
     const finalSnapshot = await this.snapshot();
