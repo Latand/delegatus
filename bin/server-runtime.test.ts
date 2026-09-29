@@ -167,7 +167,9 @@ test("the CLI rejects a ready runtime socket owned by another process", async ()
     HOME: path.join(sandbox, "home"),
     XDG_CONFIG_HOME: path.join(sandbox, "config"),
     LLV_STATE_DIR: stateDirectory,
-    TMPDIR: path.join(sandbox, "tmp"),
+    // The child's temp root must contain its config and home as well: CI's
+    // temp directory lives outside /tmp, so a nested root excludes siblings.
+    TMPDIR: sandbox,
     LLV_LANG: "en",
     /* The CLI reports a socket owned by somebody else only while the host it
        spawned is still alive: its readiness loop checks the child's exit
@@ -184,7 +186,9 @@ test("the CLI rejects a ready runtime socket owned by another process", async ()
   const incumbent = cliRuntimeHostConfig(packageRoot, { env: environment, home: environment.HOME });
   const socketPath = incumbent.socketPath;
   const fence = new RuntimeHostFence(incumbent.fencePath);
-  const listener = net.createServer((socket) => socket.end());
+  // The CLI destroys its probe after connect. Keep the accepted peer open
+  // until then so an immediate end cannot race the client's connect event.
+  const listener = net.createServer((socket) => socket.resume());
   fs.mkdirSync(environment.HOME!, { recursive: true });
   fs.mkdirSync(environment.XDG_CONFIG_HOME!, { recursive: true });
   fs.mkdirSync(environment.TMPDIR!, { recursive: true });

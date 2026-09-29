@@ -41,7 +41,11 @@ const fence = new RuntimeHostFence(fenceFilename, () => {
 let server: net.Server | null = null;
 try {
   fence.acquire();
-  server = net.createServer((socket) => socket.end(contender));
+  // Wait for the caller's connected signal before ending the response. Bun's
+  // net client can report ECONNREFUSED if its peer ends during connect setup.
+  server = net.createServer((socket) => {
+    socket.once("data", () => socket.end(contender));
+  });
   await new Promise<void>((resolve, reject) => {
     server!.once("error", reject);
     server!.listen(listenerFilename, resolve);

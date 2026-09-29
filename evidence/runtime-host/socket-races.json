@@ -1,0 +1,112 @@
+{
+  "platform": "Linux x64",
+  "baseline": "857d34dece1ba898213080923f75cfce95ebfe1d",
+  "load": {
+    "workers": 4,
+    "cpu_affinity": [
+      0,
+      1
+    ]
+  },
+  "isolation": "Each test process has a fresh mktemp-equivalent /tmp root for LLV_STATE_DIR, XDG_CONFIG_HOME and TMPDIR. CI-path cases use a worktree symlink into that root.",
+  "repetitions": [
+    {
+      "phase": "before",
+      "bun": "1.3.3",
+      "seconds": 79.27,
+      "summary": {
+        "fence": {
+          "runs": 200,
+          "failures": 72
+        },
+        "ready": {
+          "runs": 200,
+          "failures": 0
+        }
+      }
+    },
+    {
+      "phase": "after",
+      "bun": "1.3.3",
+      "seconds": 191.53,
+      "summary": {
+        "fence": {
+          "runs": 200,
+          "failures": 0
+        },
+        "ready": {
+          "runs": 200,
+          "failures": 0
+        }
+      }
+    },
+    {
+      "phase": "before-ci-path",
+      "bun": "1.3.3",
+      "seconds": 76.85,
+      "summary": {
+        "ready": {
+          "runs": 200,
+          "failures": 0
+        }
+      }
+    },
+    {
+      "phase": "after-ci-path",
+      "bun": "1.3.3",
+      "seconds": 142.59,
+      "summary": {
+        "ready": {
+          "runs": 200,
+          "failures": 0
+        }
+      }
+    },
+    {
+      "phase": "baseline-legacy",
+      "bun": "1.4.0",
+      "seconds": 130.84,
+      "summary": {
+        "legacy": {
+          "runs": 200,
+          "failures": 0
+        }
+      }
+    },
+    {
+      "phase": "before-legacy",
+      "bun": "1.4.0",
+      "seconds": 265.49,
+      "summary": {
+        "legacy": {
+          "runs": 200,
+          "failures": 200
+        }
+      }
+    },
+    {
+      "phase": "after-legacy",
+      "bun": "1.4.0",
+      "seconds": 60.42,
+      "summary": {
+        "legacy": {
+          "runs": 200,
+          "failures": 0
+        }
+      }
+    }
+  ],
+  "inbox_admission": {
+    "before": {
+      "runs": 20,
+      "failures": 20,
+      "guard_refusals": 20
+    },
+    "after": {
+      "runs": 20,
+      "failures": 0,
+      "guard_refusals": 0
+    }
+  },
+  "intermediate_legacy_note": "before-legacy is an intermediate reader-only handshake conversion, with the old immediate-ending legacy fixture. Unread probe data held teardown open. baseline-legacy uses the original test and fixture; after-legacy uses the final coordinated handshake."
+}

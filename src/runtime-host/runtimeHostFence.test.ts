@@ -25,6 +25,7 @@ async function readListener(socketPath: string): Promise<string> {
     const socket = net.createConnection(socketPath);
     let response = "";
     socket.setEncoding("utf8");
+    socket.once("connect", () => socket.write("probe"));
     socket.on("data", (chunk) => { response += chunk; });
     socket.once("end", () => resolve(response));
     socket.once("error", reject);
@@ -36,22 +37,17 @@ async function readListener(socketPath: string): Promise<string> {
    stat. Connecting is the stronger question anyway — a leftover socket inode
    that nothing listens on would pass an existence check.
 
-   A single refused connection does not settle it. A listener that has bound but
-   whose accept has not been scheduled yet refuses transiently, so each endpoint
-   is asked repeatedly for a short while; an endpoint nobody is serving refuses
-   every time and still answers nothing. */
+   The outcome barrier is published after listen completes. Each live fixture
+   waits for our connected probe before ending its response, so one connection
+   settles whether it serves; an absent endpoint refuses that connection. */
 async function answeringListeners(endpoints: string[]): Promise<string[]> {
   const answers: string[] = [];
   for (const endpoint of endpoints) {
-    const deadline = Date.now() + 2_000;
-    for (;;) {
-      try {
-        answers.push(await readListener(endpoint));
-        break;
-      } catch {
-        if (Date.now() >= deadline) break;
-        await Bun.sleep(50);
-      }
+    try {
+      answers.push(await readListener(endpoint));
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ECONNREFUSED") throw error;
     }
   }
   return answers;

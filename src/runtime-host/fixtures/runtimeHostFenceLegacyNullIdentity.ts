@@ -25,7 +25,9 @@ if (role === "owner") {
     startIdentity: "legacy-owner-start",
   }), { mode: 0o600 });
   const listenerFilename = testEndpoint(sandbox, "listener-owner");
-  const server = net.createServer((socket) => socket.end("owner"));
+  const server = net.createServer((socket) => {
+    socket.once("data", () => socket.end("owner"));
+  });
   try {
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
@@ -45,7 +47,9 @@ if (role === "owner") {
   try {
     fence.acquire();
     const listenerFilename = testEndpoint(sandbox, "listener-contender");
-    server = net.createServer((socket) => socket.end("contender"));
+    server = net.createServer((socket) => {
+      socket.once("data", () => socket.end("contender"));
+    });
     await new Promise<void>((resolve, reject) => {
       server!.once("error", reject);
       server!.listen(listenerFilename, resolve);
