@@ -174,6 +174,13 @@ test("spawn role resolution injects the scaffold and requires deploy confirmatio
   expect(spawn.value.scaffold).toContain("Builder in tdd mode");
 });
 
+test("explicit spawn fields accept GPT-6.1-Sol at ultra", () => {
+  expect(resolveRole("builder", { mode: "plain" }, { engine: "codex", model: "gpt-6.1-sol", effort: "ultra" })).toMatchObject({
+    ok: true,
+    value: { config: { engine: "codex", model: "gpt-6.1-sol", effort: "ultra" } },
+  });
+});
+
 test("explicit spawn fields accept GPT-6-Sol at ultra and GPT-6-Luna up to max", () => {
   expect(resolveRole("builder", { mode: "plain" }, { engine: "codex", model: "gpt-6-sol", effort: "ultra" })).toMatchObject({
     ok: true,

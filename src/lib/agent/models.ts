@@ -9,6 +9,7 @@ export type AgentModelOption = {
 };
 
 export const CODEX_ASTRA_MODEL = "gpt-6-astra";
+export const CODEX_GPT61_SOL_MODEL = "gpt-6.1-sol";
 export const CODEX_GPT6_SOL_MODEL = "gpt-6-sol";
 export const CODEX_GPT6_LUNA_MODEL = "gpt-6-luna";
 export const CODEX_SOL_MODEL = "gpt-5.6-sol";
@@ -17,6 +18,7 @@ export const CODEX_LUNA_MODEL = "gpt-5.6-luna";
 
 const CODEX_IMAGE_INPUT_MODELS = new Set([
   CODEX_ASTRA_MODEL,
+  CODEX_GPT61_SOL_MODEL,
   CODEX_GPT6_SOL_MODEL,
   CODEX_GPT6_LUNA_MODEL,
   CODEX_SOL_MODEL,
@@ -61,6 +63,7 @@ export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly Agen
     // left in the list with no upgrade target. The GPT-6 Sol and Luna rows
     // follow Astra and mirror the uses of their 5.6 namesakes.
     { id: CODEX_ASTRA_MODEL, label: "GPT-6-Astra", shortLabel: "6-Astra", use: "review" },
+    { id: CODEX_GPT61_SOL_MODEL, label: "GPT-6.1-Sol", shortLabel: "6.1-Sol", use: "review" },
     { id: CODEX_GPT6_SOL_MODEL, label: "GPT-6-Sol", shortLabel: "6-Sol", use: "review" },
     { id: CODEX_GPT6_LUNA_MODEL, label: "GPT-6-Luna", shortLabel: "6-Luna", use: "general" },
     { id: CODEX_SOL_MODEL, label: "GPT-5.6-Sol", shortLabel: "5.6-Sol", use: "review" },
