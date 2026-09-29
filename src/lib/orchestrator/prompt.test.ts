@@ -688,12 +688,15 @@ test("the role table tells the seat to size lanes, lists every variant and names
   });
   const table = orchestratorRoleTable(roles);
   const builderRow = table.split("\n").find((line) => line.startsWith("| builder |"))!;
-  expect(builderRow).toContain("size=trivial: claude/sonnet/high; domain=frontend: claude/claude-sonnet-5-5/high; domain=docs: claude/opus/medium; mode=apply-fixes: codex/gpt-6-luna/high; domain=frontend mode=apply-fixes: claude/sonnet/high; domain=docs mode=apply-fixes: claude/sonnet/high.");
+  /* Variants that share a runtime are listed once under it. */
+  expect(builderRow).toContain("size=trivial, domain=frontend, domain=docs, domain=frontend mode=apply-fixes, domain=docs mode=apply-fixes: claude/claude-sonnet-5-5/high; mode=apply-fixes: codex/gpt-6-luna/high.");
   const reviewerRow = table.split("\n").find((line) => line.startsWith("| reviewer |"))!;
   expect(reviewerRow).toContain("size=trivial: codex/gpt-6-luna/high.");
   expect(table).toContain("- Size each lane first. trivial (a few lines of UI, copy, one flag or label; your brief states the exact change and its acceptance): builder and reviewer size=trivial, one review round.");
   expect(table).toContain("design (options, architecture, proposals, issues from design work): an architect stage first");
-  expect(table).toContain("- size=trivial needs a brief written by a large model: Claude Opus or Fable, or a large Codex model. Sonnet and Haiku never run orchestrator, architect, reviewer or verifier work, and run a builder whose model you set by hand only at size=trivial, or as domain=frontend on an Opus brief.");
+  /* The Sonnet 5.5 / Opus 5.5 table (docs/design/model-sizing-tiers.md §1). */
+  expect(table).toContain("- Sonnet 5.5 for well-scoped build, fix, docs, verification, repeated work. Opus 5.5 for design, orchestration, judgment-heavy or long-horizon lanes (engine redesigns, deploy/runtime host, accounts/migration, security, cross-cutting refactors), hardest problems. Review backend on Codex, frontend on Opus.");
+  expect(table).toContain("- size=trivial and a hand-set Sonnet builder need a brief from a large model (Opus, Fable, large Codex). Sonnet never orchestrates, architects or reviews above size=trivial.");
   expect(table).toContain("- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, Opus review-loop.");
   /* §3 (a): the fix stage's params select its row. */
   expect(table).toContain("- Fix stages: builder mode=apply-fixes with the implementer's domain and size, on the builder row they select.");
@@ -703,7 +706,7 @@ test("the role table tells the seat to size lanes, lists every variant and names
   expect(table).toContain("which parks the lane: re-plan it.");
   expect(table).toContain("README, docs, public text: builder domain=docs.");
   expect(table).toContain("a runtimeLine (spawn_agent: runtime)");
-  expect(table).toContain("- Runtime overrides go on the stage beside role, never inside it. A reviewer stage is read-only by its role.");
+  expect(table).toContain("- Runtime overrides go on the stage, not in role. override-stage binds from the NEXT attempt.");
   expect(table).toContain("quote it with the size you chose and why");
   expect(table).toContain("builder:frontend (was claude/opus/xhigh); tell the operator");
   /* Delivery replaces the table up to the first blank line, so it carries none. */

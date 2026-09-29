@@ -494,7 +494,7 @@ test("an agent cannot rotate a seat onto Sonnet or Haiku; the operator can, and 
 
   const sonnet = await toolRotation({ clientRequestId: "rotate-sonnet-1", project: "proj-a", engine: "claude", model: "sonnet" });
   expect(sonnet.failed).toBe(true);
-  expect(sonnet.payload.error).toContain("orchestrator: Sonnet and Haiku do not run orchestrator");
+  expect(sonnet.payload.error).toContain("orchestrator: Sonnet does not run orchestrator");
   const haiku = await routeRotation("seat", { clientRequestId: "rotate-haiku-1", project: "proj-a", engine: "claude", model: "haiku" });
   expect(haiku.status).toBe(400);
   expect(haiku.body.code).toBe("sizing_refused");
@@ -530,7 +530,7 @@ test("an agent's create_orchestrator is refused at the seat route, and a create 
   const request = { project: "proj-a", mandate: "own the board", clientRequestId: "create-sonnet-2", cwd: "/workspace", engine: "claude", model: "sonnet" };
   const byAgent = await executeOrchestratorSeatRequest(request, deps, { kind: "agent", conversationId: BYSTANDER_ID, seatEpoch: null });
   expect(byAgent.status).toBe(400);
-  expect(byAgent.body.error).toContain("orchestrator: Sonnet and Haiku do not run orchestrator");
+  expect(byAgent.body.error).toContain("orchestrator: Sonnet does not run orchestrator");
   expect(spawns).toEqual([]);
 
   const byOperator = await executeOrchestratorSeatRequest(request, deps, { kind: "operator", conversationId: null, seatEpoch: null });
