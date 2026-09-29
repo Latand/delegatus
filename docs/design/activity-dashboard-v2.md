@@ -1017,8 +1017,7 @@ stretch.
 
 ## Options considered
 
-1. **Your column stacked by project in categorical hues** (the WakaTime
-   look). It answers "which project on which day" in the chart itself, at the
+1. **Your column stacked by project in categorical hues**. It answers "which project on which day" in the chart itself, at the
    cost of seven or more hues on a page whose complaint is noise; the long
    tail needs an "Other" band anyway, and the agents' teal then competes with
    a project hue. Chosen: two hues, with the per-day project split in the

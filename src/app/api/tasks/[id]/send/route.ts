@@ -17,7 +17,6 @@ import { assembleSendResults, type TaskSendTargetOutcome } from "@/lib/tasks/sen
 import { loadTasks, mutateTasks } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { ApiError } from "@/lib/types";
-import { recordDirectOperatorWakatimeActivity } from "@/lib/wakatime/operatorActivity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,7 +46,7 @@ interface TaskSendDependencies {
   listFiles: typeof listFiles;
   deliverConversationMessage: typeof deliverConversationMessage;
   mutateTasks: typeof mutateTasks;
-  recordOperatorActivity: typeof recordDirectOperatorWakatimeActivity;
+
   /** The activity dashboard's request ledger; never throws. */
   recordOperatorRequest?: typeof recordOperatorRequest;
 }
@@ -57,7 +56,7 @@ const productionDependencies: TaskSendDependencies = {
   listFiles,
   deliverConversationMessage,
   mutateTasks,
-  recordOperatorActivity: recordDirectOperatorWakatimeActivity,
+
   recordOperatorRequest,
 };
 
@@ -104,17 +103,6 @@ async function postTaskSend(
     return NextResponse.json({ error: "clientRequestId must be 8-128 URL-safe characters" }, { status: 400 });
   }
   if (targetEntries[0] && directOperatorActivityAuthority(req).ok) {
-    try {
-      dependencies.recordOperatorActivity({
-        ...(clientRequestId ? { idempotencyKey: `task-send:${clientRequestId}` } : {}),
-        resolvedAttribution: {
-          engine: targetEntries[0].engine === "claude" ? "claude" : "codex",
-          project: task.project,
-        },
-      });
-    } catch {
-      return NextResponse.json({ error: "direct operator activity could not be recorded" }, { status: 503 });
-    }
     /* One request, however many agents it fans out to. */
     dependencies.recordOperatorRequest?.(req, {
       kind: "message",

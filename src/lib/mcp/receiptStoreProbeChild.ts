@@ -121,7 +121,6 @@ async function runHttpHost(configPath: string): Promise<void> {
   setConversationHostDependenciesForTests({
     completedFileScan: async () => ({ snapshot: { files: [] } }) as never,
     readTranscriptHosts: async () => ({}) as never,
-    recordDirectOperatorWakatimeActivity: () => null,
     enqueueStructuredMessage: async (request) => {
       const registry = agentRegistry();
       const clientMessageId = request.clientMessageId?.trim() || `queue_${crypto.randomUUID()}`;

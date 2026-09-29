@@ -18,7 +18,6 @@ import {
   type VoiceUtteranceIdentity,
   type VoiceWorkIdentity,
 } from "./voiceViewBinding";
-import { recordDirectOperatorWakatimeActivity } from "@/lib/wakatime/operatorActivity";
 
 const MAX_SDP_BYTES = 512 * 1024;
 const MAX_SPEECH_BYTES = 8 * 1024;
@@ -64,13 +63,13 @@ export type RealtimeControlResult = {
 };
 
 interface RealtimeControlDependencies {
-  recordOperatorActivity: typeof recordDirectOperatorWakatimeActivity;
+
   /** The activity dashboard's request ledger; never throws. */
   recordOperatorRequest?: typeof recordOperatorRequest;
 }
 
 const REALTIME_CONTROL_DEPENDENCIES: RealtimeControlDependencies = {
-  recordOperatorActivity: recordDirectOperatorWakatimeActivity,
+
   recordOperatorRequest,
 };
 
@@ -207,7 +206,6 @@ export async function executeRealtimeControl(
     return { status: 400, body: { error: "body must be an object" } };
   }
   const request = body as Record<string, unknown>;
-
 
   const conversationId = typeof request.conversationId === "string" ? request.conversationId.trim() : "";
   if (!conversationId.startsWith("conversation_")) {
@@ -414,14 +412,6 @@ export async function executeRealtimeControl(
       }
       if (caller.kind !== "session" || caller.realtimeSessionId !== host.currentRealtimeSessionId?.()) {
         return { status: 403, body: { error: "operator activity requires the live realtime peer" } };
-      }
-      try {
-        dependencies.recordOperatorActivity({
-          conversationId,
-          idempotencyKey: `realtime:${operatorEventId}`,
-        });
-      } catch {
-        return { status: 503, body: { error: "direct operator activity could not be recorded" } };
       }
       const userAgent = authority.userAgent ?? null;
       dependencies.recordOperatorRequest?.(

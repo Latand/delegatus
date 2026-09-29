@@ -45,7 +45,6 @@ function dependencies(enqueued: unknown[], host: HostAnswer = "admit", known: re
         ? { outcome: "admitted", operationId: "op_earlier", deliveryId: "delivery_earlier", state: "delivered" }
         : { outcome: "not-executed" }),
     }) as never,
-    recordOperatorActivity: () => null,
     recordOperatorRequest: () => null,
     enqueue: async (input) => {
       enqueued.push(input);

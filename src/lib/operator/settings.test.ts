@@ -56,3 +56,13 @@ test("a malformed file reads as nothing set", () => {
   resetOperatorSettingsForTests();
   expect(operatorLocale()).toBeNull();
 });
+
+test("an older settings file can carry unknown keys", () => {
+  const locale = { value: "uk", source: "chosen", changedAt: "2026-09-25T10:00:00.000Z" } as const;
+  fs.writeFileSync(path.join(sandbox, "operator-settings.json"), JSON.stringify({
+    schemaVersion: 1,
+    locale,
+    legacyExtension: { enabled: true },
+  }));
+  expect(readOperatorSettings()).toEqual({ locale, timeZone: null });
+});

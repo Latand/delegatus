@@ -80,7 +80,6 @@ const admitted: { clientMessageId: string; text: string }[] = [];
 setConversationHostDependenciesForTests({
   collectImagePayloads: () => ({ images: [], error: null }),
   completedFileScan: async () => ({ snapshot: { files: [] } }) as never,
-  recordDirectOperatorWakatimeActivity: () => null,
   /* Stands in for the structured host, and reserves exactly what the real
      `enqueueStructuredMessage` reserves for a text-only send: the text the
      route handed it, under the caller's own key, with no digest of its own

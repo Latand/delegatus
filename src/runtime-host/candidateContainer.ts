@@ -1,9 +1,9 @@
+import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import fs from "node:fs";
 import path from "node:path";
 
 import { viewerBootGateKey } from "@/lib/access/phoneAccessBootGate";
 import type { ViewerReleaseIdentity } from "@/lib/runtime/contracts";
-import { WAKATIME_CREDENTIAL_ENV, withoutWakatimeCredential } from "@/lib/wakatime/credential";
 
 export interface ViewerComposeVolume {
   type: "bind";
@@ -84,14 +84,14 @@ function assertCoveredKeys(record: Record<string, unknown>, supported: Set<strin
   if (uncovered.length > 0) throw new Error(`${label} has uncovered fields: ${uncovered.sort().join(", ")}`);
 }
 
-export function viewerComposeSnapshotWithoutWakatimeCredential(configJson: string): string {
+export function viewerComposeSnapshotWithoutUnsupportedApiCredentials(configJson: string): string {
   const config = objectValue(JSON.parse(configJson), "Compose config");
   const services = objectValue(config.services, "Compose services");
   for (const [name, value] of Object.entries(services)) {
     const service = objectValue(value, `Compose service ${name}`);
     if (service.environment === undefined) continue;
     const environment = objectValue(service.environment, `Compose service ${name} environment`);
-    delete environment[WAKATIME_CREDENTIAL_ENV];
+    service.environment = withoutUnsupportedApiCredentials(environment as Record<string, string | undefined>);
   }
   return JSON.stringify(config);
 }
@@ -198,7 +198,7 @@ export function viewerCandidateDockerArgs(
 ): string[] {
   const endpoint = new URL(candidate.endpoint);
   const registryBackendMode = viewerRegistryBackendMode(service);
-  const environment = withoutWakatimeCredential({
+  const environment = withoutUnsupportedApiCredentials({
     ...service.environment,
     [AGENT_REGISTRY_SQLITE_ENV]: registryBackendMode,
     PORT: endpoint.port,

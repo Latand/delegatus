@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { ChildProcess } from "node:child_process";
 
 import { statePath } from "@/lib/configDir";
+import { discardUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { redactBounded } from "@/lib/monitor/redact";
 import { RuntimeHostUnavailableError } from "@/lib/runtime/client";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
@@ -22,11 +22,6 @@ import { initializeStateCollections, markStateSqliteCutoverReady } from "@/lib/s
 import { openStateMutationActivation } from "@/lib/state/stateMutationBarrier";
 import { markStructuredHostStartupFailed, markStructuredHostStartupReady } from "@/lib/runtime/startupStatus";
 import { StructuredRuntimeRequirementError } from "@/lib/proc/darwinIdentity";
-import {
-  discardWakatimeEnvironmentCredential,
-  withoutWakatimeCredential,
-} from "@/lib/wakatime/credential";
-import { wakatimeIntegrationEnabled } from "@/lib/wakatime/activation";
 import { startupDiagnosticsQuiet } from "@/lib/startupDiagnostics";
 
 /*
@@ -42,12 +37,6 @@ import { startupDiagnosticsQuiet } from "@/lib/startupDiagnostics";
 const RELEASE_ACTIVATION_POLL_MS = 250;
 const HOT_STATE_CUTOVER_STABLE_POLLS = 3;
 const HOT_STATE_CUTOVER_MAX_POLLS = 12;
-const WAKATIME_WORKER_RESTART_MS = 1_000;
-const wakatimeWorkerStore = globalThis as typeof globalThis & {
-  __llvWakatimeWorker?: ChildProcess;
-  __llvWakatimeWorkerRestart?: ReturnType<typeof setTimeout>;
-};
-
 interface ActivationTimer {
   unref?(): unknown;
 }
@@ -119,7 +108,6 @@ interface CurrentReleaseControllerLoaders {
 interface ViewerRuntimeActivationSteps {
   initializeOperatorCapability: () => Promise<void>;
   runIdentityMigration?: () => Promise<void> | void;
-  startWakatime: () => Promise<void>;
   startStructuredHosts: (() => void) | null;
   startControllers: () => Promise<void>;
   publishHotStateActivation: () => void;
@@ -575,19 +563,6 @@ export async function initializeOperatorSpawnCapabilityAtStartup(
   log(`[viewer] Open http://127.0.0.1:${port}.`);
 }
 
-export async function startWakatimeIntegrationIfEnabled(
-  env: Readonly<Record<string, string | undefined>> = process.env,
-  start: () => Promise<void> = startWakatimeWorker,
-  log: (event: string, fields: Readonly<Record<string, never>>) => void = (event, fields) => console.error(event, fields),
-): Promise<void> {
-  if (!wakatimeIntegrationEnabled(env)) return;
-  try {
-    await start();
-  } catch {
-    log("[wakatime] startup_failed", {});
-  }
-}
-
 export function runIdentityWaveMigrationWithoutBlockingStartup(
   run: () => unknown,
   log: (...args: unknown[]) => void = console.error,
@@ -616,52 +591,6 @@ export function runIdentityWaveMigrationWithoutBlockingStartup(
     }
   };
   attempt();
-}
-
-async function startWakatimeWorker(): Promise<void> {
-  if (wakatimeWorkerStore.__llvWakatimeWorker) return;
-  const cwd = process.cwd();
-  const source = path.join(cwd, "src/lib/wakatimeSync.worker.ts");
-  const bundled = path.join(cwd, ".next/server/wakatime-sync-worker.js");
-  const bunContainer = "/usr/local/bin/bun-container";
-  const launch = fs.existsSync(source) && fs.existsSync(bunContainer)
-    ? { executable: bunContainer, workerPath: source }
-    : fs.existsSync(bundled)
-      ? {
-          executable: process.versions.bun ? process.execPath : (process.env.LLV_BUN_EXECUTABLE || "bun"),
-          workerPath: bundled,
-        }
-      : { executable: process.execPath, workerPath: source };
-  const { spawn } = await import("node:child_process");
-  const useNice = fs.existsSync("/usr/bin/nice");
-  const child = spawn(useNice ? "/usr/bin/nice" : launch.executable, [
-    ...(useNice ? ["-n", "10", launch.executable] : []),
-    launch.workerPath,
-  ], {
-    cwd,
-    stdio: ["ignore", "inherit", "inherit"],
-    env: {
-      ...withoutWakatimeCredential(process.env),
-      LLV_WAKATIME_SYNC_WORKER: "1",
-    },
-  });
-  wakatimeWorkerStore.__llvWakatimeWorker = child;
-  child.once("error", (error) => {
-    console.error("[wakatime] worker_start_failed", { message: error.message });
-  });
-  child.once("exit", (code, signal) => {
-    if (wakatimeWorkerStore.__llvWakatimeWorker === child) {
-      wakatimeWorkerStore.__llvWakatimeWorker = undefined;
-    }
-    if (wakatimeWorkerStore.__llvWakatimeWorkerRestart) return;
-    console.error("[wakatime] worker_exited", { code, signal });
-    const timer = setTimeout(() => {
-      wakatimeWorkerStore.__llvWakatimeWorkerRestart = undefined;
-      void startWakatimeWorker();
-    }, WAKATIME_WORKER_RESTART_MS);
-    timer.unref?.();
-    wakatimeWorkerStore.__llvWakatimeWorkerRestart = timer;
-  });
 }
 
 export type StructuredHostStartupErrorCategory =
@@ -868,7 +797,6 @@ export async function completeViewerRuntimeActivation(
 ): Promise<void> {
   await steps.initializeOperatorCapability();
   await steps.runIdentityMigration?.();
-  await steps.startWakatime();
   steps.publishHotStateActivation();
   steps.startStructuredHosts?.();
   await steps.startControllers();
@@ -928,7 +856,8 @@ export async function installSpawnCapabilityResolverAtStartup(): Promise<void> {
 }
 
 export async function registerViewerRuntime(): Promise<void> {
-  discardWakatimeEnvironmentCredential();
+  discardUnsupportedApiCredentials();
+
   await installSpawnCapabilityResolverAtStartup();
   await gatePhoneAccessBeforeServing();
   const isCurrent = () => viewerReleaseOwnsTraffic();
@@ -973,7 +902,6 @@ export async function registerViewerRuntime(): Promise<void> {
         const { runIdentityWaveMigrationAtStartup } = await import("@/lib/agent/identityWaveStartup");
         runIdentityWaveMigrationWithoutBlockingStartup(runIdentityWaveMigrationAtStartup);
       },
-      startWakatime: startWakatimeIntegrationIfEnabled,
       startStructuredHosts: structuredHostsEnabled()
         ? () => {
             startup = (async () => {

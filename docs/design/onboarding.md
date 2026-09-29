@@ -578,8 +578,7 @@ it was:
    unapply it when the command times out, so a gate written only after a
    verified publish leaves that whole window open to the tailnet.
 3. **Publish in the tailnet.** Spawn `tailscale serve --bg <viewerPort>`
-   through `viewerChildProcessOptions` (the credential isolation
-   `tailscale-credential-isolation.test.ts` pins) and wait for it to exit,
+   through `viewerChildProcessOptions` and wait for it to exit,
    bounded 10 s. Stderr matching the operator pattern of `tailscale.mjs:237`
    is `OPERATOR_RIGHTS`; any other non-zero exit is `SERVE_FAILED` with the
    last stderr line; no exit in time is `TIMEOUT`. With `--bg` the mapping is
@@ -1569,8 +1568,7 @@ green:
 
 Fence:
 
-- `bin/cli.mjs`, `bin/tailscale.mjs`, `bin/tailscale-credential-isolation.test.ts`
-  (one case for the background spawn), `bin/cli.exposure.integration.test.ts`
+- `bin/cli.mjs`, `bin/tailscale.mjs`, `bin/cli.exposure.integration.test.ts`
 - `src/app/api/access/route.ts`, new `src/app/api/access/phone/route.ts`,
   their tests
 - new `src/app/api/transcribe/key/route.ts` and test; `src/lib/transcribeBackend.ts`
