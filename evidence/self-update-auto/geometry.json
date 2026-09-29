@@ -1,5 +1,5 @@
 {
-  "commit": "d4044c86a0493107f3588f461d3b795c9337d2f4",
+  "commit": "7b16c81ca2540dc2710f8fd07b37b586798cf3e2",
   "frames": {
     "1440-en-off": {
       "overflow": 0,
@@ -54,7 +54,7 @@
         "height": 96
       },
       "controlVisible": true,
-      "text": "Automatic updates\nTurn on\n\nA managed install uses its deployment flow."
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
     },
     "1440-uk-off": {
       "overflow": 0,
@@ -109,7 +109,7 @@
         "height": 96
       },
       "controlVisible": true,
-      "text": "Автооновлення\nУвімкнути\n\nКерована інсталяція використовує свій механізм розгортання."
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час розгортання."
     },
     "390-en-off": {
       "overflow": 0,
@@ -164,7 +164,7 @@
         "height": 131.5
       },
       "controlVisible": true,
-      "text": "Automatic updates\nTurn on\n\nA managed install uses its deployment flow."
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
     },
     "390-uk-off": {
       "overflow": 0,
@@ -216,10 +216,10 @@
         "x": 16,
         "y": 251,
         "width": 358,
-        "height": 149.5
+        "height": 131.5
       },
       "controlVisible": true,
-      "text": "Автооновлення\nУвімкнути\n\nКерована інсталяція використовує свій механізм розгортання."
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час розгортання."
     }
   },
   "failures": []
