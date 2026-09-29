@@ -52,9 +52,8 @@ export interface BoardReportDelivery {
   text: string;
   images: [];
   origin: MessageOrigin;
-  /** Lands after the running turn (the successor reading its handoff) and
-      never interrupts it; seat wakes wait for idle the same way. */
-  policy: "queue";
+  /** Joins a running turn when steering is supported; otherwise waits for idle. */
+  policy: "steer-or-queue";
 }
 
 export function boardReportDelivery(seat: BoardReportSeat, text: string): BoardReportDelivery {
@@ -66,7 +65,7 @@ export function boardReportDelivery(seat: BoardReportSeat, text: string): BoardR
     text,
     images: [],
     origin: delegatusMessageOrigin(BOARD_REPORT_ORIGIN_ROLE, seat.project),
-    policy: "queue",
+    policy: "steer-or-queue",
   };
 }
 

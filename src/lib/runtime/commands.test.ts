@@ -156,3 +156,12 @@ test("runtime command parsing admits image-only content with a canonical digest"
     idempotencyKey: "send-images-invalid",
   })).toThrow("images are invalid");
 });
+
+
+test("steer-or-queue parses and refuses any turn fence", () => {
+  const request = { conversationId: "conversation_fixture", idempotencyKey: "steer-first", text: "agent note", policy: "steer-or-queue" };
+  expect(parseRuntimeCommand("send", request)).toMatchObject({policy: "steer-or-queue"});
+  for (const turnId of [null, "turn-fixture"]) {
+    expect(() => parseRuntimeCommand("send", {...request, turnId})).toThrow("takes no fence");
+  }
+});

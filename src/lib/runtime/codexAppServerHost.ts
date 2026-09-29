@@ -1259,6 +1259,12 @@ export class CodexAppServerHost implements EngineHost {
     text: string | null;
     contentDigest: string | null;
   }>();
+  private readonly pendingSteers = new Map<string, {
+    entry: QueueEntry;
+    turnId: string;
+    promise: Promise<"landed" | "dropped" | "unknown">;
+    resolve(value: "landed" | "dropped" | "unknown"): void;
+  }>();
   private readonly pendingDeliveries = new Map<string, PendingDelivery>();
   private readonly pendingCompactions = new Map<string, PendingCompaction>();
   private readonly realtimeDeliveries = new Map<string, RealtimeDeliveryState>();
@@ -1699,13 +1705,8 @@ export class CodexAppServerHost implements EngineHost {
     return [...this.attentions.values()].some(attention => attention.isBlocking !== false);
   }
 
-  async send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence): Promise<DeliveryReceipt> {
-    if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
-      return { outcome: "rejected", reason: "dead-host" };
-    }
-    const normalized = normalizeQueueEntry(entry);
+  private prepareDelivery(normalized: ReturnType<typeof normalizeQueueEntry>): QueueEntry {
     if (normalized.content.images.length) {
-      if (this.imageInputSupport === "unknown") await this.refreshImageInputSupport();
       if (this.imageInputSupport === "unsupported") {
         throw new Error("The selected Codex model does not advertise image input through app-server.");
       }
@@ -1713,7 +1714,7 @@ export class CodexAppServerHost implements EngineHost {
         throw new Error("Codex image capability discovery is temporarily unavailable; retry shortly.");
       }
     }
-    entry = {
+    const entry: QueueEntry = {
       id: normalized.id,
       text: normalized.content.text,
       content: normalized.content,
@@ -1724,6 +1725,76 @@ export class CodexAppServerHost implements EngineHost {
       ...(normalized.origin ? { origin: normalized.origin } : {}),
     };
     if (!entry.id) throw new Error("queue entry id is required");
+    return entry;
+  }
+
+  async steer(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence) {
+    if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
+      throw new StructuredSendRefusedError("dead-host");
+    }
+    const normalized = normalizeQueueEntry(entry);
+    if (normalized.content.images.length && this.imageInputSupport === "unknown") await this.refreshImageInputSupport();
+    entry = this.prepareDelivery(normalized);
+    const confirmed = await this.confirmedDelivery(entry, firstDispatch?.firstDispatch === true
+      && firstDispatch.operationId === entry.id && Boolean(firstDispatch.writerClaim));
+    if (confirmed && "turnId" in confirmed) return { turnId: confirmed.turnId, observe: async () => "landed" as const };
+    const currentTurn = this.activeTurnId;
+    if (!currentTurn) throw new StructuredSendRefusedError("no active turn to steer");
+    if (entry.expectedTurnId !== undefined && entry.expectedTurnId !== currentTurn) {
+      throw new StructuredSendRefusedError("stale-turn");
+    }
+    if (this.hasBlockingAttention()) throw new StructuredSendRefusedError("blocking attention must be answered before steering");
+    const input = [
+      ...normalized.content.images.map(image => ({ type: "localImage", path: this.resolveImagePath(image) })),
+      { type: "text", text: encodeCodexStructuredUserText(normalized.content.text,
+        normalized.content.images.length > 0 ? normalized.contentDigest : undefined,
+        normalized.selectedContext, normalized.origin, codexDeliveryDedup(normalized.id)) },
+    ];
+    const result = await this.rpc("turn/steer", {
+      threadId: this.identity.threadId, expectedTurnId: currentTurn, input, clientUserMessageId: entry.id,
+    });
+    const turnId = turnIdFromResult(result, "turn/steer");
+    const observed = this.confirmedDeliveries.get(entry.id);
+    if (observed) {
+      this.confirmedReceipt(entry, observed);
+      observed.receipt = { outcome: "steered", turnId };
+      return { turnId, observe: async () => "landed" as const };
+    }
+    let resolve!: (value: "landed" | "dropped" | "unknown") => void;
+    const promise = new Promise<"landed" | "dropped" | "unknown">(r => { resolve = r; });
+    this.pendingSteers.set(entry.id, { entry, turnId, promise, resolve });
+    // Notifications may have preceded the acknowledgement on the same stream.
+    if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
+      this.pendingSteers.delete(entry.id);
+      resolve("unknown");
+    } else if (this.terminatedTurnIds.has(turnId)) {
+      void this.settleEndedSteers(turnId);
+    }
+    return { turnId, observe: () => promise };
+  }
+
+  private async settleEndedSteers(turnId: string): Promise<void> {
+    for (const [id, pending] of this.pendingSteers) {
+      if (pending.turnId !== turnId) continue;
+      let outcome: "landed" | "dropped" | "unknown" = "unknown";
+      try {
+        if (!this.dead && !this.releasing && !this.released && this.writerFenceAllowsActuation()) {
+          outcome = await rolloutConfirmedDelivery(this.identity.path, pending.entry) ? "landed" : "dropped";
+        }
+      } catch { /* An unreadable history proves neither delivery nor absence. */ }
+      if (this.pendingSteers.get(id) !== pending) continue;
+      this.pendingSteers.delete(id);
+      pending.resolve(outcome);
+    }
+  }
+
+  async send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence): Promise<DeliveryReceipt> {
+    if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
+      return { outcome: "rejected", reason: "dead-host" };
+    }
+    const normalized = normalizeQueueEntry(entry);
+    if (normalized.content.images.length && this.imageInputSupport === "unknown") await this.refreshImageInputSupport();
+    entry = this.prepareDelivery(normalized);
     const confirmed = await this.confirmedDelivery(entry, firstDispatch?.firstDispatch === true
       && firstDispatch.operationId === entry.id && Boolean(firstDispatch.writerClaim));
     if (confirmed) return confirmed;
@@ -2663,6 +2734,7 @@ export class CodexAppServerHost implements EngineHost {
   }
 
   async health(): Promise<HostState> {
+    if (this.pendingSteers.size && !this.writerFenceAllowsActuation()) this.settleUnverifiedSteers();
     return this.currentState();
   }
 
@@ -2939,6 +3011,7 @@ export class CodexAppServerHost implements EngineHost {
       subscriber.wake?.();
     }
     this.notifyStateListeners();
+    if (event.kind === "turn-ended") void this.settleEndedSteers(event.turnId);
   }
 
   /** Bounded terminal-turn memory. The oldest is forgotten first, and forgetting
@@ -3219,13 +3292,19 @@ export class CodexAppServerHost implements EngineHost {
     const text = decoded?.text ?? null;
     const contentDigest = decoded?.contentDigest ?? null;
     const previous = this.confirmedDeliveries.get(clientId);
+    const steer = this.pendingSteers.get(clientId);
     const pending = this.pendingDeliveries.get(clientId);
     const confirmed = {
-      receipt: previous?.receipt ?? pending?.receipt ?? { outcome: "turn-started" as const, turnId },
+      receipt: previous?.receipt ?? pending?.receipt ?? (steer ? { outcome: "steered" as const, turnId } : { outcome: "turn-started" as const, turnId }),
       text: previous && (previous.text !== text || previous.contentDigest !== contentDigest) ? null : text,
       contentDigest: previous && (previous.text !== text || previous.contentDigest !== contentDigest) ? null : contentDigest,
     };
     this.confirmedDeliveries.set(clientId, confirmed);
+    if (steer) {
+      this.pendingSteers.delete(clientId);
+      try { this.confirmedReceipt(steer.entry, confirmed); steer.resolve(this.writerFenceAllowsActuation() ? "landed" : "unknown"); }
+      catch { steer.resolve("unknown"); }
+    }
     if (!pending) return;
     this.pendingDeliveries.delete(clientId);
     clearTimeout(pending.timer);
@@ -3893,7 +3972,13 @@ export class CodexAppServerHost implements EngineHost {
     }
   }
 
+  private settleUnverifiedSteers(): void {
+    for (const steer of this.pendingSteers.values()) steer.resolve("unknown");
+    this.pendingSteers.clear();
+  }
+
   private rejectPendingDeliveries(error: Error): void {
+    this.settleUnverifiedSteers();
     const rejection = new Error(safeError(error));
     for (const delivery of this.pendingDeliveries.values()) {
       clearTimeout(delivery.timer);

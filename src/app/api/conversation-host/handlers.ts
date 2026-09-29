@@ -216,7 +216,7 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
-  let body: { pid?: unknown; path?: unknown; conversationId?: unknown; clientMessageId?: unknown; operationId?: unknown; text?: unknown; image?: unknown; images?: unknown; action?: unknown; key?: unknown; label?: unknown; question?: unknown; decision?: unknown; requestId?: unknown; target?: unknown; model?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown };
+  let body: { pid?: unknown; path?: unknown; conversationId?: unknown; clientMessageId?: unknown; operationId?: unknown; text?: unknown; policy?: unknown; image?: unknown; images?: unknown; action?: unknown; key?: unknown; label?: unknown; question?: unknown; decision?: unknown; requestId?: unknown; target?: unknown; model?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown };
   try {
     body = (await req.json()) as {
       pid?: unknown;
@@ -385,6 +385,10 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
     return NextResponse.json({ ok: false, outcome: "failed", ...refusal }, { status });
   }
 
+  const policy = body.policy;
+  if (policy !== undefined && policy !== "steer-or-queue") {
+    return NextResponse.json({ error: "policy is invalid" }, { status: 400 });
+  }
   const text = typeof body.text === "string" ? body.text : "";
   const { images, error: imageError } = dependencies.collectImagePayloads(body);
   if (imageError) {
@@ -512,6 +516,7 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
       ...(conversationId ? { conversationId } : {}),
       ...(typeof body.clientMessageId === "string" ? { clientMessageId: body.clientMessageId.slice(0, 128) } : {}),
       text: payloadText.trim(),
+      ...(policy ? { policy } : {}),
       images,
       ...(origin ? { origin } : {}),
     });
@@ -529,6 +534,7 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
     ...(conversationId ? { conversationId } : {}),
     ...(typeof body.clientMessageId === "string" ? { clientMessageId: body.clientMessageId.slice(0, 128) } : {}),
     text: payloadText,
+    ...(policy ? { policy } : {}),
     images,
     ...(origin ? { origin } : {}),
     // The "on resume" profile (issue #241 §4): honored only when this send

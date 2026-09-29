@@ -2,6 +2,7 @@ import { afterEach, expect, setSystemTime, test } from "bun:test";
 
 afterEach(() => setSystemTime());
 
+import { StructuredSendRefusedError } from "./engineHost";
 import type { DeliveryReceipt, EngineHost, FirstDispatchEvidence, HostState, QueueEntry, RuntimeEvent } from "./engineHost";
 import {
   CONTROL_SETTLEMENT_WINDOW_MS,
@@ -2646,12 +2647,8 @@ test("unsupported active steering refuses before the Claude broker can write or 
   expect(transitions).toEqual(["failed:unsupported-steering"]);
 });
 
-/* docs/design/ghost-seat.md §4: when the seat's parallel self ends, its note to
-   the seat is sent with the request the sweep builds. That request must wait
-   out the seat's running turn and start the next one: nothing reaches the host
-   while the turn runs, the turn is never interrupted, and the note is sent
-   once the seat is idle. */
-test("a deputy's end note waits behind the seat's running turn and never interrupts it", async () => {
+/* The sweep's actual request joins the seat's running turn. */
+test("a deputy's end note joins the running turn by steer and never interrupts it", async () => {
   const request = deputySeatNoteRequest({ seatPath: "/t/seat.jsonl", seatConversationId: "conversation-seat" }, "deputy_note_x", "Your parallel self handled: «file a task».");
   let active = true;
   const sent: string[] = [];
@@ -2667,13 +2664,123 @@ test("a deputy's end note waits behind the seat's running turn and never interru
   }, () => engine);
 
   await queue.drain();
-  expect(sent).toEqual([]);
+  expect(sent).toEqual(["deputy_note_x"]);
   expect(interrupts).toBe(0);
-  expect(transitions).toEqual([]);
 
   active = false;
-  await queue.drain();
   expect(sent).toEqual(["deputy_note_x"]);
   expect(interrupts).toBe(0);
   expect(transitions.at(-1)).toEqual(["deputy_note_x", "delivered"]);
+});
+
+
+function steerQueueFixture(policies: string[] = ["steer-or-queue"], conversations = policies.map(() => "conversation-a")) {
+  const effects = policies.map((policy, i) => ({ id: `effect:m${i}`, kind: "runtime.send", eventSeq: i + 1,
+    payload: { kind: "send", operationId: `m${i}`, conversationId: conversations[i]!, text: `note ${i}`, policy } }));
+  const states = new Map<string, { status: string; revision: number; reason?: string }>(effects.map(e => [e.payload.operationId, { status: "queued", revision: 1 }]));
+  const transitions: Array<{id: string; status: string; reason?: string | null}> = [];
+  const writes: string[] = [];
+  const interrupts: string[] = [];
+  let active: string | null = "turn-a";
+  const target = host(async entry => { writes.push(`start:${entry.id}`); active = "turn-next"; return { outcome: "turn-started", turnId: active }; });
+  target.health = async () => ({ ...idleState(), status: active ? "active" : "idle", activeTurnRef: active });
+  target.interrupt = async turn => { interrupts.push(turn); active = null; };
+  target.steer = async entry => { writes.push(`steer:${entry.id}`); return { turnId: active!, observe: async () => "landed" }; };
+  const port: StructuredDeliveryQueuePort = {
+    effects: async () => effects.filter(e => !["delivered", "failed", "uncertain"].includes(states.get(e.payload.operationId)!.status)),
+    status: async id => states.get(id) ?? null,
+    hostClaim: async () => "fixture-owner",
+    transition: async (id, status, details) => {
+      transitions.push({id, status, reason: details?.reason});
+      states.set(id, { status, revision: (states.get(id)?.revision ?? 0) + 1, ...(details?.reason ? {reason: details.reason} : {}) });
+    },
+  };
+  const queue = new StructuredDeliveryQueue(port, () => target);
+  return { queue, target, states, writes, interrupts, transitions, setActive: (turn: string | null) => { active = turn; }, effects, port };
+}
+
+for (const fallback of ["claude", "copilot"]) test(`steer-or-queue waits durably on ${fallback} without interrupting`, async () => {
+  const f = steerQueueFixture();
+  Object.assign(f.target, { supportsSteer: false, ...(fallback === "copilot" ? {steerFallback: "interrupt"} : {}) });
+  await f.queue.drain(); await f.queue.drain();
+  expect(f.writes).toEqual([]); expect(f.interrupts).toEqual([]);
+  expect(f.states.get("m0")!.status).toBe("queued");
+  f.setActive(null); await f.queue.drain();
+  expect(f.writes).toEqual(["start:m0"]); expect(f.states.get("m0")!.status).toBe("delivered");
+});
+
+test("a refused steer waits on the same turn across passes", async () => {
+  const f = steerQueueFixture();
+  f.target.steer = async entry => { f.writes.push(`steer:${entry.id}`); throw new StructuredSendRefusedError("cannot steer a compact turn"); };
+  await f.queue.drain(); await f.queue.drain();
+  expect(f.writes).toEqual(["steer:m0"]);
+  expect(f.states.get("m0")).toMatchObject({ status: "queued", reason: "steer-refused: cannot steer a compact turn" });
+  f.setActive(null); await f.queue.drain();
+  expect(f.writes).toEqual(["steer:m0", "start:m0"]);
+});
+
+test("unobserved steering releases other conversations and preserves same-turn order", async () => {
+  const f = steerQueueFixture(["steer-or-queue", "steer-or-queue", "queue"], ["conversation-a", "conversation-a", "conversation-b"]);
+  const observers: Array<(value: "landed") => void> = [];
+  f.target.steer = async entry => {
+    f.writes.push(`steer:${entry.id}`);
+    const promise = new Promise<"landed">(resolve => { observers.push(resolve); });
+    return { turnId: "turn-a", observe: () => promise };
+  };
+  const other = host(async entry => { f.writes.push(`other:${entry.id}`); return { outcome: "turn-started", turnId: "turn-b" }; });
+  const queue = new StructuredDeliveryQueue(f.port, id => id === "conversation-a" ? f.target : other);
+  await queue.drain(); await queue.drain();
+  expect(f.writes.filter(w => w.startsWith("steer:"))).toEqual(["steer:m0", "steer:m1"]);
+  expect(f.writes).toContain("other:m2");
+  expect(f.states.get("m0")!.status).toBe("delivering");
+  observers.forEach(resolve => resolve("landed"));
+  await Promise.resolve(); await Promise.resolve();
+  expect(f.states.get("m0")!.status).toBe("delivered");
+});
+
+for (const nextTurn of [null, "other-turn"]) test(`an ended turn waits for the earlier steer before a later send with next turn ${nextTurn}`, async () => {
+  const f = steerQueueFixture(["steer-or-queue", "steer-or-queue"]);
+  f.effects.pop();
+  let resolve!: (value: "dropped") => void;
+  f.target.steer = async entry => {
+    f.writes.push(`steer:${entry.id}`);
+    return { turnId: "turn-a", observe: () => new Promise<"dropped">(r => { resolve = r; }) };
+  };
+  await f.queue.drain();
+  f.setActive(nextTurn);
+  f.effects.push({ id: "effect:m1", kind: "runtime.send", eventSeq: 2,
+    payload: { kind: "send", operationId: "m1", conversationId: "conversation-a", text: "later", policy: "steer-or-queue" } });
+  await f.queue.drain();
+  expect(f.writes).toEqual(["steer:m0"]);
+  resolve("dropped"); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  f.setActive(null);
+  f.target.steer = async entry => { f.writes.push(`steer:${entry.id}`); return { turnId: "turn-next", observe: async () => "landed" }; };
+  await f.queue.drain();
+  expect(f.writes).toEqual(["steer:m0", "start:m0", "steer:m1"]);
+});
+
+test("an operator interrupt proceeds while an agent steer is observing", async () => {
+  const f = steerQueueFixture(["steer-or-queue", "interrupt-active"]);
+  let resolve!: (value: "landed") => void;
+  f.target.steer = async entry => {
+    f.writes.push(`steer:${entry.id}`);
+    return { turnId: "turn-a", observe: () => new Promise<"landed">(r => { resolve = r; }) };
+  };
+  await f.queue.drain();
+  expect(f.interrupts).toEqual(["turn-a"]);
+  expect(f.writes).toEqual(["steer:m0", "start:m1"]);
+  resolve("landed"); await Promise.resolve();
+});
+
+for (const policy of ["steer-or-queue", "steer-if-active"]) test(`${policy} unknown is absorbing and dropped explicit steer fails`, async () => {
+  const f = steerQueueFixture([policy]);
+  f.target.steer = async entry => { f.writes.push(`steer:${entry.id}`); return { turnId: "turn-a", observe: async () => "unknown" }; };
+  await f.queue.drain(); await Promise.resolve(); await f.queue.drain();
+  expect(f.states.get("m0")!.status).toBe("uncertain");
+  expect(f.writes).toEqual(["steer:m0"]);
+  const dropped = steerQueueFixture([policy]);
+  dropped.target.steer = async () => ({ turnId: "turn-a", observe: async () => "dropped" });
+  await dropped.queue.drain(); await Promise.resolve();
+  expect(dropped.states.get("m0")!.status).toBe(policy === "steer-or-queue" ? "queued" : "failed");
+  expect((await dropped.target.health()).status).toBe("active");
 });

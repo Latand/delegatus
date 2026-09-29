@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { agentRegistry } from "@/lib/agent/registry";
+import { agentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 
@@ -26,6 +26,7 @@ const originalStateDir = process.env.LLV_STATE_DIR;
 const originalRootId = process.env.LLV_ROOT_CONVERSATION_ID;
 
 beforeEach(() => {
+  setAgentRegistryForTests(null);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-voice-persona-mandate-"));
   sandboxes.push(dir);
   process.env.LLV_STATE_DIR = path.join(dir, "state");
@@ -33,6 +34,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setAgentRegistryForTests(null);
   if (originalStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = originalStateDir;
   if (originalRootId === undefined) delete process.env.LLV_ROOT_CONVERSATION_ID;

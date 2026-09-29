@@ -344,7 +344,7 @@ export interface RuntimeSendCommand extends RuntimeCommandBase {
   text: string;
   images?: StructuredImageRef[];
   contentDigest?: string;
-  policy?: "queue" | "steer-if-active" | "interrupt-active";
+  policy?: "queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
   turnId?: string | null;
   runtime?: RuntimeSendSettings;
   /** The Viewer card selected when this turn was submitted (#844). Admitted

@@ -77,13 +77,13 @@ function ports(overrides: Partial<Ports> = {}): { ports: Ports; sent: Delivery[]
   };
 }
 
-test("the report is queued behind the running turn, from Delegatus, under the epoch's own key", async () => {
+test("the report joins the running turn when supported, from Delegatus, under the epoch's own key", async () => {
   const run = ports();
   const record = await runBoardReport(seat, run.ports);
 
   expect(run.sent).toHaveLength(1);
   const [request] = run.sent;
-  expect(request!.policy).toBe("queue");
+  expect(request!.policy).toBe("steer-or-queue");
   expect(request!.origin).toMatchObject({ kind: "agent", role: BOARD_REPORT_ORIGIN_ROLE });
   expect(request!.clientMessageId).toBe(boardReportMessageId(seat.project, seat.seatEpoch));
   expect(request!.clientMessageId).toMatch(/^board_report_[0-9a-f]{40}$/);

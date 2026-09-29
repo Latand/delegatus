@@ -12,6 +12,7 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import type { EngineHost, HostState, QueueEntry, RuntimeEvent } from "./engineHost";
+import { StructuredSendRefusedError } from "./engineHost";
 import { FakeEngineHost, createFakeDeliveryLedger } from "./fixtures/fakeEngineHost";
 import { bindStructuredDeliveryQueue, hasStructuredDeliveryHost, publishStructuredDeliveryHost, releaseStructuredDeliveryHost, republishStructuredDeliveryHost } from "./structuredDeliveryController";
 import { resolveSendReceipt, sendReceiptFor } from "./sendSettlement";
@@ -170,6 +171,72 @@ function cleanupOnlyProvider(): RegisteredSuccessorProvider {
     startCodex: async () => { throw new Error("unexpected Codex client"); },
     claudeStatus: async () => { throw new Error("unexpected Claude status"); },
     now: () => "2026-07-13T12:01:00.000Z",
+  });
+}
+
+for (const outcome of ["refused", "dropped", "unknown"] as const) {
+  test(`steer-or-queue ${outcome} settles through its original journal and send receipt`, async () => {
+    const directory = path.join(sandbox, `steer-receipt-${outcome}`);
+    const registry = new AgentRegistry(path.join(directory, "registry.json"));
+    const artifactPath = path.join(directory, "fixture.jsonl");
+    registry.reconcileConversations([{
+      engine: "codex", path: artifactPath, accountId: "fixture",
+      launchProfile: emptyLaunchProfile({ cwd: directory }),
+      turn: { state: "busy", source: "assistant", terminalAt: null },
+      observedAt: new Date().toISOString(),
+    }]);
+    const conversation = registry.conversationForPath(artifactPath)!;
+    const operationId = `steer-receipt-${outcome}`;
+    const held = registry.holdDelivery(conversation.id, "agent note", operationId, "text", [], null,
+      { operationId, kind: "send", policy: "steer-or-queue" });
+    registry.beginDeliveryAttempt(held.id, held.generationId!);
+    const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+    const client = runtimeJournalClient(journal);
+    const ledger = createFakeDeliveryLedger();
+    const target = new FakeEngineHost(ledger);
+    const idle = await target.health();
+    let active: string | null = "observed-turn";
+    const steers: QueueEntry[] = [];
+    Object.assign(target, {
+      health: async () => ({ ...idle, status: active ? "active" : "idle", activeTurnRef: active }),
+      steer: async (entry: QueueEntry) => {
+        steers.push(entry);
+        if (outcome === "refused") throw new StructuredSendRefusedError("no active turn to steer");
+        return { turnId: "observed-turn", observe: async () => outcome };
+      },
+      interrupt: async () => { throw new Error("steer-first must never interrupt"); },
+    });
+    const queue = new StructuredDeliveryQueue(journalPort(journal, false, () => "fixture-owner"), () => target);
+    try {
+      journal.append({ scope: `session:${conversation.id}`, kind: "session-status", payload: {
+        conversationId: conversation.id, sessionKey: { engine: "codex", sessionId: "fixture" },
+        hostKind: "codex-app-server", host: "hosted", turn: "running", activeTurnId: active,
+        capabilities: { steer: true, nativeQueue: true, structuredAttention: true },
+      } });
+      const command = { kind: "send" as const, operationId, idempotencyKey: operationId,
+        conversationId: conversation.id, text: "agent note", policy: "steer-or-queue" as const };
+      journal.executeOperation(command);
+      await queue.drain();
+      await waitForCondition(() => journal.operationResult(operationId)!.receipt.status === (outcome === "unknown" ? "uncertain" : "queued"));
+      expect(steers).toMatchObject([{ id: operationId, expectedTurnId: "observed-turn" }]);
+      expect(journal.operationResult(operationId)!.receipt.turnId).toBe("observed-turn");
+      if (outcome !== "unknown") {
+        expect(journal.effectBatch()).toMatchObject([{ id: `effect:${operationId}` }]);
+        expect(journal.effectBatch()[0]!.payload).not.toHaveProperty("turnId");
+      }
+      active = null;
+      await queue.drain();
+      const receipt = await resolveSendReceipt(operationId, { registry, client });
+      expect(receipt).toMatchObject(outcome === "unknown"
+        ? { state: "failed", resend: "verify-first" } : { state: "delivered", resend: "not-needed" });
+      expect(ledger.writes).toHaveLength(outcome === "unknown" ? 0 : 1);
+      expect(journal.nativeQueueRead(conversation.id)).toEqual([]);
+      expect(journal.executeOperation(command).replayed).toBe(true);
+      await queue.drain();
+      expect(steers).toHaveLength(1);
+      expect(ledger.writes).toHaveLength(outcome === "unknown" ? 0 : 1);
+      expect(journal.effectBatch()).toEqual([]);
+    } finally { journal.close(); }
   });
 }
 
@@ -3152,13 +3219,16 @@ test("a stale synchronization-held steer fails safely across Codex and Claude re
   }
 });
 
-test("a published Codex successor receives its migration-held message once, under the original operation (#1709)", async () => {
+for (const policy of ["queue", "steer-or-queue"] as const) {
+test(`a published Codex successor receives its migration-held ${policy} message once, under the original operation (#1709)`, async () => {
+  const directory = path.join(sandbox, `migration-${policy}`);
+  fs.mkdirSync(directory);
   const sourceId = "11111111-1111-\x34111-8111-111111111111";
   const successorId = "22222222-2222-\x34222-8222-222222222222";
-  const sourcePath = path.join(sandbox, `${sourceId}.jsonl`);
-  const successorPath = path.join(sandbox, `${successorId}.jsonl`);
-  const registry = new AgentRegistry(path.join(sandbox, "migration-registry.json"));
-  const profile = emptyLaunchProfile({ cwd: sandbox });
+  const sourcePath = path.join(directory, `${sourceId}.jsonl`);
+  const successorPath = path.join(directory, `${successorId}.jsonl`);
+  const registry = new AgentRegistry(path.join(directory, "migration-registry.json"));
+  const profile = emptyLaunchProfile({ cwd: directory });
   registry.reconcileConversations([{
     engine: "codex",
     path: sourcePath,
@@ -3171,7 +3241,7 @@ test("a published Codex successor receives its migration-held message once, unde
   registry.upsert({
     key: { engine: "codex", sessionId: sourceId },
     artifactPath: sourcePath,
-    cwd: sandbox,
+    cwd: directory,
     accountId: "source",
     launchProfile: profile,
     status: "idle",
@@ -3192,7 +3262,7 @@ test("a published Codex successor receives its migration-held message once, unde
     pendingAction: null,
   });
 
-  const journal = new RuntimeJournal(path.join(sandbox, "migration-runtime.sqlite"), { structuredHosts: true });
+  const journal = new RuntimeJournal(path.join(directory, "migration-runtime.sqlite"), { structuredHosts: true });
   const client = runtimeJournalClient(journal);
   const sourceLedger = createFakeDeliveryLedger();
   const successorLedger = createFakeDeliveryLedger();
@@ -3218,8 +3288,8 @@ test("a published Codex successor receives its migration-held message once, unde
     {
       operationId: "operation-migration-successor-message",
       kind: "send",
-      policy: "queue",
-      turnId: null,
+      policy,
+      ...(policy === "queue" ? { turnId: null } : {}),
     },
   );
   expect(held.state).toBe("held");
@@ -3249,7 +3319,7 @@ test("a published Codex successor receives its migration-held message once, unde
       registry.upsert({
         key: { engine: "codex", sessionId: successorId },
         artifactPath: successorPath,
-        cwd: sandbox,
+        cwd: directory,
         accountId: "target",
         launchProfile: profile,
         status: "idle",
@@ -3269,9 +3339,19 @@ test("a published Codex successor receives its migration-held message once, unde
         claimOwner: null,
         pendingAction: null,
       });
+      const successor = observableFakeHost(new FakeEngineHost(successorLedger));
+      if (policy === "steer-or-queue") {
+        const idle = await successor.health();
+        Object.assign(successor, {
+          health: async () => ({ ...idle, status: "active", activeTurnRef: "successor-turn" }),
+          steer: async (entry: QueueEntry) => {
+            successorLedger.writes.push(entry);
+            return { turnId: "successor-turn", observe: async () => "landed" as const };
+          },
+        });
+      }
       await publishStructuredDeliveryHost({
-        key: { engine: "codex", sessionId: successorId },
-        host: observableFakeHost(new FakeEngineHost(successorLedger)),
+        key: { engine: "codex", sessionId: successorId }, host: successor,
       });
     },
   };
@@ -3300,12 +3380,14 @@ test("a published Codex successor receives its migration-held message once, unde
     state: "delivered",
     attempts: 1,
     generationId: successorId,
-    command: { operationId: held.command.operationId },
+    command: { operationId: held.command.operationId, policy },
   });
 
   await bindStructuredDeliveryQueue([], { registry, client: null });
   journal.close();
 });
+
+}
 
 test("a published Claude successor receives its migration-held message once, under the original operation (#1709)", async () => {
   const sourceId = "33333333-3333-\x34333-8333-333333333333";

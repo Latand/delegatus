@@ -804,7 +804,10 @@ export class RuntimeJournal {
       if (completing && command.kind === "kill" && status === "delivered" && !killBoundary) {
         throw new Error("runtime kill effect is missing");
       }
-      if (beginning && (command.kind === "send" || command.kind === "steer") && details.turnId !== undefined) {
+      // Steer-first fallback follows the next live turn. Keep the observed turn
+      // on its receipt, without pinning the durable effect to the ended turn.
+      if (beginning && (command.kind === "send" || command.kind === "steer")
+        && command.policy !== "steer-or-queue" && details.turnId !== undefined) {
         const effect = this.db.query<{ payload_json: string }, [string]>("SELECT payload_json FROM outbox WHERE id = ?")
           .get(`effect:${operationId}`);
         if (!effect) throw new Error("runtime operation effect is missing");

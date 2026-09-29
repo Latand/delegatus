@@ -152,13 +152,13 @@ test("a note that failed to land is retried on the next sweep, once", async () =
   expect(notes).toEqual([deputyNoteKey(deputy.askId)]);
 });
 
-test("the note is queued behind the seat's running turn, never interrupting it", () => {
+test("the note requests steering with durable queue fallback", () => {
   expect(deputySeatNoteRequest({ seatPath: "/t/seat.jsonl", seatConversationId: "conversation_seat" }, "deputy_note_x", "note")).toEqual({
     path: "/t/seat.jsonl",
     conversationId: "conversation_seat",
     clientMessageId: "deputy_note_x",
     text: "note",
-    policy: "queue",
+    policy: "steer-or-queue",
     origin: { kind: "agent", role: "orchestrator" },
   });
 });

@@ -83,7 +83,7 @@ function harness(children: readonly string[], overrides: Partial<Ports> = {}): H
   };
 }
 
-test("a settled turn sends one queued notice, attributed to the child, under the turn's hashed key", async () => {
+test("a settled turn sends one steer-first notice, attributed to the child, under the turn's hashed key", async () => {
   const child = nextChild();
   expect(obligation(child, "turn-1")).toBe(true);
   const { ports, sent } = harness([child]);
@@ -96,7 +96,7 @@ test("a settled turn sends one queued notice, attributed to the child, under the
     path: `/sessions/${LAUNCHER}.jsonl`,
     clientMessageId: spawnNoticeMessageId(child, "turn-1"),
     origin: { kind: "agent", role: "reviewer", conversationId: child },
-    policy: "queue",
+    policy: "steer-or-queue",
     images: [],
   });
   expect(sent[0]!.clientMessageId).toMatch(/^spawn_notice_[a-f0-9]{64}$/);

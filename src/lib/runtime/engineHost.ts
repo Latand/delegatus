@@ -152,6 +152,8 @@ export interface EngineHost {
   readonly steerFallback?: "interrupt";
   attach(afterSeq: number): AsyncIterable<RuntimeEvent>;
   send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence): Promise<DeliveryReceipt>;
+  /** Acknowledges the write before waiting for input to land in the running turn. */
+  steer?(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence): Promise<RuntimeSteerOutcome>;
   interrupt(turnRef: string): Promise<void>;
   answer(attentionRef: string, value: unknown): Promise<void>;
   health(): Promise<HostState>;
@@ -159,6 +161,11 @@ export interface EngineHost {
   /** Engine-backed persistence evidence for a fresh session's first message.
       A logical session may exist before its canonical transcript does. */
   sessionMaterializationEvidence?(clientMessageId: string): Promise<SessionMaterializationEvidence>;
+}
+
+export interface RuntimeSteerOutcome {
+  turnId: string;
+  observe(): Promise<"landed" | "dropped" | "unknown">;
 }
 
 export type SessionMaterializationEvidence =

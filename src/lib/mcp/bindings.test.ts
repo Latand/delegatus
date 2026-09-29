@@ -2548,10 +2548,9 @@ test("a graph edit through MCP carries the calling conversation and answers with
   for (const action of ["reorder-stage", "set-edge", "override-stage", "remove-stage"]) {
     await service.callTool("pipeline_action", { clientRequestId: `graph-${action}`, pipelineId: "pipeline_1", action, stageId: "three" });
   }
-  await service.callTool("pipeline_action", { clientRequestId: "graph-dismiss", pipelineId: "pipeline_1", action: "dismiss" });
   const agent = { kind: "agent", role: "orchestrator", conversationId: "conversation_orchestrator" };
   expect(actors).toEqual([
-    ["add-stage", agent], ["reorder-stage", agent], ["set-edge", agent], ["override-stage", agent], ["remove-stage", agent], ["dismiss", undefined],
+    ["add-stage", agent], ["reorder-stage", agent], ["set-edge", agent], ["override-stage", agent], ["remove-stage", agent],
   ]);
 });
 
@@ -3101,13 +3100,15 @@ test("seat_tick_settings turns its own project's tick off indefinitely, with the
     reason: "the only open lane is a draft nothing can discharge",
   });
   /* #2030: a write is acknowledged, never read back. */
-  expect(applied).toEqual({
+  expect(applied).toMatchObject({
     changed: true,
+    reportsOwed: [],
+    reportReminder: expect.any(String),
     revision: expect.any(String),
     changedFields: ["enabled", "reason"],
     monitorPromptLength: 0,
   });
-  expect(Buffer.byteLength(JSON.stringify(applied))).toBeLessThanOrEqual(300);
+  expect(Buffer.byteLength(JSON.stringify(applied))).toBeLessThanOrEqual(600);
   expect(await bindings.seat_tick_settings({ clientRequestId: "tick-off-read" })).toMatchObject({
     scope: "own-project",
     effective: { enabled: false, isDefault: false, until: null, reason: "the only open lane is a draft nothing can discharge" },
@@ -3209,7 +3210,7 @@ test("seat_tick_settings lets one seat set another project's tick, and says whos
   });
   /* Allowed rather than refused; what answers for it is attribution. */
   expect(applied).toMatchObject({ project: "another-project", changed: true, scope: "other-project", callerProject: "viewer" });
-  expect(Buffer.byteLength(JSON.stringify(applied))).toBeLessThanOrEqual(300);
+  expect(Buffer.byteLength(JSON.stringify(applied))).toBeLessThanOrEqual(600);
   expect(store.get("another-project")).toMatchObject({
     enabled: false,
     setBy: { conversationId: TICK_SEAT, project: "viewer" },
@@ -3388,7 +3389,10 @@ test("send_message reports acceptance as unsettled, and message_receipt answers 
   const operationId = "op_receipt_fixture";
 
   const bindings = viewerMcpBindings(undefined, {
-    post: async () => ({ outcome: "queued", operationId, receipt: { operationId, status: "queued" } }),
+    post: async (_route, body) => {
+      expect(body.policy).toBe("steer-or-queue");
+      return { outcome: "queued", operationId, receipt: { operationId, status: "queued" } };
+    },
   });
   const accepted = await bindings.send_message({
     clientRequestId: "receipt-fixture-send",

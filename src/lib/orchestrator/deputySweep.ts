@@ -105,7 +105,7 @@ export function deputySeatNoteRequest(deputy: Pick<OrchestratorDeputy, "seatPath
     conversationId: deputy.seatConversationId,
     clientMessageId,
     text,
-    policy: "queue" as const,
+    policy: "steer-or-queue" as const,
     origin: { ...delegatusMessageOrigin("orchestrator", deputy.project),
       ...(deputy.deputyConversationId ? { conversationId: deputy.deputyConversationId } : {}) },
   };

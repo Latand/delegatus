@@ -4094,3 +4094,13 @@ describe("structured host retirement (issue #1199)", () => {
     expect(store.readOnlySnapshot().entries[`codex:${KEY.sessionId}`]?.structuredHost).toBeNull();
   });
 });
+
+
+test("held steering keeps its policy across registry reload", () => {
+  const store = registry();
+  const conversation = store.ensureConversation("codex", "/held-steer.jsonl", "default");
+  const held = store.holdDelivery(conversation.id, "agent note", "steer-key", "text", [], null,
+    {operationId: "steer-held-operation", kind: "send", policy: "steer-or-queue"});
+  const reopened = new AgentRegistry(store.filename);
+  expect(reopened.snapshot().heldDeliveries[held.id]!.command).toMatchObject({policy: "steer-or-queue", operationId: "steer-held-operation"});
+});

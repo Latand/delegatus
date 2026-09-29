@@ -696,7 +696,7 @@ export interface ConversationMessage {
       not recovered into a structured send, so its message takes the legacy
       ladder, which never reads the policy and types the text into the pane
       the way it types every other message. */
-  policy?: "queue";
+  policy?: "queue" | "steer-or-queue";
 }
 
 interface DeliveryOverrides {

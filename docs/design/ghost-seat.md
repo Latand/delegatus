@@ -878,3 +878,6 @@ streaming in parallel without scrambling": the placement and growth rules in
 expandable": 6.3. "Desktop and phone": 6.4. Nothing here adds a second seat,
 a second queue, a second list, or a new process kind beyond the structured
 host that already exists.
+
+The deputy note and board report now join a running turn by steering when the
+host supports it, and fall back to the next turn on the durable queue.

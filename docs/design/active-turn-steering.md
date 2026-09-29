@@ -262,10 +262,15 @@ Each of these is a one-token or one-line edit:
   `delivery.ts:699` (`ConversationMessage.policy`).
 - `src/lib/runtime/commands.ts:168-171`: accept it, and refuse a `turnId`
   beside it ("steer-or-queue follows the live turn and takes no fence").
-  Structured admission already stores `turnId: null` and stamps no fence into
-  the effect (`journal.ts:1972-1975`, `:519-523`), so the effect never carries
-  one. That matters: a fenced message whose turn ended would be refused
-  `stale-turn` on every pass.
+  Structured admission stores `turnId: null` and stamps no fence into the
+  effect (`journal.ts:1972-1975`, `:519-523`). At first delivery,
+  `RuntimeJournal.transitionOperation` normally stamps the observed turn id
+  into the outbox (`journal.ts:807-817`). Exempt only `steer-or-queue` from
+  that persistent stamping: fallback is delivered after the observed turn
+  ended, and retaining its fence would return `stale-turn` on every pass.
+  Keep the observed turn id on the operation's receipt as evidence, and keep
+  `turn/steer.expectedTurnId` targeting the live turn observed at actuation.
+  Every other policy and kind retains its existing persistent fence.
 - `src/lib/agent/registry.ts:2294-2301` `canonicalHeldDeliveryCommand`: keep
   `steer-or-queue`. Today any other value normalizes to `interrupt-active`, so a
   message held across an account switch would replay as an interrupt.
@@ -278,7 +283,8 @@ Each of these is a one-token or one-line edit:
 - `conversation-host/handlers.ts:219-241`, `:509-537`: read `body.policy`,
   accept only `"steer-or-queue"` (400 for any other value), and forward it to
   `enqueueStructuredMessage` and `deliverConversationMessage`.
-- No journal change. `nativeCommandAtAdmission` converts only `queue`
+- The journal change is limited to the persistent fence exception above.
+  `nativeCommandAtAdmission` converts only `queue`
   (`journal.ts:554`), and the structured send branch admits every send as
   `queued` (`:1954-1976`).
 
@@ -478,6 +484,9 @@ that holds each response, and the interposing `spawnProcess` wrapper
   Assert that provider request 2 carries the text, that the turn id did not
   change, and that the receipt is `delivered` with that turn id. Assert exactly
   one `userMessage` with this client id in history and no native-queue record.
+  Repeat while a real `exec_command` waits on a fixture release file: steering
+  preserves that tool and the turn, and the next provider request includes the
+  message after the tool finishes.
 - **A2, the turn ends before the steer lands.** Hold response 1. The wrapper
   holds `turn/completed` for turn 1 until the `turn/steer` reply has been
   produced, then passes both through in the order Codex produced them. This
@@ -541,6 +550,10 @@ real journal):
 - **D2.** Held across an account switch: `canonicalHeldDeliveryCommand` keeps
   `steer-or-queue` (`registry.test.ts`), and the migration drain replays it as
   a steer.
+- **D3.** First delivery keeps the observed turn on the receipt without
+  stamping the `steer-or-queue` effect. Fallback follows the next turn under
+  the same operation. Plain send, `interrupt-active`, `queue` and
+  `steer-if-active` retain their persistent turn fences (`journal.test.ts`).
 
 **E. Call sites:**
 
@@ -558,9 +571,14 @@ real journal):
 - Run only the touched test files, by path, with `LLV_STATE_DIR`,
   `XDG_CONFIG_HOME` and `TMPDIR` each set to a fresh `mktemp -d /tmp/...`. Never
   sweep `src/lib/agent/` or `src/app/api/runtime/`.
-- Run group A through `bun scripts/verify-native-codex-runtime.ts <absolute codex binary>`
-  (private roots). Run it once with the CI pin and once with the CLI installed
-  on this host.
+- Run the full gate through `bun scripts/verify-native-codex-runtime.ts <absolute CI-pinned codex binary>`
+  (private roots) with Codex 0.154.0. This includes group A and remains the
+  required full-coverage gate.
+- Run group A against installed Codex 0.159.0 through the existing driver:
+  `bun scripts/verify-native-codex-runtime.ts <absolute installed codex binary> --steering-only`.
+  Both versions must pass all six real-CLI steering cases. Existing native-queue
+  and history fixtures assert the CI pin; installed-version native-queue cold
+  recovery is separate work and is outside this lane's gate.
 - Run `bunx tsc --noEmit`, `bunx eslint <touched files>`, and
   `bun scripts/privacy-publication-gate.ts --base <merge-base>`.
 - Claim nothing about installed behaviour until it is deployed and observed.

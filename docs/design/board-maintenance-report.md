@@ -827,3 +827,6 @@ real priorities, do not close my cards without me.")
   included (§9).
 
 No operator choice remains open.
+
+The deputy note and board report now join a running turn by steering when the
+host supports it, and fall back to the next turn on the durable queue.

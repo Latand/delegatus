@@ -166,9 +166,10 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown):
     if (!imageRefs) throw new Error("images are invalid");
     const content = structuredContent(text, imageRefs);
     const policy = body.policy === undefined ? undefined : body.policy;
-    if (policy !== undefined && policy !== "queue" && policy !== "steer-if-active" && policy !== "interrupt-active") {
+    if (policy !== undefined && policy !== "queue" && policy !== "steer-if-active" && policy !== "steer-or-queue" && policy !== "interrupt-active") {
       throw new Error("policy is invalid");
     }
+    if (policy === "steer-or-queue" && turnId !== undefined) throw new Error("steer-or-queue follows the live turn and takes no fence");
     const runtime = parseRuntimeSendSettings(body.runtime);
     /* #844: validated here, with the text, so the turn and the card it points at
        are admitted as one fact. A body the validator refuses drops the reference

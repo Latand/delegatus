@@ -33,6 +33,7 @@ const originalStateDir = process.env.LLV_STATE_DIR;
 const originalSpawnCapability = process.env[VIEWER_SPAWN_CAPABILITY_ENV];
 
 afterEach(() => {
+  setAgentRegistryForTests(null);
   if (originalStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = originalStateDir;
   if (originalSpawnCapability === undefined) delete process.env[VIEWER_SPAWN_CAPABILITY_ENV];
@@ -64,6 +65,7 @@ function sandbox(withManager = true): void {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-bridge-directive-"));
   sandboxes.push(dir);
   process.env.LLV_STATE_DIR = path.join(dir, "state");
+  setAgentRegistryForTests(new AgentRegistry(path.join(dir, "registry.json")));
   openBridgeChannel("root_directive");
   if (withManager) {
     /* The caller's own project holds the designated orchestrator. */
@@ -114,6 +116,7 @@ test("a directive is addressed to the project's active seat regardless of a call
 
   expect(posted).toHaveLength(1);
   expect(posted[0]!.body.conversationId).toBe("conversation_manager");
+  expect(posted[0]!.body.policy).toBe("steer-or-queue");
   expect(posted[0]!.headers[VIEWER_SPAWN_CAPABILITY_HEADER]).toBe("d".repeat(43));
   expect(receipt).toMatchObject({ managerConversationId: "conversation_manager" });
 });

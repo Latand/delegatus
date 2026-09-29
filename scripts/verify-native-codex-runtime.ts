@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 
 const binary = process.argv[2];
-if (!binary || !isAbsolute(binary) || !existsSync(binary)) throw new Error("Pass an absolute Codex 0.154.0 fixture executable");
+const selection = process.argv[3];
+if (selection !== undefined && selection !== "--steering-only") throw new Error("Only --steering-only is supported as a selection");
+if (!binary || !isAbsolute(binary) || !existsSync(binary)) throw new Error("Pass an absolute Codex fixture executable (full suite requires 0.154.0)");
 const roots = mkdtempSync(join(tmpdir(), "n-"));
 const bin = join(roots, "bin"); mkdirSync(bin); symlinkSync(process.execPath, join(bin, "bun"));
 const env: NodeJS.ProcessEnv = {
@@ -27,6 +29,7 @@ const files = [
   "src/runtime-host/nativeQueueCompaction.test.ts",
   "src/lib/runtime/nativeQueueCompaction.integration.test.ts",
   "src/lib/runtime/nativeQueueHost.integration.test.ts",
+  "src/lib/runtime/codexSteerDelivery.integration.test.ts",
   "src/lib/runtime/codexTurnProfile.test.ts",
   "src/lib/runtime/codexAppServerHost.test.ts",
   "src/lib/runtime/claudeStreamBrokerHost.test.ts",
@@ -39,14 +42,12 @@ const files = [
   "src/lib/runtime/realtimeControl.selectedContext.test.ts",
   "src/lib/runtime/voiceViewBinding.test.ts",
   "src/lib/runtime/voicePersonaRole.test.ts",
-  "src/lib/runtime/voicePersonaMandate.test.ts",
   "src/lib/runtime/voiceDelivery.test.ts",
   "src/lib/runtime/voiceStreamChunks.test.ts",
   // #1629 experience stage: the queue the operator touches, and the voice
   // repairs the independent review of the component branch required.
   "src/lib/runtime/codexRealtimeTranscript.test.ts",
   "src/lib/mcp/nativeWorkMetadata.test.ts",
-  "src/lib/mcp/voiceUtteranceContext.test.ts",
   "src/lib/mcp/voiceUtteranceWiring.test.ts",
   "src/components/nativeQueueView.test.ts",
   /* The delivery contracts the native queue shares with every other send. This
@@ -56,10 +57,13 @@ const files = [
      the branch never touched this file, so no reviewer ran it. A shared contract
      is verified by the suites of its dependents or by nobody. */
   "src/lib/runtime/structuredDelivery.integration.test.ts",
-  /* The panel and composer halves of the same contracts, so a control the
-     runtime cannot admit fails here rather than in the operator's hands. */
-  "src/components/NativeQueuePanel.dom.test.tsx",
-  "src/components/TmuxComposer.nativeQueue.dom.test.tsx",
+];
+
+// These files install and remove a registry singleton. Give each its own
+// process so later files cannot inherit a registry whose fixture was removed.
+const registryFiles = [
+  "src/lib/runtime/voicePersonaMandate.test.ts",
+  "src/lib/mcp/voiceUtteranceContext.test.ts",
 ];
 
 const injectionFiles = [
@@ -110,8 +114,11 @@ const domFiles = [
   "src/lib/realtime/codexRealtimeClient.selectedContext.dom.test.ts",
   "src/lib/realtime/codexRealtimeClient.transport.dom.test.ts",
 ];
-for (const file of [...files, ...domFiles, ...injectionFiles, ...attachmentFiles]) if (!existsSync(file)) throw new Error(`Missing named native runtime check: ${file}`);
-for (const batch of [files, domFiles, ...[...injectionFiles, ...attachmentFiles].map(file => [file])]) {
+const batches = selection === "--steering-only"
+  ? [["src/lib/runtime/codexSteerDelivery.integration.test.ts"]]
+  : [files, ...[...domFiles, ...registryFiles, ...injectionFiles, ...attachmentFiles].map(file => [file])];
+for (const file of batches.flat()) if (!existsSync(file)) throw new Error(`Missing named native runtime check: ${file}`);
+for (const batch of batches) {
   const result = spawnSync(process.execPath, ["test", ...batch], { env, stdio: "inherit" });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);

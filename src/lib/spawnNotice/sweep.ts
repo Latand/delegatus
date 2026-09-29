@@ -55,7 +55,7 @@ export interface SpawnNoticeDeliveryRequest {
   text: string;
   images: [];
   origin: MessageOrigin;
-  policy: "queue";
+  policy: "steer-or-queue";
 }
 
 export type SpawnNoticeDeliveryAnswer =
@@ -167,7 +167,7 @@ async function deliverAttempt(child: string, attempt: SpawnNoticeAttempt, ports:
     text: attempt.text,
     images: [],
     origin: ports.origin(child),
-    policy: "queue",
+    policy: "steer-or-queue",
   }).catch((error: unknown): SpawnNoticeDeliveryAnswer => ({
     ok: false,
     error: error instanceof Error ? error.message : String(error),

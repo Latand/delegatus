@@ -980,3 +980,28 @@ test("sign-in-and-team: a member is named only on a message the delivery admitte
     fs.rmSync(path.dirname(teamStoreFile()), { recursive: true, force: true });
   }
 });
+
+
+test("steer-or-queue passes the conversation-host route to structured and legacy delivery", async () => {
+  const previous = process.env.LLV_STRUCTURED_HOSTS;
+  const messages: unknown[] = [];
+  try {
+    process.env.LLV_STRUCTURED_HOSTS = "1";
+    structuredMessageResult = {ok: true, structured: true, target: PATHNAME, outcome: "queued", operationId: "steer-route", receipt: {operationId: "steer-route", status: "queued"}};
+    expect((await POST(post({path: PATHNAME, text: "agent note", policy: "steer-or-queue"}))).status).toBe(200);
+    expect(structuredMessageRequest).toMatchObject({policy: "steer-or-queue"});
+    structuredMessageResult = null;
+    delivery = async message => { messages.push(message); return {ok: true, outcome: "delivered-to-live", target: "agents:4.0"}; };
+    expect((await POST(post({path: PATHNAME, text: "legacy note", policy: "steer-or-queue"}))).status).toBe(200);
+    expect(messages).toEqual([expect.objectContaining({text: "legacy note", policy: "steer-or-queue"})]);
+    const calls = structuredMessageCalls;
+    for (const policy of ["queue", "steer-if-active", "invalid"]) {
+      expect((await POST(post({path: PATHNAME, text: "refused", policy}))).status).toBe(400);
+    }
+    expect(structuredMessageCalls).toBe(calls);
+  } finally {
+    structuredMessageResult = null;
+    delivery = async () => ({ok: true, outcome: "delivered-to-live", target: "agents:4.0"});
+    if (previous === undefined) delete process.env.LLV_STRUCTURED_HOSTS; else process.env.LLV_STRUCTURED_HOSTS = previous;
+  }
+});

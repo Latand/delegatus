@@ -1790,7 +1790,8 @@ test("filtered effect batches skip a full page of unrelated pending work", () =>
   journal.close();
 });
 
-test("a delivering transition persists its derived turn fence in the outbox", () => {
+for (const policy of [undefined, "interrupt-active", "queue", "steer-if-active", "steer-or-queue"] as const) {
+test(`a delivering transition preserves the turn-fence contract for ${policy ?? "plain send"}`, () => {
   const dir = sandbox("structured-delivery-fence");
   const journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { structuredHosts: true });
   journal.append({
@@ -1813,29 +1814,28 @@ test("a delivering transition persists its derived turn fence in the outbox", ()
     idempotencyKey: "key-fenced-send",
     conversationId: "conv-fence",
     text: "amend",
-    policy: "steer-if-active",
+    ...(policy ? { policy } : {}),
   });
 
   journal.transitionOperation("op-fenced-send", "delivering", { turnId: "turn-old" });
 
-  expect(journal.effectBatch()).toEqual([
-    expect.objectContaining({
-      id: "effect:op-fenced-send",
-      payload: expect.objectContaining({ turnId: "turn-old" }),
-    }),
-  ]);
-
-  journal.transitionOperation("op-fenced-send", "failed", { reason: "engine write failed" });
-  journal.retryOperation("op-fenced-send");
-
-  expect(journal.effectBatch()).toEqual([
-    expect.objectContaining({
-      id: "effect:op-fenced-send",
-      payload: expect.objectContaining({ turnId: "turn-old" }),
-    }),
-  ]);
+  const payload = journal.effectBatch()[0]!.payload;
+  if (policy === "steer-or-queue") {
+    expect(payload).not.toHaveProperty("turnId");
+    expect(journal.operationResult("op-fenced-send")!.receipt.turnId).toBe("turn-old");
+    journal.transitionOperation("op-fenced-send", "queued", { reason: "steer-refused" });
+    journal.transitionOperation("op-fenced-send", "delivering", { turnId: "turn-next" });
+    expect(journal.effectBatch()[0]!.payload).not.toHaveProperty("turnId");
+    expect(journal.operationResult("op-fenced-send")!.receipt.turnId).toBe("turn-next");
+  } else {
+    expect(payload.turnId).toBe("turn-old");
+    journal.transitionOperation("op-fenced-send", "failed", { reason: "engine write failed" });
+    journal.retryOperation("op-fenced-send");
+    expect(journal.effectBatch()[0]!.payload.turnId).toBe("turn-old");
+  }
   journal.close();
 });
+}
 
 test("an engine-host resolution keyed only by `id` still retires the attention (#765)", () => {
   /* Engine-host projections historically carried the attention id as `id`

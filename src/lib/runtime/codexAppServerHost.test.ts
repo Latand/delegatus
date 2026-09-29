@@ -14,7 +14,7 @@ import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/pr
 import { saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 
 import { CodexAppServerHost, redactCodexHostDiagnostic, rolloutTurnsFromDisk } from "./codexAppServerHost";
-import { encodeCodexStructuredUserText } from "./codexStructuredUserText.server";
+import { encodeCodexStructuredUserText, decodeCodexStructuredUserText as decodeStoredUser } from "./codexStructuredUserText.server";
 import { decodeCodexStructuredUserText } from "./codexStructuredUserText";
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
 
@@ -146,6 +146,8 @@ class FakeAppServer extends EventEmitter {
   readonly signals: NodeJS.Signals[] = [];
   autoResolveServerRequests = true;
   autoCompleteUserMessage = true;
+  steerError: { code: number; message: string; data?: unknown } | null = null;
+  holdSteer = false;
   /** Persist the recipient-side user record while withholding the app-server
       confirmation, reproducing a successful delivery whose confirmation is
       lost during a host respawn. */
@@ -330,6 +332,11 @@ class FakeAppServer extends EventEmitter {
       return;
     }
     if (method === "turn/steer") {
+      if (this.holdSteer) return;
+      if (this.steerError) {
+        this.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, error: this.steerError })}\n`);
+        return;
+      }
       const turnId = (message.params as { expectedTurnId: string }).expectedTurnId;
       this.respond(message.id, { turnId });
       this.persistUserMessage(message);
@@ -5253,4 +5260,76 @@ test("a replayed native question retains its pending answer and rejects a duplic
   expect(server.requests.filter(request => request.id === "question-replay")).toHaveLength(1);
   expect((await host.health()).pendingAttention).toEqual([]);
   await host.release();
+});
+
+
+describe("two-phase steering", () => {
+  for (const scenario of ["item", "rollout", "absent", "unreadable"] as const) test(`turn ending with ${scenario} adjudicates accepted input`, async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "steer-host-"));
+    const server = new FakeAppServer();
+    server.threadPath = path.join(directory, "rollout.jsonl");
+    fs.writeFileSync(server.threadPath, "");
+    const host = await CodexAppServerHost.start({ cwd: directory, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+    try {
+      const opening = await host.send({ id: "opening", text: "begin" });
+      if (!("turnId" in opening)) throw new Error("opening refused");
+      server.autoCompleteUserMessage = scenario === "item";
+      server.persistUserMessages = scenario === "rollout";
+      const origin = { kind: "agent" as const, conversationId: "conversation_sender", role: "builder" };
+      const accepted = await host.steer({ id: "supplement", text: "agent note", origin });
+      const request = server.requests.findLast(r => r.method === "turn/steer")!;
+      const params = request.params as { clientUserMessageId: string; input: Array<{text: string}> };
+      expect(params.clientUserMessageId).toBe("supplement");
+      expect(decodeStoredUser(params.input[0]!.text)).toMatchObject({ text: "agent note", origin });
+      expect(decodeStoredUser(params.input[0]!.text)).toMatchObject({ deliveryDedup: deliveryDedup("supplement") });
+      if (scenario === "unreadable") { fs.rmSync(server.threadPath); fs.mkdirSync(server.threadPath); }
+      server.notify("turn/completed", { threadId: host.identity.threadId, turn: { id: opening.turnId, status: "completed" } });
+      expect(await accepted.observe()).toBe(scenario === "absent" ? "dropped" : scenario === "unreadable" ? "unknown" : "landed");
+      expect((await host.health()).status).toBe("idle");
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  for (const end of ["release", "writer-fence"] as const) test(`a running steer outlives the start confirmation timer and ${end} makes it unknown`, async () => {
+    const server = new FakeAppServer();
+    const host = await CodexAppServerHost.start({ cwd: "/repo", deliveryConfirmationTimeoutMs: 10,
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+    try {
+      await host.send({ id: "opening", text: "begin" });
+      server.autoCompleteUserMessage = false;
+      const accepted = await host.steer({ id: "pending", text: "waiting for tools" });
+      await new Promise(r => setTimeout(r, 35));
+      expect((await host.health()).status).toBe("active");
+      expect(server.signals).toEqual([]);
+      if (end === "release") await host.release();
+      else {
+        host.setWriterFence(() => false);
+        expect((await host.health()).status).toBe("active");
+        expect(server.signals).toEqual([]);
+      }
+      expect(await accepted.observe()).toBe("unknown");
+    } finally { await host.release(); }
+  });
+
+  for (const code of [-32601, -32600]) test(`steer RPC error ${code} is a definite refusal`, async () => {
+    const server = new FakeAppServer();
+    const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+    try {
+      await host.send({ id: "opening", text: "begin" });
+      server.steerError = { code, message: "cannot steer a compact turn", data: { codexErrorInfo: { activeTurnNotSteerable: { turnKind: "compact" } } } };
+      await expect(host.steer({ id: "refused", text: "note" })).rejects.toMatchObject({ code });
+      expect((await host.health()).status).toBe("active");
+    } finally { await host.release(); }
+  });
+
+  test("an unanswered mutating steer is unknown and fails the wedged host", async () => {
+    const server = new FakeAppServer();
+    const host = await CodexAppServerHost.start({ cwd: "/repo", requestTimeoutMs: 30,
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+    try {
+      await host.send({ id: "opening", text: "begin" });
+      server.holdSteer = true;
+      await expect(host.steer({ id: "unknown", text: "note" })).rejects.toThrow();
+      expect((await host.health()).status).toBe("dead");
+    } finally { await host.release(); }
+  });
 });

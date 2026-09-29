@@ -53,7 +53,7 @@ export interface StructuredMessageRequest {
   clientMessageId?: string | null;
   operationId?: string;
   kind?: "send" | "steer" | "inject";
-  policy?: "queue" | "steer-if-active" | "interrupt-active";
+  policy?: "queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
   turnId?: string | null;
   text: string;
   images?: RuntimeImageUpload[];
@@ -197,7 +197,7 @@ function supersededRejection(
 function requiresStructuredCommand(request: StructuredMessageRequest): boolean {
   return request.operationId !== undefined
     || (request.kind ?? "send") !== "send"
-    || (request.policy ?? "interrupt-active") !== "interrupt-active"
+    || (request.policy !== "steer-or-queue" && (request.policy ?? "interrupt-active") !== "interrupt-active")
     || request.turnId !== undefined;
 }
 
@@ -206,7 +206,7 @@ function requiresStructuredHeldCommand(request: HeldStructuredMessageRequest): b
   return command !== undefined
     && (command.operationId !== request.deliveryId
       || command.kind !== "send"
-      || command.policy !== "interrupt-active"
+      || (command.policy !== "steer-or-queue" && command.policy !== "interrupt-active")
       || command.turnId !== undefined);
 }
 

@@ -7,7 +7,7 @@ import { parseSelectedContextRef, type SelectedContextRef } from "@/lib/selectio
 import { parseMessageOrigin, type MessageOrigin } from "./messageOrigin";
 import type { RuntimeInjectionBinding, RuntimeSendSettings, RuntimeTransitionDetails } from "./contracts";
 import { evidenceAgrees, readEvidence, readOptionalEvidence, type Evidence } from "./evidence";
-import type { CompactCapableHost, DeliveryReceipt, EngineHost, FirstDispatchEvidence, HostState, QueueEntry, RuntimeInjectOutcome } from "./engineHost";
+import type { CompactCapableHost, DeliveryReceipt, EngineHost, FirstDispatchEvidence, HostState, QueueEntry, RuntimeInjectOutcome, RuntimeSteerOutcome } from "./engineHost";
 import { hostSupportsCompact, hostSupportsInject, StructuredCompactError, StructuredInjectError, StructuredSendRefusedError } from "./engineHost";
 import {
   parseStructuredImageRefs,
@@ -145,7 +145,7 @@ interface SendEffect {
   content: StructuredMessageContent;
   contentDigest: string;
   turnId?: string | null;
-  policy?: "queue" | "steer-if-active" | "interrupt-active";
+  policy?: "queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
   kind: "send" | "steer";
   runtime?: RuntimeSendSettings;
   /** #844: the selected-card reference the operator submitted with. Replayed
@@ -307,6 +307,7 @@ function sendEffect(effect: StructuredDeliveryEffect): SendEffect | null {
     : undefined;
   const policy = effect.payload.policy === "queue"
     || effect.payload.policy === "steer-if-active"
+    || effect.payload.policy === "steer-or-queue"
     || effect.payload.policy === "interrupt-active"
     ? effect.payload.policy
     : undefined;
@@ -638,6 +639,8 @@ export class StructuredDeliveryQueue {
       which is what a recovered row has to be able to tell (#1131). */
   private readonly executorId = crypto.randomUUID();
   private readonly interruptAcknowledged = new Set<string>();
+  private readonly refusedSteerTurns = new Map<string, string | null>();
+  private readonly activeSteers = new Map<string, { conversationId: string; turnId: string; settling: Promise<void> }>();
   /** An interrupt can need several drain passes before any message is handed
    * over. Keep that first-dispatch evidence only in this executor and claim;
    * eviction or restart returns to the conservative recovery path. */
@@ -765,6 +768,8 @@ export class StructuredDeliveryQueue {
     for (const operationId of this.reconfigureRetries.keys()) {
       if (!listed.has(operationId)) this.reconfigureRetries.delete(operationId);
     }
+    const pendingIds = new Set(rawEffects.map(effect => effect.payload.operationId));
+    for (const id of this.refusedSteerTurns.keys()) if (!pendingIds.has(id)) this.refusedSteerTurns.delete(id);
     if (rawEffects.length === 0) { this.nativeExecutionRetries.clear(); return; }
     const grouped = new Map<string, DeliveryEffect[]>();
     const targetPreparations = new Map<string, Array<() => Promise<void>>>();
@@ -1069,6 +1074,7 @@ export class StructuredDeliveryQueue {
          the journal at a bad moment. */
       const durable = durableStatuses.get(effect.operationId) ?? null;
       if (effect.kind === "inject" && this.activeInjections.has(effect.operationId)) continue;
+      if (this.activeSteers.has(effect.operationId)) continue;
       if (durable?.status === "delivering") {
         if (await this.deliveringOwnerDisposition(effect.conversationId, durable.reason) !== "abandoned") continue;
         await this.terminalizeUnverified(effect.operationId, DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR);
@@ -1119,14 +1125,17 @@ export class StructuredDeliveryQueue {
         if (!await this.executeInjection(effect, host, health)) return true;
         continue;
       }
-      const steerRequested = effect.kind === "steer" || effect.policy === "steer-if-active";
+      const steerOrQueue = effect.policy === "steer-or-queue";
+      const steerRequested = effect.kind === "steer" || effect.policy === "steer-if-active"
+        || (steerOrQueue && host.supportsSteer === true
+          && this.refusedSteerTurns.get(effect.operationId) !== health.activeTurnRef);
       const maySteer = health.status === "active" && steerRequested;
       /* A host without steer that DECLARED an interrupt fallback (Copilot over
          ACP) takes a steer the way `interrupt-active` takes a send: the running
          turn is interrupted and the message starts the next one; a turn that
          already ended leaves nothing to interrupt and the message simply starts
          one. It is never delivered as `steered` (docs/design/copilot-engine.md 3.4). */
-      const steerByInterrupt = steerRequested && host.steerFallback === "interrupt";
+      const steerByInterrupt = !steerOrQueue && steerRequested && host.steerFallback === "interrupt";
       /* A host that DECLARED it cannot steer, which is the Claude broker: its
          write would land as an interrupt the operator never asked for, so the
          message is refused here rather than delivered as something else.
@@ -1152,6 +1161,9 @@ export class StructuredDeliveryQueue {
       const recordsRoute = host.steerFallback === "interrupt";
       const clearedRoute: RuntimeTransitionDetails = recordsRoute ? { delivery: null, interruptedTurnId: null } : {};
       if (health.status !== "idle" && !steersIntoTurn && !shouldInterrupt) return true;
+      if (!replacesTurn && [...this.activeSteers.values()].some(steer =>
+        steer.conversationId === effect.conversationId
+        && (!steersIntoTurn || steer.turnId !== health.activeTurnRef))) return true;
       if (health.status === "idle") this.interruptAcknowledged.delete(effect.operationId);
       const deliveryFence = shouldInterrupt
         ? effect.turnId ?? health.activeTurnRef
@@ -1254,10 +1266,26 @@ export class StructuredDeliveryQueue {
         // Consume before entering the host. A read retry, thrown result or
         // later queued retry must establish its own canonical evidence.
         this.firstDispatches.delete(effect.operationId);
+        if (steersIntoTurn && host.steer) {
+          const outcome = await host.steer(entry, firstDispatch);
+          const settling = this.settleObservedSteer(effect, outcome).finally(() => {
+            this.activeSteers.delete(effect.operationId);
+            this.retrySoon();
+          });
+          this.activeSteers.set(effect.operationId, { conversationId: effect.conversationId, turnId: outcome.turnId, settling });
+          void settling.catch(() => undefined);
+          continue;
+        }
         receipt = await sendWithReadRetry(host, entry, firstDispatch);
       } catch (error) {
         const reason = failureReason(error);
         if (error instanceof StructuredSendRefusedError || error instanceof NativeQueueProtocolRefusal) {
+          if (steerOrQueue && steersIntoTurn) {
+            this.refusedSteerTurns.set(effect.operationId, health.activeTurnRef);
+            await this.transitionUnlessSettled(effect.operationId, "queued", { reason: `steer-refused: ${reason}` });
+            this.retrySoon();
+            return true;
+          }
           await this.transitionUnlessSettled(effect.operationId, "failed", { reason });
           continue;
         }
@@ -1333,6 +1361,22 @@ export class StructuredDeliveryQueue {
       });
     }
     return Boolean(switchDeferred) || nativeReceiptUnavailable;
+  }
+
+  private async settleObservedSteer(effect: SendEffect, outcome: RuntimeSteerOutcome): Promise<void> {
+    let observed: "landed" | "dropped" | "unknown";
+    try { observed = await outcome.observe(); }
+    catch { observed = "unknown"; }
+    if (observed === "landed") {
+      await this.transitionUnlessSettled(effect.operationId, "delivered", { turnId: outcome.turnId });
+    } else if (observed === "dropped") {
+      if (effect.policy === "steer-or-queue") this.refusedSteerTurns.set(effect.operationId, outcome.turnId);
+      await this.transitionUnlessSettled(effect.operationId, effect.policy === "steer-or-queue" ? "queued" : "failed", {
+        reason: "steer-dropped",
+      });
+    } else {
+      await this.terminalizeUnverified(effect.operationId, `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: steer observation unknown`);
+    }
   }
 
   /**

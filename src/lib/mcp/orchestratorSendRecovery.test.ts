@@ -143,6 +143,7 @@ test("missing-seat creation pins its recipient before the message and recovers a
       }
       expect(f.receipt(args.clientRequestId)?.binding?.target.identity).toBe(f.first.id);
       expect(body.conversationId).toBe(f.first.id);
+      expect(body.policy).toBe("steer-or-queue");
       f.registry.holdDelivery(f.first.id, String(body.text), String(body.clientMessageId), "text", [], null, {
         operationId: "created-operation", kind: "send", policy: "queue",
       });

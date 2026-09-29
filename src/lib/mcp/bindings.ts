@@ -1487,6 +1487,7 @@ async function sendMessage(
     clientMessageId: context?.binding?.downstreamKey ?? downstreamKey,
     text: message,
     images: [],
+    policy: "steer-or-queue",
     /* #1117: an MCP send is inter-agent traffic by definition; the sender role
        is the server's own caller attribution, so the feed can say WHO relayed. */
     origin: mcpSenderOrigin(dependencies),
@@ -3228,6 +3229,7 @@ async function bridgeDirective(args: McpToolArgs, control: ViewerControlDependen
     clientMessageId: deliveryId,
     text: body,
     images: [],
+    policy: "steer-or-queue",
     /* #1117: a directive relay is inter-agent traffic — the manager's feed
        names the gateway (or attributed caller role), never the operator. */
     origin: mcpSenderOrigin(dependencies),
