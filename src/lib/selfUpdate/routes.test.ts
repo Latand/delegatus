@@ -113,6 +113,7 @@ function baseDeps(dir: string, overrides: Partial<ServiceDeps>): ServiceDeps {
     hostHealth: async () => null,
     requestDeployment: requestViewerDeployment,
     readDeployment: async () => null,
+    findDeploymentByIdempotencyKey: async () => null,
     releaseTarget: () => null,
     prepareCheckRepo: async () => { throw new Error("no check repository in this mode"); },
     buildEnv,
@@ -527,7 +528,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     return h;
   }
 
-  test("the operator can enable checkout auto-apply; invalid bodies and managed installs are refused", async () => {
+  test("the operator can enable auto-apply for checkout and managed installs", async () => {
     const h = harness({ remote: "https://github.com/example/project.git" });
     h.deps.check = async () => ({ ok: false, error: "fixture", installed: null });
     h.service = new SelfUpdateService(h.deps);
@@ -536,9 +537,14 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     expect((await postAuto(post("/auto", { enabled: true }))).status).toBe(202);
     expect((await snapshot()).auto?.enabled).toBe(true);
     expect(JSON.parse(readFileSync(join(h.deps.dir, "auto.json"), "utf8")).enabled).toBe(true);
-    const managed = new SelfUpdateService(baseDeps(mkdtempSync(join(root, "auto-managed-")), { mode: async () => ({ mode: "managed", reason: null, record: null }) }));
+    const managed = new SelfUpdateService(baseDeps(mkdtempSync(join(root, "auto-managed-")), {
+      mode: async () => ({ mode: "managed", reason: null, record: null }),
+      remote: "https://github.com/example/project.git",
+      releaseTarget: () => ({ revision: firstSha }),
+    }));
     setSelfUpdateServiceForTests(managed);
-    expect((await postAuto(post("/auto", { enabled: true }))).status).toBe(409);
+    expect((await postAuto(post("/auto", { enabled: true }))).status).toBe(202);
+    expect((await snapshot()).auto).toMatchObject({ availability: "available", enabled: true });
   });
 
   test.each(["pending", "red", "unknown"] as const)("the real snapshot names %s checks during a built update's wait, then resumes waiting after recovery", async (state) => {

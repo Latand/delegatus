@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { runtimeHostClient } from "@/lib/runtime/client";
+import type { ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
 import { listPresence } from "@/lib/view/presenceStore";
 import { requestViewerDeployment } from "@/lib/runtime/deploymentRuntime";
@@ -90,6 +91,25 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
     readDeployment: async (deploymentId) => {
       const client = runtimeHostClient();
       return client ? client.readViewerDeployment(deploymentId) : null;
+    },
+    findDeploymentByIdempotencyKey: async (idempotencyKey): Promise<ViewerDeploymentStatus | null> => {
+      const client = runtimeHostClient();
+      if (!client?.listViewerDeployments) throw new Error("runtime host cannot query deployment receipts");
+      let cursor: string | undefined;
+      let legacySnapshot = false;
+      do {
+        const page = await client.listViewerDeployments({ limit: 100, ...(cursor ? { cursor } : {}) });
+        legacySnapshot ||= page.legacySnapshot === true;
+        const found = page.deployments.find((deployment) => "idempotencyKey" in deployment && deployment.idempotencyKey === idempotencyKey);
+        if (found && "idempotencyKey" in found) return found;
+        if (!page.hasMore) break;
+        if (!page.nextCursor) throw new Error("runtime host deployment history is incomplete");
+        cursor = page.nextCursor;
+      } while (cursor);
+      // An old host's snapshot is a bounded view, so absence there cannot
+      // establish that this idempotency key was never accepted.
+      if (legacySnapshot) throw new Error("runtime host cannot confirm an absent deployment receipt");
+      return null;
     },
     releaseTarget: () => readHotStateReleaseTarget(stateDir()),
     prepareCheckRepo: () => prepareManagedCheckRepo(join(dir, "check.git"), statePath("deployments", "canonical.git", "objects")),
