@@ -3716,7 +3716,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           kind: "send" as const, status: "pending" as const,
           at: new Date(entry!.at).toISOString(), revision: 0,
         };
-        readOperationBack({ operationId, idempotencyKey: entry!.id, original }, true);
+        readOperationBack({ operationId, idempotencyKey: original.idempotencyKey, original }, true);
       }
     },
     retryOperation: (key) => {

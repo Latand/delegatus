@@ -473,6 +473,78 @@ test("a delivered real retry leaf settles its original row after remount without
   }
 });
 
+test("manual status check settles a retry leaf after its first readback fails without resending", async () => {
+  const runtime = await startComposerPayloadRuntime(path.join(sandbox, "manual-retry-lineage"));
+  const key = "manual-retry-readback-lineage";
+  const text = "check retry delivery without sending twice";
+  const call = async (method: "GET" | "POST", url: string, body?: unknown) => runtime.handle(new Request(`http://localhost${url}`, {
+    method,
+    headers: { "content-type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  }));
+  try {
+    const admitted = await call("POST", "/api/runtime/send", {
+      conversationId: runtime.conversationId, text, images: [], idempotencyKey: key,
+    });
+    expect(admitted.status).toBe(202);
+    const operationId = (await admitted.json() as { operationId: string }).operationId;
+    await waitFor(() => runtime.journal.operationResult(operationId)?.receipt.status === "failed");
+    await runtime.hostUp();
+    const retried = await call("POST", `/api/runtime/operations/${operationId}`);
+    expect([200, 202]).toContain(retried.status);
+    const leafId = (await retried.json() as { operationId: string }).operationId;
+    await waitFor(() => runtime.journal.operationResult(leafId)?.receipt.status === "delivered");
+    const storedRetry = runtime.journal.operationResult(leafId)!.receipt;
+    expect(storedRetry).toMatchObject({ idempotencyKey: expect.stringMatching(/^retry_/), retryOfOperationId: operationId });
+
+    const submittedAt = Date.now() - 60_000;
+    sessionStorage.setItem(`llvOutbox:${runtime.conversationId}`, JSON.stringify([{
+      id: key, text, images: 0, at: submittedAt, state: "delivering", operationId: leafId,
+      deliveryReceipt: {
+        ...storedRetry, status: "delivering", conversationId: runtime.conversationId,
+        text, at: new Date(submittedAt).toISOString(), revision: 2,
+      },
+    }]));
+    const readbacks: Array<{ method: string; url: string }> = [];
+    let firstRead = true;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url === "/api/tmux/targets") return Response.json({ targets: { "0": "%1" } });
+      if (url === `/api/runtime/operations/${leafId}` && method === "GET") {
+        readbacks.push({ method, url });
+        if (firstRead) {
+          firstRead = false;
+          return Response.json({ error: "temporary readback failure" }, { status: 503 });
+        }
+        return call("GET", url);
+      }
+      return Response.json({ error: "unexpected request" }, { status: 404 });
+    }) as typeof fetch;
+    const unmount = await mountComposer(runtime.conversationId);
+    try {
+      await waitFor(() => readbacks.length === 1);
+      expect(readOutbox(runtime.conversationId)[0]?.state).toBe("delivering");
+
+      await act(async () => {
+        messageRowRecovery(runtime.conversationId)?.check?.(key);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      await waitFor(() => readOutbox(runtime.conversationId)[0]?.state === "delivered");
+      expect(readbacks).toHaveLength(2);
+      expect(readOutbox(runtime.conversationId)[0]).toMatchObject({ id: key, state: "delivered" });
+      expect(sessionStorage.getItem(`llvPendingSend:${runtime.conversationId}`)).toBeNull();
+      expect(runtime.delivered).toHaveLength(1);
+      expect(runtime.delivered[0]?.text).toContain(text);
+    } finally {
+      await unmount();
+    }
+  } finally {
+    await runtime.close();
+  }
+});
+
 test("a row whose journal operation was compacted settles from the delivery record alone", async () => {
   /* The incident's exact shape: the operation was delivered and settled on
      the delivery record, and the journal has since compacted its row. The
