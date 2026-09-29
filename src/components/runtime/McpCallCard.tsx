@@ -97,7 +97,7 @@ function LinkChip({
   const label = mcpLinkLabel(t, link);
   const disabled = link.kind === "conversation"
     && (!conversationAvailability.loaded || !conversationAvailability.ids.has(link.id));
-  const shared = "inline-flex min-h-6 shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10.5px] font-semibold transition-colors [@media(pointer:coarse)]:min-h-8";
+  const shared = "inline-flex min-h-6 min-w-0 shrink items-center justify-center gap-1 max-[480px]:min-w-8 rounded-full border px-2 py-0.5 text-[10.5px] font-semibold transition-colors [@media(pointer:coarse)]:min-h-8";
   if (disabled) {
     return (
       <span
@@ -106,8 +106,8 @@ function LinkChip({
         title="This conversation will open after the scanner attributes it."
         className={`${shared} cursor-wait border-border bg-sunken text-muted opacity-60`}
       >
-        <MessageCircle className="h-3 w-3" aria-hidden />
-        {label}
+        <MessageCircle className="h-3 w-3 shrink-0" aria-hidden />
+        <span className="truncate max-[480px]:sr-only">{label}</span>
       </span>
     );
   }
@@ -115,11 +115,12 @@ function LinkChip({
     <a
       data-testid={`mcp-link-${link.kind}`}
       href={link.href}
+      title={label}
       onClick={(event) => navigateToEntity(event, link)}
       className={`${shared} border-accent/35 bg-accent-soft text-accent hover:border-accent hover:bg-accent/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45`}
     >
-      {link.kind === "conversation" ? <MessageCircle className="h-3 w-3" aria-hidden /> : <ExternalLink className="h-3 w-3" aria-hidden />}
-      {label}
+      {link.kind === "conversation" ? <MessageCircle className="h-3 w-3 shrink-0" aria-hidden /> : <ExternalLink className="h-3 w-3 shrink-0" aria-hidden />}
+      <span className="truncate max-[480px]:sr-only">{label}</span>
     </a>
   );
 }
@@ -159,7 +160,7 @@ export function McpCallCard({
         <div data-testid="mcp-call-progress" className="absolute inset-x-0 top-0 h-0.5 animate-pulse bg-gradient-to-r from-transparent via-accent to-transparent" />
       ) : null}
       <details className="min-w-0">
-        <summary className="flex min-w-0 cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-0.5 rounded-control py-0.5 text-ui hover:bg-sunken [@media(pointer:coarse)]:min-h-11 [&::-webkit-details-marker]:hidden">
+        <summary className="flex min-w-0 cursor-pointer list-none flex-nowrap items-center gap-x-2 overflow-hidden rounded-control py-0.5 text-ui hover:bg-sunken [@media(pointer:coarse)]:min-h-11 [&::-webkit-details-marker]:hidden">
           <Icon
             className={`h-3.5 w-3.5 shrink-0 ${
               state === "error" ? "text-danger" : state === "success" ? "text-success" : "text-accent"
@@ -169,14 +170,11 @@ export function McpCallCard({
           <span className="shrink-0 font-mono text-[9.5px] font-semibold uppercase tracking-[0.08em] text-muted">
             MCP · {mcp?.serverName ?? "viewer"}
           </span>
-          {/* #1955: on one wrapping line the badge, the chips, the outcome
-              mark, the duration and the timestamp are all intrinsically sized,
-              so `flex-1` (basis 0) left the title as the only item able to
-              give way — with two entity chips it held 1.27 px of a 330 px row
-              at phone width. A flex basis makes it claim the line instead, and
-              what no longer fits wraps whole, the way the live overlay row it
-              takes over from already does. */}
-          <span data-mcp-title className="min-w-0 grow basis-[10rem] truncate font-semibold text-secondary" title={description.title}>
+          {/* One line, never wrapped (operator decision, docs/design/seat-panel-noise.md
+              b2). The title claims the leftover width with a floor of its own (#1955),
+              the entity chips give way first and cut their label with an ellipsis, and
+              the whole text stays in the title tooltip and the Details disclosure. */}
+          <span data-mcp-title className="min-w-[6rem] flex-1 basis-0 truncate font-semibold text-secondary" title={description.title}>
             {description.title}
           </span>
           {replayed ? <span data-testid="mcp-replay" className="shrink-0 rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-bold text-accent">Replay</span> : null}

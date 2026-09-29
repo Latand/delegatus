@@ -63,39 +63,55 @@ export function LaunchChipsView({
       role="status"
       aria-live={launch.state === "failed" ? "assertive" : "polite"}
     >
-      <span
-        data-launch-chip="state"
-        title={detail}
-        className={`inline-flex min-w-0 max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-caption font-semibold ${tone(launch.state)}`}
-      >
-        <Icon
-          className={`h-3 w-3 shrink-0 ${spinning(launch.state) ? "animate-spin motion-reduce:animate-none" : ""}`}
-          aria-hidden
-        />
-        <span className="truncate">{t(`spawnChip.${launch.state}` as MessageKey)}</span>
-        <span className="sr-only">{detail}</span>
-      </span>
-      <span
-        data-launch-chip="initial"
-        title={initialDetail}
-        className="inline-flex min-w-0 max-w-full items-center rounded-full border border-border bg-sunken px-2 py-0.5 text-caption font-semibold text-muted"
-      >
-        <span className="truncate">{t(`spawnChip.initial.${launch.initialMessage}` as MessageKey)}</span>
-        <span className="sr-only">{initialDetail}</span>
-      </span>
-      {/* The launch id is the handle an operator quotes while a launch is still
-          being chased — pending, settling, or failed (issue #1138). A launch
-          that worked is identified by the conversation it became, so only the
-          success states drop the id from their chips. */}
-      {launch.state !== "recovered" && launch.state !== "live-late-success" ? (
+      {/* The chips are one line and never wrap (operator decision, docs/design/seat-panel-noise.md
+          b1): what does not fit is cut with an ellipsis, and every chip's full
+          text stays in its tooltip. */}
+      <div data-launch-chip-line className="flex min-w-0 max-w-full flex-nowrap items-center gap-1.5">
         <span
-          data-launch-chip="id"
-          title={t("spawnCard.launch", { id: launch.launchId })}
-          className="inline-flex shrink-0 items-center rounded-full border border-border/70 px-2 py-0.5 font-mono text-caption text-muted/80"
+          data-launch-chip="state"
+          title={detail}
+          className={`inline-flex min-w-0 shrink items-center gap-1 rounded-full border px-2 py-0.5 text-caption font-semibold ${tone(launch.state)}`}
         >
-          {launch.launchId.slice(0, 8)}
+          <Icon
+            className={`h-3 w-3 shrink-0 ${spinning(launch.state) ? "animate-spin motion-reduce:animate-none" : ""}`}
+            aria-hidden
+          />
+          <span className="truncate">{t(`spawnChip.${launch.state}` as MessageKey)}</span>
+          <span className="sr-only">{detail}</span>
         </span>
-      ) : null}
+        <span
+          data-launch-chip="initial"
+          title={initialDetail}
+          className="inline-flex min-w-0 shrink items-center rounded-full border border-border bg-sunken px-2 py-0.5 text-caption font-semibold text-muted"
+        >
+          <span className="truncate">{t(`spawnChip.initial.${launch.initialMessage}` as MessageKey)}</span>
+          <span className="sr-only">{initialDetail}</span>
+        </span>
+        {/* The launch id is the handle an operator quotes while a launch is still
+            being chased — pending, settling, or failed (issue #1138). A launch
+            that worked is identified by the conversation it became, so only the
+            success states drop the id from their chips. */}
+        {launch.state !== "recovered" && launch.state !== "live-late-success" ? (
+          <span
+            data-launch-chip="id"
+            title={t("spawnCard.launch", { id: launch.launchId })}
+            className="inline-flex min-w-0 shrink items-center rounded-full border border-border/70 px-2 py-0.5 font-mono text-caption text-muted/80"
+          >
+            <span className="truncate">{launch.launchId.slice(0, 8)}</span>
+          </span>
+        ) : null}
+        {launch.state === "failed" && launch.retrySafe && onRetry ? (
+          <button
+            type="button"
+            data-launch-retry
+            onClick={onRetry}
+            title={t("spawnCard.retrySafe")}
+            className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-full border border-border bg-card px-2 text-caption font-semibold text-primary hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [@media(pointer:coarse)]:min-h-11"
+          >
+            <RotateCcw className="h-3 w-3" aria-hidden /> {t("launchHistory.retryLabel")}
+          </button>
+        ) : null}
+      </div>
       {/* Only a launch that is lost says so, in one sentence; the projected
           reason stays available as the tooltip for whoever chases it. */}
       {launch.state === "failed" || launch.recoveryStopped ? (
@@ -106,17 +122,6 @@ export function LaunchChipsView({
         >
           {t("spawnCard.failedDetail")}
         </span>
-      ) : null}
-      {launch.state === "failed" && launch.retrySafe && onRetry ? (
-        <button
-          type="button"
-          data-launch-retry
-          onClick={onRetry}
-          title={t("spawnCard.retrySafe")}
-          className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-full border border-border bg-card px-2 text-caption font-semibold text-primary hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [@media(pointer:coarse)]:min-h-11"
-        >
-          <RotateCcw className="h-3 w-3" aria-hidden /> {t("launchHistory.retryLabel")}
-        </button>
       ) : null}
     </div>
   );

@@ -171,7 +171,7 @@ if (SEAT_NOISE !== null) {
   files[0]!.title = "Orchestrator";
   if (SEAT_NOISE === "i") { seatOn("claude", "opus", "high", ""); launchWindow({ error: SEAT_ENVELOPE }); }
   else if (SEAT_NOISE === "ii") seatOn("claude", "opus", "high", "");
-  else if (SEAT_NOISE === "iii") { seatOn("claude", "opus", "high", ""); launchWindow({ state: "failed", initialMessage: "failed", recoveryStopped: true, error: "the host has not answered yet" }); }
+  else if (SEAT_NOISE === "iii") { seatOn("claude", "opus", "high", ""); launchWindow({ state: "failed", initialMessage: "failed", retrySafe: true, recoveryStopped: true, error: "the host has not answered yet" }); }
   else if (SEAT_NOISE === "iv") seatOn("codex", "gpt-5.6", "low", "iv-old");
   else if (SEAT_NOISE === "v") seatOn("codex", "gpt-5.6", "high", "v");
 }
@@ -179,6 +179,14 @@ const SEAT_FEED = `${[
   JSON.stringify({ type: "user", timestamp: iso(480), message: { role: "user", content: "Keep the search fix moving." }, promptSource: "typed", origin: { kind: "human" } }),
   JSON.stringify({ type: "assistant", timestamp: iso(420), message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_seat_search", name: "ToolSearch", input: { query: "select:mcp__viewer__list_pipelines", max_results: 1 } }] } }),
   JSON.stringify({ type: "user", timestamp: iso(418), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_seat_search", content: "ok" }] } }),
+  ...([
+    ["toolu_seat_get_task", "mcp__viewer__get_task", { taskId: "3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41" }, 300],
+    ["toolu_seat_update_task", "mcp__viewer__update_task", { taskId: "3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41", status: "assigned" }, 260],
+    ["toolu_seat_shell", "Bash", { command: "ls -d /workspace/demo/projects/atlas-pipeline-9c1d2e3f && git -C /workspace/demo/projects/atlas-pipeline-9c1d2e3f status --short --branch", description: "Check the worktree" }, 220],
+  ] as const).flatMap(([id, name, input, ago]) => [
+    JSON.stringify({ type: "assistant", timestamp: iso(ago), message: { role: "assistant", content: [{ type: "tool_use", id, name, input }] } }),
+    JSON.stringify({ type: "user", timestamp: iso(ago - 2), message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } }),
+  ]),
   JSON.stringify({ type: "assistant", timestamp: iso(120), message: { role: "assistant", content: [{ type: "text", text: "Search: the verifier passed on the second attempt. Nothing needs you." }] } }),
 ].join("\n")}\n`;
 let snapshotReads = 0;

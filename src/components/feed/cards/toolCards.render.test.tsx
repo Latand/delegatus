@@ -266,3 +266,14 @@ test("an orchestration row renders nested children and the meaningful outer summ
   // The raw JavaScript "source" disclosure is gone (compact-feed pass).
   expect(html).not.toContain(en("tools.source"));
 });
+
+test("seat panel b3: a shell row with an absolute path stays one truncated line and keeps the whole command as its tooltip", () => {
+  const command = "ls -d /workspace/demo/projects/atlas-pipeline-9c1d2e3f && git -C /workspace/demo/projects/atlas-pipeline-9c1d2e3f status --short";
+  const html = renderToStaticMarkup(<ToolCard event={toolEvent({ summary: command, command })} />);
+  const summary = html.match(/<span class="min-w-0 flex-1 truncate[^"]*" title="([^"]*)">/);
+  expect(summary).not.toBeNull();
+  expect(summary![1]).toBe(command.replaceAll("&", "&amp;"));
+  /* The row is not a wrapping container: no flex-wrap, and the expanded body is still lazy. */
+  expect(html.match(/<summary[^>]*class="([^"]*)"/)![1]).not.toContain("flex-wrap");
+  expect(html).not.toContain("whitespace-pre-wrap");
+});

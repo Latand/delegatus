@@ -200,7 +200,7 @@ export function LiveMcpLinkChip({
 }) {
   const { t } = useLocale();
   const label = mcpLinkLabel(t, link);
-  const shared = "inline-flex min-h-6 shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10.5px] font-semibold transition-colors [@media(pointer:coarse)]:min-h-8";
+  const shared = "inline-flex min-h-6 min-w-0 shrink items-center justify-center gap-1 max-[480px]:min-w-8 rounded-full border px-2 py-0.5 text-[10.5px] font-semibold transition-colors [@media(pointer:coarse)]:min-h-8";
   if (link.kind === "conversation" && (!availability.loaded || !availability.ids.has(link.id))) {
     return (
       <span
@@ -208,8 +208,8 @@ export function LiveMcpLinkChip({
         aria-disabled="true"
         className={`${shared} cursor-wait border-border bg-sunken text-muted opacity-60`}
       >
-        <MessageCircle className="h-3 w-3" aria-hidden />
-        {label}
+        <MessageCircle className="h-3 w-3 shrink-0" aria-hidden />
+        <span className="truncate max-[480px]:sr-only">{label}</span>
       </span>
     );
   }
@@ -217,6 +217,7 @@ export function LiveMcpLinkChip({
     <a
       data-live-mcp-link={link.kind}
       href={link.href}
+      title={label}
       onClick={(event) => {
         if (link.kind === "conversation") return;
         event.preventDefault();
@@ -224,8 +225,8 @@ export function LiveMcpLinkChip({
       }}
       className={`${shared} border-accent/35 bg-accent-soft text-accent hover:border-accent hover:bg-accent/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45`}
     >
-      {link.kind === "conversation" ? <MessageCircle className="h-3 w-3" aria-hidden /> : <ExternalLink className="h-3 w-3" aria-hidden />}
-      {label}
+      {link.kind === "conversation" ? <MessageCircle className="h-3 w-3 shrink-0" aria-hidden /> : <ExternalLink className="h-3 w-3 shrink-0" aria-hidden />}
+      <span className="truncate max-[480px]:sr-only">{label}</span>
     </a>
   );
 }
@@ -271,13 +272,11 @@ function liveStateTone(state: LiveCallState): string {
    disclosure (ids, the whole payload) stays on the card: the live row is one
    line, and what the call returned is not known yet.
 
-   The title is what the operator reads, so it is what gets the width. Badge,
-   chips and outcome are all intrinsically sized, and on one flex line the
-   title was the only thing left able to shrink — at 390 px with two entity
-   chips it collapsed to about a pixel of its own row. Giving it a flex basis
-   makes it the item that claims the line instead: a chip that no longer fits
-   beside it wraps to the next line of the same block, where it stays a full,
-   tappable chip. */
+   The row is one line and never wraps (operator decision,
+   docs/design/seat-panel-noise.md b2). The title is what the operator reads, so
+   it claims the leftover width with a floor of its own (#1955); the entity chips
+   give way first, cut their label with an ellipsis and keep the whole label in
+   their tooltip. */
 function LiveMcpRow({
   item,
   tool,
@@ -306,10 +305,7 @@ function LiveMcpRow({
       data-live-mcp-state={state}
       className="ml-9 flex min-w-0 items-start gap-x-2 rounded-control py-0.5 text-ui"
     >
-      {/* The glyph opens the wrapping line, as it does on the canonical card:
-          a chip that wraps starts under the glyph on both, so the chips keep
-          one left edge when the transcript row replaces this one. */}
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
+      <div className="flex min-w-0 flex-1 flex-nowrap items-center gap-x-2 overflow-hidden">
         <Icon
           className={`h-3.5 w-3.5 shrink-0 ${tone} ${state === "pending" ? "animate-pulse" : ""}`}
           aria-hidden
@@ -319,7 +315,7 @@ function LiveMcpRow({
         </span>
         <span
           data-live-mcp-title
-          className="min-w-0 grow basis-[10rem] truncate font-semibold text-secondary"
+          className="min-w-[6rem] flex-1 basis-0 truncate font-semibold text-secondary"
           title={description.title}
         >
           {description.title}
@@ -327,9 +323,7 @@ function LiveMcpRow({
         {description.links.map((link) => (
           <LiveMcpLinkChip key={`${link.kind}:${link.id}`} link={link} availability={availability} />
         ))}
-        {/* The only outcome that is a word rather than a mark, so it wraps
-            with the chips instead of reserving a column of its own — holding
-            one would cost the title the line a second time. */}
+        {/* The only outcome that is a word rather than a mark. */}
         {state === "outcome-omitted" ? (
           <span data-live-mcp-outcome="omitted" className="shrink-0 text-caption font-semibold text-muted">
             {t("feed.liveToolOutcomeOmitted")}

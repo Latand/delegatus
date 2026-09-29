@@ -364,6 +364,8 @@ const orchestrator = add(conversation("orchestrator", "Orchestrator for atlas", 
 const SEAT_MANDATE = "Keep the project moving. Read the board before every decision, keep every lane owned, and report what changed.";
 const SEAT_ENVELOPE = `structured launch recovery: ${JSON.stringify({ phase: "uncertain", startedAt: 1, checks: 2, nextTryAt: 2, reason: "the host has not answered yet" })}`;
 const SEAT_LAUNCH_ID = "launch-seat-noise";
+const SEAT_TASK_ID = "3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41";
+const SEAT_SHELL = "ls -d /workspace/demo/projects/atlas-pipeline-9c1d2e3f && git -C /workspace/demo/projects/atlas-pipeline-9c1d2e3f status --short --branch";
 function seatLaunch(over: Record<string, unknown>) {
   return {
     launchId: SEAT_LAUNCH_ID, clientAttemptId: null, accountId: null, conversationId: orchestrator.conversationId, generation: 1,
@@ -388,7 +390,7 @@ if (SEAT_NOISE) {
   else if (NOISE_CASE === "ii") seatOn("claude", "opus", "high", "ii");
   else if (NOISE_CASE === "iii") {
     seatOn("claude", "opus", "high", "iii");
-    launchWindow(seatLaunch({ state: "failed", initialMessage: "failed", recoveryStopped: true, error: "the host has not answered yet" }));
+    launchWindow(seatLaunch({ state: "failed", initialMessage: "failed", retrySafe: true, recoveryStopped: true, error: "the host has not answered yet" }));
   }
   else if (NOISE_CASE === "iv") seatOn("codex", "gpt-5.6", "low", "iv-old");
   else if (NOISE_CASE === "v") seatOn("codex", "gpt-5.6", "high", "v");
@@ -1597,6 +1599,10 @@ function transcriptOf(pathname: string): string {
       asked(8 * MIN, "Keep the search fix moving."),
       ...tool(7 * MIN, "toolu_seat_search", "ToolSearch", { query: "select:mcp__viewer__list_pipelines", max_results: 1 }),
       ...tool(6 * MIN, "toolu_seat_list", "mcp__viewer__list_pipelines", { project: PROJECT }),
+      /* The rows the operator asked to keep visible but cut to one line (b1-b3 of the design note). */
+      ...tool(5 * MIN, "toolu_seat_get_task", "mcp__viewer__get_task", { taskId: SEAT_TASK_ID }),
+      ...tool(4 * MIN, "toolu_seat_update_task", "mcp__viewer__update_task", { taskId: SEAT_TASK_ID, status: "assigned" }),
+      ...tool(3 * MIN, "toolu_seat_shell", "Bash", { command: SEAT_SHELL, description: "Check the worktree" }),
       said(2 * MIN, "Search: the verifier passed on the second attempt. Nothing needs you."),
     ].join("\n")}\n`;
   }

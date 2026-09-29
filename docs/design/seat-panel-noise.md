@@ -318,6 +318,10 @@ and the tests below reproduce both.
 
 **(b) Product judgement: not changed here; for the orchestrator to ask the operator**
 
+*Decision on b1-b3, operator, 2026-09-29 (Ukrainian, verbatim): «1,2, 3 - треба залишити, просто
+обрізані щоб і все.»* Keep them, cut to one line each. b4-b8 stay exactly as they are. The
+"Exact change for b1-b3" section below records what was built.
+
 | # | Candidate | Evidence and why it is a judgement call |
 |---|---|---|
 | b1 | Launch chips on a seat that launched fine (`Launched`, `First message: delivered`) and the 8-character launch id chip while a launch is pending | Transient by design (#569) and the quotable handle (#1138). They retire on the first assistant turn. Hiding them on seats only is a product call. |
@@ -362,6 +366,37 @@ and the tests below reproduce both.
   - The raw transcript and the MCP `conversation_messages` output are unchanged: agents still
     read everything.
 
+### Exact change for b1-b3: kept, each on a single truncated line
+
+The operator's answer keeps the launch chips (with the 8-character launch id), the MCP task rows
+(`Opening task: <uuid>`, `Updating task <uuid>: assigned`) and the shell rows with absolute
+paths. Every action stays. What changes is that none of them wraps: each is one line, cut with an
+ellipsis, and the whole text stays one hover or one tap away. It applies to the seat panel and
+the ordinary conversation feed alike, because none of these components is seat-only.
+
+- **b1 Launch chips** (`src/components/conversation/LaunchChips.tsx`). The state chip, the
+  first-message chip, the launch id chip and the retry action sit in one `flex-nowrap` line
+  (`data-launch-chip-line`). A chip that does not fit shrinks and cuts its own label with an
+  ellipsis; each keeps its full sentence or the full launch id in its `title`. The retry
+  action does not shrink. The error sentence of a stopped launch keeps its own row under the line.
+- **b2 MCP task rows**, both surfaces that draw them: the transcript row
+  (`src/components/runtime/McpCallCard.tsx`) and the live-turn row
+  (`src/components/conversation/LiveTurnRows.tsx`, `LiveMcpRow`). The row is `flex-nowrap`.
+  The title takes the leftover width (`flex-1 basis-0 truncate`) with a floor of 6 rem, so it
+  never collapses to a pixel (#1955); the entity chips (`Відкрити задачу` and the like) give way
+  first, cut their label with an ellipsis and carry it in their `title`. The chip stays a link.
+  The whole title is the row's `title`, and the transcript row's Details disclosure still holds
+  the ids and the payload.
+- **b3 Shell rows.** The collapsed row (`ToolLine`, `MobileRunRow`, the live tool row) was
+  already `truncate` with the whole summary in `title`, and the whole command wrapped and
+  copyable sits in the row's expanded body. It needed no change; a render test now pins it, and
+  the rendered evidence measures it.
+
+This reverses the wrapping half of #1955 ("what no longer fits wraps whole"), by the operator's
+decision: a chip that no longer fits is now cut, not moved to a second line. The #1955 floors in
+`kanbanBoard.browser.test.tsx` ("live turn rows on a phone") are restated for the new layout: the
+title keeps at least 96 px and 25 % of its row, a chip at least 24 px in each direction.
+
 ### States to cover (point 3)
 
 - Launch window (a `spawn:` placeholder, prompt present, `mandate` set): a `MandateCard`, no
@@ -378,7 +413,7 @@ and the tests below reproduce both.
 - The #2265 sender resolution for transcript rows (`messageProvenance.tsx`,
   `deliveredOccurrences.ts`) and the #1166 mandate join. They are reused as they are.
 - The outbox's echo retirement and ownership (`outbox.ts`) for ordinary launches.
-- Every (b) item above.
+- Every (b) item above except b1-b3, which the operator kept and had cut to one line.
 
 ---
 
@@ -414,6 +449,13 @@ Each evidence case goes into the driver that already exists for its surface (AGE
   mounts the same `BranchPane` → `LogFeed` → `TmuxComposer` → `RuntimePill`) for cases
   (i)-(v) at 390×844, light and dark, EN and UK, with the same assertions. The pill face reads
   the tier id (`high`).
+- **b1-b3, one line each.** The same two blocks carry the transcript rows and assertions for the
+  kept items: the seat transcript holds `get_task` and `update_task` calls naming a task uuid
+  and a shell call over two absolute paths, and the stopped launch case (iii) has `retrySafe`
+  set. Per frame: the launch chip line, every MCP row and the shell row is no taller than one
+  line (34 px on the desktop, 48 px on the phone), the launch id chip is present, every chip and
+  action lies inside its row at 24 px or more, and each truncated title carries its whole text as
+  `title`.
 - The drivers' JSON records go to their existing `evidence/**` output directories.
 
 Fast checks, by file path, each run with fresh `LLV_STATE_DIR`, `XDG_CONFIG_HOME` and
@@ -457,5 +499,6 @@ Then `tsc`, the i18n test (`src/lib/i18n/i18n.test.ts`, for the new EN/UK key), 
 
 ## Questions for the operator (none block this design)
 
-The (b) table is the list: b1-b8, each with its evidence. The recommendation for every one is
-"keep as is" unless the operator names it.
+The (b) table is the list: b1-b8, each with its evidence. The operator answered b1-b3 on
+2026-09-29 (keep, cut to one line; built as above). b4-b8 stay as they are unless the operator
+names one.

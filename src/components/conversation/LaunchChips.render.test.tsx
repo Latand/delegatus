@@ -101,3 +101,24 @@ test("a launch whose recovery stopped is a failure while its receipt still reads
   expect(html).toContain("The agent could not be started.");
   expect(html).toContain('title="runtime host unavailable"');
 });
+
+test("seat panel b1: the chips share one non-wrapping line, each cut with an ellipsis and keeping its full text as a tooltip", () => {
+  const html = renderToStaticMarkup(
+    <LaunchChipsView
+      launch={launch("failed", { initialMessage: "failed", retrySafe: true, error: "host never bound" })}
+      t={t}
+      onRetry={() => {}}
+    />,
+  );
+  const line = html.match(/<div data-launch-chip-line="true" class="([^"]*)">([\s\S]*?)<\/div>/);
+  expect(line).not.toBeNull();
+  expect(line![1]).toContain("flex-nowrap");
+  expect(line![1]).not.toContain("flex-wrap");
+  /* State, first message and id are all on that line, with the retry action. */
+  for (const marker of ['data-launch-chip="state"', 'data-launch-chip="initial"', 'data-launch-chip="id"', "data-launch-retry"]) {
+    expect(line![2]).toContain(marker);
+  }
+  expect(line![2]).not.toContain('data-launch-chip="error"');
+  expect(html).toContain(`title="${t("spawnCard.launch", { id: LAUNCH_ID })}"`);
+  expect(html).toContain('<span class="truncate">' + LAUNCH_ID.slice(0, 8) + "</span>");
+});

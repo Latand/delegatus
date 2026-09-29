@@ -5010,7 +5010,37 @@ browserTest("seat panel noise: cases i-v hold no internal noise on the phone at 
       .filter((el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden");
     const pill = root.querySelector("[data-runtime-pill]");
     const chips = [...root.querySelectorAll<HTMLElement>('[data-launch-chip="error"]')];
+
+    /* b1-b3 (docs/design/seat-panel-noise.md): launch chips, MCP task rows and shell rows are one line each, cut with an ellipsis, the whole text in a tooltip. */
+    const box = (el: Element) => el.getBoundingClientRect();
+    const inside = (el: Element, row: Element) => box(el).right <= box(row).right + 1 && box(el).left >= box(row).left - 1;
+    const launchLines = [...root.querySelectorAll<HTMLElement>("[data-launch-chip-line]")].map((row) => ({
+      height: Math.round(box(row).height),
+      chips: [...row.querySelectorAll<HTMLElement>("[data-launch-chip]")].map((el) => ({ kind: el.getAttribute("data-launch-chip"), title: el.getAttribute("title"), inside: inside(el, row), width: Math.round(box(el).width), tops: Math.round(box(el).top) })),
+      retry: Boolean(row.querySelector("[data-launch-retry]")),
+      retryInside: row.querySelector("[data-launch-retry]") ? inside(row.querySelector("[data-launch-retry]")!, row) : null,
+      rowInside: box(row).right <= box(row.parentElement!).right + 1,
+    }));
+    const mcpRows = [...root.querySelectorAll<HTMLElement>("[data-testid=mcp-call-card] summary")].map((row) => {
+      const title = row.querySelector<HTMLElement>("[data-mcp-title]")!;
+      const links = [...row.querySelectorAll<HTMLElement>("[data-testid^=mcp-link-]")];
+      return {
+        height: Math.round(box(row).height),
+        text: (title.textContent ?? "").trim(),
+        titleAttr: title.getAttribute("title"),
+        cut: title.scrollWidth > title.clientWidth,
+        titleWidth: Math.round(box(title).width),
+        links: links.map((el) => ({ text: (el.textContent ?? "").trim(), title: el.getAttribute("title"), inside: inside(el, row), width: Math.round(box(el).width), height: Math.round(box(el).height) })),
+      };
+    });
+    const shellRows = [...root.querySelectorAll<HTMLElement>("[data-tool-row]")].filter((row) => (row.textContent ?? "").includes("ls -d /workspace")).map((row) => {
+      const label = [...row.querySelectorAll<HTMLElement>("span")].find((el) => (el.textContent ?? "").includes("ls -d /workspace") && el.getAttribute("title"))!;
+      return { height: Math.round(box(row).height), titleAttr: label.getAttribute("title"), cut: label.scrollWidth > label.clientWidth, inside: inside(label, row) };
+    });
     return {
+      launchLines,
+      mcpRows,
+      shellRows,
       envelope: /structured launch recovery|"phase"|\{"/.test(text),
       toolSearch,
       errorChips: chips.map((el) => ({ text: el.textContent, title: el.getAttribute("title") })),
@@ -5067,6 +5097,28 @@ browserTest("seat panel noise: cases i-v hold no internal noise on the phone at 
         if (!launchWindow && !read.answer) failures.push(`${label}: the transcript did not render`);
         if (!launchWindow && !read.pill?.endsWith(high)) failures.push(`${label}: the pill reads "${read.pill}", not …${high}`);
         if (launchWindow && read.pill && !read.pill.endsWith(high)) failures.push(`${label}: the pill reads "${read.pill}", not …${high}`);
+        for (const line of read.launchLines) {
+          if (line.height > 48) failures.push(`${label}: the launch chips wrap (${line.height}px)`);
+          if (!line.rowInside || line.chips.some((chip) => !chip.inside || chip.width < 24 || !chip.title)) failures.push(`${label}: a launch chip leaves its line, is squeezed or has no tooltip ${JSON.stringify(line.chips)}`);
+          if (new Set(line.chips.map((chip) => chip.tops)).size > 1) failures.push(`${label}: the launch chips sit on different lines`);
+        }
+        if (read.launchLines.length !== (launchWindow ? 1 : 0)) failures.push(`${label}: ${read.launchLines.length} launch chip lines`);
+        if (kind === "iii" && read.launchLines[0]?.retryInside === false) failures.push(`${label}: a retry action leaves the line`);
+        if (launchWindow && !read.launchLines[0]?.chips.some((chip) => chip.kind === "id")) failures.push(`${label}: the launch id chip is gone`);
+        const claudeRows = kind === "ii" || kind === "iv";
+        if (read.mcpRows.length !== (claudeRows ? 2 : 0)) failures.push(`${label}: ${read.mcpRows.length} MCP rows`);
+        for (const row of read.mcpRows) {
+          if (row.height > 48) failures.push(`${label}: the MCP row "${row.text}" wraps (${row.height}px)`);
+          if (row.titleAttr !== row.text) failures.push(`${label}: the MCP row "${row.text}" does not carry its whole text as a tooltip`);
+          if (row.titleWidth < 60) failures.push(`${label}: the MCP title holds ${row.titleWidth}px`);
+          if (row.links.some((link) => !link.inside || link.width < 24 || link.height < 24 || !link.title)) failures.push(`${label}: an MCP action leaves its row or is squeezed ${JSON.stringify(row.links)}`);
+        }
+        if (claudeRows && !read.mcpRows.some((row) => row.text.includes("3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41") && row.links.length)) failures.push(`${label}: the task row lost its id or its action`);
+        if (read.shellRows.length !== (claudeRows ? 1 : 0)) failures.push(`${label}: ${read.shellRows.length} shell rows`);
+        for (const row of read.shellRows) {
+          if (row.height > 48) failures.push(`${label}: the shell row wraps (${row.height}px)`);
+          if (!row.titleAttr?.includes("/workspace/demo/projects/atlas-pipeline-9c1d2e3f status")) failures.push(`${label}: the shell row does not carry its whole command as a tooltip`);
+        }
         if (read.overflowX > 1) failures.push(`${label}: overflows by ${read.overflowX}px`);
         if (read.zeroWidthControls.length) failures.push(`${label}: zero-width controls ${read.zeroWidthControls.join(", ")}`);
         if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);

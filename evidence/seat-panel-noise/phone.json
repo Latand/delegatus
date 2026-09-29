@@ -1,6 +1,39 @@
 {
   "frames": {
     "i-390-light-en": {
+      "launchLines": [
+        {
+          "height": 21,
+          "chips": [
+            {
+              "kind": "state",
+              "title": "Delivery is reconciling with the structured host.",
+              "inside": true,
+              "width": 91,
+              "tops": 233
+            },
+            {
+              "kind": "initial",
+              "title": "Initial message: queued",
+              "inside": true,
+              "width": 127,
+              "tops": 233
+            },
+            {
+              "kind": "id",
+              "title": "Launch launch-seat-noise",
+              "inside": true,
+              "width": 58,
+              "tops": 233
+            }
+          ],
+          "retry": false,
+          "retryInside": null,
+          "rowInside": true
+        }
+      ],
+      "mcpRows": [],
+      "shellRows": [],
       "envelope": false,
       "toolSearch": [],
       "errorChips": [],
@@ -14,6 +47,49 @@
       "pageErrors": []
     },
     "ii-390-light-en": {
+      "launchLines": [],
+      "mcpRows": [
+        {
+          "height": 44,
+          "text": "Opening task: 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41",
+          "titleAttr": "Opening task: 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41",
+          "cut": true,
+          "titleWidth": 107,
+          "links": [
+            {
+              "text": "Open task",
+              "title": "Open task",
+              "inside": true,
+              "width": 32,
+              "height": 32
+            }
+          ]
+        },
+        {
+          "height": 44,
+          "text": "Updating task 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41: assigned",
+          "titleAttr": "Updating task 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41: assigned",
+          "cut": true,
+          "titleWidth": 107,
+          "links": [
+            {
+              "text": "Open task",
+              "title": "Open task",
+              "inside": true,
+              "width": 32,
+              "height": 32
+            }
+          ]
+        }
+      ],
+      "shellRows": [
+        {
+          "height": 44,
+          "titleAttr": "ls -d /workspace/demo/projects/atlas-pipeline-9c1d2e3f && git -C /workspace/demo/projects/atlas-pipeline-9c1d2e3f status --short --branch",
+          "cut": true,
+          "inside": true
+        }
+      ],
       "envelope": false,
       "toolSearch": [],
       "errorChips": [],
@@ -27,6 +103,39 @@
       "pageErrors": []
     },
     "iii-390-light-en": {
+      "launchLines": [
+        {
+          "height": 21,
+          "chips": [
+            {
+              "kind": "state",
+              "title": "The launch ended with an error.",
+              "inside": true,
+              "width": 98,
+              "tops": 233
+            },
+            {
+              "kind": "initial",
+              "title": "Initial message: failed",
+              "inside": true,
+              "width": 117,
+              "tops": 233
+            },
+            {
+              "kind": "id",
+              "title": "Launch launch-seat-noise",
+              "inside": true,
+              "width": 58,
+              "tops": 233
+            }
+          ],
+          "retry": false,
+          "retryInside": null,
+          "rowInside": true
+        }
+      ],
+      "mcpRows": [],
+      "shellRows": [],
       "envelope": false,
       "toolSearch": [],
       "errorChips": [
@@ -45,6 +154,49 @@
       "pageErrors": []
     },
     "iv-390-light-en": {
+      "launchLines": [],
+      "mcpRows": [
+        {
+          "height": 44,
+          "text": "Opening task: 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41",
+          "titleAttr": "Opening task: 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41",
+          "cut": true,
+          "titleWidth": 107,
+          "links": [
+            {
+              "text": "Open task",
+              "title": "Open task",
+              "inside": true,
+              "width": 32,
+              "height": 32
+            }
+          ]
+        },
+        {
+          "height": 44,
+          "text": "Updating task 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41: assigned",
+          "titleAttr": "Updating task 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41: assigned",
+          "cut": true,
+          "titleWidth": 107,
+          "links": [
+            {
+              "text": "Open task",
+              "title": "Open task",
+              "inside": true,
+              "width": 32,
+              "height": 32
+            }
+          ]
+        }
+      ],
+      "shellRows": [
+        {
+          "height": 44,
+          "titleAttr": "ls -d /workspace/demo/projects/atlas-pipeline-9c1d2e3f && git -C /workspace/demo/projects/atlas-pipeline-9c1d2e3f status --short --branch",
+          "cut": true,
+          "inside": true
+        }
+      ],
       "envelope": false,
       "toolSearch": [],
       "errorChips": [],
@@ -60,6 +212,9 @@
       "pageErrors": []
     },
     "v-390-light-en": {
+      "launchLines": [],
+      "mcpRows": [],
+      "shellRows": [],
       "envelope": false,
       "toolSearch": [],
       "errorChips": [],
@@ -73,6 +228,39 @@
       "pageErrors": []
     },
     "i-390-dark-en": {
+      "launchLines": [
+        {
+          "height": 21,
+          "chips": [
+            {
+              "kind": "state",
+              "title": "Delivery is reconciling with the structured host.",
+              "inside": true,
+              "width": 91,
+              "tops": 233
+            },
+            {
+              "kind": "initial",
+              "title": "Initial message: queued",
+              "inside": true,
+              "width": 127,
+              "tops": 233
+            },
+            {
+              "kind": "id",
+              "title": "Launch launch-seat-noise",
+              "inside": true,
+              "width": 58,
+              "tops": 233
+            }
+          ],
+          "retry": false,
+          "retryInside": null,
+          "rowInside": true
+        }
+      ],
+      "mcpRows": [],
+      "shellRows": [],
       "envelope": false,
       "toolSearch": [],
       "errorChips": [],
@@ -86,6 +274,49 @@
       "pageErrors": []
     },
     "ii-390-dark-en": {
+      "launchLines": [],
+      "mcpRows": [
+        {
+          "height": 44,
+          "text": "Opening task: 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41",
+          "titleAttr": "Opening task: 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41",
+          "cut": true,
+          "titleWidth": 107,
+          "links": [
+            {
+              "text": "Open task",
+              "title": "Open task",
+              "inside": true,
+              "width": 32,
+              "height": 32
+            }
+          ]
+        },
+        {
+          "height": 44,
+          "text": "Updating task 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41: assigned",
+          "titleAttr": "Updating task 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41: assigned",
+          "cut": true,
+          "titleWidth": 107,
+          "links": [
+            {
+              "text": "Open task",
+              "title": "Open task",
+              "inside": true,
+              "width": 32,
+              "height": 32
+            }
+          ]
+        }
+      ],
+      "shellRows": [
+        {
+          "height": 44,
+          "titleAttr": "ls -d /workspace/demo/projects/atlas-pipeline-9c1d2e3f && git -C /workspace/demo/projects/atlas-pipeline-9c1d2e3f status --short --branch",
+          "cut": true,
+          "inside": true
+        }
+      ],
       "envelope": false,
       "toolSearch": [],
       "errorChips": [],
@@ -99,6 +330,39 @@
       "pageErrors": []
     },
     "iii-390-dark-en": {
+      "launchLines": [
+        {
+          "height": 21,
+          "chips": [
+            {
+              "kind": "state",
+              "title": "The launch ended with an error.",
+              "inside": true,
+              "width": 98,
+              "tops": 233
+            },
+            {
+              "kind": "initial",
+              "title": "Initial message: failed",
+              "inside": true,
+              "width": 117,
+              "tops": 233
+            },
+            {
+              "kind": "id",
+              "title": "Launch launch-seat-noise",
+              "inside": true,
+              "width": 58,
+              "tops": 233
+            }
+          ],
+          "retry": false,
+          "retryInside": null,
+          "rowInside": true
+        }
+      ],
+      "mcpRows": [],
+      "shellRows": [],
       "envelope": false,
       "toolSearch": [],
       "errorChips": [
@@ -117,6 +381,49 @@
       "pageErrors": []
     },
     "iv-390-dark-en": {
+      "launchLines": [],
+      "mcpRows": [
+        {
+          "height": 44,
+          "text": "Opening task: 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41",
+          "titleAttr": "Opening task: 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41",
+          "cut": true,
+          "titleWidth": 107,
+          "links": [
+            {
+              "text": "Open task",
+              "title": "Open task",
+              "inside": true,
+              "width": 32,
+              "height": 32
+            }
+          ]
+        },
+        {
+          "height": 44,
+          "text": "Updating task 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41: assigned",
+          "titleAttr": "Updating task 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41: assigned",
+          "cut": true,
+          "titleWidth": 107,
+          "links": [
+            {
+              "text": "Open task",
+              "title": "Open task",
+              "inside": true,
+              "width": 32,
+              "height": 32
+            }
+          ]
+        }
+      ],
+      "shellRows": [
+        {
+          "height": 44,
+          "titleAttr": "ls -d /workspace/demo/projects/atlas-pipeline-9c1d2e3f && git -C /workspace/demo/projects/atlas-pipeline-9c1d2e3f status --short --branch",
+          "cut": true,
+          "inside": true
+        }
+      ],
       "envelope": false,
       "toolSearch": [],
       "errorChips": [],
@@ -132,6 +439,9 @@
       "pageErrors": []
     },
     "v-390-dark-en": {
+      "launchLines": [],
+      "mcpRows": [],
+      "shellRows": [],
       "envelope": false,
       "toolSearch": [],
       "errorChips": [],
@@ -145,6 +455,39 @@
       "pageErrors": []
     },
     "i-390-light-uk": {
+      "launchLines": [
+        {
+          "height": 21,
+          "chips": [
+            {
+              "kind": "state",
+              "title": "Доставка узгоджується зі структурованим хостом.",
+              "inside": true,
+              "width": 92,
+              "tops": 252
+            },
+            {
+              "kind": "initial",
+              "title": "Перше повідомлення: у черзі",
+              "inside": true,
+              "width": 164,
+              "tops": 252
+            },
+            {
+              "kind": "id",
+              "title": "Запуск launch-seat-noise",
+              "inside": true,
+              "width": 58,
+              "tops": 252
+            }
+          ],
+          "retry": false,
+          "retryInside": null,
+          "rowInside": true
+        }
+      ],
+      "mcpRows": [],
+      "shellRows": [],
       "envelope": false,
       "toolSearch": [],
       "errorChips": [],
@@ -158,6 +501,49 @@
       "pageErrors": []
     },
     "ii-390-light-uk": {
+      "launchLines": [],
+      "mcpRows": [
+        {
+          "height": 44,
+          "text": "Opening task: 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41",
+          "titleAttr": "Opening task: 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41",
+          "cut": true,
+          "titleWidth": 104,
+          "links": [
+            {
+              "text": "Відкрити задачу",
+              "title": "Відкрити задачу",
+              "inside": true,
+              "width": 32,
+              "height": 32
+            }
+          ]
+        },
+        {
+          "height": 44,
+          "text": "Updating task 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41: assigned",
+          "titleAttr": "Updating task 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41: assigned",
+          "cut": true,
+          "titleWidth": 104,
+          "links": [
+            {
+              "text": "Відкрити задачу",
+              "title": "Відкрити задачу",
+              "inside": true,
+              "width": 32,
+              "height": 32
+            }
+          ]
+        }
+      ],
+      "shellRows": [
+        {
+          "height": 44,
+          "titleAttr": "ls -d /workspace/demo/projects/atlas-pipeline-9c1d2e3f && git -C /workspace/demo/projects/atlas-pipeline-9c1d2e3f status --short --branch",
+          "cut": true,
+          "inside": true
+        }
+      ],
       "envelope": false,
       "toolSearch": [],
       "errorChips": [],
@@ -171,6 +557,39 @@
       "pageErrors": []
     },
     "iii-390-light-uk": {
+      "launchLines": [
+        {
+          "height": 21,
+          "chips": [
+            {
+              "kind": "state",
+              "title": "Запуск завершився з помилкою.",
+              "inside": true,
+              "width": 120,
+              "tops": 252
+            },
+            {
+              "kind": "initial",
+              "title": "Перше повідомлення: помилка доставки",
+              "inside": true,
+              "width": 173,
+              "tops": 252
+            },
+            {
+              "kind": "id",
+              "title": "Запуск launch-seat-noise",
+              "inside": true,
+              "width": 58,
+              "tops": 252
+            }
+          ],
+          "retry": false,
+          "retryInside": null,
+          "rowInside": true
+        }
+      ],
+      "mcpRows": [],
+      "shellRows": [],
       "envelope": false,
       "toolSearch": [],
       "errorChips": [
@@ -189,6 +608,49 @@
       "pageErrors": []
     },
     "iv-390-light-uk": {
+      "launchLines": [],
+      "mcpRows": [
+        {
+          "height": 44,
+          "text": "Opening task: 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41",
+          "titleAttr": "Opening task: 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41",
+          "cut": true,
+          "titleWidth": 104,
+          "links": [
+            {
+              "text": "Відкрити задачу",
+              "title": "Відкрити задачу",
+              "inside": true,
+              "width": 32,
+              "height": 32
+            }
+          ]
+        },
+        {
+          "height": 44,
+          "text": "Updating task 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41: assigned",
+          "titleAttr": "Updating task 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41: assigned",
+          "cut": true,
+          "titleWidth": 104,
+          "links": [
+            {
+              "text": "Відкрити задачу",
+              "title": "Відкрити задачу",
+              "inside": true,
+              "width": 32,
+              "height": 32
+            }
+          ]
+        }
+      ],
+      "shellRows": [
+        {
+          "height": 44,
+          "titleAttr": "ls -d /workspace/demo/projects/atlas-pipeline-9c1d2e3f && git -C /workspace/demo/projects/atlas-pipeline-9c1d2e3f status --short --branch",
+          "cut": true,
+          "inside": true
+        }
+      ],
       "envelope": false,
       "toolSearch": [],
       "errorChips": [],
@@ -204,6 +666,9 @@
       "pageErrors": []
     },
     "v-390-light-uk": {
+      "launchLines": [],
+      "mcpRows": [],
+      "shellRows": [],
       "envelope": false,
       "toolSearch": [],
       "errorChips": [],
@@ -217,6 +682,39 @@
       "pageErrors": []
     },
     "i-390-dark-uk": {
+      "launchLines": [
+        {
+          "height": 21,
+          "chips": [
+            {
+              "kind": "state",
+              "title": "Доставка узгоджується зі структурованим хостом.",
+              "inside": true,
+              "width": 92,
+              "tops": 252
+            },
+            {
+              "kind": "initial",
+              "title": "Перше повідомлення: у черзі",
+              "inside": true,
+              "width": 164,
+              "tops": 252
+            },
+            {
+              "kind": "id",
+              "title": "Запуск launch-seat-noise",
+              "inside": true,
+              "width": 58,
+              "tops": 252
+            }
+          ],
+          "retry": false,
+          "retryInside": null,
+          "rowInside": true
+        }
+      ],
+      "mcpRows": [],
+      "shellRows": [],
       "envelope": false,
       "toolSearch": [],
       "errorChips": [],
@@ -230,6 +728,49 @@
       "pageErrors": []
     },
     "ii-390-dark-uk": {
+      "launchLines": [],
+      "mcpRows": [
+        {
+          "height": 44,
+          "text": "Opening task: 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41",
+          "titleAttr": "Opening task: 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41",
+          "cut": true,
+          "titleWidth": 104,
+          "links": [
+            {
+              "text": "Відкрити задачу",
+              "title": "Відкрити задачу",
+              "inside": true,
+              "width": 32,
+              "height": 32
+            }
+          ]
+        },
+        {
+          "height": 44,
+          "text": "Updating task 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41: assigned",
+          "titleAttr": "Updating task 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41: assigned",
+          "cut": true,
+          "titleWidth": 104,
+          "links": [
+            {
+              "text": "Відкрити задачу",
+              "title": "Відкрити задачу",
+              "inside": true,
+              "width": 32,
+              "height": 32
+            }
+          ]
+        }
+      ],
+      "shellRows": [
+        {
+          "height": 44,
+          "titleAttr": "ls -d /workspace/demo/projects/atlas-pipeline-9c1d2e3f && git -C /workspace/demo/projects/atlas-pipeline-9c1d2e3f status --short --branch",
+          "cut": true,
+          "inside": true
+        }
+      ],
       "envelope": false,
       "toolSearch": [],
       "errorChips": [],
@@ -243,6 +784,39 @@
       "pageErrors": []
     },
     "iii-390-dark-uk": {
+      "launchLines": [
+        {
+          "height": 21,
+          "chips": [
+            {
+              "kind": "state",
+              "title": "Запуск завершився з помилкою.",
+              "inside": true,
+              "width": 120,
+              "tops": 252
+            },
+            {
+              "kind": "initial",
+              "title": "Перше повідомлення: помилка доставки",
+              "inside": true,
+              "width": 173,
+              "tops": 252
+            },
+            {
+              "kind": "id",
+              "title": "Запуск launch-seat-noise",
+              "inside": true,
+              "width": 58,
+              "tops": 252
+            }
+          ],
+          "retry": false,
+          "retryInside": null,
+          "rowInside": true
+        }
+      ],
+      "mcpRows": [],
+      "shellRows": [],
       "envelope": false,
       "toolSearch": [],
       "errorChips": [
@@ -261,6 +835,49 @@
       "pageErrors": []
     },
     "iv-390-dark-uk": {
+      "launchLines": [],
+      "mcpRows": [
+        {
+          "height": 44,
+          "text": "Opening task: 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41",
+          "titleAttr": "Opening task: 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41",
+          "cut": true,
+          "titleWidth": 104,
+          "links": [
+            {
+              "text": "Відкрити задачу",
+              "title": "Відкрити задачу",
+              "inside": true,
+              "width": 32,
+              "height": 32
+            }
+          ]
+        },
+        {
+          "height": 44,
+          "text": "Updating task 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41: assigned",
+          "titleAttr": "Updating task 3f6b1c2e-8d4a-4e75-cf10-5c7d2b9e0f41: assigned",
+          "cut": true,
+          "titleWidth": 104,
+          "links": [
+            {
+              "text": "Відкрити задачу",
+              "title": "Відкрити задачу",
+              "inside": true,
+              "width": 32,
+              "height": 32
+            }
+          ]
+        }
+      ],
+      "shellRows": [
+        {
+          "height": 44,
+          "titleAttr": "ls -d /workspace/demo/projects/atlas-pipeline-9c1d2e3f && git -C /workspace/demo/projects/atlas-pipeline-9c1d2e3f status --short --branch",
+          "cut": true,
+          "inside": true
+        }
+      ],
       "envelope": false,
       "toolSearch": [],
       "errorChips": [],
@@ -276,6 +893,9 @@
       "pageErrors": []
     },
     "v-390-dark-uk": {
+      "launchLines": [],
+      "mcpRows": [],
+      "shellRows": [],
       "envelope": false,
       "toolSearch": [],
       "errorChips": [],

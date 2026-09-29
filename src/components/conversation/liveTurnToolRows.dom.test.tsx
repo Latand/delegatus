@@ -174,11 +174,15 @@ for (const { tool, args, chips } of MCP_CASES) {
     const cardRoot = createRoot(card);
     roots.add(cardRoot);
     flushSync(() => { cardRoot.render(<McpCallCard event={event} availableConversationIds={new Set()} />); });
-    /* Both surfaces name their action title, and both give it a flex basis of
-       its own so chips wrap rather than squeeze it (#1955). */
+    /* Both surfaces name their action title. It claims the leftover width with a
+       floor of its own (#1955), and the row never wraps: the entity chips give
+       way first (operator decision, docs/design/seat-panel-noise.md b2). */
     const cardTitleNode = card.querySelector<HTMLElement>("[data-testid=mcp-call-card] summary > [data-mcp-title]")!;
     const cardTitle = cardTitleNode.textContent;
-    expect(cardTitleNode.className).toContain("basis-[10rem]");
+    expect(cardTitleNode.className).toContain("min-w-[6rem]");
+    expect(cardTitleNode.className).toContain("truncate");
+    expect(cardTitleNode.parentElement!.className).toContain("flex-nowrap");
+    expect(cardTitleNode.parentElement!.className).not.toContain("flex-wrap");
 
     const live = mount([{
       itemId: `toolu_${tool}`, text: "", phase: "awaiting-echo", startedAt: AT, completedAt: null,
@@ -186,7 +190,19 @@ for (const { tool, args, chips } of MCP_CASES) {
     }]);
     const row = live.querySelector<HTMLElement>("[data-live-mcp]")!;
     expect(row.dataset.liveMcp).toBe(tool);
-    expect(row.querySelector("[data-live-mcp-title]")!.textContent).toBe(cardTitle);
+    const liveTitle = row.querySelector<HTMLElement>("[data-live-mcp-title]")!;
+    expect(liveTitle.textContent).toBe(cardTitle);
+    /* One line: the whole title is the tooltip, the row itself never wraps. */
+    expect(liveTitle.getAttribute("title")).toBe(cardTitle);
+    expect(liveTitle.className).toContain("truncate");
+    expect(liveTitle.parentElement!.className).toContain("flex-nowrap");
+    expect(liveTitle.parentElement!.className).not.toContain("flex-wrap");
+    expect(cardTitleNode.getAttribute("title")).toBe(cardTitle);
+    /* A chip cuts its label with an ellipsis and keeps the whole label as its tooltip. */
+    for (const chip of live.querySelectorAll<HTMLElement>("[data-live-mcp-link]")) {
+      expect(chip.getAttribute("title")).toBe(chip.textContent);
+      expect(chip.querySelector(".truncate")?.textContent).toBe(chip.textContent);
+    }
     expect(row.textContent).toContain("MCP · viewer");
     /* The same entity chips, with the same labels and the same targets. */
     expect(chipsOf(live, "[data-live-mcp-link]")).toEqual(chipsOf(card, "[data-testid^=mcp-link-]"));
