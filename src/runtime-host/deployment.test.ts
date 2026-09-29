@@ -3,6 +3,7 @@ import { DELETE as cancelDeploymentRoute } from "@/app/api/runtime/deployments/[
 
 import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
@@ -1070,6 +1071,42 @@ test("Viewer socket admission outlives the ordinary client timeout during delaye
     if (receipt.state === "accepted") await coordinator.waitForDeployment(receipt.deploymentId);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    store.close();
+  }
+});
+
+test("a disconnected deployment remains visible to a read-only key lookup after late admission", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-deploy-late-admission-"));
+  sandboxes.push(dir);
+  const store = new RuntimeJournal(path.join(dir, "runtime.sqlite"), { now: () => 1_000 });
+  const adapter = new FakeDeploymentAdapter();
+  let releaseResolution!: () => void;
+  adapter.resolveGate = new Promise<void>((resolve) => { releaseResolution = resolve; });
+  const coordinator = new ViewerDeploymentCoordinator(store, adapter, { pid: 10, startIdentity: "10:1" });
+  const socketPath = path.join(dir, "runtime.sock");
+  const server = serveRuntimeHost(socketPath, new RuntimeHost(store, undefined, coordinator));
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  const client = new UnixRuntimeHostClient(socketPath);
+  try {
+    const disconnected = net.createConnection(socketPath);
+    await new Promise<void>((resolve) => disconnected.once("connect", resolve));
+    disconnected.write(JSON.stringify({ id: "lost-reply", method: "viewer-deployment-request", params: { idempotencyKey: "late-admission" } }) + "\n");
+    while (!adapter.calls.includes("resolve:origin/main")) await Bun.sleep(1);
+    disconnected.destroy();
+    const lookup = client.findViewerDeploymentByIdempotencyKey("late-admission");
+    let settled = false;
+    void lookup.then(() => { settled = true; });
+    await Bun.sleep(5);
+    expect(settled).toBe(false);
+    releaseResolution();
+    const accepted = await lookup;
+    expect(accepted).toMatchObject({ idempotencyKey: "late-admission" });
+    if (accepted) await coordinator.waitForDeployment(accepted.deploymentId);
+    expect(await client.findViewerDeploymentByIdempotencyKey("unknown-key")).toBeNull();
+    expect(store.listViewerDeployments().deployments).toHaveLength(1);
+  } finally {
+    releaseResolution();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     store.close();
   }
 });

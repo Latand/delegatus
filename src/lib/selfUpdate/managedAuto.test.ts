@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { RuntimeHostUnavailableError } from "@/lib/runtime/client";
@@ -337,6 +337,48 @@ test("an undelivered intent yields to a newer main after fresh admission and a w
   expect(readManagedRecord(join(h.dir, "managed.json"))).toMatchObject({ target: newer, trigger: "auto" });
   await service.autoTick();
   expect(h.requests).toHaveLength(2);
+  service.stop();
+});
+
+test("a late accepted deployment failure survives main advancing during receipt lookup", async () => {
+  const h = scenario();
+  const originalRequest = h.deps.requestDeployment;
+  h.deps.requestDeployment = async (body) => {
+    await originalRequest(body);
+    throw new RuntimeHostUnavailableError("runtime host request timed out");
+  };
+  let service = h.service();
+  await service.autoTick();
+  h.advance(60_000);
+  await service.autoTick();
+  expect(h.requests).toHaveLength(1);
+  service.stop();
+
+  const newer = "c".repeat(40);
+  const stateFile = join(h.dir, "state.json");
+  const state = JSON.parse(readFileSync(stateFile, "utf8"));
+  state.slice.available = revision(newer);
+  writeFileSync(stateFile, JSON.stringify(state));
+  let releaseLookup!: () => void;
+  const admission = new Promise<void>((resolve) => { releaseLookup = resolve; });
+  const originalLookup = h.deps.findDeploymentByIdempotencyKey;
+  let lookupStarted!: () => void;
+  const started = new Promise<void>((resolve) => { lookupStarted = resolve; });
+  h.deps.findDeploymentByIdempotencyKey = async (key) => {
+    lookupStarted();
+    await admission;
+    return originalLookup(key);
+  };
+  service = h.service();
+  const tick = service.autoTick();
+  await started;
+  expect(readAuto(join(h.dir, "auto.json")).managedPending?.target.sha).toBe(TARGET);
+  h.finish("failed", "late build failed");
+  releaseLookup();
+  await tick;
+  expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ enabled: false, managedPending: null,
+    off: { target: TARGET, reason: "late build failed" } });
+  expect(h.requests).toHaveLength(1);
   service.stop();
 });
 

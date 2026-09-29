@@ -265,6 +265,13 @@ export class RuntimeHost {
         if (cursor !== undefined && typeof cursor !== "string") throw new Error("deployment list cursor is invalid");
         if (compact !== undefined && typeof compact !== "boolean") throw new Error("deployment list compact option is invalid");
         result = this.journal.listViewerDeployments({ limit, cursor, compact });
+      } else if (request.method === "viewer-deployment-find") {
+        if (!this.deployments) throw new Error("viewer deployments are disabled");
+        const idempotencyKey = request.params?.idempotencyKey;
+        if (typeof idempotencyKey !== "string" || !idempotencyKey || idempotencyKey.length > 200 || /[\r\n]/.test(idempotencyKey)) {
+          throw new Error("deployment idempotencyKey is invalid");
+        }
+        result = await this.deployments.findViewerDeploymentByIdempotencyKey(idempotencyKey);
       } else if (request.method === "viewer-deployment-read") {
         if (!this.deployments) throw new Error("viewer deployments are disabled");
         result = this.deployments.readViewerDeployment(String(request.params?.deploymentId ?? ""));

@@ -155,6 +155,12 @@ export class ViewerDeploymentCoordinator {
     return this.runAdmissionExclusive(() => this.admit(request));
   }
 
+  async findViewerDeploymentByIdempotencyKey(idempotencyKey: string): Promise<ViewerDeploymentStatus | null> {
+    // A request survives its socket disconnect. Wait for admissions already
+    // received by this host before treating a missing receipt as absent.
+    return this.runAdmissionExclusive(async () => this.journal.viewerDeploymentByIdempotencyKey(idempotencyKey));
+  }
+
   cancelViewerDeployment(deploymentId: string): ViewerDeploymentStatus | null {
     const status = this.journal.viewerDeployment(deploymentId);
     if (!status) return null;
