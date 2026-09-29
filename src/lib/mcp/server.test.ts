@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -25,11 +25,14 @@ import {
   type McpReceiptStore,
   type McpToolResult,
 } from "./server";
+import { fixturePidAlive, ownFixtureChild, ownedFixturePids, reapFixtureChildren } from "./ownedFixtureChildren";
 
 const scratch: string[] = [];
-afterEach(() => {
+afterEach(async () => {
+  await reapFixtureChildren();
   for (const directory of scratch.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
 });
+afterAll(reapFixtureChildren);
 
 function rewriteReceiptFileAsV1(receiptPath: string): void {
   const current = JSON.parse(fs.readFileSync(receiptPath, "utf8")) as {
@@ -166,7 +169,7 @@ describe("MCP tool service", () => {
     const ownerReadyPath = path.join(directory, "owner-ready");
     const ownerReleasePath = path.join(directory, "owner-release");
     const ownerCountPath = path.join(directory, "owner-count");
-    const children = Array.from({ length: 20 }, (_value, index) => Bun.spawn({
+    const children = Array.from({ length: 20 }, (_value, index) => ownFixtureChild(Bun.spawn({
       cmd: [
         process.execPath,
         childPath,
@@ -183,7 +186,7 @@ describe("MCP tool service", () => {
       env: { ...process.env, LLV_STATE_DIR: path.join(directory, "state", String(index)) },
       stdout: "pipe",
       stderr: "pipe",
-    }));
+    })));
 
     expect(await waitForFileCount(directory, "ready-", 20)).toBeTrue();
     const ready = Array.from({ length: 20 }, (_value, index) => JSON.parse(
@@ -278,6 +281,7 @@ describe("MCP tool service", () => {
       { name: "absent", extraColumns: "", seed: () => {}, expected: null },
     ];
     for (const schema of schemas) {
+      const pidStart = ownedFixturePids().length;
       const sqlitePath = path.join(directory, `${schema.name}.sqlite`);
       if (schema.name !== "absent") {
         const raw = new Database(sqlitePath, { create: true, strict: true });
@@ -290,7 +294,7 @@ describe("MCP tool service", () => {
       }
       const startPath = path.join(directory, `${schema.name}-start`);
       const processes = 20;
-      const children = Array.from({ length: processes }, (_value, index) => Bun.spawn({
+      const children = Array.from({ length: processes }, (_value, index) => ownFixtureChild(Bun.spawn({
         cmd: [
           process.execPath, childPath, "cold-start", sqlitePath,
           path.join(directory, `${schema.name}-ready-${index}`), startPath,
@@ -300,11 +304,12 @@ describe("MCP tool service", () => {
         env: { ...process.env, LLV_STATE_DIR: path.join(directory, "state", schema.name, String(index)) },
         stdout: "pipe",
         stderr: "pipe",
-      }));
+      })));
       expect(await waitForFileCount(directory, `${schema.name}-ready-`, processes)).toBeTrue();
       fs.writeFileSync(startPath, String(Date.now() + 150));
       const outcomes = await Promise.all(children.map(childResult));
       expect(outcomes).toEqual(Array.from({ length: processes }, () => ({ exit: 0, error: "" })));
+      expect(ownedFixturePids().slice(pidStart).filter(fixturePidAlive)).toEqual([]);
       const results = Array.from({ length: processes }, (_value, index) => JSON.parse(
         fs.readFileSync(path.join(directory, `${schema.name}-result-${index}.json`), "utf8"),
       ) as { index: number; ok: boolean; error?: string; record?: unknown });
@@ -869,19 +874,19 @@ describe("MCP tool service", () => {
     const resultPath = path.join(directory, "claim-result.json");
     const child = path.join(import.meta.dir, "server.lockChild.ts");
     const env = { ...process.env };
-    const holder = Bun.spawn({
+    const holder = ownFixtureChild(Bun.spawn({
       cmd: [process.execPath, child, "hold", lockPath, readyPath, releasePath],
       env,
       stdout: "ignore",
       stderr: "pipe",
-    });
+    }));
     expect(await waitForFile(readyPath)).toBeTrue();
-    const claimant = Bun.spawn({
+    const claimant = ownFixtureChild(Bun.spawn({
       cmd: [process.execPath, child, "claim", receiptPath, countPath, resultPath],
       env,
       stdout: "ignore",
       stderr: "pipe",
-    });
+    }));
 
     await Bun.sleep(150);
     const completedWhileHeld = fs.existsSync(resultPath);
@@ -909,7 +914,7 @@ describe("MCP tool service", () => {
       token: "missing-directory-owner",
     }));
 
-    const claimant = Bun.spawn({
+    const claimant = ownFixtureChild(Bun.spawn({
       cmd: [
         process.execPath,
         child,
@@ -922,7 +927,7 @@ describe("MCP tool service", () => {
       env: { ...process.env },
       stdout: "ignore",
       stderr: "pipe",
-    });
+    }));
     const settled = await waitForFile(resultPath, 6_500);
     if (!settled) claimant.kill(9);
     const processResult = await childResult(claimant);
@@ -961,7 +966,7 @@ describe("MCP tool service", () => {
       token: "transient-owner-read",
     }));
 
-    const claimant = Bun.spawn({
+    const claimant = ownFixtureChild(Bun.spawn({
       cmd: [
         process.execPath,
         child,
@@ -973,7 +978,7 @@ describe("MCP tool service", () => {
       env: { ...process.env },
       stdout: "ignore",
       stderr: "pipe",
-    });
+    }));
     const processResult = await childResult(claimant);
 
     expect(processResult).toEqual({ exit: 0, error: "" });
@@ -1012,7 +1017,7 @@ describe("MCP tool service", () => {
         startIdentity: "dead",
         token: `boundary-${boundary}`,
       }));
-      const creator = Bun.spawn({
+      const creator = ownFixtureChild(Bun.spawn({
         cmd: [
           process.execPath,
           child,
@@ -1026,7 +1031,7 @@ describe("MCP tool service", () => {
         env: { ...process.env },
         stdout: "ignore",
         stderr: "pipe",
-      });
+      }));
       expect(await waitForFile(readyPath)).toBeTrue();
       for (const artifact of recoveryArtifacts(directory)) {
         expect(Buffer.byteLength(artifact)).toBeLessThanOrEqual(255);
@@ -1034,18 +1039,18 @@ describe("MCP tool service", () => {
       creator.kill(9);
       const creatorResult = await childResult(creator);
 
-      const first = Bun.spawn({
+      const first = ownFixtureChild(Bun.spawn({
         cmd: [process.execPath, child, "claim", receiptPath, countPath, firstResultPath],
         env: { ...process.env },
         stdout: "ignore",
         stderr: "pipe",
-      });
-      const second = Bun.spawn({
+      }));
+      const second = ownFixtureChild(Bun.spawn({
         cmd: [process.execPath, child, "claim", receiptPath, countPath, secondResultPath],
         env: { ...process.env },
         stdout: "ignore",
         stderr: "pipe",
-      });
+      }));
       const claimants = await Promise.all([childResult(first), childResult(second)]);
 
       expect(creatorResult.exit).not.toBe(0);
@@ -1078,7 +1083,7 @@ describe("MCP tool service", () => {
       token: "inode-reuse-stale-owner",
     }));
 
-    const first = Bun.spawn({
+    const first = ownFixtureChild(Bun.spawn({
       cmd: [
         process.execPath,
         child,
@@ -1092,14 +1097,14 @@ describe("MCP tool service", () => {
       env: { ...process.env },
       stdout: "ignore",
       stderr: "pipe",
-    });
+    }));
     expect(await waitForFile(pausePath)).toBeTrue();
     const recoveryName = recoveryArtifacts(directory).find((entry) => entry.endsWith(".recovering"));
     expect(recoveryName).toBeDefined();
     const recoveryPath = path.join(directory, recoveryName!);
     const staleIdentity = fs.statSync(recoveryPath).ino;
     fs.unlinkSync(lockPath);
-    const replacement = Bun.spawn({
+    const replacement = ownFixtureChild(Bun.spawn({
       cmd: [
         process.execPath,
         child,
@@ -1112,15 +1117,15 @@ describe("MCP tool service", () => {
       env: { ...process.env },
       stdout: "ignore",
       stderr: "pipe",
-    });
+    }));
     expect(await waitForFile(holderReadyPath)).toBeTrue();
     expect(fs.statSync(lockPath).ino).toBe(staleIdentity);
-    const second = Bun.spawn({
+    const second = ownFixtureChild(Bun.spawn({
       cmd: [process.execPath, child, "claim", receiptPath, countPath, secondResultPath],
       env: { ...process.env },
       stdout: "ignore",
       stderr: "pipe",
-    });
+    }));
 
     fs.writeFileSync(pauseReleasePath, "release");
     await Bun.sleep(150);
@@ -1167,7 +1172,7 @@ describe("MCP tool service", () => {
     }));
     const staleInode = fs.statSync(lockPath).ino;
 
-    const reaper = Bun.spawn({
+    const reaper = ownFixtureChild(Bun.spawn({
       cmd: [
         process.execPath,
         child,
@@ -1182,12 +1187,12 @@ describe("MCP tool service", () => {
       env: { ...process.env },
       stdout: "ignore",
       stderr: "pipe",
-    });
+    }));
     expect(await waitForFile(handoffReadyPath)).toBeTrue();
     expect(fs.existsSync(lockPath)).toBeFalse();
     expect(fs.statSync(pinPath).ino).toBe(staleInode);
 
-    const first = Bun.spawn({
+    const first = ownFixtureChild(Bun.spawn({
       cmd: [
         process.execPath,
         child,
@@ -1202,13 +1207,13 @@ describe("MCP tool service", () => {
       env: { ...process.env },
       stdout: "ignore",
       stderr: "pipe",
-    });
-    const second = Bun.spawn({
+    }));
+    const second = ownFixtureChild(Bun.spawn({
       cmd: [process.execPath, child, "claim", receiptPath, countPath, secondResultPath],
       env: { ...process.env },
       stdout: "ignore",
       stderr: "pipe",
-    });
+    }));
     const enteredBeforeRelease = await waitForFile(reuseReadyPath, 250);
     fs.writeFileSync(handoffReleasePath, "release");
     expect(await waitForFile(reuseReadyPath)).toBeTrue();
@@ -1254,7 +1259,7 @@ describe("MCP tool service", () => {
       token: "namespace-busy-owner",
     }));
 
-    const reaper = Bun.spawn({
+    const reaper = ownFixtureChild(Bun.spawn({
       cmd: [
         process.execPath,
         child,
@@ -1269,20 +1274,20 @@ describe("MCP tool service", () => {
       env: { ...process.env },
       stdout: "ignore",
       stderr: "pipe",
-    });
+    }));
     expect(await waitForFile(handoffReadyPath)).toBeTrue();
-    const first = Bun.spawn({
+    const first = ownFixtureChild(Bun.spawn({
       cmd: [process.execPath, child, "timed-claim", receiptPath, countPath, firstResultPath, firstHeartbeatPath],
       env: { ...process.env },
       stdout: "ignore",
       stderr: "pipe",
-    });
-    const second = Bun.spawn({
+    }));
+    const second = ownFixtureChild(Bun.spawn({
       cmd: [process.execPath, child, "timed-claim", receiptPath, countPath, secondResultPath, secondHeartbeatPath],
       env: { ...process.env },
       stdout: "ignore",
       stderr: "pipe",
-    });
+    }));
     expect(await waitForFile(firstResultPath, 6_500)).toBeTrue();
     expect(await waitForFile(secondResultPath, 6_500)).toBeTrue();
     const claimants = await Promise.all([childResult(first), childResult(second)]);
@@ -1330,7 +1335,7 @@ describe("MCP tool service", () => {
       token: "stale-owner",
     }));
 
-    const firstClaimant = Bun.spawn({
+    const firstClaimant = ownFixtureChild(Bun.spawn({
       cmd: [
         process.execPath,
         child,
@@ -1344,22 +1349,22 @@ describe("MCP tool service", () => {
       env,
       stdout: "ignore",
       stderr: "pipe",
-    });
+    }));
     expect(await waitForFile(pausePath)).toBeTrue();
     fs.unlinkSync(lockPath);
-    const replacement = Bun.spawn({
+    const replacement = ownFixtureChild(Bun.spawn({
       cmd: [process.execPath, child, "hold", lockPath, holderReadyPath, holderReleasePath],
       env,
       stdout: "ignore",
       stderr: "pipe",
-    });
+    }));
     expect(await waitForFile(holderReadyPath)).toBeTrue();
-    const secondClaimant = Bun.spawn({
+    const secondClaimant = ownFixtureChild(Bun.spawn({
       cmd: [process.execPath, child, "claim", receiptPath, countPath, secondResultPath],
       env,
       stdout: "ignore",
       stderr: "pipe",
-    });
+    }));
 
     fs.writeFileSync(pauseReleasePath, "release");
     await Bun.sleep(150);
@@ -1405,7 +1410,7 @@ describe("MCP tool service", () => {
       token: "shared-stale-owner",
     }));
 
-    const winner = Bun.spawn({
+    const winner = ownFixtureChild(Bun.spawn({
       cmd: [
         process.execPath,
         child,
@@ -1419,9 +1424,9 @@ describe("MCP tool service", () => {
       env,
       stdout: "ignore",
       stderr: "pipe",
-    });
+    }));
     expect(await waitForFile(phase("winner", "after-link", "ready"))).toBeTrue();
-    const contender = Bun.spawn({
+    const contender = ownFixtureChild(Bun.spawn({
       cmd: [
         process.execPath,
         child,
@@ -1435,7 +1440,7 @@ describe("MCP tool service", () => {
       env,
       stdout: "ignore",
       stderr: "pipe",
-    });
+    }));
     expect(await waitForFile(path.join(raceDirectory, "contender-owner-seen"))).toBeTrue();
     const contenderBeforeUnlink = phase("contender", "before-unlink", "ready");
     const contenderBeforeAcquire = phase("contender", "acquire", "ready");
@@ -1444,12 +1449,12 @@ describe("MCP tool service", () => {
 
     fs.writeFileSync(phase("winner", "after-link", "release"), "release");
     expect(await waitForFile(phase("winner", "after-unlink", "ready"))).toBeTrue();
-    const replacement = Bun.spawn({
+    const replacement = ownFixtureChild(Bun.spawn({
       cmd: [process.execPath, child, "hold", lockPath, holderReadyPath, holderReleasePath],
       env,
       stdout: "ignore",
       stderr: "pipe",
-    });
+    }));
     expect(await waitForFile(holderReadyPath)).toBeTrue();
     fs.writeFileSync(phase("contender", "before-unlink", "release"), "release");
     fs.writeFileSync(phase("winner", "after-unlink", "release"), "release");
@@ -1502,7 +1507,7 @@ describe("MCP tool service", () => {
       token: "creator-death-owner",
     }));
 
-    const creator = Bun.spawn({
+    const creator = ownFixtureChild(Bun.spawn({
       cmd: [
         process.execPath,
         child,
@@ -1516,11 +1521,11 @@ describe("MCP tool service", () => {
       env,
       stdout: "ignore",
       stderr: "pipe",
-    });
+    }));
     expect(await waitForFile(creatorPausedPath)).toBeTrue();
     creator.kill(9);
     const creatorOutcome = await childResult(creator);
-    const first = Bun.spawn({
+    const first = ownFixtureChild(Bun.spawn({
       cmd: [
         process.execPath,
         child,
@@ -1534,21 +1539,21 @@ describe("MCP tool service", () => {
       env,
       stdout: "ignore",
       stderr: "pipe",
-    });
+    }));
     expect(await waitForFile(takeoverPausedPath)).toBeTrue();
-    const second = Bun.spawn({
+    const second = ownFixtureChild(Bun.spawn({
       cmd: [process.execPath, child, "claim", receiptPath, countPath, secondResultPath],
       env,
       stdout: "ignore",
       stderr: "pipe",
-    });
+    }));
     fs.unlinkSync(lockPath);
-    const replacement = Bun.spawn({
+    const replacement = ownFixtureChild(Bun.spawn({
       cmd: [process.execPath, child, "hold", lockPath, holderReadyPath, holderReleasePath],
       env,
       stdout: "ignore",
       stderr: "pipe",
-    });
+    }));
     expect(await waitForFile(holderReadyPath)).toBeTrue();
     fs.writeFileSync(takeoverReleasePath, "release");
     const recovered = await waitForRecoveryCleanup(directory);

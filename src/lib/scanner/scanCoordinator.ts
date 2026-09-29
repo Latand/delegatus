@@ -1,4 +1,4 @@
-import { listFilesWithProjectCatalog, type FileCatalogScan, type FileScanOptions } from "@/lib/scanner";
+import type { FileCatalogScan, FileScanOptions } from "@/lib/scanner";
 
 import { collectFileScanInWorker, fileScanWorkerEnabled, fileScanWorkerLaunch } from "./fileScanWorker";
 
@@ -98,11 +98,16 @@ export function runFileCatalogScan(
     ...(intent.fresh ? { fresh: true } : {}),
   };
   if (signal.aborted) return Promise.reject(abortError(signal.reason));
+  /* Loaded when a scan actually runs in this process. The scanner's static
+     graph reaches the account stores, and the isolated resource worker imports
+     this module through the scan cache without ever scanning (#2117). */
   const inProcess = (): Promise<FileCatalogScan> =>
-    listFilesWithProjectCatalog(undefined, { ...scanOptions, signal }).then((snapshot) => {
-      if (signal.aborted) throw abortError(signal.reason);
-      return snapshot;
-    });
+    import("@/lib/scanner")
+      .then(({ listFilesWithProjectCatalog }) => listFilesWithProjectCatalog(undefined, { ...scanOptions, signal }))
+      .then((snapshot) => {
+        if (signal.aborted) throw abortError(signal.reason);
+        return snapshot;
+      });
   if (!fileScanWorkerEnabled()) return inProcess();
   /* A process whose root carries no worker artifact scans here instead. The
      published MCP runtime release is one such root, and the sidecar running

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { waitForFixtureFile } from "./fixtureBarrier";
 
 import { procBackend } from "@/lib/proc";
 
@@ -18,9 +19,7 @@ type CrashBoundary =
   | "owner-cleanup";
 
 function waitFor(filename: string): void {
-  while (!fs.existsSync(filename)) {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
-  }
+  waitForFixtureFile(filename);
 }
 
 function pauseAt(directory: string, role: RaceRole, phase: string): void {
@@ -52,7 +51,8 @@ function publishLock(lockPath: string, readyPath: string, releasePath: string): 
 
 function pauseForCrash(readyPath: string): never {
   fs.writeFileSync(readyPath, "ready");
-  for (;;) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_000);
+  waitForFixtureFile(path.join(path.dirname(readyPath), "never-release-crash"));
+  throw new Error("crash fixture unexpectedly released");
 }
 
 function installCrashBoundary(receiptPath: string, boundary: CrashBoundary, readyPath: string): void {

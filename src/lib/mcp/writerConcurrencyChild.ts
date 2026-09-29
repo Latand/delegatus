@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { waitForFixtureFile } from "./fixtureBarrier";
 
 import { NextRequest } from "next/server";
 
@@ -29,7 +30,7 @@ fs.readFileSync = ((filePath: fs.PathOrFileDescriptor, ...args: unknown[]) => {
   gated = true;
   const value = originalReadFileSync(filePath, ...(args as Parameters<typeof fs.readFileSync> extends [unknown, ...infer Rest] ? Rest : never));
   fs.writeFileSync(readyPath, "ready\n", "utf8");
-  while (!fs.existsSync(releasePath)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+  waitForFixtureFile(releasePath);
   return value;
 }) as typeof fs.readFileSync;
 
@@ -46,7 +47,7 @@ if (kind === "task") {
       if (!gated) {
         gated = true;
         fs.writeFileSync(readyPath, "ready\n", "utf8");
-        while (!fs.existsSync(releasePath)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+        waitForFixtureFile(releasePath);
       }
       return patch;
     });
