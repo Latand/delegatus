@@ -2332,6 +2332,9 @@ describe("operationsToReconcile", () => {
     // An admitted row with only an operation id still names its key.
     expect(operationsToReconcile([row("row-b", { operationId: "op-b" })], [], [], () => true, now))
       .toMatchObject([{ operationId: "op-b", idempotencyKey: "row-b" }]);
+    // A browser-local failure cannot settle an admitted operation after a restart.
+    expect(operationsToReconcile([row("row-c", { state: "failed", operationId: "op-c" })], [], [], () => true, now))
+      .toMatchObject([{ operationId: "op-c", idempotencyKey: "row-c" }]);
   });
 
   test("settled, local and fresh rows are not read", () => {
@@ -2351,9 +2354,13 @@ describe("operationsToReconcile", () => {
     expect(operationsToReconcile([row("arrived", { deliveryReceipt: receipt("op-arrived") })], [arrived], [], () => true, now)).toEqual([]);
   });
 
-  test("a receipt the live tail still carries is left to the stream until a moving one outlives the settlement window", () => {
+  test("a moving receipt stays with the live tail until stale, while unknown terminal evidence is read back", () => {
     const uncertain = receipt("op-carried", { status: "uncertain" });
-    expect(operationsToReconcile([], [uncertain], [uncertain], () => true, now)).toEqual([]);
+    expect(operationsToReconcile([], [uncertain], [uncertain], () => true, now)
+      .map((item) => item.operationId)).toEqual(["op-carried"]);
+    const verifyFirst = receipt("op-verify-carried", { status: "failed", resend: "verify-first" });
+    expect(operationsToReconcile([], [verifyFirst], [verifyFirst], () => true, now)
+      .map((item) => item.operationId)).toEqual(["op-verify-carried"]);
     const moving = receipt("op-moving", { admittedAt: new Date(now - OPERATION_RECONCILE_MOVING_AFTER_MS + 60_000).toISOString() });
     expect(operationsToReconcile([], [moving], [moving], () => true, now)).toEqual([]);
     const abandoned = receipt("op-abandoned");

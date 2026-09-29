@@ -1997,10 +1997,28 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     /* The operation id is the identity here: `readOperationShared` only answers
        for the id it read. A record projected from a compacted operation may
        carry an empty key or conversation, which is absence, not a mismatch. */
+    const retryRow = readOutbox(cardId).find((entry) => entry.id !== item.idempotencyKey
+      && entry.operationId === item.operationId
+      && entry.deliveryReceipt?.operationId === item.operationId
+      && entry.deliveryReceipt.idempotencyKey === item.original.idempotencyKey
+      && retryParentOperationId(item.original) !== null
+      && retryParentOperationId(entry.deliveryReceipt) === retryParentOperationId(item.original));
+    const retryLeafAnswer = retryParentOperationId(answer) === item.operationId;
+    /* The operation endpoint can project the durable retry result back under
+       the original client key. Accept that shape only when this row already
+       holds the retry-key receipt for the same operation and its parent
+       lineage; the shared reader has independently bound the answer to this
+       operation id. */
+    const canonicalRetryAnswer = Boolean(retryRow && answer.operationId === item.operationId
+      && answer.idempotencyKey === retryRow.id);
     if ((answer.conversationId && answer.conversationId !== cardId)
-      || (answer.idempotencyKey && answer.idempotencyKey !== item.idempotencyKey)) return;
-    rememberRuntimeReceipt({ ...answer, conversationId: cardId, idempotencyKey: item.idempotencyKey },
-      { ...item.original, conversationId: cardId });
+      || (answer.idempotencyKey && answer.idempotencyKey !== item.idempotencyKey
+        && !retryLeafAnswer && !canonicalRetryAnswer)) return;
+    const original = canonicalRetryAnswer
+      ? { ...item.original, conversationId: cardId, operationId: item.operationId, idempotencyKey: retryRow!.id }
+      : { ...item.original, conversationId: cardId };
+    rememberRuntimeReceipt({ ...answer, conversationId: cardId }, original,
+      retryLeafAnswer, answer.operationId);
   };
   /* Every share this composer holds, so hide, inactivity and unmount release
      the forced Check status read as well as the periodic ones. */
@@ -3691,8 +3709,14 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       void runtimeDependencies.refreshRuntime();
       /* The tail may no longer carry this row's receipt; its own record does. */
       const receipt = entry?.deliveryReceipt;
-      if (receipt && !receipt.operationId.includes(":")) {
-        readOperationBack({ operationId: receipt.operationId, idempotencyKey: receipt.idempotencyKey, original: receipt }, true);
+      const operationId = receipt?.operationId ?? entry?.operationId;
+      if (operationId && !operationId.includes(":")) {
+        const original = receipt ?? {
+          operationId, idempotencyKey: entry!.id, conversationId: cardId,
+          kind: "send" as const, status: "pending" as const,
+          at: new Date(entry!.at).toISOString(), revision: 0,
+        };
+        readOperationBack({ operationId, idempotencyKey: original.idempotencyKey, original }, true);
       }
     },
     retryOperation: (key) => {
@@ -3701,8 +3725,14 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         void retryAdmittedPayload(row, key);
         return;
       }
-      const receipt = displayedRuntimeReceipts.find((candidate) => candidate.idempotencyKey === key);
-      if (receipt) void retryRuntimeReceipt(receipt, receiptHasUnknownFate(receipt) ? "uncertain" : undefined);
+      const entry = readOutbox(cardId).find((candidate) => candidate.id === key);
+      const receipt = displayedRuntimeReceipts.find((candidate) =>
+        candidate.operationId === entry?.deliveryReceipt?.operationId)
+        ?? entry?.deliveryReceipt
+        ?? displayedRuntimeReceipts.find((candidate) => candidate.idempotencyKey === key);
+      if (receipt && entry?.state === "failed" && receipt.status === "failed") {
+        void retryRuntimeReceipt(receipt, receiptHasUnknownFate(receipt) ? "uncertain" : undefined);
+      }
     },
     discard: (key) => {
       const receipt = displayedRuntimeReceipts.find((candidate) => candidate.idempotencyKey === key);

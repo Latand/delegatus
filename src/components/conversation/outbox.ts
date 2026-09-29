@@ -346,8 +346,8 @@ export interface OperationReconciliation {
  * and past its settlement deadline that read is also what ends a send its
  * executor never settled. The read sends nothing.
  *
- * A row counts when it is unsettled — an outbox entry still `delivering`
- * (uncertain included), or a shown receipt that neither arrived nor ended
+ * A row counts when it is unsettled — an outbox entry still `delivering`, a
+ * locally failed entry with an admitted operation, or a shown receipt that neither arrived nor ended
  * provably — and the live tail cannot move it: the tail no longer carries the
  * operation at all, or carries it in a moving state older than the server's
  * settlement window, which only a read can end once its executor is gone. A
@@ -369,7 +369,7 @@ export function operationsToReconcile(
   const leftToStream = (operationId: string) => {
     const carried = live.get(operationId);
     if (!carried) return false;
-    if (!MOVING_RECEIPT_STATUSES.has(carried.status)) return true;
+    if (!MOVING_RECEIPT_STATUSES.has(carried.status)) return !receiptHasUnknownFate(carried);
     const since = Date.parse(carried.admittedAt ?? carried.at);
     return !Number.isFinite(since) || nowMs - since < OPERATION_RECONCILE_MOVING_AFTER_MS;
   };
@@ -384,7 +384,10 @@ export function operationsToReconcile(
     candidates.set(operationId, { operationId, idempotencyKey: receipt.idempotencyKey, original: receipt, since });
   };
   for (const entry of queue) {
-    if (entry.launchOwned || entry.state !== "delivering") continue;
+    /* A transport failure can be local to the browser while an earlier held
+       operation is still moving on the server. Read that operation before
+       treating its row as a final failure. */
+    if (entry.launchOwned || (entry.state !== "delivering" && entry.state !== "failed")) continue;
     const operationId = entry.deliveryReceipt?.operationId ?? entry.operationId;
     if (!operationId) continue;
     const receipt = shown.get(operationId) ?? entry.deliveryReceipt;

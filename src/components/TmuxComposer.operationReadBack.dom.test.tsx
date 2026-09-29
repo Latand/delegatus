@@ -35,11 +35,14 @@ import { resolveSendReceipt } from "@/lib/runtime/sendSettlement";
 import { structuredContentDigest } from "@/lib/runtime/structuredContent";
 import { StructuredDeliveryQueue, type StructuredDeliveryQueuePort } from "@/lib/runtime/structuredDeliveryQueue";
 import type { FileEntry } from "@/lib/types";
-import { setLocale } from "@/lib/i18n";
+import { setLocale, translate } from "@/lib/i18n";
 import { RuntimeJournal } from "@/runtime-host/journal";
+import { startComposerPayloadRuntime } from "@/lib/runtime/fixtures/composerPayloadRuntime";
 import { installTmuxComposerRuntimeForTests, resetTmuxComposerRuntimeForTests } from "@/test-helpers/tmuxComposerRuntime";
 
 import { readOutbox, resetOutboxForTests } from "./conversation/outbox";
+import { messageRowModel } from "./conversation/messageRow";
+import { messageRowRecovery } from "./conversation/rowRecovery";
 import { TmuxComposer } from "./TmuxComposer";
 
 const dom = new Window();
@@ -306,6 +309,239 @@ test("a stale delivering row reloaded after a release reads its delivered record
   } finally {
     await unmount();
     journal.close();
+  }
+});
+
+test("a locally failed row with an admitted operation stays pending across a host restart and reads its delivery back", async () => {
+  const delivery = admit("failed-local-after-restart");
+  const first = new RuntimeJournal(delivery.journalFile, { structuredHosts: true });
+  first.close(); // The runtime host goes away after accepting the operator's key.
+  const successor = new RuntimeJournal(delivery.journalFile, { structuredHosts: true });
+  const submittedAt = Date.now() - 60_000;
+  sessionStorage.setItem(`llvOutbox:${delivery.conversationId}`, JSON.stringify([{
+    id: delivery.key, text: delivery.text, images: 0, at: submittedAt,
+    state: "failed", error: "runtime host is unavailable", operationId: delivery.operationId,
+  }]));
+  sessionStorage.setItem(`llvPendingSend:${delivery.conversationId}`, JSON.stringify([{
+    key: delivery.key, text: delivery.text, images: [], operationId: delivery.operationId,
+  }]));
+  const t = (key: Parameters<typeof translate>[1]) => translate("uk", key);
+  expect(messageRowModel(t, readOutbox(delivery.conversationId)[0]!).phase).toBe("pending");
+  expect(messageRowModel(t, readOutbox(delivery.conversationId)[0]!).failure).toBeNull();
+  let releaseRead!: () => void;
+  const readGate = new Promise<void>((resolve) => { releaseRead = resolve; });
+  const requests = serveOperations(async (operationId) => {
+    await readGate;
+    return handleRuntimeOperationQuery(operationId, {
+      client: () => journalClient(successor), rolledBack: () => false,
+      settle: (id, client) => resolveSendReceipt(id, { client, registry: delivery.registry }),
+    });
+  });
+  const unmount = await mountComposer(delivery.conversationId);
+  try {
+    expect(messageRowModel(t, readOutbox(delivery.conversationId)[0]!).phase).toBe("pending");
+    await new StructuredDeliveryQueue(queuePort(successor, "claim-a:1"), () => new FakeEngineHost(delivery.ledger)).drain();
+    releaseRead();
+    await waitFor(() => readOutbox(delivery.conversationId)[0]?.state === "delivered");
+    expect(readOutbox(delivery.conversationId)[0]?.state).toBe("delivered");
+    expect(messageRowModel(t, readOutbox(delivery.conversationId)[0]!).failure).toBeNull();
+    expect(sessionStorage.getItem(`llvPendingSend:${delivery.conversationId}`)).toBeNull();
+    expect(requests.some((request) => request.method === "GET" && request.url.includes(delivery.operationId))).toBe(true);
+    expect(touchesOperation(requests, delivery)).toEqual([]);
+    expect(delivery.ledger.writes).toHaveLength(1);
+  } finally {
+    releaseRead();
+    await unmount();
+    successor.close();
+  }
+});
+
+test("a genuine failed retry leaf can be resent from its original message row after the receipt tail is lost", async () => {
+  const delivery = admit("retry-leaf-tail-evicted");
+  const failed: RuntimeReceipt & { retryOfOperationId: string } = {
+    operationId: "failed-retry-leaf", retryOfOperationId: delivery.operationId,
+    idempotencyKey: "retry-leaf-key", conversationId: delivery.conversationId,
+    kind: "send", status: "failed", resend: "safe", reason: "host failed before delivery",
+    text: delivery.text, at: new Date(Date.now() - 60_000).toISOString(), revision: 2,
+  };
+  sessionStorage.setItem(`llvOutbox:${delivery.conversationId}`, JSON.stringify([{
+    id: delivery.key, text: delivery.text, images: 0, at: Date.now() - 60_000,
+    state: "failed", operationId: delivery.operationId, deliveryReceipt: failed,
+  }]));
+  const requests: Recorded[] = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const method = (init?.method ?? "GET").toUpperCase();
+    requests.push({ method, url, body: typeof init?.body === "string" ? init.body : "" });
+    if (url === "/api/tmux/targets") return Response.json({ targets: { "0": "%1" } });
+    if (url === `/api/runtime/operations/${failed.operationId}` && method === "POST") {
+      return Response.json({ operationId: "delivered-retry-leaf", receipt: {
+        ...failed, operationId: "delivered-retry-leaf", retryOfOperationId: failed.operationId,
+        idempotencyKey: "delivered-retry-key", status: "delivered", resend: "not-needed",
+        reason: null, at: new Date().toISOString(), revision: 1,
+      } });
+    }
+    return Response.json({ error: "not found" }, { status: 404 });
+  }) as typeof fetch;
+  const unmount = await mountComposer(delivery.conversationId);
+  try {
+    const row = readOutbox(delivery.conversationId)[0]!;
+    expect(messageRowModel((key) => translate("uk", key), row).failure?.action).toBe("retry-operation");
+    await act(async () => {
+      messageRowRecovery(delivery.conversationId)?.retryOperation?.(row.id);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(requests.some((request) => request.method === "POST" && request.url.includes(failed.operationId))).toBe(true);
+    await waitFor(() => readOutbox(delivery.conversationId)[0]?.state === "delivered");
+    expect(readOutbox(delivery.conversationId)[0]?.state).toBe("delivered");
+  } finally {
+    await unmount();
+  }
+});
+
+test("a delivered real retry leaf settles its original row after remount without a second send", async () => {
+  const runtime = await startComposerPayloadRuntime(path.join(sandbox, "real-retry-lineage"));
+  const key = "retry-readback-lineage";
+  const text = "deliver once, then read the retry lineage";
+  const call = async (method: "GET" | "POST", url: string, body?: unknown) => runtime.handle(new Request(`http://localhost${url}`, {
+    method,
+    headers: { "content-type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  }));
+  try {
+    /* Admit through the production send handler. The fixture starts with its
+       engine unavailable, matching a deploy that replaces the runtime host. */
+    const admitted = await call("POST", "/api/runtime/send", {
+      conversationId: runtime.conversationId, text, images: [], idempotencyKey: key,
+    });
+    expect(admitted.status).toBe(202);
+    const operationId = (await admitted.json() as { operationId: string }).operationId;
+    await waitFor(() => runtime.journal.operationResult(operationId)?.receipt.status === "failed");
+
+    /* The host returns and the real retry route delivers its deterministic
+       retry leaf. The operation query projects it back onto the admitted row. */
+    await runtime.hostUp();
+    const retried = await call("POST", `/api/runtime/operations/${operationId}`);
+    expect([200, 202]).toContain(retried.status);
+    const retryResponse = await retried.json() as { operationId: string };
+    const leafId = retryResponse.operationId;
+    await waitFor(() => runtime.journal.operationResult(leafId)?.receipt.status === "delivered");
+    expect(runtime.journal.operationResult(leafId)?.receipt).toMatchObject({
+      idempotencyKey: expect.stringMatching(/^retry_/), retryOfOperationId: operationId,
+    });
+    const queried = await call("GET", `/api/runtime/operations/${leafId}`);
+    const queriedBody = await queried.json() as { receipt: RuntimeReceipt };
+    expect(queriedBody.receipt).toMatchObject({ idempotencyKey: key, status: "delivered" });
+    const storedRetry = runtime.journal.operationResult(leafId)!.receipt;
+    expect(storedRetry.idempotencyKey).not.toBe(queriedBody.receipt.idempotencyKey);
+
+    /* A reloaded browser has only the original row and no live receipt tail. */
+    const submittedAt = Date.now() - 60_000;
+    sessionStorage.setItem(`llvOutbox:${runtime.conversationId}`, JSON.stringify([{
+      id: key, text, images: 0, at: submittedAt, state: "delivering", operationId: leafId,
+      deliveryReceipt: {
+        ...storedRetry, status: "delivering",
+        conversationId: runtime.conversationId,
+        text, at: new Date(submittedAt).toISOString(), revision: 2,
+      },
+    }]));
+    const readbackReceipts: RuntimeReceipt[] = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/tmux/targets") return Response.json({ targets: { "0": "%1" } });
+      if (url === `/api/runtime/operations/${leafId}` && (init?.method ?? "GET").toUpperCase() === "GET") {
+        const response = await call("GET", url);
+        readbackReceipts.push(((await response.clone().json()) as { receipt: RuntimeReceipt }).receipt);
+        return response;
+      }
+      return Response.json({ error: "unexpected request" }, { status: 404 });
+    }) as typeof fetch;
+    const unmount = await mountComposer(runtime.conversationId);
+    try {
+      await waitFor(() => readOutbox(runtime.conversationId)[0]?.state === "delivered");
+      expect(readOutbox(runtime.conversationId)[0]).toMatchObject({ id: key, state: "delivered" });
+      expect(readbackReceipts).toHaveLength(1);
+      expect(readbackReceipts[0]).toMatchObject({ idempotencyKey: key, status: "delivered" });
+      expect(sessionStorage.getItem(`llvPendingSend:${runtime.conversationId}`)).toBeNull();
+      expect(runtime.delivered).toHaveLength(1);
+      expect(runtime.delivered[0]?.text).toContain(text);
+    } finally {
+      await unmount();
+    }
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("manual status check settles a retry leaf after its first readback fails without resending", async () => {
+  const runtime = await startComposerPayloadRuntime(path.join(sandbox, "manual-retry-lineage"));
+  const key = "manual-retry-readback-lineage";
+  const text = "check retry delivery without sending twice";
+  const call = async (method: "GET" | "POST", url: string, body?: unknown) => runtime.handle(new Request(`http://localhost${url}`, {
+    method,
+    headers: { "content-type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  }));
+  try {
+    const admitted = await call("POST", "/api/runtime/send", {
+      conversationId: runtime.conversationId, text, images: [], idempotencyKey: key,
+    });
+    expect(admitted.status).toBe(202);
+    const operationId = (await admitted.json() as { operationId: string }).operationId;
+    await waitFor(() => runtime.journal.operationResult(operationId)?.receipt.status === "failed");
+    await runtime.hostUp();
+    const retried = await call("POST", `/api/runtime/operations/${operationId}`);
+    expect([200, 202]).toContain(retried.status);
+    const leafId = (await retried.json() as { operationId: string }).operationId;
+    await waitFor(() => runtime.journal.operationResult(leafId)?.receipt.status === "delivered");
+    const storedRetry = runtime.journal.operationResult(leafId)!.receipt;
+    expect(storedRetry).toMatchObject({ idempotencyKey: expect.stringMatching(/^retry_/), retryOfOperationId: operationId });
+
+    const submittedAt = Date.now() - 60_000;
+    sessionStorage.setItem(`llvOutbox:${runtime.conversationId}`, JSON.stringify([{
+      id: key, text, images: 0, at: submittedAt, state: "delivering", operationId: leafId,
+      deliveryReceipt: {
+        ...storedRetry, status: "delivering", conversationId: runtime.conversationId,
+        text, at: new Date(submittedAt).toISOString(), revision: 2,
+      },
+    }]));
+    const readbacks: Array<{ method: string; url: string }> = [];
+    let firstRead = true;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url === "/api/tmux/targets") return Response.json({ targets: { "0": "%1" } });
+      if (url === `/api/runtime/operations/${leafId}` && method === "GET") {
+        readbacks.push({ method, url });
+        if (firstRead) {
+          firstRead = false;
+          return Response.json({ error: "temporary readback failure" }, { status: 503 });
+        }
+        return call("GET", url);
+      }
+      return Response.json({ error: "unexpected request" }, { status: 404 });
+    }) as typeof fetch;
+    const unmount = await mountComposer(runtime.conversationId);
+    try {
+      await waitFor(() => readbacks.length === 1);
+      expect(readOutbox(runtime.conversationId)[0]?.state).toBe("delivering");
+
+      await act(async () => {
+        messageRowRecovery(runtime.conversationId)?.check?.(key);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      await waitFor(() => readOutbox(runtime.conversationId)[0]?.state === "delivered");
+      expect(readbacks).toHaveLength(2);
+      expect(readOutbox(runtime.conversationId)[0]).toMatchObject({ id: key, state: "delivered" });
+      expect(sessionStorage.getItem(`llvPendingSend:${runtime.conversationId}`)).toBeNull();
+      expect(runtime.delivered).toHaveLength(1);
+      expect(runtime.delivered[0]?.text).toContain(text);
+    } finally {
+      await unmount();
+    }
+  } finally {
+    await runtime.close();
   }
 });
 

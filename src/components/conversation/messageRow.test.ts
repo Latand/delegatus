@@ -83,12 +83,27 @@ test("the one action follows what can actually be done to the message", () => {
   /* The bytes are the server's now, so the replay is the server's too: the
      journal starts the admitted operation's next attempt from its own recorded
      request. Same message, same key, nothing composed here. */
-  expect(action({ originalOperationOnly: true, operationId: "operation-1" })).toBe("retry-operation");
+  /* A local error with an admitted operation is still awaiting its durable
+     verdict; Retry would race the original send across a host restart. */
+  const awaiting = messageRowModel(t("en"), entry({ state: "failed", originalOperationOnly: true,
+    operationId: "operation-1" }), { nowMs: AT });
+  expect(awaiting.phase).toBe("pending");
+  expect(awaiting.recovery).toBe("check");
+  expect(awaiting.failure).toBeNull();
+  const arrived = messageRowModel(t("en"), entry({ state: "failed", operationId: "operation-1",
+    deliveryReceipt: { operationId: "operation-1", idempotencyKey: "key", conversationId: "conversation_x",
+      kind: "send", status: "delivered" } as OutboxEntry["deliveryReceipt"] }), { nowMs: AT });
+  expect(arrived.phase).toBe("confirmed");
+  expect(arrived.failure).toBeNull();
+  expect(action({ originalOperationOnly: true, operationId: "operation-1", deliveryReceipt: {
+    operationId: "operation-1", idempotencyKey: "key", conversationId: "conversation_x",
+    kind: "send", status: "failed", resend: "safe",
+  } as OutboxEntry["deliveryReceipt"] })).toBe("retry-operation");
   /* Unless the operator already ended it — that decision is not replayed. */
   expect(action({ originalOperationOnly: true, operationId: "operation-1",
-    deliveryReceipt: { reason: "delivery-discarded", operationId: "operation-1" } as OutboxEntry["deliveryReceipt"] })).toBe("check");
+    deliveryReceipt: { reason: "delivery-discarded", status: "failed", operationId: "operation-1" } as OutboxEntry["deliveryReceipt"] })).toBe("check");
   /* A discard was the operator's own decision; replaying it would undo it. */
-  expect(action({ deliveryReceipt: { reason: "delivery-discarded", operationId: "operation-2" } as OutboxEntry["deliveryReceipt"] })).toBe("check");
+  expect(action({ deliveryReceipt: { reason: "delivery-discarded", status: "failed", operationId: "operation-2" } as OutboxEntry["deliveryReceipt"] })).toBe("check");
 });
 
 test("an unconfirmed delivery is asked about under its own key, never re-sent", () => {

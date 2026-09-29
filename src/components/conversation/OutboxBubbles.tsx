@@ -201,7 +201,7 @@ export function ConversationMessageRow({
         >
           {t("outbox.action.retry")}
         </button>
-      ) : row.failure.action === "retry-operation" ? (
+      ) : row.failure.action === "retry-operation" && actions?.onRetryOperation ? (
         /* The journal's own next attempt of the admitted operation. It carries
            the identity the composer's notice used to carry, because it IS that
            control — the same request, now on the message it belongs to. */
@@ -214,7 +214,7 @@ export function ConversationMessageRow({
         >
           {t("outbox.action.retry")}
         </button>
-      ) : row.failure.action === "check" ? (
+      ) : row.failure.action === "retry-operation" ? null : row.failure.action === "check" ? (
         <button
           type="button"
           data-outbox-check={entry!.id}

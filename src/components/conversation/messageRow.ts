@@ -30,7 +30,7 @@ import type { MessageKey, TFunction } from "@/lib/i18n";
 import { deliveryWaitFor, deliveryWaitText, type DeliveryWaitPhase } from "@/components/runtime/deliveryWait";
 import { humanReceiptReasonKey, type HostAxis, type TurnAxis } from "@/components/runtime/runtimeModel";
 
-import type { OutboxEntry } from "./outbox";
+import { outboxStateForReceiptStatus, receiptHasUnknownFate, type OutboxEntry } from "./outbox";
 
 export interface MessageRowSession {
   host: HostAxis;
@@ -272,18 +272,24 @@ export function messageRowModel(
      arrived, and the one thing the row must never do is tell the operator it
      was not sent. It stays pending, and the disclosure offers Check status
      under the original identity. */
-  const uncertain = Boolean(entry.deliveryUncertain) || transport.wait === "uncertain";
+  /* A browser-local failure cannot overrule an admitted operation whose
+     durable verdict is still moving or has not been read back yet. */
+  const receiptState = entry.deliveryReceipt ? outboxStateForReceiptStatus(entry.deliveryReceipt.status) : null;
+  const receiptUnknown = entry.deliveryReceipt ? receiptHasUnknownFate(entry.deliveryReceipt) : false;
+  const unverifiedLocalFailure = entry.state === "failed" && Boolean(messageRowOperationId(entry))
+    && (!receiptState || receiptState === "delivering" || receiptUnknown);
+  const uncertain = Boolean(entry.deliveryUncertain) || unverifiedLocalFailure || transport.wait === "uncertain";
   /* Uncertainty outranks every other reading of the entry. A local row the
      composer could not confirm is written `failed` with the unknown flag on
      it, and calling THAT a proven failure is the one thing this model must
      never do: the message may be in the journal, and "not delivered" would
      invite a second copy of it. */
-  const phase: MessageRowPhase = uncertain
-    ? "pending"
-    : entry.state === "failed"
-      ? "failed"
-      : entry.state === "delivered"
-        ? "confirmed"
+  const phase: MessageRowPhase = entry.state === "delivered" || receiptState === "delivered"
+    ? "confirmed"
+    : uncertain
+      ? "pending"
+      : entry.state === "failed"
+        ? "failed"
         : "pending";
   const raw = phase === "failed"
     ? entry.deliveryReceipt?.reason ?? entry.error ?? null
