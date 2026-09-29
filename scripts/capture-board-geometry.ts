@@ -139,6 +139,8 @@ import path from "node:path";
 
 import { chromium, type Browser, type Page } from "playwright-core";
 
+import { OPEN_LINKED_SETTINGS_EVENT } from "../src/components/links/openLinkedSettings";
+import { translate } from "../src/lib/i18n";
 import { nestProcessTempUnder } from "../src/lib/tempDirs";
 import { createTailscaleStub, STUB_DNS_NAME } from "../src/test-helpers/tailscaleStub";
 
@@ -5424,9 +5426,162 @@ async function selfUpdateAutoMain(): Promise<void> {
   console.log(`self-update auto geometry: ${path.join(OUT_DIR, "self-update-auto.json")}`);
 }
 
+/* The Linked installs dialog (#2333). Every /api/links* answer is a fixture, so nothing pairs, mints
+   or saves anywhere. Frames are named {width}-{lang}-{frame}; LINKING_EVIDENCE_DIR receives a copy. */
+type LinkingFixture = {
+  role: "accept" | "connect"; state: string | null; publicUrl: string | null; vouches: boolean;
+  peers: unknown[]; grants: unknown[]; used: boolean; connect: { status: number; body: unknown } | null; focus: string;
+};
+
+async function linkingMain(): Promise<void> {
+  seedHome();
+  const evidenceDir = process.env.LINKING_EVIDENCE_DIR?.trim() || null;
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const stage = "https://delegatus.example.com";
+  const peer = (over: object = {}) => ({ id: "peer-home", label: "home-pc", url: "https://home.example.test", state: "active", error: null, lastCall: Date.parse("2026-09-29T09:00:00Z"), ...over });
+  const grant = { id: "grant-home", label: "home-pc", created: 200, requests: 44, today: 3, sevenDays: 41, lastUsed: null };
+  const accept = (over: Partial<LinkingFixture>): LinkingFixture => ({ role: "accept", state: "ok", publicUrl: stage, vouches: false, peers: [], grants: [], used: false, connect: null, focus: "", ...over });
+  const connect = (over: Partial<LinkingFixture>): LinkingFixture => ({ role: "connect", state: null, publicUrl: null, vouches: false, peers: [], grants: [], used: false, connect: null, focus: "", ...over });
+  const frames: Record<string, { fixture: LinkingFixture; steps: (page: Page, lang: "en" | "uk") => Promise<void> }> = {
+    "accept-unverified": { fixture: accept({ state: "unverified", focus: "[data-linked-state]" }), steps: async () => {} },
+    "accept-verified": { fixture: accept({ focus: "[data-linked-state]" }), steps: async () => {} },
+    "accept-blocked": { fixture: accept({ state: "tls-failure", focus: "[data-linked-state]" }), steps: async () => {} },
+    "accept-code": { fixture: accept({ focus: "[data-pair-code]" }), steps: async (page, lang) => {
+      await page.getByRole("button", { name: translate(lang, "links.allow"), exact: true }).click();
+      await page.waitForSelector("[data-pair-code-value]");
+    } },
+    "accept-connected": { fixture: accept({ used: true, grants: [grant], focus: "[data-linked-connected]" }), steps: async (page, lang) => {
+      await page.getByRole("button", { name: translate(lang, "links.allow"), exact: true }).click();
+      await page.waitForSelector("[data-linked-connected]", { timeout: 15_000 });
+    } },
+    "connect-start": { fixture: connect({ focus: "" }), steps: async () => {} },
+    "connect-version": { fixture: connect({ connect: { status: 409, body: { error: "version" } }, focus: "[data-linked-connect-error]" }), steps: async (page, lang) => {
+      await fillConnect(page, lang);
+      await page.waitForSelector("[data-linked-connect-error]");
+    } },
+    "connect-connected": { fixture: connect({ connect: { status: 200, body: { peer: peer() } }, peers: [], focus: "[data-linked-connected]" }), steps: async (page, lang) => {
+      await fillConnect(page, lang);
+      await page.waitForSelector("[data-linked-connected]");
+    } },
+    "peers-version-mismatch": { fixture: connect({ peers: [peer({ state: "failing", error: "malformed" })], grants: [grant], focus: "[data-linked-peer-error]" }), steps: async () => {} },
+  };
+  async function fillConnect(page: Page, lang: "en" | "uk"): Promise<void> {
+    await page.getByLabel(translate(lang, "links.peerAddress"), { exact: true }).fill("https://home.example.test");
+    await page.getByLabel(translate(lang, "links.peerCode"), { exact: true }).fill("ABCDEFGHJKMNPQRS");
+    await page.locator("[data-linked-panel=connect] form button[type=submit]").click();
+  }
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  const report: { commit: string; frames: Record<string, unknown>; failures: string[] } = { commit: captureCommit(), frames: {}, failures: [] };
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, false);
+    await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) {
+      const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
+      if (!localeWrite.ok) throw new Error(`setting ${lang} answered ${localeWrite.status}`);
+      for (const [name, { fixture, steps }] of Object.entries(frames)) {
+        const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, reducedMotion: "reduce" });
+        await context.addInitScript(seedInit);
+        await context.addInitScript((language: string) => localStorage.setItem("llv_lang", language), lang);
+        const page = await context.newPage();
+        let minted = false;
+        let connected = false;
+        await page.route(/\/api\/links(\/|\?|$)/, (route) => {
+          const request = route.request();
+          const { pathname } = new URL(request.url());
+          const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+          if (pathname === "/api/links/codes") {
+            if (request.method() === "POST") { minted = true; return json({ code: "R4TZ7M-K7QM9-XTD2P", expiresAt: Date.now() + 600_000 }); }
+            return json({ codes: minted ? [{ id: "R4TZ7M", expiresAt: Date.now() + 600_000, wrongAttempts: 0, used: fixture.used, burned: false }] : [] });
+          }
+          if (pathname === "/api/links/peers") {
+            if (request.method() === "POST") { connected = fixture.connect?.status === 200; return json(fixture.connect?.body ?? {}, fixture.connect?.status ?? 200); }
+            return json({ peers: connected ? [peer()] : fixture.peers, states: [] });
+          }
+          if (pathname === "/api/links/grants") return json({ grants: minted || !fixture.used ? fixture.grants : [] });
+          if (pathname === "/api/links/shared") return json({ shared: { v: 1, all: false, projects: [] }, known: [{ key: "repo-1", name: "harbor" }], states: [] });
+          return json({
+            self: { label: "stage", publicUrl: fixture.publicUrl, check: fixture.publicUrl ? { code: fixture.state, at: "2026-09-29T08:00:00.000Z" } : null },
+            state: fixture.publicUrl ? fixture.state : null, entry: { port: 8898, publishable: true, localVouches: fixture.vouches }, keyOn: true, tailnetUrl: null,
+          });
+        });
+        await page.goto(`${baseUrl}/`);
+        await page.waitForFunction((event) => {
+          if (document.querySelector("[data-linked-settings]")) return true;
+          window.dispatchEvent(new Event(event));
+          return false;
+        }, OPEN_LINKED_SETTINGS_EVENT, { timeout: 60_000 });
+        await page.waitForSelector('[data-linked-role][aria-checked="true"]', { timeout: 30_000 });
+        if ((await page.locator(`[data-linked-role=${fixture.role}]`).getAttribute("aria-checked")) !== "true") await page.locator(`[data-linked-role=${fixture.role}]`).click();
+        const geometry = await page.evaluate(() => {
+          const dialog = document.querySelector<HTMLElement>("[data-linked-settings]")!;
+          const outer = dialog.getBoundingClientRect();
+          const visible = (node: Element) => (node as HTMLElement).offsetParent !== null;
+          const inside = (node: Element) => { const rect = node.getBoundingClientRect(); return rect.left >= outer.left - 0.5 && rect.right <= outer.right + 0.5; };
+          const buttons = [...dialog.querySelectorAll("button")].filter(visible);
+          const radios = [...dialog.querySelectorAll("[data-linked-role]")].map((node) => node.getBoundingClientRect());
+          return {
+            overflow: dialog.scrollWidth - dialog.clientWidth,
+            shortButtons: buttons.filter((node) => node.getBoundingClientRect().height < 43.5).map((node) => node.textContent),
+            copyOutside: [...dialog.querySelectorAll("[data-linked-copy]")].filter(visible).filter((node) => !inside(node)).length,
+            radiosInViewport: radios.every((rect) => rect.top >= 0 && rect.bottom <= window.innerHeight),
+            text: dialog.innerText,
+            hasBlocking: dialog.querySelector('[data-linked-severity="blocking"]') !== null,
+          };
+        });
+        await steps(page, lang);
+        const after = await page.evaluate((focus) => {
+          const dialog = document.querySelector<HTMLElement>("[data-linked-settings]")!;
+          const clipped = [...dialog.querySelectorAll<HTMLElement>("[data-pair-address], [data-pair-code-value]")].filter((node) => node.scrollWidth > node.clientWidth + 1).length;
+          const outer = dialog.getBoundingClientRect();
+          const allow = [...dialog.querySelectorAll("button")].filter((node) => node.offsetParent !== null && node.getBoundingClientRect().width > 0);
+          const buttonsOutside = allow.filter((node) => { const rect = node.getBoundingClientRect(); return rect.left < outer.left - 0.5 || rect.right > outer.right + 0.5; }).length;
+          const shortButtons = allow.filter((node) => node.getBoundingClientRect().height < 43.5).map((node) => node.textContent);
+          /* The state frames keep the role picker in view when they can; the ones below the fold centre their subject. */
+          if (focus) dialog.querySelector(focus)?.scrollIntoView({ block: focus === "[data-linked-state]" ? "nearest" : "center" });
+          return { clipped, buttonsOutside, shortButtons, overflow: dialog.scrollWidth - dialog.clientWidth };
+        }, fixture.focus);
+        const tag = `${width}-${lang}-${name}`;
+        report.frames[tag] = { ...geometry, text: undefined, after };
+        if (geometry.overflow > 1 || after.overflow > 1) report.failures.push(`${tag}: horizontal overflow`);
+        if (width === 390 && (geometry.shortButtons.length || after.shortButtons.length)) report.failures.push(`${tag}: buttons under 44px: ${[...geometry.shortButtons, ...after.shortButtons].join(", ")}`);
+        if (geometry.copyOutside || after.buttonsOutside) report.failures.push(`${tag}: a button leaves the dialog`);
+        if (after.clipped) report.failures.push(`${tag}: address or code clipped`);
+        if (width === 390 && !geometry.radiosInViewport) report.failures.push(`${tag}: role radios below the fold at open`);
+        if (!geometry.text.includes(translate(lang, "links.title"))) report.failures.push(`${tag}: wrong interface language`);
+        if (name === "accept-unverified" && geometry.hasBlocking) report.failures.push(`${tag}: warning drawn as blocking`);
+        if (name === "accept-blocked" && !geometry.hasBlocking) report.failures.push(`${tag}: blocker not drawn as blocking`);
+        const frame = path.join(OUT_DIR, `${tag}.png`);
+        await page.screenshot({ path: frame });
+        if (evidenceDir) {
+          fs.mkdirSync(evidenceDir, { recursive: true });
+          fs.copyFileSync(frame, path.join(evidenceDir, `${tag}.png`));
+        }
+        await context.close();
+      }
+    }
+  } finally {
+    await browser?.close();
+    await stop(server);
+  }
+  const result = JSON.stringify(report, null, 2) + "\n";
+  fs.writeFileSync(path.join(OUT_DIR, "linking.json"), result);
+  if (evidenceDir) {
+    fs.mkdirSync(evidenceDir, { recursive: true });
+    fs.writeFileSync(path.join(evidenceDir, "linking.json"), result);
+  }
+  if (report.failures.length) throw new Error(report.failures.join("; "));
+  console.log(`linking geometry: ${path.join(OUT_DIR, "linking.json")}`);
+}
+
 /* BOARD_CAPTURE_CASE=header runs the header bar's case (#1801), account-removal the removal dialog's (#1857), activity the activity dashboard's, instead of the camera probes. */
 if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
 else if (process.env.BOARD_CAPTURE_CASE === "self-update-auto") await selfUpdateAutoMain();
+else if (process.env.BOARD_CAPTURE_CASE === "linking") await linkingMain();
 else if (process.env.BOARD_CAPTURE_CASE === "activity") await activityMain();
 else if (process.env.BOARD_CAPTURE_CASE === "lightbox") await lightboxMain();
 else if (process.env.BOARD_CAPTURE_CASE === "resources") await resourcesMain();
