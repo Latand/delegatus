@@ -19,10 +19,12 @@ import { recordViewerEntries } from "@/runtime-host/viewerEntries";
 import { proxy } from "@/proxy";
 import { POST as selfCheckRoute } from "@/app/api/peer/v1/self-check/route";
 import { POST as peerRoute } from "@/app/api/peer/v1/[...path]/route";
-import { listCodes } from "./protocol";
+import { POST as linksRoute } from "@/app/api/links/route";
+import { POST as codesRoute } from "@/app/api/links/codes/route";
+import { listCodes, mintCode } from "./protocol";
 import { readGrants, sha, writeGrants } from "./state";
 
-import { checkAddress, checkSavedAddress, currentSelf, probeSelfAddress, saveAddress, selfFile } from "./self";
+import { checkAddress, checkSavedAddress, currentSelf, probeSelfAddress, readSelf, saveAddress, selfFile } from "./self";
 import { peerTarget } from "./client";
 
 const names = ["LLV_STATE_DIR", "XDG_CONFIG_HOME", "LLV_TOKEN", "LLV_PUBLIC_HOST", "LLV_DOCKER_NSENTER_SHIMS", "PORT"] as const;
@@ -392,5 +394,136 @@ test("HTTPS probes keep the public SNI while sending a spoofed Host under Bun", 
     expect(reply).toMatchObject({ status: 200, host: "LOCALHOST:443", vouched: false });
     expect(seenHost).toBe("LOCALHOST:443");
     expect(seenSni).toBe("localhost");
+  } finally { await close(server); }
+});
+
+/** The Viewer as `next start` serves it: the proxy, then the real route. */
+function viewerServer(): http.Server {
+  return http.createServer(async (incoming, outgoing) => {
+    const headers = new Headers();
+    for (const [name, value] of Object.entries(incoming.headers)) if (typeof value === "string") headers.set(name, value);
+    const request = new NextRequest(`http://127.0.0.1${incoming.url}`, { method: incoming.method, headers });
+    const gate = proxy(request);
+    const response = gate.headers.get("x-middleware-next") === "1" ? selfCheckRoute(request) : gate;
+    outgoing.writeHead(response.status, Object.fromEntries(response.headers));
+    outgoing.end(Buffer.from(await response.arrayBuffer()));
+  });
+}
+
+/** Caddy with one site block: its Host goes upstream unchanged, and a Host no
+    site matches is answered by Caddy itself with an empty 200. */
+function caddyLike(site: () => string, upstream: () => number, unmatched: () => number | null = () => null): http.Server {
+  return http.createServer((incoming, outgoing) => {
+    const port = incoming.headers.host === site() ? upstream() : unmatched();
+    if (port === null) { outgoing.writeHead(200); outgoing.end(); return; }
+    const forward = http.request({ host: "127.0.0.1", port, path: incoming.url, method: incoming.method, headers: incoming.headers }, (reply) => {
+      outgoing.writeHead(reply.statusCode ?? 502, reply.headers);
+      reply.pipe(outgoing);
+    });
+    forward.on("error", () => { outgoing.writeHead(502); outgoing.end(); });
+    incoming.pipe(forward);
+  });
+}
+
+const bearer = "Bearer test-access-key";
+const operatorRequest = (url: string, body?: object) => new NextRequest(`http://127.0.0.1:8898${url}`, {
+  method: "POST", headers: { host: "127.0.0.1:8898", authorization: bearer, "content-type": "application/json" },
+  body: body ? JSON.stringify(body) : undefined,
+});
+
+test("an address behind a Caddy that answers unknown Hosts with an empty 200 checks ok and mints a code", async () => {
+  process.env.LLV_TOKEN = "test-access-key";
+  const viewer = viewerServer();
+  const viewerPort = await listen(viewer);
+  let frontPort = 0;
+  const front = caddyLike(() => `board.example.test:${frontPort}`, () => viewerPort);
+  frontPort = await listen(front);
+  const lookup = spyOn(dns, "lookup").mockImplementation((async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as typeof dns.lookup);
+  try {
+    const publicUrl = `http://board.example.test:${frontPort}`;
+    const saved = await linksRoute(operatorRequest("/api/links", { action: "save", publicUrl, label: "stage" }));
+    expect(saved.status).toBe(200);
+    expect((await saved.json()).self.check.code).toBe("ok");
+    const checked = await linksRoute(operatorRequest("/api/links", { action: "check" }));
+    expect((await checked.json()).check.code).toBe("ok");
+    const minted = await codesRoute(operatorRequest("/api/links/codes"));
+    expect(minted.status).toBe(200);
+    expect((await minted.json()).code).toMatch(/^[0-9A-HJKMNP-TV-Z]{6}-[0-9A-HJKMNP-TV-Z]{5}-[0-9A-HJKMNP-TV-Z]{5}$/);
+  } finally { lookup.mockRestore(); await close(front); await close(viewer); }
+});
+
+test("a Caddy that sends unknown Hosts to a trusted local entry still refuses to mint", async () => {
+  process.env.LLV_TOKEN = "test-access-key";
+  const viewer = viewerServer();
+  const viewerPort = await listen(viewer);
+  const target = path.join(root, "target.json");
+  fs.writeFileSync(target, JSON.stringify({ revision: "test", image: "viewer:test", container: "viewer-test", endpoint: `http://127.0.0.1:${viewerPort}` }));
+  const gatewayFile = path.join(root, "gateway.json");
+  fs.writeFileSync(gatewayFile, JSON.stringify({ localEntry: "trusted" }));
+  const trusted = serveViewerLocalEntry(target, 0, "127.0.0.1", { gatewayFile, releaseCredential: () => "test-access-key" });
+  await once(trusted, "listening");
+  const trustedPort = (trusted.address() as { port: number }).port;
+  let frontPort = 0;
+  const front = caddyLike(() => `board.example.test:${frontPort}`, () => viewerPort, () => trustedPort);
+  frontPort = await listen(front);
+  const lookup = spyOn(dns, "lookup").mockImplementation((async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as typeof dns.lookup);
+  try {
+    const saved = await linksRoute(operatorRequest("/api/links", { action: "save", publicUrl: `http://board.example.test:${frontPort}` }));
+    expect((await saved.json()).self.check.code).toBe("open-to-internet");
+    const minted = await codesRoute(operatorRequest("/api/links/codes"));
+    expect(minted.status).toBe(409);
+    expect(await minted.json()).toEqual({ error: "open-to-internet" });
+    expect(listCodes()).toEqual([]);
+  } finally { lookup.mockRestore(); await close(front); await close(trusted); await close(viewer); }
+});
+
+test("an address this server cannot reach mints only while no local entry vouches", async () => {
+  process.env.LLV_TOKEN = "test-access-key";
+  const closed = http.createServer();
+  const port = await listen(closed);
+  await close(closed);
+  fs.mkdirSync(path.dirname(selfFile()), { recursive: true });
+  fs.writeFileSync(selfFile(), JSON.stringify({ v: 1, installId: "00000000-0000-0000-0000-000000000001", label: "B", publicUrl: `http://127.0.0.1:${port}`, check: null }));
+  // No Docker gateway: every connection authenticates, so nothing can vouch.
+  const bare = await mintCode();
+  expect(bare.error).toBeUndefined();
+  expect(bare.code).toBeString();
+  expect(readSelf()?.check?.code).toBe("unverified");
+  process.env.LLV_DOCKER_NSENTER_SHIMS = "1";
+  recordViewerEntries(statePath("viewer-entries.json"), { stablePort: 8898, stableEntry: "local-entry", remoteEntryPort: 8897 });
+  fs.writeFileSync(statePath("viewer-gateway.json"), JSON.stringify({ remoteEntryPort: 8897, localEntry: "authenticated" }));
+  expect((await mintCode()).code).toBeString();
+  fs.writeFileSync(statePath("viewer-gateway.json"), JSON.stringify({ remoteEntryPort: 8897, localEntry: "trusted" }));
+  expect(await mintCode()).toEqual({ error: "unverified" });
+});
+
+test("without a vouching entry a proxy that rewrites the Host still refuses to mint", async () => {
+  process.env.LLV_TOKEN = "test-access-key";
+  const rewriting = http.createServer((_incoming, outgoing) => {
+    outgoing.writeHead(200, { "content-type": "application/json" });
+    outgoing.end(JSON.stringify({ host: "localhost", vouched: false }));
+  });
+  const port = await listen(rewriting);
+  try {
+    fs.mkdirSync(path.dirname(selfFile()), { recursive: true });
+    fs.writeFileSync(selfFile(), JSON.stringify({ v: 1, installId: "00000000-0000-0000-0000-000000000001", label: "B", publicUrl: `http://127.0.0.1:${port}`, check: null }));
+    expect(await mintCode()).toEqual({ error: "host-rewritten" });
+  } finally { await close(rewriting); }
+});
+
+test("an HTTPS address written as an IP is probed without an IP in the SNI", async () => {
+  const key = path.join(root, "ip-key.pem");
+  const cert = path.join(root, "ip-cert.pem");
+  execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-keyout", key, "-out", cert,
+    "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"], { stdio: "ignore" });
+  const server = https.createServer({ key: fs.readFileSync(key), cert: fs.readFileSync(cert) }, (request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ host: request.headers.host, vouched: false }));
+  });
+  const port = await listen(server);
+  try {
+    const url = new URL(`https://127.0.0.1:${port}`);
+    expect(await probeSelfAddress(url, url.host, { certificateAuthority: fs.readFileSync(cert, "utf8") }))
+      .toMatchObject({ status: 200, host: url.host, vouched: false });
   } finally { await close(server); }
 });

@@ -183,14 +183,16 @@ function newNonce(): string {
 export type Probe = { status: number; host?: string; vouched?: boolean };
 export function probeSelfAddress(url: URL, host: string, options: { certificateAuthority?: string; connectionHost?: string } = {}): Promise<Probe> {
   const nonce = newNonce();
+  const name = url.hostname.replace(/^\[|\]$/g, "");
   return new Promise<Probe>((resolve, reject) => {
     let timer: ReturnType<typeof setTimeout>;
     let settled = false;
     const fail = (error: Error) => { if (settled) return; settled = true; clearTimeout(timer); reject(error); };
     const finish = (probe: Probe) => { if (settled) return; settled = true; clearTimeout(timer); resolve(probe); };
     const request = (url.protocol === "https:" ? https : http).request({
-      hostname: options.connectionHost ?? url.hostname.replace(/^\[|\]$/g, ""), port: url.port || (url.protocol === "https:" ? 443 : 80),
-      servername: url.protocol === "https:" ? url.hostname.replace(/^\[|\]$/g, "") : undefined,
+      hostname: options.connectionHost ?? name, port: url.port || (url.protocol === "https:" ? 443 : 80),
+      // SNI carries names only; Bun refuses an IP literal as the servername.
+      servername: url.protocol === "https:" && !net.isIP(name) ? name : undefined,
       ca: options.certificateAuthority,
       path: "/api/peer/v1/self-check", method: "POST", timeout: 3000,
       headers: { host, "x-delegatus-self": nonce, "content-length": "0" },
@@ -238,7 +240,9 @@ export async function checkAddress(url: URL): Promise<SelfCheck> {
     try {
       const reply = await probeSelfAddress(url, host, { connectionHost: pinnedHost });
       if (reply.status === 200 && reply.vouched === true) return result("open-to-internet");
-      if (reply.status === 200 && reply.vouched !== false) return result("unverified");
+      // Only the self-check route answers with a boolean `vouched`, and only for
+      // the nonce this probe carried. Any other answer, including the empty
+      // 200 Caddy sends for a Host no site matches, never reached this Viewer.
     }
     catch { /* A proxy closing unknown hosts is safe. */ }
   }
