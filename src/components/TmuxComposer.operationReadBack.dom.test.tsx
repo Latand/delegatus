@@ -37,6 +37,7 @@ import { StructuredDeliveryQueue, type StructuredDeliveryQueuePort } from "@/lib
 import type { FileEntry } from "@/lib/types";
 import { setLocale, translate } from "@/lib/i18n";
 import { RuntimeJournal } from "@/runtime-host/journal";
+import { startComposerPayloadRuntime } from "@/lib/runtime/fixtures/composerPayloadRuntime";
 import { installTmuxComposerRuntimeForTests, resetTmuxComposerRuntimeForTests } from "@/test-helpers/tmuxComposerRuntime";
 
 import { readOutbox, resetOutboxForTests } from "./conversation/outbox";
@@ -395,6 +396,80 @@ test("a genuine failed retry leaf can be resent from its original message row af
     expect(readOutbox(delivery.conversationId)[0]?.state).toBe("delivered");
   } finally {
     await unmount();
+  }
+});
+
+test("a delivered real retry leaf settles its original row after remount without a second send", async () => {
+  const runtime = await startComposerPayloadRuntime(path.join(sandbox, "real-retry-lineage"));
+  const key = "retry-readback-lineage";
+  const text = "deliver once, then read the retry lineage";
+  const call = async (method: "GET" | "POST", url: string, body?: unknown) => runtime.handle(new Request(`http://localhost${url}`, {
+    method,
+    headers: { "content-type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  }));
+  try {
+    /* Admit through the production send handler. The fixture starts with its
+       engine unavailable, matching a deploy that replaces the runtime host. */
+    const admitted = await call("POST", "/api/runtime/send", {
+      conversationId: runtime.conversationId, text, images: [], idempotencyKey: key,
+    });
+    expect(admitted.status).toBe(202);
+    const operationId = (await admitted.json() as { operationId: string }).operationId;
+    await waitFor(() => runtime.journal.operationResult(operationId)?.receipt.status === "failed");
+
+    /* The host returns and the real retry route delivers its deterministic
+       retry leaf. The operation query projects it back onto the admitted row. */
+    await runtime.hostUp();
+    const retried = await call("POST", `/api/runtime/operations/${operationId}`);
+    expect([200, 202]).toContain(retried.status);
+    const retryResponse = await retried.json() as { operationId: string };
+    const leafId = retryResponse.operationId;
+    await waitFor(() => runtime.journal.operationResult(leafId)?.receipt.status === "delivered");
+    expect(runtime.journal.operationResult(leafId)?.receipt).toMatchObject({
+      idempotencyKey: expect.stringMatching(/^retry_/), retryOfOperationId: operationId,
+    });
+    const queried = await call("GET", `/api/runtime/operations/${leafId}`);
+    const queriedBody = await queried.json() as { receipt: RuntimeReceipt };
+    expect(queriedBody.receipt).toMatchObject({ idempotencyKey: key, status: "delivered" });
+    const storedRetry = runtime.journal.operationResult(leafId)!.receipt;
+    expect(storedRetry.idempotencyKey).not.toBe(queriedBody.receipt.idempotencyKey);
+
+    /* A reloaded browser has only the original row and no live receipt tail. */
+    const submittedAt = Date.now() - 60_000;
+    sessionStorage.setItem(`llvOutbox:${runtime.conversationId}`, JSON.stringify([{
+      id: key, text, images: 0, at: submittedAt, state: "delivering", operationId: leafId,
+      deliveryReceipt: {
+        ...storedRetry, status: "delivering",
+        conversationId: runtime.conversationId,
+        text, at: new Date(submittedAt).toISOString(), revision: 2,
+      },
+    }]));
+    const readbackReceipts: RuntimeReceipt[] = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/tmux/targets") return Response.json({ targets: { "0": "%1" } });
+      if (url === `/api/runtime/operations/${leafId}` && (init?.method ?? "GET").toUpperCase() === "GET") {
+        const response = await call("GET", url);
+        readbackReceipts.push(((await response.clone().json()) as { receipt: RuntimeReceipt }).receipt);
+        return response;
+      }
+      return Response.json({ error: "unexpected request" }, { status: 404 });
+    }) as typeof fetch;
+    const unmount = await mountComposer(runtime.conversationId);
+    try {
+      await waitFor(() => readOutbox(runtime.conversationId)[0]?.state === "delivered");
+      expect(readOutbox(runtime.conversationId)[0]).toMatchObject({ id: key, state: "delivered" });
+      expect(readbackReceipts).toHaveLength(1);
+      expect(readbackReceipts[0]).toMatchObject({ idempotencyKey: key, status: "delivered" });
+      expect(sessionStorage.getItem(`llvPendingSend:${runtime.conversationId}`)).toBeNull();
+      expect(runtime.delivered).toHaveLength(1);
+      expect(runtime.delivered[0]?.text).toContain(text);
+    } finally {
+      await unmount();
+    }
+  } finally {
+    await runtime.close();
   }
 });
 
