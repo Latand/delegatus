@@ -113,17 +113,17 @@ Changed rules:
 | §A.3 rule 1 | A code lives at most 30 minutes (was 10), and 30 is recommended. The install treats a code as expired 30 minutes after receiving it at the latest, whatever `expires_at` says. |
 | §A.3 rule 3 | Rewritten. The owner confirms once, in the service. The install completes by itself when the service declares `one_tap_pairing` and the redeemer is no stranger to this origin: not an identity the operator rejected with "Not me", and either the origin's first pairing or a known owner or the previous pairing's owner. The operator's click remains the fallback. Replaces "confirmed at both ends". |
 | §A.3 rule 5 | `expired` means the code's own expiry passed (was "10 minutes passed"). |
-| §A.3 rules 7–9 | New. A code is spent at its first redemption, and a later redeemer is told so. The service notifies the owner when a pairing completes. The install applies defaults on completion. |
+| §A.3 rules 7–9 | New. A pairing is spent at its first redemption, of the code or of the verify token, and a later redeemer is told so. A redeemed pairing reads `pending` with `redeemed: true` until its redeemer confirms. The service notifies the owner when a pairing completes. The install applies defaults on completion. |
 | §A.3 rule 10 | New. Every live pairing of an owner lists all of the owner's active targets, with no separate attach step, so completion never lists `targets: []` for an owner who has any. A target created later is attached at once, and the install applies the defaults of rule 9 to it. A target answered through another pairing of the same owner (a second install) stays there: it is routed to one pairing at most, and other pairings see `answered_elsewhere: true`. |
 | §A.3.1 | New. The threat model of one-tap pairing. |
 | §A.4 | New endpoints 12 and 13 (below). Routing now takes both the target switch and the chat switch into account. The install may switch a target on after pairing defaults give it an engine and a model. Rows 6 and 7 follow rule 10 across pairings. A chat's switch belongs to the target, and a pairing that sees `answered_elsewhere` changes neither a chat's switch (row 13) nor a target's `fallback` (row 7). Unpair (row 11) switches back only the targets the unpaired pairing answers. |
-| §A.5 | New optional fields `Descriptor.verify_channel`, `Descriptor.features`, `ClaimRequest.features`, `Request.chat` and `Target.answered_elsewhere`. New definitions `Feature`, `ChatKey`, `RequestChat`, `Chat`, `Chats` and `ChatPatch`. |
-| §A.6 | New row F7: a request is held while its chat has a live lease; its claim window starts when that lease ends. New rule L6. |
+| §A.5 | New optional fields `Descriptor.verify_channel`, `Descriptor.features`, `ClaimRequest.features`, `PairingStatus.redeemed`, `Request.chat` and `Target.answered_elsewhere`. New definitions `Feature`, `ChatKey`, `RequestChat`, `Chat`, `Chats` and `ChatPatch`. |
+| §A.6 | New row F7: a request is held while its chat has a live lease; its claim window starts when that lease ends. F1b now ignores a `free: 0` poll when a lease of the target ended after that poll opened. New rules L6 and L7: a lease that ends frees its slot, so at the default concurrency of 1 a held request is claimed by the poll reopened after the turn, and does not fall back. |
 | §A.8 | New: the chat key, and how the prompt of each turn of a conversation is built. |
 | §A.9, §A.10, §A.12 | Chat keys come only from the service. New error code `cursor_expired`. A busy chat declines as `busy` with the detail `chat busy`. New service obligations. |
 | §A.11 | A versioning decision for each change. |
 | §B.2 | Chat text may now persist, in a chat's conversation. Replaces "chat text is never written under `<state>`". |
-| §B.3, §B.4, §B.5, §B.6.6, §B.8, §B.9, §B.10, §B.11 | New: the claim lists its features, a pairing watcher in the Viewer, a descriptor refresh, the conversation branch of a request, session options of the launch, the profile in a long-lived session, and one turn at a time per conversation. The surface takes the service's name. New state files and new tests. Late targets appear through the install's refresh of `GET {api}/targets`, which is being fixed separately and is only referenced here. |
+| §B.3, §B.4, §B.5, §B.6.6, §B.8, §B.9, §B.10, §B.11 | New: the claim lists its features, a pairing watcher in the Viewer that polls once more before it replaces a code, a descriptor refresh, the conversation branch of a request with a fixed release order (conversation idle, then slot free and poll reopened), session options of the launch, the profile in a long-lived session, and one turn at a time per conversation. The surface takes the service's name. New state files and new tests. Late targets appear through the install's refresh of `GET {api}/targets`, which is being fixed separately and is only referenced here. |
 | §B.12–§B.16 | New: branding, one-tap pairing, chat conversations, chat management, and the implementation outline. |
 | Deferred | Phase 2 trusted identities are never seeded by pairing (was "seeded with the paired owner"). New deferred items. |
 
@@ -136,6 +136,7 @@ New endpoints:
 | install | `GET /api/external-relay/icons/[id]` | §B.12 |
 | install | `POST /api/external-relay/pairings/[id]/refresh` | §B.13 |
 | install | `PATCH /api/external-relay/relays/[id]` gains `{acknowledged: true}` | §B.13 |
+| install | `POST /api/external-relay/pairings` gains `engine?`, the setup guide's engine | §B.9, §B.13 |
 | install | `GET /api/external-relay/relays/[id]/targets/[targetId]/chats` | §B.15 |
 | install | `PATCH /api/external-relay/relays/[id]/targets/[targetId]/chats/[chatKey]` | §B.15 |
 | install | `DELETE /api/external-relay/relays/[id]/targets/[targetId]/chats/[chatKey]/conversation` | §B.15 |
@@ -475,8 +476,12 @@ Rules:
    name, target names, **[delta]** channel name and chat titles) as plain
    text. It never renders relay-provided HTML or markdown.
 7. **[delta] One redemption, and a later redeemer is told.** Under
-   `one_tap_pairing`, the first account to redeem a code (or its verify
-   token) spends it, before that account confirms. The service MUST refuse
+   `one_tap_pairing`, the first account to redeem the pairing spends it,
+   before that account confirms. Redeeming either the code or the verify
+   token of rule 1 spends the pairing, so neither can be redeemed after the
+   other. Until the redeemer confirms, the status stays `pending` and
+   carries `redeemed: true`, which tells the install not to replace the
+   pairing (§B.13). The service MUST refuse
    every later attempt to redeem it, from any account, and MUST tell the
    person trying that the code was already used by another account and
    that they should disconnect in their Delegatus if they did not expect
@@ -696,9 +701,11 @@ Semantics beyond the schemas:
   target, including a pairing that sees `answered_elsewhere: true`. Row 13
   from a pairing that sees `answered_elsewhere: true` for the target changes
   nothing and answers 200 with the chat's current `Chat`, as row 7 does for
-  such a pairing (below). When no pairing answers the target, any pairing
-  of the owner may set its chats' switches, so the owner can prepare them
-  before switching the target on.
+  such a pairing (below). When no pairing answers the target, the service
+  still accepts row 13 from any pairing of the owner, but the install never
+  sends it then: it lets the owner switch chats only on a target this
+  install answers (§B.15), so every switch the owner makes takes effect at
+  once.
 - **[delta] Routing with chats.** A request from chat C of target T goes to
   the install only when T's `answered_by` is `"install"` and C's is
   `"install"`. Otherwise the service answers it itself. A chat the owner
@@ -904,7 +911,8 @@ unknown fields, rule A.2.6), so only the CLI answer schema in §A.8 is closed.
         "status": { "enum": ["pending", "awaiting_install", "completed", "expired", "denied", "cancelled"] },
         "owner": { "$ref": "#/$defs/Owner" },
         "targets": { "type": "array", "items": { "$ref": "#/$defs/Target" }, "maxItems": 100 },
-        "reason": { "type": "string", "maxLength": 300 }
+        "reason": { "type": "string", "maxLength": 300 },
+        "redeemed": { "type": "boolean" }
       },
       "allOf": [
         { "if": { "properties": { "status": { "const": "awaiting_install" } } },
@@ -1217,14 +1225,14 @@ When the relay service falls back:
 | # | Condition | Detected by | Relay service action |
 |---|---|---|---|
 | F1 | The target is in no poll that is open or ended within `poll_freshness_s` | the relay service, when it queues the request | Fall back at once. |
-| F1b | The latest poll lists the target with `free: 0` | when it queues the request | Fall back at once; the target is busy. |
+| F1b | The latest poll lists the target with `free: 0`, and **[delta]** none of this pairing's leases for the target has ended since that poll was opened | when it queues the request | Fall back at once; the target is busy. |
 | F2 | Not claimed within `claim_window_s` | its sweep | Fall back; the request expires and no later claim can take it. |
 | F2b | Claimed, no heartbeat within `ack_window_s` | its sweep | Void the lease; fall back. |
 | F3 | Completion with `outcome: "declined"` | the complete call | Fall back at once; keep the reason for the owner. |
 | F4 | Claimed and acknowledged, no heartbeat for `stall_window_s` | its sweep | Fall back. If progress was already shown, it MAY first replace the progress with a short failure notice. |
 | F5 | Completion with `outcome: "failed"` | the complete call | Fall back at once. |
 | F6 | The fallback itself fails | the relay service | Its own error handling. |
-| F7 | **[delta]** The request carries a chat that already has a live lease with this pairing, and the pairing's latest claim listed `chat_conversations` | the relay service, when it queues the request | Hold it: it is not claimable while that lease lives. Its `claim_window_s` starts when that lease ends (completed, fallen back or withdrawn), and F1, F1b and F2 then apply as usual. The service MAY fall back a held request at any time, for example past its own hold limit or when a second one waits behind it. |
+| F7 | **[delta]** The request carries a chat that already has a live lease with this pairing, and the pairing's latest claim listed `chat_conversations` | the relay service, when it queues the request | Hold it: it is not claimable while that lease lives. Its `claim_window_s` starts when that lease ends (completed, fallen back or withdrawn), and F1, F1b and F2 then apply as usual. The lease that ended frees its slot for F1b (L7), so a held request is never refused because the poll open during its chat's turn listed that turn's slot as taken. The service MAY fall back a held request at any time, for example past its own hold limit or when a second one waits behind it. |
 
 **[delta]** F7 keeps one turn at a time per chat without a round trip. An
 install whose chat conversation is still running declines a request for
@@ -1235,7 +1243,20 @@ the moment of a release succession.
 - **L6. [delta]** A held request (F7) has no lease, so no liveness rule
   applies to it until it is claimed. A turn that runs long keeps its chat's
   next request held for as long as its heartbeats arrive (L1). The service's
-  hold limit is the only bound on that wait.
+  hold limit is the only bound on that wait. When the lease ends, the held
+  request is judged as a request queued at that moment, with L7 applied.
+- **L7. [delta]** A lease that ends frees its slot. F1b counts a target as
+  busy only when the latest poll listed it with `free: 0` and none of this
+  pairing's leases for that target has ended since that poll was opened. A
+  poll lists `free` as it was when the install opened it, and a run holds
+  its slot until its completion is acknowledged (§B.4 steps 9–10), so the
+  poll that is open when a lease ends still shows that lease's slot as
+  taken. Without this rule, a target of concurrency 1 (the default, §B.8)
+  would fall back every request held by F7. The rule decides only whether
+  to fall back at once. A claim still needs a poll that lists the target
+  with `free` above 0 (§A.4 row 8), and the install opens one as soon as the
+  slot is free (§B.3). If no such poll claims the request within
+  `claim_window_s`, F2 applies.
 
 "Fall back" follows the target's `fallback` setting: `"service"` answers the
 request the relay service's own way, `"none"` posts nothing.
@@ -1256,6 +1277,11 @@ cancels from its side by completing with `failed` / `cancelled`.
 
 **[delta]** A request held by F7 sits before `queued` in this picture. It
 enters `queued`, and its claim window starts, when its chat's lease ends.
+With concurrency 1 the sequence is: the turn holds the target's only slot,
+so the poll open during it lists `free: 0`; the lease completes; F1b does
+not fire, because that lease ended after the open poll was opened (L7);
+the install frees the slot, aborts that poll and opens one with `free: 1`;
+that poll claims the held request.
 
 ## A.7 Progress events
 
@@ -1505,7 +1531,7 @@ to version 1. The path, the header and `Descriptor.versions` stay at 1.
 | Branding (§A.2 rule 10) | Rules for the existing `name` and `icon_url`; optional `verify_channel` | v1, additive | Ignores `verify_channel` and shows the name as it does today. | No icon: monogram. No channel: "Open <name>". |
 | Features (§A.2 rule 11) | Optional `Descriptor.features` and `ClaimRequest.features` | v1, additive | Ignores the descriptor field and sends no claim field. | Treats a missing array as no feature. |
 | Code TTL (§A.3 rule 1) | A code may live up to 30 minutes (was 10) | v1. It widens what a service may do, and a 10-minute code still conforms | Honours 30 minutes already: it compares `expires_at` as sent (O7). | Caps any code at 30 minutes locally. |
-| One-tap pairing (§A.3 rules 3, 7, 8) | Service obligations behind `one_tap_pairing`. No new endpoint; `confirm` is unchanged | v1, additive | The operator clicks, as today. The owner confirms once in the service, as today. | Without the feature the install keeps the click. |
+| One-tap pairing (§A.3 rules 3, 7, 8) | Service obligations behind `one_tap_pairing`, and the optional `PairingStatus.redeemed`. No new endpoint; `confirm` is unchanged | v1, additive | The operator clicks, as today, and ignores `redeemed`. The owner confirms once in the service, as today. | Without the feature the install keeps the click. Without `redeemed`, the refresh relies on its one poll (§B.13). |
 | Defaults on completion (§A.3 rule 9) | None: the install uses row 7 as today | install only | — | Applies to every service. |
 | Target attachment (§A.3 rule 10) | A service behaviour, plus the optional `Target.answered_elsewhere` | v1, additive: no body changes shape, and a longer target list is still a `Targets`. Refusing a `fallback` change from a pairing that sees `answered_elsewhere` affects only a second pairing of the same owner, which v1 never had | Receives every active target at completion. It never reads row 6 (O8), so later targets reach it only once the separate refresh fix lands. It ignores `answered_elsewhere`, so it shows a target another install answers as switched off, and switching it on moves the target to it. That is the owner's explicit act. | A Phase 1 service that lists only attached targets still works; late targets appear when attached. |
 | Chat conversations (§A.6 F7, §A.8) | Optional `Request.chat` and the `chat_conversations` claim feature | v1, additive | Ignores `chat` (rule A.2.6) and does not list the feature, so the service does not hold (F7) and the install answers one-shot. | No `chat`: answers one-shot. |
@@ -1537,8 +1563,9 @@ pairing.
 - **[delta]** Serve `icon_url` from the descriptor's origin, as PNG, JPEG or
   WebP of at most 256 KiB (§A.2 rule 10).
 - **[delta]** Under `one_tap_pairing`: at confirmation, show the install's
-  label and what connecting does; spend a code at its first redemption and
-  tell any later redeemer; after completion, message the owner with a
+  label and what connecting does; spend the pairing at its first
+  redemption, of the code or the verify token, report it with `redeemed:
+  true`, and tell any later redeemer; after completion, message the owner with a
   one-tap disconnect (§A.3 rules 3, 7, 8).
 - **[delta]** Attach every active target of the owner to each live pairing,
   including targets created later, and route each target to one pairing at
@@ -1601,7 +1628,7 @@ New files:
 | `<state>/external-relay/runs.json` | 0600 | In-flight runs only: request id, lease id, relay id, target id, child pid and process identity, owning Viewer pid and identity, run directory, start time. No chat text. |
 | `<state>/external-relay/codex-homes/<account id>/` | 0700 | The Codex answer home of §B.6.2. |
 | `<os temp root>/llv-external-relay-XXXXXX/` | 0700 (`mkdtemp`) | One run: `cwd/`, `schema.json`, `catalog.json` (Codex), `stdout.log`, `stderr.txt`, `answer.json` (Codex). Removed when the run settles, on every path. |
-| **[delta]** `relays.json`, new optional fields | as above | Per relay: `features`, `verify_channel`, `icon` (`{type, sha256, source, fetchedAt}`) and `connected` (`{at, via: "auto" \| "click", acknowledged}`). Per pending pairing: `startedAt` (when the operator clicked Connect, carried across refreshes) and the watcher's last status. At the top level, per origin and kept after unpair: `knownOwners` (`{origin, namespace, id, display_name, addedAt}`, at most 20 per origin); `previousOwners` (`{origin, namespace, id, display_name, at}`, one per origin, overwritten by each completion); and `rejectedOwners` (`{origin, namespace, id, display_name, rejectedAt}`, at most 20 per origin, the oldest dropped first). Together they are the stranger check of §A.3 rule 3. Readers accept the file without these fields, so `v` stays 1. |
+| **[delta]** `relays.json`, new optional fields | as above | Per relay: `features`, `verify_channel`, `icon` (`{type, sha256, source, fetchedAt}`) and `connected` (`{at, via: "auto" \| "click", acknowledged}`). Per pending pairing: `startedAt` (when the operator clicked Connect, carried across refreshes), `engine` (the setup guide's choice, `claude` or `codex`, absent when the pairing started in settings, carried across refreshes) and the watcher's last status. At the top level, per origin and kept after unpair: `knownOwners` (`{origin, namespace, id, display_name, addedAt}`, at most 20 per origin); `previousOwners` (`{origin, namespace, id, display_name, at}`, one per origin, overwritten by each completion); and `rejectedOwners` (`{origin, namespace, id, display_name, rejectedAt}`, at most 20 per origin, the oldest dropped first). Together they are the stranger check of §A.3 rule 3. Readers accept the file without these fields, so `v` stays 1. |
 | **[delta]** `<state>/external-relay/conversations.json` | 0600 | The chat conversation map (§B.14). Per conversation: id, relay id, target id, chat key, engine, engine session id, the account last used, cwd, turns, created and last-turn times, the ids of messages seen since the last compaction (at most 1 000), the frame digest, the last prompt size, compactions, and `state` (`idle`, `running` with its request id, or `broken`). It holds no chat text. |
 | **[delta]** `<state>/external-relay/conversations/<conversation id>/codex/` | 0700 | A Codex conversation's own `CODEX_HOME`: the `auth.json` link of the account that runs the turn, and the conversation's rollout and CLI state. |
 | **[delta]** `<Claude transcript store>/<encoded cwd>/` | the CLI's | A Claude conversation's transcript, in the account's transcript store, under the reserved project directory that the scanner skips (§B.14). |
@@ -1758,7 +1785,14 @@ interrupted turn wrote, and the next turn resumes it (§B.14).
    `violation` completes `failed` / `profile_violation`.
 9. Retry the completion as §A.4 says.
 10. In `finally`: stop the heartbeat timer, remove the run directory, drop the
-    `runs.json` entry, free the slot and wake the poll loop.
+    `runs.json` entry, free the slot and wake the poll loop. **[delta]** For a
+    conversation's turn the order is fixed: set the conversation back to
+    `idle`, then drop the `runs.json` entry (which frees the slot) and wake
+    the poll loop, and only then remove the run directory. The service may
+    hand the chat's held request (§A.6 F7, L7) to the very next poll, and
+    that poll must find the conversation idle and the slot free, or the
+    request would be declined as `chat busy`. The whole step takes well under
+    `claim_window_s`.
 
 ## B.5 The ephemeral-agent launch method
 
@@ -1823,8 +1857,8 @@ What it reuses, and what it adds:
   for the detached process group, file-backed stdio, stdin delivery, the
   duplicate-key guard and the timer that kills the group; the rule that the
   exit outranks the artifact (`headless.ts:464-478` [code]); the child
-  environment scrub that removes `LLV_TOKEN`, the state owner and the
-  Viewer token and state owner (`reviewerEnvironment`, `headless.ts:58-69` [code],
+  environment scrub that removes `LLV_TOKEN`, the Viewer token and the
+  state owner (`reviewerEnvironment`, `headless.ts:58-69` [code],
   exported for this); `claudeManagedEnvironment`
   (`src/lib/accounts/claude.ts:789` [code]).
 - **Added:** the two answer-profile builders of §B.6; a tail reader that
@@ -2028,7 +2062,7 @@ same tripwires on the next turn.
 | Tripwires | Both apply on every turn. The Codex allowlist admits the compaction item type the probe records (test 15) and nothing else new. A turn that trips one fails as `profile_violation` and marks the conversation `broken`. |
 | Instructions that persist | Chat participants can write text that tries to set rules, and it now stays in context across turns. The frame of §A.8 is restated around the data on every turn and says that no earlier turn can change the rules. The service's instructions are sent again when they change and after every compaction. With no tools, an injected rule can change only the answer text, and the service checks that text again before posting. The owner can end a conversation at once with "Start fresh" (§B.15). |
 | Where the transcript can be opened | Nowhere in Delegatus (§B.14 "Hidden"). A transcript written by strangers is never resumed by a session with tools, and it never becomes search material for the owner's other agents. |
-| The account | Chosen per turn by the same capacity-aware selection (§B.4 step 3), with the conversation's last account as the preference. |
+| The account | Chosen per turn by the same capacity-aware selection (§B.4 step 3). The conversation's last account only breaks ties of equal headroom, so a conversation may change accounts between turns (§B.14 step 2). |
 
 ## B.7 Progress mapping
 
@@ -2072,6 +2106,10 @@ to summarize.
   happens only during a release succession. A turn takes one of its target's
   slots like any run, so `free` in the claim is unchanged: chats of one
   target run in parallel up to `concurrency`, and each chat runs in turn.
+  At the default concurrency of 1, the poll open during a turn lists
+  `free: 0`. The chat's next request is held by the service and is claimed
+  by the poll the install opens after the turn frees its slot (§A.6 L7,
+  §B.4 step 10).
 
 ## B.9 Routes and UI
 
@@ -2085,7 +2123,7 @@ and 409 in staging (`isStagingMode`):
 | Route | Does |
 |---|---|
 | `GET /api/external-relay` | Refreshes each relay's targets from the service (§B.3, rate-limited), then returns relays, targets, poller state, running counts, last outcome. No secrets. |
-| `POST /api/external-relay/pairings` `{url, label?}` | Reads the descriptor, starts a pairing, returns code, link, expiry and the descriptor text. |
+| `POST /api/external-relay/pairings` `{url, label?}` | Reads the descriptor, starts a pairing, returns code, link, expiry and the descriptor text. **[delta]** Also takes `engine?` (`claude` or `codex`, anything else answers 400), the setup guide's engine, kept in the pending entry for the defaults (§B.13). |
 | `GET /api/external-relay/pairings/[id]` | Polls the pairing once; returns its status and, when awaiting, the owner identity to confirm. |
 | `POST /api/external-relay/pairings/[id]` `{ownerId}` | Confirms; stores the credential; starts the loop. |
 | `DELETE /api/external-relay/pairings/[id]` | Cancels a pending pairing. |
@@ -2259,9 +2297,9 @@ Bun pin are untouched, so `scripts/verify-runtime-host.ts` is not needed.
 | 7 | `src/lib/agent/ephemeral.probe.test.ts`, run only with `LLV_ANSWER_PROFILE_PROBE=1` | The real installed `codex` and `claude`, driven by the built profile against a loopback stub model endpoint that records what they send, with dummy credentials and temp homes holding marker lines in `AGENTS.md`, `CLAUDE.md`, ancestor `.git/AGENTS.md` and `.claude/CLAUDE.md`, and a settings hook. It asserts the offered tools (Codex: `exec` nesting only the clock, `wait`, `request_user_input_async`; Claude: `StructuredOutput`), that no marker reached the request, that no hook ran, and that the answer format is a JSON schema. It uses no model quota; it re-runs on every CLI upgrade. It is the method of the Evidence section, made repeatable. |
 | 8 | manual, once per engine, in the implementing stage | A live marker probe on a real signed-in account at the lowest effort. Codex: a temp account home whose `auth.json` links to a real account's file and whose `AGENTS.md` holds a marker, run through the real launch path. Claude: the real account, with the marker in a `.claude/CLAUDE.md` above the cwd. The prompt asks the agent to repeat any marker word it was given; the answer must not contain it, and Claude's init event must list only `StructuredOutput` and no MCP servers. The PR records the outcome without identities. |
 | 9 | `src/components/externalRelay/ExternalRelaySection.dom.test.tsx`, the relay case in `OnboardingDialog.dom.test.tsx`, and the phone driver's "external relay" case | Every state of §B.9: the connect form, the code and link, the identity to confirm, a pairing ended in the service, a relay-provided link that is not a web address left out, a paired relay with poller state, last outcome and last progress, per-target settings, the answer switch held off without an engine, a model or a signed-in account, a staging refusal; the guide step pairing only with an account of the chosen engine signed in, recording done while a relay is paired and a skip otherwise; a pairing ended in the service leaving `relays.json` after one check (`src/app/api/external-relay/route.test.ts`); Ukrainian times in `uk-UA`; the entry rows in the rail and the menu sheet; no sideways scroll and 44 px controls on the phone. |
-| 10 | **[delta]** `src/lib/externalRelay/protocol.test.ts` | The new definitions accept the §A.5 examples and refuse a `ChatKey` under 16 characters or with `/`, a `Feature` with capitals, a `verify_channel` with a control character and a `next_cursor` with a space. A Phase 1 body without any new field still parses. A target list whose `answered_by` is a third value is refused, which is why §A.11 adds a boolean. |
+| 10 | **[delta]** `src/lib/externalRelay/protocol.test.ts` | The new definitions accept the §A.5 examples and accept `PairingStatus.redeemed`, refuse a `ChatKey` under 16 characters or with `/`, a `Feature` with capitals, a `verify_channel` with a control character and a `next_cursor` with a space. A Phase 1 body without any new field still parses. A target list whose `answered_by` is a third value is refused, which is why §A.11 adds a boolean. |
 | 11 | **[delta]** `src/lib/externalRelay/icon.test.ts` against `testRelay.ts` | An icon on another origin, behind a redirect, over 256 KiB, SVG, GIF, or with bytes that do not match its type is refused and the monogram stays. A failed refetch keeps the previous copy. The route answers with the stored type, `nosniff`, a `default-src 'none'; sandbox` policy and an ETag, and loads through the relay guards as an `<img>` request. |
-| 12 | **[delta]** `src/lib/externalRelay/pairingWatch.test.ts` against `testRelay.ts` | With `one_tap_pairing`: completes with no click and with the settings dialog closed; applies the defaults (Claude first, then Codex, then none) and switches on only targets with a signed-in account and without `answered_elsewhere`; sends one push notice; records no known owner until "That's me", and records the previous owner at once. A redeemer who differs from a known owner waits for the click. After "Not me" on an automatic completion, the next pairing on that origin waits for the click, whether the same identity or another one redeems. After an automatic completion nobody acknowledged, a re-pairing by a different identity waits for the click and the prompt names the previous identity; a re-pairing by the same identity completes by itself. A click on a rejected identity makes it known again. Without the feature, the click is required. An `expires_at` two hours ahead expires locally after 30 minutes. A refresh of an `awaiting_install` pairing answers 409 `not_pending`. "Not me" unpairs and records the identity as rejected, and nothing else. Nothing runs in staging. |
+| 12 | **[delta]** `src/lib/externalRelay/pairingWatch.test.ts` against `testRelay.ts` | With `one_tap_pairing`: completes with no click and with the settings dialog closed; applies the defaults (Claude first, then Codex, then none) and switches on only targets with a signed-in account and without `answered_elsewhere`; sends one push notice; records no known owner until "That's me", and records the previous owner at once. A redeemer who differs from a known owner waits for the click. After "Not me" on an automatic completion, the next pairing on that origin waits for the click, whether the same identity or another one redeems. After an automatic completion nobody acknowledged, a re-pairing by a different identity waits for the click and the prompt names the previous identity; a re-pairing by the same identity completes by itself. A click on a rejected identity makes it known again. Without the feature, the click is required. An `expires_at` two hours ahead expires locally after 30 minutes. A refresh of an `awaiting_install` pairing answers 409 `not_pending`, and so does a refresh of a `pending` pairing with `redeemed: true`, or of one the service moved to `awaiting_install` after the watcher's last poll: the refresh's own poll sees it and cancels nothing. The setup guide's engine, sent with Connect, survives a refresh and is the engine the defaults apply with the dialog closed. "Not me" unpairs and records the identity as rejected, and nothing else. Nothing runs in staging. |
 | 13 | **[delta]** `src/lib/externalRelay/conversations.test.ts` | One conversation per (relay, target, chat key); two targets in one chat get two. The Claude transcript stores hold reserved directories under an encoded temp-root prefix, such as `-tmp-llv-relay-conv-<uuid>` and `-var-folders-x-T-llv-relay-conv-<uuid>`, and the deletions below find them there. A second turn while one runs is declined `chat busy`, and so is one from an overlapping Viewer generation. Seen ids and the frame digest shrink later turns, and a compaction (the event, or a smaller prompt than the last turn) brings back the full frame and window. A broken resume starts fresh on the next request. Every deletion trigger of §B.14 deletes the record, the Codex home, the Claude reserved directory and the cwd, and nothing else. A corrupt map is set aside. A Claude transcript under another account's store moves to the chosen account's store. |
 | 14 | **[delta]** `src/lib/agent/ephemeral.test.ts` | The start and resume argument lists per engine. They equal the one-shot list except for the session flags of §B.5. Neither `--ephemeral` nor `--no-session-persistence` is dropped without a session. A Codex resume carries `-c sandbox_mode="read-only"`. The conversation's `CODEX_HOME` holds only the `auth.json` link before the first turn. |
 | 15 | **[delta]** `src/lib/agent/ephemeral.probe.test.ts` (`LLV_ANSWER_PROFILE_PROBE=1`) | Two turns per engine against the recording stub. The second request carries the first turn's text; it offers the same tools as one-shot; no marker reaches it. A forced compaction (a small auto-compact limit) shows the event the runner detects, and the test records the Codex item type the tripwire must admit. |
@@ -2269,6 +2307,7 @@ Bun pin are untouched, so `scripts/verify-runtime-host.ts` is not needed.
 | 17 | **[delta]** `src/lib/externalRelay/client.test.ts`, `src/app/api/external-relay/route.test.ts` | Endpoints 12 and 13 against `testRelay.ts`: paging to the end, `cursor_expired` restarting, an idempotent `PATCH`, 404 for a target the pairing does not list. With two pairings of one owner, where the second sees the target `answered_elsewhere`: row 12 lists the same chats and switch values to both; a row 13 `PATCH` to `"service"` from the second answers 200 with `answered_by: "install"` and the chat still routes to the first; a row 7 `PATCH` of only `fallback` from the second answers 200 and leaves `fallback` unchanged. The chat routes keep every guard and pass no platform id. "Start fresh" deletes only that chat's conversation. |
 | 18 | **[delta]** `ExternalRelaySection.dom.test.tsx`, the phone driver's "external relay" case | The service's name and avatar, and the monogram, in the menu rows and the dialog title; the one-tap panel (button, QR, folded code, countdown, refresh, "Show a new code"); the "Connected as" banner with both actions and the menu badge; the click fallback naming the previous owner; a target answered by another install; the chat list with switches, member counts, "Start fresh", "Show more" and the disabled state. At 390 and 1440, in both languages, no sideways scroll and 44 px controls on the phone. The readings go to `evidence/external-relay/settings.json`. No new driver. |
 | 19 | **[delta]** manual, once per engine, in the implementing stage | A live two-turn conversation on a real signed-in account at the lowest effort. The second turn answers from a fact given only in the first. The marker probe of test 8 still holds on the resume. The PR records the outcome without identities. |
+| 20 | **[delta]** `src/lib/externalRelay/poller.test.ts` against `testRelay.ts`, which implements F1b with L7 and the F7 hold, and the stub CLI of test 4 | A target of concurrency 1 with a chat key. Request 1 is claimed and heartbeated, so the open poll lists `free: 0`. Request 2 for the same chat is queued and held (F7). Request 1 completes before the install opens its next poll. Request 2 does not fall back: it is claimed by the poll reopened after completion, within `claim_window_s`, and runs as the conversation's second turn without `chat busy`. Two controls. With L7 removed from `testRelay.ts`, request 2 falls back by F1b at once, so the test goes red. With an install that keeps its `free: 0` poll open after request 1 completes and opens no new one, request 2 is not claimed on that poll and falls back by F2 after `claim_window_s`. |
 
 ## B.12 [delta] Branding: the service's name and look
 
@@ -2377,12 +2416,23 @@ settings dialog and nobody had the dialog open (O6).
 `visible`, the panel calls `POST /api/external-relay/pairings/[id]/refresh`
 once a `pending` pairing is within 60 s of its local expiry. The route:
 
-1. starts a new pairing with the same service and copies `startedAt` to it;
-2. cancels the old one at the service, best effort (a failure is logged and
+1. polls `GET {api}/pairings/{id}` once and writes the status into the
+   pending entry, as the watcher does. It goes on only when the status is
+   `pending` without `redeemed: true`;
+2. starts a new pairing with the same service and copies `startedAt` to it;
+3. cancels the old one at the service, best effort (a failure is logged and
    ignored), and drops it locally.
 
-It answers 409 `not_pending` for a pairing the watcher has seen in
-`awaiting_install`, so a refresh never cuts off an owner who is confirming.
+It answers 409 `not_pending` when step 1 finds any other status, or when the
+watcher has already seen the pairing redeemed or in `awaiting_install`. So a
+refresh never cuts off an owner who has redeemed the code and is about to
+press "Yes, it's me". The panel then stops refreshing and shows "Confirm in
+<channel>…" until the pairing ends. The poll in step 1 closes the gap
+between the watcher's polls. `redeemed` closes the gap rule 7 leaves, where
+a redeemed pairing still reads `pending`. A service that does not send
+`redeemed` still leaves that gap: an owner who redeems in the last 60
+seconds and confirms after the refresh is told the pairing was cancelled,
+and uses the new code.
 A refresh makes the same two calls as a new Connect, so it works with every
 v1 service. 60 minutes after `startedAt` the panel stops refreshing and
 offers "Show a new code". Today `startRelayPairing` drops a pending entry of
@@ -2393,8 +2443,12 @@ now both cancel that entry at the service first.
 **Defaults** (§A.3 rule 9):
 
 - **Engine.** The one the setup guide's step chose, when the pairing started
-  there. Otherwise Claude when a Claude account is signed in, else Codex
-  when a Codex account is, else none. That is the order the step already
+  there. The step sends it as `engine` in the body of `POST
+  /api/external-relay/pairings`, which checks it against the two engines
+  and records it in the pending entry (§B.2). A refresh copies it to the
+  new pairing with `startedAt`, and the completion routine reads it from
+  the pending entry. Otherwise Claude when a Claude account is signed in,
+  else Codex when a Codex account is, else none. That is the order the step already
   uses (`src/components/onboarding/RelayStep.tsx:31` [code]).
 - **The rest.** Model `defaultModelFor(engine)`; the model's default effort;
   concurrency 1; hard cap 30 minutes.
@@ -2460,7 +2514,15 @@ get fresh conversations. Paths are resolved inside each call (§B.10).
    `running`, decline `busy` / `chat busy`. If it is `broken`, reset it (a
    new session, with the seen ids and the frame digest cleared) and go on.
 2. **Account.** Call `resolveHeadlessSpawn(engine, record.accountId, [],
-   target.project, model)`, which prefers the last account (§B.6.6).
+   target.project, model)`. The last account is only a tie-break: the
+   selection takes the account with the most confirmed headroom first, and
+   the preference decides only between accounts of equal headroom, or among
+   accounts whose quota is unknown
+   (`src/lib/accounts/headlessSelection.ts:92-96` [code]). With two or more
+   signed-in accounts of the engine, consecutive turns will often land on
+   different accounts, and a Claude transcript then moves between stores
+   (step 3). That move is a rename, or a copy and unlink across file
+   systems, and the conversation continues as before.
 3. **Session:**
    - **Claude.** `start` with a UUID the install mints, or `resume` with the
      recorded one. The transcript is at `<transcript store>/<encoded
@@ -2600,7 +2662,7 @@ The service can build all of Part A at once.
 |---|---|---|---|---|
 | 1. Branding and one-tap pairing | `protocol.ts` (new descriptor fields, `Target.answered_elsewhere`); `icon.ts`; `store.ts` (new `relays.json` fields, the 30-minute cap); `pairing.ts` (completion routine with defaults, cancel before replace, refresh); `pairingWatch.ts`; `poller.ts` (starts the watcher, descriptor refresh); `push.ts` (`notifyOperatorNotice`) | icons, pairing refresh, acknowledge; GET pairing reads the store | `ServiceBadge.tsx`; menu rows and dialog title (`ProjectRail.tsx`, `ProjectDashboard.tsx`, `ExternalRelaySettingsDialog.tsx`); the pairing panel with button, QR and folded code; the banner and dot; "Answered by another install"; the setup guide's heading | 10, 11, 12, 18 (branding and pairing) |
 | 2. Chat management | `protocol.ts` (`Chat`, `Chats`, `ChatPatch`); `chats.ts`; `testRelay.ts` gains rows 12 and 13 | chats GET and PATCH | `RelayChats.tsx` inside `TargetRow` | 17, 18 (chats) |
-| 3. Chat conversations | `conversations.ts`; `agent/ephemeral.ts` (session options, `thread.started`, usage, compaction, the Codex allowlist entry from test 15); `progress.ts` (the new events); `prompt.ts` (turn prompt); `runner.ts` (step 5a); `poller.ts` (claim `features`, sweep, retention); `store.ts` (`conversationId` on run records); `scanner/discover.ts` and `scanner/roots.ts` (reserved directories, through `isRelayConversationDir`) | chat conversation DELETE | "Start fresh" and the last-turn time in `RelayChats.tsx` | 13, 14, 15, 16, 19 |
+| 3. Chat conversations | `conversations.ts`; `agent/ephemeral.ts` (session options, `thread.started`, usage, compaction, the Codex allowlist entry from test 15); `progress.ts` (the new events); `prompt.ts` (turn prompt); `runner.ts` (step 5a); `poller.ts` (claim `features`, sweep, retention); `store.ts` (`conversationId` on run records); `scanner/discover.ts` and `scanner/roots.ts` (reserved directories, through `isRelayConversationDir`); `testRelay.ts` gains the F7 hold and L7 | chat conversation DELETE | "Start fresh" and the last-turn time in `RelayChats.tsx` | 13, 14, 15, 16, 19, 20 |
 
 Strings, in `en.ts` and `uk.ts`: `externalRelay.menu.none`,
 `externalRelay.menu.many`, `externalRelay.pairing.connectIn`,
@@ -2785,13 +2847,13 @@ observations cannot settle is left to tests 15 and 19.
 | 2. "Nothing that grants machine work … enabled by default" | §A.3 rule 9; §A.3.1 point 5; the amended Phase 2 item under Deferred |
 | 3. "same persistent install conversation … automatic compaction" | §A.8 turns; §B.14 |
 | 3. key format and stability; key → conversation map and its place under state ownership | §A.8 chat key; §B.2; §B.10; §B.14 |
-| 3. concurrency and a second request | §A.6 F7 and L6; §B.8 |
+| 3. concurrency and a second request | §A.6 F7, L6 and L7; §B.4 step 10; §B.8; test 20 (concurrency 1) |
 | 3. compaction and context limits | §B.14 |
 | 3. what the conversation may see; isolation between chats and targets | §A.8; §B.14 |
 | 3. §B.6 hardening in a long-lived session | §B.6.6 |
 | 3. crash/restart recovery | §B.3; §B.10; §B.14 |
 | 3. retention and deletion (unpair, chat removed) | §B.14 |
-| 3. liveness/fallback when busy | §A.6 F7, L6; §A.10 `busy` |
+| 3. liveness/fallback when busy | §A.6 F1b, F7, L6, L7; §A.10 `busy` |
 | 4. list chats per target (key, title, member count, no ids); per-chat switch; auth, pagination, errors, idempotency | §A.4 rows 12–13; §A.5; §A.10 `cursor_expired` |
 | 4. install UI | §B.15 |
 | Versioning per change; v1 installs and services keep working | §A.11 table |
