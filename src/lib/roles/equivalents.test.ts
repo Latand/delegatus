@@ -18,8 +18,8 @@ test("the GPT-6 models have Claude equivalents, and Sonnet no longer lands on a 
   expect(equivalentModel("gpt-6.1-sol", "claude")).toBe("opus");
   expect(equivalentModel("gpt-6-astra", "claude")).toBe("opus");
   expect(equivalentModel("gpt-6-luna", "claude")).toBe("sonnet");
-  expect(equivalentModel("sonnet", "codex")).toBe("gpt-6-sol");
-  expect(equivalentModel("claude-sonnet-5-5", "codex")).toBe("gpt-6-sol");
+  expect(equivalentModel("sonnet", "codex")).toBe("gpt-6.1-sol");
+  expect(equivalentModel("claude-sonnet-5-5", "codex")).toBe("gpt-6.1-sol");
   expect(equivalentModel("opus", "codex")).toBe("gpt-6-astra");
   expect(equivalentModel("haiku", "codex")).toBe("gpt-6-luna");
 });
@@ -40,8 +40,8 @@ test("with Codex out, every mapping row lands on its Sonnet 5.5 or Opus runtime"
     [{ roleId: "builder", variant: "frontend" }, { engine: "codex", model: "gpt-6-astra", effort: "high" }, sonnet("high")],
     [{ roleId: "builder", variant: "docs" }, { engine: "codex", model: "gpt-6-astra", effort: "medium" }, sonnet("high")],
     [{ roleId: "builder", variant: "trivial" }, { engine: "codex", model: "gpt-6-luna", effort: "high" }, sonnet("high")],
-    [{ roleId: "builder", variant: "frontend-fixes" }, { engine: "codex", model: "gpt-6-sol", effort: "high" }, sonnet("high")],
-    [{ roleId: "builder", variant: "docs-fixes" }, { engine: "codex", model: "gpt-6-sol", effort: "high" }, sonnet("high")],
+    [{ roleId: "builder", variant: "frontend-fixes" }, { engine: "codex", model: "gpt-6.1-sol", effort: "high" }, sonnet("high")],
+    [{ roleId: "builder", variant: "docs-fixes" }, { engine: "codex", model: "gpt-6.1-sol", effort: "high" }, sonnet("high")],
     [{ roleId: "cleaner" }, { engine: "codex", model: "gpt-6-luna", effort: "medium" }, sonnet("high")],
     [{ roleId: "prod-auditor" }, { engine: "codex", model: "gpt-6-astra", effort: "high" }, opus],
     [{ roleId: "deployer" }, { engine: "codex", model: "gpt-6-sol", effort: "medium" }, opus],
@@ -55,8 +55,8 @@ test("with Claude out, the orchestrator, the architect and the frontend builder 
   expect(equivalentConfig(opusHigh, "codex", { roleId: "architect" })).toEqual({ engine: "codex", model: "gpt-6-astra", effort: "high" });
   expect(equivalentConfig({ ...opusHigh, effort: "xhigh" }, "codex", { roleId: "builder", variant: "frontend" })).toEqual({ engine: "codex", model: "gpt-6-astra", effort: "high" });
   /* A row with no approved target keeps the model-to-model mapping, the pinned Sonnet 5.5 included. */
-  expect(equivalentConfig({ engine: "claude", model: "sonnet", effort: "xhigh" }, "codex", { roleId: "reviewer" })).toEqual({ engine: "codex", model: "gpt-6-sol", effort: "xhigh" });
-  expect(equivalentConfig({ engine: "claude", model: "claude-sonnet-5-5", effort: "medium" }, "codex", { roleId: "verifier" })).toEqual({ engine: "codex", model: "gpt-6-sol", effort: "medium" });
+  expect(equivalentConfig({ engine: "claude", model: "sonnet", effort: "xhigh" }, "codex", { roleId: "reviewer" })).toEqual({ engine: "codex", model: "gpt-6.1-sol", effort: "xhigh" });
+  expect(equivalentConfig({ engine: "claude", model: "claude-sonnet-5-5", effort: "medium" }, "codex", { roleId: "verifier" })).toEqual({ engine: "codex", model: "gpt-6.1-sol", effort: "medium" });
 });
 
 /* docs/design/model-sizing-tiers.md §6: the small-change and docs rows, and no
@@ -77,11 +77,12 @@ test("the small-change and docs rows have approved targets, and no denied row la
 });
 
 /* docs/design/agent-prompt-contract.md §3 (a): the two fix rows run Sonnet on
-   Claude and land where Sonnet maps on Codex, GPT-6 Sol, in both directions. */
+   Claude and land where Sonnet maps on Codex, GPT-6.1 Sol, in both directions. */
 test("the frontend and docs fix rows have approved targets on both engines", () => {
   for (const variant of ["frontend-fixes", "docs-fixes"] as const) {
     const row = { roleId: "builder", variant } as const;
-    expect(equivalentConfig({ engine: "claude", model: "claude-sonnet-5-5", effort: "high" }, "codex", row)).toEqual({ engine: "codex", model: "gpt-6-sol", effort: "high" });
+    expect(equivalentConfig({ engine: "claude", model: "claude-sonnet-5-5", effort: "high" }, "codex", row)).toEqual({ engine: "codex", model: "gpt-6.1-sol", effort: "high" });
+    expect(equivalentConfig({ engine: "codex", model: "gpt-6.1-sol", effort: "high" }, "claude", row)).toEqual({ engine: "claude", model: "claude-sonnet-5-5", effort: "high" });
     expect(equivalentConfig({ engine: "codex", model: "gpt-6-sol", effort: "high" }, "claude", row)).toEqual({ engine: "claude", model: "claude-sonnet-5-5", effort: "high" });
   }
 });

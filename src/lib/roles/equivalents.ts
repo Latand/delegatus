@@ -34,12 +34,12 @@ const CODEX_TO_CLAUDE: Record<string, string> = {
   [CODEX_LUNA_MODEL]: "haiku",
 };
 
-// The GPT-6 line has no Terra, so Sonnet, pinned or by alias, lands on GPT-6 Sol.
+// The GPT-6 line has no Terra, so Sonnet, pinned or by alias, lands on GPT-6.1 Sol.
 const CLAUDE_TO_CODEX: Record<string, string> = {
   opus: CODEX_ASTRA_MODEL,
   fable: CODEX_ASTRA_MODEL,
-  sonnet: CODEX_GPT6_SOL_MODEL,
-  "claude-sonnet-5-5": CODEX_GPT6_SOL_MODEL,
+  sonnet: CODEX_GPT61_SOL_MODEL,
+  "claude-sonnet-5-5": CODEX_GPT61_SOL_MODEL,
   haiku: CODEX_GPT6_LUNA_MODEL,
 };
 
@@ -81,8 +81,8 @@ const ROW_TARGETS: Record<RoleEngine, Readonly<Record<string, RoleConfig>>> = {
     "builder:trivial": { engine: "codex", model: CODEX_GPT6_LUNA_MODEL, effort: "high" },
     "builder:docs": { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "medium" },
     /* The Sonnet fix rows land where CLAUDE_TO_CODEX puts Sonnet. */
-    "builder:frontend-fixes": { engine: "codex", model: CODEX_GPT6_SOL_MODEL, effort: "high" },
-    "builder:docs-fixes": { engine: "codex", model: CODEX_GPT6_SOL_MODEL, effort: "high" },
+    "builder:frontend-fixes": { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
+    "builder:docs-fixes": { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
     "reviewer:trivial": { engine: "codex", model: CODEX_GPT6_LUNA_MODEL, effort: "high" },
   },
 };
