@@ -81,6 +81,14 @@ stage is running and nobody has used Delegatus for ten minutes. The dialog
 says what it is waiting for. A failed automatic restart goes back to the
 previous release and turns the switch off.
 
+If the switch says the launcher needs a one-time setup, the dialog lists the
+two commands to run in the install's folder and asks you to restart Delegatus
+once. After that, launcher changes arrive with each release.
+
+The Docker install has the same switch. A green merge is deployed the way the
+**Update** button deploys it, with the same health check and rollback, and a
+failed deployment turns the switch off and shows the reason.
+
 ## What it does
 
 This section follows one piece of work from your request to a reviewed pull
@@ -250,7 +258,7 @@ address, token and models.
 
 The **Activity** page, in the rail menu, shows your time and your agents'
 time, per day and per project. On a team install it counts each member's
-own time.
+own time; the owner can also filter by member or add everyone up.
 
 ![Claude accounts with their five-hour, weekly and per-model limits](docs/media/readme/accounts.svg)
 
@@ -365,8 +373,9 @@ at the foot of the sidebar.
 
 - **A bot.** Paste a bot token from @BotFather and choose which chats agents
   may post to. Agents post to those chats and read what the bot receives
-  through the MCP server. The orchestrator can send its reports to one of
-  these chats.
+  through the MCP server. An agent can also send one photo or an album of
+  up to ten (JPEG or PNG, each up to 10 MB) with a caption for each image.
+  The orchestrator can send its reports to one of these chats.
 - **Your own account.** Enter your `api_id` and `api_hash` from
   my.telegram.org, then scan a QR code with the Telegram app. Delegatus
   registers a read-only Telegram MCP server, named `telegram`, for Claude
@@ -414,13 +423,22 @@ Two Delegatus installs, for example your laptop and a server, can share one
 board for the projects you choose. Open **Linked installs** from the rail
 menu (the board's ⋯ menu on a phone).
 
-- **This install.** Enter the address other machines use to reach this one.
-  A public address needs HTTPS, and the access key must be on. **Check this
-  address** confirms that it reaches this machine and that the proxy in front
-  of it does not open the board to anyone.
-- **Pair.** On one install press **Allow a connection** to get a pairing code
-  that works once. On the other, **Connect to another install** takes that
-  address and code.
+- **Pick a role.** The dialog opens on two roles, each with three numbered
+  steps. **This machine accepts a connection** is for the machine with an
+  HTTPS address, such as a server. **This machine connects to another** is
+  for a machine without one, such as a home computer: it opens every
+  connection itself and needs no address.
+- **This install.** On the accepting machine, enter the address other
+  machines use to reach it. A public address needs HTTPS, and the access key
+  must be on. **Check this address** confirms that it reaches this machine
+  and that the proxy in front of it does not open the board to anyone. When
+  this machine cannot test its own address from the inside, the dialog shows
+  a warning, "Not checked from here", with the address to check from the
+  other machine. A problem that would make linking unsafe stays red.
+- **Pair.** On the accepting machine press **Allow a connection**. It shows
+  its address beside a pairing code that works once, each with a Copy
+  button. On the other machine, **Connect to another install** takes that
+  address and code, and a failed attempt says why under the form.
 - **Share projects.** Nothing is shared until you choose. Share projects one
   at a time, here or from the board's ⋯ menu, or share every project,
   including new ones. A project needs a git remote to be shared, and it is
@@ -497,8 +515,9 @@ The tools, by area:
   `conversation_migration`;
 - **Telegram bot:** `telegram_bot_chats`, `telegram_bot_send` (posts to a
   chat you allowed in the Telegram panel, signed with the calling
-  conversation), `telegram_bot_messages` (what the bot received, newest
-  first);
+  conversation), `telegram_bot_send_media` (one photo or an album from local
+  image files, with captions), `telegram_bot_messages` (what the bot received,
+  newest first);
 - **you and the machine:** `operator_snapshot`, `request_attention`,
   `dismiss_attention`, `agent_activity`, `lifecycle_events`, `resources`,
   `deployment_status`, `deploy_exact_sha`.
