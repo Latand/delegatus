@@ -843,7 +843,9 @@ const SCAN_MB = 20 * 1024 * 1024;
 const SCAN_BOUND_MS = 4000;
 
 test("a 20 MB text document with a megabyte-long word run scans in linear time", () => {
-  const run = crypto.randomBytes(768 * 1024).toString("base64url");
+  /* One word run with no `\b` inside: a `-` would let a random `-sk-…` read
+     as a token, which failed about one run in twelve. */
+  const run = crypto.randomBytes(768 * 1024).toString("base64url").replace(/-/g, "A");
   const filler = `${"x".repeat(999)}\n`;
   const text = `{"t":"${run}"}\n${filler.repeat(Math.ceil((SCAN_MB - run.length) / filler.length))}`;
   expect(text.length).toBeGreaterThanOrEqual(SCAN_MB);
