@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -69,7 +70,7 @@ process.on("SIGTERM", stop);
 
 const BROKEN_HOST = "process.exit(3);\n";
 
-function install() {
+function install(options: { oldSupervisor?: boolean } = {}) {
   const root = mkdtempSync("/var/tmp/llv-cli-self-update-");
   roots.push(root);
   const checkout = path.join(root, "checkout");
@@ -81,6 +82,10 @@ function install() {
   }
   for (const name of ["cli.mjs", "server-runtime.mjs", "tailscale.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs", "legacySystemd.mjs", "internalService.mjs", "skillLinks.mjs"]) {
     copyFileSync(path.resolve("bin", name), path.join(checkout, "bin", name));
+  }
+  if (options.oldSupervisor) {
+    const supervisor = path.join(checkout, "bin", "self-update-supervisor.mjs");
+    writeFileSync(supervisor, readFileSync(supervisor, "utf8").replace(", autoAdmission: 1", ""));
   }
   writeFileSync(path.join(checkout, "package.json"), JSON.stringify({ type: "module", version: "0.0.0" }));
   writeFileSync(path.join(checkout, "node_modules", ".bin", "next"), STUB_NEXT(false));
@@ -107,9 +112,11 @@ function install() {
 }
 
 /** A built release of a new commit, as the Viewer's step runner leaves it. */
-function release(fixture: ReturnType<typeof install>, name: string, options: { broken?: boolean; brokenHost?: boolean } = {}): { dir: string; sha: string } {
+function release(fixture: ReturnType<typeof install>, name: string, options: { broken?: boolean; brokenHost?: boolean; upgradeSupervisor?: boolean; launcher?: string } = {}): { dir: string; sha: string } {
   git(fixture.checkout, "checkout", "--quiet", "--detach", fixture.first);
   writeFileSync(path.join(fixture.checkout, "notes.txt"), `${name}\n`);
+  if (options.upgradeSupervisor) copyFileSync(path.resolve("bin", "self-update-supervisor.mjs"), path.join(fixture.checkout, "bin", "self-update-supervisor.mjs"));
+  if (options.launcher) writeFileSync(path.join(fixture.checkout, "bin", "cli.mjs"), options.launcher);
   if (options.broken) writeFileSync(path.join(fixture.checkout, "node_modules", ".bin", "next"), STUB_NEXT(true));
   if (options.brokenHost) writeFileSync(path.join(fixture.checkout, "dist", "runtime-host.mjs"), BROKEN_HOST);
   git(fixture.checkout, "add", "-f", ".");
@@ -139,8 +146,22 @@ function recordFile(state: string): string {
   return path.join(dir, name);
 }
 
+function pointerFile(fixture: ReturnType<typeof install>): string {
+  const installId = createHash("sha256").update(path.resolve(fixture.checkout)).digest("hex").slice(0, 16);
+  return path.join(fixture.state, "self-update", `release-${installId}.json`);
+}
+
+function version(fixture: ReturnType<typeof install>, extraEnv: Record<string, string> = {}) {
+  return spawnSync(process.execPath, ["--bun", path.join(fixture.checkout, "bin", "cli.mjs"), "--version"], {
+    cwd: fixture.checkout,
+    env: { ...fixture.env, ...extraEnv },
+    encoding: "utf8",
+    timeout: 5_000,
+  });
+}
+
 type Entry = { state: string; pid: number | null; revision: string | null; requestId: string | null; error: { kind: string; revision?: string } | null };
-type Record = { checkout: string | null; releasePointer: string; requestFile: string; socket: string; web: Entry; runtimeHost: Entry };
+type Record = { launcher: { pid: number; autoAdmission?: number }; checkout: string | null; releasePointer: string; requestFile: string; socket: string; web: Entry; runtimeHost: Entry };
 
 async function until<T>(read: () => T | null | undefined | false, timeoutMs = 20_000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
@@ -195,6 +216,107 @@ function socketAnswers(socketPath: string): Promise<boolean> {
 function request(record: Record, role: "web" | "runtime-host", requestId: string): void {
   writeFileSync(record.requestFile, JSON.stringify({ requestId, role }));
 }
+
+test("one service restart runs the installed launcher and its admission-capable supervisor while checkout HEAD stays old", async () => {
+  const fixture = install({ oldSupervisor: true });
+  const initial = await start(fixture);
+  const oldRecord = await until(() => {
+    const record = readRecord(fixture.state);
+    return record.web.state === "healthy" && record.runtimeHost.state === "healthy" ? record : null;
+  });
+  expect(oldRecord.launcher.autoAdmission).toBeUndefined();
+  initial.child.kill("SIGTERM");
+  await new Promise<void>((resolve) => initial.child.once("exit", () => resolve()));
+
+  const next = release(fixture, "admission-launcher", { upgradeSupervisor: true });
+  writeFileSync(pointerFile(fixture), JSON.stringify({ sha: next.sha, dir: next.dir, checkoutHead: fixture.first }));
+  const restarted = await start(fixture);
+  const record = await until(() => {
+    const current = readRecord(fixture.state);
+    return current.web.state === "healthy" && current.runtimeHost.state === "healthy" ? current : null;
+  });
+  expect(record.launcher.autoAdmission).toBe(1);
+  expect(record.launcher.pid).not.toBe(restarted.child.pid);
+  expect(record.checkout).toBe(fixture.checkout);
+  expect(git(fixture.checkout, "rev-parse", "HEAD")).toBe(fixture.first);
+  expect(await served(restarted.port)).toBe(next.dir);
+
+  request(record, "web", "after-launcher-handoff");
+  const afterRequest = await until(() => {
+    const current = readRecord(fixture.state);
+    return current.web.requestId === "after-launcher-handoff" && current.web.state === "healthy" ? current : null;
+  });
+  expect(afterRequest.web.revision).toBe(next.sha.slice(0, 7));
+  expect(afterRequest.runtimeHost.pid).toBe(record.runtimeHost.pid);
+  restarted.child.kill("SIGTERM");
+  await new Promise<void>((resolve) => restarted.child.once("exit", () => resolve()));
+  expect(readdirSync(path.join(fixture.state, "self-update")).some((name) => name.startsWith("launcher-"))).toBe(false);
+}, 60_000);
+
+test("release handoff forwards argv, environment and signals, and the marker prevents another handoff", async () => {
+  const fixture = install();
+  const probeFile = path.join(fixture.root, "probe.json");
+  const signalFile = path.join(fixture.root, "signal.txt");
+  const probe = `// delegatus-checkout-launcher-v1\nimport { writeFileSync } from "node:fs";\nwriteFileSync(process.env.LLV_TEST_PROBE_FILE, JSON.stringify({ argv: process.argv.slice(2), marker: process.env.LLV_LAUNCHER_REEXEC, checkout: process.env.LLV_LAUNCHER_CHECKOUT, value: process.env.LLV_TEST_VALUE, cwd: process.cwd() }));\nprocess.on("SIGTERM", () => { writeFileSync(process.env.LLV_TEST_SIGNAL_FILE, "SIGTERM"); process.exit(0); });\nsetInterval(() => {}, 1000);\n`;
+  const next = release(fixture, "probe-launcher", { launcher: probe });
+  mkdirSync(path.dirname(pointerFile(fixture)), { recursive: true });
+  writeFileSync(pointerFile(fixture), JSON.stringify({ sha: next.sha, dir: next.dir, checkoutHead: fixture.first }));
+
+  const marked = version(fixture, { LLV_LAUNCHER_REEXEC: "1" });
+  expect(marked.status).toBe(0);
+  expect(marked.stdout.trim()).toBe("0.0.0");
+  expect(existsSync(probeFile)).toBe(false);
+
+  const child = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "bin", "cli.mjs"), "--no-open", "--port", "47123"], {
+    cwd: fixture.checkout,
+    env: { ...fixture.env, LLV_TEST_PROBE_FILE: probeFile, LLV_TEST_SIGNAL_FILE: signalFile, LLV_TEST_VALUE: "forwarded" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const observed = await until(() => existsSync(probeFile) ? JSON.parse(readFileSync(probeFile, "utf8")) : null);
+  expect(observed).toEqual({ argv: ["--no-open", "--port", "47123"], marker: "1", checkout: fixture.checkout, value: "forwarded", cwd: fixture.checkout });
+  child.kill("SIGTERM");
+  await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  expect(readFileSync(signalFile, "utf8")).toBe("SIGTERM");
+  expect(child.exitCode).toBe(0);
+}, 30_000);
+
+test("missing and invalid release pointers use the checkout launcher", () => {
+  const fixture = install();
+  expect(version(fixture)).toMatchObject({ status: 0, stdout: "0.0.0\n" });
+  mkdirSync(path.dirname(pointerFile(fixture)), { recursive: true });
+  writeFileSync(pointerFile(fixture), JSON.stringify({ sha: "a".repeat(40), dir: path.join(fixture.root, "missing"), checkoutHead: fixture.first }));
+  expect(version(fixture)).toMatchObject({ status: 0, stdout: "0.0.0\n" });
+});
+
+test("a pre-bootstrap release keeps the checkout supervisor as fallback", () => {
+  const fixture = install();
+  const legacy = release(fixture, "legacy-launcher", { launcher: "process.stdout.write('legacy\\n');\n" });
+  mkdirSync(path.dirname(pointerFile(fixture)), { recursive: true });
+  writeFileSync(pointerFile(fixture), JSON.stringify({ sha: legacy.sha, dir: legacy.dir, checkoutHead: fixture.first }));
+  expect(version(fixture)).toMatchObject({ status: 0, stdout: "0.0.0\n" });
+});
+
+test("the one-time file checkout leaves HEAD old and makes release launcher code reachable", () => {
+  const fixture = install({ oldSupervisor: true });
+  const checkoutCli = path.join(fixture.checkout, "bin", "cli.mjs");
+  writeFileSync(checkoutCli, "process.stdout.write('old launcher\\n');\n");
+  git(fixture.checkout, "add", "bin/cli.mjs");
+  git(fixture.checkout, "commit", "--amend", "--quiet", "--no-edit");
+  fixture.first = git(fixture.checkout, "rev-parse", "HEAD");
+  const next = release(fixture, "bootstrap-release", {
+    launcher: readFileSync(path.resolve("bin", "cli.mjs"), "utf8"),
+    upgradeSupervisor: true,
+  });
+  mkdirSync(path.dirname(pointerFile(fixture)), { recursive: true });
+  writeFileSync(pointerFile(fixture), JSON.stringify({ sha: next.sha, dir: next.dir, checkoutHead: fixture.first }));
+  expect(version(fixture).stdout.trim()).toBe("old launcher");
+
+  git(fixture.checkout, "checkout", next.sha, "--", "bin/cli.mjs");
+  expect(git(fixture.checkout, "rev-parse", "HEAD")).toBe(fixture.first);
+  expect(version(fixture, { LLV_LAUNCHER_REEXEC: "1" }).stdout.trim()).toBe("0.0.0");
+  expect(version(fixture).stdout.trim()).toBe("0.0.0");
+});
 
 test("a checkout records both children, and a restart request moves each one onto the published release", async () => {
   const fixture = install();

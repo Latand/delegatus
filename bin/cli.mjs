@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import http from "node:http";
 import net from "node:net";
-import { homedir } from "node:os";
+import { constants, homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -78,6 +78,8 @@ const RESTART_READINESS_TIMEOUT_MS = 90_000;
 
 const cliPath = fileURLToPath(import.meta.url);
 const cliDir = dirname(cliPath);
+const LAUNCHER_HANDOFF_PROTOCOL = "delegatus-checkout-launcher-v1";
+const launcherCheckout = process.env.LLV_LAUNCHER_REEXEC === "1" ? process.env.LLV_LAUNCHER_CHECKOUT : undefined;
 
 /* Dependency-free CLI localization: English by default, Ukrainian when
    LLV_LANG=uk or the locale (LC_ALL/LANG) is a uk_* / uk.* variant. */
@@ -986,7 +988,7 @@ async function main() {
   /* `delegatus team …` (sign-in-and-team §5.5): the host's recovery of a
      team's sign-in. It touches the team file only and starts nothing. */
   if (process.argv[2] === "team") {
-    const packageRoot = findPackageRoot(cliDir);
+    const packageRoot = launcherCheckout || findPackageRoot(cliDir);
     const { runTeamCommand } = await import("./team.mjs");
     process.exitCode = await runTeamCommand(process.argv.slice(3), {
       stateDirectory: cliRuntimeHostConfig(packageRoot).stateDirectory,
@@ -1001,7 +1003,7 @@ async function main() {
     options.tailscale = true;
     options.tailscaleFromFlag = true;
   }
-  const packageRoot = findPackageRoot(cliDir);
+  const packageRoot = launcherCheckout || findPackageRoot(cliDir);
   try {
     linkSkills(packageRoot);
   } catch {
@@ -1283,6 +1285,52 @@ async function main() {
   startupOutput.release();
 }
 
-main().catch((error) => {
-  fail(error instanceof Error ? error.message : String(error));
-});
+/* The service manager keeps starting this checkout file. Keep this handoff
+   small: the release pointer selects code, while the checkout remains the
+   install identity and the fallback when no published build is valid. The
+   marker makes the release's own cli.mjs run its body without another hop. */
+function releaseLauncher() {
+  if (process.env.LLV_LAUNCHER_REEXEC === "1") return null;
+  const checkout = findPackageRoot(cliDir);
+  if (!isGitCheckout(checkout)) return null;
+  const config = cliRuntimeHostConfig(checkout);
+  const paths = selfUpdatePaths({
+    stateDirectory: config.stateDirectory,
+    cacheDirectory: process.env.XDG_CACHE_HOME?.trim() || join(homedir(), ".cache"),
+    installId: config.installId,
+  });
+  const release = installedRelease(paths.releasePointer, checkout);
+  const entry = join(release.dir, "bin", "cli.mjs");
+  if (!release.published || entry === cliPath || !existsSync(entry)) return null;
+  /* A rollback may point at a pre-bootstrap release. Its CLI cannot retain
+     the checkout as the install identity, so keep supervising it locally. */
+  try {
+    if (!readFileSync(entry, "utf8").includes(LAUNCHER_HANDOFF_PROTOCOL)) return null;
+  } catch { return null; }
+  return { checkout, entry };
+}
+
+function handOffLauncher({ checkout, entry }) {
+  const child = spawn(process.execPath, [...process.execArgv, entry, ...process.argv.slice(2)], {
+    cwd: checkout,
+    env: { ...process.env, LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_CHECKOUT: checkout },
+    stdio: "inherit",
+  });
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.on(signal, () => child.kill(signal));
+  }
+  child.once("error", (error) => fail(`Could not start the installed launcher: ${error.message}`));
+  child.once("exit", (code, signal) => {
+    process.exitCode = code ?? (signal ? 128 + (constants.signals[signal] ?? 0) : 1);
+  });
+}
+
+const selectedLauncher = releaseLauncher();
+if (selectedLauncher) handOffLauncher(selectedLauncher);
+else {
+  delete process.env.LLV_LAUNCHER_REEXEC;
+  delete process.env.LLV_LAUNCHER_CHECKOUT;
+  main().catch((error) => {
+    fail(error instanceof Error ? error.message : String(error));
+  });
+}
