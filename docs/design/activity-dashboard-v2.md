@@ -204,6 +204,25 @@ The prototype's subtitle sentence ("…The two overlap and are never added
 together.") goes: the layout shows it (two separate figures, two separate
 columns) and the drawer states it.
 
+**The owner's member filter** (2026-09-29; the count and its authority are in
+`activity-dashboard.md`, "The owner's view of every member"). For the owner,
+a member filter sits before the project picker: its trigger shows the chosen
+person's initials on their colour and their name, or a people icon and
+`All members`. Its list opens with `All members` and the sum of report hours,
+then each member, most hours first, with their hours, `≥` where a host was not
+read for them, or `Not covered` in the warning colour where that bound would be
+zero; the owner reads `Ada Quill (you)`. Choosing someone relabels the hero
+(`You` → their name, or `All members`) and every figure follows the server's
+count for them. The rest of the human axis stops saying `You`: the Projects
+column reads `Human`, the legends `Human time`, the Rhythm legend and the
+tooltips name the person (`Bo Tern:`) or `All members:`, and the tile, banner
+and drawer notes say `human time`. Under `All members` a `By member` card row appears above the
+figures, one card per person (initials, name, requests and minutes, report
+hours, up to three projects with `+ N more`, and the host they were not read
+on), with the note that agent time is the whole host's and is not split per
+member. A card opens that member. A member who is not the owner sees none of
+this.
+
 ### Figures: You and Agents (questions 1 and 2)
 
 **You.** `≥ 27.5 h` at 44 px, `reported` beside it in muted 13 px. Below,
@@ -887,6 +906,12 @@ What the build does that this concept did not say, or says differently:
 Unchanged in this lane. The v2 layout applies from 1024 px wide; below it the
 prototype's phone layout renders as it does now, and its strings stay
 available. A phone pass is Deferred.
+
+The owner's member filter and the `By member` cards also render on the narrow
+page: the filter joins the range and view switches and fills its row on a
+phone with 44 px targets, the cards stack above the tiles, and the `Your time`
+tile takes the chosen person's name; the legend, the supervised tile's note
+and the gap banner read `Human time`.
 
 ## Notes for the builder
 

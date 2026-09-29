@@ -10,6 +10,7 @@ import type { Locale, MessageKey, TFunction } from "@/lib/i18n";
 import { ActivityCountingDrawer } from "./ActivityCountingDrawer";
 import { ActivityDayChart } from "./ActivityDayChart";
 import { ActivityFigures } from "./ActivityFigures";
+import { ActivityMemberBreakdown, ActivityMemberFilter, type MemberChoice } from "./ActivityMembers";
 import { ActivityProjectPicker, ActivityScopeChip } from "./ActivityProjectPicker";
 import { ActivityProjects } from "./ActivityProjects";
 import { ActivityRhythm } from "./ActivityRhythm";
@@ -53,13 +54,16 @@ function Skeleton() {
   );
 }
 
-export function ActivityDesktop({ data, range, onRange, scope, onProject, loading, failed, onRetry, locale, t }: {
+export function ActivityDesktop({ data, range, onRange, scope, onProject, member, onMember, loading, failed, onRetry, locale, t }: {
   data: ActivityResponse | null;
   range: RangeKey;
   onRange(next: RangeKey): void;
   /** The project the whole page is scoped to, by key and name, or none. */
   scope: { project: string; name: string } | null;
   onProject(project: string | null): void;
+  /** Whose input the page counts: `all`, a member id, or null for the viewer. */
+  member: MemberChoice;
+  onMember(member: MemberChoice): void;
   loading: boolean;
   failed: boolean;
   onRetry(): void;
@@ -92,6 +96,7 @@ export function ActivityDesktop({ data, range, onRange, scope, onProject, loadin
             {data ? <span className="truncate text-[13px] text-muted" data-activity-range-label="">{rangeText(data, locale)}</span> : null}
           </div>
           <div className="flex-1" />
+          {data?.member.canChoose ? <ActivityMemberFilter data={data} selected={member} onSelect={onMember} locale={locale} t={t} /> : null}
           {data ? <ActivityProjectPicker data={data} names={names} selected={scope?.project ?? null} unread={rowsUnread} onSelect={onProject} locale={locale} t={t} /> : null}
           <div className="flex shrink-0 rounded-[8px] border border-border bg-card p-[2px]" role="tablist" aria-label={t("activity.rangeAria")}>
             {RANGES.map((key) => (
@@ -129,6 +134,12 @@ export function ActivityDesktop({ data, range, onRange, scope, onProject, loadin
             <button type="button" onClick={onRetry} className="h-8 rounded-[8px] border border-border bg-card px-3 text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
               {t("activity.retry")}
             </button>
+          </div>
+        ) : null}
+
+        {context && data && data.member.selection === "all" ? (
+          <div className={`mt-[18px] transition-opacity ${loading ? "opacity-60" : ""}`}>
+            <ActivityMemberBreakdown data={data} onSelect={onMember} locale={locale} t={t} />
           </div>
         ) : null}
 

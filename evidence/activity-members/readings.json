@@ -1,0 +1,714 @@
+{
+  "commit": "ef06336a918cb7699e5130fc7bbd62c3c9993e15",
+  "case": "activity-members",
+  "days": {
+    "first": "2026-09-23",
+    "today": "2026-09-29"
+  },
+  "api": {
+    "own": {
+      "selection": "self",
+      "memberId": "m_ada0000000000000000000000000000",
+      "canChoose": true,
+      "members": [
+        {
+          "id": "m_bo00000000000000000000000000000",
+          "name": "Bo Tern",
+          "color": "sky",
+          "initials": "BT",
+          "self": false,
+          "humanMs": 30360000,
+          "humanHours": 9,
+          "billableHours": 0,
+          "requests": 81,
+          "coverage": {
+            "complete": false,
+            "missingHosts": [
+              "stage"
+            ]
+          },
+          "missingSourceDays": 3,
+          "projects": [
+            {
+              "project": "repo-d873145ccd404d2e079c0ac7a93d28d8",
+              "name": "kestrel-cli",
+              "humanMs": 19440000,
+              "humanHours": 5.5,
+              "requests": 52
+            },
+            {
+              "project": "repo-b215c3e286558f899b8a1a46d83f776d",
+              "name": "lantern-api",
+              "humanMs": 10920000,
+              "humanHours": 3.5,
+              "requests": 29
+            }
+          ]
+        },
+        {
+          "id": "m_ada0000000000000000000000000000",
+          "name": "Ada Quill",
+          "color": "teal",
+          "initials": "AQ",
+          "self": true,
+          "humanMs": 21240000,
+          "humanHours": 7,
+          "billableHours": 2,
+          "requests": 55,
+          "coverage": {
+            "complete": true,
+            "missingHosts": []
+          },
+          "missingSourceDays": 1,
+          "projects": [
+            {
+              "project": "repo-b215c3e286558f899b8a1a46d83f776d",
+              "name": "lantern-api",
+              "humanMs": 9480000,
+              "humanHours": 3,
+              "requests": 25
+            },
+            {
+              "project": "repo-f07a16d95ca08194b0e96c02fd3cc36b",
+              "name": "orchard-client",
+              "humanMs": 6600000,
+              "humanHours": 2,
+              "requests": 17
+            },
+            {
+              "project": "repo-c0e21a2be64d7bd68f8b8c8c6a4b84d3",
+              "name": "harbor-ledger",
+              "humanMs": 5160000,
+              "humanHours": 2,
+              "requests": 13
+            }
+          ]
+        },
+        {
+          "id": "m_cy00000000000000000000000000000",
+          "name": "Cy Marsh",
+          "color": "amber",
+          "initials": "CM",
+          "self": false,
+          "humanMs": 4440000,
+          "humanHours": 1.5,
+          "billableHours": 0,
+          "requests": 11,
+          "coverage": {
+            "complete": false,
+            "missingHosts": [
+              "stage"
+            ]
+          },
+          "missingSourceDays": 4,
+          "projects": [
+            {
+              "project": "repo-c0e21a2be64d7bd68f8b8c8c6a4b84d3",
+              "name": "harbor-ledger",
+              "humanMs": 4440000,
+              "humanHours": 1.5,
+              "requests": 11
+            }
+          ]
+        },
+        {
+          "id": "m_dee000000000000000000000000000",
+          "name": "Dee Ferro",
+          "color": "violet",
+          "initials": "DF",
+          "self": false,
+          "humanMs": 0,
+          "humanHours": 0,
+          "billableHours": 0,
+          "requests": 0,
+          "coverage": {
+            "complete": false,
+            "missingHosts": [
+              "stage"
+            ]
+          },
+          "missingSourceDays": 5,
+          "projects": []
+        }
+      ],
+      "notSplit": [
+        "agents",
+        "unknownAuthorInputs"
+      ]
+    },
+    "all": {
+      "totals": {
+        "humanMs": 56040000,
+        "humanHours": 17.5,
+        "billableHours": 2,
+        "requests": 147,
+        "unregisteredConversations": 4,
+        "coverage": {
+          "complete": false,
+          "missingHosts": [
+            "stage"
+          ]
+        },
+        "agentCoverage": {
+          "complete": false,
+          "missingHosts": [
+            "stage",
+            "workstation"
+          ]
+        },
+        "missingSourceDays": 2,
+        "wallMs": 65400000,
+        "supervisedMs": 47640000,
+        "unattendedMs": 17760000,
+        "unattendedUnreadMs": 2100000,
+        "agentHoursMs": 74100000,
+        "agentHoursSupervisedMs": 52440000,
+        "agentHoursUnattendedMs": 21660000
+      },
+      "members": [
+        {
+          "id": "m_bo00000000000000000000000000000",
+          "name": "Bo Tern",
+          "color": "sky",
+          "initials": "BT",
+          "self": false,
+          "humanMs": 30360000,
+          "humanHours": 9,
+          "billableHours": 0,
+          "requests": 81,
+          "coverage": {
+            "complete": false,
+            "missingHosts": [
+              "stage"
+            ]
+          },
+          "missingSourceDays": 3,
+          "projects": [
+            {
+              "project": "repo-d873145ccd404d2e079c0ac7a93d28d8",
+              "name": "kestrel-cli",
+              "humanMs": 19440000,
+              "humanHours": 5.5,
+              "requests": 52
+            },
+            {
+              "project": "repo-b215c3e286558f899b8a1a46d83f776d",
+              "name": "lantern-api",
+              "humanMs": 10920000,
+              "humanHours": 3.5,
+              "requests": 29
+            }
+          ]
+        },
+        {
+          "id": "m_ada0000000000000000000000000000",
+          "name": "Ada Quill",
+          "color": "teal",
+          "initials": "AQ",
+          "self": true,
+          "humanMs": 21240000,
+          "humanHours": 7,
+          "billableHours": 2,
+          "requests": 55,
+          "coverage": {
+            "complete": true,
+            "missingHosts": []
+          },
+          "missingSourceDays": 1,
+          "projects": [
+            {
+              "project": "repo-b215c3e286558f899b8a1a46d83f776d",
+              "name": "lantern-api",
+              "humanMs": 9480000,
+              "humanHours": 3,
+              "requests": 25
+            },
+            {
+              "project": "repo-f07a16d95ca08194b0e96c02fd3cc36b",
+              "name": "orchard-client",
+              "humanMs": 6600000,
+              "humanHours": 2,
+              "requests": 17
+            },
+            {
+              "project": "repo-c0e21a2be64d7bd68f8b8c8c6a4b84d3",
+              "name": "harbor-ledger",
+              "humanMs": 5160000,
+              "humanHours": 2,
+              "requests": 13
+            }
+          ]
+        },
+        {
+          "id": "m_cy00000000000000000000000000000",
+          "name": "Cy Marsh",
+          "color": "amber",
+          "initials": "CM",
+          "self": false,
+          "humanMs": 4440000,
+          "humanHours": 1.5,
+          "billableHours": 0,
+          "requests": 11,
+          "coverage": {
+            "complete": false,
+            "missingHosts": [
+              "stage"
+            ]
+          },
+          "missingSourceDays": 4,
+          "projects": [
+            {
+              "project": "repo-c0e21a2be64d7bd68f8b8c8c6a4b84d3",
+              "name": "harbor-ledger",
+              "humanMs": 4440000,
+              "humanHours": 1.5,
+              "requests": 11
+            }
+          ]
+        },
+        {
+          "id": "m_dee000000000000000000000000000",
+          "name": "Dee Ferro",
+          "color": "violet",
+          "initials": "DF",
+          "self": false,
+          "humanMs": 0,
+          "humanHours": 0,
+          "billableHours": 0,
+          "requests": 0,
+          "coverage": {
+            "complete": false,
+            "missingHosts": [
+              "stage"
+            ]
+          },
+          "missingSourceDays": 5,
+          "projects": []
+        }
+      ],
+      "notSplit": [
+        "agents",
+        "unknownAuthorInputs"
+      ]
+    },
+    "refused": {
+      "status": 403,
+      "code": "activity_member_forbidden"
+    },
+    "memberOwn": {
+      "selection": "self",
+      "memberId": "m_bo00000000000000000000000000000",
+      "canChoose": false,
+      "members": [],
+      "notSplit": []
+    }
+  },
+  "desktop-own": {
+    "search": "?range=7d&view=days",
+    "viewerWords": [
+      "You",
+      "Your reported hours and agent time, per day",
+      "Wed 23: you 0 h, agents ?",
+      "Thu 24: you 1 h, agents ≥ ≈ 1 h 10 m",
+      "Fri 25: you ?, agents ≥ ≈ 2 h 30 m",
+      "Sat 26: you 2.5 h, agents ≥ ≈ 4 h 55 m",
+      "Sun 27: you 1 h, agents ≥ ≈ 4 h 15 m",
+      "Mon 28: you 2.5 h, agents ≥ ≈ 5 h 20 m",
+      "Tue 29: you 0 h, agents ?",
+      "Your reported hours and agent time, per day",
+      "You:",
+      "agents without you",
+      "Your reported hours and agents working without you, per day and hour",
+      "Sort by You",
+      "You"
+    ],
+    "width": 1440,
+    "scrollWidth": 1440,
+    "layout": "desktop",
+    "trigger": {
+      "text": "Ada Quill",
+      "height": 32
+    },
+    "options": [],
+    "cards": [],
+    "hero": "You≥7 hreported≥ 5 h 54 m by the minute·≥ 2 h billableUnknown author: 2 input(s) observed outside personal hours",
+    "truncated": []
+  },
+  "desktop-filter-open": {
+    "search": "?range=7d&view=days",
+    "viewerWords": [
+      "You",
+      "Your reported hours and agent time, per day",
+      "Wed 23: you 0 h, agents ?",
+      "Thu 24: you 1 h, agents ≥ ≈ 1 h 10 m",
+      "Fri 25: you ?, agents ≥ ≈ 2 h 30 m",
+      "Sat 26: you 2.5 h, agents ≥ ≈ 4 h 55 m",
+      "Sun 27: you 1 h, agents ≥ ≈ 4 h 15 m",
+      "Mon 28: you 2.5 h, agents ≥ ≈ 5 h 20 m",
+      "Tue 29: you 0 h, agents ?",
+      "Your reported hours and agent time, per day",
+      "You:",
+      "agents without you",
+      "Your reported hours and agents working without you, per day and hour",
+      "Sort by You",
+      "You"
+    ],
+    "width": 1440,
+    "scrollWidth": 1440,
+    "layout": "desktop",
+    "trigger": {
+      "text": "Ada Quill",
+      "height": 32
+    },
+    "options": [
+      "All members≥ 17.5 h",
+      "BTBo Tern≥ 9 h",
+      "AQAda Quill (you)≥ 7 h",
+      "CMCy Marsh≥ 1.5 h",
+      "DFDee FerroNot covered"
+    ],
+    "cards": [],
+    "hero": "You≥7 hreported≥ 5 h 54 m by the minute·≥ 2 h billableUnknown author: 2 input(s) observed outside personal hours",
+    "truncated": []
+  },
+  "desktop-all-en": {
+    "search": "?range=7d&member=all&view=days",
+    "viewerWords": [],
+    "width": 1440,
+    "scrollWidth": 1440,
+    "layout": "desktop",
+    "trigger": {
+      "text": "All members",
+      "height": 32
+    },
+    "options": [],
+    "cards": [
+      {
+        "id": "m_bo00000000000000000000000000000",
+        "covered": "false",
+        "hours": "≥ 9 h",
+        "text": "BTBo Tern81 requests · 8 h 26 m≥ 9 hNot read for them on Stage host: that host sends one person's input only.kestrel-cli5.5 hlantern-api3.5 h"
+      },
+      {
+        "id": "m_ada0000000000000000000000000000",
+        "covered": "true",
+        "hours": "≥ 7 h",
+        "text": "AQAda Quill (you)55 requests · 5 h 54 m≥ 7 hlantern-api3 horchard-client2 hharbor-ledger2 h"
+      },
+      {
+        "id": "m_cy00000000000000000000000000000",
+        "covered": "false",
+        "hours": "≥ 1.5 h",
+        "text": "CMCy Marsh11 requests · 1 h 14 m≥ 1.5 hNot read for them on Stage host: that host sends one person's input only.harbor-ledger1.5 h"
+      },
+      {
+        "id": "m_dee000000000000000000000000000",
+        "covered": "false",
+        "hours": "Not covered",
+        "text": "DFDee Ferro0 requestsNot coveredNot read for them on Stage host: that host sends one person's input only."
+      }
+    ],
+    "hero": "All members≥17.5 hreported≥ 15 h 34 m by the minute·≥ 2 h billableUnknown author: 2 input(s) observed outside personal hours",
+    "truncated": []
+  },
+  "phone-all-en": {
+    "search": "?range=7d&member=all&view=days",
+    "viewerWords": [],
+    "width": 390,
+    "scrollWidth": 390,
+    "layout": "narrow",
+    "trigger": {
+      "text": "All members",
+      "height": 44
+    },
+    "options": [],
+    "cards": [
+      {
+        "id": "m_bo00000000000000000000000000000",
+        "covered": "false",
+        "hours": "≥ 9 h",
+        "text": "BTBo Tern81 requests · 8 h 26 m≥ 9 hNot read for them on Stage host: that host sends one person's input only.kestrel-cli5.5 hlantern-api3.5 h"
+      },
+      {
+        "id": "m_ada0000000000000000000000000000",
+        "covered": "true",
+        "hours": "≥ 7 h",
+        "text": "AQAda Quill (you)55 requests · 5 h 54 m≥ 7 hlantern-api3 horchard-client2 hharbor-ledger2 h"
+      },
+      {
+        "id": "m_cy00000000000000000000000000000",
+        "covered": "false",
+        "hours": "≥ 1.5 h",
+        "text": "CMCy Marsh11 requests · 1 h 14 m≥ 1.5 hNot read for them on Stage host: that host sends one person's input only.harbor-ledger1.5 h"
+      },
+      {
+        "id": "m_dee000000000000000000000000000",
+        "covered": "false",
+        "hours": "Not covered",
+        "text": "DFDee Ferro0 requestsNot coveredNot read for them on Stage host: that host sends one person's input only."
+      }
+    ],
+    "hero": "All members≥ 15 h 34 m17.5 h reported, clock-hour weights2 h billable",
+    "truncated": []
+  },
+  "desktop-all-uk": {
+    "search": "?range=7d&member=all&view=days",
+    "viewerWords": [],
+    "width": 1440,
+    "scrollWidth": 1440,
+    "layout": "desktop",
+    "trigger": {
+      "text": "Усі учасники",
+      "height": 32
+    },
+    "options": [],
+    "cards": [
+      {
+        "id": "m_bo00000000000000000000000000000",
+        "covered": "false",
+        "hours": "≥ 9 год",
+        "text": "BTBo Tern81 запит · 8 год 26 хв≥ 9 годДля цієї людини не прочитано: Stage host. Цей хост надсилає введення лише однієї людини.kestrel-cli5,5 годlantern-api3,5 год"
+      },
+      {
+        "id": "m_ada0000000000000000000000000000",
+        "covered": "true",
+        "hours": "≥ 7 год",
+        "text": "AQAda Quill (ви)55 запитів · 5 год 54 хв≥ 7 годlantern-api3 годorchard-client2 годharbor-ledger2 год"
+      },
+      {
+        "id": "m_cy00000000000000000000000000000",
+        "covered": "false",
+        "hours": "≥ 1,5 год",
+        "text": "CMCy Marsh11 запитів · 1 год 14 хв≥ 1,5 годДля цієї людини не прочитано: Stage host. Цей хост надсилає введення лише однієї людини.harbor-ledger1,5 год"
+      },
+      {
+        "id": "m_dee000000000000000000000000000",
+        "covered": "false",
+        "hours": "Не охоплено",
+        "text": "DFDee Ferro0 запитівНе охопленоДля цієї людини не прочитано: Stage host. Цей хост надсилає введення лише однієї людини."
+      }
+    ],
+    "hero": "Усі учасники≥17,5 году звіті≥ 15 год 34 хв похвилинно·≥ 2 год оплачуванихНевідомий автор: 2 записів поза особистими годинами",
+    "truncated": []
+  },
+  "phone-all-uk": {
+    "search": "?range=7d&member=all&view=days",
+    "viewerWords": [],
+    "width": 390,
+    "scrollWidth": 390,
+    "layout": "narrow",
+    "trigger": {
+      "text": "Усі учасники",
+      "height": 44
+    },
+    "options": [],
+    "cards": [
+      {
+        "id": "m_bo00000000000000000000000000000",
+        "covered": "false",
+        "hours": "≥ 9 год",
+        "text": "BTBo Tern81 запит · 8 год 26 хв≥ 9 годДля цієї людини не прочитано: Stage host. Цей хост надсилає введення лише однієї людини.kestrel-cli5,5 годlantern-api3,5 год"
+      },
+      {
+        "id": "m_ada0000000000000000000000000000",
+        "covered": "true",
+        "hours": "≥ 7 год",
+        "text": "AQAda Quill (ви)55 запитів · 5 год 54 хв≥ 7 годlantern-api3 годorchard-client2 годharbor-ledger2 год"
+      },
+      {
+        "id": "m_cy00000000000000000000000000000",
+        "covered": "false",
+        "hours": "≥ 1,5 год",
+        "text": "CMCy Marsh11 запитів · 1 год 14 хв≥ 1,5 годДля цієї людини не прочитано: Stage host. Цей хост надсилає введення лише однієї людини.harbor-ledger1,5 год"
+      },
+      {
+        "id": "m_dee000000000000000000000000000",
+        "covered": "false",
+        "hours": "Не охоплено",
+        "text": "DFDee Ferro0 запитівНе охопленоДля цієї людини не прочитано: Stage host. Цей хост надсилає введення лише однієї людини."
+      }
+    ],
+    "hero": "Усі учасники≥ 15 год 34 хв17,5 год у звіті, за вагами годин2 год оплачуваних",
+    "truncated": []
+  },
+  "desktop-one-member": {
+    "search": "?range=7d&member=m_bo00000000000000000000000000000&view=days",
+    "viewerWords": [],
+    "width": 1440,
+    "scrollWidth": 1440,
+    "layout": "desktop",
+    "trigger": {
+      "text": "Bo Tern",
+      "height": 32
+    },
+    "options": [],
+    "cards": [],
+    "hero": "Bo Tern≥9 hreported≥ 8 h 26 m by the minute·≥ 0 h billableUnknown author: 2 input(s) observed outside personal hours",
+    "truncated": []
+  },
+  "desktop-one-member-uk": {
+    "search": "?range=7d&member=m_bo00000000000000000000000000000&view=days",
+    "viewerWords": [],
+    "width": 1440,
+    "scrollWidth": 1440,
+    "layout": "desktop",
+    "trigger": {
+      "text": "Bo Tern",
+      "height": 32
+    },
+    "options": [],
+    "cards": [],
+    "hero": "Bo Tern≥9 году звіті≥ 8 год 26 хв похвилинно·≥ 0 год оплачуванихНевідомий автор: 2 записів поза особистими годинами",
+    "truncated": []
+  },
+  "phone-one-member-en": {
+    "search": "?range=7d&member=m_bo00000000000000000000000000000&view=days",
+    "viewerWords": [],
+    "width": 390,
+    "scrollWidth": 390,
+    "layout": "narrow",
+    "trigger": {
+      "text": "Bo Tern",
+      "height": 44
+    },
+    "options": [],
+    "cards": [],
+    "hero": "Bo Tern≥ 8 h 26 m9 h reported, clock-hour weights0 h billable",
+    "truncated": []
+  },
+  "phone-one-member-uk": {
+    "search": "?range=7d&member=m_bo00000000000000000000000000000&view=days",
+    "viewerWords": [],
+    "width": 390,
+    "scrollWidth": 390,
+    "layout": "narrow",
+    "trigger": {
+      "text": "Bo Tern",
+      "height": 44
+    },
+    "options": [],
+    "cards": [],
+    "hero": "Bo Tern≥ 8 год 26 хв9 год у звіті, за вагами годин0 год оплачуваних",
+    "truncated": []
+  },
+  "desktop-member-shared-link": {
+    "search": "?range=7d&view=days",
+    "viewerWords": [
+      "You",
+      "Your reported hours and agent time, per day",
+      "Wed 23: you 0 h, agents ?",
+      "Thu 24: you ?, agents ≥ ≈ 1 h 10 m",
+      "Fri 25: you 2 h, agents ≈ 2 h 30 m",
+      "Sat 26: you 1.5 h, agents ≈ 4 h 55 m",
+      "Sun 27: you 2.5 h, agents ≈ 4 h 15 m",
+      "Mon 28: you 3 h, agents ≈ 5 h 20 m",
+      "Tue 29: you 0 h, agents –",
+      "Your reported hours and agent time, per day",
+      "You:",
+      "agents without you",
+      "Your reported hours and agents working without you, per day and hour",
+      "Sort by You",
+      "You"
+    ],
+    "width": 1440,
+    "scrollWidth": 1440,
+    "layout": "desktop",
+    "trigger": null,
+    "options": [],
+    "cards": [],
+    "hero": "You≥9 hreported≥ 8 h 26 m by the minute·≥ 0 h billableUnknown author: 2 input(s) observed outside personal hours",
+    "truncated": []
+  },
+  "phone-member-shared-link": {
+    "search": "?range=7d&view=days",
+    "viewerWords": [
+      "Your time and your agents' time, per day and per project. The two overlap and are never added together.",
+      "Your time",
+      "≥ ≈ 9 h 44 m unattended, outside your time",
+      "Your time",
+      "Tue 29 Sept: your time 0 m; agents ≈ 0 m, supervised ≈ 0 m",
+      "Mon 28 Sept: your time 2 h 44 m; agents ≈ 5 h 20 m, supervised ≈ 2 h 44 m",
+      "Sun 27 Sept: your time 2 h 28 m; agents ≈ 4 h 15 m, supervised ≈ 2 h 28 m",
+      "Sat 26 Sept: your time 1 h 16 m; agents ≈ 4 h 55 m, supervised ≈ 1 h 16 m",
+      "Fri 25 Sept: your time 1 h 58 m; agents ≈ 2 h 30 m, supervised ≈ 1 h 58 m",
+      "Thu 24 Sept: your time Probable missing source; agents ≈ 1 h 10 m, supervised ≈ 0 m",
+      "Wed 23 Sept: your time 0 m; agents ≈ 0 m, supervised ≈ 0 m",
+      "Projects you work on in parallel each count on their own, so the projects' hours usually add up to more than the total.",
+      "Agent time (≈) is approximate: each turn runs from a message to the agent's last reply, read from message timestamps on this host. Agent work outside your time is unattended and adds nothing to it.",
+      "Your input is read from every expected host. A host that was not read makes its stretch Unknown, and a total that misses it is a lower bound. This host's request ledger records only requests made through Delegatus, so this host counts as read only where a transcript export of it covers."
+    ],
+    "width": 390,
+    "scrollWidth": 390,
+    "layout": "narrow",
+    "trigger": null,
+    "options": [],
+    "cards": [],
+    "hero": "Your time8 h 26 m9 h reported, clock-hour weights0 h billable",
+    "truncated": []
+  },
+  "phone-filter-open-en": {
+    "search": "?range=7d&view=days",
+    "viewerWords": [
+      "Your time and your agents' time, per day and per project. The two overlap and are never added together.",
+      "Your time",
+      "≥ ≈ 12 h 16 m unattended, outside your time",
+      "Your time",
+      "Tue 29 Sept: your time 0 m; agents ≈ 0 m, supervised ≈ 0 m",
+      "Mon 28 Sept: your time 2 h 14 m; agents ≈ 5 h 20 m, supervised ≈ 2 h 14 m",
+      "Sun 27 Sept: your time 46 m; agents ≈ 4 h 15 m, supervised ≈ 46 m",
+      "Sat 26 Sept: your time 2 h 14 m; agents ≈ 4 h 55 m, supervised ≈ 2 h 14 m",
+      "Fri 25 Sept: your time Probable missing source; agents ≈ 2 h 30 m, supervised ≈ 0 m",
+      "Thu 24 Sept: your time 40 m; agents ≈ 1 h 10 m, supervised ≈ 40 m",
+      "Wed 23 Sept: your time 0 m; agents ≈ 0 m, supervised ≈ 0 m",
+      "Projects you work on in parallel each count on their own, so the projects' hours usually add up to more than the total.",
+      "Agent time (≈) is approximate: each turn runs from a message to the agent's last reply, read from message timestamps on this host. Agent work outside your time is unattended and adds nothing to it.",
+      "Your input is read from every expected host. A host that was not read makes its stretch Unknown, and a total that misses it is a lower bound. This host's request ledger records only requests made through Delegatus, so this host counts as read only where a transcript export of it covers."
+    ],
+    "width": 390,
+    "scrollWidth": 390,
+    "layout": "narrow",
+    "trigger": {
+      "text": "Ada Quill",
+      "height": 44
+    },
+    "options": [
+      "All members≥ 17.5 h",
+      "BTBo Tern≥ 9 h",
+      "AQAda Quill (you)≥ 7 h",
+      "CMCy Marsh≥ 1.5 h",
+      "DFDee FerroNot covered"
+    ],
+    "cards": [],
+    "hero": "Your time5 h 54 m7 h reported, clock-hour weights2 h billable",
+    "truncated": []
+  },
+  "desktop-member-view": {
+    "search": "?range=7d&view=days",
+    "viewerWords": [
+      "You",
+      "Your reported hours and agent time, per day",
+      "Wed 23: you 0 h, agents ?",
+      "Thu 24: you ?, agents ≥ ≈ 1 h 10 m",
+      "Fri 25: you 2 h, agents ≈ 2 h 30 m",
+      "Sat 26: you 1.5 h, agents ≈ 4 h 55 m",
+      "Sun 27: you 2.5 h, agents ≈ 4 h 15 m",
+      "Mon 28: you 3 h, agents ≈ 5 h 20 m",
+      "Tue 29: you 0 h, agents –",
+      "Your reported hours and agent time, per day",
+      "You:",
+      "agents without you",
+      "Your reported hours and agents working without you, per day and hour",
+      "Sort by You",
+      "You"
+    ],
+    "width": 1440,
+    "scrollWidth": 1440,
+    "layout": "desktop",
+    "trigger": null,
+    "options": [],
+    "cards": [],
+    "hero": "You≥9 hreported≥ 8 h 26 m by the minute·≥ 0 h billableUnknown author: 2 input(s) observed outside personal hours",
+    "truncated": []
+  },
+  "failures": []
+}

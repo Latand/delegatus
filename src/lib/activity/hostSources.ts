@@ -103,6 +103,10 @@ export interface HostReport {
   sources: Array<Omit<HostSourceRead, "inputs"> & { inputs: number }>;
   unknownAuthors: number;
   configurationGap: boolean;
+  /** A remote host whose pull carries one person's input only: in an owner's
+      read of every member, it was read for the operator alone, so another
+      member's input there is unread, never zero. */
+  memberScoped?: boolean;
 }
 
 export interface HumanInputRead {
@@ -111,6 +115,18 @@ export interface HumanInputRead {
   hosts: HostReport[];
   config: HostsConfig["state"];
   unknownAuthors?: number;
+  /** Set on a read of every member: the local id the operator's input counts
+      under (the owner's member id, `operator` on a solo host). A remote
+      host's rows carry this author in that read. */
+  operator?: string;
+}
+
+/** Whose input a read selects: the viewer's own, or, for the owner (or the
+    solo host's operator), every member's (`everyone`). */
+export interface ActivityViewer {
+  mode: "solo" | "team";
+  memberId: string | null;
+  everyone?: boolean;
 }
 
 export interface HostSourceDependencies {
@@ -321,7 +337,7 @@ export function readHumanInputs(
   window: Interval,
   nowMs: number,
   overrides: Partial<HostSourceDependencies> = {},
-  viewer?: { mode: "solo" | "team"; memberId: string | null },
+  viewer?: ActivityViewer,
 ): HumanInputRead {
   const dependencies = { ...productionDependencies, ...overrides };
   const dir = dependencies.dir();
@@ -336,6 +352,11 @@ export function readHumanInputs(
       operatorView = member?.role === "owner" && member.status === "active";
     } catch { /* An unreadable team store cannot grant the operator's remote rows. */ }
   }
+  /* Every member's input is the operator's read alone; anyone else keeps
+     their own. Remote rows are the operator's, so they count under the
+     operator's local id. */
+  const everyone = viewer?.everyone === true && operatorView;
+  const operatorId = localMode === "solo" ? "operator" : localMember ?? "operator";
   const hostsDir = path.join(dir, "hosts");
   let exported: string[] = [];
   try {
@@ -416,9 +437,12 @@ export function readHumanInputs(
             if (source.source !== "pull") unknownInputs.push(input);
             return false;
           }
+          if (everyone && host.local) return true;
           return wanted !== null && author === wanted;
         });
-        inputs.push(...selected);
+        if (everyone) {
+          for (const input of selected) inputs.push({ ...input, author: host.local ? effectiveAuthor(input) : operatorId });
+        } else inputs.push(...selected);
         source.inputs = selected;
         if (configurationGap && source.scope === "all") source.covered = [];
         if (selectedPullIsStale && source.source === "pull") {
@@ -448,11 +472,21 @@ export function readHumanInputs(
         sources: sources.map(({ inputs: read, ...rest }) => ({ ...rest, inputs: read.length })),
         unknownAuthors,
         configurationGap,
+        ...(everyone && !host.local ? { memberScoped: !(remoteSolo || explicitSoloExport) } : {}),
       });
     }
   } finally {
     store?.close();
   }
-  return { inputs: mergeHumanInputs(inputs), coverage, hosts, config: config.state,
-    unknownAuthors: hosts.reduce((sum, host) => sum + host.unknownAuthors, 0) };
+  const unknown = hosts.reduce((sum, host) => sum + host.unknownAuthors, 0);
+  if (!everyone) return { inputs: mergeHumanInputs(inputs), coverage, hosts, config: config.state, unknownAuthors: unknown };
+  /* Copies merge within one person's input: two people never share a minute. */
+  const byAuthor = new Map<string, HumanInput[]>();
+  for (const input of inputs) {
+    const list = byAuthor.get(input.author!);
+    if (list) list.push(input);
+    else byAuthor.set(input.author!, [input]);
+  }
+  const merged = [...byAuthor.values()].flatMap((list) => mergeHumanInputs(list)).sort((a, b) => a.at - b.at);
+  return { inputs: merged, coverage, hosts, config: config.state, unknownAuthors: unknown, operator: operatorId };
 }

@@ -106,6 +106,19 @@
  * tooltips inside the viewport, and the marks on the unread and flagged days.
  * With ACTIVITY_RENDER_DIR set, the images are copied there.
  *
+ * With BOARD_CAPTURE_CASE=activity-members it renders the owner's view of
+ * every member on an invented team of four, signed in as the owner: the
+ * owner's own page with the member filter, the filter open, every member
+ * added up with one card per person (en and uk), one member's page, and a
+ * member's own page with no filter, at 1440 × 900 and 390 × 844 in light. A
+ * stage host carries the owner's input alone, so the member who works only
+ * there reads "Not covered". It requires the members to add up to the total,
+ * a member's request for everyone to answer 403, and no sideways overflow.
+ * Every capture of someone else's figures, or everyone's, must carry no
+ * "You"/"Your"/"Ви"/"Ваш" outside the filter and the cards, and a member who
+ * opens the owner's `?member=all` link lands on their own page with `member`
+ * gone from the address.
+ *
  * With BOARD_CAPTURE_CASE=lightbox it walks the full-screen image viewer
  * through one conversation's 26 invented pictures (#2144): inbox attachments,
  * markdown images and pictures a tool showed its agent, interleaved. It opens
@@ -5005,6 +5018,273 @@ async function activityMain(): Promise<void> {
 }
 
 /* ------------------------------------------------------------------------- */
+/* BOARD_CAPTURE_CASE=activity-members: the owner's view of every member      */
+/* ------------------------------------------------------------------------- */
+
+/* An invented team (docs/design/activity-dashboard.md, "The owner's view of
+   every member"): the owner and three members on this workstation, and a
+   stage host whose export carries the owner's input alone. Dee works only
+   there, so Dee's hours are not covered rather than zero. */
+const TEAM_MEMBERS = [
+  { id: "m_ada0000000000000000000000000000", name: "Ada Quill", role: "owner" as const, color: "teal" as const },
+  { id: "m_bo00000000000000000000000000000", name: "Bo Tern", role: "member" as const, color: "sky" as const },
+  { id: "m_cy00000000000000000000000000000", name: "Cy Marsh", role: "member" as const, color: "amber" as const },
+  { id: "m_dee000000000000000000000000000", name: "Dee Ferro", role: "member" as const, color: "violet" as const },
+];
+const TEAM_REPOS: readonly ActivityRepo[] = ["orchard-client", "lantern-api", "harbor-ledger", "kestrel-cli"];
+/* Per member: [day offset back from today, start, minutes, project]. */
+const TEAM_WORK: Record<string, Array<[number, string, number, ActivityRepo]>> = {
+  m_ada0000000000000000000000000000: [[1, "09:10", 70, "lantern-api"], [2, "10:00", 50, "harbor-ledger"], [3, "09:30", 90, "lantern-api"], [5, "14:00", 40, "harbor-ledger"]],
+  m_bo00000000000000000000000000000: [[1, "09:20", 110, "lantern-api"], [1, "14:00", 60, "kestrel-cli"], [2, "09:00", 150, "kestrel-cli"], [3, "13:00", 80, "lantern-api"], [4, "10:00", 120, "kestrel-cli"]],
+  m_cy00000000000000000000000000000: [[2, "15:00", 45, "harbor-ledger"], [4, "11:00", 35, "harbor-ledger"]],
+};
+/* The owner's stage input on the client project. */
+const TEAM_STAGE: Array<[number, string, number]> = [[1, "16:00", 60], [3, "15:00", 45]];
+
+async function activityMembersMain(): Promise<void> {
+  const { zonedDays } = await import("../src/lib/activity/method");
+  const { exportLines, messageId, ledgerRowKey } = await import("../src/lib/activity/humanInput");
+  for (const dir of [OUT_DIR, path.join(BASE, "git-home"), path.join(BASE, "tmp"), path.join(BASE, "tmux"), STATE_DIR, path.join(HOME, ".codex/sessions")]) fs.mkdirSync(dir, { recursive: true });
+  for (const repo of TEAM_REPOS) {
+    const dir = activityRepoDir(repo);
+    fs.mkdirSync(dir, { recursive: true });
+    git(dir, "init", "--initial-branch=main", ".");
+    fs.writeFileSync(path.join(dir, "README.md"), `# ${repo}\n`, "utf8");
+    git(dir, "add", "README.md");
+    git(dir, "commit", "-m", `${repo}: first commit`);
+  }
+  const now = Date.now();
+  const days = zonedDays(now, 7, ACTIVITY_TZ);
+  const TODAY = 6;
+  const clock = (back: number, hhmm: string) => {
+    const [hh, mm] = hhmm.split(":").map(Number) as [number, number];
+    return days[TODAY - back]!.start + (hh * 60 + mm) * 60_000;
+  };
+  /* Agents worked beside every stretch of input, and a little past it. */
+  let transcripts = 0;
+  for (const repo of TEAM_REPOS) {
+    const turns = Object.values(TEAM_WORK).flat().filter(([, , , project]) => project === repo)
+      .map(([back, at, minutes]) => ({ start: clock(back, at) - 10 * 60_000, minutes: minutes + 30 }))
+      .concat(repo === "orchard-client" ? TEAM_STAGE.map(([back, at, minutes]) => ({ start: clock(back, at), minutes: minutes + 20 })) : []);
+    if (turns.length) {
+      writeActivityTranscript(repo, 1, turns);
+      transcripts += 1;
+    }
+  }
+
+  const failures: string[] = [];
+  const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  const report: Record<string, unknown> = { commit: captureCommit(), case: "activity-members", days: { first: days[0]!.date, today: days[TODAY]!.date } };
+  const shots: string[] = [];
+  const activityDir = path.join(STATE_DIR, "activity");
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, false);
+    const keys = await (async () => {
+      const deadline = Date.now() + 180_000;
+      while (Date.now() < deadline) {
+        const files = ((await (await fetch(`${baseUrl}/api/files`)).json()) as FilesPayload).files ?? [];
+        const found = Object.fromEntries(TEAM_REPOS.map((repo) => [repo, files.find((file) => file.path?.includes(projectSlug(activityRepoDir(repo))))?.project]));
+        if (TEAM_REPOS.every((repo) => found[repo])) return found as Record<ActivityRepo, string>;
+        await Bun.sleep(2_000);
+      }
+      throw new Error("the seeded repositories never scanned");
+    })();
+
+    /* Each member's requests in the ledger, with their author; two with none. */
+    fs.mkdirSync(activityDir, { recursive: true, mode: 0o700 });
+    const ledger: Array<Record<string, unknown>> = [];
+    for (const [author, work] of Object.entries(TEAM_WORK)) {
+      for (const [back, at, minutes, project] of work) {
+        for (let offset = 0; offset <= minutes - 10; offset += 6) {
+          const time = clock(back, at) + offset * 60_000;
+          if (time < now - 60_000) ledger.push({ v: 2, key: ledgerRowKey(`team-${author}-${time}`), at: time, kind: "message", surface: "desktop", project: keys[project], author });
+        }
+      }
+    }
+    for (const hhmm of ["08:05", "08:11"]) ledger.push({ v: 2, key: ledgerRowKey(`team-unknown-${hhmm}`), at: clock(2, hhmm), kind: "message", surface: "desktop", project: keys["lantern-api"], author: null });
+    for (const entry of ledger) {
+      const file = path.join(activityDir, `requests-${new Date(entry.at as number).toISOString().slice(0, 10)}.jsonl`);
+      fs.appendFileSync(file, JSON.stringify(entry) + "\n", { mode: 0o600 });
+    }
+    const from = days[0]!.start - 86_400_000;
+    const until = days[TODAY]!.end;
+    const localDir = path.join(activityDir, "hosts", "workstation");
+    fs.mkdirSync(localDir, { recursive: true });
+    fs.writeFileSync(path.join(localDir, "human-input.jsonl"), exportLines({ host: "workstation", coveredFrom: from, coveredUntil: until, exportedAt: now, records: 40, excluded: { "agent-message": 12 } }, []));
+    const stage = TEAM_STAGE.flatMap(([back, at, minutes]) => Array.from({ length: Math.floor(minutes / 6) }, (_, index) => clock(back, at) + index * 6 * 60_000))
+      .filter((time) => time < now - 60_000)
+      .map((time) => ({ ids: [messageId("codex", `team-stage-${time}`)], at: time, host: "stage", source: "transcripts" as const, project: keys["orchard-client"], kind: "message" as const, surface: "unknown" as const, hash: null, author: "m_remote_ada" }));
+    const stageDir = path.join(activityDir, "hosts", "stage");
+    fs.mkdirSync(stageDir, { recursive: true });
+    fs.writeFileSync(path.join(stageDir, "human-input.jsonl"), exportLines({ host: "stage", coveredFrom: from, coveredUntil: until, exportedAt: now, records: stage.length + 6, excluded: { "agent-message": 6 } }, stage));
+    fs.writeFileSync(path.join(activityDir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation", label: "Workstation" }, hosts: [{ id: "stage", label: "Stage host", mode: "team", memberId: "m_remote_ada", projects: [keys["orchard-client"]] }] }));
+    fs.writeFileSync(path.join(activityDir, "settings.json"), JSON.stringify({ v: 1, tz: ACTIVITY_TZ, billable: [keys["orchard-client"]] }));
+
+    /* The team, and a signed-in session for the owner and for one member.
+       The store is written by this process under the run's own state
+       directory, after the server is up, so the board scan ran solo. */
+    process.env.LLV_STATE_DIR = STATE_DIR;
+    const { teamStore } = await import("../src/lib/team/store");
+    const { mintSession } = await import("../src/lib/team/sessions");
+    const team = teamStore();
+    for (const member of TEAM_MEMBERS) {
+      team.insertMember({ id: member.id, name: member.name, role: member.role, status: "active", color: member.color, telegram: null,
+        createdAt: new Date(now - 30 * 86_400_000).toISOString(), createdBy: member.role === "owner" ? "claim" : "join", revokedAt: null });
+    }
+    const owner = mintSession(team, TEAM_MEMBERS[0]!.id, "claim", { surface: "desktop", browser: "chrome" }, now).value;
+    const bo = mintSession(team, TEAM_MEMBERS[1]!.id, "claim", { surface: "desktop", browser: "chrome" }, now).value;
+    const headers = (cookie: string) => ({ cookie: `llv_member=${cookie}` });
+
+    const deadline = Date.now() + 420_000;
+    let indexed = 0;
+    while (Date.now() < deadline) {
+      const body = await (await fetch(`${baseUrl}/api/activity?range=7d`, { headers: headers(owner) })).json() as { coverage?: { agentIndex?: string }; projects?: Array<{ conversations: number }> };
+      indexed = body.coverage?.agentIndex === "ok" ? (body.projects ?? []).reduce((sum, row) => sum + row.conversations, 0) : 0;
+      if (indexed >= transcripts) break;
+      await Bun.sleep(3_000);
+    }
+    must(indexed >= transcripts, `the agent axis carries ${indexed} of ${transcripts} seeded conversations`);
+
+    /* The server: the owner's own figures, every member added up, and the refusal. */
+    type Member = { id: string; name: string | null; humanHours: number; humanMs: number; requests: number; coverage: { complete: boolean; missingHosts: string[] } };
+    type Body = { totals: { humanHours: number; humanMs: number; requests: number }; unknownAuthorInputs: number; member: { selection: string; canChoose: boolean; members: Member[]; notSplit: string[] } };
+    const api = async (query: string, cookie: string) => {
+      const response = await fetch(`${baseUrl}/api/activity?range=7d${query}`, { headers: headers(cookie) });
+      return { status: response.status, body: await response.json() as Body & { code?: string } };
+    };
+    const own = await api("", owner);
+    const all = await api("&member=all", owner);
+    const refused = await api("&member=all", bo);
+    const boOwn = await api("", bo);
+    report.api = { own: own.body.member, all: { totals: all.body.totals, members: all.body.member.members, notSplit: all.body.member.notSplit }, refused: { status: refused.status, code: refused.body.code }, memberOwn: boOwn.body.member };
+    must(own.status === 200 && own.body.member.canChoose && own.body.member.selection === "self", `owner: ${own.status} ${JSON.stringify(own.body.member)}`);
+    must(all.body.member.members.length === 4, `all: ${all.body.member.members.length} members listed`);
+    const sum = all.body.member.members.reduce((total, row) => total + row.humanMs, 0);
+    must(Math.abs(sum - all.body.totals.humanMs) < 1, `all: the members add up to ${sum}, the total reads ${all.body.totals.humanMs}`);
+    const dee = all.body.member.members.find((row) => row.id === TEAM_MEMBERS[3]!.id);
+    must(dee?.humanMs === 0 && dee.coverage.complete === false && dee.coverage.missingHosts.includes("stage"), `all: Dee reads ${JSON.stringify(dee)}`);
+    must(all.body.unknownAuthorInputs >= 2, `all: ${all.body.unknownAuthorInputs} unknown-author inputs`);
+    must(refused.status === 403 && refused.body.code === "activity_member_forbidden", `a member asking for all: ${refused.status} ${refused.body.code}`);
+    must(boOwn.status === 200 && !boOwn.body.member.canChoose && boOwn.body.member.members.length === 0, `a member's own page: ${JSON.stringify(boOwn.body.member)}`);
+
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    const capture = async (name: string, query: string, options: { lang?: "en" | "uk"; phone?: boolean; cookie?: string; act?: (page: Page) => Promise<void> } = {}) => {
+      const [width, height] = options.phone ? [390, 844] : [1440, 900];
+      const context = await browser!.newContext({ viewport: { width, height }, colorScheme: "light", reducedMotion: "reduce", ...(options.phone ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : {}) });
+      await context.addCookies([{ name: "llv_member", value: options.cookie ?? owner, url: baseUrl }]);
+      await context.addInitScript(seedInit);
+      await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), options.lang ?? "en");
+      const page = await context.newPage();
+      await page.goto(`${baseUrl}/activity?${query}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+      await page.waitForSelector("[data-activity-loaded]", { timeout: 120_000 });
+      await page.waitForTimeout(400);
+      if (options.act) {
+        await options.act(page);
+        await page.waitForTimeout(300);
+      }
+      if (options.phone) {
+        const full = await page.evaluate(() => document.querySelector<HTMLElement>("[data-activity-page]")!.scrollHeight);
+        if (full > height) await page.setViewportSize({ width, height: Math.min(full, 7_000) });
+        await page.waitForTimeout(300);
+      }
+      const reading = await page.evaluate(() => {
+        const root = document.querySelector<HTMLElement>("[data-activity-page]")!;
+        const trigger = document.querySelector<HTMLElement>("[data-activity-members-trigger]");
+        /* Words that name the viewer as the counted person, in the page's text
+           and its aria and title labels. The filter and the cards mark the
+           owner's own entry "(you)" on purpose, and the surface table speaks
+           of any surface in general. */
+        const skipped = "[data-activity-members], [data-activity-member-breakdown], [data-activity-coverage]";
+        const viewerWord = /\b(you|your|yours)\b|(?<!\p{L})(ви|вас|вам|вами|ваш\p{L}*)(?!\p{L})/iu;
+        const viewerWords: string[] = [];
+        for (const element of Array.from(root.querySelectorAll<HTMLElement>("*"))) {
+          if (element.closest(skipped)) continue;
+          const parts = [element.getAttribute("aria-label") ?? "", element.getAttribute("title") ?? "", ...Array.from(element.childNodes).filter((node) => node.nodeType === 3).map((node) => node.textContent ?? "")];
+          for (const part of parts) if (viewerWord.test(part)) viewerWords.push(part.trim());
+        }
+        return {
+          search: location.search,
+          viewerWords,
+          width: document.documentElement.clientWidth,
+          scrollWidth: Math.max(document.documentElement.scrollWidth, root.scrollWidth),
+          layout: root.dataset.activityLayout ?? "narrow",
+          trigger: trigger ? { text: trigger.textContent ?? "", height: Math.round(trigger.getBoundingClientRect().height) } : null,
+          options: Array.from(document.querySelectorAll<HTMLElement>("[data-activity-member-option]")).map((option) => option.textContent ?? ""),
+          cards: Array.from(document.querySelectorAll<HTMLElement>("[data-activity-member-row]")).map((card) => ({
+            id: card.dataset.activityMemberRow ?? "", covered: card.dataset.covered ?? "", hours: card.querySelector("[data-activity-member-hours]")?.textContent ?? "", text: card.textContent ?? "",
+          })),
+          hero: document.querySelector("[data-activity-figure=you]")?.textContent ?? document.querySelector('[data-activity-tile="human"]')?.textContent ?? "",
+          truncated: Array.from(document.querySelectorAll<HTMLElement>("[data-activity-member-breakdown] .truncate")).filter((element) => element.scrollWidth > element.clientWidth + 1).map((element) => element.textContent ?? ""),
+        };
+      });
+      const file = path.join(OUT_DIR, `activity-members-${name}.png`);
+      await page.screenshot({ path: file, fullPage: !options.phone });
+      shots.push(file);
+      report[name] = reading;
+      must(reading.scrollWidth <= reading.width + 1, `${name}: the page runs ${reading.scrollWidth - reading.width}px sideways`);
+      must(reading.layout === (options.phone ? "narrow" : "desktop"), `${name}: the ${reading.layout} layout at ${width}px`);
+      must(reading.truncated.length === 0, `${name}: breakdown text cut: ${JSON.stringify(reading.truncated)}`);
+      if (/member=/.test(reading.search)) must(reading.viewerWords.length === 0, `${name}: someone else's figures read as the viewer's: ${JSON.stringify(reading.viewerWords)}`);
+      if (options.phone && reading.trigger) must(reading.trigger.height >= 44, `${name}: the member filter is ${reading.trigger.height}px tall`);
+      await context.close();
+      return reading;
+    };
+    const openFilter = async (page: Page) => { await page.click("[data-activity-members-trigger]"); await page.waitForSelector("[data-activity-members=open]"); };
+
+    const ownPage = await capture("desktop-own", "range=7d");
+    must(ownPage.trigger?.text.includes("Ada Quill") === true && ownPage.cards.length === 0, `own: trigger ${ownPage.trigger?.text}, ${ownPage.cards.length} cards`);
+    const open = await capture("desktop-filter-open", "range=7d", { act: openFilter });
+    must(open.options.length === 5 && open.options[0]!.startsWith("All members"), `filter: ${JSON.stringify(open.options)}`);
+    for (const [lang, everyone, notCovered] of [["en", "All members", "Not covered"], ["uk", "Усі учасники", "Не охоплено"]] as const) {
+      const allPage = await capture(`desktop-all-${lang}`, "range=7d&member=all", { lang });
+      must(allPage.cards.length === 4 && allPage.hero.includes(everyone), `all ${lang}: ${allPage.cards.length} cards, hero ${allPage.hero}`);
+      must(allPage.cards.find((card) => card.id === TEAM_MEMBERS[3]!.id)?.hours === notCovered, `all ${lang}: Dee reads ${JSON.stringify(allPage.cards.find((card) => card.id === TEAM_MEMBERS[3]!.id))}`);
+      const phone = await capture(`phone-all-${lang}`, "range=7d&member=all", { lang, phone: true });
+      must(phone.cards.length === 4 && phone.trigger?.text.includes(everyone) === true, `phone all ${lang}: ${phone.cards.length} cards, trigger ${phone.trigger?.text}`);
+    }
+    const one = await capture("desktop-one-member", `range=7d&member=${TEAM_MEMBERS[1]!.id}`);
+    must(one.hero.includes("Bo Tern") && one.cards.length === 0, `one member: hero ${one.hero}`);
+    await capture("desktop-one-member-uk", `range=7d&member=${TEAM_MEMBERS[1]!.id}`, { lang: "uk" });
+    for (const lang of ["en", "uk"] as const) {
+      const phoneOne = await capture(`phone-one-member-${lang}`, `range=7d&member=${TEAM_MEMBERS[1]!.id}`, { lang, phone: true });
+      must(phoneOne.hero.includes("Bo Tern"), `phone one member ${lang}: hero ${phoneOne.hero}`);
+    }
+    /* A member opening a link the owner shared lands on their own figures. */
+    for (const phone of [false, true]) {
+      const shared = await capture(`${phone ? "phone" : "desktop"}-member-shared-link`, "range=7d&member=all", { cookie: bo, phone });
+      must(!shared.search.includes("member=") && shared.trigger === null && shared.cards.length === 0, `a member's shared link (${phone ? "phone" : "desktop"}): ${shared.search}, trigger ${JSON.stringify(shared.trigger)}`);
+    }
+    await capture("phone-filter-open-en", "range=7d", { phone: true, act: openFilter });
+    const member = await capture("desktop-member-view", "range=7d", { cookie: bo });
+    must(member.trigger === null && member.cards.length === 0, `a member's page: trigger ${JSON.stringify(member.trigger)}`);
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+    await stop(server);
+  }
+  const scrub = (value: unknown) => JSON.parse(JSON.stringify(value).split(HOME).join("$HOME"));
+  report.failures = failures;
+  fs.writeFileSync(path.join(OUT_DIR, "activity-members.json"), JSON.stringify(scrub(report), null, 2) + "\n", "utf8");
+  const target = process.env.ACTIVITY_RENDER_DIR?.trim();
+  if (target) {
+    fs.mkdirSync(target, { recursive: true });
+    for (const file of [...shots, path.join(OUT_DIR, "activity-members.json")]) fs.copyFileSync(file, path.join(target, path.basename(file)));
+  }
+  console.log(`activity member captures: ${OUT_DIR}${target ? ` (copied to ${target})` : ""}`);
+  if (failures.length) {
+    process.exitCode = 1;
+    console.error(`activity member acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
+  } else {
+    console.log("activity member acceptance passed at 1440 × 900 and 390 × 844, en and uk.");
+  }
+}
+
+/* ------------------------------------------------------------------------- */
 /* BOARD_CAPTURE_CASE=lightbox (#2144)                                        */
 /* ------------------------------------------------------------------------- */
 
@@ -5583,6 +5863,7 @@ if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
 else if (process.env.BOARD_CAPTURE_CASE === "self-update-auto") await selfUpdateAutoMain();
 else if (process.env.BOARD_CAPTURE_CASE === "linking") await linkingMain();
 else if (process.env.BOARD_CAPTURE_CASE === "activity") await activityMain();
+else if (process.env.BOARD_CAPTURE_CASE === "activity-members") await activityMembersMain();
 else if (process.env.BOARD_CAPTURE_CASE === "lightbox") await lightboxMain();
 else if (process.env.BOARD_CAPTURE_CASE === "resources") await resourcesMain();
 else if (process.env.BOARD_CAPTURE_CASE === "file-preview") await filePreviewMain();

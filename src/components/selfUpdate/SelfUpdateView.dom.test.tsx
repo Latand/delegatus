@@ -223,18 +223,25 @@ describe("automatic updates", () => {
     expect(text(section(render(s), "auto"))).toContain(`deployment of ${NEW.slice(0, 7)} failed: candidate health failed`);
   });
 
-  test("an older launcher shows restart guidance in both languages", () => {
+  test("an older launcher shows the one-time checkout command in both languages", () => {
     const s = snapshot();
     s.auto = { availability: "launcher-upgrade", enabled: false, off: null, phase: "idle", target: null, green: null, blockers: null, waitingSince: null, longWait: false };
     const en = render(s);
     expect(button(en, "toggle-auto")?.disabled).toBe(true);
-    expect(text(section(en, "auto"))).toContain("Restart Delegatus from the terminal");
+    expect(text(section(en, "auto"))).toContain("git checkout <installed-release-sha> -- bin/cli.mjs");
+    expect(text(section(en, "auto"))).toContain("git show HEAD:bin/cli.mjs > bin/cli-checkout.mjs");
+    expect(text(section(en, "auto"))).toContain("releasePointer");
+    expect(text(section(en, "auto"))).toContain("containing the checkout launcher bootstrap");
+    expect(text(section(en, "auto"))).toContain("leave checkout HEAD in place");
     flushSync(() => root!.unmount());
     host?.remove();
     setLocale("uk");
     const uk = render(s);
     expect(button(uk, "toggle-auto")?.disabled).toBe(true);
-    expect(text(section(uk, "auto"))).toContain("Перезапустіть Delegatus із термінала");
+    expect(text(section(uk, "auto"))).toContain("git checkout <sha-встановленого-релізу> -- bin/cli.mjs");
+    expect(text(section(uk, "auto"))).toContain("git show HEAD:bin/cli.mjs > bin/cli-checkout.mjs");
+    expect(text(section(uk, "auto"))).toContain("releasePointer");
+    expect(text(section(uk, "auto"))).toContain("не змінюйте HEAD checkout");
   });
 
   test("the update card names an automatic build after it finishes", () => {
