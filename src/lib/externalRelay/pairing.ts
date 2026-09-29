@@ -1,13 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { forgetRelayActivity } from "./activity";
 import { discoverRelay, ExternalRelayError, relayCall } from "./client";
+import { refreshRelayTargets } from "./poller";
 import {
   pairingConfirmedSchema,
   pairingStartedSchema,
   pairingStatusSchema,
 } from "./protocol";
 import {
+  newTargetSettings,
   publicPending,
+  publicRelay,
   readRelayStore,
   updateRelayStore,
   type PairedRelay,
@@ -105,27 +108,22 @@ export async function confirmRelayPairing(
     pairedAt: new Date().toISOString(),
     paused: false,
     limits: pending.limits,
-    targets: confirmed.targets.map((target) => ({
-      id: target.target_id,
-      name: target.name,
-      answered_by: target.answered_by,
-      fallback: target.fallback,
-      enabled: true,
-      engine: null,
-      model: null,
-      effort: null,
-      project: null,
-      concurrency: 1,
-      hardCapMinutes: 30,
-    })),
+    targets: confirmed.targets.map(newTargetSettings),
   };
   updateRelayStore((store) => ({
     ...store,
     relays: [...store.relays.filter((item) => item.id !== id), relay],
     pending: store.pending.filter((item) => item.id !== id),
   }));
-  const { credential: _credential, ...publicRelay } = relay;
-  return publicRelay;
+  // A service can confirm before the owner's targets are linked to the
+  // pairing; ask once for the list it holds now, so the caller (the setup
+  // step's default engine among them) sees the targets that exist.
+  if (!confirmed.targets.length) {
+    await refreshRelayTargets(relay.id);
+    const stored = readRelayStore().relays.find((item) => item.id === id);
+    if (stored) return publicRelay(stored);
+  }
+  return publicRelay(relay);
 }
 export async function cancelRelayPairing(id: string): Promise<void> {
   const pending = pendingById(id);

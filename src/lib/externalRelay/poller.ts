@@ -7,7 +7,7 @@ import {
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { isStagingMode } from "@/lib/staging";
 import { noteRelayOutcome, relayActivity } from "./activity";
-import { ExternalRelayError, relayCall } from "./client";
+import { ExternalRelayError, fetchRelayTargets, relayCall } from "./client";
 import {
   advertisedSlots,
   externalRelayTempRoot,
@@ -17,8 +17,10 @@ import {
 import {
   dropRun,
   externalRelayFile,
+  mergeRelayTargets,
   readRelayStore,
   readRunLedger,
+  updateRelayStore,
   type PairedRelay,
 } from "./store";
 
@@ -34,20 +36,29 @@ type PollLoop = {
   stopped: boolean;
   state: PollerState;
 };
+type TargetRefresh = {
+  at: number;
+  running: Promise<TargetRefreshOutcome> | null;
+};
 type PollerController = {
   loops: Map<string, PollLoop>;
   sweepTimer: ReturnType<typeof setInterval> | null;
   armed: boolean;
+  targetRefreshes?: Map<string, TargetRefresh>;
 };
 const globalRelay = globalThis as typeof globalThis & {
   __llvExternalRelayPoller?: PollerController;
 };
-const controller = (globalRelay.__llvExternalRelayPoller ??= {
+const controller: PollerController = (globalRelay.__llvExternalRelayPoller ??= {
   loops: new Map(),
   sweepTimer: null,
   armed: false,
 });
 const loops = controller.loops;
+const targetRefreshes = (controller.targetRefreshes ??= new Map<
+  string,
+  TargetRefresh
+>());
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export function relayPollerStatus(id: string) {
   const loop = loops.get(id);
@@ -91,12 +102,115 @@ export async function sweepExternalRelayOrphans(): Promise<void> {
     dropRun(run.requestId);
   }
 }
+/* A paired relay's targets come from endpoint 6 whenever the settings page
+   reads them (at most every 30 s), every 5 min from the claim loop, and once
+   after a confirm that listed none. The attempt time is kept per relay on
+   the controller, so every module copy shares one rate limit, and a refresh
+   already on the wire is joined rather than repeated. */
+export const TARGETS_REFRESH_ON_READ_MS = 30_000;
+export const TARGETS_REFRESH_IN_LOOP_MS = 300_000;
+export type TargetRefreshOutcome =
+  | "changed"
+  | "unchanged"
+  | "skipped"
+  | "failed"
+  | "credential_rejected"
+  | "gone";
+export function refreshRelayTargets(
+  id: string,
+  minIntervalMs = 0,
+): Promise<TargetRefreshOutcome> {
+  const prior = targetRefreshes.get(id);
+  if (prior?.running) return prior.running;
+  if (prior && Date.now() - prior.at < minIntervalMs)
+    return Promise.resolve("skipped");
+  const entry: TargetRefresh = { at: Date.now(), running: null };
+  targetRefreshes.set(id, entry);
+  entry.running = refreshTargetsNow(id).finally(() => {
+    entry.running = null;
+  });
+  return entry.running;
+}
+/** Refreshes every paired relay for a read of the settings page, waiting at
+ * most `waitMs`; a slower service shows its list on the page's next read. */
+export async function refreshTargetsForRead(waitMs = 2_000): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    Promise.all(
+      readRelayStore().relays.map((relay) =>
+        refreshRelayTargets(relay.id, TARGETS_REFRESH_ON_READ_MS),
+      ),
+    ),
+    new Promise((resolve) => {
+      timer = setTimeout(resolve, waitMs);
+    }),
+  ]);
+  clearTimeout(timer);
+}
+async function refreshTargetsNow(id: string): Promise<TargetRefreshOutcome> {
+  try {
+    const relay = readRelayStore().relays.find((item) => item.id === id);
+    if (!relay) {
+      targetRefreshes.delete(id);
+      return "gone";
+    }
+    let remote;
+    try {
+      remote = await fetchRelayTargets(relay);
+    } catch (error) {
+      if (error instanceof ExternalRelayError && error.status === 401) {
+        // The claim loop would learn the same on its next call; park it now.
+        const loop = loops.get(id);
+        if (loop) {
+          loop.state = "credential_rejected";
+          loop.stopped = true;
+          loop.abort.abort();
+        }
+        return "credential_rejected";
+      }
+      // Network, 5xx, 429 or a body that fails the schema: the stored list
+      // stays, and the activity line says why it was not refreshed.
+      const code =
+        error instanceof ExternalRelayError && /^[a-z0-9_]{1,40}$/.test(error.code)
+          ? error.code
+          : "unreachable";
+      noteRelayOutcome(id, `targets:${code}`);
+      return "failed";
+    }
+    let changed = false;
+    updateRelayStore((store) => ({
+      ...store,
+      relays: store.relays.map((item) => {
+        if (item.id !== id) return item;
+        const targets = mergeRelayTargets(item.targets, remote);
+        if (JSON.stringify(targets) === JSON.stringify(item.targets))
+          return item;
+        changed = true;
+        return { ...item, targets };
+      }),
+    }));
+    // A new loop advertises slots from the new list, so a dropped target
+    // stops being offered and an added one waits for its settings.
+    if (changed) refreshExternalRelayPollers(id);
+    return changed ? "changed" : "unchanged";
+  } catch (error) {
+    console.error(
+      "External relay target refresh failed",
+      error instanceof Error ? error.name : "unknown",
+    );
+    noteRelayOutcome(id, "targets:local_error");
+    return "failed";
+  }
+}
 async function poll(
   relay: PairedRelay,
   loop: PollLoop,
 ) {
   let backoff = 5000;
   while (!loop.stopped) {
+    await refreshRelayTargets(relay.id, TARGETS_REFRESH_IN_LOOP_MS);
+    // A changed list restarted this relay's loop; a 401 parked it.
+    if (loop.stopped) break;
     loop.abort = new AbortController();
     try {
       const result = await relayCall<{ request?: unknown }>(
