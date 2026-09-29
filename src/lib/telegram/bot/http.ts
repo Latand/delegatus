@@ -25,6 +25,13 @@ const STATUS: Record<TelegramBotErrorCode, number> = {
   text_empty: 400,
   text_too_long: 400,
   photo_invalid: 400,
+  document_invalid: 400,
+  document_outside_roots: 403,
+  document_forbidden_path: 403,
+  document_type: 400,
+  document_too_large: 413,
+  document_secret: 422,
+  document_roots_invalid: 400,
   format_invalid: 400,
   forbidden: 403,
   rate_limited: 429,
@@ -47,6 +54,7 @@ export function telegramBotFailure(error: unknown): NextResponse {
       retryable: error.retryable,
       ...(error.extra.retryAfterSeconds !== undefined ? { retryAfterSeconds: error.extra.retryAfterSeconds } : {}),
       ...(error.extra.sentMessageIds ? { sentMessageIds: error.extra.sentMessageIds } : {}),
+      ...(error.extra.secretClass ? { secretClass: error.extra.secretClass } : {}),
     }, { status: STATUS[error.code] ?? 400 });
   }
   if (error instanceof UnsafeTelegramSessionError) {

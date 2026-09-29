@@ -18,6 +18,7 @@ function stateFor(status: TelegramBotStatusPayload, failure: { code: string } | 
     setChat: async () => {},
     addChat: async () => null,
     testPost: async () => false,
+    setDocumentRoots: async () => false,
     remove: async () => {},
   };
 }

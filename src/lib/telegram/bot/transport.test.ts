@@ -66,6 +66,19 @@ test("photo uploads use multipart form data with attach names and JSON fields", 
   expect((fields!.get("photo1") as File).name).toBe("photo1.png");
 });
 
+test("a document upload keeps the File's own name in the multipart body", async () => {
+  let fields: FormData | null = null;
+  const transport = createBotApiTransport(TOKEN, async (_url, init) => {
+    fields = init.body as FormData;
+    return jsonResponse({ ok: true, result: { message_id: 1, date: 1 } });
+  });
+  await transport.call("sendDocument", { chat_id: -1001, caption: "Weekly", document: new File(["# Report\n"], "Weekly report.md", { type: "text/markdown" }) });
+  expect(fields!.get("caption")).toBe("Weekly");
+  const document = fields!.get("document") as File;
+  expect(document.name).toBe("Weekly report.md");
+  expect(await document.text()).toBe("# Report\n");
+});
+
 test("a fetch rejection that quotes the request URL comes back as a bare code", async () => {
   const transport = createBotApiTransport(TOKEN, async (url) => {
     throw new TypeError(`fetch failed: request to ${url} failed, reason: connect ECONNREFUSED`);
