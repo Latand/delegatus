@@ -3691,8 +3691,14 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       void runtimeDependencies.refreshRuntime();
       /* The tail may no longer carry this row's receipt; its own record does. */
       const receipt = entry?.deliveryReceipt;
-      if (receipt && !receipt.operationId.includes(":")) {
-        readOperationBack({ operationId: receipt.operationId, idempotencyKey: receipt.idempotencyKey, original: receipt }, true);
+      const operationId = receipt?.operationId ?? entry?.operationId;
+      if (operationId && !operationId.includes(":")) {
+        const original = receipt ?? {
+          operationId, idempotencyKey: entry!.id, conversationId: cardId,
+          kind: "send" as const, status: "pending" as const,
+          at: new Date(entry!.at).toISOString(), revision: 0,
+        };
+        readOperationBack({ operationId, idempotencyKey: entry!.id, original }, true);
       }
     },
     retryOperation: (key) => {
@@ -3701,8 +3707,14 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         void retryAdmittedPayload(row, key);
         return;
       }
-      const receipt = displayedRuntimeReceipts.find((candidate) => candidate.idempotencyKey === key);
-      if (receipt) void retryRuntimeReceipt(receipt, receiptHasUnknownFate(receipt) ? "uncertain" : undefined);
+      const entry = readOutbox(cardId).find((candidate) => candidate.id === key);
+      const receipt = displayedRuntimeReceipts.find((candidate) =>
+        candidate.operationId === entry?.deliveryReceipt?.operationId)
+        ?? entry?.deliveryReceipt
+        ?? displayedRuntimeReceipts.find((candidate) => candidate.idempotencyKey === key);
+      if (receipt && entry?.state === "failed" && receipt.status === "failed") {
+        void retryRuntimeReceipt(receipt, receiptHasUnknownFate(receipt) ? "uncertain" : undefined);
+      }
     },
     discard: (key) => {
       const receipt = displayedRuntimeReceipts.find((candidate) => candidate.idempotencyKey === key);

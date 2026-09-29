@@ -164,6 +164,39 @@ test("past the bound the message stays unconfirmed — never 'not sent' — and 
   }
 });
 
+test("a deploy-stale local failure waits for its operation, then hides resend on delivery", async () => {
+  const pending = await bubble({ state: "failed", operationId: "operation-restart",
+    error: "runtime host is unavailable" }, SUBMITTED_AT + 60_000, "uk");
+  expect(rowPhase(pending)).toBe("pending");
+  expect(pending.querySelector("[data-outbox-failure], [data-outbox-retry], [data-outbox-operation-retry]")).toBeNull();
+
+  const delivered = await bubble({ state: "failed", operationId: "operation-restart",
+    deliveryReceipt: { operationId: "operation-restart", idempotencyKey: "key-1213",
+      conversationId: "conv", kind: "send", status: "delivered", at: new Date(SUBMITTED_AT + 30_000).toISOString(), revision: 1 },
+  }, SUBMITTED_AT + 60_000, "uk");
+  expect(rowPhase(delivered)).toBe("confirmed");
+  expect(delivered.querySelector("[data-outbox-failure], [data-outbox-retry], [data-outbox-operation-retry]")).toBeNull();
+});
+
+test("a failed operation shows resend only while a handler can carry it", async () => {
+  const failed = entry({ state: "failed", operationId: "operation-failed", deliveryReceipt: {
+    operationId: "operation-failed", idempotencyKey: "key-1213", conversationId: "conv",
+    kind: "send", status: "failed", resend: "safe", reason: "host failed before delivery",
+    at: new Date(SUBMITTED_AT + 30_000).toISOString(), revision: 1,
+  } });
+  const withoutHandler = await render(<OutboxBubblesView entries={[failed]} t={translator("uk")}
+    nowMs={SUBMITTED_AT + 60_000} onCancel={() => {}} onRetry={() => {}} />);
+  expect(withoutHandler.querySelector("[data-outbox-operation-retry]")).toBeNull();
+  let retries = 0;
+  const withHandler = await render(<OutboxBubblesView entries={[failed]} t={translator("uk")}
+    nowMs={SUBMITTED_AT + 60_000} onCancel={() => {}} onRetry={() => {}}
+    onRetryOperation={() => { retries += 1; }} />);
+  const button = withHandler.querySelector<HTMLButtonElement>("[data-outbox-operation-retry]");
+  expect(button?.textContent).toBe(translate("uk", "outbox.action.retry"));
+  await act(async () => button!.click());
+  expect(retries).toBe(1);
+});
+
 /**
  * Replay the composer's own receipt→bubble projection over a receipt sequence
  * and render what the operator is looking at after each one.
