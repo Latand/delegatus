@@ -100,7 +100,10 @@ test("media send preserves send_uncertain through MCP and replays the refusal", 
   }
 });
 
-test("reopened MCP media receipt rechecks the downstream send claim without repeating HTTP", async () => {
+test.each([
+  ["telegram_bot_send_media", { images: [{ path: "/sandbox/one.jpg", caption: "One" }] }],
+  ["telegram_bot_send_document", { document: { path: "/sandbox/handoff/weekly.md" } }],
+] as const)("reopened MCP %s receipt rechecks the downstream send claim without repeating HTTP", async (tool, payload) => {
   const receiptDir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-media-reopen-"));
   const filename = path.join(receiptDir, "receipts.sqlite");
   let dispatches = 0;
@@ -139,18 +142,18 @@ test("reopened MCP media receipt rechecks the downstream send claim without repe
       return { chat: "team-reports", messageIds: [72], attributedTo: { conversationId: "conversation_writer" } };
     },
   });
-  const args = { clientRequestId: "media-reopen-uncertain", chat: "team-reports", images: [{ path: "/sandbox/one.jpg", caption: "One" }] };
+  const args = { clientRequestId: "media-reopen-uncertain", chat: "team-reports", ...payload };
   const firstStore = new SqliteMcpReceiptStore(filename);
   stores.push(firstStore);
   const first = createMcpToolService(viewerMcpBindings(undefined, controlForRestart()), firstStore);
-  const pending = first.callTool("telegram_bot_send_media", args);
+  const pending = first.callTool(tool, args);
   try {
     await currentBarrier.entered;
     const reopenedStore = new SqliteMcpReceiptStore(filename);
     stores.push(reopenedStore);
     const reopened = createMcpToolService(viewerMcpBindings(undefined, controlForRestart()), reopenedStore);
-    expect(await reopened.callTool("telegram_bot_send_media", args)).toMatchObject({ ok: false, code: "send_uncertain", retryable: false });
-    expect(await reopened.callTool("telegram_bot_send_media", args)).toMatchObject({ ok: false, code: "send_uncertain", replayed: true });
+    expect(await reopened.callTool(tool, args)).toMatchObject({ ok: false, code: "send_uncertain", retryable: false });
+    expect(await reopened.callTool(tool, args)).toMatchObject({ ok: false, code: "send_uncertain", replayed: true });
     expect({ dispatches, httpSends }).toEqual({ dispatches: 2, httpSends: 1 });
     currentBarrier.release();
     await pending;
@@ -161,14 +164,14 @@ test("reopened MCP media receipt rechecks the downstream send claim without repe
     stores.push(completedStore);
     const completed = createMcpToolService(viewerMcpBindings(undefined, controlForRestart()), completedStore);
     const completedArgs = { ...args, clientRequestId: "media-reopen-completed" };
-    const pendingCompleted = completed.callTool("telegram_bot_send_media", completedArgs);
+    const pendingCompleted = completed.callTool(tool, completedArgs);
     await currentBarrier.entered;
     const completedReopenedStore = new SqliteMcpReceiptStore(filename);
     stores.push(completedReopenedStore);
     const completedReopened = createMcpToolService(viewerMcpBindings(undefined, controlForRestart()), completedReopenedStore);
     sendState = "sent";
-    expect(await completedReopened.callTool("telegram_bot_send_media", completedArgs)).toMatchObject({ ok: true, messageIds: [72] });
-    expect(await completedReopened.callTool("telegram_bot_send_media", completedArgs)).toMatchObject({ ok: true, messageIds: [72], replayed: true });
+    expect(await completedReopened.callTool(tool, completedArgs)).toMatchObject({ ok: true, messageIds: [72] });
+    expect(await completedReopened.callTool(tool, completedArgs)).toMatchObject({ ok: true, messageIds: [72], replayed: true });
     expect({ dispatches, httpSends }).toEqual({ dispatches: 4, httpSends: 2 });
     currentBarrier.release();
     await pendingCompleted;
@@ -176,6 +179,32 @@ test("reopened MCP media receipt rechecks the downstream send claim without repe
     currentBarrier.release();
     for (const store of stores) store.close();
     fs.rmSync(receiptDir, { recursive: true, force: true });
+  }
+});
+
+test("telegram_bot_send_document forwards the document with the caller capability, never a caller-named conversation", async () => {
+  const document = { path: "/sandbox/handoff/weekly.md", filename: "Weekly.md", caption: "<b>Week</b>" };
+  await bindings().telegram_bot_send_document({ clientRequestId: "doc-1", chat: "team-reports", document, format: "html", topicId: 5, replyToMessageId: 2, silent: true, conversationId: "forged" });
+  expect(dispatched[0]).toMatchObject({ pathname: "/api/telegram/bot/agent", body: { op: "send_document", clientRequestId: "doc-1", chat: "team-reports", document, format: "html", topicId: 5, replyToMessageId: 2, silent: true }, headers: { [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY } });
+  expect(dispatched[0]!.body).not.toHaveProperty("conversationId");
+});
+
+test("a document secret refusal reaches the MCP answer with its class and replays without a second dispatch", async () => {
+  let calls = 0;
+  const viewer = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => {
+    calls += 1;
+    return telegramBotFailure(new TelegramBotError("document_secret", "the file contains what looks like a secret (private_key, line 3)", { secretClass: "private_key" }));
+  } });
+  process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${viewer.port}`;
+  try {
+    const service = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true)), new MemoryMcpReceiptStore());
+    const args = { clientRequestId: "doc-secret", chat: "team-reports", document: { path: "/sandbox/handoff/key.md" } };
+    const first = await service.callTool("telegram_bot_send_document", args);
+    expect(first).toMatchObject({ ok: false, code: "document_secret", retryable: false, details: { secretClass: "private_key" } });
+    expect(await service.callTool("telegram_bot_send_document", args)).toMatchObject({ ok: false, code: "document_secret", replayed: true });
+    expect(calls).toBe(1);
+  } finally {
+    viewer.stop(true);
   }
 });
 

@@ -10,11 +10,12 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * The agents' surface for the Telegram bot account, called by the four
+ * The agents' surface for the Telegram bot account, called by the five
  * Viewer MCP tools (`docs/design/telegram-bot-account.md`, Decision 6).
  *
  * GET `?op=chats[&includeInactive=1]` and `?op=messages&chat=…` read; POST
- * `{op:"send", …}` or `{op:"send_media", …}` posts. The sender is resolved here from the forwarded
+ * `{op:"send", …}`, `{op:"send_media", …}` or `{op:"send_document", …}`
+ * posts. The sender is resolved here from the forwarded
  * conversation capability, never from an argument, so the attribution a post
  * carries is the caller's own. No answer carries the token or the bot id.
  */
@@ -49,7 +50,7 @@ export async function POST(req: NextRequest) {
   if (rejected) return rejected;
   let body: Record<string, unknown>;
   try { body = await req.json() as Record<string, unknown>; } catch { return NextResponse.json({ error: "Invalid JSON", code: "invalid_json" }, { status: 400 }); }
-  if (body.op !== "send" && body.op !== "send_media") return NextResponse.json({ error: "Unknown Telegram bot action", code: "invalid_action" }, { status: 400 });
+  if (body.op !== "send" && body.op !== "send_media" && body.op !== "send_document") return NextResponse.json({ error: "Unknown Telegram bot action", code: "invalid_action" }, { status: 400 });
   try {
     const service = telegramBotService();
     const parsed = parseTelegramChatReference(body.chat);
@@ -57,13 +58,16 @@ export async function POST(req: NextRequest) {
       chat.chatId === parsed.chat || chat.chat === parsed.chat || chat.alias === parsed.chat
       || (parsed.chat.startsWith("@") && chat.username?.toLowerCase() === parsed.chat.slice(1).toLowerCase())
     ));
-    const send = body.op === "send_media" ? service.sendMedia.bind(service) : service.send.bind(service);
+    const send = body.op === "send_media" ? service.sendMedia.bind(service)
+      : body.op === "send_document" ? service.sendDocument.bind(service)
+        : service.send.bind(service);
     return NextResponse.json(await send({
       conversationId: callerConversationId(req),
       clientRequestId: body.clientRequestId,
       chat: known?.alias ?? known?.chat ?? body.chat,
       text: body.text,
       images: body.images,
+      document: body.document,
       format: body.format,
       replyToMessageId: body.replyToMessageId,
       topicId: body.topicId ?? (known?.isForum ? parsed?.topicId : undefined),
