@@ -2138,11 +2138,11 @@ test("a seat's settled deploy is gathered, and one requested past the backlog bo
 
 test("a child this seat launched with notices on is marked, one launched by someone else or opted out is not (spawn-completion-notice §6)", async () => {
   const fixture = childRegistry("launcher-notice");
-  const launch = (title: string, launcher: { conversationId: string; notify: boolean } | null) => {
+  const launch = (title: string, launcher: { conversationId: string; notify: boolean } | null, transport: "structured" | "tmux" = "structured") => {
     const childPath = path.join(SESSIONS, `${crypto.randomUUID()}.jsonl`);
     fs.writeFileSync(childPath, "");
     const begun = fixture.registry.beginSpawnRequest({
-      engine: "claude", cwd: fixture.cwd, transport: "structured",
+      engine: "claude", cwd: fixture.cwd, transport,
       parentConversationId: fixture.seatId as never, parentSource: "explicit",
       launchProfile: { title }, launcher: launcher as never,
     });
@@ -2167,9 +2167,18 @@ test("a child this seat launched with notices on is marked, one launched by some
   const notified = launch("notified reviewer", { conversationId: fixture.seatId, notify: true });
   const quiet = launch("opted-out reviewer", { conversationId: fixture.seatId, notify: false });
   const elsewhere = launch("reviewer another agent launched", { conversationId: "conversation_other_launcher", notify: true });
+  /* A tmux child never ends a turn in the runtime journal, so no notice
+     covers it and the harvest keeps reporting it. */
+  const tmux = launch("reviewer on tmux", { conversationId: fixture.seatId, notify: true }, "tmux");
   const input = await childGather(fixture);
   const byId = new Map(input.children.map((child) => [child.conversationId, child]));
   expect(byId.get(notified)).toMatchObject({ status: "terminal", launcherNotice: true });
   expect(byId.get(quiet)?.launcherNotice).toBeUndefined();
   expect(byId.get(elsewhere)?.launcherNotice).toBeUndefined();
+  expect(fixture.registry.conversation(tmux as never)?.launcher).toBeNull();
+  expect(byId.get(tmux)).toMatchObject({ status: "terminal", outcome: "finished" });
+  expect(byId.get(tmux)?.launcherNotice).toBeUndefined();
+  const harvested = seatTickDecision({ ...input, children: [byId.get(tmux)!, byId.get(notified)!] });
+  expect(JSON.stringify(harvested.verdict)).toContain(tmux);
+  expect(JSON.stringify(harvested.verdict)).not.toContain(notified);
 });

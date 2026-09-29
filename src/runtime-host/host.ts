@@ -1,7 +1,7 @@
 import { canonicalNativeQueueProof, type NativeQueueCompactedProof, type NativeQueueTransition } from "@/lib/runtime/nativeQueueContracts";
 import { isStructuredHostKind, RUNTIME_RECEIPT_STATUSES, RuntimeIdempotencyConflictError, type RuntimeEvent, type RuntimeEventInput, type RuntimeOperationCommand, type RuntimeOperationReceipt, type RuntimeReceiptStatus, type RuntimeSocketRequest, type RuntimeSocketResponse, type RuntimeTransitionDetails } from "@/lib/runtime/contracts";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
-import { consumeRuntimeEvent, type RuntimeConsumerPorts } from "@/lib/runtime/consumers";
+import { consumeRuntimeEvent, RuntimeConsumerDeferredError, type RuntimeConsumerPorts } from "@/lib/runtime/consumers";
 
 import { RuntimeJournal } from "./journal";
 import type { ViewerDeploymentCoordinator } from "./deployment";
@@ -31,6 +31,10 @@ function turnStartedAt(receipts: readonly RuntimeOperationReceipt[] | undefined,
 export class RuntimeHost {
   private consumerQueue: Promise<void> = Promise.resolve();
   private readonly consumerFailures = new Map<string, number>();
+  /** Events a consumer deferred (a fenced or busy state write), and the one
+      timer that retries them. */
+  private readonly deferredEvents = new Set<string>();
+  private deferredRetry: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     readonly journal: RuntimeJournal,
@@ -40,6 +44,7 @@ export class RuntimeHost {
     private readonly signalFlowPipelineProgress?: () => void,
     private readonly mcpHealthProbeAdmissions?: McpHealthProbeAdmissions,
     private readonly runtimeHostHealth?: () => RuntimeHostReadyEvidence,
+    private readonly deferredRetryMs = 5_000,
   ) {
     if (consumers && journal.isWritable()) journal.registerConsumer("orchestration");
   }
@@ -52,7 +57,14 @@ export class RuntimeHost {
         const events = this.journal.unconsumedEvents("orchestration");
         if (events.length === 0) return recovered;
         for (const event of events) {
-          await this.consume(event);
+          try {
+            await this.consume(event);
+          } catch (error) {
+            /* A deferred event stays owed and its retry is scheduled; the
+               events after it wait behind it, as they would behind a failure. */
+            if (error instanceof RuntimeConsumerDeferredError) return recovered;
+            throw error;
+          }
           recovered += 1;
         }
       }
@@ -86,17 +98,38 @@ export class RuntimeHost {
         await this.consume(this.journal.append(projection));
       }
       this.consumerFailures.delete(event.eventId);
+      this.deferredEvents.delete(event.eventId);
       this.journal.markConsumerCompleted(event.eventId, "orchestration");
     } catch (error) {
+      if (error instanceof RuntimeConsumerDeferredError) {
+        if (!this.deferredEvents.has(event.eventId)) {
+          this.deferredEvents.add(event.eventId);
+          console.error(`[runtime consumer] deferred event ${event.eventId} until its write is admitted: ${error.message}`);
+        }
+        this.scheduleDeferredRetry();
+        throw error;
+      }
       const failures = (this.consumerFailures.get(event.eventId) ?? 0) + 1;
       this.consumerFailures.set(event.eventId, failures);
       if (failures >= 3) {
         console.error(`[runtime consumer] quarantined event ${event.eventId} after ${failures} failures`);
         this.journal.markConsumerCompleted(event.eventId, "orchestration");
         this.consumerFailures.delete(event.eventId);
+        this.deferredEvents.delete(event.eventId);
       }
       throw error;
     }
+  }
+
+  /** One pending retry at a time; it replays every owed event in order, so
+      a deferred event lands as soon as the fence that refused it lifts. */
+  private scheduleDeferredRetry(): void {
+    if (this.deferredRetry) return;
+    this.deferredRetry = setTimeout(() => {
+      this.deferredRetry = null;
+      if (this.journal.isWritable()) void this.recoverConsumersBestEffort();
+    }, this.deferredRetryMs);
+    this.deferredRetry.unref?.();
   }
 
   private async recoverConsumersBestEffort(): Promise<void> {

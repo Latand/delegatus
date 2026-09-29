@@ -530,6 +530,7 @@ test("a spawn launcher rides the receipt onto the conversation, and the notice c
     const begun = store.beginSpawnRequest({
       engine: "codex",
       cwd: "/repo",
+      transport: "structured",
       origin: { kind: "operator" },
       launchProfile: { title: "Review the notice lane" },
       launcher: { conversationId: launcher, notify: true },
@@ -541,12 +542,21 @@ test("a spawn launcher rides the receipt onto the conversation, and the notice c
     expect(store.spawnNoticeChild(child)).toEqual({ conversationId: child, launcher: { conversationId: launcher, notify: true }, contained: false });
 
     const optedOut = store.beginSpawnRequest({
-      engine: "codex", cwd: "/repo", origin: { kind: "operator" },
+      engine: "codex", cwd: "/repo", transport: "structured", origin: { kind: "operator" },
       launchProfile: { title: "Quiet helper" },
       launcher: { conversationId: launcher, notify: false },
     });
     if (optedOut.kind !== "created") throw new Error("expected create");
     expect(store.spawnNoticeChild(settleLaunch(store, optedOut.receipt.launchId))?.launcher).toEqual({ conversationId: launcher, notify: false });
+    /* A launch that is not structured never ends a turn in the runtime
+       journal, so it carries none. */
+    const tmux = store.beginSpawnRequest({
+      engine: "codex", cwd: "/repo", transport: "tmux", origin: { kind: "operator" },
+      launchProfile: { title: "Pane helper" },
+      launcher: { conversationId: launcher, notify: true },
+    });
+    if (tmux.kind !== "created") throw new Error("expected create");
+    expect(tmux.receipt.launcher).toBeNull();
     /* A launch nobody attributed carries none. */
     expect(store.spawnNoticeChild(launcher)?.launcher).toBeNull();
     expect(store.spawnNoticeChild("conversation_nobody")).toBeNull();
