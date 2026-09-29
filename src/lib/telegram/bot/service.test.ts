@@ -636,6 +636,33 @@ test("a credential assigned a plain word is caught; prose, placeholders and refe
   ]) expect([prose, documentSecret(prose)]).toEqual([prose, null]);
 });
 
+test(".env keys that go on past their keyword and URL userinfo are caught; describing keys and placeholders are not", () => {
+  /* Word values assembled at runtime, as above. */
+  const word = ["sword", "fish"].join("");
+  const secretKey = ["SECRET", "_KEY"].join("");
+  expect(documentSecret(`DEBUG=1\n${secretKey}=abcdefghij${word}\n`)).toEqual({ secretClass: "credential_assignment", line: 2 });
+  expect(documentSecret(`DJANGO_${secretKey}=k9f2m3n4b5v6c7x8z9${word}`)).toEqual({ secretClass: "credential_assignment", line: 1 });
+  const url = `postgres://app:${word}Zq81${"@"}db.internal:5432/app`;
+  expect(documentSecret(`# db\nDATABASE_URL=${url}\n`)).toEqual({ secretClass: "url_credentials", line: 2 });
+  expect(documentSecret(`see ${["https", "://bot:", word, "@example.test/hook"].join("")} for the hook`)).toMatchObject({ secretClass: "url_credentials" });
+  for (const prose of [
+    `TOKEN_TYPE=bearer`,
+    `${PASSWORD}_policy: strict`,
+    `${PASSWORD}_reset_url: https://example.test/reset`,
+    `${secretKey}_NAME=application`,
+    "token_count: 123456",
+    "tokens: many",
+    `${secretKey}=\${DJANGO_KEY}`,
+    `${secretKey}: <generate one>`,
+    `DB_URL=${["postgres", "://app:", "${DB_PASS}", "@db/app"].join("")}`,
+    `DB_URL=${["postgres", "://app:", "<", PASSWORD, ">", "@db/app"].join("")}`,
+    `DB_URL=${["postgres", "://app:", "****", "@db/app"].join("")}`,
+    `DB_URL=${["postgres", "://postgres:", "postgres", "@localhost/app"].join("")}`,
+    `DB_URL=${["postgres", "://app:", PASSWORD, "@localhost/app"].join("")}`,
+    ["ssh://git", "@example.test:22/repo.git"].join(""),
+  ]) expect([prose, documentSecret(prose)]).toEqual([prose, null]);
+});
+
 test("a text document carrying a secret is refused with its class, never its value", async () => {
   await allowedTeam();
   const cases: Array<[string, string]> = [
@@ -703,6 +730,23 @@ test("20 MB of prose lines after a credential keyword scan in linear time", () =
     expect([assignment, documentSecret(assignment)]).toEqual([assignment, { secretClass: "credential_assignment", line: 1 }]);
   }
 }, 30_000);
+
+/* Each of these once let one pattern restart at every offset of a run and
+   read to its end: `(^|\n)\s*` at each newline of a blank run, `\beyJ` after
+   each `-`, and a keyword line's rest copied once per keyword on it. */
+for (const [shape, unit] of [
+  ["blank lines", "\n"],
+  ["CRLF blank lines", "\r\n"],
+  ["an `eyJ-` run", "eyJ-"],
+  ["one line of keyword prose", `${PASSWORD}: vault is `],
+] as const) {
+  test(`20 MB of ${shape} scans in linear time`, () => {
+    const bytes = Buffer.from(unit.repeat(Math.ceil(SCAN_MB / unit.length)));
+    const started = performance.now();
+    expect(documentBytesSecret(bytes)).toBeNull();
+    expect(performance.now() - started).toBeLessThan(SCAN_BOUND_MS);
+  }, 30_000);
+}
 
 test("a refused document leaves its key free: the corrected file sends under the same clientRequestId", async () => {
   await allowedTeam();

@@ -2,14 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { redactKnownProviderSecrets } from "@/lib/accounts/providerSecretRedaction";
-import { SECRET_VALUE_RE } from "@/lib/review";
-import {
-  AUTHORIZATION_HEADER,
-  BEARER_TOKEN,
-  COOKIE_HEADER,
-  JWT_PATTERN,
-  TOKEN_FAMILY_PATTERN,
-} from "@/lib/view/compactText";
+import { BEARER_TOKEN, TOKEN_FAMILY_PATTERN } from "@/lib/view/compactText";
 
 import {
   DOCUMENT_CAPTION_MAX_CHARS,
@@ -142,11 +135,34 @@ export function normalizeDocumentRoots(value: unknown, environment: DocumentEnvi
   return roots;
 }
 
-/* The redactor's assignment pattern, anchored where a key can start. Its key
-   opens with `[\w.-]*`, which the engine retries at every offset of a word
-   run, so a megabyte of base64 took minutes on the request that scanned it;
-   the lookbehind lets only the run's first character start a match. */
-const ASSIGNMENT = new RegExp(`(?<![\\w.-])${SECRET_VALUE_RE.source}`, SECRET_VALUE_RE.flags);
+/* The scan runs synchronously in the request that sends the file, so every
+   pattern here must stay linear at the 20 MB limit. The redactor's patterns
+   are reshaped here where a match could start at every offset of a run and
+   read to its end, which is quadratic.
+
+   An assignment's key is the whole `[\w.-]` run before `:`/`=`, taken
+   atomically (a lookahead's capture is never backtracked into), only where a
+   run starts, and at most 128 characters, since a longer run is data. It
+   must end with a credential keyword or go on past one after `_`/`-`
+   (`SECRET_KEY`); read backwards, that costs one step per character of the
+   key. `credentialKey` then sorts the keys that matched. */
+const ASSIGNMENT = new RegExp(
+  String.raw`(?<![\w.-])(?=([\w.-]{1,128}))\1(?![\w.-])(?=\s*[:=])` +
+    String.raw`(?<=(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|bearer|secret|password|passwd|pwd|token)(?:[_-][\w-]*)?)` +
+    String.raw`(\s*[:=]\s*)(["']?)[^\s"',}]+`,
+  "gi",
+);
+/* A header never spans lines, so it is read per line; `(^|\n)\s*` let each
+   newline of a blank run rescan the rest of the run. */
+const AUTHORIZATION_LINE = /^[ \t]*(?:proxy-)?authorization[ \t]*:[^\r\n]*/gim;
+const COOKIE_LINE = /^[ \t]*(?:set-)?cookie[ \t]*:[^\r\n]*/gim;
+/* `\b` holds after every `-` of a run such as `eyJ-eyJ-…`, and each of those
+   starts read to the run's end; a JWT starts where its run starts. */
+const JWT = /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g;
+/* The userinfo of a URL, a user and a password before the host, as a
+   `DATABASE_URL` carries it. A password holds no `/`, and every scheme does,
+   so each start reads at most to the next one. */
+const URL_USERINFO = /(?<![a-z0-9+.-])[a-z][a-z0-9+.-]*:\/\/([^\s:/@]+):([^\s@/]{4,})@/gi;
 
 /** What a text file carries that must not reach a chat, by class, with the
     line it starts on. Null when nothing matched. */
@@ -157,7 +173,7 @@ export function documentSecret(text: string): { secretClass: string; line: numbe
   const first = (pattern: RegExp, secretClass: string, accept: (match: RegExpExecArray) => boolean = () => true, subject = text) => {
     const scan = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`);
     for (let match = scan.exec(subject); match; match = scan.exec(subject)) {
-      if (accept(match)) return { secretClass, line: subject.slice(0, match.index + (match[1]?.length ?? 0)).split("\n").length };
+      if (accept(match)) return { secretClass, line: subject.slice(0, match.index).split("\n").length };
       if (match[0] === "") scan.lastIndex += 1;
     }
     return null;
@@ -167,16 +183,26 @@ export function documentSecret(text: string): { secretClass: string; line: numbe
   const found = first(/-----BEGIN [A-Z ]*PRIVATE KEY-----/, "private_key")
     ?? first(TOKEN_FAMILY_PATTERN, "api_token")
     ?? first(/\b\d{5,20}:[A-Za-z0-9_-]{30,64}\b/, "bot_token")
-    ?? first(JWT_PATTERN, "jwt")
+    ?? first(JWT, "jwt")
     ?? first(BEARER_TOKEN, "bearer_token")
-    ?? first(AUTHORIZATION_HEADER, "authorization_header", (match) => credentialShaped(match[0].slice(match[0].indexOf(":") + 1)))
-    ?? first(COOKIE_HEADER, "cookie_header", (match) => match[0].slice(match[0].indexOf(":") + 1).trim().length >= 8)
+    ?? first(AUTHORIZATION_LINE, "authorization_header", (match) => credentialShaped(match[0].slice(match[0].indexOf(":") + 1)))
+    ?? first(COOKIE_LINE, "cookie_header", (match) => match[0].slice(match[0].indexOf(":") + 1).trim().length >= 8)
+    ?? first(URL_USERINFO, "url_credentials", (match) => urlPassword(match[1]!, match[2]!))
     ?? first(ASSIGNMENT, "credential_assignment", (match) => assignedCredential(match, unquotedKeys), unquotedKeys);
   if (found) return found;
   let scrubbed: string;
   try { scrubbed = redactKnownProviderSecrets(text); } catch { scrubbed = ""; }
   if (scrubbed !== text) return { secretClass: "provider_credential", line: firstDifferentLine(text, scrubbed) };
   return null;
+}
+
+/* Passwords a connection string in a README or a compose file stands in with. */
+const URL_PLACEHOLDERS = new Set(["password", "pass", "passwd", "pwd", "secret", "changeme"]);
+
+function urlPassword(user: string, password: string): boolean {
+  if (/^[[<{$*%]/.test(password) || /^x+$/i.test(password)) return false;
+  const lower = password.toLowerCase();
+  return lower !== user.toLowerCase() && !URL_PLACEHOLDERS.has(lower) && !NOT_A_CREDENTIAL.has(lower);
 }
 
 /**
@@ -202,31 +228,70 @@ const NOT_A_CREDENTIAL = new Set([
   "placeholder",
 ]);
 
+/* A key may go on past its keyword (`SECRET_KEY`, `DJANGO_SECRET_KEY`,
+   `DB_PASSWORD_B64`), but not when what follows says the value is about the
+   credential rather than the credential itself (`TOKEN_URL`, `PASSWORD_POLICY`). */
+const KEY_ENDS_WITH_KEYWORD = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|bearer|secret|password|passwd|pwd|token)$/i;
+const KEY_GOES_ON = /(?:secret|password|passwd|pwd|token|api[_-]?key)[_-][\w-]*$/i;
+const SECRET_NAMING_KEY = /secret|password|passwd|pwd|api[_-]?key/i;
+const DESCRIBING_SUFFIX = new Set([
+  "name", "names", "file", "path", "dir", "url", "uri", "endpoint", "host", "port", "type", "kind",
+  "policy", "hint", "length", "len", "count", "limit", "ttl", "expiry", "expires", "expiration",
+  "timeout", "id", "arn", "ref", "env", "var", "field", "header", "prefix", "suffix", "mode", "format",
+  "version", "rotation", "provider", "backend", "store", "manager", "label", "description", "enabled",
+  "required", "min", "max", "size", "algorithm", "scheme", "location",
+]);
+
 /**
- * `SECRET_VALUE_RE` matched `key: value`. A value shaped like a credential
- * (letters and digits) is one wherever it stands. A bare word counts too, as
- * the redactor's own pattern does (`password: hunter`, `secret=swordfish`),
- * unless the key is only `token`/`authorization`/`bearer`, which prose uses
- * loosely, or the word is a placeholder, a reference to a variable or a path.
- * The word must stand where a value stands, at the end of its line or before
- * the next assignment, so prose such as `Password: reset by the operator`
- * reads as prose.
+ * How a key names a credential: `named` ends with a credential keyword;
+ * `continued` goes on past `secret`/`password`/`api_key` into a suffix that
+ * does not describe it; `loose` is a key prose and configuration use for
+ * things other than a secret (`token`, `authorization`, `bearer`, `TOKEN_TYPE`,
+ * `PASSWORD_POLICY`), where only a credential-shaped value counts.
+ */
+function credentialKey(key: string): "named" | "continued" | "loose" | null {
+  if (KEY_ENDS_WITH_KEYWORD.test(key)) return /^(?:token|authorization|bearer)$/i.test(key) ? "loose" : "named";
+  if (!KEY_GOES_ON.test(key)) return null;
+  const suffix = key.split(/[_-]/).pop()!.toLowerCase();
+  return DESCRIBING_SUFFIX.has(suffix) || !SECRET_NAMING_KEY.test(key) ? "loose" : "continued";
+}
+
+/* Read at the end of a value, in place: the rest of its line holds nothing
+   but closing punctuation, or the next assignment on it starts. */
+const LINE_ENDS = /(?:[`"'.,;:!?)\]}]|[^\S\n])*(?:\n|$)/y;
+const NEXT_ASSIGNMENT = /[`"']?(?:[,;&]|[^\S\n])+[\w.-]+[^\S\n]*[:=]/y;
+
+/**
+ * `ASSIGNMENT` matched `key: value` under a credential key. A value shaped
+ * like a credential (letters and digits) is one wherever it stands. A bare
+ * word counts too, as the redactor's own pattern does (`password: hunter`,
+ * `secret=swordfish`), unless the key is `loose`, or the word is a
+ * placeholder, a reference to a variable, a path or a URL. The word must
+ * stand where a value stands, at the end of its line or before the next
+ * assignment, so prose such as `Password: reset by the operator` reads as
+ * prose. A key that goes on past its keyword needs a longer word.
  */
 function assignedCredential(match: RegExpExecArray, subject: string): boolean {
   const key = match[1]!;
+  const kind = credentialKey(key);
+  if (kind === null) return false;
   const raw = match[0].slice(key.length + match[2]!.length + match[3]!.length);
   if (credentialShaped(raw)) return true;
-  if (/^(?:token|authorization|bearer)$/i.test(key)) return false;
+  if (kind === "loose") return false;
   const value = /^`?([^&;`]*)/.exec(raw)![1]!.replace(/[.,:;!?)\]]+$/, "");
-  if (value.length < 4) return false;
-  /* Only to the end of this line: the rest of a 20 MB file, copied and split
-     once per keyword line, made the scan quadratic. Checked first because
-     most keyword lines are prose and fail it. */
+  if (value.length < (kind === "continued" ? 8 : 4)) return false;
+  /* Read from the subject in place, and no further than the next assignment
+     needs: the rest of a long line, copied once per keyword on it, made the
+     scan quadratic. Checked first because most keyword lines are prose. */
   const end = match.index + match[0].length;
-  const lineEnd = subject.indexOf("\n", end);
-  const after = raw.slice(raw.indexOf(value) + value.length) + subject.slice(end, lineEnd === -1 ? subject.length : lineEnd);
-  if (!/^[`"'.,;:!?)\]}\s]*$/.test(after) && !/^[`"']?[\s,;&]+[\w.-]+\s*[:=]/.test(after)) return false;
-  if (/^[[<{$*%/~]/.test(value) || /^x+$/i.test(value)) return false;
+  const tail = raw.slice(raw.indexOf(value) + value.length);
+  LINE_ENDS.lastIndex = end;
+  NEXT_ASSIGNMENT.lastIndex = end;
+  const standsAlone = /^[`"'.,;:!?)\]}]*$/.test(tail) && LINE_ENDS.test(subject);
+  if (!standsAlone && !(tail === ""
+    ? NEXT_ASSIGNMENT.test(subject)
+    : /^[`"']?[\s,;&]+[\w.-]+\s*[:=]/.test(tail + subject.slice(end, end + 256).split("\n", 1)[0]))) return false;
+  if (/^[[<{$*%/~]/.test(value) || /^x+$/i.test(value) || value.includes("://")) return false;
   if (NOT_A_CREDENTIAL.has(value.toLowerCase()) || /^\d{1,5}$/.test(value)) return false;
   /* `process.env.KEY`, `config.secret`, `YOUR_API_KEY`, `os.environ[…]`. */
   return !(/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$/.test(value) || /^[A-Z0-9]+(?:_[A-Z0-9]+)+$/.test(value) || /[([]/.test(value));
