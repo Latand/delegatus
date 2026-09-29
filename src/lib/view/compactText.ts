@@ -21,7 +21,7 @@ const SCAN_BYTES = 1024 * 1024;
  * file failed the gate on the line that exists to defend against exactly what
  * it was being accused of carrying.
  */
-const TOKEN_FAMILY_PATTERN = new RegExp(String.raw`\b(?:` + [
+export const TOKEN_FAMILY_PATTERN = new RegExp(String.raw`\b(?:` + [
   String.raw`sk-[A-Za-z0-9_-]{12,}`,
   String.raw`sk-ant-[A-Za-z0-9_-]{12,}`,
   String.raw`gh[pousr]_[A-Za-z0-9_]{20,}`,
@@ -32,6 +32,17 @@ const TOKEN_FAMILY_PATTERN = new RegExp(String.raw`\b(?:` + [
   String.raw`ASIA[0-9A-Z]{16}`,
   String.raw`AIza[0-9A-Za-z_-]{35}`,
 ].join("|") + String.raw`)\b`, "g");
+
+/** An armored private key, whole. */
+export const PRIVATE_KEY_BLOCK = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g;
+/** A signed JSON Web Token: three base64url segments after `eyJ`. */
+export const JWT_PATTERN = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g;
+/** The credential after `Bearer `. */
+export const BEARER_TOKEN = /(?<=Bearer\s)[A-Za-z0-9._-]{12,}/gi;
+/** An `Authorization:` or `Proxy-Authorization:` header line. */
+export const AUTHORIZATION_HEADER = /(^|\n)(\s*(?:proxy-)?authorization\s*:\s*)[^\r\n]*/gi;
+/** A `Cookie:` or `Set-Cookie:` header line. */
+export const COOKIE_HEADER = /(^|\n)(\s*(?:set-)?cookie\s*:\s*)[^\r\n]*/gi;
 
 export function hardenedRedact(text: string): string {
   // Claude can retain old provider error prose after a token is rotated or
@@ -47,12 +58,12 @@ export function hardenedRedact(text: string): string {
     }).join("\n")
     : text;
   return redactKnownProviderSecrets(redactSecrets(withoutClaudeDiagnostics))
-    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "[redacted]")
-    .replace(/(^|\n)(\s*(?:proxy-)?authorization\s*:\s*)[^\r\n]*/gi, "$1$2[redacted]")
-    .replace(/(^|\n)(\s*(?:set-)?cookie\s*:\s*)[^\r\n]*/gi, "$1$2[redacted]")
+    .replace(PRIVATE_KEY_BLOCK, "[redacted]")
+    .replace(AUTHORIZATION_HEADER, "$1$2[redacted]")
+    .replace(COOKIE_HEADER, "$1$2[redacted]")
     .replace(TOKEN_FAMILY_PATTERN, "[redacted]")
-    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, "[redacted]")
-    .replace(/(?<=Bearer\s)[A-Za-z0-9._-]{12,}/gi, "[redacted]");
+    .replace(JWT_PATTERN, "[redacted]")
+    .replace(BEARER_TOKEN, "[redacted]");
 }
 
 type CompactMessage = { role: "user" | "assistant"; at: string | null; text: string };

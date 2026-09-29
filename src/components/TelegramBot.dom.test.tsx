@@ -59,14 +59,16 @@ const CHATS = [
  * Mounts the section the way the hook drives it: a save marks the section
  * busy at once, which disables its controls, exactly as `act()` does.
  */
-async function mount(): Promise<{ saves: Array<[string, string, boolean]>; section: HTMLElement }> {
+async function mount(documents: TelegramBotStatusPayload["documents"] = { roots: ["/fixture-home/handoff"], custom: false }): Promise<{ saves: Array<[string, string, boolean]>; rootSaves: string[][]; section: HTMLElement }> {
   const saves: Array<[string, string, boolean]> = [];
+  const rootSaves: string[][] = [];
   const status: TelegramBotStatusPayload = {
     ...DISCONNECTED_BOT_STATUS,
     connected: true,
     bot: { name: "Report Bot", username: "report_test_bot", canReadAllGroupMessages: false, canJoinGroups: true },
     receiving: "polling",
     chats: CHATS,
+    documents,
   };
   const render = (busy: boolean) => root!.render(<TelegramBotSection state={stateFor(busy)} />);
   const stateFor = (busy: boolean): TelegramBotState => ({
@@ -81,13 +83,17 @@ async function mount(): Promise<{ saves: Array<[string, string, boolean]>; secti
     },
     addChat: async () => null,
     testPost: async () => false,
+    setDocumentRoots: async (roots) => {
+      rootSaves.push(roots);
+      return true;
+    },
     remove: async () => {},
   });
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
   await act(async () => render(false));
-  return { saves, section: container };
+  return { saves, rootSaves, section: container };
 }
 
 const switchFor = (section: HTMLElement, title: string) =>
@@ -97,7 +103,7 @@ const fieldFor = (section: HTMLElement, title: string) =>
 
 /* React's own onChange for the controlled field: order-independent across
    test files, unlike a dispatched input event. */
-async function type(input: HTMLInputElement, value: string): Promise<void> {
+async function type(input: HTMLInputElement | HTMLTextAreaElement, value: string): Promise<void> {
   const propsKey = Object.keys(input).find((key) => key.startsWith("__reactProps$"))!;
   const props = (input as unknown as Record<string, { onChange(event: unknown): void }>)[propsKey]!;
   await act(async () => props.onChange({ target: { value } }));
@@ -154,4 +160,52 @@ test("a rename that leaves the field for anywhere else saves on blur, still allo
     input.dispatchEvent(new dom.FocusEvent("focusout", { bubbles: true }) as unknown as Event);
   });
   expect(saves).toEqual([["-1000000000101", "team-weekly", true]]);
+});
+
+test("document folders: the default shows as a hint, and a save sends one trimmed path per line", async () => {
+  const { rootSaves, section } = await mount();
+  const field = section.querySelector<HTMLTextAreaElement>("[data-telegram-document-roots-input]")!;
+  const save = section.querySelector<HTMLButtonElement>("[data-telegram-document-roots-save]")!;
+  expect(field.value).toBe("");
+  expect(field.placeholder).toBe("/fixture-home/handoff");
+  expect(section.textContent).toContain("Using the default folder.");
+  expect(save.disabled).toBe(true);
+  await type(field, "  /fixture-home/handoff \n\n/fixture-home/reports\n");
+  expect(save.disabled).toBe(false);
+  await act(async () => save.click());
+  expect(rootSaves).toEqual([["/fixture-home/handoff", "/fixture-home/reports"]]);
+});
+
+test("document folders: operator roots fill the field, and emptying it returns to the default", async () => {
+  const { rootSaves, section } = await mount({ roots: ["/fixture-home/reports"], custom: true });
+  const field = section.querySelector<HTMLTextAreaElement>("[data-telegram-document-roots-input]")!;
+  expect(field.value).toBe("/fixture-home/reports");
+  expect(section.textContent).not.toContain("Using the default folder.");
+  await type(field, "");
+  await act(async () => section.querySelector<HTMLButtonElement>("[data-telegram-document-roots-save]")!.click());
+  expect(rootSaves).toEqual([[]]);
+});
+
+test("document folders: the field shows every root, a wrapped one included, instead of a fixed two rows", async () => {
+  const roots = ["/fixture-home/handoff", "/fixture-home/reports/weekly-summaries-for-the-team", "/fixture-home/exports"];
+  const { section } = await mount({ roots, custom: true });
+  const field = section.querySelector<HTMLTextAreaElement>("[data-telegram-document-roots-input]")!;
+  /* Without layout, one row per root. */
+  expect(field.getAttribute("rows")).toBe("3");
+  await type(field, `${roots.join("\n")}\n/fixture-home/drafts`);
+  expect(field.getAttribute("rows")).toBe("4");
+
+  /* With layout, the height follows the content, so a root that wraps at
+     390 px keeps the next one in view. The DOM reports the wrapped height. */
+  const prototype = dom.HTMLTextAreaElement.prototype as unknown as HTMLTextAreaElement;
+  const scrollHeight = Object.getOwnPropertyDescriptor(prototype, "scrollHeight");
+  Object.defineProperty(prototype, "scrollHeight", { configurable: true, get() { return 6 * 15; } });
+  try {
+    await type(field, roots.join("\n"));
+    expect(field.style.height).toBe("90px");
+  } finally {
+    if (scrollHeight) Object.defineProperty(prototype, "scrollHeight", scrollHeight);
+    else delete (prototype as unknown as Record<string, unknown>).scrollHeight;
+  }
+  expect(field.className).not.toContain("resize-y");
 });

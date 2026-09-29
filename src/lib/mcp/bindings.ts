@@ -590,6 +590,7 @@ async function dispatchViewerControl(
       ...(typeof result.expectedRevision === "number" || result.expectedRevision === null ? { expectedRevision: result.expectedRevision } : {}),
       ...(typeof result.retryAfterSeconds === "number" ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
       ...(Array.isArray(result.sentMessageIds) && result.sentMessageIds.every((id) => typeof id === "number") ? { sentMessageIds: result.sentMessageIds } : {}),
+      ...(text(result.secretClass) ? { secretClass: text(result.secretClass) } : {}),
     });
   }
   return result;
@@ -3940,6 +3941,34 @@ async function telegramBotSendMedia(args: McpToolArgs, control: ViewerControlDep
   return redactPayload(result);
 }
 
+/** The route checks the file on the Viewer host (roots, type, size, secret
+    scan) before Telegram is called; a secret refusal names its class. */
+async function telegramBotSendDocument(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
+  const result = await dispatchControl(control)("/api/telegram/bot/agent", {
+    op: "send_document",
+    clientRequestId: requestId(args),
+    chat: required(args, "chat"),
+    document: args.document,
+    ...(args.format === "html" || args.format === "plain" ? { format: args.format } : {}),
+    ...(typeof args.replyToMessageId === "number" ? { replyToMessageId: args.replyToMessageId } : {}),
+    ...(typeof args.topicId === "number" ? { topicId: args.topicId } : {}),
+    ...(args.silent === true ? { silent: true } : {}),
+  }, callerCapabilityHeaders()).catch((error: unknown) => {
+    if (error instanceof McpDispatchVerdictError && typeof error.details.code === "string") {
+      const code = error.details.code;
+      const { retryAfterSeconds, secretClass } = error.details;
+      throw new McpToolRefusal(error.message, {
+        code,
+        retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+        ...(typeof retryAfterSeconds === "number" ? { retryAfterSeconds } : {}),
+        ...(typeof secretClass === "string" ? { secretClass } : {}),
+      });
+    }
+    throw error;
+  });
+  return redactPayload(result);
+}
+
 /** create_orchestrator: atomically create, designate and deliver the ONE
     approved versioned default mandate (or the caller's edited text based on
     it). The seat route owns the durable intent, so a retry replays. */
@@ -6182,6 +6211,7 @@ export function viewerMcpBindings(
     telegram_bot_chats: (args, context) => telegramBotChats(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send: (args, context) => telegramBotSend(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_media: (args, context) => telegramBotSendMedia(args, viewerControlForCall(controlDependencies, context)),
+    telegram_bot_send_document: (args, context) => telegramBotSendDocument(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),
   };
 }
