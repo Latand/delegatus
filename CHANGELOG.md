@@ -102,6 +102,11 @@ guarantees for the 1.x series.
   now publishes each accepted fix before the next stage starts, keeps the
   stage waiting if the push fails, and names the reviewed commit when a
   pull request is behind it ([#2335]).
+- **The runtime host lets go of finished connections.** Under the Bun
+  version the Docker image runs, the deployment proxy in front of the web
+  app kept every connection it had already answered, so they piled up and a
+  release handover could wait on them forever. Each connection is now
+  closed once its answer is sent, within a second at most ([#2343]).
 
 ## [1.7.0] — 2026-09-29
 
@@ -1622,3 +1627,4 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2339]: https://github.com/Latand/delegatus/pull/2339
 [#2340]: https://github.com/Latand/delegatus/pull/2340
 [#2342]: https://github.com/Latand/delegatus/pull/2342
+[#2343]: https://github.com/Latand/delegatus/pull/2343
