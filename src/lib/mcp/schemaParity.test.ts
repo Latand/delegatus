@@ -1055,3 +1055,37 @@ test("stage_report's field descriptions match the stage contract", async () => {
     expect(text).toContain("Claim no head, pull request or declared output");
   });
 });
+
+test("telegram_bot_send_document publishes its own schema and the text tool's stays text-only", async () => {
+  const seen: unknown[] = [];
+  await withProtocolClient(inertBindings({
+    telegram_bot_send_document: async (args) => {
+      seen.push(args);
+      return { messageIds: [1] };
+    },
+  }), async (client) => {
+    const listed = await client.listTools();
+    const tool = listed.tools.find((entry) => entry.name === "telegram_bot_send_document")!;
+    expect(tool.inputSchema.required?.slice().sort()).toEqual(["chat", "clientRequestId", "document"]);
+    const properties = tool.inputSchema.properties as Record<string, { type?: string; enum?: string[]; required?: string[]; properties?: Record<string, { type?: string; maxLength?: number }> }>;
+    expect(properties.document?.required).toEqual(["path"]);
+    expect(Object.keys(properties.document?.properties ?? {}).sort()).toEqual(["caption", "filename", "path"]);
+    expect(properties.document?.properties?.caption?.maxLength).toBe(1024);
+    expect(properties.format?.enum).toEqual(["plain", "html"]);
+    for (const option of ["topicId", "replyToMessageId", "silent"]) expect(properties).toHaveProperty(option);
+    expect(tool.description).toContain("document root");
+    expect(tool.description).toContain("allowlisted");
+
+    const text = listed.tools.find((entry) => entry.name === "telegram_bot_send")!;
+    expect(text.inputSchema.properties).not.toHaveProperty("document");
+    expect(text.inputSchema.required?.slice().sort()).toEqual(["chat", "clientRequestId", "text"]);
+
+    const document = { path: "/sandbox/handoff/weekly.md", caption: "Weekly" };
+    const called = await client.callTool({ name: "telegram_bot_send_document", arguments: { clientRequestId: "doc-parity", chat: "team-reports", document } });
+    expect(called.structuredContent).toMatchObject({ ok: true, toolName: "telegram_bot_send_document" });
+    expect(seen).toEqual([expect.objectContaining({ chat: "team-reports", document })]);
+    const rejected = await client.callTool({ name: "telegram_bot_send_document", arguments: { clientRequestId: "doc-parity-long", chat: "team-reports", document: { path: "/sandbox/handoff/weekly.md", caption: "x".repeat(1025) } } });
+    expect(rejected.isError).toBe(true);
+    expect(seen).toHaveLength(1);
+  });
+});

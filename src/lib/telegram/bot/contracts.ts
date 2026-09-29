@@ -45,6 +45,13 @@ export type TelegramBotErrorCode =
   | "text_empty"
   | "text_too_long"
   | "photo_invalid"
+  | "document_invalid"
+  | "document_outside_roots"
+  | "document_forbidden_path"
+  | "document_type"
+  | "document_too_large"
+  | "document_secret"
+  | "document_roots_invalid"
   | "format_invalid"
   | "forbidden"
   | "rate_limited"
@@ -161,6 +168,10 @@ export type TelegramBotStatusPayload = {
   lastUpdateAt: string | null;
   lastCheckedAt: string | null;
   chats: TelegramBotChatView[];
+  /** Where `telegram_bot_send_document` may read files from; `custom` is
+      false while the operator has set none and the default applies. Absent
+      while no bot is connected. */
+  documents?: { roots: string[]; custom: boolean };
   limits: readonly string[];
 };
 
@@ -222,6 +233,8 @@ export type TelegramBotMessageView = {
   replyToMessageId: number | null;
   topicId: number | null;
   sentBy: TelegramBotAttribution | null;
+  /** The name a document the bot posted was shown under. */
+  filename?: string;
 };
 
 export type TelegramBotMessagesAnswer = {
@@ -253,6 +266,14 @@ export type TelegramBotSendAnswer = {
 };
 
 export type TelegramBotMediaInput = { path: string; caption: string };
+
+/** What `telegram_bot_send_document` may post: the lowercase extensions it
+    accepts, its size bound (Telegram allows 50 MB, this keeps a margin) and
+    Telegram's caption limit. */
+export const DOCUMENT_EXTENSIONS = [".md", ".markdown", ".txt", ".log", ".json", ".csv", ".pdf", ".png", ".jpg", ".jpeg", ".html"] as const;
+export const DOCUMENT_MAX_BYTES = 20 * 1024 * 1024;
+export const DOCUMENT_CAPTION_MAX_CHARS = 1024;
+export const DOCUMENT_ROOTS_MAX = 16;
 
 /** Bounds the tools clamp to. */
 export const BOT_MESSAGES_LIMIT = { min: 1, max: 100, fallback: 20 } as const;

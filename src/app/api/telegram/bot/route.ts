@@ -15,7 +15,9 @@ export const dynamic = "force-dynamic";
  * The operator's surface for the Telegram bot account
  * (`docs/design/telegram-bot-account.md`, Decision 7). GET is the panel's
  * status; POST is `connect {token}`, `refresh`, `chat {chatId, alias,
- * postAllowed}`, `add {chat, alias?}`, `test {chat}` and `remove`. `add`
+ * postAllowed}`, `add {chat, alias?}`, `test {chat}`, `documents {roots}`
+ * (where `telegram_bot_send_document` may read files; an empty list returns
+ * to the default) and `remove`. `add`
  * allows a chat named by its id or @username, verified with `getChat`, so a
  * post-only bot (another program owns its updates) can reach a group it never
  * received an update from; `test` is the operator's own silent test post.
@@ -44,7 +46,7 @@ export async function POST(req: NextRequest) {
   if (rejected) return rejected;
   const authority = requireOperatorAuthority(req);
   if (!authority.ok) return NextResponse.json({ error: authority.error, code: "operator_only" }, { status: authority.status });
-  let body: { action?: unknown; token?: unknown; chatId?: unknown; chat?: unknown; alias?: unknown; postAllowed?: unknown };
+  let body: { action?: unknown; token?: unknown; chatId?: unknown; chat?: unknown; alias?: unknown; postAllowed?: unknown; roots?: unknown };
   try { body = await req.json() as typeof body; } catch { return NextResponse.json({ error: "Invalid JSON", code: "invalid_json" }, { status: 400 }); }
   const service = telegramBotService();
   try {
@@ -63,6 +65,8 @@ export async function POST(req: NextRequest) {
         const tested = await service.testPost(body.chat, translate(operatorLocale() ?? "en", "telegram.bot.testPostText"));
         return NextResponse.json({ bot: withReportDestinations(tested.status), tested: { chat: body.chat, sentAt: tested.sentAt } });
       }
+      case "documents":
+        return NextResponse.json({ bot: withReportDestinations(service.setDocumentRoots(body.roots)) });
       case "remove":
         return NextResponse.json({ bot: withReportDestinations(await service.remove()) });
       default:

@@ -515,9 +515,11 @@ The tools, by area:
   `conversation_migration`;
 - **Telegram bot:** `telegram_bot_chats`, `telegram_bot_send` (posts to a
   chat you allowed in the Telegram panel, signed with the calling
-  conversation), `telegram_bot_send_media` (one photo or an album from local
-  image files, with captions), `telegram_bot_messages` (what the bot received,
-  newest first);
+  conversation), `telegram_bot_send_document` (posts a report file from
+  a document folder you set in the Telegram panel, `handoff/` in your
+  home by default, after a type, size and secret check),
+  `telegram_bot_send_media` (a JPEG or PNG photo, or an album, with
+  captions, from the same folders), `telegram_bot_messages` (what the bot received, newest first);
 - **you and the machine:** `operator_snapshot`, `request_attention`,
   `dismiss_attention`, `agent_activity`, `lifecycle_events`, `resources`,
   `deployment_status`, `deploy_exact_sha`.

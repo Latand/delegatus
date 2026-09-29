@@ -60,7 +60,8 @@ const PATH_RE =
 const MARKDOWN_LINK_RE = /\[([^\]]+)\]\(([^)\s]+)\)/;
 const SECRET_KEYWORD_RE =
   /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|bearer|secret|password|passwd|pwd|token)/i;
-const SECRET_VALUE_RE =
+/** `password = …`, `api_key: …` and the like: a credential keyword assigned a value. */
+export const SECRET_VALUE_RE =
   /([\w.-]*(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|bearer|secret|password|passwd|pwd|token))\b(\s*[:=]\s*)(["']?)[^\s"',}]+/gi;
 
 export function redactSecrets(text: string): string {

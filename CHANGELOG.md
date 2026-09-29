@@ -24,10 +24,24 @@ guarantees for the 1.x series.
 - **Agents can send photos and albums to Telegram.** The new
   `telegram_bot_send_media` tool posts one image, or two to ten as one
   album, to a chat you allowed, with a caption for each image. Files must be
-  JPEG or PNG, each up to 10 MB, and are read from an absolute path on the
-  machine that runs Delegatus. Like text messages, the media follows the
+  JPEG or PNG, each up to 10 MB, and are read from the document folders
+  described below. Like text messages, the media follows the
   chat allowlist, is signed with the calling conversation, and a repeated
-  call with the same request id posts nothing twice ([#2327]).
+  call with the same request id posts nothing twice ([#2327], [#2340]).
+- **Agents can send report files to Telegram.** The new
+  `telegram_bot_send_document` tool posts one Markdown, text, log, JSON,
+  CSV, HTML, PDF, PNG or JPEG file, up to 20 MB, to a chat you allowed,
+  with an optional caption. Files are sent only from the document folders
+  you set under **Document folders** in the Telegram panel, `handoff/` in
+  your home by default, and never from a dot-folder or the Delegatus state
+  folder. A text file that holds a password, a token or a provider key is
+  refused before anything is sent. The shown filename may be changed but
+  must keep the file's type, and a repeated call with the same request id
+  posts nothing twice ([#2340]).
+- **GPT-6.1-Sol is a selectable Codex model.** It appears in the model
+  menus right after GPT-6-Astra, takes images, and offers the same effort
+  levels as GPT-6-Sol, from low to ultra. No default or role preset
+  changes ([#2342]).
 - **The owner sees every member's activity.** On the **Activity** page the
   owner, or the operator of a single-person install, can filter by member
   or choose **All members**, which adds a per-member breakdown of report
@@ -36,7 +50,6 @@ guarantees for the 1.x series.
   whose hours live only on a linked machine reads "Not covered" instead of
   zero. A member who opens a link that names someone else lands on their own
   figures ([#2337]).
-
 - **A launched agent tells you when it finishes a turn.** When an agent
   started through `spawn_agent` ends a turn, the conversation that launched
   it gets one short notice, once per outcome, and it still arrives if the
@@ -1607,3 +1620,5 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2336]: https://github.com/Latand/delegatus/pull/2336
 [#2337]: https://github.com/Latand/delegatus/pull/2337
 [#2339]: https://github.com/Latand/delegatus/pull/2339
+[#2340]: https://github.com/Latand/delegatus/pull/2340
+[#2342]: https://github.com/Latand/delegatus/pull/2342

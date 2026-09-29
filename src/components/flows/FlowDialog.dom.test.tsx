@@ -10,7 +10,7 @@ Object.assign(globalThis, { window: dom, document: dom.document, navigator: dom.
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; document.body.replaceChildren(); });
 
-test.each(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-luna"])("manual flow role offers %s supported tiers", async (model) => {
+test.each(["gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-luna"])("manual flow role offers %s supported tiers", async (model) => {
   const role = { engine: "codex", model, effort: "max" };
   globalThis.fetch = (async () => ({ json: async () => ({ presets: [{ name: "saved", implementer: role, reviewer: role }] }) })) as unknown as typeof fetch;
   const host = document.createElement("div");

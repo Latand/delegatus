@@ -27,6 +27,9 @@ export type TelegramBotState = {
   addChat(chat: string, alias?: string): Promise<string | null>;
   /** The operator's silent test post; true once Telegram accepted it. */
   testPost(chat: string): Promise<boolean>;
+  /** The folders `telegram_bot_send_document` may read from; an empty list
+      returns to the default. True once the server stored them. */
+  setDocumentRoots(roots: string[]): Promise<boolean>;
   remove(): Promise<void>;
 };
 
@@ -101,6 +104,7 @@ export function useTelegramBot(enabled: boolean): TelegramBotState {
       return typeof added?.chat === "string" ? added.chat : null;
     },
     testPost: async (chat) => (await act({ action: "test", chat })) !== null,
+    setDocumentRoots: async (roots) => (await act({ action: "documents", roots })) !== null,
     remove: async () => { await act({ action: "remove" }); },
   };
 }

@@ -19,7 +19,7 @@ const MODEL_SIZE: readonly (readonly [RegExp, 1 | 2 | 3])[] = [
   [/^gpt-5\.6-terra\b/, 2],
   [/^(?:claude-)?(opus|fable)\b/, 3],
   [/^gpt-5\.6-sol\b/, 3],
-  [/^gpt-6-(astra|sol)\b/, 3],
+  [/^gpt-6(?:\.1)?-(astra|sol)\b/, 3],
 ];
 
 /** Size class of a catalogued model; an uncatalogued one counts as large. */
