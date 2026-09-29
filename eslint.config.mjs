@@ -1,10 +1,12 @@
 import { defineConfig, globalIgnores } from "eslint/config";
+import { fixupConfigRules } from "@eslint/compat";
 import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
 
 const eslintConfig = defineConfig([
-  ...nextVitals,
-  ...nextTs,
+  // Next's React plugin still uses rule-context APIs removed by ESLint 10.
+  // Adapt those APIs while retaining every configured rule.
+  ...fixupConfigRules([...nextVitals, ...nextTs]),
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:

@@ -15,7 +15,9 @@ import { Database } from "bun:sqlite";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { AgentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, normalizeRegistry } from "@/lib/agent/registry";
+import { defaultRegistrySqliteFilename } from "@/lib/agent/registryBackendIdentity";
+import { SqliteAgentRegistryStore } from "@/lib/agent/sqliteRegistryStore";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { createFeedSession } from "@/components/feed/parse";
 import { FeedItem } from "@/components/feed/FeedItem";
@@ -76,7 +78,7 @@ function isolatedEnvironment(sandbox: string, extra: Record<string, string> = {}
  */
 function identifiedEnvironment(sandbox: string, extra: Record<string, string> = {}): Record<string, string> {
   const environment = isolatedEnvironment(sandbox, extra);
-  const registry = new AgentRegistry(path.join(environment.LLV_STATE_DIR!, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const registry = new AgentRegistry(path.join(environment.LLV_STATE_DIR!, "agent-registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
   const caller = registry.beginSpawn("codex", sandbox, { cwd: sandbox, title: "Packaged MCP caller" });
   return { ...environment, LLV_SPAWN_CAPABILITY: registry.rotateSpawnCapabilityForReceipt(caller.launchId) };
 }
@@ -154,7 +156,14 @@ test("store reads stay independent of a slow host, held pipeline lease and same-
   let httpStarted!: () => void;
   const started = new Promise<void>(resolve => { httpStarted = resolve; });
   const { UnixRuntimeHostClient } = await import("@/lib/runtime/client");
-  const http = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch() {
+  const httpPaths: string[] = [];
+  const http = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const pathname = new URL(request.url).pathname;
+    httpPaths.push(pathname);
+    // Closing now schedules teardown (#670); a controller wake is independent
+    // of the slow search read and must not trigger another fixture snapshot.
+    if (pathname === "/api/pipelines/tick") return Response.json({ ok: true });
+    if (pathname !== "/api/search/transcripts") return new Response("unexpected fixture route", { status: 404 });
     httpStarted();
     await new UnixRuntimeHostClient(socketPath).snapshot();
     return Response.json({ items: [], total: 0, nextCursor: null });
@@ -208,6 +217,7 @@ test("store reads stay independent of a slow host, held pipeline lease and same-
     for (const result of await Promise.all(closes)) expect(result.structuredContent).toMatchObject({ ok: true });
     await slow;
     expect(methods).toEqual(["snapshot"]);
+    expect(httpPaths.filter(pathname => pathname !== "/api/pipelines/tick")).toEqual(["/api/search/transcripts"]);
     const lines = session.stderr().split("\n").filter(line => line.startsWith("[mcp slow]"));
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatch(/tool=search_transcripts callerMs=\d+ httpMs=\d+/);
@@ -475,7 +485,8 @@ async function causalFixture(prefix: string): Promise<CausalFixture> {
   const controlPath = path.join(sandbox, "control.json");
   fs.writeFileSync(controlPath, JSON.stringify({ mode: "respond" }));
 
-  const registry = new AgentRegistry(path.join(state, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+  // #1870: parent and restarted children share the authoritative SQLite store.
+  const registry = new AgentRegistry(path.join(state, "agent-registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
   const transcriptPath = path.join(transcriptRoot, "recipient.jsonl");
   fs.writeFileSync(transcriptPath, "{}\n");
   registry.reconcileConversations([{
@@ -608,6 +619,34 @@ function spawnArguments(fixture: CausalFixture, clientRequestId: string, extra: 
 async function call(session: McpSession, name: "send_message" | "spawn_agent", args: Record<string, unknown>) {
   const result = await session.client.callTool({ name, arguments: args });
   return result.structuredContent as Record<string, unknown> & { details?: Record<string, unknown> };
+}
+
+/** Erase just this fixture's downstream evidence while keeping caller authority
+    and the independent MCP receipt. JSON is a rollback mirror since #1870. */
+function removeDownstreamEvidence(fixture: CausalFixture, tool: "send_message" | "spawn_agent", effect: Record<string, unknown>): void {
+  const store = new SqliteAgentRegistryStore(defaultRegistrySqliteFilename(path.join(fixture.state, "agent-registry.json")), {
+    initialSnapshot: () => fixture.registryFile(),
+    normalize: normalizeRegistry,
+  });
+  try {
+    store.mutate(registry => {
+      if (tool === "send_message") {
+        const operationId = String(effect.operationId);
+        for (const [id, delivery] of Object.entries(registry.heldDeliveries)) {
+          if (delivery.command.operationId === operationId) delete registry.heldDeliveries[id];
+        }
+        delete registry.deliveryOperationOwners[operationId];
+      } else delete registry.receipts[String(effect.launchId)];
+    });
+  } finally {
+    store.close();
+  }
+  const snapshot = fixture.registryFile();
+  if (tool === "send_message") {
+    expect(Object.values(snapshot.heldDeliveries).some(delivery => delivery.command.operationId === effect.operationId)).toBe(false);
+    expect(snapshot.deliveryOperationOwners[String(effect.operationId)]).toBeUndefined();
+  } else expect(snapshot.receipts[String(effect.launchId)]).toBeUndefined();
+  expect(snapshot.receipts).not.toEqual({});
 }
 
 test("send: acceptance, lost response, original-key recovery — one recipient delivery, across process restart", async () => {
@@ -900,7 +939,7 @@ test("send: admitted, response lost BEFORE the recipient acts, original-key reco
        response is cut after its status line, and the recipient has NOT yet
        taken anything: two barriers, admission and execution, and the loss
        happens between them. */
-    fixture.control({ mode: "cut", sendEffect: "deliver", admission: "hold-effect" });
+    fixture.control({ mode: "cut", sendEffect: "deliver", admission: "hold-effect", sendSettlementDelayMs: 150 });
     const original = call(mcp, "send_message", sendArguments(fixture, "send-barrier-1"));
     await fixture.marker("admitted");
     await fixture.marker("accepted");
@@ -924,11 +963,9 @@ test("send: admitted, response lost BEFORE the recipient acts, original-key reco
 
     /* Execution is released: the recipient takes the admitted send once. */
     fixture.execute();
-    const deadline = Date.now() + 10_000;
-    while (fixture.effects().length === 0) {
-      if (Date.now() > deadline) throw new Error("the admitted send never executed");
-      await Bun.sleep(5);
-    }
+    // The effect log precedes settlement. Wait for the committed outcome,
+    // which the fixture deliberately delays to expose that ordering.
+    await fixture.marker(`settled-${operationId}`);
     const recovered = await call(mcp, "send_message", sendArguments(fixture, "send-barrier-1", { recoveryOnly: true }));
     expect(recovered).toMatchObject({ ok: true, outcome: "settled", operationId, state: "delivered", resend: "not-needed", nextAction: "follow-disposition" });
 
@@ -1143,7 +1180,8 @@ for (const tool of ["send_message", "spawn_agent"] as const) {
         for (const lostJson of [false, true]) {
           const key = `proxy-${status}-${lostJson}`;
           const args = tool === "send_message" ? sendArguments(fixture, key) : spawnArguments(fixture, key);
-          fixture.control({ lostStatus: status, lostJson });
+          // Force the deferred writer ordering that formerly raced the proxy.
+          fixture.control({ lostStatus: status, lostJson, ...(tool === "spawn_agent" ? { spawnEffectDelayMs: 150 } : {}) });
           const before = fixture.effects().length;
           const result = await call(mcp, tool, args);
           expect(fixture.effects()).toHaveLength(before + 1);
@@ -1358,13 +1396,7 @@ for (const tool of ["send_message", "spawn_agent"] as const) {
         expect(recovered).toMatchObject({ ok: true, outcome: "settled", ...ids });
         // Remove only the fixture operation evidence. Caller authority and the
         // readable MCP receipt remain intact, as in the independent probe.
-        const registryPath = path.join(fixture.state, "agent-registry.json");
-        const registry = JSON.parse(fs.readFileSync(registryPath, "utf8"));
-        if (tool === "send_message") {
-          registry.heldDeliveries = {};
-          registry.deliveryOperationOwners = {};
-        } else delete registry.receipts[String(effect.launchId)];
-        fs.writeFileSync(registryPath, JSON.stringify(registry));
+        removeDownstreamEvidence(fixture, tool, effect);
         if (loss === "reset") await host.kill();
         else fixture.release();
         expect(await held).toMatchObject({ ok: true, outcome: "settled", ...ids });
@@ -1473,13 +1505,7 @@ for (const tool of ["send_message", "spawn_agent"] as const) {
       expect(await call(mcp, tool, args)).toEqual({ ...accepted, replayed: true });
       await mcp.close();
       await host.kill();
-      const registryPath = path.join(fixture.state, "agent-registry.json");
-      const registry = JSON.parse(fs.readFileSync(registryPath, "utf8"));
-      if (tool === "send_message") {
-        registry.heldDeliveries = {};
-        registry.deliveryOperationOwners = {};
-      } else delete registry.receipts[String(effect.launchId)];
-      fs.writeFileSync(registryPath, JSON.stringify(registry));
+      removeDownstreamEvidence(fixture, tool, effect);
       fixture.control({ mode: "respond" });
       host = await fixture.startHost();
       mcp = await fixture.mcp();

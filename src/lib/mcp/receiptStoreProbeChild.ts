@@ -64,6 +64,8 @@ interface HttpHostControl {
   mode?: "respond" | "hold" | "lose" | "hold-before" | "cut";
   /** What the send fixture does once the reservation exists. */
   sendEffect?: "deliver" | "queue";
+  /** Exercise the gap between recipient effect and durable settlement. */
+  sendSettlementDelayMs?: number;
   /** `hold-effect`: write the `admitted` marker as soon as the durable record
       exists and defer the effect until the `execute` file appears. */
   admission?: "immediate" | "hold-effect";
@@ -78,6 +80,8 @@ interface HttpHostControl {
   /** Lose the held response after a concurrent recovery has completed. */
   lateUnreadableStatus?: number;
   settleWriter?: boolean;
+  /** Deterministically hold the deferred writer behind the admission answer. */
+  spawnEffectDelayMs?: number;
   /** Replace the admitted handler's response with incomplete or contradictory JSON. */
   replacedAnswer?: Record<string, unknown>;
 }
@@ -135,13 +139,16 @@ async function runHttpHost(configPath: string): Promise<void> {
         messageTextDigest(request.text),
         { operationId, kind: "send", policy: "queue", ...(request.origin ? { origin: request.origin } : {}) },
       );
-      const actuate = (): void => {
+      const actuate = async (): Promise<void> => {
         registry.beginDeliveryAttempt(reservation.id, config.recipientGenerationId);
         /* THE recipient effect: the controlled recipient takes the message
            exactly here, once per actuation, whatever the HTTP layer answers. */
         effect({ kind: "recipient", clientMessageId, operationId, text: request.text, origin: request.origin });
         if ((control().sendEffect ?? "deliver") === "deliver") {
+          const delayMs = control().sendSettlementDelayMs ?? 0;
+          if (delayMs > 0) await Bun.sleep(delayMs);
           registry.recordDeliveryOutcome(reservation.id, "delivered", null, "delivered");
+          marker(`settled-${operationId}`);
         }
       };
       if (reservation.state === "assigned") {
@@ -150,7 +157,7 @@ async function runHttpHost(configPath: string): Promise<void> {
              execution is released, like a drain the runtime runs later. */
           void executionBarrier().then(actuate);
         } else {
-          actuate();
+          await actuate();
         }
       }
       const receipt = sendReceiptFor(registry.readOnlySnapshot(), operationId);
@@ -174,19 +181,25 @@ async function runHttpHost(configPath: string): Promise<void> {
     transcriptRoot: config.transcriptRoot,
     env: {},
   };
+  const pendingSpawnWork = new Set<Promise<void>>();
   const spawnDependencies = {
     registry: agentRegistry,
     resolveHealthySpawnAccount: async () => account,
     resolveSpawnAccount: () => account,
     runtimeHostClient: () => ({ fixture: true }) as never,
     assertStructuredRuntime: () => {},
-    defer: (work: () => Promise<void>) => { void work(); },
+    defer: (work: () => Promise<void>) => {
+      const pending = work();
+      pendingSpawnWork.add(pending);
+      void pending.then(() => pendingSpawnWork.delete(pending), () => pendingSpawnWork.delete(pending));
+    },
     storeImages: () => [],
     spawnStructuredConversation: async (input: { receipt: { launchId: string; conversationId: string; clientAttemptId: string | null; cwd: string }; prompt: string }) => {
       /* The launch receipt already exists when the route hands the launch
          here: that is the admission. The writer runs only once execution is
          released. */
       if (control().admission === "hold-effect") await executionBarrier();
+      if (control().spawnEffectDelayMs) await Bun.sleep(control().spawnEffectDelayMs!);
       /* THE writer effect: the controlled writer creates the conversation's
          transcript exactly here, once per launch it is handed. */
       const transcriptPath = path.join(config.transcriptRoot, `${input.receipt.launchId}.jsonl`);
@@ -225,6 +238,9 @@ async function runHttpHost(configPath: string): Promise<void> {
       if (url.pathname === "/api/tmux") response = await conversationHostPOST(next);
       else if (url.pathname === "/api/spawn") response = await POST.withDependencies(next, spawnDependencies as never);
       else return new Response(JSON.stringify({ error: "unrouted" }), { status: 404, headers: { "content-type": "application/json" } });
+      // An immediate-effect proxy loses its answer only AFTER actual work.
+      // Held-effect cases intentionally return admission before execution.
+      if (current.admission !== "hold-effect") await Promise.all(pendingSpawnWork);
       const answerBody = await response.text();
       fs.appendFileSync(config.responsesPath, `${JSON.stringify({ pathname: url.pathname, status: response.status, body: answerBody })}\n`);
       if (current.replacedAnswer) {

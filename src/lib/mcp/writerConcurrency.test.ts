@@ -54,7 +54,7 @@ async function runConcurrentWriters(
       path.join(sandbox, "agent-registry.json"),
       undefined,
       undefined,
-      { sqliteMode: "off" },
+      { sqliteMode: "sqlite" },
     ).ensureConversation("codex", creatorPath, null);
   }
   const fixture = path.join(import.meta.dir, "writerConcurrencyChild.ts");
@@ -74,7 +74,7 @@ async function runConcurrentWriters(
         LLV_WRITER_RELEASE: release,
         ...(codexHome ? { LLV_CODEX_HOME: codexHome } : {}),
         ...(creatorPath ? { LLV_WRITER_SRC: creatorPath } : {}),
-        LLV_AGENT_REGISTRY_SQLITE: "off",
+        LLV_AGENT_REGISTRY_SQLITE: "sqlite",
       },
       stdout: "ignore",
       stderr: "pipe",
@@ -105,7 +105,9 @@ async function runConcurrentWriters(
   return {
     creatorPath,
     enteredBeforeRelease,
-    persisted: kind === "task" ? persistedTasks(stateFile) : JSON.parse(fs.readFileSync(stateFile, "utf8")) as Record<string, unknown>,
+    persisted: kind === "task" ? persistedTasks(stateFile) : {
+      pipelines: readStateCollectionRows(path.join(sandbox, "state.sqlite"), "pipelines") ?? [],
+    },
   };
 }
 

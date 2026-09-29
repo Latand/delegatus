@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, test } from "bun:test";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -25,6 +25,7 @@ import { boardFor, mutateBoard, patchBoard } from "@/lib/board/store";
 import { DeadlineExceededError } from "@/lib/deadline";
 import { CORPUS_BODY_MARKERS, pipelineCorpus } from "@/lib/pipelines/fixtures/corpus";
 import type { Pipeline } from "@/lib/pipelines/types";
+import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { listRoles } from "@/lib/roles/registry";
 import type { RoleDefinition } from "@/lib/roles/types";
 import { beginOrchestratorSeatIntent, canonicalOrchestratorProject, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
@@ -57,6 +58,9 @@ import {
 const sandboxes: string[] = [];
 const originalStateDir = process.env.LLV_STATE_DIR;
 const originalSpawnCapability = process.env[VIEWER_SPAWN_CAPABILITY_ENV];
+// Fixture bindings must never wake a serving controller.
+const restorePipelineTick = registerPipelineTick(async () => {});
+afterAll(restorePipelineTick);
 
 function messageRecords(payload: McpToolPayload): Array<{ text: string; author?: unknown }> {
   if (!Array.isArray(payload.records) || payload.records.some((record) =>
@@ -2530,6 +2534,8 @@ test("a refused pipeline close exposes its host report through MCP, not only pro
 
 test("a graph edit through MCP carries the calling conversation and answers with its journal entry (graph slice 1)", async () => {
   const actors: Array<[string | undefined, unknown]> = [];
+  const dismissals: unknown[] = [];
+  const pipeline: Pipeline = { ...pipelineCorpus(1)[0]!, id: "pipeline_1", project: "fixture", state: "needs_decision", dismissedAt: null };
   const graphEdit = { seq: 1, at: "2026-09-16T00:00:00.000Z", actor: { kind: "agent", role: "orchestrator", conversationId: "conversation_orchestrator" }, action: "add-stage", stageId: "three", pipelineState: "running", effect: "applied", appliesFromAttempt: 1, summary: "added stage three at position 3, after two" };
   const bindings = viewerMcpBindings(undefined, undefined, {
     patchPipeline: async (_id: string, request: { action?: string }, _ports: unknown, actor: unknown) => {
@@ -2537,6 +2543,18 @@ test("a graph edit through MCP carries the calling conversation and answers with
       return request.action === "add-stage" ? { pipeline: { id: "pipeline_1", state: "running" }, graphEdit } : { pipeline: { id: "pipeline_1", state: "running" } };
     },
     callerAttribution: () => ({ kind: "manager", conversationId: "conversation_orchestrator", role: "orchestrator" }),
+    attentionAuthority: () => ({ kind: "manager", conversationId: "conversation_orchestrator", role: "orchestrator" }),
+    authorizedSeats: () => [{ conversationId: "conversation_orchestrator", project: "fixture", path: null }],
+    getPipelines: () => ({ pipelines: [pipeline] }),
+    readPipelineRecord: () => pipeline,
+    dismissalPorts: {
+      now: () => new Date("2026-09-16T00:00:00.000Z"),
+      pipeline: () => pipeline,
+      setPipelineDismissal: async (_id: string, dismiss: boolean, by: unknown) => {
+        dismissals.push([dismiss, by]);
+        return { pipeline };
+      },
+    },
   } as never);
   const service = createMcpToolService(bindings, {
     claim: async () => ({ kind: "fresh" as const }),
@@ -2548,10 +2566,14 @@ test("a graph edit through MCP carries the calling conversation and answers with
   for (const action of ["reorder-stage", "set-edge", "override-stage", "remove-stage"]) {
     await service.callTool("pipeline_action", { clientRequestId: `graph-${action}`, pipelineId: "pipeline_1", action, stageId: "three" });
   }
+  // Dismiss uses the attributed attention service independently of graph edits.
+  const dismissed = await service.callTool("pipeline_action", { clientRequestId: "graph-dismiss", pipelineId: "pipeline_1", action: "dismiss" });
+  expect(dismissed).toMatchObject({ ok: true, pipelineId: "pipeline_1", dismissal: { dismissed: true } });
   const agent = { kind: "agent", role: "orchestrator", conversationId: "conversation_orchestrator" };
   expect(actors).toEqual([
     ["add-stage", agent], ["reorder-stage", agent], ["set-edge", agent], ["override-stage", agent], ["remove-stage", agent],
   ]);
+  expect(dismissals).toEqual([[true, { kind: "manager", conversationId: "conversation_orchestrator", role: "orchestrator" }]]);
 });
 
 test("a stage completion call is attributed by the server, and a caller cannot name itself (graph slice 2)", async () => {
@@ -3059,6 +3081,7 @@ test("create_pipeline batches every invalid stage model with each engine catalog
  * ------------------------------------------------------------------------- */
 
 const TICK_SEAT = ["conversation", "0f4c21b7729fbc9e"].join("_");
+const TICK_REPORT_REMINDER = "Nothing will ask you for reports while the tick is off or slowed. File a report now: what you are waiting on (a question or blocked report when it is the operator), and the owed outcomes above.";
 
 function tickSettingsBindings(options: {
   callerProject?: string | null;
@@ -3107,8 +3130,13 @@ test("seat_tick_settings turns its own project's tick off indefinitely, with the
     revision: expect.any(String),
     changedFields: ["enabled", "reason"],
     monitorPromptLength: 0,
+    reportsOwed: [],
+    reportReminder: TICK_REPORT_REMINDER,
   });
-  expect(Buffer.byteLength(JSON.stringify(applied))).toBeLessThanOrEqual(600);
+  // #2236 adds the report reminder; the acknowledgement itself stays bounded.
+  const { reportsOwed, reportReminder, ...acknowledgement } = applied;
+  expect(Buffer.byteLength(JSON.stringify(acknowledgement))).toBeLessThanOrEqual(300);
+  expect({ reportsOwed, reportReminder }).toEqual({ reportsOwed: [], reportReminder: TICK_REPORT_REMINDER });
   expect(await bindings.seat_tick_settings({ clientRequestId: "tick-off-read" })).toMatchObject({
     scope: "own-project",
     effective: { enabled: false, isDefault: false, until: null, reason: "the only open lane is a draft nothing can discharge" },
@@ -3210,7 +3238,9 @@ test("seat_tick_settings lets one seat set another project's tick, and says whos
   });
   /* Allowed rather than refused; what answers for it is attribution. */
   expect(applied).toMatchObject({ project: "another-project", changed: true, scope: "other-project", callerProject: "viewer" });
-  expect(Buffer.byteLength(JSON.stringify(applied))).toBeLessThanOrEqual(600);
+  const { reportsOwed, reportReminder, ...acknowledgement } = applied;
+  expect(Buffer.byteLength(JSON.stringify(acknowledgement))).toBeLessThanOrEqual(300);
+  expect({ reportsOwed, reportReminder }).toEqual({ reportsOwed: [], reportReminder: TICK_REPORT_REMINDER });
   expect(store.get("another-project")).toMatchObject({
     enabled: false,
     setBy: { conversationId: TICK_SEAT, project: "viewer" },

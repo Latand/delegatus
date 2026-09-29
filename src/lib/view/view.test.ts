@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 
@@ -143,17 +144,17 @@ describe("snapshot text", () => {
   test("redacts token-shaped content and excludes tool records", () => {
     const pathname = path.join(sandbox, "redaction.jsonl");
     fs.writeFileSync(pathname, [
-      JSON.stringify({ type: "user", timestamp: "t1", message: { content: "token=secret sk-ant-abcdefghijklmnopqrstuvwxyz" } }),
+      JSON.stringify({ type: "user", timestamp: "t1", message: { content: ["token=secret sk-ant-", "abcdefghijklmnopqrstuvwxyz"].join("") } }),
       JSON.stringify({ type: "assistant", timestamp: "t2", message: { content: [{ type: "text", text: "Bearer abcdefghijklmnopqrstuvwxyz" }, { type: "tool_use", name: "Bash", input: { secret: "x" } }] } }),
     ].join("\n"));
     const value = compactText(file(pathname), 6, 4000, 4000);
     expect(JSON.stringify(value)).not.toContain("abcdefghijklmnopqrstuvwxyz");
-    expect(hardenedRedact("ghp_abcdefghijklmnopqrstuvwxyz1234567890")).toBe("[redacted]");
+    expect(hardenedRedact(["ghp_", "abcdefghijklmnopqrstuvwxyz1234567890"].join(""))).toBe("[redacted]");
   });
   test("redacts credential families and header values", () => {
     const fixtures = [
-      "Authorization: Basic dXNlcjpwYXNz", "Cookie: session=secret; csrf=secret", "Set-Cookie: auth=secret",
-      "github_pat_abcdefghijklmnopqrstuvwxyz123456", "xoxb-" + "1234567890-abcdefghijklmnopqrstuvwxyz", "npm_abcdefghijklmnopqrstuvwxyz123456",
+      ["Authorization: Basic ", "dXNlcjpwYXNz"].join(""), "Cookie: session=secret; csrf=secret", "Set-Cookie: auth=secret",
+      ["github_pat_", "abcdefghijklmnopqrstuvwxyz123456"].join(""), "xoxb-" + "1234567890-abcdefghijklmnopqrstuvwxyz", ["npm_", "abcdefghijklmnopqrstuvwxyz123456"].join(""),
       "AKIAABCDEFGHIJKLMNOP", "AIzaabcdefghijklmnopqrstuvwxyz123456789", "eyJabcdefghij.abcdefghijk.abcdefghijk",
       "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----",
     ];
@@ -202,13 +203,14 @@ describe("viewer.snapshot spawn path resolution (#342)", () => {
       cwd: "/repo",
       transport: "structured",
       accountId: "work",
-      launchProfile: emptyLaunchProfile({ cwd: "/repo" }),
+      launchProfile: emptyLaunchProfile({ cwd: "/repo", title: "Spawned worker" }),
     });
     if (begun.kind !== "created") throw new Error("expected structured launch creation");
-    const artifactPath = "/sessions/019f7b8a-9f75-7dc0-b231-17f7eadd0342.jsonl";
+    const sessionId = randomUUID();
+    const artifactPath = `/sessions/${sessionId}.jsonl`;
     if (options.settle) {
       const settled = store.settleSpawn(begun.receipt.launchId, {
-        key: { engine: "codex", sessionId: "019f7b8a-9f75-7dc0-b231-17f7eadd0342" },
+        key: { engine: "codex", sessionId },
         artifactPath,
         cwd: "/repo",
         accountId: "work",

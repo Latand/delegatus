@@ -1,0 +1,207 @@
+{
+  "baseline": "857d34dec",
+  "baselineResults": {
+    "writer": {
+      "passed": 3,
+      "failed": 2
+    },
+    "stdio": {
+      "passed": 22,
+      "failed": 9
+    },
+    "bindings": {
+      "passed": 83,
+      "failed": 3
+    },
+    "view": {
+      "passed": 22,
+      "failed": 2
+    }
+  },
+  "isolation": {
+    "freshStateConfigAndTempRoots": true,
+    "writerAndStdioMaximumStartLoad1": 8,
+    "survivorCheck": "Recorded PID and process start time, after each run; rechecked before commit"
+  },
+  "runs": [
+    {
+      "file": "src/lib/view/view.test.ts",
+      "iteration": 1,
+      "passed": 24,
+      "failed": 0,
+      "duration": "820.00ms",
+      "recordedProcesses": 1,
+      "survivingProcesses": 0
+    },
+    {
+      "file": "src/lib/view/view.test.ts",
+      "iteration": 2,
+      "passed": 24,
+      "failed": 0,
+      "duration": "1066.00ms",
+      "recordedProcesses": 1,
+      "survivingProcesses": 0
+    },
+    {
+      "file": "src/lib/view/view.test.ts",
+      "iteration": 3,
+      "passed": 24,
+      "failed": 0,
+      "duration": "810.00ms",
+      "recordedProcesses": 1,
+      "survivingProcesses": 0
+    },
+    {
+      "file": "src/lib/mcp/bindings.test.ts",
+      "iteration": 1,
+      "passed": 86,
+      "failed": 0,
+      "duration": "34.35s",
+      "recordedProcesses": 2,
+      "survivingProcesses": 0
+    },
+    {
+      "file": "src/lib/mcp/bindings.test.ts",
+      "iteration": 2,
+      "passed": 86,
+      "failed": 0,
+      "duration": "27.64s",
+      "recordedProcesses": 2,
+      "survivingProcesses": 0
+    },
+    {
+      "file": "src/lib/mcp/bindings.test.ts",
+      "iteration": 3,
+      "passed": 86,
+      "failed": 0,
+      "duration": "8.37s",
+      "recordedProcesses": 2,
+      "survivingProcesses": 0
+    },
+    {
+      "file": "src/lib/mcp/writerConcurrency.test.ts",
+      "iteration": 1,
+      "passed": 5,
+      "failed": 0,
+      "duration": "9.40s",
+      "recordedProcesses": 17,
+      "survivingProcesses": 0
+    },
+    {
+      "file": "src/lib/mcp/writerConcurrency.test.ts",
+      "iteration": 2,
+      "passed": 5,
+      "failed": 0,
+      "duration": "12.24s",
+      "recordedProcesses": 14,
+      "survivingProcesses": 0
+    },
+    {
+      "file": "src/lib/mcp/writerConcurrency.test.ts",
+      "iteration": 3,
+      "passed": 5,
+      "failed": 0,
+      "duration": "5.40s",
+      "recordedProcesses": 13,
+      "survivingProcesses": 0
+    },
+    {
+      "file": "src/lib/mcp/stdio.integration.test.ts",
+      "iteration": 1,
+      "passed": 31,
+      "failed": 0,
+      "duration": "253.85s",
+      "startLoad1": 7.6953125,
+      "recordedProcesses": 381,
+      "survivingProcesses": 0,
+      "storeReadLatency": [
+        {
+          "tool": "list_tasks",
+          "ms": 132
+        },
+        {
+          "tool": "get_task",
+          "ms": 132
+        },
+        {
+          "tool": "get_pipeline",
+          "ms": 132
+        }
+      ]
+    },
+    {
+      "file": "src/lib/mcp/stdio.integration.test.ts",
+      "iteration": 2,
+      "passed": 31,
+      "failed": 0,
+      "duration": "128.07s",
+      "startLoad1": 7.75244140625,
+      "recordedProcesses": 356,
+      "survivingProcesses": 0,
+      "storeReadLatency": [
+        {
+          "tool": "list_tasks",
+          "ms": 51
+        },
+        {
+          "tool": "get_task",
+          "ms": 52
+        },
+        {
+          "tool": "get_pipeline",
+          "ms": 52
+        }
+      ]
+    },
+    {
+      "file": "src/lib/mcp/stdio.integration.test.ts",
+      "iteration": 3,
+      "passed": 31,
+      "failed": 0,
+      "duration": "107.51s",
+      "startLoad1": 6.09619140625,
+      "recordedProcesses": 351,
+      "survivingProcesses": 0,
+      "storeReadLatency": [
+        {
+          "tool": "list_tasks",
+          "ms": 44
+        },
+        {
+          "tool": "get_task",
+          "ms": 45
+        },
+        {
+          "tool": "get_pipeline",
+          "ms": 45
+        }
+      ]
+    }
+  ],
+  "checks": {
+    "typeScript": "pass",
+    "touchedFileLint": "pass",
+    "privacyPublicationGate": "pass",
+    "frozenLockfileInstall": "pass",
+    "repositoryLint": {
+      "completed": true,
+      "errors": 509,
+      "warnings": 263,
+      "diagnostics": "lint-errors.json"
+    }
+  },
+  "redPaths": [
+    {
+      "probe": "deferred spawn effect",
+      "oldWaitDisabled": "Expected 1 effect, received 0",
+      "recordedProcesses": 4,
+      "survivingProcesses": 0
+    },
+    {
+      "probe": "recipient settlement",
+      "oldEffectOnlyWait": "Expected settled, received in-flight",
+      "recordedProcesses": 6,
+      "survivingProcesses": 0
+    }
+  ]
+}

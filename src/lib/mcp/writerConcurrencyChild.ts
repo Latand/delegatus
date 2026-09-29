@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
 import { waitForFixtureFile } from "./fixtureBarrier";
 
 import { NextRequest } from "next/server";
@@ -19,39 +18,47 @@ if (process.env.LLV_WRITER_NO_PROCESS_IDENTITY === "1") {
   procBackend.processIdentity = () => null;
 }
 
-const stateFile = path.join(stateDir, `${kind}s.json`);
-const originalReadFileSync = fs.readFileSync.bind(fs);
 let gated = false;
-
-fs.readFileSync = ((filePath: fs.PathOrFileDescriptor, ...args: unknown[]) => {
-  if (gated || kind === "task" || String(filePath) !== stateFile) {
-    return originalReadFileSync(filePath, ...(args as Parameters<typeof fs.readFileSync> extends [unknown, ...infer Rest] ? Rest : never));
-  }
+function holdAfterRead(): void {
+  if (gated) return;
   gated = true;
-  const value = originalReadFileSync(filePath, ...(args as Parameters<typeof fs.readFileSync> extends [unknown, ...infer Rest] ? Rest : never));
-  fs.writeFileSync(readyPath, "ready\n", "utf8");
-  waitForFixtureFile(releasePath);
-  return value;
-}) as typeof fs.readFileSync;
+  fs.writeFileSync(readyPath!, "ready\n", "utf8");
+  waitForFixtureFile(releasePath!);
+}
 
-/* Since #1870 the task store is the `tasks` collection of `state.sqlite`, and a
-   write serializes on the collection lease. Hold the lease inside the write's
-   read step, after the committed state was read, exactly where the file-read
-   gate above held the file lock. */
+/* Since #1870 both stores write SQLite collections. Hold their real lease
+   after the committed rows are read; JSON is only the initial import. */
 if (kind === "task") {
   const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
   const patchSync = SqliteStateCollection.prototype.patchSync;
   SqliteStateCollection.prototype.patchSync = function gatedPatchSync(this: InstanceType<typeof SqliteStateCollection>, prepare) {
     return patchSync.call(this, () => {
       const patch = prepare();
-      if (!gated) {
-        gated = true;
-        fs.writeFileSync(readyPath, "ready\n", "utf8");
-        waitForFixtureFile(releasePath);
-      }
+      holdAfterRead();
       return patch;
     });
   } as typeof patchSync;
+}
+if (kind === "pipeline") {
+  const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+  const mutate = SqliteStateCollection.prototype.mutate;
+  SqliteStateCollection.prototype.mutate = function gatedMutation(this: InstanceType<typeof SqliteStateCollection>, operation, ...args) {
+    return mutate.call(this, (records, persist) => {
+      holdAfterRead();
+      return operation(records, persist);
+    }, ...args);
+  } as typeof mutate;
+  const boundedPatch = SqliteStateCollection.prototype.boundedPatch;
+  SqliteStateCollection.prototype.boundedPatch = function gatedCreate(this: InstanceType<typeof SqliteStateCollection>, limit, operation, ...args) {
+    return boundedPatch.call(this, limit, (tx) => operation({
+      ...tx,
+      pipelineLookup: (query) => {
+        const result = tx.pipelineLookup(query);
+        holdAfterRead();
+        return result;
+      },
+    }), ...args);
+  } as typeof boundedPatch;
 }
 
 if (kind === "task" && operation === "create" && writer === "http") {
