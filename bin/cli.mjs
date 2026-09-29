@@ -28,12 +28,14 @@ import {
   browserOpenCommand,
   cliRuntimeHostConfig,
   cliRuntimeHostEnvironment,
-  discardWakatimeEnvironmentCredential,
+  discardUnsupportedApiCredentials,
   newlyBoundNonLoopbackAddress,
   readNonLoopbackBindState,
   viewerChildProcessOptions,
   viewerServerBunRuntime,
 } from "./server-runtime.mjs";
+
+discardUnsupportedApiCredentials();
 import {
   createLauncherRecord,
   exitError,
@@ -48,7 +50,6 @@ import { probeHeadersFrom } from "./internalService.mjs";
 import { findLegacySystemdUnits, legacySystemdNotice } from "./legacySystemd.mjs";
 import { linkSkills } from "./skillLinks.mjs";
 
-discardWakatimeEnvironmentCredential();
 
 /* The launcher is one of the process kinds that may resolve the operator's own
    config and state directories (#1905); everything it starts inherits the
@@ -1242,7 +1243,22 @@ async function main() {
       record.set(key, { requestId });
       if (role === "web") await restartWeb();
       else await restartHost();
-    });
+    }, { admitAuto: async ({ requestId, autoGateId }) => {
+      try {
+        const url = new URL(`http://127.0.0.1:${options.port}/api/self-update/launcher-admission`);
+        url.searchParams.set("requestId", requestId);
+        url.searchParams.set("gateId", autoGateId);
+        const response = await fetch(url, { signal: AbortSignal.timeout(20_000), redirect: "manual", headers: {
+          ...probeHeadersFrom(runtimeHostConfig.stateDirectory),
+          ...(runtime.llvToken ? { authorization: `Bearer ${runtime.llvToken}` } : {}),
+        } });
+        if (response.status !== 200 || !response.headers.get("content-type")?.includes("application/json")) {
+          await response.body?.cancel();
+          return false;
+        }
+        return (await response.json())?.admitted === true;
+      } catch { return false; }
+    } });
   }
 
   if (options.tailscaleFromFlag && runtime.tailscalePath) {

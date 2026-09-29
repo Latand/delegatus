@@ -2,7 +2,6 @@
 
 - Status: prototype built (one builder stage, PR left open, no deploy, no merge)
 - Grounded base: `main` at `bfd58b846fa21e84138b7e74f64f0fb34c73b852`
-- Prior work read: #473 (WakaTime integration), #763 and its landed Phase 0 (#767, #1017, #1623), the scanner activity model, the view presence heartbeat, the transcript search index
 - Revised by three operator corrections on 2026-09-24 (below). Where the first draft of this document and a correction disagree, the correction wins and the text here already follows it.
 - Extended the same day by "Activity records itself" (section [Continuous record](#continuous-record-no-export-required)): every host's operator input and agent turns are written into Delegatus's own store as transcripts are indexed, other hosts are pulled over ssh, and an export is no longer required for complete numbers.
 - Extended on 2026-09-25 by [One project's page](#one-projects-page): the whole page filtered to one project, agent time a host did not send read as a lower bound, and Codex subagent threads counted as their own agents.
@@ -14,8 +13,8 @@ client projects are redacted.
 
 > Operator request for the Delegatus project: investigate a per-project
 > activity dashboard and have Opus create a reviewable prototype. Show human
-> interaction time and agent activity separately, with WakaTime-like
-> day/project views. Human time must come from real interaction in Delegatus
+> The dashboard measures operator interaction time and agent activity separately,
+> with day/project views. Human time must come from real interaction in Delegatus
 > web, desktop, and mobile surfaces where observable; agent work needs its own
 > provenance and must never inflate human hours. Inspect the current main
 > implementation and prior operator-worktime ledger / agent-activity analytics
@@ -304,8 +303,6 @@ history is about 1,300 rows in one page, under 2 s over ssh.
 
 | prior work | what it is | reused | wrong or missing for this dashboard |
 |---|---|---|---|
-| #473 WakaTime sync (`src/lib/wakatime/sync.ts`, `docs/design/wakatime-integration.md`) | 60 s scheduler that turns scanner turn windows into WakaTime heartbeats | the idea of turn windows, and the operator/agent provenance split | Agent turns and operator points go onto **one** WakaTime timeline, which unions them (`docs/wakatime.md`, "Activity mapping"), so WakaTime totals cannot supply either axis on its own. The stream state is keyed by opaque digests with no role or pipeline, and it exists only while enabled. It needs an external account and network. Rejected as a source. |
-| #763 Phase 0 (`src/lib/wakatime/operatorActivity.ts`) | `recordDirectOperatorWakatimeActivity` at every validated operator ingress | **the ingress sites and the authority rule** | Returns `null` unless `LLV_WAKATIME_ENABLED=1`. A point is queued in the WakaTime outbox and deleted after delivery, so nothing local survives. It carries no surface and no kind. When attribution fails it throws, and callers refuse the action. The dashboard ledger never refuses. |
 | #763 issue body (never built) | operator-event ledger, 30-min episodes, 0.5 h rounding, #zvit delivery | the episode parameterisation | Never implemented. Its `max(last - first, 10 min)` gives the last request of a long episode no window, which correction 1 rules out. The delivery half belongs to #zvit and stays out of scope. |
 | scanner activity model (`src/lib/scanner/activity.ts`) | point-in-time liveness from mtime and tail turn state | nothing for ranges | It has no history: every verdict is relative to *now*, and its tail parse covers under 5% of recent transcripts. |
 | view presence heartbeat (`src/hooks/useViewPresence.ts`) | device kind, visibility and input sequence every 10 s | the device rule, moved to `src/lib/view/device.ts` | Screen input is not a request; a new view session counts as input on its first heartbeat. Not used for time. |
@@ -320,7 +317,6 @@ Every site below already classifies the caller with
 `directOperatorActivityAuthority` (`src/lib/agent/operatorAuthority.ts:139`),
 which refuses agents that present their conversation capability and Viewer
 services (monitor, MCP, orchestrator) that present the signed service header.
-The ledger call sits beside the WakaTime call, after it, and never refuses.
 
 | # | surface of the request | kind | site (current tree) |
 |---|---|---|---|
@@ -399,7 +395,6 @@ member configuration gap.
 
 | source | why not |
 |---|---|
-| WakaTime API or state | Operator and agent time are unioned in one timeline, only while enabled, drained after delivery. |
 | Runtime journal events | Keeps the newest 20,000 rows, which is days. |
 | Presence heartbeat | It measures screen input, and the method counts requests. |
 | Reading transcripts live on each dashboard request | Five gigabytes on this host alone; the export runs once per host and the dashboard reads its small result. |
@@ -741,8 +736,6 @@ chip at "Lower bound", and the host named in the drawer and the hosts table.
   names, host ids and the operator's own host labels, pipeline and stage ids,
   and role ids. No titles, model names or account names.
 - **Fixtures and tests** use invented projects, ids, hosts and text.
-- **#zvit fence.** `src/lib/wakatime/**` is untouched; the ledger call sits
-  beside the WakaTime call.
 
 ## Prototype scope
 
@@ -828,8 +821,7 @@ hosts table names), and a home with no data at all. Output:
 
 - No settings UI; `hosts.json` and `settings.json` are edited as files.
 - No per-conversation or per-stage durations.
-- No change to WakaTime, #zvit or their data. The only schedule is the pull,
-  which rides the transcript index's pass.
+- The only schedule is the pull, which rides the transcript index's pass.
 
 ## Deferred — not currently justified
 
@@ -844,8 +836,8 @@ hosts table names), and a home with no data at all. Output:
 
 | decision | options | chosen and why |
 |---|---|---|
-| Human source | ingress ledger / transcripts / WakaTime / presence | **Both the ledger and per-host transcript exports**: the ledger is exact with a surface; transcripts are the only record on a host without the ledger and for history, and they are what the operator's recount used. |
 | Reading remote hosts | live reads / network pull / exported files | **Exported files**: the dashboard stays cheap, the exporter runs where the stores and delivery ledgers are, and nothing crosses a host boundary but ids, hashes and times. |
+| Human source | ingress ledger / transcripts / presence | **Both the ledger and per-host transcript exports**: the ledger is exact with a surface; transcripts cover history and hosts without the ledger. |
 | Counting unmarked records | count / exclude and report | **Exclude and report per reason**, as correction 3 asks. |
 | Defaults | refinement (T = 30, half-hour) / restated method (T = W, clock-hour) | **The restated method**, which the operator used for the accepted recount; the refinement stays a parameter. |
 | Clock-hour weight | winner's minutes / the hour's combined minutes | **The hour's combined minutes**, since windows combine within the hour before it is weighed and given to one project. |
@@ -869,4 +861,3 @@ hosts table names), and a home with no data at all. Output:
 | Probable missing source (3.6) | The workday flag; tested; shown in the warning tone. |
 | The operator's method, parameterised, defaults stated | `W = 10`, `T = W`, clock-hour, Europe/Kyiv; refinement by parameter. |
 | Privacy | Six-key ledger rows; export rows with digests and a hash; no body anywhere. |
-| #zvit untouched, no deploy, no merge | WakaTime code unchanged; PR left open; tests and builds on isolated roots; renders from a seeded home. |

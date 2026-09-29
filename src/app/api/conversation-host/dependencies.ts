@@ -16,7 +16,6 @@ import {
   tmuxEndpointDescriptor,
 } from "@/lib/tmux";
 import type { PriorSubmission } from "@/lib/team";
-import { recordDirectOperatorWakatimeActivity } from "@/lib/wakatime/operatorActivity";
 
 export interface ConversationHostDependencies {
   canonicalTranscriptTarget: typeof canonicalTranscriptTarget;
@@ -37,7 +36,7 @@ export interface ConversationHostDependencies {
   resolveRequestedTmuxTarget: typeof resolveRequestedTmuxTarget;
   resolveTmuxAttach: typeof resolveTmuxAttach;
   tmuxEndpointDescriptor: typeof tmuxEndpointDescriptor;
-  recordDirectOperatorWakatimeActivity: typeof recordDirectOperatorWakatimeActivity;
+
   /** The activity dashboard's request ledger; never throws. */
   recordOperatorRequest: typeof recordOperatorRequest;
   /** What the delivery record knows about a submission id before a send
@@ -67,7 +66,7 @@ const productionDependencies: ConversationHostDependencies = {
   resolveRequestedTmuxTarget,
   resolveTmuxAttach,
   tmuxEndpointDescriptor,
-  recordDirectOperatorWakatimeActivity,
+
   recordOperatorRequest,
   priorSubmission: (conversationId, clientMessageId) => {
     try {

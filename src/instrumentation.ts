@@ -1,4 +1,4 @@
-import { discardWakatimeEnvironmentCredential } from "@/lib/wakatime/credential";
+import { discardUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 
 interface ViewerRuntimeModule {
   registerViewerRuntime(): Promise<void>;
@@ -7,7 +7,7 @@ interface ViewerRuntimeModule {
 export async function registerNodeViewerRuntime(
   loadRuntime: () => Promise<ViewerRuntimeModule>,
 ): Promise<void> {
-  discardWakatimeEnvironmentCredential();
+  discardUnsupportedApiCredentials();
   const { registerViewerRuntime } = await loadRuntime();
   await registerViewerRuntime();
 }

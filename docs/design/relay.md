@@ -1097,7 +1097,7 @@ What it reuses, and what it adds:
   duplicate-key guard and the timer that kills the group; the rule that the
   exit outranks the artifact (`headless.ts:464-478` [code]); the child
   environment scrub that removes `LLV_TOKEN`, the state owner and the
-  WakaTime credential (`reviewerEnvironment`, `headless.ts:58-69` [code],
+  Viewer token and state owner (`reviewerEnvironment`, `headless.ts:58-69` [code],
   exported for this); `claudeManagedEnvironment`
   (`src/lib/accounts/claude.ts:789` [code]).
 - **Added:** the two answer-profile builders of §B.6; a tail reader that

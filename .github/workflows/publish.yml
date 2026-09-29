@@ -244,7 +244,7 @@ jobs:
 
       - name: Run hermetic release gate
         if: steps.registry.outputs.exists == 'false'
-        run: bun test bin/server-runtime.test.ts bin/mcp-server.test.ts docs/media/issue-626/evidence.test.ts
+        run: bun test ./bin/server-runtime.test.ts ./bin/mcp-server.test.ts ./docs/media/issue-626/evidence.test.ts
 
       - name: Publish package with OIDC
         id: publish

@@ -21,6 +21,9 @@ type RecordLike = Record<string, unknown>;
 export type StageTurnEvidence = {
   turn: "terminal" | "busy" | "unknown";
   message: { text: string; ts: number } | null;
+  /** Prose written before this attempt's stage_report call, when the agent
+      followed its detailed answer with a shorter closing message. */
+  reportProse?: string | null;
   /** The verified read covers the complete artifact and contains only Codex's
       launch metadata record. */
   launchOnly?: boolean;
@@ -178,14 +181,21 @@ function terminalProviderMessageFromRecords(
   return null;
 }
 
+/** The widest verified read spent looking for a reported attempt's prose. A
+    brief is relayed at 60 KiB at most, so a window this size holds it with
+    room for the tool output written after the report. */
+export const MAX_REPORT_EVIDENCE_BYTES = 8 * 1024 * 1024;
+
 export async function durableStageTurnEvidence(
   engine: FlowEngine,
   transcriptPath: string,
+  reportAt?: string | null,
+  attemptStartedAt?: string | null,
+  readTail: typeof readStableTailRecords = readStableTailRecords,
 ): Promise<StageTurnEvidence | null> {
-  const read = await readStableTailRecords(transcriptPath);
+  const read = await readTail(transcriptPath);
   if (read.integrity !== "complete") return null;
   const codex = engine === "codex";
-  const turn = turnStateFromRecords(read.records, codex ? "codex" : "claude");
   let fallbackTs = 0;
   try {
     fallbackTs = fs.statSync(transcriptPath).mtimeMs;
@@ -193,22 +203,60 @@ export async function durableStageTurnEvidence(
     /* The identity-verified read succeeded; a raced-away stat only loses the
        timestamp fallback for records that carry no timestamp of their own. */
   }
-  const message = lastAssistantMessageFromRecords(read.records, codex ? "codex-sessions" : "claude-projects", fallbackTs);
-  const newest = read.records.at(-1);
+  const reportTime = reportAt ? Date.parse(reportAt) : NaN;
+  const startedTime = attemptStartedAt ? Date.parse(attemptStartedAt) : NaN;
+  let evidenceRead = read;
+  let evidenceBytes = 131_072;
+  let reportProse: string | null = null;
+  let message;
+  let turn;
+  while (true) {
+    message = lastAssistantMessageFromRecords(evidenceRead.records, codex ? "codex-sessions" : "claude-projects", fallbackTs);
+    turn = turnStateFromRecords(evidenceRead.records, codex ? "codex" : "claude");
+    if (Number.isFinite(reportTime)) {
+      reportProse = lastAssistantMessageFromRecords(
+        evidenceRead.records.filter((record) => {
+          const timestamp = recordTs(record, fallbackTs);
+          return timestamp <= reportTime && (!Number.isFinite(startedTime) || timestamp > startedTime);
+        }),
+        codex ? "codex-sessions" : "claude-projects",
+        fallbackTs,
+      )?.text ?? null;
+    }
+    if (!Number.isFinite(reportTime) || !evidenceRead.prefixTruncated
+      || (reportProse !== null && message !== null && turn.state !== "unknown")) break;
+    /* Once the window reaches back to the attempt's start, an older record
+       cannot belong to this attempt: an agent that wrote no prose before its
+       report is answered here, without reading the whole transcript. */
+    const oldestAt = evidenceRead.records.map((record) => recordTs(record, 0)).find((ts) => ts > 0);
+    if (Number.isFinite(startedTime) && oldestAt !== undefined && oldestAt <= startedTime) break;
+    if (evidenceBytes >= MAX_REPORT_EVIDENCE_BYTES) break;
+    // A JSONL line crossing the tail boundary is discarded. Grow the
+    // verified window until both the final and pre-report messages are read.
+    evidenceBytes = Math.min(evidenceBytes * 2, MAX_REPORT_EVIDENCE_BYTES);
+    const expanded = await readTail(transcriptPath, evidenceBytes);
+    /* A transcript appended between the reads fails the identity check. The
+       last complete read still stands, and it is what the background-task
+       hold and the verdict were going to read anyway. */
+    if (expanded.integrity !== "complete") break;
+    evidenceRead = expanded;
+  }
+  const newest = evidenceRead.records.at(-1);
   const ledger = codex ? null : await readBackgroundTaskLedger(transcriptPath);
   return {
     turn: turn.state === "terminal" ? "terminal" : turn.state === "busy" ? "busy" : "unknown",
     message,
+    ...(reportAt ? { reportProse } : {}),
     lastRecordAt: newest ? recordTs(newest, fallbackTs) || null : null,
     launchOnly: codex
-      && !read.prefixTruncated
-      && read.records.length === 1
-      && read.records[0]?.type === "session_meta",
+      && !evidenceRead.prefixTruncated
+      && evidenceRead.records.length === 1
+      && evidenceRead.records[0]?.type === "session_meta",
     /* Gated on the same turn reading the rest of the engine trusts: a provider
        error the CLI may still retry inside an open turn keeps the busy
        projection (#516), and so never reads as the end of the turn here. */
     terminalProviderMessage: turn.state === "terminal"
-      ? terminalProviderMessageFromRecords(read.records, codex, fallbackTs)
+      ? terminalProviderMessageFromRecords(evidenceRead.records, codex, fallbackTs)
       : null,
     ...(codex
       ? { backgroundTasks: [], backgroundReportedAt: null }

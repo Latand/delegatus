@@ -9550,6 +9550,39 @@ test("reviewNote parks a too-long directive for raw and role-backed review stage
   expect(noteOf(ok)).toBe("Check ship the widget against the ACs.");
 });
 
+test("a review-loop note relays a reported pass's short summary, not the full brief", () => {
+  const role = { engine: "codex", model: "gpt-5.6-sol", effort: "high", roleId: null, access: "read-only", promptScaffold: null } as unknown as Parameters<typeof reviewNote>[2];
+  const brief = `Fence added.\n\nFinal assistant message:\n${"b".repeat(40_000)}`;
+  const reported = (activatedBy: unknown) => ({
+    n: 1, state: "passed", output: brief, activatedBy,
+    report: { verdict: { status: "pass" }, summary: "Fence added." },
+  });
+  const lane = (buildActivation: unknown, cursorInput: string) => ({
+    ...reviewPipeline,
+    stages: [
+      { id: "build", kind: "run", prompt: "Build", next: "review" },
+      { id: "verify", kind: "run", prompt: "Verify", next: "review", onFail: { to: "build", maxRounds: 1 } },
+      { id: "review", kind: "review-loop", prompt: "Review {{prev.output}}", next: null },
+    ],
+    runs: [
+      { stageId: "build", attempts: [reported(buildActivation)] },
+      { stageId: "verify", attempts: [{ n: 1, state: "failed", verdict: { status: "fail", findings: ["P1 — the fence is missing"] } }] },
+    ],
+    cursor: { stageId: "review", state: "pending", input: cursorInput, activatedBy: { stageId: "build", attempt: 1, edge: "pass" } },
+  }) as unknown as Parameters<typeof reviewNote>[0];
+
+  expect(noteOf(reviewNote(lane(null, brief), reviewStage("Review {{prev.output}}"), role))).toBe("Review Fence added.");
+  /* A fix on a spent fail edge carries the same budget note the cursor input does. */
+  const spent = noteOf(reviewNote(
+    lane({ stageId: "verify", attempt: 1, edge: "fail", budgetSpent: true }, brief),
+    reviewStage("Review {{prev.output}}"),
+    role,
+  ));
+  expect(spent).toStartWith("Review Fence added.\n\n");
+  expect(spent).toEndWith("Unreviewed findings:\n- P1 — the fence is missing");
+  expect(spent.length).toBeLessThanOrEqual(MAX_FLOW_NOTE_LENGTH);
+});
+
 test("override-stage re-configures an unstarted stage and holds one whose live attempt predates definition binding (issue #118)", async () => {
   const { ports } = harness();
   const created = await create(ports);

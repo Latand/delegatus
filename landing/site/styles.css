@@ -95,11 +95,11 @@ code, kbd, pre { font-family: var(--mono); font-feature-settings: normal; }
    interface keeps its own proportions at every width. */
 
 .live {
-  position: relative; overflow: hidden;
+  position: relative;
   background: #111218;
   border-radius: 0 0 calc(var(--radius) - 1px) calc(var(--radius) - 1px);
 }
-.live-frame { position: absolute; inset: 0; }
+.live-frame { position: absolute; inset: 0; overflow: hidden; border-radius: inherit; }
 .live iframe {
   position: absolute; left: 0; top: 0;
   border: 0; display: block;
@@ -372,6 +372,7 @@ kbd {
 .vtabs button[aria-selected="true"] b { color: var(--cream); }
 .vtabs button[aria-selected="true"] span { color: var(--cream-2); }
 .live-open { border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 40px 120px -40px rgb(0 0 0 / 0.7); }
+.live-open .live-frame { border-radius: calc(var(--radius) - 1px); }
 
 /* It finds you: the phone, live, beside the facts. */
 .sec-reach {
@@ -429,6 +430,7 @@ kbd {
   .sec-reach { grid-template-columns: 1fr; row-gap: 16px; }
   .band-inner { grid-template-columns: 1fr; row-gap: 40px; }
   .caps { max-width: 46ch; }
+  .live-open { margin-top: 24px; }
 }
 
 /* ---------- Phone ---------- */
@@ -509,3 +511,37 @@ kbd {
 .playback { position: relative; width: fit-content; margin: 8px auto 0; padding-bottom: 5px; font-size: 12px; color: var(--cream-3); }
 .playback b { font-weight: 400; }
 .playback span { position: absolute; inset: auto 0 0; height: 2px; background: currentColor; transform-origin: left; }
+
+/* ---------- Full screen ----------
+   The control sits at the top-right corner of a frame's window: in the bar of
+   the hero and the run frame, above the corner of the other two, where the
+   product's own header controls stay clear of it. Full screen keeps it there
+   as the way out. */
+
+.fs-btn {
+  position: absolute; z-index: 4; top: 10px; right: 10px;
+  display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 8px;
+  color: var(--cream-3); border: 1px solid var(--line); background: var(--ground);
+  transition: color 150ms, border-color 150ms;
+}
+.fs-btn:hover { color: var(--cream); border-color: var(--line-strong); }
+.fs-btn .i { width: 16px; height: 16px; }
+.fs-btn .i-exit, .fs-btn[data-on] .i-enter { display: none; }
+.fs-btn[data-on] .i-exit { display: block; }
+.stage-wrap:has(> .fs-btn) .stage-bar { padding-right: 52px; }
+.live-open > .fs-btn { top: auto; right: 0; bottom: calc(100% + 8px); }
+.live-phone > .fs-btn { top: auto; right: -10px; bottom: calc(100% + 18px); }
+
+html.fs-lock, html.fs-lock body { overflow: hidden; overscroll-behavior: none; }
+[data-fs] {
+  position: fixed; inset: 0; z-index: 100;
+  width: auto; height: auto; margin: 0;
+  border: 0; border-radius: 0; box-shadow: none;
+  background: #111218; overflow: hidden;
+}
+.stage-wrap[data-fs] { display: flex; flex-direction: column; margin: 0; }
+.stage-wrap[data-fs] .live { flex: 1 1 auto; min-height: 0; border-radius: 0; }
+.stage-wrap[data-fs] > .catcher { display: none; }
+.stage-wrap[data-fs] > .fs-btn, .live[data-fs] > .fs-btn { top: 10px; right: 10px; bottom: auto; }
+.live[data-fs] { padding-top: 52px; background: linear-gradient(var(--line), var(--line)) 0 51px / 100% 1px no-repeat, #111218; }
+.live[data-fs] .live-frame { inset: 52px 0 0; border-radius: 0; }

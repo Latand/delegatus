@@ -1236,7 +1236,7 @@ test("a Claude transcript appearing in a previously sessionless project director
     const encodedCwd = repository.replaceAll(path.sep, "-");
     const projectDirectory = path.join(roots["claude-projects"], encodedCwd);
     await writeFixture(
-      path.join(projectDirectory, "historical.jsonl.wakatime"),
+      path.join(projectDirectory, "historical.jsonl.bak"),
       "{}\n",
       1_700_000_000,
     );

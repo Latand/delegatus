@@ -507,6 +507,33 @@ test("a launch receipt abandoned for over a day no longer blocks retirement", as
   await refusedBy("no-open-operation", { snapshot: () => snapshot({ receipts: { "launch-1": receipt("not-a-date") } }) });
 });
 
+test("an abandoned stamped launch is reconciled while its unfinished delivery stays protected", async () => {
+  const receipt = {
+    launchId: "launch-1", conversationId: CONVERSATION, key: null,
+    state: "path-pending", engine: "claude",
+    createdAt: new Date(NOW - RETIREMENT_ABANDONED_RECEIPT_MS - 60_000).toISOString(),
+  };
+  const stamped = () => snapshot({
+    entries: { [`claude:${SESSION}`]: entry({ structuredHostOperationId: "launch-1" }) },
+    receipts: { "launch-1": receipt },
+  });
+
+  const settled = await sweep({ snapshot: stamped });
+  expect(settled.report.refused).toEqual([]);
+  expect(settled.terminated).toHaveLength(1);
+
+  await refusedBy("handoff-queue-drained", {
+    snapshot: () => {
+      const file = stamped();
+      file.heldDeliveries["delivery-1"] = {
+        id: "delivery-1", conversationId: CONVERSATION, runtimeConversationId: CONVERSATION,
+        state: "delivery-uncertain",
+      } as RegistryFile["heldDeliveries"][string];
+      return file;
+    },
+  });
+});
+
 test("a completed launch receipt does not keep its stamped host alive", async () => {
   const probe = await sweep({
     snapshot: () => snapshot({
@@ -1079,6 +1106,7 @@ function qualifiedSubject(): StructuredHostRetirementSubject {
     pendingAction: null,
     structuredHostOperationId: null,
     structuredHostOperationReceiptState: null,
+    structuredHostOperationReceiptAbandoned: false,
     undeliveredHandoffEntries: determined(0),
     openOperations: 0,
     eventCursor: 12,

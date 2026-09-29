@@ -49,7 +49,8 @@ function shortLabel(engine: string, model: string): string {
   return catalogue.find((option) => option.id === model)?.shortLabel ?? modelDisplayName(engine, model);
 }
 
-function valuesOf(role: { engine: string; model: string | null; effort: string | null }): StageRunValues {
+/** The values one role binding runs on, the engine default filling a blank model. */
+export function valuesOf(role: { engine: string; model: string | null; effort: string | null }): StageRunValues {
   const engine = role.engine;
   const fallback = engine === "claude" || engine === "codex" ? defaultModelFor(engine) : "";
   const model = (role.model ?? "").trim() || fallback;

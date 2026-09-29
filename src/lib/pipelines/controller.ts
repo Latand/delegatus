@@ -8,6 +8,7 @@ import { scheduleAutoMerge } from "@/lib/forge/autoMerge";
 import { scheduleForgeSweep } from "@/lib/forge/sweep";
 import { loadTasks } from "@/lib/tasks/store";
 import { completedFileScan } from "@/lib/scanner/scanCache";
+import { activeRestartGate } from "@/lib/selfUpdate/restartGate";
 import type { FileEntry } from "@/lib/types";
 
 import { registerPipelineTick } from "./controllerSignal";
@@ -44,6 +45,7 @@ interface TickResult {
 type TimeoutHandle = unknown;
 
 export interface FlowPipelineControllerPorts {
+  handoffHeld?: () => boolean;
   scan?: () => Promise<{ files: FileEntry[]; complete: boolean }>;
   tickPipelines: (entries: FileEntry[]) => Promise<TickResult>;
   tickFlows: (entries: FileEntry[]) => Promise<TickResult>;
@@ -102,10 +104,15 @@ function productionPorts(): FlowPipelineControllerPorts {
     scan: controllerFileScan,
     tickPipelines,
     tickFlows,
+    handoffHeld: autoHandoffHeld,
     publishHeartbeat: writeFlowPipelineControllerHeartbeat,
     sweepForgeLinks: () => scheduleForgeSweep({ loadPipelines, loadTasks }),
     sweepAutoMerge: () => scheduleAutoMerge({ loadPipelines }),
   };
+}
+
+function autoHandoffHeld(): boolean {
+  return !!activeRestartGate(statePath("self-update", "auto-admission.json"));
 }
 
 export class FlowPipelineController {
@@ -123,6 +130,7 @@ export class FlowPipelineController {
     this.ports = {
       ...ports,
       scan: ports.scan ?? (async () => ({ files: [], complete: true })),
+      handoffHeld: ports.handoffHeld ?? (() => false),
       now: ports.now ?? Date.now,
       scheduleTimeout: ports.scheduleTimeout ?? ((callback, delayMs) => setTimeout(callback, delayMs)),
       clearTimeout: ports.clearTimeout ?? ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>)),
@@ -139,6 +147,7 @@ export class FlowPipelineController {
   }
 
   tick(trigger = "signal"): Promise<void> {
+    if (this.ports.handoffHeld()) return Promise.resolve();
     if (this.running) {
       this.trailingCycleRequested = true;
       this.trailingTrigger = trigger;
@@ -174,6 +183,7 @@ export class FlowPipelineController {
     let entries: FileEntry[] = [];
     let scanComplete = false;
     for (let pass = 1; pass <= this.maxPasses; pass += 1) {
+      if (this.ports.handoffHeld()) return;
       lastPass = pass;
       const pipelineOutcome = await this.runPhase(
         "pipelines",
@@ -238,6 +248,10 @@ export class FlowPipelineController {
         startedAt: this.ports.now(),
       });
     }
+  }
+
+  idle(): boolean {
+    return this.running === null && this.activePhases.size === 0;
   }
 
   /** Hourly, off the cycle's critical path: move settled pipeline records to

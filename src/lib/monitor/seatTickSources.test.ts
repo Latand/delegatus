@@ -19,7 +19,7 @@ fs.mkdirSync(process.env.TMPDIR, { recursive: true });
 const SESSIONS = path.join(SANDBOX, "openclaw", "agents", "fixtures", "sessions");
 fs.mkdirSync(SESSIONS, { recursive: true });
 
-const { gatherSeatTickInput: gatherProduction, readRetirementJournalWindow, repoDirForProject, RETIREMENT_STALL_WINDOW_MS, runtimeWakeState, seatTickProjects, stalledRetirementClause, wakeStateFromRecord, withdrawRuntimeWake } = await import("./seatTickSources");
+const { gatherSeatTickInput: gatherProduction, readRetirementJournalWindow, repoDirForProject, RETIREMENT_STALL_WINDOW_MS, runtimeWakeState, seatTickProjects, selfUpdateSignals, stalledRetirementClause, wakeStateFromRecord, withdrawRuntimeWake } = await import("./seatTickSources");
 const { SeatTickAccounting } = await import("./seatTickAccounting");
 const { SEND_UNVERIFIED_REASON } = await import("@/lib/runtime/sendSettlement");
 const { FileRuntimeEventStore } = await import("@/lib/runtime/eventStore");
@@ -33,6 +33,13 @@ const gatherSeatTickInput: typeof gatherProduction = (project, state, policy, po
 };
 const { AgentRegistry } = await import("@/lib/agent/registry");
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+
+test("self-update sends one wait or off signal from its durable state", () => {
+  const quiet = { waitingTarget: null, lastBlockers: null, pending: null };
+  expect(selfUpdateSignals({ ...quiet, off: null, noticeAt: null, waitingSince: null })).toEqual([]);
+  expect(selfUpdateSignals({ ...quiet, waitingTarget: "a".repeat(40), off: null, noticeAt: "2026-01-02", waitingSince: "2026-01-01" })).toMatchObject([{ id: "self-update-wait" }]);
+  expect(selfUpdateSignals({ ...quiet, off: { at: "2026-01-02", target: "a".repeat(40), stage: "build", reason: "build failed" }, noticeAt: null, waitingSince: null })).toMatchObject([{ id: "self-update-off" }]);
+});
 const { sessionKeyFromTranscript } = await import("@/lib/agent/sessionKey");
 const { projectForCwd } = await import("@/lib/scanner/describe");
 import type { OriginalSendEvidence, SendReceipt } from "@/lib/runtime/sendSettlement";

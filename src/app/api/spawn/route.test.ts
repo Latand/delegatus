@@ -133,9 +133,9 @@ test("direct spawn records one durable operator gesture while MCP service spawn 
     ...structuredRouteDependencies(cwd),
     registry: () => store,
     defer: () => {},
-    recordOperatorActivity: (input: { idempotencyKey?: string }) => {
+    recordOperatorRequest: (_request: unknown, input: { idempotencyKey?: string | null; project?: string | null; kind: string }) => {
       recorded.set(input.idempotencyKey ?? "", input);
-      return { key: "b".repeat(64), engine: "claude" as const, project: "project-fixture", atMs: 1 };
+      return null;
     },
   };
   const post = async (clientAttemptId: string | undefined, headers: Record<string, string> = {}) => POST.withDependencies(new NextRequest(
@@ -190,8 +190,9 @@ test("direct spawn records one durable operator gesture while MCP service spawn 
     }
   }
   expect([...recorded.values()]).toEqual([expect.objectContaining({
+    kind: "spawn",
     idempotencyKey: "spawn:operator_spawn_gesture_20260815",
-    resolvedAttribution: expect.objectContaining({ engine: "claude" }),
+    project: expect.any(String),
   })]);
 });
 
@@ -229,8 +230,7 @@ test("a team member's accepted spawn records the first delivery's author", async
         "content-type": "application/json", cookie: `llv_member=${session.value}` },
       body: JSON.stringify({ title: "Review the harbor work", engine: "claude", cwd, project: "harbor",
         ["prompt"]: "inspect", clientAttemptId: "member_spawn_author_1" }),
-    }), { ...structuredRouteDependencies(cwd), registry: () => store, defer: () => {},
-      recordOperatorActivity: () => ({ key: "b".repeat(64), engine: "claude", project: "harbor", atMs: 1 }) });
+    }), { ...structuredRouteDependencies(cwd), registry: () => store, defer: () => {}, });
     expect(response.status).toBe(202);
     const body = await response.json() as { launchId: string; conversationId: string };
     expect(team.messageAuthors([`spawn_${body.launchId}`]).get(`spawn_${body.launchId}`))
@@ -276,7 +276,7 @@ test("one accepted direct spawn produces one input after ledger and transcript i
         body: JSON.stringify({ title: "Inspect harbor activity", engine: "claude", cwd, project: "harbor",
           ["prompt"]: "inspect", clientAttemptId: attempt }),
       }), { ...structuredRouteDependencies(cwd), registry: () => registry, defer: () => {},
-        recordOperatorRequest, recordOperatorActivity: () => ({ key: "b".repeat(64), engine: "claude", project: "harbor", atMs: 1 }) });
+        recordOperatorRequest, });
       expect(response.status).toBe(202);
       const body = await response.json() as { launchId: string; conversationId: string };
       const activityDir = path.join(state, "activity");
@@ -327,74 +327,6 @@ test("one accepted direct spawn produces one input after ledger and transcript i
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
-    }
-  }
-});
-
-test("a corrupt WakaTime state file does not refuse an authorized direct spawn", async () => {
-  const { recordDirectOperatorWakatimeActivity } = await import("@/lib/wakatime/operatorActivity");
-  const { enqueueProductionOperatorHeartbeat } = await import("@/lib/wakatime/sync");
-  const cwd = fs.mkdtempSync(path.join(routeSandbox, "operator-spawn-corrupt-state-"));
-  const stateFile = path.join(cwd, "wakatime-state.json");
-  /* The production shape of this outage: an all-NUL state file that throws in
-     `JSON.parse` before the heartbeat queue can be opened. */
-  const corruptBytes = Buffer.alloc(4_096, 0);
-  fs.writeFileSync(stateFile, corruptBytes, { mode: 0o600 });
-  const store = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
-  const outcomes: string[] = [];
-  const dependencies = {
-    ...structuredRouteDependencies(cwd),
-    registry: () => store,
-    defer: () => {},
-    recordOperatorActivity: (input: Parameters<typeof recordDirectOperatorWakatimeActivity>[0]) =>
-      recordDirectOperatorWakatimeActivity(input, {
-        enabled: () => true,
-        now: () => Date.parse("2026-09-10T09:00:00.000Z"),
-        registrySnapshot: () => { throw new Error("resolved attribution should avoid registry access"); },
-        enqueue: (heartbeat) => enqueueProductionOperatorHeartbeat(heartbeat, stateFile, () => true),
-        reportStorageFailure: (event, fields) => { outcomes.push(`${event}:${String(fields.outcome)}`); },
-      }),
-  };
-  const previous = {
-    transport: process.env.LLV_SPAWN_TRANSPORT,
-    hosts: process.env.LLV_STRUCTURED_HOSTS,
-    events: process.env.LLV_RUNTIME_EVENTS,
-    socket: process.env.LLV_RUNTIME_HOST_SOCKET,
-    ui: process.env.NEXT_PUBLIC_RUNTIME_UI,
-  };
-  process.env.LLV_SPAWN_TRANSPORT = "structured";
-  process.env.LLV_STRUCTURED_HOSTS = "1";
-  process.env.LLV_RUNTIME_EVENTS = "1";
-  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(cwd, "runtime.sock");
-  process.env.NEXT_PUBLIC_RUNTIME_UI = "1";
-  try {
-    const spawned = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
-      method: "POST",
-      headers: {
-        host: "127.0.0.1",
-        origin: "http://127.0.0.1",
-        "sec-fetch-site": "same-origin",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        title: "claude · spawn under a corrupt activity state",
-        engine: "claude",
-        cwd,
-        /* Bracketed like the fixture above: a bare `prompt:` at the head of a
-           source line reads as transcript content to the publication gate. */
-        ["prompt"]: "inspect",
-        clientAttemptId: "operator_spawn_corrupt_state_20260910",
-      }),
-    }), dependencies);
-
-    expect(spawned.status).toBe(202);
-    expect(outcomes).toEqual(["operator_activity_not_stored:state_unreadable"]);
-    expect(fs.readFileSync(stateFile)).toEqual(corruptBytes);
-  } finally {
-    for (const [key, value] of Object.entries(previous)) {
-      const envKey = ({ transport: "LLV_SPAWN_TRANSPORT", hosts: "LLV_STRUCTURED_HOSTS", events: "LLV_RUNTIME_EVENTS", socket: "LLV_RUNTIME_HOST_SOCKET", ui: "NEXT_PUBLIC_RUNTIME_UI" } as const)[key as keyof typeof previous];
-      if (value === undefined) delete process.env[envKey];
-      else process.env[envKey] = value;
     }
   }
 });

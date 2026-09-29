@@ -1,3 +1,4 @@
+import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { activeClaudeAccountId, setActiveClaudeAccount } from "@/lib/accounts/claude";
 import { activeCodexAccountId, codexAccountsMutationLocked, codexLoginPaneStatus, listCodexAccounts, setActiveCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
@@ -20,7 +21,6 @@ import { pathForPanePid, reconcileTasks } from "@/lib/tasks/reconcile";
 import { mutateTasks } from "@/lib/tasks/store";
 import { reconcileWorkflowConversationOwnershipCooperatively } from "@/lib/workflows/store";
 import { paneInfo } from "@/lib/tmux";
-import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 import { spawnViewerResidentWorker } from "@/lib/viewerWorkerLifecycle";
 
 import { reconcileMigrationInventory, reconcileMigrations, type HeldDeliveryPort } from "./coordinator";
@@ -302,7 +302,7 @@ function startInventoryControllerWorker(): void {
   ], {
     cwd: process.cwd(),
     env: {
-      ...withoutWakatimeCredential(process.env),
+      ...withoutUnsupportedApiCredentials(process.env),
       LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER: "1",
     },
   });

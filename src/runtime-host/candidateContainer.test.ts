@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { runtimeEventsEnabled, runtimeHostSocket } from "@/lib/runtime/flags";
-import { WAKATIME_CREDENTIAL_ENV, withoutWakatimeCredential } from "@/lib/wakatime/credential";
+import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 
 import {
   AGENT_REGISTRY_SQLITE_ENV,
@@ -12,7 +12,7 @@ import {
   viewerCandidateDockerArgs,
   viewerCandidateGateKey,
   viewerCandidateTmuxEnvironment,
-  viewerComposeSnapshotWithoutWakatimeCredential,
+  viewerComposeSnapshotWithoutUnsupportedApiCredentials,
   viewerComposeServiceFromConfig,
   type ViewerComposeService,
 } from "./candidateContainer";
@@ -85,7 +85,7 @@ function resolvedCompose(overrides: Record<string, string> = {}): { services: Re
      CI shell that exports it would leak into `docker compose config` and break
      the default-value assertions. Drop it from the inherited env so the test is
      hermetic — an override still sets it explicitly when a case needs it. */
-  const baseEnv = withoutWakatimeCredential(process.env);
+  const baseEnv = withoutUnsupportedApiCredentials(process.env);
   delete baseEnv.LLV_ALLOW_LEGACY_VIEWER;
   /* The same for every `DELEGATUS_` input, which wins over its `LLV_` name,
      and for the app-dir paths the config-dir cases assert. */
@@ -141,6 +141,25 @@ test("promoted candidate derives its runtime contract from Compose", () => {
   expect(args).toContain("--privileged");
 });
 
+test("candidate and Compose snapshots exclude unapproved ambient API keys", () => {
+  const pluginKey = ["EXAMPLE", "PLUGIN", "API", "KEY"].join("_");
+  const serviceKey = ["SONIOX", "API", "KEY"].join("_");
+  const service = {
+    ...composeService,
+    environment: { ...composeService.environment, [pluginKey]: "private-fixture", [serviceKey]: "service-fixture" },
+  };
+  const snapshot = JSON.parse(viewerComposeSnapshotWithoutUnsupportedApiCredentials(JSON.stringify({ services: { viewer: service } }))) as {
+    services: { viewer: { environment: Record<string, string> } };
+  };
+  expect(snapshot.services.viewer.environment[pluginKey]).toBeUndefined();
+  expect(snapshot.services.viewer.environment[serviceKey]).toBe("service-fixture");
+  const args = viewerCandidateDockerArgs(candidate, service, {
+    runtimeSocket: "/runtime.sock", legacyTmuxExternal: "0", tmuxTmpdir: "/tmp/tmux",
+  });
+  expect(environmentFromArgs(args)[pluginKey]).toBeUndefined();
+  expect(environmentFromArgs(args)[serviceKey]).toBe("service-fixture");
+});
+
 test("candidate accepts an older Compose snapshot without supplementary groups", () => {
   const legacyViewer = JSON.parse(JSON.stringify(composeService)) as Record<string, unknown>;
   delete legacyViewer.group_add;
@@ -178,45 +197,13 @@ test("promoted candidate validates and pins the operator registry backend mode",
   })).toThrow("LLV_AGENT_REGISTRY_SQLITE must be off, dual-write, read, or sqlite");
 });
 
-test("candidate artifacts exclude the legacy WakaTime credential", () => {
-  const credentialPlaceholder = ["legacy", "credential", "placeholder"].join("-");
-  const rawConfig = JSON.stringify({
-    services: {
-      viewer: {
-        ...composeService,
-        environment: {
-          ...composeService.environment,
-          [WAKATIME_CREDENTIAL_ENV]: credentialPlaceholder,
-        },
-      },
-      "runtime-host": {
-        environment: { [WAKATIME_CREDENTIAL_ENV]: credentialPlaceholder },
-      },
-    },
-  });
-
-  const snapshot = viewerComposeSnapshotWithoutWakatimeCredential(rawConfig);
-  const service = viewerComposeServiceFromConfig(snapshot);
-  const args = viewerCandidateDockerArgs(candidate, service, {
-    runtimeSocket: "/state/runtime-host.sock",
-    legacyTmuxExternal: "1",
-    tmuxTmpdir: "/run/user/1000/agent-log-viewer",
-  });
-
-  expect(snapshot).not.toContain(WAKATIME_CREDENTIAL_ENV);
-  expect(snapshot).not.toContain(credentialPlaceholder);
-  expect(JSON.stringify(args)).not.toContain(WAKATIME_CREDENTIAL_ENV);
-  expect(JSON.stringify(args)).not.toContain(credentialPlaceholder);
-  expect(environmentFromArgs(args)[WAKATIME_CREDENTIAL_ENV]).toBeUndefined();
-});
-
 test("actual Viewer Compose keys remain covered by the candidate generator", () => {
   const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-compose-parity-"));
   const envFile = path.join(fixtureDir, "service.env");
   fs.writeFileSync(envFile, "");
   const config = Bun.spawnSync(["docker", "compose", "--profile", "*", "config", "--format", "json"], {
     cwd: process.cwd(),
-    env: { ...withoutWakatimeCredential(process.env), LLV_ENV_FILE: envFile },
+    env: { ...process.env, LLV_ENV_FILE: envFile },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -340,7 +327,7 @@ test("candidate executes the Compose guard with its runtime launch grant", () =>
   fs.writeFileSync(bunContainer, "#!/bin/sh\nshift\nexec \"$@\"\n", { mode: 0o755 });
   const result = Bun.spawnSync(command, {
     cwd: sandbox,
-    env: { ...withoutWakatimeCredential(process.env), ...environmentFromArgs(args), PATH: `${sandbox}:${process.env.PATH ?? ""}` },
+    env: { ...process.env, ...environmentFromArgs(args), PATH: `${sandbox}:${process.env.PATH ?? ""}` },
     stdout: "pipe",
     stderr: "pipe",
   });

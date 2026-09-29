@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { readStableTailRecords } from "@/lib/scanner/activity";
 
-import { durableStageTurnEvidence } from "./durableEvidence";
+import { durableStageTurnEvidence, MAX_REPORT_EVIDENCE_BYTES } from "./durableEvidence";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-durable-evidence-"));
 afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -17,6 +17,147 @@ function writeTranscript(name: string, records: Record<string, unknown>[]): stri
 }
 
 const PASS_TEXT = "done\n\n```json\n{\"status\":\"pass\"}\n```";
+
+for (const engine of ["claude", "codex"] as const) {
+  test(`${engine} reads the full assistant brief before stage_report and the later closing message`, async () => {
+    const before = "2026-07-18T10:02:00.000Z";
+    const after = "2026-07-18T10:05:00.000Z";
+    const brief = "Full builder brief with exact implementation details.";
+    const closing = "Brief ready.";
+    const file = writeTranscript(`${engine}-reported-brief.jsonl`, engine === "claude" ? [
+      { type: "assistant", timestamp: "2026-07-18T10:00:00.000Z", message: { role: "assistant", content: [{ type: "text", text: "Previous turn." }] } },
+      { type: "user", timestamp: "2026-07-18T10:01:00.000Z", message: { role: "user", content: "Write the brief." } },
+      { type: "assistant", timestamp: before, message: { role: "assistant", content: [{ type: "text", text: brief }] } },
+      { type: "assistant", timestamp: after, message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: closing }] } },
+    ] : [
+      { timestamp: "2026-07-18T10:00:00.000Z", payload: { type: "agent_message", message: "Previous turn." } },
+      { timestamp: "2026-07-18T10:01:00.000Z", payload: { type: "task_started" } },
+      { timestamp: before, payload: { type: "agent_message", message: brief } },
+      { timestamp: after, payload: { type: "agent_message", message: closing } },
+      { timestamp: "2026-07-18T10:06:00.000Z", payload: { type: "task_complete", last_agent_message: closing } },
+    ]);
+    expect(await durableStageTurnEvidence(engine, file, "2026-07-18T10:03:00.000Z", "2026-07-18T10:01:00.000Z"))
+      .toMatchObject({ turn: "terminal", message: { text: closing }, reportProse: brief });
+  });
+
+  for (const [caseName, briefLength, toolLength] of [
+    ["one oversized assistant record", 150_000, 0],
+    ["a later oversized tool result", 50_000, 100_000],
+  ] as const) {
+    test(`${engine} recovers the reported brief beyond the transcript tail after ${caseName}`, async () => {
+      const brief = `BEGIN BRIEF\n${"b".repeat(briefLength)}\nEND BRIEF`;
+      const tool = "t".repeat(toolLength);
+      const file = writeTranscript(`${engine}-large-reported-brief-${briefLength}.jsonl`, engine === "claude" ? [
+        { type: "user", timestamp: "2026-07-18T10:01:00.000Z", message: { role: "user", content: "Write the brief." } },
+        { type: "assistant", timestamp: "2026-07-18T10:02:00.000Z", message: { role: "assistant", content: [{ type: "text", text: brief }] } },
+        ...(toolLength ? [{ type: "user", timestamp: "2026-07-18T10:03:00.000Z", message: { role: "user", content: [{ type: "tool_result", content: tool }] } }] : []),
+        { type: "assistant", timestamp: "2026-07-18T10:05:00.000Z", message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "Done." }] } },
+      ] : [
+        { timestamp: "2026-07-18T10:01:00.000Z", payload: { type: "task_started" } },
+        { timestamp: "2026-07-18T10:02:00.000Z", payload: { type: "agent_message", message: brief } },
+        ...(toolLength ? [{ timestamp: "2026-07-18T10:03:00.000Z", payload: { type: "function_call_output", output: tool } }] : []),
+        { timestamp: "2026-07-18T10:05:00.000Z", payload: { type: "agent_message", message: "Done." } },
+        { timestamp: "2026-07-18T10:06:00.000Z", payload: { type: "task_complete", last_agent_message: "Done." } },
+      ]);
+
+      const tail = await readStableTailRecords(file);
+      expect(tail).toMatchObject({ integrity: "complete", prefixTruncated: true });
+      expect(tail.records.some((record) => JSON.stringify(record).includes("BEGIN BRIEF"))).toBe(false);
+      expect(await durableStageTurnEvidence(engine, file, "2026-07-18T10:04:00.000Z", "2026-07-18T10:01:00.000Z"))
+        .toMatchObject({ turn: "terminal", message: { text: "Done." }, reportProse: brief });
+    });
+  }
+
+  test(`${engine} recovers an oversized final message after stage_report`, async () => {
+    const brief = `BEGIN FINAL BRIEF\n${"f".repeat(150_000)}\nEND FINAL BRIEF`;
+    const file = writeTranscript(`${engine}-large-final-brief.jsonl`, engine === "claude" ? [
+      { type: "user", timestamp: "2026-07-18T10:01:00.000Z", message: { role: "user", content: "Write the brief." } },
+      { type: "assistant", timestamp: "2026-07-18T10:02:00.000Z", message: { role: "assistant", content: [{ type: "text", text: "Short report prose." }] } },
+      { type: "user", timestamp: "2026-07-18T10:03:00.000Z", message: { role: "user", content: [{ type: "tool_result", content: "Report accepted." }] } },
+      { type: "assistant", timestamp: "2026-07-18T10:05:00.000Z", message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: brief }] } },
+    ] : [
+      { timestamp: "2026-07-18T10:01:00.000Z", payload: { type: "task_started" } },
+      { timestamp: "2026-07-18T10:02:00.000Z", payload: { type: "agent_message", message: "Short report prose." } },
+      { timestamp: "2026-07-18T10:03:00.000Z", payload: { type: "function_call_output", output: "Report accepted." } },
+      { timestamp: "2026-07-18T10:05:00.000Z", payload: { type: "agent_message", message: brief } },
+      { timestamp: "2026-07-18T10:06:00.000Z", payload: { type: "task_complete" } },
+    ]);
+
+    const tail = await readStableTailRecords(file);
+    expect(tail).toMatchObject({ integrity: "complete", prefixTruncated: true });
+    expect(tail.records.some((record) => JSON.stringify(record).includes("BEGIN FINAL BRIEF"))).toBe(false);
+    expect(await durableStageTurnEvidence(engine, file, "2026-07-18T10:04:00.000Z", "2026-07-18T10:01:00.000Z"))
+      .toMatchObject({ turn: "terminal", message: { text: brief }, reportProse: "Short report prose." });
+  });
+}
+
+test("a wider re-read that fails keeps the last complete read and its background-task hold", async () => {
+  const brief = `BEGIN BRIEF\n${"b".repeat(150_000)}\nEND BRIEF`;
+  const file = writeTranscript("claude-reread-fails.jsonl", [
+    { type: "user", timestamp: "2026-07-18T10:01:00.000Z", message: { role: "user", content: "Write the brief." } },
+    { type: "assistant", timestamp: "2026-07-18T10:02:00.000Z", message: { role: "assistant", content: [{ type: "text", text: brief }] } },
+    {
+      type: "user",
+      timestamp: "2026-07-18T10:04:30.000Z",
+      message: { role: "user", content: [{ tool_use_id: "toolu_bg1", type: "tool_result", content: "Command running in background with ID: bg1." }] },
+      toolUseResult: { stdout: "", stderr: "", interrupted: false, backgroundTaskId: "bg1" },
+    },
+    { type: "assistant", timestamp: "2026-07-18T10:05:00.000Z", message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "Done." }] } },
+  ]);
+  /* The transcript was appended between the first read and the wider one. */
+  const reads: number[] = [];
+  const appendedMeanwhile: typeof readStableTailRecords = async (pathname, nbytes = 131_072) => {
+    reads.push(nbytes);
+    return reads.length === 1 ? readStableTailRecords(pathname, nbytes) : { integrity: "uncertain", records: [] };
+  };
+  const evidence = await durableStageTurnEvidence("claude", file, "2026-07-18T10:04:00.000Z", "2026-07-18T10:01:00.000Z", appendedMeanwhile);
+  expect(reads.length).toBe(2);
+  expect(evidence).toMatchObject({ turn: "terminal", message: { text: "Done." }, reportProse: null });
+  expect(evidence?.backgroundTasks?.map((task) => task.id)).toEqual(["bg1"]);
+});
+
+test("a report with no prose before it stops widening once the window reaches the attempt's start", async () => {
+  const history = Array.from({ length: 200 }, (_, index) => ({
+    type: "assistant",
+    timestamp: new Date(Date.parse("2026-07-18T09:00:00.000Z") + index * 1_000).toISOString(),
+    message: { role: "assistant", content: [{ type: "text", text: `Earlier turn ${index} ${"h".repeat(10_000)}` }] },
+  }));
+  const file = writeTranscript("claude-no-report-prose.jsonl", [
+    ...history,
+    { type: "user", timestamp: "2026-07-18T10:01:00.000Z", message: { role: "user", content: "Build it." } },
+    { type: "user", timestamp: "2026-07-18T10:03:00.000Z", message: { role: "user", content: [{ type: "tool_result", content: "Report accepted." }] } },
+    { type: "assistant", timestamp: "2026-07-18T10:05:00.000Z", message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "Done." }] } },
+  ]);
+  expect(fs.statSync(file).size).toBeGreaterThan(2_000_000);
+  const reads: number[] = [];
+  const counted: typeof readStableTailRecords = async (pathname, nbytes = 131_072) => {
+    reads.push(nbytes);
+    return readStableTailRecords(pathname, nbytes);
+  };
+  expect(await durableStageTurnEvidence("claude", file, "2026-07-18T10:04:00.000Z", "2026-07-18T10:00:30.000Z", counted))
+    .toMatchObject({ turn: "terminal", message: { text: "Done." }, reportProse: null });
+  expect(reads).toEqual([131_072]);
+});
+
+test("the widening read stops at an absolute cap when nothing bounds it", async () => {
+  const reads: number[] = [];
+  const endless: typeof readStableTailRecords = async (_pathname, nbytes = 131_072) => {
+    reads.push(nbytes);
+    return {
+      integrity: "complete",
+      prefixTruncated: true,
+      records: [{ type: "assistant", timestamp: "2026-07-18T10:05:00.000Z", message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "Done." }] } }],
+    };
+  };
+  const file = writeTranscript("claude-capped.jsonl", [{ type: "user", timestamp: "2026-07-18T10:01:00.000Z", message: { role: "user", content: "Build it." } }]);
+  for (const startedAt of ["2026-07-18T10:01:00.000Z", null]) {
+    reads.length = 0;
+    expect(await durableStageTurnEvidence("claude", file, "2026-07-18T10:04:00.000Z", startedAt, endless))
+      .toMatchObject({ turn: "terminal", message: { text: "Done." }, reportProse: null });
+    expect(Math.max(...reads)).toBe(MAX_REPORT_EVIDENCE_BYTES);
+    expect(reads.length).toBeLessThanOrEqual(8);
+  }
+});
 
 test("a one-record Codex launch transcript reports no agent progress (#1325)", async () => {
   const file = writeTranscript("codex-launch-only.jsonl", [

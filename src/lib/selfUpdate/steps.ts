@@ -8,16 +8,17 @@
 import { spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
+import { setPriority } from "node:os";
 
 import { runGit, TIP_REF } from "./git";
-import { readStartIdentity, signalGroup, type RecordedPid } from "./pid";
+import { readStartIdentity, sameProcess, signalGroup, type RecordedPid } from "./pid";
 import { releaseDirFor, type Release } from "./release";
 import { CHECKOUT_STEPS, idleUpdate, pendingSteps, shortSha, type CheckoutStepName, type Step, type StepFailure, type UpdateState } from "./types";
 
 export const TAIL_LINES = 40;
 export const MIN_AVAILABLE_MB = 4_096;
 
-export interface RunOptions { cwd: string; env: Record<string, string>; onLine(line: string): void }
+export interface RunOptions { cwd: string; env: Record<string, string>; onLine(line: string): void; lowPriority?: boolean }
 
 export interface StepPorts {
   /** Runs a command to completion and answers its exit code. */
@@ -29,6 +30,8 @@ export interface StepPorts {
   /** Makes a ready build the installed release. */
   publish(release: Release): void;
   now(): number;
+  abort?(): void;
+  childAlive?(): boolean;
 }
 
 export interface RunnerConfig {
@@ -39,7 +42,15 @@ export interface RunnerConfig {
   logDir: string;
   releasesDir: string;
   env: Record<string, string>;
+  /** Tests can shorten the deadline without sleeping for minutes. */
+  stepTimeoutMs?: Partial<Record<CheckoutStepName, number>>;
+  livenessPollMs?: number;
 }
+
+export const STEP_TIMEOUT_MS: Record<CheckoutStepName, number> = {
+  fetch: 10 * 60_000, checkout: 5 * 60_000, install: 20 * 60_000,
+  build: 45 * 60_000, ready: 5 * 60_000,
+};
 
 /* A command that exited non-zero; its output is already in the log. */
 class CommandFailure extends Error {
@@ -80,7 +91,7 @@ export class UpdateRunner {
     };
   }
 
-  async start(target: string, meta: { short?: string; version?: string } = {}): Promise<void> {
+  async start(target: string, meta: { short?: string; version?: string; trigger?: "operator" | "auto" } = {}): Promise<void> {
     if (this.state.state === "running") throw new Error("an update is already running");
     this.state = {
       ...idleUpdate(CHECKOUT_STEPS),
@@ -90,6 +101,7 @@ export class UpdateRunner {
       targetVersion: meta.version ?? null,
       releaseDir: releaseDirFor(this.config.releasesDir, target),
       startedAt: this.iso(),
+      trigger: meta.trigger ?? "operator",
     };
     this.onChange();
     await this.runFrom(0);
@@ -127,7 +139,9 @@ export class UpdateRunner {
       this.patch(index, { state: "running", startedAt: this.iso(), durationMs: null, exitCode: null, tail: [], failure: null });
       const fd = openSync(this.logPath(name), "w");
       const tail: string[] = [];
+      let accepting = true;
       const push = (line: string, toTail = true) => {
+        if (!accepting) return;
         writeSync(fd, `${line}\n`);
         if (!toTail) return;
         tail.push(line);
@@ -136,8 +150,27 @@ export class UpdateRunner {
       };
       let exitCode: number | null = null;
       let failure: StepFailure | null = null;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      let liveness: ReturnType<typeof setInterval> | null = null;
       try {
-        exitCode = await this.runStep(name, push);
+        const limit = this.config.stepTimeoutMs?.[name] ?? STEP_TIMEOUT_MS[name];
+        exitCode = await Promise.race([
+          this.runStep(name, push),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+              this.ports.abort?.();
+              reject(new StepError({ kind: "timeout", minutes: limit / 60_000 }, `${name} did not finish within ${limit / 60_000} min`));
+            }, limit);
+            timer.unref?.();
+          }),
+          new Promise<never>((_, reject) => {
+            if (!this.ports.childAlive) return;
+            liveness = setInterval(() => {
+              if (this.ports.childAlive?.() === false) reject(new StepError({ kind: "interrupted" }, `${name} child process ended without settling the step`));
+            }, this.config.livenessPollMs ?? 1_000);
+            liveness.unref?.();
+          }),
+        ]);
       } catch (error) {
         if (error instanceof CommandFailure) {
           exitCode = error.code;
@@ -152,6 +185,9 @@ export class UpdateRunner {
           failure = { kind: "error", text };
         }
       } finally {
+        if (timer) clearTimeout(timer);
+        if (liveness) clearInterval(liveness);
+        accepting = false;
         closeSync(fd);
       }
       const ok = failure === null;
@@ -181,7 +217,7 @@ export class UpdateRunner {
     const release = this.state.releaseDir!;
     const command = async (argv: string[], cwd: string): Promise<number> => {
       push(`$ ${argv.join(" ")}   (in ${cwd})`, false);
-      const code = await this.ports.run(argv, { cwd, env, onLine: (line) => push(line) });
+      const code = await this.ports.run(argv, { cwd, env, onLine: (line) => push(line), lowPriority: this.state.trigger === "auto" });
       push(`exit ${code}`, false);
       if (code !== 0) throw new CommandFailure(code);
       return code;
@@ -232,7 +268,7 @@ export interface RealPorts extends StepPorts { abort(): void }
 export function realPorts(publish: (release: Release) => void): RealPorts {
   let current: RecordedPid | null = null;
   return {
-    async run(command, { cwd, env, onLine }) {
+    async run(command, { cwd, env, onLine, lowPriority }) {
       mkdirSync(env.TMPDIR ?? cwd, { recursive: true });
       const child = spawn(command[0]!, command.slice(1), { cwd, env: env as NodeJS.ProcessEnv, detached: true, stdio: ["ignore", "pipe", "pipe"] });
       const exited = new Promise<number>((resolve) => {
@@ -241,6 +277,9 @@ export function realPorts(publish: (release: Release) => void): RealPorts {
       });
       const identity = child.pid ? readStartIdentity(child.pid) : null;
       if (child.pid && identity) current = { pid: child.pid, startIdentity: identity };
+      if (lowPriority && child.pid) {
+        try { setPriority(child.pid, 10); } catch { /* best effort; never fail the update for scheduling */ }
+      }
       try {
         await Promise.all([pumpLines(child.stdout, onLine), pumpLines(child.stderr, onLine)]);
         return await exited;
@@ -251,6 +290,7 @@ export function realPorts(publish: (release: Release) => void): RealPorts {
     abort() {
       if (current) signalGroup(current, "SIGTERM");
     },
+    childAlive: () => current === null || sameProcess(current),
     memAvailableMb,
     async revParse(ref, cwd) {
       return (await runGit(["rev-parse", "--verify", "--quiet", ref], cwd)).stdout.trim();

@@ -39,19 +39,12 @@ function waitForExit(pid: number): Promise<void> {
   });
 }
 
-const workerEntries = [
-  ["lifecycle probe", ""],
-  ["WakaTime sync worker", path.join(import.meta.dir, "wakatimeSync.worker.ts")],
-] as const;
-
-for (const [label, entry] of workerEntries) {
-test(`${label} exits when its Viewer parent is killed`, async () => {
+test("resident worker exits when its Viewer parent is killed", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-worker-parent-"));
   const parent = spawn(process.execPath, [path.join(import.meta.dir, "viewerWorkerLifecycle.parent.ts")], {
     cwd: process.cwd(),
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, LLV_TEST_WORKER_ENTRY: entry, LLV_WAKATIME_ENABLED: "",
-      LLV_STATE_DIR: path.join(sandbox, "state"), XDG_CONFIG_HOME: sandbox },
+    env: { ...process.env, LLV_STATE_DIR: path.join(sandbox, "state"), XDG_CONFIG_HOME: sandbox },
   });
   let workerPid: number | null = null;
   try {
@@ -66,7 +59,7 @@ test(`${label} exits when its Viewer parent is killed`, async () => {
   }
 });
 
-test(`${label} exits when a successor replaces its live Viewer`, async () => {
+test("resident worker exits when a successor replaces its live Viewer", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-worker-release-"));
   const targetFile = path.join(sandbox, "viewer-release.json");
   fs.writeFileSync(targetFile, JSON.stringify({ endpoint: "http://127.0.0.1:17990" }));
@@ -74,7 +67,6 @@ test(`${label} exits when a successor replaces its live Viewer`, async () => {
     cwd: process.cwd(),
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, PORT: "17990", LLV_VIEWER_DEPLOY_TARGET: targetFile,
-      LLV_TEST_WORKER_ENTRY: entry, LLV_WAKATIME_ENABLED: "",
       LLV_STATE_DIR: path.join(sandbox, "state"), XDG_CONFIG_HOME: sandbox },
   });
   let workerPid: number | null = null;
@@ -92,4 +84,3 @@ test(`${label} exits when a successor replaces its live Viewer`, async () => {
     fs.rmSync(sandbox, { recursive: true, force: true });
   }
 });
-}

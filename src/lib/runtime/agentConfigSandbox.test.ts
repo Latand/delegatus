@@ -11,6 +11,7 @@ import { agentConfigSandboxRoot, withAgentConfigSandbox } from "./agentConfigSan
    command carries this; these cases pin what "isolated" means. */
 
 test("a spawned agent's environment carries its own config and state root", () => {
+  const pluginKey = ["EXAMPLE", "PLUGIN", "API", "KEY"].join("_");
   const source: NodeJS.ProcessEnv = {
     NODE_ENV: "production",
     HOME: "/opt/operator-home",
@@ -19,6 +20,7 @@ test("a spawned agent's environment carries its own config and state root", () =
     TMPDIR: "/scratch/tmp",
     [STATE_OWNER_ENV]: "viewer",
     [QUIET_DIAGNOSTICS_ENV]: "1",
+    [pluginKey]: "private-fixture",
   };
   const env = withAgentConfigSandbox({ ...source }, source, "/opt/operator-home/.config/agent-log-viewer/accounts/claude/lane");
 
@@ -29,6 +31,7 @@ test("a spawned agent's environment carries its own config and state root", () =
   expect(env[STATE_OWNER_ENV]).toBeUndefined();
   /* So does the CLI launcher's quiet terminal. */
   expect(env[QUIET_DIAGNOSTICS_ENV]).toBeUndefined();
+  expect(env[pluginKey]).toBeUndefined();
   /* `gh` read its configuration out of XDG_CONFIG_HOME, so it is pinned. */
   expect(env.GH_CONFIG_DIR).toBe("/opt/operator-home/.config/gh");
 });

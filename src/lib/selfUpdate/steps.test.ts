@@ -15,7 +15,7 @@ interface Script { lines?: string[]; exit?: number }
 
 /* A stubbed spawn: each step's command is recognised by its argv and answers
    with scripted lines and an exit code. Nothing real runs. */
-function harness(scripts: Partial<Record<StepName, Script>>, overrides: Partial<StepPorts> = {}) {
+function harness(scripts: Partial<Record<StepName, Script>>, overrides: Partial<StepPorts> = {}, stepTimeoutMs?: Partial<Record<StepName, number>>, livenessPollMs?: number) {
   const logDir = mkdtempSync("/var/tmp/self-update-steps-");
   roots.push(logDir);
   const calls: string[][] = [];
@@ -40,7 +40,7 @@ function harness(scripts: Partial<Record<StepName, Script>>, overrides: Partial<
     ...overrides,
   };
   const runner = new UpdateRunner(
-    { checkout: CHECKOUT, remote: "/var/tmp/remote.git", branch: "main", bun: "/opt/bun", logDir, releasesDir: RELEASES, env: { PATH: "/usr/bin" } },
+    { checkout: CHECKOUT, remote: "/var/tmp/remote.git", branch: "main", bun: "/opt/bun", logDir, releasesDir: RELEASES, env: { PATH: "/usr/bin" }, stepTimeoutMs, livenessPollMs },
     ports,
     () => {},
   );
@@ -192,5 +192,60 @@ describe("UpdateRunner", () => {
     release(0);
     await run;
     expect(seen).toEqual(["running", "running"]);
+  });
+
+  test("a stuck command settles in place at its deadline and can be retried", async () => {
+    let release: (code: number) => void = () => {};
+    let aborts = 0;
+    let stuck = true;
+    const { runner } = harness({}, {
+      run: (command) => command.includes("fetch") && stuck
+        ? new Promise<number>((resolve) => { release = resolve; })
+        : Promise.resolve(0),
+      abort: () => { aborts += 1; },
+    }, { fetch: 10 });
+    await runner.start(TARGET);
+    expect(aborts).toBe(1);
+    expect(runner.state.state).toBe("failed");
+    expect(runner.state.steps[0]?.failure?.kind).toBe("timeout");
+    release(0);
+    await Bun.sleep(1);
+    expect(runner.state.state).toBe("failed");
+    stuck = false;
+    await runner.retry();
+    expect(runner.state.state).toBe("done");
+  });
+
+  test("a vanished child interrupts the in-memory step without a web restart", async () => {
+    let alive = true;
+    let stuck = true;
+    let release: (code: number) => void = () => {};
+    const { runner } = harness({}, {
+      run: (command) => command.includes("fetch") && stuck ? new Promise<number>((resolve) => { release = resolve; }) : Promise.resolve(0),
+      childAlive: () => alive,
+    }, { fetch: 10_000 }, 10);
+    const run = runner.start(TARGET);
+    await Bun.sleep(1);
+    alive = false;
+    await run;
+    expect(runner.state.state).toBe("failed");
+    expect(runner.state.steps[0]?.failure).toEqual({ kind: "interrupted" });
+    release(0);
+    await Bun.sleep(1);
+    expect(runner.state.state).toBe("failed");
+    alive = true;
+    stuck = false;
+    await runner.retry();
+    expect(runner.state.state).toBe("done");
+  });
+
+  test("only automatic builds ask spawned commands for lower priority", async () => {
+    const priorities: Array<boolean | undefined> = [];
+    const port = { run: async (_command: string[], options: { lowPriority?: boolean }) => { priorities.push(options.lowPriority); return 0; } } as Partial<StepPorts>;
+    await harness({}, port).runner.start(TARGET);
+    expect(priorities).toEqual([false, false, false, false]);
+    priorities.length = 0;
+    await harness({}, port).runner.start(TARGET, { trigger: "auto" });
+    expect(priorities).toEqual([true, true, true, true]);
   });
 });

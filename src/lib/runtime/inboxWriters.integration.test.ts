@@ -131,7 +131,6 @@ test("control: an ordinary send under its own key writes its own batch", async (
 test("the legacy conversation-host send under the key can neither replace nor delete the queued file", async () => {
   setConversationHostDependenciesForTests({
     completedFileScan: async () => ({ snapshot: { files: [] } }) as never,
-    recordDirectOperatorWakatimeActivity: () => null,
     collectImagePayloads: () => ({ images: [], error: null }),
     /* A terminal refusal, so the route releases what it wrote. */
     enqueueStructuredMessage: async () => ({

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
+import { withoutUnsupportedApiCredentialEntries } from "@/lib/environmentIsolation";
 
 import type { ViewerReleaseIdentity } from "@/lib/runtime/contracts";
-import { withoutWakatimeCredentialEntries } from "@/lib/wakatime/credential";
 
 import { AGENT_REGISTRY_SQLITE_ENV, type AgentRegistryBackendMode } from "./candidateContainer";
 import { DOCKER_NAMES, type DockerNameSpelling } from "./dockerNames";
@@ -187,7 +187,7 @@ function parseTopology(id: string, raw: string): PredecessorTopology {
     /* PR #521: keep unsupported credentials and predecessor-owned generation
        markers outside the cloned environment. The successor appends one
        authoritative value for every reserved generation key below. */
-    env: withoutWakatimeCredentialEntries(stringArray(config.Env))
+    env: withoutUnsupportedApiCredentialEntries(stringArray(config.Env))
       .filter((entry) => !RUNTIME_HOST_GENERATION_ENV.some((key) => isEnvironmentEntry(entry, key))),
     cmd,
     containerUser: typeof config.User === "string" ? config.User : "",

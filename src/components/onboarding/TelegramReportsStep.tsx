@@ -133,6 +133,7 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
       }
       const updated = settingsOf(await response.json().catch(() => ({})) as Partial<ProjectReportSettings>);
       setSettings(updated);
+      if (outcome && "link" in outcome) await bot.refresh();
       setLink("");
       setPicked(updated.reportTelegram?.chat ?? LOG_ONLY);
       setSaved(updated.reportTelegram?.chat ? { chat: updated.reportTelegram.chat, name: updated.reportTelegram.name ?? name.trim(), topicId: updated.reportTelegram.topicId } : null);

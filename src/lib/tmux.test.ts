@@ -98,24 +98,26 @@ describe("spawn pane fencing", () => {
   const endpoint = createTmuxEndpointDescriptor("/run/user/1000/agent-log-viewer", 1000);
   const server = { pid: 900, startIdentity: "900:start" };
 
-  test("removes the Viewer-owned WakaTime credential from the tmux server before opening a pane", async () => {
+  test("clears an unapproved ambient API key from the tmux server before spawn", async () => {
+    const pluginKey = ["EXAMPLE", "PLUGIN", "API", "KEY"].join("_");
+    const previous = process.env[pluginKey];
+    process.env[pluginKey] = "private-fixture";
     const calls: string[][] = [];
-    const deps = {
-      runTmux: async (args: string[]) => {
-        calls.push(args);
-        if (args[0] === "list-panes") return { code: 0, stdout: "", stderr: "" };
-        if (args[0] === "new-window") return { code: 0, stdout: "%9\n", stderr: "" };
-        if (args[0] === "display-message") return { code: 0, stdout: "900\t%9\t109\tagents:1.0\tcodex-new\tzsh\n", stderr: "" };
-        return { code: 0, stdout: "", stderr: "" };
-      },
-      processIdentity: (pid: number) => `${pid}:start`,
-    };
-
-    await createSpawnWindow({ session: "agents", cwd: "/repo", windowName: "codex-new", endpoint, server }, deps);
-
-    expect(calls[0]).toEqual(["set-environment", "-gu", "WAKATIME_API_KEY"]);
-    expect(calls.findIndex((args) => args[0] === "set-environment"))
-      .toBeLessThan(calls.findIndex((args) => args[0] === "new-window"));
+    try {
+      await expect(createSpawnWindow({ session: "agents", cwd: "/repo", windowName: "worker", endpoint, server }, {
+        runTmux: async (args) => {
+          calls.push(args);
+          return args[0] === "list-panes"
+            ? { code: 1, stdout: "", stderr: "snapshot unavailable" }
+            : { code: 0, stdout: "", stderr: "" };
+        },
+        processIdentity: () => null,
+      })).rejects.toThrow("snapshot unavailable");
+      expect(calls[0]).toEqual(["set-environment", "-gu", pluginKey]);
+    } finally {
+      if (previous === undefined) delete process.env[pluginKey];
+      else process.env[pluginKey] = previous;
+    }
   });
 
   test("uses the pane id created by new-window while foreign idle panes exist and coordinates renumber", async () => {

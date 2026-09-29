@@ -303,7 +303,7 @@ function createVendorDigestFixture(): { manifest: string; readme: string; root: 
 }
 
 describe("privacy publication gate", () => {
-  test("fresh Bun startup isolates ambient credentials from publication children and evidence", () => {
+  test("publication children exclude unapproved ambient API keys", () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-ambient-"));
     temporaryDirectories.push(directory);
     runGit(directory, ["init", "--quiet"]);
@@ -313,7 +313,7 @@ describe("privacy publication gate", () => {
     runGit(directory, ["add", "README.md"]);
     runGit(directory, ["commit", "--quiet", "-m", "fixture"]);
 
-    const credentialName = ["WAKA", "TIME_API_KEY"].join("");
+    const credentialName = "EXAMPLE_PLUGIN_API_KEY";
     const credentialPlaceholder = ["ambient", "public", "fixture"].join("-");
     const bin = join(directory, "bin");
     mkdirSync(bin);
@@ -321,7 +321,7 @@ describe("privacy publication gate", () => {
     if (!realGit) throw new Error("Git fixture executable is unavailable");
     const git = join(bin, "git");
     writeFileSync(git, `#!/bin/sh
-credential_name='WAKA''TIME_API_KEY'
+credential_name=EXAMPLE_PLUGIN_API_KEY
 if env | grep -q "^\${credential_name}="; then exit 97; fi
 exec "$LLV_TEST_REAL_GIT" "$@"
 `);

@@ -163,7 +163,6 @@ async function launch(
         throw new Error("the pane must stay unreachable");
       },
       ensureTaskPipelineForAssignment: undefined,
-      recordOperatorActivity: undefined,
     },
   );
   const payload = await response.json() as { error?: string };

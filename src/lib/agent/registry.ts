@@ -7208,26 +7208,6 @@ export class AgentRegistry {
     });
   }
 
-  /** The conversation owning each path, projected before it leaves the read.
-      A caller that needs a few fields of each conversation for thousands of
-      paths pays for those fields: no whole-registry snapshot, no per-path
-      clone. Paths no conversation owns are absent from the result. */
-  projectConversationsForPaths<T>(
-    paths: readonly string[],
-    project: (conversation: RegistryConversation) => T,
-  ): Map<string, T> {
-    const projected = new Map<string, T>();
-    if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
-      return this.sqliteStore.projectConversationsForPaths(paths, project);
-    }
-    const lookup = readOnlyConversationLookupFromSnapshot(this.readOnlySnapshot());
-    for (const artifactPath of paths) {
-      const conversation = lookup.conversationForPath(artifactPath);
-      if (conversation) projected.set(artifactPath, project(conversation));
-    }
-    return projected;
-  }
-
   canonicalConversationId(id: ViewerConversationId): ViewerConversationId {
     return this.readKeyed(file => resolveConversationAlias(file, id));
   }

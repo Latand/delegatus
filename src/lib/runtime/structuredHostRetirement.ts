@@ -134,8 +134,8 @@ const JOURNAL_ROTATE_BYTES = 4 * 1024 * 1024;
     outcome depends on this host being there. */
 const TERMINAL_RECEIPT_STATES = new Set(["completed", "failed", "conflicted"]);
 /** A launch receipt older than this that never settled was abandoned: the
-    production registry held 64 of them from July, each refusing its host on
-    every sweep for a launch nothing was still driving. Every launch step that
+    production registry held 64 of them from July, and they could keep named
+    hosts from retiring. Every launch step that
     can still complete does so within minutes (`starting` alone is leased for
     two), and a host that is idle past the transcript threshold with its
     transcript on disk has already proven it can resume, so a day is far past
@@ -222,6 +222,7 @@ export interface StructuredHostRetirementSubject {
   /** The launch stamp outlives its receipt's work; null means the stamped
       receipt is missing or there is no stamp. */
   structuredHostOperationReceiptState: SpawnReceipt["state"] | null;
+  structuredHostOperationReceiptAbandoned: boolean;
   /** Undetermined when the handoff queue could not be read: an unreadable
       queue is not a drained one. */
   undeliveredHandoffEntries: Determinable<number>;
@@ -363,7 +364,8 @@ const CLAUSE_CHECKS: Record<
   "no-open-operation": (subject) => {
     if (subject.pendingAction !== null) return refuses(`a ${subject.pendingAction} action is pending`);
     if (subject.structuredHostOperationId !== null
-      && !TERMINAL_RECEIPT_STATES.has(subject.structuredHostOperationReceiptState ?? "")) {
+      && !TERMINAL_RECEIPT_STATES.has(subject.structuredHostOperationReceiptState ?? "")
+      && !subject.structuredHostOperationReceiptAbandoned) {
       return refuses("a structured host operation is still in flight");
     }
     return subject.openOperations > 0
@@ -863,9 +865,9 @@ function undeliveredHandoffIndex(
 }
 
 /** Spawn receipts that named a key or its conversation and have not settled.
-    Retiring under one strands the launch it is waiting on, unless the receipt
-    was abandoned: one that outlived `RETIREMENT_ABANDONED_RECEIPT_MS` without
-    settling waits on nothing, and counting it would refuse its host forever. */
+    Recent receipts protect the launch. Old receipts no longer block by
+    themselves; the delivery and other live-work clauses still protect work
+    that remains unfinished. */
 function openOperationIndex(file: RegistryFile, nowMs: number): RetirementWorkIndex {
   const index = new RetirementWorkIndex();
   for (const receipt of Object.values(file.receipts ?? {})) {
@@ -883,6 +885,7 @@ function openOperationIndex(file: RegistryFile, nowMs: number): RetirementWorkIn
  * whose queue and receipts come from the planning pass would re-check nothing.
  */
 interface RetirementInputs {
+  nowMs: number;
   file: RegistryFile;
   conversationsBySession: Map<string, RegistryFile["conversations"][string]>;
   undelivered: Determinable<RetirementWorkIndex>;
@@ -910,6 +913,7 @@ function retirementInputs(sources: RetirementSources, nowMs: number): Retirement
     for (const generation of conversation.generations) conversationsBySession.set(generation.id, conversation);
   }
   return {
+    nowMs,
     file,
     conversationsBySession,
     undelivered: undeliveredHandoffIndex(sources.handoffRows(), file),
@@ -988,6 +992,7 @@ function retirementSubject(
   const pipeline = memberships.find((membership) => membership.kind === "pipeline") ?? null;
   const generation = conversation?.generations.find((candidate) => candidate.id === key.sessionId) ?? null;
   const launchId = entry.structuredHostOperationId ?? null;
+  const launchReceipt = launchId === null ? null : inputs.file.receipts[launchId] ?? null;
 
   return {
     key,
@@ -1010,7 +1015,9 @@ function retirementSubject(
     activeFlags: columns.activeFlags,
     pendingAction: entry.pendingAction,
     structuredHostOperationId: launchId,
-    structuredHostOperationReceiptState: launchId === null ? null : inputs.file.receipts[launchId]?.state ?? null,
+    structuredHostOperationReceiptState: launchReceipt?.state ?? null,
+    structuredHostOperationReceiptAbandoned: launchReceipt !== null
+      && receiptAbandoned(launchReceipt.createdAt, inputs.nowMs),
     undeliveredHandoffEntries: mapDeterminable(inputs.undelivered,
       (index) => index.count(keyId, conversationId)),
     openOperations: inputs.openOperations.count(keyId, conversationId),

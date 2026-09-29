@@ -39,6 +39,8 @@ interface StructuredOperationStatus {
 }
 
 export interface StructuredDeliveryQueuePort {
+  /** Pause durable effects while an automatic release handoff owns admission. */
+  handoffHeld?(): boolean;
   /** A terminal provider turn engages an account pick immediately (#1983).
       Live host health still fences a newer turn before applying it. */
   terminalTurn?(conversationId: string): boolean;
@@ -883,6 +885,7 @@ export class StructuredDeliveryQueue {
   }
 
   private async drainTarget(effects: DeliveryEffect[]): Promise<boolean> {
+    if (this.port.handoffHeld?.()) return true;
     if (effects.length > 0 && effects.every(effect => effect.kind === "native-queue")
       && this.nativeExecutionRetries.get(effects[0]!.conversationId)?.ready() === false) {
       this.retrySoon();
@@ -960,6 +963,7 @@ export class StructuredDeliveryQueue {
     const readHold = () => conversationId ? this.port.switchHold?.(conversationId) ?? null : null;
     let hold = readHold();
     for (const effect of effects) {
+      if (this.port.handoffHeld?.()) return true;
       /* #862: a compaction in flight holds back everything that would write to
          the thread — messages and reconfigures — but never another control.
          Kill is the operator's safety valve and interrupt/answer are how a turn
@@ -1242,6 +1246,11 @@ export class StructuredDeliveryQueue {
       }
       let receipt;
       try {
+        if (this.port.handoffHeld?.()) {
+          this.firstDispatches.delete(effect.operationId);
+          await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "automatic-update-handoff" });
+          return true;
+        }
         // Consume before entering the host. A read retry, thrown result or
         // later queued retry must establish its own canonical evidence.
         this.firstDispatches.delete(effect.operationId);

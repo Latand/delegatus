@@ -85,6 +85,16 @@ export async function postCheck(request: NextRequest): Promise<NextResponse> {
   return answer({ ok: true });
 }
 
+export async function postAuto(request: NextRequest): Promise<NextResponse> {
+  const refused = operatorGate(request);
+  if (refused) return refused;
+  const input = await body(request);
+  if (typeof input.enabled !== "boolean") {
+    return NextResponse.json({ error: "enabled must be a boolean", code: "bad-enabled" }, { status: 400, headers: noStore });
+  }
+  return answer(await selfUpdateService().setAuto(input.enabled));
+}
+
 /** `{ key, retry? }`: `key` is the browser's id for this one press, so a
     repeated POST of the same press is the same deployment. */
 export async function postUpdate(request: NextRequest): Promise<NextResponse> {

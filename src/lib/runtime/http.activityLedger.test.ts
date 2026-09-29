@@ -38,7 +38,6 @@ function dependencies(enqueued: unknown[]): RuntimeHttpDependencies {
     enabled: () => true,
     structuredEnabled: () => true,
     client: () => null,
-    recordOperatorActivity: () => null,
     recordOperatorRequest: (req, input) => recordOperatorRequest(req, input, {
       dir: () => ledgerDir,
       registrySnapshot: () => ({ conversations: {} }) as unknown as RegistryFile,
