@@ -5439,8 +5439,8 @@ async function linkingMain(): Promise<void> {
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const stage = "https://delegatus.example.com";
-  const peer = (over: object = {}) => ({ id: "11111111-1111-4111-8111-111111111111", label: "home-pc", url: "https://home.example.test", state: "active", error: null, lastCall: Date.parse("2026-09-29T09:00:00Z"), ...over });
-  const grant = { id: "22222222-2222-4222-8222-222222222222", label: "home-pc", created: 200, requests: 44, today: 3, sevenDays: 41, lastUsed: null };
+  const peer = (over: object = {}) => ({ id: "peer-home", label: "home-pc", url: "https://home.example.test", state: "active", error: null, lastCall: Date.parse("2026-09-29T09:00:00Z"), ...over });
+  const grant = { id: "grant-home", label: "home-pc", created: 200, requests: 44, today: 3, sevenDays: 41, lastUsed: null };
   const accept = (over: Partial<LinkingFixture>): LinkingFixture => ({ role: "accept", state: "ok", publicUrl: stage, vouches: false, peers: [], grants: [], used: false, connect: null, focus: "", ...over });
   const connect = (over: Partial<LinkingFixture>): LinkingFixture => ({ role: "connect", state: null, publicUrl: null, vouches: false, peers: [], grants: [], used: false, connect: null, focus: "", ...over });
   const frames: Record<string, { fixture: LinkingFixture; steps: (page: Page, lang: "en" | "uk") => Promise<void> }> = {
