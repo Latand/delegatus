@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { agentRegistry, conversationLookupFromSnapshot, type RegistryFile } from "@/lib/agent/registry";
+import { agentRegistry, type RegistryConversation } from "@/lib/agent/registry";
 import { configFilePath, statePath } from "@/lib/configDir";
 import { UNRESOLVED_PROJECT } from "@/lib/projects/identity";
 import {
@@ -106,9 +106,34 @@ interface WakatimeResponse {
   text(): Promise<string>;
 }
 
+/** What heartbeat attribution reads of a conversation. The worker holds this
+    for each scanned transcript instead of the registry that owns them. */
+export interface WakatimeConversation {
+  id: string;
+  engine: RegistryConversation["engine"];
+  currentPath: string | null;
+  cwd: string | null;
+  launchProfileProject: string | null;
+  projectOwnership: RegistryConversation["projectOwnership"];
+}
+
+export function wakatimeConversation(conversation: RegistryConversation): WakatimeConversation {
+  const generation = conversation.generations.at(-1);
+  return {
+    id: conversation.id,
+    engine: conversation.engine,
+    currentPath: generation?.path ?? null,
+    cwd: generation?.launchProfile.cwd || null,
+    launchProfileProject: generation?.launchProfile.project ?? null,
+    projectOwnership: conversation.projectOwnership ? { ...conversation.projectOwnership } : null,
+  };
+}
+
 export interface WakatimeSyncDependencies {
   scan(): Promise<{ files: FileEntry[]; complete: boolean }>;
-  registrySnapshot(): RegistryFile;
+  /** The conversation owning each transcript path, as far as attribution reads
+      it. A path no conversation owns is absent. */
+  conversationsForPaths(paths: readonly string[]): ReadonlyMap<string, WakatimeConversation>;
   recentTurnWindows(entry: FileEntry): RecentTurnWindows;
   readCredential(): Promise<WakatimeCredential | null> | WakatimeCredential | null;
   readState(): Promise<unknown | null> | unknown | null;
@@ -615,15 +640,14 @@ export function createWakatimeSync(deps: WakatimeSyncDependencies): WakatimeSync
     }
     if (scan.complete) {
       try {
-        const registry = deps.registrySnapshot();
-        const lookup = conversationLookupFromSnapshot(registry);
-        for (const entry of scan.files) {
-          if ((entry.engine !== "claude" && entry.engine !== "codex" && entry.engine !== "copilot")
-            || (entry.root !== "claude-projects" && entry.root !== "codex-sessions")
-            || !entry.path.endsWith(".jsonl") || entry.derivationComplete !== true) continue;
-          const conversation = lookup.conversationForPath(entry.path);
-          const generation = conversation?.generations.at(-1);
-          if (!conversation || !generation || generation.path !== entry.path || conversation.engine !== entry.engine) continue;
+        const eligible = scan.files.filter((entry) =>
+          (entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot")
+          && (entry.root === "claude-projects" || entry.root === "codex-sessions")
+          && entry.path.endsWith(".jsonl") && entry.derivationComplete === true);
+        const conversations = deps.conversationsForPaths(eligible.map((entry) => entry.path));
+        for (const entry of eligible) {
+          const conversation = conversations.get(entry.path);
+          if (!conversation || conversation.currentPath !== entry.path || conversation.engine !== entry.engine) continue;
           const recent = deps.recentTurnWindows(entry);
           if (!recent.complete) continue;
           if (recent.prefixTruncated && !historyGapPaths.has(entry.path)) {
@@ -633,8 +657,8 @@ export function createWakatimeSync(deps: WakatimeSyncDependencies): WakatimeSync
           }
           const project = resolveProjectAttribution({
             projectOwnership: conversation.projectOwnership,
-            cwd: generation.launchProfile.cwd || entry.cwd,
-            launchProfileProject: generation.launchProfile.project,
+            cwd: conversation.cwd || entry.cwd,
+            launchProfileProject: conversation.launchProfileProject,
             fallbackProject: entry.project,
           }).project;
           if (!project) continue;
@@ -1059,7 +1083,7 @@ export async function wakatimeProductionScan(
 function productionDependencies(): WakatimeSyncDependencies {
   return {
     scan: () => wakatimeProductionScan(),
-    registrySnapshot: () => agentRegistry().readOnlySnapshot(),
+    conversationsForPaths: (paths) => agentRegistry().projectConversationsForPaths(paths, wakatimeConversation),
     recentTurnWindows: recentTurnWindowsFor,
     readCredential: readProductionWakatimeCredential,
     readState: readProductionState,

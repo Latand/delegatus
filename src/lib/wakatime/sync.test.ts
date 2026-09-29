@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type { RegistryFile } from "@/lib/agent/registry";
+import { readOnlyConversationLookupFromSnapshot, type RegistryFile } from "@/lib/agent/registry";
 import type { FileEntry } from "@/lib/types";
 import {
   createWakatimeSync,
@@ -11,6 +11,7 @@ import {
   readProductionWakatimeCredential,
   readWakatimeCredentialFile,
   startWakatimeSync,
+  wakatimeConversation,
   wakatimeProductionScan,
   writeProductionWakatimeState,
   type WakatimeStateV1,
@@ -215,6 +216,15 @@ function registrySnapshot(pathname = PATH): RegistryFile {
   } as unknown as RegistryFile;
 }
 
+/** The dependency the worker reads, answered from a registry fixture. */
+function conversationsFrom(snapshot: RegistryFile): WakatimeSyncDependencies["conversationsForPaths"] {
+  const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
+  return (paths) => new Map(paths.flatMap((pathname) => {
+    const conversation = lookup.conversationForPath(pathname);
+    return conversation ? [[pathname, wakatimeConversation(conversation)] as const] : [];
+  }));
+}
+
 function projectDurationSeconds(heartbeats: WakatimeStateV1["pending"][number]["heartbeat"][], project: string): number {
   const ordered = [...heartbeats].sort((left, right) => left.time - right.time);
   return ordered.reduce((total, heartbeat, index) => {
@@ -232,7 +242,7 @@ function harness(overrides: Partial<WakatimeSyncDependencies> = {}) {
   const logs: Array<{ event: string; fields: Readonly<Record<string, string | number | boolean | null>> }> = [];
   const deps: WakatimeSyncDependencies = {
     scan: async () => ({ files: [entry()], complete: true }),
-    registrySnapshot,
+    conversationsForPaths: conversationsFrom(registrySnapshot()),
     recentTurnWindows: () => ({
       windows: [{ startedAt: TURN_START, endedAt: TURN_END }],
       prefixTruncated: false,
@@ -764,7 +774,7 @@ describe("WakaTime activity sync", () => {
     conversation.generations.unshift({ ...conversation.generations[0]!, id: "archived", path: PATH, archivedAt: new Date(NOW).toISOString() });
     const { sync, state } = harness({
       scan: async () => ({ files: [entry(), entry({ path: currentPath, name: "rotated.jsonl" })], complete: true }),
-      registrySnapshot: () => snapshot,
+      conversationsForPaths: conversationsFrom(snapshot),
     });
 
     await sync.tick();

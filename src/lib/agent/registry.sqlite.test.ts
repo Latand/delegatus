@@ -2166,3 +2166,31 @@ test("a pre-note history imported into SQLite keeps its compacted key unknown", 
   const born = restarted.ensureConversation("codex", "/sessions/sqlite-born-after.jsonl", "default");
   expect(restarted.deliveryAdmissionForKey(born.id, "never-used-key")).toMatchObject({ outcome: "not-executed" });
 });
+
+for (const sqliteMode of ["sqlite", "off"] as const) {
+  test(`projected path lookup answers only owned paths and hands out nothing but the projection (${sqliteMode})`, () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-projected-paths-"));
+    const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode });
+    try {
+      registry.reconcileConversations(["a", "b"].map((name) => ({
+        engine: "codex" as const,
+        path: `/sessions/${name}.jsonl`,
+        accountId: null,
+        launchProfile: emptyLaunchProfile({ cwd: `/repo/${name}` }),
+        turn: { state: "idle" as const, source: "empty" as const, terminalAt: null },
+        observedAt: "2026-07-01T00:00:00Z",
+      })));
+
+      const projected = registry.projectConversationsForPaths(
+        ["/sessions/a.jsonl", "/sessions/b.jsonl", "/sessions/unowned.jsonl"],
+        (conversation) => ({ id: conversation.id, cwd: conversation.generations.at(-1)?.launchProfile.cwd }),
+      );
+
+      expect([...projected.keys()]).toEqual(["/sessions/a.jsonl", "/sessions/b.jsonl"]);
+      expect(projected.get("/sessions/a.jsonl")).toEqual({ id: registry.conversationForPath("/sessions/a.jsonl")!.id, cwd: "/repo/a" });
+      expect(projected.get("/sessions/b.jsonl")?.cwd).toBe("/repo/b");
+    } finally {
+      registry.close();
+    }
+  });
+}

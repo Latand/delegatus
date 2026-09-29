@@ -51,6 +51,8 @@ type LookupValue = string | readonly string[];
 type LookupField = "conversationId" | "artifactPath" | "command.operationId" | "alias";
 const LOOKUP_PATHS: Record<LookupField, string> = { conversationId: "$.conversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", alias: "$" };
 const keyedReaders = new WeakMap<RegistryFile, (collection: RowCollection, field: LookupField, value: LookupValue) => string[]>();
+/** Paths bound per query: well under SQLite's bound-variable limit. */
+const PROJECTED_PATH_CHUNK = 500;
 const pathReaders = new WeakMap<RegistryFile, (path: string) => string[]>();
 
 /** Indexed selection inside the same lazy transaction, including pending writes. */
@@ -918,6 +920,59 @@ export class SqliteAgentRegistryStore {
       || !/^[a-f0-9]{64}$/.test(digest) || typeof receipt.conversationId !== "string") return null;
     return crypto.timingSafeEqual(Buffer.from(digest, "hex"), Buffer.from(receipt.spawnCapabilityDigest, "hex"))
       ? receipt.conversationId : null;
+  }
+
+  /** The conversation owning each path, projected before it leaves the read.
+      The path index and the rows are read by key, one query each per chunk (a
+      join of the two made SQLite scan, 650 ms per 500 paths), and parsed
+      without the row cache, so a caller that needs a few fields of thousands
+      of conversations holds neither the whole registry nor their parsed rows.
+      When several conversations own a path the first in registry order wins,
+      as it does for `registryConversationsForPath`. */
+  projectConversationsForPaths<T>(
+    paths: readonly string[],
+    project: (conversation: RegistryFile["conversations"][string]) => T,
+  ): Map<string, T> {
+    const projected = new Map<string, T>();
+    const distinct = [...new Set(paths)];
+    this.db.exec("BEGIN");
+    try {
+      for (let start = 0; start < distinct.length; start += PROJECTED_PATH_CHUNK) {
+        const chunk = distinct.slice(start, start + PROJECTED_PATH_CHUNK);
+        const owners = this.db.query<{ path: string; conversation_id: string }, string[]>(
+          `SELECT path, conversation_id FROM registry_conversation_paths WHERE path IN (${chunk.map(() => "?").join(",")})`,
+        ).all(...chunk);
+        const keys = [...new Set(owners.map((owner) => owner.conversation_id))];
+        const ordered = new Map<string, { value_json: string; row_order: number }>();
+        if (keys.length > 0) {
+          for (const row of this.db.query<{ row_key: string; value_json: string; row_order: number }, string[]>(
+            `SELECT row_key, value_json, row_order FROM registry_rows WHERE collection = 'conversations' AND row_key IN (${keys.map(() => "?").join(",")})`,
+          ).all(...keys)) ordered.set(row.row_key, row);
+        }
+        /* Registry order decides between conversations owning one path. */
+        const rows = owners
+          .filter((owner) => ordered.has(owner.conversation_id))
+          .sort((left, right) => ordered.get(left.conversation_id)!.row_order - ordered.get(right.conversation_id)!.row_order)
+          .map((owner) => ({ path: owner.path, row_key: owner.conversation_id, value_json: ordered.get(owner.conversation_id)!.value_json }));
+        this.onRowPayloadRead?.("conversations", rows.length);
+        /* One normalisation for the chunk, not one per row. */
+        const stored: Record<string, unknown> = {};
+        for (const row of rows) {
+          if (!(row.row_key in stored)) stored[row.row_key] = this.parseRow("conversations", row.row_key, row.value_json, false);
+        }
+        const conversations = this.normalize({ version: 2, entries: {}, receipts: {}, conversations: stored }).conversations;
+        for (const row of rows) {
+          if (projected.has(row.path)) continue;
+          const conversation = conversations[row.row_key];
+          if (conversation) projected.set(row.path, project(conversation));
+        }
+      }
+      this.db.exec("COMMIT");
+      return projected;
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      throw error;
+    }
   }
 
   /** Keyed title lookup for the bounded custom-title store. A request reads at

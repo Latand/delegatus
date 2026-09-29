@@ -26,7 +26,7 @@ ambientTest("ambient startup produces isolated runtime and publication evidence"
         viewerComposeServiceFromConfig,
         viewerComposeSnapshotWithoutWakatimeCredential,
       } = await import("../../runtime-host/candidateContainer");
-      const { createWakatimeSync } = await import("./sync");
+      const { createWakatimeSync, wakatimeConversation } = await import("./sync");
 
       const rawConfig = JSON.stringify({
         services: {
@@ -114,7 +114,7 @@ ambientTest("ambient startup produces isolated runtime and publication evidence"
         readCredential: () => null,
         readState: () => null,
         recentTurnWindows: () => ({ complete: true, prefixTruncated: false, windows: [] }),
-        registrySnapshot: () => registry.snapshot(),
+        conversationsForPaths: (paths) => registry.projectConversationsForPaths(paths, wakatimeConversation),
         scan: async () => ({ complete: true, files: [] }),
         scheduleInterval: () => ({ unref() {} }),
         scheduleTimeout: () => ({ unref() {} }),
