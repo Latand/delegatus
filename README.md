@@ -73,6 +73,14 @@ The CLI serves the output of the last build, so build again after you pull.
 `bun dev` runs the app with hot reload, and you start the runtime host for it
 yourself.
 
+**Update** in the rail menu builds and restarts onto a newer commit. Its
+**Automatic updates** switch, off by default, does this by itself: once a
+merged pull request's checks have all finished green, Delegatus builds that
+commit and restarts onto it at a quiet moment, when no agent or pipeline
+stage is running and nobody has used Delegatus for ten minutes. The dialog
+says what it is waiting for. A failed automatic restart goes back to the
+previous release and turns the switch off.
+
 ## What it does
 
 This section follows one piece of work from your request to a reviewed pull
@@ -124,6 +132,10 @@ landed. A decision it cannot make alone reaches you in its chat and on the
 board's **Waiting** counter. While it is busy with a turn, **Ask in
 parallel** in its composer sends a side question to a copy of it, which
 answers in its own block inside the same chat.
+Each time an orchestrator takes its seat, including after a rotation, it
+first gets a report on its board: what waits on you, stuck agents, tasks
+nothing works on, cards that look safe to close and, for a GitHub project,
+open issues ranked by their recorded priority.
 [docs/orchestrator.md](docs/orchestrator.md) covers the rest.
 
 The **Reports** log beside its chat lists what it reported, newest first: a
@@ -180,7 +192,9 @@ Each stage ends with a verdict. Pass moves to the next stage. Fail follows
 the stage's fail edge, usually back to the builder, until the round budget
 runs out. "Needs decision" stops and asks you. If a "needs decision" carries
 findings and the stage has a fail edge, Delegatus routes it like a fail, so
-the findings reach the stage that can fix them.
+the findings reach the stage that can fix them. The next stage receives
+everything the previous agent wrote before it reported, not just its
+summary. Each stage is drawn with a small figure for the model it runs on.
 
 Every review round starts a fresh reviewer with read-only access and no
 memory of the builder's conversation, so it reads the whole diff cold. When
@@ -415,9 +429,23 @@ menu (the board's ⋯ menu on a phone).
   appears on the other within seconds while the board is open. Each task
   belongs to the machine that runs it, and the other machine will not start
   agents or pipelines for it.
+- **See the other machine's agents.** Its agents on a shared project show as
+  one collapsed, read-only row, such as "On server: 3 agents · 1 working",
+  on their task's card or in the Inbox. Only a title and a state cross over.
 - **Revoke** or **Remove** a link at any time from the same dialog.
 
 The design is in [docs/design/linked-installs.md](docs/design/linked-installs.md).
+
+## External relay
+
+A relay service can send this install questions from its own chats.
+**External relay** in the rail menu (the ⋯ sheet on a phone), or the
+**Relay service** step of the setup guide, pairs the two. The install asks
+the service for work, so nothing reaches it from outside. Each question is
+answered by a one-shot agent on your signed-in Claude or Codex account, with
+no shell, no tools and none of your instruction files. The page shows each
+relay's state and lets you choose the engine, model and effort it answers
+with. The protocol is in [docs/design/relay.md](docs/design/relay.md).
 
 <a id="connect-an-orchestrator-through-mcp"></a>
 
@@ -545,6 +573,10 @@ Ukrainian with `DELEGATUS_LANG=uk` or a `uk_*` locale.
 
 All of these are optional. Each `DELEGATUS_` variable also works under its
 older `LLV_` name, and the `DELEGATUS_` one wins when both are set.
+
+Of the variables ending in `_API_KEY`, only `ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `ELEVENLABS_API_KEY` and
+`SONIOX_API_KEY` pass on to the agents and commands Delegatus starts.
 
 | Variable | Effect |
 | --- | --- |

@@ -2,7 +2,12 @@ import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { discoverRelay, ExternalRelayError, relayCall } from "./client";
+import {
+  discoverRelay,
+  ExternalRelayError,
+  fetchRelayTargets,
+  relayCall,
+} from "./client";
 import {
   startRelayPairing,
   checkRelayPairing,
@@ -28,8 +33,8 @@ const owner = {
 const target = {
   target_id: "target_1",
   name: "Helper",
-  answered_by: "service",
-  fallback: "service",
+  answered_by: "service" as const,
+  fallback: "service" as const,
 };
 function descriptor(origin: string) {
   return {
@@ -191,6 +196,107 @@ test("claim 204, redirect and oversized body", async () => {
     await expect(
       relayCall(`${server.origin}/v1`, "/large", "GET"),
     ).rejects.toMatchObject({ code: "too_large" });
+  } finally {
+    await server.close();
+  }
+});
+const limits = {
+  max_response_bytes: 1048576,
+  max_wait_s: 25,
+  max_answer_chars: 4000,
+};
+test("targets are read with the credential and refused when the body fails the schema", async () => {
+  let reply: { status?: number; body?: unknown; drop?: boolean } = {
+    body: { targets: [target], extra: true },
+  };
+  const seen: { url?: string; method?: string; auth?: string }[] = [];
+  const server = await startTestRelay((req) => {
+    seen.push({ url: req.url, method: req.method, auth: req.headers.authorization });
+    return reply;
+  });
+  const relay = { api_base: `${server.origin}/v1`, credential: secret, limits };
+  try {
+    expect(await fetchRelayTargets(relay)).toEqual([target]);
+    expect(seen).toEqual([
+      { url: "/v1/targets", method: "GET", auth: `Bearer ${secret}` },
+    ]);
+    for (const body of [
+      { targets: [{ ...target, answered_by: "someone" }] },
+      { targets: [target, { ...target, name: "Twice" }] },
+      { targets: [{ ...target, name: "bad\u0007name" }] },
+      { items: [target] },
+      null,
+    ]) {
+      reply = { body };
+      await expect(fetchRelayTargets(relay)).rejects.toMatchObject({
+        code: "malformed",
+      });
+    }
+    reply = { status: 204 };
+    await expect(fetchRelayTargets(relay)).rejects.toMatchObject({
+      code: "malformed",
+    });
+    reply = {
+      status: 401,
+      body: { error: { code: "unauthorized", message: "revoked" } },
+    };
+    await expect(fetchRelayTargets(relay)).rejects.toMatchObject({
+      status: 401,
+    });
+    reply = { status: 503 };
+    await expect(fetchRelayTargets(relay)).rejects.toMatchObject({
+      code: "unreachable",
+      status: 503,
+    });
+  } finally {
+    await server.close();
+  }
+  // Nothing listens any more: a network error, never an empty list.
+  await expect(fetchRelayTargets(relay)).rejects.toBeDefined();
+});
+test("a confirm that lists no targets reads them once from the service", async () => {
+  let origin = "";
+  let listed: unknown[] = [];
+  let targetReads = 0;
+  const server = await startTestRelay((req) => {
+    if (req.url === "/.well-known/delegatus-relay.json")
+      return { body: descriptor(origin) };
+    if (req.url === "/v1/pairings" && req.method === "POST")
+      return {
+        status: 201,
+        body: {
+          pairing_id: "pair_2", poll_secret: secret, code: "1234-5678",
+          verify_url: null, expires_at: "2099-09-28T12:10:00Z", poll_interval_s: 2,
+        },
+      };
+    if (req.url === "/v1/pairings/pair_2" && req.method === "GET")
+      return { body: { status: "awaiting_install", owner, targets: [] } };
+    if (req.url === "/v1/pairings/pair_2/confirm")
+      return { body: { credential: secret, version: 1, owner, targets: listed } };
+    if (req.url === "/v1/targets")
+      return (targetReads++, { body: { targets: [target] } });
+    return { status: 404, body: { error: { code: "not_found", message: "missing" } } };
+  });
+  origin = server.origin;
+  try {
+    let pending = await startRelayPairing(origin);
+    await checkRelayPairing(pending.id);
+    const relay = await confirmRelayPairing(pending.id, owner.id);
+    expect(targetReads).toBe(1);
+    expect(relay.targets).toMatchObject([
+      { id: target.target_id, name: target.name, engine: null, model: null },
+    ]);
+    expect(readRelayStore().relays[0]?.targets.map((item) => item.id)).toEqual([
+      target.target_id,
+    ]);
+    // A confirm that already carries targets needs no second read.
+    listed = [{ ...target, target_id: "target_2" }];
+    pending = await startRelayPairing(origin);
+    await checkRelayPairing(pending.id);
+    expect(
+      (await confirmRelayPairing(pending.id, owner.id)).targets.map((item) => item.id),
+    ).toEqual(["target_2"]);
+    expect(targetReads).toBe(1);
   } finally {
     await server.close();
   }

@@ -108,9 +108,10 @@ const REASON_KEYS: Record<string, Parameters<TFunction>[0]> = {
   profile_violation: "externalRelay.reason.profileViolation",
   install_restarted: "externalRelay.reason.installRestarted",
 };
-/** `answered`, `declined:<reason>`, `failed:<reason>`, `lease_lost` or `local_error`, as the poller records it. */
+/** `answered`, `declined:<reason>`, `failed:<reason>`, `lease_lost`, `local_error` or `targets:<error code>`, as the poller records it. */
 export function outcomeText(t: TFunction, outcome: string): string {
   const [kind, reason] = outcome.split(":");
+  if (kind === "targets") return t("externalRelay.outcome.targets", { reason: relayErrorText(t, reason ?? "") });
   if (kind === "answered") return t("externalRelay.outcome.answered");
   if (kind === "lease_lost") return t("externalRelay.outcome.leaseLost");
   if (kind === "local_error") return t("externalRelay.outcome.localError");
