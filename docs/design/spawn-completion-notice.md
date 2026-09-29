@@ -290,11 +290,29 @@ Where the build differs from the text above, and why:
 - **Run time** is the newest turn's: its `turn-ended` time minus the admission
   time of the receipt that ran it. Without a receipt the line omits it.
 - **Retention:** settled rows are pruned after 14 days, at most once an hour.
+- **Only a structured launch records a launcher.** The registry stamps the
+  launcher on a receipt only when its transport is `structured`, because only
+  a structured child ends its turns in the runtime journal. A tmux child (the
+  `LLV_SPAWN_TRANSPORT=tmux` rollback, or no runtime host) records none, so
+  the seat tick keeps harvesting it, and `spawn_agent` answers
+  `launcherNotice: "unavailable"` unless the route reports
+  `transport: "structured"`. The seat tick's skip also requires a structured
+  receipt.
+- **A fenced obligation write is deferred.** During a release handoff the
+  runtime host carries no release revision, so the hot-state store refuses
+  its writes (`FileTransactionBusyError`) until the new Viewer activates.
+  `consumeRuntimeEvent` turns that refusal from the notice port into
+  `RuntimeConsumerDeferredError`. The host leaves the event owed, does not
+  count it toward the three-failure quarantine, stops the recovery pass
+  without rejecting it (so boot recovery resolves), and retries every owed
+  event on one timer until the write is admitted. The other consumers keep
+  their existing failure handling.
 
 ## Deferred — not currently justified
 
-- **Legacy tmux children.** They emit no journal `turn-ended`. Spawns
-  default to structured wherever a runtime host exists
+- **Notices for tmux children.** They emit no journal `turn-ended`, so they
+  record no launcher (see Implementation notes) and stay the seat tick's.
+  Spawns default to structured wherever a runtime host exists
   (`src/lib/runtime/spawnTransport.ts:32-34`).
 - **Gateway (operator root session) launchers.** A notice would be typed into
   a terminal Delegatus does not manage.

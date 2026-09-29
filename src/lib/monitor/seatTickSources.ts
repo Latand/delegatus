@@ -1763,7 +1763,7 @@ function projectChild(
     lastRecordAt: record, transcript: record === null ? "unresolvable" as const : "readable" as const,
     ...(read.reason ? { transcriptReason: read.reason } : generation && conversation ? { transcriptPath: generation.path, engine: conversation.engine } : {}),
     spawnedAt: edge.createdAt,
-    ...(conversation?.launcher?.notify
+    ...(conversation?.launcher?.notify && receipt?.transport === "structured"
       && lookup.canonicalConversationId(conversation.launcher.conversationId) === lookup.canonicalConversationId(edge.parentConversationId)
       ? { launcherNotice: true } : {}),
   };

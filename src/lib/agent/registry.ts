@@ -451,7 +451,8 @@ export interface SpawnRequest {
       committed at the receipt reservation; a missing target aborts the launch. */
   taskIds?: readonly string[] | null;
   /** The conversation that launched this one through spawn_agent, from caller
-      attribution (docs/design/spawn-completion-notice.md §1). */
+      attribution (docs/design/spawn-completion-notice.md §1). Recorded only
+      on a structured launch. */
   launcher?: SpawnLauncher | null;
 }
 
@@ -5564,7 +5565,10 @@ export class AgentRegistry {
         explicitProject,
         launchDisplay: normalizeLaunchDisplay(input.launchDisplay),
         queuedPinnedSpawn: null,
-        launcher: purpose === "launch" ? normalizeSpawnLauncher(input.launcher) : null,
+        /* Only a structured launch ends its turns in the runtime journal, which
+           is where a notice is owed from; a tmux child never would, so it
+           records no launcher and stays the seat tick's to harvest. */
+        launcher: purpose === "launch" && input.transport === "structured" ? normalizeSpawnLauncher(input.launcher) : null,
       };
       file.receipts[receipt.launchId] = receipt;
       /* A rejected launch persists exactly one terminal receipt: no lineage

@@ -357,3 +357,58 @@ test("the engine's error text is read from the transcript tail", () => {
   expect(transcriptErrorFromRecords([{ payload: { type: "error", message: "stream disconnected" } }], "codex")).toBe("stream disconnected");
   expect(transcriptErrorFromRecords([{ type: "assistant", message: { content: [{ type: "text", text: "fine" }] } }], "claude")).toBeNull();
 });
+
+test("a turn that ends while hot-state writes are fenced is deferred past the quarantine budget and lands once the fence lifts (§2)", async () => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { RuntimeHost } = await import("@/runtime-host/host");
+  const child = nextChild();
+  const view = { conversationId: child, launcher: { conversationId: LAUNCHER, notify: true }, contained: false };
+  let attempts = 0;
+  const ports = {
+    flowReady: () => undefined,
+    workflowStageCompleted: () => undefined,
+    taskDeliveryAcknowledged: () => undefined,
+    spawnTurnEnded: (turn: Parameters<typeof recordSpawnTurnEnded>[0]) => {
+      attempts += 1;
+      recordSpawnTurnEnded(turn, { child: () => view as never, record: store.recordSpawnNoticeObligation });
+    },
+  };
+  /* A release target this process holds no revision for: exactly the window
+     between the target flipping and the new Viewer activating, in which the
+     real store refuses every hot-state write. */
+  const releaseTarget = path.join(process.env.LLV_STATE_DIR!, "viewer-release.json");
+  fs.writeFileSync(releaseTarget, JSON.stringify({ endpoint: "http://127.0.0.1:1", revision: "a".repeat(40) }));
+  const journalFile = path.join(SANDBOX, `journal-${child}.sqlite`);
+  let journal = new RuntimeJournal(journalFile);
+  try {
+    const host = new RuntimeHost(journal, ports, undefined, undefined, undefined, undefined, undefined, 60_000);
+    await host.handle({ id: "terminal", method: "append", params: { event: {
+      scope: `session:${child}`, kind: "turn-ended", payload: { conversationId: child, turnId: "turn-fenced", outcome: "completed" },
+      producer: { kind: "claude-stream-broker", eventKey: "engine-host:claude:terminal:fenced" },
+    } } });
+    /* Well past the three attempts that used to quarantine it: no recovery
+       rejects, and the event stays owed. */
+    for (let pass = 0; pass < 4; pass++) expect(await host.recoverConsumers()).toBe(0);
+    expect(attempts).toBe(5);
+    expect(journal.unconsumedEvents("orchestration")).toHaveLength(1);
+    expect(store.readSpawnNoticeTurn(child, "turn-fenced")).toBeNull();
+    journal.close();
+
+    /* A runtime host restarted inside the same window: its boot recovery
+       resolves instead of rejecting, and its retry timer lands the row the
+       moment the fence lifts, with no further call. */
+    journal = new RuntimeJournal(journalFile);
+    const restarted = new RuntimeHost(journal, ports, undefined, undefined, undefined, undefined, undefined, 10);
+    expect(await restarted.recoverConsumers()).toBe(0);
+    expect(journal.unconsumedEvents("orchestration")).toHaveLength(1);
+    fs.rmSync(releaseTarget);
+    for (let wait = 0; wait < 200 && journal.unconsumedEvents("orchestration").length > 0; wait++) await Bun.sleep(10);
+    expect(journal.unconsumedEvents("orchestration")).toHaveLength(0);
+    expect(store.pendingSpawnNotices().filter((row) => row.childConversationId === child)).toEqual([
+      expect.objectContaining({ turnId: "turn-fenced", launcherConversationId: LAUNCHER, state: "pending" }),
+    ]);
+  } finally {
+    fs.rmSync(releaseTarget, { force: true });
+    journal.close();
+  }
+});

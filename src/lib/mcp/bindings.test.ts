@@ -482,7 +482,7 @@ test("spawn_agent stamps the launcher from server attribution and never from the
   const control = { post: async (_pathname: string, body: Record<string, unknown>) => {
     dispatched.push(body);
     return { conversationId: "conversation_child", path: null, launchId: "launch_child",
-      state: "starting", initialMessage: "pending" };
+      state: "starting", initialMessage: "pending", transport: "structured" };
   } };
   const as = (attribution: Record<string, unknown>) => viewerMcpBindings(undefined, control, { callerAttribution: () => attribution } as never).spawn_agent;
   const args = { cwd: "/repo", title: "Reviewer", ["prompt"]: "review", launcherConversationId: "conversation_forged" };
@@ -510,6 +510,16 @@ test("spawn_agent stamps the launcher from server attribution and never from the
     expect(answer.launcherNotice).toBe("unavailable");
   }
   expect(spawnDispatchBody({ ...args, clientRequestId: "x" }, "attempt")).not.toHaveProperty("launcherConversationId");
+});
+
+test("spawn_agent answers launcherNotice unavailable for a launch that did not run on a structured host", async () => {
+  const control = { post: async () => ({ conversationId: "conversation_child", path: null, launchId: "launch_child",
+    state: "starting", initialMessage: "pending", transport: "tmux" }) };
+  const worker = viewerMcpBindings(undefined, control, { callerAttribution: () => ({
+    kind: "agent", conversationId: "conversation_worker", role: "builder",
+  }) } as never).spawn_agent;
+  const answer = await worker({ clientRequestId: "launcher-tmux", cwd: "/repo", title: "Reviewer", ["prompt"]: "review" });
+  expect(answer.launcherNotice).toBe("unavailable");
 });
 
 test("spawn_agent coerces and clamps bounded role params before the control request", async () => {

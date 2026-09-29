@@ -95,6 +95,38 @@ test("the MCP service lane stamps the launcher, with its opt-out, onto the recei
   expect(store.spawnReceiptForClientAttempt("launcher_operator_20260929")?.launcher).toBeNull();
 });
 
+test("a launch that does not run on a structured host records no launcher, so none waits on a notice it never gets", async () => {
+  const store = freshRegistry();
+  const capability = rotateOperatorSpawnCapability();
+  const mcp = { "x-llv-spawn-capability": capability, ...internalServiceHeaders("mcp") };
+  let tmuxStarts = 0;
+  process.env.LLV_SPAWN_TRANSPORT = "tmux";
+  try {
+    const response = await POST.withDependencies(request({ clientAttemptId: "launcher_tmux_20260929", launcherConversationId: "conversation_seat" }, mcp), {
+      ...dependencies(store),
+      spawnTmuxAgent: async (_spec, _payload, receipt) => {
+        tmuxStarts += 1;
+        if (!receipt) throw new Error("expected a durable receipt");
+        const binding = {
+          endpoint: "/test-tmux", server: { pid: 9, startIdentity: "9:server" }, paneId: "%9",
+          panePid: { pid: 99, startIdentity: "99:pane" }, target: "agents:9.0",
+        };
+        const host = { kind: "tmux" as const, ...binding, windowName: "launcher-tmux", agent: { pid: 100, startIdentity: "100:agent" }, argv: ["claude"] };
+        store.bindSpawnPane(receipt.launchId, binding);
+        store.markSpawnHostVerified(receipt.launchId, host);
+        store.markSpawnPromptDelivered(receipt.launchId);
+        return { paneId: binding.paneId, display: binding.target, panePid: binding.panePid.pid, host, receipt };
+      },
+    });
+    expect(response.status).toBeLessThan(300);
+    expect(await response.json()).toMatchObject({ transport: "tmux" });
+  } finally {
+    process.env.LLV_SPAWN_TRANSPORT = "structured";
+  }
+  expect(tmuxStarts).toBe(1);
+  expect(store.spawnReceiptForClientAttempt("launcher_tmux_20260929")).toMatchObject({ transport: "tmux", launcher: null });
+});
+
 test("a launcher named without the MCP service tag is refused before anything is reserved", async () => {
   const store = freshRegistry();
   const capability = rotateOperatorSpawnCapability();

@@ -1447,8 +1447,10 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
     state: result.state,
     initialMessage: result.initialMessage,
     ...(typeof result.runtime === "string" ? { runtime: result.runtime } : {}),
-    /* Whether a brief still needs its own "report back" line. */
-    launcherNotice: args.notifyLauncher === false ? "off" : launcher ? "on" : "unavailable",
+    /* Whether a brief still needs its own "report back" line. Only a
+       structured launch ends its turns where a notice is owed from, so a tmux
+       child records no launcher and its launcher hears nothing. */
+    launcherNotice: args.notifyLauncher === false ? "off" : launcher && result.transport === "structured" ? "on" : "unavailable",
   };
 }
 
