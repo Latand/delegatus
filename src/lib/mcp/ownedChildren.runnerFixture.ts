@@ -2,13 +2,29 @@ import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 
-import { ownFixtureChild, reapFixtureChildren } from "./ownedFixtureChildren";
+import { fixturePidAlive, ownFixtureChild, ownedFixturePids, reapFixtureChildren } from "./ownedFixtureChildren";
 
 const root = process.env.LLV_ORPHAN_PROBE_DIR!;
 const fixture = path.join(root, "fixture");
 
+// Field 22 of /proc/<pid>/stat, so a recycled PID never reads as the recorded child.
+function processStartTime(pid: number): string | null {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] ?? null;
+  } catch { return null; }
+}
+
+const startTimes = new Map<number, string | null>();
+
 afterEach(async () => {
   await reapFixtureChildren();
+  const afterReap = ownedFixturePids().map((pid) => ({
+    pid,
+    startTime: startTimes.get(pid) ?? null,
+    alive: fixturePidAlive(pid) && processStartTime(pid) === startTimes.get(pid),
+  }));
+  fs.writeFileSync(path.join(root, "after-reap.json"), JSON.stringify(afterReap));
   fs.rmSync(fixture, { recursive: true, force: true });
 });
 
@@ -22,6 +38,7 @@ test("held child is owned during a failed assertion or runner death", async () =
     stdout: "ignore",
     stderr: "pipe",
   }));
+  startTimes.set(child.pid, processStartTime(child.pid));
   fs.writeFileSync(path.join(root, "child.pid"), String(child.pid));
   const ready = path.join(fixture, "ready");
   const deadline = Date.now() + 10_000;
