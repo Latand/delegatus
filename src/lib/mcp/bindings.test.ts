@@ -188,13 +188,13 @@ test("spawn_agent rejects an explicit model outside the engine catalog before co
     (error: unknown) => error as Error & { details?: { violations?: Array<{ field: string; message: string; expected: string }> } },
   );
 
-  const message = "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna";
+  const message = "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna";
   expect(refusal?.name).toBe("McpToolRefusal");
   expect(refusal?.message).toBe(message);
   expect(refusal?.details?.violations).toEqual([{
     field: "model",
     message,
-    expected: "one of: gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
+    expected: "one of: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
   }]);
   expect(requests).toEqual([]);
 });
@@ -475,6 +475,51 @@ test("gateway spawn with no MCP selection sends the Viewer baseline explicitly",
   await gateway({ clientRequestId: "root-agent-baseline", cwd: "/repo", title: "Root child", ["prompt"]: "inspect" });
   expect(dispatched).toHaveLength(1);
   expect(dispatched[0]?.mcpServers).toEqual(["viewer"]);
+});
+
+test("spawn_agent stamps the launcher from server attribution and never from the arguments (spawn-completion-notice §1)", async () => {
+  const dispatched: Record<string, unknown>[] = [];
+  const control = { post: async (_pathname: string, body: Record<string, unknown>) => {
+    dispatched.push(body);
+    return { conversationId: "conversation_child", path: null, launchId: "launch_child",
+      state: "starting", initialMessage: "pending", transport: "structured" };
+  } };
+  const as = (attribution: Record<string, unknown>) => viewerMcpBindings(undefined, control, { callerAttribution: () => attribution } as never).spawn_agent;
+  const args = { cwd: "/repo", title: "Reviewer", ["prompt"]: "review", launcherConversationId: "conversation_forged" };
+
+  const worker = await as({ kind: "agent", conversationId: "conversation_worker", role: "builder" })({ ...args, clientRequestId: "launcher-worker" });
+  expect(dispatched[0]).toMatchObject({ launcherConversationId: "conversation_worker" });
+  expect(worker.launcherNotice).toBe("on");
+
+  const seat = await as({ kind: "manager", conversationId: "conversation_seat", role: "orchestrator" })({ ...args, clientRequestId: "launcher-seat", notifyLauncher: false });
+  expect(dispatched[1]).toMatchObject({ launcherConversationId: "conversation_seat", notifyLauncher: false });
+  expect(seat.launcherNotice).toBe("off");
+
+  /* A deputy is the one waiting, so it is its own launcher. */
+  await as({ kind: "manager", conversationId: "conversation_seat", role: "orchestrator", via: { deputy: "conversation_deputy" } })({ ...args, clientRequestId: "launcher-deputy" });
+  expect(dispatched[2]).toMatchObject({ launcherConversationId: "conversation_deputy" });
+
+  /* The operator's own root session and an unidentified caller hear nothing
+     back, and a forged value never reaches the route. */
+  for (const [index, attribution] of [
+    { kind: "gateway", conversationId: "conversation_root", role: null },
+    { kind: "unidentified", conversationId: null, role: null },
+  ].entries()) {
+    const answer = await as(attribution)({ ...args, clientRequestId: `launcher-none-${index}` });
+    expect(dispatched[3 + index]).not.toHaveProperty("launcherConversationId");
+    expect(answer.launcherNotice).toBe("unavailable");
+  }
+  expect(spawnDispatchBody({ ...args, clientRequestId: "x" }, "attempt")).not.toHaveProperty("launcherConversationId");
+});
+
+test("spawn_agent answers launcherNotice unavailable for a launch that did not run on a structured host", async () => {
+  const control = { post: async () => ({ conversationId: "conversation_child", path: null, launchId: "launch_child",
+    state: "starting", initialMessage: "pending", transport: "tmux" }) };
+  const worker = viewerMcpBindings(undefined, control, { callerAttribution: () => ({
+    kind: "agent", conversationId: "conversation_worker", role: "builder",
+  }) } as never).spawn_agent;
+  const answer = await worker({ clientRequestId: "launcher-tmux", cwd: "/repo", title: "Reviewer", ["prompt"]: "review" });
+  expect(answer.launcherNotice).toBe("unavailable");
 });
 
 test("spawn_agent coerces and clamps bounded role params before the control request", async () => {
@@ -3003,7 +3048,7 @@ test("create_pipeline batches every invalid stage model with each engine catalog
     "stages[0].model",
     "stages[1].model",
   ]);
-  expect(refusal?.message).toContain("valid codex model ids: gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna");
+  expect(refusal?.message).toContain("valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna");
   expect(refusal?.message).toContain("valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku");
 });
 

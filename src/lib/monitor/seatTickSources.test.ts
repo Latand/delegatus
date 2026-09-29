@@ -2135,3 +2135,50 @@ test("a seat's settled deploy is gathered, and one requested past the backlog bo
   }]);
   expect(ledgerReads).toEqual(["deploy-fresh"]);
 });
+
+test("a child this seat launched with notices on is marked, one launched by someone else or opted out is not (spawn-completion-notice §6)", async () => {
+  const fixture = childRegistry("launcher-notice");
+  const launch = (title: string, launcher: { conversationId: string; notify: boolean } | null, transport: "structured" | "tmux" = "structured") => {
+    const childPath = path.join(SESSIONS, `${crypto.randomUUID()}.jsonl`);
+    fs.writeFileSync(childPath, "");
+    const begun = fixture.registry.beginSpawnRequest({
+      engine: "claude", cwd: fixture.cwd, transport,
+      parentConversationId: fixture.seatId as never, parentSource: "explicit",
+      launchProfile: { title }, launcher: launcher as never,
+    });
+    if (begun.kind !== "created") throw new Error("expected create");
+    const settled = fixture.registry.settleSpawn(begun.receipt.launchId, {
+      key: sessionKeyFromTranscript("claude", childPath)!, artifactPath: childPath, cwd: fixture.cwd, accountId: null,
+      status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+    });
+    if (settled.kind !== "settled") throw new Error("expected settle");
+    fixture.registry.reconcileConversations([{
+      engine: "claude", path: childPath, accountId: null,
+      launchProfile: emptyLaunchProfile({ cwd: fixture.cwd, title }),
+      turn: { state: "terminal", source: "assistant", terminalAt: new Date(fixture.now - 20 * MINUTE_MS).toISOString() },
+      observedAt: new Date(fixture.now - 5 * MINUTE_MS).toISOString(),
+    }]);
+    const generation = fixture.registry.conversation(settled.conversation.id)!.generations[0]!;
+    const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
+    ledger.append(generation.id, { kind: "turn-started", turnId: "turn-one", seq: 1 });
+    ledger.append(generation.id, { kind: "turn-ended", turnId: "turn-one", status: "completed", seq: 2 });
+    return settled.conversation.id;
+  };
+  const notified = launch("notified reviewer", { conversationId: fixture.seatId, notify: true });
+  const quiet = launch("opted-out reviewer", { conversationId: fixture.seatId, notify: false });
+  const elsewhere = launch("reviewer another agent launched", { conversationId: "conversation_other_launcher", notify: true });
+  /* A tmux child never ends a turn in the runtime journal, so no notice
+     covers it and the harvest keeps reporting it. */
+  const tmux = launch("reviewer on tmux", { conversationId: fixture.seatId, notify: true }, "tmux");
+  const input = await childGather(fixture);
+  const byId = new Map(input.children.map((child) => [child.conversationId, child]));
+  expect(byId.get(notified)).toMatchObject({ status: "terminal", launcherNotice: true });
+  expect(byId.get(quiet)?.launcherNotice).toBeUndefined();
+  expect(byId.get(elsewhere)?.launcherNotice).toBeUndefined();
+  expect(fixture.registry.conversation(tmux as never)?.launcher).toBeNull();
+  expect(byId.get(tmux)).toMatchObject({ status: "terminal", outcome: "finished" });
+  expect(byId.get(tmux)?.launcherNotice).toBeUndefined();
+  const harvested = seatTickDecision({ ...input, children: [byId.get(tmux)!, byId.get(notified)!] });
+  expect(JSON.stringify(harvested.verdict)).toContain(tmux);
+  expect(JSON.stringify(harvested.verdict)).not.toContain(notified);
+});

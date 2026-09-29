@@ -1346,6 +1346,22 @@ test("a terminal child is a wake reason of its own, named as an item (#1465)", (
   });
 });
 
+test("a finished child this seat launched with notices on is the notice's, never a second harvest (spawn-completion-notice §6)", () => {
+  const finished = child({ status: "terminal", outcome: "finished", terminalAt: new Date(NOW - 20 * MINUTE).toISOString(), launcherNotice: true });
+  const decision = seatTickDecision(input({ children: [finished], state: stateWith(OVERDUE_STATE) }));
+  expect(decision.verdict.kind).not.toBe("wake");
+  expect(JSON.stringify(decision.verdict)).not.toContain("child-terminal");
+  /* Opted out, it stays the harvest's. */
+  const optedOut = seatTickDecision(input({ children: [{ ...finished, launcherNotice: undefined }], state: stateWith(OVERDUE_STATE) }));
+  expect(optedOut.verdict).toMatchObject({ kind: "wake", reasons: [{ kind: "child-terminal" }] });
+  /* A launch that failed before it ran never ends a turn, so no notice covers it. */
+  const failed = seatTickDecision(input({ children: [{ ...finished, outcome: "failed" }], state: stateWith(OVERDUE_STATE) }));
+  expect(failed.verdict).toMatchObject({ reasons: [{ kind: "child-terminal", detail: "a spawned child failed and its outcome is unharvested" }] });
+  /* A running notified child is still open work the interval agenda names. */
+  const running = seatTickDecision(input({ children: [child({ launcherNotice: true })], state: stateWith(OVERDUE_STATE) }));
+  expect(running.verdict).toMatchObject({ items: [{ kind: "child", label: "build the exporter — spawned child running" }] });
+});
+
 test("a failed launch is a terminal child too, and the reason says so (#1465)", () => {
   const failed = child({ status: "terminal", outcome: "failed", terminalAt: new Date(NOW - 20 * MINUTE).toISOString() });
   const decision = seatTickDecision(input({ children: [failed], state: stateWith(OVERDUE_STATE) }));

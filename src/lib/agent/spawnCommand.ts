@@ -14,7 +14,7 @@ import { emptyLaunchProfile, validExplicitProject } from "@/lib/accounts/migrati
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { copilotBinaryGap, freshSpecFor, type AgentEngine } from "@/lib/agent/cli";
 import { NoCopilotAccountError, UnknownCopilotAccountError } from "@/lib/accounts/copilot";
-import { agentRegistry, identityMaterializationFence, SpawnChildLimitError, type SpawnRequest } from "@/lib/agent/registry";
+import { agentRegistry, identityMaterializationFence, SpawnChildLimitError, type SpawnLauncher, type SpawnRequest } from "@/lib/agent/registry";
 import { reasoningFromBody } from "@/lib/agent/efforts";
 import { grantedMcpServers, mcpServersForSession, normalizeSpawnMcpServers, SCHEDULED_REPORT_SESSION_CLASS, type McpSessionClass } from "@/lib/agent/mcpAllowlist";
 import { normalizeSpawnPlugins, pluginAllowlistForSession, SCHEDULED_REPORT_PLUGINS, sessionOriginFor } from "@/lib/agent/pluginAllowlist";
@@ -69,6 +69,7 @@ import { spawnSizingRefusal } from "@/lib/roles/sizing";
 import { launchRuntimeLabel, variantForParams } from "@/lib/roles/paramConfig";
 import { conversationRuntime } from "./conversationRuntime";
 import { AGENT_SPAWN_LINEAGE_ERROR, agentSpawnLineageError, authenticatedAgentSpawnCaller, isAgentInitiatedSpawn, mandatoryReviewsError, spawnLineageSelectorForCaller, type AuthenticatedSpawnCaller } from "@/app/api/spawn/admission";
+import { internalServiceClaim } from "@/lib/agent/callerClaims";
 import { spawnAccountErrorResponse } from "@/app/api/spawn/accountError";
 import { attributeNamedAccountChoice } from "@/lib/accounts/accountOverrides";
 
@@ -246,6 +247,40 @@ export async function spawnSuggestions(req: NextRequest): Promise<NextResponse<S
   });
 }
 
+/**
+ * Who launched this conversation, for the notice its turns send back
+ * (docs/design/spawn-completion-notice.md §1). Never an agent's own claim:
+ * the MCP binding stamps it from the server's caller attribution and reaches
+ * this route on the operator capability, so the field is honoured only beside
+ * a valid `mcp` service tag. An agent calling the route with its own
+ * capability is its own launcher. Everyone else — the UI, the operator, the
+ * pipeline engine — launches with no launcher, and nothing is sent back.
+ */
+export function spawnLauncherFor(
+  req: Pick<NextRequest, "headers">,
+  body: { launcherConversationId?: unknown; notifyLauncher?: unknown },
+  authenticatedCaller: AuthenticatedSpawnCaller | null,
+): { value: SpawnLauncher | null } | { error: string } {
+  if (body.notifyLauncher !== undefined && typeof body.notifyLauncher !== "boolean") {
+    return { error: "notifyLauncher must be a boolean" };
+  }
+  const notify = body.notifyLauncher !== false;
+  if (body.launcherConversationId !== undefined) {
+    const service = internalServiceClaim(req);
+    if (service.claim !== "valid" || service.service !== "mcp") {
+      return { error: "launcherConversationId is set only by the Delegatus MCP server" };
+    }
+    if (typeof body.launcherConversationId !== "string" || !body.launcherConversationId.startsWith("conversation_")) {
+      return { error: "launcherConversationId must name a conversation" };
+    }
+    return { value: { conversationId: body.launcherConversationId as SpawnLauncher["conversationId"], notify } };
+  }
+  if (authenticatedCaller?.kind === "agent") {
+    return { value: { conversationId: authenticatedCaller.conversationId as SpawnLauncher["conversationId"], notify } };
+  }
+  return { value: null };
+}
+
 export async function executeSpawnRequest(
   req: NextRequest,
   dependencies: SpawnCommandDependencies = productionSpawnCommandDependencies,
@@ -253,7 +288,7 @@ export async function executeSpawnRequest(
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
-  let body: { engine?: unknown; model?: unknown; cwd?: unknown; prompt?: unknown; title?: unknown; images?: unknown; src?: unknown; parent?: unknown; parentConversationId?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown; clientAttemptId?: unknown; taskId?: unknown; role?: unknown; roleParams?: unknown; confirm?: unknown; reviews?: unknown; allowSubagents?: unknown; mcpServers?: unknown; plugins?: unknown; project?: unknown; supersedes?: unknown };
+  let body: { engine?: unknown; model?: unknown; cwd?: unknown; prompt?: unknown; title?: unknown; images?: unknown; src?: unknown; parent?: unknown; parentConversationId?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown; clientAttemptId?: unknown; taskId?: unknown; role?: unknown; roleParams?: unknown; confirm?: unknown; reviews?: unknown; allowSubagents?: unknown; mcpServers?: unknown; plugins?: unknown; project?: unknown; supersedes?: unknown; launcherConversationId?: unknown; notifyLauncher?: unknown };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -305,6 +340,8 @@ export async function executeSpawnRequest(
   };
   const lineageError = agentSpawnLineageError(req, body);
   if (lineageError) return refuse(lineageError);
+  const launcher = spawnLauncherFor(req, body, authenticatedCaller);
+  if ("error" in launcher) return refuse(launcher.error);
   if (body.allowSubagents !== undefined && typeof body.allowSubagents !== "boolean") {
     return NextResponse.json({ error: "allowSubagents must be a boolean" }, { status: 400 });
   }
@@ -709,6 +746,7 @@ export async function executeSpawnRequest(
       origin: authenticatedCaller?.kind === "agent"
         ? { kind: "agent", conversationId: authenticatedCaller.conversationId }
         : { kind: "operator" },
+      launcher: launcher.value,
       launchProfile,
       clientAttemptId,
       requestDigest,

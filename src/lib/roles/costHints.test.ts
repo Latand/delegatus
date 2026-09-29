@@ -18,6 +18,7 @@ test("cost classes of the shipped defaults match the design's worked examples", 
 test("GPT-6-Sol weighs as large and GPT-6-Luna as small, like their 5.6 namesakes", () => {
   expect(modelSizeClass("gpt-6-sol")).toBe(3);
   expect(modelSizeClass("gpt-6-luna")).toBe(1);
+  expect(modelSizeClass("gpt-6.1-sol")).toBe(3);
   expect(modelSizeClass("gpt-6-sol")).toBe(modelSizeClass("gpt-5.6-sol"));
   expect(modelSizeClass("gpt-6-luna")).toBe(modelSizeClass("gpt-5.6-luna"));
 });

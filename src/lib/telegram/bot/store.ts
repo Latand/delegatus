@@ -169,6 +169,7 @@ type SqlMessage = {
   chat_id: string; message_id: number; direction: "in" | "out"; date: number; edited_at: number | null;
   from_name: string | null; from_username: string | null; kind: string; text: string | null;
   reply_to_message_id: number | null; topic_id: number | null; sent_by_conversation_id: string | null; sent_by_unidentified: number;
+  file_name: string | null;
 };
 
 function chatFromSql(row: SqlChat): ChatRow {
@@ -265,7 +266,15 @@ export class TelegramBotStore {
           created_at TEXT NOT NULL,
           PRIMARY KEY (caller_key, client_request_id)
         );
+        CREATE TABLE IF NOT EXISTS settings (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
       `);
+      /* The name a posted document was shown under; stores from before
+         documents gain the column empty. */
+      const messageColumns = new Set(db.query<{ name: string }, []>("PRAGMA table_info(messages)").all().map((column) => column.name));
+      if (!messageColumns.has("file_name")) db.exec("ALTER TABLE messages ADD COLUMN file_name TEXT");
       return db;
     });
   }
@@ -326,6 +335,25 @@ export class TelegramBotStore {
 
   setReceiving(receiving: TelegramBotReceiving): void {
     this.db.query("UPDATE bot SET receiving = ?1 WHERE id = 1").run(receiving);
+  }
+
+  /* ---- operator settings ------------------------------------------------ */
+
+  /** The operator's document roots, or null while none are set. */
+  documentRoots(): string[] | null {
+    const row = this.db.query<{ value: string }, [string]>("SELECT value FROM settings WHERE key = ?1").get("document_roots");
+    if (!row) return null;
+    try {
+      const parsed = JSON.parse(row.value) as unknown;
+      return Array.isArray(parsed) && parsed.every((entry) => typeof entry === "string") ? parsed as string[] : null;
+    } catch {
+      return null;
+    }
+  }
+
+  setDocumentRoots(roots: readonly string[] | null): void {
+    if (roots === null) this.db.query("DELETE FROM settings WHERE key = ?1").run("document_roots");
+    else this.db.query("INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run("document_roots", JSON.stringify(roots));
   }
 
   /* ---- intake ----------------------------------------------------------- */
@@ -557,6 +585,7 @@ export class TelegramBotStore {
           replyToMessageId: row.reply_to_message_id,
           topicId: row.topic_id,
           sentBy,
+          ...(row.file_name !== null ? { filename: row.file_name } : {}),
         };
       }),
       nextCursor: hasMore && last ? encodeCursor(last.date, last.message_id) : null,
@@ -621,17 +650,17 @@ export class TelegramBotStore {
     clientRequestId: string;
     chatId: string;
     conversationId: string | null;
-    sent: Array<{ messageId: number; date: number; text: string; replyToMessageId: number | null; topicId: number | null; kind?: "text" | "photo" }>;
+    sent: Array<{ messageId: number; date: number; text: string | null; replyToMessageId: number | null; topicId: number | null; kind?: "text" | "photo" | "document"; filename?: string }>;
     now: Date;
   }): void {
     const at = input.now.toISOString();
     this.transaction(() => {
       const insert = this.db.query(`
-        INSERT OR REPLACE INTO messages (chat_id, message_id, direction, date, kind, text, reply_to_message_id, topic_id, sent_by_conversation_id, sent_by_unidentified)
-        VALUES (?1, ?2, 'out', ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+        INSERT OR REPLACE INTO messages (chat_id, message_id, direction, date, kind, text, reply_to_message_id, topic_id, sent_by_conversation_id, sent_by_unidentified, file_name)
+        VALUES (?1, ?2, 'out', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
       `);
       for (const message of input.sent) {
-        insert.run(input.chatId, message.messageId, message.date, message.kind ?? "text", message.text, message.replyToMessageId, message.topicId, input.conversationId, input.conversationId ? 0 : 1);
+        insert.run(input.chatId, message.messageId, message.date, message.kind ?? "text", message.text, message.replyToMessageId, message.topicId, input.conversationId, input.conversationId ? 0 : 1, message.filename ?? null);
       }
       this.db.query(`
         UPDATE chats SET last_post_at = ?2, last_post_conversation_id = ?3, last_post_unidentified = ?4 WHERE chat_id = ?1

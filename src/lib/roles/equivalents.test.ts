@@ -15,6 +15,7 @@ test("moving a role between engines picks the equivalent model and keeps or clam
 
 test("the GPT-6 models have Claude equivalents, and Sonnet no longer lands on a Terra the GPT-6 line lacks", () => {
   expect(equivalentModel("gpt-6-sol", "claude")).toBe("opus");
+  expect(equivalentModel("gpt-6.1-sol", "claude")).toBe("opus");
   expect(equivalentModel("gpt-6-astra", "claude")).toBe("opus");
   expect(equivalentModel("gpt-6-luna", "claude")).toBe("sonnet");
   expect(equivalentModel("sonnet", "codex")).toBe("gpt-6-sol");

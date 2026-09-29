@@ -22,6 +22,10 @@ describe("effortScale", () => {
     expect(effortScale("codex", "gpt-6-sol")).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
   });
 
+  test("codex gpt-6.1-sol carries the max and ultra tiers", () => {
+    expect(effortScale("codex", "gpt-6.1-sol")).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+  });
+
   test("codex gpt-6-luna tops out at max and offers no ultra", () => {
     expect(effortScale("codex", "gpt-6-luna")).toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
@@ -91,7 +95,7 @@ describe("effortMeter", () => {
 
 test("spawn reasoning admits model-specific top tiers for Astra and both Sols", async () => {
   const { reasoningFromBody } = await import("./efforts");
-  for (const model of ["gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol"]) {
+  for (const model of ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"]) {
     for (const effort of ["max", "ultra"]) {
       expect(reasoningFromBody("codex", { model, effort })).toEqual({ effort, fast: null });
     }

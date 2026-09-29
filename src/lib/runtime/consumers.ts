@@ -1,3 +1,5 @@
+import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
+
 import type { RuntimeEvent, RuntimeEventInput } from "./contracts";
 import type { Flow } from "@/lib/flows/types";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -7,7 +9,41 @@ export interface RuntimeConsumerPorts {
   flowReady(flowId: string, note: string | null): Promise<Flow | void> | Flow | void;
   workflowStageCompleted(workflowId: string, stage: number): Promise<Workflow | void> | Workflow | void;
   taskDeliveryAcknowledged(taskId: string, assignmentId: string): Promise<BoardTask | void> | BoardTask | void;
+  /** A turn of a conversation outside any flow settled
+      (docs/design/spawn-completion-notice.md §2). The port decides whether a
+      launcher is owed a notice and records only that obligation: the host
+      waits on this consumer before it answers the append. */
+  spawnTurnEnded?(turn: SpawnTurnEnded): Promise<void> | void;
 }
+
+export interface SpawnTurnEnded {
+  conversationId: string;
+  turnId: string;
+  outcome: "completed" | "interrupted" | "error";
+  /** When the turn began, when the session's receipts can say. */
+  startedAt: string | null;
+  endedAt: string;
+}
+
+/** A consumer whose write the state store refused for now — hot-state writes
+    fenced during a release handoff, a busy database — and that will land once
+    the refusal lifts. The host keeps the event owed and retries it, and does
+    not count it toward quarantine: a notice is owed exactly once, so a fence
+    that outlasts three attempts must not drop it
+    (docs/design/spawn-completion-notice.md §2). */
+export class RuntimeConsumerDeferredError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "RuntimeConsumerDeferredError";
+  }
+}
+
+function busy(error: unknown): boolean {
+  return error instanceof FileTransactionBusyError
+    || (error instanceof Error && error.name === "FileTransactionBusyError");
+}
+
+const TURN_OUTCOMES = new Set<SpawnTurnEnded["outcome"]>(["completed", "interrupted", "error"]);
 
 function text(...values: unknown[]): string | null {
   const value = values.find((item) => typeof item === "string" && item.trim());
@@ -34,6 +70,23 @@ export async function consumeRuntimeEvent(event: RuntimeEvent, ports: RuntimeCon
   if (event.kind === "turn-ended") {
     const flowId = text(event.payload.flowId);
     if (flowId) return projection("flow", flowId, await ports.flowReady(flowId, text(event.payload.readyNote, event.payload.finalAssistantOutput)), event);
+    const conversationId = text(event.payload.conversationId);
+    const turnId = text(event.payload.turnId);
+    const outcome = event.payload.outcome as SpawnTurnEnded["outcome"];
+    if (ports.spawnTurnEnded && conversationId && turnId && TURN_OUTCOMES.has(outcome)) {
+      try {
+        await ports.spawnTurnEnded({
+          conversationId,
+          turnId,
+          outcome,
+          startedAt: text(event.payload.turnStartedAt),
+          endedAt: event.occurredAt,
+        });
+      } catch (error) {
+        if (busy(error)) throw new RuntimeConsumerDeferredError(`completion notice deferred: ${(error as Error).message}`, { cause: error });
+        throw error;
+      }
+    }
     return [];
   }
   if (event.kind === "workflow.stage.completed") {

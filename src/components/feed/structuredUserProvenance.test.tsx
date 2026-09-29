@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { encodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText.server";
 import { readStructuredUserProvenance } from "@/lib/selection/structuredUserMetadata";
 import { setLocale } from "@/lib/i18n";
@@ -70,6 +71,26 @@ test("agent records preserve their sender through marked and unmarked echoes", (
     expect(html).toContain('href="#c=conversation_sender" aria-label="Open sender conversation"');
     expect(html).not.toContain("llv:structured-user");
   }
+});
+
+test("a spawn completion notice renders as the child's message, never the operator's (spawn-completion-notice §3)", () => {
+  const child = "conversation_notice_child";
+  /* The origin the notice sweep stamps, built by the same function from the
+     child's registry row. */
+  const origin = agentMessageOrigin({
+    conversations: { [child]: { id: child, agentRole: "reviewer", projectOwnership: null,
+      generations: [{ launchProfile: { cwd: "/repo", project: "notice-project" } }] } },
+    receipts: {},
+  } as never, child);
+  expect(origin).toMatchObject({ kind: "agent", role: "reviewer", conversationId: child });
+  const text = `Agent finished: Review the lane (${child})\nVerdict: pass\nTurn completed · ran 3m 10s\nFinal message:\nLooks right.`;
+  const entries = parse(encodeCodexStructuredUserText(text, undefined, null, origin, "c".repeat(64)));
+  expect(entries.filter(({ item }) => item.kind === "user")).toHaveLength(0);
+  expect(entries.filter(({ item }) => item.kind === "tmsg")).toHaveLength(1);
+  const html = render(entries);
+  expect(html).toContain('data-agent-role="reviewer"');
+  expect(html).toContain(`href="#c=${child}" aria-label="Open sender conversation"`);
+  expect(html.replace(/<[^>]*>/g, "")).toContain("Verdict: pass");
 });
 
 test("two identical messages resolve only their own references; reads have a batch ceiling", () => {

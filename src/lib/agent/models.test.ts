@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 
 import {
   CODEX_ASTRA_MODEL,
+  CODEX_GPT61_SOL_MODEL,
   CODEX_GPT6_LUNA_MODEL,
   CODEX_GPT6_SOL_MODEL,
   CODEX_SOL_MODEL,
@@ -20,6 +21,7 @@ test("the model catalog exposes Opus 5.5 as the Claude default and GPT-6-Astra a
   expect(ENGINE_MODELS.claude[0]).toEqual({ id: "opus", label: "Opus 5.5", shortLabel: "Opus 5.5", use: "review" });
   expect(ENGINE_MODELS.codex).toEqual([
     { id: CODEX_ASTRA_MODEL, label: "GPT-6-Astra", shortLabel: "6-Astra", use: "review" },
+    { id: CODEX_GPT61_SOL_MODEL, label: "GPT-6.1-Sol", shortLabel: "6.1-Sol", use: "review" },
     { id: CODEX_GPT6_SOL_MODEL, label: "GPT-6-Sol", shortLabel: "6-Sol", use: "review" },
     { id: CODEX_GPT6_LUNA_MODEL, label: "GPT-6-Luna", shortLabel: "6-Luna", use: "general" },
     { id: CODEX_SOL_MODEL, label: "GPT-5.6-Sol", shortLabel: "5.6-Sol", use: "review" },
@@ -45,6 +47,15 @@ test("GPT-6-Sol and GPT-6-Luna are launchable and take image input", () => {
     expect(validateLaunchModel("codex", model)).toEqual({ model });
     expect(codexModelSupportsImages(model)).toBeTrue();
   }
+});
+
+test("GPT-6.1-Sol is launchable, takes image input and sits right after Astra", () => {
+  expect(CODEX_GPT61_SOL_MODEL).toBe("gpt-6.1-sol");
+  expect(validateLaunchModel("codex", CODEX_GPT61_SOL_MODEL)).toEqual({ model: CODEX_GPT61_SOL_MODEL });
+  expect(codexModelSupportsImages(CODEX_GPT61_SOL_MODEL)).toBeTrue();
+  expect(ENGINE_MODELS.codex.map((option) => option.id).slice(0, 3)).toEqual([CODEX_ASTRA_MODEL, CODEX_GPT61_SOL_MODEL, CODEX_GPT6_SOL_MODEL]);
+  // The default stays Astra: adding a model changes no default.
+  expect(defaultModelFor("codex")).toBe(CODEX_ASTRA_MODEL);
 });
 
 test("spawn model validation accepts CLI ids and rejects control characters", () => {

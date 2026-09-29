@@ -521,3 +521,44 @@ test("legacy registry files load with null role and depth and legacy receipts st
     expect(receipt.rejection).toBeNull();
   }
 });
+
+test("a spawn launcher rides the receipt onto the conversation, and the notice consumer reads it keyed (spawn-completion-notice §1)", () => {
+  for (const sqliteMode of ["off", "sqlite"] as const) {
+    const filename = path.join(sandbox, `launcher-${sqliteMode}.json`);
+    const store = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
+    const launcher = spawnAtDepth(store, { kind: "operator" }).conversationId;
+    const begun = store.beginSpawnRequest({
+      engine: "codex",
+      cwd: "/repo",
+      transport: "structured",
+      origin: { kind: "operator" },
+      launchProfile: { title: "Review the notice lane" },
+      launcher: { conversationId: launcher, notify: true },
+    });
+    if (begun.kind !== "created") throw new Error("expected create");
+    expect(begun.receipt.launcher).toEqual({ conversationId: launcher, notify: true });
+    const child = settleLaunch(store, begun.receipt.launchId);
+    expect(store.conversation(child)?.launcher).toEqual({ conversationId: launcher, notify: true });
+    expect(store.spawnNoticeChild(child)).toEqual({ conversationId: child, launcher: { conversationId: launcher, notify: true }, contained: false });
+
+    const optedOut = store.beginSpawnRequest({
+      engine: "codex", cwd: "/repo", transport: "structured", origin: { kind: "operator" },
+      launchProfile: { title: "Quiet helper" },
+      launcher: { conversationId: launcher, notify: false },
+    });
+    if (optedOut.kind !== "created") throw new Error("expected create");
+    expect(store.spawnNoticeChild(settleLaunch(store, optedOut.receipt.launchId))?.launcher).toEqual({ conversationId: launcher, notify: false });
+    /* A launch that is not structured never ends a turn in the runtime
+       journal, so it carries none. */
+    const tmux = store.beginSpawnRequest({
+      engine: "codex", cwd: "/repo", transport: "tmux", origin: { kind: "operator" },
+      launchProfile: { title: "Pane helper" },
+      launcher: { conversationId: launcher, notify: true },
+    });
+    if (tmux.kind !== "created") throw new Error("expected create");
+    expect(tmux.receipt.launcher).toBeNull();
+    /* A launch nobody attributed carries none. */
+    expect(store.spawnNoticeChild(launcher)?.launcher).toBeNull();
+    expect(store.spawnNoticeChild("conversation_nobody")).toBeNull();
+  }
+});

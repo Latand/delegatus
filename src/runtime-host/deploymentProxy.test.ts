@@ -37,6 +37,26 @@ async function close(server: net.Server): Promise<void> {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
+async function closesWithin(server: net.Server, milliseconds = 500): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      close(server),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("server.close() retained a finished connection")), milliseconds);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function destroyedWithin(socket: net.Socket, milliseconds = 500): Promise<boolean> {
+  const deadline = Date.now() + milliseconds;
+  while (!socket.destroyed && Date.now() < deadline) await Bun.sleep(10);
+  return socket.destroyed;
+}
+
 /** Every socket a server accepts, so a test can dispose of them itself. Bun
     1.4.0 never reports `end` or `close` on a raw socket the proxy already
     ended when its peer then closes, and `server.close()` waits for that
@@ -90,14 +110,69 @@ test("deployment proxy forwards an immediate request through a real TCP connecti
   if (!proxyAddress || typeof proxyAddress === "string") throw new Error("proxy did not bind a TCP port");
 
   try {
+    const accepted = once(proxy, "connection") as Promise<[net.Socket]>;
+    const viewerAccepted = once(upstream, "connection") as Promise<[net.Socket]>;
     const response = await request(proxyAddress.port);
     expect(response).toContain("HTTP/1.1 200 OK");
     expect(response).toEndWith("proxied");
+    const [downstream] = await accepted;
+    const [viewerSocket] = await viewerAccepted;
+    expect(await destroyedWithin(downstream)).toBe(true);
+    expect(await destroyedWithin(viewerSocket)).toBe(true);
   } finally {
     proxySockets.destroyAll();
     upstreamSockets.destroyAll();
     await close(proxy);
     await close(upstream);
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("deployment proxy disposes a 503 socket after its response flushes", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "llv-deployment-proxy-"));
+  const proxy = serveViewerDeploymentProxy(path.join(directory, "missing-release.json"), 0);
+  const sockets = ownAccepted(proxy);
+  await once(proxy, "listening");
+  const address = proxy.address();
+  if (!address || typeof address === "string") throw new Error("proxy did not bind a TCP port");
+
+  try {
+    const accepted = once(proxy, "connection") as Promise<[net.Socket]>;
+    expect(await request(address.port)).toContain("HTTP/1.1 503 Service Unavailable");
+    const [downstream] = await accepted;
+    expect(await destroyedWithin(downstream)).toBe(true);
+
+    await fs.writeFile(path.join(directory, "missing-release.json"), JSON.stringify({
+      revision: "self", image: "viewer:test", container: "viewer-test",
+      endpoint: `http://127.0.0.1:${address.port}`,
+    }));
+    const selfAccepted = once(proxy, "connection") as Promise<[net.Socket]>;
+    expect(await request(address.port)).toContain("HTTP/1.1 503 Service Unavailable");
+    const [selfSocket] = await selfAccepted;
+    expect(await destroyedWithin(selfSocket)).toBe(true);
+  } finally {
+    sockets.destroyAll();
+    await close(proxy);
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("deployment proxy server.close completes after clients receive and close", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "llv-deployment-proxy-"));
+  const proxy = serveViewerDeploymentProxy(path.join(directory, "missing-release.json"), 0);
+  const sockets = ownAccepted(proxy);
+  await once(proxy, "listening");
+  const address = proxy.address();
+  if (!address || typeof address === "string") throw new Error("proxy did not bind a TCP port");
+
+  try {
+    for (let index = 0; index < 2; index++) {
+      expect(await request(address.port)).toContain("HTTP/1.1 503 Service Unavailable");
+    }
+    await closesWithin(proxy);
+  } finally {
+    sockets.destroyAll();
+    await close(proxy);
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
