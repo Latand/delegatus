@@ -1327,11 +1327,14 @@ export function defaultMcpSpawnRoleParams(
 /** The exact body handed to `/api/spawn`, shared by the one dispatch and the
     request-bound admission recovery probe. Keeping this construction in one
     seam makes the downstream fence digest compare the original payload. */
-export function spawnDispatchBody(args: McpToolArgs, clientAttemptId: string): Record<string, unknown> {
-  const body = withoutKeys(args, ["clientRequestId", "recoveryOnly"]);
+export function spawnDispatchBody(args: McpToolArgs, clientAttemptId: string, launcherConversationId: string | null = null): Record<string, unknown> {
+  /* The launcher is the server's attribution of the caller, never an
+     argument: a caller-supplied value is dropped before the route sees it. */
+  const body = withoutKeys(args, ["clientRequestId", "recoveryOnly", "launcherConversationId"]);
   const roleParams = defaultMcpSpawnRoleParams(args);
   return {
     ...body,
+    ...(launcherConversationId ? { launcherConversationId } : {}),
     /* MCP callers are agents even when the control request uses the operator
        capability. An omitted list must not inherit operator-root Telegram. */
     ...(args.mcpServers == null ? { mcpServers: ["viewer"] } : {}),
@@ -1420,7 +1423,8 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
       );
     }
   }
-  const result = await dispatchControl(control)("/api/spawn", spawnDispatchBody(args, clientAttemptId), spawnControlHeaders());
+  const launcher = mcpSpawnLauncher(dependencies);
+  const result = await dispatchControl(control)("/api/spawn", spawnDispatchBody(args, clientAttemptId, launcher), spawnControlHeaders());
   // A readable body alone establishes no acceptance. Validate the fields
   // this binding publishes before the service can persist a successful replay.
   if (!text(result.launchId) || !text(result.conversationId)
@@ -1443,6 +1447,8 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
     state: result.state,
     initialMessage: result.initialMessage,
     ...(typeof result.runtime === "string" ? { runtime: result.runtime } : {}),
+    /* Whether a brief still needs its own "report back" line. */
+    launcherNotice: args.notifyLauncher === false ? "off" : launcher ? "on" : "unavailable",
   };
 }
 
@@ -3259,6 +3265,25 @@ async function bridgeDirective(args: McpToolArgs, control: ViewerControlDependen
        arrival, and `message_receipt` over the operation id is what says which. */
     settled: settledOutcome === "delivered",
   };
+}
+
+/**
+ * The conversation a spawn's completion notices go back to
+ * (docs/design/spawn-completion-notice.md §1): the calling agent as the
+ * server attributes it — a deputy is its own launcher, since it is the one
+ * waiting. The operator's root session, an unidentified caller and a
+ * process without attribution launch with none, and hear nothing back.
+ */
+export function mcpSpawnLauncher(dependencies?: Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority">): string | null {
+  if (!dependencies) return null;
+  try {
+    const attribution = attributionOf(dependencies);
+    if (attribution.kind !== "agent" && attribution.kind !== "manager") return null;
+    const conversationId = attribution.via?.deputy ?? attribution.conversationId;
+    return conversationId?.startsWith("conversation_") ? conversationId : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Sanitized idempotency key derived from the caller's, for a secondary side
@@ -5945,7 +5970,7 @@ async function recoverSpawn(
     if (legacy || !args || typeof args.role !== "string" || !args.role.trim() || !dependencies.validateSpawnAdmission) return unknown();
     let body: Record<string, unknown>;
     try {
-      body = spawnDispatchBody(args, key);
+      body = spawnDispatchBody(args, key, mcpSpawnLauncher(dependencies));
     } catch (error) {
       return unknown(`the spawn admission request could not be reconstructed (${error instanceof Error ? error.message : String(error)})`);
     }

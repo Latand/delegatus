@@ -3787,3 +3787,38 @@ test("issue 1100: tool items project into the session's live turn on both lifecy
   expect(reopened.snapshot().sessions.find((session) => session.conversationId === "conversation_tools")?.liveTurn?.items).toHaveLength(3);
   reopened.close();
 });
+
+test("a settled turn reaches the completion-notice port once, and a failed consumption replays after a restart (spawn-completion-notice §2)", async () => {
+  const filename = path.join(sandbox("spawn-notice-consumer"), "events.sqlite");
+  const seen: string[] = [];
+  let failNext = true;
+  const ports = {
+    flowReady: () => undefined,
+    workflowStageCompleted: () => undefined,
+    taskDeliveryAcknowledged: () => undefined,
+    spawnTurnEnded: (turn: { conversationId: string; turnId: string; outcome: string }) => {
+      if (failNext) { failNext = false; throw new Error("state store busy"); }
+      seen.push(`${turn.conversationId}:${turn.turnId}:${turn.outcome}`);
+    },
+  };
+  const journal = new RuntimeJournal(filename);
+  const host = new RuntimeHost(journal, ports);
+  await host.handle({ id: "terminal", method: "append", params: { event: {
+    scope: "session:conversation_child", kind: "turn-ended", payload: { conversationId: "conversation_child", turnId: "turn-one", outcome: "error" },
+    producer: { kind: "claude-stream-broker", eventKey: "engine-host:claude:terminal:1" },
+  } } });
+  /* The port threw: nothing recorded, and the event is still owed. */
+  expect(seen).toEqual([]);
+  expect(journal.unconsumedEvents("orchestration")).toHaveLength(1);
+  journal.close();
+
+  const reopened = new RuntimeJournal(filename);
+  const restarted = new RuntimeHost(reopened, ports);
+  try {
+    expect(await restarted.recoverConsumers()).toBe(1);
+    expect(await restarted.recoverConsumers()).toBe(0);
+    expect(seen).toEqual(["conversation_child:turn-one:error"]);
+  } finally {
+    reopened.close();
+  }
+});

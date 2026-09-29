@@ -583,9 +583,9 @@ function isStaleChild(child: SeatTickChildInput, seat: SeatTickSeatInput): boole
 
 /** Why a wake is not listing this child, or null when it is listing it. The
     order is the order the reasons are reported in, most fundamental first. */
-type SeatTickChildSkip = "unreadable" | "stale" | "unchanged";
+type SeatTickChildSkip = "unreadable" | "stale" | "unchanged" | "notified";
 
-const SEAT_TICK_CHILD_SKIPS: readonly SeatTickChildSkip[] = ["unreadable", "stale", "unchanged"];
+const SEAT_TICK_CHILD_SKIPS: readonly SeatTickChildSkip[] = ["unreadable", "stale", "unchanged", "notified"];
 
 /** No wake has shown anything: what the two clauses about the CHILD are asked
     with, before the line that would show it exists. */
@@ -662,6 +662,11 @@ function childFactsSkipReason(child: SeatTickChildInput, seat: SeatTickSeatInput
      child the seat cannot read is still not listed as work — it is named once
      beside the agenda, with its reason — because nothing about it is owed. */
   if (isStaleChild(child, seat)) return "stale";
+  /* The completion notice owns a settled turn of a child this seat launched
+     with notices on (spawn-completion-notice §6). A launch that failed before
+     it ran never ends a turn, so it stays the harvest's; so does a child whose
+     host died over an open turn, which is a stall and not a settled turn. */
+  if (child.launcherNotice && child.status === "terminal" && child.outcome === "finished") return "notified";
   if (!isHarvestable(child) && child.status !== "terminal") return "unreadable";
   if (!Number.isFinite(childOwnInstant(child))) return "unreadable";
   return null;

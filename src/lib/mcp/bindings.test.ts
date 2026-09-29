@@ -477,6 +477,41 @@ test("gateway spawn with no MCP selection sends the Viewer baseline explicitly",
   expect(dispatched[0]?.mcpServers).toEqual(["viewer"]);
 });
 
+test("spawn_agent stamps the launcher from server attribution and never from the arguments (spawn-completion-notice §1)", async () => {
+  const dispatched: Record<string, unknown>[] = [];
+  const control = { post: async (_pathname: string, body: Record<string, unknown>) => {
+    dispatched.push(body);
+    return { conversationId: "conversation_child", path: null, launchId: "launch_child",
+      state: "starting", initialMessage: "pending" };
+  } };
+  const as = (attribution: Record<string, unknown>) => viewerMcpBindings(undefined, control, { callerAttribution: () => attribution } as never).spawn_agent;
+  const args = { cwd: "/repo", title: "Reviewer", ["prompt"]: "review", launcherConversationId: "conversation_forged" };
+
+  const worker = await as({ kind: "agent", conversationId: "conversation_worker", role: "builder" })({ ...args, clientRequestId: "launcher-worker" });
+  expect(dispatched[0]).toMatchObject({ launcherConversationId: "conversation_worker" });
+  expect(worker.launcherNotice).toBe("on");
+
+  const seat = await as({ kind: "manager", conversationId: "conversation_seat", role: "orchestrator" })({ ...args, clientRequestId: "launcher-seat", notifyLauncher: false });
+  expect(dispatched[1]).toMatchObject({ launcherConversationId: "conversation_seat", notifyLauncher: false });
+  expect(seat.launcherNotice).toBe("off");
+
+  /* A deputy is the one waiting, so it is its own launcher. */
+  await as({ kind: "manager", conversationId: "conversation_seat", role: "orchestrator", via: { deputy: "conversation_deputy" } })({ ...args, clientRequestId: "launcher-deputy" });
+  expect(dispatched[2]).toMatchObject({ launcherConversationId: "conversation_deputy" });
+
+  /* The operator's own root session and an unidentified caller hear nothing
+     back, and a forged value never reaches the route. */
+  for (const [index, attribution] of [
+    { kind: "gateway", conversationId: "conversation_root", role: null },
+    { kind: "unidentified", conversationId: null, role: null },
+  ].entries()) {
+    const answer = await as(attribution)({ ...args, clientRequestId: `launcher-none-${index}` });
+    expect(dispatched[3 + index]).not.toHaveProperty("launcherConversationId");
+    expect(answer.launcherNotice).toBe("unavailable");
+  }
+  expect(spawnDispatchBody({ ...args, clientRequestId: "x" }, "attempt")).not.toHaveProperty("launcherConversationId");
+});
+
 test("spawn_agent coerces and clamps bounded role params before the control request", async () => {
   const bodies: Record<string, unknown>[] = [];
   const service = createMcpToolService(viewerMcpBindings(undefined, {

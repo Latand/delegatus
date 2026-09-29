@@ -770,6 +770,11 @@ export interface SeatTickChildInput {
       when the registry says the turn is open. Null is no verdict, never a
       stall. */
   activity: SeatTickActivity | null;
+  /** This seat launched the child through spawn_agent with its completion
+      notices on (docs/design/spawn-completion-notice.md §6): each settled
+      turn already reaches the seat as a message of its own, so the harvest
+      does not report it a second time. */
+  launcherNotice?: boolean;
 }
 
 /** A durable log line the Viewer already writes: a deploy outcome, the host

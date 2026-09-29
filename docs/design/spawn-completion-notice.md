@@ -262,6 +262,35 @@ Each file below sits beside the code it covers. Run each by path, with
 | The seat tick skips `child-terminal` for a notified child of that seat | `src/lib/monitor/seatTick.test.ts` |
 | Attribution rendering: the notice row renders as the child's message, never the operator's | `src/components/feed/structuredUserProvenance.test.tsx` |
 
+## Implementation notes
+
+Where the build differs from the text above, and why:
+
+- **Redaction keeps paths.** The notice text passes the secret redactor
+  (`hardenedRedact`) and not `redactBounded`. The monitor's redactor also
+  collapses every absolute path to `…/name`, because its cards are pasted
+  outside Delegatus. A notice is a message between two local conversations,
+  the same channel `send_message` uses unredacted, and agents are told to hand
+  over files by absolute path, so collapsing them would make the notice less
+  useful than reading the transcript.
+- **A notice in flight is kept whole.** The sweep writes the exact text, key
+  and recipient to the child's row before it calls the delivery layer. A
+  restart or an uncertain answer resends that record, so a turn that ends in
+  between cannot change the key of a send that may already have landed. An
+  uncertain or 5xx answer is retried under the same key for up to 20 passes,
+  then the rows are marked `failed`. A 4xx refusal fails them at once.
+- **Containers are all memberships.** The consumer skips a child with any
+  durable membership (pipeline, flow or orchestrator), matching the seat
+  tick's container rule. A `turn-ended` that carries a flow id goes only to
+  the flow, as before.
+- **The seat tick skip is narrower.** It skips only a `terminal`/`finished`
+  child whose launcher is the seat. A launch that failed before it ran ends no
+  turn, and a child whose host died over an open turn is a stall, so both stay
+  on the tick's own path.
+- **Run time** is the newest turn's: its `turn-ended` time minus the admission
+  time of the receipt that ran it. Without a receipt the line omits it.
+- **Retention:** settled rows are pruned after 14 days, at most once an hour.
+
 ## Deferred — not currently justified
 
 - **Legacy tmux children.** They emit no journal `turn-ended`. Spawns

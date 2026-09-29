@@ -1,5 +1,5 @@
 import { canonicalNativeQueueProof, type NativeQueueCompactedProof, type NativeQueueTransition } from "@/lib/runtime/nativeQueueContracts";
-import { isStructuredHostKind, RUNTIME_RECEIPT_STATUSES, RuntimeIdempotencyConflictError, type RuntimeEvent, type RuntimeEventInput, type RuntimeOperationCommand, type RuntimeReceiptStatus, type RuntimeSocketRequest, type RuntimeSocketResponse, type RuntimeTransitionDetails } from "@/lib/runtime/contracts";
+import { isStructuredHostKind, RUNTIME_RECEIPT_STATUSES, RuntimeIdempotencyConflictError, type RuntimeEvent, type RuntimeEventInput, type RuntimeOperationCommand, type RuntimeOperationReceipt, type RuntimeReceiptStatus, type RuntimeSocketRequest, type RuntimeSocketResponse, type RuntimeTransitionDetails } from "@/lib/runtime/contracts";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import { consumeRuntimeEvent, type RuntimeConsumerPorts } from "@/lib/runtime/consumers";
 
@@ -18,6 +18,15 @@ const DURABLE_ENGINE_PUBLICATIONS = new Set([
   "voice-transcript", "voice-chunk", "native-queue-changed",
   "voice-delivery-progress", "voice-delivery-acknowledged",
 ]);
+
+/** When the operation that ran this turn was admitted, for a completion
+    notice's run time (spawn-completion-notice §2). Consumer-only: the stored
+    event is unchanged. */
+function turnStartedAt(receipts: readonly RuntimeOperationReceipt[] | undefined, turnId: unknown): string | null {
+  if (typeof turnId !== "string" || !turnId) return null;
+  const receipt = receipts?.find((candidate) => candidate.turnId === turnId);
+  return receipt ? receipt.admittedAt ?? receipt.at : null;
+}
 
 export class RuntimeHost {
   private consumerQueue: Promise<void> = Promise.resolve();
@@ -64,8 +73,13 @@ export class RuntimeHost {
   private async consume(event: RuntimeEvent): Promise<void> {
     if (!this.consumers || this.journal.consumerCompleted(event.eventId, "orchestration", event.seq)) return;
     const session = event.scope.type === "session" ? this.journal.sessionState(event.scope.id) : null;
-    const consumerEvent = session?.flowId && event.kind === "turn-ended" && typeof event.payload.flowId !== "string"
-      ? { ...event, payload: { ...event.payload, flowId: session.flowId } }
+    const startedAt = event.kind === "turn-ended" ? turnStartedAt(session?.recentReceipts, event.payload.turnId) : null;
+    const consumerEvent = event.kind === "turn-ended" && session
+      ? { ...event, payload: {
+          ...event.payload,
+          ...(session.flowId && typeof event.payload.flowId !== "string" ? { flowId: session.flowId } : {}),
+          ...(startedAt ? { turnStartedAt: startedAt } : {}),
+        } }
       : event;
     try {
       for (const projection of await consumeRuntimeEvent(consumerEvent, this.consumers)) {
