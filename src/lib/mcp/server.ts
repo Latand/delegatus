@@ -3865,7 +3865,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     clientRequestId: clientRequestIdSchema,
     chat: z.string().trim().min(1).describe("The allowlisted chat's alias, id, @username or t.me chat/topic link."),
     images: z.array(z.object({
-      path: z.string().startsWith("/").describe("Absolute JPEG or PNG path on the Viewer host."),
+      path: z.string().min(1).describe("Absolute JPEG or PNG path on the Viewer host."),
       caption: z.string().max(1024).describe("Caption for this image, up to 1024 characters."),
     })).min(1).max(10).describe("One image sends sendPhoto; 2–10 images send one album."),
     format: z.enum(["plain", "html"]).optional().describe("Caption format; plain by default."),
