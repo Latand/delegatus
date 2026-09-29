@@ -3,6 +3,8 @@ import type { NextRequest } from "next/server";
 
 import { tokensMatch } from "@/lib/authToken";
 import { isTeamAuthPage, teamGate, teamPerimeter } from "@/lib/team/gate";
+import { statePath } from "@/lib/configDir";
+import { activeRestartGate } from "@/lib/selfUpdate/restartGate";
 
 const AUTH_COOKIE = "llv_auth";
 const FRAME_PREFIX = "/api/artifact/frame/";
@@ -49,6 +51,13 @@ function forbidden(request: NextRequest): NextResponse {
   );
 }
 
+function handoffBlock(request: NextRequest): NextResponse | null {
+  if (["GET", "HEAD", "OPTIONS"].includes(request.method)
+    || (request.method === "POST" && request.nextUrl.pathname === "/api/view/presence")
+    || !activeRestartGate(statePath("self-update", "auto-admission.json"))) return null;
+  return NextResponse.json({ error: "Automatic update handoff in progress. Retry shortly." }, { status: 503, headers: { "Retry-After": "2" } });
+}
+
 /**
  * Two layers, kept apart (docs/design/sign-in-and-team.md D1). The perimeter
  * below decides whether this connection may reach the Viewer at all; the
@@ -59,9 +68,11 @@ function forbidden(request: NextRequest): NextResponse {
 export function proxy(request: NextRequest): NextResponse {
   const perimeter = perimeterCheck(request);
   if (perimeter.response) return perimeter.response;
-  if (isPeerRoute(request.nextUrl.pathname)) return NextResponse.next();
+  if (isPeerRoute(request.nextUrl.pathname)) return handoffBlock(request) ?? NextResponse.next();
   const gated = teamGate(request, { bearerAuthenticated: perimeter.bearer });
   if (gated) return gated;
+  const held = handoffBlock(request);
+  if (held) return held;
   const response = NextResponse.next();
   /* The sign-in and join pages are never framed: a page that asks a person
      to approve something must not be drawn under someone else's. */

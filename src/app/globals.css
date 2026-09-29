@@ -10,6 +10,8 @@
 @import "../components/workLinks/workLinks.css";
 /* The one pipeline block and the one tone map (#2072), desktop and phone. */
 @import "../components/pipelines/pipelineBlock.css";
+/* The model glyph in front of a stage, on every surface that draws one. */
+@import "../components/kanban/modelGlyph.css";
 /* The task icon picker (#2102), desktop and phone. */
 @import "../components/tasks/taskIcon.css";
 

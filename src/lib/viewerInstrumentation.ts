@@ -102,6 +102,7 @@ interface CurrentReleaseControllerLoaders {
   /** Optional for the same reason. */
   loadAsksClassifier?: () => Promise<{ startAsksClassifier: () => void }>;
   loadLinkedBoardSync?: () => Promise<{ startLinkedBoardSync: () => void }>;
+  loadSelfUpdateAuto?: () => Promise<{ startSelfUpdateAuto: () => Promise<void> | void }>;
 }
 
 interface ViewerRuntimeActivationSteps {
@@ -394,6 +395,7 @@ export async function startCurrentReleaseControllers(
     loadRoleMappingRetirements: () => import("@/lib/roles/retirements"),
     loadAsksClassifier: () => import("@/lib/asks/controller"),
     loadLinkedBoardSync: () => import("@/lib/links/schedule"),
+    loadSelfUpdateAuto: () => import("@/lib/selfUpdate/auto"),
   },
 ): Promise<void> {
   /* Stale role mapping rows (docs/design/model-sizing-tiers.md §5) are reset
@@ -525,6 +527,12 @@ export async function startCurrentReleaseControllers(
     linkedBoards?.startLinkedBoardSync();
   } catch (error) {
     console.error("[linked boards] sync start failed", error instanceof Error ? error.name : "unknown");
+  }
+  try {
+    const selfUpdate = await loaders.loadSelfUpdateAuto?.();
+    await selfUpdate?.startSelfUpdateAuto();
+  } catch (error) {
+    console.error("[self-update] auto start failed", error instanceof Error ? error.name : "unknown");
   }
   if (env.LLV_ACCOUNT_CONTROLLER_DISABLED === "1") return;
   const { startAccountMigrationController } = await loaders.loadAccountMigrationController();

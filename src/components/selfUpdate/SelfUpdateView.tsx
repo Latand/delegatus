@@ -2,7 +2,7 @@
 
 import { Fragment, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
-import { useLocale, type TFunction } from "@/lib/i18n";
+import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
 import { parseInline, splitItem, type Inline } from "@/lib/selfUpdate/changelogMarkup";
 import type { ProcessView, Snapshot, Step } from "@/lib/selfUpdate/types";
 
@@ -46,6 +46,7 @@ export interface ViewState {
 }
 
 export interface ViewActions {
+  toggleAuto(): void;
   check(): void;
   update(): void;
   retry(): void;
@@ -275,7 +276,8 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
 
   if (update.state === "idle" || (update.state === "done" && freshTarget) || (managed && update.state === "failed" && freshTarget)) {
     if (!s.available || s.check.state !== "update-available") {
-      const copy = s.check.state === "up-to-date"
+      const rebuildCheckout = s.mode === "checkout" && s.auto?.availability === "hand-managed" && s.check.relation === "equal";
+      const copy = rebuildCheckout ? t("selfUpdate.update.rebuildNote") : s.check.state === "up-to-date"
         ? t(managed ? "selfUpdate.update.nothingToDeploy" : "selfUpdate.update.nothingToBuild", { sha: s.installed.short, branch })
         : s.check.state === "failed" ? t("selfUpdate.update.lastCheckFailed")
         : s.check.state === "checking" ? t("selfUpdate.status.checking", { branch })
@@ -284,6 +286,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
         <section data-section="update" data-update="idle" className={CARD}>
           {heading(t("selfUpdate.update.heading"))}
           <p className="m-0 text-ui text-secondary">{copy}</p>
+          {rebuildCheckout ? <Button action="update" tone="primary" label={t("selfUpdate.update.rebuildCheckout")} onClick={actions.update} disabled={s.busy !== null || state.pending.has("update")} /> : null}
         </section>
       );
     }
@@ -296,7 +299,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
             <Button action="update" tone="primary" label={t("selfUpdate.update.button")} onClick={actions.update} disabled={s.busy !== null || state.pending.has("update")} />
           </div>
         </div>
-        <p className="m-0 text-ui text-secondary">{t(managed ? "selfUpdate.update.noteManaged" : "selfUpdate.update.note")}</p>
+        <p className="m-0 text-ui text-secondary">{t(managed ? "selfUpdate.update.noteManaged" : s.auto?.enabled ? "selfUpdate.update.noteAuto" : "selfUpdate.update.note")}</p>
         {steps(target.short, update.steps.map((step) => ({ ...step, state: "pending", tail: [], durationMs: null, startedAt: null })))}
       </section>
     );
@@ -316,6 +319,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
             {t("selfUpdate.update.progress", { n: runningStepNumber(update.steps), total: update.steps.length })}
           </span>
         </div>
+        {update.trigger === "auto" ? <p className="m-0 text-ui text-secondary">{t("selfUpdate.auto.started")}</p> : null}
         {steps(short, update.steps)}
       </section>
     );
@@ -324,6 +328,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
     return (
       <section data-section="update" data-update="done" className={`${CARD} ${EDGE.success}`}>
         {heading(t("selfUpdate.update.updatedTo", { target }))}
+        {update.trigger === "auto" ? <p className="m-0 text-ui text-secondary">{t("selfUpdate.auto.started")}</p> : null}
         <p data-outcome="done" className="m-0 rounded-[8px] bg-success-soft px-2.5 py-2 text-ui text-success">
           {t(managed ? "selfUpdate.update.deployed" : "selfUpdate.update.built", { sha: short, duration: duration(elapsed, t) })} {appliedCopy(s, short, t)}
         </p>
@@ -340,6 +345,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
     : t("selfUpdate.update.failed", { step: failedName, duration: duration(elapsed, t) });
   return (
     <section data-section="update" data-update="failed" className={`${CARD} ${EDGE.danger}`}>
+      {update.trigger === "auto" ? <p className="m-0 text-ui text-secondary">{t("selfUpdate.auto.started")}</p> : null}
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
         {heading(t("selfUpdate.update.to", { target }))}
         <div className="flex flex-wrap justify-end gap-2 max-sm:w-full">
@@ -359,6 +365,55 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
         {cause ? <p data-cause="" className="m-0 font-mono text-label [overflow-wrap:anywhere]">{cause}</p> : null}
       </div>
       {steps(short, update.steps)}
+    </section>
+  );
+}
+
+function AutoSection({ s, state, actions, t }: { s: Snapshot; state: ViewState; actions: ViewActions; t: TFunction }) {
+  const auto = s.auto;
+  if (!auto) return null;
+  const available = auto.availability === "available";
+  const failed = auto.off?.stage === "build" ? s.update.steps.find((step) => step.state === "failed") : null;
+  const offReason = failed ? `${stepName(failed.name, t)}: ${stepFailureText(failed, t) ?? auto.off!.reason}` : auto.off?.reason ?? "";
+  const phase = auto.off ? t("selfUpdate.auto.offReason", { reason: offReason })
+    : auto.phase === "waiting" ? t("selfUpdate.auto.waiting", { sha: auto.target?.short ?? "" })
+    : auto.phase === "building" ? t("selfUpdate.auto.building", { sha: auto.target?.short ?? "" })
+    : auto.phase === "restarting-web" ? t("selfUpdate.auto.restartingWeb", { sha: auto.target?.short ?? "" })
+    : auto.phase === "restarting-host" ? t("selfUpdate.auto.restartingHost", { sha: auto.target?.short ?? "" })
+    : auto.phase === "not-green" ? t("selfUpdate.auto.notGreen", { sha: auto.target?.short ?? "", reason: auto.green?.detail ?? auto.green?.state ?? "" })
+    : auto.phase === "checks" ? t("selfUpdate.auto.checking", { sha: auto.target?.short ?? "" })
+    : t(auto.enabled ? "selfUpdate.auto.ready" : "selfUpdate.auto.disabled");
+  const blockers = auto.blockers;
+  return (
+    <section data-section="auto" className={CARD}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="m-0 text-body font-semibold text-primary">{t("selfUpdate.auto.heading")}</h2>
+        <Button action="toggle-auto" label={t(auto.enabled ? "selfUpdate.auto.turnOff" : "selfUpdate.auto.turnOn")} onClick={actions.toggleAuto}
+          disabled={state.pending.has("auto") || (!available && !auto.enabled)} />
+      </div>
+      <p className="m-0 text-ui text-secondary">{available ? phase : t(`selfUpdate.auto.unavailable.${auto.availability}` as MessageKey)}</p>
+      {auto.enabled && blockers && auto.phase === "waiting" ? (
+        <ul className="m-0 list-disc pl-5 text-ui text-secondary">
+          {blockers.turns > 0 ? <li>{t("selfUpdate.auto.block.turns", { count: blockers.turns })}</li> : null}
+          {blockers.stages > 0 ? <li>{t("selfUpdate.auto.block.stages", { count: blockers.stages })}</li> : null}
+          {blockers.operatorActiveAt ? <li>{t("selfUpdate.auto.block.operator")}</li> : null}
+          {blockers.busy ? <li>{t("selfUpdate.auto.block.busy")}</li> : null}
+          {blockers.memoryMb !== null ? <li>{t("selfUpdate.auto.block.memory", { mb: Math.floor(blockers.memoryMb) })}</li> : null}
+          {blockers.unreadable ? <li>{t("selfUpdate.auto.block.unreadable", { detail: blockers.unreadable })}</li> : null}
+        </ul>
+      ) : null}
+      {auto.phase === "waiting" && auto.longWait ? <p className="m-0 text-ui text-warning">{t("selfUpdate.auto.longWait")}</p> : null}
+      {s.mode === "checkout" && auto.target?.short && (s.serving.web?.short !== auto.target.short || s.serving.runtimeHost?.short !== auto.target.short) ? (
+        <p className="m-0 text-ui text-secondary">{t("selfUpdate.auto.serving", { web: s.serving.web?.short ?? "—", host: s.serving.runtimeHost?.short ?? "—", built: auto.target.short })}</p>
+      ) : null}
+      {s.history?.length ? (
+        <details>
+          <summary className="cursor-pointer text-ui font-semibold">{t("selfUpdate.auto.history")}</summary>
+          <ol className="m-0 mt-2 flex list-none flex-col gap-1 p-0 text-label text-secondary">
+            {s.history.map((entry, index) => <li key={`${entry.at}-${index}`}>{t(`selfUpdate.auto.history.${entry.kind}`)} · {entry.target.slice(0, 7)} · {t(entry.by === "auto" ? "selfUpdate.auto.byAuto" : "selfUpdate.auto.byOperator")} · {t(`selfUpdate.auto.outcome.${entry.outcome}`)}</li>)}
+          </ol>
+        </details>
+      ) : null}
     </section>
   );
 }
@@ -563,7 +618,7 @@ function ProcessBlock({ s, role, state, actions, t }: { s: Snapshot; role: "web"
           <Icon kind="warning" className="mt-0.5" />
           <span>{t(managed ? "selfUpdate.process.hostWarningManaged" : "selfUpdate.process.hostWarning")}</span>
         </p>
-      ) : null}
+      ) : !managed ? <p className="m-0 text-ui text-warning">{t("selfUpdate.process.webWarning")}</p> : null}
       {body}
       {errorText ? (
         <p data-error="process" className={status.state === "failed" ? ERROR_LINE : "m-0 rounded-[8px] bg-warning-soft px-2 py-1.5 text-label text-warning [overflow-wrap:anywhere]"}>{errorText}</p>
@@ -614,6 +669,7 @@ export function SelfUpdateView({ snapshot: s, live, state, actions }: { snapshot
     <div data-mode={s.mode} className="flex flex-col gap-4 max-sm:gap-3">
       {banner}
       <Header s={s} state={state} actions={actions} t={t} locale={locale} />
+      <AutoSection s={s} state={state} actions={actions} t={t} />
       {/* Two columns from 900 px; below that the restart blocks come first,
           since they are what the operator reaches for after an update, and
           the long log tails go last. */}

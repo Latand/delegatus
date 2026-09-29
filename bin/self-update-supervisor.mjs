@@ -125,7 +125,7 @@ function emptyProcess() {
 export function createLauncherRecord(file, base, clock = () => Date.now()) {
   const record = {
     version: RECORD_VERSION,
-    launcher: { pid: process.pid, startIdentity: readStartIdentity(process.pid) },
+    launcher: { pid: process.pid, startIdentity: readStartIdentity(process.pid), autoAdmission: 1 },
     ...base,
     web: emptyProcess(),
     runtimeHost: emptyProcess(),
@@ -177,9 +177,11 @@ export function createLauncherRecord(file, base, clock = () => Date.now()) {
  *
  * @param {string} requestFile
  * @param {(request: { requestId: string, role: "web" | "runtime-host" }) => Promise<void>} handle
+ * @param {{ intervalMs?: number, admitAuto?: (request: { requestId: string, role: "web" | "runtime-host", autoGateId: string }) => Promise<boolean> }} options
  */
-export function watchRestartRequests(requestFile, handle, { intervalMs = 500 } = {}) {
+export function watchRestartRequests(requestFile, handle, { intervalMs = 500, admitAuto = async () => false } = {}) {
   let busy = false;
+  const gateFile = join(dirname(requestFile), "auto-admission.json");
   const poll = async () => {
     if (busy || !existsSync(requestFile)) return;
     let request = null;
@@ -188,14 +190,35 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500 } =
     } catch {
       request = null;
     }
-    rmSync(requestFile, { force: true });
-    if (!request || typeof request.requestId !== "string" || !REQUEST_ROLES.has(request.role)) return;
+    if (!request || typeof request.requestId !== "string" || !REQUEST_ROLES.has(request.role)) {
+      rmSync(requestFile, { force: true });
+      return;
+    }
     busy = true;
     try {
+      if (request.autoGateId !== undefined) {
+        let gate = null;
+        try { gate = JSON.parse(readFileSync(gateFile, "utf8")); } catch { /* no valid admission */ }
+        if (typeof request.autoGateId !== "string" || gate?.id !== request.autoGateId || typeof gate.until !== "number" || gate.until <= Date.now()
+          || !await admitAuto(request)) return;
+      }
+      // Do not remove a newer request that arrived while admission was read.
+      try {
+        if (JSON.parse(readFileSync(requestFile, "utf8")).requestId !== request.requestId) return;
+      } catch { return; }
+      rmSync(requestFile, { force: true });
       await handle({ requestId: request.requestId, role: request.role });
     } catch (error) {
       console.error(`[self-update] restart of ${request.role} failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
+      if (request.autoGateId) {
+        try {
+          if (JSON.parse(readFileSync(requestFile, "utf8")).requestId === request.requestId) rmSync(requestFile, { force: true });
+        } catch { /* already consumed */ }
+        try {
+          if (JSON.parse(readFileSync(gateFile, "utf8")).id === request.autoGateId) rmSync(gateFile, { force: true });
+        } catch { /* already removed */ }
+      }
       busy = false;
     }
   };

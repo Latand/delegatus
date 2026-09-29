@@ -182,6 +182,26 @@ test("the picker saves a pasted topic link and shows a stored topic on the chip"
   expect(seatReportsReading({ reportTelegram: { chat: "team-reports", name: "Beta", topicId: 51865 }, reportChatTitle: "Team Reports", reportNameSuggestion: null }, t).face).toBe("Team Reports · topic 51865");
 });
 
+test("a pasted link to a chat the bot did not know is not shown as one agents may not post in", async () => {
+  const fetchBeforeLink = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "PUT" && String(input).includes("/api/projects/settings")) {
+      /* The server resolves the link through Telegram and adds the chat to the bot. */
+      chats = [...chats, chat({ chatId: "-1000000000505", title: "Ops Group", alias: "ops-group", isForum: true })];
+      const body = JSON.parse(String(init.body)) as { project: string };
+      stored[body.project] = { chat: "ops-group", name: "Beta" };
+      return json({ ok: true, project: body.project, reportTelegram: stored[body.project], reportNameSuggestion: null });
+    }
+    return fetchBeforeLink(input, init);
+  }) as typeof fetch;
+  const section = await mount("repo-beta");
+  const input = q<HTMLInputElement>(section, '[aria-label="Chat or topic link, @username or ID"]')!;
+  await act(async () => reactProps(input).onChange!({ target: { value: "https://t.me/c/1000000000505/7" } }));
+  await click(q(section, "[data-seat-reports-save]"));
+  expect(q(section, "[data-seat-reports-refused]")).toBeNull();
+  expect(q(section, '[data-seat-reports-chat="ops-group"]')).not.toBeNull();
+});
+
 test("a rejected topic link shows Telegram's reason in the picker", async () => {
   const fetchBeforeRefusal = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

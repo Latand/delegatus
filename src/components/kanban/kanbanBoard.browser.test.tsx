@@ -115,6 +115,30 @@ describe("linked boards M3 remote agents", () => {
   }, 90_000);
 });
 
+describe("self-update reload notice", () => {
+  browserTest("a desktop page open across a release switch offers a reload", async () => {
+    const out = path.resolve(".artifacts/self-update-reload");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?self-update-reload=1`, VIEWPORT, "light", "en", "reduce");
+      try {
+        await page.waitForFunction(() => (window as typeof window & { evidence?: { presence?: unknown[] } }).evidence?.presence?.length);
+        await page.keyboard.press("Shift");
+        const notice = page.locator("[data-release-reload]");
+        await notice.waitFor({ timeout: 10_000 });
+        expect(await notice.innerText()).toContain("Web now runs bbbbbbb");
+        const box = await notice.boundingBox();
+        expect(box).not.toBeNull();
+        expect(box!.x).toBeGreaterThanOrEqual(0);
+        expect(box!.x + box!.width).toBeLessThanOrEqual(VIEWPORT.width);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 30_000);
+});
+
 /* The loading leaf draws its own header bar until the Board mounts and draws
    the same bar itself, so a ⋯ menu opened before then is thrown away with the
    bar it opened in. Open the Board's own menu and wait until it is open. */
@@ -4468,7 +4492,9 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
       const identity = node.querySelector<HTMLElement>(".pident");
       return {
         stage: node.dataset.stage ?? "",
-        engineMark: node.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? null,
+        /* A model glyph stands in for the engine mark beside it
+           (docs/design/model-glyphs.md): one mark per stage, never two. */
+        engineMark: node.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? node.querySelector("[data-glyph-engine]")?.getAttribute("data-glyph-engine") ?? null,
         effortStep: node.querySelector("[data-effort-pills]")?.getAttribute("data-effort-step") ?? null,
         identity: identity?.dataset.identity ?? null,
         nextDiffers: Boolean(node.querySelector("[data-next-differs]")),
@@ -4547,9 +4573,9 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
     return {
       chips: [...scope.querySelectorAll<HTMLElement>(".pb-pills .pb-pill")].map((chip) => ({
         stage: chip.dataset.stage ?? "",
-        engineMark: chip.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? null,
+        engineMark: chip.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? chip.querySelector("[data-glyph-engine]")?.getAttribute("data-glyph-engine") ?? null,
         effortStep: chip.querySelector("[data-effort-pills]")?.getAttribute("data-effort-step") ?? null,
-        markWidth: Math.round((chip.querySelector("[data-engine-mark]")?.getBoundingClientRect().width ?? 0) * 100) / 100,
+        markWidth: Math.round((chip.querySelector("[data-engine-mark], [data-glyph-engine]")?.getBoundingClientRect().width ?? 0) * 100) / 100,
         scaleWidth: Math.round((chip.querySelector("[data-effort-pills]")?.getBoundingClientRect().width ?? 0) * 100) / 100,
         nextDiffers: Boolean(chip.querySelector("[data-next-differs]")),
       })),
@@ -4581,7 +4607,8 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
       headMarks: pane.querySelectorAll(".pane-head [data-engine-mark], .pane-head [data-effort-pills]").length,
       headTitle: role?.getAttribute("title") ?? "",
       idRow: Boolean(idRow),
-      engineMark: idRow?.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? null,
+      /* Or the model glyph the head draws, which stands in for the row's mark. */
+      engineMark: idRow?.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? pane.querySelector(".pane-head [data-glyph-engine]")?.getAttribute("data-glyph-engine") ?? null,
       /* Content wider than the row is content the row cuts. */
       roleOverflow: role ? Math.max(0, role.scrollWidth - role.clientWidth) : 0,
     };
@@ -4603,7 +4630,7 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
   const readPhoneStages = (page: Page) => page.evaluate(() => ({
     rows: [...document.querySelectorAll<HTMLElement>("[data-mobile2-stage]")].map((row) => ({
       stage: row.dataset.mobile2Stage ?? "",
-      engineMark: row.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? null,
+      engineMark: row.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? row.querySelector("[data-glyph-engine]")?.getAttribute("data-glyph-engine") ?? null,
       effortStep: row.querySelector("[data-effort-pills]")?.getAttribute("data-effort-step") ?? null,
       identity: row.querySelector<HTMLElement>(".pident")?.dataset.identity ?? null,
       model: row.querySelector(".imodel")?.textContent?.trim() ?? "",
@@ -4823,7 +4850,7 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
         await opened.page.waitForSelector("[data-nav-stage]", { state: "attached", timeout: 5_000 });
         const navChips = await opened.page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-nav-stage]")].map((chip) => ({
           stage: chip.dataset.navStage ?? "",
-          engineMark: chip.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? null,
+          engineMark: chip.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? chip.querySelector("[data-glyph-engine]")?.getAttribute("data-glyph-engine") ?? null,
           effortStep: chip.querySelector("[data-effort-pills]")?.getAttribute("data-effort-step") ?? null,
         })));
         await opened.page.screenshot({ path: path.join(OUT, `modal-${label}.png`) });
@@ -7647,13 +7674,17 @@ describe("#2072 one pipeline block, desktop and phone", () => {
       return color;
     };
     const cur = screen.querySelector(".pb-stage[data-stage-current]");
-    const mark = cur && cur.querySelector(".pb-stage-title .pmark");
+    /* A stage whose model has a glyph draws it in the mark's place
+       (docs/design/model-glyphs.md): its reading stands for the mark's shape,
+       and it paints in its model's tone rather than the stage's. */
+    const mark = cur && cur.querySelector(".pb-stage-title .pmark, .pb-stage-title .mglyph");
+    const glyph = Boolean(mark && mark.classList.contains("mglyph"));
     const tone = cur && mark ? {
       held: cur.getAttribute("data-stage-held") === "1",
-      mark: mark.getAttribute("data-mark"),
+      mark: glyph ? "glyph:" + mark.getAttribute("data-glyph-state") : mark.getAttribute("data-mark"),
       live: mark.getAttribute("data-live") === "1",
       pulse: getComputedStyle(mark, "::before").animationName,
-      markInk: getComputedStyle(mark).color,
+      markInk: glyph ? null : getComputedStyle(mark).color,
       word: getComputedStyle(cur.querySelector(".pb-stage-state")).color,
       stripe: getComputedStyle(cur).boxShadow,
     } : null;
@@ -7666,7 +7697,7 @@ describe("#2072 one pipeline block, desktop and phone", () => {
       scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth,
     };
   })()`;
-  type ScreenTone = { held: boolean; mark: string | null; live: boolean; pulse: string; markInk: string; word: string; stripe: string };
+  type ScreenTone = { held: boolean; mark: string | null; live: boolean; pulse: string; markInk: string | null; word: string; stripe: string };
   type ScreenReading = {
     texts: number; controls: number; overlaps: unknown[]; escapes: unknown[]; small: unknown[]; cut: unknown[];
     stages: string[]; current: string | null; answers: string[]; fold: string | null; scrollWidth: number; innerWidth: number;
@@ -7706,13 +7737,13 @@ describe("#2072 one pipeline block, desktop and phone", () => {
       if (reading.cut.length) failures.push(`${label}: ${reading.cut.length} names are cut — ${JSON.stringify(reading.cut.slice(0, 3))}`);
       if (reading.scrollWidth > reading.innerWidth) failures.push(`${label}: the page scrolls sideways (${reading.scrollWidth} > ${reading.innerWidth})`);
       const { tone, inks } = reading;
-      if (want.motion === "held" && (!tone || !tone.held || tone.mark !== "ring" || tone.live || tone.pulse !== "none"
-        || tone.markInk !== inks.muted || tone.word !== inks.muted || !tone.stripe.includes(inks.muted))) {
-        failures.push(`${label}: the held stage is drawn ${JSON.stringify(tone)}, expected a still hollow ring with the mark, the word and the stripe in ${inks.muted}`);
+      if (want.motion === "held" && (!tone || !tone.held || (tone.mark !== "ring" && tone.mark !== "glyph:waiting") || tone.live || tone.pulse !== "none"
+        || (tone.markInk !== null && tone.markInk !== inks.muted) || tone.word !== inks.muted || !tone.stripe.includes(inks.muted))) {
+        failures.push(`${label}: the held stage is drawn ${JSON.stringify(tone)}, expected a still hollow ring or waiting glyph, with the word and the stripe in ${inks.muted}`);
       }
-      if (want.motion === "live" && (!tone || tone.held || tone.mark !== "dot" || !tone.live || tone.pulse === "none"
-        || tone.markInk !== inks.success || tone.word !== inks.success || !tone.stripe.includes(inks.success))) {
-        failures.push(`${label}: the running stage is drawn ${JSON.stringify(tone)}, expected a pulsing dot with the mark, the word and the stripe in ${inks.success}`);
+      if (want.motion === "live" && (!tone || tone.held || (tone.mark !== "dot" && tone.mark !== "glyph:running") || !tone.live || tone.pulse === "none"
+        || (tone.markInk !== null && tone.markInk !== inks.success) || tone.word !== inks.success || !tone.stripe.includes(inks.success))) {
+        failures.push(`${label}: the running stage is drawn ${JSON.stringify(tone)}, expected a pulsing dot or running glyph, with the word and the stripe in ${inks.success}`);
       }
     };
     const bodyTo = (page: Page, where: "top" | "end") => page.evaluate((to) => {
@@ -12838,4 +12869,587 @@ describe("an empty column folds to a strip; an open agent keeps its minimum widt
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
   }, 900_000);
+});
+
+describe("model glyphs in place of the stage dot", () => {
+  /*
+   * The design evidence for docs/design/model-glyphs.md: the real Viewer over
+   * `issue1695Evidence.fixture.tsx?scenario=model-glyphs`. Stages are named by
+   * the role they play ("Design", "Build"), as real lanes name them, so on a
+   * pill the glyph is the only thing that says which model runs it. A lane runs
+   * one stage at a time, so "every model at work" is a task of nine lanes,
+   * each running one model. Beside it: a task holding a draft of the same nine
+   * stages, all waiting, and two lanes that between them settle every model
+   * (passed, failed, waiting on the operator); and a task whose lanes hold the
+   * live states the old dot told apart by colour: a review at work, a commit
+   * landing, and a passed stage whose conversation works again. The ninth
+   * model is uncatalogued and must keep the dot it always had.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "model glyphs"
+   *
+   * Drawn in light and dark, on the desktop (the cards, the cards' graphs, the
+   * Stages sheet's graph, pane heads and chips) and on the phone (the board
+   * cards, the task screens and the pipeline screens), at a device pixel ratio
+   * of 2; once under reduced motion, where the figures stop and the halo alone
+   * says the stage runs; and in Ukrainian. The legend frames draw the three
+   * cards with every word hidden, at 1× and 2×, so the glyphs have to name the
+   * models and the states on their own; the running card is also caught in
+   * eight frames, every animation on the page paused and seeked to 0, 200 …
+   * 1400 ms, so the frames are exactly 200 ms apart whatever a screenshot
+   * costs.
+   *
+   * What it measures: every glyph's model, reading, motion, badge and box, the
+   * host that holds it and the host's tone and label, that no stage draws the
+   * glyph and an engine mark both, every stage that kept its dot, that the
+   * states still read apart with the words hidden, how much of each glyph's
+   * ink its badge covers, that a settled state word on a graph node and a pane
+   * head is in its state's colour, and that every halo breathes on a curve
+   * symmetric about each extreme.
+   * Readings go to `evidence/model-glyphs/design/readings.json`; the frames to
+   * the same directory, where the ignore rules keep them out of the commit.
+   */
+
+  const EVIDENCE = path.resolve("evidence/model-glyphs/design");
+  const RUN = card("t-glyphs-run");
+  const REST = card("t-glyphs");
+  const LIVE = card("t-glyphs-live");
+  const WAIT = "p-glyphs-wait";
+  const SETTLED_LANE = "p-glyphs-settled";
+  const SETTLED_MORE = "p-glyphs-settled-more";
+  const LIVE_LANES = ["p-glyphs-review", "p-glyphs-commit", "p-glyphs-rework"] as const;
+  /* The model each role-named stage runs. */
+  const KIND_OF: Record<string, string> = { design: "opus", build: "fable", docs: "sonnet", tidy: "haiku", verify: "sol", critique: "astra", migrate: "terra", test: "luna" };
+  /* The stage on the uncatalogued model, which keeps its dot. */
+  const OTHER = "fix";
+  /** What each stage must draw: its model, its reading, whether it moves. */
+  type Want = Record<string, readonly [kind: string, reading: string, live: boolean]>;
+  const everyStage = (reading: string, live: boolean): Want => Object.fromEntries(Object.entries(KIND_OF).map(([stage, kind]) => [stage, [kind, reading, live] as const]));
+  const WANT: Record<string, Want> = {
+    running: everyStage("running", true),
+    waiting: everyStage("waiting", false),
+    [SETTLED_LANE]: { design: ["opus", "passed", false], build: ["fable", "passed", false], critique: ["astra", "failed", false], verify: ["sol", "needs", false], tidy: ["haiku", "waiting", false] },
+    [SETTLED_MORE]: { docs: ["sonnet", "passed", false], tidy: ["haiku", "passed", false], migrate: ["terra", "passed", false], test: ["luna", "failed", false] },
+    "p-glyphs-review": { build: ["fable", "passed", false], review: ["astra", "running", true] },
+    "p-glyphs-commit": { migrate: ["terra", "running", true] },
+    "p-glyphs-rework": { design: ["opus", "passed", false], docs: ["sonnet", "passed", true], critique: ["astra", "running", true] },
+  };
+  /* The tone a pill must carry where the reading alone does not say the state. */
+  const PILL_TONE: Record<string, Record<string, string>> = { "p-glyphs-review": { review: "review" }, "p-glyphs-commit": { migrate: "active" } };
+  /* Hosts that print no state word, where a settled state rides the glyph as a
+     badge. Everywhere else the word and the host's border say it. */
+  const BADGE_HOSTS = new Set(["pb-pill", "navchip", "pstrip", "pane-strip"]);
+  /* A host that prints the state word beside a badgeless glyph: the word must
+     carry the settled state's colour, which the dot used to. */
+  const WORD_HOSTS = new Set(["pnode", "pane-head"]);
+  /* The model words a host's accessible text must carry: the catalogue's short
+     label, which the identity sentence and the identity line both print. */
+  const MODEL_WORD: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku", sol: "6-Sol", astra: "6-Astra", terra: "5.6-Terra", luna: "6-Luna" };
+  /* The pane head's glyph names itself with the catalogue's full label. */
+  const MODEL_NAME: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku", sol: "GPT-6-Sol", astra: "GPT-6-Astra", terra: "GPT-5.6-Terra", luna: "GPT-6-Luna" };
+  /* The stage state a glyph reading stands for in this fixture, for the words its name must end on. */
+  const STATE_OF_READING: Record<string, string> = { running: "running", waiting: "pending", passed: "passed", failed: "failed", needs: "needs_decision" };
+  /* The legend: every word on the three cards hidden, so only the drawings
+     speak. The kept dot and mark draw in `currentColor`, so they keep theirs. */
+  const HIDE_TEXT = "[data-legend] :not(.pmark, .pmark *, .pdot), [data-legend] :not(.pmark, .pmark *, .pdot)::after { color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; }";
+
+  interface GlyphReading {
+    stage: string | null;
+    host: string | null;
+    hostTone: string | null;
+    kind: string;
+    reading: string;
+    live: boolean;
+    width: number;
+    height: number;
+    /** The zoom the Stages sheet draws its graph under; 1 elsewhere. */
+    scale: number;
+    halo: string;
+    haloOpacity: string;
+    figure: string[];
+    badge: string | null;
+    ownLabel: string | null;
+    hostLabel: string | null;
+    inside: boolean;
+    /** The stage's unit also draws an engine mark: two marks for one stage. */
+    twin: boolean;
+    /** On a host that prints the state word: the word's colour, and the colour of the settled state's token. */
+    word: string | null;
+    wordWant: string | null;
+  }
+  interface Reading { glyphs: GlyphReading[]; dots: Array<{ stage: string | null; mark: string }> }
+
+  /* Every glyph and every kept dot under `scope`, as drawn. */
+  const readGlyphs = (page: Page, scope: string) => page.evaluate((selector): Reading => {
+    const roots = [...document.querySelectorAll(selector)];
+    const HOSTS = ".pnode, .pstrip, .pb-pill, .pb-stage-row, .pb-stage, .navchip, .pane-head, .pane-strip";
+    const stageOf = (el: Element) => el.closest("[data-stage]")?.getAttribute("data-stage")
+      ?? el.closest("[data-nav-stage]")?.getAttribute("data-nav-stage") ?? null;
+    const glyphs = roots.flatMap((root) => [...root.querySelectorAll<HTMLElement>(".mglyph")]).filter((el) => el.getClientRects().length).map((el) => {
+      const host = el.closest(HOSTS);
+      const r = el.getBoundingClientRect();
+      const h = host?.getBoundingClientRect();
+      const halo = getComputedStyle(el, "::before");
+      const figure = [...el.querySelectorAll("svg *")].map((node) => getComputedStyle(node).animationName).filter((name) => name && name !== "none");
+      const badge = el.querySelector(".mg-badge");
+      const word = host?.matches(".pnode, .pane-head") ? host.querySelector<HTMLElement>(".pstate") : null;
+      const token = ({ passed: "--color-success", failed: "--color-danger", needs: "--color-warning" } as Record<string, string>)[el.dataset.glyphState ?? ""];
+      let wordWant: string | null = null;
+      if (word && token) {
+        const probe = document.createElement("i");
+        probe.style.color = `var(${token})`;
+        word.appendChild(probe);
+        wordWant = getComputedStyle(probe).color;
+        probe.remove();
+      }
+      return {
+        stage: stageOf(el),
+        host: host ? host.className.split(" ")[0] ?? null : null,
+        hostTone: host ? /\btone-(\w+)/.exec(host.className)?.[1] ?? null : null,
+        kind: el.dataset.glyph ?? "",
+        reading: el.dataset.glyphState ?? "",
+        live: el.dataset.live === "1",
+        width: Math.round(r.width * 10) / 10,
+        height: Math.round(r.height * 10) / 10,
+        scale: Number(el.closest("[data-zoom-scale]")?.getAttribute("data-zoom-scale") ?? 1),
+        halo: halo.animationName,
+        haloOpacity: halo.opacity,
+        figure: [...new Set(figure)],
+        badge: badge ? getComputedStyle(badge).backgroundColor : null,
+        ownLabel: el.getAttribute("aria-label"),
+        /* What a screen reader hears for the host: its own label, else its text. */
+        hostLabel: host ? host.getAttribute("aria-label") ?? (host.textContent ?? "").replace(/\s+/g, " ").trim() : el.parentElement?.closest("[aria-label]")?.getAttribute("aria-label") ?? null,
+        inside: !h || (r.left >= h.left - 0.5 && r.right <= h.right + 0.5 && r.top >= h.top - 0.5 && r.bottom <= h.bottom + 0.5),
+        twin: Boolean(el.closest(".pnode, .pstrip, .pb-pill, .pb-stage, .navchip, .pane")?.querySelector("[data-engine-mark]")),
+        word: word ? getComputedStyle(word).color : null,
+        wordWant,
+      };
+    });
+    const dots = roots.flatMap((root) => [...root.querySelectorAll<HTMLElement>(".pdot, .pmark")]).filter((el) => el.getClientRects().length)
+      .map((el) => ({ stage: stageOf(el), mark: el.classList.contains("pdot") ? "dot" : el.getAttribute("data-mark") ?? "" }));
+    return { glyphs, dots };
+  }, scope);
+
+  browserTest("every model draws its glyph in every state, light and dark, desktop and phone; any other model keeps the dot", async () => {
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const out = path.resolve(".artifacts/model-glyphs");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const base = `${server.base}?scenario=model-glyphs`;
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const shots: string[] = [];
+    const failures: string[] = [];
+    /* Which settled readings had their state word's colour checked, per host. */
+    const wordsChecked = new Set<string>();
+    const checkWord = (label: string, glyph: GlyphReading) => {
+      if (!WORD_HOSTS.has(glyph.host ?? "") || !glyph.wordWant) return;
+      wordsChecked.add(`${glyph.host}:${glyph.reading}`);
+      if (glyph.word !== glyph.wordWant) failures.push(`${label}: the ${glyph.reading} word beside ${glyph.kind} on the ${glyph.host} of ${glyph.stage} is ${glyph.word}, not its state's ${glyph.wordWant}`);
+    };
+    const shot = async (target: Page | ReturnType<Page["locator"]>, name: string) => {
+      const file = path.join(EVIDENCE, `${name}.png`);
+      await target.screenshot({ path: file });
+      shots.push(file);
+      return file;
+    };
+
+    /* What a frame must show. `want` names each stage's model, reading and
+       motion (null: whatever the surface folded in). `motion` is false under
+       reduced motion, where the figures stop and the halo holds still.
+       `labels` asks every glyph's host label to name its model; `dot` asks the
+       uncatalogued model's stage to keep its dot; `tones` the pill tone the
+       live states keep. */
+    const gate = (label: string, reading: Reading, want: Want | null, { motion = true, labels = false, dot = false, tones = {} as Record<string, string> } = {}) => {
+      frames[label] = reading;
+      const { glyphs, dots } = reading;
+      if (!glyphs.length) failures.push(`${label}: no glyph was drawn`);
+      for (const glyph of glyphs) {
+        const size = 14 * glyph.scale;
+        if (Math.abs(glyph.width - size) > 0.6 || Math.abs(glyph.height - size) > 0.6) failures.push(`${label}: ${glyph.kind} on ${glyph.stage} is ${glyph.width}×${glyph.height} px at scale ${glyph.scale}`);
+        if (!glyph.inside) failures.push(`${label}: ${glyph.kind} on ${glyph.stage} sticks out of its ${glyph.host}`);
+        if (glyph.live && motion && (!glyph.figure.length || glyph.halo !== "mg-halo")) failures.push(`${label}: running ${glyph.kind} does not move (${JSON.stringify([glyph.figure, glyph.halo])})`);
+        if (glyph.live && !motion && (glyph.figure.length || glyph.halo !== "none" || glyph.haloOpacity !== "1")) failures.push(`${label}: under reduced motion ${glyph.kind} reads ${JSON.stringify([glyph.figure, glyph.halo, glyph.haloOpacity])}`);
+        if (!glyph.live && (glyph.figure.length || glyph.halo !== "none")) failures.push(`${label}: idle ${glyph.kind} on ${glyph.stage} moves`);
+        const settled = glyph.reading === "passed" || glyph.reading === "failed" || glyph.reading === "needs";
+        const badged = settled && BADGE_HOSTS.has(glyph.host ?? "");
+        if (badged !== Boolean(glyph.badge)) failures.push(`${label}: ${glyph.kind} reading ${glyph.reading} on a ${glyph.host} has badge ${glyph.badge}`);
+        if (glyph.stage === OTHER) failures.push(`${label}: the uncatalogued model drew a glyph`);
+        if (glyph.twin) failures.push(`${label}: ${glyph.kind} on ${glyph.stage} is drawn beside an engine mark as well`);
+        checkWord(label, glyph);
+        if (labels && !glyph.ownLabel && !(glyph.hostLabel ?? "").includes(MODEL_WORD[glyph.kind] ?? "?")) failures.push(`${label}: nothing names ${glyph.kind} on ${glyph.stage}: ${JSON.stringify(glyph.hostLabel)}`);
+      }
+      const drawn = (stage: string) => glyphs.filter((glyph) => glyph.stage === stage);
+      for (const [stage, [kind, state, live]] of Object.entries(want ?? {})) {
+        const mine = drawn(stage);
+        if (!mine.length) failures.push(`${label}: ${stage} (${kind}) drew no glyph`);
+        if (mine.some((glyph) => glyph.kind !== kind || glyph.reading !== state || glyph.live !== live)) failures.push(`${label}: ${stage} should read ${JSON.stringify([kind, state, live])}, reads ${JSON.stringify(mine.map((glyph) => [glyph.kind, glyph.reading, glyph.live]))}`);
+      }
+      for (const [stage, tone] of Object.entries(tones)) {
+        if (drawn(stage).some((glyph) => glyph.hostTone !== tone)) failures.push(`${label}: ${stage}'s host should carry tone ${tone}, carries ${JSON.stringify(drawn(stage).map((glyph) => glyph.hostTone))}`);
+      }
+      if (dot && !dots.some((entry) => entry.stage === OTHER)) failures.push(`${label}: the uncatalogued model kept no dot ${JSON.stringify(dots)}`);
+    };
+    const laneOf = (id: string) => `.pblock[data-pipeline="${id}"]`;
+    const ready = async (page: Page) => {
+      await page.waitForSelector(`${REST} ${laneOf(SETTLED_MORE)}`, { state: "attached", timeout: 30_000 });
+      await page.waitForSelector(`${RUN} ${laneOf("p-glyph-luna")}`, { state: "attached", timeout: 30_000 });
+      await page.waitForSelector(`${LIVE} ${laneOf("p-glyphs-rework")}`, { state: "attached", timeout: 30_000 });
+    };
+    /* Every lane of the three cards, read as the pills draw it. */
+    const gateCards = async (page: Page, suffix: string, motion: boolean) => {
+      gate(`desktop-card-running-${suffix}`, await readGlyphs(page, RUN), WANT.running, { motion, labels: true, dot: true });
+      gate(`desktop-card-waiting-${suffix}`, await readGlyphs(page, `${REST} ${laneOf(WAIT)}`), WANT.waiting, { labels: true, dot: true });
+      for (const lane of [SETTLED_LANE, SETTLED_MORE]) gate(`desktop-card-${lane}-${suffix}`, await readGlyphs(page, `${REST} ${laneOf(lane)}`), WANT[lane], { labels: true, dot: lane === SETTLED_MORE });
+      for (const lane of LIVE_LANES) gate(`desktop-card-${lane}-${suffix}`, await readGlyphs(page, `${LIVE} ${laneOf(lane)}`), WANT[lane], { motion, labels: true, tones: PILL_TONE[lane] });
+    };
+
+    const desktop = async (scheme: Scheme, lang: "en" | "uk", motion: "no-preference" | "reduce") => {
+      const suffix = `${lang === "uk" ? "uk-" : ""}${motion === "reduce" ? "reduced-motion-" : ""}${scheme}`;
+      const moving = motion === "no-preference";
+      const opened = await openFixture(browser, base, { width: 1440, height: 1200 }, scheme, lang, motion, false, 2);
+      const { page } = opened;
+      try {
+        await ready(page);
+        await page.locator(RUN).evaluate((element) => element.scrollIntoView({ block: "start" }));
+        await page.waitForTimeout(700);
+        await gateCards(page, suffix, moving);
+        await shot(page.locator(RUN), `desktop-card-running-${suffix}`);
+        for (const [holder, name] of [[REST, "waiting-settled"], [LIVE, "live"]] as const) {
+          await page.locator(holder).evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.waitForTimeout(300);
+          await shot(page.locator(holder), `desktop-card-${name}-${suffix}`);
+        }
+        if (lang === "uk" || !moving) return;
+
+        /* Every lane's own graph on the card: the node's state row, where the
+           state word stands beside the glyph and no badge is drawn. The
+           graphs stand taller than a column, so the window grows to hold them. */
+        await page.setViewportSize({ width: 1440, height: 4200 });
+        for (const holder of [RUN, REST, LIVE]) {
+          const toggles = page.locator(`${holder} [data-graph-toggle]`);
+          for (let index = 0; index < await toggles.count(); index++) await toggles.nth(index).click();
+        }
+        await page.waitForTimeout(500);
+        gate(`desktop-card-graphs-running-${scheme}`, await readGlyphs(page, `${RUN} .pgraph`), WANT.running, { labels: true, dot: true });
+        gate(`desktop-card-graph-waiting-${scheme}`, await readGlyphs(page, `${REST} ${laneOf(WAIT)} .pgraph`), WANT.waiting, { labels: true, dot: true });
+        for (const lane of [SETTLED_LANE, SETTLED_MORE]) gate(`desktop-card-graph-${lane}-${scheme}`, await readGlyphs(page, `${REST} ${laneOf(lane)} .pgraph`), WANT[lane], { labels: true });
+        for (const lane of LIVE_LANES) gate(`desktop-card-graph-${lane}-${scheme}`, await readGlyphs(page, `${LIVE} ${laneOf(lane)} .pgraph`), WANT[lane], { labels: true });
+        for (const [holder, name] of [[RUN, "running"], [REST, "waiting-settled"], [LIVE, "live"]] as const) {
+          await page.locator(holder).evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await shot(page.locator(holder), `desktop-card-graphs-${name}-${scheme}`);
+        }
+        await page.setViewportSize({ width: 1440, height: 1200 });
+        await page.waitForTimeout(300);
+
+        /* The Stages sheet: its graph, its pane heads, then its chips. */
+        const sheets = [["waiting", WAIT, REST], ["settled", SETTLED_LANE, REST], ["settled-more", SETTLED_MORE, REST], ["reviewing", "p-glyphs-review", LIVE], ["running", "p-glyph-fable", RUN]] as const;
+        for (const [lane, id, holder] of sheets) {
+          const want = lane === "waiting" ? WANT.waiting : lane === "running" ? null : WANT[id];
+          await page.locator(`${holder} ${laneOf(id)} [data-open-stages]`).first().click();
+          await page.waitForSelector("[data-sheet-graph]", { state: "attached", timeout: 20_000 });
+          if (await page.getAttribute("[data-sheet-graph]", "aria-pressed") !== "true") await page.click("[data-sheet-graph]");
+          await page.waitForSelector(".gsheet .pgraph", { state: "attached", timeout: 20_000 });
+          await page.waitForTimeout(600);
+          gate(`desktop-sheet-graph-${lane}-${scheme}`, await readGlyphs(page, ".gsheet .pgraph"), want, { labels: true, dot: lane === "waiting" });
+          const heads = (await readGlyphs(page, ".gsheet .pane-head")).glyphs;
+          frames[`desktop-sheet-pane-heads-${lane}-${scheme}`] = heads;
+          if (!heads.length) failures.push(`desktop sheet ${lane} ${scheme}: no pane head drew a glyph`);
+          for (const head of heads) {
+            checkWord(`desktop sheet ${lane} ${scheme}`, head);
+            if (head.badge) failures.push(`desktop sheet ${lane} ${scheme}: the pane head's glyph on ${head.stage} draws a badge beside its state word`);
+            const chipState = lane === "reviewing" && head.stage === "review" ? "reviewing" : STATE_OF_READING[head.reading] ?? "pending";
+            const state = translate(lang, `kanban.graphState.${chipState}` as "kanban.graphState.pending");
+            const expected = translate(lang, "kanban.modelGlyph.aria", { model: MODEL_NAME[head.kind] ?? "?", state });
+            if (head.ownLabel !== expected) failures.push(`desktop sheet ${lane} ${scheme}: the pane head's glyph on ${head.stage} is named ${JSON.stringify(head.ownLabel)}, expected ${JSON.stringify(expected)}`);
+          }
+          await shot(page.locator(".gsheet"), `desktop-sheet-${lane}-${scheme}`);
+          if (lane === "settled") {
+            /* Every pane folded to its strip, whose grey label holds the state
+               word: there the badge says the state. Unfolded again after. */
+            for (let fold = 0; fold < 12 && await page.locator(".gsheet .pane-head [data-pane-fold]").count(); fold++) {
+              await page.locator(".gsheet .pane-head [data-pane-fold]").first().click();
+            }
+            await page.waitForTimeout(400);
+            /* The strip names its stage for the button; the section around it names the engine and the state. */
+            gate(`desktop-sheet-folded-${lane}-${scheme}`, await readGlyphs(page, ".gsheet .pane-strip"), want);
+            await shot(page.locator(".gsheet"), `desktop-sheet-folded-${lane}-${scheme}`);
+            for (let fold = 0; fold < 12 && await page.locator(".gsheet .pane-strip[data-pane-fold]").count(); fold++) {
+              await page.locator(".gsheet .pane-strip[data-pane-fold]").first().click();
+            }
+            await page.waitForTimeout(300);
+          }
+          await page.click("[data-sheet-graph]");
+          await page.waitForSelector("[data-nav-stage]", { state: "attached", timeout: 5_000 });
+          await page.waitForTimeout(300);
+          gate(`desktop-sheet-chips-${lane}-${scheme}`, await readGlyphs(page, ".gs-nav"), want, { labels: true, dot: lane === "waiting" });
+          await shot(page.locator(".gs-nav"), `desktop-sheet-chips-${lane}-${scheme}`);
+          /* The sheet remembers the graph switch; leave it on for the next lane. */
+          await page.click("[data-sheet-graph]");
+          await page.click("[data-sheet-close]");
+          await page.waitForSelector(".gsheet", { state: "detached", timeout: 5_000 });
+        }
+        if (opened.pageErrors.length) failures.push(`desktop ${suffix}: page errors ${opened.pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`desktop ${suffix}: ${(error as Error).message.split("\n")[0]}`);
+      } finally {
+        await opened.context.close();
+      }
+    };
+
+    /* The legend: the three cards with every word hidden, at 1× (an external
+       monitor) and 2× (a laptop). At 2× it also proves, without the names,
+       that the states read apart and that a badge leaves each glyph its ink,
+       and catches the running card in eight frames 200 ms apart. */
+    const legend = async (scheme: Scheme, dpr: 1 | 2) => {
+      const opened = await openFixture(browser, base, { width: 1440, height: 1200 }, scheme, "en", "no-preference", false, dpr);
+      const { page } = opened;
+      try {
+        await ready(page);
+        await page.addStyleTag({ content: HIDE_TEXT });
+        for (const holder of [RUN, REST, LIVE]) await page.locator(holder).evaluate((element) => element.setAttribute("data-legend", "1"));
+        await page.waitForTimeout(600);
+        for (const [holder, name] of [[RUN, "running"], [REST, "waiting-settled"], [LIVE, "live"]] as const) {
+          await page.locator(holder).evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.waitForTimeout(200);
+          await shot(page.locator(holder), `legend-${name}-${scheme}-dpr${dpr}`);
+        }
+        if (dpr === 1) return;
+
+        /* Each state's pill, words hidden: its border, its badge, whether it
+           moves, its glyph's treatment. No two states may look alike.
+           Committing is left out: it shared the running dot too. */
+        const looks = await page.evaluate((selector) => [...document.querySelectorAll<HTMLElement>(selector)].flatMap((pill) => {
+          const glyph = pill.querySelector<HTMLElement>(".mglyph");
+          const state = [...pill.classList].find((name) => name.startsWith("st-"))?.slice(3);
+          if (!glyph || !state) return [];
+          const style = getComputedStyle(pill);
+          const badge = glyph.querySelector(".mg-badge");
+          return [{
+            state: pill.classList.contains("rework") ? `${state}, working again` : state,
+            look: JSON.stringify([style.borderTopStyle, style.borderTopColor, badge ? getComputedStyle(badge).backgroundColor : null, glyph.dataset.live === "1", getComputedStyle(glyph.querySelector("svg")!).filter]),
+          }];
+        }), `${RUN} .pb-pill, ${REST} .pb-pill, ${LIVE} .pb-pill`);
+        const byState = new Map<string, Set<string>>();
+        for (const { state, look } of looks) if (state !== "committing") byState.set(state, (byState.get(state) ?? new Set()).add(look));
+        frames[`legend-states-${scheme}`] = Object.fromEntries([...byState].map(([state, set]) => [state, [...set]]));
+        for (const state of ["running", "reviewing", "pending", "passed", "failed", "needs_decision", "passed, working again"]) {
+          if (!byState.has(state)) failures.push(`legend ${scheme}: no pill in state ${state}`);
+        }
+        const states = [...byState.keys()];
+        for (const [index, one] of states.entries()) for (const other of states.slice(index + 1)) {
+          const shared = [...byState.get(one)!].filter((look) => byState.get(other)!.has(look));
+          if (shared.length) failures.push(`legend ${scheme}: ${one} and ${other} look alike without their words: ${shared.join(" ")}`);
+        }
+
+        /* How much of each settled glyph's ink its badge covers: the glyph is
+           shot with its badge hidden, and its inked pixels counted inside the
+           badge's disc and cut ring. Decoded in a blank page of its own. */
+        const decoder = await opened.context.newPage();
+        const inks: Array<{ stage: string | null; kind: string; ink: number; under: number }> = [];
+        const settledGlyphs = page.locator(`${REST} .pb-pill .mglyph`);
+        for (let index = 0; index < await settledGlyphs.count(); index++) {
+          const glyph = settledGlyphs.nth(index);
+          const where = await glyph.evaluate((element) => {
+            const badge = element.querySelector<HTMLElement>(".mg-badge");
+            if (!badge) return null;
+            const box = element.getBoundingClientRect();
+            const disc = badge.getBoundingClientRect();
+            badge.style.visibility = "hidden";
+            const ring = parseFloat(getComputedStyle(badge).boxShadow.split(" ").at(-1) ?? "0") || 1.5;
+            return { stage: element.closest("[data-stage]")?.getAttribute("data-stage") ?? null, kind: element.dataset.glyph ?? "", cx: disc.left + disc.width / 2 - box.left, cy: disc.top + disc.height / 2 - box.top, radius: disc.width / 2 + ring, size: box.width };
+          });
+          if (!where) continue;
+          const png = await glyph.screenshot();
+          await glyph.evaluate((element) => { element.querySelector<HTMLElement>(".mg-badge")!.style.visibility = ""; });
+          const measured = await decoder.evaluate(async ({ data, cx, cy, radius, size }) => {
+            const image = new Image();
+            image.src = `data:image/png;base64,${data}`;
+            await image.decode();
+            const canvas = document.createElement("canvas");
+            [canvas.width, canvas.height] = [image.width, image.height];
+            const context = canvas.getContext("2d")!;
+            context.drawImage(image, 0, 0);
+            const pixels = context.getImageData(0, 0, image.width, image.height).data;
+            const scale = image.width / size;
+            const [r0, g0, b0] = [pixels[0], pixels[1], pixels[2]];
+            let ink = 0;
+            let under = 0;
+            for (let y = 0; y < image.height; y++) for (let x = 0; x < image.width; x++) {
+              const at = (y * image.width + x) * 4;
+              if (Math.abs(pixels[at] - r0) + Math.abs(pixels[at + 1] - g0) + Math.abs(pixels[at + 2] - b0) <= 60) continue;
+              ink++;
+              if ((x + 0.5 - cx * scale) ** 2 + (y + 0.5 - cy * scale) ** 2 < (radius * scale) ** 2) under++;
+            }
+            return { ink: ink / scale / scale, under: ink ? under / ink : 0 };
+          }, { data: png.toString("base64"), cx: where.cx, cy: where.cy, radius: where.radius, size: where.size });
+          inks.push({ stage: where.stage, kind: where.kind, ink: Math.round(measured.ink * 10) / 10, under: Math.round(measured.under * 1000) / 1000 });
+        }
+        await decoder.close();
+        frames[`badge-ink-${scheme}`] = inks;
+        if (new Set(inks.map((entry) => entry.kind)).size < 8) failures.push(`legend ${scheme}: not every model was measured under a badge: ${JSON.stringify(inks.map((entry) => entry.kind))}`);
+        for (const entry of inks) if (entry.under > 0.15) failures.push(`legend ${scheme}: the badge covers ${Math.round(entry.under * 100)}% of ${entry.kind}'s ink`);
+        const inkOf = (kind: string) => Math.max(...inks.filter((entry) => entry.kind === kind).map((entry) => entry.ink));
+        if (!(inkOf("astra") >= inkOf("sol"))) failures.push(`legend ${scheme}: Astra (${inkOf("astra")} px of ink) is fainter than Sol (${inkOf("sol")})`);
+
+        /* Each running glyph's halo, sampled through one period with its
+           animation paused and seeked: the breath is symmetric about each
+           extreme, so the opacity at a tenth of the period matches the one at
+           nine tenths, and four tenths matches six. */
+        const curves = await page.evaluate((selector) => [...document.querySelectorAll<HTMLElement>(selector)].flatMap((glyph) => {
+          const halo = glyph.getAnimations({ subtree: true }).find((animation) => (animation.effect as KeyframeEffect | null)?.pseudoElement === "::before");
+          if (!halo) return [];
+          const period = Number(halo.effect!.getComputedTiming().duration);
+          halo.pause();
+          const opacity = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9].map((fraction) => {
+            halo.currentTime = fraction * period;
+            return Math.round(Number(getComputedStyle(glyph, "::before").opacity) * 1000) / 1000;
+          });
+          halo.play();
+          return [{ kind: glyph.dataset.glyph ?? "", period, opacity }];
+        }), `${RUN} .pb-pill .mglyph[data-live="1"]`);
+        frames[`halo-curve-${scheme}`] = curves;
+        if (new Set(curves.map((curve) => curve.kind)).size < 8) failures.push(`legend ${scheme}: not every running model's halo was sampled: ${JSON.stringify(curves.map((curve) => curve.kind))}`);
+        for (const { kind, opacity } of curves) {
+          for (let index = 0; index < 4; index++) {
+            if (Math.abs(opacity[index] - opacity[8 - index]) > 0.01) failures.push(`legend ${scheme}: ${kind}'s halo is not symmetric about its extremes: ${JSON.stringify(opacity)}`);
+          }
+          if (!(opacity[4] < opacity[0])) failures.push(`legend ${scheme}: ${kind}'s halo does not breathe: ${JSON.stringify(opacity)}`);
+        }
+
+        /* The running card in eight frames exactly 200 ms apart: every
+           animation paused and seeked to the frame's time before the shot, so
+           a slow screenshot cannot stretch the interval. Each glyph keeps its
+           silhouette. */
+        await page.locator(RUN).evaluate((element) => element.scrollIntoView({ block: "start" }));
+        const seeked: number[] = [];
+        for (let frame = 1; frame <= 8; frame++) {
+          const at = (frame - 1) * 200;
+          seeked.push(await page.evaluate((time) => {
+            const animations = document.getAnimations();
+            for (const animation of animations) { animation.pause(); animation.currentTime = time; }
+            return animations.length;
+          }, at));
+          await shot(page.locator(RUN), `motion-running-${scheme}-frame${frame}`);
+        }
+        await page.evaluate(() => { for (const animation of document.getAnimations()) animation.play(); });
+        frames[`motion-${scheme}`] = { frameMs: seeked.map((_, index) => index * 200), animationsSeeked: seeked };
+        if (seeked.some((count) => !count)) failures.push(`legend ${scheme}: a motion frame found no animation to seek: ${JSON.stringify(seeked)}`);
+        if (opened.pageErrors.length) failures.push(`legend ${scheme}: page errors ${opened.pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`legend ${scheme} ${dpr}x: ${(error as Error).message.split("\n")[0]}`);
+      } finally {
+        await opened.context.close();
+      }
+    };
+
+    /* The whole scroll of a phone screen whose body scrolls inside it. */
+    const tallShot = async (page: Page, body: string, name: string) => {
+      const tall = await page.evaluate((selector) => {
+        const element = document.querySelector(selector);
+        return element ? element.scrollHeight - element.clientHeight : 0;
+      }, body);
+      await page.setViewportSize({ width: 390, height: 844 + Math.max(0, tall) });
+      await page.waitForTimeout(300);
+      await shot(page, name);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.waitForTimeout(200);
+    };
+
+    const PHONE_TASKS = [["t-glyphs-run", "running"], ["t-glyphs", "waiting-settled"], ["t-glyphs-live", "live"]] as const;
+    const phone = async (scheme: Scheme, lang: "en" | "uk") => {
+      const suffix = `${lang === "uk" ? "uk-" : ""}${scheme}`;
+      const opened = await openFixture(browser, base, { width: 390, height: 844 }, scheme, lang, "no-preference", true, 2);
+      const { page } = opened;
+      let step = "the board";
+      try {
+        await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+        const tab = page.locator('[data-phone-kanban-tab="assigned"]');
+        if (await tab.count()) await tab.first().click();
+        /* A board card folds its lanes, so it is read for what it draws. */
+        for (const [task, name] of PHONE_TASKS) {
+          const phoneCard = page.locator(`[data-phone-card="task:${task}"]`).first();
+          await phoneCard.waitFor({ timeout: 10_000 });
+          await phoneCard.scrollIntoViewIfNeeded();
+          await page.waitForTimeout(500);
+          gate(`phone-card-${task}-${suffix}`, await readGlyphs(page, `[data-phone-card="task:${task}"]`), null);
+          await shot(phoneCard, `phone-card-${name}-${suffix}`);
+        }
+
+        /* The task screens: every lane at task density, the whole scroll. A
+           stage row prints its state word, so it draws no badge. */
+        for (const [task, name] of PHONE_TASKS) {
+          step = `the task screen of ${task}`;
+          await page.locator(`[data-phone-card="task:${task}"]`).first().click();
+          await page.waitForSelector("[data-phone-task-body] .pblock", { timeout: 10_000 });
+          /* A lane folds its passed stages into one "✓N" row; open every fold
+             so each settled model is drawn. */
+          await page.evaluate(() => { for (const fold of document.querySelectorAll<HTMLElement>('[data-phone-task-body] [data-passed-fold][aria-expanded="false"]')) fold.click(); });
+          await page.waitForTimeout(600);
+          const body = "[data-phone-task-body]";
+          if (task === "t-glyphs-run") gate(`phone-task-running-${suffix}`, await readGlyphs(page, body), WANT.running, { labels: true, dot: true });
+          else if (task === "t-glyphs") {
+            gate(`phone-task-waiting-${suffix}`, await readGlyphs(page, `${body} ${laneOf(WAIT)}`), WANT.waiting, { labels: true, dot: true });
+            for (const lane of [SETTLED_LANE, SETTLED_MORE]) gate(`phone-task-${lane}-${suffix}`, await readGlyphs(page, `${body} ${laneOf(lane)}`), WANT[lane], { labels: true });
+          } else for (const lane of LIVE_LANES) gate(`phone-task-${lane}-${suffix}`, await readGlyphs(page, `${body} ${laneOf(lane)}`), WANT[lane], { labels: true });
+          await tallShot(page, body, `phone-task-${name}-${suffix}`);
+          step = `back from the task screen of ${task}`;
+          await page.locator("[data-mobile2-back]").first().evaluate((element) => (element as HTMLElement).click());
+          await page.waitForSelector("[data-phone-kanban]", { timeout: 10_000 });
+          await page.waitForTimeout(300);
+        }
+        if (lang === "uk") return;
+
+        /* The pipeline screens of the draft and the settled lanes, opened
+           from the task screen's own "stages" row. */
+        for (const [lane, id] of [["waiting", WAIT], ["settled", SETTLED_LANE], ["settled-more", SETTLED_MORE]] as const) {
+          step = `the pipeline screen of ${id}`;
+          await page.locator('[data-phone-card="task:t-glyphs"]').first().click();
+          await page.waitForSelector(`[data-phone-task-body] ${laneOf(id)} [data-open-stages]`, { timeout: 10_000 });
+          await page.locator(`[data-phone-task-body] ${laneOf(id)} [data-open-stages]`).first().evaluate((element) => (element as HTMLElement).click());
+          await page.waitForSelector(`[data-mobile2-screen="pipeline"][data-mobile2-pipeline="${id}"] .pblock`, { timeout: 10_000 });
+          await page.evaluate(() => { (document.querySelector('[data-mobile2-screen="pipeline"] [data-passed-fold][aria-expanded="false"]') as HTMLElement | null)?.click(); });
+          await page.waitForTimeout(500);
+          gate(`phone-pipeline-${lane}-${scheme}`, await readGlyphs(page, '[data-mobile2-screen="pipeline"]'), lane === "waiting" ? WANT.waiting : WANT[id], { labels: true, dot: lane !== "settled" });
+          await tallShot(page, "[data-mobile2-pipeline-body]", `phone-pipeline-${lane}-${scheme}`);
+          /* Back to the task screen, then back to the board. */
+          for (let hop = 0; hop < 2; hop++) {
+            await page.locator("[data-mobile2-back]").first().evaluate((element) => (element as HTMLElement).click());
+            await page.waitForTimeout(300);
+          }
+          await page.waitForSelector("[data-phone-kanban]", { timeout: 10_000 });
+        }
+        if (opened.pageErrors.length) failures.push(`phone ${suffix}: page errors ${opened.pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`phone ${suffix}, ${step}: ${(error as Error).message.split("\n")[0]}`);
+      } finally {
+        await opened.context.close();
+      }
+    };
+
+    try {
+      for (const scheme of ["light", "dark"] as const) {
+        await legend(scheme, 1);
+        await legend(scheme, 2);
+        await desktop(scheme, "en", "no-preference");
+        await desktop(scheme, "uk", "no-preference");
+        await desktop(scheme, "en", "reduce");
+        await phone(scheme, "en");
+        await phone(scheme, "uk");
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    for (const host of WORD_HOSTS) for (const reading of ["passed", "failed", "needs"]) {
+      if (!wordsChecked.has(`${host}:${reading}`)) failures.push(`no ${reading} state word on a ${host} had its colour checked`);
+    }
+    const record = {
+      viewport: { desktop: "1440x1200", phone: "390x844" }, deviceScaleFactor: 2, legendDeviceScaleFactors: [1, 2],
+      screenshots: shots.map((file) => path.relative(process.cwd(), file)), frames, failures,
+    };
+    fs.writeFileSync(path.join(EVIDENCE, "readings.json"), `${JSON.stringify(record, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 1_500_000);
 });

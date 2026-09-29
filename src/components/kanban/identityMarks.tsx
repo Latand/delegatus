@@ -6,6 +6,7 @@ import { EngineMark } from "@/components/EngineMark";
 import { engineBadgeFor } from "@/components/utils";
 import { useLocale, type TFunction } from "@/lib/i18n";
 
+import { modelGlyphKind } from "./modelGlyph";
 import type { StageIdentityView, StageRunValues } from "./stageIdentity";
 
 /*
@@ -13,7 +14,9 @@ import type { StageIdentityView, StageRunValues } from "./stageIdentity";
  * read the same on a minimized chip, on a graph node, on a one-line row and in
  * a pane header:
  *
- *   engine → the shared `EngineMark`, in the engine's colour
+ *   engine → the shared `EngineMark`, in the engine's colour, unless the host
+ *            draws the stage's model glyph beside it, which names the engine
+ *            by its family (docs/design/model-glyphs.md)
  *   effort → the shared five-step `EffortScale`, identical everywhere
  *   model  → text, wherever there is room for it
  *
@@ -50,7 +53,7 @@ export function identityTitle(t: TFunction, identity: StageIdentityView): string
   ].filter(Boolean).join(" · ");
 }
 
-export function StageIdentity({ identity, density, name, showWord = false, words = true, className }: {
+export function StageIdentity({ identity, density, name, showWord = false, words = true, glyph = false, className }: {
   identity: StageIdentityView;
   /** `chip` minimized, `node` on a graph node, `line` on a one-line row that
       has no space for words, `header` on a wrapping meta row that does. */
@@ -65,17 +68,23 @@ export function StageIdentity({ identity, density, name, showWord = false, words
       are shapes, survive any scale, and the words move to the hover and the
       expanded stage rather than rendering at 7 px. */
   words?: boolean;
+  /** The host draws the stage's model glyph beside this unit
+      (docs/design/model-glyphs.md). A model that has one already names its
+      engine by its family, so the engine mark is not drawn a second time;
+      a model without one keeps the mark. */
+  glyph?: boolean;
   className?: string;
 }) {
   const { t } = useLocale();
   const title = identityTitle(t, identity);
+  const mark = !glyph || modelGlyphKind(identity.engine, identity.model) === null;
   /* A minimized chip has room for the model only when it says something the
      engine mark does not: a model other than the engine's own default. */
   const showModel = words && (density !== "chip" || !identity.modelIsDefault);
   const roomy = words && density === "header";
   return (
     <span className={`pident d-${density}${className ? ` ${className}` : ""}`} data-identity={identity.source} data-engine={identity.engine} title={title}>
-      <EngineMark engine={identity.engine} size={12} />
+      {mark ? <EngineMark engine={identity.engine} size={12} /> : null}
       {roomy ? <span className="iengine">{engineWord(identity.engine)}</span> : null}
       {name}
       {showModel ? <span className="imodel">{identity.modelLabel}</span> : null}

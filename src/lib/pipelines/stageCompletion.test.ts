@@ -46,6 +46,7 @@ function entry(pathname: string): FileEntry {
 function harness() {
   const messages = new Map<string, { text: string; ts: number }>();
   const spawnedStages: string[] = [];
+  const spawnedPrompts: string[] = [];
   /* What the mocked worktree answers the server's own provenance reads. */
   const worktree = { status: "", knownPaths: "docs/report.html\0", pullRequest: PULL_REQUEST };
   const execCalls: string[] = [];
@@ -80,6 +81,7 @@ function harness() {
     claimSpawnRetry: () => "claimed",
     spawnAgent: async (input, onReserved) => {
       spawnedStages.push(input.membership.stageId ?? "");
+      spawnedPrompts.push(input.prompt);
       const n = spawnedStages.length;
       onReserved({ launchId: `launch-${n}`, conversationId: `conversation_stage_${n}`, accountId: "account-a" });
       return { launchId: `launch-${n}`, conversationId: `conversation_stage_${n}`, sessionId: `session-${n}`, transcript: `/codex/stage-${n}.jsonl`, paneId: `%${n}`, accountId: "account-a" };
@@ -122,7 +124,7 @@ function harness() {
   const report = (n: number, request: StageCompletionRequest) =>
     reportStageCompletion(request, agent(`conversation_stage_${n}`), ports);
   return {
-    ports, worktree, spawnedStages, endTurn, report, execCalls,
+    ports, worktree, spawnedStages, spawnedPrompts, endTurn, report, execCalls,
     raceDuringProvenance: (race: () => void) => { duringProvenance = race; },
   };
 }
@@ -234,7 +236,7 @@ test("a live attempt's reported completion settles it when the turn ends, with s
   const settled = attemptsOf("build")[0]!;
   expect(settled.state).toBe("passed");
   expect(settled.verdict).toEqual({ status: "pass" });
-  expect(settled.output).toBe("Bound the report to the attempt.");
+  expect(settled.output).toBe("Reported summary:\nBound the report to the attempt.\n\nFinal assistant message:\nDone. Handing over to verification.");
   expect(current().cursor?.stageId).toBe("verify");
 
   await tickPipelines([], h.ports);
@@ -242,6 +244,74 @@ test("a live attempt's reported completion settles it when the turn ends, with s
   /* The second stage's declared outputs are the ones read for its own report. */
   const verify = await h.report(2, { verdict: "pass", summary: "Checked." });
   expect(verify.report!.provenance.outputs).toEqual([{ path: "docs/report.html", present: true }]);
+});
+
+for (const engine of ["claude", "codex"] as const) {
+  test(`${engine} final brief reaches the next stage through {{prev.output}} and the automatic relay`, async () => {
+    const h = harness();
+    await started(h.ports, [
+      stage("brief", "build", { engine, model: engine === "claude" ? "fable" : "gpt-5.6-sol" }),
+      stage("build", null, { prompt: "Build from {{prev.output}}" }),
+    ]);
+    const brief = "Builder brief:\n- Preserve the original input.\n- Verify the rendered result.";
+    await h.report(1, { verdict: "pass", summary: "Brief ready." });
+    await tickPipelines([h.endTurn(1, brief)], h.ports);
+    const relay = attemptsOf("brief")[0]!.output;
+    expect(relay).toBe(`Reported summary:\nBrief ready.\n\nFinal assistant message:\n${brief}`);
+    expect(current().cursor?.input).toBe(relay);
+    await tickPipelines([], h.ports);
+    expect(h.spawnedPrompts.at(-1)).toContain(`Build from ${relay}`);
+
+    const automatic = harness();
+    await started(automatic.ports, [stage("brief", "build", { engine, model: engine === "claude" ? "fable" : "gpt-5.6-sol" }), stage("build", null)]);
+    await automatic.report(1, { verdict: "pass", summary: "Brief ready." });
+    await tickPipelines([automatic.endTurn(1, brief)], automatic.ports);
+    await tickPipelines([], automatic.ports);
+    expect(automatic.spawnedPrompts.at(-1)).toContain(`Relayed by the controller (a previous stage's output, or the answer to this stage's earlier question):\n${relay}`);
+  });
+}
+
+test("a brief written before stage_report survives a shorter closing message", async () => {
+  const h = harness();
+  await started(h.ports, [stage("brief", "build", { engine: "claude", model: "fable" }), stage("build", null, { prompt: "Build {{prev.output}}" })]);
+  const brief = "Full builder brief with detailed file changes and checks.";
+  await h.report(1, { verdict: "pass", summary: "Brief ready." });
+  h.ports.durableTurnEvidence = async () => ({ turn: "terminal", message: { text: "Done.", ts: 1_100_000 }, reportProse: brief });
+  await tickPipelines([h.endTurn(1, "Done.")], h.ports);
+  const relay = attemptsOf("brief")[0]!.output!;
+  expect(relay).toContain("Final assistant message:\nDone.");
+  expect(relay).toContain(`Assistant message before stage_report:\n${brief}`);
+  await tickPipelines([], h.ports);
+  expect(h.spawnedPrompts.at(-1)).toContain(brief);
+});
+
+test("a long final brief is bounded in bytes with an explicit truncation marker", async () => {
+  const h = harness();
+  await started(h.ports, [stage("brief", "build"), stage("build", null, { prompt: "{{prev.output}}" })]);
+  await h.report(1, { verdict: "pass", summary: "Brief ready." });
+  await tickPipelines([h.endTurn(1, `Start. ${"🙂".repeat(20_000)} End.`)], h.ports);
+  const relay = attemptsOf("brief")[0]!.output!;
+  expect(Buffer.byteLength(relay)).toBeLessThanOrEqual(60 * 1024);
+  expect(relay).toContain("Start. 🙂");
+  expect(relay).toEndWith("[Previous stage output truncated at 60 KiB]");
+  expect(relay).not.toContain("End.");
+  expect(relay).not.toContain("�");
+  await tickPipelines([], h.ports);
+  expect(h.spawnedPrompts.at(-1)).toContain(relay);
+});
+
+test("a persisted legacy attempt without final prose relays its summary", async () => {
+  const h = harness();
+  await started(h.ports, [stage("brief", "build"), stage("build", null, { prompt: "Build {{prev.output}}" })]);
+  await h.report(1, { verdict: "pass", summary: "Legacy summary." });
+  await tickPipelines([h.endTurn(1, "")], h.ports);
+  expect(attemptsOf("brief")[0]!.output).toBe("Legacy summary.");
+  const persisted = current();
+  persisted.cursor!.input = null;
+  persisted.cursor!.activatedBy = null;
+  savePipelines([persisted]);
+  await tickPipelines([], h.ports);
+  expect(h.spawnedPrompts.at(-1)).toContain("Build Legacy summary.");
 });
 
 test("every accepted call is attributed on the pipeline, with the conversation, the attempt and the time", async () => {
@@ -412,6 +482,7 @@ test("a refused call runs no command at all, so no forge latency is ever spent o
   /* The accepted call reads the worktree and then the forge, bounded. */
   expect((await h.report(1, { verdict: "pass" })).error).toBeUndefined();
   expect(h.execCalls).toEqual([
+    "git branch --show-current",
     "git status --porcelain",
     "git rev-parse HEAD",
     `timeout --signal=KILL 10s gh pr list --head ${current().branch} --state all --limit 1 --json url,number,state`,

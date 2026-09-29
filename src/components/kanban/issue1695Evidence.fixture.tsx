@@ -41,6 +41,8 @@ import type { BoardProjectStateV1 } from "@/lib/view/types";
 
 const PROJECT = new URLSearchParams(location.search).get("scenario") === "linked-agents" ? `repo-${"a".repeat(32)}` : "atlas";
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
+const SELF_UPDATE_RELOAD = new URLSearchParams(location.search).has("self-update-reload");
+let presenceAnswers = 0;
 /* #2102: stored icons on some tasks; the others draw the title's suggestion or the quiet default. */
 const ICONS = new URLSearchParams(location.search).get("icons") === "1";
 const EDITING = SCENARIO === "editing";
@@ -88,6 +90,10 @@ const MANY = SCENARIO === "issue1765" || BALANCE || WORK_LINKS;
    all five effort levels, a long uncatalogued model, a stage edited after its
    launch, and a stage that has never started. */
 const MARKS = SCENARIO === "issue1743";
+/* Model glyphs (docs/design/model-glyphs.md): nine lanes each running one
+   model, a draft of the same nine waiting, and the settled states on a few;
+   the ninth model is uncatalogued and keeps the dot. */
+const GLYPHS = SCENARIO === "model-glyphs";
 /* #1865: the header lane the operator read — design → build → critique, where
    design and critique share the architect preset and critique ran twice — so
    each stage's conversation can be read for which stage it is. */
@@ -440,6 +446,72 @@ const marksPipelines: Pipeline[] = MARKS ? (() => {
         attempt(2, "failed", spentRev, { effectiveRole: runRole("verifier", "codex", "gpt-6-astra", "xhigh"), startedAt: iso(60 * MIN), activatedBy: { stageId: "fix", attempt: 2, edge: "pass" } }),
       ] },
     ], { stageId: "fix", state: "running", input: null, activatedBy: null }),
+  ];
+})() : [];
+
+/* One stage per model, each named by the role it plays, as a real lane names
+   it ("Design", "Build"), so the glyph is the only thing on a pill that says
+   which model runs it. Stage ids are unique across the nine, so one draft can
+   hold them all. [stage id, model kind, role, engine, model, lane title]. */
+const GLYPH_MODELS = [
+  ["design", "opus", "architect", "claude", "opus", L("Lay out the export dialog", "Спроєктувати діалог експорту")],
+  ["build", "fable", "builder", "claude", "fable", L("Build the export dialog", "Зібрати діалог експорту")],
+  ["docs", "sonnet", "builder", "claude", "sonnet", L("Write the export guide", "Написати посібник з експорту")],
+  ["tidy", "haiku", "cleaner", "claude", "haiku", L("Tidy the export module", "Прибрати модуль експорту")],
+  ["verify", "sol", "verifier", "codex", "gpt-6-sol", L("Verify the export on a large board", "Перевірити експорт на великій дошці")],
+  ["critique", "astra", "architect", "codex", "gpt-6-astra", L("Critique the export flow", "Покритикувати процес експорту")],
+  ["migrate", "terra", "builder", "codex", "gpt-5.6-terra", L("Migrate the saved exports", "Перенести збережені експорти")],
+  ["test", "luna", "verifier", "codex", "gpt-6-luna", L("Test the export on a phone", "Протестувати експорт на телефоні")],
+  ["fix", "other-model", "builder", "codex", "gpt-5.5", L("Fix the export's file name", "Виправити назву файлу експорту")],
+] as const;
+const glyphPipelines: Pipeline[] = GLYPHS ? (() => {
+  type Entry = (typeof GLYPH_MODELS)[number];
+  const entry = (id: string) => GLYPH_MODELS.find(([stageId]) => stageId === id)!;
+  const chain = (models: ReadonlyArray<Entry>) => models.map(([id, , roleId, engine, model], index) =>
+    marksStage(id, roleId, models[index + 1]?.[0] ?? null, engine, model, "high"));
+  const ran = (id: string, state: string, ago: number, over: Record<string, unknown> = {}, file: FileEntry | null = null) => {
+    const [, , roleId, engine, model] = entry(id);
+    return { stageId: id, attempts: [attempt(1, state, file, { effectiveRole: runRole(roleId, engine, model, "high"), startedAt: iso(ago * MIN), ...over })] };
+  };
+  const done = (ago: number) => ({ completedAt: iso((ago - 6) * MIN) });
+  const lane = (ids: string[]) => chain(ids.map(entry));
+  return [
+    /* Every model at work: a lane runs one stage at a time, so one lane each. */
+    ...GLYPH_MODELS.map((model, index) => {
+      const [id, , , , , title] = model;
+      return pipeline(`p-glyph-${model[1]}`, title, "t-glyphs-run", "running", chain([model]),
+        [ran(id, "running", 30 - index)], { stageId: id, state: "running", input: null, activatedBy: null }, { createdAt: iso((40 - index) * MIN) });
+    }),
+    /* A draft: nine stages configured, none started, each waiting on its model. */
+    pipeline("p-glyphs-wait", L("Plan the export release", "Спланувати випуск експорту"), "t-glyphs", "draft", chain(GLYPH_MODELS),
+      [], { stageId: "design", state: "pending", input: null, activatedBy: null }, { createdAt: iso(20 * MIN) }),
+    /* Passed, passed, failed, waiting on the operator, not yet run. */
+    pipeline("p-glyphs-settled", L("Ship the export dialog", "Випустити діалог експорту"), "t-glyphs", "needs_decision", lane(["design", "build", "critique", "verify", "tidy"]),
+      [ran("design", "passed", 90, done(90)), ran("build", "passed", 70, done(70)), ran("critique", "failed", 50, done(50)), ran("verify", "needs_decision", 30)],
+      { stageId: "verify", state: "needs_decision", input: null, activatedBy: null }, { createdAt: iso(100 * MIN) }),
+    /* The other four models settled, the round ones among them: passed, passed,
+       passed, failed, and the uncatalogued model not yet run. The lane waits on
+       the operator after the failure. */
+    pipeline("p-glyphs-settled-more", L("Ship the export guide", "Випустити посібник з експорту"), "t-glyphs", "needs_decision", lane(["docs", "tidy", "migrate", "test", "fix"]),
+      [ran("docs", "passed", 120, done(120)), ran("tidy", "passed", 100, done(100)), ran("migrate", "passed", 80, done(80)), ran("test", "failed", 60, done(60))],
+      { stageId: "test", state: "needs_decision", input: null, activatedBy: null }, { createdAt: iso(130 * MIN) }),
+    /* The live states the old dot told apart by colour: a review stage at work,
+       a stage landing its commit, and a passed stage whose conversation works again. */
+    pipeline("p-glyphs-review", L("Review the export dialog", "Переглянути діалог експорту"), "t-glyphs-live", "running", [
+      marksStage("build", "builder", "review", "claude", "fable", "high"),
+      marksStage("review", "reviewer", null, "codex", "gpt-6-astra", "high"),
+    ], [
+      ran("build", "passed", 40, done(40)),
+      { stageId: "review", attempts: [attempt(1, "running", null, { effectiveRole: runRole("reviewer", "codex", "gpt-6-astra", "high"), startedAt: iso(20 * MIN) })] },
+    ], { stageId: "review", state: "reviewing", input: null, activatedBy: null }, { createdAt: iso(50 * MIN) }),
+    pipeline("p-glyphs-commit", L("Land the saved-export migration", "Завершити перенесення збережених експортів"), "t-glyphs-live", "running", lane(["migrate"]),
+      [ran("migrate", "committing", 12)], { stageId: "migrate", state: "committing", input: null, activatedBy: null }, { createdAt: iso(30 * MIN) }),
+    pipeline("p-glyphs-rework", L("Polish the export guide", "Відшліфувати посібник з експорту"), "t-glyphs-live", "running", lane(["design", "docs", "critique"]), [
+      ran("design", "passed", 120, done(120)),
+      /* Docs passed, and its conversation took more work after it did (#1744). */
+      ran("docs", "passed", 100, done(100), add(conversation("glyphs-rework-docs", "Reworking the export guide", { model: "sonnet", ...working() }))),
+      ran("critique", "running", 60),
+    ], { stageId: "critique", state: "running", input: null, activatedBy: null }, { createdAt: iso(130 * MIN) }),
   ];
 })() : [];
 
@@ -997,6 +1069,7 @@ const pipelines: Pipeline[] = [
   ...arcPipelines,
   ...labelPipelines,
   ...marksPipelines,
+  ...glyphPipelines,
   ...loopsPipelines,
   ...manyPipelines,
   pipeline("p-search", "Restore search results after the index rebuild", "t-search", "running",
@@ -1216,6 +1289,11 @@ const tasks: BoardTask[] = [
   ...(PIPELINES ? [task("t-rounds", "assigned", "Rework the retry banner until review passes", "", 12 * MIN)] : []),
   ...(MANY ? [task("t-many", "assigned", "Kanban: say what each pipeline of a task does", "Five pipelines on one card: two running, three finished.", 5 * MIN)] : []),
   ...(MARKS ? [task("t-marks", "assigned", "Say who runs each stage, and how often an edge fired", "Two pipelines: one fail edge fired twice of three, one with its budget spent.", 4 * MIN)] : []),
+  ...(GLYPHS ? [
+    task("t-glyphs-run", "assigned", L("Every model at work", "Кожна модель у роботі"), L("Nine lanes, each running one model; the ninth has no glyph.", "Дев’ять конвеєрів, кожен запускає одну модель; дев’ята без гліфа."), 1 * MIN),
+    task("t-glyphs", "assigned", L("Every model waiting, and the settled states", "Кожна модель чекає, і завершені стани"), L("A draft of nine stages, and two lanes that settled every model.", "Чернетка з дев’яти етапів і два конвеєри, де завершилася кожна модель."), 2 * MIN),
+    task("t-glyphs-live", "assigned", L("Reviewing, committing, and working again", "Рев’ю, коміт і знову в роботі"), L("A review at work, a commit landing, and a passed stage whose conversation works again.", "Рев’ю в роботі, коміт, що завершується, і пройдений етап, чия розмова знову працює."), 3 * MIN),
+  ] : []),
   ...(LOOPS ? [
     task("t-loops-done", "assigned", L("Show a spent review budget on the lane", "Показати вичерпаний бюджет рев’ю на лінії"), "", 4 * 60 * MIN),
     task("t-loops-review", "assigned", L("Show a spent review budget on the lane, again", "Показати вичерпаний бюджет рев’ю, знову"), "", 2 * MIN),
@@ -1941,7 +2019,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/view/presence" && method === "POST") {
     const body = JSON.parse(String(init?.body)) as { mode: string; visiblePaths: string[]; focusedPath?: string | null };
     evidence.presence.push({ mode: body.mode, visiblePaths: body.visiblePaths, focusedPath: body.focusedPath ?? null });
-    return json({ ok: true });
+    return json({ ok: true, ...(SELF_UPDATE_RELOAD ? { serving: ++presenceAnswers === 1 ? "aaaaaaa" : "bbbbbbb" } : {}) });
   }
   if (TELEGRAM_STEP && url.pathname === "/api/telegram/bot") return json({ bot: TELEGRAM_BOT_STATUS });
   if (TELEGRAM_STEP && url.pathname === "/api/onboarding") {

@@ -67,7 +67,10 @@
 }
 /* The name clips only sideways: a line box of 1 would cut its descenders. */
 .pblock .pb-pill .pb-name { min-width: 3ch; overflow: hidden; text-overflow: ellipsis; line-height: 16px; }
-.pblock .pb-pill.tone-active, .pblock .pb-pill.tone-review { border-color: color-mix(in srgb, var(--stage-tone) 55%, var(--border-default)); }
+.pblock .pb-pill.tone-active { border-color: color-mix(in srgb, var(--stage-tone) 55%, var(--border-default)); }
+/* A review at work moves like a running stage, so it takes the full review
+   tone on its border where running keeps the softened green. */
+.pblock .pb-pill.tone-review { border-color: var(--stage-tone); }
 .pblock .pb-pill.tone-needs { border-color: var(--stage-tone); color: var(--stage-tone); }
 .pblock .pb-pill.rework { border-color: color-mix(in srgb, var(--color-success) 55%, var(--border-default)); }
 .pblock .pb-pill.tone-bad { border-color: color-mix(in srgb, var(--stage-tone) 45%, var(--border-default)); }
