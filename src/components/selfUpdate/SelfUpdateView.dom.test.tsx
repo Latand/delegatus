@@ -200,13 +200,27 @@ describe("automatic updates", () => {
     expect(copy).not.toContain(locale === "en" ? "Waiting over 24 hours" : "Очікування понад 24 години");
   });
 
-  test("managed installs explain why the switch is unavailable", () => {
+  test.each(["en", "uk"] as const)("managed installs offer the auto switch in %s", (locale) => {
+    setLocale(locale);
     const s = snapshot();
     s.mode = "managed";
-    s.auto = { availability: "managed", enabled: false, off: null, phase: "idle", target: null, green: null, blockers: null, waitingSince: null, longWait: false };
+    s.auto = { availability: "available", enabled: false, off: null, phase: "idle", target: null, green: null, blockers: null, waitingSince: null, longWait: false };
     const el = render(s);
-    expect(button(el, "toggle-auto")?.disabled).toBe(true);
-    expect(text(section(el, "auto"))).toContain("managed install");
+    expect(button(el, "toggle-auto")?.disabled).toBe(false);
+    expect(text(section(el, "auto"))).toContain(locale === "en" ? "You choose when to deploy" : "обираєте час розгортання");
+    expect(text(section(el, "auto"))).not.toContain(locale === "en" ? "uses its deployment flow" : "використовує свій механізм розгортання");
+  });
+
+  test("managed auto progress and rollback name the target and reason", () => {
+    const s = snapshot();
+    s.mode = "managed";
+    s.auto = { availability: "available", enabled: true, off: null, phase: "deploying", target: NEW_REV,
+      green: { state: "green" }, blockers: null, waitingSince: AT, longWait: false };
+    expect(text(section(render(s), "auto"))).toContain(`Deploying ${NEW.slice(0, 7)} automatically`);
+    flushSync(() => root!.unmount());
+    host?.remove();
+    s.auto = { ...s.auto, enabled: false, phase: "idle", off: { at: AT, target: NEW, stage: "deploy", reason: "candidate health failed" } };
+    expect(text(section(render(s), "auto"))).toContain(`deployment of ${NEW.slice(0, 7)} failed: candidate health failed`);
   });
 
   test("an older launcher shows restart guidance in both languages", () => {

@@ -1,6 +1,6 @@
 {
   "name": "delegatus-cli",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "bin": {
     "delegatus": "bin/cli.mjs",
     "dlg": "bin/cli.mjs",

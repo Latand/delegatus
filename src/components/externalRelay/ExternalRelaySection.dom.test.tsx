@@ -201,14 +201,14 @@ test("a paired relay: poller state, last outcome and progress, per-target settin
   expect(harness.calls.find((call) => call.method === "PATCH")?.body).toEqual({ target: { id: "bot-1", engine: "codex", model: "gpt-6-astra", effort: null } });
 });
 
-test("a relay whose credential was refused reads as an error, and a paused one offers Resume", async () => {
+test("a relay whose credential was refused reads as an error, and a paused one offers Resume and its failed targets refresh", async () => {
   accounts({});
   answers.relay = {
     relays: [relay(), relay({ id: "relay-2", name: "Second relay", paused: true })],
     pending: [],
     status: [
       { id: "relay-1", state: { state: "credential_rejected", lastOutcome: null, lastOutcomeAt: null, lastProgress: null }, running: {} },
-      { id: "relay-2", state: { state: "paused", lastOutcome: null, lastOutcomeAt: null, lastProgress: null }, running: {} },
+      { id: "relay-2", state: { state: "paused", lastOutcome: "targets:unreachable", lastOutcomeAt: null, lastProgress: null }, running: {} },
     ],
   };
   route((url, init) => url === "/api/external-relay/relays/relay-2" && init?.method === "PATCH" ? jsonResponse({ relay: relay() }) : undefined);
@@ -219,6 +219,8 @@ test("a relay whose credential was refused reads as an error, and a paused one o
   expect(host.querySelector("[data-external-relay=relay-1] [data-external-relay-last-outcome]")?.textContent).toBe("None yet");
   const paused = host.querySelector("[data-external-relay=relay-2]")!;
   expect(paused.querySelector("[data-external-relay-state]")?.getAttribute("data-external-relay-state")).toBe("paused");
+  // A targets refresh that failed keeps the list and says why.
+  expect(paused.querySelector("[data-external-relay-last-outcome]")?.textContent).toBe("Could not refresh the targets. The relay service could not be reached.");
   await click(Array.from(paused.querySelectorAll("button")).find((button) => button.textContent === "Resume"));
   expect(harness.calls.find((call) => call.method === "PATCH")?.body).toEqual({ paused: false });
 });

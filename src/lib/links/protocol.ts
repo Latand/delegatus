@@ -1,7 +1,8 @@
 import { randomBytes, randomUUID } from "node:crypto";
 
 import { tokensMatch } from "@/lib/authToken";
-import { currentSelf, readSelf, checkSavedAddress, markOpenToInternet } from "@/lib/links/self";
+import { currentSelf, readSelf, checkSavedAddress, markOpenToInternet, type CheckCode } from "@/lib/links/self";
+import { publicEntry } from "@/lib/links/publicEntry";
 import { forgetGrantCount, grantView, isSharedProject, readGrants, readPeers, safeEqual, sha, sharedProjects, usedGrant, writeGrants, writePeers, type Grant, type Link, type PairCode, type SharedProject } from "./state";
 export { remoteProjects, updateRemoteProjects } from "./boardLinks";
 import { dropRemoteProjects, ownBoardStoreId, remoteProjects, remoteStore, updateRemoteProjects } from "./boardLinks";
@@ -17,13 +18,23 @@ const codeId = (value: string) => value.slice(0, 6);
 const codeSecret = (value: string) => value.slice(6);
 const stamp = (code: PairCode) => ({ id: code.id, expiresAt: code.expires, attempts: code.attempts, wrongAttempts: 20 - code.attempts, used: code.used, burned: code.burned === true });
 
-export async function mintCode(): Promise<{ code?: string; expiresAt?: number; error?: string }> {
+/** Whether a check lets this install hand out and redeem pairing codes. An
+ * address this server cannot reach (no hairpin route, for one) still counts
+ * while no local entry vouches: then no proxy can deliver a request as the
+ * operator. With a vouching entry, only a passed check proves the proxy points
+ * past it. The gateway is re-read each call: its trust can flip at any time. */
+const pairable = (code: CheckCode | null | undefined) => code === "ok" || (code === "unverified" && !publicEntry().localVouches);
+
+/** Every reason mintCode refuses: the saved address's standing state or a fresh check. */
+export type MintRefusal = "invalid-address" | Exclude<CheckCode, "ok">;
+
+export async function mintCode(): Promise<{ code?: string; expiresAt?: number; error?: MintRefusal }> {
   const state = currentSelf();
   if (!process.env.LLV_TOKEN) return { error: "needs-access-key" };
   if (!state.self?.publicUrl) return { error: "invalid-address" };
   if (state.state === "needs-remote-entry" || state.state === "http-public" || state.state === "open-to-internet") return { error: state.state };
   const check = await checkSavedAddress();
-  if (check.code !== "ok") return { error: check.code };
+  if (check.code !== "ok" && !pairable(check.code)) return { error: check.code };
   const file = readGrants();
   file.codes = file.codes.filter((entry) => entry.expires > Date.now() - 86_400_000);
   for (const entry of file.codes) if (!entry.used && entry.expires > Date.now()) entry.used = true;
@@ -85,7 +96,7 @@ export function pairIncoming(value: unknown): { status: number; body: object } {
     writeGrants(file);
     return { status: 401, body: { error: "unauthorized" } };
   }
-  if (!process.env.LLV_TOKEN || currentSelf().state !== "ok") return { status: 401, body: { error: "unauthorized" } };
+  if (!process.env.LLV_TOKEN || !pairable(currentSelf().state)) return { status: 401, body: { error: "unauthorized" } };
   const self = readSelf();
   if (!self) return { status: 401, body: { error: "unauthorized" } };
   const storeId = ownBoardStoreId();

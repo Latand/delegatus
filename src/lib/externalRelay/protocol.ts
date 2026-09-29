@@ -22,6 +22,16 @@ export const targetSchema = z.object({
   answered_by: z.enum(["install", "service"]),
   fallback: z.enum(["service", "none"]),
 });
+// Endpoint 6. One entry per target id: a list naming a target twice cannot
+// be merged into the stored settings, so it is refused as a whole.
+export const targetsSchema = z
+  .object({ targets: z.array(targetSchema).max(100) })
+  .refine(
+    (value) =>
+      new Set(value.targets.map((target) => target.target_id)).size ===
+      value.targets.length,
+    { message: "duplicate target_id" },
+  );
 export const livenessSchema = z.object({
   poll_freshness_s: z.number().int().min(30).max(300),
   claim_window_s: z.number().int().min(1).max(60),
