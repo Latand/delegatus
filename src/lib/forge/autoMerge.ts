@@ -263,15 +263,26 @@ function headBeforeLocalOutput(pipeline: Pipeline): string | null {
 function reviewedHead(pipeline: Pipeline): string | null {
   const attempts = pipeline.runs
     .filter((run) => pipeline.stages.some((stage) => stage.id === run.stageId && isReviewStage(pipeline, stage)))
-    .flatMap((run) => run.attempts.filter((attempt) => !attempt.historical && attempt.state === "passed"));
-  const explicit = attempts.findLast((attempt) => {
-    const head = attempt.reviewHeadSha ?? attempt.outputBaseHead ?? attempt.report?.provenance.head;
-    return typeof head === "string" && /^[0-9a-f]{40}$/i.test(head);
-  });
-  if (explicit) return explicit.reviewHeadSha ?? explicit.outputBaseHead ?? explicit.report?.provenance.head ?? null;
-  const terminalHeadWasReviewed = attempts.length > 0 && attempts.some((attempt) =>
-    attempt.completedAt && pipeline.closedAt
-      && Math.abs(Date.parse(pipeline.closedAt) - Date.parse(attempt.completedAt)) <= 5_000);
+    .flatMap((run, runIndex) => run.attempts
+      .map((attempt, attemptIndex) => ({ attempt, runIndex, attemptIndex }))
+      .filter(({ attempt }) => !attempt.historical && attempt.state === "passed"));
+  const latest = attempts.toSorted((left, right) => {
+    const completion = (item: typeof left) => {
+      const completedAt = Date.parse(item.attempt.completedAt ?? "");
+      if (Number.isFinite(completedAt)) return completedAt;
+      const reportAt = Date.parse(item.attempt.report?.at ?? "");
+      if (Number.isFinite(reportAt)) return reportAt;
+      return typeof item.attempt.report?.seq === "number" ? item.attempt.report.seq : Number.NEGATIVE_INFINITY;
+    };
+    return completion(left) - completion(right)
+      || left.runIndex - right.runIndex
+      || left.attemptIndex - right.attemptIndex;
+  }).at(-1)?.attempt;
+  if (!latest) return null;
+  const explicitHead = latest.reviewHeadSha ?? latest.outputBaseHead ?? latest.report?.provenance.head;
+  if (typeof explicitHead === "string" && /^[0-9a-f]{40}$/i.test(explicitHead)) return explicitHead;
+  const terminalHeadWasReviewed = latest.completedAt && pipeline.closedAt
+    && Math.abs(Date.parse(pipeline.closedAt) - Date.parse(latest.completedAt)) <= 5_000;
   return terminalHeadWasReviewed ? pipeline.lastPassedCommit : null;
 }
 

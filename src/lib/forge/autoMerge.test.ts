@@ -17,6 +17,7 @@ process.env.LLV_STATE_DIR = sandbox;
 const {
   MERGE_POLL_MS, MERGE_REASONS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, lanePullRequest, mergeEligible, resetAutoMergeForTests, rollupChecks, sweepAutoMerge, sweepTaskFinishes,
 } = await import("./autoMerge");
+const { pipelineGraphError } = await import("../pipelines/store");
 
 afterAll(() => {
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -269,6 +270,50 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
       const h = harness({ lanes: [completed], prs: [openPr(11, { head: oldHead })] });
       await h.sweep();
       expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: `PR head is behind the reviewed head ${reviewedHead}` });
+      expect(h.merges()).toHaveLength(0);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("behind-head reason uses the latest executed review when declaration order differs", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "llv-merge-review-order-"));
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+    try {
+      git("init", "--initial-branch=main");
+      git("config", "user.name", "Fixture");
+      git("config", "user.email", "fixture");
+      fs.writeFileSync(path.join(repo, "work.txt"), "reviewed by pre-review\n");
+      git("add", "work.txt");
+      git("commit", "-m", "build");
+      const preReviewHead = git("rev-parse", "HEAD");
+      fs.writeFileSync(path.join(repo, "work.txt"), "reviewed by final-review\n");
+      git("commit", "-am", "apply fixes");
+      const finalReviewHead = git("rev-parse", "HEAD");
+
+      const stages = [
+        { id: "build", kind: "run", prompt: "build", next: "pre-review", onFail: null, effectiveRole: BUILDER },
+        { id: "final-review", kind: "run", prompt: "review", next: null, onFail: { to: "apply", maxRounds: 1 }, effectiveRole: REVIEWER },
+        { id: "pre-review", kind: "run", prompt: "review", next: "apply", onFail: { to: "apply", maxRounds: 1 }, effectiveRole: REVIEWER },
+        { id: "apply", kind: "run", prompt: "apply fixes", next: "final-review", onFail: null, effectiveRole: BUILDER },
+      ] as Pipeline["stages"];
+      expect(pipelineGraphError(stages)).toBeNull();
+
+      const completed = lane("L1", { head: finalReviewHead });
+      completed.repoDir = repo;
+      completed.stages = stages;
+      completed.runs = [
+        { stageId: "build", attempts: [{ n: 1, state: "passed", completedAt: iso(T0 - 4_000), effectiveRole: BUILDER }] },
+        { stageId: "final-review", attempts: [{ n: 1, state: "passed", completedAt: iso(T0 - 1_000), reviewHeadSha: finalReviewHead, effectiveRole: REVIEWER,
+          report: { provenance: { head: finalReviewHead } } }] },
+        { stageId: "pre-review", attempts: [{ n: 1, state: "passed", completedAt: iso(T0 - 3_000), reviewHeadSha: preReviewHead, effectiveRole: REVIEWER,
+          report: { provenance: { head: preReviewHead } } }] },
+        { stageId: "apply", attempts: [{ n: 1, state: "passed", completedAt: iso(T0 - 2_000), effectiveRole: BUILDER }] },
+      ] as unknown as Pipeline["runs"];
+
+      const h = harness({ lanes: [completed], prs: [openPr(11, { head: preReviewHead })] });
+      await h.sweep();
+      expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: `PR head is behind the reviewed head ${finalReviewHead}` });
       expect(h.merges()).toHaveLength(0);
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
