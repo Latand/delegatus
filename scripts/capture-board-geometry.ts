@@ -5541,7 +5541,8 @@ async function linkingMain(): Promise<void> {
           const allow = [...dialog.querySelectorAll("button")].filter((node) => node.offsetParent !== null && node.getBoundingClientRect().width > 0);
           const buttonsOutside = allow.filter((node) => { const rect = node.getBoundingClientRect(); return rect.left < outer.left - 0.5 || rect.right > outer.right + 0.5; }).length;
           const shortButtons = allow.filter((node) => node.getBoundingClientRect().height < 43.5).map((node) => node.textContent);
-          dialog.querySelector(focus)?.scrollIntoView({ block: "center" });
+          /* The state frames keep the role picker in view when they can; the ones below the fold centre their subject. */
+          dialog.querySelector(focus)?.scrollIntoView({ block: focus === "[data-linked-state]" ? "nearest" : "center" });
           return { clipped, buttonsOutside, shortButtons, overflow: dialog.scrollWidth - dialog.clientWidth };
         }, fixture.focus);
         const tag = `${width}-${lang}-${name}`;
