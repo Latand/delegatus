@@ -8,17 +8,91 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-09-29
+
 ### Added
-- **Automatic checkout updates.** An opt-in switch in the Update dialog builds
-  green merges and waits for a quiet minute before moving web and the runtime
-  host onto the release. The dialog shows blockers and each process's serving
-  revision. Builds and restarts are recorded with their trigger; a failed
-  automatic restart restores the prior release pointer and turns the switch off.
+- **Automatic updates for an install run from a clone.** The **Update**
+  dialog has an **Automatic updates** switch, off by default. When it is on
+  and a merged pull request's checks have all finished green, Delegatus
+  builds that commit and waits for a quiet moment: no agent turn or pipeline
+  stage running, nobody using Delegatus for ten minutes, no other update
+  in progress and enough free memory. It then moves the web app onto the
+  new release first and the runtime host second. While it waits, the
+  dialog says what it is waiting for, and after 24 hours it says that too.
+  Each process shows the revision
+  it runs, and the update history marks which builds and restarts ran by
+  themselves. If an automatic restart fails, Delegatus goes back to the
+  release before it and turns the switch off with the reason ([#2313]).
+- **Agents on a linked install show on your board.** For a project both
+  machines share, the other machine's agents appear as a collapsed,
+  read-only row: "On *machine*: 3 agents · 1 working", on the card of the
+  task they work on, or in the Inbox when they have no task. This works on
+  the desktop and on the phone. Only a short title and a state cross over,
+  never a transcript, a prompt, a path or an account. If the link stops
+  answering, the row says how old it is after 15 minutes, and revoking the
+  link removes it. Agents read the same rows through `get_task` and
+  `board_snapshot` ([#2305]).
+- **An external relay can ask your install questions.** **External relay**
+  in the rail menu (the ⋯ sheet on a phone), and an optional **Relay
+  service** step in the setup guide, pair this install with a relay service
+  that collects questions from its own chats. Your install asks the service
+  for work, so nothing outside can reach it. Each question is answered by a
+  one-shot agent on your signed-in Claude or Codex account, with no shell,
+  no tools and none of your own instruction files. For each paired relay the
+  page shows its connection state, its last answer, and the engine, model,
+  effort and number of parallel answers it uses ([#2302]).
+- **The orchestrator starts with a board report.** Whenever an orchestrator
+  takes its seat (a new one, an adopted one, or after a rotation), it gets a
+  report on its project's board: decisions waiting on you, tasks ready to
+  finish, stuck agents with their last words, what is running, tasks nothing
+  works on, cards that look safe to close with the reason, pull requests no
+  pipeline carries and, for a GitHub project, open issues ranked by the
+  priority recorded on them. The orchestrator checks each item before it
+  acts, closes cards one at a time and asks you before anything else. A
+  project with nothing to report gets no report ([#2308]).
+- **Claude Sonnet 5.5** is in the model lists. The builder for UI work now
+  runs on Sonnet 5.5 at high effort, and the orchestrator plans a UI
+  pipeline with an Opus stage that writes the brief and an Opus review.
+  Other roles keep their models ([#2312]).
+- **Each pipeline stage shows its model.** In place of the green status dot,
+  a stage draws the model it runs on: a spark for Claude Opus, Sonnet and
+  Haiku, a fox for Fable, and a sun, a star, the Earth and the Moon for the
+  Codex models Sol, Astra, Terra and Luna. A running stage's figure moves,
+  a waiting one is dimmed, and a finished stage wears a small tick, cross or
+  bang for passed, failed or needs you. Other models keep their dot. The
+  figures stand still when the system asks for reduced motion ([#2311]).
+
+### Changed
+- **The next pipeline stage gets the whole brief.** A stage used to pass on
+  only the one-line summary of its report. The next stage now receives
+  everything the agent wrote before it reported, up to 60 KiB and marked
+  when cut. The summary still heads the board's stage row
+  ([#2315], [#2320]).
+- **Agents get only the API keys Delegatus uses.** Of the variables ending
+  in `_API_KEY` in the environment that starts Delegatus, only
+  `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
+  `ELEVENLABS_API_KEY` and `SONIOX_API_KEY` reach the agents and commands it
+  starts. Give an agent any other key through its own configuration
+  ([#2318]).
+
+### Removed
+- The WakaTime export (`LLV_WAKATIME_ENABLED`) is gone. The setting has no
+  effect any more, and the Activity page is unchanged ([#2318]).
 
 ### Fixed
-- A self-update step whose command disappears or exceeds its deadline now
-  settles in the current web process, so the operator can retry it without a
-  web restart.
+- **Pairing works behind Caddy.** An install whose public address sits
+  behind Caddy, the Docker install among them, failed every address check
+  and **Allow a connection** made no code. The check now passes there. An
+  HTTPS address written as an IP no longer fails the check, and an address
+  the check cannot confirm still gets a pairing code, unless a local entry
+  point trusts callers without the access key ([#2325]).
+- **Telegram report topics.** Pasting a group or topic link for a chat the
+  bot had not seen yet, or a forum whose topics had changed, now saves the
+  destination, and the Reports picker shows the new chat as allowed right
+  away. A link Telegram refuses shows Telegram's reason ([#2309], [#2316]).
+- An update step whose command disappears or runs past its deadline now
+  stops in the running web app, so you can retry it without restarting the
+  web app ([#2313]).
 
 ## [1.6.0] — 2026-09-28
 
@@ -1293,7 +1367,9 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/delegatus/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/Latand/delegatus/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/Latand/delegatus/compare/v1.6.0...v1.7.0
+[1.6.0]: https://github.com/Latand/delegatus/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/Latand/delegatus/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/Latand/delegatus/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/Latand/delegatus/compare/v1.2.2...v1.3.0
@@ -1426,3 +1502,15 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2300]: https://github.com/Latand/delegatus/pull/2300
 [#2301]: https://github.com/Latand/delegatus/pull/2301
 [#2303]: https://github.com/Latand/delegatus/pull/2303
+[#2302]: https://github.com/Latand/delegatus/pull/2302
+[#2305]: https://github.com/Latand/delegatus/pull/2305
+[#2308]: https://github.com/Latand/delegatus/pull/2308
+[#2309]: https://github.com/Latand/delegatus/pull/2309
+[#2311]: https://github.com/Latand/delegatus/pull/2311
+[#2312]: https://github.com/Latand/delegatus/pull/2312
+[#2313]: https://github.com/Latand/delegatus/pull/2313
+[#2315]: https://github.com/Latand/delegatus/pull/2315
+[#2316]: https://github.com/Latand/delegatus/pull/2316
+[#2318]: https://github.com/Latand/delegatus/pull/2318
+[#2320]: https://github.com/Latand/delegatus/pull/2320
+[#2325]: https://github.com/Latand/delegatus/pull/2325

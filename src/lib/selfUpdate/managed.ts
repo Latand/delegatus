@@ -23,6 +23,7 @@ import { idleUpdate, MANAGED_STEPS, pendingSteps, shortSha, type ManagedStepName
 export interface ManagedRecord {
   deploymentId: string;
   idempotencyKey: string;
+  trigger?: "operator" | "auto";
   target: string;
   targetShort: string;
   targetVersion: string | null;
@@ -63,6 +64,7 @@ export async function requestManagedUpdate(
   clientKey: string,
   request: (body: ViewerDeploymentRequest) => Promise<ViewerDeploymentReceipt>,
   now: () => number = Date.now,
+  trigger: "operator" | "auto" = "operator",
 ): Promise<ManagedRecord> {
   const idempotencyKey = managedIdempotencyKey(target.sha, clientKey);
   const receipt = await request({ revision: target.sha, idempotencyKey });
@@ -70,6 +72,7 @@ export async function requestManagedUpdate(
   return {
     deploymentId: receipt.deploymentId,
     idempotencyKey,
+    trigger,
     target: receipt.revision || target.sha,
     targetShort: shortSha(receipt.revision || target.sha),
     targetVersion: target.version || null,
@@ -194,6 +197,7 @@ export function managedUpdateState(record: ManagedRecord, now: number): UpdateSt
     target: record.target,
     targetShort: record.targetShort,
     targetVersion: record.targetVersion,
+    trigger: record.trigger,
     deploymentId: record.deploymentId,
     rolledBack: record.phase === "rolling-back" || record.phase === "rolled-back",
     steps,

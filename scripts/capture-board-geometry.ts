@@ -5361,7 +5361,7 @@ async function selfUpdateAutoMain(): Promise<void> {
     waiting: { ...base, auto, history: [{ at: "2026-01-01T12:00:00Z", by: "auto", kind: "build", target: next, from: old, outcome: "done" }] },
     longWait: { ...base, auto: { ...auto, longWait: true } },
     fallback: { ...base, auto: { ...auto, enabled: false, phase: "idle", off: { at: "2026-01-02T00:00:00Z", target: next, stage: "restart-web", reason: "health probe failed" }, blockers: null } },
-    managed: { ...base, mode: "managed", auto: { ...auto, availability: "managed", enabled: false, phase: "idle", blockers: null } },
+    managed: { ...base, mode: "managed", auto: { ...auto, enabled: false, phase: "idle", blockers: null } },
   };
   let server: ChildProcess | null = null;
   let browser: Browser | null = null;

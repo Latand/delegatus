@@ -375,14 +375,16 @@ function AutoSection({ s, state, actions, t }: { s: Snapshot; state: ViewState; 
   const available = auto.availability === "available";
   const failed = auto.off?.stage === "build" ? s.update.steps.find((step) => step.state === "failed") : null;
   const offReason = failed ? `${stepName(failed.name, t)}: ${stepFailureText(failed, t) ?? auto.off!.reason}` : auto.off?.reason ?? "";
-  const phase = auto.off ? t("selfUpdate.auto.offReason", { reason: offReason })
-    : auto.phase === "waiting" ? t("selfUpdate.auto.waiting", { sha: auto.target?.short ?? "" })
+  const phase = auto.off ? t(s.mode === "managed" ? "selfUpdate.auto.offReasonManaged" : "selfUpdate.auto.offReason", { reason: offReason, sha: auto.target?.short ?? auto.off.target.slice(0, 7) })
+    : auto.phase === "waiting" ? t(s.mode === "managed" ? "selfUpdate.auto.waitingManaged" : "selfUpdate.auto.waiting", { sha: auto.target?.short ?? "" })
     : auto.phase === "building" ? t("selfUpdate.auto.building", { sha: auto.target?.short ?? "" })
+    : auto.phase === "deploying" ? t("selfUpdate.auto.deploying", { sha: auto.target?.short ?? "" })
     : auto.phase === "restarting-web" ? t("selfUpdate.auto.restartingWeb", { sha: auto.target?.short ?? "" })
     : auto.phase === "restarting-host" ? t("selfUpdate.auto.restartingHost", { sha: auto.target?.short ?? "" })
     : auto.phase === "not-green" ? t("selfUpdate.auto.notGreen", { sha: auto.target?.short ?? "", reason: auto.green?.detail ?? auto.green?.state ?? "" })
     : auto.phase === "checks" ? t("selfUpdate.auto.checking", { sha: auto.target?.short ?? "" })
-    : t(auto.enabled ? "selfUpdate.auto.ready" : "selfUpdate.auto.disabled");
+    : t(auto.enabled ? s.mode === "managed" ? "selfUpdate.auto.readyManaged" : "selfUpdate.auto.ready"
+      : s.mode === "managed" ? "selfUpdate.auto.disabledManaged" : "selfUpdate.auto.disabled");
   const blockers = auto.blockers;
   return (
     <section data-section="auto" className={CARD}>
@@ -391,7 +393,7 @@ function AutoSection({ s, state, actions, t }: { s: Snapshot; state: ViewState; 
         <Button action="toggle-auto" label={t(auto.enabled ? "selfUpdate.auto.turnOff" : "selfUpdate.auto.turnOn")} onClick={actions.toggleAuto}
           disabled={state.pending.has("auto") || (!available && !auto.enabled)} />
       </div>
-      <p className="m-0 text-ui text-secondary">{available ? phase : t(`selfUpdate.auto.unavailable.${auto.availability}` as MessageKey)}</p>
+      <p className="m-0 text-ui text-secondary">{available || auto.off || auto.phase === "deploying" ? phase : t(`selfUpdate.auto.unavailable.${auto.availability}` as MessageKey)}</p>
       {auto.enabled && blockers && auto.phase === "waiting" ? (
         <ul className="m-0 list-disc pl-5 text-ui text-secondary">
           {blockers.turns > 0 ? <li>{t("selfUpdate.auto.block.turns", { count: blockers.turns })}</li> : null}
