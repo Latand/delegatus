@@ -1,3 +1,4 @@
+import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn, spawnSync, type StdioOptions } from "node:child_process";
@@ -19,7 +20,6 @@ import type {
   ViewerRuntimeHostHealthEvidence,
   ViewerRuntimeHostProbeEvidence,
 } from "@/lib/runtime/contracts";
-import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 
 import type { ViewerDeploymentAdapter } from "./deployment";
 import { candidateLogExcerpt } from "./deploymentHealth";
@@ -33,7 +33,7 @@ import { runtimeHostSuccessorName } from "./hostSuccessor";
 import { parseRuntimeHostHandoffEvidence } from "./runtimeHostStartup";
 
 type CommandRunner = (action: string, input: Record<string, unknown>, signal?: AbortSignal) => Promise<unknown>;
-type AdapterAction = "resolve-revision" | "build-candidate" | "start-candidate" | "current-release" | "current-mcp-runtime" | "reconcile-mcp-runtime" | "verify-candidate" | "promote" | "verify-promoted" | "rollback" | "retire" | "retain-only" | "stage-host-successor" | "verify-host-successor" | "complete-host-handoff";
+type AdapterAction = "resolve-revision" | "build-candidate" | "start-candidate" | "current-release" | "current-mcp-runtime" | "reconcile-mcp-runtime" | "verify-candidate" | "promote" | "verify-promoted" | "candidate-log" | "rollback" | "retire" | "retain-only" | "stage-host-successor" | "verify-host-successor" | "complete-host-handoff";
 
 const ACTION_TIMEOUTS: Record<AdapterAction, number | null> = {
   "resolve-revision": 110_000,
@@ -53,6 +53,7 @@ const ACTION_TIMEOUTS: Record<AdapterAction, number | null> = {
   // Healthy startup has taken 176s at history scale. Allow five minutes for
   // serving and MCP readiness, then join the adapter and enter rollback.
   "verify-promoted": 5 * 60_000,
+  "candidate-log": 10_000,
   rollback: 90_000,
   retire: 60_000,
   "retain-only": 60_000,
@@ -489,7 +490,7 @@ export class HostCommandViewerDeploymentAdapter implements ViewerDeploymentAdapt
         child = spawn("/usr/bin/setpriv", ["--pdeathsig", "KILL", "--", executable, action], {
           stdio,
           env: {
-            ...withoutWakatimeCredential(process.env),
+            ...withoutUnsupportedApiCredentials(process.env),
             LLV_DEPLOYMENT_ADAPTER_PROTOCOL: "1",
             LLV_DEPLOYMENT_ADAPTER_PHASE_FILE: phaseFile,
             /* #1216: the deadline this host will enforce, so the adapter can
@@ -649,6 +650,14 @@ export class HostCommandViewerDeploymentAdapter implements ViewerDeploymentAdapt
 
   async verifyPromoted(candidate: ViewerReleaseIdentity, signal?: AbortSignal): Promise<ViewerHealthEvidence> {
     return evidence(await this.run("verify-promoted", { candidate }, signal));
+  }
+
+  async candidateLog(candidate: ViewerReleaseIdentity): Promise<string[]> {
+    const result = await this.run("candidate-log", { candidate });
+    if (!Array.isArray(result) || result.some((line) => typeof line !== "string")) {
+      throw new Error("candidate log response is invalid");
+    }
+    return candidateLogExcerpt(result.join("\n"), { maxLines: 200, maxChars: 500 });
   }
 
   async rollback(

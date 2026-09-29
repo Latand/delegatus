@@ -3,10 +3,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { upsertPresence } from "@/lib/view/presenceStore";
 import { readBoundedJson, validatePresence, ViewValidationError } from "@/lib/view/validation";
+import { headOf } from "@/lib/selfUpdate/release";
+import { shortSha } from "@/lib/selfUpdate/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const headers = { "Cache-Control": "no-store" };
+const revision = process.env.LLV_HOT_STATE_RELEASE_REVISION || headOf(process.cwd());
+const serving = revision && /^[a-f0-9]{40}$/.test(revision) ? shortSha(revision) : null;
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const rejection = rejectCrossOrigin(request);
@@ -14,7 +18,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     const payload = validatePresence(await readBoundedJson(request));
     const result = upsertPresence(payload);
-    return NextResponse.json({ ok: true, accepted: result.accepted, viewSessionId: result.session.viewSessionId }, { headers });
+    return NextResponse.json({ ok: true, accepted: result.accepted, viewSessionId: result.session.viewSessionId, serving }, { headers });
   } catch (error) {
     const known = error instanceof ViewValidationError ? error : new ViewValidationError("INVALID_REQUEST", "invalid request");
     return NextResponse.json({ error: known.code, message: known.message }, { status: known.status, headers });

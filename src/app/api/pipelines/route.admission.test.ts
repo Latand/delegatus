@@ -7,6 +7,12 @@ import { NextRequest } from "next/server";
 
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
+import { getPipelines } from "@/lib/pipelines/engine";
+import { loadTasks } from "@/lib/tasks/store";
+import { executeOrchestratorRotation, executeOrchestratorSeatRequest, type SeatCommandDependencies } from "@/lib/orchestrator/seatCommand";
+import { orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { createMcpToolService, MemoryMcpReceiptStore } from "@/lib/mcp/server";
+import { productionDomainDependencies, viewerMcpBindings } from "@/lib/mcp/bindings";
 
 const previousStateDir = process.env.LLV_STATE_DIR;
 const previousCodexHome = process.env.LLV_CODEX_HOME;
@@ -17,6 +23,7 @@ fs.mkdirSync(path.join(process.env.LLV_CODEX_HOME, "sessions"), { recursive: tru
 
 const { agentRegistry } = await import("@/lib/agent/registry");
 const { POST } = await import("./route");
+const { PATCH } = await import("./[id]/route");
 
 afterAll(() => {
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -26,7 +33,7 @@ afterAll(() => {
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
-function seedCaller(role: string): { capability: string; conversationId: ViewerConversationId; path: string } {
+function seedCaller(role: string, parentConversationId: ViewerConversationId | null = null): { capability: string; conversationId: ViewerConversationId; path: string } {
   const store = agentRegistry();
   const capability = crypto.randomBytes(32).toString("base64url");
   const reviews = role === "reviewer"
@@ -37,8 +44,10 @@ function seedCaller(role: string): { capability: string; conversationId: ViewerC
     cwd: "/repo",
     role,
     reviewsConversationId: reviews,
-    parentConversationId: reviews,
-    origin: { kind: "operator" },
+    parentConversationId: parentConversationId ?? reviews,
+    origin: parentConversationId
+      ? { kind: "agent", conversationId: parentConversationId }
+      : { kind: "operator" },
     spawnCapabilityDigest: crypto.createHash("sha256").update(capability).digest("hex"),
   });
   if (begun.kind !== "created") throw new Error("expected create");
@@ -133,4 +142,128 @@ test("a capability header that does not authenticate is rejected before pipeline
 
   expect(response.status).toBe(403);
   expect(await response.json()).toEqual({ error: expect.stringContaining("x-llv-spawn-capability") });
+});
+
+test("rotation revokes A's pipeline control while B, its builder and a live deputy can create work", async () => {
+  const a = seedCaller("orchestrator");
+  const b = seedCaller("orchestrator");
+  const builder = seedCaller("builder", b.conversationId);
+  const deputy = seedCaller("builder", b.conversationId);
+  let next = a;
+  const deps: SeatCommandDependencies = {
+    spawn: async () => ({ status: 200, body: { ok: true, conversationId: next.conversationId, path: next.path } }),
+    deliver: async () => ({ ok: true, outcome: "delivered" }),
+    conversationTarget: id => ({ kind: "eligible", conversationId: id, path: id === a.conversationId ? a.path : b.path, cwd: process.cwd(), project: "proj-a", engine: "codex" }),
+    resolvedConversation: id => ({ conversationId: id, path: id === a.conversationId ? a.path : b.path, holdsTurns: true, cwd: process.cwd() }),
+    stampRegistryIdentity: () => {},
+    summarizeHandoffs: async () => ({ kind: "fallback", reason: "unavailable" }),
+    launchSettlement: () => ({ kind: "unknown" }),
+    runtimeIdentity: () => ({ engine: null, model: null }),
+    now: () => "2026-09-28T00:00:00.000Z",
+  };
+  const seated = await executeOrchestratorSeatRequest({ project: "proj-a", clientRequestId: "seat-authority-a", mandate: "edited mandate", engine: "codex", model: "gpt-6-sol", cwd: process.cwd() }, deps);
+  expect(seated.status).toBe(200);
+  const request = (caller: typeof a, task: string) => ({ task, repoDir: process.cwd(), src: caller.path, autoStart: false, stages: [] });
+  const predecessorCreate = await POST(pipelineRequest(request(a, "incumbent lane"), { "x-llv-spawn-capability": a.capability }));
+  expect(predecessorCreate.status).toBe(201);
+  const predecessor = await predecessorCreate.json() as { pipeline: { id: string } };
+  next = b;
+  const rotated = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "seat-authority-b" }, deps);
+  expect(rotated.status).toBe(200);
+  expect(orchestratorSeatFor("proj-a").active?.conversationId).toBe(b.conversationId);
+  const beforeRefusal = {
+    pipelines: getPipelines().pipelines.length,
+    tasks: loadTasks().length,
+    launches: Object.keys(agentRegistry().readOnlySnapshot().receipts).length,
+  };
+
+  let actor = a;
+  const domain = { ...productionDomainDependencies, callerAttribution: () => actor === deputy
+    ? { kind: "manager" as const, conversationId: b.conversationId, role: "builder", via: { deputy: deputy.conversationId } }
+    : { kind: "agent" as const, conversationId: actor.conversationId, role: actor === builder ? "builder" : "orchestrator" } };
+  const mcp = createMcpToolService(viewerMcpBindings(undefined, undefined, domain), new MemoryMcpReceiptStore());
+  const rejected = await mcp.callTool("create_pipeline", { clientRequestId: "revoked-create", ...request(a, "old seat duplicate") });
+  expect(rejected).toMatchObject({ ok: false });
+  expect(JSON.stringify(rejected)).toContain(b.conversationId);
+  const refusedAction = await mcp.callTool("pipeline_action", { clientRequestId: "revoked-action", pipelineId: predecessor.pipeline.id, action: "pause" });
+  expect(refusedAction).toMatchObject({ ok: false });
+  expect(JSON.stringify(refusedAction)).toContain(b.conversationId);
+
+  const oldAction = await PATCH(new NextRequest(`http://127.0.0.1:8898/api/pipelines/${predecessor.pipeline.id}`, {
+    method: "PATCH", headers: { host: "127.0.0.1:8898", "content-type": "application/json", "x-llv-spawn-capability": a.capability },
+    body: JSON.stringify({ action: "pause" }),
+  }), { params: Promise.resolve({ id: predecessor.pipeline.id }) });
+  expect(oldAction.status).toBe(403);
+  expect(await oldAction.json()).toMatchObject({ code: "orchestrator_seat_revoked", error: expect.stringContaining(b.conversationId) });
+  const oldHttpCreate = await POST(pipelineRequest(request(a, "old HTTP duplicate"), { "x-llv-spawn-capability": a.capability }));
+  expect(oldHttpCreate.status).toBe(403);
+  expect(await oldHttpCreate.json()).toMatchObject({ code: "orchestrator_seat_revoked", error: expect.stringContaining(b.conversationId) });
+  const oldBrowserCreate = await POST(pipelineRequest(request(a, "old browser header duplicate"), {
+    "x-llv-spawn-capability": a.capability,
+    origin: "http://127.0.0.1:8898",
+    "sec-fetch-site": "same-origin",
+  }));
+  expect(oldBrowserCreate.status).toBe(403);
+  expect(await oldBrowserCreate.json()).toMatchObject({ code: "orchestrator_seat_revoked", error: expect.stringContaining(b.conversationId) });
+  const oldSourceCreate = await POST(pipelineRequest(request(a, "old source duplicate")));
+  expect(oldSourceCreate.status).toBe(403);
+  expect(await oldSourceCreate.json()).toMatchObject({ code: "orchestrator_seat_revoked" });
+  expect(productionDomainDependencies.callerAttribution?.()).toMatchObject({ kind: "unidentified", conversationId: null });
+  const unidentifiedMcp = createMcpToolService(viewerMcpBindings(undefined, undefined, productionDomainDependencies), new MemoryMcpReceiptStore());
+  const oldUnattributedCreate = await unidentifiedMcp.callTool("create_pipeline", {
+    clientRequestId: "revoked-src-create", ...request(a, "old unattributed duplicate"),
+  });
+  expect(oldUnattributedCreate).toMatchObject({ ok: false });
+  expect(JSON.stringify(oldUnattributedCreate)).toContain(b.conversationId);
+  expect({ pipelines: getPipelines().pipelines.length, tasks: loadTasks().length, launches: Object.keys(agentRegistry().readOnlySnapshot().receipts).length }).toEqual(beforeRefusal);
+
+  const operatorCreate = await POST(pipelineRequest({ task: "operator lane", repoDir: process.cwd(), autoStart: false, stages: [] }, {
+    origin: "http://127.0.0.1:8898", "sec-fetch-site": "same-origin",
+  }));
+  expect(operatorCreate.status).toBe(201);
+  const created = await POST(pipelineRequest(request(b, "successor lane"), { "x-llv-spawn-capability": b.capability }));
+  expect(created.status).toBe(201);
+  actor = b;
+  const successorCreate = await mcp.callTool("create_pipeline", { clientRequestId: "successor-create", ...request(b, "new seat lane") });
+  expect(successorCreate).toMatchObject({ ok: true });
+  actor = builder;
+  const builderCreate = await mcp.callTool("create_pipeline", { clientRequestId: "builder-create", ...request(builder, "builder lane") });
+  expect(builderCreate).toMatchObject({ ok: true });
+  actor = deputy;
+  const deputyCreate = await mcp.callTool("create_pipeline", { clientRequestId: "deputy-create", ...request(deputy, "deputy lane") });
+  expect(deputyCreate).toMatchObject({ ok: true });
+
+  const seatFile = path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json");
+  const standingRecord = fs.readFileSync(seatFile, "utf8");
+  const pipelineCount = getPipelines().pipelines.length;
+  actor = a;
+  for (const [index, unreadableRecord] of ["{malformed", JSON.stringify({ schemaVersion: 999 })].entries()) {
+    const clientRequestId = `unavailable-seat-${index}`;
+    fs.writeFileSync(seatFile, unreadableRecord);
+    try {
+      const mcpCreate = await mcp.callTool("create_pipeline", { clientRequestId, ...request(a, "unavailable store duplicate") });
+      expect(mcpCreate).toMatchObject({ ok: false, retryable: true, details: { code: "orchestrator_seat_authority_unavailable" } });
+      const mcpAction = await mcp.callTool("pipeline_action", { clientRequestId: `${clientRequestId}-action`, pipelineId: predecessor.pipeline.id, action: "pause" });
+      expect(mcpAction).toMatchObject({ ok: false, retryable: true, details: { code: "orchestrator_seat_authority_unavailable" } });
+
+      const httpCreate = await POST(pipelineRequest(request(a, "unavailable HTTP duplicate"), { "x-llv-spawn-capability": a.capability }));
+      expect(httpCreate.status).toBe(503);
+      expect(await httpCreate.json()).toMatchObject({ code: "orchestrator_seat_authority_unavailable", retryable: true });
+      const sourceCreate = await POST(pipelineRequest(request(a, "unavailable source duplicate")));
+      expect(sourceCreate.status).toBe(503);
+      expect(await sourceCreate.json()).toMatchObject({ code: "orchestrator_seat_authority_unavailable", retryable: true });
+      const httpAction = await PATCH(new NextRequest(`http://127.0.0.1:8898/api/pipelines/${predecessor.pipeline.id}`, {
+        method: "PATCH", headers: { host: "127.0.0.1:8898", "content-type": "application/json", "x-llv-spawn-capability": a.capability },
+        body: JSON.stringify({ action: "pause" }),
+      }), { params: Promise.resolve({ id: predecessor.pipeline.id }) });
+      expect(httpAction.status).toBe(503);
+      expect(await httpAction.json()).toMatchObject({ code: "orchestrator_seat_authority_unavailable", retryable: true });
+      expect(getPipelines().pipelines.length).toBe(pipelineCount);
+    } finally {
+      fs.writeFileSync(seatFile, standingRecord);
+    }
+    const afterRecovery = await mcp.callTool("create_pipeline", { clientRequestId, ...request(a, "unavailable store duplicate") });
+    expect(afterRecovery).toMatchObject({ ok: false });
+    expect(JSON.stringify(afterRecovery)).toContain(b.conversationId);
+  }
 });

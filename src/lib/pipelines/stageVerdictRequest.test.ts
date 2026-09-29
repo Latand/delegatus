@@ -356,22 +356,20 @@ test("skip-stage adopts the parked stage's pushed head and advances the lane (#1
   expect(advanced.cursor).toMatchObject({ stageId: "verify", state: "pending" });
   expect(advanced.runs[0]!.attempts[0]).toMatchObject({ state: "skipped" });
   expect(advanced.runs[0]!.attempts[0]!.output).toContain(STAGE_HEAD);
-  /* The reset holds the adopted head; nothing the stage committed is lost. */
-  expect(h.calls.some((call) => call.includes(`reset --hard ${STAGE_HEAD}`))).toBe(true);
+  expect(h.calls.some((call) => call.includes("reset --hard") || call.includes("clean -fd"))).toBe(false);
 });
 
-test("skip-stage is still refused when the parked stage's work was never pushed (#1756)", async () => {
+test("skip-stage carries the parked stage's unpublished local head in an internal lane (#1756)", async () => {
   const h = harness();
   const pipeline = await parkedFinishedLane(h);
-  /* The remote is still at the base: nothing the stage did is published. */
+  /* This legacy internal lane has no remote publication policy. */
   const callsBefore = h.calls.length;
 
-  const refused = await patchPipeline(pipeline.id, { action: "skip-stage" }, h.ports);
+  const skipped = await patchPipeline(pipeline.id, { action: "skip-stage" }, h.ports);
 
-  expect(refused.status).toBe(409);
-  expect(refused.error).toContain("close");
+  expect(skipped.error).toBeUndefined();
   expect(h.calls.slice(callsBefore).some((call) => call.includes("reset --hard") || call.includes("clean -fd"))).toBe(false);
-  expect(loadPipelines()[0]!).toMatchObject({ state: "needs_decision", lastPassedCommit: BASE_SHA });
+  expect(loadPipelines()[0]!).toMatchObject({ lastPassedCommit: STAGE_HEAD, cursor: { stageId: "verify", state: "pending" } });
 });
 
 test("retry-stage is refused over a pushed head, which it would reset away (#1756)", async () => {

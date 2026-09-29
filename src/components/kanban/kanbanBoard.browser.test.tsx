@@ -38,6 +38,346 @@ type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
+describe("linked boards M3 remote agents", () => {
+  browserTest("an unbound remote agent remains visible in an empty phone Inbox", async () => {
+    const out = path.resolve(".artifacts/linked-boards-m3-empty-inbox");
+    fs.mkdirSync(out, { recursive: true });
+    const project = `repo-${"a".repeat(32)}`;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/links/agents": { agents: [{ k: `a:${"3".repeat(16)}`, p: project, t: "copilot agent", e: "copilot", m: "model", st: "working", at: Date.now(), peer: "Machine B", stale: false }] },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const locale of ["en", "uk"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=linked-agents&empty=inbox`, { width: 390, height: 844 }, "light", locale, "reduce", true);
+        try {
+          await page.locator('[data-phone-kanban-tab="inbox"]').click();
+          const group = page.locator('[data-phone-kanban-column="inbox"] [data-remote-agents]');
+          await group.waitFor();
+          expect(await group.locator("summary").textContent()).toContain("Machine B");
+          await group.locator("summary").click();
+          expect(await group.locator("[data-remote-agent]").count()).toBe(1);
+          expect(await group.locator("button, a, input").count()).toBe(0);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 90_000);
+
+  browserTest("collapsed read-only rows fit desktop and phone in en and uk", async () => {
+    const out = path.resolve(".artifacts/linked-boards-m3");
+    fs.mkdirSync(out, { recursive: true });
+    const project = `repo-${"a".repeat(32)}`;
+    const now = Date.now();
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/links/agents": { agents: [
+        { k: `a:${"1".repeat(16)}`, p: project, t: "Review the sync budget", e: "claude", m: "claude-opus-5", st: "working", task: "t-search", at: now - 180_000, peer: "Machine B", stale: false,
+          pl: { id: "pipeline-1", state: "running", stage: "review", stageState: "running" } },
+        { k: `a:${"2".repeat(16)}`, p: project, t: "codex agent", e: "codex", m: "gpt-6-sol", st: "done", at: now - 600_000, peer: "Machine B", stale: true, asOf: now - 960_000 },
+      ] },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, { viewport: number; groupWidth: number; overflow: boolean; bound: number; unbound: number }> = {};
+    try {
+      for (const [label, width, locale] of [["desktop-en", 1440, "en"], ["desktop-uk", 1280, "uk"], ["phone-en", 390, "en"], ["phone-uk", 390, "uk"]] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=linked-agents`, { width, height: 844 }, "light", locale, "reduce", width === 390);
+        try {
+          if (width === 390) await page.screenshot({ path: path.join(out, `${label}-initial.png`) });
+          const bound = page.locator(width === 390 ? '[data-phone-kanban-column="assigned"] [data-remote-agents]' : `${card("t-search")} [data-remote-agents]`).first();
+          await bound.waitFor();
+          expect(await bound.locator("summary").textContent()).toContain("Machine B");
+          expect(await bound.locator("[data-remote-agent]").isVisible()).toBe(false);
+          await bound.locator("summary").click();
+          expect(await bound.locator("[data-remote-agent]").count()).toBe(1);
+          expect(await bound.locator("button, a, input").count()).toBe(0);
+          const geometry = await bound.evaluate((node) => ({ width: node.getBoundingClientRect().width, overflow: node.scrollWidth > node.clientWidth + 1 }));
+          expect(geometry.width).toBeLessThanOrEqual(width);
+          expect(geometry.overflow).toBe(false);
+          expect(pageErrors).toEqual([]);
+          await bound.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${label}.png`) });
+          if (width === 390) await page.locator('[data-phone-kanban-tab="inbox"]').click();
+          const unbound = page.locator(width === 390 ? '[data-phone-kanban-column="inbox"] [data-remote-agents]' : '[data-status="inbox"] [data-remote-agents]').first();
+          await unbound.waitFor();
+          await unbound.locator("summary").click();
+          expect(await unbound.textContent()).toContain("codex agent");
+          expect(await unbound.locator('[data-stale="true"]').count()).toBe(1);
+          readings[label] = { viewport: width, groupWidth: Math.round(geometry.width), overflow: geometry.overflow,
+            bound: await bound.locator("[data-remote-agent]").count(), unbound: await unbound.locator("[data-remote-agent]").count() };
+          if (width === 390) await page.screenshot({ path: path.join(out, `${label}-unbound.png`) });
+        } finally { await context.close(); }
+      }
+      const evidence = path.resolve("evidence/linked-boards-m3/geometry.json");
+      fs.mkdirSync(path.dirname(evidence), { recursive: true });
+      fs.writeFileSync(evidence, JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 90_000);
+});
+
+describe("self-update reload notice", () => {
+  browserTest("a desktop page open across a release switch offers a reload", async () => {
+    const out = path.resolve(".artifacts/self-update-reload");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?self-update-reload=1`, VIEWPORT, "light", "en", "reduce");
+      try {
+        await page.waitForFunction(() => (window as typeof window & { evidence?: { presence?: unknown[] } }).evidence?.presence?.length);
+        await page.keyboard.press("Shift");
+        const notice = page.locator("[data-release-reload]");
+        await notice.waitFor({ timeout: 10_000 });
+        expect(await notice.innerText()).toContain("Web now runs bbbbbbb");
+        const box = await notice.boundingBox();
+        expect(box).not.toBeNull();
+        expect(box!.x).toBeGreaterThanOrEqual(0);
+        expect(box!.x + box!.width).toBeLessThanOrEqual(VIEWPORT.width);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 30_000);
+});
+
+/* The loading leaf draws its own header bar until the Board mounts and draws
+   the same bar itself, so a ⋯ menu opened before then is thrown away with the
+   bar it opened in. Open the Board's own menu and wait until it is open. */
+async function openBoardMenu(page: Page) {
+  await page.locator('[data-kanban-board] [data-bar="project"] [data-bar-more]').click();
+  await page.locator('[data-kanban-board] [data-bar-more][aria-expanded="true"]').waitFor();
+}
+
+describe("linked boards M1 settings", () => {
+  browserTest("a mounted project row preserves sharing changed in Settings", async () => {
+    const out = path.resolve(".artifacts/linked-boards-m1");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, server.base, { width: 1280, height: 844 }, "light", "en", "reduce");
+      const other = `repo-${"b".repeat(32)}`;
+      let selected = [other];
+      let patch: { project: string; enabled: boolean } | null = null;
+      try {
+        await page.route("**/api/links/shared", async (route) => {
+          if (route.request().method() === "PATCH") {
+            patch = route.request().postDataJSON() as { project: string; enabled: boolean };
+            selected = patch.enabled ? [...selected, patch.project] : selected.filter((key) => key !== patch!.project);
+          } else if (route.request().method() === "POST") {
+            selected = (route.request().postDataJSON() as { projects: string[] }).projects;
+          }
+          await route.fulfill({ json: { shared: { v: 1, all: false, projects: selected }, known: [{ key: "atlas", name: "atlas" }], states: [] } });
+        });
+        await openBoardMenu(page);
+        await page.locator('[data-share-project-switch]').waitFor();
+        selected = [];
+        await page.locator('[data-share-project-switch]').click();
+        await page.locator('[data-share-project="on"]').waitFor();
+        expect(patch as unknown).toEqual({ project: "atlas", enabled: true });
+        expect(selected).toEqual(["atlas"]);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 15_000);
+
+  browserTest("a failed sharing read offers a retry in the project row", async () => {
+    const out = path.resolve(".artifacts/linked-boards-m1");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, server.base, { width: 1280, height: 844 }, "light", "en", "reduce");
+      let fail = true;
+      const reads: number[] = [];
+      try {
+        await page.route("**/api/links/shared", (route) => {
+          reads.push(fail ? 503 : 200);
+          return route.fulfill(fail ? { status: 503, json: { error: "unavailable" } } : {
+            json: { shared: { v: 1, all: false, projects: [] }, known: [{ key: "atlas", name: "atlas" }], states: [] },
+          });
+        });
+        await openBoardMenu(page);
+        const retry = page.getByRole("button", { name: "Retry sharing settings" });
+        await retry.waitFor();
+        expect(await page.locator('[data-share-project]').textContent()).toContain("Could not load or save sharing");
+        fail = false;
+        await retry.click();
+        await page.locator('[data-share-project-switch]:not([disabled])').waitFor();
+        expect(reads).toEqual([503, 200]);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 15_000);
+
+  browserTest("a failed code cancellation keeps the code and retry control visible", async () => {
+    const out = path.resolve(".artifacts/linked-boards-m1");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/links": { self: { label: "Machine B", publicUrl: "https://board.example.test", check: null }, state: "ok", entry: { port: 8897, publishable: true }, keyOn: true },
+      "/api/links/shared": { shared: { v: 1, all: false, projects: [] }, known: [], states: [] },
+      "/api/links/peers": { peers: [] },
+      "/api/links/grants": { grants: [] },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, server.base, { width: 390, height: 844 }, "light", "en", "reduce", true);
+      let failDelete = true;
+      try {
+        await page.route("**/api/links/codes*", (route) => {
+          if (route.request().method() === "POST") return route.fulfill({ json: { code: "ABCDEF-01234-56789", expiresAt: Date.now() + 600_000 } });
+          if (route.request().method() === "DELETE") return route.fulfill(failDelete ? { status: 503, json: { error: "unavailable" } } : { json: { removed: true } });
+          return route.fulfill({ json: { codes: [{ id: "ABCDEF", expiresAt: Date.now() + 600_000, wrongAttempts: 0, used: false, burned: false }] } });
+        });
+        await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-linked-settings")));
+        await page.getByRole("button", { name: "Allow a connection" }).click();
+        const code = page.locator('[data-pair-code]');
+        await code.waitFor();
+        await page.getByRole("button", { name: "Cancel code" }).click();
+        await page.locator('[data-linked-state="unavailable"]').waitFor();
+        expect(await code.textContent()).toContain("ABCDEF-01234-56789");
+        failDelete = false;
+        await page.getByRole("button", { name: "Cancel code" }).click();
+        await code.waitFor({ state: "detached" });
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 15_000);
+
+  browserTest("a used pairing code reveals the new grant in the open receiver dialog", async () => {
+    const out = path.resolve(".artifacts/linked-boards-m1");
+    fs.mkdirSync(out, { recursive: true });
+    const key = `repo-${"c".repeat(32)}`;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/links": { self: { label: "Machine B", publicUrl: "https://board.example.test", check: null }, state: "ok", entry: { port: 8897, publishable: true }, keyOn: true },
+      "/api/links/peers": { peers: [] },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, server.base, { width: 390, height: 844 }, "light", "en", "reduce", true);
+      let paired = false;
+      let codeReads = 0;
+      try {
+        await page.route("**/api/links/shared", (route) => route.fulfill({ json: {
+          shared: { v: 1, all: false, projects: [] }, known: [],
+          states: paired ? [{ id: "grant", label: "Machine A", projects: [{ key, name: "widget", state: "only-there" }] }] : [],
+        } }));
+        await page.route("**/api/links/grants", (route) => route.fulfill({ json: { grants: paired
+          ? [{ id: "grant", label: "Machine A", requests: 0, today: 0, sevenDays: 0, lastUsed: null }] : [] } }));
+        await page.route("**/api/links/codes", (route) => {
+          if (route.request().method() === "POST") return route.fulfill({ json: { code: "ABCDEF-01234-56789", expiresAt: Date.now() + 600_000 } });
+          codeReads++;
+          return route.fulfill({ json: { codes: [{ id: "ABCDEF", expiresAt: Date.now() + 600_000, wrongAttempts: 0, used: paired, burned: false }] } });
+        });
+        await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-linked-settings")));
+        await page.locator('[data-linked-settings] input[type="checkbox"]').waitFor();
+        expect(await page.getByRole("button", { name: "Revoke" }).count()).toBe(0);
+        expect(await page.locator(`[data-shared-project="${key}"]`).count()).toBe(0);
+        await page.getByRole("button", { name: "Allow a connection" }).click();
+        await page.locator('[data-code-state="open"]').waitFor();
+        paired = true;
+        await page.locator('[data-code-state="used"]').waitFor({ timeout: 6000 });
+        await page.getByRole("button", { name: "Revoke" }).waitFor();
+        expect(await page.locator(`[data-shared-project="${key}"] [data-share-state="only-there"]`).textContent()).toContain("Only on Machine A");
+        const stoppedReads = codeReads;
+        await page.waitForTimeout(3500);
+        expect(codeReads).toBe(stoppedReads);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 15_000);
+
+  browserTest("remote-only rows, revoked refresh and code attempts update in the open dialog", async () => {
+    const out = path.resolve(".artifacts/linked-boards-m1");
+    fs.mkdirSync(out, { recursive: true });
+    const key = `repo-${"b".repeat(32)}`;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/links": { self: { label: "Machine B", publicUrl: "https://board.example.test", check: null }, state: "ok", entry: { port: 8897, publishable: true }, keyOn: true },
+      "/api/links/shared": { shared: { v: 1, all: false, projects: [] }, known: [], states: [{ id: "peer", label: "Machine A", projects: [{ key, name: "alpha", state: "only-there" }] }] },
+      "/api/links/grants": { grants: [] },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, server.base, { width: 390, height: 844 }, "light", "en", "reduce", true);
+      let revoked = false;
+      let burned = false;
+      let codeReads = 0;
+      try {
+        await page.route("**/api/links/peers/peer", async (route) => {
+          revoked = true;
+          await route.fulfill({ status: 409, json: { error: "revoked" } });
+        });
+        await page.route("**/api/links/peers", async (route) => route.fulfill({ json: { peers: [{ id: "peer", label: "Machine A", url: "https://peer.example.test", state: revoked ? "revoked" : "active", error: revoked ? "revoked" : null, lastCall: null }] } }));
+        await page.route("**/api/links/codes", async (route) => {
+          if (route.request().method() === "POST") return route.fulfill({ json: { code: "ABCDEF-01234-56789", expiresAt: Date.now() + 600_000 } });
+          codeReads++;
+          return route.fulfill({ json: { codes: [{ id: "ABCDEF", expiresAt: Date.now() + 600_000, wrongAttempts: burned ? 20 : 2, used: burned, burned }] } });
+        });
+        await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-linked-settings")));
+        const remote = page.locator(`[data-shared-project="${key}"]`);
+        await remote.waitFor();
+        expect(await remote.locator('[data-share-state="only-there"]').textContent()).toContain("Only on Machine A");
+        expect(await remote.locator("input[type=checkbox]").isDisabled()).toBe(true);
+        expect(await remote.textContent()).toContain("alpha");
+        await page.locator('[data-linked-peer="active"] button').first().click();
+        await page.locator('[data-linked-peer="revoked"]').waitFor();
+        expect(await page.locator('[data-linked-peer="revoked"] button').first().isDisabled()).toBe(false);
+        await page.getByRole("button", { name: "Allow a connection" }).click();
+        await page.locator('[data-pair-code]').waitFor();
+        await page.locator('[data-code-state="open"]').waitFor();
+        expect(await page.locator('[data-code-state="open"]').textContent()).toContain("2 wrong attempts");
+        burned = true;
+        await page.waitForFunction(() => document.querySelector('[data-code-state="burned"]') !== null, null, { timeout: 6000 });
+        expect(codeReads).toBeGreaterThanOrEqual(2);
+        expect(await page.locator('[data-code-state="burned"]').textContent()).toContain("burned");
+        const stoppedReads = codeReads;
+        await page.waitForTimeout(3500);
+        expect(codeReads).toBe(stoppedReads);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 20_000);
+
+  browserTest("pairing and shared projects fit at desktop and 390 px", async () => {
+    const out = path.resolve(".artifacts/linked-boards-m1");
+    fs.mkdirSync(out, { recursive: true });
+    const key = `repo-${"a".repeat(32)}`;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/links": { self: { label: "Machine A", publicUrl: "https://board.example.test", check: { code: "ok", at: "2026-09-28T00:00:00Z" } }, state: "ok", entry: { port: 8897, publishable: true }, keyOn: true },
+      "/api/links/shared": { shared: { v: 1, all: false, projects: [key] }, known: [{ key, name: "widget" }], states: [{ id: "fixture-peer", label: "Machine B", projects: [{ key, state: "linked" }] }] },
+      "/api/links/peers": { peers: [{ id: "fixture-peer", label: "Machine B", url: "https://peer.example.test", state: "active", error: null }] },
+      "/api/links/grants": { grants: [{ id: "fixture-grant", label: "Machine B", requests: 12, today: 3, sevenDays: 12, lastUsed: null }] },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, { width: number; viewport: number; overflow: boolean; linked: boolean; controls: number }> = {};
+    try {
+      for (const [tag, width] of [["desktop", 1280], ["phone", 390]] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, server.base, { width, height: 844 }, "light", "en", "reduce", width === 390);
+        try {
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-linked-settings")));
+          await page.waitForSelector('[data-share-state="linked"]');
+          const reading = await page.evaluate(() => {
+            const dialog = document.querySelector('[data-linked-settings]') as HTMLElement;
+            const box = dialog.getBoundingClientRect();
+            return { width: Math.round(box.width), viewport: innerWidth, overflow: dialog.scrollWidth > dialog.clientWidth + 1, linked: !!dialog.querySelector('[data-share-state="linked"]'), controls: dialog.querySelectorAll("button, input").length };
+          });
+          readings[tag] = reading;
+          expect(reading.width).toBeLessThanOrEqual(width);
+          expect(reading.overflow).toBe(false);
+          expect(reading.linked).toBe(true);
+          expect(reading.controls).toBeGreaterThan(8);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${tag}.png`) });
+          await page.locator('[data-share-state="linked"]').scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${tag}-shared.png`) });
+        } finally { await context.close(); }
+      }
+      const evidence = path.resolve("evidence/linked-boards-m1/geometry.json");
+      fs.mkdirSync(path.dirname(evidence), { recursive: true });
+      fs.writeFileSync(evidence, JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  });
+});
+
 describe("#1695 K1+K2 kanban board", () => {
   /*
    * Rendered evidence for the kanban desktop board (#1695 K1+K2): the real
@@ -1796,9 +2136,11 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
 
   interface GraphMeasure {
     dir: string | null;
-    nodes: Array<{ stage: string; width: number; height: number; state: string; detail: string }>;
+    nodes: Array<{ stage: string; width: number; height: number; state: string; attempt: string; detail: string }>;
     edges: Array<{ edge: string; classes: string; dashed: boolean }>;
     labels: string[];
+    /* A fail edge folds into a strip under its source (docs/design/pipeline-graph-loops.md). */
+    strips: Array<{ strip: string; shape: string; classes: string; fired: string; max: string; text: string; dots: string }>;
   }
 
   /** The graph of one card, read the same way from either page. */
@@ -1815,7 +2157,9 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
           width: Math.round(box.width),
           height: Math.round(box.height),
           state: node.querySelector(".pstate")?.textContent?.trim() ?? "",
-          detail: [...node.querySelectorAll(".pdetail, .rchip")].map((part) => part.textContent?.trim()).join(" "),
+          /* The one attempt caption: "· N" beside the name from a stage's second own attempt. */
+          attempt: node.querySelector(".pattempt")?.textContent?.replace("·", "").trim() ?? "",
+          detail: [...node.querySelectorAll(".pdetail, .rounds-mark .ccircle, .rounds-mark .rverdict")].map((part) => part.textContent?.trim()).join(" "),
         };
       }),
       edges: [...graph.querySelectorAll<SVGPathElement>(".pedge")].map((edge) => ({
@@ -1824,6 +2168,15 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
         dashed: getComputedStyle(edge).strokeDasharray !== "none",
       })),
       labels: [...graph.querySelectorAll(".pelabel")].map((label) => label.textContent?.trim() ?? ""),
+      strips: [...graph.querySelectorAll<HTMLElement>(".pstrip")].map((strip) => ({
+        strip: strip.dataset.strip ?? "",
+        shape: strip.dataset.stripShape ?? "",
+        classes: strip.getAttribute("class") ?? "",
+        fired: strip.dataset.stripFired ?? "",
+        max: strip.dataset.stripMax ?? "",
+        text: strip.querySelector(".sname")?.textContent?.trim() ?? "",
+        dots: strip.querySelector<HTMLElement>(".sdots")?.dataset.dots ?? "",
+      })),
     };
   }, cardSelector);
 
@@ -1919,13 +2272,17 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
           if (graph.nodes.map((node) => node.stage).join() !== "implement,review,verify,merge") failures.push(`retry graph ${scheme}: nodes ${JSON.stringify(graph.nodes)}`);
           if (graph.nodes.some((node) => node.height !== 76)) failures.push(`retry graph ${scheme}: node heights ${graph.nodes.map((node) => node.height)}`);
           if (byStage.get("verify")?.state !== "running" || byStage.get("merge")?.state !== "waiting") failures.push(`retry graph ${scheme}: states ${JSON.stringify(graph.nodes)}`);
-          if (byStage.get("review")?.detail !== "R1 ✓") failures.push(`retry graph ${scheme}: review rounds ${byStage.get("review")?.detail}`);
+          if (byStage.get("review")?.detail !== "1 ✓") failures.push(`retry graph ${scheme}: review rounds ${byStage.get("review")?.detail}`);
           /* A helper conversation is adopted last on Implement: neither the attempt count nor the budget moves. */
-          if (byStage.get("implement")?.detail !== "attempt 2") failures.push(`retry graph ${scheme}: implement detail ${byStage.get("implement")?.detail}`);
-          const fail = graph.edges.find((edge) => edge.edge === "verify:fail:implement");
-          if (!fail?.dashed || !/\bback\b/.test(fail.classes) || !/\btaken\b/.test(fail.classes)) failures.push(`retry graph ${scheme}: fail edge ${JSON.stringify(fail)}`);
-          if (graph.edges.filter((edge) => !edge.dashed).length !== 3) failures.push(`retry graph ${scheme}: pass edges ${JSON.stringify(graph.edges)}`);
-          if (!graph.labels.includes("fail · retry 1 of 2")) failures.push(`retry graph ${scheme}: labels ${JSON.stringify(graph.labels)}`);
+          if (byStage.get("implement")?.attempt !== "2") failures.push(`retry graph ${scheme}: implement attempt ${byStage.get("implement")?.attempt}`);
+          if (byStage.get("verify")?.attempt !== "2" || byStage.get("review")?.attempt || byStage.get("merge")?.attempt) failures.push(`retry graph ${scheme}: attempt captions ${JSON.stringify(graph.nodes.map((node) => [node.stage, node.attempt]))}`);
+          /* Verify's fail edge is no wire: it folds into the strip under Verify, "back to Implement", one of two rounds spent. */
+          const fail = graph.strips.find((strip) => strip.strip === "verify:fail:implement");
+          if (graph.strips.length !== 1 || fail?.shape !== "return" || fail.fired !== "1" || fail.max !== "2" || !/\bfired\b/.test(fail.classes) || /\bspent\b/.test(fail.classes) || fail.text !== "back to Implement" || fail.dots !== "bad next") failures.push(`retry graph ${scheme}: fail strip ${JSON.stringify(graph.strips)}`);
+          /* Only the pass chain is wired; a wire the engine travelled is solid with its count, one it did not stays dashed. */
+          const wires = graph.edges.map((edge) => `${edge.edge}:${edge.dashed ? "dashed" : "solid"}`).join();
+          if (wires !== "implement:pass:review:dashed,review:pass:verify:solid,verify:pass:merge:dashed" || graph.edges.some((edge) => /\bback\b/.test(edge.classes))) failures.push(`retry graph ${scheme}: wires ${JSON.stringify(graph.edges)}`);
+          if (JSON.stringify(graph.labels) !== JSON.stringify(["1"])) failures.push(`retry graph ${scheme}: labels ${JSON.stringify(graph.labels)}`);
           /* The same toggle brings the summary back, all four stages with it. */
           await page.click(`${card("t-search")} .pblock [data-graph-toggle]`);
           await page.waitForSelector(`${card("t-search")} .pblock .pb-chain`, { timeout: 5_000 });
@@ -1965,7 +2322,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
           const node = document.querySelector<HTMLElement>(`${selector} .pnode[data-stage="review"]`);
           if (!node) return null;
           const box = node.getBoundingClientRect();
-          const chips = [...node.querySelectorAll<HTMLElement>(".rchip")].map((chip) => {
+          const chips = [...node.querySelectorAll<HTMLElement>(".rounds-mark .ccircle, .rounds-mark .rverdict")].map((chip) => {
             const rect = chip.getBoundingClientRect();
             return { text: chip.textContent?.trim(), right: Math.round(rect.right), top: Math.round(rect.top), bottom: Math.round(rect.bottom) };
           });
@@ -1974,8 +2331,9 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
         await shot(page, "production", "five-rounds", "light");
         frames["five-rounds"] = { production: review };
         const inside = review && review.chips.every((chip) => chip.right <= review.right - 1 && chip.bottom <= review.bottom);
-        const oneLine = review && new Set(review.chips.map((chip) => chip.top)).size === 1;
-        if (!review || review.dir !== "LR" || JSON.stringify(review.chips.map((chip) => chip.text)) !== JSON.stringify(["+4", "R5 ✓"]) || !inside || !oneLine) failures.push(`five rounds: ${JSON.stringify(review)}`);
+        /* The count circle and the verdict tick differ in height; one line means one centre. */
+        const oneLine = review && new Set(review.chips.map((chip) => Math.round((chip.top + chip.bottom) / 2))).size === 1;
+        if (!review || review.dir !== "LR" || JSON.stringify(review.chips.map((chip) => chip.text)) !== JSON.stringify(["5", "✓"]) || !inside || !oneLine) failures.push(`five rounds: ${JSON.stringify(review)}`);
       }, WIDE);
 
       await production("light", "past attempts and helpers", async (page) => {
@@ -1983,7 +2341,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
           kind: (row as HTMLElement).dataset.pastKind, label: row.querySelector(".lbl")?.textContent, verdict: row.querySelector(".verdict")?.textContent,
         })), card("t-limits"));
         frames["failed-latest"] = { production: limits };
-        if (!limits.some((row) => row.kind === "attempt" && row.label === "Builder · attempt 1" && row.verdict === "failed")) failures.push(`failed latest attempt missing from Past attempts: ${JSON.stringify(limits)}`);
+        if (!limits.some((row) => row.kind === "attempt" && row.label === "Build" && row.verdict === "failed")) failures.push(`failed latest attempt missing from Past attempts: ${JSON.stringify(limits)}`);
 
         await page.locator(`${card("t-search")} details.history`).evaluate((element) => { (element as HTMLDetailsElement).open = true; element.scrollIntoView({ block: "center" }); });
         await page.waitForTimeout(300);
@@ -1993,9 +2351,10 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
         await shot(page, "production", "history-open", "light");
         frames["history-open"] = { production: past };
         const labels = past.map((row) => row.label).sort();
-        const expected = ["Builder · attempt 1", "Builder · attempt 2", "Builder · helper conversation 1", "Reviewer · attempt 1", "Reviewer · round 1", "Verifier · attempt 1"];
+        /* One attempt caption: a stage's name, with "· N" once it has more than one attempt of its own. */
+        const expected = ["Implement · 1", "Implement · 2", "Implement · helper conversation 1", "Review", "Review · round 1", "Verify · 1"];
         if (JSON.stringify(labels) !== JSON.stringify(expected) || !past.every((row) => row.open)) failures.push(`past attempts: ${JSON.stringify(past)}`);
-        if (past.some((row) => row.label === "Verifier · attempt 2")) failures.push("past attempts: the running Verify attempt is listed");
+        if (past.some((row) => row.label === "Verify · 2")) failures.push("past attempts: the running Verify attempt is listed");
         await page.click(`${card("t-search")} details.history [data-past-kind="helper"] .hopen`);
         await page.waitForSelector(`${card("t-search")} [data-kanban-reader]`, { timeout: 10_000 });
         const opened = await page.evaluate((selector) => document.querySelector<HTMLElement>(`${selector} [data-kanban-reader]`)?.dataset.kanbanReader ?? null, card("t-search"));
@@ -2030,24 +2389,33 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
       await production("light", "live edge", async (page) => {
         type Hook = { evidence: { addStageAttempt: (pipelineId: string, stageId: string, over: Record<string, unknown>) => void } };
         const section = `${card("t-search")} .pblock`;
+        /* Verify's fail edge is drawn as the strip under Verify; a live mark may land on it or on any wire. */
+        const liveMarks = (selector: string) => document.querySelectorAll(`${selector} :is(.pedge, .pelabel, .pstrip).live`).length;
         await openGraph(page, "t-search");
-        const before = await page.evaluate((selector) => document.querySelectorAll(`${selector} .pedge.live`).length, section);
+        const before = await page.evaluate(liveMarks, section);
         /* A helper adopted with the fail edge's provenance copied: nothing travelled that edge. */
         await page.evaluate(() => (window as unknown as Hook).evidence.addStageAttempt("p-search", "implement", { historical: true, state: "passed", activatedBy: { stageId: "verify", attempt: 1, edge: "fail" } }));
         await page.waitForTimeout(1_500);
-        const afterHelper = await page.evaluate((selector) => document.querySelectorAll(`${selector} .pedge.live`).length, section);
+        const afterHelper = await page.evaluate(liveMarks, section);
+        const helperAttempt = await page.evaluate((selector) => document.querySelector(`${selector} .pnode[data-stage="implement"] .pattempt`)?.textContent ?? null, section);
         await page.evaluate(() => (window as unknown as Hook).evidence.addStageAttempt("p-search", "implement", { activatedBy: { stageId: "verify", attempt: 2, edge: "fail" } }));
-        await page.waitForSelector(`${section} .pedge.live[data-edge="verify:fail:implement"]`, { timeout: 10_000 });
+        await page.waitForSelector(`${section} .pstrip.live[data-strip="verify:fail:implement"]`, { timeout: 10_000 });
         const markedAt = Date.now();
-        const label = await page.evaluate((selector) => document.querySelector(`${selector} .pelabel.live`)?.textContent ?? null, section);
+        const strip = await page.evaluate((selector) => {
+          const element = document.querySelector<HTMLElement>(`${selector} .pstrip.live`);
+          return element ? { fired: element.dataset.stripFired, max: element.dataset.stripMax, spent: element.classList.contains("spent") } : null;
+        }, section);
+        const marks = await page.evaluate(liveMarks, section);
+        const implementAttempt = await page.evaluate((selector) => document.querySelector(`${selector} .pnode[data-stage="implement"] .pattempt`)?.textContent ?? null, section);
         await shot(page, "production", "live-edge", "light");
         /* Another change inside the window: an attempt of the stage's own that no edge activated. */
         await page.waitForTimeout(400);
         await page.evaluate(() => (window as unknown as Hook).evidence.addStageAttempt("p-search", "review", {}));
-        await page.waitForFunction((selector) => document.querySelector(`${selector} .pnode[data-stage="review"] .pdetail`)?.textContent === "attempt 2", section, { timeout: 5_000 });
-        await page.waitForFunction((selector) => !document.querySelector(`${selector} .pedge.live`), section, { timeout: 6_000 });
+        await page.waitForFunction((selector) => document.querySelector(`${selector} .pnode[data-stage="review"] .pattempt`)?.textContent === " · 2", section, { timeout: 5_000 });
+        await page.waitForFunction((selector) => !document.querySelector(`${selector} :is(.pedge, .pelabel, .pstrip).live`), section, { timeout: 6_000 });
         const clearedAfterMs = Date.now() - markedAt;
-        if (before !== 0 || afterHelper !== 0 || label !== "fail · retry 2 of 2") failures.push(`live edge: ${JSON.stringify({ before, afterHelper, label })}`);
+        const label = { strip, marks, helperAttempt, implementAttempt };
+        if (before !== 0 || afterHelper !== 0 || helperAttempt !== " · 2" || implementAttempt !== " · 3" || marks !== 1 || strip?.fired !== "2" || strip.max !== "2" || !strip.spent) failures.push(`live edge: ${JSON.stringify({ before, afterHelper, label })}`);
         if (clearedAfterMs > 3_400) failures.push(`live edge: cleared ${clearedAfterMs} ms after it was marked`);
         flows.liveEdge = { before, afterHelper, label, clearedAfterMs };
       });
@@ -2063,7 +2431,8 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
         dir: { production: frame.production.dir, prototype: frame.prototype.dir },
         nodeHeights: { production: frame.production.nodes.map((node) => node.height), prototype: frame.prototype.nodes.map((node) => node.height) },
         nodeWidths: { production: frame.production.nodes.map((node) => node.width), prototype: frame.prototype.nodes.map((node) => node.width) },
-        edges: { production: frame.production.edges.length, prototype: frame.prototype.edges.length },
+        /* The prototype wires every edge; production folds each fail edge into a strip. */
+        edges: { production: frame.production.edges.length + frame.production.strips.length, prototype: frame.prototype.edges.length + frame.prototype.strips.length },
         labels: { production: frame.production.labels, prototype: frame.prototype.labels },
       };
     };
@@ -4123,7 +4492,9 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
       const identity = node.querySelector<HTMLElement>(".pident");
       return {
         stage: node.dataset.stage ?? "",
-        engineMark: node.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? null,
+        /* A model glyph stands in for the engine mark beside it
+           (docs/design/model-glyphs.md): one mark per stage, never two. */
+        engineMark: node.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? node.querySelector("[data-glyph-engine]")?.getAttribute("data-glyph-engine") ?? null,
         effortStep: node.querySelector("[data-effort-pills]")?.getAttribute("data-effort-step") ?? null,
         identity: identity?.dataset.identity ?? null,
         nextDiffers: Boolean(node.querySelector("[data-next-differs]")),
@@ -4202,9 +4573,9 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
     return {
       chips: [...scope.querySelectorAll<HTMLElement>(".pb-pills .pb-pill")].map((chip) => ({
         stage: chip.dataset.stage ?? "",
-        engineMark: chip.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? null,
+        engineMark: chip.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? chip.querySelector("[data-glyph-engine]")?.getAttribute("data-glyph-engine") ?? null,
         effortStep: chip.querySelector("[data-effort-pills]")?.getAttribute("data-effort-step") ?? null,
-        markWidth: Math.round((chip.querySelector("[data-engine-mark]")?.getBoundingClientRect().width ?? 0) * 100) / 100,
+        markWidth: Math.round((chip.querySelector("[data-engine-mark], [data-glyph-engine]")?.getBoundingClientRect().width ?? 0) * 100) / 100,
         scaleWidth: Math.round((chip.querySelector("[data-effort-pills]")?.getBoundingClientRect().width ?? 0) * 100) / 100,
         nextDiffers: Boolean(chip.querySelector("[data-next-differs]")),
       })),
@@ -4236,7 +4607,8 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
       headMarks: pane.querySelectorAll(".pane-head [data-engine-mark], .pane-head [data-effort-pills]").length,
       headTitle: role?.getAttribute("title") ?? "",
       idRow: Boolean(idRow),
-      engineMark: idRow?.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? null,
+      /* Or the model glyph the head draws, which stands in for the row's mark. */
+      engineMark: idRow?.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? pane.querySelector(".pane-head [data-glyph-engine]")?.getAttribute("data-glyph-engine") ?? null,
       /* Content wider than the row is content the row cuts. */
       roleOverflow: role ? Math.max(0, role.scrollWidth - role.clientWidth) : 0,
     };
@@ -4258,7 +4630,7 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
   const readPhoneStages = (page: Page) => page.evaluate(() => ({
     rows: [...document.querySelectorAll<HTMLElement>("[data-mobile2-stage]")].map((row) => ({
       stage: row.dataset.mobile2Stage ?? "",
-      engineMark: row.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? null,
+      engineMark: row.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? row.querySelector("[data-glyph-engine]")?.getAttribute("data-glyph-engine") ?? null,
       effortStep: row.querySelector("[data-effort-pills]")?.getAttribute("data-effort-step") ?? null,
       identity: row.querySelector<HTMLElement>(".pident")?.dataset.identity ?? null,
       model: row.querySelector(".imodel")?.textContent?.trim() ?? "",
@@ -4478,7 +4850,7 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
         await opened.page.waitForSelector("[data-nav-stage]", { state: "attached", timeout: 5_000 });
         const navChips = await opened.page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-nav-stage]")].map((chip) => ({
           stage: chip.dataset.navStage ?? "",
-          engineMark: chip.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? null,
+          engineMark: chip.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? chip.querySelector("[data-glyph-engine]")?.getAttribute("data-glyph-engine") ?? null,
           effortStep: chip.querySelector("[data-effort-pills]")?.getAttribute("data-effort-step") ?? null,
         })));
         await opened.page.screenshot({ path: path.join(OUT, `modal-${label}.png`) });
@@ -7302,13 +7674,17 @@ describe("#2072 one pipeline block, desktop and phone", () => {
       return color;
     };
     const cur = screen.querySelector(".pb-stage[data-stage-current]");
-    const mark = cur && cur.querySelector(".pb-stage-title .pmark");
+    /* A stage whose model has a glyph draws it in the mark's place
+       (docs/design/model-glyphs.md): its reading stands for the mark's shape,
+       and it paints in its model's tone rather than the stage's. */
+    const mark = cur && cur.querySelector(".pb-stage-title .pmark, .pb-stage-title .mglyph");
+    const glyph = Boolean(mark && mark.classList.contains("mglyph"));
     const tone = cur && mark ? {
       held: cur.getAttribute("data-stage-held") === "1",
-      mark: mark.getAttribute("data-mark"),
+      mark: glyph ? "glyph:" + mark.getAttribute("data-glyph-state") : mark.getAttribute("data-mark"),
       live: mark.getAttribute("data-live") === "1",
       pulse: getComputedStyle(mark, "::before").animationName,
-      markInk: getComputedStyle(mark).color,
+      markInk: glyph ? null : getComputedStyle(mark).color,
       word: getComputedStyle(cur.querySelector(".pb-stage-state")).color,
       stripe: getComputedStyle(cur).boxShadow,
     } : null;
@@ -7321,7 +7697,7 @@ describe("#2072 one pipeline block, desktop and phone", () => {
       scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth,
     };
   })()`;
-  type ScreenTone = { held: boolean; mark: string | null; live: boolean; pulse: string; markInk: string; word: string; stripe: string };
+  type ScreenTone = { held: boolean; mark: string | null; live: boolean; pulse: string; markInk: string | null; word: string; stripe: string };
   type ScreenReading = {
     texts: number; controls: number; overlaps: unknown[]; escapes: unknown[]; small: unknown[]; cut: unknown[];
     stages: string[]; current: string | null; answers: string[]; fold: string | null; scrollWidth: number; innerWidth: number;
@@ -7361,13 +7737,13 @@ describe("#2072 one pipeline block, desktop and phone", () => {
       if (reading.cut.length) failures.push(`${label}: ${reading.cut.length} names are cut — ${JSON.stringify(reading.cut.slice(0, 3))}`);
       if (reading.scrollWidth > reading.innerWidth) failures.push(`${label}: the page scrolls sideways (${reading.scrollWidth} > ${reading.innerWidth})`);
       const { tone, inks } = reading;
-      if (want.motion === "held" && (!tone || !tone.held || tone.mark !== "ring" || tone.live || tone.pulse !== "none"
-        || tone.markInk !== inks.muted || tone.word !== inks.muted || !tone.stripe.includes(inks.muted))) {
-        failures.push(`${label}: the held stage is drawn ${JSON.stringify(tone)}, expected a still hollow ring with the mark, the word and the stripe in ${inks.muted}`);
+      if (want.motion === "held" && (!tone || !tone.held || (tone.mark !== "ring" && tone.mark !== "glyph:waiting") || tone.live || tone.pulse !== "none"
+        || (tone.markInk !== null && tone.markInk !== inks.muted) || tone.word !== inks.muted || !tone.stripe.includes(inks.muted))) {
+        failures.push(`${label}: the held stage is drawn ${JSON.stringify(tone)}, expected a still hollow ring or waiting glyph, with the word and the stripe in ${inks.muted}`);
       }
-      if (want.motion === "live" && (!tone || tone.held || tone.mark !== "dot" || !tone.live || tone.pulse === "none"
-        || tone.markInk !== inks.success || tone.word !== inks.success || !tone.stripe.includes(inks.success))) {
-        failures.push(`${label}: the running stage is drawn ${JSON.stringify(tone)}, expected a pulsing dot with the mark, the word and the stripe in ${inks.success}`);
+      if (want.motion === "live" && (!tone || tone.held || (tone.mark !== "dot" && tone.mark !== "glyph:running") || !tone.live || tone.pulse === "none"
+        || (tone.markInk !== null && tone.markInk !== inks.success) || tone.word !== inks.success || !tone.stripe.includes(inks.success))) {
+        failures.push(`${label}: the running stage is drawn ${JSON.stringify(tone)}, expected a pulsing dot or running glyph, with the word and the stripe in ${inks.success}`);
       }
     };
     const bodyTo = (page: Page, where: "top" | "end") => page.evaluate((to) => {
@@ -11986,4 +12362,1094 @@ describe("needs-you panel: renders and readings over the real Viewer", () => {
     fs.writeFileSync(evidence, `${JSON.stringify({ readings, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 600_000);
+});
+
+describe("readable pipeline graph: loops fold into their sources, nodes say what they are, one attempt caption", () => {
+  /*
+   * docs/design/pipeline-graph-loops.md, over `?scenario=graph-loops`: two fix
+   * stages docked on their reviewers (completed with both budgets spent, and
+   * cut back to Review running again), a return over two stages, a retry in
+   * place that fired, a completed lane whose Build conversation took more
+   * work, and stage names of 40 characters.
+   *
+   * Gated on measured geometry, at 1440 px (each card's compact graph and the
+   * Stages sheet's wide one) and on the phone at 390 px, in en and uk: no
+   * strip or wire label meets another node, no graph is wider than its card,
+   * no wire runs back around the graph, and no node of an ended lane reads
+   * waiting. Frames go to LOOPS_PNG_DIR (default /var/tmp/llv-graph-loops-evidence);
+   * readings to `evidence/pipeline-graph-loops/geometry.json`.
+   */
+  const LANES = [
+    { task: "t-loops-done", pipeline: "p-loops-done", ended: true },
+    { task: "t-loops-review", pipeline: "p-loops-review", ended: false },
+    { task: "t-loops-return", pipeline: "p-loops-return", ended: false },
+    { task: "t-loops-retry", pipeline: "p-loops-retry", ended: false },
+    { task: "t-loops-rework", pipeline: "p-loops-rework", ended: true },
+    { task: "t-loops-long", pipeline: "p-loops-long", ended: false },
+  ] as const;
+  type GraphReading = {
+    dir: string | null; width: number; boxWidth: number; scrolls: boolean; nodes: number; strips: number; back: number;
+    waitingEnded: string[]; hits: Array<{ a: string; b: string }>; cut: string[]; rework: string[];
+    captions: Record<string, string>;
+  };
+  /* One graph, read as boxes: every node, strip and wire label against every
+     node it does not belong to, and each name that its box cuts. */
+  const measureGraph = (scope: string, ended: boolean) => `(() => {
+    const graph = document.querySelector(${JSON.stringify(scope)} + " .pgraph");
+    if (!graph) return null;
+    const box = graph.closest(".pgraph-box");
+    const rect = el => el.getBoundingClientRect();
+    const meets = (a, b) => Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)) > 0.5;
+    const nodes = [...graph.querySelectorAll(".pnode")];
+    const strips = [...graph.querySelectorAll(".pstrip")];
+    const labels = [...graph.querySelectorAll(".pelabel")];
+    const hits = [];
+    for (const node of nodes) {
+      const own = node.getAttribute("data-stage");
+      for (const other of [...nodes, ...strips, ...labels]) {
+        if (other === node) continue;
+        const source = other.getAttribute("data-strip")?.split(":fail:")[0];
+        if (source === own) continue;
+        if (meets(rect(node), rect(other))) hits.push({ a: own, b: other.getAttribute("data-stage") || other.getAttribute("data-strip") || other.getAttribute("data-edge-label") });
+      }
+    }
+    const cut = [...graph.querySelectorAll(".pname, .sname")].filter(el => el.scrollWidth > el.clientWidth + 1).map(el => el.textContent);
+    const captions = {};
+    for (const node of nodes) captions[node.getAttribute("data-stage")] = [node.querySelector(".pname")?.textContent, node.querySelector(".pattempt")?.textContent ?? "", " | ", node.querySelector(".pstate")?.textContent, " | ", node.querySelector(".pdetail")?.textContent ?? ""].join("");
+    for (const strip of strips) captions[strip.getAttribute("data-strip")] = [strip.querySelector(".sname")?.textContent, strip.querySelector(".pattempt")?.textContent ?? "", " | ", strip.querySelector(".sdots")?.getAttribute("data-dots"), strip.querySelector(".srework") ? " | " + strip.querySelector(".srework").textContent : ""].join("");
+    return {
+      dir: graph.getAttribute("data-dir"),
+      width: Math.round(rect(graph).width),
+      boxWidth: Math.round(box.clientWidth),
+      scrolls: box.scrollWidth > box.clientWidth + 1,
+      nodes: nodes.length,
+      strips: strips.length,
+      back: graph.querySelectorAll(".pedge.back").length,
+      waitingEnded: ${ended ? "nodes.filter(n => n.getAttribute(\"data-stage-again\") === \"1\").map(n => n.getAttribute(\"data-stage\"))" : "[]"},
+      hits,
+      cut,
+      rework: nodes.filter(n => n.getAttribute("data-stage-rework") === "1").map(n => n.getAttribute("data-stage")),
+      captions,
+    };
+  })()`;
+
+  browserTest("the graph of every loop lane reads at 1440 and 390 px, in en and uk", async () => {
+    const out = path.resolve(".artifacts/pipeline-graph-loops");
+    const pngDir = process.env.LOOPS_PNG_DIR ?? "/var/tmp/llv-graph-loops-evidence";
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const base = `${server.base}?scenario=graph-loops`;
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, GraphReading | null> = {};
+    const failures: string[] = [];
+    const gate = (label: string, reading: GraphReading | null, lane: (typeof LANES)[number], wantDir?: "LR" | "TB") => {
+      readings[label] = reading;
+      if (!reading) return void failures.push(`${label}: no graph drawn`);
+      if (wantDir && reading.dir !== wantDir) failures.push(`${label}: drawn ${reading.dir}, expected ${wantDir}`);
+      if (reading.hits.length) failures.push(`${label}: ${reading.hits.length} boxes meet a node — ${JSON.stringify(reading.hits.slice(0, 3))}`);
+      if (reading.scrolls) failures.push(`${label}: the graph (${reading.width} px) is wider than its box (${reading.boxWidth} px)`);
+      if (reading.back) failures.push(`${label}: ${reading.back} wires run back around the graph`);
+      if (reading.waitingEnded.length) failures.push(`${label}: an ended lane reads waiting on ${reading.waitingEnded.join(", ")}`);
+      if (lane.pipeline === "p-loops-rework" && !reading.rework.includes("build")) failures.push(`${label}: Build's rework is not drawn`);
+    };
+    const seatFolded = `try { localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })); } catch {}`;
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        /* The desktop board: each card's graph, opened. */
+        const { context, page, pageErrors } = await openFixture(browser, base, { width: 1440, height: 2400 }, "light", lang);
+        try {
+          await context.addInitScript(seatFolded);
+          await page.reload();
+          await page.waitForSelector(`${card("t-loops-done")} [data-pipeline]`, { timeout: 30_000 });
+          await page.waitForTimeout(600);
+          for (const lane of LANES) {
+            await page.locator(`${card(lane.task)} [data-graph-toggle="${lane.pipeline}"]`).evaluate((element) => (element as HTMLElement).click());
+          }
+          await page.waitForTimeout(600);
+          for (const lane of LANES) {
+            const label = `card-${lane.pipeline}-1440-${lang}`;
+            gate(label, await page.evaluate(measureGraph(card(lane.task), lane.ended)) as GraphReading | null, lane, "TB");
+            await page.locator(card(lane.task)).screenshot({ path: path.join(pngDir, `${label}.png`) });
+          }
+          /* The Stages sheet draws the same lanes left to right. */
+          for (const lane of LANES) {
+            await page.locator(`${card(lane.task)} [data-open-stages="${lane.pipeline}"]`).first().evaluate((element) => (element as HTMLElement).click());
+            await page.waitForSelector(`[data-stages-sheet="${lane.pipeline}"] .gs-graph .pgraph`, { timeout: 10_000 });
+            await page.waitForTimeout(400);
+            const label = `sheet-${lane.pipeline}-1440-${lang}`;
+            gate(label, await page.evaluate(measureGraph(`[data-stages-sheet="${lane.pipeline}"] .gs-graph`, lane.ended)) as GraphReading | null, lane, "LR");
+            await page.locator(`[data-stages-sheet="${lane.pipeline}"] .gs-graph`).screenshot({ path: path.join(pngDir, `${label}.png`) });
+            await page.keyboard.press("Escape");
+            await page.waitForTimeout(300);
+          }
+          if (pageErrors.length) failures.push(`1440-${lang}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+
+        /* The phone: each lane's task screen, then its pipeline screen, the whole scroll. */
+        const phone = await openFixture(browser, base, { width: 390, height: 844 }, "light", lang, "no-preference", true);
+        const full = async (name: string, scroller: string) => {
+          const tall = await phone.page.evaluate((selector) => {
+            const body = document.querySelector(selector);
+            return body ? body.scrollHeight - body.clientHeight : 0;
+          }, scroller);
+          await phone.page.setViewportSize({ width: 390, height: 844 + Math.max(0, tall) });
+          await phone.page.waitForTimeout(250);
+          const scrollWidth = await phone.page.evaluate(() => document.documentElement.scrollWidth);
+          if (scrollWidth > 390) failures.push(`${name}: the page scrolls sideways (${scrollWidth})`);
+          await phone.page.screenshot({ path: path.join(pngDir, `${name}.png`) });
+          await phone.page.setViewportSize({ width: 390, height: 844 });
+          await phone.page.waitForTimeout(150);
+        };
+        try {
+          await phone.page.waitForSelector(`[data-phone-card="task:${LANES[0].task}"]`, { state: "attached", timeout: 30_000 });
+          await phone.page.waitForTimeout(500);
+          for (const lane of LANES) {
+            await phone.page.locator(`[data-phone-card="task:${lane.task}"]`).evaluate((element) => (element as HTMLElement).click());
+            /* A finished lane is folded under «Completed» on its task: unfold it. */
+            if (lane.ended) {
+              await phone.page.waitForSelector("[data-phone-task-ended]", { timeout: 10_000 });
+              await phone.page.locator("[data-phone-task-ended]").evaluate((element) => (element as HTMLElement).click());
+            }
+            await phone.page.waitForSelector(`[data-phone-task-lane="${lane.pipeline}"]`, { timeout: 10_000 });
+            await phone.page.waitForTimeout(400);
+            /* The lane on its task screen: a settled stage working again says so on its pill (#1744). */
+            const taskPills = await phone.page.evaluate((pipeline) => [...document.querySelectorAll(`[data-phone-task-lane="${pipeline}"] .pb-pill[data-stage]`)]
+              .map((pill) => ({ stage: pill.getAttribute("data-stage"), rework: pill.classList.contains("rework"), title: (pill as HTMLElement).title })), lane.pipeline);
+            readings[`phone-task-${lane.pipeline}-390-${lang}`] = { pills: taskPills } as never;
+            if (lane.pipeline === "p-loops-rework") {
+              const build = taskPills.find((pill) => pill.stage === "build");
+              if (build && (!build.rework || !build.title.includes(translate(lang, "kanban.graph.workingAgain")))) failures.push(`phone-task-${lane.pipeline}-390-${lang}: Build's pill does not say it works again`);
+            }
+            if (taskPills.some((pill) => pill.rework && !(lane.pipeline === "p-loops-rework" && pill.stage === "build"))) failures.push(`phone-task-${lane.pipeline}-390-${lang}: a pill reads working again where no conversation works`);
+            await full(`phone-task-${lane.pipeline}-390-${lang}`, `[data-phone-task-body="${lane.task}"]`);
+            await phone.page.locator(`[data-phone-task-lane="${lane.pipeline}"] [data-open-stages="${lane.pipeline}"]`).first().evaluate((element) => (element as HTMLElement).click());
+            await phone.page.waitForSelector(`[data-mobile2-screen="pipeline"][data-mobile2-pipeline="${lane.pipeline}"] .pblock`, { timeout: 10_000 });
+            await phone.page.waitForTimeout(400);
+            /* Every stage's row, the folded passed ones opened. */
+            await phone.page.evaluate(() => { (document.querySelector('[data-mobile2-screen="pipeline"] [data-passed-fold]') as HTMLElement | null)?.click(); });
+            await phone.page.waitForTimeout(200);
+            const screen = await phone.page.evaluate(() => ({
+              names: [...document.querySelectorAll('[data-mobile2-screen="pipeline"] .pb-stage[data-stage]')].map((row) => `${row.querySelector(".pb-name")?.textContent ?? ""} | ${row.querySelector(".pb-stage-state")?.firstChild?.textContent ?? ""}${row.querySelector(".pb-rework") ? ` | ${row.querySelector(".pb-rework")!.textContent}` : ""}`),
+              rework: [...document.querySelectorAll('[data-mobile2-screen="pipeline"] .pb-stage[data-stage-rework="1"]')].map((row) => `${row.getAttribute("data-stage")}: ${row.querySelector(".pb-rework")?.textContent ?? ""}`),
+              loops: [...document.querySelectorAll('[data-mobile2-screen="pipeline"] .pb-loops li')].map((row) => row.textContent),
+              bar: document.querySelector('[data-mobile2-screen="pipeline"] .pb-stateline')?.textContent ?? null,
+            }));
+            readings[`phone-${lane.pipeline}-390-${lang}`] = screen as never;
+            /* The phone says what the desktop graph says: Build works again, and nothing else does. */
+            const wantRework = lane.pipeline === "p-loops-rework" ? [`build: ${translate(lang, "kanban.graph.workingAgain")}`] : [];
+            if (JSON.stringify(screen.rework) !== JSON.stringify(wantRework)) failures.push(`phone-${lane.pipeline}-390-${lang}: rows read working again on ${JSON.stringify(screen.rework)}, expected ${JSON.stringify(wantRework)}`);
+            /* The bar holds its own text (critique finding 1): at a short
+               viewport, at rest and with the list scrolled so the title moves
+               into the bar, the state line and the title lie inside it. */
+            for (const width of [390, 360]) {
+              await phone.page.setViewportSize({ width, height: 560 });
+              await phone.page.waitForTimeout(250);
+              for (const scrolled of [false, true]) {
+                await phone.page.evaluate((top) => { document.querySelector("[data-mobile2-pipeline-body]")!.scrollTop = top; }, scrolled ? 260 : 0);
+                await phone.page.waitForTimeout(300);
+                const bar = await phone.page.evaluate(() => {
+                  const screen = document.querySelector('[data-mobile2-screen="pipeline"]')!;
+                  const rect = (selector: string) => {
+                    const element = screen.querySelector(selector);
+                    if (!element) return null;
+                    const box = element.getBoundingClientRect();
+                    return { top: Math.round(box.top), bottom: Math.round(box.bottom), left: Math.round(box.left), right: Math.round(box.right) };
+                  };
+                  const line = screen.querySelector(".pb-stateline");
+                  const shown = line ? [...line.querySelectorAll(":scope > .pb-staterow")].filter((row) => (row as HTMLElement).offsetParent !== null) : [];
+                  const rows = shown.length;
+                  /* A row's text stays in the row: the stage name gives way, it never runs under the bar's buttons. */
+                  const lineRight = line ? line.getBoundingClientRect().right : 0;
+                  const spill = shown.filter((row) => row.getBoundingClientRect().right > lineRight + 1 || row.scrollWidth > row.clientWidth + 1)
+                    .map((row) => `${row.textContent}: ${Math.round(row.getBoundingClientRect().right)} > ${Math.round(lineRight)}`);
+                  /* A short lane may not scroll its heading out; only then does the title move up. */
+                  const body = screen.querySelector("[data-mobile2-pipeline-body]")!;
+                  const heading = screen.querySelector(".pb-heading");
+                  const away = Boolean(heading && heading.getBoundingClientRect().bottom < body.getBoundingClientRect().top);
+                  return { bar: rect("[data-mobile2-bar]"), line: rect(".pb-stateline"), title: rect("[data-mobile2-title-text]"), rows, spill, scrollTop: Math.round(body.scrollTop), away };
+                });
+                const name = `phone-bar-${lane.pipeline}-${width}-${scrolled ? "scrolled" : "rest"}-${lang}`;
+                readings[name] = bar as never;
+                const inside = (box: { top: number; bottom: number; left: number; right: number } | null) => !box || !bar.bar
+                  || (box.top >= bar.bar.top && box.bottom <= bar.bar.bottom && box.left >= bar.bar.left && box.right <= bar.bar.right);
+                if (!bar.bar || !bar.line) failures.push(`${name}: no bar or no state line`);
+                else if (!inside(bar.line) || !inside(bar.title)) failures.push(`${name}: the bar (${bar.bar.top}–${bar.bar.bottom}) does not hold the state line ${JSON.stringify(bar.line)} and the title ${JSON.stringify(bar.title)}`);
+                if (bar.spill.length) failures.push(`${name}: a row spills out of the state line: ${bar.spill.join(" | ")}`);
+                if (bar.away && !bar.title) failures.push(`${name}: the title did not move into the bar`);
+                await phone.page.screenshot({ path: path.join(pngDir, `${name}.png`), clip: { x: 0, y: 0, width, height: 160 } });
+              }
+              await phone.page.evaluate(() => { document.querySelector("[data-mobile2-pipeline-body]")!.scrollTop = 0; });
+            }
+            await phone.page.setViewportSize({ width: 390, height: 844 });
+            await phone.page.waitForTimeout(250);
+            await full(`phone-pipeline-${lane.pipeline}-390-${lang}`, "[data-mobile2-pipeline-body]");
+            await phone.page.locator("[data-mobile2-back]").first().evaluate((element) => (element as HTMLElement).click());
+            await phone.page.waitForTimeout(300);
+            await phone.page.locator("[data-mobile2-back]").first().evaluate((element) => (element as HTMLElement).click());
+            await phone.page.waitForSelector(`[data-phone-card="task:${lane.task}"]`, { state: "attached", timeout: 10_000 });
+            await phone.page.waitForTimeout(300);
+          }
+          if (phone.pageErrors.length) failures.push(`390-${lang}: page errors ${phone.pageErrors.join(" | ")}`);
+        } finally {
+          await phone.context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/pipeline-graph-loops", { recursive: true });
+    fs.writeFileSync("evidence/pipeline-graph-loops/geometry.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
+describe("an empty column folds to a strip; an open agent keeps its minimum width", () => {
+  /*
+   * The `stages` scenario with Blocked emptied (`&empty=blocked`), at
+   * 1280×900, 1440×900 and 1600×900, with no conversation open and with the
+   * Assigned card's worker open (the open-agents rail then stands beside the
+   * columns), in English and Ukrainian; and at 390×844 on a phone, which
+   * draws its own layout and no strip. What is gated: the empty column is a
+   * strip no wider than 48 px that still names itself and its count and draws
+   * no menu button; a pointer passing across it leaves it shut; it opens to a
+   * shelf under a resting mouse (whose menu then opens) and under a dragged
+   * card, and a card dropped on it lands there; it stays open while its own
+   * menu is, with the pointer on the menu or focus in it; a search typed on
+   * the full board folds no column; the open agent's column is never narrower than
+   * `--agent-min` (clamp(520px, 40vw, 760px)), and when the columns do not
+   * fit the board scrolls sideways instead. Frames go to
+   * EMPTY_STRIP_PNG_DIR.
+   *
+   *   CHROME_BIN=/usr/bin/google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "folds to a strip"
+   */
+  const AGENT = "search-ver-2";
+  const seedReaders = `try { localStorage.setItem("llv:kanban-readers:v1:atlas", ${JSON.stringify(JSON.stringify([{ key: `conversation_${AGENT}`, path: `/repo/${AGENT}.jsonl`, folded: false }]))}); } catch {}`;
+  const readBoard = (page: Page) => page.evaluate(() => {
+    const board = document.querySelector<HTMLElement>("[data-kanban-board] [data-board]");
+    const columns = Object.fromEntries([...document.querySelectorAll<HTMLElement>("[data-kanban-board] .column[data-status]")].map((column) => {
+      const head = column.querySelector<HTMLElement>(".col-head");
+      const title = column.querySelector<HTMLElement>(".col-head h2");
+      const count = column.querySelector<HTMLElement>(".col-head .n");
+      return [column.dataset.status!, {
+        width: Math.round(column.getBoundingClientRect().width),
+        strip: column.classList.contains("strip"),
+        title: title && title.getBoundingClientRect().height > 0 ? title.textContent : null,
+        count: count && count.getBoundingClientRect().width > 0 ? count.textContent : null,
+        headOverflows: head ? head.scrollWidth > head.clientWidth + 1 : false,
+        cards: column.querySelectorAll(".card[data-id]").length,
+      }];
+    }));
+    const reader = document.querySelector<HTMLElement>("[data-kanban-reader]");
+    const agentColumn = reader?.closest<HTMLElement>(".column[data-status]") ?? null;
+    const probe = document.createElement("div");
+    probe.style.width = "var(--agent-min)";
+    document.querySelector("[data-kanban-board]")?.appendChild(probe);
+    const agentMin = Math.round(probe.getBoundingClientRect().width);
+    probe.remove();
+    return {
+      mode: board?.dataset.mode ?? null,
+      rail: document.querySelector<HTMLElement>("[data-open-rail]")?.dataset.openRail ?? null,
+      columns,
+      agentMin,
+      agent: reader ? { column: agentColumn?.dataset.status ?? null, columnWidth: Math.round(agentColumn!.getBoundingClientRect().width), readerWidth: Math.round(reader.getBoundingClientRect().width) } : null,
+      scroll: board ? { scrollWidth: board.scrollWidth, clientWidth: board.clientWidth } : null,
+    };
+  });
+
+  browserTest("1280, 1440 and 1600 with and without an open agent, the strip under the mouse and a drag, and the phone", async () => {
+    const pngDir = process.env.EMPTY_STRIP_PNG_DIR ?? "/var/tmp/llv-empty-strip-evidence";
+    const out = path.resolve(".artifacts/empty-strip");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const url = `${server.base}?scenario=stages&empty=blocked`;
+    const open = async (viewport: { width: number; height: number }, lang: "en" | "uk", agent: boolean) => {
+      const opened = await openFixture(browser, url, viewport, "light", lang);
+      if (agent) {
+        await opened.context.addInitScript(seedReaders);
+        await opened.page.reload();
+        await opened.page.waitForSelector("[data-kanban-reader]", { timeout: 30_000 });
+      }
+      await opened.page.waitForSelector('[data-kanban-board] .column[data-status="blocked"]', { timeout: 30_000 });
+      await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      if (await opened.page.locator('[data-seat-collapse][aria-expanded="true"]').count()) await opened.page.keyboard.press("o");
+      await opened.page.mouse.move(700, 10);
+      await opened.page.waitForTimeout(700);
+      return opened;
+    };
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const width of [1280, 1440, 1600] as const) {
+          for (const agent of [false, true]) {
+            const label = `${width}x900-${agent ? "agent" : "none"}-${lang}`;
+            const { context, page, pageErrors } = await open({ width, height: 900 }, lang, agent);
+            try {
+              if (agent) await page.locator("[data-kanban-reader]").first().scrollIntoViewIfNeeded();
+              await page.waitForTimeout(300);
+              await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
+              const reading = await readBoard(page);
+              readings[label] = { ...reading, pageErrors };
+              const blocked = reading.columns.blocked;
+              if (!blocked?.strip || blocked.width > 48) failures.push(`${label}: Blocked is ${blocked?.width}px, strip ${blocked?.strip}`);
+              if (!blocked?.title || blocked.count !== "0") failures.push(`${label}: the strip reads «${blocked?.title}» «${blocked?.count}»`);
+              for (const status of ["inbox", "assigned", "done"]) if (reading.columns[status]?.strip) failures.push(`${label}: ${status} holds cards and folded`);
+              if (agent) {
+                if (!reading.agent) failures.push(`${label}: no open agent`);
+                else if (reading.agent.columnWidth < reading.agentMin - 1) failures.push(`${label}: the agent's column is ${reading.agent.columnWidth}px under its ${reading.agentMin}px minimum`);
+                if (reading.rail === null) failures.push(`${label}: no open-agents rail`);
+                if (width === 1280) {
+                  /* Inbox widened, Assigned gives the wide share away and turns
+                     a shelf; the agent it holds keeps its minimum all the same. */
+                  await page.locator('[data-kanban-board] [data-col-width="inbox"][data-col-width-action="widen"]').click();
+                  await page.mouse.move(700, 10);
+                  await page.waitForTimeout(700);
+                  await page.screenshot({ path: path.join(pngDir, `${label}-inbox-wide.png`) });
+                  const widened = await readBoard(page);
+                  (readings[label] as Record<string, unknown>).inboxWide = { mode: widened.mode, agentMin: widened.agentMin, agent: widened.agent, assigned: widened.columns.assigned };
+                  if (!widened.agent) failures.push(`${label}: Inbox widened, no open agent`);
+                  else if (widened.agent.columnWidth < widened.agentMin - 1) failures.push(`${label}: Inbox widened, the agent's column is ${widened.agent.columnWidth}px under its ${widened.agentMin}px minimum`);
+                }
+              }
+              if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+              if (width !== 1280) {
+                /* A pointer passing across the strip leaves it shut: moved from
+                   Assigned to the first Done card, it ends on Done. */
+                if (!agent) {
+                  const assigned = (await page.locator('[data-kanban-board] .column[data-status="assigned"]').boundingBox())!;
+                  const doneCard = (await page.locator('[data-kanban-board] .column[data-status="done"] .card[data-id]').first().boundingBox())!;
+                  const end = { x: doneCard.x + 40, y: doneCard.y + doneCard.height / 2 };
+                  await page.mouse.move(assigned.x + assigned.width / 2, end.y);
+                  await page.waitForTimeout(400);
+                  await page.mouse.move(end.x, end.y, { steps: 20 });
+                  const passed = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest<HTMLElement>(".column[data-status]")?.dataset.status ?? null, end);
+                  const after = await readBoard(page);
+                  (readings[label] as Record<string, unknown>).passage = { under: passed, blocked: after.columns.blocked?.width };
+                  if (passed !== "done" || (after.columns.blocked?.width ?? 999) > 48) failures.push(`${label}: a pointer passing to Done ends on ${passed}, Blocked ${after.columns.blocked?.width}px`);
+                  await page.mouse.move(700, 10);
+                  await page.waitForTimeout(500);
+                }
+                /* The strip draws no menu button of its own. */
+                const menuOnStrip = (await page.locator('[data-kanban-board] [data-colmenu="blocked"]').boundingBox())!;
+                if (menuOnStrip.width > 1 || menuOnStrip.height > 1) failures.push(`${label}: the strip draws its menu at ${menuOnStrip.width}x${menuOnStrip.height}`);
+                /* Under a resting mouse the strip opens to a shelf, and folds back when it leaves. */
+                const box = (await page.locator('[data-kanban-board] .column[data-status="blocked"]').boundingBox())!;
+                await page.mouse.move(box.x + box.width / 2, box.y + 200);
+                await page.waitForTimeout(700);
+                await page.screenshot({ path: path.join(pngDir, `${label}-hover.png`) });
+                const hovered = await readBoard(page);
+                if ((hovered.columns.blocked?.width ?? 0) < 200) failures.push(`${label}: hovered, the strip is ${hovered.columns.blocked?.width}px`);
+                /* Opened, its menu is where it is drawn and opens under a press;
+                   the strip stays open while its menu is, under the pointer on
+                   the menu's first row and under the keyboard alike. */
+                const menuHolds = async (how: string) => {
+                  const menuOpened = await page.waitForSelector(".menu", { timeout: 3_000 }).then(() => true, () => false);
+                  if (!menuOpened) { failures.push(`${label}: the opened strip's menu does not open (${how})`); return; }
+                  if (how === "pointer") {
+                    const row = (await page.locator('.menu [role^="menuitem"]').first().boundingBox())!;
+                    await page.mouse.move(row.x + row.width / 2, row.y + row.height / 2, { steps: 6 });
+                  }
+                  await page.waitForTimeout(700);
+                  await page.screenshot({ path: path.join(pngDir, `${label}-menu-${how}.png`) });
+                  const held = await readBoard(page);
+                  const column = (await page.locator('[data-kanban-board] .column[data-status="blocked"]').boundingBox())!;
+                  const menuBox = (await page.locator(".menu").boundingBox())!;
+                  const inside = menuBox.x >= column.x - 1 && menuBox.x <= column.x + column.width;
+                  (readings[label] as Record<string, unknown>)[`menu-${how}`] = { blocked: held.columns.blocked?.width, column: { x: Math.round(column.x), width: Math.round(column.width) }, menuX: Math.round(menuBox.x) };
+                  if ((held.columns.blocked?.width ?? 0) < 200 || !inside) failures.push(`${label}: with its menu open (${how}) Blocked is ${held.columns.blocked?.width}px and the menu starts at ${Math.round(menuBox.x)} outside ${Math.round(column.x)}-${Math.round(column.x + column.width)}`);
+                  await page.keyboard.press("Escape");
+                };
+                await page.locator('[data-kanban-board] [data-colmenu="blocked"]').click();
+                await menuHolds("pointer");
+                await page.mouse.move(box.x + box.width / 2, box.y + 200);
+                await page.waitForTimeout(700);
+                await page.locator('[data-kanban-board] [data-colmenu="blocked"]').focus();
+                await page.keyboard.press("Enter");
+                await menuHolds("keyboard");
+                await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+                await page.mouse.move(700, 10);
+                await page.waitForTimeout(500);
+                const left = await readBoard(page);
+                if ((left.columns.blocked?.width ?? 999) > 48) failures.push(`${label}: after the mouse left, Blocked is ${left.columns.blocked?.width}px`);
+                (readings[label] as Record<string, unknown>).hovered = hovered.columns.blocked;
+                if (!agent) {
+                  /* A card dragged over the strip opens it, and dropped there lands in Blocked. */
+                  const source = page.locator('[data-kanban-board] .card[data-id="task:t-links"]');
+                  await source.scrollIntoViewIfNeeded();
+                  const from = (await source.boundingBox())!;
+                  const strip = (await page.locator('[data-kanban-board] .column[data-status="blocked"]').boundingBox())!;
+                  /* Pressed in the card's own padding: a press on its title or a button never drags. */
+                  await page.mouse.move(from.x + 5, from.y + from.height / 2);
+                  await page.mouse.down();
+                  await page.mouse.move(from.x + 25, from.y + from.height / 2 + 10, { steps: 4 });
+                  await page.mouse.move(strip.x + strip.width / 2, strip.y + 300, { steps: 12 });
+                  await page.waitForTimeout(500);
+                  if (!(await page.locator("[data-kanban-board] .card.dragging").count())) failures.push(`${label}: no drag started`);
+                  const over = await readBoard(page);
+                  await page.screenshot({ path: path.join(pngDir, `${label}-drag.png`) });
+                  if ((over.columns.blocked?.width ?? 0) < 200) failures.push(`${label}: under a dragged card the strip is ${over.columns.blocked?.width}px`);
+                  const target = (await page.locator('[data-kanban-board] .column[data-status="blocked"]').boundingBox())!;
+                  await page.mouse.move(target.x + target.width / 2, target.y + 300, { steps: 3 });
+                  await page.mouse.up();
+                  await page.waitForTimeout(900);
+                  await page.mouse.move(700, 10);
+                  await page.waitForTimeout(600);
+                  const dropped = await readBoard(page);
+                  await page.screenshot({ path: path.join(pngDir, `${label}-dropped.png`) });
+                  if (dropped.columns.blocked?.cards !== 1 || dropped.columns.blocked?.strip) failures.push(`${label}: after the drop Blocked holds ${dropped.columns.blocked?.cards} cards, strip ${dropped.columns.blocked?.strip}`);
+                  (readings[label] as Record<string, unknown>).drag = { over: over.columns.blocked, dropped: dropped.columns.blocked };
+                }
+              }
+            } finally {
+              await context.close();
+            }
+          }
+        }
+        {
+          /* A search never folds a column that holds cards: typed key by key
+             on the board with no column emptied, every column stays open and
+             Assigned stays where it stood. */
+          const label = `1440x900-search-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, { width: 1440, height: 900 }, "light", lang);
+          try {
+            await page.waitForSelector('[data-kanban-board] .column[data-status="blocked"]', { timeout: 30_000 });
+            await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+            if (await page.locator('[data-seat-collapse][aria-expanded="true"]').count()) await page.keyboard.press("o");
+            await page.mouse.move(700, 10);
+            await page.waitForTimeout(700);
+            const assignedX = async () => Math.round((await page.locator('[data-kanban-board] .column[data-status="assigned"]').boundingBox())!.x);
+            const before = await assignedX();
+            const steps: Record<string, unknown> = {};
+            await page.locator("[data-kanban-search]").focus();
+            for (const typed of ["R", "Re", "Res", "Rest"]) {
+              await page.keyboard.type(typed.slice(-1));
+              await page.waitForTimeout(500);
+              const reading = await readBoard(page);
+              const x = await assignedX();
+              const strips = Object.entries(reading.columns).filter(([, column]) => column.strip).map(([status]) => status);
+              steps[typed] = { strips, assignedX: x };
+              if (strips.length || Math.abs(x - before) > 1) failures.push(`${label}: after «${typed}» ${strips.join(", ") || "no column"} folded and Assigned moved ${before} -> ${x}`);
+            }
+            await page.screenshot({ path: path.join(pngDir, `${label}-Rest.png`) });
+            readings[label] = { before, steps, pageErrors };
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+        {
+          const label = `390x844-phone-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, { width: 390, height: 844 }, "light", lang, "no-preference", true);
+          try {
+            await page.waitForTimeout(1500);
+            await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
+            const strips = await page.locator(".column.strip").count();
+            readings[label] = { strips, pageErrors };
+            if (strips) failures.push(`${label}: the phone draws ${strips} strips`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/empty-column-strip", { recursive: true });
+    fs.writeFileSync("evidence/empty-column-strip/readings.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
+describe("model glyphs in place of the stage dot", () => {
+  /*
+   * The design evidence for docs/design/model-glyphs.md: the real Viewer over
+   * `issue1695Evidence.fixture.tsx?scenario=model-glyphs`. Stages are named by
+   * the role they play ("Design", "Build"), as real lanes name them, so on a
+   * pill the glyph is the only thing that says which model runs it. A lane runs
+   * one stage at a time, so "every model at work" is a task of nine lanes,
+   * each running one model. Beside it: a task holding a draft of the same nine
+   * stages, all waiting, and two lanes that between them settle every model
+   * (passed, failed, waiting on the operator); and a task whose lanes hold the
+   * live states the old dot told apart by colour: a review at work, a commit
+   * landing, and a passed stage whose conversation works again. The ninth
+   * model is uncatalogued and must keep the dot it always had.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "model glyphs"
+   *
+   * Drawn in light and dark, on the desktop (the cards, the cards' graphs, the
+   * Stages sheet's graph, pane heads and chips) and on the phone (the board
+   * cards, the task screens and the pipeline screens), at a device pixel ratio
+   * of 2; once under reduced motion, where the figures stop and the halo alone
+   * says the stage runs; and in Ukrainian. The legend frames draw the three
+   * cards with every word hidden, at 1× and 2×, so the glyphs have to name the
+   * models and the states on their own; the running card is also caught in
+   * eight frames, every animation on the page paused and seeked to 0, 200 …
+   * 1400 ms, so the frames are exactly 200 ms apart whatever a screenshot
+   * costs.
+   *
+   * What it measures: every glyph's model, reading, motion, badge and box, the
+   * host that holds it and the host's tone and label, that no stage draws the
+   * glyph and an engine mark both, every stage that kept its dot, that the
+   * states still read apart with the words hidden, how much of each glyph's
+   * ink its badge covers, that a settled state word on a graph node and a pane
+   * head is in its state's colour, and that every halo breathes on a curve
+   * symmetric about each extreme.
+   * Readings go to `evidence/model-glyphs/design/readings.json`; the frames to
+   * the same directory, where the ignore rules keep them out of the commit.
+   */
+
+  const EVIDENCE = path.resolve("evidence/model-glyphs/design");
+  const RUN = card("t-glyphs-run");
+  const REST = card("t-glyphs");
+  const LIVE = card("t-glyphs-live");
+  const WAIT = "p-glyphs-wait";
+  const SETTLED_LANE = "p-glyphs-settled";
+  const SETTLED_MORE = "p-glyphs-settled-more";
+  const LIVE_LANES = ["p-glyphs-review", "p-glyphs-commit", "p-glyphs-rework"] as const;
+  /* The model each role-named stage runs. */
+  const KIND_OF: Record<string, string> = { design: "opus", build: "fable", docs: "sonnet", tidy: "haiku", verify: "sol", critique: "astra", migrate: "terra", test: "luna" };
+  /* The stage on the uncatalogued model, which keeps its dot. */
+  const OTHER = "fix";
+  /** What each stage must draw: its model, its reading, whether it moves. */
+  type Want = Record<string, readonly [kind: string, reading: string, live: boolean]>;
+  const everyStage = (reading: string, live: boolean): Want => Object.fromEntries(Object.entries(KIND_OF).map(([stage, kind]) => [stage, [kind, reading, live] as const]));
+  const WANT: Record<string, Want> = {
+    running: everyStage("running", true),
+    waiting: everyStage("waiting", false),
+    [SETTLED_LANE]: { design: ["opus", "passed", false], build: ["fable", "passed", false], critique: ["astra", "failed", false], verify: ["sol", "needs", false], tidy: ["haiku", "waiting", false] },
+    [SETTLED_MORE]: { docs: ["sonnet", "passed", false], tidy: ["haiku", "passed", false], migrate: ["terra", "passed", false], test: ["luna", "failed", false] },
+    "p-glyphs-review": { build: ["fable", "passed", false], review: ["astra", "running", true] },
+    "p-glyphs-commit": { migrate: ["terra", "running", true] },
+    "p-glyphs-rework": { design: ["opus", "passed", false], docs: ["sonnet", "passed", true], critique: ["astra", "running", true] },
+  };
+  /* The tone a pill must carry where the reading alone does not say the state. */
+  const PILL_TONE: Record<string, Record<string, string>> = { "p-glyphs-review": { review: "review" }, "p-glyphs-commit": { migrate: "active" } };
+  /* Hosts that print no state word, where a settled state rides the glyph as a
+     badge. Everywhere else the word and the host's border say it. */
+  const BADGE_HOSTS = new Set(["pb-pill", "navchip", "pstrip", "pane-strip"]);
+  /* A host that prints the state word beside a badgeless glyph: the word must
+     carry the settled state's colour, which the dot used to. */
+  const WORD_HOSTS = new Set(["pnode", "pane-head"]);
+  /* The model words a host's accessible text must carry: the catalogue's short
+     label, which the identity sentence and the identity line both print. */
+  const MODEL_WORD: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku", sol: "6-Sol", astra: "6-Astra", terra: "5.6-Terra", luna: "6-Luna" };
+  /* The pane head's glyph names itself with the catalogue's full label. */
+  const MODEL_NAME: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku", sol: "GPT-6-Sol", astra: "GPT-6-Astra", terra: "GPT-5.6-Terra", luna: "GPT-6-Luna" };
+  /* The stage state a glyph reading stands for in this fixture, for the words its name must end on. */
+  const STATE_OF_READING: Record<string, string> = { running: "running", waiting: "pending", passed: "passed", failed: "failed", needs: "needs_decision" };
+  /* The legend: every word on the three cards hidden, so only the drawings
+     speak. The kept dot and mark draw in `currentColor`, so they keep theirs. */
+  const HIDE_TEXT = "[data-legend] :not(.pmark, .pmark *, .pdot), [data-legend] :not(.pmark, .pmark *, .pdot)::after { color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; }";
+
+  interface GlyphReading {
+    stage: string | null;
+    host: string | null;
+    hostTone: string | null;
+    kind: string;
+    reading: string;
+    live: boolean;
+    width: number;
+    height: number;
+    /** The zoom the Stages sheet draws its graph under; 1 elsewhere. */
+    scale: number;
+    halo: string;
+    haloOpacity: string;
+    figure: string[];
+    badge: string | null;
+    ownLabel: string | null;
+    hostLabel: string | null;
+    inside: boolean;
+    /** The stage's unit also draws an engine mark: two marks for one stage. */
+    twin: boolean;
+    /** On a host that prints the state word: the word's colour, and the colour of the settled state's token. */
+    word: string | null;
+    wordWant: string | null;
+  }
+  interface Reading { glyphs: GlyphReading[]; dots: Array<{ stage: string | null; mark: string }> }
+
+  /* Every glyph and every kept dot under `scope`, as drawn. */
+  const readGlyphs = (page: Page, scope: string) => page.evaluate((selector): Reading => {
+    const roots = [...document.querySelectorAll(selector)];
+    const HOSTS = ".pnode, .pstrip, .pb-pill, .pb-stage-row, .pb-stage, .navchip, .pane-head, .pane-strip";
+    const stageOf = (el: Element) => el.closest("[data-stage]")?.getAttribute("data-stage")
+      ?? el.closest("[data-nav-stage]")?.getAttribute("data-nav-stage") ?? null;
+    const glyphs = roots.flatMap((root) => [...root.querySelectorAll<HTMLElement>(".mglyph")]).filter((el) => el.getClientRects().length).map((el) => {
+      const host = el.closest(HOSTS);
+      const r = el.getBoundingClientRect();
+      const h = host?.getBoundingClientRect();
+      const halo = getComputedStyle(el, "::before");
+      const figure = [...el.querySelectorAll("svg *")].map((node) => getComputedStyle(node).animationName).filter((name) => name && name !== "none");
+      const badge = el.querySelector(".mg-badge");
+      const word = host?.matches(".pnode, .pane-head") ? host.querySelector<HTMLElement>(".pstate") : null;
+      const token = ({ passed: "--color-success", failed: "--color-danger", needs: "--color-warning" } as Record<string, string>)[el.dataset.glyphState ?? ""];
+      let wordWant: string | null = null;
+      if (word && token) {
+        const probe = document.createElement("i");
+        probe.style.color = `var(${token})`;
+        word.appendChild(probe);
+        wordWant = getComputedStyle(probe).color;
+        probe.remove();
+      }
+      return {
+        stage: stageOf(el),
+        host: host ? host.className.split(" ")[0] ?? null : null,
+        hostTone: host ? /\btone-(\w+)/.exec(host.className)?.[1] ?? null : null,
+        kind: el.dataset.glyph ?? "",
+        reading: el.dataset.glyphState ?? "",
+        live: el.dataset.live === "1",
+        width: Math.round(r.width * 10) / 10,
+        height: Math.round(r.height * 10) / 10,
+        scale: Number(el.closest("[data-zoom-scale]")?.getAttribute("data-zoom-scale") ?? 1),
+        halo: halo.animationName,
+        haloOpacity: halo.opacity,
+        figure: [...new Set(figure)],
+        badge: badge ? getComputedStyle(badge).backgroundColor : null,
+        ownLabel: el.getAttribute("aria-label"),
+        /* What a screen reader hears for the host: its own label, else its text. */
+        hostLabel: host ? host.getAttribute("aria-label") ?? (host.textContent ?? "").replace(/\s+/g, " ").trim() : el.parentElement?.closest("[aria-label]")?.getAttribute("aria-label") ?? null,
+        inside: !h || (r.left >= h.left - 0.5 && r.right <= h.right + 0.5 && r.top >= h.top - 0.5 && r.bottom <= h.bottom + 0.5),
+        twin: Boolean(el.closest(".pnode, .pstrip, .pb-pill, .pb-stage, .navchip, .pane")?.querySelector("[data-engine-mark]")),
+        word: word ? getComputedStyle(word).color : null,
+        wordWant,
+      };
+    });
+    const dots = roots.flatMap((root) => [...root.querySelectorAll<HTMLElement>(".pdot, .pmark")]).filter((el) => el.getClientRects().length)
+      .map((el) => ({ stage: stageOf(el), mark: el.classList.contains("pdot") ? "dot" : el.getAttribute("data-mark") ?? "" }));
+    return { glyphs, dots };
+  }, scope);
+
+  browserTest("every model draws its glyph in every state, light and dark, desktop and phone; any other model keeps the dot", async () => {
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const out = path.resolve(".artifacts/model-glyphs");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const base = `${server.base}?scenario=model-glyphs`;
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const shots: string[] = [];
+    const failures: string[] = [];
+    /* Which settled readings had their state word's colour checked, per host. */
+    const wordsChecked = new Set<string>();
+    const checkWord = (label: string, glyph: GlyphReading) => {
+      if (!WORD_HOSTS.has(glyph.host ?? "") || !glyph.wordWant) return;
+      wordsChecked.add(`${glyph.host}:${glyph.reading}`);
+      if (glyph.word !== glyph.wordWant) failures.push(`${label}: the ${glyph.reading} word beside ${glyph.kind} on the ${glyph.host} of ${glyph.stage} is ${glyph.word}, not its state's ${glyph.wordWant}`);
+    };
+    const shot = async (target: Page | ReturnType<Page["locator"]>, name: string) => {
+      const file = path.join(EVIDENCE, `${name}.png`);
+      await target.screenshot({ path: file });
+      shots.push(file);
+      return file;
+    };
+
+    /* What a frame must show. `want` names each stage's model, reading and
+       motion (null: whatever the surface folded in). `motion` is false under
+       reduced motion, where the figures stop and the halo holds still.
+       `labels` asks every glyph's host label to name its model; `dot` asks the
+       uncatalogued model's stage to keep its dot; `tones` the pill tone the
+       live states keep. */
+    const gate = (label: string, reading: Reading, want: Want | null, { motion = true, labels = false, dot = false, tones = {} as Record<string, string> } = {}) => {
+      frames[label] = reading;
+      const { glyphs, dots } = reading;
+      if (!glyphs.length) failures.push(`${label}: no glyph was drawn`);
+      for (const glyph of glyphs) {
+        const size = 14 * glyph.scale;
+        if (Math.abs(glyph.width - size) > 0.6 || Math.abs(glyph.height - size) > 0.6) failures.push(`${label}: ${glyph.kind} on ${glyph.stage} is ${glyph.width}×${glyph.height} px at scale ${glyph.scale}`);
+        if (!glyph.inside) failures.push(`${label}: ${glyph.kind} on ${glyph.stage} sticks out of its ${glyph.host}`);
+        if (glyph.live && motion && (!glyph.figure.length || glyph.halo !== "mg-halo")) failures.push(`${label}: running ${glyph.kind} does not move (${JSON.stringify([glyph.figure, glyph.halo])})`);
+        if (glyph.live && !motion && (glyph.figure.length || glyph.halo !== "none" || glyph.haloOpacity !== "1")) failures.push(`${label}: under reduced motion ${glyph.kind} reads ${JSON.stringify([glyph.figure, glyph.halo, glyph.haloOpacity])}`);
+        if (!glyph.live && (glyph.figure.length || glyph.halo !== "none")) failures.push(`${label}: idle ${glyph.kind} on ${glyph.stage} moves`);
+        const settled = glyph.reading === "passed" || glyph.reading === "failed" || glyph.reading === "needs";
+        const badged = settled && BADGE_HOSTS.has(glyph.host ?? "");
+        if (badged !== Boolean(glyph.badge)) failures.push(`${label}: ${glyph.kind} reading ${glyph.reading} on a ${glyph.host} has badge ${glyph.badge}`);
+        if (glyph.stage === OTHER) failures.push(`${label}: the uncatalogued model drew a glyph`);
+        if (glyph.twin) failures.push(`${label}: ${glyph.kind} on ${glyph.stage} is drawn beside an engine mark as well`);
+        checkWord(label, glyph);
+        if (labels && !glyph.ownLabel && !(glyph.hostLabel ?? "").includes(MODEL_WORD[glyph.kind] ?? "?")) failures.push(`${label}: nothing names ${glyph.kind} on ${glyph.stage}: ${JSON.stringify(glyph.hostLabel)}`);
+      }
+      const drawn = (stage: string) => glyphs.filter((glyph) => glyph.stage === stage);
+      for (const [stage, [kind, state, live]] of Object.entries(want ?? {})) {
+        const mine = drawn(stage);
+        if (!mine.length) failures.push(`${label}: ${stage} (${kind}) drew no glyph`);
+        if (mine.some((glyph) => glyph.kind !== kind || glyph.reading !== state || glyph.live !== live)) failures.push(`${label}: ${stage} should read ${JSON.stringify([kind, state, live])}, reads ${JSON.stringify(mine.map((glyph) => [glyph.kind, glyph.reading, glyph.live]))}`);
+      }
+      for (const [stage, tone] of Object.entries(tones)) {
+        if (drawn(stage).some((glyph) => glyph.hostTone !== tone)) failures.push(`${label}: ${stage}'s host should carry tone ${tone}, carries ${JSON.stringify(drawn(stage).map((glyph) => glyph.hostTone))}`);
+      }
+      if (dot && !dots.some((entry) => entry.stage === OTHER)) failures.push(`${label}: the uncatalogued model kept no dot ${JSON.stringify(dots)}`);
+    };
+    const laneOf = (id: string) => `.pblock[data-pipeline="${id}"]`;
+    const ready = async (page: Page) => {
+      await page.waitForSelector(`${REST} ${laneOf(SETTLED_MORE)}`, { state: "attached", timeout: 30_000 });
+      await page.waitForSelector(`${RUN} ${laneOf("p-glyph-luna")}`, { state: "attached", timeout: 30_000 });
+      await page.waitForSelector(`${LIVE} ${laneOf("p-glyphs-rework")}`, { state: "attached", timeout: 30_000 });
+    };
+    /* Every lane of the three cards, read as the pills draw it. */
+    const gateCards = async (page: Page, suffix: string, motion: boolean) => {
+      gate(`desktop-card-running-${suffix}`, await readGlyphs(page, RUN), WANT.running, { motion, labels: true, dot: true });
+      gate(`desktop-card-waiting-${suffix}`, await readGlyphs(page, `${REST} ${laneOf(WAIT)}`), WANT.waiting, { labels: true, dot: true });
+      for (const lane of [SETTLED_LANE, SETTLED_MORE]) gate(`desktop-card-${lane}-${suffix}`, await readGlyphs(page, `${REST} ${laneOf(lane)}`), WANT[lane], { labels: true, dot: lane === SETTLED_MORE });
+      for (const lane of LIVE_LANES) gate(`desktop-card-${lane}-${suffix}`, await readGlyphs(page, `${LIVE} ${laneOf(lane)}`), WANT[lane], { motion, labels: true, tones: PILL_TONE[lane] });
+    };
+
+    const desktop = async (scheme: Scheme, lang: "en" | "uk", motion: "no-preference" | "reduce") => {
+      const suffix = `${lang === "uk" ? "uk-" : ""}${motion === "reduce" ? "reduced-motion-" : ""}${scheme}`;
+      const moving = motion === "no-preference";
+      const opened = await openFixture(browser, base, { width: 1440, height: 1200 }, scheme, lang, motion, false, 2);
+      const { page } = opened;
+      try {
+        await ready(page);
+        await page.locator(RUN).evaluate((element) => element.scrollIntoView({ block: "start" }));
+        await page.waitForTimeout(700);
+        await gateCards(page, suffix, moving);
+        await shot(page.locator(RUN), `desktop-card-running-${suffix}`);
+        for (const [holder, name] of [[REST, "waiting-settled"], [LIVE, "live"]] as const) {
+          await page.locator(holder).evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.waitForTimeout(300);
+          await shot(page.locator(holder), `desktop-card-${name}-${suffix}`);
+        }
+        if (lang === "uk" || !moving) return;
+
+        /* Every lane's own graph on the card: the node's state row, where the
+           state word stands beside the glyph and no badge is drawn. The
+           graphs stand taller than a column, so the window grows to hold them. */
+        await page.setViewportSize({ width: 1440, height: 4200 });
+        for (const holder of [RUN, REST, LIVE]) {
+          const toggles = page.locator(`${holder} [data-graph-toggle]`);
+          for (let index = 0; index < await toggles.count(); index++) await toggles.nth(index).click();
+        }
+        await page.waitForTimeout(500);
+        gate(`desktop-card-graphs-running-${scheme}`, await readGlyphs(page, `${RUN} .pgraph`), WANT.running, { labels: true, dot: true });
+        gate(`desktop-card-graph-waiting-${scheme}`, await readGlyphs(page, `${REST} ${laneOf(WAIT)} .pgraph`), WANT.waiting, { labels: true, dot: true });
+        for (const lane of [SETTLED_LANE, SETTLED_MORE]) gate(`desktop-card-graph-${lane}-${scheme}`, await readGlyphs(page, `${REST} ${laneOf(lane)} .pgraph`), WANT[lane], { labels: true });
+        for (const lane of LIVE_LANES) gate(`desktop-card-graph-${lane}-${scheme}`, await readGlyphs(page, `${LIVE} ${laneOf(lane)} .pgraph`), WANT[lane], { labels: true });
+        for (const [holder, name] of [[RUN, "running"], [REST, "waiting-settled"], [LIVE, "live"]] as const) {
+          await page.locator(holder).evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await shot(page.locator(holder), `desktop-card-graphs-${name}-${scheme}`);
+        }
+        await page.setViewportSize({ width: 1440, height: 1200 });
+        await page.waitForTimeout(300);
+
+        /* The Stages sheet: its graph, its pane heads, then its chips. */
+        const sheets = [["waiting", WAIT, REST], ["settled", SETTLED_LANE, REST], ["settled-more", SETTLED_MORE, REST], ["reviewing", "p-glyphs-review", LIVE], ["running", "p-glyph-fable", RUN]] as const;
+        for (const [lane, id, holder] of sheets) {
+          const want = lane === "waiting" ? WANT.waiting : lane === "running" ? null : WANT[id];
+          await page.locator(`${holder} ${laneOf(id)} [data-open-stages]`).first().click();
+          await page.waitForSelector("[data-sheet-graph]", { state: "attached", timeout: 20_000 });
+          if (await page.getAttribute("[data-sheet-graph]", "aria-pressed") !== "true") await page.click("[data-sheet-graph]");
+          await page.waitForSelector(".gsheet .pgraph", { state: "attached", timeout: 20_000 });
+          await page.waitForTimeout(600);
+          gate(`desktop-sheet-graph-${lane}-${scheme}`, await readGlyphs(page, ".gsheet .pgraph"), want, { labels: true, dot: lane === "waiting" });
+          const heads = (await readGlyphs(page, ".gsheet .pane-head")).glyphs;
+          frames[`desktop-sheet-pane-heads-${lane}-${scheme}`] = heads;
+          if (!heads.length) failures.push(`desktop sheet ${lane} ${scheme}: no pane head drew a glyph`);
+          for (const head of heads) {
+            checkWord(`desktop sheet ${lane} ${scheme}`, head);
+            if (head.badge) failures.push(`desktop sheet ${lane} ${scheme}: the pane head's glyph on ${head.stage} draws a badge beside its state word`);
+            const chipState = lane === "reviewing" && head.stage === "review" ? "reviewing" : STATE_OF_READING[head.reading] ?? "pending";
+            const state = translate(lang, `kanban.graphState.${chipState}` as "kanban.graphState.pending");
+            const expected = translate(lang, "kanban.modelGlyph.aria", { model: MODEL_NAME[head.kind] ?? "?", state });
+            if (head.ownLabel !== expected) failures.push(`desktop sheet ${lane} ${scheme}: the pane head's glyph on ${head.stage} is named ${JSON.stringify(head.ownLabel)}, expected ${JSON.stringify(expected)}`);
+          }
+          await shot(page.locator(".gsheet"), `desktop-sheet-${lane}-${scheme}`);
+          if (lane === "settled") {
+            /* Every pane folded to its strip, whose grey label holds the state
+               word: there the badge says the state. Unfolded again after. */
+            for (let fold = 0; fold < 12 && await page.locator(".gsheet .pane-head [data-pane-fold]").count(); fold++) {
+              await page.locator(".gsheet .pane-head [data-pane-fold]").first().click();
+            }
+            await page.waitForTimeout(400);
+            /* The strip names its stage for the button; the section around it names the engine and the state. */
+            gate(`desktop-sheet-folded-${lane}-${scheme}`, await readGlyphs(page, ".gsheet .pane-strip"), want);
+            await shot(page.locator(".gsheet"), `desktop-sheet-folded-${lane}-${scheme}`);
+            for (let fold = 0; fold < 12 && await page.locator(".gsheet .pane-strip[data-pane-fold]").count(); fold++) {
+              await page.locator(".gsheet .pane-strip[data-pane-fold]").first().click();
+            }
+            await page.waitForTimeout(300);
+          }
+          await page.click("[data-sheet-graph]");
+          await page.waitForSelector("[data-nav-stage]", { state: "attached", timeout: 5_000 });
+          await page.waitForTimeout(300);
+          gate(`desktop-sheet-chips-${lane}-${scheme}`, await readGlyphs(page, ".gs-nav"), want, { labels: true, dot: lane === "waiting" });
+          await shot(page.locator(".gs-nav"), `desktop-sheet-chips-${lane}-${scheme}`);
+          /* The sheet remembers the graph switch; leave it on for the next lane. */
+          await page.click("[data-sheet-graph]");
+          await page.click("[data-sheet-close]");
+          await page.waitForSelector(".gsheet", { state: "detached", timeout: 5_000 });
+        }
+        if (opened.pageErrors.length) failures.push(`desktop ${suffix}: page errors ${opened.pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`desktop ${suffix}: ${(error as Error).message.split("\n")[0]}`);
+      } finally {
+        await opened.context.close();
+      }
+    };
+
+    /* The legend: the three cards with every word hidden, at 1× (an external
+       monitor) and 2× (a laptop). At 2× it also proves, without the names,
+       that the states read apart and that a badge leaves each glyph its ink,
+       and catches the running card in eight frames 200 ms apart. */
+    const legend = async (scheme: Scheme, dpr: 1 | 2) => {
+      const opened = await openFixture(browser, base, { width: 1440, height: 1200 }, scheme, "en", "no-preference", false, dpr);
+      const { page } = opened;
+      try {
+        await ready(page);
+        await page.addStyleTag({ content: HIDE_TEXT });
+        for (const holder of [RUN, REST, LIVE]) await page.locator(holder).evaluate((element) => element.setAttribute("data-legend", "1"));
+        await page.waitForTimeout(600);
+        for (const [holder, name] of [[RUN, "running"], [REST, "waiting-settled"], [LIVE, "live"]] as const) {
+          await page.locator(holder).evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.waitForTimeout(200);
+          await shot(page.locator(holder), `legend-${name}-${scheme}-dpr${dpr}`);
+        }
+        if (dpr === 1) return;
+
+        /* Each state's pill, words hidden: its border, its badge, whether it
+           moves, its glyph's treatment. No two states may look alike.
+           Committing is left out: it shared the running dot too. */
+        const looks = await page.evaluate((selector) => [...document.querySelectorAll<HTMLElement>(selector)].flatMap((pill) => {
+          const glyph = pill.querySelector<HTMLElement>(".mglyph");
+          const state = [...pill.classList].find((name) => name.startsWith("st-"))?.slice(3);
+          if (!glyph || !state) return [];
+          const style = getComputedStyle(pill);
+          const badge = glyph.querySelector(".mg-badge");
+          return [{
+            state: pill.classList.contains("rework") ? `${state}, working again` : state,
+            look: JSON.stringify([style.borderTopStyle, style.borderTopColor, badge ? getComputedStyle(badge).backgroundColor : null, glyph.dataset.live === "1", getComputedStyle(glyph.querySelector("svg")!).filter]),
+          }];
+        }), `${RUN} .pb-pill, ${REST} .pb-pill, ${LIVE} .pb-pill`);
+        const byState = new Map<string, Set<string>>();
+        for (const { state, look } of looks) if (state !== "committing") byState.set(state, (byState.get(state) ?? new Set()).add(look));
+        frames[`legend-states-${scheme}`] = Object.fromEntries([...byState].map(([state, set]) => [state, [...set]]));
+        for (const state of ["running", "reviewing", "pending", "passed", "failed", "needs_decision", "passed, working again"]) {
+          if (!byState.has(state)) failures.push(`legend ${scheme}: no pill in state ${state}`);
+        }
+        const states = [...byState.keys()];
+        for (const [index, one] of states.entries()) for (const other of states.slice(index + 1)) {
+          const shared = [...byState.get(one)!].filter((look) => byState.get(other)!.has(look));
+          if (shared.length) failures.push(`legend ${scheme}: ${one} and ${other} look alike without their words: ${shared.join(" ")}`);
+        }
+
+        /* How much of each settled glyph's ink its badge covers: the glyph is
+           shot with its badge hidden, and its inked pixels counted inside the
+           badge's disc and cut ring. Decoded in a blank page of its own. */
+        const decoder = await opened.context.newPage();
+        const inks: Array<{ stage: string | null; kind: string; ink: number; under: number }> = [];
+        const settledGlyphs = page.locator(`${REST} .pb-pill .mglyph`);
+        for (let index = 0; index < await settledGlyphs.count(); index++) {
+          const glyph = settledGlyphs.nth(index);
+          const where = await glyph.evaluate((element) => {
+            const badge = element.querySelector<HTMLElement>(".mg-badge");
+            if (!badge) return null;
+            const box = element.getBoundingClientRect();
+            const disc = badge.getBoundingClientRect();
+            badge.style.visibility = "hidden";
+            const ring = parseFloat(getComputedStyle(badge).boxShadow.split(" ").at(-1) ?? "0") || 1.5;
+            return { stage: element.closest("[data-stage]")?.getAttribute("data-stage") ?? null, kind: element.dataset.glyph ?? "", cx: disc.left + disc.width / 2 - box.left, cy: disc.top + disc.height / 2 - box.top, radius: disc.width / 2 + ring, size: box.width };
+          });
+          if (!where) continue;
+          const png = await glyph.screenshot();
+          await glyph.evaluate((element) => { element.querySelector<HTMLElement>(".mg-badge")!.style.visibility = ""; });
+          const measured = await decoder.evaluate(async ({ data, cx, cy, radius, size }) => {
+            const image = new Image();
+            image.src = `data:image/png;base64,${data}`;
+            await image.decode();
+            const canvas = document.createElement("canvas");
+            [canvas.width, canvas.height] = [image.width, image.height];
+            const context = canvas.getContext("2d")!;
+            context.drawImage(image, 0, 0);
+            const pixels = context.getImageData(0, 0, image.width, image.height).data;
+            const scale = image.width / size;
+            const [r0, g0, b0] = [pixels[0], pixels[1], pixels[2]];
+            let ink = 0;
+            let under = 0;
+            for (let y = 0; y < image.height; y++) for (let x = 0; x < image.width; x++) {
+              const at = (y * image.width + x) * 4;
+              if (Math.abs(pixels[at] - r0) + Math.abs(pixels[at + 1] - g0) + Math.abs(pixels[at + 2] - b0) <= 60) continue;
+              ink++;
+              if ((x + 0.5 - cx * scale) ** 2 + (y + 0.5 - cy * scale) ** 2 < (radius * scale) ** 2) under++;
+            }
+            return { ink: ink / scale / scale, under: ink ? under / ink : 0 };
+          }, { data: png.toString("base64"), cx: where.cx, cy: where.cy, radius: where.radius, size: where.size });
+          inks.push({ stage: where.stage, kind: where.kind, ink: Math.round(measured.ink * 10) / 10, under: Math.round(measured.under * 1000) / 1000 });
+        }
+        await decoder.close();
+        frames[`badge-ink-${scheme}`] = inks;
+        if (new Set(inks.map((entry) => entry.kind)).size < 8) failures.push(`legend ${scheme}: not every model was measured under a badge: ${JSON.stringify(inks.map((entry) => entry.kind))}`);
+        for (const entry of inks) if (entry.under > 0.15) failures.push(`legend ${scheme}: the badge covers ${Math.round(entry.under * 100)}% of ${entry.kind}'s ink`);
+        const inkOf = (kind: string) => Math.max(...inks.filter((entry) => entry.kind === kind).map((entry) => entry.ink));
+        if (!(inkOf("astra") >= inkOf("sol"))) failures.push(`legend ${scheme}: Astra (${inkOf("astra")} px of ink) is fainter than Sol (${inkOf("sol")})`);
+
+        /* Each running glyph's halo, sampled through one period with its
+           animation paused and seeked: the breath is symmetric about each
+           extreme, so the opacity at a tenth of the period matches the one at
+           nine tenths, and four tenths matches six. */
+        const curves = await page.evaluate((selector) => [...document.querySelectorAll<HTMLElement>(selector)].flatMap((glyph) => {
+          const halo = glyph.getAnimations({ subtree: true }).find((animation) => (animation.effect as KeyframeEffect | null)?.pseudoElement === "::before");
+          if (!halo) return [];
+          const period = Number(halo.effect!.getComputedTiming().duration);
+          halo.pause();
+          const opacity = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9].map((fraction) => {
+            halo.currentTime = fraction * period;
+            return Math.round(Number(getComputedStyle(glyph, "::before").opacity) * 1000) / 1000;
+          });
+          halo.play();
+          return [{ kind: glyph.dataset.glyph ?? "", period, opacity }];
+        }), `${RUN} .pb-pill .mglyph[data-live="1"]`);
+        frames[`halo-curve-${scheme}`] = curves;
+        if (new Set(curves.map((curve) => curve.kind)).size < 8) failures.push(`legend ${scheme}: not every running model's halo was sampled: ${JSON.stringify(curves.map((curve) => curve.kind))}`);
+        for (const { kind, opacity } of curves) {
+          for (let index = 0; index < 4; index++) {
+            if (Math.abs(opacity[index] - opacity[8 - index]) > 0.01) failures.push(`legend ${scheme}: ${kind}'s halo is not symmetric about its extremes: ${JSON.stringify(opacity)}`);
+          }
+          if (!(opacity[4] < opacity[0])) failures.push(`legend ${scheme}: ${kind}'s halo does not breathe: ${JSON.stringify(opacity)}`);
+        }
+
+        /* The running card in eight frames exactly 200 ms apart: every
+           animation paused and seeked to the frame's time before the shot, so
+           a slow screenshot cannot stretch the interval. Each glyph keeps its
+           silhouette. */
+        await page.locator(RUN).evaluate((element) => element.scrollIntoView({ block: "start" }));
+        const seeked: number[] = [];
+        for (let frame = 1; frame <= 8; frame++) {
+          const at = (frame - 1) * 200;
+          seeked.push(await page.evaluate((time) => {
+            const animations = document.getAnimations();
+            for (const animation of animations) { animation.pause(); animation.currentTime = time; }
+            return animations.length;
+          }, at));
+          await shot(page.locator(RUN), `motion-running-${scheme}-frame${frame}`);
+        }
+        await page.evaluate(() => { for (const animation of document.getAnimations()) animation.play(); });
+        frames[`motion-${scheme}`] = { frameMs: seeked.map((_, index) => index * 200), animationsSeeked: seeked };
+        if (seeked.some((count) => !count)) failures.push(`legend ${scheme}: a motion frame found no animation to seek: ${JSON.stringify(seeked)}`);
+        if (opened.pageErrors.length) failures.push(`legend ${scheme}: page errors ${opened.pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`legend ${scheme} ${dpr}x: ${(error as Error).message.split("\n")[0]}`);
+      } finally {
+        await opened.context.close();
+      }
+    };
+
+    /* The whole scroll of a phone screen whose body scrolls inside it. */
+    const tallShot = async (page: Page, body: string, name: string) => {
+      const tall = await page.evaluate((selector) => {
+        const element = document.querySelector(selector);
+        return element ? element.scrollHeight - element.clientHeight : 0;
+      }, body);
+      await page.setViewportSize({ width: 390, height: 844 + Math.max(0, tall) });
+      await page.waitForTimeout(300);
+      await shot(page, name);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.waitForTimeout(200);
+    };
+
+    const PHONE_TASKS = [["t-glyphs-run", "running"], ["t-glyphs", "waiting-settled"], ["t-glyphs-live", "live"]] as const;
+    const phone = async (scheme: Scheme, lang: "en" | "uk") => {
+      const suffix = `${lang === "uk" ? "uk-" : ""}${scheme}`;
+      const opened = await openFixture(browser, base, { width: 390, height: 844 }, scheme, lang, "no-preference", true, 2);
+      const { page } = opened;
+      let step = "the board";
+      try {
+        await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+        const tab = page.locator('[data-phone-kanban-tab="assigned"]');
+        if (await tab.count()) await tab.first().click();
+        /* A board card folds its lanes, so it is read for what it draws. */
+        for (const [task, name] of PHONE_TASKS) {
+          const phoneCard = page.locator(`[data-phone-card="task:${task}"]`).first();
+          await phoneCard.waitFor({ timeout: 10_000 });
+          await phoneCard.scrollIntoViewIfNeeded();
+          await page.waitForTimeout(500);
+          gate(`phone-card-${task}-${suffix}`, await readGlyphs(page, `[data-phone-card="task:${task}"]`), null);
+          await shot(phoneCard, `phone-card-${name}-${suffix}`);
+        }
+
+        /* The task screens: every lane at task density, the whole scroll. A
+           stage row prints its state word, so it draws no badge. */
+        for (const [task, name] of PHONE_TASKS) {
+          step = `the task screen of ${task}`;
+          await page.locator(`[data-phone-card="task:${task}"]`).first().click();
+          await page.waitForSelector("[data-phone-task-body] .pblock", { timeout: 10_000 });
+          /* A lane folds its passed stages into one "✓N" row; open every fold
+             so each settled model is drawn. */
+          await page.evaluate(() => { for (const fold of document.querySelectorAll<HTMLElement>('[data-phone-task-body] [data-passed-fold][aria-expanded="false"]')) fold.click(); });
+          await page.waitForTimeout(600);
+          const body = "[data-phone-task-body]";
+          if (task === "t-glyphs-run") gate(`phone-task-running-${suffix}`, await readGlyphs(page, body), WANT.running, { labels: true, dot: true });
+          else if (task === "t-glyphs") {
+            gate(`phone-task-waiting-${suffix}`, await readGlyphs(page, `${body} ${laneOf(WAIT)}`), WANT.waiting, { labels: true, dot: true });
+            for (const lane of [SETTLED_LANE, SETTLED_MORE]) gate(`phone-task-${lane}-${suffix}`, await readGlyphs(page, `${body} ${laneOf(lane)}`), WANT[lane], { labels: true });
+          } else for (const lane of LIVE_LANES) gate(`phone-task-${lane}-${suffix}`, await readGlyphs(page, `${body} ${laneOf(lane)}`), WANT[lane], { labels: true });
+          await tallShot(page, body, `phone-task-${name}-${suffix}`);
+          step = `back from the task screen of ${task}`;
+          await page.locator("[data-mobile2-back]").first().evaluate((element) => (element as HTMLElement).click());
+          await page.waitForSelector("[data-phone-kanban]", { timeout: 10_000 });
+          await page.waitForTimeout(300);
+        }
+        if (lang === "uk") return;
+
+        /* The pipeline screens of the draft and the settled lanes, opened
+           from the task screen's own "stages" row. */
+        for (const [lane, id] of [["waiting", WAIT], ["settled", SETTLED_LANE], ["settled-more", SETTLED_MORE]] as const) {
+          step = `the pipeline screen of ${id}`;
+          await page.locator('[data-phone-card="task:t-glyphs"]').first().click();
+          await page.waitForSelector(`[data-phone-task-body] ${laneOf(id)} [data-open-stages]`, { timeout: 10_000 });
+          await page.locator(`[data-phone-task-body] ${laneOf(id)} [data-open-stages]`).first().evaluate((element) => (element as HTMLElement).click());
+          await page.waitForSelector(`[data-mobile2-screen="pipeline"][data-mobile2-pipeline="${id}"] .pblock`, { timeout: 10_000 });
+          await page.evaluate(() => { (document.querySelector('[data-mobile2-screen="pipeline"] [data-passed-fold][aria-expanded="false"]') as HTMLElement | null)?.click(); });
+          await page.waitForTimeout(500);
+          gate(`phone-pipeline-${lane}-${scheme}`, await readGlyphs(page, '[data-mobile2-screen="pipeline"]'), lane === "waiting" ? WANT.waiting : WANT[id], { labels: true, dot: lane !== "settled" });
+          await tallShot(page, "[data-mobile2-pipeline-body]", `phone-pipeline-${lane}-${scheme}`);
+          /* Back to the task screen, then back to the board. */
+          for (let hop = 0; hop < 2; hop++) {
+            await page.locator("[data-mobile2-back]").first().evaluate((element) => (element as HTMLElement).click());
+            await page.waitForTimeout(300);
+          }
+          await page.waitForSelector("[data-phone-kanban]", { timeout: 10_000 });
+        }
+        if (opened.pageErrors.length) failures.push(`phone ${suffix}: page errors ${opened.pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`phone ${suffix}, ${step}: ${(error as Error).message.split("\n")[0]}`);
+      } finally {
+        await opened.context.close();
+      }
+    };
+
+    try {
+      for (const scheme of ["light", "dark"] as const) {
+        await legend(scheme, 1);
+        await legend(scheme, 2);
+        await desktop(scheme, "en", "no-preference");
+        await desktop(scheme, "uk", "no-preference");
+        await desktop(scheme, "en", "reduce");
+        await phone(scheme, "en");
+        await phone(scheme, "uk");
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    for (const host of WORD_HOSTS) for (const reading of ["passed", "failed", "needs"]) {
+      if (!wordsChecked.has(`${host}:${reading}`)) failures.push(`no ${reading} state word on a ${host} had its colour checked`);
+    }
+    const record = {
+      viewport: { desktop: "1440x1200", phone: "390x844" }, deviceScaleFactor: 2, legendDeviceScaleFactors: [1, 2],
+      screenshots: shots.map((file) => path.relative(process.cwd(), file)), frames, failures,
+    };
+    fs.writeFileSync(path.join(EVIDENCE, "readings.json"), `${JSON.stringify(record, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 1_500_000);
 });

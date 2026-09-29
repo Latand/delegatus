@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { detectBrowser, detectDeviceKind } from "@/lib/view/device";
 import { VIEW_SCHEMA_VERSION, type PresencePayloadV1 } from "@/lib/view/types";
@@ -104,6 +104,7 @@ export interface PresenceResponse {
   status: number;
   body?: ReadableStream<Uint8Array> | null;
   text?: () => Promise<string>;
+  json?: () => Promise<unknown>;
 }
 
 export interface PresencePublisherOptions {
@@ -112,6 +113,7 @@ export interface PresencePublisherOptions {
   scheduler: PresenceScheduler;
   beacon?: (url: string, body: string) => boolean;
   endpoint?: string;
+  onServing?: (revision: string) => void;
 }
 
 /** Free the response body so a non-keepalive connection can be reused: cancel the
@@ -148,7 +150,7 @@ export interface PresencePublisher {
  * the fetcher are injected so the whole thing runs under a fake clock in tests.
  */
 export function createPresencePublisher(options: PresencePublisherOptions): PresencePublisher {
-  const { identity, fetcher, scheduler, beacon, endpoint = "/api/view/presence" } = options;
+  const { identity, fetcher, scheduler, beacon, onServing, endpoint = "/api/view/presence" } = options;
   let sequence = 0;
   let inputSequence = 0;
   let pendingInteraction = false;
@@ -214,7 +216,14 @@ export function createPresencePublisher(options: PresencePublisherOptions): Pres
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
       });
-      await drainBody(res);
+      if (res.ok && onServing && res.json) {
+        try {
+          const payload = await res.json() as { serving?: unknown };
+          if (typeof payload?.serving === "string" && /^[a-f0-9]{7}$/.test(payload.serving)) onServing(payload.serving);
+        } catch { /* an older server may not answer this field */ }
+      } else {
+        await drainBody(res);
+      }
       if (res.ok) {
         clearBackoff();
       } else if (res.status >= 400 && res.status < 500) {
@@ -308,7 +317,9 @@ function windowViewport(): PresenceViewport {
  * visibility / online / resize / pagehide, and drives the publisher. It renders
  * nothing and adds no visible pixels — presence is invisible plumbing.
  */
-export function useViewPresence(): void {
+export function useViewPresence(): string | null {
+  const [reloadTo, setReloadTo] = useState<string | null>(null);
+  const initialServing = useRef<string | null>(null);
   useEffect(() => {
     if (typeof window === "undefined") return;
     let storage: Storage | null = null;
@@ -329,6 +340,10 @@ export function useViewPresence(): void {
     const publisher = createPresencePublisher({
       identity,
       fetcher: (input, init) => fetch(input, init),
+      onServing: (revision) => {
+        if (initialServing.current === null) initialServing.current = revision;
+        else if (revision !== initialServing.current) setReloadTo(revision);
+      },
       beacon:
         typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function"
           ? (url, body) => navigator.sendBeacon(url, new Blob([body], { type: "application/json" }))
@@ -375,4 +390,5 @@ export function useViewPresence(): void {
       publisher.stop();
     };
   }, []);
+  return reloadTo;
 }

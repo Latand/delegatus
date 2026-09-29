@@ -132,3 +132,73 @@ test("the design system §1.5 table documents the shipped token values", () => {
     expect(row!.toLowerCase(), `§1.5 "${label}" dark value`).toContain(dark);
   }
 });
+
+/* The model glyphs (docs/design/model-glyphs.md) are graphical objects, so the
+   ink that draws each silhouette clears 3:1 on every surface a stage sits on.
+   Sol's yellow fill is exempt on purpose: on the light paper it sits inside
+   its edge ink, which carries the shape. The Claude glyphs take the Claude
+   mark token, already pinned at its own floor. */
+test("the model glyphs' silhouette inks clear the graphical-object floor in both schemes", () => {
+  const surfaces = ["surface-card", "surface-canvas", "surface-well", "surface-sunken"].map(values);
+  for (const ink of ["glyph-sol-edge", "glyph-astra", "glyph-terra-rim", "glyph-luna"]) {
+    const inks = values(ink);
+    expect(inks.length).toBe(3);
+    for (const scheme of [0, 1]) {
+      for (const surface of surfaces) expect(contrast(inks[scheme], surface[scheme])).toBeGreaterThanOrEqual(3);
+    }
+  }
+});
+
+/* A waiting glyph is drawn through the treatment in modelGlyph.css (its colour
+   drained, at the opacity the rule sets), and a waiting stage is the look of
+   every configured lane, so the silhouette has to clear 3:1 as it is drawn
+   in that state too. The treatment is read from the rule itself. A filter
+   may run in sRGB or in linear light depending on the engine, so both are
+   checked. */
+test("a waiting glyph's drained silhouette still clears the graphical-object floor in both schemes", () => {
+  const css = fs.readFileSync(path.join(import.meta.dir, "../components/kanban/modelGlyph.css"), "utf8");
+  const rule = /\.mglyph\[data-glyph-state="waiting"\] > svg \{([^}]*)\}/.exec(css)?.[1] ?? "";
+  const saturation = Number(/saturate\(([\d.]+)\)/.exec(rule)?.[1]);
+  const opacity = Number(/opacity:\s*([\d.]+)/.exec(rule)?.[1] ?? 1);
+  expect(saturation).toBeGreaterThan(0);
+  expect(saturation).toBeLessThan(1);
+
+  const channels = (hex: string) => [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16) / 255);
+  const toLinear = (value: number) => (value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+  const toGamma = (value: number) => (value <= 0.0031308 ? value * 12.92 : 1.055 * value ** (1 / 2.4) - 0.055);
+  const toHex = (rgb: number[]) => `#${rgb.map((value) => Math.round(Math.min(1, Math.max(0, value)) * 255).toString(16).padStart(2, "0")).join("")}`;
+  /* The filter-effects saturate matrix. */
+  const saturate = (rgb: number[], linear: boolean) => {
+    const s = saturation;
+    const input = linear ? rgb.map(toLinear) : rgb;
+    const matrix = [
+      [0.213 + 0.787 * s, 0.715 - 0.715 * s, 0.072 - 0.072 * s],
+      [0.213 - 0.213 * s, 0.715 + 0.285 * s, 0.072 - 0.072 * s],
+      [0.213 - 0.213 * s, 0.715 - 0.715 * s, 0.072 + 0.928 * s],
+    ];
+    const output = matrix.map((row) => Math.min(1, Math.max(0, row[0] * input[0] + row[1] * input[1] + row[2] * input[2])));
+    return linear ? output.map(toGamma) : output;
+  };
+  const composite = (ink: string, surface: string, linear: boolean) => {
+    const drained = saturate(channels(ink), linear);
+    const under = channels(surface);
+    return toHex(drained.map((value, index) => opacity * value + (1 - opacity) * under[index]));
+  };
+
+  /* The Claude glyphs take the Claude mark: `--color-claude-mark` in light,
+     which the dark blocks point at `--color-claude`. */
+  const claude = [values("color-claude-mark")[0], values("color-claude")[1]];
+  const inks = { "glyph-claude": claude, ...Object.fromEntries(["glyph-sol-edge", "glyph-astra", "glyph-terra-rim", "glyph-luna"].map((name) => [name, values(name)])) };
+  const surfaces = ["surface-card", "surface-canvas", "surface-well", "surface-sunken"].map(values);
+  for (const [name, pair] of Object.entries(inks)) {
+    for (const scheme of [0, 1]) {
+      expect(pair[scheme], `${name} has a value in scheme ${scheme}`).toMatch(/^#[0-9a-f]{6}$/);
+      for (const surface of surfaces) {
+        for (const linear of [false, true]) {
+          const drawn = composite(pair[scheme], surface[scheme], linear);
+          expect(contrast(drawn, surface[scheme]), `${name} waiting on ${surface[scheme]} (${linear ? "linear" : "sRGB"})`).toBeGreaterThanOrEqual(3);
+        }
+      }
+    }
+  }
+});

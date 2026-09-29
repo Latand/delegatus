@@ -7,10 +7,12 @@ import type { AccountContext } from "@/lib/accounts/contracts";
 import { CODEX_LUNA_MODEL } from "@/lib/agent/models";
 import type { HeadlessCodexRunRequest, HeadlessRunResult } from "@/lib/flows/exec";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
+import { loadRoleDefinitionsOrDefaults } from "@/lib/roles/store";
 
 import {
   composeSuccessorMandate,
   fallbackHistory,
+  HANDOFF_BOARD_REPORT_POINTER,
   HANDOFF_HEADING,
   HANDOFF_DIGEST_TIMEOUT_MS,
   HISTORY_BUDGET_BYTES,
@@ -442,7 +444,15 @@ test("the delivered default mandate fits the delivery bound with room for a rota
      leave at least that much behind. */
   if (preflight.ok) {
     const remaining = MAX_STRUCTURED_TEXT_BYTES - preflight.bytes - preflight.overhead;
-    expect(remaining).toBeGreaterThan(HISTORY_BUDGET_BYTES);
+    /* v31 (docs/design/board-maintenance-report.md §5.5) moved the handoff's
+       open-task list — up to twelve rows, about 2 400 bytes — into the board
+       maintenance report, and spent part of what that freed on the core
+       section that says how to read it. So the history budget is measured
+       beside the handoff a rotation carries now: the room the core leaves,
+       plus the task list the handoff no longer carries, less the one pointer
+       line that replaced it, still holds a full history section. */
+    const retiredTaskListBytes = 2_400;
+    expect(remaining + retiredTaskListBytes - Buffer.byteLength(HANDOFF_BOARD_REPORT_POINTER)).toBeGreaterThan(HISTORY_BUDGET_BYTES);
   }
   /* Delivery appends only the role table (#1880) to the current default, and
      preflight measured the delivered text, table included. */
@@ -460,8 +470,14 @@ test("the delivered default mandate fits the delivery bound with room for a rota
    20 000 bytes left still hold two history budgets, which the second
    assertion below pins. Raised to 12 500 for the sizing rule and the variant
    runtimes in the role table (docs/design/model-sizing-tiers.md §4); main
-   already measured 12 080 before it, and 19 500 bytes still hold two. */
-const DELIVERED_DIRECTIVE_BUDGET_BYTES = 12_500;
+   already measured 12 080 before it, and 19 500 bytes still hold two. Raised
+   to 12 800 for the fix rows and the fix-stage note in the role table and the
+   greeting that says what a proactive seat starts
+   (docs/design/agent-prompt-contract.md, mandate v30), which measured 12 703;
+   19 200 bytes still hold two. Raised to 13 500 for the board maintenance
+   report section (docs/design/board-maintenance-report.md §8), which measured
+   13 399; 18 500 bytes still hold two. */
+const DELIVERED_DIRECTIVE_BUDGET_BYTES = 13_500;
 
 test("what delivery appends stays inside its share of the envelope", () => {
   const appended = Buffer.byteLength(orchestratorMandateForDelivery(""));
@@ -477,7 +493,10 @@ test("what delivery appends stays inside its share of the envelope", () => {
    delivery's cost is added to the mandate before the bound is applied, and
    that `excess` reports the real overshoot a caller is asked to shorten by. */
 test("a bespoke mandate landing exactly on the envelope is admitted, and one byte past it is refused", () => {
-  const room = MAX_STRUCTURED_TEXT_BYTES - Buffer.byteLength(orchestratorMandateForDelivery(""));
+  /* Measured against the registry preflight reads: its role table names the
+     registry revision, a line four bytes longer than the one a caller without
+     a snapshot gets. */
+  const room = MAX_STRUCTURED_TEXT_BYTES - Buffer.byteLength(orchestratorMandateForDelivery("", loadRoleDefinitionsOrDefaults()));
   expect(room).toBeGreaterThan(0);
 
   const atBound = mandatePreflight("c".repeat(room), "existing", { mode: "standard" });

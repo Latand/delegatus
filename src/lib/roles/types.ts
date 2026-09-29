@@ -79,9 +79,11 @@ export type RegistryRoleDefinitions = RoleDefinition[] & {
 
 /** The parameter combinations that run on their own runtime, per role, in
     the order the mapping lists them. `trivial` is `size=trivial`, the
-    small-change tier (docs/design/model-sizing-tiers.md §1). */
+    small-change tier (docs/design/model-sizing-tiers.md §1); the fix rows sit
+    together, a fix round's runtime following its lane's domain
+    (docs/design/agent-prompt-contract.md §3 (a)). */
 export const ROLE_VARIANT_IDS = {
-  builder: ["trivial", "frontend", "docs", "apply-fixes"],
+  builder: ["trivial", "frontend", "docs", "apply-fixes", "frontend-fixes", "docs-fixes"],
   reviewer: ["trivial"],
 } as const;
 export type VariantRoleId = keyof typeof ROLE_VARIANT_IDS;
@@ -90,6 +92,9 @@ export type BuilderVariantId = typeof ROLE_VARIANT_IDS.builder[number];
 /** The two variants an older build already knew; a file carrying only these
     stays schema 2. */
 export const SCHEMA_2_VARIANT_IDS: readonly string[] = ["frontend", "apply-fixes"];
+/** The variants schema 3 knows; a file storing any other one is schema 4, so a
+    build that predates the fix rows refuses it instead of dropping the row. */
+export const SCHEMA_3_VARIANT_IDS: readonly string[] = ["trivial", "frontend", "docs", "apply-fixes"];
 
 export type RoleOverride = {
   config?: Partial<RoleConfig>;
@@ -107,9 +112,10 @@ export type RoleMappingRetirementRecord = {
 
 export type RoleOverridesFile = {
   /** 1 without variants; 2 with only the variants an older build knew; 3 once
-      a newer variant (builder trivial/docs, reviewer trivial) is stored, so an
-      older build degrades to its defaults instead of misreading the row. */
-  schemaVersion: 1 | 2 | 3;
+      a newer variant (builder trivial/docs, reviewer trivial) is stored, and 4
+      once a fix row (builder frontend-fixes/docs-fixes) is, so an older build
+      degrades to its defaults instead of misreading the row. */
+  schemaVersion: 1 | 2 | 3 | 4;
   overrides: Partial<Record<RoleId, RoleOverride>>;
   retirements?: Record<string, RoleMappingRetirementRecord>;
 };

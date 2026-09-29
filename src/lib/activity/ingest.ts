@@ -216,10 +216,8 @@ export async function ingestTranscripts(sources: readonly IngestSource[], option
         const turns = [...piece.reader.turns, ...(open && open.end > open.start ? [{ ...open }] : [])];
         let owner: TurnOwner | null = null;
         if (transcript && (records.length || turns.length)) {
-          if (!resolution) {
-            resolve ??= options.resolver();
-            resolution = resolve(transcript);
-          }
+          resolve ??= options.resolver();
+          resolution = resolve(transcript);
           if (records.length && awaitsRegistry(transcript, resolution) && passStart - source.mtimeMs < holdMs) {
             result.filesHeld += 1;
             heldFrom = Math.min(heldFrom, earliestOf(records)!);
@@ -249,6 +247,7 @@ export async function ingestTranscripts(sources: readonly IngestSource[], option
           excluded,
           earliestOf(records),
           owner && turns.length ? { owner, turns } : null,
+          resolution?.mode === "team",
         );
         facts = piece.reader.state;
         offset = piece.offset;

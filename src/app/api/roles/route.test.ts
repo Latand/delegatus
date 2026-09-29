@@ -16,7 +16,7 @@ afterAll(() => {
 
 const { GET, PUT } = await import("./route");
 
-type Catalog = { schemaVersion: number; roles: { id: string; promptPreview: string; config: { engine: string; model: string; effort: string }; variants?: Record<string, { engine: string; model: string; effort: string }>; shipped: { config: unknown; variants?: unknown } }[] };
+type Catalog = { schemaVersion: number; roles: { id: string; promptScaffold: string; promptPreview: string; config: { engine: string; model: string; effort: string }; variants?: Record<string, { engine: string; model: string; effort: string }>; shipped: { config: unknown; promptScaffold?: string; variants?: unknown } }[] };
 const file = path.join(sandbox, "role-presets.json");
 const put = (body: unknown) => PUT(new NextRequest("http://127.0.0.1/api/roles", {
   method: "PUT",
@@ -28,16 +28,20 @@ beforeEach(() => fs.rmSync(file, { force: true }));
 
 test("roles route returns all merged role definitions with scaffold previews and shipped runtimes", async () => {
   const body = await (await GET()).json() as Catalog;
-  expect(body.schemaVersion).toBe(3);
+  expect(body.schemaVersion).toBe(4);
   expect(body.roles).toHaveLength(8);
   expect(body.roles[0]).toMatchObject({ id: "orchestrator" });
-  expect(body.roles.find((role) => role.id === "deployer")?.promptPreview).toContain("blue/green");
+  /* The shipped deployer follows the project's own release procedure and assumes no topology. */
+  expect(body.roles.find((role) => role.id === "deployer")?.promptPreview).toContain("Follow the project's own release procedure");
+  expect(body.roles.find((role) => role.id === "deployer")?.shipped.promptScaffold).toBe(body.roles.find((role) => role.id === "deployer")?.promptScaffold);
   const builder = body.roles.find((role) => role.id === "builder")!;
   expect(builder.variants).toEqual({
     trivial: { engine: "claude", model: "sonnet", effort: "high" },
-    frontend: { engine: "claude", model: "opus", effort: "high" },
+    frontend: { engine: "claude", model: "claude-sonnet-5-5", effort: "high" },
     docs: { engine: "claude", model: "opus", effort: "medium" },
-    "apply-fixes": { engine: "codex", model: "gpt-5.6-terra", effort: "low" },
+    "apply-fixes": { engine: "codex", model: "gpt-6-luna", effort: "high" },
+    "frontend-fixes": { engine: "claude", model: "sonnet", effort: "high" },
+    "docs-fixes": { engine: "claude", model: "sonnet", effort: "high" },
   });
   expect(builder.shipped.variants).toEqual(builder.variants);
   const reviewer = body.roles.find((role) => role.id === "reviewer")!;
@@ -66,7 +70,7 @@ test("GET answers the rows a retirement reset, and a write to the row clears it"
 test("PUT refuses Sonnet or Haiku on the reviewer, the architect, the orchestrator or the verifier, in words", async () => {
   const refused = await put({ overrides: { reviewer: { variants: { trivial: { engine: "claude", model: "sonnet", effort: "high" } } } } });
   expect(refused.status).toBe(400);
-  expect((await refused.json() as { error: string }).error).toBe("reviewer: Sonnet and Haiku do not run orchestrator, architect, reviewer or verifier work; name an Opus-class model or use the role's row.");
+  expect((await refused.json() as { error: string }).error).toBe("reviewer: Sonnet and Haiku do not run orchestrator, architect, reviewer or verifier work; name a large model (Claude Opus or Fable, or a large Codex model) or use the role's row.");
   expect((await put({ overrides: { architect: { config: { engine: "claude", model: "haiku", effort: "high" } } } })).status).toBe(400);
   expect(fs.existsSync(file)).toBe(false);
 });
@@ -76,7 +80,7 @@ test("GET marks a malformed registry degraded while showing the shipped catalog"
   const body = await (await GET()).json() as Catalog & { revision: string; health: { state: string; reason?: string } };
   expect(body.health).toEqual({ state: "degraded", reason: "preset unavailable" });
   expect(body.revision).toMatch(/^roles-1-/);
-  expect(body.roles.find((role) => role.id === "builder")?.variants?.frontend).toEqual({ engine: "claude", model: "opus", effort: "high" });
+  expect(body.roles.find((role) => role.id === "builder")?.variants?.frontend).toEqual({ engine: "claude", model: "claude-sonnet-5-5", effort: "high" });
 });
 
 test("PUT maps a role and a builder variant, keeps a scaffold override, and answers the merged catalog", async () => {
@@ -135,4 +139,38 @@ test("PUT refuses a malformed body and an invalid runtime, and changes nothing",
   expect(invalid.status).toBe(400);
   expect((await invalid.json() as { error: string }).error).toContain("effort for claude/opus must be one of");
   expect(fs.existsSync(file)).toBe(false);
+});
+
+/* docs/design/agent-prompt-contract.md §2.10 I: the product can put a role's
+   shipped prompt back and nothing else; setting one stays outside it, and a
+   row left with nothing is dropped. */
+test("PUT restores a role's shipped prompt text and refuses to set one", async () => {
+  fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, overrides: {
+    deployer: { promptScaffold: "An install's own deployer text." },
+    architect: { promptScaffold: "mine {{mode}}", config: { engine: "claude", model: "fable", effort: "high" } },
+  } }));
+  const before = await (await GET()).json() as Catalog;
+  const deployer = before.roles.find((role) => role.id === "deployer")!;
+  expect(deployer.promptScaffold).toBe("An install's own deployer text.");
+  expect(deployer.shipped.promptScaffold).not.toBe(deployer.promptScaffold);
+
+  const refused = await put({ overrides: { deployer: { promptScaffold: "Another text." } } });
+  expect(refused.status).toBe(400);
+  expect((await refused.json() as { error: string }).error).toBe("promptScaffold can only be reset to the shipped text");
+
+  const restored = await put({ overrides: { deployer: { promptScaffold: null }, architect: { promptScaffold: null } } });
+  expect(restored.status).toBe(200);
+  const after = await restored.json() as Catalog;
+  expect(after.roles.find((role) => role.id === "deployer")!.promptScaffold).toBe(deployer.shipped.promptScaffold!);
+  expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({ schemaVersion: 1, overrides: {
+    architect: { config: { engine: "claude", model: "fable", effort: "high" } },
+  } });
+});
+
+/* A stored fix row is schema 4, so a build that predates the fix rows refuses
+   the file instead of dropping the row. */
+test("a stored fix row writes the file at schema 4", async () => {
+  const row = { engine: "claude", model: "opus", effort: "medium" };
+  expect((await put({ overrides: { builder: { variants: { "frontend-fixes": row } } } })).status).toBe(200);
+  expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({ schemaVersion: 4, overrides: { builder: { variants: { "frontend-fixes": row } } } });
 });

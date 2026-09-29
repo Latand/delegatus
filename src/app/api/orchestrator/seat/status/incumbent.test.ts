@@ -116,6 +116,45 @@ test("reaching the configured threshold RECOMMENDS and says so — and the paylo
   expect(JSON.stringify(body)).not.toContain("rotate_orchestrator\":");
 });
 
+/** Invented base64: `bytes` of a repeating pattern, encoded — no real image. */
+function inventedBase64(bytes: number, seed: number): string {
+  return Buffer.from(Array.from({ length: bytes }, (_, index) => (index * 31 + seed) % 256)).toString("base64");
+}
+
+test("a first message with 13 pasted images and no usage yet is a small estimate with no rotation advice; the next usage record replaces it", async () => {
+  /* The shape read on this machine: a Claude seat's first operator message is
+     one user row whose content is 13 `{type:"image",source:{type:"base64"}}`
+     blocks (84–618 KB of base64 each, 4.4 MB in the row) plus the text, and
+     the reply's assistant rows carry message.usage once they are written. */
+  const transcript = path.join(sandbox, "orchestrator.jsonl");
+  const images = Array.from({ length: 13 }, (_, index) => ({
+    type: "image",
+    source: { type: "base64", media_type: "image/png", data: inventedBase64(240 * 1024, index) },
+  }));
+  const firstMessage = { type: "user", message: { role: "user", content: [...images, { type: "text", text: "what is on these screens?" }] } };
+  fs.writeFileSync(transcript, JSON.stringify(firstMessage) + "\n", "utf8");
+  expect(fs.statSync(transcript).size).toBeGreaterThan(4 * 1024 * 1024);
+  beginOrchestratorSeatIntent({ project: "proj-a", mandate: "run the board", clientRequestId: "req_00000001", mode: "spawn", now: AT });
+  completeOrchestratorSeatIntent({ project: "proj-a", clientRequestId: "req_00000001", conversationId: "conversation_a", path: transcript, now: AT });
+  const read = () => readOrchestratorIncumbent("proj-a", dependencies({ conversation: () => conversation(transcript) }));
+
+  const running = await read();
+  expect(running.context).toMatchObject({ estimated: true, limit: 1_000_000 });
+  expect(running.context!.tokens!).toBeLessThan(25_000);
+  expect(running.context!.percent!).toBeLessThanOrEqual(3);
+  expect(running.context!.basis).toContain("ESTIMATE");
+  expect(running.rotation).toMatchObject({ recommended: false, level: "none", advisory: null, reasons: [] });
+
+  fs.appendFileSync(
+    transcript,
+    JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "I see" }], usage: { input_tokens: 2, cache_creation_input_tokens: 31_000, cache_read_input_tokens: 9_000, output_tokens: 40 } } }) + "\n",
+    "utf8",
+  );
+  const answered = await read();
+  expect(answered.context).toMatchObject({ tokens: 40_002, percent: 4, estimated: false });
+  expect(answered.rotation).toMatchObject({ recommended: false, level: "none" });
+});
+
 test("a model with no window policy states the usage it can prove and calls the threshold unknown", async () => {
   const transcript = seatWithTranscript(2_048, 90_000);
   const body = await readOrchestratorIncumbent("proj-a", dependencies({

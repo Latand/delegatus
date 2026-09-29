@@ -10,13 +10,13 @@ import { recordTeamEvent, refuseAnonymous, teamActor } from "@/lib/team";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { listFiles } from "@/lib/scanner";
 import { attachmentPath } from "@/lib/tasks/attachments";
+import { runsElsewhere } from "@/lib/links/linked";
 import { applyAssignmentPatches } from "@/lib/tasks/commands";
 import { isoNow, taskDeliveryText } from "@/lib/tasks/helpers";
 import { assembleSendResults, type TaskSendTargetOutcome } from "@/lib/tasks/send";
 import { loadTasks, mutateTasks } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { ApiError } from "@/lib/types";
-import { recordDirectOperatorWakatimeActivity } from "@/lib/wakatime/operatorActivity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,7 +46,7 @@ interface TaskSendDependencies {
   listFiles: typeof listFiles;
   deliverConversationMessage: typeof deliverConversationMessage;
   mutateTasks: typeof mutateTasks;
-  recordOperatorActivity: typeof recordDirectOperatorWakatimeActivity;
+
   /** The activity dashboard's request ledger; never throws. */
   recordOperatorRequest?: typeof recordOperatorRequest;
 }
@@ -56,7 +56,7 @@ const productionDependencies: TaskSendDependencies = {
   listFiles,
   deliverConversationMessage,
   mutateTasks,
-  recordOperatorActivity: recordDirectOperatorWakatimeActivity,
+
   recordOperatorRequest,
 };
 
@@ -84,6 +84,10 @@ async function postTaskSend(
   const { id } = await ctx.params;
   const task = dependencies.loadTasks().find((item) => item.id === id);
   if (!task) return NextResponse.json({ error: "task not found" }, { status: 404 });
+  /* Handing a task to agents is work on it: only the machine it names does
+     that (docs/design/linked-installs.md M.4 seam 3). */
+  const elsewhere = runsElsewhere(task);
+  if (elsewhere) return NextResponse.json({ error: elsewhere.error, code: elsewhere.code }, { status: elsewhere.status });
 
   const files = await dependencies.listFiles();
   const byPath = new Map(files.map((file) => [file.path, file]));
@@ -99,17 +103,6 @@ async function postTaskSend(
     return NextResponse.json({ error: "clientRequestId must be 8-128 URL-safe characters" }, { status: 400 });
   }
   if (targetEntries[0] && directOperatorActivityAuthority(req).ok) {
-    try {
-      dependencies.recordOperatorActivity({
-        ...(clientRequestId ? { idempotencyKey: `task-send:${clientRequestId}` } : {}),
-        resolvedAttribution: {
-          engine: targetEntries[0].engine === "claude" ? "claude" : "codex",
-          project: task.project,
-        },
-      });
-    } catch {
-      return NextResponse.json({ error: "direct operator activity could not be recorded" }, { status: 503 });
-    }
     /* One request, however many agents it fans out to. */
     dependencies.recordOperatorRequest?.(req, {
       kind: "message",

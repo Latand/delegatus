@@ -103,6 +103,18 @@ export interface StateMutationContext<T> {
   structural: boolean;
 }
 
+export interface ChangeLogPage {
+  revision: number;
+  changeFloor: number;
+  entries: { revision: number; key: string; operation: "upsert" | "delete"; valueJson: string | null; rowRevision: number | null }[];
+}
+
+/** Rows another collection of the same database writes in the same commit. */
+export interface CompanionPatch<C> {
+  records: readonly C[];
+  deleteKeys?: readonly string[];
+}
+
 export interface StateBoundedTransaction<T> {
   get(key: string): T | null;
   pipelineLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): T | null;
@@ -841,6 +853,35 @@ export class SqliteStateCollection<T> {
     return decoded === null ? null : this.options.clone(decoded);
   }
 
+  /** One read transaction over the change log strictly after `(revision,
+      key)`, in `(revision, row_key)` order, joined to each row's current
+      value (null once deleted). An empty `key` means the whole of `revision`
+      is behind the caller. Reads nothing when the collection revision equals
+      `revision` and no key is given. */
+  changesAfter(revision: number, key: string, limit: number): ChangeLogPage {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 4096) throw new Error("invalid state page limit");
+    this.readDb.exec("BEGIN");
+    try {
+      const meta = this.readDb.query<{ revision: number; change_floor: number }, [string]>(
+        "SELECT revision, change_floor FROM state_collections WHERE collection = ?",
+      ).get(this.options.collection);
+      if (!meta) throw new Error(`SQLite state collection disappeared: ${this.options.collection}`);
+      const entries = meta.revision === revision && !key ? [] : this.readDb.query<{ revision: number; row_key: string; operation: "upsert" | "delete"; value_json: string | null; row_revision: number | null }, [string, number, number, string, number, number]>(`
+        SELECT c.revision, c.row_key, c.operation, r.value_json, r.row_revision FROM state_changes c
+        LEFT JOIN state_rows r ON r.collection = c.collection AND r.row_key = c.row_key
+        WHERE c.collection = ? AND (c.revision > ? OR (c.revision = ? AND c.row_key > ?)) AND c.revision <= ?
+        ORDER BY c.revision, c.row_key LIMIT ?
+      `).all(this.options.collection, revision, key ? revision : -1, key, meta.revision, limit).map((row) => ({
+        revision: row.revision, key: row.row_key, operation: row.operation, valueJson: row.value_json, rowRevision: row.row_revision,
+      }));
+      this.readDb.exec("COMMIT");
+      return { revision: meta.revision, changeFloor: meta.change_floor, entries };
+    } catch (error) {
+      rollbackQuietly(this.readDb);
+      throw error;
+    }
+  }
+
   /** Indexed keyset page. The caller owns the upper bound and continuation. */
   keyRange(after: string, through: string, limit: number): T[] {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 512) throw new Error("invalid state page limit");
@@ -1169,20 +1210,37 @@ export class SqliteStateCollection<T> {
       for the legacy reconcile its own demotion checkpoint runs (#1870).
       `appendKeys` names changed rows that move to the end of the collection
       order instead of keeping their held position. */
-  patchSync(
-    prepare: () => { records: readonly T[]; deleteKeys?: readonly string[]; appendKeys?: readonly string[] },
-    options: { fenceOwner?: boolean } = {},
+  patchSync<C = never>(
+    prepare: () => { records: readonly T[]; deleteKeys?: readonly string[]; appendKeys?: readonly string[]; companion?: CompanionPatch<C> },
+    options: { fenceOwner?: boolean; companion?: SqliteStateCollection<C> } = {},
   ): void {
     const authorize = options.fenceOwner
       ? () => assertSqliteInitializationAuthority(this.filename, true)
       : () => assertSqliteWriteAuthority(this.filename);
     authorize();
-    const lease = this.acquireLeaseSync();
+    const companion = options.companion;
+    if (companion && (companion === (this as unknown) || companion.filename !== this.filename)) {
+      throw new Error("a companion write needs another collection of the same database");
+    }
+    /* Both leases, taken in collection-name order like `moveMatchingTo`, so
+       the prepare step reads both collections as committed. */
+    const first = companion && companion.options.collection < this.options.collection ? companion : null;
+    const companionLease = first ? first.acquireLeaseSync() : null;
+    let ownLease: string | null = null;
+    let laterLease: string | null = null;
     try {
+      ownLease = this.acquireLeaseSync();
+      if (companion && !first) laterLease = companion.acquireLeaseSync();
       const patch = prepare();
-      this.persistReplacement(lease, patch.records, true, patch.deleteKeys ?? [], authorize, new Set(patch.appendKeys ?? []));
+      const companionWrite = companion && patch.companion
+        ? { collection: companion, lease: (companionLease ?? laterLease)!, ...patch.companion }
+        : undefined;
+      this.persistReplacement(ownLease, patch.records, true, patch.deleteKeys ?? [], authorize, new Set(patch.appendKeys ?? []),
+        companionWrite as (CompanionPatch<unknown> & { collection: SqliteStateCollection<unknown>; lease: string }) | undefined);
     } finally {
-      this.releaseLeaseSync(lease);
+      if (laterLease) companion!.releaseLeaseSync(laterLease);
+      if (ownLease) this.releaseLeaseSync(ownLease);
+      if (companionLease) first!.releaseLeaseSync(companionLease);
     }
   }
 
@@ -1510,6 +1568,7 @@ export class SqliteStateCollection<T> {
     deleteKeys: readonly string[] = [],
     authorize: () => void = () => assertSqliteWriteAuthority(this.filename),
     appendKeys: ReadonlySet<string> = new Set(),
+    companion?: CompanionPatch<unknown> & { collection: SqliteStateCollection<unknown>; lease: string },
   ): void {
     for (const record of records) this.validate(record);
     const seen = new Set<string>();
@@ -1548,7 +1607,8 @@ export class SqliteStateCollection<T> {
         const deleted = mergeOmitted
           ? [...requestedDeletes].filter((key) => current.has(key))
           : [...current.keys()].filter((key) => !seen.has(key));
-        if (changed.length === 0 && deleted.length === 0) return null;
+        const companionChanged = companion ? companion.collection.mergeRows(db, companion.lease, companion.records, companion.deleteKeys ?? []) : false;
+        if (changed.length === 0 && deleted.length === 0) return companionChanged ? meta.revision : null;
         const nextRevision = meta.revision + 1;
         const nextOrder = mergeOmitted
           ? (Math.max(-1, ...[...current.values()].map((row) => row.row_order)) + 1)
@@ -1586,10 +1646,49 @@ export class SqliteStateCollection<T> {
       if (revision !== null) {
         secureDatabaseFiles(this.filename);
         this.invalidateAfterCommit();
+        companion?.collection.invalidateAfterCommit();
       }
     } finally {
       db.close();
     }
+  }
+
+  /** Upsert and delete rows of this collection inside a transaction another
+      collection opened, under this collection's lease. Returns whether
+      anything changed. */
+  private mergeRows(db: Database, ownerToken: string, records: readonly T[], deleteKeys: readonly string[]): boolean {
+    this.assertLease(db, ownerToken);
+    for (const record of records) this.validate(record);
+    const current = db.query<Pick<CollectionRow, "value_json" | "row_order" | "controller_active">, [string, string]>(
+      "SELECT value_json, row_order, controller_active FROM state_rows WHERE collection = ? AND row_key = ?",
+    );
+    const upserts = records.flatMap((record) => {
+      const key = this.options.key(record);
+      const valueJson = JSON.stringify(record);
+      const held = current.get(this.options.collection, key);
+      return held?.value_json === valueJson ? [] : [{ key, valueJson, held, controllerActive: this.options.controllerActive?.(record) === false ? 0 : 1 }];
+    });
+    const deletes = deleteKeys.filter((key) => current.get(this.options.collection, key));
+    if (!upserts.length && !deletes.length) return false;
+    const revision = this.collectionMeta(db)!.revision + 1;
+    let order = (db.query<{ value: number }, [string]>("SELECT COALESCE(MAX(row_order), -1) AS value FROM state_rows WHERE collection = ?")
+      .get(this.options.collection)?.value ?? -1) + 1;
+    const change = db.query("INSERT INTO state_changes(collection, revision, row_key, operation) VALUES (?, ?, ?, ?)");
+    const upsert = db.query(`INSERT INTO state_rows(collection, row_key, value_json, row_order, row_revision, controller_active)
+      VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(collection, row_key) DO UPDATE SET
+      value_json = excluded.value_json, row_revision = excluded.row_revision, controller_active = excluded.controller_active`);
+    for (const entry of upserts) {
+      upsert.run(this.options.collection, entry.key, entry.valueJson, entry.held?.row_order ?? order++, revision, entry.controllerActive);
+      change.run(this.options.collection, revision, entry.key, "upsert");
+    }
+    const remove = db.query("DELETE FROM state_rows WHERE collection = ? AND row_key = ?");
+    for (const key of deletes) {
+      remove.run(this.options.collection, key);
+      change.run(this.options.collection, revision, key, "delete");
+    }
+    db.query("UPDATE state_collections SET revision = ? WHERE collection = ?").run(revision, this.options.collection);
+    this.pruneChanges(db, revision);
+    return true;
   }
 
   private assertLease(db: Database, ownerToken: string): void {

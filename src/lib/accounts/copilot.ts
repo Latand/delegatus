@@ -1,9 +1,9 @@
+import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { stateDir, statePath } from "@/lib/configDir";
-import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 
 import { withAccountMutationLock } from "./accountMutation";
 import type { AccountContext } from "./contracts";
@@ -226,7 +226,7 @@ export function copilotAccountContext(account: CopilotAccount): AccountContext {
     kind: account.kind,
     home: account.home,
     transcriptRoot: account.sessionStateDir,
-    env: withoutWakatimeCredential(process.env),
+    env: withoutUnsupportedApiCredentials(process.env),
   };
 }
 

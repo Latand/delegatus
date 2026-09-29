@@ -46,6 +46,7 @@ export interface ReportTelegramSetting {
   chat: string;
   /** The project's name in report headers; never a local folder name. */
   name: string;
+  topicId?: number;
   changedAt: string;
   changedBy: string;
 }
@@ -67,6 +68,7 @@ export type ReportTelegramChoice = ReportTelegramSetting | ReportLogOnlySetting;
 export interface EffectiveReportTelegram {
   chat: string;
   name: string;
+  topicId?: number;
   source: "chosen";
 }
 
@@ -113,7 +115,7 @@ function reportTelegramOf(value: unknown): ReportTelegramChoice | null {
   }
   if (typeof record.chat !== "string" || !record.chat.trim() || typeof record.name !== "string" || !record.name.trim()) return null;
   if (typeof record.changedAt !== "string" || typeof record.changedBy !== "string") return null;
-  return { chat: record.chat, name: record.name, changedAt: record.changedAt, changedBy: record.changedBy };
+  return { chat: record.chat, name: record.name, ...(typeof record.topicId === "number" && Number.isSafeInteger(record.topicId) && record.topicId > 0 ? { topicId: record.topicId } : {}), changedAt: record.changedAt, changedBy: record.changedBy };
 }
 
 /** A malformed setting reads as its default; the entry's other setting keeps its value. */
@@ -248,7 +250,7 @@ export function reportTelegram(project: string): ReportTelegramSetting | null {
  */
 export function effectiveReportTelegram(project: string): EffectiveReportTelegram | null {
   const choice = reportTelegram(project);
-  return choice ? { chat: choice.chat, name: choice.name, source: "chosen" } : null;
+  return choice ? { chat: choice.chat, name: choice.name, ...(choice.topicId ? { topicId: choice.topicId } : {}), source: "chosen" } : null;
 }
 
 /**
@@ -258,7 +260,7 @@ export function effectiveReportTelegram(project: string): EffectiveReportTelegra
  */
 export function setReportTelegram(
   project: string,
-  value: { chat: string; name: string } | null,
+  value: { chat: string; name: string; topicId?: number } | null,
   changedBy: string,
   now: string = new Date().toISOString(),
 ): ReportTelegramChoice | false {
@@ -267,7 +269,7 @@ export function setReportTelegram(
   const projects = { ...readProjects() };
   const entry = { ...projects[key] };
   if (value) {
-    entry.reportTelegram = { chat: value.chat.trim(), name: value.name.trim().slice(0, REPORT_NAME_MAX_CHARS), changedAt: now, changedBy };
+    entry.reportTelegram = { chat: value.chat.trim(), name: value.name.trim().slice(0, REPORT_NAME_MAX_CHARS), ...(value.topicId ? { topicId: value.topicId } : {}), changedAt: now, changedBy };
   } else {
     entry.reportTelegram = { chat: null, changedAt: now, changedBy };
   }

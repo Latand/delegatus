@@ -33,7 +33,8 @@ import {
  * 5. **The engine-wide automatic migration** — `commitMigrationIntent` with an
  *    automatic origin. → `admitAutomaticAccountTarget`, per conversation.
  * 6. **The lazy active-account migration** on the delivery path —
- *    `requestConversationMigrationToActiveAccount`. → same, for one conversation.
+ *    `requestConversationMigrationToActiveAccount`. → same, for one conversation,
+ *    and it moves nothing while `placedAccountHolds` keeps the pool's placement.
  * 7. **The one-click reseat** — `chooseProjectReseatTarget`. Drawn from the pool;
  *    it keeps its own STRICTER capacity bar (real headroom, not merely "not
  *    exhausted"), because a successor seat picked on a nearly spent account is
@@ -287,4 +288,22 @@ export function admitAutomaticAccountTarget(input: AutomaticAccountTargetInput):
   return selected.kind === "exhausted"
     ? { kind: "exhausted", resetsAt: selected.resetsAt, allowedAccountIds: allowed }
     : { kind: "unavailable", allowedAccountIds: allowed };
+}
+
+/**
+ * Whether work a bound project's pool already placed stays where it is when
+ * the engine's routing points elsewhere. The launch picked this account from
+ * the pool by room, and routing only broke a tie there, so a later send that
+ * moves it onto the routed account undoes the placement for no reason and
+ * pays for a migration. An account the pool still allows and that still has
+ * room keeps the work; one the pool dropped, or with no room left, lets the
+ * lazy move go ahead as before.
+ *
+ * An unbound project has no placement of its own: its launches take the
+ * engine's default, so the routed account is its placement and the lazy move
+ * stays exactly as it was.
+ */
+export function placedAccountHolds(input: Omit<AutomaticAccountTargetInput, "targetId"> & { accountId: string }): boolean {
+  if (allowedAccountIdsForProject(input.project, input.engine, input.bindings) === null) return false;
+  return admitAutomaticAccountTarget({ ...input, targetId: input.accountId }).kind === "available";
 }

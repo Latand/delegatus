@@ -253,6 +253,85 @@ test("a stall wakes only once it has persisted across two consecutive checks", (
   expect(reasonsOf(second.verdict)).toEqual(["stalled"]);
 });
 
+test("a stall the last wake reported and that has not moved gives its place to every unstarted task", () => {
+  const stuckSince = new Date(NOW - 120 * MINUTE).toISOString();
+  const stalls = [1, 2, 3, 4, 5].map((n) => lane({ id: `pipeline_s${n}`, title: `stuck ${n}`, updatedAt: stuckSince,
+    stageActivity: { lifecycle: "stalled", reason: "host_alive_transcript_silent" } }));
+  const fresh = card({ id: "task_new", title: "assigned after the wake", updatedAt: new Date(NOW - 10 * MINUTE).toISOString() });
+  const older = card({ id: "task_old", title: "assigned before the wake", updatedAt: new Date(NOW - 90 * MINUTE).toISOString() });
+  const seen = { lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString(), lastWakeReasons: ["stalled" as const], stalledSeen: stalls.map((stall) => stall.id) };
+  const reportedStalls = stalls.map((stall) => `${stall.id}@${stuckSince}`);
+  const idsOf = (verdict: SeatTickVerdict) => verdict.kind === "wake" ? verdict.items.map((item) => item.id) : [];
+
+  const reported = seatTickDecision(input({ pipelines: stalls, tasks: [older, fresh], state: stateWith({ ...seen, reportedStalls }) }));
+  expect(reasonsOf(reported.verdict)).toEqual(["stalled", "unstarted-task"]);
+  expect(idsOf(reported.verdict)).toEqual(["task_old", "task_new", "pipeline_s1", "pipeline_s2", "pipeline_s3"]);
+
+  /* Never named by a landed wake, the stalls keep the head of the agenda,
+     even though the last wake carried the stalled reason. */
+  const unreported = seatTickDecision(input({ pipelines: stalls, tasks: [older, fresh], state: stateWith(seen) }));
+  expect(idsOf(unreported.verdict)).toEqual(stalls.map((stall) => stall.id));
+
+  /* A stalled lane that moved since the wake is news again and stays ahead. */
+  const moved = stalls.map((stall, index) => index === 0 ? { ...stall, updatedAt: new Date(NOW - 30 * MINUTE).toISOString() } : stall);
+  const again = seatTickDecision(input({ pipelines: moved, tasks: [older, fresh], state: stateWith({ ...seen, reportedStalls }) }));
+  expect(idsOf(again.verdict)).toEqual(["pipeline_s1", "task_old", "task_new", "pipeline_s2", "pipeline_s3"]);
+});
+
+test("a task assigned before the wake that first reported a stall is not deferred behind it on the next wake", () => {
+  const W1 = NOW - 90 * MINUTE;
+  const stalls = [1, 2, 3, 4, 5].map((n) => lane({ id: `pipeline_s${n}`, title: `stuck ${n}`,
+    updatedAt: new Date(NOW - 240 * MINUTE).toISOString(),
+    stageActivity: { lifecycle: "stalled", reason: "host_alive_transcript_silent" } }));
+  const assigned = card({ id: "task_early", title: "assigned before the stalls were reported",
+    updatedAt: new Date(W1 - 30 * MINUTE).toISOString() });
+  const idsOf = (verdict: SeatTickVerdict) => verdict.kind === "wake" ? verdict.items.map((item) => item.id) : [];
+
+  /* W1: the stalls pass their second check; the wake before carried no stall. */
+  const first = seatTickDecision(input({ now: W1, pipelines: stalls, tasks: [assigned],
+    state: stateWith({ lastWakeAt: new Date(W1 - 61 * MINUTE).toISOString(), lastWakeReasons: ["interval"],
+      stalledSeen: stalls.map((stall) => stall.id) }) }));
+  expect(reasonsOf(first.verdict)).toEqual(["stalled", "unstarted-task"]);
+  expect(idsOf(first.verdict)).toEqual(stalls.map((stall) => stall.id));
+  const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-w1", 0), W1);
+  expect(landed.lastWakeReasons).toContain("stalled");
+  expect(landed.reportedStalls).toEqual(stalls.map((stall) => `${stall.id}@${stall.updatedAt}`));
+
+  /* W2: the stalls have not moved, and the task, older than W1, now leads. */
+  const second = seatTickDecision(input({ pipelines: stalls, tasks: [assigned], changeFingerprint: "fp-w2", state: landed }));
+  expect(reasonsOf(second.verdict)).toContain("unstarted-task");
+  expect(idsOf(second.verdict)).toEqual(["task_early", "pipeline_s1", "pipeline_s2", "pipeline_s3", "pipeline_s4"]);
+});
+
+test("a stall no landed wake named keeps its place ahead of five or more unstarted tasks", () => {
+  const W1 = NOW - 90 * MINUTE;
+  const stuck = { updatedAt: new Date(NOW - 240 * MINUTE).toISOString(), stageActivity: { lifecycle: "stalled" as const, reason: "host_alive_transcript_silent" } };
+  const told = lane({ id: "pipeline_told", title: "reported stall", ...stuck });
+  const untold = lane({ id: "pipeline_untold", title: "stall nobody reported", ...stuck });
+  const tasks = [1, 2, 3, 4, 5, 6].map((n) => card({ id: `task_${n}`, title: `task ${n}`, updatedAt: new Date(W1 - 30 * MINUTE).toISOString() }));
+  const idsOf = (verdict: SeatTickVerdict) => verdict.kind === "wake" ? verdict.items.map((item) => item.id) : [];
+
+  /* W1: only the first lane has stalled across two checks; the wake names it. */
+  const first = seatTickDecision(input({ now: W1, pipelines: [told, { ...untold, stageActivity: null }], tasks,
+    state: stateWith({ lastWakeAt: new Date(W1 - 61 * MINUTE).toISOString(), stalledSeen: [told.id] }) }));
+  expect(idsOf(first.verdict)[0]).toBe(told.id);
+  const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-w1", 0), W1);
+  expect(landed.lastWakeReasons).toEqual(["stalled", "unstarted-task"]);
+
+  /* W2: the second lane crossed its second stalled check after W1. Its record
+     is older than W1 too, and it still leads, because no wake named it. */
+  const second = seatTickDecision(input({ pipelines: [told, untold], tasks, changeFingerprint: "fp-w2",
+    state: { ...landed, stalledSeen: [told.id, untold.id] } }));
+  expect(idsOf(second.verdict)).toEqual([untold.id, "task_1", "task_2", "task_3", "task_4"]);
+  expect(second.verdict.kind === "wake" ? second.verdict.deferred : null).toBe(3);
+
+  /* W3: named once, it yields to the tasks as the first one did. */
+  const third = seatTickWakeCommit(second.state, plan(second.verdict, "fp-w2", 0), NOW);
+  expect(third.reportedStalls).toEqual([`${told.id}@${told.updatedAt}`, `${untold.id}@${untold.updatedAt}`]);
+  const after = seatTickDecision(input({ now: NOW + 90 * MINUTE, pipelines: [told, untold], tasks, changeFingerprint: "fp-w3", state: third }));
+  expect(idsOf(after.verdict)).toEqual(["task_1", "task_2", "task_3", "task_4", "task_5"]);
+});
+
 test("a stage or child held on a permission request is listed as a permission item, never as a stall (#2215)", () => {
   const permission = { tool: "Bash", command: "rm -rf $R/*.json", reason: "Dangerous rm operation on possibly-empty variable path: $R/*.json" };
   const held = lane({ stageId: "build", stageActivity: { lifecycle: "waiting", reason: "permission_request", turnState: "busy", permission } });
@@ -834,6 +913,16 @@ test("an assigned task nothing has started wakes the seat once the wake interval
   expect(reasonsOf(decision.verdict)).toEqual(["unstarted-task"]);
 });
 
+/* docs/design/linked-installs.md M.4: another machine's orchestrator starts
+   its own tasks, so they are no wake reason here, unstarted or backlog. */
+test("an assigned task another linked machine runs wakes no seat", () => {
+  const decision = seatTickDecision(input({
+    tasks: [card({ runsOn: "beta" }), card({ id: "task_old", runsOn: "beta", updatedAt: new Date(NOW - 30 * 24 * 60 * MINUTE).toISOString() })],
+    state: stateWith({ lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString() }),
+  }));
+  expect(reasonsOf(decision.verdict)).toEqual([]);
+});
+
 /* #1262: the bound itself, at the layer that applies it. What the bound is FOR
    — a board of stale assigned cards that could never discharge the reason, and
    a movement that brings one back — is a claim about a real board under a real
@@ -1293,7 +1382,7 @@ test("an unreadable settled child is listed with its reason, and an unreadable r
   const verdict = first.verdict as Extract<SeatTickVerdict, { kind: "wake" }>;
   expect(verdict.items.find((item) => item.id === settled.conversationId)?.label)
     .toContain("spawned child finished, transcript not readable: the transcript file is no longer on disk");
-  expect(verdict.unreadableChildren).toEqual([expect.objectContaining({ conversationId: SECOND_CHILD, title: "silent worker", reason: "its transcript path is outside every folder this Viewer scans" })]);
+  expect(verdict.unreadableChildren).toEqual([expect.objectContaining({ conversationId: SECOND_CHILD, title: "silent worker", reason: "its transcript path is outside every folder Delegatus scans" })]);
   expect(verdict.skippedChildren.unreadable).toBe(0);
   /* Landed, the running child's reason is not named again while it stands. */
   const plan = seatTickWakeCommitPlan(first.verdict, { fingerprint: "fp-2", eventsThrough: 0, terminalChildren: [settled.conversationId] })!;

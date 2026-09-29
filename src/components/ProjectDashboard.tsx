@@ -64,6 +64,8 @@ import { MobileSeatCard } from "./mobile/MobileSeatCard";
 import { activityMobileMenuEntry } from "./activity/menuEntry";
 import { teamMobileMenuEntry } from "./team/menuEntry";
 import { onboardingMobileMenuEntries } from "./onboarding/menuEntries";
+import { openLinkedSettings } from "./links/openLinkedSettings";
+import { openExternalRelaySettings } from "./externalRelay/openExternalRelaySettings";
 import { selfUpdateMobileMenuEntry } from "./selfUpdate/menuEntry";
 import { MobileMenuSheet, type MobileMenuEntry } from "./mobile/MobileMenuSheet";
 import { showReceipt } from "./mobile/MobileReceipt";
@@ -106,6 +108,7 @@ import { ArchiveProjectButton, DeleteProjectButton } from "./ProjectTrash";
 import { AsksYouRow } from "./AsksYouRow";
 import { BridgeReportsRow } from "./BridgeReportsRow";
 import { MergeOnReviewRow } from "./MergeOnReviewRow";
+import { ShareProjectRow } from "./links/ShareProjectRow";
 import { SoundToggle } from "./SoundToggle";
 import { BAR_MENU_ROW, BarCreateGroup, BarMenuGroup, BarMoreMenu, BarPanelToggles, DashboardBar } from "./ProjectBar";
 
@@ -2064,11 +2067,14 @@ function ProjectDashboardView({
       { kind: "custom", key: "awake", node: <div className="px-2.5"><KeepAwakeMenuRow /></div> },
       { kind: "divider", key: "d-setup" },
       ...onboardingMobileMenuEntries(t, () => mobileNav.closeSheet()),
+      { kind: "row", key: "linked-settings", icon: null, label: t("links.title"), onSelect: () => { mobileNav.closeSheet(); openLinkedSettings(); } },
+      { kind: "row", key: "external-relay", icon: null, label: t("externalRelay.title"), onSelect: () => { mobileNav.closeSheet(); openExternalRelaySettings(); } },
       selfUpdateMobileMenuEntry(t, () => mobileNav.closeSheet()),
       /* The project's merge and bridge report settings (#2187 §6, #2146), the
          same rows as the desktop ⋯. */
       { kind: "divider", key: "d-merge" },
       { kind: "custom", key: "merge-on-review", node: <MergeOnReviewRow project={project} variant="sheet" /> },
+      { kind: "custom", key: "share-project", node: <ShareProjectRow project={project} variant="sheet" /> },
       { kind: "custom", key: "bridge-reports", node: <BridgeReportsRow project={project} variant="sheet" /> },
       /* "Asks you" is the installation's, not the project's; it sits here
          because this is where the operator looks for what reports to them. */
@@ -2148,6 +2154,7 @@ function ProjectDashboardView({
             </BarMenuGroup>
             <BarMenuGroup name="project">
               <MergeOnReviewRow project={project} variant="menu" />
+              <ShareProjectRow project={project} variant="menu" />
               <BridgeReportsRow project={project} variant="menu" />
               <AsksYouRow variant="menu" />
               {archived ? (
@@ -2332,6 +2339,7 @@ function ProjectDashboardView({
             <MobilePipelinesScreen
               pipelines={activePipelines}
               flows={flows}
+              files={files}
               now={nowSeconds}
               host={mobileShell}
               renderSheet={renderMobileSheet}

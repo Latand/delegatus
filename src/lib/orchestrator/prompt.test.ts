@@ -12,6 +12,8 @@ import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { renderTaskColorRule, TASK_COLOR_RULE } from "@/lib/tasks/colorRule";
 
 import {
+  ORCHESTRATOR_BOARD_REPORT_DIRECTIVE,
+  ORCHESTRATOR_BOARD_REPORT_HEADING,
   ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
   ORCHESTRATOR_PROMPT_VERSION,
   ORCHESTRATOR_ROLE_TABLE_HEADING,
@@ -22,6 +24,7 @@ import {
   ORCHESTRATOR_TASK_OWNERSHIP_HEADING,
   ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE,
   ORCHESTRATOR_VIEWER_CLOCK_HEADING,
+  ORCHESTRATOR_SHIPPED_CLOCK_OPENING,
   orchestratorMandateCarriesTickContract,
   orchestratorMandateForDelivery,
   orchestratorMandateWithRoleTable,
@@ -72,8 +75,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 29, and a v28 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(29);
+test("the default mandate is at version 31, and a v30 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(31);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -94,16 +97,22 @@ test("the default mandate is at version 29, and a v28 seat reads as stale", () =
      project's own release step only when the operator turned releases on.
      v29 (docs/design/orchestrator-reports.md §5.7) makes the report log the
      operator's catch-up surface: file what each wake lists as owed or due,
-     under its keys, as a summary and sections in the interface language. */
-  expect(orchestratorMandateStale(28)).toBe(true);
-  expect(orchestratorMandateStale(29)).toBe(false);
+     under its keys, as a summary and sections in the interface language.
+     v30 (docs/design/agent-prompt-contract.md) runs every piece of work as a
+     pipeline whose review is a reviewer and a fix stage, teaches one verdict
+     vocabulary, names no stack, and gives the seat its personality. v31
+     (docs/design/board-maintenance-report.md §8) tells the seat how to read
+     the board maintenance report it is sent when it is seated. */
+  expect(orchestratorMandateStale(30)).toBe(true);
+  expect(orchestratorMandateStale(31)).toBe(false);
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("keep these rare");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Off: file no bridge reports at all");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('onExhausted?: "advance" | "stop-after-fix" | "park"');
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Use stop-after-fix only when the operator asked to look before merge");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("review-loop stages are converted to a reviewer and a fix stage when you create or add them");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('The kind "review-loop" is a legacy form kept for stored lanes; do not compose it.');
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("You are this project's orchestrator in Delegatus");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("registered under the key `viewer`");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("the viewer's built-in Manager");
@@ -131,6 +140,8 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   27: "1135c1274c1dc36fcc1f595035837e13f0913a818ed7d59ce1db79791de01a37",
   28: "90819032b795f74b3ac4f5bf0699f5443cf31353e95c1ad19ef87b16e8e1ab60",
   29: "220722434e6ce6a265155097b000d1ec5cbf6461e67e7d39193b61cae5b6318a",
+  30: "9743e8688175e3e08fd07d54df961ff363b8798b049d50ff11973e7bf2624e69",
+  31: "e1583b032cf61e67f50b486172f974ae2a2ae03649cc666b0738b010247c106d",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -141,7 +152,7 @@ test("the merge bar follows the project's merge setting, and the mandate says wh
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("merge on APPROVE");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("Merge bar: merge only on an APPROVE verdict");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("governs every automatic merge, yours included");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('Setting off: you do not merge on your own; report "PR ready: <url>" to the operator and merge only when they ask.');
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask.');
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating or merging)");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("then pipeline_action retry-merge");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Never merge red");
@@ -155,23 +166,25 @@ test("the merge bar follows the project's merge setting, and the mandate says wh
    operator turns releases on for that project. */
 test("the mandate opens without issue numbers, greets in plain words and runs releases only when turned on", () => {
   const opening = ORCHESTRATOR_SYSTEM_PROMPT.split("\n")[0]!;
-  expect(opening).toBe("You are this project's orchestrator in Delegatus — the agent that owns its board and runs its work through Delegatus's own HTTP API and MCP tools (the MCP server is registered under the key `viewer`). You never act outside them.");
+  expect(opening).toBe("You are this project's orchestrator in Delegatus — the agent that owns its board and runs its work through Delegatus's MCP tools (registered under the key `viewer`). You never act outside them.");
   expect(opening).not.toMatch(/#\d/);
-  expect(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE).toContain("Ready in {project}.\nTell me what you want done here. I'll turn it into tasks on the board, have agents build and review it, and report back. Nothing starts until you ask.");
+  expect(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE).toContain(`Ready in {project}.\n${CURRENT_GREETING_OFFER}`);
   expect(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE).not.toContain("lanes");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("-> merge bar -> this project's own release step, only when the operator has turned releases on for this project (in their message or as a standing line in your monitor note) -> cleanup.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("- The project's own release step runs only when the operator has turned releases on for this project, in their message or as a standing line in your monitor note.");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("release step, where it has one");
 });
+
+/* v30: a proactive seat keeps accepted work moving, so the greeting says what
+   still waits for the operator's word: new work. */
+const CURRENT_GREETING_OFFER = "Tell me what you want done here. I'll turn it into tasks on the board, have agents build and review it, keep it moving and report back. New work starts when you ask; I'll suggest what could come next.";
 
 for (const [version, offer] of [
   ["v25", "Tell me what to ship — I open lanes, spawn implementers and reviewers, and merge on APPROVE. Nothing starts until you ask."],
   ["v26", "Tell me what to ship — I open lanes, spawn implementers and reviewers, and bring each PR to ready; merges follow this project's merge setting. Nothing starts until you ask."],
+  ["v29", "Tell me what you want done here. I'll turn it into tasks on the board, have agents build and review it, and report back. Nothing starts until you ask."],
 ] as const) {
   test(`a mandate delivered with the greeting as it shipped up to ${version} greets once, in the current words`, () => {
-    const shipped = ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE.replace(
-      "Tell me what you want done here. I'll turn it into tasks on the board, have agents build and review it, and report back. Nothing starts until you ask.",
-      offer,
-    );
+    const shipped = ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE.replace(CURRENT_GREETING_OFFER, offer);
     expect(shipped).toContain(offer);
     const delivered = orchestratorMandateForDelivery(`Run the widgets project.\n\n${shipped}`);
     expect(delivered).not.toContain(offer);
@@ -209,7 +222,8 @@ const SHIPPED_TICK_CONTRACT = [
 /* Each shipped clause, and where the clock section now says it. The wording is
    the mandate's own (a wake no longer quotes it), so this maps rule to rule. */
 const CLAUSE_IN_MANDATE: readonly [string, string][] = [
-  [SHIPPED_TICK_CONTRACT[0]!, "then make ONE bounded pass over this project's whole board and act on what stands still: list_pipelines for lanes completed, parked or failed to spawn, the open pull requests their finished lanes left, list_flows, agent_activity with liveOnly for live and stalled agents, and open tasks with nothing running."],
+  /* v30 dropped list_flows: the seat composes no review flows. */
+  [SHIPPED_TICK_CONTRACT[0]!, "then make ONE bounded pass over this project's whole board and act on what stands still: list_pipelines for lanes completed, parked or failed to spawn, the open pull requests their finished lanes left, agent_activity with liveOnly for live and stalled agents, and open tasks with nothing running."],
   [SHIPPED_TICK_CONTRACT[1]!, "Record every outcome on the board card or the pipeline, not only in this conversation."],
   [SHIPPED_TICK_CONTRACT[2]!, "mark its task blocked with the reason: that is the stop, and the only one."],
   [SHIPPED_TICK_CONTRACT[3]!, "So do not schedule yourself"],
@@ -232,16 +246,28 @@ test("every clause the tick contract carried lives in the mandate, and reaches e
   expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
 });
 
+/** The clock section's heading and opening three paragraphs as they shipped
+    from v11 to v29, copied verbatim from those bodies: v30 names the product
+    Delegatus in them (docs/design/agent-prompt-contract.md, review of #2301). */
+const SHIPPED_CLOCK_OPENING = `## The Viewer's clock — you never schedule yourself
+The Viewer wakes you. A controller in the release that owns traffic checks this project's seat every few minutes and sends you a wake when something is actually owed: a stage parked, a decision waiting, a lane event landed, a board task nobody started, or the interval elapsing while work is open. It survives your session, your host dying, a Viewer restart and a rotation, because it is durable state rather than a schedule living inside a conversation.
+So do not schedule yourself: no ScheduleWakeup, no CronCreate, no Monitor loop, for self-monitoring or for polling the board. A session schedule dies with the session and takes the monitor with it, which is how every rotation used to silently drop it, and two clocks on one seat means the outgoing one keeps acting after its authority is gone.
+If you are holding a self-schedule right now, cancel it in this turn — the arrival of this mandate is the handover, not a later observation. Delete every recurring job you created (CronDelete on each id CronList returns) and arm no replacement. Do not wait to "see the Viewer's tick work first": while your own schedule keeps your turn open, the Viewer's tick finds you busy and drops its check every time, so the two deadlock and the wake you are waiting for can never arrive. Yours goes first.`;
+
 /** The clock section's last paragraph as it shipped in v11–v16 and in
-    v17–v20, copied verbatim from those bodies. The three paragraphs before it
-    never changed, so each shipped section is the current opening plus one of
-    these. */
+    v17–v20, copied verbatim from those bodies. Each shipped section is the
+    shipped opening plus one of these. */
 const SHIPPED_CLOCK_LAST_PARAGRAPHS = [
   "Between wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. When a wake arrives, act on the items it lists and nothing else, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.",
   "Between wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. When a wake arrives, act on the items it lists first, then make one bounded pass over the rest of the board — lanes, pull requests, agents, tasks — and act on what stands still, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.",
 ];
-const shippedClockSection = (lastParagraph: string) =>
-  `${ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE.split("\n").slice(0, 4).join("\n")}\n${lastParagraph}`;
+const shippedClockSection = (lastParagraph: string) => `${SHIPPED_CLOCK_OPENING}\n${lastParagraph}`;
+
+/* The module's own copy, which the seat and tick tests build their older
+   mandates from, is the text that shipped. */
+test("the shipped clock opening the module keeps is the one that shipped", () => {
+  expect(ORCHESTRATOR_SHIPPED_CLOCK_OPENING).toBe(SHIPPED_CLOCK_OPENING);
+});
 
 /* #2030 review: every mandate composed from a v20-or-older body carries the
    clock HEADING with the old paragraph under it, so appending by heading gave
@@ -379,7 +405,9 @@ test("the current default already contains the clock directive", () => {
    kind and directs the seat back to that schema. */
 test("the mandate names every attention target and uses the tool schema for shapes", () => {
   const namedKinds = ORCHESTRATOR_SYSTEM_PROMPT.match(/Targets are typed by kind \(([^)]+)\)/)?.[1]?.split(", ");
-  expect(namedKinds?.sort()).toEqual([...FOCUS_TARGET_KINDS].sort());
+  /* v30: a review-flow round is no target a seat creates any more; the tool
+     keeps the kind until the flow removal takes it. */
+  expect(namedKinds?.sort()).toEqual(FOCUS_TARGET_KINDS.filter((kind) => kind !== "flowRound").sort());
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("the tool schema gives each shape");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("The shapes, verbatim:");
   /* The sentinel the tool answers with when there is nothing to move. */
@@ -390,7 +418,7 @@ test("the mandate names every attention target and uses the tool schema for shap
    validation errors because nothing it had read named the stage shape. The
    mandate now prints that shape as the schema declares it. */
 test("the mandate carries the pipeline stage shape a first pipeline needs", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('kind: "run" | "review-loop"');
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('kind: "run"');
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("role: {roleId, params?}");
 });
 
@@ -478,6 +506,29 @@ test("the task-ownership section reaches a bespoke or older mandate, exactly onc
   expect(orchestratorMandateForDelivery(reworded)).toStartWith(reworded);
 });
 
+/* docs/design/board-maintenance-report.md §8: a rotation that names no mandate
+   keeps the incumbent's core (#2283), so delivery is the only way a running
+   seat learns how to read the report it is sent. */
+test("the board report section reaches a bespoke or older mandate once, and is recognized by its heading", () => {
+  const bespoke = "A seat's own mandate, written before the board maintenance report.";
+  const delivered = orchestratorMandateForDelivery(bespoke);
+  expect(delivered.split(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE)).toHaveLength(2);
+  expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
+  const reworded = `${ORCHESTRATOR_BOARD_REPORT_HEADING}
+Read the report, then ask me before closing anything.`;
+  expect(orchestratorMandateForDelivery(reworded)).not.toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
+  expect(orchestratorMandateForDelivery(reworded)).toStartWith(reworded);
+  /* The operator's decisions of 2026-09-27: their own cards close on their
+     word (D3), and a missing priority is never a request to label (D2). */
+  expect(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE).toContain('a card marked "ask first" only when the operator agrees');
+  expect(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE).toContain("never ask for labels or fields");
+  /* The report replaces the board walk of the first turn only; the clock
+     contract's per-wake pass stands beside it. */
+  expect(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE).toContain("Your first turn gives status and leaves the board walk to it; later wakes still make their own pass.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("make ONE bounded pass over this project's whole board");
+  expect(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE).toContain("start none unasked");
+});
+
 /* The current default carries all three inline, so a fresh seat reads each in
    place and delivery has nothing to append. */
 test("the delivered default carries each directive exactly once, and delivery adds only the role table", () => {
@@ -486,6 +537,7 @@ test("the delivered default carries each directive exactly once, and delivery ad
   for (const directive of [
     ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE,
     ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE,
+    ORCHESTRATOR_BOARD_REPORT_DIRECTIVE,
     ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
   ]) {
     expect(ORCHESTRATOR_SYSTEM_PROMPT.split(directive)).toHaveLength(2);
@@ -555,10 +607,10 @@ test("the role table carries the runtime guidance beside it", () => {
   expect(section).toMatch(/low or medium/);
   expect(section).toContain("NEXT attempt");
   expect(section).toContain("create_pipeline");
-  /* The standing model rules (model landscape 2026-09) ride in the role rows. */
-  expect(section).toContain("Frontend xhigh only per lane, for the hardest UI");
-  expect(section).toContain("never raise GPT-6 Sol to xhigh by hand");
-  expect(section).toContain("Default Sol high vs Astra medium: decided at 30 Sol first reviews");
+  /* The standing model rules (model landscape 2026-09) ride in the role rows;
+     the builder's description names no model (agent-prompt-contract.md
+     §2.10 B), since runtime advice belongs to the table's notes. */
+  expect(section).toContain("| builder | codex | gpt-6-astra | medium | read-write | Writes product code for a scoped brief.");
   expect(section).toContain("High per lane for risky backend diffs.");
   expect(section).toContain("claude/fable/high per lane for the largest cross-cutting designs");
 });
@@ -611,8 +663,16 @@ test("the role table keeps the delivered default inside the structured envelope"
   /* Leave the orchestrator scaffold and a rotation's history room beside it.
      The sizing rule (docs/design/model-sizing-tiers.md §4) takes 200 bytes of
      that room, and keeping the review-loop read-only rule beside it another
-     100; a rotation trims its history to what is left. */
-  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 7_700);
+     100; the UI-lane recipe (Opus brief, Sonnet build, Opus review) another
+     100 net of the table words trimmed to make room; a rotation trims its
+     history to what is left. v30 takes 2 850 more
+     for one contract every agent reads (docs/design/agent-prompt-contract.md:
+     how work runs, the stage contract, the fix rows) and the seat's
+     personality; its scaffold gave 200 back. v31 takes 700 more for the
+     board maintenance report section, paid for by the open-task list the
+     rotation handoff no longer carries (docs/design/board-maintenance-report.md
+     §5.5); handoffDigest.test.ts pins what that leaves a rotation's history. */
+  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 4_100);
 });
 
 /* docs/design/model-sizing-tiers.md §4: the seat sizes every lane, reads each
@@ -628,19 +688,113 @@ test("the role table tells the seat to size lanes, lists every variant and names
   });
   const table = orchestratorRoleTable(roles);
   const builderRow = table.split("\n").find((line) => line.startsWith("| builder |"))!;
-  expect(builderRow).toContain("size=trivial: claude/sonnet/high; domain=frontend: claude/opus/high; domain=docs: claude/opus/medium; mode=apply-fixes: codex/gpt-5.6-terra/low.");
+  expect(builderRow).toContain("size=trivial: claude/sonnet/high; domain=frontend: claude/claude-sonnet-5-5/high; domain=docs: claude/opus/medium; mode=apply-fixes: codex/gpt-6-luna/high; domain=frontend mode=apply-fixes: claude/sonnet/high; domain=docs mode=apply-fixes: claude/sonnet/high.");
   const reviewerRow = table.split("\n").find((line) => line.startsWith("| reviewer |"))!;
   expect(reviewerRow).toContain("size=trivial: codex/gpt-6-luna/high.");
   expect(table).toContain("- Size each lane first. trivial (a few lines of UI, copy, one flag or label; your brief states the exact change and its acceptance): builder and reviewer size=trivial, one review round.");
   expect(table).toContain("design (options, architecture, proposals, issues from design work): an architect stage first");
-  expect(table).toContain("- Only an Opus-class agent's brief admits size=trivial. Sonnet and Haiku never run orchestrator, architect, reviewer or verifier, nor a hand-set builder.");
+  expect(table).toContain("- size=trivial needs a brief written by a large model: Claude Opus or Fable, or a large Codex model. Sonnet and Haiku never run orchestrator, architect, reviewer or verifier work, and run a builder whose model you set by hand only at size=trivial, or as domain=frontend on an Opus brief.");
+  expect(table).toContain("- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, Opus review-loop.");
+  /* §3 (a): the fix stage's params select its row. */
+  expect(table).toContain("- Fix stages: builder mode=apply-fixes with the implementer's domain and size, on the builder row they select.");
+  /* Review of #2301: a fix round takes what names its place, an OVER-BUILT cut
+     included, and the seat is told that the rest parks the lane. */
+  expect(table).toContain("OVER-BUILT cuts included");
+  expect(table).toContain("which parks the lane: re-plan it.");
   expect(table).toContain("README, docs, public text: builder domain=docs.");
   expect(table).toContain("a runtimeLine (spawn_agent: runtime)");
-  expect(table).toContain("- Runtime overrides go on the stage beside role, never inside it. A review-loop stage is always read-only.");
+  expect(table).toContain("- Runtime overrides go on the stage beside role, never inside it. A reviewer stage is read-only by its role.");
   expect(table).toContain("quote it with the size you chose and why");
   expect(table).toContain("builder:frontend (was claude/opus/xhigh); tell the operator");
   /* Delivery replaces the table up to the first blank line, so it carries none. */
   expect(table).not.toContain("\n\n");
   const delivered = orchestratorMandateWithRoleTable("Bespoke mandate", table);
   expect(orchestratorMandateWithRoleTable(delivered, table)).toBe(delivered);
+});
+
+/* docs/design/agent-prompt-contract.md §2.11 review check: the mandate a seat
+   is delivered names no language, tool, topology or this product's own code,
+   and teaches one verdict vocabulary. The retired markers appear once, in the
+   brief rule that tells the seat never to write them. */
+const STACK_SPECIFIC = [/\btsc\b/, /bunx/, /TypeScript/, /blue\/green/, /external-worker/, /conveyor/i, /8898/, /Ukrainian/, /review flow/i, /list_flows/, /flowRound/, /review review/, /file ownership/, /one owner per file/, /\/api\//];
+
+test("the delivered default names no stack and teaches one verdict vocabulary (v30)", () => {
+  const delivered = orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT);
+  for (const pattern of STACK_SPECIFIC) expect(delivered).not.toMatch(pattern);
+  expect(delivered).not.toContain("COMMENT");
+  for (const marker of ["REVIEW_READY", "NO FINDINGS"]) expect(delivered.split(marker)).toHaveLength(2);
+  /* The two retired VERDICT lines are named exactly, in the one retiring sentence. */
+  expect(delivered.match(/VERDICT/g)).toEqual(["VERDICT", "VERDICT"]);
+  expect(delivered).toContain("never write REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES or NO FINDINGS into a brief");
+  /* A GitHub issue is attached when one exists and never waited for. */
+  expect(delivered).toContain("no step waits for an issue");
+  /* Recommended when the project has GitHub, never mandatory (operator, 2026-09-27). */
+  expect(delivered).toContain("When the project has a GitHub remote, open or reuse an issue where it helps tracking and attach it to the lane (pipeline_action attach-link)");
+  /* Review of #2301: the merge bar names the lanes Delegatus merges
+     (forge/autoMerge.ts mergeEligible): reviews passed, or budget spent with
+     the last fix passed, whose kept findings the seat reads. */
+  expect(delivered).toContain("or spent their budget with the last fix passed and you have read the findings they kept");
+  expect(delivered).toContain("Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed");
+  expect(delivered).toContain("and nobody reads a spent budget's kept findings first;");
+  /* One condition for stop-after-fix, stated once (review of #2301). */
+  expect(delivered.match(/stop-after-fix only when|use stop-after-fix when/g)).toEqual(["stop-after-fix only when"]);
+  expect(delivered).not.toContain("kept for you to read before you merge");
+  /* The worker cap holds in every mode, in the scaffold's words. */
+  /* A seat designated onto an existing conversation gets no scaffold, so the
+     mandate names the default cap itself (review of #2301). */
+  expect(delivered).toContain("Keep no more workers running at once than your role parameters allow (3 when they name none), in every mode: each running lane and each live spawned agent counts as one.");
+});
+
+/* The operator, 2026-09-27: a friend who teases a little, speaks their way,
+   and keeps working. Each line that could read against "proactive" says what
+   it means instead: accepted work moves unasked, new work waits for their
+   word, and the drive lives inside the turns the seat is given. */
+test("the seat's personality is proactive inside accepted work, and every line agrees", () => {
+  const section = ORCHESTRATOR_SYSTEM_PROMPT.slice(ORCHESTRATOR_SYSTEM_PROMPT.indexOf("## Who you are"), ORCHESTRATOR_SYSTEM_PROMPT.indexOf("## Initial visible status"));
+  expect(section).toContain("likes to tease a little");
+  expect(section).toContain("Mirror how the operator talks: language, register, brevity, and their casual words when they use them.");
+  expect(section).toContain("You are hard-working and want to keep going");
+  expect(section).toContain("never start work nobody asked for, or change what the operator owns");
+  expect(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE).not.toContain("Nothing starts until you ask");
+  expect(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE).toContain("New work starts when you ask");
+  expect(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE).toContain("Between wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. Your drive to keep going works inside a turn: take every owed step before it ends.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Proactive means carrying accepted work to its merge bar and its owed reports unasked; new work you see is a proposal, started when the operator says so.");
+});
+
+/* A v29 seat's stored clock section is replaced by exact match, so its board
+   pass stops listing review flows; a reworded section stays its author's. */
+test("delivery replaces the clock section a v29 mandate carries", () => {
+  const v29Section = shippedClockSection(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE.split("\n").slice(4).join("\n")
+    .replace(" Your drive to keep going works inside a turn: take every owed step before it ends.", "")
+    .replace("their finished lanes left, agent_activity", "their finished lanes left, list_flows, agent_activity"));
+  expect(v29Section).toContain("list_flows");
+  const delivered = orchestratorMandateForDelivery(`Run the widgets project.\n\n${v29Section}`);
+  expect(delivered).not.toContain("list_flows");
+  expect(delivered.split(ORCHESTRATOR_VIEWER_CLOCK_HEADING)).toHaveLength(2);
+  expect(delivered).toStartWith(`Run the widgets project.\n\n${ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE}`);
+  expect(orchestratorMandateCarriesTickContract({ mandate: `Run the widgets project.\n\n${v29Section}`, promptVersion: 29 })).toBe(true);
+});
+
+/* §3 (c2): a scaffold this install replaced stops every shipped prompt change,
+   so the table names it and the seat can tell the operator. */
+test("the role table names a role whose prompt text this install replaced", () => {
+  expect(orchestratorRoleTable(ROLE_DEFAULTS)).not.toContain("Prompt text overridden");
+  const roles = ROLE_DEFAULTS.map((role) => role.id === "deployer" ? { ...role, promptScaffold: "An install's own deployer text." } : role);
+  const table = orchestratorRoleTable(roles);
+  expect(table).toContain("- Prompt text overridden by this install: deployer. Shipped prompt changes do not reach these roles; tell the operator, who can restore the shipped text in the agent mapping.");
+  expect(table).not.toContain("\n\n");
+});
+
+/* Review of #2301: text a seat reads names the product Delegatus, and a seat
+   whose clock section still carries the heading it shipped with up to v29
+   keeps its own wording under it and gets no second section. */
+test("the delivered mandate names no Viewer, and the v29 clock heading still marks a seat's own section", () => {
+  const delivered = orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(delivered.replaceAll("`viewer`", "")).not.toMatch(/\bviewer\b/i);
+  expect(delivered).not.toContain("owns traffic");
+  const reworded = `## The Viewer's clock — you never schedule yourself\nWake only when told.`;
+  const kept = orchestratorMandateForDelivery(`Run the widgets project.\n\n${reworded}`);
+  expect(kept).toContain(reworded);
+  expect(kept).not.toContain(ORCHESTRATOR_VIEWER_CLOCK_HEADING);
+  expect(kept.split("you never schedule yourself")).toHaveLength(2);
 });

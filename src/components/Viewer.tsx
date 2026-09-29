@@ -43,6 +43,8 @@ import { ArtifactPreviewHost } from "./preview/ArtifactPreviewHost";
 import { OnboardingHost } from "./onboarding/OnboardingDialog";
 import { OnboardingWalk } from "./onboarding/OnboardingWalk";
 import { SelfUpdateHost } from "./selfUpdate/SelfUpdateDialog";
+import { LinkedSettingsHost } from "./links/LinkedSettingsDialog";
+import { ExternalRelaySettingsHost } from "./externalRelay/ExternalRelaySettingsDialog";
 import { VoiceBridgeRelayHost } from "./voice/VoiceBridgeRelayHost";
 import { VoiceComposerHost } from "./voice/VoiceComposerHost";
 import { VoicePipHost } from "./voice/VoicePipHost";
@@ -199,7 +201,7 @@ function ViewerApp() {
   /* The one presence publisher for the whole app: it reads the shared view bus
      that the board/scheme/mobile components report into and ships an ephemeral
      per-tab snapshot to the server. Renders nothing. */
-  useViewPresence();
+  const reloadTo = useViewPresence();
   /* The interface language is the operator's, and agents write reports and
      board task text in it, so the server learns it from here once per load
      (docs/design/orchestrator-reports.md §4.2). */
@@ -1571,6 +1573,10 @@ function ViewerApp() {
 
   const shell = (
     <div className="flex h-full">
+      {reloadTo ? <div data-release-reload="" role="status" className="fixed left-1/2 top-16 z-50 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-wrap items-center gap-2 rounded-[8px] border border-accent bg-card px-3 py-2 text-ui text-primary shadow-2">
+        <span>{t("selfUpdate.reconnect.newVersion", { sha: reloadTo })}</span>
+        <button type="button" className="rounded-[8px] bg-brand px-3 py-1.5 font-semibold text-on-brand pointer-coarse:min-h-11" onClick={() => window.location.reload()}>{t("selfUpdate.reconnect.reload")}</button>
+      </div> : null}
       {isMobile || railHidden ? null : (
         <ProjectRail onHide={toggleRail} files={files} projectCatalog={projectCatalog} projectDisplayNames={projectDisplayNames} pipelines={pipelines} workflows={workflows} archivedProjects={archivedProjects} crownedProjects={crownedProjects} selected={project} now={clock} needsYouCounts={needsYouByProject} loaded={loaded} catalogFailures={catalogFailures} onSelect={selectProject} onToggleCrown={toggleCrown} onCreateProject={createProject} />
       )}
@@ -1745,6 +1751,8 @@ function ViewerApp() {
       <OnboardingWalk project={project === OVERVIEW ? null : project} projectCwd={project === OVERVIEW ? undefined : projectCwds[project]} mobile={isMobile} />
       {/* #2007: the Update surface, opened from the menus' "Update" row. */}
       <SelfUpdateHost />
+      <LinkedSettingsHost />
+      <ExternalRelaySettingsHost />
       {/* #691: the ONE voice conversation panel, portalled into the card's dock
           slot or the floating PiP window. Mounted here rather than in the card
           because the card unmounts on board navigation while the call keeps

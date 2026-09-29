@@ -89,7 +89,10 @@ function entryProvenance(
   if (entry.selectedContext) {
     return { origin: "operator", selectedContext: entry.selectedContext, ...(submissionId ? { submissionId } : {}) };
   }
-  if (entry.id.startsWith(SPAWN_MESSAGE_PREFIX)) return spawnEntryProvenance(entry.id, transcriptPath, snapshot());
+  if (entry.id.startsWith(SPAWN_MESSAGE_PREFIX)) {
+    const spawn = spawnEntryProvenance(entry.id, transcriptPath, snapshot());
+    return spawn && submissionId ? { ...spawn, submissionId } : spawn;
+  }
   return null;
 }
 

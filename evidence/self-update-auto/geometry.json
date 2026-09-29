@@ -1,0 +1,226 @@
+{
+  "commit": "d4044c86a0493107f3588f461d3b795c9337d2f4",
+  "frames": {
+    "1440-en-off": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to build and restart.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-waiting": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 222
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa.\n\nHistory"
+    },
+    "1440-en-longWait": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 222
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nWaiting over 24 hours. The update will apply at the next quiet moment.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-fallback": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nTurned off after a failed automatic update: health probe failed. Turn it on to retry.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-managed": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nA managed install uses its deployment flow."
+    },
+    "1440-uk-off": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час збирання та перезапуску.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-waiting": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 222
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa.\n\nІсторія"
+    },
+    "1440-uk-longWait": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 222
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nОчікування понад 24 години. Оновлення застосовується в найближчу тиху хвилину.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-fallback": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nАвтооновлення вимкнено після збою: health probe failed. Увімкніть знову, щоб повторити.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-managed": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nКерована інсталяція використовує свій механізм розгортання."
+    },
+    "390-en-off": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 179.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to build and restart.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-waiting": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 275.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa.\n\nHistory"
+    },
+    "390-en-longWait": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 293.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nWaiting over 24 hours. The update will apply at the next quiet moment.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-fallback": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 197.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nTurned off after a failed automatic update: health probe failed. Turn it on to retry.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-managed": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 233,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nA managed install uses its deployment flow."
+    },
+    "390-uk-off": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 273,
+        "width": 358,
+        "height": 179.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час збирання та перезапуску.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-waiting": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 273,
+        "width": 358,
+        "height": 275.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa.\n\nІсторія"
+    },
+    "390-uk-longWait": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 273,
+        "width": 358,
+        "height": 293.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nОчікування понад 24 години. Оновлення застосовується в найближчу тиху хвилину.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-fallback": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 273,
+        "width": 358,
+        "height": 197.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nАвтооновлення вимкнено після збою: health probe failed. Увімкніть знову, щоб повторити.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-managed": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 251,
+        "width": 358,
+        "height": 149.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nКерована інсталяція використовує свій механізм розгортання."
+    }
+  },
+  "failures": []
+}

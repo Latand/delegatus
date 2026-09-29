@@ -131,9 +131,10 @@ async function launch(
   id: string,
   cwd: string,
   assignments: BoardTask["assignments"] = [],
+  fields: Partial<BoardTask> = {},
 ): Promise<LaunchAttempt> {
   const registry = new AgentRegistry(path.join(SANDBOX, `${id}.json`), undefined, undefined, { sqliteMode: "off" });
-  let tasks: BoardTask[] = [taskFor(id, assignments)];
+  let tasks: BoardTask[] = [{ ...taskFor(id, assignments), ...fields }];
   /* The reservation names this task as the launch's explicit target (#1586),
      so the isolated task store under STATE has to hold it as well. */
   saveTasks(tasks);
@@ -162,7 +163,6 @@ async function launch(
         throw new Error("the pane must stay unreachable");
       },
       ensureTaskPipelineForAssignment: undefined,
-      recordOperatorActivity: undefined,
     },
   );
   const payload = await response.json() as { error?: string };
@@ -272,4 +272,23 @@ test("an unbound project still launches a retry on the account the task already 
   expect(attempt.status).toBe(400);
   expect(attempt.error).toContain(RETIRED);
   expect(attempt.spawnCalls).toBe(0);
+});
+
+/* docs/design/linked-installs.md M.4: a task another linked machine runs is
+   started by that machine; this route refuses it before any reservation. */
+test("a task another linked machine runs refuses the launch with TASK_RUNS_ELSEWHERE, leaving no receipt", async () => {
+  const cwd = fs.mkdtempSync(path.join(SANDBOX, "atlas-elsewhere-"));
+  const selfFile = path.join(STATE, "links/self.json");
+  fs.mkdirSync(path.dirname(selfFile), { recursive: true });
+  fs.writeFileSync(selfFile, JSON.stringify({ v: 1, installId: ["0a0a0a0a", "1111", "4111", "8111", "111111111111"].join("-"), label: "fixture", publicUrl: null, check: null }));
+  try {
+    const attempt = await launch("10410199-89c5-0064-9118-51661c4f1041", cwd, [], { machine: ["0b0b0b0b", "2222", "4222", "8222", "222222222222"].join("-") });
+    expect(attempt.status).toBe(409);
+    expect(attempt.error).toContain("TASK_RUNS_ELSEWHERE");
+    expect(attempt.spawnCalls).toBe(0);
+    expect(attempt.writes).toBe(0);
+    expect(attempt.receipts).toBe(0);
+  } finally {
+    fs.rmSync(selfFile, { force: true });
+  }
 });

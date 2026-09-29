@@ -1,4 +1,4 @@
-import { VERDICT_LINE_RE } from "@/lib/review";
+import { countFindingBlocks, parseReview, VERDICT_LINE_RE } from "@/lib/review";
 import { globalCache } from "@/lib/scanner/caches";
 import type { FileEntry } from "@/lib/types";
 
@@ -26,6 +26,27 @@ export interface ReviewOutcome {
     like "no findings yet" — the role contract asks for the exact phrase. */
 const NO_FINDINGS_RE = /^\s*[*_`#-]*\s*NO\s+FINDINGS\b/im;
 
+/** The line a spawned role agent ends with (`SPAWN_COMPLETION` in
+    roles/registry.ts, docs/design/agent-prompt-contract.md §2.2): the last
+    non-blank line, in the three words a stage reports. */
+const SPAWN_VERDICT_RE = /^\s*[*_`]*\s*verdict\s*:\s*[*_`]*\s*(pass|fail|needs_decision)\s*[*_`.]*\s*$/i;
+
+/** The chip's grammar for the spawn line: pass approves, fail requests
+    changes, and needs_decision is the decision state COMMENT already carries. */
+const SPAWN_VERDICTS: Record<string, ReviewVerdict> = { pass: "APPROVE", fail: "REQUEST_CHANGES", needs_decision: "COMMENT" };
+
+/** The outcome a message ending in the spawn line states, or null. The
+    retired markers win when a message carries them, so history reads as it did. */
+export function spawnVerdictOutcome(text: string): { verdict: ReviewVerdict; findingsCount: number } | null {
+  const last = text.trimEnd().split("\n").at(-1) ?? "";
+  const word = last.match(SPAWN_VERDICT_RE)?.[1]?.toLowerCase();
+  if (!word) return null;
+  const verdict = SPAWN_VERDICTS[word]!;
+  if (verdict !== "REQUEST_CHANGES") return { verdict, findingsCount: 0 };
+  const structured = parseReview(text, null)?.findings.length ?? 0;
+  return { verdict, findingsCount: structured > 0 ? structured : countFindingBlocks(text) };
+}
+
 const outcomeCache = globalCache<[number, ReviewOutcome | null]>("review-outcome");
 
 type TranscriptEntry = Pick<FileEntry, "path" | "root" | "size" | "mtime">;
@@ -42,7 +63,9 @@ export function reviewOutcomeFor(entry: TranscriptEntry): ReviewOutcome | null {
   if (message) {
     const observedAt = Number.isFinite(message.ts) ? new Date(message.ts).toISOString() : null;
     const parsed = parseFindings(message.text);
+    const spawned = parsed ? null : spawnVerdictOutcome(message.text);
     if (parsed) outcome = { verdict: parsed.verdict, findingsCount: parsed.findingsCount, observedAt };
+    else if (spawned) outcome = { ...spawned, observedAt };
     /* A message with verdict lines that yielded no verdict (conflicting,
        hedged or templated) keeps no outcome; its NO FINDINGS line cannot
        approve it. */

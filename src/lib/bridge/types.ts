@@ -201,6 +201,7 @@ export type BridgeReportTelegramState = "pending" | "sent" | "failed" | "uncerta
 export interface BridgeReportTelegram {
   /** The bot chat's alias the project chose. */
   chat: string;
+  topicId?: number;
   /** Telegram HTML, at most 4 096 characters, re-sent byte for byte on a retry. */
   html: string;
   state: BridgeReportTelegramState;
@@ -232,7 +233,7 @@ export interface BridgeReportInput {
   /** `coversOwed: true`: store `coversOwedAt` equal to `at`. */
   coversOwed?: boolean;
   /** The Telegram copy to keep beside the row, when the project has a chat. */
-  telegram?: { chat: string; html: string } | null;
+  telegram?: { chat: string; html: string; topicId?: number } | null;
 }
 
 export interface BridgeReportLogV1 {

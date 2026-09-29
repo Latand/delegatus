@@ -2,7 +2,6 @@
 
 - Status: prototype built (one builder stage, PR left open, no deploy, no merge)
 - Grounded base: `main` at `bfd58b846fa21e84138b7e74f64f0fb34c73b852`
-- Prior work read: #473 (WakaTime integration), #763 and its landed Phase 0 (#767, #1017, #1623), the scanner activity model, the view presence heartbeat, the transcript search index
 - Revised by three operator corrections on 2026-09-24 (below). Where the first draft of this document and a correction disagree, the correction wins and the text here already follows it.
 - Extended the same day by "Activity records itself" (section [Continuous record](#continuous-record-no-export-required)): every host's operator input and agent turns are written into Delegatus's own store as transcripts are indexed, other hosts are pulled over ssh, and an export is no longer required for complete numbers.
 - Extended on 2026-09-25 by [One project's page](#one-projects-page): the whole page filtered to one project, agent time a host did not send read as a lower bound, and Codex subagent threads counted as their own agents.
@@ -14,8 +13,8 @@ client projects are redacted.
 
 > Operator request for the Delegatus project: investigate a per-project
 > activity dashboard and have Opus create a reviewable prototype. Show human
-> interaction time and agent activity separately, with WakaTime-like
-> day/project views. Human time must come from real interaction in Delegatus
+> The dashboard measures operator interaction time and agent activity separately,
+> with day/project views. Human time must come from real interaction in Delegatus
 > web, desktop, and mobile surfaces where observable; agent work needs its own
 > provenance and must never inflate human hours. Inspect the current main
 > implementation and prior operator-worktime ledger / agent-activity analytics
@@ -112,7 +111,8 @@ untouched.
 ## Decision
 
 1. **Human axis: human-input events from every expected host.** An event is
-   `{ ids, at, host, source, project, kind, surface, hash }`. Two sources exist
+   `{ ids, at, host, source, project, kind, surface, hash, author }`. `author` is
+   a team member id, `operator` on a solo host, or null when unknown. Two sources exist
    and more can be added behind the same interface:
    - `ledger`: this host's request ledger, written at each direct-operator
      ingress (exact, with the browser surface), from its first row on. It
@@ -156,7 +156,7 @@ right after the index and in the same process. It writes
 
 | table | one row per | fields |
 |---|---|---|
-| `activity_inputs` | operator input, per host | opaque ids, content hash, time, project, kind, surface, opaque conversation digest |
+| `activity_inputs` | human input, per host | opaque ids, content hash, time, project, kind, surface, opaque conversation digest, author |
 | `activity_input_ids` | id of this host's inputs | which row the id already names |
 | `activity_turns` | agent turn of a conversation, per host | opaque conversation digest, project, engine, role, pipeline and stage ids, start, end |
 | `activity_files` | transcript read | byte offset read to, what the lines before it said (cwd, entrypoint, how the session started, the open turn), whether its first message was judged |
@@ -206,8 +206,10 @@ So each host records itself with the same ingest, and this Viewer pulls:
 self-contained reader handed to the remote Bun on stdin. The reader uses Bun
 built-ins only, reads the remote `activity/records.sqlite` read-only in one
 transaction, and answers the remote's read span, exclusion counts, store id
-and every input and turn row written after the version this host last
-received. Nothing is installed on the remote host and no port is opened.
+and the selected member's input rows and agent turn rows written after the
+version this host last received. It also answers the count of unknown-author
+inputs. Rows by other members stay on the remote host. Nothing is installed
+on the remote host and no port is opened.
 
 - **Idempotent.** Rows are keyed per host and replace an older version only;
   a replay changes nothing. A remote store whose id changed (recreated) is
@@ -220,8 +222,22 @@ received. Nothing is installed on the remote host and no port is opened.
   default) has passed is pulled, one at a time, beside the index queue so a
   slow host delays nothing but itself.
 - **Configuration.** A host entry in `activity/hosts.json` gains
-  `pull: { ssh, bun?, stateDir?, everyMin? }`; `ssh` is an alias from the
+  `pull: { ssh, bun?, stateDir?, everyMin?, memberId? }`; `memberId` is the
+  operator's member id on that host. A team host without it sends no personal
+  input rows, and the hosts table names the configuration gap. A solo host
+  continues to send its sole operator's input. Configured remote hosts appear
+  in the operator's figure (solo or signed-in local owner); other local team
+  members see only their local input. `ssh` is an alias from the
   operator's ssh config and is never an option or a command.
+  The reader checks for the author column at runtime, so a team host on an
+  older schema sends no personal input and counts its rows as unknown; a solo
+  host on that schema keeps its previous figures, including when an empty team
+  database exists after an unfinished claim. A host with recorded team members
+  retains its team history boundary even if no owner is currently active. The
+  remote host's previous member selection supplies no coverage while a newly
+  configured member waits for the next pull. The
+  local writer adds the author column to existing `records.sqlite` without
+  replacing old rows.
 
 ### Agent axis from the same record
 
@@ -287,8 +303,6 @@ history is about 1,300 rows in one page, under 2 s over ssh.
 
 | prior work | what it is | reused | wrong or missing for this dashboard |
 |---|---|---|---|
-| #473 WakaTime sync (`src/lib/wakatime/sync.ts`, `docs/design/wakatime-integration.md`) | 60 s scheduler that turns scanner turn windows into WakaTime heartbeats | the idea of turn windows, and the operator/agent provenance split | Agent turns and operator points go onto **one** WakaTime timeline, which unions them (`docs/wakatime.md`, "Activity mapping"), so WakaTime totals cannot supply either axis on its own. The stream state is keyed by opaque digests with no role or pipeline, and it exists only while enabled. It needs an external account and network. Rejected as a source. |
-| #763 Phase 0 (`src/lib/wakatime/operatorActivity.ts`) | `recordDirectOperatorWakatimeActivity` at every validated operator ingress | **the ingress sites and the authority rule** | Returns `null` unless `LLV_WAKATIME_ENABLED=1`. A point is queued in the WakaTime outbox and deleted after delivery, so nothing local survives. It carries no surface and no kind. When attribution fails it throws, and callers refuse the action. The dashboard ledger never refuses. |
 | #763 issue body (never built) | operator-event ledger, 30-min episodes, 0.5 h rounding, #zvit delivery | the episode parameterisation | Never implemented. Its `max(last - first, 10 min)` gives the last request of a long episode no window, which correction 1 rules out. The delivery half belongs to #zvit and stays out of scope. |
 | scanner activity model (`src/lib/scanner/activity.ts`) | point-in-time liveness from mtime and tail turn state | nothing for ranges | It has no history: every verdict is relative to *now*, and its tail parse covers under 5% of recent transcripts. |
 | view presence heartbeat (`src/hooks/useViewPresence.ts`) | device kind, visibility and input sequence every 10 s | the device rule, moved to `src/lib/view/device.ts` | Screen input is not a request; a new view session counts as input on its first heartbeat. Not used for time. |
@@ -303,7 +317,6 @@ Every site below already classifies the caller with
 `directOperatorActivityAuthority` (`src/lib/agent/operatorAuthority.ts:139`),
 which refuses agents that present their conversation capability and Viewer
 services (monitor, MCP, orchestrator) that present the signed service header.
-The ledger call sits beside the WakaTime call, after it, and never refuses.
 
 | # | surface of the request | kind | site (current tree) |
 |---|---|---|---|
@@ -355,11 +368,19 @@ span it speaks for (`exportSource`, `src/lib/activity/hostSources.ts`).
 
 | file | shape | default when absent |
 |---|---|---|
-| `activity/hosts.json` | `{ v: 1, local: { id, label }, hosts: [{ id, label, projects, since, pull? }] }`, `pull` = `{ ssh, bun?, stateDir?, everyMin? }` | this host is `local`; no other host is expected unless it has an export directory |
+| `activity/hosts.json` | `{ v: 1, local: { id, label }, hosts: [{ id, label, projects, since, pull? }] }`, `pull` = `{ ssh, bun?, stateDir?, everyMin?, memberId? }` | this host is `local`; no other host is expected unless it has an export directory |
 | `activity/settings.json` | `{ v: 1, tz, billable: [project keys], workdays: [0-6] }` | Europe/Kyiv, nothing billable, Monday to Friday |
 
 `projects` scopes a host (`"all"` or a list): its absence makes only those
 projects unknown. `since` says when the host started holding work.
+An export-only host with old rows lacking `author` can declare `mode: "solo"`
+on its host entry when it has always had one operator. Without that evidence,
+old export rows remain unknown. A current export with explicit
+`author: "operator"` counts those rows on an export-only host without a mode
+setting; it does not assign that author to rows where the author is absent.
+A pulled host gets its mode from the remote reader instead. An export-only
+team host can use `mode: "team", memberId: "m_..."`; it otherwise reports a
+member configuration gap.
 
 ### Agent axis
 
@@ -374,7 +395,6 @@ projects unknown. `since` says when the host started holding work.
 
 | source | why not |
 |---|---|
-| WakaTime API or state | Operator and agent time are unioned in one timeline, only while enabled, drained after delivery. |
 | Runtime journal events | Keeps the newest 20,000 rows, which is days. |
 | Presence heartbeat | It measures screen input, and the method counts requests. |
 | Reading transcripts live on each dashboard request | Five gigabytes on this host alone; the export runs once per host and the dashboard reads its small result. |
@@ -440,7 +460,34 @@ their mode.
 
 ## Cross-host human input
 
-### Only real operator input counts
+### Human input belongs to one person
+
+The dashboard counts the signed-in member on a team host. The owner sees the
+owner's input when signed in; a live member session still selects that member
+after the owner is revoked. A solo host has one `operator`. The host's
+`message_authors` row, keyed by the admitted submission and bound to its
+conversation (`src/lib/team/store.ts`), supplies the member id for a delivered
+message. An admitted spawn records its first delivery id with the spawning
+member, so remote ingest can attribute that prompt too. The ingress request
+ledger reads the request's team actor. A typed
+terminal prompt on a team host has no member identity and stays unknown.
+Existing team rows with no author also stay unknown. Neither adds to any
+person's hours. The page shows an unknown-author input count separately, and
+team remote pulls send its count without sending those inputs. Every activity
+figure has one person; the existing project and day views use the same filter.
+Earlier solo `operator` rows also become unknown in a later team member view:
+their identity cannot be assigned to a member after enrollment.
+Configured remote hosts belong to the local operator's figure. A signed-in
+local team member who is not the owner sees no remote operator rows or remote
+coverage in their figure.
+Ingest keeps team attribution when the store has member history and its owner
+is no longer active, so a later backfill cannot label older team input as solo.
+The unknown-author count describes records the sources observed: local file
+sources count the selected read window, and a pulled host reports the count in
+its stored record. It is a coverage figure, independent of the chosen person's
+hours.
+
+### Only real human input counts
 
 `classifyUserRecord` (`src/lib/activity/humanInput.ts:262`) keeps a record
 only on a positive signal:
@@ -503,12 +550,13 @@ Two of these exist because the operator marker is not proof by itself:
    own ids. Two records of one conversation that both carry ids stay two.
    Only a SHA-256 of the canonical content is kept.
 3. **Across hosts.** The merge applies the id rule over every host, and the
-   fallback rule between hosts (same hash within 90 s).
-4. **The ledger and the transcripts of one host.** Inside the span a host's
-   ledger covers, that host's transcript inputs that came through Delegatus
-   (surface `unknown`) are dropped: the ledger recorded each Delegatus request
-   once, at ingress, fan-out included. Terminal-typed input still counts from
-   the transcripts.
+   fallback rule between hosts (same hash within 90 s). Member ids may differ
+   across hosts; each host selects the dashboard person before this merge.
+4. **The ledger and the transcripts of one host.** A transcript input that
+   came through Delegatus (surface `unknown`) yields to a ledger row only when
+   both carry the same request id. Time coverage alone cannot identify a copy;
+   unrelated and unknown-author inputs remain visible. Terminal-typed input
+   still counts from the transcripts.
 
 Duplicates change request counts. They barely change hours, because a copy
 within 90 s adds at most 90 s to a union of 10-minute windows.
@@ -669,23 +717,25 @@ chip at "Lower bound", and the host named in the drawer and the hosts table.
 ## Privacy boundary
 
 - **Ledger rows** (`activity/requests-YYYY-MM-DD.jsonl`, mode `0600`,
-  directory `0700`, 90-day retention) hold exactly
-  `{ v, key, at, kind, surface, project }`. The key is
+  directory `0700`, 90-day retention) hold
+  `{ v, key, at, kind, surface, project, author }`. The key is
   `sha256("delegatus-activity-request-v1\0" + idempotencyKey)`, or random.
 - **Export rows** hold a manifest `{ v, type, host, coveredFrom, coveredUntil, exportedAt, records, excluded }`
   (counts only) and one line per input
-  `{ v, type, ids, hash, at, host, project, kind, surface }`. The ids are
+  `{ v, type, ids, hash, at, host, project, kind, surface, author }`. The ids are
   SHA-256 digests of the raw ids under a domain string; the hash is a SHA-256
   of the canonical content. No text, path, session id or title is written.
   The exporter reads text only in memory, to classify and to hash.
 - **The agent query** selects no body; transcript paths never leave the
   server.
+- **Remote pull** sends only the configured member's input rows from a team
+  host, and a count of inputs whose author is unknown. Other members' input
+  rows remain on that host. A missing member id is shown as a configuration
+  gap with no personal input rows pulled.
 - **API and UI** carry times, durations, counts, enums, project keys and
   names, host ids and the operator's own host labels, pipeline and stage ids,
   and role ids. No titles, model names or account names.
 - **Fixtures and tests** use invented projects, ids, hosts and text.
-- **#zvit fence.** `src/lib/wakatime/**` is untouched; the ledger call sits
-  beside the WakaTime call.
 
 ## Prototype scope
 
@@ -771,8 +821,7 @@ hosts table names), and a home with no data at all. Output:
 
 - No settings UI; `hosts.json` and `settings.json` are edited as files.
 - No per-conversation or per-stage durations.
-- No change to WakaTime, #zvit or their data. The only schedule is the pull,
-  which rides the transcript index's pass.
+- The only schedule is the pull, which rides the transcript index's pass.
 
 ## Deferred — not currently justified
 
@@ -787,8 +836,8 @@ hosts table names), and a home with no data at all. Output:
 
 | decision | options | chosen and why |
 |---|---|---|
-| Human source | ingress ledger / transcripts / WakaTime / presence | **Both the ledger and per-host transcript exports**: the ledger is exact with a surface; transcripts are the only record on a host without the ledger and for history, and they are what the operator's recount used. |
 | Reading remote hosts | live reads / network pull / exported files | **Exported files**: the dashboard stays cheap, the exporter runs where the stores and delivery ledgers are, and nothing crosses a host boundary but ids, hashes and times. |
+| Human source | ingress ledger / transcripts / presence | **Both the ledger and per-host transcript exports**: the ledger is exact with a surface; transcripts cover history and hosts without the ledger. |
 | Counting unmarked records | count / exclude and report | **Exclude and report per reason**, as correction 3 asks. |
 | Defaults | refinement (T = 30, half-hour) / restated method (T = W, clock-hour) | **The restated method**, which the operator used for the accepted recount; the refinement stays a parameter. |
 | Clock-hour weight | winner's minutes / the hour's combined minutes | **The hour's combined minutes**, since windows combine within the hour before it is weighed and given to one project. |
@@ -812,4 +861,3 @@ hosts table names), and a home with no data at all. Output:
 | Probable missing source (3.6) | The workday flag; tested; shown in the warning tone. |
 | The operator's method, parameterised, defaults stated | `W = 10`, `T = W`, clock-hour, Europe/Kyiv; refinement by parameter. |
 | Privacy | Six-key ledger rows; export rows with digests and a hash; no body anywhere. |
-| #zvit untouched, no deploy, no merge | WakaTime code unchanged; PR left open; tests and builds on isolated roots; renders from a seeded home. |

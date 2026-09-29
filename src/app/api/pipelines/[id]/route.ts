@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
+import { authenticatedAgentSpawnCaller } from "@/app/api/spawn/admission";
+import { agentRegistry } from "@/lib/agent/registry";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
+import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { carryingTaskWorkLinks, pipelineWorkLinks } from "@/lib/forge/resolve";
 import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
@@ -26,7 +30,7 @@ const CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-st
 
 type PipelineApiError = ApiError & {
   code?: PipelineRepoPreflightErrorCode | PipelineGuardErrorCode | "store_busy" | typeof ENGINE_NOT_CONNECTED
-    | "WORK_LINK_INVALID" | "WORK_LINK_AUTO" | "WORK_LINK_LIMIT";
+    | "WORK_LINK_INVALID" | "WORK_LINK_AUTO" | "WORK_LINK_LIMIT" | "orchestrator_seat_revoked" | "orchestrator_seat_authority_unavailable" | "TASK_RUNS_ELSEWHERE";
   /** With ENGINE_NOT_CONNECTED: the stage, role and engine (#1876). */
   details?: EngineNotConnectedDetails;
   /** #1766: set when the registry lock refused before the action was admitted,
@@ -39,6 +43,23 @@ type PipelineApiError = ApiError & {
   /** Present when a legacy review conversion was refused: the editable preview. */
   legacyReviewPreview?: LegacyReviewPreview;
 };
+
+function pipelineControlRefusal(req: NextRequest): NextResponse<PipelineApiError> | null {
+  if (!req.headers.get(VIEWER_SPAWN_CAPABILITY_HEADER)) return null;
+  const registry = agentRegistry();
+  const caller = authenticatedAgentSpawnCaller(req, undefined, registry);
+  if ("error" in caller) return NextResponse.json({ error: caller.error }, { status: caller.status ?? 403 });
+  if (caller.kind === "operator") return null;
+  try {
+    const revoked = revokedSeatPipelineRefusal(caller.conversationId, id => registry.canonicalConversationId(id as `conversation_${string}`));
+    return revoked ? NextResponse.json({ error: revoked, code: "orchestrator_seat_revoked" }, { status: 403 }) : null;
+  } catch (error) {
+    if (error instanceof SeatRevocationStoreUnavailableError) {
+      return NextResponse.json({ error: error.message, code: "orchestrator_seat_authority_unavailable", retryable: true }, { status: 503 });
+    }
+    throw error;
+  }
+}
 
 export async function GET(
   _req: NextRequest,
@@ -69,6 +90,8 @@ export async function PATCH(
 ): Promise<NextResponse<{ ok: true; pipeline: Pipeline; revision: string; close?: PipelineCloseReport; graphEdit?: PipelineGraphEdit; convertedStages?: PipelinePatchResult["convertedStages"]; legacyReview?: PipelinePatchResult["legacyReview"]; workLinks?: ResolvedWorkLinks; taskWorkLinks?: Record<string, ResolvedWorkLinks> } | PipelineApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
+  const seatRefusal = pipelineControlRefusal(req);
+  if (seatRefusal) return seatRefusal;
   let body: PatchPipelineRequest;
   try {
     const raw = await req.json();
@@ -126,6 +149,8 @@ export async function DELETE(
 ): Promise<NextResponse<{ ok: true; pipeline: Pipeline } | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
+  const seatRefusal = pipelineControlRefusal(req);
+  if (seatRefusal) return seatRefusal;
   const { id } = await ctx.params;
   try {
     const result = await patchPipeline(id, { action: "delete" });

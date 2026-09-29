@@ -77,6 +77,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; t
       /* An attachment ref only becomes task-owned once its bytes are actually
          in the store — a stale/forged ref is rejected loudly, never dangling. */
       attachmentExists: (att) => fs.existsSync(attachmentPath(att)),
+      explicit: true,
     });
     /* Persist only a fresh create; a validation failure or a replay (which left
        the list and receipts untouched) skips the rewrite. */

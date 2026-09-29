@@ -14,15 +14,19 @@ const { chooseLocale, getLocale, resetLocaleForTests, setLocale, syncOperatorLoc
 
 type Call = { url: string; method: string; body: Record<string, unknown> | null };
 let calls: Call[] = [];
+let responses: Response[] = [];
 let server: { locale: { value: string; source?: string } | null; timeZone: { value: string } | null } = { locale: null, timeZone: null };
 
 beforeEach(() => {
   calls = [];
+  responses = [];
   dom.localStorage.clear();
   resetLocaleForTests();
   globalThis.fetch = (async (url: string, init?: RequestInit) => {
     calls.push({ url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : null });
-    return new Response(JSON.stringify({ ok: true, ...server }), { status: 200, headers: { "content-type": "application/json" } });
+    const response = new Response(JSON.stringify({ ok: true, ...server }), { status: 200, headers: { "content-type": "application/json" } });
+    responses.push(response);
+    return response;
   }) as typeof fetch;
 });
 
@@ -79,4 +83,11 @@ test("a detected server language is not adopted by a browser that keeps none", a
   expect(getLocale()).toBe(shown);
   expect(dom.localStorage.getItem("llv_lang")).toBeNull();
   expect(calls.map((call) => call.method)).toEqual(["GET"]);
+});
+
+test("a write reads its answer to the end, so the request does not stay open", async () => {
+  server = { locale: null, timeZone: null };
+  await syncOperatorLocale();
+  expect(calls.map((call) => call.method)).toEqual(["GET", "PUT"]);
+  expect(responses.map((response) => response.bodyUsed)).toEqual([true, true]);
 });

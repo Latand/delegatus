@@ -87,9 +87,9 @@ test("stage runtime fields override registry and global defaults", () => {
 
 test("cross-engine overrides require a compatible model", () => {
   expect(resolvePipelineRole({ role: { roleId: "reviewer" }, engine: "claude" }, "review-loop", REGISTRY_LOOKUP).error)
-    .toContain("valid claude model ids: opus, fable, sonnet, haiku");
+    .toContain("valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku");
   expect(resolvePipelineRole({ engine: "claude" }, "run", REGISTRY_LOOKUP).error)
-    .toContain("valid claude model ids: opus, fable, sonnet, haiku");
+    .toContain("valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku");
   expect(resolvePipelineRole({ engine: "claude", model: "opus", effort: "high" }, "run", REGISTRY_LOOKUP).role)
     .toMatchObject({ engine: "claude", model: "opus", effort: "high" });
 });
@@ -98,7 +98,7 @@ test("stage model overrides enumerate the selected engine catalog when invalid",
   expect(resolvePipelineRole({ engine: "codex", model: "gpt-5.6-codex" }, "run", REGISTRY_LOOKUP).error)
     .toBe("invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna");
   expect(resolvePipelineRole({ engine: "claude", model: "claude-fable-5" }, "run", REGISTRY_LOOKUP).error)
-    .toBe("invalid claude model id \"claude-fable-5\"; valid claude model ids: opus, fable, sonnet, haiku");
+    .toBe("invalid claude model id \"claude-fable-5\"; valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku");
 });
 
 test("review-loop roles default to read-only access", () => {
@@ -139,14 +139,20 @@ test("the deployer role is refused in pipelines (no interactive confirm gate)", 
     .toContain("not allowed in a pipeline");
 });
 
-test("Builder domain=frontend resolves to the Claude/Opus config", () => {
+test("Builder domain=frontend resolves to the Claude Sonnet 5.5 config", () => {
   const resolved = resolvePipelineRole({ role: { roleId: "builder", params: { domain: "frontend" } } }, "run", pipelineRoleLookup).role;
-  expect(resolved).toMatchObject({ roleId: "builder", engine: "claude", model: "opus" });
+  expect(resolved).toMatchObject({ roleId: "builder", engine: "claude", model: "claude-sonnet-5-5", effort: "high" });
 });
 
-test("Builder mode=apply-fixes resolves to the Terra config", () => {
-  const resolved = resolvePipelineRole({ role: { roleId: "builder", params: { mode: "apply-fixes" } } }, "run", pipelineRoleLookup).role;
-  expect(resolved).toMatchObject({ roleId: "builder", engine: "codex", model: "gpt-5.6-terra" });
+/* docs/design/agent-prompt-contract.md §3 (a): a fix round's runtime follows
+   its lane's domain and size through the fix rows. */
+test("a Builder fix round resolves to the fix row its domain and size select", () => {
+  const fix = (params: Record<string, string>) => resolvePipelineRole({ role: { roleId: "builder", params: { mode: "apply-fixes", ...params } } }, "run", pipelineRoleLookup).role;
+  expect(fix({})).toMatchObject({ roleId: "builder", engine: "codex", model: "gpt-6-luna", effort: "high" });
+  expect(fix({ domain: "frontend" })).toMatchObject({ engine: "claude", model: "sonnet", effort: "high" });
+  expect(fix({ domain: "docs" })).toMatchObject({ engine: "claude", model: "sonnet", effort: "high" });
+  expect(fix({ domain: "frontend", size: "trivial" })).toMatchObject({ engine: "claude", model: "sonnet", effort: "high" });
+  expect(fix({})?.promptScaffold).toContain("Apply-fixes guidance: the brief is a list of findings.");
 });
 
 test("validatePipelineRoleParams enforces canonical value rules and skips required-when-absent", () => {
@@ -165,13 +171,22 @@ test("operator role params substitute into the resolved prompt scaffold", () => 
     "review-loop",
     pipelineRoleLookup,
   );
-  expect(resolved.role?.promptScaffold).toContain("PR#100");
-  expect(resolved.role?.promptScaffold).toContain("lens scope");
+  expect(resolved.role?.promptScaffold).toContain("Change under review: PR#100");
+  expect(resolved.role?.promptScaffold).toContain("Lens: scope.");
+});
+
+/* Review of #2301: a pipeline stage never carries the seat mandate, so an
+   orchestrator stage gets the shared rules its scaffold leaves to it. */
+test("an orchestrator pipeline stage carries the shared rules", () => {
+  const scaffold = pipelineRoleLookup("orchestrator", { mode: "standard" })?.promptScaffold ?? "";
+  expect(scaffold).toContain("search_transcripts");
+  expect(scaffold).toContain("finish with needs_decision");
+  expect(scaffold).toContain("The project's own rules govern the work");
 });
 
 test("pipeline role lookup defaults omitted orchestrator maxWorkers to three", () => {
-  expect(pipelineRoleLookup("orchestrator")?.promptScaffold).toContain("Maximum workers: 3");
-  expect(pipelineRoleLookup("orchestrator", { maxWorkers: 1 })?.promptScaffold).toContain("Maximum workers: 1");
+  expect(pipelineRoleLookup("orchestrator")?.promptScaffold).toContain("keep at most 3 workers running at once");
+  expect(pipelineRoleLookup("orchestrator", { maxWorkers: 1 })?.promptScaffold).toContain("keep at most 1 workers running at once");
   expect(pipelineRoleLookup("reviewer")?.promptScaffold).toContain("Run 1 independent pass(es)");
 });
 
@@ -181,9 +196,12 @@ test("blank role params fall back to the registry default token value", () => {
     "review-loop",
     pipelineRoleLookup,
   );
-  /* lens defaults to the first registry option, so no empty token is substituted. */
-  expect(resolved.role?.promptScaffold).toContain("lens correctness");
-  expect(resolved.role?.promptScaffold).not.toContain("lens .");
+  /* lens defaults to the first registry option, so no empty token is
+     substituted, and an empty change drops its labelled line (C6). */
+  expect(resolved.role?.promptScaffold).toContain("Lens: correctness.");
+  expect(resolved.role?.promptScaffold).not.toContain("Lens: .");
+  expect(resolved.role?.promptScaffold).not.toContain("Change under review:");
+  expect(resolved.role?.promptScaffold).not.toMatch(/Inspect\s+with/);
 });
 
 test("Builder domain=frontend keeps the canonical frontend scaffold guidance (parity with resolveRole)", () => {

@@ -405,7 +405,7 @@ test("a live lane is its numbered stage list: who runs each stage once, the curr
   /* The stages, each drawn once, numbered, with who runs it on its own row. */
   const rows = qa(live, "ol.pb-stages > li.pb-stage");
   expect(rows.map((row) => [row.querySelector(".pb-num")?.textContent, row.querySelector(".pb-name")?.textContent])).toEqual([["1", "Implement"], ["2", "Review"]]);
-  expect(rows.every((row) => row.querySelector("[data-engine-mark], .pb-ident-words") !== null)).toBe(true);
+  expect(rows.every((row) => row.querySelector("[data-engine-mark], [data-glyph-engine], .pb-ident-words") !== null)).toBe(true);
   expect(live.querySelector(".pb-chain, .pb-pills")).toBeNull();
   /* The screen above names the task and Attach lives on the pipeline screen,
      so the embedded list draws no heading and no Attach. */

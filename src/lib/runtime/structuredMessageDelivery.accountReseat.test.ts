@@ -552,6 +552,38 @@ test("a live structured send starts an active-account reseat and holds the opera
   expect(Object.values(registry.snapshot().heldDeliveries)).toHaveLength(1);
 });
 
+test("a live continuation keeps an in-flight conversation reseat ahead of active routing", async () => {
+  const { registry, conversation } = registryWithConversation("seat-source", "claude");
+  registry.setEngineRouting("claude", "seat-previously-limited");
+  const reseat = registry.requestConversationReseat(conversation.id, "seat-free");
+  let commands = 0;
+  const client = {
+    readSession: sessionReader(async () => snapshot(conversation.id, "claude")),
+    command: async () => { commands += 1; throw new Error("predecessor received continuation"); },
+  } as unknown as RuntimeHostClient;
+
+  const result = await enqueueStructuredMessage({
+    path: artifactPath,
+    conversationId: conversation.id,
+    clientMessageId: "stage-limit-continuation",
+    text: "continue after limit",
+  }, {
+    enabled: () => true,
+    client: () => client,
+    registry: () => registry,
+    requestMigrationTick: () => {},
+  });
+
+  expect(result).toMatchObject({ ok: true, target: conversation.id, outcome: "held" });
+  expect(commands).toBe(0);
+  expect(registry.conversation(conversation.id)?.migration).toMatchObject({
+    targetId: "seat-free", operationId: reseat.migration!.operationId,
+  });
+  expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{
+    clientMessageId: "stage-limit-continuation", state: "held",
+  }]);
+});
+
 test("a mismatched-account image rejection leaves migration state untouched", async () => {
   const { registry, conversation } = registryWithConversation();
   registry.setEngineRouting("codex", "seat-active");

@@ -19,7 +19,7 @@ fs.mkdirSync(process.env.TMPDIR, { recursive: true });
 const SESSIONS = path.join(SANDBOX, "openclaw", "agents", "fixtures", "sessions");
 fs.mkdirSync(SESSIONS, { recursive: true });
 
-const { gatherSeatTickInput: gatherProduction, readRetirementJournalWindow, repoDirForProject, RETIREMENT_STALL_WINDOW_MS, runtimeWakeState, seatTickProjects, stalledRetirementClause, wakeStateFromRecord, withdrawRuntimeWake } = await import("./seatTickSources");
+const { gatherSeatTickInput: gatherProduction, readRetirementJournalWindow, repoDirForProject, RETIREMENT_STALL_WINDOW_MS, runtimeWakeState, seatTickProjects, selfUpdateSignals, stalledRetirementClause, wakeStateFromRecord, withdrawRuntimeWake } = await import("./seatTickSources");
 const { SeatTickAccounting } = await import("./seatTickAccounting");
 const { SEND_UNVERIFIED_REASON } = await import("@/lib/runtime/sendSettlement");
 const { FileRuntimeEventStore } = await import("@/lib/runtime/eventStore");
@@ -33,6 +33,13 @@ const gatherSeatTickInput: typeof gatherProduction = (project, state, policy, po
 };
 const { AgentRegistry } = await import("@/lib/agent/registry");
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+
+test("self-update sends one wait or off signal from its durable state", () => {
+  const quiet = { waitingTarget: null, lastBlockers: null, pending: null };
+  expect(selfUpdateSignals({ ...quiet, off: null, noticeAt: null, waitingSince: null })).toEqual([]);
+  expect(selfUpdateSignals({ ...quiet, waitingTarget: "a".repeat(40), off: null, noticeAt: "2026-01-02", waitingSince: "2026-01-01" })).toMatchObject([{ id: "self-update-wait" }]);
+  expect(selfUpdateSignals({ ...quiet, off: { at: "2026-01-02", target: "a".repeat(40), stage: "build", reason: "build failed" }, noticeAt: null, waitingSince: null })).toMatchObject([{ id: "self-update-off" }]);
+});
 const { sessionKeyFromTranscript } = await import("@/lib/agent/sessionKey");
 const { projectForCwd } = await import("@/lib/scanner/describe");
 import type { OriginalSendEvidence, SendReceipt } from "@/lib/runtime/sendSettlement";
@@ -1409,6 +1416,23 @@ test("the projects worth checking are the seated ones plus anything with work an
     tasks: [{ id: "task_b2", project: "unstarted", status: "assigned", text: "card", placement: "unplaced", assignments: [], createdAt: "", updatedAt: "" }],
   }));
   expect(projects).toEqual(["abandoned", "unstarted", PROJECT]);
+});
+
+/* docs/design/linked-installs.md M.4: the sources mark another machine's
+   tasks and never count their project as work nobody is on. */
+test("a task another linked machine runs is marked runsOn and adds no project", async () => {
+  const selfFile = path.join(process.env.LLV_STATE_DIR!, "links/self.json");
+  fs.mkdirSync(path.dirname(selfFile), { recursive: true });
+  fs.writeFileSync(selfFile, JSON.stringify({ v: 1, installId: ["0a0a0a0a", "1111", "4111", "8111", "111111111111"].join("-"), label: "alpha", publicUrl: null, check: null }));
+  try {
+    const peer = ["0b0b0b0b", "2222", "4222", "8222", "222222222222"].join("-");
+    const elsewhere = { id: "task_peer", project: "peer-only", status: "assigned", text: "card", placement: "unplaced", assignments: [], machine: peer, createdAt: "", updatedAt: "" };
+    expect(seatTickProjects({ ...sources({ tasks: [elsewhere] }), activeSeats: () => [], pipelines: () => [] as never })).toEqual([]);
+    const input = await gather({ tasks: [{ ...elsewhere, project: PROJECT, updatedAt: new Date(NOW - 60_000).toISOString() }] });
+    expect(input.tasks[0]).toMatchObject({ id: "task_peer", runsOn: "0b0b0b0b" });
+  } finally {
+    fs.rmSync(selfFile, { force: true });
+  }
 });
 
 test("a done board and a closed lane leave a project the tick has no opinion about", () => {

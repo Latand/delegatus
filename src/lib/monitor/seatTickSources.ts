@@ -14,8 +14,10 @@ import {
   type SpawnLineageEdge,
   type SpawnReceipt,
 } from "@/lib/agent/registry";
+import { linkedContext, machineLabel, runsHere } from "@/lib/links/linked";
 import { sessionKeyFromTranscript, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { statePath } from "@/lib/configDir";
+import { readAuto, type AutoState } from "@/lib/selfUpdate/auto";
 import { readJsonCache } from "@/lib/state/durableJson";
 import { pageFromEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { refreshLifecycleJournal } from "@/lib/lifecycle/projector";
@@ -1202,6 +1204,9 @@ export function readRetirementJournalWindow(filename: string, sinceMs: number): 
 
 function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources): SeatTickSignalInput[] {
   const found: SeatTickSignalInput[] = [];
+  if (viewerOwnProjectKeys().includes(project)) {
+    found.push(...selfUpdateSignals(readAuto(statePath("self-update", "auto.json"))));
+  }
   /* The LATEST deployment, asked for as such. The ledger's default ordering is
      by entity id — a random UUID — so taking an element out of a one-row "tail"
      reported a rolled-back deploy from earlier in the day while the four newest
@@ -1236,6 +1241,15 @@ function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatT
     found.push({ id: "seat-host", label: `the seat's own turn is ${seatActivity.lifecycle} in ${project} (${seatActivity.reason})` });
   }
   return found;
+}
+
+export function selfUpdateSignals(auto: Pick<AutoState, "off" | "noticeAt" | "waitingSince" | "waitingTarget" | "lastBlockers" | "pending">): SeatTickSignalInput[] {
+  if (auto.off) return [{ id: "self-update-off", label: `self-update: automatic updates turned off — ${auto.off.reason}` }];
+  if (auto.noticeAt && auto.waitingSince) {
+    const counts = [auto.lastBlockers?.turns ? `${auto.lastBlockers.turns} agent turns` : "", auto.lastBlockers?.stages ? `${auto.lastBlockers.stages} stages` : ""].filter(Boolean).join(", ");
+    return [{ id: "self-update-wait", label: `self-update: ${auto.waitingTarget?.slice(0, 7) ?? "built release"} has waited over 24 h for a quiet moment${counts ? ` (${counts})` : ""}` }];
+  }
+  return [];
 }
 
 /**
@@ -1339,7 +1353,10 @@ export function seatTickProjects(sources: SeatTickSources): string[] {
   for (const pipeline of sources.pipelines()) {
     if (isOpen(pipeline) && pipeline.project) projects.add(canonicalOrchestratorProject(pipeline.project));
   }
-  for (const task of sources.tasks()) {
+  const tasks = sources.tasks();
+  const linked = tasks.some((task) => task.machine) ? linkedContext() : null;
+  for (const task of tasks) {
+    if (linked && !runsHere(task, linked)) continue;
     if ((task.status === "inbox" || task.status === "assigned") && task.project) projects.add(canonicalOrchestratorProject(task.project));
   }
   return [...projects].sort();
@@ -2081,12 +2098,15 @@ export async function gatherSeatTickInput(
   const board = projectTaskPipelineIds(sources.tasks(), [...hotLanes])
     .filter((task) => canonicalOrchestratorProject(task.project) === canonical);
   const taskEvidence = evidenceFromTasks(board.map(taskSummary));
+  const linked = board.some((task) => task.machine) ? linkedContext() : null;
   const tasks: SeatTickTaskInput[] = board.map((task, index) => ({
     id: task.id,
     title: taskEvidence[index]!.title,
     status: task.status,
     owned: taskEvidence[index]!.owner !== null,
     updatedAt: task.updatedAt ?? null,
+    /* The guard is the guarantee; this only saves wakes (M.4). */
+    ...(linked && !runsHere(task, linked) ? { runsOn: machineLabel(task.machine!, linked).label } : {}),
   }));
 
   const announcedLanes = retainedLaneAnnouncements(state.announcedLanes ?? [], hotLanes, canonical, seat, now, policy.backlogAfterMs);

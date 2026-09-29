@@ -101,6 +101,46 @@ test("the layout mode follows the board's own width, tabbed from 640 px up to 76
   expect(kanbanLayoutMode(1400)).toBe("wide");
 });
 
+test("remote agents stay on their own project while a different board loads or fails", async () => {
+  const first = `repo-${"a".repeat(32)}`;
+  const second = `repo-${"b".repeat(32)}`;
+  const row = (project: string) => ({ k: `a:${(project === first ? "1" : "2").repeat(16)}`, p: project, t: "claude agent", e: "claude", m: "model", st: "working", at: Date.now(), peer: "Machine B", asOf: Date.now(), stale: false });
+  const originalFetch = globalThis.fetch;
+  let failSecond: (() => void) | undefined;
+  globalThis.fetch = (async (input) => {
+    const project = new URL(String(input), "http://localhost").searchParams.get("project");
+    if (project === first) return Response.json({ agents: [row(first), row(second)] });
+    if (project === second) return new Promise<Response>((resolve) => { failSecond = () => resolve(new Response(null, { status: 503 })); });
+    throw new Error(`Unexpected agent request for ${project}`);
+  }) as typeof fetch;
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  roots.push(root);
+  const render = (project: string) => flushSync(() => root.render(
+    <KanbanBoard project={project} groups={[]} manual={[]} files={[]} flows={[]} pipelines={[]} tasks={[]} allTasks={[]} drafts={[]}
+      now={1_800_000_000} loaded catalogFailures={0} selection={new Set()} onOpenConversations={() => {}}
+      seatRefs={null} mutationPorts={NO_PORTS} />,
+  ));
+  try {
+    render(first);
+    await tick();
+    expect(host.querySelectorAll("[data-remote-agent]")).toHaveLength(1);
+    render("dir-local");
+    expect(host.querySelectorAll("[data-remote-agents]")).toHaveLength(0);
+    render(first);
+    expect(host.querySelectorAll("[data-remote-agent]")).toHaveLength(1);
+    render(second);
+    expect(host.querySelectorAll("[data-remote-agents]")).toHaveLength(0);
+    expect(failSecond).toBeDefined();
+    failSecond!();
+    await tick();
+    expect(host.querySelectorAll("[data-remote-agents]")).toHaveLength(0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("a seat docked at the side never costs the columns: what it leaves scrolls instead of folding into tabs (#1841)", () => {
   /* 1280 window: 1032 px of board, a 380 px seat leaves 652. */
   expect(kanbanLayoutModeBeside(1032, 380)).toBe("scroll");
@@ -450,7 +490,8 @@ const WORK = "minmax(var(--work-min), 1fr)";
 
 test("on a large screen a project board balances its columns; narrow, scroll, tabs and the Overview keep theirs", () => {
   localStorage.clear();
-  const tasks = [task("a", "assigned", "Repair old links"), task("b", "blocked", "Waiting on a review")];
+  /* Every column holds a card: an empty one folds to a strip. */
+  const tasks = [task("i", "inbox", "Sort the intake"), task("a", "assigned", "Repair old links"), task("b", "blocked", "Waiting on a review"), task("d", "done", "Ship the adapter")];
   const overview = { project: "__overview__", overview: { names: { fixture: "fixture" }, onOpenProject: () => {}, keep: () => true } };
   const at = (width: number, extra: Partial<KanbanBoardProps> = {}) => atBoardWidth(width, () => {
     const { host } = mount(tasks, NO_PORTS, extra);
@@ -511,6 +552,44 @@ test("the column template function holds the reading width and the wide share in
   expect(kanbanColumnTracks("wide", { overview: false, wide: "blocked", reading })).toEqual({
     "--c-inbox": BALANCED, "--c-assigned": BALANCED, "--c-blocked": WORK, "--c-done": BALANCED,
   });
+});
+
+test("an open agent keeps its minimum width and an empty column folds to a strip in every grid mode", () => {
+  const none = new Set<TaskStatus>();
+  const assigned = new Set<TaskStatus>(["assigned"]);
+  const blocked = new Set<TaskStatus>(["blocked"]);
+  expect(kanbanColumnTracks("scroll", { overview: false, wide: null, reading: none, agents: assigned, strips: blocked })).toBeNull();
+  /* An agent open in Assigned: the workspace never goes under the agent minimum. */
+  expect(kanbanColumnTracks("narrow", { overview: false, wide: null, reading: none, agents: assigned })).toEqual({
+    "--c-inbox": "220px", "--c-assigned": "minmax(var(--agent-min), 1fr)", "--c-blocked": "220px", "--c-done": "220px",
+  });
+  /* One open in a shelf holds the same minimum, balanced beside the others. */
+  expect(kanbanColumnTracks("wide", { overview: false, wide: null, reading: blocked, agents: blocked })).toEqual({
+    "--c-inbox": BALANCED, "--c-assigned": "minmax(440px, 1fr)", "--c-blocked": "minmax(var(--agent-min), max(460px, var(--shelf-balanced)))", "--c-done": BALANCED,
+  });
+  /* An empty shelf is a strip that opens to the track it would have had. */
+  expect(kanbanColumnTracks("narrow", { overview: false, wide: null, reading: none, agents: assigned, strips: blocked })).toEqual({
+    "--c-inbox": "220px", "--c-assigned": "minmax(var(--agent-min), 1fr)", "--c-blocked": "var(--kb-open-blocked, var(--strip-w))", "--c-done": "220px",
+    "--kb-track-blocked": "220px",
+  });
+  /* The wide share and reading are never folded. */
+  expect(kanbanColumnTracks("wide", { overview: false, wide: "blocked", reading: none, strips: blocked })).toEqual({
+    "--c-inbox": BALANCED, "--c-assigned": BALANCED, "--c-blocked": WORK, "--c-done": BALANCED,
+  });
+  expect(kanbanColumnTracks("wide", { overview: false, wide: null, reading: blocked, strips: blocked })?.["--c-blocked"]).toBe("minmax(420px, max(460px, var(--shelf-balanced)))");
+});
+
+test("an empty column draws as a strip and a filled one does not", () => {
+  localStorage.clear();
+  atBoardWidth(1440, () => {
+    const { host } = mount([task("a", "assigned", "Merge the approved queue adapter")], NO_PORTS);
+    const column = (status: string) => host.querySelector(`.column[data-status="${status}"]`)!;
+    expect(column("blocked").classList.contains("strip")).toBe(true);
+    expect(column("done").classList.contains("strip")).toBe(true);
+    expect(column("assigned").classList.contains("strip")).toBe(false);
+    expect(tracks(host).blocked).toBe("var(--kb-open-blocked, var(--strip-w))");
+  });
+  localStorage.clear();
 });
 
 test("in tabs every column is already full width, so no column draws the control", () => {

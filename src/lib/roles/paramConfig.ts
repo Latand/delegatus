@@ -8,9 +8,15 @@ import type { RoleConfig, RoleId, RoleParamValues, RoleVariantId } from "./types
  * role table and the launch line share `variantForParams` with the registry.
  */
 export const BUILDER_TRIVIAL_CONFIG: RoleConfig = { engine: "claude", model: "sonnet", effort: "high" };
-export const BUILDER_FRONTEND_CONFIG: RoleConfig = { engine: "claude", model: "opus", effort: "high" };
+/* A UI lane's builder runs Sonnet 5.5 pinned by id (the `sonnet` alias moves
+   with the next Sonnet); an Opus brief states what to build and Opus reviews. */
+export const BUILDER_FRONTEND_CONFIG: RoleConfig = { engine: "claude", model: "claude-sonnet-5-5", effort: "high" };
 export const BUILDER_DOCS_CONFIG: RoleConfig = { engine: "claude", model: "opus", effort: "medium" };
-export const BUILDER_APPLY_FIXES_CONFIG: RoleConfig = { engine: "codex", model: "gpt-5.6-terra", effort: "low" };
+/* docs/design/agent-prompt-contract.md §3 (a): a fix round runs a light model
+   by its lane's domain, and its brief is a list of findings, each with a place. */
+export const BUILDER_APPLY_FIXES_CONFIG: RoleConfig = { engine: "codex", model: "gpt-6-luna", effort: "high" };
+export const BUILDER_FRONTEND_FIXES_CONFIG: RoleConfig = { engine: "claude", model: "sonnet", effort: "high" };
+export const BUILDER_DOCS_FIXES_CONFIG: RoleConfig = { engine: "claude", model: "sonnet", effort: "high" };
 /* Astra does not review trivial diffs, and Sonnet may not review at all; Luna
    is the Codex reviewer of the Sonnet class. */
 export const REVIEWER_TRIVIAL_CONFIG: RoleConfig = { engine: "codex", model: "gpt-6-luna", effort: "high" };
@@ -22,22 +28,28 @@ export const ROLE_VARIANT_DEFAULTS = {
     frontend: BUILDER_FRONTEND_CONFIG,
     docs: BUILDER_DOCS_CONFIG,
     "apply-fixes": BUILDER_APPLY_FIXES_CONFIG,
+    "frontend-fixes": BUILDER_FRONTEND_FIXES_CONFIG,
+    "docs-fixes": BUILDER_DOCS_FIXES_CONFIG,
   },
   reviewer: { trivial: REVIEWER_TRIVIAL_CONFIG },
 } as const satisfies Record<string, Partial<Record<RoleVariantId, RoleConfig>>>;
 
 /**
  * The variant these parameters select, or null for the role's base row. The
- * one statement of the precedence (trivial > frontend > docs > apply-fixes):
- * `trivial` wins over the domain so a trivial UI tweak runs the light row and
- * keeps the frontend scaffold guidance, and `docs` wins over `apply-fixes` so
- * a writing lane's fix stage stays on Claude.
+ * one statement of the precedence (trivial > frontend-fixes > docs-fixes >
+ * frontend > docs > apply-fixes): `trivial` wins over everything so a trivial
+ * lane's fix round runs the same light row as its build; a fix round in a
+ * frontend or docs lane runs that domain's fix row, so the domain rows stay the
+ * implementer's; and a general fix round runs the general fix row.
  */
 export function variantForParams(roleId: RoleId | string | null | undefined, params: RoleParamValues | undefined): RoleVariantId | null {
   const values = params ?? {};
   if (roleId === "reviewer") return values.size === "trivial" ? "trivial" : null;
   if (roleId !== "builder") return null;
   if (values.size === "trivial") return "trivial";
+  const fixRound = values.mode === "apply-fixes";
+  if (fixRound && values.domain === "frontend") return "frontend-fixes";
+  if (fixRound && values.domain === "docs") return "docs-fixes";
   if (values.domain === "frontend") return "frontend";
   if (values.domain === "docs") return "docs";
   if (values.mode === "apply-fixes") return "apply-fixes";
@@ -81,6 +93,8 @@ export const VARIANT_PARAMS: Record<RoleVariantId, RoleParamValues> = {
   frontend: { domain: "frontend" },
   docs: { domain: "docs" },
   "apply-fixes": { mode: "apply-fixes" },
+  "frontend-fixes": { domain: "frontend", mode: "apply-fixes" },
+  "docs-fixes": { domain: "docs", mode: "apply-fixes" },
 };
 
 /** `size=trivial`, `domain=frontend`: how a caller selects a variant. */

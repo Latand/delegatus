@@ -66,9 +66,12 @@ export async function openFixture(
      context with a mouse is therefore NOT a phone, and a case that measures
      phone geometry has to say so (send-latency slice 3). */
   touch = false,
+  /* A drawing a few pixels across (the model glyphs) is read at the density
+     an operator's screen draws it; everything else is measured at 1. */
+  deviceScaleFactor = 1,
 ) {
   const context = await browser.newContext({
-    viewport, deviceScaleFactor: 1, colorScheme: scheme, reducedMotion: motion,
+    viewport, deviceScaleFactor, colorScheme: scheme, reducedMotion: motion,
     ...(touch ? { hasTouch: true, isMobile: true } : {}),
   });
   if (lang) await context.addInitScript(`try { localStorage.setItem("llv_lang", ${JSON.stringify(lang)}); } catch {}`);

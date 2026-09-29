@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { authenticatedAgentSpawnCaller, isAgentInitiatedSpawn } from "@/app/api/spawn/admission";
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { agentRegistry } from "@/lib/agent/registry";
+import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { conversationAgentRole, isSpawnDeniedRole, reviewerOriginSpawnGuidance, type SpawnRejectionCode } from "@/lib/agent/spawnAdmission";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
@@ -21,7 +22,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type PipelineApiError = ApiError & {
-  code?: PipelineRepoPreflightErrorCode | SpawnRejectionCode | "store_busy" | typeof ENGINE_NOT_CONNECTED;
+  code?: PipelineRepoPreflightErrorCode | SpawnRejectionCode | "orchestrator_seat_revoked" | "orchestrator_seat_authority_unavailable" | "store_busy" | typeof ENGINE_NOT_CONNECTED | "TASK_RUNS_ELSEWHERE";
   /** With ENGINE_NOT_CONNECTED: the stage, role and engine (#1876). */
   details?: EngineNotConnectedDetails;
   /** #1766: set when the registry lock refused before anything was admitted, so
@@ -80,16 +81,18 @@ export async function GET(req: NextRequest): Promise<NextResponse<PipelinesRespo
     reviewer-created container, so this route check is defense in depth.
     An admitted request answers who briefed it, for the sizing rules. */
 function pipelineOrigin(req: NextRequest, body: CreatePipelineRequest): NextResponse<PipelineApiError> | PipelineBriefer {
-  if (!isAgentInitiatedSpawn(req)) return { kind: "operator" };
+  const capability = req.headers.get(VIEWER_SPAWN_CAPABILITY_HEADER);
+  if (capability === null && !isAgentInitiatedSpawn(req)) return { kind: "operator" };
   const registry = agentRegistry();
-  const capability = req.headers.get(VIEWER_SPAWN_CAPABILITY_HEADER)?.trim();
-  if (capability) {
+  if (capability !== null) {
     const caller = authenticatedAgentSpawnCaller(req, body.src, registry);
     if ("error" in caller) return NextResponse.json({ error: caller.error }, { status: caller.status ?? 403 });
     /* The sizing rules judge the authenticated conversation; the operator's
        own capability is the operator (docs/design/model-sizing-tiers.md §2). */
     if (caller.kind === "operator") return { kind: "operator" };
     if (caller.kind === "agent") {
+      const revoked = revokedSeatPipelineRefusal(caller.conversationId, id => registry.canonicalConversationId(id as `conversation_${string}`));
+      if (revoked) return NextResponse.json({ error: revoked, code: "orchestrator_seat_revoked" }, { status: 403 });
       const role = conversationAgentRole(registry.readOnlySnapshot(), caller.conversationId);
       if (isSpawnDeniedRole(role)) {
         return NextResponse.json({ error: reviewerOriginSpawnGuidance(role), code: "reviewer_origin_spawn" }, { status: 403 });
@@ -108,6 +111,8 @@ function pipelineOrigin(req: NextRequest, body: CreatePipelineRequest): NextResp
   const srcPath = typeof body.src === "string" && body.src.trim() ? body.src.trim() : null;
   const srcConversation = srcPath ? registry.conversationForPath(srcPath) : null;
   if (srcConversation) {
+    const revoked = revokedSeatPipelineRefusal(srcConversation.id, id => registry.canonicalConversationId(id as `conversation_${string}`));
+    if (revoked) return NextResponse.json({ error: revoked, code: "orchestrator_seat_revoked" }, { status: 403 });
     const role = conversationAgentRole(registry.readOnlySnapshot(), srcConversation.id);
     if (isSpawnDeniedRole(role)) {
       return NextResponse.json({ error: reviewerOriginSpawnGuidance(role), code: "reviewer_origin_spawn" }, { status: 403 });
@@ -160,6 +165,9 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; p
       ...(result.legacyReview?.length ? { legacyReview: result.legacyReview } : {}),
     }, { status: result.queued ? 202 : 201 });
   } catch (error) {
+    if (error instanceof SeatRevocationStoreUnavailableError) {
+      return NextResponse.json({ error: error.message, code: "orchestrator_seat_authority_unavailable", retryable: true }, { status: 503 });
+    }
     /* #1766: the registry lock was never taken, so no pipeline was created.
        Say so, and say the same request may be repeated — a 500 leaves a caller
        guessing whether a pipeline exists. */

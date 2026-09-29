@@ -18,7 +18,7 @@ import { withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/acc
 import { retiredAccountIds } from "@/lib/accounts/accountsStore";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { accountProjectBindings, projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
-import { admitAutomaticAccountTarget } from "@/lib/accounts/projectSelection";
+import { admitAutomaticAccountTarget, placedAccountHolds } from "@/lib/accounts/projectSelection";
 import {
   emptyLaunchProfile,
   normalizeProjectOwnership,
@@ -1690,6 +1690,22 @@ function settlingLaunchChoseAccount(
 /** The in-flight migration a transaction is about to replace, whose held deliveries its replacement adopts. */
 function inFlightMigration(conversation: RegistryConversation): ConversationMigration | null {
   return conversation.migration && IN_FLIGHT_MIGRATION_PHASES.has(conversation.migration.phase) ? { ...conversation.migration } : null;
+}
+
+/** A committed conversation reseat still owns sends carried to its successor
+    until their delivery settles. A later lazy routing pass must not move that
+    successor while its accepted continuation is waiting to run. */
+function migrationTargetWithPendingDelivery(file: RegistryFile, conversation: RegistryConversation): string | null {
+  const migration = conversation.migration;
+  if (!migration || migration.phase === "rolled-back" || migration.phase === "failed-recoverable") return null;
+  if (migration.phase !== "committed") return migration.targetId;
+  if (file.migrationIntents[migration.intentId]?.scope !== "conversation") return null;
+  const successorId = conversation.generations.at(-1)?.id;
+  return Object.values(file.heldDeliveries).some((delivery) =>
+    resolveConversationAlias(file, delivery.conversationId) === conversation.id
+    && delivery.generationId === successorId
+    && ["held", "assigned", "delivery-uncertain"].includes(delivery.state))
+    ? migration.targetId : null;
 }
 
 /** The replacement migration, now on the conversation, adopts what the one it replaced held and what its owner kept. */
@@ -7811,6 +7827,12 @@ export class AgentRegistry {
    * conversation is returned exactly as it stands and the send lands on the
    * account it is already running on, which crosses nothing.
    */
+  conversationMigrationTargetWithPendingDelivery(id: ViewerConversationId): string | null {
+    const snapshot = this.readOnlySnapshot();
+    const conversation = snapshot.conversations[resolveConversationAlias(snapshot, id)];
+    return conversation ? migrationTargetWithPendingDelivery(snapshot, conversation) : null;
+  }
+
   requestConversationMigrationToActiveAccount(
     id: ViewerConversationId,
     options: { launchId?: string | null } = {},
@@ -7834,6 +7856,11 @@ export class AgentRegistry {
          with no turn yet: a Claude move waits for a transcript only that
          held message can start, and a committed move drops the held message. */
       if (settlingLaunchChoseAccount(file, canonicalId, source, options.launchId)) return clone(conversation);
+      /* A conversation-scoped reseat already chose this thread's successor.
+         Lazy routing on message admission must leave that migration and its
+         held continuation on the chosen account. */
+      if (file.migrationIntents[conversation.migration?.intentId ?? ""]?.scope === "conversation"
+        && migrationTargetWithPendingDelivery(file, conversation)) return clone(conversation);
       if (admitAutomaticAccountTarget({
         project: conversationProjectKey(conversation.projectOwnership, source.launchProfile),
         engine: conversation.engine,
@@ -7842,6 +7869,17 @@ export class AgentRegistry {
         observations: Object.values(file.quotaObservations[conversation.engine]),
         bindings,
       }).kind !== "available") return clone(conversation);
+      /* Past its first message the same holds: the pool placed this thread by
+         room, and while that account is still allowed and still has room a
+         send keeps it there rather than following routing into a migration. */
+      if (placedAccountHolds({
+        project: conversationProjectKey(conversation.projectOwnership, source.launchProfile),
+        engine: conversation.engine,
+        accountId: source.accountId,
+        model: source.launchProfile.model,
+        observations: Object.values(file.quotaObservations[conversation.engine]),
+        bindings,
+      })) return clone(conversation);
       /* A failed-recoverable migration stays parked (#708). Re-arming it from a
          lazy active-account request minted a fresh operation identity on every
          later touch of the conversation, and a fresh identity means a fresh

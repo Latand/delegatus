@@ -55,14 +55,6 @@ const refusals: Array<[string, RuntimeHttpDependencies, string]> = [
   ["structured hosts disabled",
     { enabled: () => true, structuredEnabled: () => false, client: () => admittingClient },
     "structured hosts are disabled"],
-  ["operator activity not recordable",
-    {
-      enabled: () => true,
-      structuredEnabled: () => true,
-      client: () => admittingClient,
-      recordOperatorActivity: () => { throw new Error("activity store unavailable"); },
-    },
-    "direct operator activity could not be recorded"],
   ["no structured delivery ownership",
     {
       enabled: () => true,

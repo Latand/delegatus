@@ -47,7 +47,15 @@ export function viewerBootGateKey(environment: Readonly<Record<string, string | 
   const root = configRoot(environment);
   if (!root) return null;
   const directory = appDirIn(root);
-  if (!phoneAccessFlagMayBeSet(path.join(directory, "phone-access"))) return null;
+  const state = environment.LLV_STATE_DIR || path.join(directory, "state");
+  let linked = false;
+  const selfPath = path.join(state, "links/self.json");
+  try {
+    const self = JSON.parse(fs.readFileSync(selfPath, "utf8")) as { publicUrl?: string };
+    if (self.publicUrl) linked = !["localhost", "127.0.0.1", "::1"].includes(new URL(self.publicUrl).hostname.replace(/^\[|\]$/g, ""));
+  } catch { linked = phoneAccessFlagMayBeSet(selfPath); }
+  if (!linked) linked = phoneAccessFlagMayBeSet(path.join(state, "links/grants.json"));
+  if (!linked && !phoneAccessFlagMayBeSet(path.join(directory, "phone-access"))) return null;
   try {
     const key = fs.readFileSync(path.join(directory, "token"), "utf8").trim();
     return KEY_PATTERN.test(key) ? key : null;

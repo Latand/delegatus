@@ -13,7 +13,6 @@ const { forgetHeadlessReview, headlessReviewStatus, reviewerCommand, scanEventSt
 const { runHeadlessCodexOnce } = await import("@/lib/agent/headless");
 const { reviewerPrompt } = await import("./prompts");
 const { outputPathFor, stdoutPathFor } = await import("./store");
-const { WAKATIME_CREDENTIAL_ENV } = await import("../wakatime/credential");
 const { registerPipelineTick } = await import("../pipelines/controllerSignal");
 
 afterAll(() => {
@@ -218,46 +217,6 @@ test("headless codex reviewer launches without CLI sandbox blocking", () => {
   expect(built.stdin).toContain("Viewer spawn policy:");
 });
 
-test("headless Codex launch closes stdin and excludes the WakaTime credential from child artifacts", async () => {
-  const capturePath = path.join(process.env.LLV_STATE_DIR!, "stdin-capture.json");
-  const executablePath = path.join(process.env.LLV_STATE_DIR!, "fake-codex");
-  const prompt = "Review line one.\nReview line two with unicode: Привіт.\n";
-  const wakatimePlaceholder = ["artifact", "fixture"].join("-");
-  fs.writeFileSync(
-    executablePath,
-    `#!${process.execPath}\nconst prompt = await Bun.stdin.text();\nawait Bun.write(${JSON.stringify(capturePath)}, JSON.stringify({ prompt, eof: true, inherited: process.env[${JSON.stringify(WAKATIME_CREDENTIAL_ENV)}] ?? null }));\n`,
-    { mode: 0o700 },
-  );
-
-  Reflect.deleteProperty(process.env, WAKATIME_CREDENTIAL_ENV);
-  Reflect.set(process.env, WAKATIME_CREDENTIAL_ENV, wakatimePlaceholder);
-  try {
-    startHeadlessReview(
-      "flow-stdin-eof",
-      1,
-      { engine: "codex", model: null, effort: null },
-      process.cwd(),
-      prompt,
-      5_000,
-      null,
-      null,
-      { command: executablePath },
-    );
-    await waitForFile(capturePath);
-
-    const artifact = fs.readFileSync(capturePath, "utf8");
-    const captured = JSON.parse(artifact) as { prompt: string; eof: boolean; inherited: string | null };
-    expect(captured.prompt).toStartWith(prompt.trim());
-    expect(captured.prompt).toContain("Viewer spawn policy:");
-    expect(captured.eof).toBe(true);
-    expect(captured.inherited).toBeNull();
-    expect(artifact).not.toContain(wakatimePlaceholder);
-  } finally {
-    forgetHeadlessReview("flow-stdin-eof", 1);
-    Reflect.deleteProperty(process.env, WAKATIME_CREDENTIAL_ENV);
-  }
-});
-
 test("a headless review exit schedules one flow and pipeline reconciliation", async () => {
   const executablePath = path.join(process.env.LLV_STATE_DIR!, "fake-completing-codex");
   fs.writeFileSync(
@@ -339,9 +298,6 @@ test("an owned reviewer stays running when process identity is briefly unavailab
 
 test("headless managed Codex reviewer fixes its account home and file credential store at launch", () => {
   process.env.LLV_TOKEN = "viewer-token";
-  const wakatimePlaceholder = ["fixture", "value"].join("-");
-  Reflect.deleteProperty(process.env, WAKATIME_CREDENTIAL_ENV);
-  Reflect.set(process.env, WAKATIME_CREDENTIAL_ENV, wakatimePlaceholder);
   const built = reviewerCommand(
     { engine: "codex", model: null, effort: null },
     "review prompt",
@@ -355,11 +311,8 @@ test("headless managed Codex reviewer fixes its account home and file credential
   expect(built.env.CODEX_HOME).toBe("/accounts/work");
   expect(built.args).toContain("cli_auth_credentials_store=file");
   expect(built.env.LLV_TOKEN).toBeUndefined();
-  expect(built.env[WAKATIME_CREDENTIAL_ENV]).toBeUndefined();
-  expect(JSON.stringify({ args: built.args, env: built.env })).not.toContain(wakatimePlaceholder);
   expect(built.env.LLV_SPAWN_CAPABILITY).toBe("B".repeat(43));
   delete process.env.LLV_TOKEN;
-  Reflect.deleteProperty(process.env, WAKATIME_CREDENTIAL_ENV);
 });
 
 test("a headless reviewer never inherits the Viewer's state owner claim", () => {

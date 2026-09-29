@@ -85,6 +85,21 @@ function recordingFetcher() {
   };
 }
 
+test("presence publishes serving revisions so an open page can offer a reload", async () => {
+  const clock = fakeScheduler();
+  const seen: string[] = [];
+  let serving = "aaaaaaa";
+  const publisher = createPresencePublisher({ identity, scheduler: clock.scheduler, onServing: (revision) => seen.push(revision),
+    fetcher: async () => Response.json({ serving }),
+  });
+  publisher.start();
+  await clock.advance(0);
+  serving = "bbbbbbb";
+  await clock.advance(10_000);
+  expect(seen).toEqual(["aaaaaaa", "bbbbbbb"]);
+  publisher.stop();
+});
+
 test("detectBrowser and detectDeviceKind classify common agents", () => {
   expect(detectBrowser("Mozilla/5.0 Chrome/130 Safari/537")).toBe("chrome");
   expect(detectBrowser("Mozilla/5.0 Firefox/130")).toBe("firefox");

@@ -21,7 +21,8 @@ import {
   type ReportTelegramChoice,
 } from "@/lib/projects/settings";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
-import { telegramBotService } from "@/lib/telegram/bot/service";
+import { TelegramBotError, telegramBotService } from "@/lib/telegram/bot/service";
+import { parseTelegramChatReference } from "@/lib/telegram/chatReference";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -103,9 +104,12 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
   const telegram = record?.reportTelegram;
   const telegramShape = telegram === undefined || telegram === null || (
     typeof telegram === "object" && !Array.isArray(telegram)
-    && typeof (telegram as Record<string, unknown>).chat === "string" && !!((telegram as Record<string, unknown>).chat as string).trim()
+    && ((typeof (telegram as Record<string, unknown>).chat === "string" && !!((telegram as Record<string, unknown>).chat as string).trim())
+      !== (typeof (telegram as Record<string, unknown>).link === "string" && !!((telegram as Record<string, unknown>).link as string).trim()))
     && typeof (telegram as Record<string, unknown>).name === "string" && !!((telegram as Record<string, unknown>).name as string).trim()
     && ((telegram as Record<string, unknown>).name as string).trim().length <= REPORT_NAME_MAX_CHARS
+    && ((telegram as Record<string, unknown>).topicId === undefined || (Number.isSafeInteger((telegram as Record<string, unknown>).topicId) && ((telegram as Record<string, unknown>).topicId as number) > 0))
+    && ((telegram as Record<string, unknown>).link === undefined || (telegram as Record<string, unknown>).topicId === undefined)
   );
   const shapeOk = (merge === undefined || typeof merge === "boolean")
     && (bridge === undefined || typeof bridge === "boolean")
@@ -120,23 +124,38 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
     const authority = requireOperatorAuthority(request);
     if (!authority.ok) return NextResponse.json({ error: authority.error, code: "operator_only" }, { status: authority.status, headers });
     if (telegram !== null) {
-      const chat = ((telegram as Record<string, unknown>).chat as string).trim();
-      let allowed = false;
+      const input = telegram as { chat?: string; link?: string; name: string; topicId?: number };
+      const parsed = input.link ? parseTelegramChatReference(input.link) : null;
+      if (input.link && !parsed) return NextResponse.json({ error: "INVALID_CHAT_REFERENCE", message: "enter a chat ID, @username or Telegram link" }, { status: 400, headers });
+      const reference = parsed?.chat ?? input.chat!.trim();
+      let match: { chat?: string; chatId: string; alias: string | null; username?: string | null; isForum?: boolean; postAllowed: boolean } | undefined;
+      const service = telegramBotService();
       try {
-        allowed = telegramBotService().listChats().chats.some((entry) => entry.postAllowed && (entry.chat === chat || entry.alias === chat));
+        match = service.listChats().chats.find((entry) => (
+          entry.chat === reference || entry.chatId === reference || entry.alias === reference
+          || (reference.startsWith("@") && entry.username?.toLowerCase() === reference.slice(1).toLowerCase())
+        ));
       } catch {
-        allowed = false;
+        // No connected bot or no known postable chat.
       }
-      if (!allowed) {
-        return NextResponse.json({ error: "CHAT_NOT_ALLOWED", message: "the bot may not post in that chat; allow it in the bot panel first" }, { status: 409, headers });
+      if (input.link || (!match && (/^-?\d+$/.test(reference) || reference.startsWith("@")))) {
+        try {
+          const added = await service.addChat(reference);
+          match = added.status.chats.find((entry) => entry.chatId === added.chatId);
+        } catch (error) {
+          if (error instanceof TelegramBotError) {
+            const statuses: Record<string, number> = { bot_not_in_chat: 409, chat_unknown: 404, rate_limited: 429, network_failed: 503 };
+            return NextResponse.json({ error: error.code, code: error.code, message: error.message }, { status: statuses[error.code] ?? 409, headers });
+          }
+          return NextResponse.json({ error: "TELEGRAM_FAILED", message: "could not verify the chat with Telegram" }, { status: 503, headers });
+        }
       }
-    }
-    const written = setReportTelegram(project, telegram === null ? null : {
-      chat: ((telegram as Record<string, unknown>).chat as string).trim(),
-      name: ((telegram as Record<string, unknown>).name as string).trim(),
-    }, "operator");
-    if (written === false) {
-      return NextResponse.json({ error: "INTERNAL_ERROR", message: "could not persist the setting" }, { status: 500, headers });
+      if (!match?.postAllowed) return NextResponse.json({ error: "CHAT_NOT_ALLOWED", message: "the bot is not in that chat or posting is not allowed" }, { status: 409, headers });
+      const topicId = match.isForum ? (input.topicId ?? parsed?.topicId) : undefined;
+      const written = setReportTelegram(project, { chat: match.alias ?? match.chat ?? match.chatId, name: input.name.trim(), ...(topicId ? { topicId } : {}) }, "operator");
+      if (written === false) return NextResponse.json({ error: "INTERNAL_ERROR", message: "could not persist the setting" }, { status: 500, headers });
+    } else {
+      if (setReportTelegram(project, null, "operator") === false) return NextResponse.json({ error: "INTERNAL_ERROR", message: "could not persist the setting" }, { status: 500, headers });
     }
   }
   if ((typeof merge === "boolean" && !setMergeOnReview(project, merge, "operator"))

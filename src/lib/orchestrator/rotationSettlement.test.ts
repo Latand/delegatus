@@ -193,7 +193,6 @@ function dependencies(): SeatCommandDependencies {
         engine: "claude",
       };
     },
-    projectTasks: () => [],
     summarizeHandoffs: async () => ({ kind: "fallback", reason: "unavailable" }),
     launchSettlement: () => settlement,
     stampRegistryIdentity: () => {},

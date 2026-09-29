@@ -158,7 +158,9 @@ function boundedSeatTickMessage(dynamic: readonly string[], reserved: readonly s
 
 /** The one line that stands where the contract's clauses used to (#2030),
     for a seat whose delivered mandate states them. */
-export const SEAT_TICK_CONTRACT_POINTER = `Contract: the "${ORCHESTRATOR_VIEWER_CLOCK_HEADING.replace(/^## /, "").split(" — ")[0]}" section of your mandate governs this turn.`;
+/* Named by the words every shipped heading of the section shares, so a seat
+   still holding the heading it was delivered before v30 finds it too. */
+export const SEAT_TICK_CONTRACT_POINTER = `Contract: the "${ORCHESTRATOR_VIEWER_CLOCK_HEADING.split(" — ")[1]}" section of your mandate governs this turn.`;
 
 /** The foot of a wake: the pointer when the seat's mandate states the
     contract, the clauses themselves when it may not — a seat still running on
@@ -166,7 +168,7 @@ export const SEAT_TICK_CONTRACT_POINTER = `Contract: the "${ORCHESTRATOR_VIEWER_
     or bespoke rules. The mandate states the ban on scheduling yourself in the
     clock section's own paragraph; a wake listing the clauses cannot count on
     that paragraph surviving a seat's edit, so it states the ban too. */
-export const SEAT_TICK_NO_SELF_SCHEDULE = "Do not schedule yourself. The Viewer ticks this seat; a self-scheduled monitor is refused practice.";
+export const SEAT_TICK_NO_SELF_SCHEDULE = "Do not schedule yourself. Delegatus ticks this seat; a self-scheduled monitor is refused practice.";
 
 function seatTickContractLines(mandateCarriesContract: boolean): string[] {
   return mandateCarriesContract
@@ -291,11 +293,11 @@ export function seatTickWakeMessage(input: {
   /* Named, each once, with the reason (#1881): which child and why is what
      makes an unreadable transcript something anyone can fix. */
   if (input.unreadableChildren && input.unreadableChildren.length > 0) {
-    lines.push("", "Spawned children whose transcript the Viewer cannot read (not work, named once):",
+    lines.push("", "Spawned children whose transcript Delegatus cannot read (not work, named once):",
       ...input.unreadableChildren.map((child) => `- ${child.conversationId} — ${child.title}: ${child.reason}`));
   }
   if (input.skippedChildren && input.skippedChildren.unreadable > 0) {
-    lines.push(`(${input.skippedChildren.unreadable} more spawned child(ren) whose transcript the Viewer cannot resolve, named by a later wake.)`);
+    lines.push(`(${input.skippedChildren.unreadable} more spawned child(ren) whose transcript Delegatus cannot resolve, named by a later wake.)`);
   }
   if (input.skippedChildren && input.skippedChildren.unchanged > 0) {
     lines.push(`(${input.skippedChildren.unchanged} spawned child(ren) not listed: nothing has changed about them since the wake that showed them.)`);

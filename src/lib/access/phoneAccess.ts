@@ -1,9 +1,8 @@
 
 import { phoneAccessFlagMayBeSet } from "@/lib/access/phoneAccessBootGate";
-import { statePath } from "@/lib/configDir";
 import { isStagingMode } from "@/lib/staging";
-import { readViewerGatewayConfig, VIEWER_GATEWAY_FILE } from "@/runtime-host/deploymentProxy";
-import { readViewerEntries, VIEWER_ENTRIES_FILE } from "@/runtime-host/viewerEntries";
+import { publicEntry } from "@/lib/links/publicEntry";
+import { linksNeedGate } from "@/lib/links/self";
 
 import {
   clearPhoneAccessFlag,
@@ -120,7 +119,6 @@ function dockerManaged(): boolean {
   return process.env.LLV_DOCKER_NSENTER_SHIMS === "1";
 }
 
-const STABLE_VIEWER_PORT = 8898;
 
 /**
  * Where the tailnet is pointed on a Docker install: the runtime host's
@@ -134,24 +132,7 @@ const STABLE_VIEWER_PORT = 8898;
  * requests with the release's key, and the press never points the tailnet at
  * it. Whether it vouches is re-read per request, so it is read live here too.
  */
-function dockerTailnetEntry(): { port: number; publishable: boolean } {
-  const bound = readViewerEntries(statePath(VIEWER_ENTRIES_FILE));
-  if (bound) {
-    if (bound.remoteEntryPort !== null) return { port: bound.remoteEntryPort, publishable: true };
-    if (bound.stableEntry === "pipe") return { port: bound.stablePort, publishable: true };
-    const gateway = readViewerGatewayConfig(statePath(VIEWER_GATEWAY_FILE), bound.stablePort);
-    return { port: bound.stablePort, publishable: gateway.problem !== null || gateway.config.localEntry !== "trusted" };
-  }
-  /* A runtime host older than the record: derive the entries the way it
-     reads them at boot (`src/runtime-host/main.ts`). */
-  const configured = Number(process.env.LLV_VIEWER_PORT);
-  const stable = Number.isInteger(configured) && configured > 0 ? configured : STABLE_VIEWER_PORT;
-  const gateway = readViewerGatewayConfig(statePath(VIEWER_GATEWAY_FILE), stable);
-  /* A file the runtime host cannot read leaves the stable port the plain pipe. */
-  if (gateway.problem) return { port: stable, publishable: true };
-  if (gateway.config.remoteEntryPort !== null) return { port: gateway.config.remoteEntryPort, publishable: true };
-  return { port: stable, publishable: gateway.config.localEntry !== "trusted" };
-}
+function dockerTailnetEntry(): { port: number; publishable: boolean } { return publicEntry(); }
 
 /** The port the tailnet reaches this Viewer on: on a Docker install the
     runtime host's entry, otherwise the launcher's `PORT`, else the port the
@@ -395,7 +376,7 @@ export async function disablePhoneAccess(viewerPort: number): Promise<PhoneOutco
      that bind, and lifting it would open the server to the network. A Docker
      container keeps its key too: `service.env` may have set it for every
      connection, and one the press set is gone at the container's next start. */
-  if (loopbackBind() && !dockerManaged()) setEnv("LLV_TOKEN", undefined);
+  if (loopbackBind() && !dockerManaged() && !linksNeedGate()) setEnv("LLV_TOKEN", undefined);
   setEnv("LLV_TS_HOST", undefined);
   setEnv("LLV_TS_URL", undefined);
   return { ok: true, token: null, read: await readPhoneAccess(viewerPort) };
@@ -449,5 +430,16 @@ export async function restorePhoneAccessGate(): Promise<"off" | "gated" | "linke
     return "linked";
   } catch {
     return "gated";
+  }
+}
+
+/** A saved outward address is a remembered gate, even if phone access is off. */
+export async function restoreLinksGate(): Promise<void> {
+  const { readSelf, linksNeedGate } = await import("@/lib/links/self");
+  const saved = readSelf();
+  process.env.LLV_PUBLIC_HOST = saved?.publicUrl ? new URL(saved.publicUrl).hostname : "";
+  if (linksNeedGate() && !processGates()) {
+    try { setEnv("LLV_TOKEN", (await getToken()).token); }
+    catch (error) { throw new PhoneGateRefusal(errorText(error)); }
   }
 }

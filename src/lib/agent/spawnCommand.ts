@@ -20,8 +20,8 @@ import { grantedMcpServers, mcpServersForSession, normalizeSpawnMcpServers, SCHE
 import { normalizeSpawnPlugins, pluginAllowlistForSession, SCHEDULED_REPORT_PLUGINS, sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { codexModelSupportsImages, defaultModelFor, modelFromBody, validateLaunchModel } from "@/lib/agent/models";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
-import { recordTeamEvent, refuseAnonymous, teamActor } from "@/lib/team";
-import { resolveSpawnRole } from "@/lib/roles/registry";
+import { recordMessageAuthor, recordTeamEvent, refuseAnonymous, teamActor } from "@/lib/team";
+import { resolveSpawnRole, roleSpawnPrompt } from "@/lib/roles/registry";
 import { ENGINE_NOT_CONNECTED, engineNotConnectedDetails, engineNotConnectedMessage, engineReadiness, type EngineReadiness } from "@/lib/accounts/engineConnection";
 import { assertDarwinStructuredRuntime } from "@/lib/proc/darwinIdentity";
 import { spawnAdmissionBodyDigest, spawnContentDigest, spawnParentSelector, spawnRequestDigests } from "@/lib/agent/spawnIdentity";
@@ -61,7 +61,6 @@ import { buildImagePayload, collectImagePayloads, deleteInboxImages, spawnAgentW
 import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
 import type { ApiError } from "@/lib/types";
-import { recordDirectOperatorWakatimeActivity } from "@/lib/wakatime/operatorActivity";
 import { readTelegramConnection, readTelegramSession } from "@/lib/telegram/sessionStore";
 import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
 
@@ -133,7 +132,7 @@ export interface SpawnCommandDependencies {
    * through the origin classifier.
    */
   internalGrant?(): { sessionClass: McpSessionClass; mcpServers: readonly string[] } | null;
-  recordOperatorActivity?: typeof recordDirectOperatorWakatimeActivity;
+
   /** The activity dashboard's request ledger; never throws. */
   recordOperatorRequest?: typeof recordOperatorRequest;
   /** Whether an engine's command resolves and it has a signed-in account
@@ -160,7 +159,7 @@ export const productionSpawnCommandDependencies: SpawnCommandDependencies = {
   storeImages: (images) => runtimeImageStore().putMany(images),
   adoptPipelineAttemptFromSource,
   pipelineAttemptTargetForSource,
-  recordOperatorActivity: recordDirectOperatorWakatimeActivity,
+
   recordOperatorRequest,
   engineReadiness: (engine, project) => engine === "claude" || engine === "codex" ? engineReadiness(engine, project) : "connected",
 };
@@ -365,7 +364,7 @@ export async function executeSpawnRequest(
   }
 
   const userPrompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
-  const prompt = role.value ? [role.value.scaffold, userPrompt].filter(Boolean).join("\n\n") : userPrompt;
+  const prompt = roleSpawnPrompt(role.value, userPrompt);
   const { images, error: imageError } = collectImagePayloads(body);
   if (imageError) {
     return NextResponse.json({ error: imageError.error }, { status: imageError.status });
@@ -497,17 +496,6 @@ export async function executeSpawnRequest(
     const project = explicitProject ?? projectForCwd(cwd);
     if (!project) {
       return NextResponse.json({ error: "project could not be resolved for direct operator spawn" }, { status: 400 });
-    }
-    try {
-      dependencies.recordOperatorActivity?.({
-        idempotencyKey: `spawn:${clientAttemptId!}`,
-        resolvedAttribution: {
-          engine,
-          project,
-        },
-      });
-    } catch {
-      return NextResponse.json({ error: "direct operator activity could not be recorded" }, { status: 503 });
     }
     dependencies.recordOperatorRequest?.(req, { kind: "spawn", idempotencyKey: `spawn:${clientAttemptId!}`, project });
   }
@@ -969,6 +957,11 @@ export async function executeSpawnRequest(
     }
     if (begun.kind === "created") launchId = begun.receipt.launchId;
     if (begun.kind === "created" && begun.receipt.conversationId) {
+      /* The structured host delivers the first prompt under this receipt's
+         stable id. Preserve the admitted member for transcript ingest and
+         member-filtered remote pulls, including a later delivery retry. */
+      recordMessageAuthor({ actor: spawnActor, clientMessageId: `spawn_${begun.receipt.launchId}`,
+        conversationId: begun.receipt.conversationId, text: prompt });
       recordTeamEvent({
         actor: spawnActor,
         action: "agent.started",
@@ -1328,7 +1321,7 @@ export async function executeSpawnRequest(
       deleteInboxImages(imagePaths);
     }
     if (error instanceof SpawnParentError) return NextResponse.json({ error: error.message }, { status: error.status });
-    if (error instanceof LaunchMembershipError) return NextResponse.json({ error: error.message }, { status: error.status });
+    if (error instanceof LaunchMembershipError) return NextResponse.json({ error: error.message, ...(error.code ? { code: error.code } : {}) }, { status: error.status });
     if (error instanceof SpawnAdmissionFenceConflictError) return NextResponse.json({ error: error.message }, { status: 409 });
     if (error instanceof SpawnAdmissionFenceError) return NextResponse.json({ error: error.fence.error, code: "spawn_admission_refused" }, { status: error.fence.status });
     /* Typed terminal admission rejection (#393): the durable receipt already

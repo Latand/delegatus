@@ -8,6 +8,187 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+### Added
+- **Automatic checkout updates.** An opt-in switch in the Update dialog builds
+  green merges and waits for a quiet minute before moving web and the runtime
+  host onto the release. The dialog shows blockers and each process's serving
+  revision. Builds and restarts are recorded with their trigger; a failed
+  automatic restart restores the prior release pointer and turns the switch off.
+
+### Fixed
+- A self-update step whose command disappears or exceeds its deadline now
+  settles in the current web process, so the operator can retry it without a
+  web restart.
+
+## [1.6.0] — 2026-09-28
+
+### Added
+- **Linked installs share a board.** Two Delegatus installs, say your laptop
+  and a server, can now be paired. **Linked installs** in the rail menu (the
+  board's ⋯ menu on a phone) first sets this install's public address. It
+  needs HTTPS and the access key, and a self-check says whether the address
+  really reaches this machine and whether the proxy in front of it is safe.
+  One install then makes a single-use pairing code and the other enters it.
+  Nothing is shared until you choose: pick projects one by one (from the
+  dialog or the board's ⋯ menu) or share every project, including new ones. A
+  project needs a git remote to be shared. Each side shows whether a project
+  is linked, shared only here, or only on the other machine, and you can
+  revoke or remove the link. For a project both machines share, tasks sync
+  both ways: a task created, edited or deleted on one machine appears on the
+  other after the next sync, which runs within seconds while a linked board
+  is open. Each task belongs to the machine that runs it, and the other
+  machine refuses to start agents or pipelines for it. A task's text crosses
+  only once someone has named it. Until then it shows as "Untitled task"
+  ([#2280], [#2287], [#2298]).
+- **Sign-in and team.** One Delegatus can be shared by a team, each person
+  signed in as themselves. An owner claims the install from ⋯ → **Team**,
+  then invites people with a one-time link that lasts seven days. Other
+  devices sign in with a passkey, through the install's Telegram bot, or by
+  approval from a device that is already signed in, and the phone QR signs
+  the phone in as you. The chat names the sender of each human message. The
+  Team page lists the members, what each of them did (messages, answers,
+  agents started, tasks changed) and every signed-in device, with sign-out
+  and revoke. `delegatus team recover` on the host prints a one-time owner
+  link. A failed passkey sign-in or registration says what went wrong and
+  what to try next. A Delegatus used by one person is unchanged: no sign-in
+  page and no new step ([#2243], [#2264]).
+- **Activity per team member.** On a team install, Activity counts each
+  member's own hours, and input with no known author is shown as a separate
+  count. A linked remote can be told which member's rows to send. Each
+  project now counts its own hours, so one clock hour can count for several
+  projects you worked on in parallel, and the day's total counts it once.
+  Scripts that send through the composer routes no longer count as your
+  time. On the phone, ⋯ → Activity opens the page, which now fits the
+  screen ([#2224], [#2238], [#2270]).
+- **Orchestrator reports go to the Telegram chat you pick, per project.**
+  Reports come regularly, in one shape, in your interface language. Every
+  finished deploy or pipeline and every unanswered question is reported,
+  with a digest when the board moved and nothing was reported. Each
+  orchestrator has a **Reports** section in its own row (the seat sheet on
+  a phone) with an "Also to Telegram" switch and the group to post to. Only
+  a project you turned on posts to Telegram. A group the bot cannot see
+  updates for can be added by its id, `@username` or `t.me/` link, and a
+  topic link posts into that forum topic. Orchestrators can also use your
+  Telegram connector when it is connected ([#2236], [#2237], [#2242],
+  [#2249], [#2260], [#2303]).
+- **One panel for what waits on you.** The header shows one quiet
+  **Waiting** count for every project, in place of the old pill with Next.
+  Its panel groups the waiting items by project, with the project on screen
+  first. It docks beside the board where there is room and floats otherwise. Each row names the waiting agent's role in that role's
+  colour, how long it has waited and why, with **Dismiss** on every row and
+  project, and **Allow once** / **Deny** inline on a permission prompt. An
+  item whose cause is gone leaves by itself. The orchestrator's open
+  questions in its report log are the same items: resolve one in either
+  place and it is resolved in both. On the phone the ⚠ sheet groups the
+  same way ([#2256]).
+- **"Asks you".** An optional switch in the board's ⋯ menu, off by default,
+  sends the last message of each agent's turn to a small model on OpenRouter
+  to spot a question for you. The agent's card then says «asks you» with its
+  role, and the report log gets a line with a jump link. It needs your own
+  OpenRouter key, and a monthly cap (USD 1 by default) limits what it
+  spends ([#2251]).
+- **A task's image album.** A card whose agents made renders or screenshots
+  gets an **Images** button with the count and a dot for new ones. The album
+  shows every image from the task's conversations and pipeline stages,
+  newest first and grouped by stage, and opens each one in the full-screen
+  viewer ([#2253]).
+- **Ask the orchestrator in parallel.** While the orchestrator is busy with
+  a turn, **Ask in parallel** (Ctrl/⌘+Shift+Enter) in its composer sends a
+  side question to a copy of it. The copy answers with the orchestrator's
+  authority, works live in its own block inside the orchestrator's chat,
+  then folds to one line with links to what it touched. It cannot deploy or
+  rotate the orchestrator ([#2248]).
+- **Anthropic-compatible provider accounts.** Under Claude accounts, **Add
+  compatible provider** takes a base URL, a token and model IDs for any
+  service that speaks the Anthropic Messages API. Claude Code launches and
+  resumes on that account use the provider and its models. The token is
+  stored in a file only you can read and never appears in any answer
+  ([#2262]).
+- **Undo and redo on the board.** On the desktop board, Ctrl+Z / ⌘Z undoes
+  your own task moves, text edits and hides, and Ctrl+Shift+Z or Ctrl+Y
+  redoes them. Every such edit shows a receipt with Undo. If someone else
+  changed the task in the meantime, nothing is undone and the receipt says
+  so ([#2234]).
+- **Task priority.** A task can be high, normal or low. High tasks sit at
+  the top of the Inbox and low ones at the bottom, and the card shows a
+  small arrow for high and low. Set it from the card's ⋯ menu, or the task
+  sheet on a phone ([#2229]).
+
+### Changed
+- **A readable pipeline graph.** A review loop now folds under the stage it
+  belongs to, as a strip with the fix stage, its state and the rounds as
+  dots, instead of a wire looping around the graph. Every node shows its
+  true state, and the attempt caption appears once. The graph on a card is
+  one column that never gets wider than the card ([#2277]).
+- **Claude stages keep going through a usage limit.** When a Claude
+  pipeline stage hits its account's session limit, Delegatus moves the
+  conversation to another allowed account of that project and continues it
+  there, with the same conversation, worktree and review round. A stage whose
+  account you chose yourself stays on it ([#2285]).
+- **Merge when the review passes covers more pipelines.** Pipelines whose
+  review stage passed are now queued for merge, including older review and
+  design-review plans. A final read-only stage that committed its output
+  locally no longer blocks the merge ([#2288]).
+- **Board layout.** On the desktop board an empty column folds to a narrow
+  strip and opens when the mouse rests on it or a card is dragged over it.
+  A narrow column widens by itself when the mouse rests in it, or when you
+  focus one of its agents from the rail. The orchestrator's report log opens
+  beside its chat only where the chat keeps enough width ([#2228], [#2233],
+  [#2300]).
+- **Messages from agents are labelled.** A message that an agent, an
+  orchestrator, a pipeline or Delegatus delivers into a conversation shows
+  as an agent card with its sender's role, project and a link to the
+  sender, never as your own turn ([#2265]).
+- **Models are sized to the task.** Builders and reviewers take a small-change
+  tier that runs a lighter model. A docs builder (README, docs, public text)
+  starts on Claude Opus, and its fix rounds run a lighter model. An
+  orchestrator, architect, reviewer or verifier that an agent launches never
+  runs on Sonnet or Haiku; a launch you make yourself keeps the model you
+  chose ([#2246]).
+- **Agent prompts fit any project.** Every role's standing instructions
+  now describe practices and name no language, framework or deploy of their
+  own, GitHub issues are used only where GitHub is set up, and each stage
+  reports with one shared set of verdicts ([#2301]).
+- The orchestrator's wakes wait until it is idle instead of arriving in
+  the middle of a turn ([#2293]).
+- The README is rewritten in plain language on the same structure ([#2239]).
+
+### Fixed
+- **Agents keep their Delegatus tools across a release.** An agent's
+  connection to the Delegatus MCP server used to close during a release
+  restart and stay closed. It now reconnects to the new release, answers
+  with a retryable error during the gap, and follows a self-updated install
+  to its new release. If it stays broken, the orchestrator is offered a
+  rotation instead of more wakes ([#2267], [#2271]).
+- **A failed web restart no longer stops your agents.** If a new release
+  and the one before it both fail to start, the web server reports failed
+  and the runtime host that runs every agent stays up ([#2289]).
+- **Finished agent hosts free their resources again.** A host whose agent
+  finished long ago used to stay running because of its old launch record.
+  Once its launch has settled and it has been idle past the age threshold,
+  it is retired like any other idle host ([#2291]).
+- **Accounts.** An account whose Codex usage limit was reset early is
+  usable again right away rather than refused until the old reset. A
+  conversation stuck in a migration that could never start finishes, and
+  sending a message no longer moves an agent off the account it was placed
+  on ([#2294], [#2295]).
+- **Pipelines.** A stage's worktree uses the pipeline's delivery branch,
+  retry keeps commits and uncommitted files, and publication stops with a
+  clear next step when the local and remote branches diverge. A stage
+  report refused while the store was busy can be sent again. Graph edits
+  have a typed MCP schema. Pipeline commits get a fallback author when the
+  machine has no git identity. A replaced orchestrator can no longer
+  control pipelines, and rotation keeps its standing instructions unless new
+  ones are given ([#2273], [#2281], [#2282], [#2283]).
+- **Deploys.** A team install's sign-in answer no longer fails the deploy
+  health check, and a release loads pipelines recorded with older verdicts
+  ([#2263], [#2286]).
+- The orchestrator's context meter reads correctly after a message with many
+  pasted images, instead of showing about 100 % and urging a rotation
+  ([#2297]).
+- Agent skills stay available after a pipeline worktree is removed, because
+  the CLI links them from the main checkout ([#2241]).
+
 ## [1.5.0] — 2026-09-25
 
 ### Added
@@ -1199,3 +1380,49 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2214]: https://github.com/Latand/delegatus/pull/2214
 [#2216]: https://github.com/Latand/delegatus/pull/2216
 [#2219]: https://github.com/Latand/delegatus/pull/2219
+[#2224]: https://github.com/Latand/delegatus/pull/2224
+[#2228]: https://github.com/Latand/delegatus/pull/2228
+[#2229]: https://github.com/Latand/delegatus/pull/2229
+[#2233]: https://github.com/Latand/delegatus/pull/2233
+[#2234]: https://github.com/Latand/delegatus/pull/2234
+[#2236]: https://github.com/Latand/delegatus/pull/2236
+[#2237]: https://github.com/Latand/delegatus/pull/2237
+[#2238]: https://github.com/Latand/delegatus/pull/2238
+[#2239]: https://github.com/Latand/delegatus/pull/2239
+[#2241]: https://github.com/Latand/delegatus/pull/2241
+[#2242]: https://github.com/Latand/delegatus/pull/2242
+[#2243]: https://github.com/Latand/delegatus/pull/2243
+[#2246]: https://github.com/Latand/delegatus/pull/2246
+[#2248]: https://github.com/Latand/delegatus/pull/2248
+[#2249]: https://github.com/Latand/delegatus/pull/2249
+[#2251]: https://github.com/Latand/delegatus/pull/2251
+[#2253]: https://github.com/Latand/delegatus/pull/2253
+[#2256]: https://github.com/Latand/delegatus/pull/2256
+[#2260]: https://github.com/Latand/delegatus/pull/2260
+[#2262]: https://github.com/Latand/delegatus/pull/2262
+[#2263]: https://github.com/Latand/delegatus/pull/2263
+[#2264]: https://github.com/Latand/delegatus/pull/2264
+[#2265]: https://github.com/Latand/delegatus/pull/2265
+[#2267]: https://github.com/Latand/delegatus/pull/2267
+[#2270]: https://github.com/Latand/delegatus/pull/2270
+[#2271]: https://github.com/Latand/delegatus/pull/2271
+[#2273]: https://github.com/Latand/delegatus/pull/2273
+[#2277]: https://github.com/Latand/delegatus/pull/2277
+[#2280]: https://github.com/Latand/delegatus/pull/2280
+[#2281]: https://github.com/Latand/delegatus/pull/2281
+[#2282]: https://github.com/Latand/delegatus/pull/2282
+[#2283]: https://github.com/Latand/delegatus/pull/2283
+[#2285]: https://github.com/Latand/delegatus/pull/2285
+[#2286]: https://github.com/Latand/delegatus/pull/2286
+[#2287]: https://github.com/Latand/delegatus/pull/2287
+[#2288]: https://github.com/Latand/delegatus/pull/2288
+[#2289]: https://github.com/Latand/delegatus/pull/2289
+[#2291]: https://github.com/Latand/delegatus/pull/2291
+[#2293]: https://github.com/Latand/delegatus/pull/2293
+[#2294]: https://github.com/Latand/delegatus/pull/2294
+[#2295]: https://github.com/Latand/delegatus/pull/2295
+[#2297]: https://github.com/Latand/delegatus/pull/2297
+[#2298]: https://github.com/Latand/delegatus/pull/2298
+[#2300]: https://github.com/Latand/delegatus/pull/2300
+[#2301]: https://github.com/Latand/delegatus/pull/2301
+[#2303]: https://github.com/Latand/delegatus/pull/2303

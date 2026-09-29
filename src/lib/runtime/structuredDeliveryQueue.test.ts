@@ -50,6 +50,24 @@ function host(send: (entry: QueueEntry, firstDispatch?: FirstDispatchEvidence) =
   };
 }
 
+test("a durable queued turn waits while automatic restart admission is held", async () => {
+  let held = true;
+  let sends = 0;
+  const queue = new StructuredDeliveryQueue({
+    handoffHeld: () => held,
+    effects: async () => [{ id: "effect:held", kind: "runtime.send", eventSeq: 1,
+      payload: { kind: "send", operationId: "held", conversationId: "conversation-one", text: "queued input", policy: "queue" } }],
+    status: async () => ({ status: "queued", revision: 1 }),
+    hostClaim: async () => "owner:1",
+    transition: async () => {},
+  }, () => host(async () => { sends += 1; return { outcome: "turn-started", turnId: "turn-one" }; }));
+  await queue.drain();
+  expect(sends).toBe(0);
+  held = false;
+  await queue.drain();
+  expect(sends).toBe(1);
+});
+
 test("only the first journal admission under a known claim supplies first-dispatch evidence", async () => {
   for (const [revision, claim] of [[1, "owner:1"], [2, "owner:1"], [undefined, "owner:1"], [1, null], [1, "?"]] as const) {
     const seen: Array<FirstDispatchEvidence | undefined> = [];

@@ -37,6 +37,18 @@ renders nothing: it plays the hero's script ten times in each language and
 width and fails unless every step shows the visitor's request exactly once in
 the orchestrator's chat, above the orchestrator's answer.
 
+```
+CHROME_BIN=/usr/bin/google-chrome-stable bun landing/site/capture.ts --check-fullscreen
+```
+
+puts each of the four frames full screen through its control, in both
+languages at 1440×900 and 390×844, once with the browser's Fullscreen API and
+once as the overlay iPhone Safari gets (no element fullscreen there). It fails
+unless the iframe runs unscaled at the width of the screen and at the height of
+the frame's area, the control clears the product's own controls, the frame is
+not reloaded, Esc (overlay) and the control (API) leave, and the page's scroll
+position comes back. PNGs go to `/tmp/landing-fullscreen-renders/`.
+
 ## Files
 
 | file | what it holds |
@@ -122,6 +134,16 @@ frames farther down refresh when the reader approaches them.
 - **Size.** The demo bundle is about 3.6 MiB minified; the hero's frame loads
   with the page and the others as they come near.
 
+- **Full screen.** Each frame has a control at the top-right corner of its
+  window: in the bar of the hero and the run frame, above the corner of the
+  other two, so the product's own header controls stay clear. The hero and the
+  run frame go full screen as a whole window (tabs, and the hero's steps and
+  hint), the other two with a 52 px strip that holds the way out. The frame
+  then runs at the real size of its area, unscaled, so the product's own
+  layout applies. Full screen never changes an iframe's `src`. The demo's own
+  synthetic Esc (it closes panels between views) does not leave the overlay;
+  only a visitor's Esc does.
+
 ## Performance and scroll regression
 
 Build first, then run the existing capture driver with Chrome's 4× CPU
@@ -149,6 +171,8 @@ retry without acknowledging readiness, and retry must recover three results
 in the same iframe. Acknowledgements are checked against the rendered DOM.
 `--search-failure-only` isolates the empty-response and retry check.
 
+To check phone swipes, run `CHROME_BIN=/usr/bin/google-chrome-stable bun landing/site/capture.ts --check-swipe=after` after building. It drives 390×844 touch gestures at DPR 3 over the hero composer, each demo frame, the install prompt and plain text in both languages. For the page-scroll measurement it places nested scroll areas at the edge in the swipe direction; a long composer draft separately verifies that the inner area still scrolls before that edge. The check writes `swipe-after.json` to `LANDING_RENDER_DIR` and requires page travel of at least 80% of the plain-text control in either direction. It also checks that a quick flick coasts after release. Use `--check-swipe=before` to record an unchanged or published baseline without asserting it.
+
 The driver records load, manual steps, automatic playback, tabs and repeated
 EN/UK switches after visiting the lower sections. Chrome traces record script
 evaluation, layout, paint and long tasks; JSON records click-to-state and
@@ -169,3 +193,5 @@ which clears pending conversation intent; an initial conversation can no
 longer finish opening over a later Search selection. Readiness timeouts show
 a localized retry control. Reloaded frames also wait for acknowledgement;
 elapsed time alone never marks a frame ready.
+
+`--check-swipe-feedback` covers the other half: a finger that moves steadily and then rests over the hero and phone frames. The page has to follow it 1:1, hold still while it rests, and never reverse. It runs twice, once with Chromium's stable touch coordinates and once with `Touch.screenY` carrying the landing's scroll, the semantics seen in an iPhone Safari recording where the page alternated over a demo. The second run fails on a frame that reads the finger as a difference between two readings taken in a frame that moved in between, which is what made the landing jump back and forth. Playwright's WebKit can only tap, so this check models the iPhone coordinates in Chromium.

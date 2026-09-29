@@ -317,6 +317,31 @@ test("a redeemed reset makes the later live window authoritative and keeps the a
   )).toEqual({ kind: "available", accountId: "account-a" });
 });
 
+test("a transcript's last 100% yields to the live 0% of the cycle a redeemed reset opened (8feee404)", async () => {
+  const account = createManagedCodexAccount("Redeemed exhausted weekly");
+  const now = Date.parse("2026-09-28T09:46:00.000Z");
+  const transcriptReset = Date.parse("2026-10-04T19:00:16.000Z") / 1000;
+  const liveReset = Date.parse("2026-10-05T09:42:56.000Z") / 1000;
+  const session = path.join(account.sessionsDir, "2026", "09", "27", "exhausted-before-reset.jsonl");
+  fs.mkdirSync(path.dirname(session), { recursive: true });
+  fs.writeFileSync(session, JSON.stringify({
+    timestamp: "2026-09-27T21:10:00.000Z",
+    payload: { type: "token_count", rate_limits: { limit_id: "codex", primary: { used_percent: 100, window_minutes: 10_080, resets_at: transcriptReset }, secondary: null, plan_type: "prolite" } },
+  }) + "\n");
+
+  const result = await readCodexLimits({
+    account,
+    now: () => now,
+    liveReader: async () => ({
+      primary: { usedPercent: 0, resetsAt: liveReset, windowDurationMins: 10_080 },
+      secondary: null,
+      planType: "prolite",
+    }),
+  });
+
+  expect(result).toMatchObject({ source: "live", reason: null, data: { weekly: { usedPercent: 0, resetsAt: liveReset } } });
+});
+
 test("usage_limit_exceeded clears an already-expired quota reset", async () => {
   const account = createManagedCodexAccount("Expired reset rejection reconciliation");
   const nowS = Math.floor(Date.now() / 1000);

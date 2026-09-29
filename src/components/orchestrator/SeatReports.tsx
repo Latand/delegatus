@@ -30,7 +30,7 @@ import { useLocale, type TFunction } from "@/lib/i18n";
 
 export type ProjectReportSettings = {
   /** A chat, "Log only" (`chat: null`), or null when never chosen. */
-  reportTelegram: { chat: string | null; name?: string } | null;
+  reportTelegram: { chat: string | null; name?: string; topicId?: number } | null;
   /** The chosen chat's title, which names it on the closed chip. */
   reportChatTitle: string | null;
   reportNameSuggestion: string | null;
@@ -39,9 +39,9 @@ export type ProjectReportSettings = {
 export type ProjectReportsRead = {
   settings: ProjectReportSettings | null;
   saving: boolean;
-  failed: boolean;
+  failed: string | null;
   /** Writes the choice; null stores "Log only". True once stored. */
-  save(outcome: { chat: string; name: string } | null): Promise<boolean>;
+  save(outcome: { chat: string; name: string; topicId?: number } | { link: string; name: string } | null): Promise<boolean>;
   /** Reads the stored choice again: the overview may have moved it. */
   reload(): void;
 };
@@ -54,7 +54,7 @@ export function useProjectReports(project: string): ProjectReportsRead {
   /* Keyed by project, so a project switch never shows the previous one's. */
   const [read, setRead] = useState<{ project: string; settings: ProjectReportSettings } | null>(null);
   const [saving, setSaving] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
   const [generation, setGeneration] = useState(0);
   useEffect(() => {
     let cancelled = false;
@@ -71,20 +71,23 @@ export function useProjectReports(project: string): ProjectReportsRead {
     return () => { cancelled = true; };
   }, [project, generation]);
   const reload = useCallback(() => setGeneration((value) => value + 1), []);
-  const save = useCallback(async (outcome: { chat: string; name: string } | null) => {
+  const save = useCallback(async (outcome: { chat: string; name: string; topicId?: number } | { link: string; name: string } | null) => {
     setSaving(true);
-    setFailed(false);
+    setFailed(null);
     try {
       const response = await fetch("/api/projects/settings", {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ project, reportTelegram: outcome }),
       });
-      if (!response.ok) throw new Error(String(response.status));
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { message?: unknown };
+        throw new Error(outcome && "link" in outcome && typeof body.message === "string" ? body.message : "");
+      }
       setRead({ project, settings: settingsOf(await response.json().catch(() => ({})) as Partial<ProjectReportSettings>) });
       return true;
-    } catch {
-      setFailed(true);
+    } catch (error) {
+      setFailed(error instanceof Error ? error.message : "");
       return false;
     } finally {
       setSaving(false);
@@ -103,7 +106,7 @@ function chosenChat(settings: ProjectReportSettings | null): string | null {
     prefix truncate alike. */
 export function seatReportsReading(settings: ProjectReportSettings | null, t: TFunction): { face: string; line: string; chat: string | null } {
   const chat = chosenChat(settings);
-  const title = settings?.reportChatTitle || chat;
+  const title = (settings?.reportChatTitle || chat) + (settings?.reportTelegram?.topicId ? ` · ${t("telegram.reportTopic", { id: settings.reportTelegram.topicId })}` : "");
   return chat && title
     ? { face: title, line: t("seatReports.toChat", { chat: title }), chat }
     : { face: t("seatReports.faceLog"), line: t("seatReports.logOnly"), chat: null };
@@ -124,6 +127,7 @@ export function SeatReportsBody({ project, projectName, reports, surface }: {
   const [draftOn, setDraftOn] = useState<boolean | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
   const [typedName, setTypedName] = useState<string | null>(null);
+  const [link, setLink] = useState("");
   const [saved, setSaved] = useState(false);
 
   const status = bot.status;
@@ -137,12 +141,12 @@ export function SeatReportsBody({ project, projectName, reports, surface }: {
   const choice = pickedLive ?? stored;
   const storedName = settings?.reportTelegram?.name ?? "";
   const name = typedName ?? (storedName || settings?.reportNameSuggestion || "");
-  const nameMissing = choice !== null && name.trim() === "";
-  const dirty = choice !== null && choice !== refused && (choice !== stored || name.trim() !== storedName);
+  const nameMissing = (choice !== null || link.trim() !== "") && name.trim() === "";
+  const dirty = link.trim() !== "" || (choice !== null && choice !== refused && (choice !== stored || name.trim() !== storedName));
   const canSave = on && dirty && !nameMissing && !reports.saving;
   const title = (alias: string) => status?.chats.find((chat) => chat.alias === alias || chat.chatId === alias)?.title ?? alias;
 
-  const reset = () => { setDraftOn(null); setPicked(null); setTypedName(null); };
+  const reset = () => { setDraftOn(null); setPicked(null); setTypedName(null); setLink(""); };
   const toggle = async () => {
     setSaved(false);
     if (!on) { setDraftOn(true); return; }
@@ -155,8 +159,15 @@ export function SeatReportsBody({ project, projectName, reports, surface }: {
     reset();
   };
   const save = async () => {
-    if (!canSave || choice === null) return;
-    if (await reports.save({ chat: choice, name: name.trim() })) { reset(); setSaved(true); }
+    if (!canSave || (choice === null && !link.trim())) return;
+    const outcome = link.trim() ? { link: link.trim(), name: name.trim() } : { chat: choice!, name: name.trim(), ...(choice === stored && settings?.reportTelegram?.topicId ? { topicId: settings.reportTelegram.topicId } : {}) };
+    if (await reports.save(outcome)) {
+      /* A pasted link can add the chat to the bot on the server; read the
+         bot's chats again so the new chat is not shown as one agents may not post in. */
+      if ("link" in outcome) await bot.refresh();
+      reset();
+      setSaved(true);
+    }
   };
 
   const control = phone
@@ -176,14 +187,14 @@ export function SeatReportsBody({ project, projectName, reports, surface }: {
         aria-checked={checked}
         disabled={disabled || reports.saving}
         data-seat-reports-chat={value}
-        onClick={() => { setPicked(value); setSaved(false); }}
+        onClick={() => { setPicked(value); setLink(""); setSaved(false); }}
         className={`flex w-full min-w-0 items-center gap-2.5 rounded-control border px-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed ${phone ? "min-h-11 py-2" : "min-h-8 py-1.5"} ${checked ? "border-accent/50 bg-accent-soft/50" : "border-border bg-card hover:bg-sunken"}`}
       >
         <span aria-hidden className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border-2 ${checked ? "border-accent" : "border-strong"}`}>
           {checked ? <span className="h-2 w-2 rounded-full bg-accent" /> : null}
         </span>
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className={`truncate font-semibold text-primary ${phone ? "text-body" : "text-ui"}`}>{title(value)}</span>
+          <span className={`truncate font-semibold text-primary ${phone ? "text-body" : "text-ui"}`}>{title(value)}{value === stored && settings?.reportTelegram?.topicId ? ` · ${t("telegram.reportTopic", { id: settings.reportTelegram.topicId })}` : ""}</span>
           <span className="truncate font-mono text-caption text-muted">{value}</span>
           {value === refused ? <span data-seat-reports-refused="" className="text-caption leading-snug text-warning">{t("onboarding.telegram.refused")}</span> : null}
         </span>
@@ -217,7 +228,7 @@ export function SeatReportsBody({ project, projectName, reports, surface }: {
         </button>
       </div>
       <p role="status" data-seat-reports-line="" className="-mt-2 text-ui leading-snug text-secondary">
-        {stored ? t("seatReports.toChat", { chat: title(stored) }) : on ? t("seatReports.pick") : t("seatReports.logOnly")}
+        {stored ? t("seatReports.toChat", { chat: `${title(stored)}${settings?.reportTelegram?.topicId ? ` · ${t("telegram.reportTopic", { id: settings.reportTelegram.topicId })}` : ""}` }) : on ? t("seatReports.pick") : t("seatReports.logOnly")}
       </p>
 
       {bot.failure ? (
@@ -242,6 +253,9 @@ export function SeatReportsBody({ project, projectName, reports, surface }: {
               {refused ? radio(refused, true) : null}
               {postable.map((chat) => radio(chat.alias!, false))}
             </div>
+            <input type="text" value={link} onChange={(event) => { setLink(event.target.value); setSaved(false); }}
+              aria-label={t("telegram.reportLink")} placeholder={t("telegram.reportLink")}
+              className={`${control} w-full min-w-0 border-border`} />
           </div>
           <details data-seat-reports-add="" open={postable.length === 0 ? true : undefined} className="group min-w-0">
             <summary className={`flex cursor-pointer list-none items-center gap-1 text-ui font-semibold text-secondary [&::-webkit-details-marker]:hidden ${phone ? "min-h-11" : "min-h-7"}`}>
@@ -280,8 +294,8 @@ export function SeatReportsBody({ project, projectName, reports, surface }: {
         </>
       ) : null}
 
-      {reports.failed ? <p role="alert" className="text-ui font-semibold text-danger">{t("seatReports.failed")}</p> : null}
-      {saved && !reports.failed ? (
+      {reports.failed !== null ? <p role="alert" className="text-ui font-semibold text-danger">{reports.failed || t("seatReports.failed")}</p> : null}
+      {saved && reports.failed === null ? (
         <p data-seat-reports-saved="" className="text-ui font-semibold text-success">
           {stored ? t("onboarding.telegram.savedChat", { chat: title(stored) }) : t("onboarding.telegram.savedLog")}
         </p>

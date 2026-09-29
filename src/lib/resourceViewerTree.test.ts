@@ -27,7 +27,7 @@ type FakeProcess = { ppid: number; argv: string[]; rss: number; swap?: number; s
     agent hosts it launched, the runtime host in its own container. */
 const MACHINE: Record<number, FakeProcess> = {
   100: { ppid: 1, argv: ["bun-container", "--bun", "node_modules/.bin/next", "start"], rss: 1_300 * MIB },
-  101: { ppid: 100, argv: ["/usr/local/bin/bun-container", "/app/src/lib/wakatimeSync.worker.ts"], rss: 900 * MIB, swap: 50 * MIB },
+  101: { ppid: 100, argv: ["/usr/local/bin/bun-container", "/app/src/lib/stateBackup.worker.ts"], rss: 900 * MIB, swap: 50 * MIB },
   102: { ppid: 100, argv: ["/usr/local/bin/bun-container", "/app/src/lib/accountMigrationController.worker.ts"], rss: 1_000 * MIB },
   103: { ppid: 100, argv: ["/state/telegram/venv/bin/python", "/app/bin/telegram-mcp-server.py"], rss: 50 * MIB },
   /* A structured host behind its nsenter wrapper, listed as a session root. */
@@ -75,7 +75,7 @@ test("the server, the runtime host and their workers are attributed; agent trees
     ["server", "bun-container", 100, 1],
     ["runtime-host", "main", 200, 1],
     ["worker", "accountMigrationController.worker", 102, 1],
-    ["worker", "wakatimeSync.worker", 101, 1],
+    ["worker", "stateBackup.worker", 101, 1],
     ["worker", "resourceCollector.worker", 140, 2],
     ["worker", "telegram-mcp-server", 103, 1],
   ]);

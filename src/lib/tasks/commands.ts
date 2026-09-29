@@ -153,6 +153,8 @@ export interface PatchTaskOptions {
   seatHolding?: (task: BoardTask) => SeatHolding;
   /** For attachLinks/detachLinks; without it a bare number cannot be resolved. */
   workLinks?: (task: BoardTask) => TaskWorkLinkContext;
+  /** See {@link TaskCommandDeps.explicit}: a text written without it is private. */
+  explicit?: boolean;
 }
 
 /** Injected so the pure command can ask the store whether an attachment ref's
@@ -167,6 +169,10 @@ export interface TaskCommandDeps {
       {@link countBoardTasks} for why guessing it from stored rows is worse than
       not answering. */
   hasBoardMembers?: (task: BoardTask) => boolean;
+  /** A person or an agent chose the text (the task routes, the MCP tools):
+      it may cross to a linked board. Every other writer leaves it private
+      (docs/design/linked-installs.md M.3). */
+  explicit?: boolean;
 }
 
 /** The refusal both admission paths give when the board is full. */
@@ -381,6 +387,7 @@ export function createTask(
     ...(icon.kind === "set" ? { icon: icon.icon } : {}),
     ...(color.kind === "set" ? { color: color.color } : {}),
     ...(priority.kind === "set" ? { priority: priority.priority } : {}),
+    ...(deps.explicit ? { chosen: true as const } : {}),
     assignments: [],
     createdAt: now,
     updatedAt: now,
@@ -455,6 +462,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     if (!text) return { ok: false, error: "task text is required", status: 400 };
     if (text.length > TASK_TEXT_LIMIT) return textLimitError();
     patch.text = text;
+    patch.chosen = options.explicit ? true : undefined;
     /* An operator's edit names a placeholder for good: a later agent
        refinement returns "already named" instead of overwriting it (#1586). */
     if (existing[index]!.origin?.refinement === "pending" && text !== existing[index]!.text) {
@@ -600,6 +608,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   if (Object.hasOwn(patch, "priority") && patch.priority === undefined) delete updated.priority;
   if (Object.hasOwn(patch, "groupHidden") && patch.groupHidden === undefined) delete updated.groupHidden;
   if (Object.hasOwn(patch, "workLinks") && patch.workLinks === undefined) delete updated.workLinks;
+  if (Object.hasOwn(patch, "chosen") && patch.chosen === undefined) delete updated.chosen;
   const tasks = existing.slice();
   tasks[index] = updated;
   return { ok: true, tasks, task: updated, ...(notes.length ? { notes } : {}) };

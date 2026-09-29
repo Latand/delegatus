@@ -57,7 +57,7 @@ export async function PATCH(
     before.status = tasks.find((task) => task.id === id)?.status ?? null;
     /* The dashboard is the operator; a group hide is refused for the task
        holding the project's orchestrator seat. */
-    const outcome = patchTask(tasks, id, body, undefined, { actor: "operator", seatHolding: taskSeatHolding, workLinks: taskWorkLinkContext(loadPipelines) });
+    const outcome = patchTask(tasks, id, body, undefined, { actor: "operator", seatHolding: taskSeatHolding, workLinks: taskWorkLinkContext(loadPipelines), explicit: true });
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
   });
   /* The refusal's code and field travel with it, as they do over MCP, so a

@@ -1155,6 +1155,15 @@ export async function tickFlow(
         markNeedsDecision(flow, "flow review round limit reached");
         return true;
       }
+      if (flow.state === "fixing" && flow.headRef) {
+        const { preparePipelineReviewRepair } = await import("@/lib/pipelines/engine");
+        const prepared = await preparePipelineReviewRepair(flow.id);
+        if (!prepared.ok) {
+          if (prepared.retryable) flow.stateDetail = prepared.detail;
+          else markNeedsDecision(flow, prepared.detail);
+          return JSON.stringify(flow) !== before;
+        }
+      }
       const markerRound = newRound(flow, "marker", note);
       flow.rounds.push(markerRound);
       try {

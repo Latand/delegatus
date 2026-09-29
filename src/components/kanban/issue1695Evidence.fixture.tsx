@@ -39,8 +39,10 @@ import type { BoardProjectStateV1 } from "@/lib/view/types";
  * or a state directory. Driven by the `issue1695*.browser.test.tsx` files.
  */
 
-const PROJECT = "atlas";
+const PROJECT = new URLSearchParams(location.search).get("scenario") === "linked-agents" ? `repo-${"a".repeat(32)}` : "atlas";
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
+const SELF_UPDATE_RELOAD = new URLSearchParams(location.search).has("self-update-reload");
+let presenceAnswers = 0;
 /* #2102: stored icons on some tasks; the others draw the title's suggestion or the quiet default. */
 const ICONS = new URLSearchParams(location.search).get("icons") === "1";
 const EDITING = SCENARIO === "editing";
@@ -88,10 +90,21 @@ const MANY = SCENARIO === "issue1765" || BALANCE || WORK_LINKS;
    all five effort levels, a long uncatalogued model, a stage edited after its
    launch, and a stage that has never started. */
 const MARKS = SCENARIO === "issue1743";
+/* Model glyphs (docs/design/model-glyphs.md): nine lanes each running one
+   model, a draft of the same nine waiting, and the settled states on a few;
+   the ninth model is uncatalogued and keeps the dot. */
+const GLYPHS = SCENARIO === "model-glyphs";
 /* #1865: the header lane the operator read — design → build → critique, where
    design and critique share the architect preset and critique ran twice — so
    each stage's conversation can be read for which stage it is. */
 const LABELS = SCENARIO === "issue1865";
+/* Readable pipeline graph (docs/design/pipeline-graph-loops.md): lanes whose
+   fail edges fold into their sources — two fix stages docked on their
+   reviewers, completed with both budgets spent and cut back to Review running
+   again; a return over two stages; a retry in place that fired; a completed
+   lane whose passed Build conversation took more work; and stage names of 40
+   characters. */
+const LOOPS = SCENARIO === "graph-loops";
 /* #1820: the Overview draws the SAME board over every project, filtered to the
    cards a worker is working on right now. Two invented projects join `atlas`
    so the shared columns can be read across three, each bringing one card with
@@ -433,6 +446,176 @@ const marksPipelines: Pipeline[] = MARKS ? (() => {
         attempt(2, "failed", spentRev, { effectiveRole: runRole("verifier", "codex", "gpt-6-astra", "xhigh"), startedAt: iso(60 * MIN), activatedBy: { stageId: "fix", attempt: 2, edge: "pass" } }),
       ] },
     ], { stageId: "fix", state: "running", input: null, activatedBy: null }),
+  ];
+})() : [];
+
+/* One stage per model, each named by the role it plays, as a real lane names
+   it ("Design", "Build"), so the glyph is the only thing on a pill that says
+   which model runs it. Stage ids are unique across the nine, so one draft can
+   hold them all. [stage id, model kind, role, engine, model, lane title]. */
+const GLYPH_MODELS = [
+  ["design", "opus", "architect", "claude", "opus", L("Lay out the export dialog", "Спроєктувати діалог експорту")],
+  ["build", "fable", "builder", "claude", "fable", L("Build the export dialog", "Зібрати діалог експорту")],
+  ["docs", "sonnet", "builder", "claude", "sonnet", L("Write the export guide", "Написати посібник з експорту")],
+  ["tidy", "haiku", "cleaner", "claude", "haiku", L("Tidy the export module", "Прибрати модуль експорту")],
+  ["verify", "sol", "verifier", "codex", "gpt-6-sol", L("Verify the export on a large board", "Перевірити експорт на великій дошці")],
+  ["critique", "astra", "architect", "codex", "gpt-6-astra", L("Critique the export flow", "Покритикувати процес експорту")],
+  ["migrate", "terra", "builder", "codex", "gpt-5.6-terra", L("Migrate the saved exports", "Перенести збережені експорти")],
+  ["test", "luna", "verifier", "codex", "gpt-6-luna", L("Test the export on a phone", "Протестувати експорт на телефоні")],
+  ["fix", "other-model", "builder", "codex", "gpt-5.5", L("Fix the export's file name", "Виправити назву файлу експорту")],
+] as const;
+const glyphPipelines: Pipeline[] = GLYPHS ? (() => {
+  type Entry = (typeof GLYPH_MODELS)[number];
+  const entry = (id: string) => GLYPH_MODELS.find(([stageId]) => stageId === id)!;
+  const chain = (models: ReadonlyArray<Entry>) => models.map(([id, , roleId, engine, model], index) =>
+    marksStage(id, roleId, models[index + 1]?.[0] ?? null, engine, model, "high"));
+  const ran = (id: string, state: string, ago: number, over: Record<string, unknown> = {}, file: FileEntry | null = null) => {
+    const [, , roleId, engine, model] = entry(id);
+    return { stageId: id, attempts: [attempt(1, state, file, { effectiveRole: runRole(roleId, engine, model, "high"), startedAt: iso(ago * MIN), ...over })] };
+  };
+  const done = (ago: number) => ({ completedAt: iso((ago - 6) * MIN) });
+  const lane = (ids: string[]) => chain(ids.map(entry));
+  return [
+    /* Every model at work: a lane runs one stage at a time, so one lane each. */
+    ...GLYPH_MODELS.map((model, index) => {
+      const [id, , , , , title] = model;
+      return pipeline(`p-glyph-${model[1]}`, title, "t-glyphs-run", "running", chain([model]),
+        [ran(id, "running", 30 - index)], { stageId: id, state: "running", input: null, activatedBy: null }, { createdAt: iso((40 - index) * MIN) });
+    }),
+    /* A draft: nine stages configured, none started, each waiting on its model. */
+    pipeline("p-glyphs-wait", L("Plan the export release", "Спланувати випуск експорту"), "t-glyphs", "draft", chain(GLYPH_MODELS),
+      [], { stageId: "design", state: "pending", input: null, activatedBy: null }, { createdAt: iso(20 * MIN) }),
+    /* Passed, passed, failed, waiting on the operator, not yet run. */
+    pipeline("p-glyphs-settled", L("Ship the export dialog", "Випустити діалог експорту"), "t-glyphs", "needs_decision", lane(["design", "build", "critique", "verify", "tidy"]),
+      [ran("design", "passed", 90, done(90)), ran("build", "passed", 70, done(70)), ran("critique", "failed", 50, done(50)), ran("verify", "needs_decision", 30)],
+      { stageId: "verify", state: "needs_decision", input: null, activatedBy: null }, { createdAt: iso(100 * MIN) }),
+    /* The other four models settled, the round ones among them: passed, passed,
+       passed, failed, and the uncatalogued model not yet run. The lane waits on
+       the operator after the failure. */
+    pipeline("p-glyphs-settled-more", L("Ship the export guide", "Випустити посібник з експорту"), "t-glyphs", "needs_decision", lane(["docs", "tidy", "migrate", "test", "fix"]),
+      [ran("docs", "passed", 120, done(120)), ran("tidy", "passed", 100, done(100)), ran("migrate", "passed", 80, done(80)), ran("test", "failed", 60, done(60))],
+      { stageId: "test", state: "needs_decision", input: null, activatedBy: null }, { createdAt: iso(130 * MIN) }),
+    /* The live states the old dot told apart by colour: a review stage at work,
+       a stage landing its commit, and a passed stage whose conversation works again. */
+    pipeline("p-glyphs-review", L("Review the export dialog", "Переглянути діалог експорту"), "t-glyphs-live", "running", [
+      marksStage("build", "builder", "review", "claude", "fable", "high"),
+      marksStage("review", "reviewer", null, "codex", "gpt-6-astra", "high"),
+    ], [
+      ran("build", "passed", 40, done(40)),
+      { stageId: "review", attempts: [attempt(1, "running", null, { effectiveRole: runRole("reviewer", "codex", "gpt-6-astra", "high"), startedAt: iso(20 * MIN) })] },
+    ], { stageId: "review", state: "reviewing", input: null, activatedBy: null }, { createdAt: iso(50 * MIN) }),
+    pipeline("p-glyphs-commit", L("Land the saved-export migration", "Завершити перенесення збережених експортів"), "t-glyphs-live", "running", lane(["migrate"]),
+      [ran("migrate", "committing", 12)], { stageId: "migrate", state: "committing", input: null, activatedBy: null }, { createdAt: iso(30 * MIN) }),
+    pipeline("p-glyphs-rework", L("Polish the export guide", "Відшліфувати посібник з експорту"), "t-glyphs-live", "running", lane(["design", "docs", "critique"]), [
+      ran("design", "passed", 120, done(120)),
+      /* Docs passed, and its conversation took more work after it did (#1744). */
+      ran("docs", "passed", 100, done(100), add(conversation("glyphs-rework-docs", "Reworking the export guide", { model: "sonnet", ...working() }))),
+      ran("critique", "running", 60),
+    ], { stageId: "critique", state: "running", input: null, activatedBy: null }, { createdAt: iso(130 * MIN) }),
+  ];
+})() : [];
+
+const loopsPipelines: Pipeline[] = LOOPS ? (() => {
+  const conv = (id: string, title: string, ago: number, over: Record<string, unknown> = {}) => add(conversation(id, title, { mtime: now - ago * MIN, ...over }));
+  const failVia = (stageId: string, n: number, budgetSpent = false) => ({ activatedBy: { stageId, attempt: n, edge: "fail", ...(budgetSpent ? { budgetSpent: true } : {}) } });
+  const passVia = (stageId: string, n: number) => ({ activatedBy: { stageId, attempt: n, edge: "pass" } });
+  const done = (at: number) => ({ startedAt: iso(at * MIN), completedAt: iso((at - 6) * MIN) });
+  /* Design → Build → Critique → Review, each reviewer with its own fix stage. */
+  const docks = (names: { design: string; build: string; critique: string; critiqueFix: string; review: string; reviewFix: string }) => [
+    stage(names.design, "architect", names.build),
+    stage(names.build, "builder", names.critique),
+    stage(names.critique, "architect", names.review, { onFail: { to: names.critiqueFix, maxRounds: 2 } }),
+    stage(names.critiqueFix, "builder", names.critique),
+    stage(names.review, "reviewer", null, { kind: "run", onFail: { to: names.reviewFix, maxRounds: 3 } }),
+    stage(names.reviewFix, "builder", names.review),
+  ];
+  const short = { design: "design", build: "build", critique: "critique", critiqueFix: "critique-fix", review: "review", reviewFix: "review-fix" };
+  /* The first half every docked lane shares: Critique failed twice, and its
+     second fix handed its findings on past the spent budget. */
+  const firstHalf = (key: string, names: typeof short, from: number) => [
+    { stageId: names.design, attempts: [attempt(1, "passed", conv(`${key}-design`, "Wrote the plan", from), done(from))] },
+    { stageId: names.build, attempts: [attempt(1, "passed", conv(`${key}-build`, "Built the first pass", from - 10), { ...done(from - 10), ...passVia(names.design, 1) })] },
+    { stageId: names.critique, attempts: [
+      attempt(1, "failed", conv(`${key}-crit-1`, "Sent it back: the count hides", from - 20), { ...done(from - 20), ...passVia(names.build, 1) }),
+      attempt(2, "failed", conv(`${key}-crit-2`, "Sent it back again", from - 40), { ...done(from - 40), ...passVia(names.critiqueFix, 1) }),
+    ] },
+    { stageId: names.critiqueFix, attempts: [
+      attempt(1, "passed", conv(`${key}-cfix-1`, "Moved the count out", from - 30), { ...done(from - 30), ...failVia(names.critique, 1) }),
+      attempt(2, "passed", conv(`${key}-cfix-2`, "Took the last findings", from - 50), { ...done(from - 50), ...failVia(names.critique, 2, true) }),
+    ] },
+  ];
+  const reviews = (key: string, names: typeof short, from: number, count: number, lastRunning: boolean) => Array.from({ length: count }, (_, index) => {
+    const running = lastRunning && index === count - 1;
+    const file = conv(`${key}-rev-${index + 1}`, running ? "Reading the third revision" : "Sent it back", from - index * 20, running ? working() : {});
+    return attempt(index + 1, running ? "running" : "failed", file, { ...(running ? { startedAt: iso((from - index * 20) * MIN) } : done(from - index * 20)), ...(index ? passVia(names.reviewFix, index) : passVia(names.critiqueFix, 2)) });
+  });
+  const fixes = (key: string, names: typeof short, from: number, count: number, spentLast: boolean) => Array.from({ length: count }, (_, index) =>
+    attempt(index + 1, "passed", conv(`${key}-rfix-${index + 1}`, "Fixed the review's findings", from - index * 20), { ...done(from - index * 20), ...failVia(names.review, index + 1, spentLast && index === count - 1) }));
+  const long = {
+    design: "design-the-export-for-every-old-format",
+    build: "build-the-export-writer-and-its-presets",
+    critique: "critique-the-export-against-the-old-files",
+    critiqueFix: "fix-what-the-export-critique-found-there",
+    review: "review-the-export-writer-and-its-presets",
+    reviewFix: "fix-what-the-export-review-found-in-there",
+  };
+  return [
+    pipeline("p-loops-done", L("Show a spent review budget on the lane", "Показати вичерпаний бюджет рев’ю на лінії"), "t-loops-done", "completed", docks(short), [
+      ...firstHalf("loops-done", short, 400),
+      { stageId: "review", attempts: reviews("loops-done", short, 340, 3, false) },
+      { stageId: "review-fix", attempts: fixes("loops-done", short, 330, 3, true) },
+    ], null, { closedAt: iso(270 * MIN) }),
+    pipeline("p-loops-review", L("Show a spent review budget on the lane, again", "Показати вичерпаний бюджет рев’ю, знову"), "t-loops-review", "running", docks(short), [
+      ...firstHalf("loops-review", short, 200),
+      { stageId: "review", attempts: reviews("loops-review", short, 140, 2, true) },
+      { stageId: "review-fix", attempts: fixes("loops-review", short, 130, 1, false) },
+    ], { stageId: "review", state: "running", input: null, ...passVia("review-fix", 1) }),
+    pipeline("p-loops-return", L("Resume an upload after a reload", "Продовжити вивантаження після перезавантаження"), "t-loops-return", "running", [
+      stage("plan", "architect", "build"),
+      stage("build", "builder", "critique"),
+      stage("critique", "architect", "review"),
+      stage("review", "reviewer", null, { kind: "run", onFail: { to: "build", maxRounds: 2 } }),
+    ], [
+      { stageId: "plan", attempts: [attempt(1, "passed", conv("loops-return-plan", "Planned the resume token", 160), done(160))] },
+      { stageId: "build", attempts: [
+        attempt(1, "passed", conv("loops-return-build-1", "Built the resume token", 140), { ...done(140), ...passVia("plan", 1) }),
+        attempt(2, "running", conv("loops-return-build-2", "Keeping the token across a reload", 20, working()), { startedAt: iso(20 * MIN), ...failVia("review", 1) }),
+      ] },
+      { stageId: "critique", attempts: [attempt(1, "passed", conv("loops-return-crit", "The plan holds", 110), { ...done(110), ...passVia("build", 1) })] },
+      { stageId: "review", attempts: [attempt(1, "failed", conv("loops-return-rev", "A reload loses the token", 80), { ...done(80), ...passVia("critique", 1) })] },
+    ], { stageId: "build", state: "running", input: null, ...failVia("review", 1) }),
+    pipeline("p-loops-retry", L("Migrate the ledger to the new schema", "Перенести реєстр на нову схему"), "t-loops-retry", "running", [
+      stage("prepare", "architect", "migrate"),
+      stage("migrate", "builder", "verify", { onFail: { to: "migrate", maxRounds: 3 } }),
+      stage("verify", "verifier", null),
+    ], [
+      { stageId: "prepare", attempts: [attempt(1, "passed", conv("loops-retry-prep", "Wrote the migration plan", 90), done(90))] },
+      { stageId: "migrate", attempts: [
+        attempt(1, "failed", conv("loops-retry-mig-1", "The lock timed out", 60), { ...done(60), ...passVia("prepare", 1) }),
+        attempt(2, "running", conv("loops-retry-mig-2", "Migrating in batches", 10, working()), { startedAt: iso(10 * MIN), ...failVia("migrate", 1) }),
+      ] },
+    ], { stageId: "migrate", state: "running", input: null, ...failVia("migrate", 1) }),
+    pipeline("p-loops-rework", L("Keep the draft when the tab closes", "Зберегти чернетку, коли вкладку закрито"), "t-loops-rework", "completed", [
+      stage("build", "builder", "critique"),
+      stage("critique", "architect", null, { onFail: { to: "critique-fix", maxRounds: 1 } }),
+      stage("critique-fix", "builder", "critique"),
+    ], [
+      /* The Build conversation took more work after the lane completed (#1744). */
+      { stageId: "build", attempts: [attempt(1, "passed", conv("loops-rework-build", "Reworking the draft store", 1, working()), done(120))] },
+      { stageId: "critique", attempts: [
+        attempt(1, "failed", conv("loops-rework-crit-1", "The draft is lost on close", 100), { ...done(100), ...passVia("build", 1) }),
+        attempt(2, "passed", conv("loops-rework-crit-2", "Approved", 60), { ...done(60), ...passVia("critique-fix", 1) }),
+      ] },
+      { stageId: "critique-fix", attempts: [attempt(1, "passed", conv("loops-rework-fix", "Saved the draft on close", 80), { ...done(80), ...failVia("critique", 1) })] },
+    ], null, { closedAt: iso(50 * MIN) }),
+    pipeline("p-loops-long", L("Export every old format the importer reads", "Експортувати кожен старий формат, який читає імпорт"), "t-loops-long", "running", docks(long), [
+      ...firstHalf("loops-long", long, 200),
+      { stageId: long.review, attempts: reviews("loops-long", long, 140, 2, false) },
+      { stageId: long.reviewFix, attempts: [
+        attempt(1, "passed", conv("loops-long-rfix-1", "Fixed the review's findings", 130), { ...done(130), ...failVia(long.review, 1) }),
+        attempt(2, "running", conv("loops-long-rfix-2", "Fixing the presets", 5, working()), { startedAt: iso(5 * MIN), ...failVia(long.review, 2) }),
+      ] },
+    ], { stageId: long.reviewFix, state: "running", input: null, ...failVia(long.review, 2) }),
   ];
 })() : [];
 
@@ -886,6 +1069,8 @@ const pipelines: Pipeline[] = [
   ...arcPipelines,
   ...labelPipelines,
   ...marksPipelines,
+  ...glyphPipelines,
+  ...loopsPipelines,
   ...manyPipelines,
   pipeline("p-search", "Restore search results after the index rebuild", "t-search", "running",
     [stage("implement", "builder", "review"), stage("review", "reviewer", "verify"), stage("verify", "verifier", "merge", { onFail: { to: "implement", maxRounds: 2 } }), stage("merge", "cleaner", null)],
@@ -1104,6 +1289,19 @@ const tasks: BoardTask[] = [
   ...(PIPELINES ? [task("t-rounds", "assigned", "Rework the retry banner until review passes", "", 12 * MIN)] : []),
   ...(MANY ? [task("t-many", "assigned", "Kanban: say what each pipeline of a task does", "Five pipelines on one card: two running, three finished.", 5 * MIN)] : []),
   ...(MARKS ? [task("t-marks", "assigned", "Say who runs each stage, and how often an edge fired", "Two pipelines: one fail edge fired twice of three, one with its budget spent.", 4 * MIN)] : []),
+  ...(GLYPHS ? [
+    task("t-glyphs-run", "assigned", L("Every model at work", "Кожна модель у роботі"), L("Nine lanes, each running one model; the ninth has no glyph.", "Дев’ять конвеєрів, кожен запускає одну модель; дев’ята без гліфа."), 1 * MIN),
+    task("t-glyphs", "assigned", L("Every model waiting, and the settled states", "Кожна модель чекає, і завершені стани"), L("A draft of nine stages, and two lanes that settled every model.", "Чернетка з дев’яти етапів і два конвеєри, де завершилася кожна модель."), 2 * MIN),
+    task("t-glyphs-live", "assigned", L("Reviewing, committing, and working again", "Рев’ю, коміт і знову в роботі"), L("A review at work, a commit landing, and a passed stage whose conversation works again.", "Рев’ю в роботі, коміт, що завершується, і пройдений етап, чия розмова знову працює."), 3 * MIN),
+  ] : []),
+  ...(LOOPS ? [
+    task("t-loops-done", "assigned", L("Show a spent review budget on the lane", "Показати вичерпаний бюджет рев’ю на лінії"), "", 4 * 60 * MIN),
+    task("t-loops-review", "assigned", L("Show a spent review budget on the lane, again", "Показати вичерпаний бюджет рев’ю, знову"), "", 2 * MIN),
+    task("t-loops-return", "assigned", L("Resume an upload after a reload", "Продовжити вивантаження після перезавантаження"), "", 3 * MIN),
+    task("t-loops-retry", "assigned", L("Migrate the ledger to the new schema", "Перенести реєстр на нову схему"), "", 6 * MIN),
+    task("t-loops-rework", "assigned", L("Keep the draft when the tab closes", "Зберегти чернетку, коли вкладку закрито"), "", 1 * MIN),
+    task("t-loops-long", "assigned", L("Export every old format the importer reads", "Експортувати кожен старий формат, який читає імпорт"), "", 1 * MIN),
+  ] : []),
   ...(LABELS ? [task("t-labels", "assigned", "Build the board header lane", "Design, build and critique; the critique sent the first build back.", 2 * MIN)] : []),
   ...(REVIEW_SPENT ? [task("t-review-spent", "assigned", "Show the retry count in the banner", "The last review failed, and the fix after it was never reviewed.", 3 * MIN)] : []),
   ...(GHOSTS ? [
@@ -1164,6 +1362,11 @@ const tasks: BoardTask[] = [
   ] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
+
+/* `&empty=<status>` empties one column: its tasks move to Done, so the
+   column's strip can be read beside the others (an empty column folds). */
+const EMPTY_COLUMN = new URLSearchParams(location.search).get("empty");
+if (EMPTY_COLUMN) for (const entry of tasks) if (entry.status === EMPTY_COLUMN) entry.status = "done";
 
 if (FLAT) {
   const retitle: Record<string, [string, string, string, string]> = {
@@ -1724,6 +1927,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
+  if (url.pathname.startsWith("/api/links")) return serverFetch(url.pathname + url.search, init);
   if (ALBUM && url.pathname === "/api/task-album") {
     const ids = (url.searchParams.get("ids") ?? "").split(",").filter((id) => albumItems()[id]);
     return json({ tasks: Object.fromEntries(ids.map((id) => {
@@ -1815,7 +2019,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/view/presence" && method === "POST") {
     const body = JSON.parse(String(init?.body)) as { mode: string; visiblePaths: string[]; focusedPath?: string | null };
     evidence.presence.push({ mode: body.mode, visiblePaths: body.visiblePaths, focusedPath: body.focusedPath ?? null });
-    return json({ ok: true });
+    return json({ ok: true, ...(SELF_UPDATE_RELOAD ? { serving: ++presenceAnswers === 1 ? "aaaaaaa" : "bbbbbbb" } : {}) });
   }
   if (TELEGRAM_STEP && url.pathname === "/api/telegram/bot") return json({ bot: TELEGRAM_BOT_STATUS });
   if (TELEGRAM_STEP && url.pathname === "/api/onboarding") {

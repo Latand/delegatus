@@ -1497,6 +1497,7 @@ test("board_snapshot returns an inert bounded board projection with durable line
     count: 1,
     hiddenCount: 2,
     board: { revision: 7 },
+    remoteAgents: [],
     conversations: [{
       conversationId: "conversation_worker",
       title: "Audit api_key=[redacted]",
@@ -1639,6 +1640,8 @@ test("task read tools expose the pipeline-linked durable read model", async () =
   expect(await bindings.get_task({ clientRequestId: "get-task", taskId: "task_viewer" })).toEqual({
     taskId: "task_viewer",
     task: { ...tasks[0], pipelineIds: ["pipeline_608"] },
+    remoteAgents: [],
+    workLinks: { links: [], noPr: false },
   });
 });
 
@@ -3001,7 +3004,7 @@ test("create_pipeline batches every invalid stage model with each engine catalog
     "stages[1].model",
   ]);
   expect(refusal?.message).toContain("valid codex model ids: gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna");
-  expect(refusal?.message).toContain("valid claude model ids: opus, fable, sonnet, haiku");
+  expect(refusal?.message).toContain("valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku");
 });
 
 /* ------------------------------------------------------------------------- *
@@ -4256,7 +4259,7 @@ test("spawn_agent applies the sizing rules on the service's bound first dispatch
   expect(await sonnet.service.callTool("spawn_agent", launch("sizing-r1", { role: "reviewer", roleParams: { diffSource: "PR #1" }, engine: "claude", model: "sonnet" })))
     .toMatchObject({ ok: false, error: expect.stringContaining("Sonnet and Haiku do not run orchestrator, architect, reviewer or verifier work") });
   expect(await sonnet.service.callTool("spawn_agent", launch("sizing-r2", { role: "builder", roleParams: { size: "trivial" } })))
-    .toMatchObject({ ok: false, error: expect.stringContaining("needs a brief written by an Opus-class agent; this brief comes from claude/sonnet") });
+    .toMatchObject({ ok: false, error: expect.stringContaining("needs a brief written by a large model (Claude Opus or Fable, or a large Codex model); this brief comes from claude/sonnet") });
   expect(sonnet.dispatched).toEqual([]);
 
   const opus = serviceFor("opus");

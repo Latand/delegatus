@@ -64,7 +64,7 @@ const { resetAlbumSummaries } = await import("./albumSummaries");
 const { albumSourceLabel } = await import("./TaskAlbum");
 const { translate } = await import("@/lib/i18n");
 
-const PIPELINE = { id: "pipe-1", stages: [{ id: "implement", role: { roleId: "builder" } }, { id: "review", role: { roleId: "reviewer" } }] } as unknown as Pipeline;
+const PIPELINE = { id: "pipe-1", stages: [{ id: "implement", role: { roleId: "builder" } }, { id: "review", role: { roleId: "reviewer" } }], runs: [] } as unknown as Pipeline;
 
 const roots: Root[] = [];
 afterEach(() => {
@@ -192,6 +192,11 @@ test("a stage's attempt is spelled out, never a bare number beside the group", a
   expect(albumSourceLabel(en, stage(2), [PIPELINE], [])).toBe("Implement · attempt 2");
   expect(albumSourceLabel(en, stage(1, 2), [PIPELINE], [])).toMatch(/ · attempt 1 · round 2$/);
   expect(albumSourceLabel(uk, stage(2), [PIPELINE], [])).toMatch(/ · спроба 2$/);
+  /* The engine numbered an adopted helper conversation 2, so Implement's
+     second own attempt is its record's 3: the album says 2, as the graph does. */
+  const adopted = { ...PIPELINE, runs: [{ stageId: "implement", attempts: [{ n: 1 }, { n: 2, historical: true }, { n: 3 }] }] } as unknown as Pipeline;
+  expect(albumSourceLabel(en, stage(3), [adopted], [])).toBe("Implement · attempt 2");
+  expect(albumSourceLabel(uk, stage(3), [adopted], [])).toMatch(/ · спроба 2$/);
 
   /* The heading and the viewer's caption both carry it. */
   const retried = source("conversation_retry", { pipelineId: "pipe-1", stageId: "implement", attempt: 2 });

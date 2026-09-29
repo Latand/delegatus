@@ -352,10 +352,12 @@ export type PipelineStageAttempt = {
   paneId: string | null;
   /** Account that owns this launch. Optional for records written before #1371. */
   accountId?: string | null;
-  /** Usage-limited accounts excluded from this activation, with their resets.
-      `engine` names the engine the limit was hit on; account ids are unique
-      only within an engine. Entries written before it was recorded omit it. */
-  usageLimitedAccounts?: Array<{ accountId: string; engine?: FlowEngine; resetsAt: number | null }>;
+  /** Usage-limit history for this attempt. Claude checks each account's fresh
+      capacity before excluding it again; `limitedAt` dates that observation and
+      `turnId` keeps one delivery key per terminal limit turn. `engine` names
+      the engine the limit was hit on; account ids are unique only within an
+      engine. Entries written before it was recorded omit it. */
+  usageLimitedAccounts?: Array<{ accountId: string; engine?: FlowEngine; resetsAt: number | null; limitedAt?: number | null; turnId?: string }>;
   flowId: string | null;
   /** Clean pipeline SHA expected when the first reviewer launches. */
   expectedReviewHeadSha?: string | null;
@@ -380,6 +382,8 @@ export type PipelineStageAttempt = {
   };
   startedAt: string | null;
   completedAt: string | null;
+  /** Controller-observed head before committing a read-only stage's declared outputs. */
+  outputBaseHead?: string;
   /** Bounded wait for a structured delivery controller that is between
       publications (#1191). `startedAt` is wall-clock from the first sighting,
       so the budget covers the time a failing spawn attempt spent inside

@@ -4,6 +4,7 @@ import { callerConversationId } from "@/lib/agent/operatorAuthority";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { telegramBotFailure } from "@/lib/telegram/bot/http";
 import { telegramBotService } from "@/lib/telegram/bot/service";
+import { parseTelegramChatReference } from "@/lib/telegram/chatReference";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -50,14 +51,20 @@ export async function POST(req: NextRequest) {
   try { body = await req.json() as Record<string, unknown>; } catch { return NextResponse.json({ error: "Invalid JSON", code: "invalid_json" }, { status: 400 }); }
   if (body.op !== "send") return NextResponse.json({ error: "Unknown Telegram bot action", code: "invalid_action" }, { status: 400 });
   try {
+    const service = telegramBotService();
+    const parsed = parseTelegramChatReference(body.chat);
+    const known = parsed && service.listChats().chats.find((chat) => chat.postAllowed && (
+      chat.chatId === parsed.chat || chat.chat === parsed.chat || chat.alias === parsed.chat
+      || (parsed.chat.startsWith("@") && chat.username?.toLowerCase() === parsed.chat.slice(1).toLowerCase())
+    ));
     return NextResponse.json(await telegramBotService().send({
       conversationId: callerConversationId(req),
       clientRequestId: body.clientRequestId,
-      chat: body.chat,
+      chat: known?.alias ?? known?.chat ?? body.chat,
       text: body.text,
       format: body.format,
       replyToMessageId: body.replyToMessageId,
-      topicId: body.topicId,
+      topicId: body.topicId ?? (known?.isForum ? parsed?.topicId : undefined),
       silent: body.silent,
     }));
   } catch (error) {

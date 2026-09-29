@@ -33,7 +33,8 @@ const { defaultSeatTickSettings } = await import("./seatTickSettings");
 const { openPullRequestsForRepo } = await import("./githubEvidence");
 const { defaultSeatTickSources, journalReceipt, settleRecordFromJournal, wakeStateFromRecord } = await import("./seatTickSources");
 const { resolveOriginalSend, resolveSendReceipt, SEND_UNRECORDED_REASON, SEND_UNSETTLEABLE_REASON, SEND_UNVERIFIED_REASON, SEND_DISCARDED_REASON } = await import("@/lib/runtime/sendSettlement");
-const { DELIVERY_FENCED_BY_SETTLEMENT } = await import("@/lib/runtime/structuredDeliveryQueue");
+const { DELIVERY_FENCED_BY_SETTLEMENT, StructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryQueue");
+const { createFakeDeliveryLedger, FakeEngineHost } = await import("@/lib/runtime/fixtures/fakeEngineHost");
 const { enqueueStructuredMessage } = await import("@/lib/runtime/structuredMessageDelivery");
 const { structuredContentDigest } = await import("@/lib/runtime/structuredContent");
 const { RUNTIME_IDEMPOTENCY_KEY_LIMIT } = await import("@/lib/runtime/contracts");
@@ -48,7 +49,7 @@ const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/re
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
 const { sessionKeyFromTranscript } = await import("@/lib/agent/sessionKey");
 const { projectForCwd } = await import("@/lib/scanner/describe");
-const { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SEAT_TICK_CONTRACT, ORCHESTRATOR_SYSTEM_PROMPT, ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE } = await import("@/lib/orchestrator/prompt");
+const { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SHIPPED_CLOCK_OPENING, ORCHESTRATOR_SEAT_TICK_CONTRACT, ORCHESTRATOR_SYSTEM_PROMPT, ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE } = await import("@/lib/orchestrator/prompt");
 import type { AgentHostStatus, DurableMembershipInput } from "@/lib/agent/registry";
 import type { SeatTickSettings } from "./seatTickSettings";
 import type { SeatTickControllerDependencies } from "./seatTickController";
@@ -56,6 +57,7 @@ import type { GithubRunner, OpenPullRequest, OpenPullRequestsUnavailable } from 
 import type { SeatTickWakeState, SeatTickWithdrawal } from "./seatTickSources";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeReceiptStatus } from "@/lib/runtime/contracts";
+import type { HostState } from "@/lib/runtime/engineHost";
 import {
   emptySeatTickState,
   type SeatTickCard,
@@ -784,7 +786,7 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
   const dist = path.join(packageRoot, "dist");
   fs.mkdirSync(bin);
   fs.mkdirSync(dist);
-  for (const name of ["mcp-server.mjs", "server-runtime.mjs", "appDir.mjs", "envAlias.mjs"]) {
+  for (const name of ["mcp-server.mjs", "server-runtime.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs"]) {
     fs.copyFileSync(path.join(import.meta.dir, "../../../bin", name), path.join(bin, name));
   }
   const crashFlag = path.join(packageRoot, "crash.flag");
@@ -2220,7 +2222,7 @@ test("a note the seat's last landed wake carried is one line on the next wake, a
   expect(second).not.toContain(PROMPT_HEADING);
   expect(second).not.toContain("lane 1: pipeline_0000ab");
   expect(second).toContain(`Standing monitor note unchanged since your last wake (${LEDGER_NOTE.length} chars;`);
-  expect(second).toContain("Contract: the \"The Viewer's clock\" section of your mandate governs this turn.");
+  expect(second).toContain("Contract: the \"you never schedule yourself\" section of your mandate governs this turn.");
   for (const clause of ORCHESTRATOR_SEAT_TICK_CONTRACT) expect(second).not.toContain(clause);
   const unchangedBytes = Buffer.byteLength(second);
   expect(unchangedBytes).toBeLessThanOrEqual(1_200);
@@ -2244,7 +2246,8 @@ test("a note the seat's last landed wake carried is one line on the next wake, a
    one — was delivered the old clock paragraph, which states none of the
    clauses. Its wakes keep them until its mandate does. */
 test("a seat whose mandate predates the contract gets its clauses in the wake; a current one gets the line naming them (#2030)", async () => {
-  const v20Clock = `${ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE.split("\n").slice(0, 4).join("\n")}\nBetween wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. When a wake arrives, act on the items it lists first, then make one bounded pass over the rest of the board — lanes, pull requests, agents, tasks — and act on what stands still, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.`;
+  /* A v20 seat carries the opening as it shipped, heading included. */
+  const v20Clock = `${ORCHESTRATOR_SHIPPED_CLOCK_OPENING}\nBetween wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. When a wake arrives, act on the items it lists first, then make one bounded pass over the rest of the board — lanes, pull requests, agents, tasks — and act on what stands still, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.`;
   const v20Seat = { ...CURRENT_SEAT, mandate: ORCHESTRATOR_SYSTEM_PROMPT.replace(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE, v20Clock), promptVersion: 20 };
   const bespoke = { ...CURRENT_SEAT, mandate: "Run this board my way.", promptVersion: null };
   for (const seat of [v20Seat, bespoke]) {
@@ -5001,6 +5004,64 @@ test("a released wake is raised again as a new message the journal admits, throu
   }
 });
 
+test("a wake waits out the seat's running turn instead of interrupting it, and reaches the seat once, when it is idle", async () => {
+  const fixture = childFixture("busy-seat-wake");
+  setAgentRegistryForTests(fixture.registry);
+  const child = fixture.spawn({ title: "finished worker", turn: "terminal", terminalAt: ago(fixture, 20) });
+  fixture.seed();
+  const { journal, client } = hostedSeat(fixture);
+  /* The seat's host as the delivery queue sees it: a turn the operator
+     started is running when the queue reaches the wake. */
+  const seatHost: HostState = {
+    status: "active", sessionKey: "seat-session", endpoint: "fixture:seat-host", pid: 1, processStartIdentity: "fixture:1",
+    eventCursor: 0, protocolVersion: "fixture-v1", activeTurnRef: "turn:operator", pendingAttention: [], activeFlags: [], account: null,
+  };
+  const ledger = createFakeDeliveryLedger();
+  let interrupts = 0;
+  class SeatHost extends FakeEngineHost {
+    override async interrupt(): Promise<void> { interrupts += 1; }
+  }
+  const queue = new StructuredDeliveryQueue({
+    effects: async (kinds, afterEventSeq) => journal.effectBatch(100, kinds, afterEventSeq),
+    transition: async (id, status, details) => { journal.transitionOperation(id, status, details); },
+    status: async (id) => journal.operationResult(id)?.receipt ?? null,
+    settled: () => false,
+  }, () => new SeatHost(ledger, seatHost));
+  const live = () => Date.now();
+  try {
+    const raised = childRig(fixture, { realWakeState: true, journal: { client }, settlementNow: live, deliverWith: realTransport(fixture, client) });
+    expect(await runSeatTickCheck(fixture.project, raised.deps)).toMatchObject({ verdict: "wake", delivery: { outcome: "queued" } });
+    const wake = fixture.row().outstandingWake!;
+    expect(wake.operationId).not.toBeNull();
+    expect(journal.effectBatch(100, ["runtime.send"]).map((effect) => effect.payload.policy)).toEqual(["queue"]);
+
+    await queue.drain();
+    expect(interrupts).toBe(0);
+    expect(ledger.writes).toEqual([]);
+    expect(journal.operationResult(wake.operationId!)?.receipt.status).toBe("queued");
+    /* A check while the turn runs sends nothing and keeps the same wake. */
+    const busy = childRig(fixture, { realWakeState: true, journal: { client }, now: fixture.now + 5 * MINUTE, settlementNow: live, deliverWith: realTransport(fixture, client) });
+    await runSeatTickCheck(fixture.project, busy.deps);
+    expect(busy.sent).toEqual([]);
+    expect(fixture.row().outstandingWake).toMatchObject({ clientMessageId: wake.clientMessageId, operationId: wake.operationId });
+
+    /* The turn ends; the next pass hands the wake over, once, under its key. */
+    Object.assign(seatHost, { status: "idle", activeTurnRef: null });
+    await queue.drain();
+    await queue.drain();
+    expect(interrupts).toBe(0);
+    expect(ledger.writes.map((entry) => entry.id)).toEqual([wake.operationId!]);
+    expect(journal.operationResult(wake.operationId!)?.receipt).toMatchObject({ status: "delivered", idempotencyKey: wake.clientMessageId });
+    const landed = childRig(fixture, { realWakeState: true, journal: { client }, now: fixture.now + 10 * MINUTE, settlementNow: live, deliverWith: realTransport(fixture, client) });
+    await runSeatTickCheck(fixture.project, landed.deps);
+    expect(landed.journal[0]).toMatchObject({ verdict: "landed", delivery: { clientMessageId: wake.clientMessageId, outcome: "landed" } });
+    expect(landed.sent).toEqual([]);
+    expect(fixture.acknowledged()).toEqual([child.id]);
+  } finally {
+    journal.close();
+  }
+});
+
 /* ------------------------------------------------------------------------- *
  * The bound on the fence (#1746).
  *
@@ -5529,7 +5590,7 @@ test("a finished child whose transcript the Viewer cannot resolve is listed with
      know whether or not a word of either can be read (#1881). */
   expect(record).toMatchObject({ verdict: "wake", reasons: ["own-lane-settled", "child-terminal"], items: 3 });
   const text = rig.sent[0]!.text;
-  expect(text).toContain(`${unscanned.id} — worker outside the roots — spawned child finished, transcript not readable: its transcript path is outside every folder this Viewer scans`);
+  expect(text).toContain(`${unscanned.id} — worker outside the roots — spawned child finished, transcript not readable: its transcript path is outside every folder Delegatus scans`);
   expect(text).toContain(`${gone.id} — worker whose transcript is gone — spawned child finished, transcript not readable: the transcript file is no longer on disk`);
   expect(text).not.toContain("cannot resolve their transcript");
   expect(fixture.acknowledged().sort()).toEqual([unscanned.id, gone.id].sort());
@@ -5673,7 +5734,7 @@ test("an unreadable child is listed when it finished and named once when it stal
   /* The ended turn is owed and listed with its reason (#1881). The open turn
      under a dead host is not work, and is named beside the agenda with why. */
   const shown = first.sent[0]!.text;
-  expect(shown).toContain(`${owed.id} — unscanned worker — spawned child failed, transcript not readable: its transcript path is outside every folder this Viewer scans`);
+  expect(shown).toContain(`${owed.id} — unscanned worker — spawned child failed, transcript not readable: its transcript path is outside every folder Delegatus scans`);
   expect(shown).toContain(`- ${stalled.id} — vanished worker: the transcript file is no longer on disk`);
   expect(fixture.acknowledged()).toEqual([owed.id]);
 

@@ -5,6 +5,7 @@ import { yieldToRuntime } from "@/lib/cooperative";
 import { SeatTickAccounting } from "./seatTickAccounting";
 
 import { statePath } from "@/lib/configDir";
+import { activeRestartGate } from "@/lib/selfUpdate/restartGate";
 import { deliverConversationMessage, type DeliveryOutcome } from "@/lib/delivery";
 import { canonicalOrchestratorProject, type StillbornSeatRollback } from "@/lib/orchestrator/seats";
 import { recordSeatProjectSuccessions } from "@/lib/orchestrator/seatProjectIdentity";
@@ -1041,7 +1042,7 @@ async function reconcileOutstandingWake(context: {
     let outcome: DeliveryOutcome | null = null;
     try {
       outcome = await context.deliver({ pid: null, path: authority.path ?? context.seat?.path ?? "", conversationId: wake.conversationId,
-        clientMessageId: wake.clientMessageId, text: wake.text!, images: [], origin: delegatusMessageOrigin("seat-tick", context.project) });
+        clientMessageId: wake.clientMessageId, text: wake.text!, images: [], origin: delegatusMessageOrigin("seat-tick", context.project), policy: "queue" });
       redispatched = deliveryOutcomeLabel(outcome);
       redispatchReason = sendRefusalDetail(outcome);
     } catch (error) {
@@ -1549,8 +1550,10 @@ async function check(
           let outcome: DeliveryOutcome | null = null;
           try {
             if (accounting && !token) throw new Error("wake dispatch already claimed");
+            /* A wake waits for the seat to go idle: the default policy would
+               interrupt a turn the seat or the operator has running. */
             outcome = await deliver({ pid: null, path: authority.path ?? input.seat.path ?? "", conversationId: authority.conversationId,
-              clientMessageId, text, images: [], origin: delegatusMessageOrigin("seat-tick", input.project) });
+              clientMessageId, text, images: [], origin: delegatusMessageOrigin("seat-tick", input.project), policy: "queue" });
             delivery = { clientMessageId, outcome: deliveryOutcomeLabel(outcome) };
             sendDetail = sendRefusalDetail(outcome);
           } catch (error) {
@@ -1860,6 +1863,7 @@ const tickHost = globalThis as typeof globalThis & {
  * already read.
  */
 export function startSeatTick(ports: {
+  handoffHeld?: () => boolean;
   recordSuccessions?: () => unknown[];
   scheduleInterval?: (callback: () => void, delayMs: number) => ReturnType<typeof setInterval>;
   sweep?: () => Promise<unknown>;
@@ -1901,11 +1905,12 @@ export function startSeatTick(ports: {
   }
   const schedule = ports.scheduleInterval ?? ((callback, delayMs) => setInterval(callback, delayMs));
   const sweep = ports.sweep ?? (() => reconcileSeatTick());
+  const handoffHeld = ports.handoffHeld ?? (() => !!activeRestartGate(statePath("self-update", "auto-admission.json")));
   const timer = schedule(() => {
     /* A check that outran its interval drops the next one rather than stacking
        it. A tick that would land behind the one before it is stale by
        construction, and staleness is the whole reason nothing is queued. */
-    if (tickHost.__llvSeatTickRunning) return;
+    if (tickHost.__llvSeatTickRunning || handoffHeld()) return;
     tickHost.__llvSeatTickRunning = true;
     void Promise.resolve(sweep())
       .catch((error) => console.error("[seat tick] sweep failed", error instanceof Error ? error.name : "unknown"))
@@ -1914,6 +1919,10 @@ export function startSeatTick(ports: {
   timer.unref?.();
   tickHost.__llvSeatTickTimer = timer;
   return true;
+}
+
+export function seatTickIdle(): boolean {
+  return !tickHost.__llvSeatTickRunning;
 }
 
 /** Test seam: the timer is process-global, so a suite must be able to start

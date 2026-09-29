@@ -50,6 +50,7 @@ Object.assign(globalThis, {
       return json({ ok: true, reportNameSuggestion: nameSuggestion, ...reportSettings });
     }
     if (url.includes("/api/onboarding")) return json({ marker: null });
+    if (url.includes("/api/external-relay")) return json(relayBody);
     if (url.includes("/api/roles")) return json(rolesBody);
     if (url.includes("/api/transcribe/backend")) return json({ backend: "local", lockedByEnv: false, options: [] });
     if (url.includes("/api/access")) return json({ tailnetUrl: null, phone: { state: "missing", dnsName: null, viewerPort: 8898, servingPort: null, persisted: false }, phoneError: null });
@@ -59,6 +60,9 @@ Object.assign(globalThis, {
     return json({ claude: { active: "", accounts: [] }, codex: { active: "", accounts: [] } });
   },
 });
+
+/* What `/api/external-relay` answers; the relay step's cases set it. */
+let relayBody: unknown = { relays: [], pending: [], status: [] };
 
 /* What `/api/roles` answers; the agent mapping's case sets it. */
 let rolesBody: unknown = { schemaVersion: 2, roles: [] };
@@ -160,14 +164,14 @@ test("an engine whose command is missing reads Not installed even with a credent
   host.remove();
 });
 
-test("#2166: four numbered steps with the optional Telegram one, then Agents, Phone, Voice and Check under Later, counted to four", () => {
+test("#2166: four numbered steps with the optional Telegram one, then Agents, Phone, Voice, Check and Relay service under Later, counted to four", () => {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
   flushSync(() => root.render(<OnboardingDialog mode="guide" marker={null} onClose={() => {}} />));
   const steps = Array.from(host.querySelectorAll("[data-onboarding-step]")).map((element) => element.getAttribute("data-onboarding-step"));
-  expect(steps).toEqual(["engines", "project", "telegram", "orchestrator", "agents", "phone", "voice", "check"]);
-  expect(Array.from(host.querySelectorAll("[data-step-mark=later]")).length).toBe(4);
+  expect(steps).toEqual(["engines", "project", "telegram", "orchestrator", "agents", "phone", "voice", "check", "relay"]);
+  expect(Array.from(host.querySelectorAll("[data-step-mark=later]")).length).toBe(5);
   expect(host.textContent).toContain("Later, any time");
   expect(host.querySelector("[data-onboarding-step=engines]")?.getAttribute("aria-current")).toBe("step");
   expect(host.textContent).toContain("Step 1 of 4");
@@ -178,11 +182,57 @@ test("#2166: four numbered steps with the optional Telegram one, then Agents, Ph
   host.remove();
 });
 
+test("the relay service step is optional: it offers the engine that answers, and leaving it unpaired is a skip", async () => {
+  answerAccounts({ claude: { active: "a", accounts: [signedIn("a", "Main")] }, codex: { active: "", accounts: [] } });
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  requests.length = 0;
+  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="relay" marker={null} onClose={() => {}} />));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(host.querySelector("[data-onboarding-current]")?.getAttribute("data-onboarding-current")).toBe("relay");
+  expect(host.textContent).toContain("Answer for a relay service");
+  expect(host.querySelector("[data-onboarding-relay-engine=claude]")?.getAttribute("aria-checked")).toBe("true");
+  expect(host.querySelector("[data-external-relay-connect]")).not.toBeNull();
+  flushSync(() => host.querySelector<HTMLElement>("[data-onboarding-primary]")!.click());
+  expect(requests.find((request) => request.url.includes("/api/onboarding") && request.method === "PUT")?.body).toEqual({ steps: { relay: "skipped" } });
+  expect(host.querySelector("[data-onboarding-current]")?.getAttribute("data-onboarding-current")).toBe("engines");
+  flushSync(() => root.unmount());
+  host.remove();
+});
+
+test("the relay service step left without pairing is done, never skipped, when a relay was paired before", async () => {
+  answerAccounts({ claude: { active: "a", accounts: [signedIn("a", "Main")] }, codex: { active: "", accounts: [] } });
+  relayBody = {
+    relays: [{ id: "relay-1", origin: "https://relay.example", name: "Example relay", description: "", owner: { namespace: "example", id: "owner-1", display_name: "Person A", handle: null }, pairedAt: "2026-09-27T10:00:00.000Z", paused: false, targets: [] }],
+    pending: [],
+    status: [],
+  };
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  requests.length = 0;
+  try {
+    const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: null, telegram: null, orchestrator: null, agents: null, phone: null, voice: null, check: null, relay: null } } as const;
+    flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="relay" marker={marker} onClose={() => {}} />));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(host.querySelector("[data-external-relay=relay-1]")).not.toBeNull();
+    expect(host.querySelector("[data-onboarding-relay-skip]")).toBeNull();
+    flushSync(() => host.querySelector<HTMLElement>("[data-onboarding-primary]")!.click());
+    const writes = requests.filter((request) => request.url.includes("/api/onboarding") && request.method === "PUT").map((request) => request.body);
+    expect(writes).toEqual([{ steps: { relay: "done" } }]);
+  } finally {
+    relayBody = { relays: [], pending: [], status: [] };
+    flushSync(() => root.unmount());
+    host.remove();
+  }
+});
+
 test("#2166: a six-step marker with Engines done lands on Project; the Tour is gone", () => {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
-  const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: null, telegram: null, orchestrator: null, agents: "done", phone: null, voice: null, check: null } } as const;
+  const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: null, telegram: null, orchestrator: null, agents: "done", phone: null, voice: null, check: null, relay: null } } as const;
   flushSync(() => root.render(<OnboardingDialog mode="guide" marker={marker} onClose={() => {}} />));
   expect(host.querySelector("[data-onboarding-step=project]")?.getAttribute("aria-current")).toBe("step");
   expect(host.textContent).toContain("Step 2 of 4");
@@ -569,7 +619,7 @@ test("a skipped Telegram step is settled: the guide never reopens on it", () => 
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
-  const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: "done", telegram: "skipped", orchestrator: null, agents: null, phone: null, voice: null, check: null } } as const;
+  const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: "done", telegram: "skipped", orchestrator: null, agents: null, phone: null, voice: null, check: null, relay: null } } as const;
   flushSync(() => root.render(<OnboardingDialog mode="guide" marker={marker} onClose={() => {}} />));
   expect(host.querySelector("[data-onboarding-step=orchestrator]")?.getAttribute("aria-current")).toBe("step");
   flushSync(() => root.unmount());
@@ -625,7 +675,10 @@ test("the mapping shows the small-change and docs rows, a reset row with Restore
     flushSync(() => root.render(<OnboardingDialog mode="mapping" marker={null} onClose={() => {}} />));
     await until(() => Boolean(host.querySelector("[data-mapping-row]")));
     const rows = [...host.querySelectorAll("[data-mapping-row]")].map((row) => row.getAttribute("data-mapping-row"));
-    expect(rows.slice(0, 8)).toEqual(["builder", "builder:trivial", "builder:frontend", "builder:docs", "builder:apply-fixes", "reviewer", "reviewer:trivial", "verifier"]);
+    expect(rows.slice(0, 10)).toEqual(["builder", "builder:trivial", "builder:frontend", "builder:docs", "builder:apply-fixes", "builder:frontend-fixes", "builder:docs-fixes", "reviewer", "reviewer:trivial", "verifier"]);
+    /* docs/design/agent-prompt-contract.md §3 (a): the fix rows sit together. */
+    expect(host.querySelector("[data-mapping-row='builder:frontend-fixes']")?.textContent).toContain("Builder, frontend fix rounds");
+    expect(host.querySelector("[data-mapping-row='builder:docs-fixes']")?.textContent).toContain("Builder, docs fix rounds");
     expect(host.querySelector("[data-mapping-row='builder:trivial']")?.textContent).toContain("Builder, small changes");
     expect(host.querySelector("[data-mapping-row='builder:docs']")?.textContent).toContain("Builder, docs and text");
     expect(host.querySelector("[data-mapping-row='reviewer:trivial']")?.textContent).toContain("Reviewer, small changes");
@@ -644,6 +697,36 @@ test("the mapping shows the small-change and docs rows, a reset row with Restore
     flushSync(() => (host.querySelector("[data-mapping-restore='builder:frontend']") as HTMLElement).click());
     await until(() => requests.some((request) => request.method === "PUT" && request.url.includes("/api/roles")));
     expect(requests.find((request) => request.method === "PUT")?.body).toEqual({ overrides: { builder: { variants: { frontend: from } } } });
+  } finally {
+    flushSync(() => root.unmount());
+    host.remove();
+    rolesBody = { schemaVersion: 2, roles: [] };
+  }
+});
+
+/* docs/design/agent-prompt-contract.md §2.10 I: a role whose prompt text this
+   install replaced says so, and one action puts the shipped text back. */
+test("the mapping marks a replaced prompt and restores the shipped one", async () => {
+  const { mergeRoleDefinitions } = await import("@/lib/roles/store");
+  const { ROLE_DEFAULTS } = await import("@/lib/roles/defaults");
+  const roles = mergeRoleDefinitions({ architect: { promptScaffold: "An install's own architect text." } }).map((role) => ({
+    ...role,
+    promptPreview: role.promptScaffold,
+    shipped: { config: role.config, promptScaffold: ROLE_DEFAULTS.find((shipped) => shipped.id === role.id)!.promptScaffold },
+  }));
+  rolesBody = { schemaVersion: 4, roles, resets: [] };
+  requests.length = 0;
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => root.render(<OnboardingDialog mode="mapping" marker={null} onClose={() => {}} />));
+    await until(() => Boolean(host.querySelector("[data-mapping-row]")));
+    expect(host.querySelectorAll("[data-mapping-custom-prompt]")).toHaveLength(1);
+    expect(host.querySelector("[data-mapping-custom-prompt='architect']")?.textContent).toContain("Custom prompt text");
+    flushSync(() => (host.querySelector("[data-mapping-prompt-reset='architect']") as HTMLElement).click());
+    await until(() => requests.some((request) => request.method === "PUT" && request.url.includes("/api/roles")));
+    expect(requests.find((request) => request.method === "PUT")?.body).toEqual({ overrides: { architect: { promptScaffold: null } } });
   } finally {
     flushSync(() => root.unmount());
     host.remove();

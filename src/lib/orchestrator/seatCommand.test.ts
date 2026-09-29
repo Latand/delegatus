@@ -13,6 +13,7 @@ import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection } from "@/lib/telegram/sessionStore";
 
 import {
+  HANDOFF_BOARD_REPORT_POINTER,
   HANDOFF_HEADING,
   HISTORY_BUDGET_BYTES,
   HISTORY_HEADING,
@@ -24,6 +25,7 @@ import {
   ORCHESTRATOR_PROMPT_VERSION,
   ORCHESTRATOR_SEAT_TICK_CONTRACT,
   ORCHESTRATOR_SYSTEM_PROMPT,
+  ORCHESTRATOR_SHIPPED_CLOCK_OPENING,
   ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE,
   orchestratorMandateForDelivery,
   orchestratorMandateStale,
@@ -82,7 +84,6 @@ function dependencies(overrides: Partial<SeatCommandDependencies> = {}): { deps:
       engine: "claude",
     }),
     stampRegistryIdentity: (seat) => { recorded.identityStamps.push(seat); },
-    projectTasks: () => [],
     /* No test in this file reaches the real summarizer: the seam is injected,
        so nothing here spawns a process, opens a socket, or reads an account. */
     summarizeHandoffs: async (request) => {
@@ -711,12 +712,15 @@ test("rotation composes a bounded handoff, switches designation atomically, and 
       recorded2.push(body);
       return { status: 200, body: { ok: true, conversationId: SUCCESSOR, path: "/tmp/successor.jsonl" } };
     },
-    projectTasks: () => [
-      { id: "task_1", status: "doing", text: "Ship the handoff", },
-      { id: "task_2", status: "inbox", text: "Review the successor", },
-    ],
+    /* The report's own work never settles here: the rotation must answer
+       without it (docs/design/board-maintenance-report.md §5.1). */
+    startBoardReport: (seat) => {
+      reports.push(seat);
+      void new Promise<never>(() => {});
+    },
   });
   const recorded2: Record<string, unknown>[] = [];
+  const reports: Parameters<NonNullable<SeatCommandDependencies["startBoardReport"]>>[0][] = [];
   const result = await executeOrchestratorRotation({
     project: "proj-a",
     clientRequestId: "req_00000010",
@@ -727,15 +731,20 @@ test("rotation composes a bounded handoff, switches designation atomically, and 
   expect(result.body.rotatedFrom).toMatchObject({ conversationId: NEW_ID });
   const spawnedPrompt = String(recorded2[0]!.prompt);
   /* Successor mandate = incumbent mandate + bounded handoff naming the
-     predecessor, its MCP read, the open tasks and the caller's notes. */
+     predecessor, its MCP read, where the board report comes from and the
+     caller's notes. */
   expect(spawnedPrompt).toStartWith("own the board");
   expect(spawnedPrompt).toContain(NEW_ID);
   expect(spawnedPrompt).toContain(`conversation_messages({"clientRequestId":"rotation-predecessor-recent-turns-${NEW_ID}","conversationId":"${NEW_ID}","roles":["user","assistant"],"limit":40})`);
   expect(spawnedPrompt).not.toContain(`/tmp/${NEW_ID.slice(-4)}.jsonl`);
-  expect(spawnedPrompt).toContain("[doing] Ship the handoff (task_1)");
+  /* The open-task list moved into the board maintenance report (§5.5). */
+  expect(spawnedPrompt).toContain(HANDOFF_BOARD_REPORT_POINTER);
+  expect(spawnedPrompt).not.toContain("Open board tasks for this project");
   expect(spawnedPrompt).toContain("Prioritize the review queue.");
 
   const { active } = orchestratorSeatFor("proj-a");
+  /* The successor's epoch starts one report, and only the successor's. */
+  expect(reports).toEqual([{ project: "proj-a", seatEpoch: active!.seatEpoch, conversationId: SUCCESSOR, path: "/tmp/successor.jsonl" }]);
   expect(active?.conversationId).toBe(SUCCESSOR);
   /* Bidirectional lineage, both cards preserved: the seat names its
      predecessor, the revocation names its successor, and nothing killed or
@@ -771,6 +780,7 @@ test("a rotation onto the built-in default records the CURRENT version, whatever
   }, deps);
 
   expect(result.status).toBe(200);
+  expect(result.body.mandateDisposition).toBe("replaced");
   const active = orchestratorSeatFor("proj-a").active;
   expect(active).toMatchObject({ conversationId: successor, promptVersion: ORCHESTRATOR_PROMPT_VERSION });
   expect(active?.mandate).toStartWith(ORCHESTRATOR_SYSTEM_PROMPT);
@@ -800,7 +810,8 @@ test("a rotation asked to keep the incumbent's mandate keeps its text and versio
    heading with the v17–v20 paragraph under it. Delivery replaces that shipped
    section, so the successor reads every tick contract clause once. */
 test("a rotation that keeps a v20 incumbent's mandate still delivers every tick contract clause once", async () => {
-  const v20Clock = `${ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE.split("\n").slice(0, 4).join("\n")}\nBetween wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. When a wake arrives, act on the items it lists first, then make one bounded pass over the rest of the board — lanes, pull requests, agents, tasks — and act on what stands still, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.`;
+  /* A v20 seat carries the opening as it shipped, heading included. */
+  const v20Clock = `${ORCHESTRATOR_SHIPPED_CLOCK_OPENING}\nBetween wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. When a wake arrives, act on the items it lists first, then make one bounded pass over the rest of the board — lanes, pull requests, agents, tasks — and act on what stands still, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.`;
   const v20Core = ORCHESTRATOR_SYSTEM_PROMPT.replace(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE, v20Clock);
   const seeded = dependencies();
   await executeOrchestratorSeatRequest({ ...spawnRequest("req_00000039"), mandate: v20Core, promptVersion: 20 }, seeded.deps);
@@ -821,12 +832,8 @@ test("a rotation that keeps a v20 incumbent's mandate still delivers every tick 
   expect(delivered).not.toContain("act on the items it lists first, then make one bounded pass over the rest of the board");
 });
 
-/* #2030: v20's text was rewritten without a bump, and every rotation after it
-   carried the incumbent's older core forward. With no mandate named, a stale
-   incumbent's core is rebuilt from the current default byte for byte, while
-   its rotation history — the part that is not a default at all — is kept. */
-test("a rotation that names no mandate over an older default rebuilds the core byte for byte and keeps the history", async () => {
-  const olderCore = "You are the viewer's built-in Manager.\n\nCall list_tasks for this project with NO status filter and limit: 200.";
+test("a no-mandate rotation preserves an edited older core and bounded handoff history", async () => {
+  const olderCore = "Edited seat rules: keep the operator's triage order and limit: 200.";
   const seeded = dependencies();
   await executeOrchestratorSeatRequest({
     ...spawnRequest("req_00000037"),
@@ -845,16 +852,14 @@ test("a rotation that names no mandate over an older default rebuilds the core b
 
   expect(result.status).toBe(200);
   const active = orchestratorSeatFor("proj-a").active;
-  expect(active).toMatchObject({ conversationId: successor, promptVersion: ORCHESTRATOR_PROMPT_VERSION });
-  expect(splitMandate(active!.mandate).core).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
-  expect(active!.mandate).not.toContain("limit: 200");
-  /* The history survives the rebuild: both prior sections were handed to the
-     summarizer, and its fallback kept their text. */
+  expect(active).toMatchObject({ conversationId: successor, promptVersion: ORCHESTRATOR_PROMPT_VERSION - 1 });
+  expect(splitMandate(active!.mandate).core).toBe(olderCore);
+  expect(result.body.mandateDisposition).toBe("preserved");
   expect(recorded.digests).toHaveLength(1);
   expect(active!.mandate).toContain("merged the exporter lane");
   expect(active!.mandate).toContain("digest lane parked on review");
   /* And what the successor was delivered opens with the same bytes. */
-  expect(String(recorded.spawns[0]!.prompt)).toContain(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(String(recorded.spawns[0]!.prompt)).toContain(olderCore);
 });
 
 test("an EDITED mandate over a stale seat records no version, so the successor is neither flagged stale nor prefilled over on the next rotation (#1452)", async () => {
@@ -1559,7 +1564,7 @@ test("rotation rejects an explicit successor model outside the engine catalog be
   }, deps);
 
   expect(rotated.status).toBe(400);
-  expect(rotated.body.error).toBe("invalid claude model id \"claude-fable-5\"; valid claude model ids: opus, fable, sonnet, haiku");
+  expect(rotated.body.error).toBe("invalid claude model id \"claude-fable-5\"; valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku");
   expect(recorded.spawns).toHaveLength(1);
   expect(orchestratorSeatFor("proj-a")).toMatchObject({ active: { conversationId: NEW_ID }, pending: null });
 });
@@ -1618,6 +1623,30 @@ async function seatIncumbent(mandate: string, clientRequestId: string): Promise<
   const seeded = await executeOrchestratorSeatRequest({ ...spawnRequest(clientRequestId), mandate }, deps);
   expect(seeded.status).toBe(200);
 }
+
+/* docs/design/board-maintenance-report.md §5.5: the handoff's open-task list —
+   twelve rows of about 200 bytes on a busy board — went into the board
+   maintenance report, and the bytes it took are what a rotation of the default
+   mandate now keeps for its history. A 2 000-byte history beside a full task
+   list did not fit the envelope; beside the one pointer line it does. */
+test("a rotation of the default mandate keeps a history section the old task list pushed out", async () => {
+  await seatIncumbent(stackedMandate(ORCHESTRATOR_SYSTEM_PROMPT, 1), "req_00002301");
+  const prompts: string[] = [];
+  const { deps } = dependencies({
+    spawn: async (body) => {
+      prompts.push(String(body.prompt));
+      return { status: 200, body: { ok: true, conversationId: successorId(2301), path: "/tmp/successor.jsonl" } };
+    },
+    summarizeHandoffs: async () => ({ kind: "digest", text: "d".repeat(2_000) }),
+  });
+  const rotated = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00002302" }, deps);
+
+  expect(rotated.status).toBe(200);
+  expect((rotated.body.handoff as { historyDropped?: boolean }).historyDropped).toBe(false);
+  expect(historySection(prompts[0]!)).toContain("d".repeat(2_000));
+  expect(prompts[0]).toContain(HANDOFF_BOARD_REPORT_POINTER);
+  expect(launchBytes(prompts[0]!)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
+});
 
 test("AC1: three stacked handoffs compact into ONE rotation history section", async () => {
   const core = "own the board";
@@ -2018,7 +2047,7 @@ test("AC5: retrying a failed existing-mode designation with its OWN key clears i
 async function rotateTwelveTimes(
   project: string,
   summarizeHandoffs: SeatCommandDependencies["summarizeHandoffs"],
-): Promise<string[]> {
+): Promise<{ prompts: string[]; historyDropped: boolean[] }> {
   const seeded = dependencies({
     conversationTarget: (conversationId) => ({ kind: "eligible", conversationId, path: "/tmp/incumbent.jsonl", cwd: "/workspace", project, engine: "claude" }),
   });
@@ -2030,6 +2059,7 @@ async function rotateTwelveTimes(
   expect(created.status).toBe(200);
 
   const prompts: string[] = [];
+  const historyDropped: boolean[] = [];
   for (let rotation = 1; rotation <= 12; rotation += 1) {
     const { deps } = dependencies({
       conversationTarget: (conversationId) => ({ kind: "eligible", conversationId, path: "/tmp/incumbent.jsonl", cwd: "/workspace", project, engine: "claude" }),
@@ -2037,11 +2067,6 @@ async function rotateTwelveTimes(
         prompts.push(String(body.prompt));
         return { status: 200, body: { ok: true, conversationId: successorId(100 + rotation), path: "/tmp/successor.jsonl" } };
       },
-      projectTasks: () => Array.from({ length: 12 }, (_, index) => ({
-        id: `task_${index + 1}`,
-        status: "doing",
-        text: "t".repeat(200),
-      })),
       summarizeHandoffs,
     });
     const rotated = await executeOrchestratorRotation({
@@ -2050,24 +2075,27 @@ async function rotateTwelveTimes(
       handoffNotes: "n".repeat(2_000),
     }, deps);
     expect(rotated.status).toBe(200);
+    historyDropped.push((rotated.body.handoff as { historyDropped?: boolean } | undefined)?.historyDropped === true);
   }
-  return prompts;
+  return { prompts, historyDropped };
 }
 
 test("AC6: twelve rotations keep every successor mandate inside the structured envelope", async () => {
   const summarized = await rotateTwelveTimes("proj-a", async () => ({ kind: "digest", text: "d".repeat(3_800) }));
   const fellBack = await rotateTwelveTimes("proj-b", async () => ({ kind: "fallback", reason: "exhausted" }));
 
-  expect(summarized).toHaveLength(12);
-  expect(fellBack).toHaveLength(12);
-  for (const prompt of [...summarized, ...fellBack]) {
+  expect(summarized.prompts).toHaveLength(12);
+  expect(fellBack.prompts).toHaveLength(12);
+  for (const prompt of [...summarized.prompts, ...fellBack.prompts]) {
     expect(launchBytes(prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
     expect(prompt.split(HANDOFF_HEADING)).toHaveLength(2);
   }
-  /* The first rotation has nothing to compact; every later one carries exactly
-     one history section however many rotations preceded it. */
-  for (const prompt of [...summarized.slice(1), ...fellBack.slice(1)]) {
-    expect(prompt.split(HISTORY_HEADING)).toHaveLength(2);
+  /* A section is present once when it fits; an envelope trim reports that it
+     dropped the history instead of silently losing it. */
+  for (const result of [summarized, fellBack]) {
+    for (let index = 1; index < result.prompts.length; index += 1) {
+      expect(result.prompts[index]!.split(HISTORY_HEADING)).toHaveLength(result.historyDropped[index] ? 1 : 2);
+    }
   }
 });
 

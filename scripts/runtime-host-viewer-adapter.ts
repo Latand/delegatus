@@ -1,4 +1,5 @@
 #!/usr/bin/env bun-container
+import { withoutUnsupportedApiCredentials } from "../src/lib/environmentIsolation";
 
 /* FIRST, and before every other import: the claim has to precede the modules
    below, which resolve the operator's state directory while they load (#1905).
@@ -33,11 +34,11 @@ import {
   type HotStateAuthority,
 } from "../src/lib/state/hotStateAuthority";
 import {
+  viewerComposeSnapshotWithoutUnsupportedApiCredentials,
   obsoleteManagedViewerContainers,
   viewerCandidateDockerArgs,
   viewerCandidateGateKey,
   viewerCandidateTmuxEnvironment,
-  viewerComposeSnapshotWithoutWakatimeCredential,
   viewerComposeServiceFromConfig,
   viewerComposeServiceUid,
   viewerRegistryBackendMode,
@@ -107,7 +108,6 @@ import {
   waitForViewerReadiness,
   type ViewerCandidateContainerState,
 } from "../src/runtime-host/deploymentHealth";
-import { withoutWakatimeCredential } from "../src/lib/wakatime/credential";
 
 const defaultConfigDir = process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || "/home/user", ".config");
 const stateDir = process.env.LLV_STATE_DIR || path.join(appDirIn(defaultConfigDir), "state");
@@ -163,7 +163,7 @@ async function commandResult(argv: string[], options: { cwd?: string; timeoutMs?
     ...(options.timeoutMs ? { timeout: options.timeoutMs, killSignal: "SIGKILL" as const } : {}),
     stdout: "pipe",
     stderr: "pipe",
-    env: withoutWakatimeCredential(process.env),
+    env: withoutUnsupportedApiCredentials(process.env),
   });
   const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
   return { code, stdout: stdout.trim(), stderr: stderr.trim() };
@@ -191,7 +191,7 @@ function composeConfigFile(container: string): string {
 }
 
 function writeComposeConfig(container: string, config: string): void {
-  const snapshot = viewerComposeSnapshotWithoutWakatimeCredential(config);
+  const snapshot = viewerComposeSnapshotWithoutUnsupportedApiCredentials(config);
   viewerComposeServiceFromConfig(snapshot);
   const filename = composeConfigFile(container);
   fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
@@ -454,19 +454,19 @@ function observation(
 
 /** Read while the candidate is alive: a failed candidate is retired, and its
     container - the only place its own account of a 500 exists - with it. */
-async function candidateContainerLog(container: string): Promise<string[]> {
+async function candidateContainerLog(container: string, tail = 40): Promise<string[]> {
   try {
-    const child = Bun.spawn(["/usr/bin/setpriv", "--pdeathsig", "KILL", "--", "docker", "logs", "--tail", "40", container], {
+    const child = Bun.spawn(["/usr/bin/setpriv", "--pdeathsig", "KILL", "--", "docker", "logs", "--tail", String(tail), container], {
       stdout: "pipe",
       stderr: "pipe",
-      env: withoutWakatimeCredential(process.env),
+      env: withoutUnsupportedApiCredentials(process.env),
     });
     const [stdout, stderr] = await Promise.all([
       new Response(child.stdout).text(),
       new Response(child.stderr).text(),
       child.exited,
     ]);
-    return candidateLogExcerpt(`${stdout}\n${stderr}`);
+    return candidateLogExcerpt(`${stdout}\n${stderr}`, tail === 200 ? { maxLines: 200, maxChars: 500 } : {});
   } catch {
     return [];
   }
@@ -605,7 +605,7 @@ export function mcpProbeEnvironment(
     throw new Error("candidate MCP probe requires the candidate's own control endpoint");
   }
   return {
-    ...Object.fromEntries(Object.entries(withoutWakatimeCredential(env))
+    ...Object.fromEntries(Object.entries(withoutUnsupportedApiCredentials(env))
       .filter((entry): entry is [string, string] => typeof entry[1] === "string")),
     LLV_VIEWER_DEPLOY_TARGET: deployTarget,
     // Candidate health must exercise the candidate's web/runtime client. The
@@ -1321,6 +1321,7 @@ async function main(): Promise<unknown> {
       await Bun.sleep(1_000);
     }
   }
+  if (action === "candidate-log") return candidateContainerLog(release(input.candidate).container, 200);
   if (action === "rollback") {
     const previous = release(input.previous);
     reportAdapterPhase(action, "starting the rollback Viewer release");

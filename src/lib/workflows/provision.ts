@@ -1,9 +1,10 @@
+import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
 import { pidAlive } from "@/lib/scanner/process";
-import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
+import { controllerCommitIdentityArgs } from "@/lib/git/controllerCommitIdentity";
 
 import { setupExitPath, setupStderrPath, setupStdoutPath } from "./store";
 import type { Workflow } from "./types";
@@ -86,7 +87,7 @@ export function startSetup(wf: Workflow): { pid: number | null; error?: string }
        text never gets interpolated into the wrapper script. */
     const child = spawn("sh", ["-c", `sh -c "$LLV_SETUP_CMD"; printf '%s' "$?" > "$LLV_SETUP_EXIT"`], {
       cwd: wf.worktreeDir,
-      env: { ...withoutWakatimeCredential(process.env), LLV_SETUP_CMD: setup, LLV_SETUP_EXIT: exitPath },
+      env: { ...withoutUnsupportedApiCredentials(process.env), LLV_SETUP_CMD: setup, LLV_SETUP_EXIT: exitPath },
       detached: true,
       stdio: ["ignore", stdoutFd, stderrFd],
     });
@@ -188,7 +189,8 @@ export function finishMerge(wf: Workflow, exec: ExecPort): FinishResult {
   if (current !== wf.baseBranch) {
     return { ok: false, error: `the repo checkout is on ${current}; check out ${wf.baseBranch} before merging` };
   }
-  const merge = exec("git", ["merge", "--no-ff", wf.branch, "-m", `Merge ${wf.branch}: ${prTitle(wf)}`], wf.repoDir);
+  const identity = controllerCommitIdentityArgs(exec, wf.repoDir);
+  const merge = exec("git", [...identity, "merge", "--no-ff", wf.branch, "-m", `Merge ${wf.branch}: ${prTitle(wf)}`], wf.repoDir);
   if (merge.code !== 0) {
     /* Leave the checkout clean: an aborted merge is retryable after the user
        resolves whatever blocked it. */

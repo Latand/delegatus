@@ -72,6 +72,8 @@ export interface ActivityResponse extends Omit<ActivityReport, "projects" | "par
   /** Whether any project is tagged billable, so the billable figure means something. */
   billableConfigured: boolean;
   projects: ActivityProjectRow[];
+  /** Human inputs whose author cannot be established; excluded from hours. */
+  unknownAuthorInputs: number;
 }
 
 export interface ActivityQuery {
@@ -107,7 +109,7 @@ export function parseActivityQuery(search: URLSearchParams, fallbackTz: string =
 export interface ActivityResponseDependencies {
   now(): number;
   settings(): ActivitySettings;
-  humanInputs(window: { start: number; end: number }, nowMs: number): HumanInputRead;
+  humanInputs(window: { start: number; end: number }, nowMs: number, viewer?: { mode: "solo" | "team"; memberId: string | null }): HumanInputRead;
   agents(cacheKey: string, range: { start: number; end: number }, nowMs: number): AgentSourceRead;
   canonicalProject(project: string): string;
   /** Live display names by project key. */
@@ -138,7 +140,7 @@ export async function catalogProjectNames(): Promise<ReadonlyMap<string, string>
 const productionDependencies: ActivityResponseDependencies = {
   now: Date.now,
   settings: () => readActivitySettings(statePath("activity")),
-  humanInputs: (window, nowMs) => readHumanInputs(window, nowMs),
+  humanInputs: (window, nowMs, viewer) => readHumanInputs(window, nowMs, {}, viewer),
   agents: cachedAgentConversations,
   canonicalProject,
   projectNames: catalogProjectNames,
@@ -147,6 +149,7 @@ const productionDependencies: ActivityResponseDependencies = {
 export async function activityResponse(
   search: URLSearchParams,
   overrides: Partial<ActivityResponseDependencies> = {},
+  viewer?: { mode: "solo" | "team"; memberId: string | null },
 ): Promise<ActivityResponse> {
   const dependencies = { ...productionDependencies, ...overrides };
   const nowMs = dependencies.now();
@@ -159,7 +162,7 @@ export async function activityResponse(
   /* From T before the first day: an episode running into the range from
      before it is then counted exactly (see ReportInput.anchors). A source
      that cannot be read covers nothing, which leaves its host unknown. */
-  const human = dependencies.humanInputs({ start: window.start - params.breakMs, end: Math.min(window.end, nowMs) }, nowMs);
+  const human = dependencies.humanInputs({ start: window.start - params.breakMs, end: Math.min(window.end, nowMs) }, nowMs, viewer);
   const canonical = (project: string | null): string | null => {
     if (project === null) return null;
     const resolved = dependencies.canonicalProject(project);
@@ -239,6 +242,7 @@ export async function activityResponse(
     days: report.days,
     billableConfigured: settings.billable.length > 0,
     projects,
+    unknownAuthorInputs: human.unknownAuthors ?? 0,
   };
 }
 

@@ -16,14 +16,19 @@ import type { KanbanPipeline, KanbanStageChip } from "@/components/kanban/kanban
 import { ChevronDown, ChevronRight, MoreGlyph, svgProps } from "@/components/kanban/kanbanGlyphs";
 import { STAGE_TONE } from "@/components/kanban/pipelineGraph";
 import {
-  arcTitle, GraphEditLine, GraphGlyph, graphStateWord, ListGlyph, loopArcs, PipelineGraph, pipelineProgress, pipelineTitle, ReturnSuffix, spentEdgeSentence, StageReportLine,
+  arcTitle, GraphEditLine, GraphGlyph, graphStateWord, ListGlyph, loopArcs, PipelineGraph, pipelineProgress, pipelineTitle, ReturnSuffix, spentEdgeSentence, StageReportLine, StageToneMark,
   type LoopArc,
 } from "@/components/kanban/PipelineSection";
+
+/* The stage mark lives beside the model glyph that stands in for it, which
+   the graph draws on a loop strip too. */
+export { StageToneMark } from "@/components/kanban/PipelineSection";
+import { StageGlyph } from "@/components/kanban/StageGlyph";
 import { stageIdentity } from "@/components/kanban/stageIdentity";
 import { stageDraftable, type PipelineActionKind } from "@/components/kanban/stagesModel";
 
 import {
-  latestAttempt, pipelineReviewHeads, pipelineStagePosition, pipelineStateLabel, stageChipLabel, stageConfigurable, stageLatestAttemptPlace, stageNames, stageRoleAside,
+  latestAttempt, pipelineReviewHeads, pipelineStagePosition, pipelineStateLabel, stageChipLabel, stageConfigurable, stageDisplayName, stageLatestAttemptPlace, stageNames, stageRoleAside,
   type StageChipState,
 } from "./pipelineModel";
 import {
@@ -53,34 +58,18 @@ import {
  *   who runs it: engine mark, model, effort and role.
  *
  * The pill is the phone's: an outline with no fill around a mark and the
- * stage's name. The mark's shape carries the state and its colour is the
- * stage's `STAGE_TONE`, the one tone map the desktop graph reads. Who runs a
- * stage (engine, model, effort) is in the pill's tooltip, the Stages sheet
- * and the graph, not on the pill. A fail edge rides the failing pill as
- * "↺ 1/2".
+ * stage's name. The mark is the glyph of the model the stage runs on, with its
+ * state on it (docs/design/model-glyphs.md); a model with no glyph keeps the
+ * mark whose shape carries the state and whose colour is the stage's
+ * `STAGE_TONE`, the one tone map the desktop graph reads. Engine, model and
+ * effort in words are in the pill's tooltip, the Stages sheet and the graph,
+ * not on the pill. A fail edge rides the failing pill as "↺ 1/2".
  */
 
 const LIVE = new Set<StageChipState>(["running", "reviewing", "committing"]);
 
 /** How many findings the answer lists before counting the rest. */
 const ANSWER_FINDINGS = 1;
-
-/** The mark in front of a stage's name. */
-export function StageToneMark({ state, className }: { state: StageChipState; className?: string }) {
-  const shape = STAGE_MARK[state];
-  return (
-    <i
-      className={`pmark tone-${STAGE_TONE[state]}${className ? ` ${className}` : ""}`}
-      data-mark={shape}
-      data-live={LIVE.has(state) ? "1" : undefined}
-      aria-hidden="true"
-    >
-      {shape === "check" ? <svg {...svgProps} strokeWidth={3}><path d="m5 12.5 4.5 4.5L19 7.5" /></svg> : null}
-      {shape === "cross" ? <svg {...svgProps} strokeWidth={3}><path d="M17 7 7 17M7 7l10 10" /></svg> : null}
-      {shape === "alert" ? <span className="pmark-bang">!</span> : null}
-    </i>
-  );
-}
 
 interface Suffix { arc: LoopArc; title: string }
 
@@ -116,16 +105,18 @@ function StagePill({ pipeline, chip, name, suffix, interactive, selected, onOpen
   const conversation = Boolean(attempt?.agentPath || attempt?.conversationId);
   const openable = interactive && Boolean(onOpen) && (conversation || stageDraftable(pipeline, chip.stage.id));
   const who = whoRuns(t, pipeline, chip.stage);
+  const rework = chip.rework ? t("kanban.graph.workingAgain") : null;
   const aria = [
     chip.rounds ? t("kanban.stageAriaRounds", { stage: name, state, count: chip.rounds }) : t("kanban.stageAria", { stage: name, state }),
+    rework,
     who,
     suffix?.title,
   ].filter(Boolean).join(". ");
-  const hover = [[name, state, who].filter(Boolean).join(" · "), suffix?.title].filter(Boolean).join(" · ");
-  const className = `pb-pill tone-${STAGE_TONE[chip.state]} st-${chip.state}${attempt ? "" : " waiting"}${chip.branch ? " side" : ""}${selected ? " selected" : ""}`;
+  const hover = [[name, state, rework, who].filter(Boolean).join(" · "), suffix?.title].filter(Boolean).join(" · ");
+  const className = `pb-pill tone-${STAGE_TONE[chip.state]} st-${chip.state}${attempt ? "" : " waiting"}${chip.branch ? " side" : ""}${chip.rework ? " rework" : ""}${selected ? " selected" : ""}`;
   const body = (
     <>
-      <StageToneMark state={chip.state} />
+      <StageGlyph state={chip.state} model={chip.stage.effectiveRole ? stageIdentity(pipeline, chip.stage) : null} live={chip.rework} fallback="mark" />
       <span className="pb-name">{chip.branch ? t("kanban.branch", { stage: name }) : name}</span>
       {chip.rounds ? <CountCircle n={chip.rounds} tone="neutral" label={t("kanban.stageAriaRounds", { stage: name, state, count: chip.rounds })} /> : null}
       {drawn(suffix) ? <ReturnSuffix arc={suffix.arc} title={suffix.title} /> : null}
@@ -727,20 +718,40 @@ export function PipelineStateLine({ summary, nowMs }: { summary: KanbanPipeline;
   const { k, n } = index >= 0 ? { k: index + 1, n: summary.chips.length } : pipelineStagePosition(pipeline);
   const moved = pipelineMovedAtMs(pipeline);
   const position = t("kanban.stages.position", { k, n });
+  /* The stage it stands on, in the one attempt caption (#1892), then where
+     that stage sits in the lane. A long name truncates; its number stays. */
+  const stage = index >= 0 && !pipelineEnded(pipeline) ? summary.chips[index]!.stage : null;
+  const attempts = stage ? summary.views.get(stage.id)?.attempts ?? 0 : 0;
   const parts = [
     pipelineEnded(pipeline) ? null : position.charAt(0).toLocaleLowerCase() + position.slice(1),
     moved === null ? null : humanizeDuration(blockAgeSeconds((nowMs - moved) / 1000)),
   ].filter((part): part is string => Boolean(part));
-  return (
-    <span className="pb-stateline" data-pipeline-stateline={pipeline.id}>
+  const head = (
+    <>
       <span className="pstate-word" data-pstate={pipeline.state}>{pipelineStateLabel(t, pipeline.state)}</span>
       <MergeWord pipeline={pipeline} nowMs={nowMs} />
-      {parts.map((part, index) => (
-        <span key={index} className="pb-statepart">
+    </>
+  );
+  const tail = parts.map((part, index) => (
+    <span key={index} className="pb-statepart">
+      <span className="pb-sep" aria-hidden="true">·</span>
+      {part}
+    </span>
+  ));
+  if (!stage) return <span className="pb-stateline" data-pipeline-stateline={pipeline.id}>{head}{tail}</span>;
+  /* On a stage the line is two rows that never wrap (the bar holds 44 px):
+     the state and the stage, then where it sits and how long since it moved. */
+  return (
+    <span className="pb-stateline" data-pipeline-stateline={pipeline.id} data-stateline-rows="">
+      <span className="pb-staterow">
+        {head}
+        <span className="pb-statepart pb-statestage" data-stateline-stage={stage.id}>
           <span className="pb-sep" aria-hidden="true">·</span>
-          {part}
+          <span className="pb-statename">{stageDisplayName(t, stage)}</span>
+          {attempts > 1 ? <span className="pb-attempt">{` · ${attempts}`}</span> : null}
         </span>
-      ))}
+      </span>
+      {tail.length ? <span className="pb-staterow">{tail}</span> : null}
     </span>
   );
 }
@@ -775,7 +786,9 @@ function ScreenBlock(props: PipelineBlockProps & {
   const currentId = screenCurrentStageId(summary);
   const currentIndex = currentId ? chips.findIndex((chip) => chip.stage.id === currentId) : -1;
   const before = currentIndex > 0 ? chips.slice(0, currentIndex).filter((chip) => !chip.branch) : [];
-  const foldPassed = before.length > 1 && before.every((chip) => chip.state === "passed" || chip.state === "skipped");
+  /* A passed stage whose conversation works again (#1744) is live work, so it
+     keeps its row and its "working again", and nothing before it folds. */
+  const foldPassed = before.length > 1 && before.every((chip) => (chip.state === "passed" || chip.state === "skipped") && !chip.rework);
   const folded = foldPassed && !passedOpen ? new Set(before.map((chip) => chip.stage.id)) : new Set<string>();
   const selected = props.selected ?? NO_STAGES;
   const arcs = loopArcs(summary);
@@ -791,7 +804,8 @@ function ScreenBlock(props: PipelineBlockProps & {
   const arcLines = (stage: PipelineStage) => arcs.flatMap((arc) => {
     const from = nameOf(arc.loop.from);
     const to = nameOf(arc.loop.to);
-    if (arc.live && arc.loop.to.id === stage.id) return [{ id: arc.id, text: t("kanban.loopLive", { from, to }) }];
+    /* A retry in place is not "running because it failed": its budget line says it. */
+    if (arc.live && arc.loop.to.id === stage.id && arc.loop.from.id !== stage.id) return [{ id: arc.id, text: t("kanban.loopLive", { from, to }) }];
     if (arc.loop.from.id !== stage.id || arc.state === "rest") return [];
     if (arc.parked) return [{ id: arc.id, text: t("kanban.loopParkedHere", { from }) }];
     return [{
@@ -848,27 +862,35 @@ function ScreenBlock(props: PipelineBlockProps & {
       aside,
       /* A role-less review loop's aside already names it: say it once. */
       stage.kind === "review-loop" && aside !== t("pipelineStrip.reviewStage") ? t("mobile2.pipeline.review") : null,
-      place.attempt !== null && (place.attempts > 1 || isCurrent) ? t("pipelineBlock.attempt", { n: place.attempt }) : null,
     ].filter(Boolean).join(" · ");
-    const aria = [t("kanban.stageAria", { stage: name, state }), who, suffix?.title].filter(Boolean).join(". ");
+    /* One attempt caption (#1892): «Critique · 2» in the name, from the
+       stage's second own attempt. */
+    const attemptN = place.attempt !== null && place.attempts > 1 ? place.attempt : null;
+    /* A settled stage whose conversation works again says so under its state (#1744). */
+    const rework = chip.rework ? t("kanban.graph.workingAgain") : null;
+    const aria = [t("kanban.stageAria", { stage: name, state }), rework, who, suffix?.title].filter(Boolean).join(". ");
     const head = (
       <>
         <span className="pb-num">{index + 1}</span>
         <span className="pb-stage-main">
           <span className="pb-stage-title">
-            <StageToneMark state={shown} />
-            <span className="pb-name">{chip.branch ? t("kanban.branch", { stage: name }) : name}</span>
+            <StageGlyph state={shown} model={identity} live={chip.rework} fallback="mark" badge={false} />
+            {/* The number flows after the name's last word, wrapped or not. */}
+            <span className="pb-name">{chip.branch ? t("kanban.branch", { stage: name }) : name}{attemptN !== null ? <span className="pb-attempt">{` · ${attemptN}`}</span> : null}</span>
             {chip.rounds ? <CountCircle n={chip.rounds} tone="neutral" label={t("kanban.stageAriaRounds", { stage: name, state, count: chip.rounds })} /> : null}
             {suffix ? <ReturnSuffix arc={suffix.arc} title={suffix.title} /> : null}
           </span>
           {identity || words ? (
             <span className="pb-stage-ident">
-              {identity ? <StageIdentity identity={identity} density="line" /> : null}
+              {identity ? <StageIdentity identity={identity} density="line" glyph /> : null}
               {words ? <span className="pb-ident-words">{identity ? `· ${words}` : words}</span> : null}
             </span>
           ) : null}
         </span>
-        <span className={`pb-stage-state tone-${tone}`}>{state}</span>
+        <span className={`pb-stage-state tone-${tone}`}>
+          {state}
+          {rework ? <span className="pb-rework">{rework}</span> : null}
+        </span>
       </>
     );
     /* A stage that has run opens its conversation from its row, the current
@@ -894,6 +916,7 @@ function ScreenBlock(props: PipelineBlockProps & {
         data-stage={stage.id}
         data-stage-state={chip.state}
         data-stage-held={isHeld ? "1" : undefined}
+        data-stage-rework={chip.rework ? "1" : undefined}
         data-stage-current={isCurrent ? "1" : undefined}
       >
         {control}
@@ -995,7 +1018,7 @@ function ScreenBlock(props: PipelineBlockProps & {
       {summary.loops.length ? (
         <ul className="pb-loops">
           {summary.loops.map((loop) => (
-            <li key={`${loop.from.id}:${loop.to.id}`}>{`↺ ${t("kanban.loopRest", { from: nameOf(loop.from), to: nameOf(loop.to), max: loop.max })}`}</li>
+            <li key={`${loop.from.id}:${loop.to.id}`}>{`↺ ${t("kanban.loopRest", { from: nameOf(loop.from), to: nameOf(loop.to), count: loop.max })}`}</li>
           ))}
         </ul>
       ) : null}

@@ -28,12 +28,14 @@ import {
   browserOpenCommand,
   cliRuntimeHostConfig,
   cliRuntimeHostEnvironment,
-  discardWakatimeEnvironmentCredential,
+  discardUnsupportedApiCredentials,
   newlyBoundNonLoopbackAddress,
   readNonLoopbackBindState,
   viewerChildProcessOptions,
   viewerServerBunRuntime,
 } from "./server-runtime.mjs";
+
+discardUnsupportedApiCredentials();
 import {
   createLauncherRecord,
   exitError,
@@ -48,7 +50,6 @@ import { probeHeadersFrom } from "./internalService.mjs";
 import { findLegacySystemdUnits, legacySystemdNotice } from "./legacySystemd.mjs";
 import { linkSkills } from "./skillLinks.mjs";
 
-discardWakatimeEnvironmentCredential();
 
 /* The launcher is one of the process kinds that may resolve the operator's own
    config and state directories (#1905); everything it starts inherits the
@@ -134,6 +135,7 @@ Options:
     runtimeHostExited: (detail) => `the runtime host exited before its socket was ready${detail ? `: ${detail}` : ""}`,
     runtimeHostOwnerMismatch: (ownerPid, childPid) => `the runtime host socket is owned by pid ${ownerPid}, while this CLI spawned pid ${childPid}; stop the other delegatus instance for this installation and try again`,
     runtimeHostRestart: (delay, detail) => `[runtime host] ${detail}; restarting in ${delay}ms`,
+    webRestartFailed: (detail) => `[web] restart failed, the runtime host keeps running: ${detail}`,
     runtimeHostRestartFail: (detail) => `[runtime host] restart failed: ${detail}`,
     phoneAccessSkipped: (detail) => `Phone access is turned on in the setup guide, and Tailscale is not ready, so this start is local only:\n${detail}`,
     phoneAccessUngated: (detail) => `Warning: the access key could not be read, so this start asks no key: ${detail}`,
@@ -183,6 +185,7 @@ Options:
     runtimeHostExited: (detail) => `runtime host завершився до готовності сокета${detail ? `: ${detail}` : ""}`,
     runtimeHostOwnerMismatch: (ownerPid, childPid) => `сокетом runtime host володіє процес ${ownerPid}, а цей CLI запустив процес ${childPid}; зупиніть інший delegatus для цієї інсталяції та повторіть спробу`,
     runtimeHostRestart: (delay, detail) => `[runtime host] ${detail}; повторний запуск за ${delay} мс`,
+    webRestartFailed: (detail) => `[web] перезапуск не вдався, runtime host працює далі: ${detail}`,
     runtimeHostRestartFail: (detail) => `[runtime host] помилка повторного запуску: ${detail}`,
     phoneAccessSkipped: (detail) => `Доступ із телефона увімкнено в посібнику з налаштування, але Tailscale не готовий, тому цей запуск лише локальний:\n${detail}`,
     phoneAccessUngated: (detail) => `Увага: не вдалося прочитати ключ доступу, тому цей запуск не питає ключа: ${detail}`,
@@ -477,8 +480,13 @@ function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostS
     restarting: launch.restarting === true,
   };
 
-  /* Attached first, so a failed spawn is always reported by it (#2178). */
+  /* Attached first, so a failed spawn is always reported by it (#2178). A
+     restart's spawn failure is that restart's to report: readiness sees it. */
   child.on("error", (error) => {
+    if (state.restarting) {
+      state.spawnError = error;
+      return;
+    }
     state.stopping = true;
     void Promise.all([
       tailscaleProcessRef?.current ? stopChild(tailscaleProcessRef.current) : Promise.resolve(),
@@ -778,6 +786,9 @@ async function waitForReadiness(port, timeoutMs = READINESS_TIMEOUT_MS, processH
   const url = `http://127.0.0.1:${port}/api/files`;
 
   while (Date.now() < deadline) {
+    if (processHandle?.state.spawnError) {
+      throw new Error(`could not start (${processHandle.state.spawnError.message})`);
+    }
     if (processHandle && (processHandle.child.exitCode !== null || processHandle.child.signalCode !== null)) {
       throw new Error(`exited before it answered (${processHandle.child.signalCode ? `signal ${processHandle.child.signalCode}` : `exit code ${processHandle.child.exitCode}`})`);
     }
@@ -1211,10 +1222,11 @@ async function main() {
         record.set("web", { state: "healthy", error: { kind: "fell-back", revision: next.sha ? next.sha.slice(0, 7) : null, detail: failure } });
         return;
       }
+      /* Neither release came up. The web is down and says so; the runtime
+         host, the agents it carries and the restart watcher stay up, so the
+         next web restart request is still taken. */
       record.set("web", { state: "failed", error: { kind: "message", text: fallbackFailure } });
-      restartRequests?.stop();
-      await stopAll(null, tailscaleProcessRef.current, runtimeHostSupervisor);
-      fail(fallbackFailure);
+      console.error(m.webRestartFailed(fallbackFailure));
     };
     const restartHost = async () => {
       try {
@@ -1231,7 +1243,22 @@ async function main() {
       record.set(key, { requestId });
       if (role === "web") await restartWeb();
       else await restartHost();
-    });
+    }, { admitAuto: async ({ requestId, autoGateId }) => {
+      try {
+        const url = new URL(`http://127.0.0.1:${options.port}/api/self-update/launcher-admission`);
+        url.searchParams.set("requestId", requestId);
+        url.searchParams.set("gateId", autoGateId);
+        const response = await fetch(url, { signal: AbortSignal.timeout(20_000), redirect: "manual", headers: {
+          ...probeHeadersFrom(runtimeHostConfig.stateDirectory),
+          ...(runtime.llvToken ? { authorization: `Bearer ${runtime.llvToken}` } : {}),
+        } });
+        if (response.status !== 200 || !response.headers.get("content-type")?.includes("application/json")) {
+          await response.body?.cancel();
+          return false;
+        }
+        return (await response.json())?.admitted === true;
+      } catch { return false; }
+    } });
   }
 
   if (options.tailscaleFromFlag && runtime.tailscalePath) {

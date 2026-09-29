@@ -507,7 +507,7 @@ const SOURCE_NAMES: Record<HostReport["sources"][number]["source"], MessageKey> 
   ingest: "activity.hosts.ingest",
   pull: "activity.hosts.pull",
 };
-const SOURCE_ERRORS = new Set(["unreachable", "timeout", "no-ingest", "malformed", "unreadable"]);
+const SOURCE_ERRORS = new Set(["unreachable", "timeout", "no-ingest", "malformed", "unreadable", "member-unconfigured"]);
 
 function sourceLine(source: HostReport["sources"][number], locale: Locale, tz: string, t: TFunction): string {
   const name = t(SOURCE_NAMES[source.source]);
@@ -563,6 +563,8 @@ function HostsTable({ hosts, locale, tz, t }: { hosts: readonly ActivityHostRow[
                 </th>
                 <td className="py-1.5 pr-3 text-secondary max-sm:block max-sm:py-0.5">
                   {host.sources.map((source) => <div key={source.source}>{sourceLine(source, locale, tz, t)}</div>)}
+                  {host.configurationGap ? <div className="font-semibold text-warning" data-activity-member-gap="">{t(host.local ? "activity.hosts.signInGap" : "activity.hosts.memberGap")}</div> : null}
+                  <div data-activity-unknown-author={host.unknownAuthors}>{t("activity.counted.unknownAuthor", { count: host.unknownAuthors })}</div>
                   {terminalUnread ? (
                     <div className="mt-0.5 flex items-start gap-1 text-warning" data-activity-terminal-unread="">
                       <TriangleAlert className="mt-[2px] h-3 w-3 shrink-0" aria-hidden />
@@ -602,6 +604,9 @@ function Counted({ data, locale, t }: { data: ActivityResponse; locale: Locale; 
         <p>{t(params.rounding === "half-hour" ? "activity.counted.halfHour" : "activity.counted.clockHour")}</p>
         <p>{t("activity.counted.parallel")}</p>
         <p>{t("activity.counted.operatorOnly")}</p>
+        <p className="font-semibold text-warning" data-activity-unknown-author-total={data.unknownAuthorInputs}>
+          {t("activity.counted.unknownAuthor", { count: data.unknownAuthorInputs })}
+        </p>
         <p>{t("activity.counted.agent")}</p>
         <p>
           {t("activity.counted.hosts")}

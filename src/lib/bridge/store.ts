@@ -201,6 +201,7 @@ function normalizeTelegram(value: unknown): BridgeReportTelegram | undefined {
   if (raw.state !== "pending" && raw.state !== "sent" && raw.state !== "failed" && raw.state !== "uncertain") return undefined;
   return {
     chat: raw.chat,
+    ...(typeof raw.topicId === "number" && Number.isSafeInteger(raw.topicId) && raw.topicId > 0 ? { topicId: raw.topicId } : {}),
     html: raw.html,
     state: raw.state,
     ...(Array.isArray(raw.messageIds) ? { messageIds: raw.messageIds.filter((id): id is number => Number.isInteger(id)) } : {}),
@@ -872,7 +873,7 @@ export function appendBridgeReports(
         ...(input.covers?.length ? { covers: [...new Set(input.covers.map((key) => scopedReportId(project, key)))] } : {}),
         ...(input.coversOwed ? { coversOwedAt: input.at } : {}),
         ...(input.telegram
-          ? { telegram: { chat: input.telegram.chat, html: input.telegram.html, state: "pending" as const, attempts: 0, at: input.at } }
+          ? { telegram: { chat: input.telegram.chat, html: input.telegram.html, ...(input.telegram.topicId ? { topicId: input.telegram.topicId } : {}), state: "pending" as const, attempts: 0, at: input.at } }
           : {}),
       };
       file.reports.push(report);

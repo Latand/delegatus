@@ -4,12 +4,11 @@
    loads (#1905). See `@/lib/state/owner/mcp`. */
 import "../../../bin/envAlias.mjs";
 import "@/lib/state/owner/mcp";
-
-import { discardWakatimeEnvironmentCredential } from "@/lib/wakatime/credential";
+import { discardUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 
 import { startViewerMcpServer } from "./server";
 
-discardWakatimeEnvironmentCredential();
+discardUnsupportedApiCredentials();
 
 startViewerMcpServer().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));

@@ -15,6 +15,13 @@
  *
  * `--gallery` renders the Product Hunt gallery instead (see renderGallery).
  *
+ * `--check-fullscreen` puts each demo frame full screen through its control, in
+ * both languages and widths, once with the browser's Fullscreen API and once
+ * as the overlay iPhone Safari gets. It asserts the frame's layout and scale, that the
+ * control clears the product's own controls, that Esc and the control leave,
+ * and that the page's scroll position comes back; PNGs go to
+ * LANDING_RENDER_DIR (default /tmp/landing-fullscreen-renders/).
+ *
  * `--check-request=10` renders nothing: it plays the hero's script that many
  * times in each language and width and fails unless every step shows the
  * visitor's request exactly once in the orchestrator's chat, above the reply.
@@ -36,6 +43,8 @@ const dist = process.env.LANDING_DIST_DIR ?? path.join(here, "dist");
 const out = process.env.LANDING_RENDER_DIR ?? path.join(os.homedir(), "Pictures/delegatus-review/landing/final");
 const only = process.argv.find((arg) => arg.startsWith("--only="))?.slice("--only=".length) ?? null;
 const checkRuns = Number(process.argv.find((arg) => arg.startsWith("--check-request="))?.slice("--check-request=".length) ?? 0);
+const fullscreenCheck = process.argv.includes("--check-fullscreen");
+const swipeCheck = process.argv.find((arg) => arg.startsWith("--check-swipe="))?.slice("--check-swipe=".length);
 if (!fs.existsSync(path.join(dist, "demo/demo.js"))) throw new Error("landing/site/dist is not built: run bun landing/site/build.ts first");
 fs.mkdirSync(out, { recursive: true });
 
@@ -120,6 +129,409 @@ async function checkRequest(lang: Locale, viewport: (typeof VIEWPORTS)[number], 
   }
   await context.close();
   return failures;
+}
+
+/* A compositor touch gesture, aimed at the same visible surface a visitor touches.
+   "before" records the published or unchanged build; "after" also asserts that
+   the outer page moves in the finger's expected direction. */
+async function checkSwipe() {
+  if (swipeCheck !== "before" && swipeCheck !== "after") throw new Error("use --check-swipe=before or --check-swipe=after");
+  const rows: { lang: Locale; surface: string; direction: string; before: number; after: number; delta: number; available: number }[] = [];
+  const surfaces = [
+    ["install-prompt", '.hero [data-install="hero"] .prompt pre'],
+    ["hero-composer", ".live-hero iframe"],
+    ["hero-demo", ".live-hero iframe"],
+    ["run-demo", ".live-run iframe"],
+    ["open-demo", ".live-open iframe"],
+    ["phone-demo", ".live-phone iframe"],
+    ["plain-text", ".sec-run .sec-head h2"],
+  ] as const;
+  for (const lang of ["en", "uk"] as Locale[]) {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3 });
+    const page = await context.newPage();
+    const cdp = await context.newCDPSession(page);
+    await page.goto(`${base}?lang=${lang}`);
+    for (const [surface, selector] of surfaces) {
+      if (surface.endsWith("demo") || surface === "hero-composer") {
+        await page.locator(selector.replace(" iframe", "")).scrollIntoViewIfNeeded();
+        await frameOf(page, selector.replace(" iframe", ""));
+      }
+      for (const direction of ["down", "up"] as const) {
+        if (swipeCheck === "after" && (surface.endsWith("demo") || surface === "hero-composer")) {
+          const frame = await frameOf(page, selector.replace(" iframe", ""));
+          await frame.evaluate((direction) => {
+            for (const node of document.querySelectorAll<HTMLElement>("*")) {
+              if (/auto|scroll/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight + 1) {
+                node.scrollTop = direction === "down" ? node.scrollHeight : 0;
+              }
+            }
+          }, direction);
+        }
+        const element = page.locator(selector).first();
+        await element.scrollIntoViewIfNeeded();
+        let point = await page.evaluate((selector) => {
+          const rect = document.querySelector(selector)!.getBoundingClientRect();
+          const max = document.documentElement.scrollHeight - innerHeight;
+          const center = rect.top + Math.min(rect.height, 520) / 2;
+          scrollTo(0, Math.max(0, Math.min(max, scrollY + center - 420)));
+          const positioned = document.querySelector(selector)!.getBoundingClientRect();
+          return { x: Math.round(positioned.left + positioned.width / 2), y: Math.round(Math.max(positioned.top + 12, Math.min(positioned.bottom - 12, 420))) };
+        }, selector);
+        if (surface === "hero-composer") {
+          const field = (await frameOf(page, ".live-hero")).locator("textarea").first();
+          await field.waitFor({ state: "visible" });
+          let rect = await field.boundingBox();
+          if (!rect) throw new Error("hero composer has no box");
+          await page.evaluate((dy) => scrollBy(0, dy), rect.y + rect.height / 2 - 420);
+          rect = await field.boundingBox();
+          if (!rect) throw new Error("hero composer moved out of view");
+          point = { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) };
+        }
+        await settle(page, 250);
+        const { before, available } = await page.evaluate((direction) => ({ before: scrollY, available: direction === "down" ? document.documentElement.scrollHeight - innerHeight - scrollY : scrollY }), direction);
+        const travel = direction === "down" ? -300 : 300;
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: point.x, y: point.y, id: 1 }] });
+        for (let step = 1; step <= 12; step += 1) {
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: point.x, y: point.y + Math.round(travel * step / 12), id: 1 }] });
+          await settle(page, 16);
+        }
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await settle(page, 450);
+        const after = await page.evaluate(() => scrollY);
+        rows.push({ lang, surface, direction, before, after, delta: after - before, available });
+      }
+    }
+    if (swipeCheck === "after") {
+      const hero = await frameOf(page, ".live-hero");
+      const composer = hero.locator("textarea").first();
+      await composer.fill("A visitor can still type in this field");
+      if (await composer.inputValue() !== "A visitor can still type in this field") throw new Error(`${lang}: composer did not accept typing`);
+
+      // A short flick must keep moving after release, unlike an immediate scrollBy.
+      await page.locator(".live-hero").scrollIntoViewIfNeeded();
+      await hero.evaluate(() => {
+        for (const node of document.querySelectorAll<HTMLElement>("*")) {
+          if (/auto|scroll/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight + 1) node.scrollTop = node.scrollHeight;
+        }
+      });
+      const heroBox = await page.locator(".live-hero iframe").boundingBox();
+      if (!heroBox) throw new Error("hero frame has no box");
+      const flickX = Math.round(heroBox.x + heroBox.width / 2);
+      const flickY = Math.round(heroBox.y + Math.min(heroBox.height / 2, 400));
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: flickX, y: flickY, id: 2 }] });
+      for (let step = 1; step <= 4; step += 1) {
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: flickX, y: flickY - step * 40, id: 2 }] });
+        await settle(page, 10);
+      }
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await settle(page, 25);
+      const atRelease = await page.evaluate(() => scrollY);
+      await settle(page, 300);
+      const afterCoast = await page.evaluate(() => scrollY);
+      console.log(`${lang} hero flick coast: ${atRelease} -> ${afterCoast} (${afterCoast - atRelease})`);
+      if (afterCoast - atRelease < 40) throw new Error(`${lang}: hero flick stopped without momentum`);
+
+      // A new gesture on the landing must take over from a forwarded iframe flick.
+      for (const interruption of ["touch", "wheel"] as const) {
+        await page.locator(".live-hero").scrollIntoViewIfNeeded();
+        const box = await page.locator(".live-hero iframe").boundingBox();
+        if (!box) throw new Error("hero frame has no box");
+        const x = Math.round(box.x + box.width / 2);
+        const y = Math.round(box.y + Math.min(box.height / 2, 400));
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y, id: 4 }] });
+        for (let step = 1; step <= 4; step += 1) {
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y - step * 40, id: 4 }] });
+          await settle(page, 10);
+        }
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        const releasePosition = await page.evaluate(() => scrollY);
+        await settle(page, 25);
+        const coastPosition = await page.evaluate(() => scrollY);
+        if (coastPosition - releasePosition < 2) throw new Error(`${lang}: ${interruption} probe had no active flick to interrupt`);
+        if (interruption === "touch") {
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 8, y: 8, id: 5 }] });
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        } else {
+          await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: 8, y: 8, deltaX: 0, deltaY: 0 });
+        }
+        await settle(page, 25);
+        const interruptedAt = await page.evaluate(() => scrollY);
+        await settle(page, 250);
+        const afterInterruption = await page.evaluate(() => scrollY);
+        console.log(`${lang} ${interruption} stopped flick: ${interruptedAt} -> ${afterInterruption}`);
+        if (Math.abs(afterInterruption - interruptedAt) > 5) throw new Error(`${lang}: ${interruption} did not stop iframe flick`);
+      }
+
+      // A long draft still scrolls inside its textarea until it reaches an edge.
+      await composer.fill(Array.from({ length: 30 }, (_, index) => `Draft line ${index + 1}`).join("\n"));
+      const draftSize = await composer.evaluate((element) => ({ height: element.clientHeight, scrollHeight: element.scrollHeight }));
+      if (draftSize.scrollHeight <= draftSize.height + 40) throw new Error(`${lang}: long composer draft did not overflow`);
+      await composer.evaluate((element) => { element.scrollTop = 0; });
+      await composer.scrollIntoViewIfNeeded();
+      const composerBox = await composer.boundingBox();
+      if (!composerBox) throw new Error("composer has no box");
+      const draftX = Math.round(composerBox.x + composerBox.width / 2);
+      const draftY = Math.round(composerBox.y + composerBox.height / 2);
+      const pageBeforeDraft = await page.evaluate(() => scrollY);
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: draftX, y: draftY, id: 3 }] });
+      for (let step = 1; step <= 4; step += 1) {
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: draftX, y: draftY - step * 25, id: 3 }] });
+        await settle(page, 20);
+      }
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await settle(page, 200);
+      const draftScroll = await composer.evaluate((element) => element.scrollTop);
+      const pageAfterDraft = await page.evaluate(() => scrollY);
+      console.log(`${lang} long draft scroll: inner ${draftScroll}, page ${pageAfterDraft - pageBeforeDraft}`);
+      if (draftScroll < 40 || Math.abs(pageAfterDraft - pageBeforeDraft) > 20) throw new Error(`${lang}: long composer draft did not retain inner scrolling`);
+
+      const phone = await frameOf(page, ".live-phone");
+      const columns = phone.locator(".snap-x").first();
+      await columns.scrollIntoViewIfNeeded();
+      await phone.locator("[data-phone-kanban-tab]").nth(1).click();
+      await settle(page, 300);
+      const horizontal = await columns.evaluate((element) => element.scrollLeft);
+      console.log(`${lang} phone tab navigation: scrollLeft ${horizontal}`);
+      if (horizontal < 300) throw new Error(`${lang}: phone tab navigation did not move`);
+    }
+    await context.close();
+  }
+  fs.writeFileSync(path.join(out, `swipe-${swipeCheck}.json`), `${JSON.stringify({ url: base, viewport: "390x844 touch DPR3", rows }, null, 2)}\n`);
+  for (const row of rows) console.log(`${row.lang} ${row.surface} ${row.direction}: ${row.before} -> ${row.after} (${row.delta})`);
+  if (swipeCheck === "after") {
+    const failed = rows.filter((row) => {
+      const control = rows.find((candidate) => candidate.lang === row.lang && candidate.surface === "plain-text" && candidate.direction === row.direction)!;
+      const required = Math.min(300, Math.abs(control.delta), row.available) * 0.8;
+      return Math.abs(row.delta) < required || Math.sign(row.delta) !== Math.sign(control.delta);
+    });
+    if (failed.length) throw new Error(`outer page moved less than 80% of the plain-text control for ${failed.map((row) => `${row.lang}/${row.surface}/${row.direction}`).join(", ")}`);
+  }
+}
+
+
+/* Each frame full screen: the size the product runs at, the control's place,
+   the way out, and the page where the visitor left it. */
+async function checkFullscreen() {
+  const dir = process.env.LANDING_RENDER_DIR ?? "/tmp/landing-fullscreen-renders";
+  fs.mkdirSync(dir, { recursive: true });
+  const frames = [["hero", ".live-hero"], ["run", ".live-run"], ["open", ".live-open"], ["phone", ".live-phone"]] as const;
+  const LABELS = { en: { enter: "Full screen", exit: "Exit full screen" }, uk: { enter: "На весь екран", exit: "Вийти з повного екрана" } };
+  const failures: string[] = [];
+  const rows: Record<string, unknown>[] = [];
+  const modeOnly = process.argv.find((arg) => arg.startsWith("--fs-mode="))?.slice("--fs-mode=".length);
+  for (const mode of ["native", "overlay"] as const) {
+    if (modeOnly && modeOnly !== mode) continue;
+    for (const lang of ["en", "uk"] as Locale[]) {
+      for (const viewport of VIEWPORTS) {
+        if (only && only !== `${lang}-${viewport.name}`) continue;
+        const context = await browser.newContext({
+          viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, colorScheme: "dark",
+          ...(viewport.phone ? { hasTouch: true, isMobile: true } : {}),
+        });
+        /* iPhone Safari has no element fullscreen: the page must run without the API. */
+        if (mode === "overlay") await context.addInitScript(() => {
+          for (const name of ["requestFullscreen", "webkitRequestFullscreen"]) Object.defineProperty(Element.prototype, name, { value: undefined, configurable: true });
+        });
+        const page = await context.newPage();
+        const errors: string[] = [];
+        page.on("pageerror", (error) => errors.push(error.message));
+        await page.goto(`${base}?lang=${lang}`);
+        for (const [name, selector] of frames) {
+          const key = `${mode}-${lang}-${viewport.name}-${name}`;
+          const fail = (why: string) => failures.push(`${key}: ${why}`);
+          await page.locator(selector).scrollIntoViewIfNeeded();
+          await frameOf(page, selector);
+          await settle(page, 1200);
+          const button = page.locator(`${selector} > .fs-btn, .stage-wrap:has(> ${selector}) > .fs-btn`);
+          /* Where the page stood, and what the frame looked like, before. */
+          await page.evaluate((top) => window.scrollTo(0, top), (await page.evaluate(() => scrollY)) + 37);
+          await button.scrollIntoViewIfNeeded();
+          await settle(page, 200);
+          const measure = (selector: string) => page.evaluate((selector) => {
+            const live = document.querySelector<HTMLElement>(selector)!;
+            const iframe = live.querySelector<HTMLIFrameElement>("iframe")!;
+            const rect = iframe.getBoundingClientRect();
+            const host = live.querySelector<HTMLElement>(".live-frame")!;
+            const btn = (live.closest(".stage-wrap") ?? live).querySelector<HTMLElement>(":scope > .fs-btn, :scope > .live-frame ~ .fs-btn")!;
+            const b = btn.getBoundingClientRect();
+            /* The product's own controls, in page coordinates. */
+            const doc = iframe.contentDocument!;
+            const k = rect.width / iframe.offsetWidth;
+            const hits = [...doc.querySelectorAll<HTMLElement>("button, a[href], input, textarea, [role=button], [role=tab]")].filter((el) => {
+              const r = el.getBoundingClientRect();
+              if (r.width === 0 || r.height === 0) return false;
+              const left = rect.left + r.left * k, top = rect.top + r.top * k, right = left + r.width * k, bottom = top + r.height * k;
+              /* Only what a visitor can see: not clipped away by the frame. */
+              return left < b.right && right > b.left && top < b.bottom && bottom > b.top
+                && right > host.getBoundingClientRect().left && left < host.getBoundingClientRect().right
+                && bottom > host.getBoundingClientRect().top && top < host.getBoundingClientRect().bottom;
+            }).map((el) => el.getAttribute("aria-label") ?? el.textContent?.trim().slice(0, 20) ?? el.tagName);
+            return {
+              scrollY, src: iframe.src, layout: `${iframe.offsetWidth}x${iframe.offsetHeight}`, transform: getComputedStyle(iframe).transform,
+              viewport: `${innerWidth}x${innerHeight}`, host: `${host.clientWidth}x${host.clientHeight}`,
+              label: btn.getAttribute("aria-label"), button: { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height) },
+              covers: hits, native: Boolean(document.fullscreenElement), full: live.closest("[data-fs]") !== null,
+              rootBox: (() => { const r = (live.closest(".stage-wrap") ?? live).getBoundingClientRect(); return `${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)}`; })(),
+              chrome: (() => { const r = (live.closest(".stage-wrap") ?? live).getBoundingClientRect(); return Math.round(r.height - host.clientHeight); })(),
+            };
+          }, selector);
+          const before = await measure(selector);
+          if (before.covers.length) fail(`control covers ${before.covers.join(", ")} before full screen`);
+          if (mode === "native") await page.screenshot({ path: path.join(dir, `${lang}-${viewport.name}-${name}-page.png`) });
+          const handle = await page.locator(`${selector} iframe`).last().elementHandle();
+          await button.click();
+          await settle(page, 700);
+          const inside = await measure(selector);
+          const [vw, vh] = inside.viewport.split("x").map(Number);
+          const [lw, lh] = inside.layout.split("x").map(Number);
+          const [hw, hh] = inside.host.split("x").map(Number);
+          if (!inside.full) fail("root did not enter full screen");
+          if (mode === "native" && !inside.native) fail("native fullscreen did not start");
+          if (mode === "overlay" && inside.native) fail("overlay run went native");
+          if (lw !== vw || lh !== hh || hw !== vw) fail(`iframe ${inside.layout}, frame area ${inside.host}, viewport ${inside.viewport}`);
+          if (inside.chrome !== vh - hh || inside.rootBox !== `0,0 ${vw}x${vh}`) fail(`root ${inside.rootBox}, chrome ${inside.chrome}`);
+          if (inside.transform !== "none") fail(`scale is ${inside.transform}`);
+          if (inside.src !== before.src || (await page.locator(`${selector} iframe`).last().elementHandle().then((h) => h && handle && h.evaluate((a, b) => a === b, handle)).catch(() => false)) !== true) fail("iframe reloaded");
+          if (inside.covers.length) fail(`exit control covers ${inside.covers.join(", ")}`);
+          if (inside.label !== LABELS[lang].exit || before.label !== LABELS[lang].enter) fail(`labels "${before.label}" / "${inside.label}"`);
+          await page.screenshot({ path: path.join(dir, `${lang}-${viewport.name}-${name}-${mode}.png`) });
+          if (name === "hero" && mode === "overlay") {
+            /* The hero's step bar works from inside full screen. */
+            await page.locator('[data-step="3"]').click();
+            await settle(page, 800);
+            if ((await page.locator('[data-step="3"][aria-current="step"]').count()) !== 1) fail("hero step bar did not answer in full screen");
+            /* The window changing size while full screen. */
+            await page.setViewportSize({ width: viewport.width === 1440 ? 1100 : 360, height: viewport.height === 900 ? 700 : 640 });
+            await settle(page, 700);
+            const resized = await measure(selector);
+            const [rw, rh] = resized.viewport.split("x").map(Number);
+            const [w2, h2] = resized.layout.split("x").map(Number);
+            const [, hh2] = resized.host.split("x").map(Number);
+            if (w2 !== rw || h2 !== hh2 || resized.transform !== "none") fail(`after resize iframe ${resized.layout} in ${resized.viewport}`);
+            await page.setViewportSize({ width: viewport.width, height: viewport.height });
+            await settle(page, 500);
+          }
+          /* Out again: Esc in the overlay (also from inside the product), the control in the API mode. */
+          if (mode === "overlay") {
+            await page.evaluate((selector) => document.querySelector(selector)!.querySelector("iframe")!.contentDocument!.body.focus(), selector);
+            await page.keyboard.press("Escape");
+          } else await page.locator(`${selector} > .fs-btn, .stage-wrap:has(> ${selector}) > .fs-btn`).click();
+          await settle(page, 700);
+          const after = await measure(selector);
+          if (after.full || after.native) fail("still full screen after leaving");
+          if (Math.abs(after.scrollY - before.scrollY) > 1) fail(`scroll ${before.scrollY} -> ${after.scrollY}`);
+          if (after.layout !== before.layout || after.transform !== before.transform) fail(`size ${before.layout} ${before.transform} -> ${after.layout} ${after.transform}`);
+          if (after.label !== before.label) fail(`label ${before.label} -> ${after.label}`);
+          rows.push({ key, viewport: inside.viewport, layout: inside.layout, frameArea: inside.host, chromePx: inside.chrome, scale: inside.transform, native: inside.native, scrollBefore: before.scrollY, scrollAfter: after.scrollY, control: before.label, exit: inside.label });
+        }
+        if (errors.length) failures.push(`${mode}-${lang}-${viewport.name}: page errors ${errors.join("; ")}`);
+        await context.close();
+      }
+    }
+  }
+  fs.writeFileSync(path.join(dir, "fullscreen-check.json"), `${JSON.stringify({ rows, failures }, null, 2)}\n`);
+  for (const row of rows) console.log(JSON.stringify(row));
+  for (const failure of failures) console.error(failure);
+  console.log(failures.length ? `${failures.length} failure(s)` : `${rows.length} full-screen cases hold`);
+  return failures.length === 0;
+}
+
+if (fullscreenCheck) {
+  let ok = false;
+  try { ok = await checkFullscreen(); } finally { await browser.close(); server.stop(true); }
+  process.exit(ok ? 0 : 1);
+}
+
+/* A finger that moves steadily and then rests over a phone demo. The landing
+   follows it 1:1 and stays put while it rests. Run on a build that measures the
+   finger in a frame that moves with the page, the page alternates instead: each
+   forwarded scroll moves the frame under the finger, and the next reading
+   undoes it. "content-space" replays the coordinate semantics seen in the
+   iPhone recording (Touch.screenY carries the parent's scroll); "stable" is the
+   Chromium default. Both have to pass. */
+async function checkSwipeFeedback() {
+  const rows: Record<string, unknown>[] = [];
+  const failures: string[] = [];
+  for (const semantics of ["stable", "content-space"] as const) {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3 });
+    if (semantics === "content-space") {
+      await context.addInitScript(() => {
+        if (window.parent === window) return;
+        const screenY = Object.getOwnPropertyDescriptor(Touch.prototype, "screenY")!.get!;
+        Object.defineProperty(Touch.prototype, "screenY", { get() { return screenY.call(this) + window.parent.scrollY; } });
+      });
+    }
+    const page = await context.newPage();
+    const cdp = await context.newCDPSession(page);
+    await page.goto(`${base}?lang=en`);
+    for (const surface of ["hero", "phone"]) {
+      const host = `.live-${surface}`;
+      await page.locator(host).scrollIntoViewIfNeeded();
+      const frame = await frameOf(page, host);
+      await frame.evaluate(() => {
+        for (const node of document.querySelectorAll<HTMLElement>("*")) {
+          if (/auto|scroll/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight + 1) node.scrollTop = node.scrollHeight;
+        }
+      });
+      const point = await page.evaluate((selector) => {
+        const box = document.querySelector(`${selector} iframe`)!.getBoundingClientRect();
+        scrollTo(0, Math.max(0, scrollY + box.top + Math.min(box.height, 520) / 2 - 420));
+        const placed = document.querySelector(`${selector} iframe`)!.getBoundingClientRect();
+        return { x: Math.round(placed.left + placed.width / 2), y: Math.round(Math.max(placed.top + 12, Math.min(placed.bottom - 12, 420))) };
+      }, host);
+      await settle(page, 250);
+      const trace: number[] = [];
+      const read = async () => { trace.push(await page.evaluate(() => scrollY)); };
+      const touch = (type: string, y: number) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x: point.x, y, id: 1 }] } as never);
+      await read();
+      await touch("touchStart", point.y);
+      const steps = 10, stride = 12;
+      for (let step = 1; step <= steps; step += 1) {
+        await touch("touchMove", point.y - step * stride);
+        await settle(page, 16);
+        await read();
+      }
+      const moved = trace[trace.length - 1]! - trace[0]!;
+      // The finger rests, with the small tremor every finger has.
+      for (let tick = 0; tick < 24; tick += 1) {
+        await touch("touchMove", point.y - steps * stride - (tick % 2));
+        await settle(page, 16);
+        await read();
+      }
+      await touch("touchEnd", 0);
+      const held = trace.slice(steps + 1);
+      const rest = Math.max(...held) - Math.min(...held);
+      let reversals = 0;
+      for (let index = 1; index < trace.length; index += 1) if (trace[index]! < trace[index - 1]! - 1) reversals += 1;
+      await settle(page, 700);
+      const settled = await page.evaluate(() => scrollY);
+      const finger = steps * stride;
+      const row = { semantics, surface, finger, moved, ratio: Number((moved / finger).toFixed(2)), rest, reversals, coast: settled - trace[trace.length - 1]!, trace: trace.join(",") };
+      rows.push(row);
+      const problems = [
+        Math.abs(moved - finger) > finger * 0.15 && `page moved ${moved}px for ${finger}px of finger`,
+        rest > 4 && `page moved ${rest}px while the finger rested`,
+        reversals > 0 && `page reversed ${reversals} times`,
+        settled < trace[trace.length - 1]! - 2 && "page snapped back after release",
+      ].filter(Boolean);
+      for (const problem of problems) failures.push(`${semantics}/${surface}: ${problem}`);
+    }
+    await context.close();
+  }
+  for (const row of rows) console.log(JSON.stringify(row));
+  fs.writeFileSync(path.join(out, "swipe-feedback.json"), `${JSON.stringify({ url: base, viewport: "390x844 touch DPR3", rows }, null, 2)}\n`);
+  if (failures.length) throw new Error(`swipe feedback: ${failures.join("; ")}`);
+  console.log("swipe feedback: the page follows the finger 1:1 and holds still while it rests");
+}
+
+if (process.argv.includes("--check-swipe-feedback")) {
+  try { await checkSwipeFeedback(); } catch (error) { console.error(String(error instanceof Error ? error.message : error)); process.exitCode = 1; } finally { await browser.close(); server.stop(true); }
+  process.exit(process.exitCode ?? 0);
+}
+
+if (swipeCheck) {
+  try { await checkSwipe(); } finally { await browser.close(); server.stop(true); }
+  process.exit(0);
 }
 
 
@@ -417,13 +829,16 @@ const GALLERY: GallerySlide[] = [
 const GALLERY_DEMO = { width: 1600, height: 756 };
 const GALLERY_PHONE = { width: 390, height: 812 };
 
-/* The install slide's claim, counted from this checkout's history when it renders. */
+/* The install slide's claim, counted when it renders from the default branch's
+   own line of merges (origin/main when the clone has it), so a feature branch
+   that merged main in counts the same pull requests main does. */
 function builtWithItself(days = 30) {
   const git = (...args: string[]) => Bun.spawnSync(["git", ...args], { cwd: here }).stdout.toString().trim();
   if (git("rev-parse", "--is-shallow-repository") === "true") throw new Error("--gallery counts merged pull requests: fetch the full history first (git fetch --unshallow)");
-  const merged = git("log", "--first-parent", `--since=${days} days ago`, "--format=%s%x09%(trailers:key=Co-Authored-By,valueonly,separator=%x2C)")
+  const ref = git("rev-parse", "--verify", "--quiet", "origin/main") ? "origin/main" : "HEAD";
+  const merged = git("log", ref, "--first-parent", `--since=${days} days ago`, "--format=%s%x09%(trailers:key=Co-Authored-By,valueonly,separator=%x2C)")
     .split("\n").map((line) => line.split("\t")).filter(([subject]) => /\(#\d+\)$/.test(subject ?? ""));
-  return { days, merged: merged.length, byAgents: merged.filter(([, trailers]) => /Claude|Codex|Copilot/.test(trailers ?? "")).length };
+  return { days, ref, merged: merged.length, byAgents: merged.filter(([, trailers]) => /Claude|Codex|Copilot/.test(trailers ?? "")).length };
 }
 
 async function renderGallery() {
@@ -479,7 +894,7 @@ async function renderGallery() {
   await render(`<!doctype html><body style="margin:0"><img src="${uri("image/svg+xml", brand("delegatus-touch-icon.svg"))}" style="display:block;width:240px;height:240px">`, "thumbnail", { width: 240, height: 240 });
   await render(`<!doctype html><body style="margin:0"><img src="${uri("image/svg+xml", brand("delegatus-social-card.svg"))}" style="display:block;width:1280px;height:640px">`, "social-preview", { width: 1280, height: 640 });
   await page.close();
-  console.log(`gallery in ${dir} (${counted.byAgents}/${counted.merged} agent-co-authored merges in ${counted.days} days)`);
+  console.log(`gallery in ${dir} (${counted.byAgents}/${counted.merged} agent-co-authored merges on ${counted.ref} in ${counted.days} days)`);
 }
 
 /* The landing's own faces. The slide carries them inline, fetched here rather

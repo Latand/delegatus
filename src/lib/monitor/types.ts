@@ -248,6 +248,10 @@ export interface SeatTickItem {
   stateTokens?: readonly string[];
   /** The lane and settled state this visible line announces on delivery. */
   laneAnnouncement?: string;
+  /** Only on a stall line: the stalled lane or child and the record it was
+      stalled at. A landing records it, and the next wake lists that stall
+      after the unstarted tasks while the record has not moved. */
+  stallToken?: string;
   /** `provisioning` is the outcome of the seat's own create call (#1799). */
   kind: "pipeline" | "task" | "event" | "signal" | "pull-request" | "child" | "provisioning" | "deploy" | "permission";
   id: string;
@@ -558,6 +562,9 @@ export interface SeatTickTaskInput {
       is the discharge, and a retry guard that could not see the movement would
       suppress the reason past the condition that raised it. */
   updatedAt: string | null;
+  /** Set when another linked machine runs the task (docs/design/linked-installs.md
+      M.4): its own orchestrator starts it there, so it is no wake reason here. */
+  runsOn?: string;
 }
 
 export interface SeatTickEventInput {
@@ -841,6 +848,10 @@ export interface SeatTickWakeCommit {
       must carry (docs/design/orchestrator-reports.md §5.1). A landing records
       them as owed; a wake that never landed announced nothing. */
   reportsOwed?: { key: string; label: string }[];
+  /** The stall tokens of the stall lines this wake carries, recorded by a
+      landing and by nothing else: a stall the per-wake bound cut was never
+      reported. Absent on a plan written before this field, which records none. */
+  reportedStalls?: string[];
 }
 
 /**
@@ -952,6 +963,11 @@ export const SEAT_TICK_CHILDREN_SHOWN_LIMIT = 64;
 /** Settled deployment history has its own bounded announcement window. Lane
     announcements instead live for the lane's entire eligibility window. */
 export const SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT = 64;
+
+/** Stall tokens one project's row remembers having reported to its seat. A
+    token evicted past the bound puts a reported stall back ahead of the
+    unstarted tasks once, which is a repeated line and no lost obligation. */
+export const SEAT_TICK_REPORTED_STALLS_LIMIT = 64;
 
 /**
  * A settled outcome the report log has not received yet
@@ -1142,6 +1158,15 @@ export interface SeatTickProjectState {
    * successor's first wake shows the note it never received.
    */
   noteShown?: string | null;
+  /**
+   * The stall tokens a landed wake showed THIS seat, newest last, bounded to
+   * {@link SEAT_TICK_REPORTED_STALLS_LIMIT}. A persisted stall whose token is
+   * here was reported and has not moved since, so it gives its place in the
+   * item window to every unstarted task. A stall nobody reported keeps its
+   * place. Absent reads as empty, and a rotation reads it empty too, like
+   * {@link childrenShown}: a successor was told of no stall.
+   */
+  reportedStalls?: string[];
   /** The project's unbroken run of attempts released on the same permanent
       refusal, or null/absent when there is none. See
       {@link SeatTickRefusalRun}. */

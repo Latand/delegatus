@@ -171,7 +171,8 @@ already have, and count against their limits the same way.
 **Can it merge or deploy without me?**
 Merging only if you turn on "Merge when the review passes", per project, and
 then only once every check is green; it never resolves a conflict. No pipeline
-stage can take the deployer role, so deploys stay yours.
+stage can take the deployer role: a deploy is a separate step, run only in a
+project that has one set up.
 
 **Why several accounts per engine?**
 Many of us have a work and a personal account, or a team seat and a personal

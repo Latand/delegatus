@@ -258,3 +258,30 @@ EOF
 
 EXPOSE 8898
 CMD ["sh", "-c", "exec bun-container --bun node_modules/.bin/next start --port ${PORT:-8898} --hostname ${HOSTNAME:-127.0.0.1}"]
+
+# The registry image resolves the runtime UID and HOME through NSS. The default
+# target below stays the original runtime image used by exact-revision deploys.
+FROM runtime AS published
+RUN <<'EOF'
+set -eu
+apt-get update
+apt-get install -y --no-install-recommends libnss-wrapper
+rm -rf /var/lib/apt/lists/*
+library=$(find /usr/lib -name libnss_wrapper.so -print -quit)
+test -n "$library"
+ln -s "$library" /usr/local/lib/libnss_wrapper.so
+# Host CLI shims enter the host namespace through nsenter. The host must not
+# inherit the image's LD_PRELOAD path or synthetic passwd/group files.
+cat > /usr/local/bin/nsenter <<'WRAPPER'
+#!/bin/sh
+unset LD_PRELOAD NSS_WRAPPER_PASSWD NSS_WRAPPER_GROUP
+exec /usr/bin/nsenter "$@"
+WRAPPER
+chmod +x /usr/local/bin/nsenter
+EOF
+COPY scripts/published-image-entrypoint.sh /usr/local/bin/delegatus-published-entrypoint
+RUN chmod +x /usr/local/bin/delegatus-published-entrypoint
+ENTRYPOINT ["/usr/local/bin/delegatus-published-entrypoint"]
+CMD ["sh", "-c", "exec bun-container --bun node_modules/.bin/next start --port ${PORT:-8898} --hostname ${HOSTNAME:-127.0.0.1}"]
+
+FROM runtime AS local

@@ -14,6 +14,9 @@ import { laneMovedAt } from "@/lib/pipelines/laneMovement";
 import type { AgentRegistry as AgentRegistryType } from "@/lib/agent/registry";
 import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 import { accountManager } from "@/lib/accounts/manager";
+import { selectProjectAccount } from "@/lib/accounts/projectSelection";
+import { forkClaudeHistory } from "@/lib/accounts/migration/safeHistoryCopy";
+import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
 const engineModule = await import("./engine");
@@ -157,6 +160,54 @@ test("a pipeline stage keeps its reserved account through a routing change befor
       launchProfile: expect.objectContaining({ title: "Build scoped change · build" }),
     });
     expect(settled.conversation).toMatchObject({ pinnedAccountId: "limited", migration: null });
+  } finally {
+    resolveSpawn.mockRestore();
+    setAgentRegistryForTests(null);
+  }
+});
+
+test("an automatically selected Claude stage remains eligible for ordinary conversation migration", async () => {
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "claude-stage-migration-registry.json"));
+  setAgentRegistryForTests(registry);
+  const resolveSpawn = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => ({
+    kind: "available",
+    account: {
+      engine: "claude", accountId: "limited", kind: "managed",
+      home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" },
+    },
+  }));
+  try {
+    let launchId: string | null = null;
+    await expect(defaultPipelinePorts().spawnAgent({
+      role: {
+        roleId: "builder", engine: "claude", model: "fable", effort: "high",
+        access: "read-write", promptScaffold: "Builder guidance",
+      },
+      runtimeProfile: { access: "read-write", sandbox: "full" },
+      cwd: process.env.LLV_STATE_DIR!, project: "repo-00000000000000000000000000000001",
+      requestedAccountId: null, title: "Build scoped change · build", prompt: "Build",
+      parentPath: null, clientAttemptId: "claude_stage_migratable",
+      membership: {
+        kind: "pipeline", containerId: "claude-stage", role: "builder", slot: "build:1",
+        stageId: "build", stageOrder: 0, round: 1, parentConversationId: null,
+      },
+      creatorConversationId: null,
+    }, (reserved) => {
+      launchId = reserved.launchId;
+      throw new Error("reservation captured");
+    })).rejects.toThrow("reservation captured");
+    expect(launchId).not.toBeNull();
+    const receipt = registry.snapshot().receipts[launchId!]!;
+    expect(receipt).toMatchObject({ engine: "claude", accountId: "limited", accountPin: false });
+    const settled = registry.stageStructuredSpawn(receipt.launchId, {
+      key: { engine: "claude", sessionId: crypto.randomUUID() },
+      artifactPath: path.join(process.env.LLV_STATE_DIR!, "claude-stage-migratable.jsonl"),
+      cwd: process.env.LLV_STATE_DIR!, accountId: "limited", launchProfile: receipt.launchProfile,
+      status: "starting", host: null, structuredHost: null, claimEpoch: 0,
+      claimOwner: null, pendingAction: "spawn",
+    });
+    expect(settled.kind).toBe("settled");
+    if (settled.kind === "settled") expect(settled.conversation.pinnedAccountId).toBeNull();
   } finally {
     resolveSpawn.mockRestore();
     setAgentRegistryForTests(null);
@@ -570,6 +621,417 @@ function harness() {
 
 /** Publication is opt-in (#1692): the tests of the remote-branch contract ask for it. */
 const REMOTE_BRANCH = { publication: "remote-branch" } as const;
+
+async function realWorktreeLane(name: string, stages: unknown[], publication?: "remote-branch", legacyReview = false) {
+  savePipelines([]);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), `llv-${name}-`));
+  const origin = path.join(root, "origin.git");
+  const repo = path.join(root, "repo");
+  const { realExec } = await import("@/lib/workflows/provision");
+  const { realProvisionExec } = await import("./git");
+  const git = (cwd: string, ...args: string[]) => {
+    const result = realExec("git", args, cwd);
+    if (result.code !== 0) throw new Error(result.stderr || result.stdout);
+    return result.stdout.trim();
+  };
+  fs.mkdirSync(repo);
+  git(root, "init", "--bare", "--initial-branch=main", origin);
+  git(repo, "init", "--initial-branch=main");
+  git(repo, "config", "user.name", "Fixture");
+  git(repo, "config", "user.email", "noreply@example.com");
+  git(repo, "config", "commit.gpgSign", "false");
+  fs.writeFileSync(path.join(repo, ".gitignore"), "sentinel.tmp\n");
+  git(repo, "add", ".gitignore");
+  git(repo, "commit", "-m", "base");
+  git(repo, "remote", "add", "origin", origin);
+  git(repo, "push", "origin", "main");
+  const base = git(repo, "rev-parse", "HEAD");
+  const h = harness();
+  h.ports.exec = realExec;
+  h.ports.provisionExec = realProvisionExec;
+  const created = await createPipelineFromRequest({ task: name, repoDir: repo, baseRef: base, stages: stages as never,
+    ...(publication ? { publication } : {}) }, h.ports);
+  if (!created.pipeline) throw new Error(created.error);
+  if (legacyReview) savePipelines([asStoredLegacyReviewLane(created.pipeline, created.convertedStages)]);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  return { root, origin, repo, base, h, git, id: created.pipeline.id, worktree: created.pipeline.worktreeDir };
+}
+
+test("skip carries a committed fix into review and completion without touching ignored work", async () => {
+  const fixture = await realWorktreeLane("skip-keeps-fix", [
+    { id: "fix", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Fix", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review", next: null },
+  ]);
+  try {
+    const { h, git, worktree, id, base } = fixture;
+    fs.writeFileSync(path.join(worktree, "fix.txt"), "accepted fix\n");
+    fs.writeFileSync(path.join(worktree, "sentinel.tmp"), "untouched\n");
+    git(worktree, "add", "fix.txt");
+    git(worktree, "commit", "-m", "fix B");
+    const fixed = git(worktree, "rev-parse", "HEAD");
+    expect(fixed).not.toBe(base);
+    h.setConversationActive(false);
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "needs_decision")], h.ports);
+    expect(loadPipelines().find((item) => item.id === id)!.state).toBe("needs_decision");
+    expect((await patchPipeline(id, { action: "skip-stage" }, h.ports)).error).toBeUndefined();
+    expect(loadPipelines().find((item) => item.id === id)!).toMatchObject({
+      lastPassedCommit: fixed, cursor: { stageId: "review", state: "pending" },
+    });
+    await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(2);
+    expect(git(worktree, "rev-parse", "HEAD")).toBe(fixed);
+    await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
+    expect(loadPipelines().find((item) => item.id === id)!).toMatchObject({ state: "completed", lastPassedCommit: fixed, cursor: null });
+    expect(fs.readFileSync(path.join(worktree, "sentinel.tmp"), "utf8")).toBe("untouched\n");
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("remote skip publishes the accepted head before its reviewer can start", async () => {
+  const fixture = await realWorktreeLane("remote-skip", [
+    { id: "fix", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Fix", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review", next: null },
+  ], "remote-branch");
+  try {
+    fs.writeFileSync(path.join(fixture.worktree, "fix.txt"), "accepted\n");
+    fixture.git(fixture.worktree, "add", "fix.txt");
+    fixture.git(fixture.worktree, "commit", "-m", "accepted fix");
+    const accepted = fixture.git(fixture.worktree, "rev-parse", "HEAD");
+    fixture.h.setConversationActive(false);
+    await tickPipelines([fixture.h.finish("/codex/stage-1.jsonl", "needs_decision")], fixture.h.ports);
+    expect((await patchPipeline(fixture.id, { action: "skip-stage" }, fixture.h.ports)).error).toBeUndefined();
+    const waiting = loadPipelines().find((item) => item.id === fixture.id)!;
+    expect(waiting).toMatchObject({ lastPassedCommit: accepted, cursor: { stageId: "fix", state: "committing" } });
+    expect(waiting.runs[0]!.attempts[0]!.state).toBe("skipped");
+    expect(fixture.h.spawnInputs).toHaveLength(1);
+    expect(fixture.git(fixture.origin, "rev-parse", `refs/heads/${waiting.branch}`)).toBe(accepted);
+    await tickPipelines([], fixture.h.ports);
+    expect(loadPipelines().find((item) => item.id === fixture.id)!.cursor?.stageId).toBe("review");
+    await tickPipelines([], fixture.h.ports);
+    expect(fixture.h.spawnInputs).toHaveLength(2);
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+for (const completion of ["pass", "skip"] as const) {
+  test(`an unreachable remote keeps a ${completion} successor behind the accepted head`, async () => {
+    const fixture = await realWorktreeLane(`remote-${completion}-outage`, [
+      { id: "fix", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Fix", next: "review" },
+      { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review", next: null },
+    ], "remote-branch");
+    const offline = `${fixture.origin}.offline`;
+    try {
+      fs.writeFileSync(path.join(fixture.worktree, "fix.txt"), "accepted\n");
+      if (completion === "skip") {
+        fixture.git(fixture.worktree, "add", "fix.txt");
+        fixture.git(fixture.worktree, "commit", "-m", "accepted fix");
+      }
+      fixture.h.setConversationActive(false);
+      fs.renameSync(fixture.origin, offline);
+      await tickPipelines([fixture.h.finish("/codex/stage-1.jsonl", completion === "pass" ? "pass" : "needs_decision")], fixture.h.ports);
+      if (completion === "skip") {
+        expect((await patchPipeline(fixture.id, { action: "skip-stage" }, fixture.h.ports)).error).toBeUndefined();
+      }
+      await tickPipelines([], fixture.h.ports);
+      const waiting = loadPipelines().find((item) => item.id === fixture.id)!;
+      const accepted = fixture.git(fixture.worktree, "rev-parse", "HEAD");
+      expect(waiting.lastPassedCommit).toBe(accepted);
+      expect(waiting.publishedCommit).toBeNull();
+      expect(waiting.cursor).toMatchObject({ stageId: "fix", state: "committing" });
+      expect(fixture.h.spawnInputs).toHaveLength(1);
+      fs.renameSync(offline, fixture.origin);
+      await tickPipelines([], fixture.h.ports);
+      await tickPipelines([], fixture.h.ports);
+      expect(fixture.git(fixture.origin, "rev-parse", `refs/heads/${waiting.branch}`)).toBe(accepted);
+      expect(fixture.h.spawnInputs).toHaveLength(2);
+    } finally {
+      savePipelines([]);
+      if (fs.existsSync(offline)) fs.renameSync(offline, fixture.origin);
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("ordinary retry leaves dirty work for the next attempt", async () => {
+  const fixture = await realWorktreeLane("retry-keeps-dirty", [
+    { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: null },
+  ]);
+  try {
+    fs.writeFileSync(path.join(fixture.worktree, "draft.txt"), "unfinished\n");
+    fixture.h.setConversationActive(false);
+    await tickPipelines([fixture.h.finish("/codex/stage-1.jsonl", "fail")], fixture.h.ports);
+    expect((await patchPipeline(fixture.id, { action: "retry-stage" }, fixture.h.ports)).error).toBeUndefined();
+    expect(fs.readFileSync(path.join(fixture.worktree, "draft.txt"), "utf8")).toBe("unfinished\n");
+    await tickPipelines([], fixture.h.ports);
+    expect(fixture.h.spawnInputs).toHaveLength(2);
+    expect(fixture.git(fixture.worktree, "rev-parse", "HEAD")).toBe(fixture.base);
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a read-only architect pass commits its declared fix output through settlement", async () => {
+  const fixture = await realWorktreeLane("architect-output", [
+    { id: "fix", kind: "run", role: { roleId: "architect" }, access: "read-only", outputs: ["reports/fix.md"], prompt: "Write the fix", next: null },
+  ]);
+  try {
+    fs.mkdirSync(path.join(fixture.worktree, "reports"));
+    fs.writeFileSync(path.join(fixture.worktree, "reports", "fix.md"), "declared result\n");
+    fs.writeFileSync(path.join(fixture.worktree, "sentinel.tmp"), "untouched\n");
+    fixture.h.setConversationActive(false);
+    await tickPipelines([fixture.h.finish("/codex/stage-1.jsonl", "pass")], fixture.h.ports);
+    const current = loadPipelines().find((item) => item.id === fixture.id)!;
+    expect(current.state).toBe("completed");
+    expect(current.lastPassedCommit).not.toBe(fixture.base);
+    expect(fixture.git(fixture.worktree, "show", "--name-only", "--format=", "HEAD")).toBe("reports/fix.md");
+    expect(fs.readFileSync(path.join(fixture.worktree, "sentinel.tmp"), "utf8")).toBe("untouched\n");
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("fallback verdict preserves the pre-output PR head through real settlement and merge", async () => {
+  const fixture = await realWorktreeLane("fallback-output-merge", [
+    { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: "critique" },
+    { id: "critique", kind: "run", role: { roleId: "reviewer" }, access: "read-only", outputs: ["report.md"], prompt: "Review", next: null, onFail: { to: "build", maxRounds: 2 } },
+  ]);
+  try {
+    const { git, h, id, worktree } = fixture;
+    const admitted = loadPipelines().find((item) => item.id === id)!;
+    admitted.delivery = {
+      target: { repository: "acme/widgets", remote: "https://github.com/acme/widgets.git", branch: `refs/heads/${admitted.branch}`, pr: 11 },
+      disposition: "owner", publish: "disabled", ownerId: id, epoch: 1, active: false, journal: [],
+    };
+    savePipelines([admitted]);
+    fs.writeFileSync(path.join(worktree, "build.txt"), "accepted build\n");
+    git(worktree, "add", "build.txt");
+    git(worktree, "commit", "-m", "accepted build");
+    const prHead = git(worktree, "rev-parse", "HEAD");
+    h.setConversationActive(false);
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+    await tickPipelines([], h.ports);
+    fs.writeFileSync(path.join(worktree, "report.md"), "review passed\n");
+    await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
+    const completed = loadPipelines().find((item) => item.id === id)!;
+    expect(completed.state).toBe("completed");
+    expect(completed.lastPassedCommit).not.toBe(prHead);
+    expect(completed.runs[1]!.attempts[0]!.report).toBeUndefined();
+    expect(completed.runs[1]!.attempts[0]!.outputBaseHead).toBe(prHead);
+    savePipelines([completed]);
+    expect(loadPipelines().find((item) => item.id === id)!.runs[1]!.attempts[0]!.outputBaseHead).toBe(prHead);
+
+    const { productionAutoMergePorts, MERGE_POLL_MS, MERGE_SETTLE_MS, MERGE_REASONS, lanePullRequest, mergeEligible, sweepAutoMerge } = await import("@/lib/forge/autoMerge");
+    expect(mergeEligible(loadPipelines().find((item) => item.id === id)!)).toBe(true);
+    expect(lanePullRequest(loadPipelines().find((item) => item.id === id)!)).toEqual({ repository: "acme/widgets", number: 11 });
+    let clock = Date.parse(completed.closedAt!) + 1_000;
+    let merged = false;
+    const calls: string[][] = [];
+    const ports = productionAutoMergePorts({
+      now: () => clock,
+      loadPipelines,
+      setting: () => ({ enabled: true, changedAt: new Date(0).toISOString(), changedBy: "operator" }),
+      cachedState: () => null,
+      log: () => undefined,
+      run: async (args) => {
+        calls.push(args);
+        if (args[0] === "pr" && args[1] === "view") return JSON.stringify({
+          state: merged ? "MERGED" : "OPEN", isDraft: false, headRefOid: prHead, baseRefName: "main",
+          mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
+          statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS", startedAt: completed.closedAt }],
+          mergeCommit: merged ? { oid: "f".repeat(40) } : null, mergedAt: merged ? new Date(clock).toISOString() : null,
+        });
+        if (args[0] === "api" && args[1] === "repos/acme/widgets/branches/main") return "[]";
+        if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
+        if (args[0] === "pr" && args[1] === "merge") { merged = true; return ""; }
+        throw new Error(`unexpected gh ${args.join(" ")}`);
+      },
+    });
+    for (let poll = 0; poll < Math.ceil(MERGE_SETTLE_MS / MERGE_POLL_MS) + 3; poll += 1) {
+      await sweepAutoMerge(ports);
+      clock += MERGE_POLL_MS;
+    }
+    const settled = loadPipelines().find((item) => item.id === id)!;
+    expect(settled.merge?.reason).not.toBe(MERGE_REASONS.headChanged);
+    expect(settled.merge?.state).toBe("merged");
+    expect(settled.merge?.chain).toEqual([prHead]);
+    expect(calls.filter((args) => args[0] === "pr" && args[1] === "merge")).toHaveLength(1);
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a skipped legacy architect publishes its declared output to the review flow", async () => {
+  const fixture = await realWorktreeLane("legacy-architect-skip-review", [
+    { id: "architect", kind: "run", role: { roleId: "architect" }, access: "read-only", outputs: ["fix.txt"], prompt: "Write fix", next: "review" },
+    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review fix", next: null },
+  ], "remote-branch", true);
+  try {
+    const { git, h, id, origin, worktree } = fixture;
+    expect(loadPipelines().find((item) => item.id === id)!.stages[1]!.kind).toBe("review-loop");
+    fs.writeFileSync(path.join(worktree, "fix.txt"), "accepted fix\n");
+    fs.writeFileSync(path.join(worktree, "sentinel.tmp"), "untouched\n");
+    h.setConversationActive(false);
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "needs_decision")], h.ports);
+    expect((await patchPipeline(id, { action: "skip-stage" }, h.ports)).error).toBeUndefined();
+    await tickPipelines([], h.ports);
+    const skipped = loadPipelines().find((item) => item.id === id)!;
+    const accepted = git(worktree, "rev-parse", "HEAD");
+    expect(accepted).not.toBe(fixture.base);
+    expect(skipped).toMatchObject({ lastPassedCommit: accepted, cursor: { stageId: "review" } });
+    expect(skipped.runs[0]!.attempts[0]!.state).toBe("skipped");
+    expect(git(worktree, "show", "--name-only", "--format=", "HEAD")).toBe("fix.txt");
+    expect(git(origin, "rev-parse", `refs/heads/${skipped.branch}`)).toBe(accepted);
+    await tickPipelines([], h.ports);
+    const review = loadPipelines().find((item) => item.id === id)!;
+    expect(review.state).toBe("running");
+    expect(review.runs[1]!.attempts[0]).toMatchObject({ expectedReviewHeadSha: accepted, flowId: "flow-1" });
+    expect(h.flowRequests).toHaveLength(1);
+    expect(h.flowRequests[0]).toMatchObject({ implementerPath: "/codex/stage-1.jsonl", targetSha: accepted, headRef: skipped.branch, requireRemoteHead: true });
+    expect(fs.readFileSync(path.join(worktree, "sentinel.tmp"), "utf8")).toBe("untouched\n");
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+for (const publication of ["internal", "remote-branch"] as const) {
+test(`a legacy architect repair commits its declared output before ${publication} review`, async () => {
+  const fixture = await realWorktreeLane(`architect-review-repair-${publication}`, [
+    { id: "architect", kind: "run", role: { roleId: "architect" }, access: "read-only", outputs: ["report.md"], prompt: "Write report", next: "review" },
+    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review report", next: null },
+  ], publication === "remote-branch" ? publication : undefined);
+  const offline = `${fixture.origin}.offline`;
+  try {
+    fs.writeFileSync(path.join(fixture.worktree, "report.md"), "first report\n");
+    fixture.h.setConversationActive(false);
+    await tickPipelines([fixture.h.finish("/codex/stage-1.jsonl", "pass")], fixture.h.ports);
+    await tickPipelines([], fixture.h.ports);
+    const first = fixture.git(fixture.worktree, "rev-parse", "HEAD");
+    const flow = fixture.h.flows.get("flow-1")!;
+    expect(flow).toBeDefined();
+    const transcript = path.join(fixture.root, "architect-repair.jsonl");
+    const sessionId = ["059f421e", "02e1", "73e0", "9b77", "bebde063f529"].join("-");
+    fs.writeFileSync(transcript, `${JSON.stringify({ type: "session_meta", payload: { id: sessionId, cwd: fixture.worktree } })}\n${JSON.stringify({
+      timestamp: new Date(Date.now() + 1_000).toISOString(), type: "event_msg",
+      payload: { type: "task_complete", last_agent_message: "REVIEW_READY: repaired report" },
+    })}\n`);
+    const roles = { implementer: { engine: "codex" as const, model: null, effort: "high" }, reviewer: { engine: "codex" as const, model: null, effort: "high" } };
+    const firstRound = { ...newRound({ ...flow, roles, rounds: [] }, "marker", null), n: 1, startedAt: "2026-07-22T00:00:00Z", relayedAt: "2026-07-22T00:01:00Z" };
+    Object.assign(flow, {
+      cwd: fixture.worktree,
+      implementerPath: transcript,
+      requireRemoteHead: publication === "remote-branch",
+      roles,
+      mode: "auto", reviewerMode: "headless", state: "fixing", roundLimit: 5,
+      createdAt: "2026-07-21T00:00:00Z",
+      rounds: [firstRound],
+    });
+    fs.writeFileSync(path.join(fixture.worktree, "report.md"), "repaired report\n");
+    fs.writeFileSync(path.join(fixture.worktree, "sentinel.tmp"), "keep me\n");
+    const record = entry(transcript);
+    record.size = fs.statSync(transcript).size;
+    record.mtime = Date.now() / 1_000;
+    if (publication === "remote-branch") fs.renameSync(fixture.origin, offline);
+    expect(await tickFlow(flow, [record], new Map([[transcript, record]]), () => {})).toBe(true);
+    const repaired = fixture.git(fixture.worktree, "rev-parse", "HEAD");
+    expect(repaired).not.toBe(first);
+    if (publication === "remote-branch") {
+      expect(flow.state).toBe("fixing");
+      expect(flow.rounds).toHaveLength(1);
+      fs.renameSync(offline, fixture.origin);
+      expect(await tickFlow(flow, [record], new Map([[transcript, record]]), () => {})).toBe(true);
+      expect(fixture.git(fixture.origin, "rev-parse", `refs/heads/${loadPipelines().find((item) => item.id === fixture.id)!.branch}`)).toBe(repaired);
+    }
+    expect(flow.state).toBe("spawning");
+    expect(flow.rounds[1]!.reviewHeadSha).toBe(repaired);
+    expect(loadPipelines().find((item) => item.id === fixture.id)!.lastPassedCommit).toBe(repaired);
+    expect(fixture.git(fixture.worktree, "show", "--name-only", "--format=", "HEAD")).toBe("report.md");
+    expect(fs.readFileSync(path.join(fixture.worktree, "sentinel.tmp"), "utf8")).toBe("keep me\n");
+  } finally {
+    savePipelines([]);
+    if (fs.existsSync(offline)) fs.renameSync(offline, fixture.origin);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+}
+
+test("a new owner reviews the commit published after the producer turn ends", async () => {
+  savePipelines([]);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-one-published-head-"));
+  const origin = path.join(root, "origin.git");
+  const repo = path.join(root, "repo");
+  const { realExec } = await import("@/lib/workflows/provision");
+  const { realProvisionExec } = await import("./git");
+  const git = (cwd: string, ...args: string[]) => {
+    const result = realExec("git", args, cwd);
+    if (result.code !== 0) throw new Error(result.stderr || result.stdout);
+    return result.stdout.trim();
+  };
+  try {
+    fs.mkdirSync(repo);
+    git(root, "init", "--bare", "--initial-branch=main", origin);
+    git(repo, "init", "--initial-branch=main");
+    git(repo, "config", "user.name", "Fixture");
+    git(repo, "config", "user.email", "noreply@example.com");
+    git(repo, "config", "commit.gpgSign", "false");
+    fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
+    git(repo, "add", "base.txt");
+    git(repo, "commit", "-m", "base");
+    git(repo, "remote", "add", "origin", origin);
+    git(repo, "push", "origin", "main");
+    const base = git(repo, "rev-parse", "HEAD");
+
+    const h = harness();
+    h.ports.exec = realExec;
+    h.ports.provisionExec = realProvisionExec;
+    const created = await createPipelineFromRequest({
+      task: "One published head", repoDir: repo, baseRef: base,
+      publication: "remote-branch", delivery: { branch: "refs/heads/feature/shared" },
+      stages: [
+        { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: "review" },
+        { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review", next: null },
+      ],
+    }, h.ports);
+    if (!created.pipeline) throw new Error(created.error);
+    const id = created.pipeline.id;
+    await tickPipelines([], h.ports);
+    const lane = loadPipelines().find((item) => item.id === id)!;
+    expect(git(lane.worktreeDir, "branch", "--show-current")).toBe("feature/shared");
+    expect(realExec("git", ["show-ref", "--verify", "--quiet", `refs/heads/${lane.branch}`], repo).code).not.toBe(0);
+    await tickPipelines([], h.ports);
+    fs.writeFileSync(path.join(lane.worktreeDir, "work.txt"), "producer work\n");
+    const ready = h.finish("/codex/stage-1.jsonl", "pass");
+    ready.activity = "live";
+    h.setConversationActive(true);
+    await tickPipelines([ready], h.ports);
+    expect(loadPipelines().find((item) => item.id === id)!.cursor?.stageId).toBe("build");
+    expect(h.spawnInputs).toHaveLength(1);
+
+    ready.activity = "idle";
+    h.setConversationActive(false);
+    await tickPipelines([ready], h.ports);
+    const committed = git(lane.worktreeDir, "rev-parse", "HEAD");
+    expect(committed).not.toBe(base);
+    expect(h.spawnInputs).toHaveLength(1);
+    for (let n = 0; n < 5 && h.spawnInputs.length === 1; n += 1) await tickPipelines([], h.ports);
+    expect(git(origin, "rev-parse", "refs/heads/feature/shared")).toBe(committed);
+    expect(loadPipelines().find((item) => item.id === id)!.lastPassedCommit).toBe(committed);
+    expect(h.spawnInputs).toHaveLength(2);
+    await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(2);
+  } finally {
+    savePipelines([]);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("delivery creation clamps the second target lane and replays its original key before provisioning", async () => {
   const h = harness();
@@ -1071,6 +1533,52 @@ test("task links reject project mismatches without persisting a change", async (
 
   expect(result).toEqual({ error: `task project does not match pipeline project: ${foreignTask.id}`, status: 400 });
   expect(loadPipelines()[0]!.taskIds).toEqual([]);
+});
+
+/* docs/design/linked-installs.md M.4 seam 1: pipeline state that starts work
+   refuses a task another linked machine runs; on that machine the same calls
+   pass. */
+test("a task another linked machine runs refuses pipeline creation, link-task, a draft's start and a retry", async () => {
+  const self = ["0a0a0a0a", "1111", "4111", "8111", "111111111111"].join("-");
+  const peer = ["0b0b0b0b", "2222", "4222", "8222", "222222222222"].join("-");
+  const selfFile = path.join(process.env.LLV_STATE_DIR!, "links/self.json");
+  const writeSelf = (installId: string) => {
+    fs.mkdirSync(path.dirname(selfFile), { recursive: true });
+    fs.writeFileSync(selfFile, JSON.stringify({ v: 1, installId, label: "fixture", publicUrl: null, check: null }));
+  };
+  writeSelf(self);
+  try {
+    const h = harness();
+    const elsewhere = { ...boardTask("task-runs-on-peer"), machine: peer };
+    const here = { ...boardTask("task-runs-here"), machine: self };
+    saveTasks([elsewhere, here]);
+    savePipelines([]);
+    const draftRequest = { repoDir: "/repo", autoStart: false, stages: [{ id: "run", kind: "run", role: { roleId: "builder" }, engine: "codex", prompt: "run", next: null }] } as const;
+    const refused = await createPipelineFromRequest({ ...draftRequest, task: "Refused", taskIds: [elsewhere.id] } as never, h.ports);
+    expect(refused).toMatchObject({ status: 409, code: "TASK_RUNS_ELSEWHERE" });
+    expect(loadPipelines()).toHaveLength(0);
+    const draft = await createPipelineFromRequest({ ...draftRequest, task: "Draft", taskIds: [here.id] } as never, h.ports);
+    expect(draft.pipeline?.state).toBe("draft");
+    expect(await patchPipeline(draft.pipeline!.id, { action: "link-task", taskId: elsewhere.id }, h.ports)).toMatchObject({ status: 409, code: "TASK_RUNS_ELSEWHERE" });
+    saveTasks([elsewhere, { ...here, machine: peer }]);
+    expect(await patchPipeline(draft.pipeline!.id, { action: "start" }, h.ports)).toMatchObject({ status: 409, code: "TASK_RUNS_ELSEWHERE" });
+    expect(loadPipelines().find((pipeline) => pipeline.id === draft.pipeline!.id)?.state).toBe("draft");
+
+    saveTasks([elsewhere, here]);
+    const created = await create(h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "fail", "retry me")], h.ports);
+    const failed = loadPipelines().find((pipeline) => pipeline.id === created.id)!;
+    expect(failed.state).toBe("needs_decision");
+    savePipelines([{ ...failed, taskIds: [elsewhere.id] }]);
+    expect(await patchPipeline(created.id, { action: "retry-stage" }, h.ports)).toMatchObject({ status: 409, code: "TASK_RUNS_ELSEWHERE" });
+    // On the machine the task names, the same retry is admitted.
+    writeSelf(peer);
+    expect((await patchPipeline(created.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  } finally {
+    fs.rmSync(selfFile, { force: true });
+  }
 });
 
 test("a linked draft cannot move to a different task project", async () => {
@@ -4029,7 +4537,7 @@ test("a read-only stage whose host was lost re-runs on the same head instead of 
   expect(routed.cursor).toMatchObject({ stageId: "fix", activatedBy: { stageId: "review", attempt: 3, edge: "fail" } });
 });
 
-test("skip-stage over a lost host's pushed head adopts it instead of resetting behind the remote (#1871)", async () => {
+test("skip-stage over a lost host's pushed head carries it without resetting (#1871)", async () => {
   const h = harness();
   await runningStructuredStage(h);
   h.setConversationActive(false);
@@ -4047,7 +4555,7 @@ test("skip-stage over a lost host's pushed head adopts it instead of resetting b
   expect(skipped.error).toBeUndefined();
   expect(loadPipelines()[0]!.lastPassedCommit).toBe(STAGE_HEAD);
   expect(h.calls).not.toContain(`git reset --hard ${base}`);
-  expect(h.calls).toContain(`git reset --hard ${STAGE_HEAD}`);
+  expect(h.calls).not.toContain(`git reset --hard ${STAGE_HEAD}`);
 });
 
 /** A read-only review parked exactly as lane 4a6cd090's was after a restart. */
@@ -4944,7 +5452,7 @@ test("a contradictory durable pass verdict parks with the parser failure reason"
   const current = loadPipelines()[0]!;
   expect(current.state).toBe("needs_decision");
   expect(current.stateDetail).toBe(reason);
-  expect(current.cursor).toEqual({ stageId: "plan", state: "running", input: null, activatedBy: null });
+  expect(current.cursor).toEqual({ stageId: "plan", state: "pending", input: null, activatedBy: null });
   expect(current.lastPassedCommit).toBe(ORIGIN_MAIN_SHA);
   expect(current.runs[0]!.attempts[0]).toMatchObject({
     state: "needs_decision",
@@ -5144,7 +5652,6 @@ test("retrying a parked review-loop fast-forwards to the pushed repair and recor
     if (command === "git" && args[0] === "branch" && args[1] === "--show-current") return { code: 0, stdout: `${loadPipelines()[0]!.branch}\n`, stderr: "" };
     if (command === "git" && args[0] === "ls-remote") return { code: 0, stdout: `${remoteHead}\trefs/heads/${loadPipelines()[0]!.branch}\n`, stderr: "" };
     if (command === "git" && args[0] === "rev-parse" && args[1] === "HEAD") return { code: 0, stdout: `${localHead}\n`, stderr: "" };
-    if (command === "git" && args[0] === "rev-parse" && String(args[1]).startsWith("refs/remotes/origin/")) return { code: 0, stdout: `${remoteHead}\n`, stderr: "" };
     if (command === "git" && args[0] === "merge-base") return { code: localHead === ORIGIN_MAIN_SHA && remoteHead === repairHead ? 0 : 1, stdout: "", stderr: "" };
     if (command === "git" && args[0] === "merge" && args[1] === "--ff-only") {
       h.calls.push(`${command} ${args.join(" ")}`);
@@ -5186,7 +5693,7 @@ test("retrying a parked review-loop fast-forwards to the pushed repair and recor
   expect(fastForwarded).toBe(true);
   expect(h.calls).toContain(`flow:/codex/stage-1.jsonl:${ORIGIN_MAIN_SHA}:${repairHead}:AC1`);
   expect(h.calls.some((call) => call.includes("reset --hard"))).toBe(false);
-  expect(h.calls.indexOf("flow-close:flow-1")).toBeLessThan(h.calls.indexOf(`git merge --ff-only refs/remotes/origin/${pipeline.branch}`));
+  expect(h.calls.indexOf("flow-close:flow-1")).toBeLessThan(h.calls.indexOf(`git merge --ff-only --no-overwrite-ignore ${repairHead}`));
 });
 
 test("issue 533: an in-loop repair advances expectedReviewHeadSha with reviewHeadSha from d03cc211 to 5755f992", async () => {
@@ -6720,15 +7227,18 @@ test("retry parks without synchronizing when reviewer termination cannot be veri
   expect(loadPipelines()[0]).toMatchObject({ state: "closed", hiddenAt: null, stateDetail: expect.stringContaining("reviewer process group did not terminate") });
 });
 
-test("failed stages park and retry resets to the last passed commit", async () => {
+test("failed stages park and retry without discarding checkout work", async () => {
   const h = harness();
   const pipeline = await create(h.ports);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "fail", "blocked")], h.ports);
-  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.cursor).toEqual({ stageId: "plan", state: "pending", input: null, activatedBy: null });
+  expect(parked.runs[0]!.attempts[0]).toMatchObject({ state: "failed", verdict: { status: "fail" } });
   await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports);
-  expect(h.calls.some((call) => call.includes("reset --hard"))).toBe(true);
+  expect(h.calls.some((call) => call.includes("reset --hard") || call.includes("clean -fd"))).toBe(false);
   await tickPipelines([], h.ports);
   expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
 });
@@ -6970,7 +7480,7 @@ test("a retried attempt whose predecessor never reserved a conversation records 
   expect(h.calls).toContain(`spawn:pipeline_${pipeline.id}_plan_2:supersedes=none`);
 });
 
-test("skip-stage cleans failed work before advancing", async () => {
+test("skip-stage advances from the current clean head without cleaning", async () => {
   const h = harness();
   const pipeline = await create(h.ports);
   await tickPipelines([], h.ports);
@@ -6978,8 +7488,7 @@ test("skip-stage cleans failed work before advancing", async () => {
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "needs_decision", "operator choice")], h.ports);
   const result = await patchPipeline(pipeline.id, { action: "skip-stage" }, h.ports);
   expect(result.pipeline?.cursor?.stageId).toBe("build");
-  expect(h.calls.some((call) => call.includes("reset --hard"))).toBe(true);
-  expect(h.calls.some((call) => call.includes("clean -fd"))).toBe(true);
+  expect(h.calls.some((call) => call.includes("reset --hard") || call.includes("clean -fd"))).toBe(false);
 });
 
 test("a corrupt SQLite pipeline row skips the tick without escalating", async () => {
@@ -7004,7 +7513,7 @@ test("a corrupt SQLite pipeline row skips the tick without escalating", async ()
   savePipelines([]);
 });
 
-test("retry and skip leave verdict-recovery exhaustion only when reset preserves all work (#879)", async () => {
+test("retry preserves dirty work and skip requires a clean accepted head after verdict exhaustion (#879)", async () => {
   const exhaust = async (h: ReturnType<typeof harness>) => {
     const pipeline = await create(h.ports);
     await tickPipelines([], h.ports);
@@ -7025,8 +7534,7 @@ test("retry and skip leave verdict-recovery exhaustion only when reset preserves
     const recovered = await patchPipeline(cleanPipeline.id, { action }, clean.ports);
 
     expect(recovered.error).toBeUndefined();
-    expect(clean.calls.some((call) => call.includes("reset --hard"))).toBe(true);
-    expect(clean.calls.some((call) => call.includes("clean -fd"))).toBe(true);
+    expect(clean.calls.some((call) => call.includes("reset --hard") || call.includes("clean -fd"))).toBe(false);
 
     const dirty = harness();
     const dirtyPipeline = await exhaust(dirty);
@@ -7037,8 +7545,11 @@ test("retry and skip leave verdict-recovery exhaustion only when reset preserves
 
     const refused = await patchPipeline(dirtyPipeline.id, { action }, dirty.ports);
 
-    expect(refused.status).toBe(409);
-    expect(refused.error).toContain("close");
+    if (action === "retry-stage") expect(refused.error).toBeUndefined();
+    else {
+      expect(refused.status).toBe(409);
+      expect(refused.error).toContain("commit the stage's work or retry it");
+    }
     expect(dirty.calls.some((call) => call.includes("reset --hard") || call.includes("clean -fd"))).toBe(false);
 
     const publishedAhead = harness();
@@ -7061,17 +7572,13 @@ test("retry and skip leave verdict-recovery exhaustion only when reset preserves
     const ahead = await patchPipeline(publishedAheadPipeline.id, { action }, publishedAhead.ports);
 
     if (action === "retry-stage") {
-      expect(ahead.status).toBe(409);
-      expect(ahead.error).toContain("close");
+      expect(ahead.error).toBeUndefined();
       expect(publishedAhead.calls.some((call) => call.includes("reset --hard") || call.includes("clean -fd"))).toBe(false);
     } else {
-      /* #1756: everything the stage produced is on the remote at exactly this
-         HEAD, so the reset preserves all of it. The skip adopts that commit as
-         the stage's result and the lane moves on to its next stage instead of
-         needing a successor pipeline. */
+      /* The skip accepts the current descendant without moving the checkout. */
       expect(ahead.error).toBeUndefined();
       expect(loadPipelines()[0]!.lastPassedCommit).toBe(publishedAheadHead);
-      expect(publishedAhead.calls.some((call) => call.includes(`reset --hard ${publishedAheadHead}`))).toBe(true);
+      expect(publishedAhead.calls.some((call) => call.includes("reset --hard") || call.includes("clean -fd"))).toBe(false);
     }
   }
 });
@@ -7746,7 +8253,7 @@ function stageTranscript(name: string, records: Record<string, unknown>[]): stri
   return file;
 }
 
-function limitInterruptedTranscript(name: string): string {
+function limitInterruptedTranscript(name: string, notice = PROVIDER_LIMIT_NOTICE): string {
   return stageTranscript(name, [
     { type: "user", timestamp: "2026-08-27T09:00:00.000Z", message: { role: "user", content: "run the stage" } },
     {
@@ -7763,7 +8270,7 @@ function limitInterruptedTranscript(name: string): string {
         role: "assistant",
         model: "<synthetic>",
         stop_reason: "stop_sequence",
-        content: [{ type: "text", text: PROVIDER_LIMIT_NOTICE }],
+        content: [{ type: "text", text: notice }],
       },
     },
   ]);
@@ -7998,6 +8505,631 @@ test("an unpinned usage-limited stage respawns on another allowed account (#1371
   const failedOver = loadPipelines().find((candidate) => candidate.id === pipeline.id)!;
   expect(h.spawnInputs[1]).toMatchObject({ requestedAccountId: null, unavailableAccountIds: [LIMITED_ACCOUNT] });
   expect(failedOver.runs[0]!.attempts[1]).toMatchObject({ state: "running", accountId: SPARE_ACCOUNT });
+});
+
+test("a Claude session limit preserves dirty work, stage identity and review rounds through controller recovery", async () => {
+  const h = harness();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-limit-work-"));
+  let repo = "";
+  const git = (...args: string[]) => {
+    const result = spawnSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout;
+  };
+  try {
+    const pipeline = await create(h.ports, [
+      { ...usageLimitStage()[0], engine: "claude", model: "fable", next: "review" },
+      { id: "review", kind: "run", engine: "claude", model: "fable", access: "read-only", prompt: "Review", next: null, onFail: { to: "build", maxRounds: 3 } },
+    ] as never);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([h.finish("/codex/stage-2.jsonl", "fail")], h.ports);
+    await tickPipelines([], h.ports);
+    const before = loadPipelines().find((item) => item.id === pipeline.id)!;
+    before.repoDir = path.join(root, "repo");
+    repo = path.join(root, `repo-pipeline-${pipeline.id}`);
+    before.worktreeDir = repo;
+    const limited = before.runs.find((run) => run.stageId === "build")!.attempts[1]!;
+    limited.paneId = null;
+    savePipelines([before]);
+    const roundCount = edgeRoundsUsed(before, { from: "build", to: "review", kind: "pass" });
+    expect(roundCount).toBe(1);
+
+    fs.mkdirSync(repo);
+    git("init", "-q");
+    fs.writeFileSync(path.join(repo, "work.txt"), "before\n");
+    git("add", "work.txt");
+    git("-c", "user.name=Test", "-c", "user.email=fixture", "commit", "-qm", "baseline");
+    fs.writeFileSync(path.join(repo, "work.txt"), "unfinished Claude edit\n");
+    const dirtyDiff = git("diff", "--", "work.txt");
+    expect(dirtyDiff).toContain("unfinished Claude edit");
+    const successorPath = "/codex/stage-3-successor.jsonl";
+    const sourceId = "019f423a-d6e9-\x34903-b597-3e676b6ff3d4";
+    const forkId = "7d1c2b3a-4e5f-\x34a6b-8c7d-9e0f1a2b3c4d";
+    const sourceRoot = path.join(root, "claude-source");
+    const targetRoot = path.join(root, "claude-target");
+    fs.mkdirSync(sourceRoot);
+    fs.mkdirSync(targetRoot);
+    const sourcePath = path.join(sourceRoot, `${sourceId}.jsonl`);
+    const sourceFixture = limitInterruptedTranscript("claude-controller-session-limit", "You've hit your session limit · resets 2:30pm (Europe/Kyiv)");
+    fs.writeFileSync(sourcePath, fs.readFileSync(sourceFixture, "utf8").trimEnd().split("\n")
+      .map((line) => JSON.stringify({ ...JSON.parse(line), sessionId: sourceId })).join("\n") + "\n");
+    const fork = forkClaudeHistory({
+      sourcePath, sourceRoot, targetRoot, destination: path.join(targetRoot, `${forkId}.jsonl`),
+      sourceSessionId: sourceId, sessionId: forkId, operationId: "stage-limit-copy",
+    });
+    expect(fork.rewritten).toBeGreaterThan(0);
+    readFixtures(h, { "/codex/stage-3.jsonl": sourcePath, [successorPath]: fork.path });
+    usageLimitPorts(h, { kind: "available", account: {
+      engine: "claude", accountId: SPARE_ACCOUNT, kind: "managed",
+      home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" },
+    } });
+    let currentPath = "/codex/stage-3.jsonl";
+    const reseats: Array<{ conversationId: string; accountId: string }> = [];
+    const continuations: Array<{ conversationId: string; clientMessageId: string; path: string }> = [];
+    h.ports.requestConversationReseat = async (conversationId, accountId) => {
+      reseats.push({ conversationId, accountId });
+    };
+    h.ports.conversationMigration = () => reseats.length && currentPath !== successorPath
+      ? { targetId: SPARE_ACCOUNT, retry: false } : null;
+    h.ports.resumeSeveredTurn = async (input) => {
+      continuations.push({ conversationId: input.conversationId, clientMessageId: input.clientMessageId, path: input.transcriptPath });
+      return true;
+    };
+    h.ports.pathForConversation = (id) => id === limited.conversationId ? currentPath : null;
+    h.ports.accountForTranscript = (_engine, transcriptPath) => ({
+      accountId: transcriptPath === successorPath ? SPARE_ACCOUNT : LIMITED_ACCOUNT,
+      label: transcriptPath === successorPath ? SPARE_ACCOUNT_LABEL : LIMITED_ACCOUNT_LABEL,
+    });
+
+    await tickPipelines([], h.ports);
+    const switching = loadPipelines().find((item) => item.id === pipeline.id)!;
+    expect(switching.cursor).toMatchObject({ stageId: "build", state: "running" });
+    expect(switching.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(2);
+    expect(switching.runs.find((run) => run.stageId === "build")!.attempts[1]).toMatchObject({
+      state: "running", conversationId: limited.conversationId,
+      usageLimitedAccounts: [{ accountId: LIMITED_ACCOUNT, engine: "claude", resetsAt: null }],
+    });
+    expect(reseats).toEqual([{ conversationId: limited.conversationId!, accountId: SPARE_ACCOUNT }]);
+    expect(continuations).toHaveLength(1);
+    expect(switching.runs.find((run) => run.stageId === "review")!.attempts).toHaveLength(1);
+    expect(edgeRoundsUsed(switching, { from: "build", to: "review", kind: "pass" })).toBe(roundCount);
+    expect(git("diff", "--", "work.txt")).toBe(dirtyDiff);
+
+    h.ports.resolveProjectSpawn = () => ({ kind: "exhausted", resetsAt: null, allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] });
+    await tickPipelines([], h.ports);
+    const migrating = loadPipelines().find((item) => item.id === pipeline.id)!;
+    expect(migrating.state).toBe("running");
+    expect(migrating.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(2);
+    expect(reseats).toHaveLength(1);
+
+    currentPath = successorPath;
+    await tickPipelines([], h.ports);
+    const resumed = loadPipelines().find((item) => item.id === pipeline.id)!;
+    expect(resumed.id).toBe(pipeline.id);
+    expect(resumed.branch).toBe(pipeline.branch);
+    expect(resumed.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(2);
+    expect(resumed.runs.find((run) => run.stageId === "build")!.attempts[1]).toMatchObject({
+      state: "running", conversationId: limited.conversationId, agentPath: successorPath, accountId: SPARE_ACCOUNT,
+    });
+    expect(resumed.runs.find((run) => run.stageId === "build")!.attempts[1]!.usageLimitedAccounts).toEqual(
+      switching.runs.find((run) => run.stageId === "build")!.attempts[1]!.usageLimitedAccounts,
+    );
+    expect(resumed.state).toBe("running");
+    expect(h.spawnInputs).toHaveLength(3);
+    expect(continuations.every((item) => item.conversationId === limited.conversationId
+      && item.clientMessageId === continuations[0]!.clientMessageId)).toBe(true);
+    expect(edgeRoundsUsed(resumed, { from: "build", to: "review", kind: "pass" })).toBe(roundCount);
+    expect(git("diff", "--", "work.txt")).toBe(dirtyDiff);
+    expect(h.calls.some((call) => /\b(?:reset|clean)\b/.test(call))).toBe(false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a Claude stage parks without a free allowed account and resumes its conversation when capacity returns", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports, [{ ...usageLimitStage()[0], engine: "claude", model: "fable" }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const running = loadPipelines().find((item) => item.id === pipeline.id)!;
+  const attempt = running.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([running]);
+  readFixtures(h, { "/codex/stage-1.jsonl": limitInterruptedTranscript("claude-no-capacity") });
+  usageLimitPorts(h, { kind: "exhausted", resetsAt: null, allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] });
+
+  await tickPipelines([], h.ports);
+  const parked = loadPipelines().find((item) => item.id === pipeline.id)!;
+  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: `rate limited until an unknown reset time, account ${LIMITED_ACCOUNT_LABEL}` });
+  expect(parked.runs[0]!.attempts).toHaveLength(1);
+  expect(parked.runs[0]!.attempts[0]).toMatchObject({ conversationId: attempt.conversationId, state: "failed" });
+
+  h.ports.resolveProjectSpawn = () => ({ kind: "available", account: {
+    engine: "claude", accountId: SPARE_ACCOUNT, kind: "managed",
+    home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" },
+  } });
+  const reseats: string[] = [];
+  const continuations: string[] = [];
+  h.ports.requestConversationReseat = async (conversationId, accountId) => { reseats.push(`${conversationId}:${accountId}`); };
+  h.ports.resumeSeveredTurn = async (input) => { continuations.push(input.clientMessageId); return true; };
+
+  await tickPipelines([], h.ports);
+  const resumed = loadPipelines().find((item) => item.id === pipeline.id)!;
+  expect(resumed.state).toBe("running");
+  expect(resumed.runs[0]!.attempts).toHaveLength(1);
+  expect(resumed.runs[0]!.attempts[0]).toMatchObject({ conversationId: attempt.conversationId, state: "running" });
+  expect(reseats).toEqual([`${attempt.conversationId}:${SPARE_ACCOUNT}`]);
+  expect(continuations).toHaveLength(1);
+});
+
+test("a Claude stage retains the source account's confirmed reset when no allowed account is free", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports, [{ ...usageLimitStage()[0], engine: "claude", model: "fable" }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const running = loadPipelines().find((item) => item.id === pipeline.id)!;
+  const attempt = running.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([running]);
+  readFixtures(h, { "/codex/stage-1.jsonl": limitInterruptedTranscript("claude-known-reset") });
+
+  const now = Date.now();
+  const resetsAt = Math.floor(now / 1_000) + 15 * 60;
+  const observation: DurableQuotaObservation = {
+    engine: "claude", accountId: LIMITED_ACCOUNT, authenticated: true,
+    authCheckedAt: new Date(now - 1_000).toISOString(),
+    limits: { session: { usedPercent: 100, resetsAt }, weekly: null, plan: "max", capturedAt: Math.floor(now / 1_000) },
+    provenance: { source: "live", reason: null, staleSince: null },
+    observedAt: new Date(now - 1_000).toISOString(), bootId: "known-reset",
+  };
+  const selection = (unavailableIds: string[] = []) => selectProjectAccount({
+    project: pipeline.project, engine: "claude", model: "fable",
+    accounts: [{ id: LIMITED_ACCOUNT, authPresent: true }, { id: SPARE_ACCOUNT, authPresent: true }],
+    observations: [observation],
+    bindings: [{ engine: "claude", accountId: LIMITED_ACCOUNT, project: pipeline.project, createdAt: new Date(now).toISOString() }],
+    unavailableIds, now,
+  });
+  expect(selection()).toMatchObject({ kind: "exhausted", resetsAt });
+  h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT];
+  h.ports.accountLabel = () => LIMITED_ACCOUNT_LABEL;
+  h.ports.resolveProjectSpawn = (_engine, request) => {
+    const selected = selection(request.unavailableIds ?? []);
+    return selected.kind === "available"
+      ? { kind: "unavailable", allowedAccountIds: [LIMITED_ACCOUNT] }
+      : selected;
+  };
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "known-reset-registry.json"));
+  registry.recordQuotaObservation(observation);
+  setAgentRegistryForTests(registry);
+  try {
+    h.ports.claudeAccountReset = defaultPipelinePorts().claudeAccountReset;
+  } finally {
+    setAgentRegistryForTests(null);
+  }
+  expect(h.ports.claudeAccountReset?.(LIMITED_ACCOUNT, "fable")).toBe(resetsAt);
+
+  await tickPipelines([], h.ports);
+  const parked = loadPipelines().find((item) => item.id === pipeline.id)!;
+  expect(parked).toMatchObject({
+    state: "needs_decision",
+    stateDetail: `rate limited until ${new Date(resetsAt * 1_000).toISOString()}, account ${LIMITED_ACCOUNT_LABEL}`,
+  });
+  expect(parked.runs[0]!.attempts[0]!.usageLimitedAccounts).toMatchObject([
+    { accountId: LIMITED_ACCOUNT, resetsAt },
+  ]);
+
+  const dateNow = spyOn(Date, "now").mockImplementation(() => (resetsAt + 1) * 1_000);
+  try {
+    h.ports.resumeSeveredTurn = async () => true;
+    await tickPipelines([], h.ports);
+    const resumed = loadPipelines().find((item) => item.id === pipeline.id)!;
+    expect(resumed.state).toBe("running");
+    expect(resumed.runs[0]!.attempts).toHaveLength(1);
+    expect(resumed.runs[0]!.attempts[0]).toMatchObject({ state: "running", conversationId: attempt.conversationId });
+  } finally {
+    dateNow.mockRestore();
+  }
+});
+
+test("a parked Claude stage continues its original conversation after that account's capacity returns", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports, [{ ...usageLimitStage()[0], engine: "claude", model: "fable" }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const running = loadPipelines().find((item) => item.id === pipeline.id)!;
+  const attempt = running.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([running]);
+  readFixtures(h, { "/codex/stage-1.jsonl": limitInterruptedTranscript("claude-source-reset") });
+  usageLimitPorts(h, { kind: "exhausted", resetsAt: null, allowedAccountIds: [LIMITED_ACCOUNT] });
+  let recovered = false;
+  let allowed = [LIMITED_ACCOUNT];
+  h.ports.allowedAccountIds = () => allowed;
+  h.ports.claudeAccountRecovered = () => recovered;
+  const continuations: string[] = [];
+  h.ports.resumeSeveredTurn = async (input) => { continuations.push(input.conversationId); return true; };
+
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  recovered = true;
+  allowed = [SPARE_ACCOUNT];
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  allowed = [LIMITED_ACCOUNT];
+  await tickPipelines([], h.ports);
+  const resumed = loadPipelines()[0]!;
+  expect(resumed.state).toBe("running");
+  expect(resumed.runs[0]!.attempts).toHaveLength(1);
+  expect(resumed.runs[0]!.attempts[0]).toMatchObject({ conversationId: attempt.conversationId, state: "running" });
+  expect(continuations).toEqual([attempt.conversationId!]);
+});
+
+test("a previously limited Claude account becomes available for a later stage reseat and parked reconciliation", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports, [{ ...usageLimitStage()[0], engine: "claude", model: "fable" }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const running = loadPipelines()[0]!;
+  running.runs[0]!.attempts[0]!.paneId = null;
+  savePipelines([running]);
+  const fixtures = {
+    "/codex/stage-1.jsonl": limitInterruptedTranscript("claude-limited-a"),
+    "/codex/stage-2.jsonl": stageTranscript("claude-limited-b", [
+      { type: "user", timestamp: "2026-08-27T09:42:00.000Z", message: { role: "user", content: "continue" } },
+      { type: "assistant", timestamp: "2026-08-27T09:50:00.000Z", isApiErrorMessage: true, error: "rate_limit",
+        message: { role: "assistant", stop_reason: "stop_sequence", content: [{ type: "text", text: PROVIDER_LIMIT_NOTICE }] } },
+    ]),
+  };
+  readFixtures(h, fixtures);
+  usageLimitPorts(h, { kind: "exhausted", resetsAt: null, allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] });
+  h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT, SPARE_ACCOUNT];
+  let recoveredA = false;
+  h.ports.claudeAccountRecovered = (accountId) => accountId === LIMITED_ACCOUNT && recoveredA;
+  let currentPath = "/codex/stage-1.jsonl";
+  h.ports.pathForConversation = () => currentPath;
+  const reseats: string[] = [];
+  h.ports.requestConversationReseat = async (_id, target) => { reseats.push(target); };
+  h.ports.conversationMigration = () =>
+    reseats.at(-1) === LIMITED_ACCOUNT && currentPath === "/codex/stage-2.jsonl"
+      ? { targetId: LIMITED_ACCOUNT, retry: false } : null;
+  h.ports.resumeSeveredTurn = async () => true;
+  h.ports.resolveProjectSpawn = (_engine, input) => {
+    const available = [LIMITED_ACCOUNT, SPARE_ACCOUNT].find((id) => !input.unavailableIds?.includes(id));
+    return available
+      ? { kind: "available", account: { engine: "claude", accountId: available, kind: "managed",
+        home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } }
+      : { kind: "exhausted", resetsAt: null, allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] };
+  };
+
+  await tickPipelines([], h.ports);
+  expect(reseats).toEqual([SPARE_ACCOUNT]);
+  currentPath = "/codex/stage-2.jsonl";
+  await tickPipelines([], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.runs[0]!.attempts[0]!.usageLimitedAccounts).toMatchObject([
+    { accountId: LIMITED_ACCOUNT, limitedAt: Date.parse("2026-08-27T09:41:00.000Z"), turnId: expect.any(String) },
+    { accountId: SPARE_ACCOUNT, limitedAt: Date.parse("2026-08-27T09:50:00.000Z"), turnId: expect.any(String) },
+  ]);
+  recoveredA = true;
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const resumed = loadPipelines()[0]!;
+  expect(resumed.state).toBe("running");
+  expect(resumed.runs[0]!.attempts).toHaveLength(1);
+  expect(reseats).toEqual([SPARE_ACCOUNT, LIMITED_ACCOUNT]);
+});
+
+test("separate Claude limit turns on one account receive separate registry deliveries", async () => {
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const h = harness();
+  const pipeline = await create(h.ports, [{ ...usageLimitStage()[0], engine: "claude", model: "fable" }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const running = loadPipelines()[0]!;
+  running.runs[0]!.attempts[0]!.paneId = null;
+  savePipelines([running]);
+  const source = limitInterruptedTranscript("claude-repeat-limit-1");
+  const fixtures = { "/codex/stage-1.jsonl": source };
+  readFixtures(h, fixtures);
+  usageLimitPorts(h, { kind: "exhausted", resetsAt: null, allowedAccountIds: [LIMITED_ACCOUNT] });
+  h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT];
+  let recovered = false;
+  h.ports.claudeAccountRecovered = () => recovered;
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "claude-repeat-limit-registry.json"));
+  registry.reconcileConversations([{ engine: "claude", path: source, accountId: LIMITED_ACCOUNT,
+    launchProfile: emptyLaunchProfile({ cwd: pipeline.worktreeDir, project: pipeline.project, model: "fable", effort: "high" }),
+    turn: { state: "terminal", source: "lifecycle", terminalAt: "2026-08-27T09:41:00.000Z" },
+    observedAt: "2026-08-27T09:41:01.000Z" }]);
+  const conversation = registry.conversationForPath(source)!;
+  const deliveries: string[] = [];
+  h.ports.resumeSeveredTurn = async (input) => {
+    const receipt = registry.holdDelivery(conversation.id, input.text, input.clientMessageId);
+    deliveries.push(receipt.id);
+    registry.recordDeliveryOutcome(receipt.id, "delivered");
+    return true;
+  };
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  recovered = true;
+  await tickPipelines([], h.ports);
+  expect(deliveries).toHaveLength(1);
+  await tickPipelines([], h.ports);
+  expect(deliveries.at(-1)).toBe(deliveries[0]);
+
+  recovered = false;
+  fixtures["/codex/stage-1.jsonl"] = stageTranscript("claude-repeat-limit-2", [
+    { type: "user", timestamp: "2026-08-27T09:42:00.000Z", message: { role: "user", content: "continue" } },
+    { type: "assistant", timestamp: "2026-08-27T09:50:00.000Z", isApiErrorMessage: true, error: "rate_limit",
+      message: { role: "assistant", stop_reason: "stop_sequence", content: [{ type: "text", text: PROVIDER_LIMIT_NOTICE }] } },
+  ]);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  recovered = true;
+  await tickPipelines([], h.ports);
+  expect(new Set(deliveries).size).toBe(2);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+});
+
+test("an explicitly pinned Claude stage parks despite another free account and resumes on its own", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports, [{ ...usageLimitStage(LIMITED_ACCOUNT)[0], engine: "claude", model: "fable" }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const running = loadPipelines()[0]!;
+  running.runs[0]!.attempts[0]!.paneId = null;
+  savePipelines([running]);
+  readFixtures(h, { "/codex/stage-1.jsonl": limitInterruptedTranscript("claude-pinned-limit") });
+  usageLimitPorts(h, { kind: "available", account: { engine: "claude", accountId: SPARE_ACCOUNT, kind: "managed",
+    home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } });
+  h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT, SPARE_ACCOUNT];
+  let recovered = false;
+  h.ports.claudeAccountRecovered = () => recovered;
+  const reseats: string[] = [];
+  const continuations: string[] = [];
+  h.ports.requestConversationReseat = async (_id, target) => { reseats.push(target); };
+  h.ports.resumeSeveredTurn = async (input) => { continuations.push(input.conversationId); return true; };
+
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(reseats).toEqual([]);
+  recovered = true;
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(reseats).toEqual([]);
+  expect(continuations.length).toBeGreaterThan(0);
+  expect(new Set(continuations)).toEqual(new Set([running.runs[0]!.attempts[0]!.conversationId!]));
+});
+
+test("a recorded Claude limit moves the stage's real registry conversation and settles on its successor", async () => {
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { advanceConversationMigration, reconcileMigrations } = await import("@/lib/accounts/migration/coordinator");
+  const { enqueueStructuredMessage } = await import("@/lib/runtime/structuredMessageDelivery");
+  const h = harness();
+  const pipeline = await create(h.ports, [{ ...usageLimitStage()[0], engine: "claude", model: "fable" }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const sourcePath = limitInterruptedTranscript("claude-real-reseat", "You've hit your session limit · resets 2:30pm (Europe/Kyiv)");
+  const successorPath = stageTranscript("claude-real-successor", [
+    { type: "user", timestamp: "2026-08-27T09:42:00.000Z", message: { role: "user", content: "continue after limit" } },
+    { type: "assistant", timestamp: "2026-08-27T09:43:00.000Z", message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: PASS_TEXT }] } },
+  ]);
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "claude-limit-reseat-registry.json"));
+  registry.reconcileConversations([{
+    engine: "claude", path: sourcePath, accountId: LIMITED_ACCOUNT,
+    launchProfile: emptyLaunchProfile({ cwd: pipeline.worktreeDir, project: pipeline.project, model: "fable", effort: "high" }),
+    turn: { state: "terminal", source: "lifecycle", terminalAt: "2026-08-27T09:41:00.000Z" },
+    observedAt: "2026-08-27T09:41:01.000Z",
+  }]);
+  const conversation = registry.conversationForPath(sourcePath)!;
+  const previouslyLimitedAccount = "account-previously-limited";
+  registry.setEngineRouting("claude", previouslyLimitedAccount);
+  const running = loadPipelines().find((item) => item.id === pipeline.id)!;
+  Object.assign(running.runs[0]!.attempts[0]!, {
+    conversationId: conversation.id, agentPath: sourcePath, accountId: LIMITED_ACCOUNT, paneId: null,
+    usageLimitedAccounts: [{ accountId: previouslyLimitedAccount, engine: "claude", resetsAt: null }],
+  });
+  savePipelines([running]);
+  h.ports.pathForConversation = (id) => id === conversation.id ? registry.conversation(conversation.id)?.generations.at(-1)?.path ?? null : null;
+  h.ports.accountForTranscript = (_engine, transcriptPath) => {
+    const generation = registry.conversationForPath(transcriptPath)?.generations.find((item) => item.path === transcriptPath);
+    return generation?.accountId ? { accountId: generation.accountId, label: generation.accountId } : null;
+  };
+  setAgentRegistryForTests(registry);
+  try {
+    h.ports.conversationMigration = defaultPipelinePorts().conversationMigration;
+    h.ports.conversationDeliveryCompleted = defaultPipelinePorts().conversationDeliveryCompleted;
+  } finally {
+    setAgentRegistryForTests(null);
+  }
+  let reseatOperationId: string | null = null;
+  h.ports.requestConversationReseat = async (id, target) => {
+    reseatOperationId = registry.requestConversationReseat(id as never, target).migration?.operationId ?? null;
+  };
+  h.ports.resumeSeveredTurn = async (input) => {
+    const result = await enqueueStructuredMessage({
+      path: input.transcriptPath,
+      conversationId: input.conversationId,
+      clientMessageId: input.clientMessageId,
+      text: input.text,
+    }, {
+      enabled: () => true,
+      client: () => null,
+      registry: () => registry,
+      requestMigrationTick: () => {},
+    });
+    return result?.ok === true;
+  };
+  h.ports.durableTurnEvidence = durableStageTurnEvidence;
+  h.ports.resolveProjectSpawn = () => ({ kind: "available", account: {
+    engine: "claude", accountId: SPARE_ACCOUNT, kind: "managed",
+    home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" },
+  } });
+
+  await tickPipelines([], h.ports);
+  expect(registry.conversation(conversation.id)?.migration).toMatchObject({
+    targetId: SPARE_ACCOUNT, operationId: reseatOperationId,
+  });
+  expect(reseatOperationId).toBeTruthy();
+  expect(registry.pendingDeliveries(conversation.id)).toHaveLength(1);
+  const provider = {
+    virtualSource: true as const,
+    async create(input: { operationId: string }) {
+      return {
+        operationId: input.operationId, nativeId: "claude-real-successor", path: successorPath,
+        continuityPaths: [], historyHash: "fixture-history",
+        host: { kind: "claude-fork" as const, identity: "fixture-host", epoch: 1, verifiedAt: "2026-08-27T09:42:00.000Z" },
+      };
+    },
+    async verify() {},
+  };
+  const advanced = await advanceConversationMigration(conversation.id, registry, provider);
+  expect(advanced.migration?.phase).toBe("committed");
+  expect(advanced.id).toBe(conversation.id);
+  expect(advanced.generations.at(-1)).toMatchObject({ path: successorPath, accountId: SPARE_ACCOUNT });
+  const successorContents = fs.readFileSync(successorPath, "utf8");
+  fs.writeFileSync(successorPath, fs.readFileSync(sourcePath, "utf8"));
+  await tickPipelines([], h.ports);
+  expect(registry.conversation(conversation.id)?.migration).toMatchObject({
+    phase: "committed", targetId: SPARE_ACCOUNT, operationId: reseatOperationId,
+  });
+  expect(registry.conversationMigrationTargetWithPendingDelivery(conversation.id)).toBe(SPARE_ACCOUNT);
+  expect(registry.pendingDeliveries(conversation.id)).toHaveLength(1);
+  fs.writeFileSync(successorPath, successorContents);
+  const delivered: string[] = [];
+  await reconcileMigrations(provider, {
+    async deliver({ path: target }) { delivered.push(target); return "delivered"; },
+  }, registry);
+  expect(delivered).toEqual([successorPath]);
+  expect(registry.conversationMigrationTargetWithPendingDelivery(conversation.id)).toBeNull();
+
+  await tickPipelines([], h.ports);
+  const settled = loadPipelines().find((item) => item.id === pipeline.id)!;
+  expect(settled.runs[0]!.attempts).toHaveLength(1);
+  expect(settled.runs[0]!.attempts[0]).toMatchObject({
+    conversationId: conversation.id, agentPath: successorPath, accountId: SPARE_ACCOUNT,
+    verdict: { status: "pass" },
+  });
+  expect(h.spawnInputs).toHaveLength(1);
+});
+
+test("a failed Claude migration retries its original operation and held continuation", async () => {
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { advanceConversationMigration } = await import("@/lib/accounts/migration/coordinator");
+  const { enqueueStructuredMessage } = await import("@/lib/runtime/structuredMessageDelivery");
+  const h = harness();
+  const pipeline = await create(h.ports, [{ ...usageLimitStage()[0], engine: "claude", model: "fable" }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const sourcePath = limitInterruptedTranscript("claude-failed-migration");
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "claude-failed-migration-registry.json"));
+  registry.reconcileConversations([{
+    engine: "claude", path: sourcePath, accountId: LIMITED_ACCOUNT,
+    launchProfile: emptyLaunchProfile({ cwd: pipeline.worktreeDir, project: pipeline.project, model: "fable", effort: "high" }),
+    turn: { state: "terminal", source: "lifecycle", terminalAt: "2026-08-27T09:41:00.000Z" },
+    observedAt: "2026-08-27T09:41:01.000Z",
+  }]);
+  const conversation = registry.conversationForPath(sourcePath)!;
+  registry.setEngineRouting("claude", "account-previously-limited");
+  const running = loadPipelines()[0]!;
+  Object.assign(running.runs[0]!.attempts[0]!, {
+    conversationId: conversation.id, agentPath: sourcePath, accountId: LIMITED_ACCOUNT, paneId: null,
+  });
+  savePipelines([running]);
+  setAgentRegistryForTests(registry);
+  try {
+    const defaults = defaultPipelinePorts();
+    h.ports.requestConversationReseat = defaults.requestConversationReseat;
+    h.ports.conversationMigration = defaults.conversationMigration;
+    h.ports.durableTurnEvidence = durableStageTurnEvidence;
+    h.ports.resolveProjectSpawn = () => ({ kind: "available", account: {
+      engine: "claude", accountId: SPARE_ACCOUNT, kind: "managed",
+      home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" },
+    } });
+    h.ports.accountForTranscript = () => ({ accountId: LIMITED_ACCOUNT, label: LIMITED_ACCOUNT_LABEL });
+    h.ports.pathForConversation = (id) => id === conversation.id ? sourcePath : null;
+    h.ports.resumeSeveredTurn = async (input) => (await enqueueStructuredMessage({
+      path: input.transcriptPath, conversationId: input.conversationId,
+      clientMessageId: input.clientMessageId, text: input.text,
+    }, {
+      enabled: () => true, client: () => null, registry: () => registry,
+      requestMigrationTick: () => {}, kick: async () => {},
+      executeSwitch: async () => registry.conversation(conversation.id)!,
+    }))?.ok === true;
+
+    await tickPipelines([], h.ports);
+    const first = registry.conversation(conversation.id)!.migration!;
+    expect(first).toMatchObject({ phase: "requested", targetId: SPARE_ACCOUNT });
+    expect(registry.pendingDeliveries(conversation.id)).toHaveLength(1);
+    const failed = await advanceConversationMigration(conversation.id, registry, {
+      virtualSource: true,
+      async create() { throw new Error("provider temporarily unavailable"); },
+      async verify() {},
+    });
+    expect(failed.migration).toMatchObject({ phase: "failed-recoverable", operationId: first.operationId });
+
+    await tickPipelines([], h.ports);
+    expect(registry.conversation(conversation.id)!.migration).toMatchObject({
+      phase: "requested", operationId: first.operationId, targetId: SPARE_ACCOUNT,
+    });
+    expect(registry.pendingDeliveries(conversation.id)).toHaveLength(1);
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  } finally {
+    setAgentRegistryForTests(null);
+  }
+});
+
+test("a delivered Claude limit continuation releases later dead-host recovery", async () => {
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const h = harness();
+  const pipeline = await create(h.ports, [{ ...usageLimitStage()[0], engine: "claude", model: "fable" }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const sourcePath = limitInterruptedTranscript("claude-delivered-then-dead");
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "claude-delivered-then-dead-registry.json"));
+  registry.reconcileConversations([{
+    engine: "claude", path: sourcePath, accountId: LIMITED_ACCOUNT,
+    launchProfile: emptyLaunchProfile({ cwd: pipeline.worktreeDir, project: pipeline.project, model: "fable", effort: "high" }),
+    turn: { state: "terminal", source: "lifecycle", terminalAt: "2026-08-27T09:41:00.000Z" },
+    observedAt: "2026-08-27T09:41:01.000Z",
+  }]);
+  const conversation = registry.conversationForPath(sourcePath)!;
+  const running = loadPipelines()[0]!;
+  Object.assign(running.runs[0]!.attempts[0]!, {
+    conversationId: conversation.id, agentPath: sourcePath, accountId: LIMITED_ACCOUNT, paneId: null,
+  });
+  savePipelines([running]);
+  readFixtures(h, { [sourcePath]: sourcePath });
+  usageLimitPorts(h, { kind: "exhausted", resetsAt: null, allowedAccountIds: [LIMITED_ACCOUNT] });
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+
+  h.ports.claudeAccountRecovered = () => true;
+  h.ports.resumeSeveredTurn = async (input) => {
+    const receipt = registry.holdDelivery(conversation.id, input.text, input.clientMessageId);
+    registry.recordDeliveryOutcome(receipt.id, "delivered");
+    return true;
+  };
+  setAgentRegistryForTests(registry);
+  try {
+    h.ports.conversationDeliveryCompleted = defaultPipelinePorts().conversationDeliveryCompleted;
+  } finally {
+    setAgentRegistryForTests(null);
+  }
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  h.ports.durableTurnEvidence = async () => null;
+  h.ports.conversationHostUnavailableSince = async () => new Date(1).toISOString();
+  await tickPipelines([], h.ports);
+  const recovered = loadPipelines()[0]!;
+  expect(recovered.state).toBe("needs_decision");
+  expect(recovered.stateDetail).not.toContain("Claude limit: continuing");
+  expect(h.calls.some((call) => call.startsWith("stop-host:build:1:"))).toBe(true);
 });
 
 test("a failover attempt edited to another engine launches there with none of the old engine's limits (graph slice 1)", async () => {
@@ -8418,6 +9550,39 @@ test("reviewNote parks a too-long directive for raw and role-backed review stage
   expect(noteOf(ok)).toBe("Check ship the widget against the ACs.");
 });
 
+test("a review-loop note relays a reported pass's short summary, not the full brief", () => {
+  const role = { engine: "codex", model: "gpt-5.6-sol", effort: "high", roleId: null, access: "read-only", promptScaffold: null } as unknown as Parameters<typeof reviewNote>[2];
+  const brief = `Fence added.\n\nFinal assistant message:\n${"b".repeat(40_000)}`;
+  const reported = (activatedBy: unknown) => ({
+    n: 1, state: "passed", output: brief, activatedBy,
+    report: { verdict: { status: "pass" }, summary: "Fence added." },
+  });
+  const lane = (buildActivation: unknown, cursorInput: string) => ({
+    ...reviewPipeline,
+    stages: [
+      { id: "build", kind: "run", prompt: "Build", next: "review" },
+      { id: "verify", kind: "run", prompt: "Verify", next: "review", onFail: { to: "build", maxRounds: 1 } },
+      { id: "review", kind: "review-loop", prompt: "Review {{prev.output}}", next: null },
+    ],
+    runs: [
+      { stageId: "build", attempts: [reported(buildActivation)] },
+      { stageId: "verify", attempts: [{ n: 1, state: "failed", verdict: { status: "fail", findings: ["P1 — the fence is missing"] } }] },
+    ],
+    cursor: { stageId: "review", state: "pending", input: cursorInput, activatedBy: { stageId: "build", attempt: 1, edge: "pass" } },
+  }) as unknown as Parameters<typeof reviewNote>[0];
+
+  expect(noteOf(reviewNote(lane(null, brief), reviewStage("Review {{prev.output}}"), role))).toBe("Review Fence added.");
+  /* A fix on a spent fail edge carries the same budget note the cursor input does. */
+  const spent = noteOf(reviewNote(
+    lane({ stageId: "verify", attempt: 1, edge: "fail", budgetSpent: true }, brief),
+    reviewStage("Review {{prev.output}}"),
+    role,
+  ));
+  expect(spent).toStartWith("Review Fence added.\n\n");
+  expect(spent).toEndWith("Unreviewed findings:\n- P1 — the fence is missing");
+  expect(spent.length).toBeLessThanOrEqual(MAX_FLOW_NOTE_LENGTH);
+});
+
 test("override-stage re-configures an unstarted stage and holds one whose live attempt predates definition binding (issue #118)", async () => {
   const { ports } = harness();
   const created = await create(ports);
@@ -8819,7 +9984,7 @@ test("a rejected structured fail verdict parks before fail-edge traversal (#429)
   expect(current.stateDetail).toBe(reason);
   expect(current.cursor).toEqual({
     stageId: "verify",
-    state: "running",
+    state: "pending",
     input: "built",
     activatedBy: { stageId: "build", attempt: 1, edge: "pass" },
   });
@@ -10401,13 +11566,11 @@ test("an unreachable remote leaves the stage passed and records it as unpublishe
   expect(box.order).toEqual(["commit"]);
   expect(h.flows.size).toBe(0);
 
-  /* Review ingress still cannot fence a flow while GitHub is unreachable. It
-     keeps the lane retryable in place instead of turning infrastructure into
-     a second operator decision. */
+  /* A successor cannot run while the accepted head remains unpublished. */
   await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
   const waiting = loadPipelines()[0]!;
   expect(waiting.state).toBe("running");
-  expect(waiting.cursor?.stageId).toBe("review");
+  expect(waiting.cursor).toMatchObject({ stageId: "build", state: "committing" });
   expect(waiting.stateDetail).toContain("passed but unpublished");
   expect(waiting.runs.find((run) => run.stageId === "build")!.attempts[0]).toMatchObject({
     state: "passed",
@@ -10482,29 +11645,27 @@ test("a publication that cannot land parks the pass without losing the commit", 
   expect(h.flows.size).toBe(0);
 });
 
-test("a pipeline whose repo has no origin parks at review ingress instead of fencing on a remote it cannot have", async () => {
+test("a pipeline whose repo has no origin keeps its producer head before review ingress", async () => {
   const h = harness();
   const box = publishHarness(h, { origin: false });
   await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
-  /* The pass itself still advances — an unpublishable repo is not a reason to
-     lose the builder's commit. */
+  /* The builder's commit remains accepted while the successor waits. */
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-  expect(loadPipelines()[0]).toMatchObject({ state: "running", lastPassedCommit: box.passedSha, publishedCommit: null });
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", lastPassedCommit: box.passedSha, publishedCommit: null,
+    cursor: { stageId: "build", state: "committing" } });
 
   await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
 
-  const parked = loadPipelines()[0]!;
-  expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toBe(
-    `review stage requires a published pipeline branch, but this repository has no origin remote to publish ${box.passedSha} to`,
-  );
-  /* Parked BEFORE the flow exists: no reviewer is ever fenced on a remote head
-     that cannot be created. */
+  const waiting = loadPipelines()[0]!;
+  expect(waiting.state).toBe("running");
+  expect(waiting.cursor).toMatchObject({ stageId: "build", state: "committing" });
+  expect(waiting.stateDetail).toContain("configure it to publish this accepted head");
+  /* The flow is not created before the accepted head can be published. */
   expect(box.order).toEqual(["commit"]);
   expect(h.flows.size).toBe(0);
-  expect(parked.lastPassedCommit).toBe(box.passedSha);
+  expect(waiting.lastPassedCommit).toBe(box.passedSha);
 });
 
 test("retrying a parked review stage republishes a local repair before the reviewer relaunches", async () => {
@@ -10532,8 +11693,8 @@ test("retrying a parked review stage republishes a local repair before the revie
 
 /* --- exact-head publication is a precondition of EVERY review ingress ------ */
 
-/* A review stage needs a passed run session to review, so both the skip path
-   and the fail-edge path reach ingress only behind an earlier passed stage. */
+/* These synthetic routes have an earlier passed run; the real-git legacy
+   architect case above covers a skipped run as the review producer. */
 const SKIP_STAGES = [
   { id: "plan", kind: "run", role: { roleId: "builder" }, ["prompt"]: "plan", next: "build" },
   { id: "build", kind: "run", role: { roleId: "builder" }, ["prompt"]: "build", next: "review" },
@@ -12195,7 +13356,7 @@ test("retry-stage with the stage and attempt the caller saw retries it; the same
   expect(h.calls).toContain(`spawn:pipeline_${pipeline.id}_plan_3:parent=/codex/creator.jsonl:supersedes=conversation_stage_2`);
 });
 
-test("skip-stage naming another stage or another attempt is refused before the worktree is reset; the one it names is skipped", async () => {
+test("skip-stage naming another stage or attempt is refused before worktree access; the named attempt is skipped", async () => {
   const h = harness();
   const pipeline = await create(h.ports);
   await tickPipelines([], h.ports);
@@ -12212,11 +13373,11 @@ test("skip-stage naming another stage or another attempt is refused before the w
 
   const skipped = await patchPipeline(pipeline.id, { action: "skip-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports);
   expect(skipped.pipeline?.cursor?.stageId).toBe("build");
-  expect(resets()).toBe(2);
+  expect(resets()).toBe(0);
   /* The pipeline no longer waits on plan: the same skip again changes nothing. */
   const again = await patchPipeline(pipeline.id, { action: "skip-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports);
   expect(again.code).toBe("STAGE_CHANGED");
-  expect(resets()).toBe(2);
+  expect(resets()).toBe(0);
 });
 
 test("the attempt retry expects is the stage's latest own attempt, never a lineage-adopted one", async () => {

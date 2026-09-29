@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { accountManager } from "@/lib/accounts/manager";
+import { successorRefusal } from "@/lib/links/adoptionGuard";
 import type { AccountContext, AccountManager } from "@/lib/accounts/contracts";
 import { CodexAppServerClient, CodexAppServerError } from "@/lib/accounts/codexAppServer";
 import { sharedClaudeProjectsRoot } from "@/lib/accounts/claude";
@@ -280,6 +281,11 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
   if (!key) throw new Error("successor Codex thread identity is invalid");
   if (hasStructuredDeliveryHost(key)) return async () => { await releaseStructuredDeliveryHost(key); };
 
+  /* M.4 seam 5 (docs/design/linked-installs.md): a successor is a new
+     process for every task the conversation holds. Refused before the claim,
+     so nothing is started and the predecessor keeps serving. */
+  const refused = successorRefusal(input, "codex", input.registry.readOnlySnapshot());
+  if (refused) throw new Error(refused.error);
   const existing = input.registry.readOnlySnapshot().entries[sessionKeyId(key)];
   const entry = input.registry.upsert({
     ...(existing ?? {
@@ -403,6 +409,11 @@ async function publishClaudeSuccessorHost(
   if (hasStructuredDeliveryHost(key)) return async () => { await releaseStructuredDeliveryHost(key); };
   requireStructuredDeliveryControllerPublication();
 
+  /* M.4 seam 5 (docs/design/linked-installs.md): a successor is a new
+     process for every task the conversation holds. Refused before the claim,
+     so nothing is started and the predecessor keeps serving. */
+  const refused = successorRefusal(input, "claude", input.registry.readOnlySnapshot());
+  if (refused) throw new Error(refused.error);
   const existing = input.registry.readOnlySnapshot().entries[sessionKeyId(key)];
   const entry = input.registry.upsert({
     ...(existing ?? {

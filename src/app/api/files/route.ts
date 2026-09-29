@@ -9,6 +9,7 @@ import { diffFilesBodies, FILES_DELTA_ACCEPT_HEADER, FILES_DELTA_BASE_HEADER } f
 import { acceptsGzip, gzipBody } from "@/lib/http/gzipBody";
 import { readStateCollectionRevision } from "@/lib/state/sqliteStateStore";
 import { ensureEmptyTaskBoardVisibilityMigration } from "@/lib/tasks/boardVisibilityMigration";
+import { markBoardViewed } from "@/lib/links/boardPresence";
 import { buildFilesResponse } from "./response";
 import { cachedFileScan } from "@/lib/scanner/scanCache";
 import { buildFilesResponseInWorker, filesResponseWorkerEnabled } from "@/lib/scanner/filesResponseWorker";
@@ -454,6 +455,7 @@ export async function GET(request: Request): Promise<Response> {
   const requiredGeneration = generationHeader(request, "x-llv-files-generation");
   const url = new URL(request.url);
   const selectedProject = url.searchParams.get("project")?.trim() || undefined;
+  markBoardViewed(selectedProject);
   const pinnedPath = url.searchParams.get("path")?.trim() || undefined;
   const scan = await cachedFileScan(
     selectedProject,

@@ -8,6 +8,7 @@ import { engineTintOf } from "@/components/utils";
 import { ENGINE_MODELS } from "@/lib/agent/models";
 import { useLocale } from "@/lib/i18n";
 import { renderStagePrompt } from "@/lib/pipelines/prompts";
+import { StageGlyph } from "@/components/kanban/StageGlyph";
 
 import {
   STAGE_TONES,
@@ -68,7 +69,7 @@ export function StageCompletedCard({ slot, onOpen, disclosed }: { slot: StageSlo
     >
       <span aria-hidden className="h-1 w-full shrink-0 opacity-60" style={{ backgroundColor: tint.color }} />
       {disclosed ? null : <header className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border px-2.5" style={{ backgroundColor: tint.soft }}>
-        <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: tone.color }} title={t(`pipelineChipState.${state}`)} />
+        <StageGlyph state={state} model={{ engine: stage.effectiveRole.engine, model }} fallback="tone" named badge={false} title={t(`pipelineChipState.${state}`)} />
         <span className="shrink-0 rounded-full border border-border bg-card/70 px-1.5 py-0.5 text-caption font-bold capitalize text-muted">
           {stage.effectiveRole.engine}
         </span>

@@ -86,6 +86,31 @@ const entry = () => readForgeCache(file).data.repositories[REPO]!;
 const isSearch = (args: string[]) => args.includes("--search");
 
 describe("the sweep", () => {
+  test("old gh falls back to GraphQL and preserves closing issue links", async () => {
+    const h = harness((args) => {
+      if (args[0] === "api" && args[1] === "graphql") return { data: { repository: { p0: { closingIssuesReferences: { nodes: [{ number: 42, url: "https://github.com/acme/widgets/issues/42" }], pageInfo: { hasNextPage: false } } } } } };
+      if (args.at(-1)?.includes("closingIssuesReferences")) return Object.assign(new Error("Unknown JSON field: closingIssuesReferences"), { stderr: 'Unknown JSON field: "closingIssuesReferences"' });
+      const legacy = row({ number: 7, headRefName: "pipeline/lane-a" });
+      delete (legacy as Partial<typeof legacy>).closingIssuesReferences;
+      return [legacy];
+    });
+    expect(await h.sweep()).toEqual([REPO]);
+    expect(h.calls.map((args) => args.slice(0, 2))).toEqual([["pr", "list"], ["pr", "list"], ["api", "graphql"]]);
+    expect(entry().prs["7"]).toMatchObject({ closes: [42], headRefName: "pipeline/lane-a", state: "open" });
+    expect(entry().canonical).toBe(REPO);
+  });
+
+  test("old gh keeps the cache incomplete when closing references cannot be read in full", async () => {
+    const h = harness((args) => {
+      if (args[0] === "api") return { data: { repository: { p0: { closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: true } } } } } };
+      if (args.at(-1)?.includes("closingIssuesReferences")) return Object.assign(new Error("Unknown JSON field"), { stderr: 'Unknown JSON field: "closingIssuesReferences"' });
+      return [row({ number: 7 })];
+    });
+    await h.sweep();
+    expect(entry().completeSince).toBeNull();
+    expect(entry().lastError).toBe("command-failed");
+  });
+
   test("the first sweep is a full read: the backfill, draft mapped from isDraft, closing issues kept", async () => {
     const h = harness(() => [row({ number: 7, isDraft: true, closes: [3] }), row({ number: 6, state: "MERGED", headRefName: "pipeline/lane-a" })]);
     expect(await h.sweep()).toEqual([REPO]);

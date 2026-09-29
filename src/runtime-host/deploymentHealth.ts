@@ -4,6 +4,7 @@ import type {
   ViewerHealthReadiness,
 } from "@/lib/runtime/contracts";
 import { MEMBER_REQUIRED_CODE } from "@/lib/team/contract";
+import { redactMonitorText } from "@/lib/monitor/redact";
 
 export type ViewerCandidateContainerState = "running" | "exited" | "missing";
 
@@ -192,7 +193,7 @@ export function candidateLogExcerpt(
   const maxChars = Math.min(Math.max(options.maxChars ?? CANDIDATE_LOG_CHARS, 40), 1_000);
   return output
     .split("\n")
-    .map((line) => probeExcerpt(line, maxChars))
+    .map((line) => probeExcerpt(redactMonitorText(line), maxChars))
     .filter((line) => line.length > 0)
     .slice(-maxLines);
 }

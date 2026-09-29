@@ -12,7 +12,7 @@ import {
   isQuietReconfigureFailure, onAccountChoiceRequest, pickApplying, readPickedAccount, requestAccountChoice, setPickedAccount, useIntendedAccount,
 } from "@/lib/accounts/intendedAccount";
 import { effortScale, registerCopilotEffortScales } from "@/lib/agent/efforts";
-import { ENGINE_MODELS, normalizeClaudeLaunchModel } from "@/lib/agent/models";
+import { ENGINE_MODELS, claudeCatalogModelId } from "@/lib/agent/models";
 import type { AgentModelOption } from "@/lib/agent/models";
 import type { CopilotModelEntry } from "@/lib/agent/copilotModels";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
@@ -399,7 +399,7 @@ export function RuntimePill({
      (ported verbatim from the retired AgentRuntimeControls lifecycle). */
   useEffect(() => {
     if (pillSurface !== "live-root" || applyState !== "confirming") return;
-    const observedModel = engine === "claude" ? normalizeClaudeLaunchModel(file.launchModel ?? file.model) : file.model;
+    const observedModel = engine === "claude" ? claudeCatalogModelId(file.launchModel ?? file.model) : file.model;
     const modelMatches = observedModel === liveDraft.model;
     const effortMatches = file.effort === liveDraft.effort;
     const speedMatches = engine === "claude" || file.fast === liveDraft.fast;

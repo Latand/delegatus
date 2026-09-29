@@ -108,6 +108,7 @@ import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orch
 import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies, spawnParentForCaller } from "@/lib/orchestrator/deputies";
 import { recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
@@ -165,6 +166,7 @@ import { resolveProjectAttribution } from "@/lib/session/projectResolution";
 import { overlaySessionTitles } from "@/lib/session/titleProjection";
 import { recordReplySuggestions } from "@/lib/suggestions/store";
 import { ReplySuggestionValidationError } from "@/lib/suggestions/types";
+import { linkedContext, withOwnership } from "@/lib/links/linked";
 import { applyAssignmentPatches, createTask, patchTask, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskSeatHolding } from "@/lib/tasks/seatHolding";
 import { recordAuthors, type RecordAuthor } from "@/lib/team";
@@ -1373,7 +1375,7 @@ function refuseMcpSpawnSizing(args: McpToolArgs, dependencies: Pick<ViewerMcpDom
     model: args.model,
     briefer: { kind: "agent", runtime },
   });
-  if (refusal) throw new McpToolRefusal(refusal, { violations: [{ field: roleId ? "roleParams" : "model", message: refusal, expected: "size=trivial on a brief from an Opus-class agent, or the role's own row" }] });
+  if (refusal) throw new McpToolRefusal(refusal, { violations: [{ field: roleId ? "roleParams" : "model", message: refusal, expected: "size=trivial on a brief from a large model (Claude Opus or Fable, or a large Codex model), or the role's own row" }] });
 }
 
 async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
@@ -1552,13 +1554,18 @@ function taskTextLanguageWarnings(value: unknown, dependencies?: ViewerMcpDomain
 }
 
 async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  /* A new task runs on the machine that creates it (M.4); "here" is the only
+     machine a create names. */
+  if (args.machine !== undefined && args.machine !== "here") {
+    throw new McpToolRefusal("machine accepts only \"here\": a new task runs on the machine that creates it", { code: "TASK_INVALID_FIELD", field: "machine", status: 400 });
+  }
   const input: CreateTaskInput = {
     ...args,
     placement: args.placement ?? "unplaced",
     clientRequestId: requestId(args),
   };
   const result = mutateTasksFile((state) => {
-    const outcome = createTask(state.tasks, input, state.recentCreates);
+    const outcome = createTask(state.tasks, input, state.recentCreates, { explicit: true });
     return {
       state: outcome.ok && !outcome.replay ? { tasks: outcome.tasks, recentCreates: outcome.recentCreates } : undefined,
       result: outcome,
@@ -1608,7 +1615,7 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
   let changedFields: string[] = [];
   const result = mutateTasks((tasks) => {
     const before = fieldValues(tasks.find(task => task.id === taskId));
-    const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", seatHolding: taskSeatHolding,
+    const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", seatHolding: taskSeatHolding, explicit: true,
       workLinks: taskWorkLinkContext(() => dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? []) });
     if (outcome.ok) changedFields = changedFieldNames(before, outcome.task);
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
@@ -1620,20 +1627,20 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
 /**
  * The pipeline mutations that share one idempotency receipt path (#1766).
  *
- * A registry lock that was never taken refused before anything was admitted:
- * no pipeline row, no task assignment, nothing reserved downstream. That
- * refusal is reported as unadmitted, so the receipt layer releases the claim
- * and the caller's retry under the SAME clientRequestId runs the operation
- * instead of replaying the refusal. Any other busy error keeps its ordinary
- * meaning — releasing the lease raises the same message after the write has
- * already committed, and such an answer must stay this request's answer.
+ * A registry lock refusal or unavailable seat revocations occurs before
+ * admission: no record or downstream reservation exists. Release the receipt
+ * claim so a retry under the SAME clientRequestId checks authority again. Any
+ * later busy error keeps its ordinary meaning because a write may already
+ * have committed.
  */
-async function unadmittedOnStoreBusy<T>(run: () => Promise<T>): Promise<T> {
+async function unadmittedBeforeMutation<T>(run: () => Promise<T>): Promise<T> {
   try {
     return await run();
   } catch (error) {
-    if (error instanceof StoreBusyBeforeAdmissionError) {
-      throw new McpUnadmittedRefusal(error.message, { code: "store_busy" });
+    if (error instanceof StoreBusyBeforeAdmissionError || error instanceof SeatRevocationStoreUnavailableError) {
+      throw new McpUnadmittedRefusal(error.message, {
+        code: error instanceof SeatRevocationStoreUnavailableError ? "orchestrator_seat_authority_unavailable" : "store_busy",
+      });
     }
     throw error;
   }
@@ -1648,7 +1655,17 @@ function deliveryAcknowledgement(pipeline: import("@/lib/pipelines/types").Pipel
 
 const PIPELINE_CREATION_QUEUED_NOTE = "Pipeline state is not writable right now (a Viewer deployment is handing over, or the store is busy), so this pipeline is queued under the pipelineId above. The serving release stores and starts it on its next controller pass; get_pipeline answers once it is stored. Do not create it again.";
 
+function assertPipelineSeatAuthority(dependencies: ViewerMcpDomainDependencies, src?: unknown): void {
+  const caller = attributionOf(dependencies).conversationId;
+  const snapshot = dependencies.registrySnapshot?.();
+  const lookup = snapshot ? readOnlyConversationLookupFromSnapshot(snapshot) : null;
+  const source = !caller && typeof src === "string" ? lookup?.conversationForPath(src.trim()) : null;
+  const refusal = revokedSeatPipelineRefusal(caller ?? source?.id ?? null, id => lookup?.canonicalConversationId(id as `conversation_${string}`) ?? id);
+  if (refusal) throw new McpToolRefusal(refusal, { code: "orchestrator_seat_revoked", status: 403 });
+}
+
 async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  if (dependencies) assertPipelineSeatAuthority(dependencies, args.src);
   const request = withoutKeys(args, ["clientRequestId", "recoveryOnly"]);
   if (context?.dispatch) context.dispatch.attempted = true;
   /* Every MCP caller is an agent; the sizing rules judge the attributed
@@ -1730,6 +1747,7 @@ function closeReportCounts(report: PipelineCloseReport) {
 }
 
 async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  assertPipelineSeatAuthority(dependencies);
   const pipelineId = required(args, "pipelineId");
   const action = required(args, "action") as PipelineAction;
   /* Clearing a lane off the operator's queue is the dismissal service's write
@@ -2815,7 +2833,8 @@ async function bridgeReport(
     const telegram = existing.telegram && existing.telegram.state === "failed" && existing.origin?.kind === "manager"
       && origin.kind === "manager" && isRetryableReportSend(existing.telegram.code)
       && project !== null && effectiveReportTelegram(project)?.chat === existing.telegram.chat
-      ? await postReportTelegram(existing.id, existing.telegram.chat, existing.telegram.html, `bridge-report:${existing.id}:r${existing.telegram.attempts}`, dependencies, control)
+      && effectiveReportTelegram(project)?.topicId === existing.telegram.topicId
+      ? await postReportTelegram(existing.id, existing.telegram.chat, existing.telegram.html, existing.telegram.topicId, `bridge-report:${existing.id}:r${existing.telegram.attempts}`, dependencies, control)
       : existing.telegram ?? null;
     /* `alreadyRecorded`, because the tool service's envelope owns `replayed`
        (a replay of the same clientRequestId). */
@@ -2831,7 +2850,7 @@ async function bridgeReport(
   const locale = dependencies.operatorLocale ? dependencies.operatorLocale() : operatorLocale();
   const warnings: string[] = [];
   let storedBody: string;
-  let telegramCopy: { chat: string; html: string } | null = null;
+  let telegramCopy: { chat: string; html: string; topicId?: number } | null = null;
   if (origin.kind === "manager") {
     /* Only a chat the operator chose for the project is posted to (§5.6). */
     const destination = project ? effectiveReportTelegram(project) : null;
@@ -2865,7 +2884,7 @@ async function bridgeReport(
     if (language) warnings.push(language);
     storedBody = renderPlain(rendered.cut);
     if (destination) {
-      telegramCopy = { chat: destination.chat, html: renderTelegram(rendered.cut, knownPullRequests(project!)) };
+      telegramCopy = { chat: destination.chat, html: renderTelegram(rendered.cut, knownPullRequests(project!)), ...(destination.topicId ? { topicId: destination.topicId } : {}) };
     }
   } else {
     /* The visible attribution is SERVER-composed and leads the body, so
@@ -2893,7 +2912,7 @@ async function bridgeReport(
      to have delivered a second report. */
   if (!appended) return { recorded: false, alreadyRecorded: true };
   const telegram = appended.telegram
-    ? await postReportTelegram(appended.id, appended.telegram.chat, appended.telegram.html, `bridge-report:${appended.id}`, dependencies, control)
+    ? await postReportTelegram(appended.id, appended.telegram.chat, appended.telegram.html, appended.telegram.topicId, `bridge-report:${appended.id}`, dependencies, control)
     : null;
   return {
     recorded: true,
@@ -2950,6 +2969,7 @@ async function postReportTelegram(
   reportId: string,
   chat: string,
   html: string,
+  topicId: number | undefined,
   clientRequestId: string,
   dependencies: ViewerMcpDomainDependencies,
   control: ViewerControlDependencies | null,
@@ -2957,7 +2977,7 @@ async function postReportTelegram(
   const send = dependencies.sendReportTelegram ?? ((input: ReportTelegramSend) => productionSendReportTelegram(input, control));
   let outcome: ReportTelegramSendOutcome;
   try {
-    outcome = await send({ chat, html, clientRequestId });
+    outcome = await send({ chat, html, ...(topicId ? { topicId } : {}), clientRequestId });
   } catch (error) {
     outcome = { ok: false, code: "telegram_failed", message: error instanceof Error ? error.message : String(error) };
   }
@@ -2970,6 +2990,7 @@ async function postReportTelegram(
 export interface ReportTelegramSend {
   chat: string;
   html: string;
+  topicId?: number;
   clientRequestId: string;
 }
 
@@ -2984,6 +3005,7 @@ async function productionSendReportTelegram(input: ReportTelegramSend, control: 
       op: "send",
       clientRequestId: input.clientRequestId,
       chat: input.chat,
+      ...(input.topicId ? { topicId: input.topicId } : {}),
       text: input.html,
       format: "html",
       silent: true,
@@ -3990,12 +4012,8 @@ async function rotateOrchestrator(
     );
   }
   const project = canonicalOrchestratorProject(required(args, "project"));
-  /* #1452, #2030: with no mandate named, the route rebuilds the successor's
-     core from the CURRENT default whenever the incumbent's stored mandate is
-     based on an older version, and keeps its rotation history. Sending the
-     default from here instead dropped that history. `keepIncumbentMandate:
-     true` is the explicit way to carry the old text forward; a seat on the
-     current version, or on bespoke (unversioned) rules, keeps its own text. */
+  /* Omitting mandate preserves the incumbent's core and handoff history;
+     sending one explicitly replaces the core. */
   const fields = allowedSeatFields(args, ["mandate", "handoffNotes", "cwd", "engine", "model", "effort", "accountId", "keepIncumbentMandate"]);
   const result = await control.post("/api/orchestrator/rotate", {
     project,
@@ -4013,6 +4031,7 @@ async function rotateOrchestrator(
     triggeredBy: result.triggeredBy ?? null,
     /* Whether the prior handoffs were summarized or kept verbatim, and why. */
     handoff: result.handoff ?? null,
+    mandateDisposition: result.mandateDisposition ?? null,
     replayed: result.replayed === true,
   });
 }
@@ -4159,9 +4178,11 @@ async function boardSnapshot(
       };
     });
   const board = project ? dependencies.boardFor(project) : null;
+  const remote = project ? await readRemoteAgentRows(project) : { rows: [], unavailable: false };
   return redactPayload({
     count: conversations.length,
     conversations,
+    ...(project ? { remoteAgents: remote.rows, ...(remote.unavailable ? { remoteAgentsUnavailable: true } : {}) } : {}),
     hiddenCount: board?.prefs.hidden.length ?? null,
     board,
   });
@@ -4320,7 +4341,7 @@ function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies)
     openOnly: args.openOnly === true, updatedSince: sinceTime(args.updatedSince), ids: stringSet(args.ids), query: text(args.query).trim().toLowerCase(),
     priorities: stringSet(args.priority, [...TASK_PRIORITIES]) };
   const source = dependencies.taskSelectionSource?.();
-  const project = (task: TaskPipelineReadModel) => args.full === true ? task : args.compact === false ? listTaskRow(task) : compactTask(task);
+  const project = (task: TaskPipelineReadModel) => args.full === true ? withOwnership(task) : args.compact === false ? withOwnership(listTaskRow(task)) : compactTask(task);
   const page = source ? boardSelection(source.filename, "tasks").page(source, scope, args.cursor,
     Math.max(1, Math.min(200, integer(args.limit, 100))), task => project(taskWithLinks(task, dependencies)))
     : listPage(taskReadModel(dependencies), {
@@ -4333,7 +4354,7 @@ function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies)
       && (!scope.updatedSince || task.updatedAt >= scope.updatedSince)
       && (!scope.ids.length || scope.ids.includes(task.id))
       && (!scope.query || task.text.toLowerCase().includes(scope.query)),
-    project: task => args.full === true ? task : args.compact === false ? listTaskRow(task) : compactTask(task),
+    project,
   });
   const { rows: tasks, ...pagination } = page;
   return redactPayload({ ...pagination, tasks, compact: !fullAnswer(args),
@@ -4352,7 +4373,20 @@ function carriedPipelines(ids: readonly string[], dependencies: ViewerMcpDomainD
   return (dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? []).filter((pipeline) => wanted.has(pipeline.id));
 }
 
-function getTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
+type RemoteAgentRows = ReturnType<typeof import("@/lib/links/agentFeed").remoteAgents>;
+async function readRemoteAgentRows(project: string): Promise<{ rows: RemoteAgentRows; unavailable: boolean }> {
+  if (!linkedContext().all.has(project)) return { rows: [], unavailable: false };
+  const { remoteAgents } = await import("@/lib/links/agentFeed");
+  const local = remoteAgents(project);
+  if (local.length) return { rows: local, unavailable: false };
+  try {
+    const { response, parsed } = await requestViewerControl(`/api/links/agents?project=${encodeURIComponent(project)}`, { method: "GET" });
+    if (response.ok && objectRecord(parsed) && Array.isArray(parsed.agents)) return { rows: parsed.agents as RemoteAgentRows, unavailable: false };
+  } catch { /* The task read still works while the Viewer control endpoint is down. */ }
+  return { rows: [], unavailable: true };
+}
+
+async function getTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const taskId = required(args, "taskId");
   const source = dependencies.taskSelectionSource?.();
   const stored = source?.read(taskId);
@@ -4360,7 +4394,9 @@ function getTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): 
     : taskById.get(taskReadModel(dependencies))!.get(taskId);
   if (!task) throw new Error("task not found");
   const workLinks = args.compact === true ? null : taskWorkLinks(task, carriedPipelines(task.pipelineIds, dependencies));
-  return redactPayload({ taskId, task: args.compact === true ? compactTask(task) : task, ...(workLinks ? { workLinks } : {}),
+  const remote = await readRemoteAgentRows(task.project);
+  return redactPayload({ taskId, task: args.compact === true ? compactTask(task) : withOwnership(task), remoteAgents: remote.rows.filter((row) => row.task === task.id),
+    ...(remote.unavailable ? { remoteAgentsUnavailable: true } : {}), ...(workLinks ? { workLinks } : {}),
     ...(args.compact === true ? { omittedRecordCount: 1, readMore: "get_task without compact reads the full task." } : {}) });
 }
 
@@ -6038,9 +6074,9 @@ export function viewerMcpBindings(
     message_receipt: (args) => messageReceipt(args),
     create_task: (args) => createBoardTask(args, domainDependencies),
     update_task: (args) => updateBoardTask(args, domainDependencies),
-    create_pipeline: (args, context) => unadmittedOnStoreBusy(() => createPipeline(args, context, domainDependencies)),
+    create_pipeline: (args, context) => unadmittedBeforeMutation(() => createPipeline(args, context, domainDependencies)),
     pipeline_action: Object.assign(
-      (args: McpToolArgs) => unadmittedOnStoreBusy(() => pipelineAction(args, domainDependencies)),
+      (args: McpToolArgs) => unadmittedBeforeMutation(() => pipelineAction(args, domainDependencies)),
       { authorizeReceipt: (args: McpToolArgs) => {
         if (!PIPELINE_RECEIPT_ACTIONS.has(args.action as PipelineAction)) return;
         const id = required(args, "pipelineId");
@@ -6056,8 +6092,8 @@ export function viewerMcpBindings(
         if (refusal) throw new Error(refusal.error);
       } },
     ),
-    stage_report: (args) => stageReport(args, domainDependencies),
-    link_task_to_pipeline: (args) => unadmittedOnStoreBusy(() => linkTaskToPipeline(args, linkTaskDependencies)),
+    stage_report: (args) => unadmittedBeforeMutation(() => stageReport(args, domainDependencies)),
+    link_task_to_pipeline: (args) => unadmittedBeforeMutation(() => linkTaskToPipeline(args, linkTaskDependencies)),
     list_conversations: (args, context) => budgeted("list_conversations", args, 12_000, cursor => listConversations({ ...args, cursor }, viewerControlForCall(controlDependencies, context))),
     search_transcripts: (args, context) => searchTranscripts(args, viewerControlForCall(controlDependencies, context)),
     get_conversation: (args, context) => getConversation(args, domainDependencies, context),
@@ -6071,7 +6107,7 @@ export function viewerMcpBindings(
     flow_action: (args) => flowAction(args, domainDependencies),
     list_pipelines: (args, context) => listPipelines(args, domainDependencies, context),
     list_tasks: (args) => Promise.resolve(listTasks(args, domainDependencies)),
-    get_task: (args) => Promise.resolve(getTask(args, domainDependencies)),
+    get_task: (args) => getTask(args, domainDependencies),
     operator_snapshot: (args) => operatorSnapshot(args, domainDependencies),
     deployment_status: (args, context) => deploymentStatus(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     resources: (args) => resources(args, domainDependencies),

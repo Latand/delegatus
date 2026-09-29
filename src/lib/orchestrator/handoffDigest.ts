@@ -154,6 +154,12 @@ export function splitMandate(mandate: string): SplitMandate {
   };
 }
 
+/** Where the successor finds the board (docs/design/board-maintenance-report.md
+    §5.5). The handoff used to list up to twelve open tasks by title and status;
+    the report lists every open task with its state, and the bytes that list
+    took pay for the mandate section that says how to read it. */
+export const HANDOFF_BOARD_REPORT_POINTER = "The board maintenance report, a separate message Delegatus sends after this mandate, lists this project's open tasks and their state.";
+
 /** The fresh handoff, in pieces, so compose can trim the caller's notes
     without re-deriving the rest. */
 export interface HandoffParts {
@@ -497,7 +503,7 @@ Decisions:
 Blockers:
 In flight:
 
-Rules: at most 3500 bytes in total. Keep only what the successor needs to act: decisions already made, blockers still open, and work in flight with its current state. Never include names, account handles, email addresses, tokens, or file paths. Do not use Markdown headings starting with "#". Do not run commands or read files; everything you need is below. Output the digest only — no preamble, no closing remarks.`;
+Rules: at most 3500 bytes in total. Keep only what the successor needs to act: decisions already made, blockers still open, and work in flight with its current state. Never include names, account handles, email addresses, tokens, or file paths. Do not use Markdown headings starting with "#". Do not run commands or read files; everything you need is below. Output the digest only — no preamble, no closing remarks. Decisions means the operator's decisions about the product, its scope and the project's settings; leave out rules about how to run agents, which the successor's mandate already carries.`;
 
 /** Every piece of transcript-derived text is redacted before it enters the
     prompt, and the oldest handoffs drop out first when the input is too big —
