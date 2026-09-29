@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import sharp from "sharp";
 
 import { NextRequest } from "next/server";
 
@@ -98,7 +99,7 @@ test("agent media route uses the caller capability and topic link for an album",
   await connected();
   service.setChat(String(TEAM.id), "team-reports", true);
   const image = path.join(SANDBOX, "route-photo.jpg");
-  fs.writeFileSync(image, Uint8Array.from([0xff, 0xd8, 0xff, 0xd9]));
+  fs.writeFileSync(image, await sharp({ create: { width: 1, height: 1, channels: 3, background: { r: 12, g: 34, b: 56 } } }).jpeg().toBuffer());
   transport.script("sendMediaGroup", ok([{ message_id: 71, date: 5 }, { message_id: 72, date: 6 }]));
   const response = await agentRoute.POST(request("/api/telegram/bot/agent", { method: "POST", headers: AGENT, body: { op: "send_media", clientRequestId: "media-route", chat: "team-reports", topicId: 5, images: [{ path: image, caption: "First" }, { path: image, caption: "Second" }], conversationId: "forged" } }));
   expect(response.status).toBe(200);

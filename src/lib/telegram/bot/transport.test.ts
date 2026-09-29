@@ -75,6 +75,17 @@ test("a fetch rejection that quotes the request URL comes back as a bare code", 
   expect(JSON.stringify(result)).not.toContain(TOKEN_TAIL);
 });
 
+test("an unreadable or malformed success body stays uncertain, while Telegram rejection is definitive", async () => {
+  const truncated = createBotApiTransport(TOKEN, async () => new Response('{"ok":true,"result":[', { status: 200 }));
+  expect(await truncated.call("sendMediaGroup", {})).toMatchObject({ ok: false, kind: "network_failed" });
+
+  const missingResult = createBotApiTransport(TOKEN, async () => jsonResponse({ ok: true }));
+  expect(await missingResult.call("sendPhoto", {})).toMatchObject({ ok: false, kind: "network_failed" });
+
+  const rejected = createBotApiTransport(TOKEN, async () => jsonResponse({ ok: false, error_code: 400, description: "bad request" }, 400));
+  expect(await rejected.call("sendPhoto", {})).toMatchObject({ ok: false, kind: "http", status: 400 });
+});
+
 test("a connection refused or a name that never resolved is unreachable; a connection cut later may have carried the request", async () => {
   /* The codes Bun raises, read from a closed port, an unresolvable name and
      a server that dropped the socket after reading the request. */

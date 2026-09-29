@@ -10,7 +10,7 @@ process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 
 const { TelegramBotError, TelegramBotService, productionTelegramBotDependencies, splitMessageText } = await import("./service");
 const { FakeBotTransport, fakeBotToken, ok, refused, unreachable } = await import("./fakeTransport");
-const { telegramBotTokenPath } = await import("./transport");
+const { createBotApiTransport, telegramBotTokenPath } = await import("./transport");
 const { statePath } = await import("@/lib/configDir");
 
 import type { TgUpdate } from "./store";
@@ -341,6 +341,41 @@ test("album sends per-image captions once and an unfinished claim replays send_u
   expect((await refusal(() => service.sendMedia(uncertainInput))).code).toBe("send_uncertain");
   expect((await refusal(() => service.sendMedia(uncertainInput))).code).toBe("send_uncertain");
   expect(transport.callsOf("sendMediaGroup")).toHaveLength(2);
+});
+
+test("a truncated HTTP success stays pending across a service restart", async () => {
+  await allowedTeam();
+  await service.stopPoller();
+  Reflect.get(service, "storeCache")?.close();
+
+  let httpCalls = 0;
+  const dependencies = {
+    ...productionTelegramBotDependencies(),
+    transportFor: () => createBotApiTransport(TOKEN, async () => {
+      httpCalls += 1;
+      return new Response('{"ok":true,"result":[', { status: 200 });
+    }),
+    now: () => NOW,
+    sleep: async () => {},
+    conversationTitle: () => "Weekly report writer",
+  };
+  const input = {
+    conversationId: "conversation_writer",
+    clientRequestId: "truncated-body",
+    chat: "team-reports",
+    images: [{ path: await validImage("truncated-response.jpg", "jpeg"), caption: "Step" }],
+  };
+
+  service = new TelegramBotService(dependencies);
+  expect((await refusal(() => service.sendMedia(input))).code).toBe("send_uncertain");
+  expect(httpCalls).toBe(1);
+  Reflect.get(service, "storeCache")?.close();
+
+  service = new TelegramBotService(dependencies);
+  const retry = await refusal(() => service.sendMedia(input));
+  expect(retry.code).toBe("send_uncertain");
+  expect(retry.retryable).toBe(false);
+  expect(httpCalls).toBe(1);
 });
 
 test("text and media receipts use separate namespaces for both call orders and prefixed user keys", async () => {
