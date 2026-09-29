@@ -100,6 +100,32 @@ test("media send preserves send_uncertain through MCP and replays the refusal", 
   }
 });
 
+test("telegram_bot_send_document forwards the document with the caller capability, never a caller-named conversation", async () => {
+  const document = { path: "/sandbox/handoff/weekly.md", filename: "Weekly.md", caption: "<b>Week</b>" };
+  await bindings().telegram_bot_send_document({ clientRequestId: "doc-1", chat: "team-reports", document, format: "html", topicId: 5, replyToMessageId: 2, silent: true, conversationId: "forged" });
+  expect(dispatched[0]).toMatchObject({ pathname: "/api/telegram/bot/agent", body: { op: "send_document", clientRequestId: "doc-1", chat: "team-reports", document, format: "html", topicId: 5, replyToMessageId: 2, silent: true }, headers: { [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY } });
+  expect(dispatched[0]!.body).not.toHaveProperty("conversationId");
+});
+
+test("a document secret refusal reaches the MCP answer with its class and replays without a second dispatch", async () => {
+  let calls = 0;
+  const viewer = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => {
+    calls += 1;
+    return telegramBotFailure(new TelegramBotError("document_secret", "the file contains what looks like a secret (private_key, line 3)", { secretClass: "private_key" }));
+  } });
+  process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${viewer.port}`;
+  try {
+    const service = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true)), new MemoryMcpReceiptStore());
+    const args = { clientRequestId: "doc-secret", chat: "team-reports", document: { path: "/sandbox/handoff/key.md" } };
+    const first = await service.callTool("telegram_bot_send_document", args);
+    expect(first).toMatchObject({ ok: false, code: "document_secret", retryable: false, details: { secretClass: "private_key" } });
+    expect(await service.callTool("telegram_bot_send_document", args)).toMatchObject({ ok: false, code: "document_secret", replayed: true });
+    expect(calls).toBe(1);
+  } finally {
+    viewer.stop(true);
+  }
+});
+
 test("a route refusal keeps its code, whether a new key may retry, and Telegram's wait", async () => {
   dispatchAnswer = async () => { throw new McpDispatchVerdictError("the operator has not allowed posting to Team Reports", { status: 403, code: "chat_not_allowed" }); };
   const notAllowed = await bindings().telegram_bot_send({ clientRequestId: "req-2", chat: "team-reports", text: "x" }).catch((error: unknown) => error);

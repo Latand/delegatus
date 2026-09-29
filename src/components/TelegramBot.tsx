@@ -37,6 +37,7 @@ export const ERROR_KEYS: Record<string, Key> = {
   chat_not_allowed: "telegram.bot.err.chat_not_allowed",
   forbidden: "telegram.bot.err.forbidden",
   rate_limited: "telegram.bot.err.rate_limited",
+  document_roots_invalid: "telegram.bot.err.document_roots_invalid",
   transport: "telegram.actionUnreachable",
 };
 
@@ -245,6 +246,58 @@ export function AddChatForm({ state, onAdded, compact = false }: { state: Telegr
   );
 }
 
+/**
+ * The folders agents may send documents from, one absolute path per line.
+ * The draft follows the server's list until the operator edits it; saving an
+ * empty field returns to the default.
+ */
+export function DocumentRootsForm({ state }: { state: TelegramBotState }) {
+  const { t } = useLocale();
+  const documents = state.status?.documents;
+  const stored = documents?.custom ? documents.roots.join("\n") : "";
+  const [draft, setDraft] = useState<string | null>(null);
+  const value = draft ?? stored;
+  const roots = value.split("\n").map((line) => line.trim()).filter(Boolean);
+  const submit = async () => {
+    if (state.busy) return;
+    if (await state.setDocumentRoots(roots)) setDraft(null);
+  };
+  return (
+    <form
+      data-telegram-document-roots=""
+      onSubmit={(event) => { event.preventDefault(); void submit(); }}
+      className="flex flex-col gap-1.5"
+    >
+      <p className="text-[10.5px] leading-snug text-muted">{t("telegram.bot.documentsHint")}</p>
+      <textarea
+        value={value}
+        disabled={state.busy}
+        rows={2}
+        autoComplete="off"
+        spellCheck={false}
+        data-telegram-document-roots-input=""
+        aria-label={t("telegram.bot.documentsLabel")}
+        placeholder={documents && !documents.custom ? documents.roots.join("\n") : t("telegram.bot.documentsLabel")}
+        onChange={(event) => setDraft(event.target.value)}
+        className="min-h-[44px] min-w-0 resize-y rounded-[8px] border border-border bg-canvas px-2 py-1.5 font-mono text-[11px] leading-snug outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      />
+      <div className="flex min-w-0 items-center gap-1.5">
+        {documents && !documents.custom && draft === null ? (
+          <span className="min-w-0 flex-1 truncate text-[10px] font-semibold text-muted">{t("telegram.bot.documentsDefault")}</span>
+        ) : <span className="flex-1" />}
+        <button
+          type="submit"
+          data-telegram-document-roots-save=""
+          disabled={state.busy || draft === null || value === stored}
+          className="h-11 shrink-0 rounded-[8px] border border-border bg-canvas px-2.5 text-[11px] font-semibold hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-8"
+        >
+          {t("telegram.bot.documentsSave")}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 /** The token field. Uncontrolled, and emptied before the request starts. */
 export function TokenForm({ busy, onConnect }: { busy: boolean; onConnect: (token: string) => void }) {
   const { t } = useLocale();
@@ -353,6 +406,10 @@ export function TelegramBotSection({ state }: { state: TelegramBotState }) {
           <div className="flex flex-col gap-1.5 border-t border-border pt-2">
             <h4 className="text-[10.5px] font-bold uppercase tracking-wide text-muted">{t("telegram.bot.addTitle")}</h4>
             <AddChatForm state={state} />
+          </div>
+          <div className="flex flex-col gap-1.5 border-t border-border pt-2">
+            <h4 className="text-[10.5px] font-bold uppercase tracking-wide text-muted">{t("telegram.bot.documentsTitle")}</h4>
+            <DocumentRootsForm state={state} />
           </div>
           <div className="border-t border-border pt-2">
             <ProjectReportsOverview bot={state} />

@@ -97,7 +97,9 @@ export function createBotApiTransport(token: string, fetchImpl: FetchLike = (inp
       const multipart = Object.values(params).some((value) => value instanceof Blob);
       const form = multipart ? new FormData() : null;
       if (form) for (const [key, value] of Object.entries(params)) {
-        if (value instanceof Blob) form.append(key, value, `${key}.${value.type === "image/png" ? "png" : "jpg"}`);
+        /* A File (a document) keeps its own name; a photo is named for its field. */
+        if (value instanceof File) form.append(key, value, value.name);
+        else if (value instanceof Blob) form.append(key, value, `${key}.${value.type === "image/png" ? "png" : "jpg"}`);
         else form.append(key, typeof value === "string" ? value : JSON.stringify(value));
       }
       response = await fetchImpl(`${API_ORIGIN}/bot${token}/${method}`, {

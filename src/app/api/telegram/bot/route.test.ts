@@ -23,6 +23,8 @@ const TOKEN_TAIL = TOKEN.slice(TOKEN.indexOf(":") + 1);
 const AGENT_CAPABILITY = "A".repeat(43);
 const AGENT = { [VIEWER_SPAWN_CAPABILITY_HEADER]: AGENT_CAPABILITY };
 const TEAM = { id: -1000000000101, type: "supergroup", title: "Team Reports" };
+/* The Viewer host's home for document roots: a sandbox, never the real one. */
+const HOME = path.join(SANDBOX, "home");
 
 let transport: InstanceType<typeof FakeBotTransport>;
 let service: InstanceType<typeof TelegramBotService>;
@@ -35,6 +37,7 @@ beforeEach(() => {
     transportFor: () => transport,
     sleep: async () => {},
     conversationTitle: () => "Report writer",
+    documentEnvironment: () => ({ home: HOME, stateDir: process.env.LLV_STATE_DIR! }),
   });
   setTelegramBotServiceForTests(service);
   setCallerConversationResolverForTests((digest) => (digest ? "conversation_writer" : null));
@@ -135,6 +138,7 @@ test("an agent capability is refused every operator action, so no agent widens i
   for (const body of [
     { action: "connect", token: TOKEN },
     { action: "chat", chatId: String(TEAM.id), alias: "team-reports", postAllowed: true },
+    { action: "documents", roots: [SANDBOX] },
     { action: "remove" },
   ]) {
     const response = await operatorRoute.POST(request("/api/telegram/bot", { method: "POST", headers: AGENT, body }));
@@ -142,7 +146,40 @@ test("an agent capability is refused every operator action, so no agent widens i
     expect(await response.json()).toMatchObject({ code: "operator_only" });
   }
   expect(service.status().chats[0]).toMatchObject({ alias: null, postAllowed: false });
+  expect(service.status().documents).toEqual({ roots: [path.join(HOME, "handoff")], custom: false });
   expect(service.status().connected).toBe(true);
+});
+
+test("the operator sets document roots; a refused root keeps the stored ones", async () => {
+  await connected();
+  const reports = path.join(SANDBOX, "reports");
+  const saved = await operatorRoute.POST(request("/api/telegram/bot", { method: "POST", body: { action: "documents", roots: [reports] } }));
+  expect(saved.status).toBe(200);
+  expect((await saved.json()).bot.documents).toEqual({ roots: [reports], custom: true });
+  const refused = await operatorRoute.POST(request("/api/telegram/bot", { method: "POST", body: { action: "documents", roots: [path.join(process.env.LLV_STATE_DIR!, "telegram")] } }));
+  expect(refused.status).toBe(400);
+  expect(await refused.json()).toMatchObject({ code: "document_roots_invalid" });
+  expect(service.status().documents).toEqual({ roots: [reports], custom: true });
+});
+
+test("agent document route checks the file on the host and attributes the post to the caller", async () => {
+  await connected();
+  service.setChat(String(TEAM.id), "team-reports", true);
+  fs.mkdirSync(path.join(HOME, "handoff"), { recursive: true });
+  const report = path.join(HOME, "handoff", "route-report.md");
+  fs.writeFileSync(report, "# Weekly report\n\nAll green.\n");
+  transport.script("sendDocument", ok({ message_id: 73, date: 7 }));
+  const response = await agentRoute.POST(request("/api/telegram/bot/agent", { method: "POST", headers: AGENT, body: { op: "send_document", clientRequestId: "document-route", chat: "team-reports", document: { path: report, caption: "Weekly" }, conversationId: "forged" } }));
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ messageIds: [73], attributedTo: { conversationId: "conversation_writer" } });
+  expect((transport.callsOf("sendDocument")[0]!.params.document as File).name).toBe("route-report.md");
+
+  const outside = path.join(SANDBOX, "outside.md");
+  fs.writeFileSync(outside, "not a report");
+  const refused = await agentRoute.POST(request("/api/telegram/bot/agent", { method: "POST", headers: AGENT, body: { op: "send_document", clientRequestId: "document-outside", chat: "team-reports", document: { path: outside } } }));
+  expect(refused.status).toBe(403);
+  expect(await refused.json()).toMatchObject({ code: "document_outside_roots", retryable: false });
+  expect(transport.callsOf("sendDocument")).toHaveLength(1);
 });
 
 test("a cross-origin request is refused before anything runs", async () => {
