@@ -308,6 +308,16 @@
     cancelAnimationFrame(panAnimation);
     panAnimation = 0;
   }
+  // A forwarded pan follows the finger in viewport coordinates. The frame moves
+  // under the finger whenever the page scrolls, so the frame's own reading of
+  // the touch is turned into viewport terms here, where the frame's position
+  // is known, and the page is never scrolled by a difference between readings
+  // taken in a frame that has moved in between.
+  let pan = null;
+  function fingerInViewport(live, y) {
+    const box = live.iframe.getBoundingClientRect();
+    return box.top + y * (box.height / (live.iframe.offsetHeight || 1));
+  }
   window.addEventListener("touchstart", stopPanMomentum, { passive: true });
   window.addEventListener("wheel", stopPanMomentum, { passive: true });
   function coastPan(velocity) {
@@ -500,14 +510,29 @@
     if (!live || !data || typeof data.type !== "string") return;
     if (data.type === "dlg:vertical-start") {
       if (live.phone) stopPanMomentum();
+      pan = null;
       return;
     }
     if (data.type === "dlg:vertical-pan") {
-      if (live.phone && Number.isFinite(data.deltaY)) window.scrollBy(0, Math.max(-100, Math.min(100, data.deltaY)));
+      if (!live.phone || !live.iframe || !Number.isFinite(data.y)) return;
+      const now = fingerInViewport(live, data.y);
+      if (!pan) pan = { last: Number.isFinite(data.fromY) ? fingerInViewport(live, data.fromY) : now, samples: [] };
+      const at = performance.now();
+      pan.samples.push({ y: now, at });
+      pan.samples = pan.samples.filter((sample) => at - sample.at <= 90);
+      window.scrollBy(0, Math.max(-100, Math.min(100, pan.last - now)));
+      pan.last = now;
       return;
     }
     if (data.type === "dlg:vertical-end") {
-      if (live.phone) coastPan(data.velocity);
+      const samples = pan ? pan.samples : [];
+      pan = null;
+      if (!live.phone || samples.length < 2) return;
+      const first = samples[0];
+      const last = samples[samples.length - 1];
+      if (last.at > first.at && performance.now() - last.at < 80) {
+        coastPan(Math.max(-1.8, Math.min(1.8, (first.y - last.y) / (last.at - first.at))));
+      }
       return;
     }
     if (data.type === "dlg:view-error") {
