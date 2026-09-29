@@ -8,6 +8,106 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+## [1.7.1] — 2026-09-29
+
+### Added
+- **Automatic updates on a managed install.** The Docker install's **Update**
+  dialog now has the **Automatic updates** switch too, off by default. It
+  needs a readable release target and a GitHub remote. Once a merged pull
+  request's checks have all finished green, Delegatus waits for the same
+  quiet moment an install run from a clone waits for, then asks the runtime
+  host for the same deployment the **Update** button makes, with its health
+  check and its rollback. A restart of the web app in the middle does not
+  start a second deployment, and the dialog shows the deployment's progress.
+  A failed or rolled-back deployment turns the switch off and shows its
+  target and reason ([#2326]).
+- **Agents can send photos and albums to Telegram.** The new
+  `telegram_bot_send_media` tool posts one image, or two to ten as one
+  album, to a chat you allowed, with a caption for each image. Files must be
+  JPEG or PNG, each up to 10 MB, and are read from the document folders
+  described below. Like text messages, the media follows the
+  chat allowlist, is signed with the calling conversation, and a repeated
+  call with the same request id posts nothing twice ([#2327], [#2340]).
+- **Agents can send report files to Telegram.** The new
+  `telegram_bot_send_document` tool posts one Markdown, text, log, JSON,
+  CSV, HTML, PDF, PNG or JPEG file, up to 20 MB, to a chat you allowed,
+  with an optional caption. Files are sent only from the document folders
+  you set under **Document folders** in the Telegram panel, `handoff/` in
+  your home by default, and never from a dot-folder or the Delegatus state
+  folder. A text file that holds a password, a token or a provider key is
+  refused before anything is sent. The shown filename may be changed but
+  must keep the file's type, and a repeated call with the same request id
+  posts nothing twice ([#2340]).
+- **GPT-6.1-Sol is a selectable Codex model.** It appears in the model
+  menus right after GPT-6-Astra, takes images, and offers the same effort
+  levels as GPT-6-Sol, from low to ultra. No default or role preset
+  changes ([#2342]).
+- **The owner sees every member's activity.** On the **Activity** page the
+  owner, or the operator of a single-person install, can filter by member
+  or choose **All members**, which adds a per-member breakdown of report
+  hours and projects. Two people working in the same hour count as two
+  hours. Another member's figures never say "you" or "your", and a member
+  whose hours live only on a linked machine reads "Not covered" instead of
+  zero. A member who opens a link that names someone else lands on their own
+  figures ([#2337]).
+- **A launched agent tells you when it finishes a turn.** When an agent
+  started through `spawn_agent` ends a turn, the conversation that launched
+  it gets one short notice, once per outcome, and it still arrives if the
+  runtime host restarts in between. Delegatus records who launched an agent
+  itself and ignores a launcher an agent claims. A launcher that has been
+  archived or replaced is skipped with the reason, and a notice for a
+  retired orchestrator seat goes to its successor. Agents run on the
+  tmux fallback send no notice, and `spawn_agent` accepts
+  `notifyLauncher: false` to turn it off for one agent ([#2339]).
+
+### Changed
+- **The Linked installs dialog walks you through the pairing.** It opens on
+  two roles: **This machine accepts a connection** and **This machine
+  connects to another**, each with three numbered steps that say which
+  machine must reach the other. An address the install cannot check from
+  itself is now an amber warning, "Not checked from here", with the address
+  to check from the other machine. Problems that block linking stay red.
+  The pairing code appears with the saved address, each with a Copy button.
+  A failed connection reads as a sentence under the connect form, and the
+  dialog lists the connected machines ([#2336]).
+- **Claude models follow the Sonnet 5.5 / Opus 5.5 table.** Builders, their
+  variants, the cleaner and the verifier run on Claude Sonnet 5.5; the
+  orchestrator, architect, reviewer, production auditor and deployer stay
+  on Opus. Sonnet may also review or gate a trivial stage, and an install
+  that already saved its role rows keeps them ([#2331]).
+- **A checkout install can turn on automatic updates.** The launcher of an
+  install run from a clone now runs the launcher from the installed release,
+  so later launcher changes arrive with each release. If the switch says the
+  launcher needs a one-time setup, the dialog names the two commands to run
+  in the install's folder before one restart ([#2334]).
+
+### Fixed
+- **A stale automatic update no longer blocks the next one.** On a managed
+  install, a request the runtime host never accepted stayed saved after main
+  moved on. It is now cleared once the host confirms it was never admitted,
+  and the newer commit goes through the green and quiet-moment checks
+  again. A late failure still turns the switch off with its reason
+  ([#2333]).
+- **Old Viewer workers stop.** The background worker that keeps account
+  migration current used to outlive a Viewer that was killed or replaced by
+  a new release, and one was found holding about 480 MiB after two days. It
+  now exits with its Viewer, or when the installed release moves on. It also
+  no longer keeps a second copy of the registry in memory, which took an
+  isolated test from about 1.3 GiB to 0.8 GiB. An idle agent host is no
+  longer kept alive for months by an old unfinished spawn record ([#2317]).
+- **Review fixes reach the pull request before the next review.** When a
+  builder fixed what a review found, the fix could stay only on the local
+  branch. The pull request then fell behind the commit that was reviewed,
+  and merging stopped because the pull request head had changed. Delegatus
+  now publishes each accepted fix before the next stage starts, keeps the
+  stage waiting if the push fails, and names the reviewed commit when a
+  pull request is behind it ([#2335]).
+- **The runtime host lets go of finished connections.** Under the Bun
+  version the Docker image runs, the deployment proxy in front of the web
+  app kept every connection it had already answered, so they piled up and a
+  release handover could wait on them forever. Each connection is now
+  closed once its answer is sent, within a second at most ([#2343]).
+
 ## [1.7.0] — 2026-09-29
 
 ### Added
@@ -1367,7 +1467,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/delegatus/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/Latand/delegatus/compare/v1.7.1...HEAD
+[1.7.1]: https://github.com/Latand/delegatus/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/Latand/delegatus/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/Latand/delegatus/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/Latand/delegatus/compare/v1.4.0...v1.5.0
@@ -1511,6 +1612,19 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2313]: https://github.com/Latand/delegatus/pull/2313
 [#2315]: https://github.com/Latand/delegatus/pull/2315
 [#2316]: https://github.com/Latand/delegatus/pull/2316
+[#2317]: https://github.com/Latand/delegatus/pull/2317
 [#2318]: https://github.com/Latand/delegatus/pull/2318
 [#2320]: https://github.com/Latand/delegatus/pull/2320
 [#2325]: https://github.com/Latand/delegatus/pull/2325
+[#2326]: https://github.com/Latand/delegatus/pull/2326
+[#2327]: https://github.com/Latand/delegatus/pull/2327
+[#2331]: https://github.com/Latand/delegatus/pull/2331
+[#2333]: https://github.com/Latand/delegatus/pull/2333
+[#2334]: https://github.com/Latand/delegatus/pull/2334
+[#2335]: https://github.com/Latand/delegatus/pull/2335
+[#2336]: https://github.com/Latand/delegatus/pull/2336
+[#2337]: https://github.com/Latand/delegatus/pull/2337
+[#2339]: https://github.com/Latand/delegatus/pull/2339
+[#2340]: https://github.com/Latand/delegatus/pull/2340
+[#2342]: https://github.com/Latand/delegatus/pull/2342
+[#2343]: https://github.com/Latand/delegatus/pull/2343
