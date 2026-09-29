@@ -8,7 +8,7 @@ import type { Revision } from "./types";
 import { runGit } from "./git";
 import { endRestartGate, restartGateFile } from "./restartGate";
 
-export type AutoPhase = "idle" | "checks" | "not-green" | "building" | "waiting" | "restarting-web" | "restarting-host";
+export type AutoPhase = "idle" | "checks" | "not-green" | "building" | "waiting" | "deploying" | "restarting-web" | "restarting-host";
 export interface AutoPending {
   role: LauncherRole;
   requestId: string;
@@ -22,7 +22,7 @@ export interface AutoState {
   version: 1;
   enabled: boolean;
   changedAt: string | null;
-  off: { at: string; target: string; stage: "build" | "restart-web" | "restart-host"; reason: string } | null;
+  off: { at: string; target: string; stage: "build" | "deploy" | "restart-web" | "restart-host"; reason: string } | null;
   green: Record<string, GreenVerdict>;
   waitingSince: string | null;
   waitingTarget: string | null;
@@ -30,11 +30,13 @@ export interface AutoState {
   quietSince: string | null;
   noticeAt: string | null;
   pending: AutoPending | null;
+  /** Written before asking the runtime host; replay uses the same key after a web restart. */
+  managedPending: { target: Revision; clientKey: string; at: string } | null;
   rollbackPointer: string | null;
   rollbackCaptured: boolean;
 }
 export interface AutoView {
-  availability: "available" | "managed" | "packaged" | "launcher-upgrade" | "not-github" | "hand-managed" | "diverged";
+  availability: "available" | "no-release-target" | "packaged" | "launcher-upgrade" | "not-github" | "hand-managed" | "diverged";
   enabled: boolean;
   off: AutoState["off"];
   phase: AutoPhase;
@@ -45,7 +47,7 @@ export interface AutoView {
   longWait: boolean;
 }
 export function initialAuto(): AutoState {
-  return { version: 1, enabled: false, changedAt: null, off: null, green: {}, waitingSince: null, waitingTarget: null, lastBlockers: null, quietSince: null, noticeAt: null, pending: null, rollbackPointer: null, rollbackCaptured: false };
+  return { version: 1, enabled: false, changedAt: null, off: null, green: {}, waitingSince: null, waitingTarget: null, lastBlockers: null, quietSince: null, noticeAt: null, pending: null, managedPending: null, rollbackPointer: null, rollbackCaptured: false };
 }
 export function readAuto(file: string): AutoState {
   try {
