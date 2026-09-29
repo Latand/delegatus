@@ -191,6 +191,10 @@ const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
  */
 const INTERRUPTED_RECOVERABLE_TOOLS: ReadonlySet<McpToolName> = new Set<McpToolName>([
   "request_attention",
+  // The Viewer owns the Telegram send claim. Re-dispatching this tool after
+  // the MCP receipt store reopens lets that durable claim answer uncertain or
+  // replay the completed Telegram receipt without repeating the HTTP send.
+  "telegram_bot_send_media",
   /* Deliberately NOT here: `suggest_replies`. Its write is idempotent over the
      record, but the record is retired by something outside the call — the
      operator's own answer — so re-running an interrupted write would put the

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import sharp from "sharp";
 
 import { agentRegistry } from "@/lib/agent/registry";
 import { teamTelegramHook } from "@/lib/team";
@@ -87,7 +88,7 @@ const GET_UPDATES_TIMEOUT_S = 50;
 const PHOTO_MAX_BYTES = 10_000_000;
 const PHOTO_CAPTION_MAX_CHARS = 1024;
 
-function photoBlob(filename: string, index: number): Blob {
+async function photoBlob(filename: string, index: number): Promise<Blob> {
   if (!path.isAbsolute(filename)) throw new TelegramBotError("photo_invalid", `photo ${index + 1} needs an absolute local path`);
   let bytes: Buffer;
   try {
@@ -98,10 +99,22 @@ function photoBlob(filename: string, index: number): Blob {
     throw new TelegramBotError("photo_invalid", `photo ${index + 1} must be a readable file of at most 10 MB`);
   }
   if (bytes.length === 0 || bytes.length > PHOTO_MAX_BYTES) throw new TelegramBotError("photo_invalid", `photo ${index + 1} exceeds the photo size limit`);
-  const jpeg = bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes.at(-2) === 0xff && bytes.at(-1) === 0xd9;
-  const png = bytes.length >= 24 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) && bytes.toString("ascii", 12, 16) === "IHDR";
-  if (!jpeg && !png) throw new TelegramBotError("photo_invalid", `photo ${index + 1} must be a JPEG or PNG image`);
-  return new Blob([Uint8Array.from(bytes)], { type: jpeg ? "image/jpeg" : "image/png" });
+  try {
+    const metadata = await sharp(bytes, { failOn: "warning" }).metadata();
+    const jpeg = metadata.format === "jpeg";
+    const png = metadata.format === "png";
+    const width = metadata.width ?? 0;
+    const height = metadata.height ?? 0;
+    if ((!jpeg && !png) || width < 1 || height < 1 || width + height > 10_000 || Math.max(width, height) / Math.min(width, height) > 20) {
+      throw new Error("unsupported photo format or dimensions");
+    }
+    // Metadata parsing alone accepts some truncated images. Force a full decode
+    // before this file can be handed to Telegram.
+    await sharp(bytes, { failOn: "warning" }).raw().toBuffer();
+    return new Blob([Uint8Array.from(bytes)], { type: jpeg ? "image/jpeg" : "image/png" });
+  } catch {
+    throw new TelegramBotError("photo_invalid", `photo ${index + 1} must be a decodable JPEG or PNG within Telegram's photo dimensions`);
+  }
 }
 const ALLOWED_UPDATES = ["message", "edited_message", "channel_post", "edited_channel_post", "my_chat_member"];
 const ANOTHER_READER_DELAY_MS = 30_000;
@@ -774,8 +787,11 @@ export class TelegramBotService {
     const attributedTo: TelegramBotAttribution = input.conversationId ? { conversationId: input.conversationId } : { unidentified: true };
     const callerKey = input.conversationId ?? "unidentified";
     const clientRequestId = input.clientRequestId.trim();
+    const legacyRow = store.sendRow(callerKey, clientRequestId);
+    const legacyKind = legacyRow ? store.sendKind(callerKey, clientRequestId) : null;
+    const sendCallerKey = legacyRow && legacyKind !== "photo" ? callerKey : `text:${callerKey}`;
 
-    const claim = store.claimSend(callerKey, clientRequestId, chat.chatId, this.deps.now());
+    const claim = store.claimSend(sendCallerKey, clientRequestId, chat.chatId, this.deps.now());
     if (!claim.claimed) {
       if (claim.row.state === "sent") {
         const current = store.chat(claim.row.chatId);
@@ -821,8 +837,8 @@ export class TelegramBotService {
       if (!result.ok) {
         const error = sendFailure(result, chat);
         if (sent.length) {
-          store.completeSend({ callerKey, clientRequestId, chatId, conversationId: input.conversationId, sent, now: this.deps.now() });
-          store.failSend(callerKey, clientRequestId, "send_partial", sent.map((message) => message.messageId));
+          store.completeSend({ callerKey: sendCallerKey, clientRequestId, chatId, conversationId: input.conversationId, sent, now: this.deps.now() });
+          store.failSend(sendCallerKey, clientRequestId, "send_partial", sent.map((message) => message.messageId));
           throw new TelegramBotError("send_partial", `parts 1–${sent.length} of ${parts.length} were posted (message ids ${sent.map((message) => message.messageId).join(", ")}); the rest failed: ${error.message}. Send only the remaining text, under a new clientRequestId`, { sentMessageIds: sent.map((message) => message.messageId) });
         }
         if (result.kind === "timed_out" || result.kind === "network_failed") {
@@ -831,13 +847,13 @@ export class TelegramBotService {
           const why = result.kind === "timed_out" ? "Telegram did not answer in time" : "the connection to Telegram failed mid-request";
           throw new TelegramBotError("send_uncertain", `${why}, so the message may already be posted and the bot cannot check; send again under a new clientRequestId only if a duplicate is acceptable`);
         }
-        store.failSend(callerKey, clientRequestId, error.code, []);
+        store.failSend(sendCallerKey, clientRequestId, error.code, []);
         throw error;
       }
       sent.push({ messageId: result.result.message_id, date: result.result.date, text, replyToMessageId: partReply, topicId });
     }
     const now = this.deps.now();
-    store.completeSend({ callerKey, clientRequestId, chatId, conversationId: input.conversationId, sent, now });
+    store.completeSend({ callerKey: sendCallerKey, clientRequestId, chatId, conversationId: input.conversationId, sent, now });
     const current = store.chat(chatId);
     return {
       chat: current?.alias ?? chatId,
@@ -868,9 +884,14 @@ export class TelegramBotService {
     if (refusal) throw new TelegramBotError(refusal.code, refusal.reason);
     if (typeof input.clientRequestId !== "string" || !input.clientRequestId.trim()) throw new TelegramBotError("bad_request", "clientRequestId is required");
     const callerKey = input.conversationId ?? "unidentified";
-    const clientRequestId = `media:${input.clientRequestId.trim()}`;
+    const clientRequestId = input.clientRequestId.trim();
+    const legacyClientRequestId = `media:${clientRequestId}`;
+    const legacyRow = store.sendRow(callerKey, legacyClientRequestId);
+    const legacyKind = legacyRow ? store.sendKind(callerKey, legacyClientRequestId) : null;
+    const sendCallerKey = legacyRow && legacyKind !== "text" ? callerKey : `media:${callerKey}`;
     const attributedTo: TelegramBotAttribution = input.conversationId ? { conversationId: input.conversationId } : { unidentified: true };
-    const claim = store.claimSend(callerKey, clientRequestId, chat.chatId, this.deps.now());
+    const claim = store.claimSend(sendCallerKey, sendCallerKey === callerKey ? legacyClientRequestId : clientRequestId, chat.chatId, this.deps.now());
+    const sendRequestId = sendCallerKey === callerKey ? legacyClientRequestId : clientRequestId;
     if (!claim.claimed) {
       if (claim.row.state === "sent") {
         const current = store.chat(claim.row.chatId);
@@ -882,16 +903,17 @@ export class TelegramBotService {
     let images: Array<TelegramBotMediaInput & { blob: Blob }>;
     try {
       if (!Array.isArray(input.images) || input.images.length < 1 || input.images.length > 10) throw new TelegramBotError("photo_invalid", "send 1 photo or an album of 2–10 photos");
-      images = input.images.map((image: unknown, index: number) => {
+      images = [];
+      for (const [index, image] of input.images.entries()) {
         if (!image || typeof image !== "object" || typeof (image as TelegramBotMediaInput).path !== "string" || typeof (image as TelegramBotMediaInput).caption !== "string") {
           throw new TelegramBotError("photo_invalid", `photo ${index + 1} needs a path and caption`);
         }
         const { path: filename, caption } = image as TelegramBotMediaInput;
         if (caption.length > PHOTO_CAPTION_MAX_CHARS) throw new TelegramBotError("text_too_long", `photo ${index + 1} caption exceeds 1024 characters`);
-        return { path: filename, caption, blob: photoBlob(filename, index) };
-      });
+        images.push({ path: filename, caption, blob: await photoBlob(filename, index) });
+      }
     } catch (error) {
-      store.failSend(callerKey, clientRequestId, error instanceof TelegramBotError ? error.code : "photo_invalid", []);
+      store.failSend(sendCallerKey, sendRequestId, error instanceof TelegramBotError ? error.code : "photo_invalid", []);
       throw error;
     }
 
@@ -925,7 +947,7 @@ export class TelegramBotService {
     if (!result.ok) {
       if (result.kind === "timed_out" || result.kind === "network_failed") throw new TelegramBotError("send_uncertain", "Telegram did not confirm the media send, so it may already be posted; use a new clientRequestId only if a duplicate is acceptable");
       const error = sendFailure(result, chat);
-      store.failSend(callerKey, clientRequestId, error.code, []);
+      store.failSend(sendCallerKey, sendRequestId, error.code, []);
       throw error;
     }
     const received: unknown[] = single ? [result.result] : Array.isArray(result.result) ? result.result : [];
@@ -934,7 +956,7 @@ export class TelegramBotService {
     }
     const sent = (received as TgSent[]).map((message, index) => ({ messageId: message.message_id, date: message.date, text: images[index]!.caption, replyToMessageId: replyTo, topicId, kind: "photo" as const }));
     const now = this.deps.now();
-    store.completeSend({ callerKey, clientRequestId, chatId, conversationId: input.conversationId, sent, now });
+    store.completeSend({ callerKey: sendCallerKey, clientRequestId: sendRequestId, chatId, conversationId: input.conversationId, sent, now });
     const current = store.chat(chatId);
     return { chat: current?.alias ?? chatId, chatId, messageIds: sent.map((message) => message.messageId), sentAt: now.toISOString(), attributedTo, parts: sent.length, alreadySent: false };
   }

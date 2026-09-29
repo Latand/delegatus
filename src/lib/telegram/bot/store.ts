@@ -592,6 +592,21 @@ export class TelegramBotStore {
     return { state: row.state as SendRow["state"], chatId: row.chat_id, messageIds, parts: row.parts, sentAt: row.sent_at, errorCode: row.error_code };
   }
 
+  /** Identifies settled legacy receipts so callers can preserve them while
+      moving text and media sends into separate key namespaces. */
+  sendKind(callerKey: string, clientRequestId: string): "text" | "photo" | null {
+    const row = this.sendRow(callerKey, clientRequestId);
+    if (!row?.messageIds.length) return null;
+    const query = this.db.query<{ kind: string }, [string, number]>(
+      "SELECT kind FROM messages WHERE chat_id = ?1 AND message_id = ?2",
+    );
+    for (const id of row.messageIds) {
+      const kind = query.get(row.chatId, id)?.kind;
+      if (kind === "text" || kind === "photo") return kind;
+    }
+    return null;
+  }
+
   failSend(callerKey: string, clientRequestId: string, errorCode: string, sentMessageIds: readonly number[]): void {
     this.db.query("UPDATE sends SET state = 'failed', error_code = ?3, message_ids = ?4 WHERE caller_key = ?1 AND client_request_id = ?2")
       .run(callerKey, clientRequestId, errorCode, JSON.stringify(sentMessageIds));
