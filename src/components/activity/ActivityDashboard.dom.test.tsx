@@ -7,7 +7,7 @@ import type { AgentSourceRead } from "@/lib/activity/agentSource";
 import type { HostReport, HostSourceRead, HumanInputRead } from "@/lib/activity/hostSources";
 import type { HumanInput } from "@/lib/activity/humanInput";
 import type { AgentConversation, HostCoverage, Interval } from "@/lib/activity/method";
-import { activityResponse, type ActivityRequestViewer, type ActivityResponseDependencies } from "@/lib/activity/report";
+import { ACTIVITY_MEMBER_FORBIDDEN, ActivityMemberForbidden, activityResponse, type ActivityRequestViewer, type ActivityResponseDependencies } from "@/lib/activity/report";
 import { setLocale, translate } from "@/lib/i18n";
 import { installActEnv } from "@/test-helpers/actEnv";
 
@@ -110,7 +110,13 @@ globalThis.fetch = (async (resource: string | URL | Request) => {
   const url = new URL(String(resource), "http://localhost");
   if (url.pathname !== "/api/activity") throw new Error(`unexpected request ${url.pathname}`);
   requests.push(url.searchParams);
-  return new Response(JSON.stringify(await activityResponse(url.searchParams, current, viewer)), { status: 200 });
+  try {
+    return new Response(JSON.stringify(await activityResponse(url.searchParams, current, viewer)), { status: 200 });
+  } catch (error) {
+    /* As the route answers it. */
+    if (error instanceof ActivityMemberForbidden) return new Response(JSON.stringify({ error: error.message, code: ACTIVITY_MEMBER_FORBIDDEN }), { status: 403 });
+    throw error;
+  }
 }) as typeof fetch;
 
 let root: Root | null = null;
@@ -375,4 +381,85 @@ describe("the owner's member filter", () => {
     expect(address().has("member")).toBe(false);
     expect(lastRequest().has("member")).toBe(false);
   });
+
+  /* Everything the page says about the human axis: its text, and the labels
+     a screen reader or a hover reads. The filter and the cards name the
+     owner's own entry "(you)" on purpose, and the surface table describes
+     each surface in general, so they are left out. */
+  const humanAxisText = () => {
+    const skipped = "[data-activity-members], [data-activity-member-breakdown], [data-activity-coverage]";
+    const parts: string[] = [];
+    for (const element of dom.document.querySelectorAll("body *")) {
+      if (element.closest(skipped)) continue;
+      for (const attribute of ["aria-label", "title"]) {
+        const value = element.getAttribute(attribute);
+        if (value) parts.push(value);
+      }
+      for (const node of element.childNodes) if (node.nodeType === 3) parts.push(node.textContent ?? "");
+    }
+    return parts.join("\n");
+  };
+  const VIEWER = { en: /\b(you|your|yours)\b/i, uk: /(?<!\p{L})(ви|вас|вам|вами|ваш\p{L}*)(?!\p{L})/iu };
+
+  for (const locale of ["en", "uk"] as const) {
+    for (const choice of ["member", "all"] as const) {
+      test(`another member's and every member's figures never read as the viewer's own: desktop, ${choice}, ${locale}`, async () => {
+        current = teamDeps();
+        viewer = OWNER_VIEWER;
+        setLocale(locale);
+        await open(`/activity?range=7d&member=${choice === "all" ? "all" : BO}`);
+        expect($("[data-activity-hero]")).not.toBeNull();
+        expect($('[data-activity-figure="you"]')!.textContent).toContain(choice === "all" ? translate(locale, "activity.member.everyone") : "Bo Tern");
+        /* The drawer's method and host notes too. */
+        await click($("[data-activity-how]"));
+        const text = humanAxisText();
+        expect(text).toContain(translate(locale, "activity.others.col.you"));
+        expect(text).toContain(translate(locale, "activity.others.rhythm.you", { person: choice === "all" ? translate(locale, "activity.member.everyone") : "Bo Tern" }));
+        expect(text.match(VIEWER[locale])).toBeNull();
+      });
+
+      test(`another member's and every member's figures never read as the viewer's own: narrow, ${choice}, ${locale}`, async () => {
+        current = teamDeps();
+        viewer = OWNER_VIEWER;
+        wide = false;
+        setLocale(locale);
+        await open(`/activity?range=7d&member=${choice === "all" ? "all" : BO}`);
+        expect($('[data-activity-tile="human"]')).not.toBeNull();
+        const days = humanAxisText();
+        expect(days).toContain(translate(locale, "activity.others.legend.human"));
+        expect(days).toContain(translate(locale, "activity.others.gap.incompleteTitle"));
+        expect(days.match(VIEWER[locale])).toBeNull();
+        await click($(`[data-activity-option="projects"]`));
+        const projects = humanAxisText();
+        expect(projects).toContain(translate(locale, "activity.others.sort.human"));
+        expect(projects.match(VIEWER[locale])).toBeNull();
+      });
+    }
+  }
+
+  test("the owner's own figures still read as theirs", async () => {
+    current = teamDeps();
+    viewer = OWNER_VIEWER;
+    wide = false;
+    await open("/activity?range=7d");
+    expect(humanAxisText()).toContain(t("activity.legend.human"));
+    expect(humanAxisText()).toContain(t("activity.tile.splitSub", { unattended: "≈ 2 h 30 m" }));
+  });
+
+  for (const asked of ["all", OWNER]) {
+    test(`a member opening the owner's link (member=${asked === "all" ? "all" : "the owner"}) lands on their own figures`, async () => {
+      current = teamDeps();
+      viewer = { mode: "team", memberId: BO, canChoose: false };
+      await open(`/activity?range=7d&member=${asked}`);
+      expect(requests.some((request) => request.get("member") === asked)).toBe(true);
+      expect(lastRequest().has("member")).toBe(false);
+      expect(address().has("member")).toBe(false);
+      expect(dom.document.body.textContent).not.toContain(t("activity.failed"));
+      const own = await activityResponse(new URLSearchParams("range=7d"), current, viewer);
+      expect(own.totals.humanHours).toBeGreaterThan(0);
+      expect($("[data-activity-hero]")!.textContent).toContain(hoursText(own.totals.humanHours, "en", t));
+      expect($('[data-activity-figure="you"]')!.textContent).toContain("You");
+      expect($("[data-activity-members-trigger]")).toBeNull();
+    });
+  }
 });

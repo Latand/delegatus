@@ -10,7 +10,7 @@ import type { Locale, MessageKey, TFunction } from "@/lib/i18n";
 import { ActivityCountingDrawer } from "./ActivityCountingDrawer";
 import { ActivityDayChart } from "./ActivityDayChart";
 import { ActivityFigures } from "./ActivityFigures";
-import { ActivityMemberBreakdown, ActivityMemberFilter, countedLabel, type MemberChoice } from "./ActivityMembers";
+import { ActivityMemberBreakdown, ActivityMemberFilter, type MemberChoice } from "./ActivityMembers";
 import { ActivityProjectPicker, ActivityScopeChip } from "./ActivityProjectPicker";
 import { ActivityProjects } from "./ActivityProjects";
 import { ActivityRhythm } from "./ActivityRhythm";
@@ -149,7 +149,7 @@ export function ActivityDesktop({ data, range, onRange, scope, onProject, member
             data-activity-loaded={data.range.key}
           >
             <section ref={main} className="col-start-1 row-start-1 rounded-[12px] border border-border bg-card px-[22px] pb-3.5 pt-5 shadow-1" data-activity-main="">
-              <ActivityFigures data={data} unread={unread} locale={locale} t={t} onConnect={() => setDrawer("hosts")} person={countedLabel(data, t)} />
+              <ActivityFigures data={data} unread={unread} locale={locale} t={t} onConnect={() => setDrawer("hosts")} />
               <div className="mt-[18px] border-t border-border pt-3">
                 <ActivityDayChart
                   context={context}

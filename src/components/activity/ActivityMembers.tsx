@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { Z } from "@/components/layers";
 import { MemberAvatar } from "@/components/team/MemberAvatar";
 import type { ActivityMemberRow, ActivityResponse } from "@/lib/activity/report";
-import type { Locale, TFunction } from "@/lib/i18n";
+import type { Locale, MessageKey, TFunction } from "@/lib/i18n";
 
 import { hostName, hoursText, minutesText, nameList, projectName } from "./format";
 
@@ -24,6 +24,11 @@ import { hostName, hoursText, minutesText, nameList, projectName } from "./forma
 export type MemberChoice = string | null;
 
 export const ALL_MEMBERS = "all";
+
+/** The 403 code GET /api/activity answers a member who names someone else
+    (`ACTIVITY_MEMBER_FORBIDDEN` in src/lib/activity/report.ts, which this
+    client module cannot import). */
+export const MEMBER_FORBIDDEN = "activity_member_forbidden";
 
 export function memberFromSearch(search: string): MemberChoice {
   const value = new URLSearchParams(search).get("member")?.trim();
@@ -71,6 +76,63 @@ export function countedLabel(data: ActivityResponse, t: TFunction): string | nul
   if (data.member.selection === "self") return null;
   const row = data.member.members.find((entry) => entry.id === data.member.memberId);
   return row ? memberLabel(row, t) : memberLabel({ id: data.member.memberId ?? "", name: null }, t);
+}
+
+/** The messages that name the counted person as the viewer ("You", "Your
+    time"), each beside its wording for someone else's input or everyone's. */
+export const OTHERS_WORDING: Readonly<Partial<Record<MessageKey, MessageKey>>> = {
+  "activity.subtitle": "activity.others.subtitle",
+  "activity.sort.human": "activity.others.sort.human",
+  "activity.legend.human": "activity.others.legend.human",
+  "activity.tile.human": "activity.others.tile.human",
+  "activity.tile.splitSub": "activity.others.tile.splitSub",
+  "activity.gap.incompleteTitle": "activity.others.gap.incompleteTitle",
+  "activity.day.aria": "activity.others.day.aria",
+  "activity.tooltip.human": "activity.others.tooltip.human",
+  "activity.tooltip.noHuman": "activity.others.tooltip.noHuman",
+  "activity.breakdown.host": "activity.others.breakdown.host",
+  "activity.breakdown.surface": "activity.others.breakdown.surface",
+  "activity.breakdown.kind": "activity.others.breakdown.kind",
+  "activity.counted.methodEpisodes": "activity.others.counted.methodEpisodes",
+  "activity.counted.halfHour": "activity.others.counted.halfHour",
+  "activity.counted.parallel": "activity.others.counted.parallel",
+  "activity.counted.operatorOnly": "activity.others.counted.operatorOnly",
+  "activity.counted.agent": "activity.others.counted.agent",
+  "activity.counted.hosts": "activity.others.counted.hosts",
+  "activity.trust.none": "activity.others.trust.none",
+  "activity.fig.you": "activity.others.fig.you",
+  "activity.fig.splitUnknown": "activity.others.fig.splitUnknown",
+  "activity.chart.aria": "activity.others.chart.aria",
+  "activity.chart.ariaToday": "activity.others.chart.ariaToday",
+  "activity.chart.pair": "activity.others.chart.pair",
+  "activity.rhythm.aria": "activity.others.rhythm.aria",
+  "activity.rhythm.you": "activity.others.rhythm.you",
+  "activity.rhythm.alone": "activity.others.rhythm.alone",
+  "activity.col.you": "activity.others.col.you",
+  "activity.detail.note": "activity.others.detail.note",
+  "activity.tip.lower": "activity.others.tip.lower",
+  "activity.tip.unclearNote": "activity.others.tip.unclearNote",
+  "activity.tip.unclearAny": "activity.others.tip.unclearAny",
+  "activity.drawer.flagLower": "activity.others.drawer.flagLower",
+  "activity.drawer.flagBoth": "activity.others.drawer.flagBoth",
+  "activity.drawer.m1": "activity.others.drawer.m1",
+  "activity.drawer.m1Episodes": "activity.others.drawer.m1Episodes",
+  "activity.drawer.m3": "activity.others.drawer.m3",
+  "activity.drawer.m4": "activity.others.drawer.m4",
+  "activity.drawer.excluded": "activity.others.drawer.excluded",
+};
+
+/** The page's wording for the input it counts: the viewer's own reads as
+    before, and one member's or every member's reads "Human time" and names
+    them where a label has room, so the owner reading another member's page
+    is never told "You" worked it. */
+export function countedWording(data: ActivityResponse | null, t: TFunction): TFunction {
+  const person = data ? countedLabel(data, t) : null;
+  if (person === null) return t;
+  return (key, params) => {
+    const other = OTHERS_WORDING[key];
+    return other ? t(other, { person, ...params }) : t(key, params);
+  };
 }
 
 interface Option {

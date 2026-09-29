@@ -10,7 +10,7 @@ import { isOpaqueProjectKey, projectDisplayName } from "@/lib/displayNames";
 import { useLocale, type Locale, type MessageKey, type TFunction } from "@/lib/i18n";
 
 import { ActivityDesktop } from "./ActivityDesktop";
-import { ActivityMemberBreakdown, ActivityMemberFilter, countedLabel, memberFromSearch, type MemberChoice } from "./ActivityMembers";
+import { ActivityMemberBreakdown, ActivityMemberFilter, countedLabel, countedWording, MEMBER_FORBIDDEN, memberFromSearch, type MemberChoice } from "./ActivityMembers";
 import { ActivityScopeChip } from "./ActivityProjectPicker";
 import { nothingRead, projectFromSearch } from "./format";
 
@@ -656,6 +656,16 @@ function Counted({ data, locale, t }: { data: ActivityResponse; locale: Locale; 
 /* The page                                                                 */
 /* ------------------------------------------------------------------------ */
 
+/** The `code` of an error answer, or null when it carries none. */
+async function errorCode(response: Response): Promise<string | null> {
+  try {
+    const body = (await response.json()) as { code?: unknown };
+    return typeof body.code === "string" ? body.code : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The query of one read: the range, the project the page is scoped to, and
     whose input it counts. */
 export function activityQuery(range: RangeKey, project: string | null, member: MemberChoice = null): string {
@@ -673,7 +683,7 @@ export function ActivityDashboard({ initialRange, initialView, initialProject = 
   /** `?member=`: `all`, a member id, or none for the viewer's own input. */
   initialMember?: MemberChoice;
 }) {
-  const { t, locale } = useLocale();
+  const { t: viewerT, locale } = useLocale();
   const desktop = useDesktop();
   const [range, setRange] = useState<RangeKey>(initialRange);
   const [view, setView] = useState<ActivityView>(initialView);
@@ -687,6 +697,8 @@ export function ActivityDashboard({ initialRange, initialView, initialProject = 
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const request = useRef(0);
+  /* Another member's figures, or everyone's, are never labelled the viewer's own. */
+  const t = useMemo(() => countedWording(data, viewerT), [data, viewerT]);
 
   /* No zone is sent: days and hours follow the zone in the settings
      (Europe/Kyiv unless changed), whatever zone this device is in. A
@@ -696,6 +708,14 @@ export function ActivityDashboard({ initialRange, initialView, initialProject = 
     setLoading(true);
     try {
       const response = await fetch(`/api/activity?${activityQuery(target, scope, person)}`, { cache: "no-store" });
+      if (response.status === 403 && person !== null && (await errorCode(response)) === MEMBER_FORBIDDEN) {
+        /* A member opened a link the owner shared: someone else's figures are
+           not theirs to read, so the page drops the choice, from the address
+           too, and the member change reads their own. */
+        if (id !== request.current) return;
+        setMember(null);
+        return;
+      }
       if (!response.ok) throw new Error(String(response.status));
       const body = (await response.json()) as ActivityResponse;
       if (id !== request.current) return;

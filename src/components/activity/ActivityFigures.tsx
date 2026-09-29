@@ -23,10 +23,8 @@ function Lower({ big }: { big?: boolean }) {
   return <span className={`mr-1.5 font-medium text-muted ${big ? "align-[0.18em] text-[0.62em]" : ""}`}>≥</span>;
 }
 
-export function ActivityFigures({ data, unread, locale, t, onConnect, person = null }: {
+export function ActivityFigures({ data, unread, locale, t, onConnect }: {
   data: ActivityResponse;
-  /** Whose input the hero counts, when it is not the viewer's own. */
-  person?: string | null;
   /** None of your input was read for the range. */
   unread: boolean;
   locale: Locale;
@@ -64,7 +62,7 @@ export function ActivityFigures({ data, unread, locale, t, onConnect, person = n
       <div data-activity-figure="you">
         <div className="flex h-3.5 items-center gap-[7px] text-[12px] font-semibold text-secondary">
           <Swatch kind="you" />
-          {person ?? t("activity.fig.you")}
+          {t("activity.fig.you")}
         </div>
         {unknown ? (
           <>

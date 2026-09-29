@@ -552,6 +552,20 @@ member, or `All members`. A member who is not the owner is sent no members and
 sees no filter. The phone draws the same filter full-width with 44 px rows,
 and the same cards.
 
+Nothing on the page calls another member's figures the viewer's own. When the
+answer counts someone other than the viewer, every label on the human axis
+takes its `activity.others.*` wording (`countedWording` in
+`ActivityMembers.tsx`): the Projects column and the legend read `Human`/`Human
+time`, the Rhythm legend and the chart's tooltips name the person or `All
+members`, and the tiles, gap banner, sort option, chart and grid labels, the
+drawer's flags and method notes say `human time` for `your time`. The
+viewer's own figures keep `You` and `Your time`.
+
+A member who opens a link the owner shared (`?member=all`, or another member's
+id) is answered `403 activity_member_forbidden`. The page then drops `member`
+from its state and, by replacing the entry, from the address, and reads the
+member's own figures, so the link lands on their own page instead of an error.
+
 ### Only real human input counts
 
 `classifyUserRecord` (`src/lib/activity/humanInput.ts:262`) keeps a record
@@ -874,7 +888,10 @@ chip at "Lower bound", and the host named in the drawer and the hosts table.
   was not read for reads not covered, and only the owner names someone else.
 - `src/components/activity/ActivityDashboard.dom.test.tsx`: no filter for a
   member, the owner's filter, `All members` with its cards, a card opening a
-  member, Back, and the narrow page in Ukrainian.
+  member, Back, and the narrow page in Ukrainian; no `You`/`Your`/`Ви`/`Ваш`
+  on the human axis for one member or `All members`, desktop and narrow, en
+  and uk; a member opening the owner's `?member=` link lands on their own
+  figures with `member` gone from the address.
 - `src/lib/runtime/startup.test.ts`: the Codex continuation carries the
   `startup-recovery` origin.
 - `src/lib/activity/requestLedger.test.ts`, `src/app/api/activity/route.test.ts`,
