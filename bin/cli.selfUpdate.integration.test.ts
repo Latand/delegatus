@@ -342,6 +342,25 @@ test("the one-time file checkout links against an older checkout and retains its
   expect(await served(running.port)).toBe(next.dir);
 }, 60_000);
 
+test("a hand-moved checkout runs its current launcher instead of the saved old one", () => {
+  const fixture = install();
+  const checkoutCli = path.join(fixture.checkout, "bin", "cli.mjs");
+  writeFileSync(checkoutCli, "process.stdout.write('old launcher\\n');\n");
+  git(fixture.checkout, "add", "bin/cli.mjs");
+  git(fixture.checkout, "commit", "--amend", "--quiet", "--no-edit");
+  fixture.first = git(fixture.checkout, "rev-parse", "HEAD");
+  const next = release(fixture, "current-launcher", { launcher: readFileSync(path.resolve("bin", "cli.mjs"), "utf8") });
+  writeFileSync(path.join(fixture.checkout, "bin", "cli-checkout.mjs"), git(fixture.checkout, "show", "HEAD:bin/cli.mjs") + "\n");
+  git(fixture.checkout, "checkout", next.sha, "--", "bin/cli.mjs");
+  expect(version(fixture).stdout.trim()).toBe("old launcher");
+
+  git(fixture.checkout, "checkout", "--quiet", "--force", "--detach", next.sha);
+  expect(version(fixture)).toMatchObject({ status: 0, stdout: "0.0.0\n" });
+  mkdirSync(path.dirname(pointerFile(fixture)), { recursive: true });
+  writeFileSync(pointerFile(fixture), JSON.stringify({ sha: next.sha, dir: next.dir, checkoutHead: fixture.first }));
+  expect(version(fixture)).toMatchObject({ status: 0, stdout: "0.0.0\n" });
+});
+
 test.each([0, 1])("a release launcher exiting %i before recording itself falls back to a healthy checkout launcher", async (exitCode) => {
   const fixture = install();
   const broken = release(fixture, "broken-launcher", { launcher: `// delegatus-checkout-launcher-v2\nprocess.exit(${exitCode});\n` });
@@ -374,7 +393,8 @@ test("saved checkout launcher handles a group signal once and finishes shutdown"
   const fixture = install();
   const started = path.join(fixture.root, "backup-started");
   const stopped = path.join(fixture.root, "backup-stopped");
-  writeFileSync(path.join(fixture.checkout, "bin", "cli-checkout.mjs"), `
+  const checkoutCli = path.join(fixture.checkout, "bin", "cli.mjs");
+  const savedLauncher = `
 import { writeFileSync } from "node:fs";
 writeFileSync(${JSON.stringify(started)}, "started");
 process.once("SIGTERM", () => setTimeout(() => {
@@ -382,7 +402,12 @@ process.once("SIGTERM", () => setTimeout(() => {
   process.exit(0);
 }, 200));
 setInterval(() => {}, 1000);
-`);
+`;
+  writeFileSync(checkoutCli, savedLauncher);
+  git(fixture.checkout, "add", "bin/cli.mjs");
+  git(fixture.checkout, "commit", "--amend", "--quiet", "--no-edit");
+  writeFileSync(path.join(fixture.checkout, "bin", "cli-checkout.mjs"), savedLauncher);
+  copyFileSync(path.resolve("bin", "cli.mjs"), checkoutCli);
   const child = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "bin", "cli.mjs")], {
     cwd: fixture.checkout, env: fixture.env, stdio: ["ignore", "pipe", "pipe"],
   });

@@ -1360,7 +1360,19 @@ function handOffLauncher({ checkout, entry, record }) {
 async function checkoutLauncher() {
   const checkout = findPackageRoot(cliDir);
   const original = join(cliDir, "cli-checkout.mjs");
+  /* A hand-managed checkout can move HEAD after the one-time bootstrap step.
+     Its saved launcher then belongs to the old commit and must not link against
+     the new commit's sibling modules. */
+  let savedLauncherIsCurrent = false;
   if (!launcherCheckout && existsSync(original)) {
+    const committed = spawnSync("git", ["show", "HEAD:bin/cli.mjs"], {
+      cwd: checkout, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 4 * 1024 * 1024,
+    });
+    try {
+      savedLauncherIsCurrent = committed.status === 0 && readFileSync(original).equals(committed.stdout);
+    } catch { /* Unreadable backup: use this file's body. */ }
+  }
+  if (savedLauncherIsCurrent) {
     delete process.env.LLV_LAUNCHER_REEXEC;
     delete process.env.LLV_LAUNCHER_CHECKOUT;
     await import("./cli-checkout.mjs");
