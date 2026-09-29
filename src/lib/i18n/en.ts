@@ -896,6 +896,7 @@ export const en = {
   "spawnCard.recoverable-timeout": "The initial-message timeout is recoverable while durable delivery settles.",
   "spawnCard.live-late-success": "Late delivery succeeded and the live conversation was adopted.",
   "spawnCard.failed": "The launch ended with an error.",
+  "spawnCard.failedDetail": "The agent could not be started.",
   "spawnCard.recovered": "Durable evidence recovered this launch.",
   "spawnCard.initial.pending": "Initial message: waiting for host binding",
   "spawnCard.initial.queued": "Initial message: queued",

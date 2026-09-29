@@ -53,7 +53,7 @@ const MANDATE_CLIENT_MESSAGE_PREFIX = "orchmandate_";
 /** The identity `structuredSpawn.ts` reserves a launch's first prompt under.
     Generic — every delegated spawn has one — so unlike the prefix above it
     names a mandate only when a seat says that launch was its own creation. */
-const SPAWN_CLIENT_MESSAGE_PREFIX = "spawn_";
+export const SPAWN_CLIENT_MESSAGE_PREFIX = "spawn_";
 
 /** The single approved default this checkout holds, against which a seat's
     stored mandate can be recognized. A rotation appends its handoff to the

@@ -24,7 +24,7 @@ import { decodeTerminalText } from "./ansi";
 import { elapsedDurationMs, timestampMilliseconds } from "./duration";
 import { diffFromApplyPatch, diffFromCodexFileChange, normalizeEdit, type DiffModel, type FileDiff } from "./diff";
 import { feedCopy, taskText } from "./toolMeaning";
-import { familyOf, summarizeTool, type ArgChip, type FeedEngine, type ToolFamily } from "./tools";
+import { familyOf, isToolSchemaLoader, summarizeTool, type ArgChip, type FeedEngine, type ToolFamily } from "./tools";
 
 /* Feed labels resolve against the active locale at build/render time; a locale
    flip rebuilds the feed (see LogFeed's memo), so cached items re-localize. */
@@ -2147,8 +2147,9 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     if (wakeup && wakeup.failed) recomputeWakeupStates();
     return event;
   };
+  const schemaLoaderCalls = new Set<string>();
   const addOutput = (callId: string | undefined, output: string, err?: boolean, rawSession?: string, resultTs?: unknown, blocks?: ToolOutputBlock[]) => {
-    if (!callId) return;
+    if (!callId || schemaLoaderCalls.has(callId)) return;
     pendingExecs.delete(callId);
     if (execWindow?.id === callId) {
       if (!execWindow.remaining.length && execWindow.seen.size && !err && !/^\s*(?:Script (?:running|failed)|\w*Error:)/i.test(output)) {
@@ -3096,6 +3097,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
           const id = textPart(part.id) || "plain-" + pushSeq + "-" + String(ts ?? "");
           if (name === "ScheduleWakeup") {
             addWakeup(ts, id, input);
+          } else if (isToolSchemaLoader(name)) {
+            schemaLoaderCalls.add(id);
           } else {
             const command = familyOf(name) === "shell" ? textPart(input.command) : undefined;
             const lang = familyOf(name) === "read" ? extLang(textPart(input.file_path)) : undefined;

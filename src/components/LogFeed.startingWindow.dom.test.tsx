@@ -438,3 +438,28 @@ test("issue 1397: a poll that still carries the launch chips on the open turn is
   expect(footerTimer(host)).toBe("1m");
   expect(headerBadge(host)).toContain("1m");
 });
+
+test("a seat's mandate in the launch window is Delegatus's collapsed card, never the operator's bubble", () => {
+  const conversationId = "conversation_seat_mandate";
+  const launchId = "launch_seat_mandate";
+  const base = placeholder(conversationId, launchId);
+  const seat = { ...base, spawn: launchFacts(conversationId, launchId, { mandate: { kind: "version", version: 1 } }) } as FileEntry;
+  const { host, root } = render(seat);
+
+  expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(1);
+  expect(host.querySelector("[data-mandate-card]")!.textContent).not.toContain("Pinned task");
+  expect(host.querySelectorAll("[data-outbox-entry]")).toHaveLength(0);
+  expect(host.querySelector("[data-launch-chips]")).not.toBeNull();
+
+  /* Adopted with the display fields retired: the launch contributes chips only,
+     and the transcript's own mandate row is the card from here on. */
+  rerender(root, adopted(conversationId, launchId));
+  expect(host.querySelectorAll("[data-outbox-entry]")).toHaveLength(0);
+  expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(0);
+});
+
+test("an ordinary operator launch keeps its own bubble and shows no mandate card", () => {
+  const { host } = render(placeholder("conversation_operator_launch", "launch_operator_launch"));
+  expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(0);
+  expect(host.querySelectorAll("[data-outbox-entry]")).toHaveLength(1);
+});

@@ -187,7 +187,7 @@ describe("feed session parity with one-shot parse", () => {
       JSON.stringify({
         type: "assistant",
         timestamp: "2026-08-31T10:00:00.000Z",
-        message: { role: "assistant", content: [{ type: "tool_use", id: "tool-duration", name: "ToolSearch", input: { query: "duration" } }] },
+        message: { role: "assistant", content: [{ type: "tool_use", id: "tool-duration", name: "Monitor", input: { query: "duration" } }] },
       }),
       JSON.stringify({
         type: "user",
@@ -208,7 +208,7 @@ describe("feed session parity with one-shot parse", () => {
         timestamp: "2026-08-31T10:00:00.000Z",
         message: { role: "assistant", content: [
           { type: "tool_use", id: "parallel-a", name: "Bash", input: { command: "first" } },
-          { type: "tool_use", id: "parallel-b", name: "ToolSearch", input: { query: "second" } },
+          { type: "tool_use", id: "parallel-b", name: "Monitor", input: { query: "second" } },
         ] },
       }),
       JSON.stringify({ type: "user", timestamp: "2026-08-31T10:00:02.000Z", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "parallel-b", content: "second done" }] } }),
@@ -217,6 +217,27 @@ describe("feed session parity with one-shot parse", () => {
     const group = buildFeed(claudeFile, lines, false, "").items.find((item) => item.kind === "cmd-group");
     if (group?.kind !== "cmd-group") throw new Error("expected action group");
     expect(group.t1).toBe("2026-08-31T10:00:05.000Z");
+  });
+
+  test("Claude's tool-definition loader leaves no row, and its result leaves no service row either", () => {
+    const lines = [
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-08-31T10:00:00.000Z",
+        message: { role: "assistant", content: [
+          { type: "tool_use", id: "loader", name: "ToolSearch", input: { query: "select:mcp__viewer__get_task" } },
+          { type: "tool_use", id: "work", name: "Bash", input: { command: "ls" } },
+        ] },
+      }),
+      JSON.stringify({ type: "user", timestamp: "2026-08-31T10:00:01.000Z", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "loader", content: "[definitions]" }] } }),
+      JSON.stringify({ type: "user", timestamp: "2026-08-31T10:00:02.000Z", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "work", content: "a.txt" }] } }),
+    ];
+    for (const showSvc of [false, true]) {
+      const shown = JSON.stringify(buildFeed(claudeFile, lines, showSvc, "").items);
+      expect(shown).not.toContain("ToolSearch");
+      expect(shown).not.toContain("definitions");
+      expect(shown).toContain("a.txt");
+    }
   });
 
   test("keeps a Claude Bash command when the enclosing record carries Viewer MCP attribution", () => {

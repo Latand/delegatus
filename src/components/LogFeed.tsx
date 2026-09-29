@@ -17,6 +17,7 @@ import type { FileEntry } from "@/lib/types";
 import { isAwaitingUser } from "@/hooks/useSwitchboardData";
 
 import { LaunchChips } from "./conversation/LaunchChips";
+import { MandateCard } from "./feed/cards/MandateCard";
 import { FeedSkeleton } from "./skeletons";
 import { LiveTurnRows } from "./conversation/LiveTurnRows";
 import { FeedMessageRow, useOutboxRowActions, type CanonicalMessage } from "./conversation/OutboxBubbles";
@@ -935,6 +936,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      the live transcript's adoption. */
   useLayoutEffect(() => {
     if (!memoryKey || !launch?.launchId || !launchOwnsThisPane) return;
+    /* A seat's mandate is Delegatus's message: the launch row renders it as the
+       mandate card, so no operator bubble is seeded for it. */
+    if (launch.mandate) return;
     const promptText = launch.prompt ?? "";
     const promptImages = launch.promptImages ?? 0;
     if (!promptText.trim() && !promptImages && !launch.promptEcho) return;
@@ -953,7 +957,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       ...(launch.deliveredAt !== undefined ? { settledAt: launch.deliveredAt } : {}),
       ...(launch.error ? { error: launch.error } : {}),
     });
-  }, [memoryKey, launch?.launchId, launch?.prompt, launch?.promptImages, launch?.promptAt, launch?.promptEcho, launch?.initialMessage, launch?.deliveredAt, launch?.error, launchOwner, launchOwnsThisPane]);
+  }, [memoryKey, launch?.launchId, launch?.prompt, launch?.promptImages, launch?.promptAt, launch?.promptEcho, launch?.initialMessage, launch?.deliveredAt, launch?.error, launch?.mandate, launchOwner, launchOwnsThisPane]);
   /* Settle the launch bubble from the delivery receipt the server projects
      (issue #648), independent of any transcript echo. A structured / MCP spawn's
      first message is journaled with SDK / agent provenance and parses as a
@@ -1572,7 +1576,16 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                 a transcript list plus a separate outbox section, is exactly how
                 the message used to be re-created under the reader. */}
             {conversationRows.map((row) => {
-              if (row.kind === "launch") return <LaunchChips key="launch" launch={launch!} onRetry={onLaunchRetry} />;
+              if (row.kind === "launch") {
+                return (
+                  <div key="launch">
+                    {launch!.mandate && launch!.prompt ? (
+                      <MandateCard item={{ kind: "mandate", ts: launch!.promptAt, text: launch!.prompt, mandate: launch!.mandate }} />
+                    ) : null}
+                    <LaunchChips launch={launch!} onRetry={onLaunchRetry} />
+                  </div>
+                );
+              }
               if (row.kind === "delta") {
                 /* While a parallel self streams in the same window, the seat's
                    own live turn names its participant too, so the two streams

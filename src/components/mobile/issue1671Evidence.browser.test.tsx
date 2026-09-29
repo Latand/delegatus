@@ -4979,3 +4979,100 @@ browserTest("the orchestrator's parallel self on the phone: pinned, streaming, c
   fs.writeFileSync(path.join(evidence, "phone.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
   if (failures.length) throw new Error(failures.join("\n"));
 }, 600_000);
+
+/*
+ * docs/design/seat-panel-noise.md on the phone: the running conversation is an
+ * orchestrator seat (`?seatnoise=<i..v>`), opened full screen at 390 px, light
+ * and dark, English and Ukrainian. The cases and the per-frame checks are the
+ * desktop block's (`kanbanBoard.browser.test.tsx`, "seat panel carries no
+ * internal noise"): no recovery envelope text, the error chip only on the
+ * stopped launch and carrying its sentence, the mandate card on the launch
+ * window with no operator bubble beside it, no ToolSearch row, the runtime
+ * pill on the high tier, no sideways overflow and no zero-width control.
+ * Readings go to `evidence/seat-panel-noise/phone.json`.
+ */
+browserTest("seat panel noise: cases i-v hold no internal noise on the phone at 390, light and dark, en and uk", async () => {
+  const out = path.resolve(".artifacts/seat-panel-noise-phone");
+  const evidence = path.resolve("evidence/seat-panel-noise");
+  fs.mkdirSync(out, { recursive: true });
+  fs.mkdirSync(evidence, { recursive: true });
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const failures: string[] = [];
+  const frames: Record<string, unknown> = {};
+  const readPanel = (page: Page) => page.evaluate(() => {
+    const root = document.body;
+    const text = root.textContent ?? "";
+    const toolSearch: string[] = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) if ((node.nodeValue ?? "").trim().startsWith("ToolSearch")) toolSearch.push(node.nodeValue!.trim());
+    const controls = [...root.querySelectorAll<HTMLElement>("button, [role=button], input, textarea, select")]
+      .filter((el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden");
+    const pill = root.querySelector("[data-runtime-pill]");
+    const chips = [...root.querySelectorAll<HTMLElement>('[data-launch-chip="error"]')];
+    return {
+      envelope: /structured launch recovery|"phase"|\{"/.test(text),
+      toolSearch,
+      errorChips: chips.map((el) => ({ text: el.textContent, title: el.getAttribute("title") })),
+      mandateCards: root.querySelectorAll("[data-mandate-card]").length,
+      operatorBubbles: [...root.querySelectorAll("[data-outbox-entry], [data-user-bubble]")].filter((el) => (el.textContent ?? "").includes("Keep the project moving")).length,
+      pill: pill ? (pill.textContent ?? "").trim() : null,
+      overflowX: document.documentElement.scrollWidth - innerWidth,
+      zeroWidthControls: controls.filter((el) => el.getBoundingClientRect().width < 1).map((el) => el.tagName + (el.getAttribute("aria-label") ? `[${el.getAttribute("aria-label")}]` : "")),
+      answer: text.includes("Search: the verifier passed"),
+    };
+  });
+  try {
+    for (const lang of ["en", "uk"] as const) for (const scheme of SCHEMES) for (const kind of ["i", "ii", "iii", "iv", "v"] as const) {
+      const label = `${kind}-390-${scheme}-${lang}`;
+      /* The phone's pill names the tier by its id in every language. */
+      const high = "high";
+      const low = "low";
+      const sentence = translate(lang, "spawnCard.failedDetail");
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
+      await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        await page.goto(`${base}/?seatnoise=${kind}#c=${{ iv: "conversation_seat_iv-old", v: "conversation_seat_v" }[kind as string] ?? "conversation_running"}`);
+        await page.waitForFunction(() => Boolean(document.querySelector("[data-feed-state]")), undefined, { timeout: 20_000 })
+          .catch(async (error) => { await page.screenshot({ path: path.join(out, `${label}-stuck.png`) }); throw new Error(`${label}: ${error.message.split("\n")[0]}`); });
+        await page.waitForSelector("[data-runtime-pill]", { state: "attached", timeout: 15_000 }).catch(() => undefined);
+        let rotation: unknown = null;
+        if (kind === "iv") {
+          const before = await readPanel(page);
+          await page.evaluate(() => (window as unknown as { evidence: { storeSeatProfile(): void } }).evidence.storeSeatProfile());
+          if (!before.pill?.endsWith(low)) failures.push(`${label}: the codex seat's pill before the rotation reads "${before.pill}", not …${low}`);
+          await page.evaluate(() => (window as unknown as { evidence: { rotateSeat(): void } }).evidence.rotateSeat());
+          await page.evaluate(() => { location.hash = "#c=conversation_seat_iv-new"; });
+          await page.waitForFunction(() => (document.querySelector("[data-runtime-pill]")?.textContent ?? "").includes("Opus"), undefined, { timeout: 40_000 });
+          rotation = { before: before.pill };
+        }
+        if (kind === "ii" || kind === "iv" || kind === "v") {
+          await page.waitForFunction(() => (document.body.textContent ?? "").includes("Search: the verifier passed"), undefined, { timeout: 25_000 }).catch(() => undefined);
+        }
+        await page.waitForTimeout(600);
+        const read = await readPanel(page);
+        await page.screenshot({ path: path.join(out, `${label}.png`) });
+        frames[label] = { ...read, rotation, pageErrors };
+        if (read.envelope) failures.push(`${label}: the panel prints the recovery envelope`);
+        if (kind === "iii") {
+          if (read.errorChips.length !== 1 || read.errorChips[0]!.text !== sentence) failures.push(`${label}: error chips ${JSON.stringify(read.errorChips)}`);
+        } else if (read.errorChips.length) failures.push(`${label}: an error chip ${JSON.stringify(read.errorChips)}`);
+        const launchWindow = kind === "i" || kind === "iii";
+        if (read.mandateCards !== (launchWindow ? 1 : 0)) failures.push(`${label}: ${read.mandateCards} mandate cards`);
+        if (read.operatorBubbles) failures.push(`${label}: the mandate is an operator bubble`);
+        if (read.toolSearch.length) failures.push(`${label}: ToolSearch rows ${JSON.stringify(read.toolSearch)}`);
+        if (!launchWindow && !read.answer) failures.push(`${label}: the transcript did not render`);
+        if (!launchWindow && !read.pill?.endsWith(high)) failures.push(`${label}: the pill reads "${read.pill}", not …${high}`);
+        if (launchWindow && read.pill && !read.pill.endsWith(high)) failures.push(`${label}: the pill reads "${read.pill}", not …${high}`);
+        if (read.overflowX > 1) failures.push(`${label}: overflows by ${read.overflowX}px`);
+        if (read.zeroWidthControls.length) failures.push(`${label}: zero-width controls ${read.zeroWidthControls.join(", ")}`);
+        if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+      } finally { await context.close(); }
+    }
+  } finally { await browser.close(); stop(); }
+  fs.writeFileSync(path.join(evidence, "phone.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 900_000);

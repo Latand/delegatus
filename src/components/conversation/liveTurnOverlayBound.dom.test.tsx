@@ -235,3 +235,18 @@ test("an explicit omission descriptor is the count, not a row of its own", () =>
   expect(kept.map((item) => item.itemId)).toEqual(["msg_demo_tail"]);
   expect(earlier).toBe(17);
 });
+
+test("Claude's tool-definition loader is neither listed nor counted as a step", () => {
+  const item = (itemId: string, name: string) => ({
+    itemId, text: "", phase: "streaming" as const, startedAt: null, completedAt: null,
+    tool: { name, engine: "claude" as const, status: "ok" as const, args: { query: "select:mcp__viewer__get_task" } },
+  });
+  const { rows: kept, earlier } = liveTurnTail([item("a", "ToolSearch"), item("b", "Bash"), item("c", "ToolSearch")]);
+  expect(kept.map((row) => row.tool?.name)).toEqual(["Bash"]);
+  expect(earlier).toBe(0);
+
+  const host = mount(<LiveTurnRows items={[item("a", "ToolSearch"), item("c", "ToolSearch")]} />);
+  expect(host.textContent).not.toContain("ToolSearch");
+  expect(rows(host)).toHaveLength(0);
+  expect(earlierLine(host)).toBeNull();
+});

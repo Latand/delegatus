@@ -72,3 +72,32 @@ test("issue 1138: a launch still being chased keeps its launch id", () => {
     expect(html).toContain('data-launch-chip="initial"');
   }
 });
+
+test("a healthy or pending launch renders no error line, whatever the projection carries", () => {
+  for (const state of ["starting", "binding", "queued", "reconciling", "recoverable-timeout", "recovered", "live-late-success"] as const) {
+    const html = renderToStaticMarkup(<LaunchChipsView launch={launch(state, { error: "leftover text" })} t={t} />);
+    expect(html).not.toContain('data-launch-chip="error"');
+    expect(html).not.toContain("leftover text");
+  }
+});
+
+test("a failed launch says one sentence and keeps the raw reason in the tooltip only", () => {
+  for (const [locale, sentence] of [["en", "The agent could not be started."], ["uk", "Агента не вдалося запустити."]] as const) {
+    const html = renderToStaticMarkup(
+      <LaunchChipsView launch={launch("failed", { error: "host never bound" })} t={(key, params) => translate(locale, key, params)} />,
+    );
+    expect(html).toContain('data-launch-chip="error"');
+    expect(html).toContain(`>${sentence}</span>`);
+    expect(html).toContain('title="host never bound"');
+    expect(html.replace('title="host never bound"', "")).not.toContain("host never bound");
+  }
+});
+
+test("a launch whose recovery stopped is a failure while its receipt still reads pending", () => {
+  const html = renderToStaticMarkup(
+    <LaunchChipsView launch={launch("queued", { error: "runtime host unavailable", recoveryStopped: true })} t={t} />,
+  );
+  expect(html).toContain('data-launch-chip="error"');
+  expect(html).toContain("The agent could not be started.");
+  expect(html).toContain('title="runtime host unavailable"');
+});

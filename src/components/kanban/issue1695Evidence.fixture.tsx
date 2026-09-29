@@ -4,12 +4,14 @@ import { cancelArrivalPulse, startArrivalPulse } from "@/components/attention/ar
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
 import { runFocusTransaction } from "@/components/attention/navigate";
 import { asksYouFixtureLines, asksYouFixtureSetting, reportLogFixturePage } from "@/components/orchestrator/reportLog/reportLogEvidence.fixture";
+import { writeProfile } from "@/components/runtimeProfile";
 import { Viewer } from "@/components/Viewer";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { ORCHESTRATOR_PROMPT_VERSION } from "@/lib/orchestrator/prompt";
 import { admissionSnapshot } from "@/lib/tasks/groupHide";
+import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
@@ -68,7 +70,11 @@ const L = (en: string, uk: string) => (UK ? uk : en);
 const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT;
 /* #1846: `&runtime=structured` answers the runtime snapshot with one structured session, for the running
    verify conversation, so its composer's runtime pill and the board's account chip both draw. */
-const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured";
+/* The seat-noise scenario (docs/design/seat-panel-noise.md) seats the orchestrator on a structured host too,
+   so the pill draws its structured face. */
+const SEAT_NOISE = SCENARIO === "seat-noise";
+const NOISE_CASE = new URLSearchParams(location.search).get("case") ?? "i";
+const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE;
 /* Review round 2 of #1712: a conversation no card holds, whose reader takes the window. */
 const LOOSE = SCENARIO === "loose";
 /* #1765: one task carrying five pipelines — two running, three completed — so
@@ -290,15 +296,22 @@ const searchVer1 = add(conversation("search-ver-1", "Results empty for 40 s afte
 const searchVer2 = add(conversation("search-ver-2", "Re-running the rebuild with traffic", working({ plan: { current: "Re-running the rebuild with traffic" } })));
 
 /** The runtime snapshot `&runtime=structured` answers: the verify conversation on a structured host, mid-turn. */
+let snapshotReads = 0;
 function structuredSnapshot() {
+  snapshotReads += 1;
   return {
-    schemaVersion: 1, snapshotSeq: 1, retentionFloorSeq: 0, structuredHostsEnabled: true, runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 1,
+    schemaVersion: 1, snapshotSeq: snapshotReads, retentionFloorSeq: 0, structuredHostsEnabled: true, runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 1,
     sessions: [{
       conversationId: searchVer2.conversationId, sessionKey: { engine: "claude", sessionId: "search-ver-2-session" }, hostKind: "claude-broker", host: "hosted",
       turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: "default",
       parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: searchVer2.path,
       capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1", pendingReconfigure: null,
-    }],
+    }, ...(SEAT_NOISE ? [{
+      conversationId: orchestrator.conversationId, sessionKey: { engine: orchestrator.engine, sessionId: `${orchestrator.name}-session` }, hostKind: orchestrator.engine === "codex" ? "codex-app-server" : "claude-broker", host: "hosted",
+      turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: "default",
+      parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: orchestrator.path,
+      capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1", pendingReconfigure: null,
+    }] : [])],
     attentions: [], recentOperations: [], edges: [], flows: [], workflows: [], tasks: [], deployments: [],
   };
 }
@@ -343,6 +356,43 @@ const orchestrator = add(conversation("orchestrator", "Orchestrator for atlas", 
   plan: { current: "Watching the search fix" },
   ...(SEAT_HEAD ? { model: "claude-opus-4-5-1m", ctx: { usedTokens: 520_825, windowTokens: 1_000_000, pct: 52, confidence: "exact" } } : {}),
 })));
+
+/* The seat-panel noise cases (docs/design/seat-panel-noise.md). The launch facts are what the board's
+   projection hands the panel: a launch the runtime is still recovering carries no reason, a stopped one
+   carries it with `recoveryStopped`. The raw recovery envelope rides in `error` on the pending cases on
+   purpose: the chip must not print it whatever the projection did. */
+const SEAT_MANDATE = "Keep the project moving. Read the board before every decision, keep every lane owned, and report what changed.";
+const SEAT_ENVELOPE = `structured launch recovery: ${JSON.stringify({ phase: "uncertain", startedAt: 1, checks: 2, nextTryAt: 2, reason: "the host has not answered yet" })}`;
+const SEAT_LAUNCH_ID = "launch-seat-noise";
+function seatLaunch(over: Record<string, unknown>) {
+  return {
+    launchId: SEAT_LAUNCH_ID, clientAttemptId: null, accountId: null, conversationId: orchestrator.conversationId, generation: 1,
+    state: "reconciling", initialMessage: "queued", retrySafe: false, error: null,
+    admittedAt: (now - 90) * 1_000, promptAt: (now - 90) * 1_000, promptImages: 0,
+    mandate: { kind: "version", version: 1 }, prompt: SEAT_MANDATE,
+    ...over,
+  };
+}
+function seatOn(engine: "claude" | "codex", model: string, effort: string, tag: string) {
+  Object.assign(orchestrator, {
+    engine, fmt: engine, root: engine === "codex" ? "codex-sessions" : "claude-projects", model, effort,
+    conversationId: `conversation_seat_${tag}`, path: `/repo/seat-${tag}.jsonl`, name: `seat-${tag}.jsonl`,
+    spawn: undefined, activityReason: undefined, size: 2_048,
+  });
+}
+if (SEAT_NOISE) {
+  const launchWindow = (facts: Record<string, unknown>) => Object.assign(orchestrator, {
+    path: `spawn:${SEAT_LAUNCH_ID}`, name: `spawn:${SEAT_LAUNCH_ID}`, size: 0, activityReason: "structured_spawn_reconciling", spawn: facts,
+  });
+  if (NOISE_CASE === "i") { seatOn("claude", "opus", "high", "i"); launchWindow(seatLaunch({ error: SEAT_ENVELOPE })); }
+  else if (NOISE_CASE === "ii") seatOn("claude", "opus", "high", "ii");
+  else if (NOISE_CASE === "iii") {
+    seatOn("claude", "opus", "high", "iii");
+    launchWindow(seatLaunch({ state: "failed", initialMessage: "failed", recoveryStopped: true, error: "the host has not answered yet" }));
+  }
+  else if (NOISE_CASE === "iv") seatOn("codex", "gpt-5.6", "low", "iv-old");
+  else if (NOISE_CASE === "v") seatOn("codex", "gpt-5.6", "high", "v");
+}
 /* K4b: the merge task's implementer, and a spike closed on the board. */
 const mergeImpl = EDITING ? add(conversation("merge-impl", "Implementer: merge the queue adapter", { mtime: now - 26 * 60 * MIN })) : null;
 const oldSpike = EDITING ? add(conversation("old-spike", "Spike: a virtualized Done column", { mtime: now - 5 * 24 * 60 * MIN })) : null;
@@ -1541,6 +1591,15 @@ function transcriptOf(pathname: string): string {
     for (let step = 0; step < 24; step += 1) long.push(said((88 - step * 3) * MIN, `Step ${step + 1}: re-ran the rebuild against live traffic and checked the alias swap window.`));
     return `${long.join("\n")}\n`;
   }
+  if (SEAT_NOISE && file === orchestrator) {
+    if (file.spawn) return "";
+    return `${[
+      asked(8 * MIN, "Keep the search fix moving."),
+      ...tool(7 * MIN, "toolu_seat_search", "ToolSearch", { query: "select:mcp__viewer__list_pipelines", max_results: 1 }),
+      ...tool(6 * MIN, "toolu_seat_list", "mcp__viewer__list_pipelines", { project: PROJECT }),
+      said(2 * MIN, "Search: the verifier passed on the second attempt. Nothing needs you."),
+    ].join("\n")}\n`;
+  }
   if (AGENT_REPORT && file === orchestrator) {
     return `${[
       asked(12 * MIN, "Where are we on the release? Give me the whole picture before I decide what to cut."),
@@ -1630,6 +1689,10 @@ const evidence = {
     window.dispatchEvent(new Event("llv:tasks-changed"));
   },
   boardMutations: [] as BoardMutationV1[],
+  /* Case iv: the Codex seat's operator-chosen profile is stored, then the seat rotates to a Claude seat launched opus/high. */
+  storeSeatProfile() { writeProfile(orchestrator, { model: "gpt-5.6", effort: "low" }); },
+  /* The runtime stream is silent here, so the rotation asks the bus for the snapshot that carries the new seat's session, as the panel's own refresh does. */
+  rotateSeat() { seatOn("claude", "opus", "high", "iv-new"); return getRuntimeBus().refresh(); },
   refuseNextTaskPatch: false,
   taskAnswerDelayMs: 400,
   /* When each task write reached the fixture and when it was answered. */

@@ -1,0 +1,293 @@
+{
+  "frames": {
+    "i-390-light-en": {
+      "envelope": false,
+      "toolSearch": [],
+      "errorChips": [],
+      "mandateCards": 1,
+      "operatorBubbles": 0,
+      "pill": "Opus 5.5 · high",
+      "overflowX": 0,
+      "zeroWidthControls": [],
+      "answer": false,
+      "rotation": null,
+      "pageErrors": []
+    },
+    "ii-390-light-en": {
+      "envelope": false,
+      "toolSearch": [],
+      "errorChips": [],
+      "mandateCards": 0,
+      "operatorBubbles": 0,
+      "pill": "Opus 5.5 · high",
+      "overflowX": 0,
+      "zeroWidthControls": [],
+      "answer": true,
+      "rotation": null,
+      "pageErrors": []
+    },
+    "iii-390-light-en": {
+      "envelope": false,
+      "toolSearch": [],
+      "errorChips": [
+        {
+          "text": "The agent could not be started.",
+          "title": "the host has not answered yet"
+        }
+      ],
+      "mandateCards": 1,
+      "operatorBubbles": 0,
+      "pill": null,
+      "overflowX": 0,
+      "zeroWidthControls": [],
+      "answer": false,
+      "rotation": null,
+      "pageErrors": []
+    },
+    "iv-390-light-en": {
+      "envelope": false,
+      "toolSearch": [],
+      "errorChips": [],
+      "mandateCards": 0,
+      "operatorBubbles": 0,
+      "pill": "Opus 5.5 · high",
+      "overflowX": 0,
+      "zeroWidthControls": [],
+      "answer": true,
+      "rotation": {
+        "before": "6-Astra · low"
+      },
+      "pageErrors": []
+    },
+    "v-390-light-en": {
+      "envelope": false,
+      "toolSearch": [],
+      "errorChips": [],
+      "mandateCards": 0,
+      "operatorBubbles": 0,
+      "pill": "6-Astra · high",
+      "overflowX": 0,
+      "zeroWidthControls": [],
+      "answer": true,
+      "rotation": null,
+      "pageErrors": []
+    },
+    "i-390-dark-en": {
+      "envelope": false,
+      "toolSearch": [],
+      "errorChips": [],
+      "mandateCards": 1,
+      "operatorBubbles": 0,
+      "pill": "Opus 5.5 · high",
+      "overflowX": 0,
+      "zeroWidthControls": [],
+      "answer": false,
+      "rotation": null,
+      "pageErrors": []
+    },
+    "ii-390-dark-en": {
+      "envelope": false,
+      "toolSearch": [],
+      "errorChips": [],
+      "mandateCards": 0,
+      "operatorBubbles": 0,
+      "pill": "Opus 5.5 · high",
+      "overflowX": 0,
+      "zeroWidthControls": [],
+      "answer": true,
+      "rotation": null,
+      "pageErrors": []
+    },
+    "iii-390-dark-en": {
+      "envelope": false,
+      "toolSearch": [],
+      "errorChips": [
+        {
+          "text": "The agent could not be started.",
+          "title": "the host has not answered yet"
+        }
+      ],
+      "mandateCards": 1,
+      "operatorBubbles": 0,
+      "pill": null,
+      "overflowX": 0,
+      "zeroWidthControls": [],
+      "answer": false,
+      "rotation": null,
+      "pageErrors": []
+    },
+    "iv-390-dark-en": {
+      "envelope": false,
+      "toolSearch": [],
+      "errorChips": [],
+      "mandateCards": 0,
+      "operatorBubbles": 0,
+      "pill": "Opus 5.5 · high",
+      "overflowX": 0,
+      "zeroWidthControls": [],
+      "answer": true,
+      "rotation": {
+        "before": "6-Astra · low"
+      },
+      "pageErrors": []
+    },
+    "v-390-dark-en": {
+      "envelope": false,
+      "toolSearch": [],
+      "errorChips": [],
+      "mandateCards": 0,
+      "operatorBubbles": 0,
+      "pill": "6-Astra · high",
+      "overflowX": 0,
+      "zeroWidthControls": [],
+      "answer": true,
+      "rotation": null,
+      "pageErrors": []
+    },
+    "i-390-light-uk": {
+      "envelope": false,
+      "toolSearch": [],
+      "errorChips": [],
+      "mandateCards": 1,
+      "operatorBubbles": 0,
+      "pill": "Opus 5.5 · high",
+      "overflowX": 0,
+      "zeroWidthControls": [],
+      "answer": false,
+      "rotation": null,
+      "pageErrors": []
+    },
+    "ii-390-light-uk": {
+      "envelope": false,
+      "toolSearch": [],
+      "errorChips": [],
+      "mandateCards": 0,
+      "operatorBubbles": 0,
+      "pill": "Opus 5.5 · high",
+      "overflowX": 0,
+      "zeroWidthControls": [],
+      "answer": true,
+      "rotation": null,
+      "pageErrors": []
+    },
+    "iii-390-light-uk": {
+      "envelope": false,
+      "toolSearch": [],
+      "errorChips": [
+        {
+          "text": "Агента не вдалося запустити.",
+          "title": "the host has not answered yet"
+        }
+      ],
+      "mandateCards": 1,
+      "operatorBubbles": 0,
+      "pill": null,
+      "overflowX": 0,
+      "zeroWidthControls": [],
+      "answer": false,
+      "rotation": null,
+      "pageErrors": []
+    },
+    "iv-390-light-uk": {
+      "envelope": false,
+      "toolSearch": [],
+      "errorChips": [],
+      "mandateCards": 0,
+      "operatorBubbles": 0,
+      "pill": "Opus 5.5 · high",
+      "overflowX": 0,
+      "zeroWidthControls": [],
+      "answer": true,
+      "rotation": {
+        "before": "6-Astra · low"
+      },
+      "pageErrors": []
+    },
+    "v-390-light-uk": {
+      "envelope": false,
+      "toolSearch": [],
+      "errorChips": [],
+      "mandateCards": 0,
+      "operatorBubbles": 0,
+      "pill": "6-Astra · high",
+      "overflowX": 0,
+      "zeroWidthControls": [],
+      "answer": true,
+      "rotation": null,
+      "pageErrors": []
+    },
+    "i-390-dark-uk": {
+      "envelope": false,
+      "toolSearch": [],
+      "errorChips": [],
+      "mandateCards": 1,
+      "operatorBubbles": 0,
+      "pill": "Opus 5.5 · high",
+      "overflowX": 0,
+      "zeroWidthControls": [],
+      "answer": false,
+      "rotation": null,
+      "pageErrors": []
+    },
+    "ii-390-dark-uk": {
+      "envelope": false,
+      "toolSearch": [],
+      "errorChips": [],
+      "mandateCards": 0,
+      "operatorBubbles": 0,
+      "pill": "Opus 5.5 · high",
+      "overflowX": 0,
+      "zeroWidthControls": [],
+      "answer": true,
+      "rotation": null,
+      "pageErrors": []
+    },
+    "iii-390-dark-uk": {
+      "envelope": false,
+      "toolSearch": [],
+      "errorChips": [
+        {
+          "text": "Агента не вдалося запустити.",
+          "title": "the host has not answered yet"
+        }
+      ],
+      "mandateCards": 1,
+      "operatorBubbles": 0,
+      "pill": null,
+      "overflowX": 0,
+      "zeroWidthControls": [],
+      "answer": false,
+      "rotation": null,
+      "pageErrors": []
+    },
+    "iv-390-dark-uk": {
+      "envelope": false,
+      "toolSearch": [],
+      "errorChips": [],
+      "mandateCards": 0,
+      "operatorBubbles": 0,
+      "pill": "Opus 5.5 · high",
+      "overflowX": 0,
+      "zeroWidthControls": [],
+      "answer": true,
+      "rotation": {
+        "before": "6-Astra · low"
+      },
+      "pageErrors": []
+    },
+    "v-390-dark-uk": {
+      "envelope": false,
+      "toolSearch": [],
+      "errorChips": [],
+      "mandateCards": 0,
+      "operatorBubbles": 0,
+      "pill": "6-Astra · high",
+      "overflowX": 0,
+      "zeroWidthControls": [],
+      "answer": true,
+      "rotation": null,
+      "pageErrors": []
+    }
+  },
+  "failures": []
+}

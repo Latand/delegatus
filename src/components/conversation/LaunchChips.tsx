@@ -96,9 +96,15 @@ export function LaunchChipsView({
           {launch.launchId.slice(0, 8)}
         </span>
       ) : null}
-      {launch.error ? (
-        <span data-launch-chip="error" className="min-w-0 basis-full break-words text-caption font-semibold text-danger">
-          {launch.error}
+      {/* Only a launch that is lost says so, in one sentence; the projected
+          reason stays available as the tooltip for whoever chases it. */}
+      {launch.state === "failed" || launch.recoveryStopped ? (
+        <span
+          data-launch-chip="error"
+          title={launch.error ?? undefined}
+          className="min-w-0 basis-full break-words text-caption font-semibold text-danger"
+        >
+          {t("spawnCard.failedDetail")}
         </span>
       ) : null}
       {launch.state === "failed" && launch.retrySafe && onRetry ? (

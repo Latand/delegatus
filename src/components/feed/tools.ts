@@ -256,6 +256,12 @@ const WEB_TOOLS = new Set(["WebFetch", "WebSearch"]);
 const SPAWN_TOOLS = new Set(["Task", "Agent", "Workflow", "Skill", "spawn_agent", "followup_task", "send_message", "wait_agent", "subagent_activity"]);
 const PLAN_TOOLS = new Set(["TodoWrite", "TaskCreate", "TaskUpdate", "EnterPlanMode", "ExitPlanMode"]);
 
+/** Claude Code fetching tool definitions. It does no work the operator asked
+    for, so no surface lists it: the raw transcript keeps it for agents. */
+export function isToolSchemaLoader(tool: string): boolean {
+  return tool === "ToolSearch";
+}
+
 export function familyOf(tool: string): ToolFamily {
   if (/^mcp__/.test(tool)) return "mcp";
   if (SHELL_TOOLS.has(tool)) return "shell";

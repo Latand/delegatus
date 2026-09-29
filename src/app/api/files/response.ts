@@ -20,6 +20,9 @@ import {
   type AgentRegistryEntry,
 } from "@/lib/agent/registry";
 import { projectLaunchConversations } from "@/lib/agent/spawnProjection";
+import { readOrchestratorSeatFile } from "@/lib/orchestrator/seats";
+import { orchestratorMandateDeliveries, SPAWN_CLIENT_MESSAGE_PREFIX } from "@/lib/runtime/deliveredMessageOccurrences";
+import type { MandateDelivery } from "@/lib/runtime/messageOrigin";
 import { conversationCatalogSnapshot } from "@/lib/scanner/conversationCatalog";
 import { pidAlive, readPpid } from "@/lib/scanner/process";
 import { repositoryForProjectRoot } from "@/lib/projects/git";
@@ -281,7 +284,21 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
   /* One launch read-model (issue #569): a launch either projects the
      conversation window itself (nothing materialized yet) or folds into the
      live conversation as transient chips — never both. */
-  const launchProjection = projectLaunchConversations(files, registrySnapshot);
+  /* A launch a seat recorded carries a mandate: read the seat file once, and
+     only when a launch has a prompt to attribute. An unreadable file leaves the
+     launch as it was. */
+  let seatMandates: ReadonlyMap<string, MandateDelivery> | null = null;
+  const launchMandate = (launchId: string): MandateDelivery | undefined => {
+    if (!seatMandates) {
+      try {
+        seatMandates = orchestratorMandateDeliveries(readOrchestratorSeatFile());
+      } catch {
+        seatMandates = new Map();
+      }
+    }
+    return seatMandates.get(`${SPAWN_CLIENT_MESSAGE_PREFIX}${launchId}`);
+  };
+  const launchProjection = projectLaunchConversations(files, registrySnapshot, undefined, undefined, launchMandate);
   traceStep("launch-projection");
   files.push(...launchProjection.cards);
   for (const file of files) {

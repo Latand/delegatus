@@ -423,8 +423,8 @@ test("issue 1138: a succeeded launch retires its chips on the first assistant tu
   }
 });
 
-test("issue 1138: a failed launch keeps its chips through the assistant turns that follow it", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-1138-failed-keeps-chips-"));
+test("a failed launch keeps its chips until the conversation answers, and retires once it has", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-failed-launch-retires-"));
   try {
     const launch = lateSuccessLaunch(directory);
     const snapshot = launch.registry.snapshot();
@@ -432,14 +432,91 @@ test("issue 1138: a failed launch keeps its chips through the assistant turns th
     receipt.state = "failed";
     receipt.error = "host never bound";
 
-    /* Failure is the point of the row: its error and Retry stay reachable for
-       the whole freshness bound no matter what the transcript grew afterwards. */
+    /* A launch nothing answered after is the failure the row exists for: its
+       error and Retry stay reachable for the whole freshness bound. */
+    const silent = scannedFile(launch.artifactPath);
+    expect(projectLaunchConversations([silent], snapshot, launch.createdAt + 60_000).facts.get(launch.artifactPath))
+      .toMatchObject({ state: "failed", initialMessage: "failed", retrySafe: true, error: "host never bound" });
+    expect(projectLaunchConversations([silent], snapshot, launch.createdAt + 16 * 60_000).facts.get(launch.artifactPath))
+      .toBeUndefined();
+
+    /* The runtime marks a launch failed at its setup bound while the host goes
+       on. A conversation that answered after the launch plainly started, so the
+       chip is not news (a seat in this state shows no red launch row). */
     const answered = scannedFile(launch.artifactPath);
     answered.lastAssistantMessageAt = launch.createdAt + 30_000;
     expect(projectLaunchConversations([answered], snapshot, launch.createdAt + 60_000).facts.get(launch.artifactPath))
-      .toMatchObject({ state: "failed", initialMessage: "failed", retrySafe: true, error: "host never bound" });
-    expect(projectLaunchConversations([answered], snapshot, launch.createdAt + 16 * 60_000).facts.get(launch.artifactPath))
       .toBeUndefined();
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("the runtime's recovery envelope is never projected as error text", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-recovery-envelope-"));
+  try {
+    const launch = lateSuccessLaunch(directory);
+    const envelope = (extra: object) => "structured launch recovery: " + JSON.stringify({
+      phase: "delivered", startedAt: 1, checks: 6, nextTryAt: 2, reason: "transcript publication pending", ...extra,
+    });
+    const project = (error: string | null) => {
+      const snapshot = launch.registry.snapshot();
+      snapshot.receipts[launch.launchId]!.error = error;
+      return projectLaunchConversations([scannedFile(launch.artifactPath)], snapshot, launch.createdAt + 60_000)
+        .facts.get(launch.artifactPath);
+    };
+
+    /* Recovery still running: no failure to show, and none of its JSON. */
+    for (const phase of ["delivered", "uncertain", "unpublished"]) {
+      const pending = project(envelope({ phase }));
+      expect(pending?.error).toBeNull();
+      expect(pending?.recoveryStopped).toBeUndefined();
+      expect(JSON.stringify(pending)).not.toContain("structured launch recovery");
+    }
+    /* Recovery gave up: its plain reason is the failure, flagged as terminal. */
+    const stopped = project(envelope({ stopped: true, reason: "runtime host unavailable" }));
+    expect(stopped).toMatchObject({ error: "runtime host unavailable", recoveryStopped: true });
+    /* Any other error text passes through as before. */
+    expect(project("host never bound")?.error).toBe("host never bound");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a launch a seat recorded carries its mandate on the placeholder and drops it on adoption", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-mandate-launch-"));
+  try {
+    const registry = legacyRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+    const begun = registry.beginSpawnRequest({
+      engine: "claude", cwd: directory, transport: "structured", accountId: "work",
+      launchProfile: emptyLaunchProfile({ cwd: directory }),
+      launchDisplay: { prompt: "You are this project's orchestrator", images: 0, echo: "You are this project's orchestrator" },
+    });
+    if (begun.kind !== "created") throw new Error("expected structured launch creation");
+    const launchId = begun.receipt.launchId;
+    const createdAt = Date.parse(begun.receipt.createdAt);
+    const mandateFor = (id: string) => (id === launchId ? { kind: "version" as const, version: 1 } : undefined);
+
+    const window = projectLaunchConversations([], registry.snapshot(), createdAt + 1_000, undefined, mandateFor);
+    expect(window.cards[0]?.spawn).toMatchObject({ prompt: "You are this project's orchestrator", mandate: { kind: "version", version: 1 } });
+    /* An ordinary operator launch has no mandate, so its bubble is unchanged. */
+    const ordinary = projectLaunchConversations([], registry.snapshot(), createdAt + 1_000);
+    expect(ordinary.cards[0]?.spawn?.mandate).toBeUndefined();
+    expect(ordinary.cards[0]?.spawn?.prompt).toBe("You are this project's orchestrator");
+
+    /* Once the transcript is adopted its own mandate row takes over. */
+    const artifactPath = path.join(directory, "seat.jsonl");
+    fs.writeFileSync(artifactPath, `${JSON.stringify({ type: "user", message: "kickoff" })}\n`);
+    registry.settleSpawn(launchId, {
+      key: { engine: "claude", sessionId: "seat" }, artifactPath, cwd: directory, accountId: "work",
+      launchProfile: emptyLaunchProfile({ cwd: directory }), status: "idle",
+      host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+    });
+    const adopted = projectLaunchConversations([scannedFile(artifactPath)], registry.snapshot(), createdAt + 1_000, undefined, mandateFor);
+    const fact = adopted.facts.get(artifactPath);
+    expect(fact).toBeDefined();
+    expect(fact?.mandate).toBeUndefined();
+    expect(fact?.prompt).toBeUndefined();
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

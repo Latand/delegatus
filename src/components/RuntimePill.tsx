@@ -229,10 +229,13 @@ export function RuntimePill({
   useEffect(() => {
     if (!engine) return;
     if (pillSurface !== "live-root" && pillSurface !== "structured") return;
-    const stored = readDraft(file);
+    const phase = localStorage.getItem(phaseKey(file));
+    const inFlight = phase === "pending" || phase === "confirming";
+    /* A structured face is what the conversation runs. Only a reconfigure the
+       operator still has in flight restores the stored draft. */
+    const stored = pillSurface === "structured" && !inFlight ? defaults(file) : readDraft(file);
     liveDraftRef.current = stored;
     setLiveDraft(stored);
-    const phase = localStorage.getItem(phaseKey(file));
     operationRef.current = localStorage.getItem(phaseOperationKey(file));
     rollbackRef.current = readBrowserProfileRollback(file);
     setApplyState(phase === "pending" || phase === "confirming" ? phase : "idle");
@@ -249,16 +252,42 @@ export function RuntimePill({
      user's stored selection was silently reverted on pane load (issue #499). */
 
   // A poll can adopt a provisional identity to the canonical one while mounted;
-  // carry the persisted selection along so it is never silently orphaned.
-  const identityRef = useRef(cardId);
+  // carry the persisted selection along so it is never silently orphaned. Only
+  // the same transcript adopts: a rotation changes the path too, and the
+  // predecessor's selection stays with the predecessor.
+  const identityRef = useRef({ id: cardId, path: file.path });
   const runtimeConversationId = runtimeSession?.conversationId;
   useEffect(() => {
-    if (identityRef.current !== cardId) {
-      adoptRuntimeProfile(identityRef.current, cardId);
-      identityRef.current = cardId;
+    const previous = identityRef.current;
+    if (previous.id !== cardId) {
+      if (previous.path === file.path) adoptRuntimeProfile(previous.id, cardId);
       setVersion((v) => v + 1);
     }
-  }, [cardId]);
+    identityRef.current = { id: cardId, path: file.path };
+  }, [cardId, file.path]);
+
+  /* The structured face follows what the conversation runs. A poll that brings
+     a different runtime replaces the face unless the operator's own change is
+     still in flight; an applied change stands until the runtime moves. */
+  const observedKey = `${file.model ?? ""}|${file.launchModel ?? ""}|${file.effort ?? ""}|${file.fast ?? ""}`;
+  const seenObserved = useRef({ key: observedKey, path: file.path });
+  /* eslint-disable react-hooks/set-state-in-effect -- syncing the face to the
+     runtime the poll observed, the same external-store sync as the load above. */
+  useEffect(() => {
+    const seen = seenObserved.current;
+    seenObserved.current = { key: observedKey, path: file.path };
+    /* A new path reloads the face in the effect above. */
+    if (seen.key === observedKey || seen.path !== file.path) return;
+    if (!engine || pillSurface !== "structured") return;
+    if (applyState !== "idle" && applyState !== "applied") return;
+    const observed = defaults(file);
+    liveDraftRef.current = observed;
+    setLiveDraft(observed);
+    if (applyState === "applied") setApplyState("idle");
+    // The observed runtime is the trigger; the rest of `file` is not.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [observedKey, file.path]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const clearBrowserProfileRollback = useCallback((operationId: string | null = null) => {
     const rollback = rollbackRef.current ?? readBrowserProfileRollback(file);

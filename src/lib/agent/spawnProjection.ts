@@ -5,6 +5,8 @@ import { readOnlyConversationLookupFromSnapshot, type ConversationLookup, type R
 import { projectRootForCwd } from "@/lib/scanner/describe";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
 import type { FileEntry, StructuredSpawnCardState } from "@/lib/types";
+import type { MandateDelivery } from "@/lib/runtime/messageOrigin";
+import { stagedLaunchRecovery } from "@/lib/runtime/stagedRecovery";
 
 const TERMINAL_SPAWN_RECENT_MS = 15 * 60 * 1_000;
 
@@ -104,7 +106,20 @@ function launchPromptOf(
   return null;
 }
 
-function cardState(snapshot: RegistryFile, receipt: SpawnReceipt): StructuredSpawnCardState {
+/** The receipt's error as the operator's panel may show it. The runtime parks
+    its recovery bookkeeping there as a JSON envelope: while recovery runs it is
+    no failure at all, and once recovery stopped only its plain reason is one. */
+function projectedError(receipt: SpawnReceipt): Pick<StructuredSpawnCardState, "error" | "recoveryStopped"> {
+  const recovery = stagedLaunchRecovery(receipt);
+  if (!recovery) return { error: receipt.error };
+  return recovery.stopped === true ? { error: recovery.reason, recoveryStopped: true } : { error: null };
+}
+
+function cardState(
+  snapshot: RegistryFile,
+  receipt: SpawnReceipt,
+  mandateFor?: (launchId: string) => MandateDelivery | undefined,
+): StructuredSpawnCardState {
   const delivery = initialDelivery(snapshot, receipt);
   const identity = launchIdentity(snapshot, receipt);
   const failed = receipt.state === "failed" || receipt.state === "conflicted";
@@ -155,7 +170,7 @@ function cardState(snapshot: RegistryFile, receipt: SpawnReceipt): StructuredSpa
     state,
     initialMessage,
     retrySafe: receipt.state === "failed",
-    error: receipt.error,
+    ...projectedError(receipt),
     ...(Number.isFinite(admittedAt) ? { admittedAt } : {}),
     ...(deliveredAt !== undefined ? { deliveredAt } : {}),
     ...(launchPrompt
@@ -163,6 +178,7 @@ function cardState(snapshot: RegistryFile, receipt: SpawnReceipt): StructuredSpa
           promptImages: launchPrompt.promptImages,
           promptAt: Date.parse(receipt.createdAt) || undefined,
           promptEcho: launchPrompt.promptEcho, prompt: launchPrompt.prompt,
+          ...(mandateFor?.(receipt.launchId) ? { mandate: mandateFor(receipt.launchId) } : {}),
         }
       : {}),
   };
@@ -174,7 +190,7 @@ function cardState(snapshot: RegistryFile, receipt: SpawnReceipt): StructuredSpa
     remains long enough for a browser-seeded raw role prompt to reconcile with that
     transcript row on a direct 202-to-live adoption. */
 function launchFactsWithoutPrompt(spawn: StructuredSpawnCardState): StructuredSpawnCardState {
-  if (spawn.prompt === undefined && spawn.promptImages === undefined && spawn.promptAt === undefined) {
+  if (spawn.prompt === undefined && spawn.promptImages === undefined && spawn.promptAt === undefined && spawn.mandate === undefined) {
     return spawn;
   }
   const facts = { ...spawn };
@@ -182,6 +198,7 @@ function launchFactsWithoutPrompt(spawn: StructuredSpawnCardState): StructuredSp
   delete facts.prompt;
   delete facts.promptImages;
   delete facts.promptAt;
+  delete facts.mandate;
   return facts;
 }
 
@@ -380,9 +397,11 @@ function assistantTurnObserved(live: FileEntry | null, launchedMs: number): bool
 
     A SUCCEEDED launch (`recovered` / `live-late-success`) retires on evidence —
     the conversation's own first assistant turn says everything the chips did, at
-    any age (issue #1138). The {@link TERMINAL_SPAWN_RECENT_MS} bound stays as
-    the fallback while no such evidence exists, and `failed` keeps that bound as
-    its only rule: its error and retry are the point of the row. */
+    any age (issue #1138). A `failed` receipt retires on the same evidence: a
+    conversation that answered after the launch plainly started, and the runtime
+    marks a launch failed at its setup bound while the host goes on. The
+    {@link TERMINAL_SPAWN_RECENT_MS} bound stays as the fallback while no such
+    evidence exists, so a launch that really failed keeps its error and retry. */
 function transientLaunchFact(
   spawn: StructuredSpawnCardState,
   createdAt: string,
@@ -392,7 +411,7 @@ function transientLaunchFact(
   const succeeded = spawn.state === "recovered" || spawn.state === "live-late-success";
   if (!succeeded && spawn.state !== "failed") return true;
   const createdMs = Date.parse(createdAt);
-  if (succeeded && assistantTurnObserved(live, createdMs)) return false;
+  if ((succeeded || spawn.state === "failed") && assistantTurnObserved(live, createdMs)) return false;
   return !Number.isFinite(createdMs) || nowMs - createdMs < TERMINAL_SPAWN_RECENT_MS;
 }
 
@@ -446,6 +465,7 @@ export function projectLaunchConversations(
   snapshot: RegistryFile,
   nowMs = Date.now(),
   artifactProbe: (pathname: string) => ArtifactProbeResult = readableArtifact,
+  mandateFor?: (launchId: string) => MandateDelivery | undefined,
 ): LaunchProjection {
   const byPath = new Map(files.map((file) => [file.path, file]));
   const scannedPaths = new Set(byPath.keys());
@@ -456,7 +476,7 @@ export function projectLaunchConversations(
      apply the freshness rules to only the newest per conversation. */
   const routes = allLaunchRoutes(snapshot);
   for (const receipt of receipts) {
-    const spawn = cardState(snapshot, receipt);
+    const spawn = cardState(snapshot, receipt, mandateFor);
     /* The materialized live conversation immediately retires the duplicate
        spawn projection (#569/#614): the launch folds into that window as chips.
        Retirement happens ONLY here — when the adopted live conversation is

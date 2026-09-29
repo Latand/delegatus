@@ -5,6 +5,7 @@ import type { TmuxEndpointHealth } from "@/lib/tmux";
 import type { Workflow } from "@/lib/workflows/types";
 import type { TurnState } from "@/lib/accounts/migration/contracts";
 import type { PendingPermissionRequest } from "@/lib/runtime/permissionRequests";
+import type { MandateDelivery } from "@/lib/runtime/messageOrigin";
 
 export type RootKey =
   | "codex-sessions"
@@ -67,6 +68,14 @@ export interface StructuredSpawnCardState {
   initialMessage: "pending" | "queued" | "delivered" | "failed";
   retrySafe: boolean;
   error: string | null;
+  /** The runtime stopped recovering this launch (its staged recovery envelope
+      says so). The receipt may still read as pending, so the state alone cannot
+      say the launch is lost. */
+  recoveryStopped?: boolean;
+  /** The launch prompt is an orchestrator seat's mandate, delivered by
+      Delegatus and never typed by the operator: the launch window renders it as
+      the mandate card, not as the operator's own turn. */
+  mandate?: MandateDelivery;
   /** The durable initial-launch display text (issue #614), projected so every
       surface renders the first user bubble while the transcript is absent. The
       seed is keyed by {@link launchId}, survives refresh, and retires when the

@@ -13453,3 +13453,125 @@ describe("model glyphs in place of the stage dot", () => {
     expect(failures).toEqual([]);
   }, 1_500_000);
 });
+
+describe("seat panel carries no internal noise", () => {
+  /*
+   * The rendered evidence for docs/design/seat-panel-noise.md: the real Viewer
+   * over `issue1695Evidence.fixture.tsx?scenario=seat-noise&case=<i..v>`, the
+   * orchestrator seat above the board at 1440 and 1280, light and dark, English
+   * and Ukrainian.
+   *
+   *   (i)   a Claude seat in its launch window: the mandate and a raw recovery
+   *         envelope in the launch facts
+   *   (ii)  the same seat adopted, its transcript holding a Claude ToolSearch call
+   *   (iii) a stopped launch that never started
+   *   (iv)  a Codex seat launched low that rotates to a Claude seat launched
+   *         opus / high while the pill is mounted
+   *   (v)   a Codex seat launched high
+   *
+   * Per frame: no recovery envelope text in the panel, the error chip only on
+   * (iii) and carrying its sentence, the mandate card on (i) and (iii) with no
+   * operator bubble beside it, no ToolSearch row, the runtime pill ending in
+   * the high tier's label, no horizontal overflow and no zero-width control.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "seat panel carries no internal noise"
+   *
+   * Readings go to `evidence/seat-panel-noise/desktop.json`; frames to
+   * `.artifacts/seat-panel-noise/`.
+   */
+  const OUT = path.resolve(".artifacts/seat-panel-noise");
+  const EVIDENCE = path.resolve("evidence/seat-panel-noise");
+  const SEAT = "[data-kanban-seat]";
+  const FRAMES = [{ width: 1440, height: 900 }, { width: 1280, height: 800 }] as const;
+  const CASES = ["i", "ii", "iii", "iv", "v"] as const;
+  const HIDE_TOAST = "[data-attention-toast] { display: none !important; }";
+
+  const readPanel = (page: Page) => page.evaluate((seat) => {
+    const root = document.querySelector(`${seat} [data-orchestrator-panel]`)!;
+    const text = root.textContent ?? "";
+    const toolSearch: string[] = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) if ((node.nodeValue ?? "").trim().startsWith("ToolSearch")) toolSearch.push(node.nodeValue!.trim());
+    const controls = [...root.querySelectorAll<HTMLElement>("button, [role=button], input, textarea, select")]
+      .filter((el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden");
+    const pill = root.querySelector("[data-runtime-pill]");
+    const chips = [...root.querySelectorAll<HTMLElement>('[data-launch-chip="error"]')];
+    return {
+      text,
+      envelope: /structured launch recovery|"phase"|\{"/.test(text),
+      toolSearch,
+      errorChips: chips.map((el) => ({ text: el.textContent, title: el.getAttribute("title") })),
+      mandateCards: root.querySelectorAll("[data-mandate-card]").length,
+      operatorBubbles: [...root.querySelectorAll("[data-outbox-entry], [data-user-bubble]")].filter((el) => (el.textContent ?? "").includes("Keep the project moving")).length,
+      pill: pill ? (pill.textContent ?? "").trim() : null,
+      overflowX: Math.max(document.documentElement.scrollWidth - innerWidth, root.scrollWidth - (root as HTMLElement).clientWidth),
+      zeroWidthControls: controls.filter((el) => el.getBoundingClientRect().width < 1).map((el) => el.tagName + (el.getAttribute("aria-label") ? `[${el.getAttribute("aria-label")}]` : "")),
+      answer: text.includes("Search: the verifier passed"),
+    };
+  }, SEAT);
+
+  browserTest("cases i-v hold no internal noise at 1440 and 1280, light and dark, en and uk", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/seat-panel-noise-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const frames: Record<string, unknown> = {};
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const viewport of FRAMES) for (const kind of CASES) {
+        const label = `${kind}-${viewport.width}-${scheme}-${lang}`;
+        const high = translate(lang, "reasoningTier.high");
+        const low = translate(lang, "reasoningTier.low");
+        const sentence = translate(lang, "spawnCard.failedDetail");
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-noise&case=${kind}`, viewport, scheme, lang);
+        try {
+          await page.addStyleTag({ content: HIDE_TOAST });
+          await page.waitForSelector(`${SEAT} [data-orchestrator-panel]`, { state: "attached", timeout: 20_000 });
+          await page.waitForFunction((seat) => Boolean(document.querySelector(`${seat} [data-feed-state]`)), SEAT, { timeout: 15_000 });
+          await page.waitForSelector(`${SEAT} [data-runtime-pill]`, { state: "attached", timeout: 15_000 }).catch(() => undefined);
+          let rotation: unknown = null;
+          if (kind === "iv") {
+            const before = await readPanel(page);
+            await page.evaluate(() => (window as unknown as { evidence: { storeSeatProfile(): void } }).evidence.storeSeatProfile());
+            if (!before.pill?.endsWith(low)) failures.push(`${label}: the codex seat's pill before the rotation reads "${before.pill}", not ${low}`);
+            await page.evaluate(() => (window as unknown as { evidence: { rotateSeat(): void } }).evidence.rotateSeat());
+            await page.waitForFunction((seat) => (document.querySelector(`${seat} [data-runtime-pill]`)?.textContent ?? "").includes("Opus"), SEAT, { timeout: 40_000 });
+            rotation = { before: before.pill };
+          }
+          if (kind === "ii" || kind === "iv" || kind === "v") {
+            await page.waitForFunction((seat) => (document.querySelector(`${seat} [data-orchestrator-panel]`)?.textContent ?? "").includes("Search: the verifier passed"), SEAT, { timeout: 25_000 }).catch(() => undefined);
+          }
+          await page.waitForTimeout(600);
+          const read = await readPanel(page);
+          await page.screenshot({ path: path.join(OUT, `${label}.png`) });
+          const { text, ...kept } = read;
+          void text;
+          frames[label] = { ...kept, rotation, pageErrors };
+          if (read.envelope) failures.push(`${label}: the panel prints the recovery envelope`);
+          if (kind === "iii") {
+            if (read.errorChips.length !== 1 || read.errorChips[0]!.text !== sentence) failures.push(`${label}: error chips ${JSON.stringify(read.errorChips)}`);
+          } else if (read.errorChips.length) failures.push(`${label}: an error chip ${JSON.stringify(read.errorChips)}`);
+          const launchWindow = kind === "i" || kind === "iii";
+          if (read.mandateCards !== (launchWindow ? 1 : 0)) failures.push(`${label}: ${read.mandateCards} mandate cards`);
+          if (read.operatorBubbles) failures.push(`${label}: the mandate is an operator bubble`);
+          if (read.toolSearch.length) failures.push(`${label}: ToolSearch rows ${JSON.stringify(read.toolSearch)}`);
+          if (!launchWindow && !read.answer) failures.push(`${label}: the transcript did not render`);
+          if (kind !== "i" && kind !== "iii" && !read.pill?.endsWith(high)) failures.push(`${label}: the pill reads "${read.pill}", not …${high}`);
+          if (launchWindow && read.pill && !read.pill.endsWith(high)) failures.push(`${label}: the pill reads "${read.pill}", not …${high}`);
+          if (read.overflowX > 1) failures.push(`${label}: overflows by ${read.overflowX}px`);
+          if (read.zeroWidthControls.length) failures.push(`${label}: zero-width controls ${read.zeroWidthControls.join(", ")}`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "desktop.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 1_800_000);
+});

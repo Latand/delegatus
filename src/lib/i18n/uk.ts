@@ -811,6 +811,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "spawnCard.recoverable-timeout": "Тайм-аут першого повідомлення можна відновити, поки збережена доставка завершується.",
   "spawnCard.live-late-success": "Пізня доставка успішна, активну розмову приєднано.",
   "spawnCard.failed": "Запуск завершився з помилкою.",
+  "spawnCard.failedDetail": "Агента не вдалося запустити.",
   "spawnCard.recovered": "Запуск відновлено за збереженими даними.",
   "spawnCard.initial.pending": "Перше повідомлення: очікує на під’єднання хоста",
   "spawnCard.initial.queued": "Перше повідомлення: у черзі",

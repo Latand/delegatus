@@ -9,7 +9,9 @@
 import { createRoot } from "react-dom/client";
 
 import { asksYouFixtureLines, asksYouFixtureSetting, reportLogFixturePage } from "@/components/orchestrator/reportLog/reportLogEvidence.fixture";
+import { writeProfile } from "@/components/runtimeProfile";
 import { Viewer } from "@/components/Viewer";
+import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
@@ -108,7 +110,10 @@ const RUNNING_PATH = `/state/agent-log-viewer/shared/accounts/claude/${ACCOUNT}/
 /* #1846: `&runtime=structured` puts the running conversation on a structured host, mid-turn, so its runtime
    pill picks an account for the conversation itself; `&next=` names the account ready to take the next
    message, which with a long running id is what the title line has to hold as well. */
-const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured";
+/* `?seatnoise=<i..v>` (docs/design/seat-panel-noise.md): the running conversation is an orchestrator seat, on a
+   structured host, in the state the case names; the driver opens it in the focus view. */
+const SEAT_NOISE = new URLSearchParams(location.search).get("seatnoise");
+const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE !== null;
 const NEXT_ACCOUNT = new URLSearchParams(location.search).get("next") || "relief";
 
 /* With the deck asked for (#1795 below), the running conversation is the round
@@ -138,6 +143,45 @@ const files: FileEntry[] = [
     { mtime: now - 900 - i * 600, activity: i < 2 ? "recent" : "idle", engine: i % 3 === 1 ? "codex" : "claude", model: i % 3 === 1 ? "gpt-5.6" : "opus" },
   )),
 ];
+
+/* The launch facts are what the board's projection hands the pane: a launch the runtime is still recovering
+   carries no reason, a stopped one carries it with `recoveryStopped`. The raw recovery envelope rides in
+   `error` on the pending case on purpose: the chip must not print it whatever the projection did. */
+const SEAT_MANDATE = "Keep the project moving. Read the board before every decision, keep every lane owned, and report what changed.";
+const SEAT_LAUNCH_ID = "launch-seat-noise";
+const SEAT_ENVELOPE = `structured launch recovery: ${JSON.stringify({ phase: "uncertain", startedAt: 1, checks: 2, nextTryAt: 2, reason: "the host has not answered yet" })}`;
+function seatOn(engine: "claude" | "codex", model: string, effort: string, tag: string) {
+  Object.assign(files[0]!, {
+    engine, fmt: engine, root: engine === "codex" ? "codex-sessions" : "claude-projects", model, effort,
+    conversationId: tag === "" ? "conversation_running" : `conversation_seat_${tag}`,
+    path: tag === "" ? RUNNING_PATH : `/repo/seat-${tag}.jsonl`, name: tag === "" ? "running.jsonl" : `seat-${tag}.jsonl`,
+    spawn: undefined, activityReason: undefined, size: 2_048,
+  });
+}
+if (SEAT_NOISE !== null) {
+  const launchWindow = (facts: Record<string, unknown>) => Object.assign(files[0]!, {
+    path: `spawn:${SEAT_LAUNCH_ID}`, name: `spawn:${SEAT_LAUNCH_ID}`, size: 0, activityReason: "structured_spawn_reconciling",
+    spawn: {
+      launchId: SEAT_LAUNCH_ID, clientAttemptId: null, accountId: null, conversationId: "conversation_running", generation: 1,
+      state: "reconciling", initialMessage: "queued", retrySafe: false, error: null,
+      admittedAt: (now - 90) * 1_000, promptAt: (now - 90) * 1_000, promptImages: 0,
+      mandate: { kind: "version", version: 1 }, prompt: SEAT_MANDATE, ...facts,
+    },
+  });
+  files[0]!.title = "Orchestrator";
+  if (SEAT_NOISE === "i") { seatOn("claude", "opus", "high", ""); launchWindow({ error: SEAT_ENVELOPE }); }
+  else if (SEAT_NOISE === "ii") seatOn("claude", "opus", "high", "");
+  else if (SEAT_NOISE === "iii") { seatOn("claude", "opus", "high", ""); launchWindow({ state: "failed", initialMessage: "failed", recoveryStopped: true, error: "the host has not answered yet" }); }
+  else if (SEAT_NOISE === "iv") seatOn("codex", "gpt-5.6", "low", "iv-old");
+  else if (SEAT_NOISE === "v") seatOn("codex", "gpt-5.6", "high", "v");
+}
+const SEAT_FEED = `${[
+  JSON.stringify({ type: "user", timestamp: iso(480), message: { role: "user", content: "Keep the search fix moving." }, promptSource: "typed", origin: { kind: "human" } }),
+  JSON.stringify({ type: "assistant", timestamp: iso(420), message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_seat_search", name: "ToolSearch", input: { query: "select:mcp__viewer__list_pipelines", max_results: 1 } }] } }),
+  JSON.stringify({ type: "user", timestamp: iso(418), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_seat_search", content: "ok" }] } }),
+  JSON.stringify({ type: "assistant", timestamp: iso(120), message: { role: "assistant", content: [{ type: "text", text: "Search: the verifier passed on the second attempt. Nothing needs you." }] } }),
+].join("\n")}\n`;
+let snapshotReads = 0;
 /* #2215 (`?permission=1`): a Claude conversation whose structured host holds
    the tool request the engine's safety check raises under bypassPermissions,
    with the command and the full decision_reason the fake CLI of the host
@@ -203,6 +247,10 @@ const evidence = {
   closesAnswered: [] as string[],
   hidesAnswered: [] as Array<{ id: string; action: string; dismissedAt: string | null }>,
   boardMutations: [] as BoardMutationV1[],
+  /* Case iv: the Codex seat's operator-chosen profile is stored, then the seat rotates to a Claude seat launched opus/high.
+     The runtime stream is silent here, so the rotation asks the bus for the snapshot that carries the new seat's session. */
+  storeSeatProfile() { writeProfile(files[0]!, { model: "gpt-5.6", effort: "low" }); },
+  rotateSeat() { seatOn("claude", "opus", "high", "iv-new"); return getRuntimeBus().refresh(); },
   refuseNextPipelinePatch: false,
   /* Every task PATCH the phone's columns sent (#2072 slice 4). */
   taskPatches: [] as Array<{ id: string; body: Record<string, unknown> }>,
@@ -1032,11 +1080,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
      through a run, and the banner moved the list under a measured tap. */
   if (url.pathname === "/api/runtime/snapshot" && STRUCTURED) {
     return json({
-      schemaVersion: 1, snapshotSeq: 1, retentionFloorSeq: 0, structuredHostsEnabled: true, runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 1,
+      schemaVersion: 1, snapshotSeq: (snapshotReads += 1), retentionFloorSeq: 0, structuredHostsEnabled: true, runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 1,
       sessions: [{
-        conversationId: "conversation_running", sessionKey: { engine: "claude", sessionId: "running-session" }, hostKind: "claude-broker", host: "hosted",
+        conversationId: SEAT_NOISE !== null ? files[0]!.conversationId : "conversation_running", sessionKey: { engine: SEAT_NOISE !== null ? files[0]!.engine : "claude", sessionId: "running-session" }, hostKind: SEAT_NOISE !== null && files[0]!.engine === "codex" ? "codex-app-server" : "claude-broker", host: "hosted",
         turn: queueRecovery ? "idle" : "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: ACCOUNT,
-        parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: RUNNING_PATH,
+        parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: SEAT_NOISE !== null ? files[0]!.path : RUNNING_PATH,
         capabilities: { steer: false, structuredAttention: true }, activeTurnId: queueRecovery ? null : "turn-1", pendingReconfigure: null,
       }],
       attentions: [], recentOperations: [], edges: [], flows: [], workflows: [], tasks: [], deployments: [],
@@ -1140,7 +1188,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const asked = JSON.parse(String(init?.body ?? "{}")) as { reqs?: Array<{ id: string; path: string; offset: number }> };
     const chunks: Record<string, { offset: number; start: number; size: number; data: string }> = {};
     (asked.reqs ?? []).forEach((request, index) => {
-      const body = request.path === RUNNING_PATH ? evidenceFeed : "";
+      const body = SEAT_NOISE !== null ? (request.path === files[0]!.path && !files[0]!.spawn ? SEAT_FEED : "") : request.path === RUNNING_PATH ? evidenceFeed : "";
       const from = Math.min(Math.max(request.offset, 0), body.length);
       chunks[String(index)] = { offset: body.length, start: from, size: body.length, data: body.slice(from) };
     });

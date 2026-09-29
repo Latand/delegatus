@@ -38,7 +38,7 @@ import { ImageCard } from "@/components/feed/cards/ImageCard";
 import { StatusIcon } from "@/components/feed/cards/shared";
 import { StreamingMd } from "@/components/feed/markdown";
 import { READING_MEASURE } from "@/components/feed/measure";
-import { summarizeTool } from "@/components/feed/tools";
+import { isToolSchemaLoader, summarizeTool } from "@/components/feed/tools";
 
 import { useDeputyInk } from "./deputyInk";
 
@@ -123,7 +123,7 @@ function viewerMcpIdentity(name: string): { serverName: string; toolName: string
     "<tool> · arguments omitted" is the defect itself — such a row belongs in
     the collapsed count, never in the list. */
 function listable(item: RuntimeLiveTurnItem): boolean {
-  if (item.tool) return !item.tool.argsOmitted;
+  if (item.tool) return !item.tool.argsOmitted && !isToolSchemaLoader(item.tool.name);
   return item.text.trim().length > 0;
 }
 
@@ -141,6 +141,7 @@ function listable(item: RuntimeLiveTurnItem): boolean {
     are theirs, so it never adds one for itself. */
 function steps(item: RuntimeLiveTurnItem): number {
   const folded = item.omittedItems ?? 0;
+  if (item.tool && isToolSchemaLoader(item.tool.name)) return folded;
   if (item.tool || item.text.trim()) return folded + 1;
   if (folded) return folded;
   return item.omittedChars ? 1 : 0;

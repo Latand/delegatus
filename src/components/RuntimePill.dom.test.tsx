@@ -263,7 +263,9 @@ test("a failed newest selection restores the last confirmed browser profile", as
   });
 
   expect(sendRuntimeFrom(codexFile)).toEqual({ effort: "medium" });
-  expect(JSON.parse(localStorage.getItem(key)!)).toEqual({ model: "gpt-5.6-sol", effort: "medium", fast: false });
+  /* The face and the restored draft are what the conversation runs (high); the
+     operator's last confirmed selection stays the profile that rides sends. */
+  expect(JSON.parse(localStorage.getItem(key)!)).toEqual({ model: "gpt-5.6-sol", effort: "high", fast: false });
   await act(async () => mounted.root.unmount());
 });
 
@@ -649,4 +651,92 @@ test("no pill renders for engines without a runtime dial or on surfaces outside 
   const second = await renderPill(<RuntimePill file={codexFile} surface="live-subagent" />);
   expect(second.host.querySelector("[data-runtime-pill]")).toBeNull();
   await act(async () => second.root.unmount());
+});
+
+const claudeSeat: FileEntry = { ...claudeFile, model: "opus", effort: "high" };
+const faceOf = (host: HTMLElement) => host.querySelector("[data-runtime-pill]")?.textContent ?? "";
+const rerender = async (root: Root, node: React.ReactElement) => {
+  await act(async () => {
+    root.render(node);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+};
+
+test("a structured face seeded before the runtime reported an effort follows the poll that brings it", async () => {
+  const { host, root } = await renderPill(
+    <RuntimePill file={{ ...claudeSeat, effort: null }} surface="structured" runtimeSettings={CLAUDE_STRUCTURED} />,
+  );
+  expect(faceOf(host)).toContain("Opus 5.5 · Light");
+  await rerender(root, <RuntimePill file={claudeSeat} surface="structured" runtimeSettings={CLAUDE_STRUCTURED} />);
+  expect(faceOf(host)).toContain("Opus 5.5 · High");
+  await act(async () => root.unmount());
+});
+
+test("a rotation does not carry the previous seat's runtime onto the new seat's face or sends", async () => {
+  const previous: FileEntry = { ...codexFile, conversationId: "conversation_previous_seat", path: "/previous.jsonl" };
+  localStorage.setItem("llvAgentRuntime:conversation_previous_seat", JSON.stringify({ model: "gpt-5.6-sol", effort: "low", fast: false }));
+  localStorage.setItem("llvAgentRuntime:conversation_previous_seat:profile", JSON.stringify({ model: "gpt-5.6-sol", effort: "low" }));
+  const { host, root } = await renderPill(
+    <RuntimePill file={previous} surface="structured" runtimeSettings={CODEX_STRUCTURED} />,
+  );
+  expect(faceOf(host)).toContain("5.6-Sol · High");
+
+  await rerender(root, <RuntimePill file={claudeSeat} surface="structured" runtimeSettings={CLAUDE_STRUCTURED} />);
+  expect(faceOf(host)).toContain("Opus 5.5 · High");
+  expect(sendRuntimeFrom(claudeSeat)).toBeUndefined();
+  expect(localStorage.getItem("llvAgentRuntime:conversation_claude:profile")).toBeNull();
+  expect(JSON.parse(localStorage.getItem("llvAgentRuntime:conversation_previous_seat:profile")!)).toEqual({ model: "gpt-5.6-sol", effort: "low" });
+  await act(async () => root.unmount());
+});
+
+test("the same transcript changing identity still carries its own selection along", async () => {
+  const provisional: FileEntry = { ...claudeSeat, conversationId: "conversation_provisional" };
+  const { host, root } = await renderPill(
+    <RuntimePill file={provisional} surface="structured" runtimeSettings={CLAUDE_STRUCTURED} />,
+  );
+  await click(host.querySelector("[data-runtime-pill]")!);
+  await click([...host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')].find((row) => row.textContent === "Medium")!);
+  expect(localStorage.getItem("llvAgentRuntime:conversation_provisional:profile")).not.toBeNull();
+
+  await rerender(root, <RuntimePill file={{ ...provisional, conversationId: "conversation_claude" }} surface="structured" runtimeSettings={CLAUDE_STRUCTURED} />);
+  expect(JSON.parse(localStorage.getItem("llvAgentRuntime:conversation_claude:profile")!)).toEqual({ effort: "medium" });
+  expect(localStorage.getItem("llvAgentRuntime:conversation_provisional:profile")).toBeNull();
+  await act(async () => root.unmount());
+});
+
+test("a chosen tier holds through the apply and the poll that reports it, then the runtime leads again", async () => {
+  const { host, root } = await renderPill(
+    <RuntimePill file={claudeSeat} surface="structured" runtimeSettings={CLAUDE_STRUCTURED} />,
+  );
+  await click(host.querySelector("[data-runtime-pill]")!);
+  await click([...host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')].find((row) => row.textContent === "Medium")!);
+  expect(requests.at(-1)).toMatchObject({ action: "reconfigure", model: "opus", effort: "medium" });
+  expect(faceOf(host)).toContain("Opus 5.5 · Medium");
+
+  /* An unrelated poll while the apply is in flight leaves the choice alone. */
+  await rerender(root, <RuntimePill file={{ ...claudeSeat, mtime: 2 }} surface="structured" runtimeSettings={CLAUDE_STRUCTURED} />);
+  expect(faceOf(host)).toContain("Opus 5.5 · Medium");
+
+  const applied = structuredSession("applied");
+  await rerender(root, <RuntimePill file={{ ...claudeSeat, effort: "medium" }} surface="structured" runtimeSettings={CLAUDE_STRUCTURED} runtimeSession={applied} />);
+  expect(faceOf(host)).toContain("Opus 5.5 · Medium");
+
+  /* Something else moves the runtime: the face says so. */
+  await rerender(root, <RuntimePill file={{ ...claudeSeat, effort: "xhigh" }} surface="structured" runtimeSettings={CLAUDE_STRUCTURED} runtimeSession={applied} />);
+  expect(faceOf(host)).toContain("Opus 5.5 · Extra High");
+  await act(async () => root.unmount());
+});
+
+test("a model or account pick is built on what the conversation runs, never a stale draft", async () => {
+  const { host, root } = await renderPill(
+    <RuntimePill file={{ ...claudeSeat, effort: null }} surface="structured" runtimeSettings={CLAUDE_STRUCTURED} />,
+  );
+  await rerender(root, <RuntimePill file={claudeSeat} surface="structured" runtimeSettings={CLAUDE_STRUCTURED} />);
+  await click(host.querySelector("[data-runtime-pill]")!);
+  await click([...host.ownerDocument.querySelectorAll('[data-runtime-row="submenu"]')]
+    .find((row) => row.getAttribute("data-runtime-value") === "model")!);
+  await click([...host.ownerDocument.querySelectorAll('[data-runtime-row="model"]')]
+    .find((row) => row.getAttribute("data-runtime-value") === "sonnet")!);
+  expect(requests.at(-1)).toMatchObject({ action: "reconfigure", effort: "high" });
+  await act(async () => root.unmount());
 });
