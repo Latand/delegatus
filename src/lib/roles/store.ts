@@ -8,6 +8,7 @@ import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 
 import { ROLE_DEFAULTS } from "./defaults";
 import { ROLE_VARIANT_DEFAULTS, shippedVariantConfig } from "./paramConfig";
+import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { mappingRowRefusal } from "./sizing";
 import { ROLE_IDS, ROLE_VARIANT_IDS, SCHEMA_2_VARIANT_IDS, SCHEMA_3_VARIANT_IDS, type RegistryRoleDefinitions, type RoleConfig, type RoleDefinition, type RoleId, type RoleMappingReset, type RoleMappingRetirementRecord, type RoleOverride, type RoleOverridesFile, type RoleRegistryHealth, type RoleRegistrySnapshot, type RoleVariantId, type VariantRoleId } from "./types";
 
@@ -305,10 +306,14 @@ function patchedRows(patch: Partial<Record<RoleId, RoleMappingPatch>>): Set<stri
   return rows;
 }
 
-/** Read, patch, validate and write the mapping in one step; answers the merged
-    catalog. A write to a row a retirement reset clears that reset's notice,
-    and the retirement stays applied. */
-export function saveRoleMapping(patch: Partial<Record<RoleId, RoleMappingPatch>>): RoleDefinition[] {
+/** Every writer of role-presets.json runs its read-modify-write under this
+    process-shared lock, so two Viewer or MCP processes never interleave a read
+    with the other's write. Not reentrant: do not nest it. */
+export function withRoleRegistryLock<T>(operation: () => T): T {
+  return withFileTransactionSync(overridesFile(), "the role mapping is being written by another process; try again", operation);
+}
+
+function patchAndSave(patch: Partial<Record<RoleId, RoleMappingPatch>>): RoleDefinition[] {
   const stored = loadRoleOverrides();
   const next = applyRoleMappingPatch(stored.overrides, patch);
   const touched = patchedRows(patch);
@@ -316,6 +321,49 @@ export function saveRoleMapping(patch: Partial<Record<RoleId, RoleMappingPatch>>
     [id, record.reset && touched.has(record.reset.row) ? { at: record.at } : record]));
   saveRoleOverrides(next, retirements);
   return mergeRoleDefinitions(next);
+}
+
+/** Read, patch, validate and write the mapping in one step; answers the merged
+    catalog. A write to a row a retirement reset clears that reset's notice,
+    and the retirement stays applied. */
+export function saveRoleMapping(patch: Partial<Record<RoleId, RoleMappingPatch>>): RoleDefinition[] {
+  return withRoleRegistryLock(() => patchAndSave(patch));
+}
+
+export type RoleMappingChange =
+  | { state: "stale"; current: RoleRegistrySnapshot }
+  | { state: "written"; before: RoleRegistrySnapshot; after: RoleRegistrySnapshot; merged: RoleDefinition[] };
+
+/** The revision check, the write and its durable record as one transaction
+    under the registry lock. `record` runs once the file is written and sees the
+    registry as it stood at the moment of the write; when it throws, the file is
+    put back byte for byte and the error is rethrown, so a write is never left
+    standing without its record. */
+export function changeRoleMapping(
+  patch: Partial<Record<RoleId, RoleMappingPatch>>,
+  options: { expectedRevision?: string; record: (before: RoleRegistrySnapshot, after: RoleRegistrySnapshot, merged: RoleDefinition[]) => void },
+): RoleMappingChange {
+  return withRoleRegistryLock(() => {
+    const before = loadRoleRegistrySnapshot();
+    if (options.expectedRevision !== undefined && options.expectedRevision !== before.revision) return { state: "stale", current: before };
+    const file = overridesFile();
+    let previous: Buffer | null = null;
+    try {
+      previous = fs.readFileSync(file);
+    } catch {
+      previous = null;
+    }
+    const merged = patchAndSave(patch);
+    const after = loadRoleRegistrySnapshot();
+    try {
+      options.record(before, after, merged);
+    } catch (error) {
+      if (previous === null) fs.rmSync(file, { force: true });
+      else fs.writeFileSync(file, previous);
+      throw error;
+    }
+    return { state: "written", before, after, merged };
+  });
 }
 
 export function mergeRoleDefinitions(overrides: Partial<Record<RoleId, RoleOverride>>): RoleDefinition[] {

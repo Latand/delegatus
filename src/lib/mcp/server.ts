@@ -3098,11 +3098,11 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   role_presets: [
     "Read — and change — which engine, model and effort each role runs on (builder, reviewer, verifier, architect, orchestrator, cleaner, prod-auditor, deployer, and the builder and reviewer variants such as `trivial`, `frontend` or `apply-fixes`), the mapping the Settings agent mapping edits and `PUT /api/roles` writes.",
-    "Called without `overrides` it is a read: per role its `config`, its `variants`, the `shipped` values beside them and whether its prompt text is overridden, plus the registry `revision`, its `health`, any `resets` a retirement made, and `choices`, every valid model per engine with the efforts each accepts.",
+    "Called without `overrides` it is a read: per role its `config` and its `variants`, plus the registry `revision`, its `health` and any `resets` a retirement made. `detail: true` adds each role's `shipped` values and whether its prompt text is overridden, and `choices`, every valid model per engine with the efforts each accepts.",
     "`overrides` writes, in the shape of the PUT: `{ [roleId]: { config?, variants? } }`, where a full `{ engine, model, effort }` sets a row and `null` resets it to the shipped default; an absent key is left alone, and `promptScaffold: null` restores the shipped prompt text (a scaffold cannot be set from here). Example: `{ builder: { config: { engine: \"claude\", model: \"claude-sonnet-5-5\", effort: \"high\" } }, reviewer: { config: null } }`.",
     "Only the designated orchestrator seat and the operator's own session write; any other caller reads, and its write is refused with `role_presets_write_refused` before anything else is checked.",
     "The whole write is refused, and nothing is stored, when a row names an engine, model or effort outside the launch catalogue (`role_presets_invalid`, with the offending `violations` and `choices`) or when `expectedRevision` is not the current revision (`role_presets_stale_revision`, carrying the current registry to resend against). `expectedRevision` is optional.",
-    "A write answers `{changed, revision, previousRevision, health, rows, audited}`, each row as `{row, before, after}`; every write is also appended, with who made it, to `role-presets-audit.jsonl` beside role-presets.json. A change reaches launches that start after it; running agents keep the runtime they started on.",
+    "A write answers `{changed, revision, previousRevision, health, rows}`, each row as `{row, before, after}`. The revision check, the write and its audit record are one step under a lock shared by every process that writes the registry: every write is appended, with who made it, to `role-presets-audit.jsonl` beside role-presets.json, and a write whose record cannot be stored is undone and refused with `role_presets_audit_unavailable`. A change reaches launches that start after it; running agents keep the runtime they started on.",
   ].join(" "),
   account_limits: "Read each account's last observed usage: per account `engine`, `accountId`, `active`, `fresh` (recent enough for the automatic switch to act on), `plan`, the `session` and `weekly` windows and every metered model tier as {usedPercent, resetsAt}, and `observedAt`. Narrow with `engine` and `accountId`. A read of the durable observations the accounts panel shows; it never asks a provider.",
   telegram_bot_chats: [
@@ -3885,6 +3885,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("The mapping change, keyed by role id. Omit to read the registry. Engine and model must be in the launch catalogue and the effort valid for them, or the whole write is refused."),
     expectedRevision: z.string().trim().min(1).optional()
       .describe("The registry revision this change was made against; a stale one is refused with the current registry. Only with overrides."),
+    detail: z.boolean().optional()
+      .describe("true: a read also carries each role's shipped values, whether its prompt is overridden, and the launch choices. Ignored with overrides."),
   }).passthrough(),
   account_limits: z.object({
     clientRequestId: clientRequestIdSchema,

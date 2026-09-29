@@ -18,7 +18,7 @@ import { assertStateStartupMutation } from "@/lib/stateOwnership";
 
 import { ROLE_DEFAULTS } from "./defaults";
 import { shippedVariantConfig } from "./paramConfig";
-import { loadRoleOverrides, roleOverridesFile, sameConfig, saveRoleOverrides } from "./store";
+import { loadRoleOverrides, roleOverridesFile, sameConfig, saveRoleOverrides, withRoleRegistryLock } from "./store";
 import type { RoleConfig, RoleId, RoleMappingRetirementRecord, RoleOverride, RoleVariantId } from "./types";
 
 export type RoleMappingRetirement = {
@@ -87,6 +87,10 @@ export function applyRoleMappingRetirements(
   const file = roleOverridesFile();
   assertStateStartupMutation(path.dirname(file), "role mapping retirement");
   if (!fs.existsSync(file)) return { state: "absent" };
+  return withRoleRegistryLock(() => applyRetirementsLocked(retirements, now));
+}
+
+function applyRetirementsLocked(retirements: readonly RoleMappingRetirement[], now: () => string): RoleMappingRetirementOutcome {
   let stored: ReturnType<typeof loadRoleOverrides>;
   try {
     stored = loadRoleOverrides();

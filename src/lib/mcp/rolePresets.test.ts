@@ -42,7 +42,7 @@ const SOL = { engine: "codex", model: "gpt-6.1-sol", effort: "high" };
 type Registry = { revision: string; health: { state: string }; roles: { id: string; config: Record<string, string>; variants?: Record<string, Record<string, string>>; shipped: { config: Record<string, string> } }[]; choices: Record<string, Record<string, string[]>> };
 
 async function read(): Promise<Registry> {
-  return await tools(WORKER).role_presets({ clientRequestId: "read" }) as unknown as Registry;
+  return await tools(WORKER).role_presets({ clientRequestId: "read", detail: true }) as unknown as Registry;
 }
 
 async function refusal(call: Promise<unknown>): Promise<Refusal> {
@@ -58,6 +58,16 @@ async function refusal(call: Promise<unknown>): Promise<Refusal> {
 beforeEach(() => {
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
   fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
+});
+
+test("the default read answers configs, variants, revision and health without the shipped detail", async () => {
+  const answer = await tools(WORKER).role_presets({ clientRequestId: "plain" }) as unknown as Registry & { choices?: unknown };
+  expect(answer.revision).toStartWith("roles-");
+  expect(answer.health).toEqual({ state: "healthy" });
+  expect(answer.roles.find((role) => role.id === "builder")!.config).toEqual(expect.objectContaining({ engine: expect.any(String) }));
+  expect(Object.keys(answer.roles.find((role) => role.id === "builder")!.variants!)).toContain("frontend");
+  expect(answer.roles.some((role) => "shipped" in role)).toBe(false);
+  expect(answer.choices).toBeUndefined();
 });
 
 test("a read answers every role's config and variants, the revision, the health and the valid choices", async () => {
@@ -80,8 +90,8 @@ test("the seat writes a full config, and the row, the revision and an independen
     clientRequestId: "write-1",
     overrides: { builder: { config: SONNET }, reviewer: { config: SOL } },
     expectedRevision: before.revision,
-  }) as { changed: boolean; revision: string; previousRevision: string; rows: { row: string; before: unknown; after: unknown }[]; audited: boolean };
-  expect(answer).toMatchObject({ changed: true, previousRevision: before.revision, audited: true });
+  }) as { changed: boolean; revision: string; previousRevision: string; rows: { row: string; before: unknown; after: unknown }[]};
+  expect(answer).toMatchObject({ changed: true, previousRevision: before.revision });
   expect(answer.revision).not.toBe(before.revision);
   expect(answer.rows.map((row) => row.row)).toEqual(expect.arrayContaining(["builder", "reviewer"]));
   expect(JSON.parse(fs.readFileSync(stateFile("role-presets.json"), "utf8")).overrides).toMatchObject({ reviewer: { config: SOL } });
@@ -225,4 +235,40 @@ test("restoring a shipped prompt is recorded without the prompt text", async () 
 
 test("expectedRevision without overrides is refused as a misuse, not silently read", async () => {
   await expect(tools(SEAT).role_presets({ clientRequestId: "misuse", expectedRevision: "roles-1-x" })).rejects.toThrow("expectedRevision applies to a write");
+});
+
+test("a write whose audit record cannot be stored is refused and leaves the registry as it was", async () => {
+  const before = await read();
+  fs.mkdirSync(stateFile("role-presets-audit.jsonl"));
+  const refused = await refusal(tools(SEAT).role_presets({ clientRequestId: "no-audit", overrides: { reviewer: { config: SOL } } }));
+  expect(refused.details.code).toBe("role_presets_audit_unavailable");
+  expect(fs.existsSync(stateFile("role-presets.json"))).toBe(false);
+  expect((await read()).revision).toBe(before.revision);
+
+  fs.rmSync(stateFile("role-presets-audit.jsonl"), { recursive: true });
+  await tools(SEAT).role_presets({ clientRequestId: "ok", overrides: { builder: { config: SONNET } } });
+  const file = fs.readFileSync(stateFile("role-presets.json"), "utf8");
+  fs.rmSync(stateFile("role-presets-audit.jsonl"));
+  fs.mkdirSync(stateFile("role-presets-audit.jsonl"));
+  await refusal(tools(SEAT).role_presets({ clientRequestId: "no-audit-2", overrides: { reviewer: { config: SOL } } }));
+  expect(fs.readFileSync(stateFile("role-presets.json"), "utf8")).toBe(file);
+});
+
+test("a second process that writes between the read and the write makes the stale write refuse and leaves its row and no audit entry", async () => {
+  const before = await read();
+  const child = Bun.spawn(["bun", path.join(import.meta.dir, "../roles/registryLock.fixture.ts")], { stdout: "pipe", stderr: "inherit", env: { ...process.env } });
+  const reader = child.stdout.getReader();
+  const chunk = await reader.read();
+  expect(new TextDecoder().decode(chunk.value)).toContain("locked");
+  /* This call waits on the registry lock the child holds, then reads the
+     registry the child wrote. */
+  const refused = await refusal(tools(SEAT).role_presets({
+    clientRequestId: "interleaved",
+    overrides: { builder: { config: SONNET } },
+    expectedRevision: before.revision,
+  }));
+  await child.exited;
+  expect(refused.details.code).toBe("role_presets_stale_revision");
+  expect((await read()).roles.find((role) => role.id === "builder")!.config).toEqual({ engine: "claude", model: "opus", effort: "high" });
+  expect(auditLines()).toEqual([]);
 });

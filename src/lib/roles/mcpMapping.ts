@@ -65,20 +65,21 @@ export function roleMappingViolations(patch: Partial<Record<RoleId, RoleMappingP
   return violations;
 }
 
-/** The registry as an agent reads it: each role's runtime and variants beside
-    the shipped ones, without the prompt scaffolds. */
-export function roleRegistryAnswer(snapshot: RoleRegistrySnapshot): Record<string, unknown> {
+/** The registry as an agent reads it: each role's runtime and variants, with
+    the revision and health. `detail` adds each role's shipped values beside them
+    and whether its prompt text is overridden, for a caller that compares or
+    resets; the default answer stays inside the MCP answer budget without them. */
+export function roleRegistryAnswer(snapshot: RoleRegistrySnapshot, options: { detail?: boolean } = {}): Record<string, unknown> {
   return {
     revision: snapshot.revision,
     health: snapshot.health,
     roles: snapshot.roles.map((role) => {
+      const base = { id: role.id, name: role.name, config: role.config, ...(role.variants ? { variants: role.variants } : {}) };
+      if (!options.detail) return base;
       const shipped = ROLE_DEFAULTS.find((candidate) => candidate.id === role.id)!;
       const shippedVariants = role.id in ROLE_VARIANT_DEFAULTS ? ROLE_VARIANT_DEFAULTS[role.id as keyof typeof ROLE_VARIANT_DEFAULTS] : undefined;
       return {
-        id: role.id,
-        name: role.name,
-        config: role.config,
-        ...(role.variants ? { variants: role.variants } : {}),
+        ...base,
         shipped: { config: shipped.config, ...(shippedVariants ? { variants: shippedVariants } : {}) },
         promptScaffoldOverridden: role.promptScaffold !== shipped.promptScaffold,
       };

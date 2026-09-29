@@ -131,10 +131,11 @@ import { pathAllowed, scanRootEntries } from "@/lib/scanner/roots";
 import { completedFileScan } from "@/lib/scanner/scanCache";
 import { readResources, readResourcesWithDiagnostic } from "@/lib/resources";
 import { adoptLiveRootSession, conversationRole, liveRootSession, type RootSessionSource } from "@/lib/root/adopt";
-import { appendRoleMappingAudit, changedMappingRows, roleLaunchChoices, roleMappingViolations, roleRegistryAnswer } from "@/lib/roles/mcpMapping";
+import { appendRoleMappingAudit, changedMappingRows, type RoleMappingAuditRow, roleLaunchChoices, roleMappingViolations, roleRegistryAnswer } from "@/lib/roles/mcpMapping";
 import { listRoles, resolveSpawnRole } from "@/lib/roles/registry";
 import { spawnSizingRefusal } from "@/lib/roles/sizing";
-import { loadRoleRegistrySnapshot, loadRoleRegistrySnapshotOrDefaults, parseRoleMappingPatch, saveRoleMapping } from "@/lib/roles/store";
+import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
+import { changeRoleMapping, loadRoleRegistrySnapshotOrDefaults, parseRoleMappingPatch, RoleStoreError, type RoleMappingChange } from "@/lib/roles/store";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import type { RoleDefinition, RoleParameter } from "@/lib/roles/types";
 import { readSpawnAdmissionFence, type SpawnAdmissionFence } from "@/lib/agent/spawnAdmission";
@@ -3768,7 +3769,8 @@ function seatTickFenceAnswer(project: string, wakeIntervalMs: number, now: numbe
 function rolePresetsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
   if (args.overrides === undefined) {
     if (args.expectedRevision !== undefined) throw new Error("expectedRevision applies to a write; send it with overrides");
-    return redactPayload({ ...roleRegistryAnswer(loadRoleRegistrySnapshotOrDefaults()), choices: roleLaunchChoices() });
+    const detail = args.detail === true;
+    return redactPayload({ ...roleRegistryAnswer(loadRoleRegistrySnapshotOrDefaults(), { detail }), ...(detail ? { choices: roleLaunchChoices() } : {}) });
   }
 
   const attribution = attributionOf(dependencies);
@@ -3793,44 +3795,49 @@ function rolePresetsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDepende
     );
   }
 
-  const before = loadRoleRegistrySnapshot();
-  if (expectedRevision !== undefined && expectedRevision !== before.revision) {
-    throw new McpToolRefusal(
-      `the role mapping changed since revision ${expectedRevision}; nothing was written. The current registry is attached; resend against ${before.revision}.`,
-      { code: "role_presets_stale_revision", ...roleRegistryAnswer(before), choices: roleLaunchChoices() },
-    );
-  }
-  const merged = saveRoleMapping(patch);
-  const after = loadRoleRegistrySnapshot();
-  const rows = changedMappingRows(before.roles, merged);
-  let audited = true;
+  const actor = {
+    kind: attribution.kind,
+    conversationId: attribution.conversationId,
+    role: attribution.role,
+    ...(attribution.via ? { via: attribution.via } : {}),
+  };
+  let rows: RoleMappingAuditRow[] = [];
+  let change: RoleMappingChange;
   try {
-    appendRoleMappingAudit({
-      at: new Date().toISOString(),
-      actor: {
-        kind: attribution.kind,
-        conversationId: attribution.conversationId,
-        role: attribution.role,
-        ...(attribution.via ? { via: attribution.via } : {}),
+    change = changeRoleMapping(patch, {
+      ...(expectedRevision !== undefined ? { expectedRevision } : {}),
+      record: (before, after, merged) => {
+        rows = changedMappingRows(before.roles, merged);
+        appendRoleMappingAudit({
+          at: new Date().toISOString(),
+          actor,
+          clientRequestId: text(args.clientRequestId) || null,
+          revisionBefore: before.revision,
+          revisionAfter: after.revision,
+          rows,
+        });
       },
-      clientRequestId: text(args.clientRequestId) || null,
-      revisionBefore: before.revision,
-      revisionAfter: after.revision,
-      rows,
     });
   } catch (error) {
-    /* The mapping is already written; a missing audit line costs the record and
-       nothing else, so the answer says so instead of failing the call. */
-    audited = false;
-    console.error(`[role_presets] could not record the audit entry for ${after.revision}: ${error instanceof Error ? error.message : String(error)}`);
+    if (error instanceof RoleStoreError || error instanceof FileTransactionBusyError) throw error;
+    /* The store put the file back when the record failed, so nothing changed. */
+    throw new McpToolRefusal(
+      `the role mapping was not changed: it could not be written together with its audit record (${error instanceof Error ? error.message : String(error)})`,
+      { code: "role_presets_audit_unavailable" },
+    );
+  }
+  if (change.state === "stale") {
+    throw new McpToolRefusal(
+      `the role mapping changed since revision ${expectedRevision}; nothing was written. The current registry is attached; resend against ${change.current.revision}.`,
+      { code: "role_presets_stale_revision", ...roleRegistryAnswer(change.current, { detail: true }), choices: roleLaunchChoices() },
+    );
   }
   return redactPayload({
     changed: rows.length > 0,
-    revision: after.revision,
-    previousRevision: before.revision,
-    health: after.health,
+    revision: change.after.revision,
+    previousRevision: change.before.revision,
+    health: change.after.health,
     rows,
-    audited,
   });
 }
 
