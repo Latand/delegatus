@@ -497,6 +497,44 @@ test("an address this server cannot reach mints only while no local entry vouche
   expect(await mintCode()).toEqual({ error: "unverified" });
 });
 
+test("a code minted for an unverified address redeems through the real routes while no local entry vouches", async () => {
+  process.env.LLV_TOKEN = "test-access-key";
+  const closed = http.createServer();
+  const port = await listen(closed);
+  await close(closed);
+  fs.mkdirSync(path.dirname(selfFile()), { recursive: true });
+  fs.writeFileSync(selfFile(), JSON.stringify({ v: 1, installId: "00000000-0000-0000-0000-000000000001", label: "B", publicUrl: `http://127.0.0.1:${port}`, check: null }));
+  const redeem = (code: string) => peerRoute(new NextRequest("http://board.example.test/api/peer/v1/pair", {
+    method: "POST", headers: { host: "board.example.test", "content-type": "application/json" },
+    body: JSON.stringify({ code, install: "00000000-0000-0000-0000-000000000002", label: "home" }),
+  }), { params: Promise.resolve({ path: ["pair"] }) });
+  const minted = await codesRoute(operatorRequest("/api/links/codes"));
+  expect(minted.status).toBe(200);
+  const { code } = await minted.json() as { code: string };
+  expect(readSelf()?.check?.code).toBe("unverified");
+  const paired = await redeem(code);
+  expect(paired.status).toBe(200);
+  expect((await paired.json()).grant.token).toBeString();
+  expect(readGrants().grants.map((grant) => grant.label)).toEqual(["home"]);
+
+  // A local entry that starts vouching after the code was minted refuses its redemption.
+  const second = await codesRoute(operatorRequest("/api/links/codes"));
+  const { code: late } = await second.json() as { code: string };
+  process.env.LLV_DOCKER_NSENTER_SHIMS = "1";
+  recordViewerEntries(statePath("viewer-entries.json"), { stablePort: 8898, stableEntry: "local-entry", remoteEntryPort: 8897 });
+  fs.writeFileSync(statePath("viewer-gateway.json"), JSON.stringify({ remoteEntryPort: 8897, localEntry: "trusted" }));
+  const refused = await redeem(late);
+  expect(refused.status).toBe(401);
+  expect(await refused.json()).toEqual({ error: "unauthorized" });
+  expect(readGrants().grants).toHaveLength(1);
+
+  // A dangerous saved state refuses redemption too.
+  delete process.env.LLV_DOCKER_NSENTER_SHIMS;
+  fs.writeFileSync(selfFile(), JSON.stringify({ ...readSelf(), check: { code: "open-to-internet", at: new Date().toISOString() } }));
+  expect((await redeem(late)).status).toBe(401);
+  expect(readGrants().grants).toHaveLength(1);
+});
+
 test("without a vouching entry a proxy that rewrites the Host still refuses to mint", async () => {
   process.env.LLV_TOKEN = "test-access-key";
   const rewriting = http.createServer((_incoming, outgoing) => {
