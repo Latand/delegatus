@@ -142,6 +142,12 @@ export function normalizeDocumentRoots(value: unknown, environment: DocumentEnvi
   return roots;
 }
 
+/* The redactor's assignment pattern, anchored where a key can start. Its key
+   opens with `[\w.-]*`, which the engine retries at every offset of a word
+   run, so a megabyte of base64 took minutes on the request that scanned it;
+   the lookbehind lets only the run's first character start a match. */
+const ASSIGNMENT = new RegExp(`(?<![\\w.-])${SECRET_VALUE_RE.source}`, SECRET_VALUE_RE.flags);
+
 /** What a text file carries that must not reach a chat, by class, with the
     line it starts on. Null when nothing matched. */
 export function documentSecret(text: string): { secretClass: string; line: number } | null {
@@ -165,7 +171,7 @@ export function documentSecret(text: string): { secretClass: string; line: numbe
     ?? first(BEARER_TOKEN, "bearer_token")
     ?? first(AUTHORIZATION_HEADER, "authorization_header", (match) => credentialShaped(match[0].slice(match[0].indexOf(":") + 1)))
     ?? first(COOKIE_HEADER, "cookie_header", (match) => match[0].slice(match[0].indexOf(":") + 1).trim().length >= 8)
-    ?? first(SECRET_VALUE_RE, "credential_assignment", (match) => assignedCredential(match, unquotedKeys), unquotedKeys);
+    ?? first(ASSIGNMENT, "credential_assignment", (match) => assignedCredential(match, unquotedKeys), unquotedKeys);
   if (found) return found;
   let scrubbed: string;
   try { scrubbed = redactKnownProviderSecrets(text); } catch { scrubbed = ""; }
@@ -179,6 +185,8 @@ export function documentSecret(text: string): { secretClass: string; line: numbe
  * reference to one (`[redacted]`, `<token>`, `${TOKEN}`, `***`).
  */
 function credentialShaped(raw: string): boolean {
+  /* Nothing below adds or drops a digit; most keyword lines stop here. */
+  if (!/\d/.test(raw)) return false;
   const value = raw.trim().replace(/^["']|["']$/g, "").replace(/^(?:Bearer|Basic|Token)\s+/i, "");
   if (value.length < 8 || /^[[<{$*%]/.test(value) || /^x+$/i.test(value)) return false;
   return /[A-Za-z]/.test(value) && /\d/.test(value);
@@ -210,12 +218,18 @@ function assignedCredential(match: RegExpExecArray, subject: string): boolean {
   if (credentialShaped(raw)) return true;
   if (/^(?:token|authorization|bearer)$/i.test(key)) return false;
   const value = /^`?([^&;`]*)/.exec(raw)![1]!.replace(/[.,:;!?)\]]+$/, "");
-  if (value.length < 4 || /^[[<{$*%/~]/.test(value) || /^x+$/i.test(value)) return false;
+  if (value.length < 4) return false;
+  /* Only to the end of this line: the rest of a 20 MB file, copied and split
+     once per keyword line, made the scan quadratic. Checked first because
+     most keyword lines are prose and fail it. */
+  const end = match.index + match[0].length;
+  const lineEnd = subject.indexOf("\n", end);
+  const after = raw.slice(raw.indexOf(value) + value.length) + subject.slice(end, lineEnd === -1 ? subject.length : lineEnd);
+  if (!/^[`"'.,;:!?)\]}\s]*$/.test(after) && !/^[`"']?[\s,;&]+[\w.-]+\s*[:=]/.test(after)) return false;
+  if (/^[[<{$*%/~]/.test(value) || /^x+$/i.test(value)) return false;
   if (NOT_A_CREDENTIAL.has(value.toLowerCase()) || /^\d{1,5}$/.test(value)) return false;
   /* `process.env.KEY`, `config.secret`, `YOUR_API_KEY`, `os.environ[…]`. */
-  if (/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$/.test(value) || /^[A-Z0-9]+(?:_[A-Z0-9]+)+$/.test(value) || /[([]/.test(value)) return false;
-  const after = raw.slice(raw.indexOf(value) + value.length) + subject.slice(match.index + match[0].length).split("\n")[0];
-  return /^[`"'.,;:!?)\]}\s]*$/.test(after) || /^[`"']?[\s,;&]+[\w.-]+\s*[:=]/.test(after);
+  return !(/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$/.test(value) || /^[A-Z0-9]+(?:_[A-Z0-9]+)+$/.test(value) || /[([]/.test(value));
 }
 
 /**

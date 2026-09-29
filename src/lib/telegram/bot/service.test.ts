@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,7 +12,7 @@ const { TelegramBotError, TelegramBotService, productionTelegramBotDependencies,
 const { FakeBotTransport, fakeBotToken, ok, refused, unreachable } = await import("./fakeTransport");
 const { telegramBotTokenPath } = await import("./transport");
 const { statePath } = await import("@/lib/configDir");
-const { documentSecret } = await import("./documents");
+const { documentBytesSecret, documentSecret } = await import("./documents");
 
 import type { TgUpdate } from "./store";
 
@@ -668,6 +669,40 @@ test("the secret scan names classes and leaves ordinary report prose alone", () 
   expect(documentSecret(`bot ${"4242424"}:${"AAx9".repeat(9)}\n`)).toMatchObject({ secretClass: "bot_token" });
   expect(documentSecret(["eyJhbGciOiJIUzI1", "eyJzdWIiOiIxMjM0", "c2lnbmF0dXJlMTIz"].join("."))).toMatchObject({ secretClass: "jwt" });
 });
+
+/* The scan runs synchronously in the send_document request, so a slow input
+   stalls every Viewer route. Both shapes below once took minutes to hours at
+   the 20 MB document limit; linear, each takes one to two seconds on a busy
+   machine, and the bound leaves room for a loaded runner. */
+const SCAN_MB = 20 * 1024 * 1024;
+const SCAN_BOUND_MS = 4000;
+
+test("a 20 MB text document with a megabyte-long word run scans in linear time", () => {
+  const run = crypto.randomBytes(768 * 1024).toString("base64url");
+  const filler = `${"x".repeat(999)}\n`;
+  const text = `{"t":"${run}"}\n${filler.repeat(Math.ceil((SCAN_MB - run.length) / filler.length))}`;
+  expect(text.length).toBeGreaterThanOrEqual(SCAN_MB);
+  const bytes = Buffer.from(text);
+  const started = performance.now();
+  expect(documentBytesSecret(bytes)).toBeNull();
+  expect(performance.now() - started).toBeLessThan(SCAN_BOUND_MS);
+}, 30_000);
+
+test("20 MB of prose lines after a credential keyword scan in linear time", () => {
+  const line = `${PASSWORD}: vault is where it lives\n`;
+  const text = line.repeat(Math.ceil(SCAN_MB / line.length));
+  const bytes = Buffer.from(text);
+  const started = performance.now();
+  expect(documentBytesSecret(bytes)).toBeNull();
+  expect(performance.now() - started).toBeLessThan(SCAN_BOUND_MS);
+  /* A word secret after the prose is still found, and a key that opens with
+     a prefix still reads as a key now that a match must start the word. */
+  const word = ["sword", "fish"].join("");
+  expect(documentSecret(`${text.slice(0, 64 * line.length)}${PASSWORD}: ${word}`)).toEqual({ secretClass: "credential_assignment", line: 65 });
+  for (const assignment of [`x.${PASSWORD}=${word}`, `my_${PASSWORD}: ${word}`, `run --db-${PASSWORD}=${word}`]) {
+    expect([assignment, documentSecret(assignment)]).toEqual([assignment, { secretClass: "credential_assignment", line: 1 }]);
+  }
+}, 30_000);
 
 test("a refused document leaves its key free: the corrected file sends under the same clientRequestId", async () => {
   await allowedTeam();
