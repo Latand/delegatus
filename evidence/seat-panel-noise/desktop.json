@@ -35,6 +35,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 1,
@@ -99,6 +100,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -145,6 +147,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [
         {
@@ -214,6 +217,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -223,7 +227,7 @@
       "zeroWidthControls": [],
       "answer": true,
       "rotation": {
-        "before": "6-Astra · Light"
+        "before": "5.6-Sol · Light"
       },
       "pageErrors": []
     },
@@ -232,11 +236,12 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
       "operatorBubbles": 0,
-      "pill": "6-Astra · High",
+      "pill": "5.6-Sol · High",
       "overflowX": 0,
       "zeroWidthControls": [],
       "answer": true,
@@ -278,6 +283,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 1,
@@ -342,6 +348,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -388,6 +395,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [
         {
@@ -457,6 +465,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -466,7 +475,7 @@
       "zeroWidthControls": [],
       "answer": true,
       "rotation": {
-        "before": "6-Astra · Light"
+        "before": "5.6-Sol · Light"
       },
       "pageErrors": []
     },
@@ -475,11 +484,12 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
       "operatorBubbles": 0,
-      "pill": "6-Astra · High",
+      "pill": "5.6-Sol · High",
       "overflowX": 0,
       "zeroWidthControls": [],
       "answer": true,
@@ -521,6 +531,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 1,
@@ -585,6 +596,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -631,6 +643,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [
         {
@@ -700,6 +713,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -709,7 +723,7 @@
       "zeroWidthControls": [],
       "answer": true,
       "rotation": {
-        "before": "6-Astra · Light"
+        "before": "5.6-Sol · Light"
       },
       "pageErrors": []
     },
@@ -718,11 +732,12 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
       "operatorBubbles": 0,
-      "pill": "6-Astra · High",
+      "pill": "5.6-Sol · High",
       "overflowX": 0,
       "zeroWidthControls": [],
       "answer": true,
@@ -764,6 +779,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 1,
@@ -828,6 +844,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -874,6 +891,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [
         {
@@ -943,6 +961,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -952,7 +971,7 @@
       "zeroWidthControls": [],
       "answer": true,
       "rotation": {
-        "before": "6-Astra · Light"
+        "before": "5.6-Sol · Light"
       },
       "pageErrors": []
     },
@@ -961,11 +980,12 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
       "operatorBubbles": 0,
-      "pill": "6-Astra · High",
+      "pill": "5.6-Sol · High",
       "overflowX": 0,
       "zeroWidthControls": [],
       "answer": true,
@@ -1007,6 +1027,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 1,
@@ -1071,6 +1092,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -1117,6 +1139,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [
         {
@@ -1186,6 +1209,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -1195,7 +1219,7 @@
       "zeroWidthControls": [],
       "answer": true,
       "rotation": {
-        "before": "6-Astra · Легкі"
+        "before": "5.6-Sol · Легкі"
       },
       "pageErrors": []
     },
@@ -1204,11 +1228,12 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
       "operatorBubbles": 0,
-      "pill": "6-Astra · Високі",
+      "pill": "5.6-Sol · Високі",
       "overflowX": 0,
       "zeroWidthControls": [],
       "answer": true,
@@ -1250,6 +1275,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 1,
@@ -1314,6 +1340,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -1360,6 +1387,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [
         {
@@ -1429,6 +1457,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -1438,7 +1467,7 @@
       "zeroWidthControls": [],
       "answer": true,
       "rotation": {
-        "before": "6-Astra · Легкі"
+        "before": "5.6-Sol · Легкі"
       },
       "pageErrors": []
     },
@@ -1447,11 +1476,12 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
       "operatorBubbles": 0,
-      "pill": "6-Astra · Високі",
+      "pill": "5.6-Sol · Високі",
       "overflowX": 0,
       "zeroWidthControls": [],
       "answer": true,
@@ -1493,6 +1523,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 1,
@@ -1557,6 +1588,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -1603,6 +1635,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [
         {
@@ -1672,6 +1705,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -1681,7 +1715,7 @@
       "zeroWidthControls": [],
       "answer": true,
       "rotation": {
-        "before": "6-Astra · Легкі"
+        "before": "5.6-Sol · Легкі"
       },
       "pageErrors": []
     },
@@ -1690,11 +1724,12 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
       "operatorBubbles": 0,
-      "pill": "6-Astra · Високі",
+      "pill": "5.6-Sol · Високі",
       "overflowX": 0,
       "zeroWidthControls": [],
       "answer": true,
@@ -1736,6 +1771,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 1,
@@ -1800,6 +1836,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -1846,6 +1883,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [
         {
@@ -1915,6 +1953,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -1924,7 +1963,7 @@
       "zeroWidthControls": [],
       "answer": true,
       "rotation": {
-        "before": "6-Astra · Легкі"
+        "before": "5.6-Sol · Легкі"
       },
       "pageErrors": []
     },
@@ -1933,11 +1972,12 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
       "operatorBubbles": 0,
-      "pill": "6-Astra · Високі",
+      "pill": "5.6-Sol · Високі",
       "overflowX": 0,
       "zeroWidthControls": [],
       "answer": true,

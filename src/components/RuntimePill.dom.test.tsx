@@ -262,9 +262,9 @@ test("a failed newest selection restores the last confirmed browser profile", as
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
-  expect(sendRuntimeFrom(codexFile)).toEqual({ effort: "medium" });
-  /* The face and the restored draft are what the conversation runs (high); the
-     operator's last confirmed selection stays the profile that rides sends. */
+  /* The face, the restored draft and the send are all what the conversation
+     runs (high): the stale medium the seat inherited was dropped at mount. */
+  expect(sendRuntimeFrom(codexFile)).toBeUndefined();
   expect(JSON.parse(localStorage.getItem(key)!)).toEqual({ model: "gpt-5.6-sol", effort: "high", fast: false });
   await act(async () => mounted.root.unmount());
 });
@@ -674,12 +674,12 @@ test("a structured face seeded before the runtime reported an effort follows the
 
 test("a rotation does not carry the previous seat's runtime onto the new seat's face or sends", async () => {
   const previous: FileEntry = { ...codexFile, conversationId: "conversation_previous_seat", path: "/previous.jsonl" };
-  localStorage.setItem("llvAgentRuntime:conversation_previous_seat", JSON.stringify({ model: "gpt-5.6-sol", effort: "low", fast: false }));
-  localStorage.setItem("llvAgentRuntime:conversation_previous_seat:profile", JSON.stringify({ model: "gpt-5.6-sol", effort: "low" }));
   const { host, root } = await renderPill(
     <RuntimePill file={previous} surface="structured" runtimeSettings={CODEX_STRUCTURED} />,
   );
   expect(faceOf(host)).toContain("5.6-Sol · High");
+  localStorage.setItem("llvAgentRuntime:conversation_previous_seat", JSON.stringify({ model: "gpt-5.6-sol", effort: "low", fast: false }));
+  localStorage.setItem("llvAgentRuntime:conversation_previous_seat:profile", JSON.stringify({ model: "gpt-5.6-sol", effort: "low" }));
 
   await rerender(root, <RuntimePill file={claudeSeat} surface="structured" runtimeSettings={CLAUDE_STRUCTURED} />);
   expect(faceOf(host)).toContain("Opus 5.5 · High");
@@ -738,5 +738,16 @@ test("a model or account pick is built on what the conversation runs, never a st
   await click([...host.ownerDocument.querySelectorAll('[data-runtime-row="model"]')]
     .find((row) => row.getAttribute("data-runtime-value") === "sonnet")!);
   expect(requests.at(-1)).toMatchObject({ action: "reconfigure", effort: "high" });
+  await act(async () => root.unmount());
+});
+
+test("a selection the seat inherited never rides a send the face does not name", async () => {
+  localStorage.setItem("llvAgentRuntime:conversation_claude", JSON.stringify({ model: "gpt-5.6-sol", effort: "low", fast: false }));
+  localStorage.setItem("llvAgentRuntime:conversation_claude:profile", JSON.stringify({ model: "gpt-5.6-sol", effort: "low" }));
+  const { host, root } = await renderPill(
+    <RuntimePill file={claudeSeat} surface="structured" runtimeSettings={CLAUDE_STRUCTURED} />,
+  );
+  expect(faceOf(host)).toContain("Opus 5.5 · High");
+  expect(sendRuntimeFrom(claudeSeat)).toBeUndefined();
   await act(async () => root.unmount());
 });

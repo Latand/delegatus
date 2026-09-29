@@ -35,6 +35,7 @@ import {
   readResumeDraft,
   storageKey,
   writeProfile,
+  dropStoredSelection,
   writeResumeProfile,
   type RuntimeDraft,
   type RuntimeProfile,
@@ -233,7 +234,9 @@ export function RuntimePill({
     const inFlight = phase === "pending" || phase === "confirming";
     /* A structured face is what the conversation runs. Only a reconfigure the
        operator still has in flight restores the stored draft. */
-    const stored = pillSurface === "structured" && !inFlight ? defaults(file) : readDraft(file);
+    const observed = pillSurface === "structured" && !inFlight;
+    if (observed) dropStoredSelection(file);
+    const stored = observed ? defaults(file) : readDraft(file);
     liveDraftRef.current = stored;
     setLiveDraft(stored);
     operationRef.current = localStorage.getItem(phaseOperationKey(file));
@@ -280,6 +283,7 @@ export function RuntimePill({
     if (seen.key === observedKey || seen.path !== file.path) return;
     if (!engine || pillSurface !== "structured") return;
     if (applyState !== "idle" && applyState !== "applied") return;
+    dropStoredSelection(file);
     const observed = defaults(file);
     liveDraftRef.current = observed;
     setLiveDraft(observed);

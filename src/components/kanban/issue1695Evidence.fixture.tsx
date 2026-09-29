@@ -392,8 +392,8 @@ if (SEAT_NOISE) {
     seatOn("claude", "opus", "high", "iii");
     launchWindow(seatLaunch({ state: "failed", initialMessage: "failed", retrySafe: true, recoveryStopped: true, error: "the host has not answered yet" }));
   }
-  else if (NOISE_CASE === "iv") seatOn("codex", "gpt-5.6", "low", "iv-old");
-  else if (NOISE_CASE === "v") seatOn("codex", "gpt-5.6", "high", "v");
+  else if (NOISE_CASE === "iv") seatOn("codex", "gpt-5.6-sol", "low", "iv-old");
+  else if (NOISE_CASE === "v") seatOn("codex", "gpt-5.6-sol", "high", "v");
 }
 /* K4b: the merge task's implementer, and a spike closed on the board. */
 const mergeImpl = EDITING ? add(conversation("merge-impl", "Implementer: merge the queue adapter", { mtime: now - 26 * 60 * MIN })) : null;
@@ -1595,6 +1595,13 @@ function transcriptOf(pathname: string): string {
   }
   if (SEAT_NOISE && file === orchestrator) {
     if (file.spawn) return "";
+    if (file.engine === "codex") {
+      const rollout = (secondsAgo: number, payload: Record<string, unknown>) => JSON.stringify({ type: "event_msg", timestamp: iso(secondsAgo), payload });
+      return `${[
+        rollout(8 * MIN, { type: "user_message", message: "Keep the search fix moving." }),
+        rollout(2 * MIN, { type: "agent_message", message: "Search: the verifier passed on the second attempt. Nothing needs you." }),
+      ].join("\n")}\n`;
+    }
     return `${[
       asked(8 * MIN, "Keep the search fix moving."),
       ...tool(7 * MIN, "toolu_seat_search", "ToolSearch", { query: "select:mcp__viewer__list_pipelines", max_results: 1 }),

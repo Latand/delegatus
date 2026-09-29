@@ -172,6 +172,15 @@ export function writeResumeProfile(file: FileEntry, patch: RuntimeProfile): Runt
   return next;
 }
 
+/** Forget the stored draft and sparse profile: a structured face that shows the
+    observed runtime must not leave an older selection riding the next send. */
+export function dropStoredSelection(file: FileEntry): void {
+  try {
+    localStorage.removeItem(storageKey(file));
+    localStorage.removeItem(profileKey(file));
+  } catch { /* opaque origin: nothing was stored */ }
+}
+
 /** The concrete profile the next message resolves to: the user's persisted
     selection where present, otherwise the observed/boot runtime, otherwise
     engine defaults (issue #390 §3.1 "the face is the truth about the next

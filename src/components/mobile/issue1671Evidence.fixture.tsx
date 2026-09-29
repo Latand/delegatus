@@ -172,9 +172,13 @@ if (SEAT_NOISE !== null) {
   if (SEAT_NOISE === "i") { seatOn("claude", "opus", "high", ""); launchWindow({ error: SEAT_ENVELOPE }); }
   else if (SEAT_NOISE === "ii") seatOn("claude", "opus", "high", "");
   else if (SEAT_NOISE === "iii") { seatOn("claude", "opus", "high", ""); launchWindow({ state: "failed", initialMessage: "failed", retrySafe: true, recoveryStopped: true, error: "the host has not answered yet" }); }
-  else if (SEAT_NOISE === "iv") seatOn("codex", "gpt-5.6", "low", "iv-old");
-  else if (SEAT_NOISE === "v") seatOn("codex", "gpt-5.6", "high", "v");
+  else if (SEAT_NOISE === "iv") seatOn("codex", "gpt-5.6-sol", "low", "iv-old");
+  else if (SEAT_NOISE === "v") seatOn("codex", "gpt-5.6-sol", "high", "v");
 }
+const SEAT_CODEX_FEED = `${[
+  JSON.stringify({ type: "event_msg", timestamp: iso(480), payload: { type: "user_message", message: "Keep the search fix moving." } }),
+  JSON.stringify({ type: "event_msg", timestamp: iso(120), payload: { type: "agent_message", message: "Search: the verifier passed on the second attempt. Nothing needs you." } }),
+].join("\n")}\n`;
 const SEAT_FEED = `${[
   JSON.stringify({ type: "user", timestamp: iso(480), message: { role: "user", content: "Keep the search fix moving." }, promptSource: "typed", origin: { kind: "human" } }),
   JSON.stringify({ type: "assistant", timestamp: iso(420), message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_seat_search", name: "ToolSearch", input: { query: "select:mcp__viewer__list_pipelines", max_results: 1 } }] } }),
@@ -1196,7 +1200,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const asked = JSON.parse(String(init?.body ?? "{}")) as { reqs?: Array<{ id: string; path: string; offset: number }> };
     const chunks: Record<string, { offset: number; start: number; size: number; data: string }> = {};
     (asked.reqs ?? []).forEach((request, index) => {
-      const body = SEAT_NOISE !== null ? (request.path === files[0]!.path && !files[0]!.spawn ? SEAT_FEED : "") : request.path === RUNNING_PATH ? evidenceFeed : "";
+      const body = SEAT_NOISE !== null ? (request.path === files[0]!.path && !files[0]!.spawn ? (files[0]!.engine === "codex" ? SEAT_CODEX_FEED : SEAT_FEED) : "") : request.path === RUNNING_PATH ? evidenceFeed : "";
       const from = Math.min(Math.max(request.offset, 0), body.length);
       chunks[String(index)] = { offset: body.length, start: from, size: body.length, data: body.slice(from) };
     });

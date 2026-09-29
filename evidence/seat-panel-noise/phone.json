@@ -35,6 +35,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 1,
@@ -91,6 +92,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -137,6 +139,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [
         {
@@ -198,6 +201,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -207,7 +211,7 @@
       "zeroWidthControls": [],
       "answer": true,
       "rotation": {
-        "before": "6-Astra · low"
+        "before": "5.6-Sol · low"
       },
       "pageErrors": []
     },
@@ -216,11 +220,12 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
       "operatorBubbles": 0,
-      "pill": "6-Astra · high",
+      "pill": "5.6-Sol · high",
       "overflowX": 0,
       "zeroWidthControls": [],
       "answer": true,
@@ -262,6 +267,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 1,
@@ -318,6 +324,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -364,6 +371,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [
         {
@@ -425,6 +433,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -434,7 +443,7 @@
       "zeroWidthControls": [],
       "answer": true,
       "rotation": {
-        "before": "6-Astra · low"
+        "before": "5.6-Sol · low"
       },
       "pageErrors": []
     },
@@ -443,11 +452,12 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
       "operatorBubbles": 0,
-      "pill": "6-Astra · high",
+      "pill": "5.6-Sol · high",
       "overflowX": 0,
       "zeroWidthControls": [],
       "answer": true,
@@ -489,6 +499,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 1,
@@ -545,6 +556,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -591,6 +603,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [
         {
@@ -652,6 +665,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -661,7 +675,7 @@
       "zeroWidthControls": [],
       "answer": true,
       "rotation": {
-        "before": "6-Astra · low"
+        "before": "5.6-Sol · low"
       },
       "pageErrors": []
     },
@@ -670,11 +684,12 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
       "operatorBubbles": 0,
-      "pill": "6-Astra · high",
+      "pill": "5.6-Sol · high",
       "overflowX": 0,
       "zeroWidthControls": [],
       "answer": true,
@@ -716,6 +731,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 1,
@@ -772,6 +788,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -818,6 +835,7 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [
         {
@@ -879,6 +897,7 @@
         }
       ],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
@@ -888,7 +907,7 @@
       "zeroWidthControls": [],
       "answer": true,
       "rotation": {
-        "before": "6-Astra · low"
+        "before": "5.6-Sol · low"
       },
       "pageErrors": []
     },
@@ -897,11 +916,12 @@
       "mcpRows": [],
       "shellRows": [],
       "envelope": false,
+      "rawRecords": false,
       "toolSearch": [],
       "errorChips": [],
       "mandateCards": 0,
       "operatorBubbles": 0,
-      "pill": "6-Astra · high",
+      "pill": "5.6-Sol · high",
       "overflowX": 0,
       "zeroWidthControls": [],
       "answer": true,

@@ -369,8 +369,6 @@ test("structured recovery state is bounded and exposes retry details", async () 
 });
 
 test("a same-key retry re-sends the ORIGINAL runtime snapshot even after the selection changed", async () => {
-  // The user explicitly selected ultra before sending (sparse :profile).
-  localStorage.setItem("llvAgentRuntime:conv-snapshot:profile", JSON.stringify({ effort: "ultra" }));
   const sends: SendBody[] = [];
   mockWire(sends, [
     () => ({ status: 400, json: { error: "pre-dispatch validation rejected" } }), // retryable: key survives
@@ -379,6 +377,8 @@ test("a same-key retry re-sends the ORIGINAL runtime snapshot even after the sel
 
   const { host, root } = await renderInto(<TmuxComposer file={file} />);
   const { type, submit } = composerControls(host);
+  // The user explicitly selects ultra after the pane loads (sparse :profile).
+  writeProfile(file, { effort: "ultra" });
 
   await settle(() => type("run the migration"));
   await settle(() => submit());
@@ -408,7 +408,6 @@ test("a same-key retry re-sends the ORIGINAL runtime snapshot even after the sel
 });
 
 test("a remounted same-key retry restores the original runtime snapshot", async () => {
-  localStorage.setItem("llvAgentRuntime:conv-snapshot:profile", JSON.stringify({ effort: "ultra" }));
   const sends: SendBody[] = [];
   mockWire(sends, [
     () => ({ status: 400, json: { error: "pre-dispatch validation rejected" } }),
@@ -418,6 +417,7 @@ test("a remounted same-key retry restores the original runtime snapshot", async 
   const rendered = await renderInto(<TmuxComposer file={file} />);
   const host = rendered.host;
   let root = rendered.root;
+  writeProfile(file, { effort: "ultra" });
   await settle(() => composerControls(host).type("persist this runtime generation"));
   await settle(() => composerControls(host).submit());
   expect(sends[0]!.runtime).toEqual({ effort: "ultra" });

@@ -13490,6 +13490,7 @@ describe("seat panel carries no internal noise", () => {
   const readPanel = (page: Page) => page.evaluate((seat) => {
     const root = document.querySelector(`${seat} [data-orchestrator-panel]`)!;
     const text = root.textContent ?? "";
+    const visible = (root as HTMLElement).innerText;
     const toolSearch: string[] = [];
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) if ((node.nodeValue ?? "").trim().startsWith("ToolSearch")) toolSearch.push(node.nodeValue!.trim());
@@ -13529,7 +13530,8 @@ describe("seat panel carries no internal noise", () => {
       launchLines,
       mcpRows,
       shellRows,
-      envelope: /structured launch recovery|"phase"|\{"/.test(text),
+      envelope: /structured launch recovery|"phase"|\{\s*"/.test(visible),
+      rawRecords: /transcript record|"type"\s*:/.test(visible),
       toolSearch,
       errorChips: chips.map((el) => ({ text: el.textContent, title: el.getAttribute("title") })),
       mandateCards: root.querySelectorAll("[data-mandate-card]").length,
@@ -13567,6 +13569,7 @@ describe("seat panel carries no internal noise", () => {
             if (!before.pill?.endsWith(low)) failures.push(`${label}: the codex seat's pill before the rotation reads "${before.pill}", not ${low}`);
             await page.evaluate(() => (window as unknown as { evidence: { rotateSeat(): void } }).evidence.rotateSeat());
             await page.waitForFunction((seat) => (document.querySelector(`${seat} [data-runtime-pill]`)?.textContent ?? "").includes("Opus"), SEAT, { timeout: 40_000 });
+            if (!before.pill?.toLowerCase().includes("5.6-sol")) failures.push(`${label}: the codex seat's pill before the rotation reads "${before.pill}", not its model 5.6-sol`);
             rotation = { before: before.pill };
           }
           if (kind === "ii" || kind === "iv" || kind === "v") {
@@ -13579,6 +13582,9 @@ describe("seat panel carries no internal noise", () => {
           void text;
           frames[label] = { ...kept, rotation, pageErrors };
           if (read.envelope) failures.push(`${label}: the panel prints the recovery envelope`);
+          if (read.rawRecords) failures.push(`${label}: the panel prints a raw transcript record`);
+          const seatModel = kind === "v" ? "5.6-sol" : "opus";
+          if ((read.pill || !(kind === "i" || kind === "iii")) && !read.pill?.toLowerCase().includes(seatModel)) failures.push(`${label}: the pill reads "${read.pill}", not the seat's model ${seatModel}`);
           if (kind === "iii") {
             if (read.errorChips.length !== 1 || read.errorChips[0]!.text !== sentence) failures.push(`${label}: error chips ${JSON.stringify(read.errorChips)}`);
           } else if (read.errorChips.length) failures.push(`${label}: an error chip ${JSON.stringify(read.errorChips)}`);
