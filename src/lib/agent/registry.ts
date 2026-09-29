@@ -6910,7 +6910,9 @@ export class AgentRegistry {
 
   /** One inventory transaction owns identity allocation, launch-profile
       backfill, account provenance, and authoritative turn observations. */
-  reconcileConversations(observations: ConversationObservation[]): RegistryFile {
+  reconcileConversations(observations: ConversationObservation[]): RegistryFile;
+  reconcileConversations(observations: ConversationObservation[], options: { snapshot: false }): void;
+  reconcileConversations(observations: ConversationObservation[], options?: { snapshot: false }): RegistryFile | void {
     return this.mutate((file) => {
       const scopeChanged = new Set<AgentEngine>();
       const firstPathByNativeSession = new Map<string, string>();
@@ -7195,7 +7197,7 @@ export class AgentRegistry {
         file.conversationRevision[engine] += 1;
         file.engineRouting[engine].revision += 1;
       }
-      return clone(file);
+      return options?.snapshot === false ? undefined : clone(file);
     });
   }
 

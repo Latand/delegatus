@@ -11,7 +11,7 @@ import { ENGINE_MODELS } from "@/lib/agent/models";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import { costClass, effortRank, tightestHeadroom, type CostClass } from "@/lib/roles/costHints";
 import { equivalentConfig } from "@/lib/roles/equivalents";
-import { LIGHT_DENIED_ROLE_IDS } from "@/lib/roles/sizing";
+import { mappingRowRefusal } from "@/lib/roles/sizing";
 import type { RoleConfig, RoleEngine, RoleId, RoleMappingReset, RoleVariantId } from "@/lib/roles/types";
 
 /**
@@ -226,12 +226,12 @@ function runtimeName(config: RoleConfig): string {
   return `${model} · ${config.effort}`;
 }
 
-/* Sonnet and Haiku never run these rows (docs/design/model-sizing-tiers.md
-   §2, R1); the server refuses them, so the select does not offer them. */
+/* The server refuses the light models a row may not run (docs/design/model-sizing-tiers.md
+   §2, R1), so the select does not offer them. */
 function modelOptions(row: RowKey, engine: RoleEngine) {
   const models = ENGINE_MODELS[engine];
-  if (engine !== "claude" || !LIGHT_DENIED_ROLE_IDS.includes(row.roleId)) return models;
-  return models.filter((option) => option.id !== "sonnet" && option.id !== "haiku");
+  if (engine !== "claude") return models;
+  return models.filter((option) => !mappingRowRefusal(row.roleId, { engine, model: option.id }, row.variant));
 }
 
 function RowControls({ row, config, shipped, reset, promptCustom, statuses, layout, onChange, onResetPrompt }: {

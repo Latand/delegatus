@@ -25,6 +25,7 @@ import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
 import { terminateStructuredHostTree } from "./structuredHostControl";
 import {
   reconcileStructuredHostRetirement,
+  RETIREMENT_ABANDONED_RECEIPT_MS,
   STRUCTURED_HOST_RETIREMENT_CLAUSES,
   runStructuredHostRetirementSweep,
   structuredHostRetirementGraceMs,
@@ -482,6 +483,54 @@ test("a non-terminal spawn receipt blocks retirement", async () => {
         "launch-1": { launchId: "launch-1", conversationId: CONVERSATION, key: null, state: "prompt-delivered", engine: "claude" },
       },
     }),
+  });
+});
+
+test("a launch receipt abandoned for over a day no longer blocks retirement", async () => {
+  const receipt = (createdAt: string | undefined, key: unknown = null) => ({
+    launchId: "launch-1", conversationId: CONVERSATION, key, state: "path-pending", engine: "claude", createdAt,
+  });
+  const abandoned = new Date(NOW - RETIREMENT_ABANDONED_RECEIPT_MS - 60_000).toISOString();
+  const fresh = new Date(NOW - RETIREMENT_ABANDONED_RECEIPT_MS + 60_000).toISOString();
+
+  /* Both index routes: a receipt naming the conversation and one naming the key. */
+  for (const key of [null, { engine: "claude", sessionId: SESSION }]) {
+    const stale = await sweep({ snapshot: () => snapshot({ receipts: { "launch-1": receipt(abandoned, key) } }) });
+    expect(stale.report.refused).toEqual([]);
+    expect(stale.report.retired[0]!.passed).toContain("no-open-operation");
+    expect(stale.terminated).toHaveLength(1);
+  }
+
+  /* A launch that could still be settling, and one whose age cannot be read,
+     keep protecting their host. */
+  await refusedBy("no-open-operation", { snapshot: () => snapshot({ receipts: { "launch-1": receipt(fresh) } }) });
+  await refusedBy("no-open-operation", { snapshot: () => snapshot({ receipts: { "launch-1": receipt("not-a-date") } }) });
+});
+
+test("an abandoned stamped launch is reconciled while its unfinished delivery stays protected", async () => {
+  const receipt = {
+    launchId: "launch-1", conversationId: CONVERSATION, key: null,
+    state: "path-pending", engine: "claude",
+    createdAt: new Date(NOW - RETIREMENT_ABANDONED_RECEIPT_MS - 60_000).toISOString(),
+  };
+  const stamped = () => snapshot({
+    entries: { [`claude:${SESSION}`]: entry({ structuredHostOperationId: "launch-1" }) },
+    receipts: { "launch-1": receipt },
+  });
+
+  const settled = await sweep({ snapshot: stamped });
+  expect(settled.report.refused).toEqual([]);
+  expect(settled.terminated).toHaveLength(1);
+
+  await refusedBy("handoff-queue-drained", {
+    snapshot: () => {
+      const file = stamped();
+      file.heldDeliveries["delivery-1"] = {
+        id: "delivery-1", conversationId: CONVERSATION, runtimeConversationId: CONVERSATION,
+        state: "delivery-uncertain",
+      } as RegistryFile["heldDeliveries"][string];
+      return file;
+    },
   });
 });
 
@@ -1057,6 +1106,7 @@ function qualifiedSubject(): StructuredHostRetirementSubject {
     pendingAction: null,
     structuredHostOperationId: null,
     structuredHostOperationReceiptState: null,
+    structuredHostOperationReceiptAbandoned: false,
     undeliveredHandoffEntries: determined(0),
     openOperations: 0,
     eventCursor: 12,

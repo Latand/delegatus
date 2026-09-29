@@ -24,6 +24,7 @@ const STATUS: Record<TelegramBotErrorCode, number> = {
   alias_taken: 409,
   text_empty: 400,
   text_too_long: 400,
+  photo_invalid: 400,
   format_invalid: 400,
   forbidden: 403,
   rate_limited: 429,

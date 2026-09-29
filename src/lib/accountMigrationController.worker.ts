@@ -1,4 +1,8 @@
-import { startAccountMigrationController } from "./accounts/migration/controller";
+import { exitWhenViewerOwnershipEnds } from "./viewerWorkerLifecycle";
+
+exitWhenViewerOwnershipEnds();
+
+const { startAccountMigrationController } = await import("./accounts/migration/controller");
 
 await startAccountMigrationController();
 

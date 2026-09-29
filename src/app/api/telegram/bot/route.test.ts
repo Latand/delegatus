@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import sharp from "sharp";
 
 import { NextRequest } from "next/server";
 
@@ -92,6 +93,19 @@ test("token never serialised: connect, status, chat edits and every agent answer
   bodies.push(await text(await operatorRoute.POST(request("/api/telegram/bot", { method: "POST", body: { action: "connect", token: `${TOKEN}x` } }))));
   for (const body of bodies) expect(leaks(body)).toBe(false);
   expect(bodies[1]).toContain("Report Bot");
+});
+
+test("agent media route uses the caller capability and topic link for an album", async () => {
+  await connected();
+  service.setChat(String(TEAM.id), "team-reports", true);
+  const image = path.join(SANDBOX, "route-photo.jpg");
+  fs.writeFileSync(image, await sharp({ create: { width: 1, height: 1, channels: 3, background: { r: 12, g: 34, b: 56 } } }).jpeg().toBuffer());
+  transport.script("sendMediaGroup", ok([{ message_id: 71, date: 5 }, { message_id: 72, date: 6 }]));
+  const response = await agentRoute.POST(request("/api/telegram/bot/agent", { method: "POST", headers: AGENT, body: { op: "send_media", clientRequestId: "media-route", chat: "team-reports", topicId: 5, images: [{ path: image, caption: "First" }, { path: image, caption: "Second" }], conversationId: "forged" } }));
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ messageIds: [71, 72], attributedTo: { conversationId: "conversation_writer" } });
+  expect(service.readMessages({ chat: "team-reports" }).messages.slice(0, 2)).toMatchObject([{ direction: "out", kind: "photo" }, { direction: "out", kind: "photo" }]);
+  expect(transport.callsOf("sendMediaGroup")[0]!.params.message_thread_id).toBe(5);
 });
 
 test("agent send resolves a public topic link and forwards message_thread_id", async () => {

@@ -4114,7 +4114,7 @@ test("an agent on Sonnet spawning a trivial builder is refused, and a Sonnet rev
 
   const reviewer = await post({ role: "reviewer", roleParams: { diffSource: "#1" }, reviews: "#1", engine: "claude", model: "sonnet" });
   expect(reviewer.status).toBe(400);
-  expect((await reviewer.json() as { error: string }).error).toContain("Sonnet and Haiku do not run");
+  expect((await reviewer.json() as { error: string }).error).toContain("Sonnet does not run");
 });
 
 test("an accepted role spawn answers which model runs", async () => {
@@ -4149,7 +4149,7 @@ test("an accepted role spawn answers which model runs", async () => {
       }),
     }), dependencies);
     expect(response.status).toBe(202);
-    expect(await response.json()).toMatchObject({ runtime: "builder·trivial claude/sonnet/high" });
+    expect(await response.json()).toMatchObject({ runtime: "builder·trivial claude/claude-sonnet-5-5/high" });
   } finally {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key];

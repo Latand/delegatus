@@ -642,12 +642,27 @@ test("a window that retires nothing while one clause refuses past the threshold 
   /* Refusals spread thin, or few, are a quiet machine. */
   const quiet = await gather({ retirementJournal: () => ({ covered: true, sweeps: retirementSweeps(288, { "seat-free": 3, "turn-settled": 3 }) }) });
   expect(quiet.signals).toEqual([]);
+  /* Live conditions of a seat, turn or transcript hold as long as the
+     condition does, so even a flood of them is a working fence. */
+  const live = await gather({ retirementJournal: () => ({ covered: true, sweeps: retirementSweeps(284, { "seat-free": 6, "turn-settled": 6, "transcript-idle": 6 }) }) });
+  expect(live.signals).toEqual([]);
+  /* Bookkeeping clauses only a defect leaves unsettled on an idle host. The
+     production registry held spawn receipts stuck for months: no-open-operation
+     refused their hosts on every sweep, and events-flushed and resumable refuse
+     on a lagging durable cursor or a missing transcript. */
+  for (const clause of ["no-open-operation", "events-flushed", "resumable", "handoff-queue-drained"]) {
+    const stuck = await gather({ retirementJournal: () => ({ covered: true, sweeps: retirementSweeps(284, { [clause]: 4 }) }) });
+    expect(stuck.signals).toEqual([{
+      id: "host-retirement-stalled",
+      label: `host retirement: nothing retired in 284 sweeps over 24h while ${clause} refused 1136 times`,
+    }]);
+  }
 });
 
 test("the stall threshold is strict and picks the clause with the most refusals", () => {
-  const window = { covered: true, sweeps: retirementSweeps(10, { "transcript-idle": 50, "handoff-queue-drained": 100 }) };
+  const window = { covered: true, sweeps: retirementSweeps(10, { "transcript-idle": 100, "process-identity": 100 }) };
   expect(stalledRetirementClause(window, 1000)).toBeNull();
-  expect(stalledRetirementClause(window, 999)).toEqual({ clause: "handoff-queue-drained", refusals: 1000, sweeps: 10, flags: [] });
+  expect(stalledRetirementClause(window, 999)).toEqual({ clause: "process-identity", refusals: 1000, sweeps: 10, flags: [] });
   expect(stalledRetirementClause({ covered: true, sweeps: [] }, 0)).toBeNull();
 });
 
@@ -673,9 +688,9 @@ test("a stall on no-active-flags names the flags that refused, most frequent fir
   const label = (await gather({ retirementJournal: () => ({ covered: true, sweeps: retirementSweeps(200, { "no-active-flags": 6 }, null, many) }) })).signals[0]?.label;
   expect(label).toEndWith("(flags: flag-0 1600, flag-1 1400, flag-2 1200, flag-3 1000, flag-4 800, +3 more)");
 
-  /* Flags ride only on the clause that refused on them. */
-  const other = stalledRetirementClause({ covered: true, sweeps: retirementSweeps(200, { "seat-free": 6, "no-active-flags": 1 }, null, flags) });
-  expect(other).toMatchObject({ clause: "seat-free", flags: [] });
+  /* A larger live-condition count does not displace a bookkeeping clause. */
+  const other = stalledRetirementClause({ covered: true, sweeps: retirementSweeps(200, { "seat-free": 10, "no-active-flags": 6 }, null, flags) });
+  expect(other).toMatchObject({ clause: "no-active-flags", refusals: 1200 });
 });
 
 test("the journal window reads through rotation and stops at the first sweep older than the window", () => {

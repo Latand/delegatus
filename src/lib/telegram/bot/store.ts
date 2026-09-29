@@ -592,6 +592,21 @@ export class TelegramBotStore {
     return { state: row.state as SendRow["state"], chatId: row.chat_id, messageIds, parts: row.parts, sentAt: row.sent_at, errorCode: row.error_code };
   }
 
+  /** Identifies settled legacy receipts so callers can preserve them while
+      moving text and media sends into separate key namespaces. */
+  sendKind(callerKey: string, clientRequestId: string): "text" | "photo" | null {
+    const row = this.sendRow(callerKey, clientRequestId);
+    if (!row?.messageIds.length) return null;
+    const query = this.db.query<{ kind: string }, [string, number]>(
+      "SELECT kind FROM messages WHERE chat_id = ?1 AND message_id = ?2",
+    );
+    for (const id of row.messageIds) {
+      const kind = query.get(row.chatId, id)?.kind;
+      if (kind === "text" || kind === "photo") return kind;
+    }
+    return null;
+  }
+
   failSend(callerKey: string, clientRequestId: string, errorCode: string, sentMessageIds: readonly number[]): void {
     this.db.query("UPDATE sends SET state = 'failed', error_code = ?3, message_ids = ?4 WHERE caller_key = ?1 AND client_request_id = ?2")
       .run(callerKey, clientRequestId, errorCode, JSON.stringify(sentMessageIds));
@@ -606,17 +621,17 @@ export class TelegramBotStore {
     clientRequestId: string;
     chatId: string;
     conversationId: string | null;
-    sent: Array<{ messageId: number; date: number; text: string; replyToMessageId: number | null; topicId: number | null }>;
+    sent: Array<{ messageId: number; date: number; text: string; replyToMessageId: number | null; topicId: number | null; kind?: "text" | "photo" }>;
     now: Date;
   }): void {
     const at = input.now.toISOString();
     this.transaction(() => {
       const insert = this.db.query(`
         INSERT OR REPLACE INTO messages (chat_id, message_id, direction, date, kind, text, reply_to_message_id, topic_id, sent_by_conversation_id, sent_by_unidentified)
-        VALUES (?1, ?2, 'out', ?3, 'text', ?4, ?5, ?6, ?7, ?8)
+        VALUES (?1, ?2, 'out', ?3, ?4, ?5, ?6, ?7, ?8, ?9)
       `);
       for (const message of input.sent) {
-        insert.run(input.chatId, message.messageId, message.date, message.text, message.replyToMessageId, message.topicId, input.conversationId, input.conversationId ? 0 : 1);
+        insert.run(input.chatId, message.messageId, message.date, message.kind ?? "text", message.text, message.replyToMessageId, message.topicId, input.conversationId, input.conversationId ? 0 : 1);
       }
       this.db.query(`
         UPDATE chats SET last_post_at = ?2, last_post_conversation_id = ?3, last_post_unidentified = ?4 WHERE chat_id = ?1

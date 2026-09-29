@@ -49,6 +49,23 @@ test("the token reaches only the request URL, and a successful answer passes thr
   expect(seen).toEqual([{ url: `https://api.telegram.org/bot${TOKEN}/getMe`, body: { probe: 1 } }]);
 });
 
+test("photo uploads use multipart form data with attach names and JSON fields", async () => {
+  let fields: FormData | null = null;
+  const transport = createBotApiTransport(TOKEN, async (_url, init) => {
+    expect(init.headers).toBeUndefined();
+    fields = init.body as FormData;
+    return jsonResponse({ ok: true, result: [{ message_id: 1, date: 1 }, { message_id: 2, date: 1 }] });
+  });
+  const media = JSON.stringify([{ type: "photo", media: "attach://photo0" }, { type: "photo", media: "attach://photo1" }]);
+  await transport.call("sendMediaGroup", { chat_id: -1001, media, reply_parameters: { message_id: 9 }, photo0: new Blob([Uint8Array.from([1])], { type: "image/jpeg" }), photo1: new Blob([Uint8Array.from([2])], { type: "image/png" }) });
+  expect(fields).toBeInstanceOf(FormData);
+  expect(fields!.get("chat_id")).toBe("-1001");
+  expect(fields!.get("media")).toBe(media);
+  expect(fields!.get("reply_parameters")).toBe('{"message_id":9}');
+  expect((fields!.get("photo0") as File).name).toBe("photo0.jpg");
+  expect((fields!.get("photo1") as File).name).toBe("photo1.png");
+});
+
 test("a fetch rejection that quotes the request URL comes back as a bare code", async () => {
   const transport = createBotApiTransport(TOKEN, async (url) => {
     throw new TypeError(`fetch failed: request to ${url} failed, reason: connect ECONNREFUSED`);
@@ -56,6 +73,17 @@ test("a fetch rejection that quotes the request URL comes back as a bare code", 
   const result = await transport.call("getUpdates", {});
   expect(result).toEqual({ ok: false, kind: "network_failed", status: null, description: null, retryAfterSeconds: null, migrateToChatId: null });
   expect(JSON.stringify(result)).not.toContain(TOKEN_TAIL);
+});
+
+test("an unreadable or malformed success body stays uncertain, while Telegram rejection is definitive", async () => {
+  const truncated = createBotApiTransport(TOKEN, async () => new Response('{"ok":true,"result":[', { status: 200 }));
+  expect(await truncated.call("sendMediaGroup", {})).toMatchObject({ ok: false, kind: "network_failed" });
+
+  const missingResult = createBotApiTransport(TOKEN, async () => jsonResponse({ ok: true }));
+  expect(await missingResult.call("sendPhoto", {})).toMatchObject({ ok: false, kind: "network_failed" });
+
+  const rejected = createBotApiTransport(TOKEN, async () => jsonResponse({ ok: false, error_code: 400, description: "bad request" }, 400));
+  expect(await rejected.call("sendPhoto", {})).toMatchObject({ ok: false, kind: "http", status: 400 });
 });
 
 test("a connection refused or a name that never resolved is unreachable; a connection cut later may have carried the request", async () => {

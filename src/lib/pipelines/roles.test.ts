@@ -149,9 +149,9 @@ test("Builder domain=frontend resolves to the Claude Sonnet 5.5 config", () => {
 test("a Builder fix round resolves to the fix row its domain and size select", () => {
   const fix = (params: Record<string, string>) => resolvePipelineRole({ role: { roleId: "builder", params: { mode: "apply-fixes", ...params } } }, "run", pipelineRoleLookup).role;
   expect(fix({})).toMatchObject({ roleId: "builder", engine: "codex", model: "gpt-6-luna", effort: "high" });
-  expect(fix({ domain: "frontend" })).toMatchObject({ engine: "claude", model: "sonnet", effort: "high" });
-  expect(fix({ domain: "docs" })).toMatchObject({ engine: "claude", model: "sonnet", effort: "high" });
-  expect(fix({ domain: "frontend", size: "trivial" })).toMatchObject({ engine: "claude", model: "sonnet", effort: "high" });
+  expect(fix({ domain: "frontend" })).toMatchObject({ engine: "claude", model: "claude-sonnet-5-5", effort: "high" });
+  expect(fix({ domain: "docs" })).toMatchObject({ engine: "claude", model: "claude-sonnet-5-5", effort: "high" });
+  expect(fix({ domain: "frontend", size: "trivial" })).toMatchObject({ engine: "claude", model: "claude-sonnet-5-5", effort: "high" });
   expect(fix({})?.promptScaffold).toContain("Apply-fixes guidance: the brief is a list of findings.");
 });
 

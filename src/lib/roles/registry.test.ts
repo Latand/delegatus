@@ -228,12 +228,12 @@ test("variantForParams orders trivial over the fix rows over the domains over ap
 });
 
 test("the small-change and docs variants ship their runtime, and only builder and reviewer take size", () => {
-  expect(resolveRole("builder", { size: "trivial", domain: "frontend" })).toMatchObject({ ok: true, value: { config: { engine: "claude", model: "sonnet", effort: "high" } } });
-  expect(resolveRole("builder", { domain: "docs" })).toMatchObject({ ok: true, value: { config: { engine: "claude", model: "opus", effort: "medium" } } });
-  /* A fix round runs its lane's fix row: a writing or UI lane's on Sonnet, a
+  expect(resolveRole("builder", { size: "trivial", domain: "frontend" })).toMatchObject({ ok: true, value: { config: { engine: "claude", model: "claude-sonnet-5-5", effort: "high" } } });
+  expect(resolveRole("builder", { domain: "docs" })).toMatchObject({ ok: true, value: { config: { engine: "claude", model: "claude-sonnet-5-5", effort: "high" } } });
+  /* A fix round runs its lane's fix row: a writing or UI lane's on Sonnet 5.5, a
      general one on GPT-6 Luna (agent-prompt-contract.md §3 (a)). */
-  expect(resolveRole("builder", { domain: "docs", mode: "apply-fixes" })).toMatchObject({ ok: true, value: { config: { engine: "claude", model: "sonnet", effort: "high" } } });
-  expect(resolveRole("builder", { domain: "frontend", mode: "apply-fixes" })).toMatchObject({ ok: true, value: { config: { engine: "claude", model: "sonnet", effort: "high" } } });
+  expect(resolveRole("builder", { domain: "docs", mode: "apply-fixes" })).toMatchObject({ ok: true, value: { config: { engine: "claude", model: "claude-sonnet-5-5", effort: "high" } } });
+  expect(resolveRole("builder", { domain: "frontend", mode: "apply-fixes" })).toMatchObject({ ok: true, value: { config: { engine: "claude", model: "claude-sonnet-5-5", effort: "high" } } });
   expect(resolveRole("builder", { mode: "apply-fixes" })).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6-luna", effort: "high" } } });
   expect(resolveRole("reviewer", { diffSource: "#1", size: "trivial" })).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6-luna", effort: "high" } } });
   expect(resolveRole("builder", { size: "normal" })).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6-astra", effort: "medium" } } });
@@ -250,8 +250,8 @@ test("the small-change and docs variants ship their runtime, and only builder an
 
 test("spawn role resolution says whether the request moved the runtime off the role's row", () => {
   const row = resolveSpawnRole({ role: "builder", roleParams: { size: "trivial" } });
-  expect(row).toMatchObject({ ok: true, value: { role: "builder", explicitRuntime: false, params: { size: "trivial" }, config: { engine: "claude", model: "sonnet" } } });
-  const same = resolveSpawnRole({ role: "builder", roleParams: { size: "trivial" }, model: "sonnet", effort: "low" });
+  expect(row).toMatchObject({ ok: true, value: { role: "builder", explicitRuntime: false, params: { size: "trivial" }, config: { engine: "claude", model: "claude-sonnet-5-5" } } });
+  const same = resolveSpawnRole({ role: "builder", roleParams: { size: "trivial" }, model: "claude-sonnet-5-5", effort: "low" });
   expect(same).toMatchObject({ ok: true, value: { explicitRuntime: false, config: { effort: "low" } } });
   const moved = resolveSpawnRole({ role: "builder", engine: "claude", model: "sonnet" });
   expect(moved).toMatchObject({ ok: true, value: { explicitRuntime: true, config: { engine: "claude", model: "sonnet" } } });

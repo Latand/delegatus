@@ -77,13 +77,13 @@ test("an Opus-run agent's trivial lane is admitted, its fix stage inherits size=
   if (!created.pipeline) throw new Error(`create refused: ${created.error}`);
   const stages = created.pipeline.stages;
   expect(stages.map((stage) => [stage.id, stage.role?.roleId, stage.role?.params?.size, stage.effectiveRole.engine, stage.effectiveRole.model, stage.effectiveRole.effort])).toEqual([
-    ["build", "builder", "trivial", "claude", "sonnet", "high"],
+    ["build", "builder", "trivial", "claude", "claude-sonnet-5-5", "high"],
     ["review", "reviewer", "trivial", "codex", "gpt-6-luna", "high"],
-    ["review-fix", "builder", "trivial", "claude", "sonnet", "high"],
+    ["review-fix", "builder", "trivial", "claude", "claude-sonnet-5-5", "high"],
   ]);
   const answer = pipelineAcknowledgement(created.pipeline);
   expect(answer.stages.map((stage) => [stage.id, stage.role, stage.variant])).toEqual([["build", "builder", "trivial"], ["review", "reviewer", "trivial"], ["review-fix", "builder", "trivial"]]);
-  expect(answer.runtimeLine).toBe("build: builder·trivial claude/sonnet/high · review: reviewer·trivial codex/gpt-6-luna/high · review-fix: builder·trivial claude/sonnet/high");
+  expect(answer.runtimeLine).toBe("build: builder·trivial claude/claude-sonnet-5-5/high · review: reviewer·trivial codex/gpt-6-luna/high · review-fix: builder·trivial claude/claude-sonnet-5-5/high");
 });
 
 test("the operator's own draft is admitted whatever it names", async () => {
@@ -95,21 +95,30 @@ test("the operator's own draft is admitted whatever it names", async () => {
   expect(created.pipeline?.stages.find((stage) => stage.id === "review")?.effectiveRole.model).toBe("sonnet");
 });
 
-test("an explicit Sonnet builder without size=trivial, and an explicit Sonnet reviewer, are refused for an agent", async () => {
-  const lightBuilder = await createPipelineFromRequest(trivialLane(OPUS_SEAT.src, {
-    build: { role: { roleId: "builder" }, engine: "claude", model: "sonnet", effort: "high" },
-    review: { role: { roleId: "reviewer" } },
-  }), ports(), { briefer: { kind: "agent", conversationId: OPUS_SEAT.conversationId } });
+test("an explicit Sonnet builder runs at any size on a large model's brief and not on a Sonnet one; a full-size Sonnet reviewer is refused, a trivial one admitted", async () => {
+  const opusBriefer = { briefer: { kind: "agent" as const, conversationId: OPUS_SEAT.conversationId } };
+  const sonnetBuilder: { build: Partial<StageInput>; review: Partial<StageInput> } = { build: { role: { roleId: "builder" as const }, engine: "claude", model: "sonnet", effort: "high" }, review: { role: { roleId: "reviewer" as const } } };
+  const admitted = await createPipelineFromRequest(trivialLane(OPUS_SEAT.src, sonnetBuilder), ports(), opusBriefer);
+  expect(admitted.error).toBeUndefined();
+  expect(admitted.pipeline?.stages.find((stage) => stage.id === "build")?.effectiveRole).toMatchObject({ engine: "claude", model: "sonnet" });
+
   /* The converted fix stage runs its own fix row and copies no explicit
      runtime (docs/design/agent-prompt-contract.md §3 (a)), so only the
-     builder that set Sonnet by hand is refused. */
-  expect(lightBuilder.violations?.map((violation) => violation.field)).toEqual(["stages[0].role"]);
-  expect(lightBuilder.violations?.[0]?.message).toContain("a builder runs claude/sonnet only as size=trivial");
+     builder that set Sonnet by hand is judged. */
+  const lightBrief = await createPipelineFromRequest(trivialLane(SONNET_SEAT.src, sonnetBuilder), ports(), { briefer: { kind: "agent", conversationId: null } });
+  expect(lightBrief.violations?.map((violation) => violation.field)).toEqual(["stages[0].role"]);
+  expect(lightBrief.violations?.[0]?.message).toContain("a builder runs Claude Sonnet when a large model");
 
   const sonnetReviewer = await createPipelineFromRequest(trivialLane(OPUS_SEAT.src, {
     review: { role: { roleId: "reviewer" }, engine: "claude", model: "sonnet", effort: "high" },
-  }), ports(), { briefer: { kind: "agent", conversationId: OPUS_SEAT.conversationId } });
-  expect(sonnetReviewer.violations).toEqual([expect.objectContaining({ field: "stages[1].role", message: expect.stringContaining("Sonnet and Haiku do not run") })]);
+  }), ports(), opusBriefer);
+  expect(sonnetReviewer.violations).toEqual([expect.objectContaining({ field: "stages[1].role", message: expect.stringContaining("Sonnet does not run") })]);
+
+  const trivialReviewer = await createPipelineFromRequest(trivialLane(OPUS_SEAT.src, {
+    review: { role: { roleId: "reviewer", params: { size: "trivial" } }, engine: "claude", model: "claude-sonnet-5-5", effort: "medium" },
+  }), ports(), opusBriefer);
+  expect(trivialReviewer.error).toBeUndefined();
+  expect(trivialReviewer.pipeline?.stages.find((stage) => stage.id === "review")?.effectiveRole).toMatchObject({ engine: "claude", model: "claude-sonnet-5-5" });
 });
 
 test("a create without a briefer (the Viewer's own) is not judged", async () => {
@@ -131,7 +140,9 @@ test("override-stage and add-stage by an agent actor are checked, and by the ope
 
   const byAgent = await patchPipeline(id, { action: "override-stage", stageId: "build", engine: "claude", model: "sonnet", effort: "high" }, ports(), sonnetAgent);
   expect(byAgent.status).toBe(400);
-  expect(byAgent.error).toContain("a builder runs claude/sonnet only as size=trivial");
+  expect(byAgent.error).toContain("a builder runs Claude Sonnet when a large model");
+  const byOpusAgent = await patchPipeline(id, { action: "override-stage", stageId: "build", engine: "claude", model: "sonnet", effort: "high" }, ports(), { kind: "agent", role: "orchestrator", conversationId: OPUS_SEAT.conversationId });
+  expect(byOpusAgent.error).toBeUndefined();
   const trivialByAgent = await patchPipeline(id, { action: "override-stage", stageId: "build", role: { roleId: "builder", params: { size: "trivial" } } }, ports(), sonnetAgent);
   expect(trivialByAgent.error).toContain("needs a brief written by a large model (Claude Opus or Fable, or a large Codex model)");
 
@@ -140,58 +151,105 @@ test("override-stage and add-stage by an agent actor are checked, and by the ope
     index: 1,
     stage: { id: "check", kind: "run", role: { roleId: "verifier", params: { claims: "the label reads Save" } }, engine: "claude", model: "haiku", effort: "low", ["prompt"]: "Check it", next: null },
   }, ports(), sonnetAgent);
-  expect(addedByAgent.error).toContain("Sonnet and Haiku do not run");
+  expect(addedByAgent.error).toContain("Haiku runs none of orchestrator, architect, reviewer or verifier");
 
   const byOperator = await patchPipeline(id, { action: "override-stage", stageId: "build", engine: "claude", model: "sonnet", effort: "high" }, ports());
   expect(byOperator.error).toBeUndefined();
   expect(byOperator.pipeline?.stages[0]?.effectiveRole).toMatchObject({ engine: "claude", model: "sonnet" });
 });
 
-test("a review gate that names role builder·trivial is reviewer work: refused at create and at override-stage for an agent, admitted for the operator", async () => {
+test("a review gate that names a full-size Sonnet builder is reviewer work: refused at create and at override-stage for an agent, admitted for the operator; a size=trivial gate is admitted", async () => {
   const opusBriefer = { briefer: { kind: "agent" as const, conversationId: OPUS_SEAT.conversationId } };
   const builderReview = await createPipelineFromRequest(trivialLane(OPUS_SEAT.src, {
-    review: { role: { roleId: "builder", params: { size: "trivial" } } },
+    review: { role: { roleId: "builder", params: { domain: "frontend" } } },
   }), ports(), opusBriefer);
   expect(builderReview.pipeline).toBeUndefined();
   expect(builderReview.violations).toEqual([expect.objectContaining({
     field: "stages[1].role",
-    message: expect.stringContaining("stage review: a review gate is reviewer work whatever role it names: Sonnet and Haiku do not run"),
+    message: expect.stringContaining("stage review: a review gate is reviewer work whatever role it names: Sonnet does not run"),
   })]);
+  const trivialGate = await createPipelineFromRequest(trivialLane(OPUS_SEAT.src, {
+    review: { role: { roleId: "builder", params: { size: "trivial" } } },
+  }), ports(), opusBriefer);
+  expect(trivialGate.error).toBeUndefined();
+  expect(trivialGate.pipeline?.stages.find((stage) => stage.id === "review")?.effectiveRole).toMatchObject({ engine: "claude", model: "claude-sonnet-5-5" });
 
   const created = await createPipelineFromRequest(trivialLane(OPUS_SEAT.src), ports(), opusBriefer);
   const id = created.pipeline?.id;
   if (!id) throw new Error(`create refused: ${created.error}`);
   expect(created.pipeline?.stages.find((stage) => stage.id === "review")?.onFail?.to).toBe("review-fix");
   const opusAgent = { kind: "agent" as const, role: "orchestrator", conversationId: OPUS_SEAT.conversationId };
-  const overridden = await patchPipeline(id, { action: "override-stage", stageId: "review", role: { roleId: "builder", params: { size: "trivial" } } }, ports(), opusAgent);
+  const overridden = await patchPipeline(id, { action: "override-stage", stageId: "review", role: { roleId: "builder", params: { domain: "frontend" } } }, ports(), opusAgent);
   expect(overridden.status).toBe(400);
   expect(overridden.error).toContain("a review gate is reviewer work whatever role it names");
+  const trivialOverride = await patchPipeline(id, { action: "override-stage", stageId: "review", role: { roleId: "builder", params: { size: "trivial" } } }, ports(), opusAgent);
+  expect(trivialOverride.error).toBeUndefined();
 
   /* The fix stage is no gate, and the operator's own edit is not judged. */
   const fixByAgent = await patchPipeline(id, { action: "override-stage", stageId: "review-fix", role: { roleId: "builder", params: { size: "trivial" } } }, ports(), opusAgent);
   expect(fixByAgent.error).toBeUndefined();
-  const byOperator = await patchPipeline(id, { action: "override-stage", stageId: "review", role: { roleId: "builder", params: { size: "trivial" } } }, ports());
+  const byOperator = await patchPipeline(id, { action: "override-stage", stageId: "review", role: { roleId: "builder", params: { domain: "frontend" } } }, ports());
   expect(byOperator.error).toBeUndefined();
-  expect(byOperator.pipeline?.stages.find((stage) => stage.id === "review")?.effectiveRole).toMatchObject({ engine: "claude", model: "sonnet" });
+  expect(byOperator.pipeline?.stages.find((stage) => stage.id === "review")?.effectiveRole).toMatchObject({ engine: "claude", model: "claude-sonnet-5-5" });
 });
 
-test("a fail edge set by an agent cannot turn a Sonnet stage into a review gate", async () => {
-  const created = await createPipelineFromRequest({
-    task: "Two trivial steps",
+test("a fail edge set by an agent cannot turn a full-size Sonnet stage into a review gate, and turns a size=trivial one into one", async () => {
+  const twoSteps = (params: Record<string, string>): CreatePipelineRequest => ({
+    task: "Two steps",
     repoDir: REPO,
     autoStart: false as const,
     src: OPUS_SEAT.src,
     stages: [
-      { id: "build", kind: "run" as const, role: { roleId: "builder" as const, params: { size: "trivial" } }, ["prompt"]: "Change the label", next: "check" },
-      { id: "check", kind: "run" as const, role: { roleId: "builder" as const, params: { size: "trivial" } }, ["prompt"]: "Check the label", next: null },
+      { id: "build", kind: "run" as const, role: { roleId: "builder" as const, params }, ["prompt"]: "Change the label", next: "check" },
+      { id: "check", kind: "run" as const, role: { roleId: "builder" as const, params }, ["prompt"]: "Check the label", next: null },
     ],
-  }, ports(), { briefer: { kind: "agent", conversationId: OPUS_SEAT.conversationId } });
-  const id = created.pipeline?.id;
-  if (!id) throw new Error(`create refused: ${created.error}`);
+  });
   const opusAgent = { kind: "agent" as const, role: "orchestrator", conversationId: OPUS_SEAT.conversationId };
-  const byAgent = await patchPipeline(id, { action: "set-edge", stageId: "check", edge: "fail", to: "build", maxRounds: 2 }, ports(), opusAgent);
+  const edge = { action: "set-edge" as const, stageId: "check", edge: "fail" as const, to: "build", maxRounds: 2 };
+
+  const full = await createPipelineFromRequest(twoSteps({ domain: "frontend" }), ports(), { briefer: { kind: "agent", conversationId: OPUS_SEAT.conversationId } });
+  const fullId = full.pipeline?.id;
+  if (!fullId) throw new Error(`create refused: ${full.error}`);
+  const byAgent = await patchPipeline(fullId, edge, ports(), opusAgent);
   expect(byAgent.status).toBe(400);
   expect(byAgent.error).toContain("stage check: a review gate is reviewer work");
-  const byOperator = await patchPipeline(id, { action: "set-edge", stageId: "check", edge: "fail", to: "build", maxRounds: 2 }, ports());
+  const byOperator = await patchPipeline(fullId, edge, ports());
   expect(byOperator.error).toBeUndefined();
+
+  const trivial = await createPipelineFromRequest(twoSteps({ size: "trivial" }), ports(), { briefer: { kind: "agent", conversationId: OPUS_SEAT.conversationId } });
+  const trivialId = trivial.pipeline?.id;
+  if (!trivialId) throw new Error(`create refused: ${trivial.error}`);
+  expect((await patchPipeline(trivialId, edge, ports(), opusAgent)).error).toBeUndefined();
+});
+
+test("a Sonnet verifier stage with a fail edge is an admitted gate at create and at set-edge; a Haiku verifier gate and a Sonnet full-size reviewer gate stay refused", async () => {
+  const lane = (verifier: Partial<StageInput>, withEdge: boolean): CreatePipelineRequest => ({
+    task: "Verify the label",
+    repoDir: REPO,
+    autoStart: false as const,
+    src: OPUS_SEAT.src,
+    stages: [
+      { id: "build", kind: "run" as const, role: { roleId: "builder" as const, params: { domain: "frontend" } }, ["prompt"]: "Change the label", next: "check" },
+      { id: "check", kind: "run" as const, role: { roleId: "verifier" as const, params: { claims: "the label reads Save" } }, engine: "claude", model: "claude-sonnet-5-5", effort: "medium", ["prompt"]: "Check it", next: null, ...(withEdge ? { onFail: { to: "build", maxRounds: 2 } } : {}), ...verifier },
+    ],
+  });
+  const opusBriefer = { briefer: { kind: "agent" as const, conversationId: OPUS_SEAT.conversationId } };
+  const opusAgent = { kind: "agent" as const, role: "orchestrator", conversationId: OPUS_SEAT.conversationId };
+
+  const created = await createPipelineFromRequest(lane({}, true), ports(), opusBriefer);
+  expect(created.error).toBeUndefined();
+  expect(created.pipeline?.stages.find((stage) => stage.id === "check")?.onFail?.to).toBe("build");
+
+  const haikuGate = await createPipelineFromRequest(lane({ model: "haiku", effort: "low" }, true), ports(), opusBriefer);
+  expect(haikuGate.pipeline).toBeUndefined();
+  expect(haikuGate.violations?.[0]?.message).toContain("Haiku runs none of");
+
+  const reviewerGate = await createPipelineFromRequest(lane({ role: { roleId: "reviewer" as const, params: {} } }, true), ports(), opusBriefer);
+  expect(reviewerGate.violations?.[0]?.message).toContain("Sonnet does not run");
+
+  const plain = await createPipelineFromRequest(lane({}, false), ports(), opusBriefer);
+  const id = plain.pipeline?.id;
+  if (!id) throw new Error(`create refused: ${plain.error}`);
+  const edge = await patchPipeline(id, { action: "set-edge", stageId: "check", edge: "fail", to: "build", maxRounds: 2 }, ports(), opusAgent);
+  expect(edge.error).toBeUndefined();
 });

@@ -467,7 +467,14 @@ export async function reconcileMigrationInventory(
   options: MigrationCoordinatorOptions = {},
 ): Promise<ReturnType<AgentRegistry["snapshot"]>> {
   const entries = files ?? await listFiles();
-  const snapshot = registry.reconcileConversations(await inventory(entries, registry));
+  const observations = await inventory(entries, registry);
+  let snapshot: RegistryFile;
+  if (options.readOnlySnapshot) {
+    registry.reconcileConversations(observations, { snapshot: false });
+    snapshot = registry.readOnlySnapshot();
+  } else {
+    snapshot = registry.reconcileConversations(observations);
+  }
   if (!options.deferBoardRepair) {
     await repairAdoptedForkBoardPlacements(
       Object.values(snapshot.conversations),
@@ -662,6 +669,8 @@ export interface MigrationCoordinatorOptions {
   remapBoardPaths?: typeof remapDurableBoardPaths;
   transferBoardPathPlacements?: typeof transferDurableBoardPathPlacements;
   deferBoardRepair?: boolean;
+  /** The inventory worker reads the result without changing it. */
+  readOnlySnapshot?: boolean;
   ownsOperation?: () => Promise<boolean>;
 }
 

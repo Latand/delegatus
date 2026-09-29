@@ -133,6 +133,20 @@ const JOURNAL_ROTATE_BYTES = 4 * 1024 * 1024;
 /** Receipt states that settle a launch. Anything else still names work whose
     outcome depends on this host being there. */
 const TERMINAL_RECEIPT_STATES = new Set(["completed", "failed", "conflicted"]);
+/** A launch receipt older than this that never settled was abandoned: the
+    production registry held 64 of them from July, and they could keep named
+    hosts from retiring. Every launch step that
+    can still complete does so within minutes (`starting` alone is leased for
+    two), and a host that is idle past the transcript threshold with its
+    transcript on disk has already proven it can resume, so a day is far past
+    any launch that is still waiting. A receipt whose age cannot be read is not
+    called abandoned. */
+export const RETIREMENT_ABANDONED_RECEIPT_MS = 24 * 3_600_000;
+
+function receiptAbandoned(createdAt: string, nowMs: number): boolean {
+  const created = Date.parse(createdAt);
+  return Number.isFinite(created) && nowMs - created > RETIREMENT_ABANDONED_RECEIPT_MS;
+}
 /** Held-delivery states that have not reached the conversation yet. */
 const UNDELIVERED_HELD_STATES = new Set(["held", "assigned", "delivery-uncertain"]);
 /** The only two host states the predicate admits. Every other one — starting,
@@ -208,6 +222,7 @@ export interface StructuredHostRetirementSubject {
   /** The launch stamp outlives its receipt's work; null means the stamped
       receipt is missing or there is no stamp. */
   structuredHostOperationReceiptState: SpawnReceipt["state"] | null;
+  structuredHostOperationReceiptAbandoned: boolean;
   /** Undetermined when the handoff queue could not be read: an unreadable
       queue is not a drained one. */
   undeliveredHandoffEntries: Determinable<number>;
@@ -349,7 +364,8 @@ const CLAUSE_CHECKS: Record<
   "no-open-operation": (subject) => {
     if (subject.pendingAction !== null) return refuses(`a ${subject.pendingAction} action is pending`);
     if (subject.structuredHostOperationId !== null
-      && !TERMINAL_RECEIPT_STATES.has(subject.structuredHostOperationReceiptState ?? "")) {
+      && !TERMINAL_RECEIPT_STATES.has(subject.structuredHostOperationReceiptState ?? "")
+      && !subject.structuredHostOperationReceiptAbandoned) {
       return refuses("a structured host operation is still in flight");
     }
     return subject.openOperations > 0
@@ -849,11 +865,14 @@ function undeliveredHandoffIndex(
 }
 
 /** Spawn receipts that named a key or its conversation and have not settled.
-    Retiring under one strands the launch it is waiting on. */
-function openOperationIndex(file: RegistryFile): RetirementWorkIndex {
+    Recent receipts protect the launch. Old receipts no longer block by
+    themselves; the delivery and other live-work clauses still protect work
+    that remains unfinished. */
+function openOperationIndex(file: RegistryFile, nowMs: number): RetirementWorkIndex {
   const index = new RetirementWorkIndex();
   for (const receipt of Object.values(file.receipts ?? {})) {
     if (TERMINAL_RECEIPT_STATES.has(receipt.state)) continue;
+    if (receiptAbandoned(receipt.createdAt, nowMs)) continue;
     if (receipt.key !== null) index.addKey(sessionKeyId(receipt.key));
     else index.addConversation(receipt.conversationId);
   }
@@ -866,6 +885,7 @@ function openOperationIndex(file: RegistryFile): RetirementWorkIndex {
  * whose queue and receipts come from the planning pass would re-check nothing.
  */
 interface RetirementInputs {
+  nowMs: number;
   file: RegistryFile;
   conversationsBySession: Map<string, RegistryFile["conversations"][string]>;
   undelivered: Determinable<RetirementWorkIndex>;
@@ -886,17 +906,18 @@ interface RetirementSources {
   revokedConversations: () => Determinable<ReadonlySet<string>>;
 }
 
-function retirementInputs(sources: RetirementSources): RetirementInputs {
+function retirementInputs(sources: RetirementSources, nowMs: number): RetirementInputs {
   const file = sources.snapshot();
   const conversationsBySession = new Map<string, RegistryFile["conversations"][string]>();
   for (const conversation of Object.values(file.conversations)) {
     for (const generation of conversation.generations) conversationsBySession.set(generation.id, conversation);
   }
   return {
+    nowMs,
     file,
     conversationsBySession,
     undelivered: undeliveredHandoffIndex(sources.handoffRows(), file),
-    openOperations: openOperationIndex(file),
+    openOperations: openOperationIndex(file, nowMs),
     seatConversations: sources.seatConversations(),
     revokedConversations: sources.revokedConversations(),
   };
@@ -971,6 +992,7 @@ function retirementSubject(
   const pipeline = memberships.find((membership) => membership.kind === "pipeline") ?? null;
   const generation = conversation?.generations.find((candidate) => candidate.id === key.sessionId) ?? null;
   const launchId = entry.structuredHostOperationId ?? null;
+  const launchReceipt = launchId === null ? null : inputs.file.receipts[launchId] ?? null;
 
   return {
     key,
@@ -993,7 +1015,9 @@ function retirementSubject(
     activeFlags: columns.activeFlags,
     pendingAction: entry.pendingAction,
     structuredHostOperationId: launchId,
-    structuredHostOperationReceiptState: launchId === null ? null : inputs.file.receipts[launchId]?.state ?? null,
+    structuredHostOperationReceiptState: launchReceipt?.state ?? null,
+    structuredHostOperationReceiptAbandoned: launchReceipt !== null
+      && receiptAbandoned(launchReceipt.createdAt, inputs.nowMs),
     undeliveredHandoffEntries: mapDeterminable(inputs.undelivered,
       (index) => index.count(keyId, conversationId)),
     openOperations: inputs.openOperations.count(keyId, conversationId),
@@ -1154,7 +1178,7 @@ export async function runStructuredHostRetirementSweep(
     return report;
   }
 
-  const planned = retirementInputs(sources);
+  const planned = retirementInputs(sources, startedAtMs);
   const candidates = retirementCandidates(planned.file);
   report.evaluated = candidates.length;
 
@@ -1181,7 +1205,7 @@ export async function runStructuredHostRetirementSweep(
        admitted this host are that much older than the signal about to be sent
        (the race `structuredHostKillRefusal` exists for on the interactive
        path). A row that vanished in the meantime is nothing to retire. */
-    const current = retirementInputs(sources);
+    const current = retirementInputs(sources, now());
     const fresh = current.file.entries[planning.keyId] ?? null;
     if (fresh === null || !fresh.structuredHost?.process) {
       report.refused.push({
