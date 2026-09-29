@@ -181,13 +181,19 @@ function terminalProviderMessageFromRecords(
   return null;
 }
 
+/** The widest verified read spent looking for a reported attempt's prose. A
+    brief is relayed at 60 KiB at most, so a window this size holds it with
+    room for the tool output written after the report. */
+export const MAX_REPORT_EVIDENCE_BYTES = 8 * 1024 * 1024;
+
 export async function durableStageTurnEvidence(
   engine: FlowEngine,
   transcriptPath: string,
   reportAt?: string | null,
   attemptStartedAt?: string | null,
+  readTail: typeof readStableTailRecords = readStableTailRecords,
 ): Promise<StageTurnEvidence | null> {
-  const read = await readStableTailRecords(transcriptPath);
+  const read = await readTail(transcriptPath);
   if (read.integrity !== "complete") return null;
   const codex = engine === "codex";
   let fallbackTs = 0;
@@ -219,11 +225,20 @@ export async function durableStageTurnEvidence(
     }
     if (!Number.isFinite(reportTime) || !evidenceRead.prefixTruncated
       || (reportProse !== null && message !== null && turn.state !== "unknown")) break;
+    /* Once the window reaches back to the attempt's start, an older record
+       cannot belong to this attempt: an agent that wrote no prose before its
+       report is answered here, without reading the whole transcript. */
+    const oldestAt = evidenceRead.records.map((record) => recordTs(record, 0)).find((ts) => ts > 0);
+    if (Number.isFinite(startedTime) && oldestAt !== undefined && oldestAt <= startedTime) break;
+    if (evidenceBytes >= MAX_REPORT_EVIDENCE_BYTES) break;
     // A JSONL line crossing the tail boundary is discarded. Grow the
     // verified window until both the final and pre-report messages are read.
-    evidenceBytes *= 2;
-    const expanded = await readStableTailRecords(transcriptPath, evidenceBytes);
-    if (expanded.integrity !== "complete") return null;
+    evidenceBytes = Math.min(evidenceBytes * 2, MAX_REPORT_EVIDENCE_BYTES);
+    const expanded = await readTail(transcriptPath, evidenceBytes);
+    /* A transcript appended between the reads fails the identity check. The
+       last complete read still stands, and it is what the background-task
+       hold and the verdict were going to read anyway. */
+    if (expanded.integrity !== "complete") break;
     evidenceRead = expanded;
   }
   const newest = evidenceRead.records.at(-1);
