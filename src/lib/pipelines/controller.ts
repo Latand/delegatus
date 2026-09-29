@@ -57,6 +57,9 @@ export interface FlowPipelineControllerPorts {
   sweepForgeLinks?: () => void;
   /** Fire-and-forget merge runner (#2187 §4.4); it paces its own reads. */
   sweepAutoMerge?: () => void;
+  /** Fire-and-forget completion notices to spawn launchers
+      (docs/design/spawn-completion-notice.md §3); one pass at a time. */
+  sweepSpawnNotices?: () => void;
   log?: (message: string, error?: unknown) => void;
 }
 
@@ -108,6 +111,13 @@ function productionPorts(): FlowPipelineControllerPorts {
     publishHeartbeat: writeFlowPipelineControllerHeartbeat,
     sweepForgeLinks: () => scheduleForgeSweep({ loadPipelines, loadTasks }),
     sweepAutoMerge: () => scheduleAutoMerge({ loadPipelines }),
+    /* Loaded on first use: the sweep reaches the delivery layer, which this
+       module's own import graph has no business carrying. */
+    sweepSpawnNotices: () => {
+      void import("@/lib/spawnNotice/production")
+        .then(({ scheduleSpawnNoticeSweep }) => scheduleSpawnNoticeSweep())
+        .catch((error) => console.error("[spawn notice] sweep could not start", error));
+    },
   };
 }
 
@@ -137,6 +147,7 @@ export class FlowPipelineController {
       publishHeartbeat: ports.publishHeartbeat ?? (() => undefined),
       sweepForgeLinks: ports.sweepForgeLinks ?? (() => undefined),
       sweepAutoMerge: ports.sweepAutoMerge ?? (() => undefined),
+      sweepSpawnNotices: ports.sweepSpawnNotices ?? (() => undefined),
       log: ports.log ?? ((message, error) => {
         if (error === undefined) console.error(message);
         else console.error(message, error);
@@ -226,6 +237,13 @@ export class FlowPipelineController {
       this.ports.sweepAutoMerge();
     } catch (error) {
       this.ports.log("[flow pipeline controller] merge runner failed to start", error);
+    }
+    /* The runtime host signals this controller on every published
+       `turn-ended`, which is the moment a spawned child's notice is owed. */
+    try {
+      this.ports.sweepSpawnNotices();
+    } catch (error) {
+      this.ports.log("[flow pipeline controller] spawn notice sweep failed to start", error);
     }
     const blocked = [...this.activePhases.entries()]
       .sort((left, right) => left[1].startedAt - right[1].startedAt)[0];

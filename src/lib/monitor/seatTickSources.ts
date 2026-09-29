@@ -1763,6 +1763,9 @@ function projectChild(
     lastRecordAt: record, transcript: record === null ? "unresolvable" as const : "readable" as const,
     ...(read.reason ? { transcriptReason: read.reason } : generation && conversation ? { transcriptPath: generation.path, engine: conversation.engine } : {}),
     spawnedAt: edge.createdAt,
+    ...(conversation?.launcher?.notify
+      && lookup.canonicalConversationId(conversation.launcher.conversationId) === lookup.canonicalConversationId(edge.parentConversationId)
+      ? { launcherNotice: true } : {}),
   };
   const createdAt = edge.createdAt;
   /* A launch that failed or conflicted before it ran: terminal, outcome

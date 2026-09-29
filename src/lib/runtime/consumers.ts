@@ -7,7 +7,23 @@ export interface RuntimeConsumerPorts {
   flowReady(flowId: string, note: string | null): Promise<Flow | void> | Flow | void;
   workflowStageCompleted(workflowId: string, stage: number): Promise<Workflow | void> | Workflow | void;
   taskDeliveryAcknowledged(taskId: string, assignmentId: string): Promise<BoardTask | void> | BoardTask | void;
+  /** A turn of a conversation outside any flow settled
+      (docs/design/spawn-completion-notice.md §2). The port decides whether a
+      launcher is owed a notice and records only that obligation: the host
+      waits on this consumer before it answers the append. */
+  spawnTurnEnded?(turn: SpawnTurnEnded): Promise<void> | void;
 }
+
+export interface SpawnTurnEnded {
+  conversationId: string;
+  turnId: string;
+  outcome: "completed" | "interrupted" | "error";
+  /** When the turn began, when the session's receipts can say. */
+  startedAt: string | null;
+  endedAt: string;
+}
+
+const TURN_OUTCOMES = new Set<SpawnTurnEnded["outcome"]>(["completed", "interrupted", "error"]);
 
 function text(...values: unknown[]): string | null {
   const value = values.find((item) => typeof item === "string" && item.trim());
@@ -34,6 +50,18 @@ export async function consumeRuntimeEvent(event: RuntimeEvent, ports: RuntimeCon
   if (event.kind === "turn-ended") {
     const flowId = text(event.payload.flowId);
     if (flowId) return projection("flow", flowId, await ports.flowReady(flowId, text(event.payload.readyNote, event.payload.finalAssistantOutput)), event);
+    const conversationId = text(event.payload.conversationId);
+    const turnId = text(event.payload.turnId);
+    const outcome = event.payload.outcome as SpawnTurnEnded["outcome"];
+    if (ports.spawnTurnEnded && conversationId && turnId && TURN_OUTCOMES.has(outcome)) {
+      await ports.spawnTurnEnded({
+        conversationId,
+        turnId,
+        outcome,
+        startedAt: text(event.payload.turnStartedAt),
+        endedAt: event.occurredAt,
+      });
+    }
     return [];
   }
   if (event.kind === "workflow.stage.completed") {

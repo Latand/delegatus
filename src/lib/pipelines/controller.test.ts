@@ -345,3 +345,19 @@ test("pipeline settlement leads the cycle and one scanner snapshot feeds every f
     "flows:1",
   ]);
 });
+
+test("every settled cycle starts the spawn completion-notice sweep, and a sweep that throws does not fail the cycle", async () => {
+  let sweeps = 0;
+  const logged: string[] = [];
+  const controller = new FlowPipelineController({
+    tickPipelines: async () => ({ changed: false }),
+    tickFlows: async () => ({ changed: false }),
+    sweepSpawnNotices: () => { sweeps += 1; if (sweeps === 2) throw new Error("store busy"); },
+    log: (message) => { logged.push(message); },
+  }, { maxPasses: 1 });
+  await controller.tick("signal");
+  await controller.tick("signal");
+  await controller.tick("watchdog");
+  expect(sweeps).toBe(3);
+  expect(logged).toContain("[flow pipeline controller] spawn notice sweep failed to start");
+});

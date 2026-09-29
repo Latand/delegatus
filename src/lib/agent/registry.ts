@@ -276,6 +276,9 @@ export interface SpawnReceipt {
   /** Delegation depth computed at admission (#393): 0 for operator/external
       roots, depth(origin)+1 for agent- and container-origin launches. */
   delegationDepth: number | null;
+  /** The spawn_agent caller that asked to hear when this launch's turns end
+      (spawn-completion-notice §1). Null on every other launch. */
+  launcher?: SpawnLauncher | null;
   /** Typed terminal admission rejection (#393). Non-null means this receipt
       never launched: no conversation, lineage edge, membership, transcript,
       or process exists for it. */
@@ -357,6 +360,24 @@ export interface SeatChildrenPage {
   evidenceGap: boolean;
 }
 
+/** Who launched a conversation through spawn_agent, and whether it asked to be
+    told when each turn ends (docs/design/spawn-completion-notice.md §1). Set
+    only from the server's own caller attribution, never from a request field
+    an agent could write, and separate from the lineage parent: a reviewer is
+    parented on the work it reviews, yet its launcher is the one waiting. */
+export interface SpawnLauncher {
+  conversationId: ViewerConversationId;
+  notify: boolean;
+}
+
+export function normalizeSpawnLauncher(value: unknown): SpawnLauncher | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Partial<SpawnLauncher>;
+  return typeof record.conversationId === "string" && record.conversationId.startsWith("conversation_")
+    ? { conversationId: record.conversationId as ViewerConversationId, notify: record.notify !== false }
+    : null;
+}
+
 export interface DurableConversationMembership {
   conversationId: ViewerConversationId;
   kind: "flow" | "pipeline" | "orchestrator";
@@ -429,6 +450,9 @@ export interface SpawnRequest {
   /** Explicit task targets of a task-local launch (#1586). Their membership is
       committed at the receipt reservation; a missing target aborts the launch. */
   taskIds?: readonly string[] | null;
+  /** The conversation that launched this one through spawn_agent, from caller
+      attribution (docs/design/spawn-completion-notice.md §1). */
+  launcher?: SpawnLauncher | null;
 }
 
 export class SpawnChildLimitError extends Error {
@@ -593,6 +617,10 @@ export interface RegistryConversation {
   /** Durable delegation depth recorded at birth (#393). Null for legacy
       conversations; admission then falls back to membership/lineage evidence. */
   delegationDepth: number | null;
+  /** Stamped once from the launch receipt (spawn-completion-notice §1), like
+      {@link RegistryConversation.agentRole}. Absent on every conversation no
+      agent launched through spawn_agent. */
+  launcher?: SpawnLauncher | null;
   turn: TurnState & { observedAt: string | null };
   /**
    * THIS CONVERSATION'S DELIVERY EVIDENCE HAS BEEN COMPLETE SINCE IT BEGAN.
@@ -2222,6 +2250,7 @@ function normalizeConversation(value: RegistryConversation, policy?: McpGrantPol
     supersededBy,
     agentRole: normalizeAgentRole((value as Partial<RegistryConversation>).agentRole),
     delegationDepth: normalizeDelegationDepth((value as Partial<RegistryConversation>).delegationDepth),
+    launcher: normalizeSpawnLauncher((value as Partial<RegistryConversation>).launcher),
     turn: value.turn && typeof value.turn === "object"
       ? { state: value.turn.state, source: value.turn.source, terminalAt: value.turn.terminalAt ?? null, observedAt: value.turn.observedAt ?? null }
       : { state: "unknown", source: "empty", terminalAt: null, observedAt: null },
@@ -3286,6 +3315,7 @@ function adoptProvisionalOwner(
   }
   target.agentRole ??= owner.agentRole;
   target.delegationDepth ??= owner.delegationDepth;
+  target.launcher ??= owner.launcher ?? null;
   /* The adopted identity's keys are answered under the target from here on, so
      the target inherits the weaker of the two histories. */
   if (!owner.deliveryEvidenceTracked) target.deliveryEvidenceTracked = false;
@@ -3613,6 +3643,7 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     completionMode: value.completionMode === "route-completed" || value.completionMode === "observed-completed" || value.completionMode === "route-recovered" ? value.completionMode : null,
     agentRole: normalizeAgentRole(value.agentRole),
     delegationDepth: normalizeDelegationDepth(value.delegationDepth),
+    launcher: normalizeSpawnLauncher(value.launcher),
     rejection: normalizeSpawnRejection(value.rejection),
     launchProfile: receiptLaunchProfile(value, policy),
     explicitProject: validExplicitProject(value.explicitProject),
@@ -5120,6 +5151,23 @@ export class AgentRegistry {
     return conversation ? { id: conversation.id, turn: conversation.turn } : null;
   }
 
+  /** The completion-notice consumer's one keyed read of a child
+      (spawn-completion-notice §2): its launcher, and whether it belongs to a
+      container that reports it already. */
+  spawnNoticeChild(id: string): { conversationId: ViewerConversationId; launcher: SpawnLauncher | null; contained: boolean } | null {
+    if (!id.startsWith("conversation_")) return null;
+    return this.readKeyed((file) => {
+      const conversationId = resolveConversationAlias(file, id as ViewerConversationId);
+      const conversation = file.conversations[conversationId];
+      if (!conversation) return null;
+      return {
+        conversationId,
+        launcher: conversation.launcher ? { ...conversation.launcher } : null,
+        contained: (file.memberships[conversationId] ?? []).length > 0,
+      };
+    });
+  }
+
   /** Current credential identity for the seat's stdio MCP heartbeat. */
   seatMcpReceipt(conversationId: string): { spawnCapabilityDigest: string; createdAt: string; viewerMcpTransport: "stdio" | "http" | null } | null {
     if (this.sqliteStore && (this.sqliteMode === "sqlite" || this.sqliteMode === "read")) {
@@ -5516,6 +5564,7 @@ export class AgentRegistry {
         explicitProject,
         launchDisplay: normalizeLaunchDisplay(input.launchDisplay),
         queuedPinnedSpawn: null,
+        launcher: purpose === "launch" ? normalizeSpawnLauncher(input.launcher) : null,
       };
       file.receipts[receipt.launchId] = receipt;
       /* A rejected launch persists exactly one terminal receipt: no lineage
@@ -5955,6 +6004,7 @@ export class AgentRegistry {
        re-derive or demote it. */
     conversation.agentRole ??= receipt.agentRole;
     conversation.delegationDepth ??= receipt.delegationDepth;
+    if (receipt.purpose === "launch") conversation.launcher ??= receipt.launcher ?? null;
     if (receipt.purpose === "launch" && receipt.accountPin && receipt.accountId) {
       conversation.pinnedAccountId = receipt.accountId;
     }

@@ -2950,6 +2950,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   spawn_agent: [
     "Create a Delegatus-managed agent conversation and return its durable conversation and launch ids.",
     "Pass `taskId` to admit the agent onto an existing board task (#1720), reviewers included. A launch that names none joins the tasks held by the parent it names (`parentConversationId`, `src` or `parent`) and by the conversation it `reviews`; naming neither, or when neither holds a task, it is given a placeholder task of its own — a duplicate card.",
+    "When a turn of the new agent ends, Delegatus sends you, the caller, one message from it: its title and id, how long it ran, its Verdict line first, and its final message (up to 4 KB). Briefs need no 'report back' line. Pass `notifyLauncher: false` to turn this off; the answer's `launcherNotice` says whether it is on.",
     RECOVERY_CONTRACT_DESCRIPTION,
   ].join(" "),
   send_message: [
@@ -3293,6 +3294,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     project: z.string().optional()
       .describe("Optional. The target project is resolved server-side from cwd; a value that contradicts it is refused before anything is claimed or dispatched."),
     allowSubagents: z.boolean().optional(),
+    notifyLauncher: z.boolean().optional()
+      .describe("Default true: each time a turn of the new agent ends, you receive one message from it with its final message. false turns that off for this launch."),
     mcpServers: z.array(z.string().regex(/^[^\s\u0000-\u001f\u007f]{1,128}$/u))
       .optional()
       .describe("Per-spawn MCP server allowlist, resolved server-side. Only servers Delegatus may grant are accepted; any other name is refused outright, never silently trimmed. `viewer` is always included. The grant is then decided by the new session's origin — a delegated launch, which every role-preset spawn is, receives the Delegatus baseline whatever it lists here — so this can narrow the surface, never widen it."),

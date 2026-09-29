@@ -1,10 +1,12 @@
+import { agentRegistry } from "@/lib/agent/registry";
 import { isoNow, newRound } from "@/lib/flows/engine";
 import { loadFlows, saveFlows } from "@/lib/flows/store";
 import type { Flow } from "@/lib/flows/types";
 import { mutateTasks } from "@/lib/tasks/store";
+import { recordSpawnNoticeObligation } from "@/lib/spawnNotice/store";
 import { loadWorkflows, saveWorkflows } from "@/lib/workflows/store";
 
-import type { RuntimeConsumerPorts } from "./consumers";
+import type { RuntimeConsumerPorts, SpawnTurnEnded } from "./consumers";
 
 const READY = /^REVIEW_READY:\s*(.*)$/m;
 
@@ -21,6 +23,32 @@ export function advanceFlowFromRuntime(flow: Flow, note: string | null): boolean
   flow.state = flow.mode === "manual" ? "spawn_pending" : "spawning";
   flow.stateDetail = null;
   return true;
+}
+
+/**
+ * Record the notice a settled turn owes its launcher
+ * (docs/design/spawn-completion-notice.md §2): one keyed registry read and one
+ * insert-if-absent, nothing else, because the host answers the append only
+ * after this returns. A child with no launcher, one that opted out, and one a
+ * pipeline, flow or seat already reports are owed nothing.
+ */
+export function recordSpawnTurnEnded(
+  turn: SpawnTurnEnded,
+  ports: {
+    child: (id: string) => ReturnType<ReturnType<typeof agentRegistry>["spawnNoticeChild"]>;
+    record: typeof recordSpawnNoticeObligation;
+  } = { child: (id) => agentRegistry().spawnNoticeChild(id), record: recordSpawnNoticeObligation },
+): boolean {
+  const child = ports.child(turn.conversationId);
+  if (!child?.launcher?.notify || child.contained || child.launcher.conversationId === child.conversationId) return false;
+  return ports.record({
+    childConversationId: child.conversationId,
+    turnId: turn.turnId,
+    launcherConversationId: child.launcher.conversationId,
+    outcome: turn.outcome,
+    startedAt: turn.startedAt,
+    endedAt: turn.endedAt,
+  });
 }
 
 export function createServerRuntimeConsumers(): RuntimeConsumerPorts {
@@ -63,6 +91,9 @@ export function createServerRuntimeConsumers(): RuntimeConsumerPorts {
         task.updatedAt = isoNow();
         return { tasks, result: task };
       });
+    },
+    spawnTurnEnded(turn) {
+      recordSpawnTurnEnded(turn);
     },
   };
 }
