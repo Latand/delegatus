@@ -467,7 +467,7 @@ export class SelfUpdateService {
 
   private async runManagedAutoTick(decision: ModeDecision): Promise<void> {
     const snapshot = await this.snapshot();
-    const pending = this.auto.managedPending;
+    let pending = this.auto.managedPending;
     if (pending) {
       const idempotencyKey = managedIdempotencyKey(pending.target.sha, pending.clientKey);
       if (this.managed?.idempotencyKey === idempotencyKey) return;
@@ -493,6 +493,15 @@ export class SelfUpdateService {
       // If the switch is off, retain the uncertain identity for observation
       // and do not admit a request. Re-enabling will re-check current policy.
       if (!this.auto.enabled) return;
+      if ((this.slice.check.state === "update-available" || this.slice.check.state === "up-to-date")
+        && this.slice.available?.sha !== pending.target.sha) {
+        // The host does not know this key and a successful check moved past
+        // its target. Let the current revision start a new admission window.
+        this.auto = { ...this.auto, managedPending: null, waitingSince: null, waitingTarget: null,
+          quietSince: null, lastBlockers: null, noticeAt: null };
+        this.saveAuto();
+        pending = null;
+      }
     }
     if (!this.auto.enabled || this.autoAvailability(decision) !== "available" || managedActive(this.managed)
       || this.checking || snapshot.check.state === "checking") return;

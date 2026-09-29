@@ -285,6 +285,61 @@ test("an uncertain request absent from the host must pass fresh green and quiet 
   service.stop();
 });
 
+test("an undelivered intent yields to a newer main after fresh admission and a web restart", async () => {
+  const h = scenario();
+  const newer = "c".repeat(40);
+  h.deps.requestDeployment = async (body) => {
+    h.requests.push(body);
+    throw new RuntimeHostUnavailableError("runtime host request timed out");
+  };
+  let service = h.service();
+  await service.autoTick();
+  h.advance(60_000);
+  await service.autoTick();
+  expect(h.requests).toHaveLength(1);
+  const oldKey = h.requests[0]?.idempotencyKey;
+  expect(readAuto(join(h.dir, "auto.json")).managedPending?.target.sha).toBe(TARGET);
+  service.stop();
+
+  h.deps.check = async () => ({ ok: true, installed: revision(OLD), available: revision(newer), relation: "behind", ahead: 0, behind: 1, delta: null });
+  h.deps.requestDeployment = async (body) => {
+    h.requests.push(body);
+    return { state: "accepted", deploymentId: "deployment-newer", revision: newer, replayed: false };
+  };
+  h.setGreen("red");
+  h.setTurns(1);
+  service = h.service();
+  await service.check();
+  expect((await service.snapshot()).available?.sha).toBe(newer);
+  service.stop();
+  service = h.service();
+  await service.autoTick();
+  expect(h.requests).toHaveLength(1);
+  expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ enabled: true, managedPending: null, off: null });
+
+  h.setGreen("green");
+  h.advance(15 * 60_000);
+  await service.autoTick();
+  expect(h.requests).toHaveLength(1);
+  h.setTurns(0);
+  await service.autoTick();
+  h.advance(59_000);
+  await service.autoTick();
+  expect(h.requests).toHaveLength(1);
+  service.stop();
+
+  service = h.service();
+  h.advance(1_000);
+  await service.autoTick();
+  expect(h.requests).toHaveLength(2);
+  expect(h.requests[1]).toMatchObject({ revision: newer, idempotencyKey: expect.stringMatching(/^self-update-/) });
+  expect(h.requests[1]?.idempotencyKey).not.toBe(oldKey);
+  expect(readManagedRecord(join(h.dir, "managed.json"))).toMatchObject({ target: newer, trigger: "auto" });
+  await service.autoTick();
+  expect(h.requests).toHaveLength(2);
+  service.stop();
+});
+
 test("a previous managed record does not hide recovery of a later accepted lost reply", async () => {
   const h = scenario();
   const old: ManagedRecord = {
