@@ -9,6 +9,7 @@ import * as stateOwnership from "@/lib/stateOwnership";
 
 import { applyRoleMappingRetirements, ROLE_MAPPING_RETIREMENTS } from "./retirements";
 import { applyRoleMappingPatch, loadRoleDefinitions, loadRoleOverrides, loadRoleRegistrySnapshot, mergeRoleDefinitions, parseRoleMappingPatch, saveRoleMapping, saveRoleOverrides } from "./store";
+import type { RoleConfig } from "./types";
 
 test("role overrides persist with a schema version and merge only the selected role", () => {
   const previous = process.env.LLV_STATE_DIR;
@@ -226,20 +227,25 @@ test("reviewer variants load and save, and schema 3 appears only when a newer va
     expect(() => saveRoleOverrides({ reviewer: { variants: { frontend: luna } } })).toThrow();
     expect(() => saveRoleOverrides({ architect: { variants: { trivial: luna } } })).toThrow();
     /* The shipped values of the new rows are never written, so an untouched install keeps schema 1. */
-    saveRoleMapping({ builder: { variants: { trivial: { engine: "claude", model: "sonnet", effort: "high" }, docs: null } }, reviewer: { variants: { trivial: null } } });
+    saveRoleMapping({ builder: { variants: { trivial: { engine: "claude", model: "claude-sonnet-5-5", effort: "high" }, docs: null } }, reviewer: { variants: { trivial: null } } });
     expect(readFile(file)).toEqual({ schemaVersion: 1, overrides: {} });
   });
 });
 
-test("a mapping patch putting a denied role on Sonnet or Haiku is refused before anything is written", () => {
-  for (const id of ["reviewer", "architect", "orchestrator", "verifier"]) {
-    for (const model of ["sonnet", "haiku"]) {
-      const refusal = parseRoleMappingPatch({ [id]: { config: { engine: "claude", model, effort: "high" } } });
-      expect(typeof refusal === "string" && refusal).toContain("Sonnet and Haiku do not run");
+test("a mapping patch putting a role on a light model it may not run is refused before anything is written", () => {
+  const row = (model: string): RoleConfig => ({ engine: "claude", model, effort: "high" });
+  for (const id of ["reviewer", "architect", "orchestrator"]) {
+    for (const model of ["sonnet", "claude-sonnet-5-5", "haiku"]) {
+      const refusal = parseRoleMappingPatch({ [id]: { config: row(model) } });
+      expect(typeof refusal === "string" && refusal).toContain("Sonnet does not run");
     }
   }
-  expect(parseRoleMappingPatch({ reviewer: { variants: { trivial: { engine: "claude", model: "sonnet", effort: "high" } } } })).toContain("Sonnet and Haiku");
-  expect(parseRoleMappingPatch({ builder: { variants: { trivial: { engine: "claude", model: "haiku", effort: "high" } } } })).toEqual({ builder: { variants: { trivial: { engine: "claude", model: "haiku", effort: "high" } } } });
+  /* Sonnet runs the verifier and the size=trivial reviewer; Haiku runs neither. */
+  expect(parseRoleMappingPatch({ verifier: { config: row("claude-sonnet-5-5") } })).toEqual({ verifier: { config: row("claude-sonnet-5-5") } });
+  expect(parseRoleMappingPatch({ verifier: { config: row("haiku") } })).toContain("verifier: ");
+  expect(parseRoleMappingPatch({ reviewer: { variants: { trivial: row("claude-sonnet-5-5") } } })).toEqual({ reviewer: { variants: { trivial: row("claude-sonnet-5-5") } } });
+  expect(parseRoleMappingPatch({ reviewer: { variants: { trivial: row("haiku") } } })).toContain("reviewer: ");
+  expect(parseRoleMappingPatch({ builder: { variants: { trivial: row("haiku") } } })).toEqual({ builder: { variants: { trivial: row("haiku") } } });
   expect(parseRoleMappingPatch({ reviewer: { variants: { docs: null } } })).toBe("unknown reviewer variant: docs");
   /* A legacy file carrying such a row still loads; only new writes are refused. */
   withStateDir("llv-role-legacy-sonnet-", (_state, file) => {

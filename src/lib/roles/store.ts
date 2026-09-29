@@ -248,7 +248,7 @@ export function parseRoleMappingPatch(raw: unknown): Partial<Record<RoleId, Role
         if (!isVariantOf(id, key)) return `unknown ${id} variant: ${key}`;
         if (variant !== null && !isFullConfig(variant)) return `overrides.${id}.variants.${key} must be { engine, model, effort } or null`;
         if (variant !== null) {
-          const refusal = mappingRowRefusal(id, variant);
+          const refusal = mappingRowRefusal(id, variant, key);
           if (refusal) return refusal;
         }
         row.variants[key] = variant as RoleConfig | null;

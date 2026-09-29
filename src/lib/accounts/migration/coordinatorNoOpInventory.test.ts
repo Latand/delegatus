@@ -96,6 +96,24 @@ function fixture() {
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 
+test("inventory worker reuses the registry snapshot across unchanged cycles", async () => {
+  const { registry, transcript } = fixture();
+  const file = entry(transcript);
+  let conversationId: string | undefined;
+  for (let cycle = 0; cycle < 5; cycle += 1) {
+    const snapshot = await reconcileMigrationInventory(registry, [file], {
+      readOnlySnapshot: true, deferBoardRepair: true,
+    });
+    expect(snapshot).toBe(registry.readOnlySnapshot());
+    const ids = Object.keys(snapshot.conversations);
+    expect(ids).toHaveLength(1);
+    conversationId ??= ids[0];
+    expect(ids[0]).toBe(conversationId);
+  }
+  const detached = await reconcileMigrationInventory(registry, [file], { deferBoardRepair: true });
+  expect(detached).not.toBe(registry.readOnlySnapshot());
+});
+
 test("an unchanged transcript re-inventoried leaves the row and the registry revision as they were", async () => {
   const { registry, transcript } = fixture();
   await reconcileMigrationInventory(registry, [entry(transcript)]);

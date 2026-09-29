@@ -127,7 +127,7 @@ test("historical failures and orphaned applying rows perform no conversation or 
   } finally { registry.close(); }
 });
 
-test("controller migration cycle reconciles and ticks both durable quota policy guards", async () => {
+test("controller migration cycle reconciles and ticks all durable quota policy guards", async () => {
   const ticks: string[] = [];
   const quota = { tick: async (engine: string) => { ticks.push(engine); } };
   const registry = new AgentRegistry(path.join(stateDir, "registry.json"));
@@ -149,7 +149,7 @@ test("controller migration cycle reconciles and ticks both durable quota policy 
 
   await reconcileAccountMigrationCycle(registry, quota as never, provider, { async deliver() { return "delivered"; } });
 
-  expect(ticks.sort()).toEqual(["claude", "codex"]);
+  expect(ticks.sort()).toEqual(["claude", "codex", "copilot"]);
   expect(registry.conversation(conversation.id)?.migration?.phase).toBe("committed");
 }, 20_000);
 

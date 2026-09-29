@@ -247,7 +247,7 @@ test("every stage a lane renders names no stack and teaches one verdict vocabula
      the fix row (§3 (a)), and its prompt says the first build's steps are done. */
   const fixer = converted.stages.find((current) => current.id === "review-fix")!;
   expect(fixer.role).toEqual({ roleId: "builder", params: { mode: "apply-fixes", domain: "frontend" } });
-  expect(fixer.effectiveRole).toMatchObject({ roleId: "builder", engine: "claude", model: "sonnet", effort: "high", access: "read-write" });
+  expect(fixer.effectiveRole).toMatchObject({ roleId: "builder", engine: "claude", model: "claude-sonnet-5-5", effort: "high", access: "read-write" });
   const fixPrompt = renderStagePrompt(pipeline, fixer, fixer.effectiveRole, "P1 src/a.ts:3 wrong label");
   expect(fixPrompt).toContain("Fix the findings stage review reported for: pipeline support");
   expect(fixPrompt).toContain("P1 src/a.ts:3 wrong label");

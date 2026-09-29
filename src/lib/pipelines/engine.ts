@@ -8043,7 +8043,7 @@ export async function patchPipeline(
           if (graphError) return { error: graphError, status: 400 };
           /* A fail edge makes the stage a review gate, so an agent cannot turn
              a Sonnet or Haiku stage into one (R1). */
-          const gateRefusal = actor && actor.kind !== "operator" ? reviewGateRefusal(from.effectiveRole) : null;
+          const gateRefusal = actor && actor.kind !== "operator" ? reviewGateRefusal(from.effectiveRole, from.role?.params, from.effectiveRole.roleId) : null;
           if (gateRefusal) return { error: `stage ${from.id}: ${gateRefusal}`, status: 400 };
           from.onFail = onFail;
           graphEdit = recordGraphEdit(pipeline, ports, actor, {

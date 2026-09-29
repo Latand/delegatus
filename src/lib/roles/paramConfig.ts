@@ -7,18 +7,18 @@ import type { RoleConfig, RoleId, RoleParamValues, RoleVariantId } from "./types
  * role-presets.json. Client-safe (no node:* imports) so the draft pane, the
  * role table and the launch line share `variantForParams` with the registry.
  */
-export const BUILDER_TRIVIAL_CONFIG: RoleConfig = { engine: "claude", model: "sonnet", effort: "high" };
-/* A UI lane's builder runs Sonnet 5.5 pinned by id (the `sonnet` alias moves
-   with the next Sonnet); an Opus brief states what to build and Opus reviews. */
+/* Sonnet 5.5 runs the well-scoped rows, pinned by id (the `sonnet` alias moves
+   with the next Sonnet): docs/design/model-sizing-tiers.md §7. */
+export const BUILDER_TRIVIAL_CONFIG: RoleConfig = { engine: "claude", model: "claude-sonnet-5-5", effort: "high" };
 export const BUILDER_FRONTEND_CONFIG: RoleConfig = { engine: "claude", model: "claude-sonnet-5-5", effort: "high" };
-export const BUILDER_DOCS_CONFIG: RoleConfig = { engine: "claude", model: "opus", effort: "medium" };
+export const BUILDER_DOCS_CONFIG: RoleConfig = { engine: "claude", model: "claude-sonnet-5-5", effort: "high" };
 /* docs/design/agent-prompt-contract.md §3 (a): a fix round runs a light model
    by its lane's domain, and its brief is a list of findings, each with a place. */
 export const BUILDER_APPLY_FIXES_CONFIG: RoleConfig = { engine: "codex", model: "gpt-6-luna", effort: "high" };
-export const BUILDER_FRONTEND_FIXES_CONFIG: RoleConfig = { engine: "claude", model: "sonnet", effort: "high" };
-export const BUILDER_DOCS_FIXES_CONFIG: RoleConfig = { engine: "claude", model: "sonnet", effort: "high" };
-/* Astra does not review trivial diffs, and Sonnet may not review at all; Luna
-   is the Codex reviewer of the Sonnet class. */
+export const BUILDER_FRONTEND_FIXES_CONFIG: RoleConfig = { engine: "claude", model: "claude-sonnet-5-5", effort: "high" };
+export const BUILDER_DOCS_FIXES_CONFIG: RoleConfig = { engine: "claude", model: "claude-sonnet-5-5", effort: "high" };
+/* Astra does not review trivial diffs; Luna is the Codex reviewer of the light
+   class, and a Claude install's row is Sonnet 5.5 (equivalents.ts). */
 export const REVIEWER_TRIVIAL_CONFIG: RoleConfig = { engine: "codex", model: "gpt-6-luna", effort: "high" };
 
 /** Shipped runtime of every variant, per role. */

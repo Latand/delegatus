@@ -36,12 +36,12 @@ test("roles route returns all merged role definitions with scaffold previews and
   expect(body.roles.find((role) => role.id === "deployer")?.shipped.promptScaffold).toBe(body.roles.find((role) => role.id === "deployer")?.promptScaffold);
   const builder = body.roles.find((role) => role.id === "builder")!;
   expect(builder.variants).toEqual({
-    trivial: { engine: "claude", model: "sonnet", effort: "high" },
+    trivial: { engine: "claude", model: "claude-sonnet-5-5", effort: "high" },
     frontend: { engine: "claude", model: "claude-sonnet-5-5", effort: "high" },
-    docs: { engine: "claude", model: "opus", effort: "medium" },
+    docs: { engine: "claude", model: "claude-sonnet-5-5", effort: "high" },
     "apply-fixes": { engine: "codex", model: "gpt-6-luna", effort: "high" },
-    "frontend-fixes": { engine: "claude", model: "sonnet", effort: "high" },
-    "docs-fixes": { engine: "claude", model: "sonnet", effort: "high" },
+    "frontend-fixes": { engine: "claude", model: "claude-sonnet-5-5", effort: "high" },
+    "docs-fixes": { engine: "claude", model: "claude-sonnet-5-5", effort: "high" },
   });
   expect(builder.shipped.variants).toEqual(builder.variants);
   const reviewer = body.roles.find((role) => role.id === "reviewer")!;
@@ -67,12 +67,19 @@ test("GET answers the rows a retirement reset, and a write to the row clears it"
   });
 });
 
-test("PUT refuses Sonnet or Haiku on the reviewer, the architect, the orchestrator or the verifier, in words", async () => {
-  const refused = await put({ overrides: { reviewer: { variants: { trivial: { engine: "claude", model: "sonnet", effort: "high" } } } } });
+test("PUT refuses Sonnet on the reviewer, the architect and the orchestrator, and Haiku on those and the verifier, in words", async () => {
+  const refused = await put({ overrides: { reviewer: { config: { engine: "claude", model: "claude-sonnet-5-5", effort: "high" } } } });
   expect(refused.status).toBe(400);
-  expect((await refused.json() as { error: string }).error).toBe("reviewer: Sonnet and Haiku do not run orchestrator, architect, reviewer or verifier work; name a large model (Claude Opus or Fable, or a large Codex model) or use the role's row.");
+  expect((await refused.json() as { error: string }).error).toBe("reviewer: Sonnet does not run orchestrator, architect or a reviewer above size=trivial, and Haiku runs none of orchestrator, architect, reviewer or verifier; name a large model (Claude Opus or Fable, or a large Codex model) or use the role's row.");
   expect((await put({ overrides: { architect: { config: { engine: "claude", model: "haiku", effort: "high" } } } })).status).toBe(400);
+  expect((await put({ overrides: { verifier: { config: { engine: "claude", model: "haiku", effort: "high" } } } })).status).toBe(400);
   expect(fs.existsSync(file)).toBe(false);
+});
+
+test("PUT admits Sonnet 5.5 on the verifier and the size=trivial reviewer", async () => {
+  const sonnet = { engine: "claude", model: "claude-sonnet-5-5", effort: "medium" };
+  expect((await put({ overrides: { verifier: { config: sonnet } } })).status).toBe(200);
+  expect((await put({ overrides: { reviewer: { variants: { trivial: sonnet } } } })).status).toBe(200);
 });
 
 test("GET marks a malformed registry degraded while showing the shipped catalog", async () => {

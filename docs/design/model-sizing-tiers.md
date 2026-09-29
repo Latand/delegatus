@@ -134,6 +134,9 @@ accept an optional `claude-` prefix, so `claude-sonnet-5-5` reads as 2.
 
 ### 1. The tier model
 
+*2026-09-29: the Claude rows and rules R1 and R3 below were revised by the
+Sonnet 5.5 / Opus 5.5 table in §7, which wins where the two differ.*
+
 One new role parameter, `size`, on the **builder** and the **reviewer** only:
 `{ key: "size", kind: "select", options: ["normal", "trivial"] }`, default
 `normal`. No other role gets it, so `architect`, `orchestrator` and `verifier`
@@ -454,6 +457,90 @@ gpt-6-luna/high`, `builder:docs → gpt-6-astra/medium`, and (*built*, so a
 round trip lands back on the shipped value) `reviewer:trivial →
 gpt-6-luna/high`. The mapping table's model select omits Sonnet and Haiku on
 the four denied rows.
+
+### 7. The Sonnet 5.5 / Opus 5.5 table (operator decision, 2026-09-29)
+
+Delegatus follows Anthropic's model guidance for Claude, plus this install's
+own rule for who reviews:
+
+- **Sonnet 5.5** (`claude-sonnet-5-5`): well-scoped everyday coding (bug fixes,
+  quick feature iteration, checking work against its requirements), high-volume
+  development, polished documents and doc edits, and well-defined repeated
+  agent tasks (investigation, review, drafting).
+- **Opus 5.5**: complex work that needs careful judgment, long-horizon agentic
+  coding and knowledge work, and the hardest problems.
+- **This install:** builders run Sonnet 5.5; backend work is reviewed on Codex
+  (`gpt-6-astra` or `gpt-6-sol`), frontend work on Claude Opus.
+
+**Claude rows.** What each row runs when the install maps it to Claude
+(`ROW_TARGETS.claude` in `src/lib/roles/equivalents.ts`, which onboarding and
+the engine banner read):
+
+| row | Claude runtime |
+| --- | --- |
+| builder, `builder:frontend`, `builder:docs`, `builder:apply-fixes`, `builder:frontend-fixes`, `builder:docs-fixes`, `builder:trivial` | claude-sonnet-5-5 / high |
+| cleaner | claude-sonnet-5-5 / high |
+| verifier | claude-sonnet-5-5 / medium |
+| `reviewer:trivial` | claude-sonnet-5-5 / medium |
+| orchestrator, architect, reviewer, prod-auditor, deployer | opus / high |
+
+`src/lib/roles/paramConfig.ts` ships the same runtime for the Claude variants
+(`trivial`, `frontend`, `docs`, `frontend-fixes`, `docs-fixes`), pinned by id
+because the `sonnet` alias moves with the next Sonnet. The Codex rows
+(`builder:apply-fixes` on Luna, `reviewer:trivial` on Luna, the base rows on
+Astra) are unchanged. `CLAUDE_TO_CODEX` gains `claude-sonnet-5-5` →
+`gpt-6-sol`, so a pinned Sonnet row moving to Codex lands where the `sonnet`
+alias does (the non-blocking note on #2312). Installs keep the rows they saved;
+no retirement is added, because a reset would send a Claude-only install back
+to the Codex defaults.
+
+**R1 (revised).** Sonnet may run the `verifier` and a `reviewer` with
+`size=trivial`, and gates a review of a `size=trivial` stage. The orchestrator,
+the architect and a reviewer above `size=trivial` stay large-only, and Haiku
+runs none of the four roles. A mapping row follows the same rule: the
+`reviewer:trivial` row may be Sonnet, the base reviewer row may not, and the
+mapping table's model select offers only what the server admits. The seat and
+pipeline seams that already call R1 read the stage's own `size` parameter.
+
+**R3 (revised).** A builder runs Claude Sonnet by explicit override at any
+size and in any domain when an Opus-class runtime wrote the brief, and always
+when the operator did. The `size=trivial` and `domain=frontend` conditions are
+gone for Sonnet. A Sonnet or unreadable briefer is refused, with a message that
+names it. Haiku and the light Codex models keep R3 as written: only at
+`size=trivial`. R2 (a `size=trivial` lane needs a large model's brief) is
+unchanged. The flow reviewer (`flows/commands.ts`) carries no `size`, so it
+stays a full-size reviewer under R1.
+
+**What the seat receives.** One bullet states the table and one replaces the
+sizing-rule bullet; the mandate reads:
+
+```
+- Sonnet 5.5 for well-scoped build, fix, docs, verification, repeated work. Opus 5.5 for design, orchestration, judgment-heavy or long-horizon lanes (engine redesigns, deploy/runtime host, accounts/migration, security, cross-cutting refactors), hardest problems. Review backend on Codex, frontend on Opus.
+- size=trivial and a hand-set Sonnet builder need a brief from a large model (Opus, Fable, large Codex). Sonnet never orchestrates, architects or reviews above size=trivial. README, docs, public text: builder domain=docs.
+```
+
+The two bullets and the longer Claude variant ids cost more than the two
+envelope pins in `prompt.test.ts` leave (section under 3 300 bytes, delivered
+mandate under `MAX_STRUCTURED_TEXT_BYTES - 4 100`), and no pin moved. Three
+trims paid for them: variants that share a runtime are listed once under it
+(`size=trivial, domain=frontend, …: claude/claude-sonnet-5-5/high`), which
+saves about 130 bytes now that most variants run the same Sonnet; the
+runtime-overrides bullet lost its "A reviewer stage is read-only by its role"
+sentence, which the `access` column of every row and the stage contract already
+state; and the create_pipeline bullet lost the parenthetical
+"(draft, or pause, override-stage, start)", whose actions the `pipeline_action`
+schema already names. The Haiku and light-Codex clause of the old sizing bullet
+also went: the refusal names the rule when a launch breaks it.
+
+**Tests.** `sizing.test.ts` holds R1 (Sonnet on verifier and trivial reviewer,
+never on orchestrator, architect or a full-size reviewer, Haiku on none), the
+review-gate case, and R3 across every builder domain and mode for an Opus, an
+Astra, a Sonnet and an unreadable briefer. `equivalents.test.ts` holds every
+Claude row and the Sonnet 5.5 → Sol key. `stageSizing.test.ts` covers create,
+override-stage and set-edge through the pipeline engine. `store.test.ts` and
+`api/roles/route.test.ts` cover the mapping writer, `registry.test.ts` and
+`pipelines/roles.test.ts` the shipped variant runtimes, and `prompt.test.ts`
+the two bullets, the grouped variant list and both envelope pins.
 
 ## Tests
 
