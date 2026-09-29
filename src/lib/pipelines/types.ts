@@ -180,7 +180,7 @@ export type PipelineVerdictRecovery = {
 
 /** What a pipeline's accepted revisions depend on (#1692).
 
-    `internal` (the default, and every record without the field): the Viewer's
+    `internal` (explicitly requested, or a comparison delivery): the Viewer's
     own durable state is the authority. A stage passes on its attempt, its
     verdict and the exact clean local revision it was judged on; a review
     settles on the SHA the reviewer was fenced to, read from the local
@@ -190,7 +190,8 @@ export type PipelineVerdictRecovery = {
     since #1799 the controller makes that fetch after the call is answered,
     outside the registry lease; a pinned `baseRef` never touches the network.
 
-    `remote-branch`: the caller asked for publication. Every accepted revision
+    `remote-branch` (also the default for an owner delivery whose older record
+    has no publication field): Every accepted revision
     is pushed to `origin/<branch>`, reviewers launch only on a published head,
     an approval settles only when the remote carries the reviewed SHA, and a
     terminal stage completes only once its revision is remotely durable. A

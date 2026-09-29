@@ -1,4 +1,5 @@
 import os from "node:os";
+import { spawnSync } from "node:child_process";
 
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
 import { failEdgeExhaustion } from "@/lib/pipelines/failEdgeBudget";
@@ -244,7 +245,7 @@ function newMerge(pipeline: Pipeline, pr: { repository: string; number: number }
  * committed locally. New attempts record it at commit time; older reports
  * captured it before the controller commit. */
 function headBeforeLocalOutput(pipeline: Pipeline): string | null {
-  if (pipeline.publishedCommit || pipeline.delivery?.publish !== "disabled") return null;
+  if (pipeline.delivery?.publish !== "disabled") return null;
   const final = pipeline.stages.find((stage) => stage.next === null && stage.kind === "run" && stage.outputs?.length);
   if (!final) return null;
   const attempt = pipeline.runs.find((run) => run.stageId === final.id)?.attempts.filter((item) => !item.historical).at(-1);
@@ -252,7 +253,52 @@ function headBeforeLocalOutput(pipeline: Pipeline): string | null {
   const elapsed = Date.parse(pipeline.closedAt ?? "") - Date.parse(attempt.completedAt ?? "");
   if (!Number.isFinite(elapsed) || elapsed < 0 || elapsed > 5_000) return null;
   const baseHead = attempt.outputBaseHead ?? attempt.report?.provenance.head;
+  if (pipeline.publishedCommit && pipeline.publishedCommit !== baseHead) return null;
   return typeof baseHead === "string" && /^[0-9a-f]{40}$/i.test(baseHead) && baseHead !== pipeline.lastPassedCommit ? baseHead : null;
+}
+
+/** Return the exact head the latest successful review judged. Older records
+ * may omit the SHA; only those records may use the terminal-head timestamp
+ * heuristic. Explicit review evidence always outranks timing. */
+function reviewedHead(pipeline: Pipeline): string | null {
+  const attempts = pipeline.runs
+    .filter((run) => pipeline.stages.some((stage) => stage.id === run.stageId && isReviewStage(pipeline, stage)))
+    .flatMap((run, runIndex) => run.attempts
+      .map((attempt, attemptIndex) => ({ attempt, runIndex, attemptIndex }))
+      .filter(({ attempt }) => !attempt.historical && attempt.state === "passed"));
+  const latest = attempts.toSorted((left, right) => {
+    const completion = (item: typeof left) => {
+      const completedAt = Date.parse(item.attempt.completedAt ?? "");
+      if (Number.isFinite(completedAt)) return completedAt;
+      const reportAt = Date.parse(item.attempt.report?.at ?? "");
+      if (Number.isFinite(reportAt)) return reportAt;
+      return typeof item.attempt.report?.seq === "number" ? item.attempt.report.seq : Number.NEGATIVE_INFINITY;
+    };
+    return completion(left) - completion(right)
+      || left.runIndex - right.runIndex
+      || left.attemptIndex - right.attemptIndex;
+  }).at(-1)?.attempt;
+  if (!latest) return null;
+  const explicitHead = latest.reviewHeadSha ?? latest.outputBaseHead ?? latest.report?.provenance.head;
+  if (typeof explicitHead === "string" && /^[0-9a-f]{40}$/i.test(explicitHead)) return explicitHead;
+  const terminalHeadWasReviewed = latest.completedAt && pipeline.closedAt
+    && Math.abs(Date.parse(pipeline.closedAt) - Date.parse(latest.completedAt)) <= 5_000;
+  return terminalHeadWasReviewed ? pipeline.lastPassedCommit : null;
+}
+
+/** A behind diagnostic requires Git to prove the PR head is an ancestor of
+ * the exact head a successful review judged. SHA mentions in reports do not
+ * prove ancestry: rejected attempts can be divergent retries. */
+function prHeadBehindReviewedHead(pipeline: Pipeline, prHead: string): string | null {
+  const head = reviewedHead(pipeline);
+  if (!head || prHead === head) return null;
+  if (pipeline.repoDir && /^[0-9a-f]{40}$/i.test(prHead) && /^[0-9a-f]{40}$/i.test(head)) {
+    const ancestor = spawnSync("git", ["merge-base", "--is-ancestor", prHead, head], {
+      cwd: pipeline.repoDir, timeout: 5_000, stdio: "ignore",
+    });
+    return ancestor.status === 0 ? head : null;
+  }
+  return null;
 }
 
 type Step =
@@ -366,6 +412,13 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts): Promise<void> {
     if (view.state === "OPEN" && merge.updates.length === 0 && merge.chain.length === 1
       && merge.chain[0] === read.lastPassedCommit && view.headRefOid === headBeforeLocalOutput(read)) {
       merge.chain = [view.headRefOid];
+    }
+    const behindReviewedHead = view.state === "OPEN" && view.headRefOid !== merge.chain.at(-1)
+      ? prHeadBehindReviewedHead(read, view.headRefOid)
+      : null;
+    if (behindReviewedHead) {
+      await commit(ports, read, (live) => block(live, `PR head is behind the reviewed head ${behindReviewedHead}`, now));
+      return;
     }
     /* A head outside the chain is admitted only as the commit of our own
        update; anything else stays outside, and decideMerge blocks on it. */

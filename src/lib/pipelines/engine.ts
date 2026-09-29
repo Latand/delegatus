@@ -2479,11 +2479,11 @@ export function reconcileEmbeddedReviewFlows(
   return changed;
 }
 
-/** Whether this pipeline asked for remote publication (#1692). Every other
-    record, including every one written before the policy existed, is
-    internal: nothing it accepts waits on a remote. */
-function publishesRemoteBranch(pipeline: Pick<Pipeline, "publication">): boolean {
-  return pipeline.publication === "remote-branch";
+/** An owner with a delivery branch must publish before handing off a head.
+    Explicit internal lanes remain local; comparison lanes are always local. */
+function publishesRemoteBranch(pipeline: Pick<Pipeline, "publication" | "delivery">): boolean {
+  return pipeline.publication === "remote-branch"
+    || (pipeline.publication === undefined && pipeline.delivery?.disposition === "owner");
 }
 
 /** Advance along the pass edge, persisting the relay record: the completed
@@ -2795,7 +2795,9 @@ function commitPassedStage(
     attempt.outputBaseHead = pipeline.lastPassedCommit;
   }
   pipeline.lastPassedCommit = result.sha;
-  if (!publishesRemoteBranch(pipeline)) {
+  const terminalLocalOutput = pipeline.publication === undefined && stage.kind === "run" && !allowCommit
+    && stage.next === null && !!attemptStage(stage, attempt).outputs?.length;
+  if (!publishesRemoteBranch(pipeline) || terminalLocalOutput) {
     attempt.state = "passed";
     attempt.completedAt = ports.now();
     advancePipeline(pipeline, stage, ports, attempt);
@@ -5813,7 +5815,7 @@ const STAGE_OUTPUTS_SHAPE = `array of 1–${MAX_STAGE_OUTPUTS} repository-relati
 const STAGE_NEXT_SHAPE = "id of another stage, or null to terminate the pass chain";
 const STAGE_ACCOUNT_SHAPE = "id of an account the pipeline's project allows, or null to let the project's own selection choose";
 const STAGE_ON_FAIL_SHAPE = `null, or {to: <existing stage id>, maxRounds?: 1–${MAX_FAIL_EDGE_ROUNDS}, onExhausted?: "advance" | "stop-after-fix" | "park"} — run stages only`;
-const PIPELINE_PUBLICATION_SHAPE = '"internal" (default: the Viewer\'s own attempt, verdict and exact local revision decide every stage; nothing is pushed or read from a remote while the pipeline runs, and creation or start without baseRef leaves the base to the controller, fetched time-bounded after the call is answered) | "remote-branch" (push every accepted revision to origin/<branch>, launch and settle reviews only on the published head, and complete only once the final revision is remotely durable)';
+const PIPELINE_PUBLICATION_SHAPE = '"internal" (explicit local-only policy; nothing is pushed while the pipeline runs) | "remote-branch" (publish every accepted revision before the next stage and complete only after the final revision is remote); an owner delivery defaults to remote publication when omitted';
 const STAGE_GRAPH_SHAPE = "acyclic next chains over existing stage ids, with every review-loop reachable from a run stage";
 
 /** A validated fail edge in its stored shape; `onExhausted` is kept only when
