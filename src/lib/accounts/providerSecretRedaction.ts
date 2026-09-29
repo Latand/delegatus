@@ -114,6 +114,63 @@ function fingerprintMatchRanges(text: string, key: Buffer, records: Fingerprint[
   return ranges;
 }
 
+/**
+ * The offset of one fingerprinted secret in the text, or -1. It stops at the
+ * first hit, and it reads the text in chunks of prefix hashes, so each secret
+ * length costs a subtraction and a table lookup per offset with nothing kept
+ * per character past the chunk. A window's hash is `prefix[end] -
+ * prefix[start] * base^length`, the same value {@link rollingHash} gives it;
+ * a 64 KiB table of residues turns most offsets away before any map is read.
+ */
+function fingerprintHit(text: string, key: Buffer, records: Fingerprint[]): number {
+  const base = rollingBase(key);
+  const byLength = new Map<number, Map<number, Set<string>>>();
+  for (const record of records) {
+    if (record.length > text.length) continue;
+    let hashes = byLength.get(record.length);
+    if (!hashes) { hashes = new Map(); byLength.set(record.length, hashes); }
+    let digests = hashes.get(record.rolling);
+    if (!digests) { digests = new Set(); hashes.set(record.rolling, digests); }
+    digests.add(record.mac);
+  }
+  if (!byLength.size) return -1;
+  const lengths = [...byLength.keys()];
+  const longest = Math.max(...lengths);
+  const powers = lengths.map((length) => {
+    let power = 1;
+    for (let index = 0; index < length; index += 1) power = Math.imul(power, base);
+    return power;
+  });
+  const residues = lengths.map((length) => {
+    const table = new Uint8Array(1 << 16);
+    for (const rolling of byLength.get(length)!.keys()) table[rolling & 0xffff] = 1;
+    return table;
+  });
+  const chunk = 1 << 20;
+  const prefix = new Int32Array(Math.min(text.length, chunk + longest) + 1);
+  for (let from = 0; from < text.length; from += chunk) {
+    const size = Math.min(text.length - from, chunk + longest);
+    let hash = 0;
+    for (let index = 0; index < size; index += 1) {
+      hash = (Math.imul(hash, base) + text.charCodeAt(from + index)) | 0;
+      prefix[index + 1] = hash;
+    }
+    for (let which = 0; which < lengths.length; which += 1) {
+      const length = lengths[which]!;
+      const power = powers[which]!;
+      const table = residues[which]!;
+      const starts = Math.min(chunk, size - length + 1);
+      for (let start = 0; start < starts; start += 1) {
+        const window = (prefix[start + length]! - Math.imul(prefix[start]!, power)) | 0;
+        if (table[window & 0xffff] !== 1) continue;
+        const offset = from + start;
+        if (byLength.get(length)!.get(window >>> 0)?.has(mac(text.slice(offset, offset + length), key))) return offset;
+      }
+    }
+  }
+  return -1;
+}
+
 function applyRedactionRanges(text: string, ranges: Array<[number, number]>, marker: string): string {
   if (!ranges.length) return text;
   ranges.sort((left, right) => left[0] - right[0] || right[1] - left[1]);
@@ -227,4 +284,31 @@ export function redactKnownProviderSecrets(text: string): string {
   const encoded = fingerprintMatchRanges(view.decoded, key, records)
     .map(([start, end]): [number, number] => [view.spans[start]![0], view.spans[end - 1]![1]]);
   return applyRedactionRanges(current, [...direct, ...encoded], marker);
+}
+
+/**
+ * Where the text holds a known provider credential, or -1: the live ones in
+ * each spelling the redactor replaces, then the retained fingerprints. For a
+ * caller that refuses rather than redacts and may hold megabytes, so it reads
+ * the text once per secret length and skips the escape-decoded view that
+ * {@link redactKnownProviderSecrets} builds per character; the JSON- and
+ * slash-escaped spellings are retained as fingerprints of their own. Throws
+ * when the retained records cannot be read.
+ */
+export function knownProviderSecretOffset(text: string): number {
+  for (const secret of knownProviderSecrets()) {
+    const escaped = JSON.stringify(secret).slice(1, -1);
+    for (const form of new Set([secret, escaped, secret.replaceAll("/", "\\/"), escaped.replaceAll("/", "\\/")])) {
+      const offset = text.indexOf(form);
+      if (offset !== -1) return offset;
+    }
+  }
+  let root: string;
+  try { root = stateDir(); }
+  catch { return -1; }
+  const records = fingerprints(root);
+  if (!records.length) return -1;
+  const key = redactionKey(root, false);
+  if (!key) throw new Error("Provider redaction key is missing");
+  return fingerprintHit(text, key, records);
 }

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { redactKnownProviderSecrets } from "@/lib/accounts/providerSecretRedaction";
+import { knownProviderSecretOffset } from "@/lib/accounts/providerSecretRedaction";
 import { BEARER_TOKEN, TOKEN_FAMILY_PATTERN } from "@/lib/view/compactText";
 
 import {
@@ -190,9 +190,11 @@ export function documentSecret(text: string): { secretClass: string; line: numbe
     ?? first(URL_USERINFO, "url_credentials", (match) => urlPassword(match[1]!, match[2]!))
     ?? first(ASSIGNMENT, "credential_assignment", (match) => assignedCredential(match, unquotedKeys), unquotedKeys);
   if (found) return found;
-  let scrubbed: string;
-  try { scrubbed = redactKnownProviderSecrets(text); } catch { scrubbed = ""; }
-  if (scrubbed !== text) return { secretClass: "provider_credential", line: firstDifferentLine(text, scrubbed) };
+  /* Records that cannot be read refuse the document, as the redactor
+     withholds a text it cannot check. */
+  let offset: number;
+  try { offset = knownProviderSecretOffset(text); } catch { offset = 0; }
+  if (offset !== -1) return { secretClass: "provider_credential", line: text.slice(0, offset).split("\n").length };
   return null;
 }
 
@@ -306,16 +308,16 @@ function assignedCredential(match: RegExpExecArray, subject: string): boolean {
  */
 function documentTexts(bytes: Buffer): string[] {
   const texts = [new TextDecoder("utf-8").decode(bytes)];
-  const sample = bytes.subarray(0, 64 * 1024);
+  /* Over the whole file: text appended in UTF-16 after an ASCII start (a
+     PowerShell `>>` onto an existing log) has its zeros past any sample. */
   let evenZeros = 0;
   let oddZeros = 0;
-  for (let index = 0; index < sample.length; index += 1) {
-    if (sample[index] === 0) {
-      if (index % 2 === 0) evenZeros += 1;
-      else oddZeros += 1;
-    }
+  for (let index = bytes.indexOf(0); index !== -1 && index < bytes.length; index += 1) {
+    if (bytes[index] !== 0) continue;
+    if (index % 2 === 0) evenZeros += 1;
+    else oddZeros += 1;
   }
-  const pairs = Math.max(1, Math.floor(sample.length / 2));
+  const pairs = Math.max(1, Math.floor(bytes.length / 2));
   const bom = bytes[0] === 0xff && bytes[1] === 0xfe ? "utf-16le" : bytes[0] === 0xfe && bytes[1] === 0xff ? "utf-16be" : null;
   const guessed = oddZeros > pairs / 4 && evenZeros < oddZeros / 4 ? "utf-16le" : evenZeros > pairs / 4 && oddZeros < evenZeros / 4 ? "utf-16be" : null;
   const encoding = bom ?? guessed;
@@ -331,13 +333,6 @@ export function documentBytesSecret(bytes: Buffer): { secretClass: string; line:
     if (hit) return hit;
   }
   return null;
-}
-
-function firstDifferentLine(left: string, right: string): number {
-  const a = left.split("\n");
-  const b = right.split("\n");
-  const index = a.findIndex((line, position) => line !== b[position]);
-  return index === -1 ? 1 : index + 1;
 }
 
 function extensionOf(name: string): string {

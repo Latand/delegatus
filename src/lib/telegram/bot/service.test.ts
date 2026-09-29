@@ -13,6 +13,7 @@ const { FakeBotTransport, fakeBotToken, ok, refused, unreachable } = await impor
 const { telegramBotTokenPath } = await import("./transport");
 const { statePath } = await import("@/lib/configDir");
 const { documentBytesSecret, documentSecret } = await import("./documents");
+const { retainProviderRedactionSecrets } = await import("@/lib/accounts/providerSecretRedaction");
 
 import type { TgUpdate } from "./store";
 
@@ -686,6 +687,40 @@ test("a text document carrying a secret is refused with its class, never its val
   expect((await sendDocument({ path: documentFile(path.join(HANDOFF, "scan.pdf"), `%PDF-1.7\n${FORGE_TOKEN}\n`) }, { clientRequestId: "pdf" })).messageIds).toEqual([94]);
 });
 
+test("UTF-16 text appended after 64 KiB of ASCII is still read as text", async () => {
+  await allowedTeam();
+  const prefix = Buffer.from(`${"a".repeat(70 * 1024)}\n`);
+  const word = ["hunter2", "sword", "fish"].join("");
+  const error = await refusal(() => sendDocument({ path: documentFile(path.join(HANDOFF, "appended.log"), Buffer.concat([prefix, Buffer.from(`${PASSWORD}: ${word}\n`, "utf16le")])) }));
+  expect([error.code, error.extra.secretClass]).toEqual(["document_secret", "credential_assignment"]);
+  expect(error.message).not.toContain(word);
+  /* A zero between the letters of a keyword past the first 64 KiB too. */
+  const split = Buffer.concat([prefix, Buffer.from(`pass\u0000word: ${word}\n`, "latin1")]);
+  expect(documentBytesSecret(split)).toMatchObject({ secretClass: "credential_assignment" });
+  expect(transport.callsOf("sendDocument")).toHaveLength(0);
+});
+
+/* Invented provider credentials of different lengths, so the scan reads the
+   text once per length; nothing here resembles a real one. */
+function retainedProviderSecrets(count: number): string[] {
+  const secrets = Array.from({ length: count }, (_, index) => crypto.randomBytes(24 + index).toString("hex"));
+  retainProviderRedactionSecrets(secrets);
+  return secrets;
+}
+
+test("a retained provider credential in a document is refused, on its line and in UTF-16", async () => {
+  await allowedTeam();
+  const retained = retainedProviderSecrets(10)[0]!;
+  const text = `${REPORT}\nthe provider answered with ${retained} again\n`;
+  const line = REPORT.split("\n").length + 1;
+  expect(documentSecret(text)).toEqual({ secretClass: "provider_credential", line });
+  expect(documentSecret(`{"key":${JSON.stringify(`${retained}\n`)}}`)).toMatchObject({ secretClass: "provider_credential" });
+  const error = await refusal(() => sendDocument({ path: documentFile(path.join(HANDOFF, "provider.md"), utf16(text, "le", false)) }));
+  expect([error.code, error.extra.secretClass]).toEqual(["document_secret", "provider_credential"]);
+  expect(error.message).not.toContain(retained);
+  expect(transport.callsOf("sendDocument")).toHaveLength(0);
+});
+
 test("the secret scan names classes and leaves ordinary report prose alone", () => {
   expect(documentSecret(REPORT)).toBeNull();
   /* Placeholders a report quotes; assembled so no source line reads as one. */
@@ -747,6 +782,14 @@ for (const [shape, unit] of [
     expect(performance.now() - started).toBeLessThan(SCAN_BOUND_MS);
   }, 30_000);
 }
+
+test("a 20 MB clean text document scans in linear time with ten provider credentials retained", () => {
+  retainedProviderSecrets(10);
+  const bytes = Buffer.from("lorem ipsum dolor sit amet\n".repeat(Math.ceil(SCAN_MB / 27)));
+  const started = performance.now();
+  expect(documentBytesSecret(bytes)).toBeNull();
+  expect(performance.now() - started).toBeLessThan(SCAN_BOUND_MS);
+}, 60_000);
 
 test("a refused document leaves its key free: the corrected file sends under the same clientRequestId", async () => {
   await allowedTeam();
