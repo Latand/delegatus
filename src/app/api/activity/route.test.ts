@@ -197,3 +197,75 @@ test("GET keeps team-era terminal input unknown after the owner is revoked", asy
   expect(after.totals.humanMs).toBe(0);
   expect(after.unknownAuthorInputs).toBeGreaterThanOrEqual(before.unknownAuthorInputs);
 });
+
+test("?member=: the owner reads any member or all of them; a member reads only themselves", async () => {
+  const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+  const { mintSession } = await import("@/lib/team/sessions");
+  const now = Date.now();
+  const project = "member-filter-fixture";
+  /* No live owner yet (the one before was revoked): a solo host's operator
+     may read every member. */
+  expect((await get("?range=7d&member=all")).status).toBe(200);
+
+  const ownerId = "m_cccccccccccccccccccccccccccccccc";
+  const memberId = "m_dddddddddddddddddddddddddddddddd";
+  const team = teamStore();
+  team.insertMember({ id: ownerId, name: "Ivo Pell", role: "owner", status: "active", color: "amber", telegram: null,
+    createdAt: new Date(now - 60_000).toISOString(), createdBy: "claim", revokedAt: null });
+  team.insertMember({ id: memberId, name: "Rhea Stone", role: "member", status: "active", color: "violet", telegram: null,
+    createdAt: new Date(now - 60_000).toISOString(), createdBy: "join", revokedAt: null });
+  resetTeamStoreForTests();
+  const owner = `llv_member=${mintSession(teamStore(), ownerId, "claim", { surface: "desktop", browser: "chrome" }, now).value}`;
+  const member = `llv_member=${mintSession(teamStore(), memberId, "claim", { surface: "desktop", browser: "chrome" }, now).value}`;
+  const request = (cookie: string, key: string, minutesAgo: number) => recordOperatorRequest(new NextRequest("http://127.0.0.1/api/tasks", { headers: {
+    cookie, "user-agent": "Mozilla/5.0 Chrome/140.0 Safari/537.36",
+  } }), { kind: "task", project, idempotencyKey: key }, { now: () => now - minutesAgo * 60_000 });
+  request(owner, "member-filter-owner", 40);
+  request(member, "member-filter-member-1", 40);
+  request(member, "member-filter-member-2", 20);
+
+  type Body = {
+    totals: { requests: number };
+    unknownAuthorInputs: number;
+    member: { selection: string; memberId: string | null; canChoose: boolean; notSplit: string[];
+      members: Array<{ id: string; name: string | null; initials: string | null; self: boolean; requests: number }> };
+  };
+  const read = async (query: string, cookie: string) => {
+    const response = await get(`?range=7d&project=${project}${query}`, { cookie });
+    return { status: response.status, body: await response.json() as Body & { code?: string } };
+  };
+
+  const own = await read("", owner);
+  expect(own.status).toBe(200);
+  expect(own.body.member).toMatchObject({ selection: "self", memberId: ownerId, canChoose: true, notSplit: ["agents", "unknownAuthorInputs"] });
+  expect(own.body.totals.requests).toBe(1);
+  /* The earlier case's member worked in the range on another project: listed, with none here. */
+  expect(own.body.member.members.map((row) => [row.name, row.initials, row.self, row.requests])).toEqual([
+    ["Rhea Stone", "RS", false, 2], ["Ivo Pell", "IP", true, 1], ["Member", "ME", false, 0],
+  ]);
+  const all = await read("&member=all", owner);
+  expect(all.status).toBe(200);
+  expect(all.body.member.selection).toBe("all");
+  expect(all.body.totals.requests).toBe(3);
+  /* The terminal input with no author (an earlier case) is nobody's, and still counted apart. */
+  expect(all.body.unknownAuthorInputs).toBeGreaterThanOrEqual(1);
+  expect(all.body.member.members.every((row) => row.id.startsWith("m_"))).toBe(true);
+  const one = await read(`&member=${memberId}`, owner);
+  expect(one.status).toBe(200);
+  expect(one.body.totals.requests).toBe(2);
+
+  for (const query of ["&member=all", `&member=${ownerId}`]) {
+    const refused = await read(query, member);
+    expect(refused.status).toBe(403);
+    expect(refused.body.code).toBe("activity_member_forbidden");
+  }
+  for (const query of ["", `&member=${memberId}`]) {
+    const self = await read(query, member);
+    expect(self.status).toBe(200);
+    expect(self.body.totals.requests).toBe(2);
+    expect(self.body.member).toEqual({ selection: "self", memberId, canChoose: false, members: [], notSplit: [] });
+  }
+  /* No email or handle reaches the answer. */
+  const text = JSON.stringify(all.body);
+  for (const leaked of ["@", "telegram"]) expect(text).not.toContain(leaked);
+});

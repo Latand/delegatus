@@ -462,8 +462,9 @@ their mode.
 
 ### Human input belongs to one person
 
-The dashboard counts the signed-in member on a team host. The owner sees the
-owner's input when signed in; a live member session still selects that member
+The dashboard counts the signed-in member on a team host, unless the owner
+chooses another member or every member ("The owner's view of every member",
+below). The owner sees the owner's input by default; a live member session still selects that member
 after the owner is revoked. A solo host has one `operator`. The host's
 `message_authors` row, keyed by the admitted submission and bound to its
 conversation (`src/lib/team/store.ts`), supplies the member id for a delivered
@@ -486,6 +487,70 @@ The unknown-author count describes records the sources observed: local file
 sources count the selected read window, and a pulled host reports the count in
 its stored record. It is a coverage figure, independent of the chosen person's
 hours.
+
+### The owner's view of every member
+
+The operator's request on 2026-09-29, paraphrased: show different
+participants' activity on the page and let the owner filter by them.
+
+`GET /api/activity?member=` chooses whose input the human figures count:
+
+| `member` | counts | who may ask |
+|---|---|---|
+| absent (or malformed) | the viewer's own input, as before | anyone |
+| the viewer's own id | the same | anyone |
+| another member id | that member's input | the owner, or a solo host's operator |
+| `all` | every known author, each counted alone, then added up | the owner, or a solo host's operator |
+
+Anyone else naming someone other than themselves gets `403` with
+`code: "activity_member_forbidden"`. The route decides who may choose: a
+signed-in session whose member is the owner, or no session on a solo host.
+
+For the owner, `readHumanInputs` reads every member's input at once
+(`everyone`), each input tagged with its author. A remote host's pull or
+export carries one person's rows, the operator's, so those rows count under
+the operator's local id (the owner's member id, `operator` on a solo host),
+exactly as they did in the owner's own figure. Copies merge within one
+person's input only; two people never share a minute.
+
+The method is unchanged. For one member it runs over that member's input, the
+same run the page made before. For `all` it runs over each member's input
+alone and adds their human figures (minutes, report hours, billable hours,
+requests, and each project's and day's share), so two people working the same
+hour are two hours. The page's structure comes from one run over everyone's
+input: agent time is supervised by whoever was present, and the hour cells and
+day stretches draw when anyone was.
+
+The answer carries `member: { selection, memberId, canChoose, members,
+notSplit }`. `members` lists, for the owner only, every author with input in
+the range, the owner, the member asked for, and any active member a host was
+not read for (below), each with an id, a roster name, colour and initials (no
+email, handle or Telegram field), their own report hours, minutes, requests
+and coverage, and their projects. An author the roster does not name (a
+removed member) keeps its id and no name. `notSplit` names the figures no
+member owns: `agents` (agent time is the whole host's) and
+`unknownAuthorInputs` (inputs with no author are nobody's and stay counted
+apart).
+
+**Coverage stays honest per member.** A remote host whose rows belong to one
+person (a team host pulled for `memberId`, or an export with a team `mode`)
+carries `memberScoped: true`. It was read for the operator alone, so for any
+other member it covers nothing: their figure is a lower bound naming that host,
+and a member whose hours could live only there reads **Not covered**, never 0.
+Under `all`, such a host counts as unread whenever someone besides the operator
+is listed. A solo remote host has one person and stays covered for everyone.
+
+The page (`src/components/activity/ActivityMembers.tsx`) draws a member
+filter beside the project picker for the owner: `All members`, then each
+member with their initials on their colour and their report hours, the owner
+marked `(you)`. The owner's own view stays the default. `?member=` holds the
+choice like `?project=`: a choice is a history step Back undoes, and a reload
+keeps it. Under `All members` a card per person shows their report hours,
+requests and minutes, the projects they worked on, and the host a member was
+not read on; a card opens that member's page. The hero's `You` label names the
+member, or `All members`. A member who is not the owner is sent no members and
+sees no filter. The phone draws the same filter full-width with 44 px rows,
+and the same cards.
 
 ### Only real human input counts
 
@@ -734,7 +799,9 @@ chip at "Lower bound", and the host named in the drawer and the hosts table.
   gap with no personal input rows pulled.
 - **API and UI** carry times, durations, counts, enums, project keys and
   names, host ids and the operator's own host labels, pipeline and stage ids,
-  and role ids. No titles, model names or account names.
+  and role ids. No titles, model names or account names. The owner's answer
+  adds member ids with each member's roster name, colour and initials; no
+  email, handle or Telegram field. Anyone else receives no member list.
 - **Fixtures and tests** use invented projects, ids, hosts and text.
 
 ## Prototype scope
@@ -797,6 +864,17 @@ chip at "Lower bound", and the host named in the drawer and the hosts table.
   export files (complete, then the stage host missing), a ledger alone leaving
   its host incomplete and a partial export of it, an export that ends early, a
   mislabelled file, cross-host dedupe, and the hosts file.
+  The owner's read of every member: each author tagged, a one-person remote
+  host's rows under the operator and `memberScoped`, a solo remote host not,
+  unknown authors kept apart, copies merged within one person only, and a
+  member who is not the owner never given the read.
+- `src/lib/activity/report.test.ts`, "the owner's view of every member": the
+  owner's default equals the member-blind count, `all` equals the members
+  added up (two people in one hour are two hours), a member a one-person host
+  was not read for reads not covered, and only the owner names someone else.
+- `src/components/activity/ActivityDashboard.dom.test.tsx`: no filter for a
+  member, the owner's filter, `All members` with its cards, a card opening a
+  member, Back, and the narrow page in Ukrainian.
 - `src/lib/runtime/startup.test.ts`: the Codex continuation carries the
   `startup-recovery` origin.
 - `src/lib/activity/requestLedger.test.ts`, `src/app/api/activity/route.test.ts`,
@@ -816,6 +894,16 @@ expanded, the unknown-coverage state (the stage host not read for the last two
 days, and today's terminal input on this host not exported yet, which the
 hosts table names), and a home with no data at all. Output:
 `~/Pictures/delegatus-review/activity-dashboard/`.
+
+The `activity-members` case (`BOARD_CAPTURE_CASE=activity-members`) seeds an
+invented team of four (the owner and three members) with authored ledger rows,
+this host's export, and a stage host whose export carries the owner's input
+alone, signs in as the owner, and captures at 1440 x 900 and 390 x 844 in
+light: the owner's own page, the member filter open, `All members` (en and
+uk) with a card per person, one member's page, and a member's own page with no
+filter. It requires the members to add up to the total, the member who works
+only on the stage host to read "Not covered", and a member's request for
+everyone to answer 403.
 
 ### What it does not do
 

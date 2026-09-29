@@ -10,6 +10,7 @@ import { isOpaqueProjectKey, projectDisplayName } from "@/lib/displayNames";
 import { useLocale, type Locale, type MessageKey, type TFunction } from "@/lib/i18n";
 
 import { ActivityDesktop } from "./ActivityDesktop";
+import { ActivityMemberBreakdown, ActivityMemberFilter, countedLabel, memberFromSearch, type MemberChoice } from "./ActivityMembers";
 import { ActivityScopeChip } from "./ActivityProjectPicker";
 import { nothingRead, projectFromSearch } from "./format";
 
@@ -655,24 +656,29 @@ function Counted({ data, locale, t }: { data: ActivityResponse; locale: Locale; 
 /* The page                                                                 */
 /* ------------------------------------------------------------------------ */
 
-/** The query of one read: the range, and the project the page is scoped to. */
-export function activityQuery(range: RangeKey, project: string | null): string {
+/** The query of one read: the range, the project the page is scoped to, and
+    whose input it counts. */
+export function activityQuery(range: RangeKey, project: string | null, member: MemberChoice = null): string {
   const search = new URLSearchParams({ range });
   if (project !== null) search.set("project", project);
+  if (member !== null) search.set("member", member);
   return search.toString();
 }
 
-export function ActivityDashboard({ initialRange, initialView, initialProject = null }: {
+export function ActivityDashboard({ initialRange, initialView, initialProject = null, initialMember = null }: {
   initialRange: RangeKey;
   initialView: ActivityView;
   /** `?project=`: the project the whole page is scoped to, or none. */
   initialProject?: string | null;
+  /** `?member=`: `all`, a member id, or none for the viewer's own input. */
+  initialMember?: MemberChoice;
 }) {
   const { t, locale } = useLocale();
   const desktop = useDesktop();
   const [range, setRange] = useState<RangeKey>(initialRange);
   const [view, setView] = useState<ActivityView>(initialView);
   const [project, setProject] = useState<string | null>(initialProject);
+  const [member, setMember] = useState<MemberChoice>(initialMember);
   const [sort, setSort] = useState<ProjectSort>("human");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [data, setData] = useState<ActivityResponse | null>(null);
@@ -685,11 +691,11 @@ export function ActivityDashboard({ initialRange, initialView, initialProject = 
   /* No zone is sent: days and hours follow the zone in the settings
      (Europe/Kyiv unless changed), whatever zone this device is in. A
      project's figures are the server's own count for that project. */
-  const load = useCallback(async (target: RangeKey, scope: string | null) => {
+  const load = useCallback(async (target: RangeKey, scope: string | null, person: MemberChoice) => {
     const id = ++request.current;
     setLoading(true);
     try {
-      const response = await fetch(`/api/activity?${activityQuery(target, scope)}`, { cache: "no-store" });
+      const response = await fetch(`/api/activity?${activityQuery(target, scope, person)}`, { cache: "no-store" });
       if (!response.ok) throw new Error(String(response.status));
       const body = (await response.json()) as ActivityResponse;
       if (id !== request.current) return;
@@ -704,12 +710,12 @@ export function ActivityDashboard({ initialRange, initialView, initialProject = 
   }, []);
 
   useEffect(() => {
-    void load(range, project);
+    void load(range, project, member);
     const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") void load(range, project);
+      if (document.visibilityState === "visible") void load(range, project, member);
     }, REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [load, range, project]);
+  }, [load, range, project, member]);
 
   /* The range, view and project live in the address, so a reload or a shared
      link opens the same page. Choosing or clearing a project is a step Back
@@ -720,14 +726,17 @@ export function ActivityDashboard({ initialRange, initialView, initialProject = 
     url.searchParams.set("view", view);
     if (project !== null) url.searchParams.set("project", project);
     else url.searchParams.delete("project");
+    if (member !== null) url.searchParams.set("member", member);
+    else url.searchParams.delete("member");
     if (url.href !== window.location.href) window.history.replaceState(window.history.state, "", url);
-  }, [range, view, project]);
+  }, [range, view, project, member]);
 
   useEffect(() => {
     const onPopState = () => {
       const search = new URLSearchParams(window.location.search);
       const range = search.get("range");
       setProject(projectFromSearch(window.location.search));
+      setMember(memberFromSearch(window.location.search));
       if (RANGES.includes(range as RangeKey)) setRange(range as RangeKey);
       setView(search.get("view") === "projects" ? "projects" : "days");
     };
@@ -741,6 +750,16 @@ export function ActivityDashboard({ initialRange, initialView, initialProject = 
     const url = new URL(window.location.href);
     if (next !== null) url.searchParams.set("project", next);
     else url.searchParams.delete("project");
+    if (url.href !== window.location.href) window.history.pushState(null, "", url);
+  }, []);
+
+  /* Choosing whose activity to read is a step Back undoes, like a project. */
+  const selectMember = useCallback((next: MemberChoice) => {
+    setMember(next);
+    setExpanded(null);
+    const url = new URL(window.location.href);
+    if (next !== null) url.searchParams.set("member", next);
+    else url.searchParams.delete("member");
     if (url.href !== window.location.href) window.history.pushState(null, "", url);
   }, []);
 
@@ -784,9 +803,11 @@ export function ActivityDashboard({ initialRange, initialView, initialProject = 
         onRange={(next) => { setRange(next); setExpanded(null); }}
         scope={scope}
         onProject={selectProject}
+        member={member}
+        onMember={selectMember}
         loading={loading}
         failed={failed}
-        onRetry={() => void load(range, project)}
+        onRetry={() => void load(range, project, member)}
         locale={locale}
         t={t}
       />
@@ -825,6 +846,7 @@ export function ActivityDashboard({ initialRange, initialView, initialProject = 
               onChange={setView}
               options={[{ value: "days", label: t("activity.view.days") }, { value: "projects", label: t("activity.view.projects") }]}
             />
+            {data?.member.canChoose ? <ActivityMemberFilter data={data} selected={member} onSelect={selectMember} locale={locale} t={t} wide /> : null}
           </div>
         </header>
 
@@ -861,10 +883,12 @@ export function ActivityDashboard({ initialRange, initialView, initialProject = 
               </div>
             ) : null}
 
+            <ActivityMemberBreakdown data={data} onSelect={selectMember} locale={locale} t={t} />
+
             <div className="grid grid-cols-4 gap-3 max-lg:grid-cols-2 max-sm:gap-2">
               <Tile
                 testId="human"
-                label={t("activity.tile.human")}
+                label={countedLabel(data, t) ?? t("activity.tile.human")}
                 value={humanFigure(totals.humanMs, totals.coverage, t)}
                 sub={unread ? t("activity.tile.humanUnknown") : !totals.coverage.complete && totals.humanMs === 0 ? t("activity.fig.notReadOn", { hosts: hostList(totals.coverage.missingHosts, hosts, t) }) : (
                   <>

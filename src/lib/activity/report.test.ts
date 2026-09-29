@@ -4,7 +4,7 @@ import type { AgentSourceRead } from "./agentSource";
 import type { HostReport, HostSourceRead, HumanInputRead } from "./hostSources";
 import type { HumanInput } from "./humanInput";
 import type { AgentConversation, HostCoverage, Interval } from "./method";
-import { activityResponse, distinctNames, type ActivityResponse, type ActivityResponseDependencies } from "./report";
+import { ActivityMemberForbidden, activityResponse, distinctNames, type ActivityResponse, type ActivityResponseDependencies } from "./report";
 
 test("one project never reads twice: rows that share a display name take a piece of their key", () => {
   /* The shape of a real 7-day page: two scratch directories both named
@@ -73,6 +73,7 @@ function dependencies(stage: HostReport["sources"], inputs: HumanInput[], agents
     agents: (): AgentSourceRead => ({ agents, index: { available: true, indexedAtMs: NOW }, local: "ingest" }),
     canonicalProject: (project) => (project === CLIENT_OLD ? CLIENT : project),
     projectNames: async () => new Map([[HARBOR, "harbor"], [CLIENT, "client-portal"]]),
+    roster: () => [],
   };
 }
 
@@ -189,5 +190,132 @@ describe("a listed host whose agent turns never arrived", () => {
     expect(body.totals.agentCoverage).toEqual({ complete: true, missingHosts: [] });
     expect(body.coverage.hosts.every((host) => host.agentsComplete)).toBe(true);
     expect(client(body).wallMs).toBe(6 * HOUR);
+  });
+});
+
+/* The owner's view of every member (docs/design/activity-dashboard.md, "The
+   owner's view of every member"): an invented team of three on this
+   workstation, and the stage host pulled for the owner alone. */
+describe("GET /api/activity?member=: the owner's view of every member", () => {
+  const OWNER = "m_owner0000000000000000000000000";
+  const BO = "m_bo000000000000000000000000000000";
+  const CY = "m_cy000000000000000000000000000000";
+  const ROSTER = [
+    { id: OWNER, name: "Ada Quill", color: "teal" as const, initials: "AQ", status: "active" as const },
+    { id: BO, name: "Bo Tern", color: "sky" as const, initials: "BT", status: "active" as const },
+    { id: CY, name: "Cy Marsh", color: "pink" as const, initials: "CM", status: "active" as const },
+  ];
+  const by = (author: string, entry: HumanInput): HumanInput => ({ ...entry, author, ids: entry.ids.map((id) => `${author}:${id}`) });
+  /* The owner and Bo both work harbor 09:00-09:30 on Tuesday; Bo alone on
+     Wednesday; the owner on the stage host (the client) on Tuesday. A removed
+     member's input stays theirs, under their id. */
+  const TEAM_INPUTS = [
+    ...["09:00", "09:10", "09:20"].map((hhmm) => by(OWNER, input("2026-09-22", hhmm, HARBOR))),
+    ...["09:00", "09:10", "09:20"].map((hhmm) => by(BO, input("2026-09-22", hhmm, HARBOR))),
+    ...["14:00", "14:10"].map((hhmm) => by(BO, input("2026-09-23", hhmm, HARBOR))),
+    by(OWNER, input("2026-09-22", "11:00", CLIENT_OLD, "stage")),
+    by("m_gone00000000000000000000000000", input("2026-09-24", "08:00", HARBOR)),
+  ];
+  function team(read: Partial<HumanInputRead> = {}): Partial<ActivityResponseDependencies> {
+    const base = dependencies([source("pull", "read", [ALWAYS])], TEAM_INPUTS, AGENTS);
+    return {
+      ...base,
+      roster: () => ROSTER,
+      humanInputs: (_window, _now, viewer) => {
+        const whole = human([source("pull", "read", [ALWAYS])], TEAM_INPUTS);
+        const hosts = whole.hosts.map((host) => (host.local ? host : { ...host, memberScoped: true }));
+        /* A read that is not the owner's holds the viewer's input alone. */
+        if (!viewer?.everyone) return { ...whole, hosts, inputs: TEAM_INPUTS.filter((entry) => entry.author === viewer?.memberId), unknownAuthors: 2 };
+        return { ...whole, hosts, operator: OWNER, unknownAuthors: 2, ...read };
+      },
+    };
+  }
+  const OWNER_VIEW = { mode: "team" as const, memberId: OWNER, canChoose: true };
+  const view = (query: string, viewer: Parameters<typeof activityResponse>[2] = OWNER_VIEW) => activityResponse(new URLSearchParams(query), team(), viewer);
+  const member = (body: ActivityResponse, id: string) => body.member.members.find((entry) => entry.id === id)!;
+
+  test("absent, the owner reads their own figures as before, with every member listed beside them", async () => {
+    const own = await view("range=7d");
+    expect(own.member).toMatchObject({ selection: "self", memberId: OWNER, canChoose: true, notSplit: ["agents", "unknownAuthorInputs"] });
+    /* The same count a member-blind read of the owner's input gives. */
+    const blind = await activityResponse(new URLSearchParams("range=7d"), dependencies([source("pull", "read", [ALWAYS])], TEAM_INPUTS.filter((entry) => entry.author === OWNER), AGENTS));
+    expect(own.totals).toEqual(blind.totals);
+    expect(own.projects).toEqual(blind.projects);
+    expect(own.member.members.map((entry) => [entry.id, entry.name, entry.initials, entry.self])).toEqual([
+      [BO, "Bo Tern", "BT", false],
+      [OWNER, "Ada Quill", "AQ", true],
+      ["m_gone00000000000000000000000000", null, null, false],
+      [CY, "Cy Marsh", "CM", false],
+    ]);
+    expect(member(own, OWNER).humanMs).toBe(own.totals.humanMs);
+    /* Nothing leaks from the roster beyond a name, a colour and initials. */
+    expect(Object.keys(member(own, BO)).sort()).toEqual(["billableHours", "color", "coverage", "humanHours", "humanMs", "id", "initials", "missingSourceDays", "name", "projects", "requests", "self"]);
+    /* A card reads what that member's own page reads. */
+    const boPage = await view(`range=7d&member=${BO}`);
+    expect(member(own, BO)).toMatchObject({ humanMs: boPage.totals.humanMs, humanHours: boPage.totals.humanHours, coverage: boPage.totals.coverage, missingSourceDays: boPage.totals.missingSourceDays });
+  });
+
+  test("all: every member counted alone, then added, so two people in one hour are two hours", async () => {
+    const all = await view("range=7d&member=all");
+    expect(all.member).toMatchObject({ selection: "all", memberId: null });
+    const rows = all.member.members;
+    const add = (pick: (row: (typeof rows)[number]) => number) => rows.reduce((sum, row) => sum + pick(row), 0);
+    expect(all.totals.humanMs).toBe(add((row) => row.humanMs));
+    expect(all.totals.humanHours).toBe(add((row) => row.humanHours));
+    expect(all.totals.requests).toBe(add((row) => row.requests));
+    expect(all.totals.requests).toBe(TEAM_INPUTS.length);
+    const tuesday = all.days.find((day) => day.date === "2026-09-22")!;
+    /* 09:00-09:30 each, harbor, for two people; the owner's stage hour beside. */
+    expect(tuesday.projects.find((entry) => entry.project === HARBOR)!.humanMs).toBe(2 * 30 * MIN);
+    expect(row(all, HARBOR).humanMs).toBe(add((entry) => entry.projects.find((p) => p.project === HARBOR)?.humanMs ?? 0));
+    expect(member(all, BO).projects.map((entry) => [entry.name, entry.humanMs])).toEqual([["harbor", 30 * MIN + 20 * MIN]]);
+    /* Agent time is one axis: the same figures as any member's page. */
+    const own = await view("range=7d");
+    expect(all.totals.wallMs).toBe(own.totals.wallMs);
+    expect(all.totals.agentHoursMs).toBe(own.totals.agentHoursMs);
+  });
+
+  test("a member whose input may live on a host pulled for the owner reads not covered, never zero", async () => {
+    const all = await view("range=7d&member=all");
+    expect(member(all, CY)).toMatchObject({ humanMs: 0, requests: 0, coverage: { complete: false, missingHosts: ["stage"] } });
+    expect(member(all, BO).coverage).toEqual({ complete: false, missingHosts: ["stage"] });
+    expect(member(all, OWNER).coverage).toEqual({ complete: true, missingHosts: [] });
+    /* Every member together misses the others' stage input too. */
+    expect(all.totals.coverage).toEqual({ complete: false, missingHosts: ["stage"] });
+    const cy = await view(`range=7d&member=${CY}`);
+    expect(cy.member).toMatchObject({ selection: "member", memberId: CY });
+    expect(cy.totals.humanMs).toBe(0);
+    expect(cy.totals.coverage).toEqual({ complete: false, missingHosts: ["stage"] });
+    expect(cy.coverage.hosts.find((host) => host.host === "stage")).toMatchObject({ complete: false, memberScoped: true });
+    /* A project the stage host cannot hold stays exact for them. */
+    const harbor = await view(`range=7d&member=${CY}&project=${HARBOR}`);
+    expect(harbor.totals.coverage).toEqual({ complete: true, missingHosts: [] });
+  });
+
+  test("one member's page counts that member alone; the unknown-author count stays beside it", async () => {
+    const bo = await view(`range=7d&member=${BO}`);
+    expect(bo.totals.humanMs).toBe(member(bo, BO).humanMs);
+    expect(bo.totals.requests).toBe(5);
+    expect(bo.unknownAuthorInputs).toBe(2);
+    const own = await view(`range=7d&member=${OWNER}`);
+    expect(own.member.selection).toBe("self");
+    expect(own.totals).toEqual((await view("range=7d")).totals);
+  });
+
+  test("only the owner names someone else; anyone may name themselves", async () => {
+    const bo = { mode: "team" as const, memberId: BO, canChoose: false };
+    for (const query of ["range=7d&member=all", `range=7d&member=${OWNER}`, `range=7d&member=${CY}`]) {
+      const failure = await view(query, bo).then(() => null, (error: unknown) => error);
+      expect(failure).toBeInstanceOf(ActivityMemberForbidden);
+      expect((failure as ActivityMemberForbidden).code).toBe("activity_member_forbidden");
+    }
+    for (const query of ["range=7d", `range=7d&member=${BO}`, "range=7d&member=%20"]) {
+      const own = await view(query, bo);
+      expect(own.member).toEqual({ selection: "self", memberId: BO, canChoose: false, members: [], notSplit: [] });
+      expect(own.totals.requests).toBe(5);
+    }
+    /* A solo host's operator may read every member. */
+    const solo = await activityResponse(new URLSearchParams("range=7d&member=all"), team({ operator: "operator" }), { mode: "solo", memberId: null, canChoose: true });
+    expect(solo.member.canChoose).toBe(true);
   });
 });

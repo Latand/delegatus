@@ -156,3 +156,64 @@ describe("human input from every expected host", () => {
     expect(readHostsConfig(dir).hosts[0]?.memberId).toBeUndefined();
   });
 });
+
+describe("the owner's read of every member", () => {
+  const local = (isoTime: string, id: string, author: string | null): HumanInput => ({
+    ...stageInput(isoTime, id), host: "workstation", project: "harbor", author,
+  });
+  function workstationExport(inputs: HumanInput[]): void {
+    const target = path.join(dir, "hosts", "workstation");
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(path.join(target, "local.jsonl"), exportLines({ host: "workstation", coveredFrom: DAY.start, coveredUntil: NOW, exportedAt: NOW, records: inputs.length, excluded: {} }, inputs));
+  }
+
+  test("every author's input, each tagged; a host that sends one person's rows counts them as the operator's and says it was read for them alone", () => {
+    hostsFile([
+      { id: "stage", mode: "team", memberId: "m_remote" },
+      { id: "solo-box", mode: "solo" },
+    ]);
+    workstationExport([local("2026-09-23T09:00:00Z", "own", "operator"), local("2026-09-23T09:05:00Z", "bo", "m_bo")]);
+    stageExport([{ ...stageInput("2026-09-23T10:00:00Z", "stage-own"), author: "m_remote" }]);
+    stageExport([{ ...stageInput("2026-09-23T11:00:00Z", "solo-own"), host: "solo-box" }], DAY.start, NOW, "solo-box");
+    const viewer = { mode: "solo" as const, memberId: null };
+    const every = readHumanInputs(DAY, NOW, { dir: () => dir, readLedger: quietLedger }, { ...viewer, everyone: true });
+    expect(every.operator).toBe("operator");
+    expect(every.inputs.map((input) => [input.host, input.author])).toEqual([
+      ["workstation", "operator"], ["workstation", "m_bo"], ["stage", "operator"], ["solo-box", "operator"],
+    ]);
+    expect(every.hosts.map((host) => [host.host, host.memberScoped])).toEqual([["workstation", undefined], ["stage", true], ["solo-box", false]]);
+    /* The viewer's own read is what it always was. */
+    const own = readHumanInputs(DAY, NOW, { dir: () => dir, readLedger: quietLedger }, viewer);
+    expect(own.operator).toBeUndefined();
+    expect(own.inputs.map((input) => [input.host, input.author])).toEqual([["workstation", "operator"], ["stage", "m_remote"], ["solo-box", "operator"]]);
+    expect(own.hosts.every((host) => host.memberScoped === undefined)).toBe(true);
+  });
+
+  test("an input with no author belongs to nobody and is counted apart", () => {
+    hostsFile([{ id: "stage", mode: "team", memberId: "m_remote" }]);
+    workstationExport([local("2026-09-23T09:00:00Z", "own", "operator")]);
+    /* A team host's legacy rows carry no author: nobody's hours, one count. */
+    stageExport([{ ...stageInput("2026-09-23T10:00:00Z", "mine"), author: "m_remote" }, { ...stageInput("2026-09-23T10:05:00Z", "legacy"), author: null }]);
+    const every = readHumanInputs(DAY, NOW, { dir: () => dir, readLedger: quietLedger }, { mode: "solo", memberId: null, everyone: true });
+    expect(every.inputs.map((input) => [input.host, input.author])).toEqual([["workstation", "operator"], ["stage", "operator"]]);
+    expect(every.unknownAuthors).toBe(1);
+    expect(every.hosts.find((host) => host.host === "stage")!.unknownAuthors).toBe(1);
+  });
+
+  test("the same message copied twice by one person counts once; two people never merge", () => {
+    hostsFile([]);
+    const shared = local("2026-09-23T09:00:00Z", "same", "m_bo");
+    workstationExport([shared, { ...shared, at: shared.at + 30_000 }, { ...shared, ids: [messageId("codex", "other")], author: "m_cy" }]);
+    const every = readHumanInputs(DAY, NOW, { dir: () => dir, readLedger: quietLedger }, { mode: "solo", memberId: null, everyone: true });
+    expect(every.inputs.map((input) => input.author)).toEqual(["m_bo", "m_cy"]);
+  });
+
+  test("a member who is not the owner never gets every member's read", () => {
+    hostsFile([{ id: "stage", mode: "team", memberId: "m_remote" }]);
+    workstationExport([local("2026-09-23T09:00:00Z", "bo", "m_bo"), local("2026-09-23T09:05:00Z", "cy", "m_cy")]);
+    const read = readHumanInputs(DAY, NOW, { dir: () => dir, readLedger: quietLedger }, { mode: "team", memberId: "m_bo", everyone: true });
+    expect(read.operator).toBeUndefined();
+    expect(read.inputs.map((input) => input.author)).toEqual(["m_bo"]);
+    expect(read.hosts.map((host) => host.host)).toEqual(["workstation"]);
+  });
+});

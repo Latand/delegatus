@@ -10,6 +10,7 @@ import type { Locale, MessageKey, TFunction } from "@/lib/i18n";
 import { ActivityCountingDrawer } from "./ActivityCountingDrawer";
 import { ActivityDayChart } from "./ActivityDayChart";
 import { ActivityFigures } from "./ActivityFigures";
+import { ActivityMemberBreakdown, ActivityMemberFilter, countedLabel, type MemberChoice } from "./ActivityMembers";
 import { ActivityProjectPicker, ActivityScopeChip } from "./ActivityProjectPicker";
 import { ActivityProjects } from "./ActivityProjects";
 import { ActivityRhythm } from "./ActivityRhythm";
@@ -53,13 +54,16 @@ function Skeleton() {
   );
 }
 
-export function ActivityDesktop({ data, range, onRange, scope, onProject, loading, failed, onRetry, locale, t }: {
+export function ActivityDesktop({ data, range, onRange, scope, onProject, member, onMember, loading, failed, onRetry, locale, t }: {
   data: ActivityResponse | null;
   range: RangeKey;
   onRange(next: RangeKey): void;
   /** The project the whole page is scoped to, by key and name, or none. */
   scope: { project: string; name: string } | null;
   onProject(project: string | null): void;
+  /** Whose input the page counts: `all`, a member id, or null for the viewer. */
+  member: MemberChoice;
+  onMember(member: MemberChoice): void;
   loading: boolean;
   failed: boolean;
   onRetry(): void;
@@ -92,6 +96,7 @@ export function ActivityDesktop({ data, range, onRange, scope, onProject, loadin
             {data ? <span className="truncate text-[13px] text-muted" data-activity-range-label="">{rangeText(data, locale)}</span> : null}
           </div>
           <div className="flex-1" />
+          {data?.member.canChoose ? <ActivityMemberFilter data={data} selected={member} onSelect={onMember} locale={locale} t={t} /> : null}
           {data ? <ActivityProjectPicker data={data} names={names} selected={scope?.project ?? null} unread={rowsUnread} onSelect={onProject} locale={locale} t={t} /> : null}
           <div className="flex shrink-0 rounded-[8px] border border-border bg-card p-[2px]" role="tablist" aria-label={t("activity.rangeAria")}>
             {RANGES.map((key) => (
@@ -132,13 +137,19 @@ export function ActivityDesktop({ data, range, onRange, scope, onProject, loadin
           </div>
         ) : null}
 
+        {context && data && data.member.selection === "all" ? (
+          <div className={`mt-[18px] transition-opacity ${loading ? "opacity-60" : ""}`}>
+            <ActivityMemberBreakdown data={data} onSelect={onMember} locale={locale} t={t} />
+          </div>
+        ) : null}
+
         {context && data ? (
           <div
             className={`mt-[18px] grid grid-cols-[minmax(0,1fr)_420px] items-start gap-4 transition-opacity ${loading ? "opacity-60" : ""}`}
             data-activity-loaded={data.range.key}
           >
             <section ref={main} className="col-start-1 row-start-1 rounded-[12px] border border-border bg-card px-[22px] pb-3.5 pt-5 shadow-1" data-activity-main="">
-              <ActivityFigures data={data} unread={unread} locale={locale} t={t} onConnect={() => setDrawer("hosts")} />
+              <ActivityFigures data={data} unread={unread} locale={locale} t={t} onConnect={() => setDrawer("hosts")} person={countedLabel(data, t)} />
               <div className="mt-[18px] border-t border-border pt-3">
                 <ActivityDayChart
                   context={context}
