@@ -21,6 +21,7 @@ import { activeRestartGate, beginRestartGate, endRestartGate, restartGateFile } 
 import { headOf, releaseDirFor } from "./release";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { memAvailableMb } from "./steps";
+import { isRuntimeHostTransportFailure } from "@/lib/runtime/client";
 
 import type { RuntimeHostHealth } from "@/lib/runtime/client";
 import type { ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeploymentStatus } from "@/lib/runtime/contracts";
@@ -99,6 +100,7 @@ export interface ServiceDeps {
     English for API readers and logs, and `detail` is machine output (the
     runtime host's own refusal). */
 export type ActionResult = { ok: true } | { ok: false; status: number; code: RefusalCode; error: string; detail?: string };
+type DeploymentResult = ActionResult & { deliveryUncertain?: boolean };
 
 export function refuse(status: number, code: RefusalCode, error: string, detail?: string): ActionResult {
   return { ok: false, status, code, error, ...(detail ? { detail } : {}) };
@@ -449,21 +451,34 @@ export class SelfUpdateService {
     this.saveAuto();
   }
 
+  private finishManagedAutoRefusal(target: Revision, reason: string): void {
+    this.auto = {
+      ...this.auto, enabled: false, managedPending: null, waitingSince: null, waitingTarget: null,
+      quietSince: null, lastBlockers: null,
+      off: { at: new Date(this.deps.now()).toISOString(), target: target.sha, stage: "deploy", reason },
+    };
+    this.saveAuto();
+  }
+
   private async runManagedAutoTick(decision: ModeDecision): Promise<void> {
     const snapshot = await this.snapshot();
     const pending = this.auto.managedPending;
     if (pending) {
-      if (this.managed?.idempotencyKey === managedIdempotencyKey(pending.target.sha, pending.clientKey)) {
-        this.finishManagedAuto();
+      if (this.managed?.idempotencyKey === managedIdempotencyKey(pending.target.sha, pending.clientKey)) return;
+      // Only a durable managed.json record proves that the host accepted this
+      // intent. An unaccepted or uncertain request must pass current policy
+      // before it can be replayed after a restart.
+      if (!this.auto.enabled) {
+        this.auto = { ...this.auto, managedPending: null, quietSince: null };
+        this.saveAuto();
         return;
       }
-      if (!managedActive(this.managed)) await this.deploy(pending.target, pending.clientKey, "auto");
-      return;
     }
     if (!this.auto.enabled || this.autoAvailability(decision) !== "available" || managedActive(this.managed)
       || this.checking || snapshot.check.state === "checking") return;
-    const target = this.slice.available;
-    if (this.slice.check.state !== "update-available" || !target?.sha || snapshot.installed.sha === target.sha
+    const target = pending?.target ?? this.slice.available;
+    if (this.slice.check.state !== "update-available" || !target?.sha || this.slice.available?.sha !== target.sha
+      || snapshot.installed.sha === target.sha
       || this.managed?.phase === "succeeded" && this.managed.target === target.sha) return;
     const now = this.deps.now();
     const repo = await this.deps.prepareCheckRepo();
@@ -481,14 +496,38 @@ export class SelfUpdateService {
       this.saveAuto();
       return;
     }
-    this.decision = null;
-    const current = await this.decide();
-    if (current.mode !== "managed" || this.autoAvailability(current) !== "available" || !this.auto.enabled
-      || this.slice.check.state !== "update-available" || this.slice.available?.sha !== target.sha) return;
-    const clientKey = randomUUID();
-    this.auto = { ...this.auto, managedPending: { target, clientKey, at: new Date(this.deps.now()).toISOString() }, quietSince: null };
-    this.saveAuto();
-    await this.deploy(target, clientKey, "auto");
+    const gateFile = restartGateFile(join(this.deps.dir, "managed-deploy.intent"));
+    const gateId = beginRestartGate(gateFile, this.deps.now());
+    if (!gateId) return;
+    try {
+      // Mode resolution can be asynchronous. Recheck it before admission, then
+      // read blockers again so work that starts during that read can veto it.
+      this.decision = null;
+      const current = await this.decide();
+      if (current.mode !== "managed" || this.autoAvailability(current) !== "available" || !this.auto.enabled
+        || managedActive(this.managed) || this.checking || this.slice.check.state !== "update-available"
+        || this.slice.available?.sha !== target.sha) return;
+      green = await this.refreshGreen(target.sha, repo, green);
+      const admissionSnapshot = await this.snapshot();
+      const admissionProbe = this.deps.quiet ? await probeQuiet(admissionSnapshot, this.deps.quiet, this.deps.now()) : null;
+      this.autoBlockers = admissionProbe?.blockers ?? null;
+      if (activeRestartGate(gateFile, this.deps.now()) !== gateId || green.state !== "green" || !admissionProbe?.quiet || !this.auto.enabled || this.checking
+        || admissionSnapshot.check.state === "checking" || admissionSnapshot.installed.sha === target.sha
+        || admissionSnapshot.available?.sha !== target.sha || this.slice.available?.sha !== target.sha) {
+        this.auto = { ...this.auto, quietSince: null, lastBlockers: admissionProbe?.blockers ?? this.auto.lastBlockers };
+        this.saveAuto();
+        return;
+      }
+      const clientKey = pending?.clientKey ?? randomUUID();
+      if (!pending) {
+        this.auto = { ...this.auto, managedPending: { target, clientKey, at: new Date(this.deps.now()).toISOString() }, quietSince: null };
+        this.saveAuto();
+      }
+      const result = await this.deploy(target, clientKey, "auto");
+      if (!result.ok && !result.deliveryUncertain) this.finishManagedAutoRefusal(target, result.detail ?? result.error);
+    } finally {
+      endRestartGate(gateFile, gateId);
+    }
   }
 
   private async refreshGreen(target: string, checkout: string, prior: GreenVerdict): Promise<GreenVerdict> {
@@ -747,7 +786,7 @@ export class SelfUpdateService {
     return refuse(409, "cannot-update", "This install cannot update itself");
   }
 
-  private async deploy(target: Revision, clientKey: string, trigger: "operator" | "auto" = "operator"): Promise<ActionResult> {
+  private async deploy(target: Revision, clientKey: string, trigger: "operator" | "auto" = "operator"): Promise<DeploymentResult> {
     if (managedActive(this.managed)) return busy("update");
     try {
       const record = await requestManagedUpdate(target, clientKey, this.deps.requestDeployment, this.deps.now, trigger);
@@ -759,7 +798,8 @@ export class SelfUpdateService {
     } catch (error) {
       if (error instanceof DeploymentBusyError) return refuse(409, "deployment-busy", error.message);
       const detail = error instanceof Error ? error.message : undefined;
-      return refuse(503, "deployment-refused", "The runtime host did not take the deployment", detail);
+      return { ...refuse(503, "deployment-refused", "The runtime host did not take the deployment", detail),
+        ...(isRuntimeHostTransportFailure(error) ? { deliveryUncertain: true } : {}) };
     }
   }
 

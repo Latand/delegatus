@@ -2,6 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { RuntimeHostUnavailableError } from "@/lib/runtime/client";
 import type { ViewerDeploymentRequest, ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import { initialAuto, readAuto, writeAuto } from "./auto";
 import { initialCheck } from "./checkState";
@@ -21,8 +22,11 @@ function scenario(enabled = true) {
   let remote = "https://github.com/example/project";
   let release: string | null = OLD;
   let turns = 0;
+  let stages = 0;
   let green: "green" | "red" = "green";
   let greenReads = 0;
+  let modeReads = 0;
+  let modeReadHook: ((read: number) => Promise<void>) | null = null;
   let status: ViewerDeploymentStatus | null = null;
   const requests: ViewerDeploymentRequest[] = [];
   writeAuto(join(dir, "auto.json"), { ...initialAuto(), enabled });
@@ -32,7 +36,11 @@ function scenario(enabled = true) {
   }, update: null }));
   const deps = {
     dir, now: () => now, env: {}, get remote() { return remote; }, branch: "main", pollMinutes: 60, bun: "bun",
-    mode: async () => ({ mode: "managed", reason: null, record: null }),
+    mode: async () => {
+      modeReads += 1;
+      await modeReadHook?.(modeReads);
+      return { mode: "managed", reason: null, record: null };
+    },
     check: async () => ({ ok: true, installed: revision(OLD), available: revision(TARGET), relation: "behind", ahead: 0, behind: 1, delta: null }),
     describe: async (_repo: string, sha: string) => revision(sha),
     releaseTarget: () => release ? { revision: release } : null,
@@ -41,7 +49,8 @@ function scenario(enabled = true) {
     web: { pid: 101, port: 3000, startedAt: new Date(now).toISOString() },
     green: { read: async () => { greenReads += 1; return { state: green }; } },
     quiet: { runtimeSnapshot: async () => ({ sessions: Array.from({ length: turns }, () => ({ turn: "running", host: "hosted" })) }),
-      pipelines: () => [], presence: () => [], memoryAvailableMb: () => 8_192 },
+      pipelines: () => Array.from({ length: stages }, () => ({ state: "running", cursor: { state: "running" } })) as never,
+      presence: () => [], memoryAvailableMb: () => 8_192 },
     requestDeployment: async (body: ViewerDeploymentRequest) => {
       requests.push(body);
       status = {
@@ -57,8 +66,10 @@ function scenario(enabled = true) {
   return {
     dir, deps, requests, service: () => new SelfUpdateService(deps),
     advance: (ms: number) => { now += ms; }, setTurns: (value: number) => { turns = value; },
+    setStages: (value: number) => { stages = value; },
     setGreen: (value: "green" | "red") => { green = value; }, greenReads: () => greenReads,
     setRemote: (value: string) => { remote = value; }, setRelease: (value: string | null) => { release = value; },
+    setModeReadHook: (hook: ((read: number) => Promise<void>) | null) => { modeReadHook = hook; },
     finish: (phase: "succeeded" | "rolled-back" | "failed", error: string | null = null) => {
       if (!status) throw new Error("deployment was not requested");
       status = { ...status, phase, terminal: true, error, updatedAt: new Date(now).toISOString(), revisionNumber: status.revisionNumber + 1 };
@@ -117,6 +128,116 @@ test("a fresh red check at the end of the quiet minute vetoes managed deployment
   await service.autoTick();
   expect(h.requests).toHaveLength(0);
   expect(readAuto(join(h.dir, "auto.json")).green[TARGET]?.state).toBe("red");
+  service.stop();
+});
+
+test("an unaccepted managed intent does not deploy after auto is disabled and policy changes", async () => {
+  const h = scenario();
+  h.deps.requestDeployment = async (body) => {
+    h.requests.push(body);
+    return { state: "busy", deploymentId: "other-deployment", revision: TARGET };
+  };
+  let service = h.service();
+  await service.autoTick();
+  h.advance(60_000);
+  await service.autoTick();
+  expect(h.requests).toHaveLength(1);
+  expect(readManagedRecord(join(h.dir, "managed.json"))).toBeNull();
+  expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ enabled: false, managedPending: null,
+    off: { target: TARGET, stage: "deploy", reason: "another deployment is running (other-deployment)" } });
+  expect(await service.setAuto(false)).toEqual({ ok: true });
+  service.stop();
+
+  h.setGreen("red");
+  h.setTurns(1);
+  service = h.service();
+  await service.autoTick();
+  expect(h.requests).toHaveLength(1);
+  expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ enabled: false, managedPending: null });
+  service.stop();
+
+  const disabled = scenario();
+  writeAuto(join(disabled.dir, "auto.json"), { ...initialAuto(), enabled: true,
+    managedPending: { target: revision(TARGET), clientKey: "unaccepted-key", at: "2026-01-01T00:00:00.000Z" } });
+  service = disabled.service();
+  await service.setAuto(false);
+  service.stop();
+  disabled.setGreen("red");
+  disabled.setTurns(1);
+  service = disabled.service();
+  await service.autoTick();
+  expect(disabled.requests).toHaveLength(0);
+  expect(readAuto(join(disabled.dir, "auto.json"))).toMatchObject({ enabled: false, managedPending: null });
+  service.stop();
+});
+
+test("a deterministic host refusal disables auto and survives service reconstruction", async () => {
+  const h = scenario();
+  h.deps.requestDeployment = async () => { throw new Error("canonical revision is unavailable"); };
+  let service = h.service();
+  await service.autoTick();
+  h.advance(60_000);
+  await service.autoTick();
+  expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ enabled: false, managedPending: null,
+    off: { target: TARGET, stage: "deploy", reason: "canonical revision is unavailable" } });
+  service.stop();
+
+  service = h.service();
+  expect((await service.snapshot()).auto?.off).toMatchObject({ target: TARGET, reason: "canonical revision is unavailable" });
+  service.stop();
+});
+
+test("an uncertain host response retries after restart with the saved idempotency key", async () => {
+  const h = scenario();
+  h.deps.requestDeployment = async (body) => {
+    h.requests.push(body);
+    throw new RuntimeHostUnavailableError("runtime host request timed out");
+  };
+  let service = h.service();
+  await service.autoTick();
+  h.advance(60_000);
+  await service.autoTick();
+  const key = h.requests[0]?.idempotencyKey;
+  expect(key).toMatch(/^self-update-/);
+  expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ enabled: true, managedPending: { clientKey: expect.any(String) } });
+  service.stop();
+
+  h.deps.requestDeployment = async (body) => {
+    h.requests.push(body);
+    return { state: "accepted", deploymentId: "deployment-1", revision: TARGET, replayed: true };
+  };
+  service = h.service();
+  await service.autoTick();
+  h.advance(60_000);
+  await service.autoTick();
+  expect(h.requests).toHaveLength(2);
+  expect(h.requests[1]?.idempotencyKey).toBe(key);
+  service.stop();
+});
+
+test.each(["turn", "stage"] as const)("a running %s that starts during the final mode read blocks managed admission", async (work) => {
+  const h = scenario();
+  const service = h.service();
+  await service.autoTick();
+  h.advance(60_000);
+  let entered!: () => void;
+  let releaseMode!: () => void;
+  const modeEntered = new Promise<void>((resolve) => { entered = resolve; });
+  const modeRelease = new Promise<void>((resolve) => { releaseMode = resolve; });
+  h.setModeReadHook(async (read) => {
+    if (read === 3) {
+      entered();
+      await modeRelease;
+    }
+  });
+  const tick = service.autoTick();
+  await modeEntered;
+  if (work === "turn") h.setTurns(1);
+  else h.setStages(1);
+  releaseMode();
+  await tick;
+  expect(h.requests).toHaveLength(0);
+  expect(readAuto(join(h.dir, "auto.json")).managedPending).toBeNull();
   service.stop();
 });
 
@@ -193,6 +314,9 @@ test("an interrupted request replays its persisted idempotency key", async () =>
   const pending = { target: revision(TARGET), clientKey: "saved-key", at: new Date(Date.parse("2026-01-01T00:00:00Z")).toISOString() };
   writeAuto(join(h.dir, "auto.json"), { ...initialAuto(), enabled: true, managedPending: pending });
   const service = h.service();
+  await service.autoTick();
+  expect(h.requests).toHaveLength(0);
+  h.advance(60_000);
   await service.autoTick();
   expect(h.requests).toHaveLength(1);
   expect(h.requests[0]?.idempotencyKey).toBe(`self-update-${TARGET.slice(0, 12)}-saved-key`);
