@@ -5455,7 +5455,7 @@ async function linkingMain(): Promise<void> {
       await page.getByRole("button", { name: translate(lang, "links.allow"), exact: true }).click();
       await page.waitForSelector("[data-linked-connected]", { timeout: 15_000 });
     } },
-    "connect-start": { fixture: connect({ focus: "[data-linked-panel=connect]" }), steps: async () => {} },
+    "connect-start": { fixture: connect({ focus: "" }), steps: async () => {} },
     "connect-version": { fixture: connect({ connect: { status: 409, body: { error: "version" } }, focus: "[data-linked-connect-error]" }), steps: async (page, lang) => {
       await fillConnect(page, lang);
       await page.waitForSelector("[data-linked-connect-error]");
@@ -5542,7 +5542,7 @@ async function linkingMain(): Promise<void> {
           const buttonsOutside = allow.filter((node) => { const rect = node.getBoundingClientRect(); return rect.left < outer.left - 0.5 || rect.right > outer.right + 0.5; }).length;
           const shortButtons = allow.filter((node) => node.getBoundingClientRect().height < 43.5).map((node) => node.textContent);
           /* The state frames keep the role picker in view when they can; the ones below the fold centre their subject. */
-          dialog.querySelector(focus)?.scrollIntoView({ block: focus === "[data-linked-state]" ? "nearest" : "center" });
+          if (focus) dialog.querySelector(focus)?.scrollIntoView({ block: focus === "[data-linked-state]" ? "nearest" : "center" });
           return { clipped, buttonsOutside, shortButtons, overflow: dialog.scrollWidth - dialog.clientWidth };
         }, fixture.focus);
         const tag = `${width}-${lang}-${name}`;
