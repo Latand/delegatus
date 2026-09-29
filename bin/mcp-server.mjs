@@ -15,13 +15,14 @@ import { createInterface } from "node:readline";
 import { appDirIn } from "./appDir.mjs";
 import {
   cliRuntimeHostConfig,
-  discardWakatimeEnvironmentCredential,
+  discardUnsupportedApiCredentials,
   viewerChildProcessOptions,
   viewerServerBunRuntime,
 } from "./server-runtime.mjs";
+
+discardUnsupportedApiCredentials();
 import { installedRelease, isGitCheckout, selfUpdatePaths } from "./self-update-supervisor.mjs";
 
-discardWakatimeEnvironmentCredential();
 process.env.LLV_STATE_OWNER = "mcp";
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");

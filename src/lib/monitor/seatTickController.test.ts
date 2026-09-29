@@ -786,7 +786,7 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
   const dist = path.join(packageRoot, "dist");
   fs.mkdirSync(bin);
   fs.mkdirSync(dist);
-  for (const name of ["mcp-server.mjs", "server-runtime.mjs", "appDir.mjs", "envAlias.mjs"]) {
+  for (const name of ["mcp-server.mjs", "server-runtime.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs"]) {
     fs.copyFileSync(path.join(import.meta.dir, "../../../bin", name), path.join(bin, name));
   }
   const crashFlag = path.join(packageRoot, "crash.flag");

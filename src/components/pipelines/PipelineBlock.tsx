@@ -20,8 +20,10 @@ import {
   type LoopArc,
 } from "@/components/kanban/PipelineSection";
 
-/* The stage mark lives beside the graph, which draws it on a loop strip too. */
+/* The stage mark lives beside the model glyph that stands in for it, which
+   the graph draws on a loop strip too. */
 export { StageToneMark } from "@/components/kanban/PipelineSection";
+import { StageGlyph } from "@/components/kanban/StageGlyph";
 import { stageIdentity } from "@/components/kanban/stageIdentity";
 import { stageDraftable, type PipelineActionKind } from "@/components/kanban/stagesModel";
 
@@ -56,11 +58,12 @@ import {
  *   who runs it: engine mark, model, effort and role.
  *
  * The pill is the phone's: an outline with no fill around a mark and the
- * stage's name. The mark's shape carries the state and its colour is the
- * stage's `STAGE_TONE`, the one tone map the desktop graph reads. Who runs a
- * stage (engine, model, effort) is in the pill's tooltip, the Stages sheet
- * and the graph, not on the pill. A fail edge rides the failing pill as
- * "↺ 1/2".
+ * stage's name. The mark is the glyph of the model the stage runs on, with its
+ * state on it (docs/design/model-glyphs.md); a model with no glyph keeps the
+ * mark whose shape carries the state and whose colour is the stage's
+ * `STAGE_TONE`, the one tone map the desktop graph reads. Engine, model and
+ * effort in words are in the pill's tooltip, the Stages sheet and the graph,
+ * not on the pill. A fail edge rides the failing pill as "↺ 1/2".
  */
 
 const LIVE = new Set<StageChipState>(["running", "reviewing", "committing"]);
@@ -113,7 +116,7 @@ function StagePill({ pipeline, chip, name, suffix, interactive, selected, onOpen
   const className = `pb-pill tone-${STAGE_TONE[chip.state]} st-${chip.state}${attempt ? "" : " waiting"}${chip.branch ? " side" : ""}${chip.rework ? " rework" : ""}${selected ? " selected" : ""}`;
   const body = (
     <>
-      <StageToneMark state={chip.state} live={chip.rework} />
+      <StageGlyph state={chip.state} model={chip.stage.effectiveRole ? stageIdentity(pipeline, chip.stage) : null} live={chip.rework} fallback="mark" />
       <span className="pb-name">{chip.branch ? t("kanban.branch", { stage: name }) : name}</span>
       {chip.rounds ? <CountCircle n={chip.rounds} tone="neutral" label={t("kanban.stageAriaRounds", { stage: name, state, count: chip.rounds })} /> : null}
       {drawn(suffix) ? <ReturnSuffix arc={suffix.arc} title={suffix.title} /> : null}
@@ -871,7 +874,7 @@ function ScreenBlock(props: PipelineBlockProps & {
         <span className="pb-num">{index + 1}</span>
         <span className="pb-stage-main">
           <span className="pb-stage-title">
-            <StageToneMark state={shown} live={chip.rework} />
+            <StageGlyph state={shown} model={identity} live={chip.rework} fallback="mark" badge={false} />
             {/* The number flows after the name's last word, wrapped or not. */}
             <span className="pb-name">{chip.branch ? t("kanban.branch", { stage: name }) : name}{attemptN !== null ? <span className="pb-attempt">{` · ${attemptN}`}</span> : null}</span>
             {chip.rounds ? <CountCircle n={chip.rounds} tone="neutral" label={t("kanban.stageAriaRounds", { stage: name, state, count: chip.rounds })} /> : null}
@@ -879,7 +882,7 @@ function ScreenBlock(props: PipelineBlockProps & {
           </span>
           {identity || words ? (
             <span className="pb-stage-ident">
-              {identity ? <StageIdentity identity={identity} density="line" /> : null}
+              {identity ? <StageIdentity identity={identity} density="line" glyph /> : null}
               {words ? <span className="pb-ident-words">{identity ? `· ${words}` : words}</span> : null}
             </span>
           ) : null}

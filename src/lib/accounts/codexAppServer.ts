@@ -1,3 +1,4 @@
+import { withoutUnsupportedApiCredentials } from "../environmentIsolation";
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
@@ -10,7 +11,6 @@ import {
 } from "./codexAppServerProtocol";
 import { signalDetachedProcessGroup, signalProcessGroup, type ProcessSignal } from "../processGroup";
 import { headlessCodexThreadConfig } from "../codexHeadlessConfig";
-import { withoutWakatimeCredential } from "../wakatime/credential";
 
 export interface CodexAppServerChild {
   pid?: number;
@@ -143,7 +143,7 @@ const defaultClock: CodexAppServerClock = {
 };
 
 export function codexAppServerEnvironment(home: string): NodeJS.ProcessEnv {
-  return { ...withoutWakatimeCredential(process.env), CODEX_HOME: home };
+  return { ...withoutUnsupportedApiCredentials(process.env), CODEX_HOME: home };
 }
 
 function spawnCodexAppServer(home: string, args: readonly string[]): CodexAppServerChild {

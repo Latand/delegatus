@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -44,6 +44,31 @@ const runningPath = (account: string) => `/state/agent-log-viewer/shared/account
 const RUNNING_PATH = runningPath("spare");
 const VIEWPORTS = [{ width: 390, height: 844 }, { width: 430, height: 932 }] as const;
 const SCHEMES = ["light", "dark"] as const;
+
+describe("self-update reload notice", () => {
+  browserTest("a phone page open across a release switch offers a visible reload button", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    try {
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+      try {
+        await context.addInitScript(() => localStorage.setItem("llv_lang", "uk"));
+        const page = await context.newPage();
+        await page.goto(`${base}/?self-update-reload=1`);
+        await page.waitForFunction(() => (window as typeof window & { evidence?: { presenceReplies?: number } }).evidence?.presenceReplies);
+        await page.keyboard.press("Shift");
+        const notice = page.locator("[data-release-reload]");
+        await notice.waitFor({ timeout: 10_000 });
+        expect(await notice.innerText()).toContain("Тепер веб працює на bbbbbbb");
+        const button = notice.getByRole("button", { name: "Перезавантажити" });
+        const box = await button.boundingBox();
+        expect(box).not.toBeNull();
+        expect(box!.height).toBeGreaterThanOrEqual(32);
+        expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+      } finally { await context.close(); }
+    } finally { await browser.close(); stop(); }
+  }, 30_000);
+});
 
 browserTest("linked installs: this install renders at 390 and desktop widths in en and uk", async () => {
   const { base, stop } = await serveFixture();

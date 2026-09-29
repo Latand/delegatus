@@ -278,6 +278,13 @@ export function stageVerdictRejectionReason(text: string): string {
     : "canonical completed assistant turn did not yield a valid final JSON verdict";
 }
 
+/** A completed turn's prose with its fenced JSON verdict taken off, whole and
+    unbounded; the text itself when it carries no well-formed verdict. */
+export function stageVerdictProse(text: string): string {
+  const candidate = finalVerdictCandidate(text);
+  return "failureReason" in candidate ? text : text.slice(0, candidate.index);
+}
+
 /** Completion authority is the last well-formed fenced JSON verdict in a completed turn. */
 export function parseStageVerdict(text: string): ParsedStageVerdict | RejectedStageVerdict | null {
   const candidate = finalVerdictCandidate(text);

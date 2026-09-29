@@ -1,3 +1,4 @@
+import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import crypto from "node:crypto";
 
 import { accountManager } from "@/lib/accounts/manager";
@@ -10,7 +11,6 @@ import { activeOrchestratorSeats, type OrchestratorSeat } from "@/lib/orchestrat
 import { captureProcessIdentity, processIdentityMayOwn, processIdentityStatus } from "@/lib/processIdentity";
 import { assertDarwinStructuredRuntime } from "@/lib/proc/darwinIdentity";
 import { readStableTailRecords } from "@/lib/scanner/activity";
-import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 import { loadPipelinesForStartup, withPipelineStartupAdmission } from "@/lib/pipelines/store";
 
 import {
@@ -1161,7 +1161,7 @@ export function claudeStartupHostOptions(
 ) {
   const access = materializeStructuredHostAccess(
     structuredHostAccessPolicy(entry.launchProfile),
-    withoutWakatimeCredential(owner?.env ?? startupEnvironment),
+    withoutUnsupportedApiCredentials(owner?.env ?? startupEnvironment),
     capability,
   );
   /* No owner means no account answered for this transcript, so there is no
@@ -1421,7 +1421,7 @@ async function adoptStructuredHostsPass(
       accountManager.resolveTranscriptOwner("codex", entry.artifactPath));
     const resolveClaudeOwner = dependencies.resolveClaudeOwner ?? ((entry: AgentRegistryEntry) =>
       accountManager.resolveTranscriptOwner("claude", entry.artifactPath));
-    const startupEnvironment = withoutWakatimeCredential(process.env);
+    const startupEnvironment = withoutUnsupportedApiCredentials(process.env);
     const codex = resumeDeferred && codexCandidateCount === 0 ? [] : await (dependencies.adopt ?? adoptCodexRegistryHosts)(
       registry,
       (entry) => {

@@ -192,3 +192,5 @@ which clears pending conversation intent; an initial conversation can no
 longer finish opening over a later Search selection. Readiness timeouts show
 a localized retry control. Reloaded frames also wait for acknowledgement;
 elapsed time alone never marks a frame ready.
+
+`--check-swipe-feedback` covers the other half: a finger that moves steadily and then rests over the hero and phone frames. The page has to follow it 1:1, hold still while it rests, and never reverse. It runs twice, once with Chromium's stable touch coordinates and once with `Touch.screenY` carrying the landing's scroll, the semantics seen in an iPhone Safari recording where the page alternated over a demo. The second run fails on a frame that reads the finger as a difference between two readings taken in a frame that moved in between, which is what made the landing jump back and forth. Playwright's WebKit can only tap, so this check models the iPhone coordinates in Chromium.

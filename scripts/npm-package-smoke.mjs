@@ -476,7 +476,6 @@ async function main() {
       LLV_CLAUDE_HOME: path.join(homeDirectory, ".claude"),
       TMPDIR: runtimeTempDirectory,
       NODE_ENV: "production",
-      LLV_WAKATIME_ENABLED: "1",
     };
     let output = "";
     const collect = (chunk) => {

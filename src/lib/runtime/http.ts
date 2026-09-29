@@ -13,7 +13,6 @@ import { retireReplySuggestionsOnOperatorMessage } from "@/lib/suggestions/store
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { claimMessageAuthor, recordConversationEvent, refuseAnonymous, settleMessageAuthor, teamActor, type PriorSubmission } from "@/lib/team";
 import { agentMessageOrigin } from "./agentMessageAuthor";
-import { recordDirectOperatorWakatimeActivity } from "@/lib/wakatime/operatorActivity";
 
 import { RuntimeHostUnavailableError, runtimeHostClient, type RuntimeHostClient } from "./client";
 import { parseRuntimeCommand } from "./commands";
@@ -36,7 +35,7 @@ export interface RuntimeHttpDependencies {
   structuredEnabled?(): boolean;
   registry?(): AgentRegistry;
   enqueue?: typeof enqueueStructuredMessage;
-  recordOperatorActivity?: typeof recordDirectOperatorWakatimeActivity;
+
   /** The activity dashboard's request ledger; never throws. */
   recordOperatorRequest?: typeof recordOperatorRequest;
   /** #1202: retires the conversation's reply drafts when the operator answers. */
@@ -50,7 +49,7 @@ const DEFAULT_DEPENDENCIES: RuntimeHttpDependencies = {
   structuredEnabled: () => structuredHostsEnabled(),
   registry: agentRegistry,
   enqueue: enqueueStructuredMessage,
-  recordOperatorActivity: recordDirectOperatorWakatimeActivity,
+
   recordOperatorRequest,
   retireReplySuggestions: retireReplySuggestionsOnOperatorMessage,
   kick: kickStructuredDeliveryQueue,
@@ -276,18 +275,6 @@ async function dispatchRuntimeCommand(
         })()
         : API_CLIENT_ORIGIN;
       command = { ...command, origin };
-    }
-    if ((command.kind === "send" || command.kind === "steer" || command.kind === "inject" || command.kind === "answer")
-      && byOperator
-      && dependencies.recordOperatorActivity) {
-      try {
-        dependencies.recordOperatorActivity({
-          conversationId: command.conversationId,
-          idempotencyKey: command.idempotencyKey,
-        });
-      } catch {
-        return refusedBeforeDispatch("direct operator activity could not be recorded");
-      }
     }
     if ((command.kind === "send" || command.kind === "steer" || command.kind === "inject" || command.kind === "answer") && byOperator) {
       dependencies.recordOperatorRequest?.(request, {

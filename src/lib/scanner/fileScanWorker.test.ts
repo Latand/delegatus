@@ -283,7 +283,7 @@ test("worker scans publish a Claude transcript that appears in a previously sess
   fs.mkdirSync(projectDirectory, { recursive: true });
   fs.mkdirSync(temporaryDir, { recursive: true });
   fs.mkdirSync(path.join(temporaryDir, `claude-${process.getuid?.() ?? 1000}`));
-  fs.writeFileSync(path.join(projectDirectory, "historical.jsonl.wakatime"), "{}\n");
+  fs.writeFileSync(path.join(projectDirectory, "historical.jsonl.bak"), "{}\n");
   replaceConversationCatalog([]);
   const runtime = {
     cwd: path.resolve(import.meta.dir, "../../.."),

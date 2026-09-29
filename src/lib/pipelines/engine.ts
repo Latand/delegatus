@@ -133,7 +133,7 @@ import type {
   PipelineUnresolvedTermination,
 } from "./types";
 import { PIPELINE_FAIL_EDGE_EXHAUSTIONS } from "./types";
-import { fencedBlocks, MAX_OUTPUT_CHARS, normalizeStageCompletion, parseStageVerdict, stageVerdictRejectionReason, verdictRoutesAsFail, type ParsedStageVerdict, type StageCompletionInput } from "./verdict";
+import { fencedBlocks, MAX_OUTPUT_CHARS, normalizeStageCompletion, parseStageVerdict, stageVerdictProse, stageVerdictRejectionReason, verdictRoutesAsFail, type ParsedStageVerdict, type StageCompletionInput } from "./verdict";
 
 export type PipelineStageSpawn = {
   launchId: string;
@@ -2601,7 +2601,9 @@ function budgetSpentInput(
     ...(findings.length ? ["Unreviewed findings:", ...findings.map((finding) => `- ${finding}`)] : []),
   ].join("\n");
   if (!output) return note;
-  return `${output.slice(0, Math.max(0, MAX_OUTPUT_CHARS - note.length - 2))}\n\n${note}`;
+  /* The note is what the merging stage must not miss, so the output's cut
+     makes room for it; the output keeps the relay's marked, byte-bounded cut. */
+  return `${boundedStageRelay(output, MAX_STAGE_RELAY_BYTES - Buffer.byteLength(note) - 2)}\n\n${note}`;
 }
 
 function keepPassedStageUnpublished(
@@ -2883,11 +2885,23 @@ export async function preparePipelineReviewRepair(flowId: string): Promise<{ ok:
  * then keeps working settles when its turn ends.
  */
 const MAX_STAGE_RELAY_BYTES = 60 * 1024;
-const STAGE_RELAY_TRUNCATED = "\n\n[Previous stage output truncated at 60 KiB]";
+const STAGE_RELAY_TRUNCATED = "\n\n[Previous stage output truncated to fit the 60 KiB relay]";
 
+/** Cut a relay to `maxBytes` of UTF-8 on a character boundary, the marker
+    included, so the reader knows text is missing. */
+function boundedStageRelay(text: string, maxBytes = MAX_STAGE_RELAY_BYTES): string {
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.length <= maxBytes) return text;
+  let end = Math.max(0, maxBytes - Buffer.byteLength(STAGE_RELAY_TRUNCATED));
+  while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end -= 1;
+  return bytes.subarray(0, end).toString("utf8") + STAGE_RELAY_TRUNCATED;
+}
+
+/** The summary leads, as its own first line: the board's stage row and the
+    lifecycle event both show an output's first line. */
 function reportedPassOutput(summary: string | null, finalMessage: string, reportProse: string | null): string {
-  const prose = finalMessage.trim();
-  const earlier = reportProse?.trim() ?? "";
+  const prose = stageVerdictProse(finalMessage).trim();
+  const earlier = reportProse ? stageVerdictProse(reportProse).trim() : "";
   const short = summary?.trim() ?? "";
   const messages = [
     ...(prose ? [prose] : []),
@@ -2895,13 +2909,9 @@ function reportedPassOutput(summary: string | null, finalMessage: string, report
   ];
   const full = messages.join("\n\n");
   const output = full && short && short !== prose
-    ? `Reported summary:\n${short}\n\nFinal assistant message:\n${full}`
+    ? `${short}\n\nFinal assistant message:\n${full}`
     : full || short;
-  const bytes = Buffer.from(output, "utf8");
-  if (bytes.length <= MAX_STAGE_RELAY_BYTES) return output;
-  let end = MAX_STAGE_RELAY_BYTES - Buffer.byteLength(STAGE_RELAY_TRUNCATED);
-  while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end -= 1;
-  return bytes.subarray(0, end).toString("utf8") + STAGE_RELAY_TRUNCATED;
+  return boundedStageRelay(output);
 }
 
 function reportedStageVerdict(
@@ -4137,12 +4147,13 @@ async function tickRunStage(
 }
 
 /** Substitute the {{task}}/{{prev.output}} placeholders and trim. The relay
-    payload prefers the cursor's persisted input (#353), falling back to the
-    legacy positional scan only for pre-v3 activations without provenance. */
+    payload is a reported pass's short summary when there is one, then the
+    cursor's persisted input (#353), falling back to the legacy positional scan
+    only for pre-v3 activations without provenance. */
 function renderNoteTemplate(text: string, pipeline: Pipeline): string {
-  const relay = pipeline.cursor?.activatedBy
+  const relay = reviewNoteRelay(pipeline) ?? (pipeline.cursor?.activatedBy
     ? pipeline.cursor.input ?? ""
-    : pipeline.cursor?.input ?? normalizedOutput(pipeline);
+    : pipeline.cursor?.input ?? normalizedOutput(pipeline));
   return text
     .split("{{task}}").join(pipeline.task)
     .split("{{prev.output}}").join(relay)
@@ -4150,6 +4161,22 @@ function renderNoteTemplate(text: string, pipeline: Pipeline): string {
 }
 
 const FENCE_MARKER = "\n\nSafety fences:\n";
+
+/** A review-loop note holds at most MAX_FLOW_NOTE_LENGTH characters, and a
+    full relayed brief (#2315) would park the stage. A reported pass relays its
+    short summary there instead, as it did before the brief was relayed, with
+    the same spent-budget note the cursor's input carries. Null when the
+    activating attempt reported no summary. */
+function reviewNoteRelay(pipeline: Pipeline): string | null {
+  const activation = pipeline.cursor?.activatedBy;
+  if (activation?.edge !== "pass") return null;
+  const stage = pipeline.stages.find((candidate) => candidate.id === activation.stageId);
+  const attempt = pipeline.runs.find((run) => run.stageId === activation.stageId)?.attempts[activation.attempt - 1];
+  const summary = attempt?.state === "passed" && attempt.report?.verdict.status === "pass" ? attempt.report.summary?.trim() : null;
+  if (!stage || !attempt || !summary) return null;
+  const { handoff } = passSuccessor(pipeline, stage, attempt);
+  return handoff ? budgetSpentInput(summary, handoff) : summary;
+}
 
 /**
  * Fits the review-loop stage's directive + role scaffold into the flow note's

@@ -25,6 +25,9 @@ const { summarizePipeline } = await import("@/components/kanban/kanbanModel");
 const { pastAttempts } = await import("@/components/kanban/pipelineGraph");
 const { pipelineProgress, stageDisplayName } = await import("@/components/kanban/PipelineSection");
 const { translate } = await import("@/lib/i18n");
+const { stageOutcomeReason } = await import("@/components/pipelines/pipelineModel");
+const { projectPipelineEvents } = await import("@/lib/lifecycle/projector");
+const { operatorSafeSummary } = await import("@/lib/lifecycle/vocabulary");
 type TFunction = import("@/lib/i18n").TFunction;
 const t = ((key: string, params?: Record<string, unknown>) => translate("en", key as never, params as never)) as TFunction;
 
@@ -236,8 +239,15 @@ test("a live attempt's reported completion settles it when the turn ends, with s
   const settled = attemptsOf("build")[0]!;
   expect(settled.state).toBe("passed");
   expect(settled.verdict).toEqual({ status: "pass" });
-  expect(settled.output).toBe("Reported summary:\nBound the report to the attempt.\n\nFinal assistant message:\nDone. Handing over to verification.");
+  expect(settled.output).toBe("Bound the report to the attempt.\n\nFinal assistant message:\nDone. Handing over to verification.");
   expect(current().cursor?.stageId).toBe("verify");
+  /* Both one-line displays of the settled stage read the reported summary:
+     the board's collapsed stage row and the lifecycle event that wakes the
+     orchestrator's seat tick. */
+  const pipeline = current();
+  expect(stageOutcomeReason(t, pipeline, pipeline.stages.find((candidate) => candidate.id === "build")!)).toBe("Bound the report to the attempt.");
+  const completed = projectPipelineEvents([pipeline]).find((event) => event.type === "stage_completed" && event.stageId === "build")!;
+  expect(operatorSafeSummary(completed.summary)).toBe("Bound the report to the attempt.");
 
   await tickPipelines([], h.ports);
   expect(h.spawnedStages).toEqual(["build", "verify"]);
@@ -257,7 +267,7 @@ for (const engine of ["claude", "codex"] as const) {
     await h.report(1, { verdict: "pass", summary: "Brief ready." });
     await tickPipelines([h.endTurn(1, brief)], h.ports);
     const relay = attemptsOf("brief")[0]!.output;
-    expect(relay).toBe(`Reported summary:\nBrief ready.\n\nFinal assistant message:\n${brief}`);
+    expect(relay).toBe(`Brief ready.\n\nFinal assistant message:\n${brief}`);
     expect(current().cursor?.input).toBe(relay);
     await tickPipelines([], h.ports);
     expect(h.spawnedPrompts.at(-1)).toContain(`Build from ${relay}`);
@@ -293,11 +303,21 @@ test("a long final brief is bounded in bytes with an explicit truncation marker"
   const relay = attemptsOf("brief")[0]!.output!;
   expect(Buffer.byteLength(relay)).toBeLessThanOrEqual(60 * 1024);
   expect(relay).toContain("Start. 🙂");
-  expect(relay).toEndWith("[Previous stage output truncated at 60 KiB]");
+  expect(relay).toEndWith("[Previous stage output truncated to fit the 60 KiB relay]");
   expect(relay).not.toContain("End.");
   expect(relay).not.toContain("�");
   await tickPipelines([], h.ports);
   expect(h.spawnedPrompts.at(-1)).toContain(relay);
+});
+
+test("a pass reported without a summary relays its prose without the fenced JSON verdict", async () => {
+  const h = harness();
+  await started(h.ports, [stage("brief", "build"), stage("build", null, { prompt: "Build {{prev.output}}" })]);
+  await h.report(1, { verdict: "pass" });
+  await tickPipelines([h.endTurn(1, 'Brief body.\n\n```json\n{"status":"pass","findings":[]}\n```')], h.ports);
+  expect(attemptsOf("brief")[0]!.output).toBe("Brief body.");
+  await tickPipelines([], h.ports);
+  expect(h.spawnedPrompts.at(-1)).toContain("Build Brief body.\n\nPinned task:");
 });
 
 test("a persisted legacy attempt without final prose relays its summary", async () => {
@@ -681,6 +701,30 @@ test("a needs_decision with findings on a spent default edge is handed to the fi
   expect(h.spawnedStages).toEqual(["build", "verify", "build", "ship"]);
   expect(attemptsOf("verify")).toHaveLength(1);
   expect(current().cursor?.stageId).toBe("ship");
+});
+
+test("a spent-budget handoff keeps the fix's whole brief and cuts a longer one with a marker, on a character boundary", async () => {
+  for (const [body, whole] of [[`${"b".repeat(50_000)} END OF BRIEF`, true], [`Start. ${"🙂".repeat(20_000)} END OF BRIEF`, false]] as const) {
+    const h = harness();
+    await reachedVerify(h, [
+      stage("build", "verify"),
+      stage("verify", "ship", { onFail: { to: "build", maxRounds: 1 } }),
+      stage("ship", null),
+    ]);
+    await h.report(2, { verdict: "fail", findings: [{ severity: "P1", text: "the fence is missing" }] });
+    await tickPipelines([h.endTurn(2, "Reviewed.")], h.ports);
+    await tickPipelines([], h.ports); // spawn build attempt 2
+    await h.report(3, { verdict: "pass", summary: "Fence added." });
+    await tickPipelines([h.endTurn(3, body)], h.ports);
+    expect(current().cursor?.stageId).toBe("ship");
+    const input = current().cursor!.input!;
+    expect(Buffer.byteLength(input)).toBeLessThanOrEqual(60 * 1024);
+    expect(input).toStartWith("Fence added.");
+    expect(input).toEndWith("Unreviewed findings:\n- P1 — the fence is missing");
+    expect(input).not.toContain("\uFFFD");
+    expect(input.includes("END OF BRIEF")).toBe(whole);
+    expect(input.includes("[Previous stage output truncated to fit the 60 KiB relay]")).toBe(!whole);
+  }
 });
 
 test("a needs_decision parks with no fail edge, and parks with no findings (#1785)", async () => {

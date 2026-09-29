@@ -61,7 +61,6 @@ import { buildImagePayload, collectImagePayloads, deleteInboxImages, spawnAgentW
 import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
 import type { ApiError } from "@/lib/types";
-import { recordDirectOperatorWakatimeActivity } from "@/lib/wakatime/operatorActivity";
 import { readTelegramConnection, readTelegramSession } from "@/lib/telegram/sessionStore";
 import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
 
@@ -133,7 +132,7 @@ export interface SpawnCommandDependencies {
    * through the origin classifier.
    */
   internalGrant?(): { sessionClass: McpSessionClass; mcpServers: readonly string[] } | null;
-  recordOperatorActivity?: typeof recordDirectOperatorWakatimeActivity;
+
   /** The activity dashboard's request ledger; never throws. */
   recordOperatorRequest?: typeof recordOperatorRequest;
   /** Whether an engine's command resolves and it has a signed-in account
@@ -160,7 +159,7 @@ export const productionSpawnCommandDependencies: SpawnCommandDependencies = {
   storeImages: (images) => runtimeImageStore().putMany(images),
   adoptPipelineAttemptFromSource,
   pipelineAttemptTargetForSource,
-  recordOperatorActivity: recordDirectOperatorWakatimeActivity,
+
   recordOperatorRequest,
   engineReadiness: (engine, project) => engine === "claude" || engine === "codex" ? engineReadiness(engine, project) : "connected",
 };
@@ -497,17 +496,6 @@ export async function executeSpawnRequest(
     const project = explicitProject ?? projectForCwd(cwd);
     if (!project) {
       return NextResponse.json({ error: "project could not be resolved for direct operator spawn" }, { status: 400 });
-    }
-    try {
-      dependencies.recordOperatorActivity?.({
-        idempotencyKey: `spawn:${clientAttemptId!}`,
-        resolvedAttribution: {
-          engine,
-          project,
-        },
-      });
-    } catch {
-      return NextResponse.json({ error: "direct operator activity could not be recorded" }, { status: 503 });
     }
     dependencies.recordOperatorRequest?.(req, { kind: "spawn", idempotencyKey: `spawn:${clientAttemptId!}`, project });
   }

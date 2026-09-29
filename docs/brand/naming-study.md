@@ -309,7 +309,7 @@ and says nothing about the seat.
 | Product noun in UI and prompts | "the Viewer": about 1,000 uses in non-test `src/`, 200 in MCP tool descriptions, 94 in orchestrator/role/pipeline prompts; 44 in `en.ts`, 41 in `uk.ts` | agent-facing and operator-facing text | agents learn the product from these |
 | Product name strings | `onboarding.title`, `onboarding.tour.heading` (en, uk); `src/app/layout.tsx` title and description; CLI usage and messages in `bin/cli.mjs` (en, uk) | ~12 strings | first-run and tab title |
 | Browser storage | cookie `llv_auth`; dozens of `llv:*` and `llvAgentRuntime:*` localStorage keys | per browser | saved sessions, layout, per-project dock state |
-| Stable external ids | WakaTime entities `agent-log-viewer/<engine>/…`; push VAPID subject | 2 | deduplication with data already sent |
+| Stable external ids | push VAPID subject | 2 | deduplication with data already sent |
 | Docs | README, AGENTS.md, 36 Markdown files mention an old name; CHANGELOG | — | readers |
 | Repo skills | `.claude/skills/live-log-viewer-orchestration`, `llv-conveyor` | 2 | agents load skills by name |
 | Worktree folders | `<checkout-folder>-pipeline-<id>` (`src/lib/pipelines/store.ts`) | derived from the local folder, independent of the repo name | — |
@@ -406,7 +406,7 @@ cost one lookup each.
   in Step D gives users the new prefix; a mechanical rename of internals buys
   nothing for users and touches 611 files.
 - **Browser storage keys, the `llv_auth` cookie, `llv-*` container and temp
-  prefixes, WakaTime entities.** Invisible identifiers; renaming them logs
+  prefixes.** Invisible identifiers; renaming them logs
   everyone out, resets saved layouts or duplicates external data.
 - **Renaming the local checkout folder.** Worktree folder names come from it,
   and deleted worktrees under the old folder name group through the persisted

@@ -148,7 +148,8 @@ test("the card line is passive: no control in it, the PR as text, the reason in 
   expect(decision.querySelector("[data-work-links-text]")?.textContent).toBe("#2070+1");
   expect(decision.querySelector("[data-pipeline-reason]")?.textContent).toBe("Verify failed · 1 finding · 41m");
   expect(decision.querySelector(".pb-age")).toBeNull();
-  expect(decision.querySelector('.pb-pill[data-stage="verify"] .pmark')?.getAttribute("data-mark")).toBe("cross");
+  /* The stage's model draws its glyph, and the glyph carries the failure. */
+  expect(decision.querySelector('.pb-pill[data-stage="verify"] .mglyph')?.getAttribute("data-glyph-state")).toBe("failed");
 
   const running = mount(<PipelineBlock summary={summarizePipeline(searchPipeline())} density="card" nowMs={NOW_MS} />);
   expect(running.querySelector("[data-pipeline-reason]")).toBeNull();
@@ -313,7 +314,7 @@ test("a settled stage whose conversation works again says so on its row and its 
     expect(row.dataset.stageRework).toBe("1");
     expect(row.querySelector(".pb-stage-state")?.firstChild?.textContent).toBe(passed);
     expect(row.querySelector(".pb-stage-state .pb-rework")?.textContent).toBe(again);
-    expect(row.querySelector(".pb-stage-title .pmark")?.getAttribute("data-live")).toBe("1");
+    expect(row.querySelector(".pb-stage-title .mglyph")?.getAttribute("data-live")).toBe("1");
     expect(row.querySelector("[aria-label]")?.getAttribute("aria-label")).toContain(again);
     expect(screen.querySelectorAll("[data-stage-rework]").length).toBe(1);
     expect(screen.querySelectorAll(".pb-rework").length).toBe(1);
@@ -324,7 +325,7 @@ test("a settled stage whose conversation works again says so on its row and its 
       if (!pill && density === "card") continue;
       expect(pill!.className).toContain("rework");
       expect(pill!.title).toContain(again);
-      expect(pill!.querySelector(".pmark")?.getAttribute("data-live")).toBe("1");
+      expect(pill!.querySelector(".mglyph")?.getAttribute("data-live")).toBe("1");
       expect(host.querySelector('.pb-pill[data-stage="review"]')?.className ?? "").not.toContain("rework");
     }
   }
@@ -373,10 +374,10 @@ test("the screen density numbers the stages, folds the passed ones before the cu
   const current = host.querySelector<HTMLElement>(".pb-stage[data-stage-current]")!;
   expect(current.dataset.stage).toBe("verify");
   /* The stage the lane waits on takes the lane's amber and its state word;
-     its mark keeps the failed stage's cross. */
+     its glyph keeps the failed stage's badge. */
   expect(current.className).toContain("tone-needs");
   expect(current.querySelector(".pb-stage-state")?.textContent).toBe(translate("en", "pipelineState.needs_decision"));
-  expect(current.querySelector(".pb-stage-title .pmark")?.getAttribute("data-mark")).toBe("cross");
+  expect(current.querySelector(".pb-stage-title .mglyph")?.getAttribute("data-glyph-state")).toBe("failed");
   expect(texts(current, "[data-answer-action]")).toEqual([translate("en", "mobile2.pipeline.skip"), translate("en", "mobile2.pipeline.retry")]);
   click(current.querySelector('[data-answer-action="retry-stage"]'));
   expect(answers).toEqual(["retry-stage"]);

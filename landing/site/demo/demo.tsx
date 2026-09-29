@@ -71,9 +71,15 @@ function post(message: Record<string, unknown>) {
 }
 
 /* Hand a vertical pan to the landing when no nested scroll area can take it.
-   Screen coordinates stay stable while the parent page moves the iframe. */
+   This frame moves under the finger every time the landing scrolls, and on iOS
+   Touch.screenY carries the landing's scroll too, so a delta taken here from
+   one reading to the next feeds each scroll back into the next delta and the
+   page alternates. The landing does that arithmetic: it is told where the
+   finger is in this frame and reads where the frame sits when the message
+   arrives. Until the first forward the frame is still, so client coordinates
+   are stable for the direction test and the nested-scroll test. */
 if (PHONE && window.parent !== window) {
-  let touch: { x: number; y: number; lastY: number; samples: { y: number; at: number }[]; axis: "pending" | "vertical" | "horizontal"; forwarding: boolean } | null = null;
+  let touch: { x: number; y: number; lastY: number; axis: "pending" | "vertical" | "horizontal"; forwarding: boolean } | null = null;
   function canScroll(target: EventTarget | null, delta: number): boolean {
     for (let node = target instanceof Element ? target : null; node && node !== document.documentElement; node = node.parentElement) {
       const style = getComputedStyle(node);
@@ -85,38 +91,28 @@ if (PHONE && window.parent !== window) {
   }
   document.addEventListener("touchstart", (event) => {
     const point = event.touches[0];
-    touch = event.touches.length === 1 && point ? { x: point.screenX, y: point.screenY, lastY: point.screenY, samples: [], axis: "pending", forwarding: false } : null;
+    touch = event.touches.length === 1 && point ? { x: point.clientX, y: point.clientY, lastY: point.clientY, axis: "pending", forwarding: false } : null;
     if (touch) post({ type: "dlg:vertical-start" });
   }, { passive: true, capture: true });
   document.addEventListener("touchmove", (event) => {
     const point = event.touches[0];
     if (!touch || !point || event.touches.length !== 1) return;
     if (touch.axis === "pending") {
-      const dx = Math.abs(point.screenX - touch.x);
-      const dy = Math.abs(point.screenY - touch.y);
+      const dx = Math.abs(point.clientX - touch.x);
+      const dy = Math.abs(point.clientY - touch.y);
       if (Math.max(dx, dy) < 8) return;
       touch.axis = dy > dx * 1.2 ? "vertical" : "horizontal";
     }
     if (touch.axis !== "vertical") return;
-    const deltaY = touch.lastY - point.screenY;
-    touch.lastY = point.screenY;
-    if (!touch.forwarding && canScroll(event.target, deltaY)) return;
+    const fromY = touch.lastY;
+    touch.lastY = point.clientY;
+    if (!touch.forwarding && canScroll(event.target, fromY - point.clientY)) return;
     touch.forwarding = true;
     if (event.cancelable) event.preventDefault();
-    const at = performance.now();
-    touch.samples.push({ y: point.screenY, at });
-    touch.samples = touch.samples.filter((sample) => at - sample.at <= 90);
-    post({ type: "dlg:vertical-pan", deltaY });
+    post({ type: "dlg:vertical-pan", y: point.clientY, fromY });
   }, { passive: false, capture: true });
   document.addEventListener("touchend", () => {
-    if (touch?.forwarding && touch.samples.length > 1) {
-      const first = touch.samples[0]!;
-      const last = touch.samples[touch.samples.length - 1]!;
-      if (last.at > first.at && performance.now() - last.at < 80) {
-        const velocity = (first.y - last.y) / (last.at - first.at);
-        post({ type: "dlg:vertical-end", velocity: Math.max(-1.8, Math.min(1.8, velocity)) });
-      }
-    }
+    if (touch?.forwarding) post({ type: "dlg:vertical-end" });
     touch = null;
   }, { passive: true, capture: true });
   document.addEventListener("touchcancel", () => { touch = null; }, { passive: true, capture: true });

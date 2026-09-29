@@ -12,7 +12,6 @@ import { pendingQuestionFor, recordedToolResult } from "@/lib/scanner/questions"
 import { screenTail } from "@/lib/status";
 import { paneScreen, resolveTarget, sendKeys, sendText } from "@/lib/tmux";
 import type { ApiError, FileEntry, PendingQuestion } from "@/lib/types";
-import { recordDirectOperatorWakatimeActivity } from "@/lib/wakatime/operatorActivity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,7 +25,7 @@ const paneIo: PaneIo = { paneScreen, sendKeys, sendText };
 interface AnswerRouteDependencies {
   knownState: typeof knownState;
   resolveTarget: typeof resolveTarget;
-  recordOperatorActivity: typeof recordDirectOperatorWakatimeActivity;
+
   /** The activity dashboard's request ledger; never throws. */
   recordOperatorRequest?: typeof recordOperatorRequest;
   deliverAnswer: typeof deliverAnswer;
@@ -134,15 +133,6 @@ async function deliver(
   const anonymous = refuseAnonymous(actor);
   if (anonymous) return anonymous as NextResponse<RouteResponse>;
   if (directOperatorActivityAuthority(req).ok) {
-    try {
-      dependencies.recordOperatorActivity({
-        path: transcriptPath,
-        idempotencyKey: `question:${toolUseId}`,
-        fallbackEntry: state.entry,
-      });
-    } catch {
-      return NextResponse.json({ error: "direct operator activity could not be recorded" }, { status: 503 });
-    }
     dependencies.recordOperatorRequest?.(req, {
       kind: "answer",
       idempotencyKey: `question:${toolUseId}`,
@@ -169,7 +159,7 @@ async function deliver(
 const productionDependencies: AnswerRouteDependencies = {
   knownState,
   resolveTarget,
-  recordOperatorActivity: recordDirectOperatorWakatimeActivity,
+
   recordOperatorRequest,
   deliverAnswer,
   confirmAnswered,

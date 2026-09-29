@@ -143,6 +143,7 @@ import { nestProcessTempUnder } from "../src/lib/tempDirs";
 import { createTailscaleStub, STUB_DNS_NAME } from "../src/test-helpers/tailscaleStub";
 
 import { createCaptureDirectory } from "./capture-directory";
+import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "../src/lib/selfUpdate/types";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 /* The commit the record was captured from. A `git archive` export has no repository, so the caller
@@ -4185,7 +4186,6 @@ function writeResourcesFixture(stale: boolean): number {
     { pid: 892_225, role: "server", name: "bun-container", rssBytes: 1.3 * GIB, swapBytes: 0, procCount: 1 },
     { pid: 921_801, role: "runtime-host", name: "main", rssBytes: 690 * MIB, swapBytes: 0, procCount: 1 },
     { pid: 894_438, role: "worker", name: "accountMigrationController.worker", rssBytes: 1.3 * GIB, swapBytes: 210 * MIB, procCount: 1 },
-    { pid: 894_382, role: "worker", name: "wakatimeSync.worker", rssBytes: 980 * MIB, swapBytes: 0, procCount: 1 },
     { pid: 2_787_025, role: "worker", name: "filesResponse.worker", rssBytes: 960 * MIB, swapBytes: 0, procCount: 1 },
     { pid: 894_409, role: "worker", name: "telegram-mcp-server", rssBytes: 52 * MIB, swapBytes: 0, procCount: 1 },
   ];
@@ -5337,8 +5337,96 @@ async function lightboxMain(): Promise<void> {
   }
 }
 
+/* One browser driver owns the Update dialog geometry too. Its API answer is a
+   fixture, so no capture can start a real update or restart. */
+async function selfUpdateAutoMain(): Promise<void> {
+  seedHome();
+  const evidenceDir = process.env.SELF_UPDATE_AUTO_EVIDENCE_DIR?.trim() || null;
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const old = "a".repeat(40);
+  const next = "b".repeat(40);
+  const revision = (sha: string) => ({ sha, short: sha.slice(0, 7), version: "1.6.1", date: "2026-01-01" });
+  const processView = (sha: string) => ({ ...stoppedProcess(), state: "healthy" as const, pid: 101, startedAt: "2026-01-01T00:00:00Z", revision: sha.slice(0, 7), lastHealthAt: "2026-01-01T00:00:00Z", lastHealthOk: true, tail: [] });
+  const base: Snapshot = {
+    mode: "checkout", unsupportedReason: null, installed: revision(next), available: null,
+    serving: { web: revision(old), runtimeHost: revision(old) }, check: { ...idleCheck(), state: "up-to-date", at: "2026-01-01T00:00:00Z" },
+    update: idleUpdate(), processes: { web: processView(old), runtimeHost: processView(old) }, busy: null,
+    meta: { branch: "main", remote: "https://github.com/example/project", checkout: null, pollMinutes: 15, serverTime: "2026-01-02T00:00:00Z" },
+  };
+  const auto = { availability: "available" as const, enabled: true, off: null, phase: "waiting" as const, target: revision(next), green: { state: "green" as const },
+    blockers: { turns: 2, stages: 1, operatorActiveAt: "2026-01-01T23:55:00Z", busy: false, memoryMb: null, unreadable: null }, waitingSince: "2026-01-01T00:00:00Z", longWait: false };
+  const states: Record<string, Snapshot> = {
+    off: { ...base, auto: { ...auto, enabled: false, phase: "idle", blockers: null } },
+    waiting: { ...base, auto, history: [{ at: "2026-01-01T12:00:00Z", by: "auto", kind: "build", target: next, from: old, outcome: "done" }] },
+    longWait: { ...base, auto: { ...auto, longWait: true } },
+    fallback: { ...base, auto: { ...auto, enabled: false, phase: "idle", off: { at: "2026-01-02T00:00:00Z", target: next, stage: "restart-web", reason: "health probe failed" }, blockers: null } },
+    managed: { ...base, mode: "managed", auto: { ...auto, availability: "managed", enabled: false, phase: "idle", blockers: null } },
+  };
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  const report: { commit: string; frames: Record<string, unknown>; failures: string[] } = { commit: captureCommit(), frames: {}, failures: [] };
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, false);
+    await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const [name, snapshot] of Object.entries(states)) {
+      const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
+      if (!localeWrite.ok) throw new Error(`setting ${lang} answered ${localeWrite.status}`);
+      const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, reducedMotion: "reduce" });
+      await context.addInitScript(seedInit);
+      await context.addInitScript((language: string) => localStorage.setItem("llv_lang", language), lang);
+      const page = await context.newPage();
+      await page.route("**/api/self-update", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(snapshot) }));
+      await page.goto(`${baseUrl}/`);
+      await page.waitForFunction(() => {
+        if (document.querySelector("[data-self-update-dialog]")) return true;
+        window.dispatchEvent(new Event("llv:open-self-update"));
+        return false;
+      }, undefined, { timeout: 60_000 });
+      await page.waitForSelector('[data-section="auto"]', { timeout: 30_000 });
+      const geometry = await page.evaluate(() => {
+        const dialog = document.querySelector<HTMLElement>("[data-self-update-dialog]")!;
+        const card = dialog.querySelector<HTMLElement>('[data-section="auto"]')!;
+        const button = card.querySelector<HTMLButtonElement>('[data-action="toggle-auto"]')!;
+        const outer = dialog.getBoundingClientRect();
+        const rect = card.getBoundingClientRect();
+        const control = button.getBoundingClientRect();
+        return { overflow: dialog.scrollWidth - dialog.clientWidth, card: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+          controlVisible: control.left >= outer.left && control.right <= outer.right && control.top >= outer.top && control.bottom <= outer.bottom,
+          text: card.innerText.slice(0, 600) };
+      });
+      const tag = `${width}-${lang}-${name}`;
+      report.frames[tag] = geometry;
+      if (geometry.overflow > 1 || !geometry.controlVisible) report.failures.push(`${tag}: overflow or clipped switch`);
+      if (!geometry.text.includes(lang === "uk" ? "Автооновлення" : "Automatic updates")) report.failures.push(`${tag}: wrong interface language`);
+      const frame = path.join(OUT_DIR, `${tag}.png`);
+      await page.screenshot({ path: frame });
+      if (evidenceDir) {
+        fs.mkdirSync(evidenceDir, { recursive: true });
+        fs.copyFileSync(frame, path.join(evidenceDir, `${tag}.png`));
+      }
+      await context.close();
+    }
+  } finally {
+    await browser?.close();
+    await stop(server);
+  }
+  const result = JSON.stringify(report, null, 2) + "\n";
+  fs.writeFileSync(path.join(OUT_DIR, "self-update-auto.json"), result);
+  if (evidenceDir) {
+    fs.mkdirSync(evidenceDir, { recursive: true });
+    fs.writeFileSync(path.join(evidenceDir, "geometry.json"), result);
+  }
+  if (report.failures.length) throw new Error(report.failures.join("; "));
+  console.log(`self-update auto geometry: ${path.join(OUT_DIR, "self-update-auto.json")}`);
+}
+
 /* BOARD_CAPTURE_CASE=header runs the header bar's case (#1801), account-removal the removal dialog's (#1857), activity the activity dashboard's, instead of the camera probes. */
 if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
+else if (process.env.BOARD_CAPTURE_CASE === "self-update-auto") await selfUpdateAutoMain();
 else if (process.env.BOARD_CAPTURE_CASE === "activity") await activityMain();
 else if (process.env.BOARD_CAPTURE_CASE === "lightbox") await lightboxMain();
 else if (process.env.BOARD_CAPTURE_CASE === "resources") await resourcesMain();

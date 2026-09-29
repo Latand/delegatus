@@ -135,7 +135,7 @@ test("direct activity accepts a browser and rejects server-authenticated backgro
   for (const service of ["monitor", "mcp", "orchestrator"] as const) {
     const serviceRequest = request({ ...BROWSER, ...internalServiceHeaders(service) });
     expect(directOperatorActivityAuthority(serviceRequest).ok).toBe(false);
-    /* Service provenance only classifies WakaTime activity. It does not alter
+    /* Service provenance does not alter
        the product's existing operator-authority contract. */
     expect(requireOperatorAuthority(serviceRequest).ok).toBe(true);
   }

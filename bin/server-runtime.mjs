@@ -6,21 +6,23 @@ import { join, posix, resolve, win32 } from "node:path";
 
 import { appDirIn } from "./appDir.mjs";
 
-export const WAKATIME_CREDENTIAL_ENV = "WAKATIME_API_KEY";
+const FORWARDED_API_KEYS = new Set([
+  "ANTHROPIC_API_KEY", "ELEVENLABS_API_KEY", "OPENAI_API_KEY",
+  "OPENROUTER_API_KEY", "SONIOX_API_KEY",
+]);
 
-/** @param {Record<string, string | undefined>} environment */
-export function discardWakatimeEnvironmentCredential(environment = process.env) {
-  delete environment[WAKATIME_CREDENTIAL_ENV];
+export function unsupportedApiCredentialNames(base) {
+  return Object.keys(base).filter((key) => key.endsWith("_API_KEY") && !FORWARDED_API_KEYS.has(key));
 }
 
-/**
- * @param {Readonly<Record<string, string | undefined>>} base
- * @returns {Record<string, string | undefined>}
- */
-export function withoutWakatimeCredential(base) {
-  const env = { NODE_ENV: base.NODE_ENV };
+export function discardUnsupportedApiCredentials(environment = process.env) {
+  for (const key of unsupportedApiCredentialNames(environment)) delete environment[key];
+}
+
+export function withoutUnsupportedApiCredentials(base) {
+  const env = {};
   for (const key of Object.keys(base)) {
-    if (key === WAKATIME_CREDENTIAL_ENV) continue;
+    if (key.endsWith("_API_KEY") && !FORWARDED_API_KEYS.has(key)) continue;
     env[key] = base[key];
   }
   return env;
@@ -32,7 +34,7 @@ export function withoutWakatimeCredential(base) {
 export function viewerChildProcessOptions(options = {}) {
   return {
     ...options,
-    env: withoutWakatimeCredential(options.env ?? process.env),
+    env: withoutUnsupportedApiCredentials(options.env ?? process.env),
   };
 }
 
@@ -151,7 +153,7 @@ export function browserOpenCommand(url, platform = process.platform) {
  */
 export function cliRuntimeHostEnvironment(base, config) {
   return {
-    ...withoutWakatimeCredential(base),
+    ...withoutUnsupportedApiCredentials(base),
     LLV_RUNTIME_HOST_SOCKET: config.socketPath,
     LLV_RUNTIME_HOST_FENCE: config.fencePath,
     LLV_RUNTIME_JOURNAL: config.journalPath,

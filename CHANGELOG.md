@@ -8,6 +8,18 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+### Added
+- **Automatic checkout updates.** An opt-in switch in the Update dialog builds
+  green merges and waits for a quiet minute before moving web and the runtime
+  host onto the release. The dialog shows blockers and each process's serving
+  revision. Builds and restarts are recorded with their trigger; a failed
+  automatic restart restores the prior release pointer and turns the switch off.
+
+### Fixed
+- A self-update step whose command disappears or exceeds its deadline now
+  settles in the current web process, so the operator can retry it without a
+  web restart.
+
 ## [1.6.0] — 2026-09-28
 
 ### Added

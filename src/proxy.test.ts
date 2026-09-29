@@ -2,8 +2,39 @@ import { afterEach, expect, test } from "bun:test";
 import http from "node:http";
 import { networkInterfaces } from "node:os";
 import { NextRequest } from "next/server";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { statePath } from "@/lib/configDir";
 
 import { proxy } from "./proxy";
+
+test("automatic handoff defers new write requests while reads remain available", () => {
+  const file = statePath("self-update", "auto-admission.json");
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify({ id: "handoff", until: Date.now() + 60_000 }));
+  try {
+    const request = (method: string) => new NextRequest("http://localhost/api/pipelines", { method });
+    expect(proxy(request("POST")).status).toBe(503);
+    expect(proxy(request("GET")).headers.get("x-middleware-next")).toBe("1");
+  } finally { rmSync(file, { force: true }); }
+});
+
+test("automatic handoff keeps authenticated presence writable and rejects other writes", () => {
+  const file = statePath("self-update", "auto-admission.json");
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify({ id: "handoff", until: Date.now() + 60_000 }));
+  process.env.LLV_TOKEN = "operator-key";
+  try {
+    const request = (path: string, authorized: boolean) => {
+      const headers = new Headers();
+      if (authorized) headers.set("authorization", `Bearer ${process.env.LLV_TOKEN}`);
+      return new NextRequest(`http://localhost${path}`, { method: "POST", headers });
+    };
+    expect(proxy(request("/api/view/presence", false)).status).toBe(403);
+    expect(proxy(request("/api/view/presence", true)).headers.get("x-middleware-next")).toBe("1");
+    expect(proxy(request("/api/pipelines", true)).status).toBe(503);
+  } finally { rmSync(file, { force: true }); }
+});
 
 const originalToken = process.env.LLV_TOKEN;
 afterEach(() => {

@@ -440,6 +440,93 @@ if (fullscreenCheck) {
   process.exit(ok ? 0 : 1);
 }
 
+/* A finger that moves steadily and then rests over a phone demo. The landing
+   follows it 1:1 and stays put while it rests. Run on a build that measures the
+   finger in a frame that moves with the page, the page alternates instead: each
+   forwarded scroll moves the frame under the finger, and the next reading
+   undoes it. "content-space" replays the coordinate semantics seen in the
+   iPhone recording (Touch.screenY carries the parent's scroll); "stable" is the
+   Chromium default. Both have to pass. */
+async function checkSwipeFeedback() {
+  const rows: Record<string, unknown>[] = [];
+  const failures: string[] = [];
+  for (const semantics of ["stable", "content-space"] as const) {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3 });
+    if (semantics === "content-space") {
+      await context.addInitScript(() => {
+        if (window.parent === window) return;
+        const screenY = Object.getOwnPropertyDescriptor(Touch.prototype, "screenY")!.get!;
+        Object.defineProperty(Touch.prototype, "screenY", { get() { return screenY.call(this) + window.parent.scrollY; } });
+      });
+    }
+    const page = await context.newPage();
+    const cdp = await context.newCDPSession(page);
+    await page.goto(`${base}?lang=en`);
+    for (const surface of ["hero", "phone"]) {
+      const host = `.live-${surface}`;
+      await page.locator(host).scrollIntoViewIfNeeded();
+      const frame = await frameOf(page, host);
+      await frame.evaluate(() => {
+        for (const node of document.querySelectorAll<HTMLElement>("*")) {
+          if (/auto|scroll/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight + 1) node.scrollTop = node.scrollHeight;
+        }
+      });
+      const point = await page.evaluate((selector) => {
+        const box = document.querySelector(`${selector} iframe`)!.getBoundingClientRect();
+        scrollTo(0, Math.max(0, scrollY + box.top + Math.min(box.height, 520) / 2 - 420));
+        const placed = document.querySelector(`${selector} iframe`)!.getBoundingClientRect();
+        return { x: Math.round(placed.left + placed.width / 2), y: Math.round(Math.max(placed.top + 12, Math.min(placed.bottom - 12, 420))) };
+      }, host);
+      await settle(page, 250);
+      const trace: number[] = [];
+      const read = async () => { trace.push(await page.evaluate(() => scrollY)); };
+      const touch = (type: string, y: number) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x: point.x, y, id: 1 }] } as never);
+      await read();
+      await touch("touchStart", point.y);
+      const steps = 10, stride = 12;
+      for (let step = 1; step <= steps; step += 1) {
+        await touch("touchMove", point.y - step * stride);
+        await settle(page, 16);
+        await read();
+      }
+      const moved = trace[trace.length - 1]! - trace[0]!;
+      // The finger rests, with the small tremor every finger has.
+      for (let tick = 0; tick < 24; tick += 1) {
+        await touch("touchMove", point.y - steps * stride - (tick % 2));
+        await settle(page, 16);
+        await read();
+      }
+      await touch("touchEnd", 0);
+      const held = trace.slice(steps + 1);
+      const rest = Math.max(...held) - Math.min(...held);
+      let reversals = 0;
+      for (let index = 1; index < trace.length; index += 1) if (trace[index]! < trace[index - 1]! - 1) reversals += 1;
+      await settle(page, 700);
+      const settled = await page.evaluate(() => scrollY);
+      const finger = steps * stride;
+      const row = { semantics, surface, finger, moved, ratio: Number((moved / finger).toFixed(2)), rest, reversals, coast: settled - trace[trace.length - 1]!, trace: trace.join(",") };
+      rows.push(row);
+      const problems = [
+        Math.abs(moved - finger) > finger * 0.15 && `page moved ${moved}px for ${finger}px of finger`,
+        rest > 4 && `page moved ${rest}px while the finger rested`,
+        reversals > 0 && `page reversed ${reversals} times`,
+        settled < trace[trace.length - 1]! - 2 && "page snapped back after release",
+      ].filter(Boolean);
+      for (const problem of problems) failures.push(`${semantics}/${surface}: ${problem}`);
+    }
+    await context.close();
+  }
+  for (const row of rows) console.log(JSON.stringify(row));
+  fs.writeFileSync(path.join(out, "swipe-feedback.json"), `${JSON.stringify({ url: base, viewport: "390x844 touch DPR3", rows }, null, 2)}\n`);
+  if (failures.length) throw new Error(`swipe feedback: ${failures.join("; ")}`);
+  console.log("swipe feedback: the page follows the finger 1:1 and holds still while it rests");
+}
+
+if (process.argv.includes("--check-swipe-feedback")) {
+  try { await checkSwipeFeedback(); } catch (error) { console.error(String(error instanceof Error ? error.message : error)); process.exitCode = 1; } finally { await browser.close(); server.stop(true); }
+  process.exit(process.exitCode ?? 0);
+}
+
 if (swipeCheck) {
   try { await checkSwipe(); } finally { await browser.close(); server.stop(true); }
   process.exit(0);

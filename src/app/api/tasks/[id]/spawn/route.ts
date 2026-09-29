@@ -35,7 +35,6 @@ import type { BoardTask, TaskAssignment } from "@/lib/tasks/types";
 import { isGenericSessionTitle } from "@/lib/title";
 import { spawnAgentWithPrompt, type SpawnedPane } from "@/lib/tmux";
 import type { ApiError } from "@/lib/types";
-import { recordDirectOperatorWakatimeActivity } from "@/lib/wakatime/operatorActivity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -70,7 +69,7 @@ interface TaskSpawnDependencies {
   spawnAgentWithPrompt: typeof spawnAgentWithPrompt;
   resolveSpawnedTranscriptPath: typeof resolveSpawnedTranscriptPath;
   ensureTaskPipelineForAssignment?: typeof ensureTaskPipelineForAssignment;
-  recordOperatorActivity?: typeof recordDirectOperatorWakatimeActivity;
+
   /** The activity dashboard's request ledger; never throws. */
   recordOperatorRequest?: typeof recordOperatorRequest;
 }
@@ -83,7 +82,7 @@ const productionDependencies: TaskSpawnDependencies = {
   spawnAgentWithPrompt,
   resolveSpawnedTranscriptPath,
   ensureTaskPipelineForAssignment,
-  recordOperatorActivity: recordDirectOperatorWakatimeActivity,
+
   recordOperatorRequest,
 };
 
@@ -323,14 +322,6 @@ async function postTaskSpawn(
   const anonymousSpawn = refuseAnonymous(spawnActor);
   if (anonymousSpawn) return anonymousSpawn;
   if (directOperatorActivityAuthority(req).ok) {
-    try {
-      dependencies.recordOperatorActivity?.({
-        idempotencyKey: `task-spawn:${clientAttemptId}`,
-        resolvedAttribution: { engine, project: task.project },
-      });
-    } catch {
-      return NextResponse.json({ error: "direct operator activity could not be recorded" }, { status: 503 });
-    }
     dependencies.recordOperatorRequest?.(req, { kind: "spawn", idempotencyKey: `task-spawn:${clientAttemptId}`, project: task.project });
   }
   const taskTitle = task.text.split("\n")[0]?.trim() ?? "";

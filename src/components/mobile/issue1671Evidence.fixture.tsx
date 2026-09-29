@@ -17,6 +17,8 @@ import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 
 const PROJECT = "atlas";
+const SELF_UPDATE_RELOAD = new URLSearchParams(location.search).has("self-update-reload");
+let presenceAnswers = 0;
 const queueRecovery = new URLSearchParams(location.search).has("queue-recovery");
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -183,6 +185,7 @@ let board = {
 } as unknown as BoardProjectStateV1;
 
 const evidence = {
+  presenceReplies: 0,
   /* docs/design/needs-attention.md: every dismissal the phone sent, and the
      switch that makes the agent's request arrive. */
   dismissals: [] as Array<Record<string, unknown>>,
@@ -850,6 +853,10 @@ const bridgeSetting = { enabled: new URLSearchParams(location.search).get("bridg
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
+  if (url.pathname === "/api/view/presence" && method === "POST" && SELF_UPDATE_RELOAD) {
+    evidence.presenceReplies += 1;
+    return json({ ok: true, serving: ++presenceAnswers === 1 ? "aaaaaaa" : "bbbbbbb" });
+  }
   if (url.pathname === "/api/links") {
     const linked = new URLSearchParams(location.search).get("linked");
     if (linked === "error") return json({ error: "forbidden" }, 403);

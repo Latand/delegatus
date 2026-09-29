@@ -161,7 +161,13 @@ export function SeatReportsBody({ project, projectName, reports, surface }: {
   const save = async () => {
     if (!canSave || (choice === null && !link.trim())) return;
     const outcome = link.trim() ? { link: link.trim(), name: name.trim() } : { chat: choice!, name: name.trim(), ...(choice === stored && settings?.reportTelegram?.topicId ? { topicId: settings.reportTelegram.topicId } : {}) };
-    if (await reports.save(outcome)) { reset(); setSaved(true); }
+    if (await reports.save(outcome)) {
+      /* A pasted link can add the chat to the bot on the server; read the
+         bot's chats again so the new chat is not shown as one agents may not post in. */
+      if ("link" in outcome) await bot.refresh();
+      reset();
+      setSaved(true);
+    }
   };
 
   const control = phone

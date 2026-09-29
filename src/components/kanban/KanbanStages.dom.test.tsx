@@ -374,7 +374,9 @@ test("Stages opens the sheet on the live stage: graph or navigator, loop, and a 
   /* Who runs each stage, on the minimized chip itself (#1743): the engine mark
      and the effort ladder. Review was launched on Claude and is now configured
      for Codex, so its chip keeps the launched mark and flags the next attempt. */
-  expect(chips.map((chip) => chip.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark"))).toEqual(["claude", "claude", "claude", "claude"]);
+  /* A model with a glyph names its engine by the glyph, and the chip draws no second mark. */
+  expect(chips.map((chip) => chip.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? chip.querySelector("[data-glyph-engine]")?.getAttribute("data-glyph-engine"))).toEqual(["claude", "claude", "claude", "claude"]);
+  expect(chips.filter((chip) => chip.querySelector("[data-glyph-engine]") && chip.querySelector("[data-engine-mark]"))).toHaveLength(0);
   expect(chips.map((chip) => chip.querySelector("[data-effort-pills]")?.getAttribute("data-effort-step"))).toEqual(["3", "3", "3", "3"]);
   expect(chips.map((chip) => Boolean(chip.querySelector("[data-next-differs]")))).toEqual([false, true, false, false]);
   expect(chips.map((chip) => chip.getAttribute("aria-current"))).toEqual(["false", "false", "true", "false"]);
