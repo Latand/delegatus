@@ -1014,6 +1014,70 @@ exit 1
   }
 }, 15_000);
 
+test("issue 1045: a Compose key the running deployer cannot apply is refused before the image build, naming the two-deploy path", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-compose-uncovered-"));
+  const state = path.join(sandbox, "state");
+  const bin = path.join(sandbox, "bin");
+  const template = path.join(sandbox, "template");
+  const dockerLog = path.join(sandbox, "docker.log");
+  fs.mkdirSync(bin, { recursive: true });
+  fs.mkdirSync(template, { recursive: true });
+  fs.writeFileSync(path.join(bin, "git"), `#!/bin/sh
+set -eu
+if [ "\${3:-}" = "rev-parse" ] && [ "\${4:-}" = "--is-bare-repository" ]; then printf 'true\\n'; exit 0; fi
+if [ "\${3:-}" = "worktree" ] && [ "\${4:-}" = "add" ]; then mkdir -p "$6"; exit 0; fi
+if [ "\${3:-}" = "worktree" ] && [ "\${4:-}" = "remove" ]; then rm -rf "$6"; exit 0; fi
+if [ "\${3:-}" = "remote" ] || [ "\${3:-}" = "fetch" ] || [ "\${3:-}" = "cat-file" ]; then exit 0; fi
+if [ "\${3:-}" = "worktree" ] && [ "\${4:-}" = "prune" ]; then exit 0; fi
+exit 1
+`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "docker"), `#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1 $2" = "compose --project-directory" ]; then printf '%s\\n' "$FAKE_COMPOSE"; exit 0; fi
+if [ "$1 $2" = "image rm" ]; then exit 0; fi
+exit 1
+`, { mode: 0o755 });
+  // The #1043 shape: the target's docker-compose.yml names a key this
+  // deployer's candidate generator does not apply.
+  const compose = JSON.parse(composeSnapshot()) as { services: { viewer: Record<string, unknown> } };
+  compose.services.viewer.cap_add = ["SYS_PTRACE"];
+  const child = Bun.spawn([process.execPath, adapter, "build-candidate"], {
+    cwd: root,
+    env: {
+      ...process.env,
+      HOME: path.join(sandbox, "runtime-home"),
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+      FAKE_COMPOSE: JSON.stringify(compose),
+      FAKE_DOCKER_LOG: dockerLog,
+      LLV_DEPLOYMENT_ADAPTER_PROTOCOL: "1",
+      LLV_MCP_RUNTIME_ROOT: path.join(sandbox, "llv-mcp-runtime"),
+      LLV_STATE_DIR: state,
+      LLV_VIEWER_CANDIDATE_PORT_BASE: "28000",
+      LLV_VIEWER_PORT: "1",
+    },
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  child.stdin.write(`${JSON.stringify({ deploymentId: "deploy-uncovered-compose", revision: "7".repeat(40) })}\n`);
+  child.stdin.end();
+  const code = await child.exited;
+  const stderr = await new Response(child.stderr).text();
+  try {
+    expect(code).toBe(1);
+    expect(stderr).toContain("Viewer Compose service has uncovered fields: cap_add; the running deployer cannot apply them to a candidate.");
+    expect(stderr).toContain("Compose schema changes ship in two deploys");
+    // The host keeps the first 500 characters of an adapter error.
+    expect(stderr.trim().length).toBeLessThanOrEqual(500);
+    const dockerCalls = fs.readFileSync(dockerLog, "utf8").split("\n");
+    expect(dockerCalls.some((line) => line.startsWith("build"))).toBe(false);
+    expect(fs.existsSync(path.join(state, "deployments", "deploy-uncovered-compose", "source"))).toBe(false);
+  } finally {
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
+}, 15_000);
+
 test("issue 1270: fenced successor cleanup retains its predecessor as the rollback target", async () => {
   const generation = {
     image: "agent-log-viewer:deploy-cleanup",

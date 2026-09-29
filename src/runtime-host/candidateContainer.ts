@@ -79,9 +79,18 @@ function stringArray(value: unknown, label: string): string[] {
   return value as string[];
 }
 
+/* #1045: the running deployer, not the target revision, turns these keys into
+   the candidate's `docker run` arguments, so a key only the target knows cannot
+   be applied in the deploy that introduces it. The refusal names the way out. */
+const UNCOVERED_COMPOSE_GUIDANCE = "the running deployer cannot apply them to a candidate. "
+  + "Deploy a revision that teaches the deployer these keys first, then the one that uses them "
+  + "(docs/RELEASING.md, \"Compose schema changes ship in two deploys\")";
+
 function assertCoveredKeys(record: Record<string, unknown>, supported: Set<string>, label: string): void {
   const uncovered = Object.keys(record).filter((key) => !supported.has(key));
-  if (uncovered.length > 0) throw new Error(`${label} has uncovered fields: ${uncovered.sort().join(", ")}`);
+  if (uncovered.length > 0) {
+    throw new Error(`${label} has uncovered fields: ${uncovered.sort().join(", ")}; ${UNCOVERED_COMPOSE_GUIDANCE}`);
+  }
 }
 
 export function viewerComposeSnapshotWithoutUnsupportedApiCredentials(configJson: string): string {
@@ -101,7 +110,7 @@ function composeVolume(value: unknown, index: number): ViewerComposeVolume {
   assertCoveredKeys(volume, VOLUME_KEYS, `viewer Compose volume ${index}`);
   if (volume.type !== "bind") throw new Error(`viewer Compose volume ${index} type is unsupported`);
   const bind = objectValue(volume.bind ?? {}, `viewer Compose volume ${index}.bind`);
-  if (Object.keys(bind).length > 0) throw new Error(`viewer Compose volume ${index}.bind has uncovered fields`);
+  assertCoveredKeys(bind, new Set(), `viewer Compose volume ${index}.bind`);
   if (volume.read_only !== undefined && typeof volume.read_only !== "boolean") throw new Error(`viewer Compose volume ${index}.read_only is invalid`);
   return {
     type: "bind",

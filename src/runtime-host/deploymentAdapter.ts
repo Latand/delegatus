@@ -50,8 +50,9 @@ const ACTION_TIMEOUTS: Record<AdapterAction, number | null> = {
      contains, so the adapter reports its own named reason instead of being
      killed mid-wait and leaving the operator a bare phase string. */
   promote: PROMOTE_ACTION_TIMEOUT_MS,
-  // Healthy startup has taken 176s at history scale. Allow five minutes for
-  // serving and MCP readiness, then join the adapter and enter rollback.
+  // Healthy startup has taken 176s at history scale. Five minutes without new
+  // startup progress joins the adapter and enters rollback; see
+  // PROGRESS_CEILINGS for how long a Viewer that keeps progressing may take.
   "verify-promoted": 5 * 60_000,
   "candidate-log": 10_000,
   rollback: 90_000,
@@ -60,6 +61,17 @@ const ACTION_TIMEOUTS: Record<AdapterAction, number | null> = {
   "stage-host-successor": 60_000,
   "verify-host-successor": 5_000,
   "complete-host-handoff": 60_000,
+};
+
+/* #1482: a promoted Viewer busy adopting live hosts is still starting, and a
+   fixed window rolled such a release back while it progressed. For these
+   actions the deadline above is a stall window, restarted each time the
+   adapter reports a phase it has not reported before in this run, and the
+   ceiling bounds the whole action however long progress continues. A phase
+   that recurs extends nothing, so a startup retry loop cycling through the
+   same phases still ends at the stall window. */
+const PROGRESS_CEILINGS: Partial<Record<AdapterAction, number>> = {
+  "verify-promoted": 20 * 60_000,
 };
 
 const MCP_HEALTH_PROBE_ACTIONS: ReadonlySet<AdapterAction> = new Set([
@@ -88,6 +100,7 @@ export interface HostCommandViewerDeploymentAdapterOptions {
   log?(...args: unknown[]): void;
   phaseLogIntervalMs?: number;
   timeouts?: Partial<Record<AdapterAction, number | null>>;
+  progressCeilings?: Partial<Record<AdapterAction, number>>;
   proc?: ProcBackend;
   mcpHealthProbeAdmissions?: Pick<McpHealthProbeAdmissions, "issue" | "consume" | "revoke">;
 }
@@ -459,6 +472,7 @@ export class HostCommandViewerDeploymentAdapter implements ViewerDeploymentAdapt
     const log = options.log ?? console.error;
     const phaseLogIntervalMs = Math.max(1, options.phaseLogIntervalMs ?? PHASE_LOG_INTERVAL_MS);
     const timeouts = { ...ACTION_TIMEOUTS, ...options.timeouts };
+    const progressCeilings = { ...PROGRESS_CEILINGS, ...options.progressCeilings };
     const reconcile = async () => {
       const previous = readProcessRecord(stateFile);
       if (!previous) {
@@ -478,6 +492,8 @@ export class HostCommandViewerDeploymentAdapter implements ViewerDeploymentAdapt
     ): Promise<unknown> => {
       signal?.throwIfAborted();
       const timeoutMs = timeouts[action] === null ? null : Math.max(1, timeouts[action]!);
+      const ceilingMs = timeoutMs === null || progressCeilings[action] === undefined
+        ? null : Math.max(timeoutMs, progressCeilings[action]!);
       const admissionChannel = healthAdmissions
         ? await createMcpHealthProbeAdmissionChannel()
         : null;
@@ -546,6 +562,17 @@ export class HostCommandViewerDeploymentAdapter implements ViewerDeploymentAdapt
       const stdoutPromise = readStream(child.stdout);
       const stderrPromise = readStream(child.stderr);
       let timer: ReturnType<typeof setTimeout> | null = null;
+      let expire: (() => void) | null = null;
+      let deadlineIsCeiling = false;
+      const startedAt = Date.now();
+      const armDeadline = () => {
+        if (timeoutMs === null || !expire) return;
+        if (timer) clearTimeout(timer);
+        const toCeiling = ceilingMs === null ? Infinity : startedAt + ceilingMs - Date.now();
+        deadlineIsCeiling = toCeiling <= timeoutMs;
+        timer = setTimeout(expire, Math.max(0, Math.min(timeoutMs, toCeiling)));
+      };
+      const seenPhases = new Set<string>();
       let onAbort: (() => void) | undefined;
       /* #1216: a deployment used to leave no trace in the runtime-host log, so
          a promote that stalled was invisible next to the journal maintenance
@@ -553,7 +580,12 @@ export class HostCommandViewerDeploymentAdapter implements ViewerDeploymentAdapt
       let reportedPhase: string | null = null;
       const phaseLog = setInterval(() => {
         const phase = readAdapterPhase(phaseFile, action);
-        if (phase === null || phase === reportedPhase) return;
+        if (phase === null) return;
+        if (ceilingMs !== null && !seenPhases.has(phase)) {
+          seenPhases.add(phase);
+          armDeadline();
+        }
+        if (phase === reportedPhase) return;
         reportedPhase = phase;
         log(`[viewer deployment] ${action} ${phase}`);
       }, phaseLogIntervalMs);
@@ -561,7 +593,10 @@ export class HostCommandViewerDeploymentAdapter implements ViewerDeploymentAdapt
       try {
         const outcome = await Promise.race([
           exitPromise.then((exitCode) => ({ type: "exit" as const, exitCode })),
-          ...(timeoutMs === null ? [] : [new Promise<{ type: "timeout" }>((resolve) => { timer = setTimeout(() => resolve({ type: "timeout" }), timeoutMs); })]),
+          ...(timeoutMs === null ? [] : [new Promise<{ type: "timeout" }>((resolve) => {
+            expire = () => resolve({ type: "timeout" });
+            armDeadline();
+          })]),
           new Promise<{ type: "cancelled" }>((resolve) => {
             onAbort = () => resolve({ type: "cancelled" });
             if (signal?.aborted) onAbort();
@@ -574,7 +609,12 @@ export class HostCommandViewerDeploymentAdapter implements ViewerDeploymentAdapt
           await Promise.all([stdoutPromise, stderrPromise]);
           if (outcome.type === "cancelled") throw signal?.reason ?? new Error("serving verification cancelled by operator");
           const phase = readAdapterPhase(phaseFile, action) ?? "waiting for the adapter process";
-          throw new Error(`deployment adapter ${action} timed out while ${phase}`);
+          const bound = ceilingMs === null
+            ? ""
+            : deadlineIsCeiling
+              ? `; still progressing at the ${Math.ceil(ceilingMs / 1000)}s ceiling`
+              : `; no new progress for ${Math.ceil(timeoutMs! / 1000)}s`;
+          throw new Error(`deployment adapter ${action} timed out while ${phase}${bound}`);
         }
         const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
         if (outcome.exitCode !== 0) throw new Error((stderr.trim() || `deployment adapter ${action} failed`).slice(0, 500));
