@@ -1503,7 +1503,8 @@ export class CodexAppServerHost implements EngineHost {
       // terminalizes a turn lost with the old process. Only the former records
       // a pause the operator already saw and must keep across adoption.
       const previousTurn = provisional.events.findLast(event => event.kind === "turn-started" || event.kind === "turn-ended");
-      const deliberatelyPaused = previousTurn?.kind === "turn-ended" && previousTurn.status === "interrupted";
+      const deliberatelyPaused = previousTurn?.kind === "turn-ended" && previousTurn.status === "interrupted"
+        && previousTurn.interruptionSource !== "history";
       provisional.beginBufferedNotificationReconciliation();
       provisional.flushPreRestoreEvents();
       provisional.flushPreRestoreMessages(threadId ? result : null);
@@ -3218,7 +3219,8 @@ export class CodexAppServerHost implements EngineHost {
       const authoritativeStatus = terminalStatus(status);
       const recordedTerminal = turnEvents.findLast((event) => event.kind === "turn-ended");
       if (recordedTerminal?.kind !== "turn-ended" || recordedTerminal.status !== authoritativeStatus) {
-        this.emit({ kind: "turn-ended", turnId, status: authoritativeStatus });
+        this.emit({ kind: "turn-ended", turnId, status: authoritativeStatus,
+          ...(authoritativeStatus === "interrupted" ? { interruptionSource: "history" as const } : {}) });
       }
       if (this.activeTurnId === turnId) this.activeTurnId = null;
     }

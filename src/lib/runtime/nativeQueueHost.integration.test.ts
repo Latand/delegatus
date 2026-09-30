@@ -74,6 +74,8 @@ plugins = false
   let liveChildren = 0;
   let dropAdd = false;
   let hideCanonicalClient: string | null = null;
+  let coalescedNativeStarts = 0;
+  let retainedIdleResumes = 0;
   // Only authentication/catalog projection is synthetic. Queue, history,
   // native IDs, dispatch and persistence execute in the real installed CLI.
   const spawnProcess = (_command: string, args: string[]) => {
@@ -85,6 +87,15 @@ plugins = false
       while (diagnostics.length > 64) diagnostics.shift();
     });
     const input = new PassThrough(); const output = new PassThrough();
+    let heldResume: string | null = null;
+    let bufferedFrames = "";
+    let resumeStartObserved = false;
+    const releaseResume = () => {
+      if (heldResume === null) return;
+      output.write(heldResume + bufferedFrames);
+      heldResume = null;
+      bufferedFrames = "";
+    };
     const methods = new Map<number, string>();
     const inbound = createInterface({ input });
     inbound.on("line", line => {
@@ -96,6 +107,17 @@ plugins = false
     const outbound = createInterface({ input: child.stdout });
     outbound.on("line", line => {
       const message = JSON.parse(line); const method = methods.get(message.id);
+      if (message.id === -1) {
+        // This read belongs to the fixture barrier, outside the host's RPCs.
+        // An empty queue waits for the real auto-start; a retained queue
+        // releases resume so the host can perform its recovery start.
+        if (message.error || !Array.isArray(message.result?.data)) throw new Error("resume barrier queue read failed");
+        if (message.result.data.length > 0) {
+          retainedIdleResumes++;
+          releaseResume();
+        } else if (resumeStartObserved) releaseResume();
+        return;
+      }
       if (method === "account/read") message.result = { account: { type: "chatgpt", planType: "fixture" }, requiresOpenaiAuth: false };
       if (method === "model/list") message.result = { data: [{ id: "fixture-model", model: "fixture-model", isDefault: true, inputModalities: ["text", "image"], supportedReasoningEfforts: [{ reasoningEffort: "high" }] }] };
       if (method === "thread/queue/add" && dropAdd) return;
@@ -108,6 +130,25 @@ plugins = false
         }
       }
       const frame = JSON.stringify(message) + "\n";
+      if (message.method === "turn/started") resumeStartObserved = true;
+      if (method === "thread/resume" && scenario === "large") {
+        heldResume = frame;
+        if (resumeStartObserved) {
+          coalescedNativeStarts++;
+          releaseResume();
+          return;
+        }
+        child.stdin.write(JSON.stringify({ id: -1, method: "thread/queue/list", params: { threadId: message.result.thread.id } }) + "\n");
+        return;
+      }
+      if (heldResume !== null) {
+        bufferedFrames += frame;
+        if (message.method === "turn/started") {
+          coalescedNativeStarts++;
+          releaseResume();
+        }
+        return;
+      }
       output.write(frame);
     });
     child.once("close", (code, signal) => {
@@ -264,10 +305,12 @@ plugins = false
     const adds = requests.filter(r => r.method === "thread/queue/add").length;
     await host.release(); dropAdd = false;
     host = await CodexAppServerHost.adopt(threadId, options);
-    // The CLI may auto-dispatch or retain an idle head for host recovery.
-    // Do not hold resume behind turn/started: paused native queues cannot
-    // produce that event until adoption's explicit atomic start. The
-    // coalesced idle-snapshot/start race is held in codexAppServerHost.test.ts.
+    // The large case coalesces resume with a real native auto-start when it
+    // occurs. A read of a retained head releases the barrier without a start.
+    if (scenario === "large") {
+      expect(coalescedNativeStarts + retainedIdleResumes).toBe(1);
+      console.info("native cold resume barrier", { coalescedNativeStarts, retainedIdleResumes });
+    }
     await executor.reconcile(conversationId);
     expect(requests.filter(r => r.method === "thread/queue/add")).toHaveLength(adds);
     // A cold resume may dispatch the queued entry. A complete canonical read

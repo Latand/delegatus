@@ -130,6 +130,18 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: Install a supported native Codex fixture CLI
         run: npm install --prefix "$RUNNER_TEMP/native-codex" --no-save --ignore-scripts @openai/codex@${{ matrix.codex }}
+      - name: Require the pinned interpreter
+        shell: bash
+        env:
+          EXPECTED_BUN: ${{ steps.pin.outputs.version }}
+        run: |
+          set -euo pipefail
+          actual="$(bun --version)"
+          if [[ "$actual" != "$EXPECTED_BUN" ]]; then
+            echo "expected bun $EXPECTED_BUN, got $actual" >&2
+            exit 1
+          fi
+          bun --revision
       - name: Verify native queue, history, status and inherited Voice contracts
         run: bun scripts/verify-native-codex-runtime.ts "$RUNNER_TEMP/native-codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
 

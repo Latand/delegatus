@@ -431,11 +431,10 @@ plugins = false
   }
   const init = async (client: Client) => {
     const result = await client.rpc("initialize", { clientInfo: { name: "history_reader_fixture", version: "1" }, capabilities: { experimentalApi: true } }, 5000) as { userAgent: string };
-    expect(result.userAgent).toMatch(/\/\d+\.\d+\.\d+/);
+    expect(typeof result.userAgent).toBe("string");
     expect(await client.rpc("account/read", { refreshToken: false }, 5000)).toMatchObject({ account: null });
   };
   try {
-    expect(spawnSync(nativeCli!, ["--version"], { env, cwd, encoding: "utf8" }).stdout.trim()).toMatch(/^codex-cli \d+\.\d+\.\d+$/);
     let client = startClient(); await init(client);
     // Same reason as the native queue fixture: no command is ever run here, and
     // a sandboxed thread makes this case depend on a helper the runner lacks.

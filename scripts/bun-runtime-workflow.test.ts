@@ -23,6 +23,7 @@ interface WorkflowStep {
   if?: string;
   "continue-on-error"?: unknown;
   with?: Record<string, string>;
+  env?: Record<string, string>;
 }
 
 const workflow = Bun.YAML.parse(workflowSource) as {
@@ -120,6 +121,11 @@ test("both supported Codex CLIs run the full native contracts at the proposed co
   expect(job.steps.find(step => step.uses?.startsWith("oven-sh/setup-bun@"))?.with?.["bun-version"])
     .toBe("${{ steps.pin.outputs.version }}");
   expect(job.steps.some(step => step.run?.includes("@openai/codex@${{ matrix.codex }}"))).toBeTrue();
+  const interpreter = job.steps.find(step => step.name === "Require the pinned interpreter");
+  expect(interpreter?.env?.EXPECTED_BUN).toBe("${{ steps.pin.outputs.version }}");
+  expect(interpreter?.run).toContain('actual="$(bun --version)"');
+  expect(interpreter?.run).toContain('if [[ "$actual" != "$EXPECTED_BUN" ]]');
+  expect(interpreter?.run).toContain("exit 1");
   expect(job.steps.some(step => step.run?.includes("bun scripts/verify-native-codex-runtime.ts") && !step.run.includes("--steering-only"))).toBeTrue();
   for (const step of job.steps) {
     expect(step.if).toBeUndefined();

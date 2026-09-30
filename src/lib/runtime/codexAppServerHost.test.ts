@@ -3174,6 +3174,47 @@ describe("CodexAppServerHost", () => {
     expect(server.nativeQueueItems).toHaveLength(1);
   });
 
+  for (const [failure, storage] of [["refused", "memory"], ["uncertain", "memory"], ["refused", "file"]]) test(`native cold recovery retries adoption after ${failure} start with reconciled interruption (${storage})`, async () => {
+    const threadId = `cold-queue-retry-${failure}`;
+    const directory = storage === "file" ? fs.mkdtempSync(path.join(os.tmpdir(), "llv-cold-retry-")) : null;
+    const eventStore = directory ? new FileRuntimeEventStore(directory) : new MemoryEventStore();
+    eventStore.append(threadId, { kind: "turn-started", turnId: "lost-turn", seq: 1 });
+    const makeServer = () => {
+      const server = new FakeAppServer(threadId, threadId, false,
+        [{ id: "lost-turn", status: "interrupted", items: [] }], { type: "idle" }, null,
+        failure === "uncertain" ? ["thread/queue/start"] : []);
+      server.userAgent = "codex_desktop_app/0.159.0 (Linux)";
+      server.paginatedHistory = true;
+      server.nativeQueueItems = [{ id: "retained-head", clientUserMessageId: "original-client", input: [{ type: "text", text: "retained" }] }];
+      return server;
+    };
+    const failed = makeServer();
+    if (failure === "refused") failed.nativeQueueStartError = "provider configuration refused";
+    await expect(CodexAppServerHost.adopt(threadId, {
+      cwd: "/repo", requestTimeoutMs: 20, eventStore, spawnProcess: fakeSpawn(failed),
+    })).rejects.toThrow(failure === "refused" ? "provider configuration refused" : "Native queue mutation outcome is uncertain");
+    expect(failed.requests.filter(request => request.method === "thread/queue/start")).toHaveLength(1);
+    expect(eventStore.load(threadId)).toContainEqual(expect.objectContaining({ kind: "turn-ended", turnId: "lost-turn", status: "interrupted", interruptionSource: "history" }));
+    const replacement = new FakeAppServer(threadId, threadId, false,
+      [{ id: "lost-turn", status: "interrupted", items: [] }], { type: "idle" });
+    replacement.userAgent = "codex_desktop_app/0.159.0 (Linux)";
+    replacement.paginatedHistory = true;
+    replacement.nativeQueueItems = structuredClone(failed.nativeQueueItems);
+    const host = await CodexAppServerHost.adopt(threadId, {
+      cwd: "/repo", eventStore: directory ? new FileRuntimeEventStore(directory) : eventStore, spawnProcess: fakeSpawn(replacement),
+    });
+    try {
+      const starts = replacement.requests.filter(request => request.method === "thread/queue/start");
+      expect(starts).toHaveLength(1);
+      expect(starts[0]?.params).toEqual({ threadId, queuedSubmissionId: "retained-head" });
+      expect(replacement.requests.filter(request => request.method === "thread/queue/add" || request.method === "turn/start")).toHaveLength(0);
+      expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: "recovered-native-turn" });
+    } finally {
+      await host.release();
+      if (directory) fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("native cold recovery never retries an unacknowledged start", async () => {
     const threadId = "cold-queue-lost-start-reply";
     const server = new FakeAppServer(threadId, threadId, false, [], { type: "idle" }, null, ["thread/queue/start"]);

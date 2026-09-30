@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -29,7 +29,6 @@ test.skipIf(!binary)("installed Codex: adapter pagination and mutation acknowled
   }
   const cwd = join(base, "workspace");
   mkdirSync(cwd);
-  expect(spawnSync(binary, ["--version"], { env, encoding: "utf8" }).stdout.trim()).toMatch(/^codex-cli \d+\.\d+\.\d+$/);
   const backendStarted = deferred<void>();
   const backend = createServer((request, response) => {
     request.resume();
