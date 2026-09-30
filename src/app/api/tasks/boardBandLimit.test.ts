@@ -38,7 +38,8 @@ function row(id: string, board: "shown" | "hidden"): BoardTask {
   return {
     id,
     project: "proj",
-    status: "done",
+    /* Active rows exercise admission; old done rows expire from the board. */
+    status: "assigned",
     text: `task ${id}`,
     placement: "unplaced",
     board,

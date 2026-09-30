@@ -61,6 +61,7 @@ function task(id: string, createdAt: string, files: readonly FileEntry[], status
     project: "fixture",
     text,
     status,
+    ...(status === "done" ? { doneAt: new Date().toISOString() } : {}),
     placement: "unplaced",
     assignments: files.map((entry) => ({ path: entry.path, conversationId: entry.conversationId!, panePid: null, state: "delivered", error: null, at: createdAt })),
     createdAt,

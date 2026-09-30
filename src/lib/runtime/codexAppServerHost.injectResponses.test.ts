@@ -1,4 +1,4 @@
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { PassThrough } from "node:stream";
 import fs from "node:fs";
 import os from "node:os";
@@ -23,9 +23,6 @@ function sse(type: string, data: object) {
   return `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
 }
 async function fixture() {
-  const version = spawnSync(codexBinary, ["--version"], { encoding: "utf8" });
-  expect(version.status).toBe(0);
-  expect(version.stdout.trim()).toBe("codex-cli 0.154.0");
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), "inj-real-"));
   const model = "fixture-model";
   const requests: Array<{ body: { input?: unknown[] } }> = [];

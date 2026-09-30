@@ -92,7 +92,8 @@ export type RuntimeEvent =
   | { kind: "delta"; turnId: string; text: string; seq: number }
   | { kind: "item"; turnId: string | null; item: unknown; phase: "started" | "completed"; voiceResponse?: RuntimeVoiceResponse | null; seq: number }
   | { kind: "voice-chunk"; turnId: string; delivery: RuntimeVoiceDelivery; seq: number }
-  | { kind: "turn-ended"; turnId: string; status: "completed" | "interrupted" | "error"; seq: number }
+  /** History can infer interruption after a lost process; it carries no operator pause intent. */
+  | { kind: "turn-ended"; turnId: string; status: "completed" | "interrupted" | "error"; interruptionSource?: "history"; seq: number }
   | { kind: "attention"; id: string; method: string; attention: unknown; seq: number }
   | { kind: "attention-resolved"; id: string; resolution: "answered" | "host-restarted" | "server-resolved" | "turn-ended"; seq: number }
   | { kind: "limits"; snapshot: unknown; seq: number }

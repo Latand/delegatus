@@ -89,8 +89,19 @@ confirm the original payload.
 `bun scripts/verify-native-codex-runtime.ts <absolute-codex-binary>` runs the
 named queue, history, host, status and inherited Voice tests under private
 HOME/XDG/provider/state roots and a short TMPDIR. CI installs Codex 0.154.0 and
-runs this same check with the Dockerfile's Bun version. Dependencies come from
+0.159.0 in separate matrix jobs and runs this same check with the Dockerfile's Bun version. Dependencies come from
 the repository lockfile.
+
+On cold adoption, an observed idle native queue can retain its head without
+auto-dispatching it. Delegatus starts that exact submission through the native
+atomic start RPC after reconciling resume notifications. A previously recorded
+interruption, live turn or blocking attention keeps the queue paused. Recovery
+never re-adds the input; canonical history still owns delivery settlement.
+See [cold-recovery evidence](codex-native-queue-cold-recovery.md) for the version
+comparison, production impact and checks. Queues already stranded by a pre-fix
+cold adoption remain paused because their untagged interruption also represents
+a legacy operator pause. Use the queue panel's **Send the queue now** control
+when idle to resume them, as described in that report's Production impact.
 
 The runtime integration fixture uses the real CLI and native persistence against
 a loopback Responses server. Only its authentication/catalog projection is

@@ -10,6 +10,7 @@ import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations
 import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { ORCHESTRATOR_PROMPT_VERSION } from "@/lib/orchestrator/prompt";
+import { withTaskCompletion } from "@/lib/tasks/completion";
 import { admissionSnapshot } from "@/lib/tasks/groupHide";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
@@ -1418,6 +1419,16 @@ const tasks: BoardTask[] = [
 /* `&empty=<status>` empties one column: its tasks move to Done, so the
    column's strip can be read beside the others (an empty column folds). */
 const EMPTY_COLUMN = new URLSearchParams(location.search).get("empty");
+/* Completion expiry: one corpus used on desktop and phone, with an old
+   staffed row, a recent done row and a legacy row. */
+if (SCENARIO === "done-expiry") {
+  tasks.splice(0, tasks.length,
+    withTaskCompletion(task("t-expired", "done", "Retained completion history", "", 4 * 24 * 60 * MIN, [searchImpl1])),
+    withTaskCompletion(task("t-recent", "done", "Recent completion", "", 60 * MIN)),
+    task("t-legacy", "done", "Legacy completion history", "", 5 * 24 * 60 * MIN, [searchImpl2]),
+    task("t-reopen", "assigned", "Reopened completion", "", 60 * MIN),
+  );
+}
 if (EMPTY_COLUMN) for (const entry of tasks) if (entry.status === EMPTY_COLUMN) entry.status = "done";
 
 if (FLAT) {
