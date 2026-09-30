@@ -59,7 +59,7 @@ jobs:
           set -euo pipefail
           printf 'MEDIA_CACHE_DIR=%s/privacy-media\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
           package_hash="$(printf '%s' "$PRIVACY_MEDIA_PACKAGES" | sha256sum | cut -d ' ' -f 1)"
-          printf 'key=privacy-media-v2-%s-%s-%s-%s\n' \
+          printf 'key=privacy-media-v3-%s-%s-%s-%s\n' \
             "$ImageOS" "$ImageVersion" "$RUNNER_ARCH" "$package_hash" >> "$GITHUB_OUTPUT"
 
       - name: Restore media inspection tools

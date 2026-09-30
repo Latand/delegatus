@@ -110,7 +110,7 @@ for (const [index, job] of jobs.entries()) {
   test(`${names[index]} cache key follows tools and runner image, with no candidate input`, () => {
     const baseline = run(job, "Resolve media tools cache");
     expect(baseline.code).toBe(0);
-    expect(baseline.output).toContain("key=privacy-media-v2-ubuntu24-20260930.1-X64-");
+    expect(baseline.output).toContain("key=privacy-media-v3-ubuntu24-20260930.1-X64-");
     expect(run(job, "Resolve media tools cache", { PRIVACY_MEDIA_PACKAGES: "ffmpeg" }).output).not.toBe(baseline.output);
     expect(run(job, "Resolve media tools cache", { ImageVersion: "20261001.1" }).output).not.toBe(baseline.output);
     const saveIndex = job.steps.findIndex((entry) => entry.uses?.startsWith("actions/cache/save@"));
