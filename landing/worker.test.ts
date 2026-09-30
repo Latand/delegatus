@@ -113,6 +113,6 @@ describe("landing site events", () => {
   test("a failed binding write cannot acknowledge success", async () => {
     const { env } = harness();
     env.SITE_EVENTS.writeDataPoint = () => { throw new Error("binding unavailable"); };
-    expect(worker.fetch(eventRequest(valid), env)).rejects.toThrow("binding unavailable");
+    await expect(worker.fetch(eventRequest(valid), env)).rejects.toThrow("binding unavailable");
   });
 });
