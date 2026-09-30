@@ -147,10 +147,10 @@ export interface BoardTask {
   id: string; // crypto.randomUUID(), server-side
   project: string; // FileEntry.project — the board the card lives on
   status: TaskStatus;
-  /** Entry into done; cleared on reopen. Legacy rows freeze updatedAt on read
-      and persist it on the next store write. */
+  /** Entry into done or its latest new admission; cleared on reopen. Legacy
+      rows freeze updatedAt on read and persist it on the next store write. */
   doneAt?: string;
-  /** Admissions present at completion, for hidden-group resurfacing. */
+  /** Admissions covered by the current done retention window. */
   doneAdmissions?: string[];
   /** Plain text, ≤ 6000 chars (server-enforced). First line acts as the
       title everywhere a compact label is needed. Written for the HUMAN who

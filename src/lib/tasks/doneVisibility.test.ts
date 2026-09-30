@@ -6,6 +6,7 @@ import path from "node:path";
 import { DONE_TASK_BOARD_RETENTION_MS, countBoardTasks, taskShowsOnBoard } from "./boardVisibility";
 import { createTask, patchTask } from "./commands";
 import { withTaskCompletion } from "./completion";
+import { ensureTaskMembership } from "./membership";
 import { loadTasks, mutateTasks, saveTasks } from "./store";
 import { taskRevision } from "./revision";
 import { finishBoardTask } from "@/lib/forge/autoMerge";
@@ -72,6 +73,83 @@ test("new admission resurfaces, reconciliation of an old admission does not", ()
   const row = completed();
   expect(taskShowsOnBoard({ ...row, assignments: [{ ...member, at: new Date(END + 1).toISOString() }] }, true, { now: END + 2 })).toBe(false);
   expect(taskShowsOnBoard({ ...row, assignments: [...row.assignments, { ...member, path: "/fixture/new.jsonl", conversationId: "new" }] }, true, { now: END + 2 })).toBe(true);
+});
+
+test("a late admission restarts retention once and expires after three days", () => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "done-admission-")), "tasks.json");
+  saveTasks([completed()], file);
+  const admittedAt = END + 24 * 60 * 60 * 1000;
+  const input = {
+    project: "fixture", origin: { kind: "conversation" as const, key: "new" },
+    explicitTaskIds: ["task"], identity: { conversationId: "new", path: "/fixture/new.jsonl" },
+  };
+  mutateTasks((tasks) => {
+    const result = ensureTaskMembership(tasks, input, { now: () => new Date(admittedAt).toISOString() });
+    if (!result.ok) throw new Error(result.error);
+    const row = result.tasks[0]!;
+    expect(row.status).toBe("done");
+    expect(row.doneAt).toBe(new Date(admittedAt).toISOString());
+    expect(row.doneAdmissions).toContain("new");
+    expect(taskShowsOnBoard(row, true, { now: admittedAt })).toBe(true);
+    return { tasks: result.tasks, result: null };
+  }, file);
+  const end = admittedAt + DONE_TASK_BOARD_RETENTION_MS;
+  const revision = taskRevision(loadTasks(file)[0]!);
+  mutateTasks((tasks) => {
+    const replay = ensureTaskMembership(tasks, input, { now: () => new Date(end).toISOString() });
+    if (!replay.ok) throw new Error(replay.error);
+    expect(replay.changed).toBe(false);
+    return { tasks: replay.tasks, result: null };
+  }, file);
+  const row = loadTasks(file)[0]!;
+  expect(taskRevision(row)).toBe(revision);
+  expect(row.doneAt).toBe(new Date(admittedAt).toISOString());
+  for (const now of [admittedAt, end, end + 1, Date.parse(DONE) + 60 * 24 * 60 * 60 * 1000]) {
+    const visible = now <= end;
+    expect(taskShowsOnBoard(row, true, { now })).toBe(visible);
+    expect(countBoardTasks([row], "fixture", () => true, () => ({ now }))).toBe(visible ? 1 : 0);
+  }
+});
+
+test("reconciling an old admission with new identifiers does not restart retention", () => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "done-reconcile-")), "tasks.json");
+  saveTasks([completed()], file);
+  mutateTasks((tasks) => {
+    const result = ensureTaskMembership(tasks, {
+      project: "fixture", origin: { kind: "conversation", key: "worker" },
+      explicitTaskIds: ["task"],
+      identity: { conversationId: "worker", path: "/fixture/successor.jsonl", launchId: "successor" },
+    }, { now: () => new Date(END + 1).toISOString() });
+    if (!result.ok) throw new Error(result.error);
+    expect(result.changed).toBe(true);
+    expect(result.tasks[0]!.doneAt).toBe(DONE);
+    return { tasks: result.tasks, result: null };
+  }, file);
+  const row = loadTasks(file)[0]!;
+  expect(row.doneAt).toBe(DONE);
+  expect(taskShowsOnBoard(row, true, { now: END + 1 })).toBe(false);
+  expect(countBoardTasks([row], "fixture", () => true, () => ({ now: END + 1 }))).toBe(0);
+});
+
+test("the store restarts retention for direct admission writes and later admissions", () => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "done-direct-admission-")), "tasks.json");
+  saveTasks([completed()], file);
+  for (const [index, now] of [END + 1, END + DONE_TASK_BOARD_RETENTION_MS + 2].entries()) {
+    const at = new Date(now).toISOString();
+    mutateTasks((tasks) => {
+      tasks[0]!.assignments.push({ ...member, conversationId: `late-${index}`, path: `/fixture/late-${index}.jsonl`, at });
+      tasks[0]!.updatedAt = at;
+      return { tasks, result: null };
+    }, file);
+    const row = loadTasks(file)[0]!;
+    expect(row.doneAt).toBe(at);
+    expect(row.doneAdmissions).toContain(`late-${index}`);
+    expect(taskShowsOnBoard(row, false, { now })).toBe(true);
+    expect(taskShowsOnBoard(row, true, { now: now + DONE_TASK_BOARD_RETENTION_MS + 1 })).toBe(false);
+    const revision = taskRevision(row);
+    mutateTasks((tasks) => ({ tasks, result: null }), file);
+    expect(taskRevision(loadTasks(file)[0]!)).toBe(revision);
+  }
 });
 
 test("a fresh decision request resurfaces; a decision predating expiry does not", () => {
