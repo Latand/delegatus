@@ -51,7 +51,7 @@
     "entities": "^8.0.0",
     "highlight.js": "^11.11.1",
     "lucide-react": "^1.23.0",
-    "next": "16.3.3",
+    "next": "16.3.6",
     "pdfjs-dist": "^6.2.108",
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
@@ -69,7 +69,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^10",
-    "eslint-config-next": "16.3.2",
+    "eslint-config-next": "16.3.6",
     "happy-dom": "^20.10.6",
     "playwright-core": "1.62.1",
     "tailwindcss": "^4",
@@ -106,6 +106,6 @@
     "fast-uri": "^3.1.6"
   },
   "patchedDependencies": {
-    "next@16.3.3": "patches/next-16.3.3.patch"
+    "next@16.3.6": "patches/next-16.3.6.patch"
   }
 }

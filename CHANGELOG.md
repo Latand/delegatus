@@ -39,7 +39,7 @@ guarantees for the 1.x series.
   default tier falls back to the standard one with the fallback shown. The
   tier stays with the agent through resume, restart and reconfiguration.
   The existing `fast` option still means the `priority` tier, and the
-  runtime pill names a tier other than standard or fast. Your Codex
+  runtime pill names a tier other than standard. Your Codex
   `config.toml` is left alone.
 - **Agents can read and change the role mapping.** The new `role_presets`
   tool returns each role's engine, model and effort, the shipped values,
@@ -123,6 +123,9 @@ guarantees for the 1.x series.
   model the pill names.
 
 ### Fixed
+- **Next.js 16.3.6 security update.** Delegatus moves from Next.js 16.3.3 to
+  16.3.6, which closes the remote code execution advisory in `next/og`
+  `ImageResponse` (GHSA-vcvr-r3jv-pc5j) that affected 16.2.0 up to 16.3.5.
 - **A message to an agent arrives once or fails with its reason.** A
   message to a finished or idle agent is delivered once within a bounded
   wait or ends in a failure that names its cause. A finished flow reviewer
