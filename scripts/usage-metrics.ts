@@ -1,10 +1,11 @@
 /** Read-only maintainer metrics. No Viewer imports, install pings or scheduler. */
 import { execFile } from "node:child_process";
-import { appendFile, mkdir, readFile, realpath } from "node:fs/promises";
+import { appendFile, lstat, mkdir, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
+import { APP_DIR_NAMES } from "../bin/appDir.mjs";
 
 export const TIMEOUT_MS = 30_000;
 const command = promisify(execFile);
@@ -26,6 +27,14 @@ type Github = { views: z.infer<typeof githubViews> | null; referrers: z.infer<ty
 type Site = { days: { day: string; visits: number; sampleInterval: number }[] };
 export type Report = { observedAt: string; from: string; to: string; npm: Npm | null; github: Github | null; site: Site | null; failures: string[] };
 export type IO = { json: (url: string, init?: RequestInit) => Promise<unknown>; run: (args: string[]) => Promise<string>; token: (path: string) => Promise<string> };
+
+function safeReferrer(value: string): string {
+  if (["Google", "Microsoft Teams"].includes(value)) return value;
+  const host = /^(?:[a-z0-9-]+\.)+[a-z]{2,}$/i.test(value) ? value : (() => {
+    try { return new URL(value).hostname; } catch { return ""; }
+  })();
+  return /^(?:[a-z0-9-]+\.)+[a-z]{2,}$/i.test(host) ? host.toLowerCase() : "інше джерело";
+}
 
 export const liveIO: IO = {
   async json(url, init) {
@@ -103,7 +112,7 @@ export async function collect(options: Options, io: IO = liveIO, now = new Date(
       const api = async (suffix: string) => JSON.parse(await io.run(["gh", "api", `repos/${repo}${suffix}`]));
       const [views, referrers, stars] = await Promise.all([
         source("GitHub views", async () => githubViews.parse(await api("/traffic/views?per=day"))),
-        source("GitHub referrers", async () => githubReferrers.parse(await api("/traffic/popular/referrers"))),
+        source("GitHub referrers", async () => githubReferrers.parse(await api("/traffic/popular/referrers")).map(referrer => ({ ...referrer, referrer: safeReferrer(referrer.referrer) }))),
         source("GitHub stars", async () => githubStars.parse(await api("")).stargazers_count),
       ]);
       return { views, referrers, stars };
@@ -184,6 +193,13 @@ export function render(report: Report, options: Options): string {
 async function canonical(path: string): Promise<string> {
   try { return await realpath(path); } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    // realpath reports ENOENT for a dangling symlink too. Do not reconstruct
+    // the link's own path: appending there could create a file at its target.
+    try {
+      if ((await lstat(path)).isSymbolicLink()) throw new Error("unsafe history location");
+    } catch (statError) {
+      if ((statError as NodeJS.ErrnoException).code !== "ENOENT") throw statError;
+    }
     return join(await canonical(dirname(path)), basename(path));
   }
 }
@@ -192,7 +208,10 @@ const inside = (root: string, path: string) => { const r = relative(root, path);
 export async function appendHistory(path: string, report: Report): Promise<void> {
   const target = await canonical(resolve(path));
   const repo = await canonical(resolve(import.meta.dir, ".."));
-  const protectedRoots = [repo, join(homedir(), ".config/agent-log-viewer"), join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "agent-log-viewer"), process.env.LLV_STATE_DIR].filter((p): p is string => !!p);
+  const home = process.env.HOME || homedir();
+  const homeConfig = join(home, ".config");
+  const xdgConfig = process.env.XDG_CONFIG_HOME || homeConfig;
+  const protectedRoots = [repo, ...[homeConfig, xdgConfig].flatMap(root => APP_DIR_NAMES.map(name => join(root, name))), join(home, ".claude/viewer-state"), join(home, ".claude/viewer-inbox"), process.env.LLV_STATE_DIR].filter((p): p is string => !!p);
   for (const root of protectedRoots) if (inside(await canonical(resolve(root)), target)) throw new Error("unsafe history location");
   // Also refuse another checkout. A home-level dotfiles repository must not
   // disallow the specification's default ~/.local/share history location.
@@ -201,6 +220,13 @@ export async function appendHistory(path: string, report: Report): Promise<void>
     try { await realpath(join(ancestor, ".git")); if (ancestor !== await canonical(homedir())) throw new Error("unsafe history location"); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     ancestor = dirname(ancestor);
+  }
+  // A hard link can name a protected state inode from outside every protected
+  // path. Refuse shared inodes so appending history cannot mutate that state.
+  try {
+    if ((await stat(target)).nlink > 1) throw new Error("unsafe history location");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   await mkdir(dirname(target), { recursive: true, mode: 0o700 });
   // Append snapshots, including every available GitHub day. Window uniques are never summed.

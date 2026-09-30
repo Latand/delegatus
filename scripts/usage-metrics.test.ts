@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { link, mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { APP_DIR_NAMES } from "../bin/appDir.mjs";
 import recorded from "./fixtures/usage-metrics/recorded.json";
 import { appendHistory, collect, parseOptions, render, TIMEOUT_MS, type IO, type Report } from "./usage-metrics";
 
@@ -15,7 +17,9 @@ function fixtureIO(fail?: string): IO {
     async run(args) {
       if (fail === "GitHub") throw new Error("fixture-credential in subprocess stderr");
       if (args[1] === "repo") {
-        expect(args).toEqual(["gh", "repo", "view", "Latand/delegatus", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
+        expect(args.slice(0, 3)).toEqual(["gh", "repo", "view"]);
+        expect(args[3]).toEndWith("/delegatus");
+        expect(args.slice(4)).toEqual(["--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
         return "fixture/project";
       }
       expect(args[2]).toStartWith("repos/fixture/project");
@@ -87,9 +91,35 @@ test("failed sources are named, other sources survive, credentials and raw error
   expect(render(report, options)).toContain("зірки загалом | 20");
 });
 
+test("referrer URLs are reduced before display or history while metrics remain", async () => {
+  const io = fixtureIO();
+  const run = io.run;
+  io.run = async args => args[2]?.includes("referrers")
+    ? JSON.stringify([{ referrer: "https://example.test/?token=fixture-private-credential", count: 7, uniques: 3 }])
+    : run(args);
+  const report = await collect(options, io, now);
+  const output = render(report, options) + render(report, { ...options, line: true }) + JSON.stringify(report);
+  expect(report.failures).toEqual([]);
+  expect(report.github!.referrers).toEqual([{ referrer: "example.test", count: 7, uniques: 3 }]);
+  expect(output).toContain("example.test: перегляди; відвідувачі 3 | 7");
+  expect(output).not.toContain("fixture-private-credential");
+  const scratch = await mkdtemp("/var/tmp/usage-metrics-referrer-");
+  try {
+    const history = join(scratch, "history.jsonl");
+    await appendHistory(history, report);
+    const saved = await readFile(history, "utf8");
+    expect(saved).toContain("example.test");
+    expect(saved).not.toContain("fixture-private-credential");
+    expect(JSON.parse(saved).github.referrers[0].count).toBe(7);
+  } finally { await rm(scratch, { recursive: true, force: true }); }
+});
+
 test("append-only history retains all GitHub days and window uniques and refuses repo/state/symlink targets", async () => {
   const scratch = await mkdtemp("/var/tmp/usage-metrics-test-");
   const originalState = process.env.LLV_STATE_DIR;
+  const originalHome = process.env.HOME;
+  const originalXdg = process.env.XDG_CONFIG_HOME;
+  const missingTarget = join(import.meta.dir, `.usage-metrics-${randomUUID()}-missing.jsonl`);
   try {
     const report = await collect(options, fixtureIO(), now);
     const path = join(scratch, "metrics", "history.jsonl");
@@ -106,6 +136,66 @@ test("append-only history retains all GitHub days and window uniques and refuses
     await mkdir(state);
     await symlink(state, join(scratch, "alias"));
     await expect(appendHistory(join(scratch, "alias", "history.jsonl"), report)).rejects.toThrow("unsafe history location");
+
+    const home = join(scratch, "home");
+    const xdg = join(scratch, "xdg");
+    process.env.HOME = home;
+    process.env.XDG_CONFIG_HOME = xdg;
+    delete process.env.LLV_STATE_DIR;
+    const newInstallState = join(xdg, "delegatus", "state");
+    await mkdir(newInstallState, { recursive: true });
+    const tasks = join(newInstallState, "tasks.json");
+    await writeFile(tasks, "[]", "utf8");
+    await expect(appendHistory(tasks, report)).rejects.toThrow("unsafe history location");
+    expect(await readFile(tasks, "utf8")).toBe("[]");
+    await mkdir(join(home, ".config"), { recursive: true });
+    await symlink(join(xdg, "delegatus"), join(home, ".config", "delegatus"));
+    const aliasTasks = join(home, ".config", "delegatus", "state", "tasks.json");
+    await expect(appendHistory(aliasTasks, report)).rejects.toThrow("unsafe history location");
+    expect(await readFile(tasks, "utf8")).toBe("[]");
+    for (const appName of APP_DIR_NAMES) {
+      const historicalState = join(xdg, appName, "state");
+      await mkdir(historicalState, { recursive: true });
+      const historicalTasks = join(historicalState, "tasks.json");
+      await writeFile(historicalTasks, "[]", "utf8");
+      await expect(appendHistory(historicalTasks, report)).rejects.toThrow("unsafe history location");
+      expect(await readFile(historicalTasks, "utf8")).toBe("[]");
+
+      const homeState = join(home, ".config", appName, "state");
+      await mkdir(homeState, { recursive: true });
+      const homeTasks = join(homeState, "tasks.json");
+      await writeFile(homeTasks, "[]", "utf8");
+      await expect(appendHistory(homeTasks, report)).rejects.toThrow("unsafe history location");
+      expect(await readFile(homeTasks, "utf8")).toBe("[]");
+    }
+    for (const legacyName of ["viewer-state", "viewer-inbox"]) {
+      const legacyRoot = join(home, ".claude", legacyName);
+      await mkdir(legacyRoot, { recursive: true });
+      const legacyFile = join(legacyRoot, "protected.json");
+      await writeFile(legacyFile, "[]", "utf8");
+      await expect(appendHistory(legacyFile, report)).rejects.toThrow("unsafe history location");
+      expect(await readFile(legacyFile, "utf8")).toBe("[]");
+    }
+
+    const hardlinkXdg = join(scratch, "hardlink-xdg");
+    const hardlinkedTasks = join(hardlinkXdg, "delegatus", "state", "tasks.json");
+    await mkdir(join(hardlinkXdg, "delegatus", "state"), { recursive: true });
+    await writeFile(hardlinkedTasks, "[]", "utf8");
+    const historyAlias = join(scratch, "hardlinked-history.jsonl");
+    await link(hardlinkedTasks, historyAlias);
+    process.env.XDG_CONFIG_HOME = hardlinkXdg;
+    await expect(appendHistory(historyAlias, report)).rejects.toThrow("unsafe history location");
+    expect(await readFile(hardlinkedTasks, "utf8")).toBe("[]");
+
+    const dangling = join(scratch, "dangling-history.jsonl");
+    await symlink(missingTarget, dangling);
+    await expect(appendHistory(dangling, report)).rejects.toThrow("unsafe history location");
+    await expect(readFile(missingTarget, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+    // A genuinely new, ordinary file outside all protected roots remains valid.
+    const externalFresh = join(scratch, "fresh", "history.jsonl");
+    await appendHistory(externalFresh, report);
+    expect((await readFile(externalFresh, "utf8")).trim()).toBe(JSON.stringify(report));
     const checkout = join(scratch, "checkout");
     await mkdir(checkout);
     await writeFile(join(checkout, ".git"), "gitdir: fixture\n");
@@ -113,6 +203,13 @@ test("append-only history retains all GitHub days and window uniques and refuses
   } finally {
     if (originalState === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = originalState;
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = originalXdg;
+    await unlink(missingTarget).catch(error => {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    });
     await rm(scratch, { recursive: true, force: true });
   }
 });
