@@ -31,7 +31,7 @@ const noStore = { "cache-control": "no-store" };
    language), `error` (the same in English, for API readers) and `detail`
    (machine output), with the snapshot. */
 async function answer(result: ActionResult): Promise<NextResponse> {
-  const snapshot = await selfUpdateService().snapshot();
+  const snapshot = result.ok && result.replaySnapshot ? result.replaySnapshot : await selfUpdateService().snapshot();
   return result.ok
     ? NextResponse.json(snapshot, { status: 202, headers: noStore })
     : NextResponse.json({ error: result.error, code: result.code, ...(result.detail ? { detail: result.detail } : {}), snapshot }, { status: result.status, headers: noStore });
@@ -94,7 +94,8 @@ export async function postAuto(request: NextRequest): Promise<NextResponse> {
   if (typeof input.enabled !== "boolean") {
     return NextResponse.json({ error: "enabled must be a boolean", code: "bad-enabled" }, { status: 400, headers: noStore });
   }
-  return answer(await selfUpdateService().setAuto(input.enabled, autoWriter(request, input.writer)));
+  const requestId = typeof input.clientRequestId === "string" && input.clientRequestId.length > 0 ? input.clientRequestId : undefined;
+  return answer(await selfUpdateService().setAuto(input.enabled, autoWriter(request, input.writer), requestId));
 }
 
 const WRITER_CONVERSATION = /^[A-Za-z0-9_-]{1,128}$/;

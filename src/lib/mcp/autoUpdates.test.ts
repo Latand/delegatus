@@ -56,6 +56,7 @@ let controlOrigin = "";
 let routeRequests: { method: string; pathname: string }[] = [];
 let service: SelfUpdateService | null = null;
 let releaseTarget: { revision: string } | null = { revision: RELEASE };
+let heldAutoAnswer: { applied(): void; release: Promise<void>; used: boolean } | null = null;
 const saved: Record<string, string | undefined> = {};
 
 beforeAll(() => {
@@ -72,6 +73,12 @@ beforeAll(() => {
         answer = await autoRoute(new NextRequest(url, { method: "POST", headers: request.headers, body: await request.text() }));
       } else {
         return Response.json({ error: `no route for ${request.method} ${url.pathname}` }, { status: 404 });
+      }
+      if (heldAutoAnswer && !heldAutoAnswer.used && url.pathname === "/api/self-update/auto" && request.method === "POST") {
+        heldAutoAnswer.used = true;
+        heldAutoAnswer.applied();
+        await heldAutoAnswer.release;
+        return new Response("lost downstream answer", { status: 502 });
       }
       return new Response(await answer.text(), { status: answer.status, headers: { "content-type": "application/json" } });
     },
@@ -101,6 +108,7 @@ beforeEach(() => {
   service = new SelfUpdateService(serviceDeps(path.join(sandbox, "self-update")));
   setSelfUpdateServiceForTests(service);
   routeRequests = [];
+  heldAutoAnswer = null;
 });
 
 afterEach(() => {
@@ -112,6 +120,7 @@ afterEach(() => {
     else process.env[name] = value;
   }
   fs.rmSync(sandbox, { recursive: true, force: true });
+  heldAutoAnswer = null;
 });
 
 function serviceDeps(dir: string): ServiceDeps {
@@ -241,6 +250,7 @@ test("the Delegatus seat turns automatic updates on and off, and the dialog and 
   expect(afterOn.auto).toMatchObject({ enabled: true, changedBy: { kind: "seat", conversationId: SEAT_ID, via: "mcp" } });
   expect(typeof afterOn.auto?.changedAt).toBe("string");
   expect(afterOn.history?.[0]).toMatchObject({ kind: "auto-on", by: "seat", writer: { kind: "seat", conversationId: SEAT_ID, via: "mcp" }, outcome: "done" });
+  expect(afterOn.history?.[0]).not.toHaveProperty("requestId");
   expect(afterOn.history?.[0]?.at).toBe(afterOn.auto?.changedAt ?? "");
   /* One state file: the switch the dialog and the controller read. */
   expect(JSON.parse(fs.readFileSync(autoFile(), "utf8"))).toMatchObject({ enabled: true, changedBy: { kind: "seat", conversationId: SEAT_ID } });
@@ -294,6 +304,70 @@ test("a replayed clientRequestId answers the first write and writes nothing agai
   const view = await dialog();
   expect(view.auto?.enabled).toBe(false);
   expect(view.history?.filter((entry) => entry.kind === "auto-on")).toHaveLength(1);
+});
+
+test("a lost downstream answer cannot replay a seat switch over a newer operator disable", async () => {
+  let applied!: () => void;
+  let resume!: () => void;
+  const requestApplied = new Promise<void>((resolve) => { applied = resolve; });
+  const releaseAnswer = new Promise<void>((resolve) => { resume = resolve; });
+  heldAutoAnswer = { applied, release: releaseAnswer, used: false };
+  const opened = await session(SEAT);
+  try {
+    const resultPromise = opened.call({ clientRequestId: "lost-seat-enable", enabled: true });
+    await requestApplied;
+    expect((await dialog()).auto?.enabled).toBe(true);
+    expect(await dialogSwitch({ enabled: false })).toBe(202);
+    service!.stop();
+    service = new SelfUpdateService(serviceDeps(path.join(sandbox, "self-update")));
+    setSelfUpdateServiceForTests(service);
+    resume();
+    const result = await resultPromise;
+    expect(result.failed).toBe(false);
+    expect(result.payload).toMatchObject({ enabled: true, changedBy: { kind: "seat", conversationId: SEAT_ID } });
+  } finally {
+    resume();
+    await opened.close();
+  }
+  const view = await dialog();
+  expect(view.auto?.enabled).toBe(false);
+  expect(view.history?.filter((entry) => entry.kind === "auto-on")).toHaveLength(1);
+  expect(view.history?.slice(0, 2).map((entry) => entry.kind)).toEqual(["auto-off", "auto-on"]);
+  expect(posts().filter((request) => request.pathname === "/api/self-update/auto")).toHaveLength(3);
+});
+
+test.each(["history", "setting"] as const)("a failed %s persistence leaves the MCP switch and dialog view unchanged", async (failure) => {
+  const beforeSnapshot = await dialog();
+  let notifications = 0;
+  const unsubscribe = service!.changes.on(() => { notifications += 1; });
+  const historyFile = path.join(sandbox, "self-update", "history.jsonl");
+  const receiptTemporary = `${historyFile}.${process.pid}.tmp`;
+  const settingTemporary = `${autoFile()}.${process.pid}.tmp`;
+  if (failure === "history") {
+    fs.mkdirSync(path.dirname(historyFile), { recursive: true });
+    fs.writeFileSync(historyFile, "");
+    fs.mkdirSync(receiptTemporary);
+  } else {
+    fs.mkdirSync(settingTemporary);
+  }
+  const beforeBytes = !fs.existsSync(historyFile) ? null : fs.readFileSync(historyFile, "utf8");
+  const attempted = await once(SEAT, { clientRequestId: `failed-enable-${failure}`, enabled: true });
+  expect(attempted.failed).toBe(true);
+  const after = await dialog();
+  expect(after.auto).toMatchObject({ enabled: beforeSnapshot.auto?.enabled, changedAt: beforeSnapshot.auto?.changedAt, changedBy: beforeSnapshot.auto?.changedBy });
+  expect(after.history).toEqual(beforeSnapshot.history);
+  expect(notifications).toBe(0);
+  if (failure === "history") {
+    expect(fs.readFileSync(historyFile, "utf8")).toBe("");
+    expect(fs.existsSync(autoFile())).toBe(false);
+    fs.rmSync(receiptTemporary, { recursive: true, force: true });
+  } else {
+    if (beforeBytes === null) expect(fs.existsSync(historyFile)).toBe(false);
+    else expect(fs.readFileSync(historyFile, "utf8")).toBe(beforeBytes);
+    expect(fs.existsSync(autoFile())).toBe(false);
+    fs.rmSync(settingTemporary, { recursive: true, force: true });
+  }
+  unsubscribe();
 });
 
 test("an install that cannot update itself refuses the seat's enable, and nothing is written", async () => {

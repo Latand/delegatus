@@ -73,8 +73,13 @@ export function writeAuto(file: string, value: AutoState): void {
   mkdirSync(dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.tmp`;
   const { pending: _pending, rollbackPointer: _rollbackPointer, rollbackCaptured: _rollbackCaptured, ...setting } = value;
-  writeFileSync(temporary, `${JSON.stringify(setting)}\n`, { mode: 0o600 });
-  renameSync(temporary, file);
+  try {
+    writeFileSync(temporary, `${JSON.stringify(setting)}\n`, { mode: 0o600 });
+    renameSync(temporary, file);
+  } catch (error) {
+    try { rmSync(temporary, { force: true }); } catch { /* preserve the write failure */ }
+    throw error;
+  }
 }
 /** Persist the intent before the launcher sees the request. */
 export function requestAutoRestart(record: LauncherRecord, role: LauncherRole, target: string, rollbackPointer: string | null, now: number, gateId: string, persist: (pending: AutoPending) => void): AutoPending {

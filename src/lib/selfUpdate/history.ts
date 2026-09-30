@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync, appendFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync, appendFileSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 
 import type { AutoWriter } from "./auto";
@@ -16,16 +16,61 @@ export interface HistoryEntry {
   detail?: string;
   /** Who switched automatic updates, on `auto-on`/`auto-off`. */
   writer?: AutoWriter;
+  /** Idempotency key for an MCP switch. The receipt is kept with its audit row. */
+  requestId?: string;
+  /** The response snapshot returned for the first delivery of that switch. */
+  response?: unknown;
 }
 export function readHistory(file: string, limit = 20): HistoryEntry[] {
   try {
     return readFileSync(file, "utf8").split("\n").flatMap((line) => {
       try {
         const value = JSON.parse(line) as HistoryEntry;
-        return value && typeof value.at === "string" && typeof value.kind === "string" ? [value] : [];
+        if (!value || typeof value.at !== "string" || typeof value.kind !== "string") return [];
+        const visible = { ...value };
+        delete visible.requestId;
+        delete visible.response;
+        return [visible];
       } catch { return []; }
     }).slice(-limit).reverse();
   } catch { return []; }
+}
+
+export function findAutoSwitchRequest(file: string, requestId: string): HistoryEntry | null {
+  try {
+    for (const line of readFileSync(file, "utf8").split("\n").reverse()) {
+      try {
+        const entry = JSON.parse(line) as HistoryEntry;
+        if (entry?.requestId === requestId && (entry.kind === "auto-on" || entry.kind === "auto-off")) return entry;
+      } catch { /* ignore malformed history rows */ }
+    }
+  } catch { /* a missing or unreadable history cannot prove a prior write */ }
+  return null;
+}
+
+export function storeAutoSwitchResponse(file: string, requestId: string, response: unknown): void {
+  const rows = readFileSync(file, "utf8").split("\n");
+  let updated = false;
+  const next = rows.map((line) => {
+    if (!line) return line;
+    try {
+      const entry = JSON.parse(line) as HistoryEntry;
+      if (!updated && entry.requestId === requestId) {
+        updated = true;
+        return JSON.stringify({ ...entry, response });
+      }
+    } catch { /* preserve malformed rows byte for byte */ }
+    return line;
+  });
+  if (!updated) throw new Error("automatic update receipt row disappeared");
+  const temporary = `${file}.${process.pid}.tmp`;
+  try {
+    writeFileSync(temporary, next.join("\n"));
+    renameSync(temporary, file);
+  } catch (error) {
+    try { rmSync(temporary, { force: true }); } catch { /* preserve the write failure */ }
+    throw error;
+  }
 }
 export function appendHistory(file: string, entry: HistoryEntry): void {
   mkdirSync(dirname(file), { recursive: true });
