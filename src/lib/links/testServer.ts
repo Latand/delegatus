@@ -48,7 +48,7 @@ let maxSyncBody = 0;
 let failSync: number | null = null;
 let badInfo = false;
 let grantDeleteStatus: number | null = null;
-let holdNextSync: "request" | "response" | null = null;
+let holdNextSync: "request" | "response" | "task-response" | null = null;
 let syncHeld = false;
 let releaseSync: (() => void) | null = null;
 const syncBodySizes: number[] = [];
@@ -268,7 +268,8 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     if (path === "/test/hold-sync") {
-      holdNextSync = new URL(request.url ?? "/", "http://localhost").searchParams.get("side") === "response" ? "response" : "request";
+      const side = new URL(request.url ?? "/", "http://localhost").searchParams.get("side");
+      holdNextSync = side === "response" || side === "task-response" ? side : "request";
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ holdNextSync }));
       return;
@@ -353,8 +354,10 @@ const server = http.createServer(async (request, response) => {
     // Whitespace after the JSON keeps it valid; only the size cap refuses it.
     if (path === "/api/peer/v1/boards/sync" && padAnswer > resultBody.byteLength) resultBody = Buffer.concat([resultBody, Buffer.alloc(padAnswer - resultBody.byteLength, " ")]);
     if (captureWire && path.startsWith("/api/peer/v1/") && wire.length < 30) wire.push({ path, request: Buffer.concat(chunks).toString("utf8"), response: resultBody.toString("utf8") });
+    const heldBody = path === "/api/peer/v1/boards/sync" && holdNextSync
+      ? JSON.parse((holdNextSync === "request" ? Buffer.concat(chunks) : resultBody).toString("utf8")) as { index?: number; tasks?: { rows?: unknown[] } } : null;
     if (path === "/api/peer/v1/boards/sync" && holdNextSync &&
-        JSON.parse((holdNextSync === "response" ? resultBody : Buffer.concat(chunks)).toString("utf8")).index === 0) {
+        (holdNextSync === "task-response" ? (heldBody?.tasks?.rows?.length ?? 0) > 0 : heldBody?.index === 0)) {
       holdNextSync = null;
       syncHeld = true;
       await new Promise<void>((resolve) => { releaseSync = resolve; });

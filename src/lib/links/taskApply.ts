@@ -73,13 +73,16 @@ function mergeRow(local: BoardTask | null, row: WireTask, link: ApplyLink, write
     // v1 sent an unchosen title as a placeholder under its real text stamp.
     // A v2 rescan can fill that exact placeholder. A newer local edit keeps
     // its stamp and wins as usual; no other equal-stamp field is replaced.
-    const restoresTitle = group === "text" && row.s.text === held && local.text === UNTITLED_TASK_TEXT && row.text !== UNTITLED_TASK_TEXT
-      && held.endsWith(`.${link.prefix}`);
+    const restoresTitle = group === "text" && row.s.text === held && local.text === UNTITLED_TASK_TEXT && row.text !== UNTITLED_TASK_TEXT;
     if (row.s[group] <= held && !restoresTitle) continue;
     // Only the owner hands a task on, judged by the link the call came over.
     if (group === "machine" && (local.machine ?? self.id) !== link.install) continue;
     if (group === "handover" && row.handover && row.handover.to !== link.install) continue;
-    if (restoresTitle) { merged.text = row.text; merged.chosen = true; }
+    if (restoresTitle) {
+      merged.text = row.text;
+      merged.chosen = true;
+      write.preserveStamp(row.id, group);
+    }
     else assignGroup(merged, row, group);
     stamps[group] = row.s[group];
     won = true;

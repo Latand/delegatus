@@ -1024,3 +1024,78 @@ test("shared text crosses and already-synced placeholders recover on the next sy
   expect(await tasksOf(a)).toEqual(beforeA);
   expect(await tasksOf(b)).toEqual(beforeB);
 }, 30_000);
+
+test("an in-flight placeholder repair keeps the source's concurrent title and details through resync and restart", async () => {
+  const receiver = await install("title-race-receiver");
+  const source = await install("title-race-source");
+  const sourceId = JSON.parse(fs.readFileSync(path.join(root, "title-race-source/links/self.json"), "utf8")).installId as string;
+  const at = new Date(Date.now() - 60_000).toISOString();
+  const stamp = `${String(Date.parse(at)).padStart(13, "0")}.000.${installPrefix(sourceId)}`;
+  const task: BoardTask = { id: randomUUID(), project: key, text: "Title from the captured response", details: "Details from the captured response",
+    status: "inbox", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at, machine: sourceId,
+    sync: { s: Object.fromEntries(["text", "status", "look", "place", "links", "machine", "handover"].map((group) => [group, stamp])), o: installPrefix(sourceId) } };
+  const placeholder = { ...task, text: "Untitled task" };
+  await request(source, "/test/import-tasks", "POST", { tasks: [task] });
+  await request(receiver, "/test/import-tasks", "POST", { tasks: [placeholder] });
+  const peerId = await link(receiver, source, { projects: [key] }, source, false);
+  const revisionReceiver = Number((await request(receiver, "/test/revision")).body.revision);
+  const revisionSource = Number((await request(source, "/test/revision")).body.revision);
+  await request(receiver, "/test/legacy-cursor", "POST", { id: peerId, pull: [revisionSource], pushed: [revisionReceiver], projects: [key] });
+
+  await request(source, "/test/hold-sync?side=task-response");
+  const inFlight = fetch(`${receiver}/api/links/peers/${peerId}`, { method: "POST" });
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if ((await request(source, "/test/sync-held")).body.held) break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  expect((await request(source, "/test/sync-held")).body.held).toBe(true);
+  expect((await patchOn(source, task.id, { text: "Newer source title", details: "Newer source details" })).status).toBe(200);
+  const sourceEdit = (await taskOn(source, task.id))!;
+  expect(sourceEdit.text).toBe("Newer source title");
+  // Stop the exchange after it consumes the held, stale response. This keeps
+  // a later page from hiding whether the repair minted a local text stamp.
+  await request(source, "/test/fail-sync?on=1");
+  await request(source, "/test/release-sync");
+  await inFlight;
+
+  // The delayed reply carries the old title and stamp. Applying it may repair
+  // the placeholder, but must not turn old content into a newer local edit.
+  const repaired = (await taskOn(receiver, task.id))!;
+  expect(repaired).toMatchObject({ text: "Title from the captured response", details: "Details from the captured response" });
+  expect(repaired.sync?.s.text).toBe(stamp);
+  await request(source, "/test/fail-sync?on=0");
+  await sync(receiver, peerId);
+  expect(await taskOn(receiver, task.id)).toMatchObject({ text: "Newer source title", details: "Newer source details" });
+  expect(await taskOn(source, task.id)).toMatchObject({ text: "Newer source title", details: "Newer source details" });
+  const beforeRestart = await tasksOf(receiver);
+  await stopInstall(receiver);
+  const restarted = await install("title-race-receiver");
+  expect(await taskOn(restarted, task.id)).toMatchObject({ text: "Newer source title", details: "Newer source details" });
+  await sync(restarted, peerId);
+  expect(await tasksOf(restarted)).toEqual(beforeRestart);
+}, 60_000);
+
+test("placeholder title repair follows the saved task stamp across a peer reinstall and consumed cursor", async () => {
+  const receiver = await install("legacy-title-receiver");
+  await install("legacy-title-old-source");
+  const oldSourceId = JSON.parse(fs.readFileSync(path.join(root, "legacy-title-old-source/links/self.json"), "utf8")).installId as string;
+  const currentSource = await install("legacy-title-new-source");
+  const at = new Date(Date.now() - 60_000).toISOString();
+  const stamp = `${String(Date.parse(at)).padStart(13, "0")}.000.${installPrefix(oldSourceId)}`;
+  const task: BoardTask = { id: randomUUID(), project: key, text: "Title from the previous install", details: "Keep the existing details",
+    status: "inbox", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at, machine: oldSourceId,
+    sync: { s: Object.fromEntries(["text", "status", "look", "place", "links", "machine", "handover"].map((group) => [group, stamp])), o: installPrefix(oldSourceId) } };
+  await request(currentSource, "/test/import-tasks", "POST", { tasks: [task] });
+  await request(receiver, "/test/import-tasks", "POST", { tasks: [{ ...task, text: "Untitled task" }] });
+  const peerId = await link(receiver, currentSource, { projects: [key] }, currentSource, false);
+  const revisionReceiver = Number((await request(receiver, "/test/revision")).body.revision);
+  const revisionSource = Number((await request(currentSource, "/test/revision")).body.revision);
+  await request(receiver, "/test/legacy-cursor", "POST", { id: peerId, pull: [revisionSource], pushed: [revisionReceiver], projects: [key] });
+
+  await sync(receiver, peerId);
+  expect(await taskOn(receiver, task.id)).toMatchObject({ text: "Title from the previous install", details: "Keep the existing details", machine: oldSourceId });
+  const repaired = (await taskOn(receiver, task.id))!;
+  expect(repaired.sync?.s.text).toBe(stamp);
+  await sync(receiver, peerId);
+  expect((await taskOn(receiver, task.id))?.text).toBe("Title from the previous install");
+}, 60_000);
