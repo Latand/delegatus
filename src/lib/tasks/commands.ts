@@ -368,8 +368,9 @@ export function createTask(
   const now = deps.now?.() ?? isoNow();
   /* The bound is on bands, so only a task that will occupy one is counted
      against it: a task created off the board joins the history, which has no
-     cap, and no durable identity is ever refused to keep a display small. */
-  if (board !== "hidden" && countBoardTasks(existing, project, deps.hasBoardMembers ?? (() => false), (task) => ({ now: Date.parse(now), holdsSeat: deps.seatHolding?.(task) === "holds" })) >= BOARD_TASKS_PER_PROJECT_LIMIT) {
+     cap, and no durable identity is ever refused to keep a display small.
+     The getter consults seats only if the shared rule reaches an expired row. */
+  if (board !== "hidden" && countBoardTasks(existing, project, deps.hasBoardMembers ?? (() => false), (task) => ({ now: Date.parse(now), get holdsSeat() { return deps.seatHolding?.(task) === "holds"; } })) >= BOARD_TASKS_PER_PROJECT_LIMIT) {
     return boardFullError("project");
   }
 
@@ -521,11 +522,11 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
        this call was handed, the serialized read-modify-write around it (see
        `mutateTasks`) is what stops two writers taking the last slot at once. */
     const hasMembers = options.hasBoardMembers ?? (() => false);
-    const visibility = { now: Date.parse(now), holdsSeat: options.seatHolding?.(task) === "holds" };
+    const visibility = { now: Date.parse(now), get holdsSeat() { return options.seatHolding?.(task) === "holds"; } };
     const candidate = withTaskCompletion({ ...task, ...patch, board, updatedAt: now }, task);
     if (board === "shown" && taskShowsOnBoard(candidate, hasMembers(candidate), visibility)
       && !taskShowsOnBoard(task, hasMembers(task), visibility)
-      && countBoardTasks(existing, task.project, hasMembers, (row) => ({ now: Date.parse(now), holdsSeat: options.seatHolding?.(row) === "holds" })) >= BOARD_TASKS_PER_PROJECT_LIMIT) {
+      && countBoardTasks(existing, task.project, hasMembers, (row) => ({ now: Date.parse(now), get holdsSeat() { return options.seatHolding?.(row) === "holds"; } })) >= BOARD_TASKS_PER_PROJECT_LIMIT) {
       return boardFullError("board");
     }
     patch.board = board;

@@ -9,6 +9,7 @@ import { withTaskCompletion } from "./completion";
 import { ensureTaskMembership } from "./membership";
 import { loadTasks, mutateTasks, saveTasks } from "./store";
 import { taskRevision } from "./revision";
+import { taskSeatHoldingSnapshot } from "./seatHolding";
 import { finishBoardTask } from "@/lib/forge/autoMerge";
 import type { BoardTask, TaskAssignment } from "./types";
 
@@ -67,6 +68,62 @@ test("the current seat survives expiry and remains protected from group hide", (
   const hidden = patchTask([row], row.id, { hide: true, expectedProject: row.project, expectedRevision: taskRevision(row) }, DONE, { seatHolding: () => "holds" });
   if (hidden.ok) throw new Error("seat was hidden");
   expect(hidden.code).toBe("TASK_HIDE_PROTECTED");
+});
+
+test("create and show admission read seats once across 1000 expired rows and count the seat", () => {
+  const now = new Date(END + 1).toISOString();
+  const old = Array.from({ length: 1000 }, (_, index) => ({ ...completed(), id: `old-${index}`, assignments: index === 0 ? [member] : [] }));
+  const target = task({ id: "restore", board: "hidden", assignments: [] });
+  const live = Array.from({ length: 299 }, (_, index) => task({ id: `live-${index}`, assignments: [] }));
+  for (const operation of ["create", "show"] as const) {
+    for (const holdsSeat of [false, true]) {
+      let reads = 0;
+      const seatHolding = taskSeatHoldingSnapshot((project) => {
+        expect(project).toBe("fixture");
+        reads += 1;
+        return { active: holdsSeat ? { conversationId: "worker", path: null } as never : null, pending: null };
+      });
+      const rows = [...old, ...live, target];
+      const result = operation === "create"
+        ? createTask(rows, { project: "fixture", text: "New work", placement: "unplaced" }, [], { now: () => now, seatHolding })
+        : patchTask(rows, target.id, { board: "shown" }, now, { seatHolding });
+      expect(reads).toBe(1);
+      expect(result.ok).toBe(!holdsSeat);
+      if (!result.ok) expect(result.code).toBe("TASK_BOARD_FULL");
+    }
+  }
+});
+
+test("limit checks consult seat holding only for expired done rows", () => {
+  const target = task({ id: "restore", board: "hidden", assignments: [] });
+  const rows = [task({ id: "assigned" }), task({ id: "inbox", status: "inbox" }), task({ id: "blocked", status: "blocked" }), completed(), target];
+  for (const operation of ["create", "show"] as const) {
+    for (const at of [END, END + 1]) {
+      const consulted: string[] = [];
+      const seatHolding = (row: BoardTask) => { consulted.push(row.id); return "free" as const; };
+      const now = new Date(at).toISOString();
+      const result = operation === "create"
+        ? createTask(rows, { project: "fixture", text: "New work", placement: "unplaced" }, [], { now: () => now, seatHolding })
+        : patchTask(rows, target.id, { board: "shown" }, now, { seatHolding });
+      expect(result.ok).toBe(true);
+      expect(consulted).toEqual(at === END ? [] : ["task"]);
+    }
+  }
+});
+
+test("a command caches an unreadable seat once; the next command reads again", () => {
+  let reads = 0;
+  const seatsFor = () => {
+    reads += 1;
+    if (reads === 1) throw new Error("seat record unreadable");
+    return { active: null, pending: null };
+  };
+  const first = taskSeatHoldingSnapshot(seatsFor);
+  expect(first(task())).toBe("unknown");
+  expect(first(task())).toBe("unknown");
+  expect(reads).toBe(1);
+  expect(taskSeatHoldingSnapshot(seatsFor)(task())).toBe("free");
+  expect(reads).toBe(2);
 });
 
 test("new admission resurfaces, reconciliation of an old admission does not", () => {

@@ -171,7 +171,7 @@ import { recordReplySuggestions } from "@/lib/suggestions/store";
 import { ReplySuggestionValidationError } from "@/lib/suggestions/types";
 import { linkedContext, withOwnership } from "@/lib/links/linked";
 import { applyAssignmentPatches, createTask, patchTask, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
-import { taskSeatHolding } from "@/lib/tasks/seatHolding";
+import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
 import { recordAuthors, type RecordAuthor } from "@/lib/team";
 import { pipelineWorkLinks, pullRequestSummary, taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
 import { bridgeReportsEnabled, effectiveReportTelegram, mergeOnReviewEnabled, reportHeaderName, type EffectiveReportTelegram } from "@/lib/projects/settings";
@@ -1578,7 +1578,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
     clientRequestId: requestId(args),
   };
   const result = mutateTasksFile((state) => {
-    const outcome = createTask(state.tasks, input, state.recentCreates, { explicit: true, seatHolding: taskSeatHolding });
+    const outcome = createTask(state.tasks, input, state.recentCreates, { explicit: true, seatHolding: taskSeatHoldingSnapshot() });
     return {
       state: outcome.ok && !outcome.replay ? { tasks: outcome.tasks, recentCreates: outcome.recentCreates } : undefined,
       result: outcome,
@@ -1628,7 +1628,7 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
   let changedFields: string[] = [];
   const result = mutateTasks((tasks) => {
     const before = fieldValues(tasks.find(task => task.id === taskId));
-    const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", seatHolding: taskSeatHolding, explicit: true,
+    const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", seatHolding: taskSeatHoldingSnapshot(), explicit: true,
       workLinks: taskWorkLinkContext(() => dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? []) });
     if (outcome.ok) changedFields = changedFieldNames(before, outcome.task);
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
