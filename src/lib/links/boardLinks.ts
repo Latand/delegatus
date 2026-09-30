@@ -8,7 +8,7 @@ import type { SharedProject } from "./state";
     and pushed to the peer store named by `store`, and the linked projects
     whose rows have fully crossed each way. */
 export type TaskCursor = { pull: [number] | [number, string] | null; pushed: [number] | [number, string] | null; pullCovered: string[]; pushCovered: string[] };
-type BoardLink = { key: string; store: string; shared: SharedProject[]; cursor?: TaskCursor };
+type BoardLink = { key: string; store: string; shared: SharedProject[]; cursor?: TaskCursor; taskWireVersion?: number };
 const seed = { collection: "board_links", schemaVersion: 1, migrationId: "linked-boards-m1", key: (row: BoardLink) => row.key, loadRecords: (): BoardLink[] => [] };
 const cache = new Map<string, SqliteStateCollection<BoardLink>>();
 
@@ -85,13 +85,14 @@ export function dropRemoteProjects(id: string): void {
 
 export function readTaskCursor(id: string, store: string): TaskCursor | null {
   const row = readRow(`tasks:${id}`);
-  return row?.cursor && row.store === store ? row.cursor : null;
+  // The first v2 exchange scans both ways to restore previously withheld titles.
+  return row?.cursor && row.store === store && row.taskWireVersion === 2 ? row.cursor : null;
 }
 
 /** Writes only a changed cursor. */
 export function writeTaskCursor(id: string, store: string, cursor: TaskCursor): void {
   const key = `tasks:${id}`;
-  const next: BoardLink = { key, store, shared: [], cursor };
+  const next: BoardLink = { key, store, shared: [], cursor, taskWireVersion: 2 };
   const held = readRow(key);
   if (held && JSON.stringify(held) === JSON.stringify(next)) return;
   collection(true)!.boundedPatch(2, (tx) => {

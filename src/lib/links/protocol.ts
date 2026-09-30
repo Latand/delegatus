@@ -1,3 +1,4 @@
+import { sharedLinkState } from "./runtimeState";
 import { randomBytes, randomUUID } from "node:crypto";
 
 import { tokensMatch } from "@/lib/authToken";
@@ -133,7 +134,7 @@ export function revokeGrant(id: string): boolean {
 }
 
 export function grantRows() { return readGrants().grants.map(grantView); }
-const peerCalls = new Map<string, number>();
+const peerCalls = sharedLinkState("protocol.peerCalls", () => new Map<string, number>());
 export function markPeerCall(id: string, at: number): void { peerCalls.set(id, at); }
 export function peerRows() { return readPeers().peers.map(({ token: _token, ...peer }) => ({ ...peer, lastCall: peerCalls.get(peer.id) ?? peer.lastCall })); }
 export function findPeer(id: string): Link | undefined { return readPeers().peers.find((peer) => peer.id === id); }
@@ -151,7 +152,7 @@ export function removePeer(id: string): Link | undefined {
 }
 
 export const sharedDigest = (projects: SharedProject[]) => sha(JSON.stringify(projects)).slice(0, 8);
-const partialShared = new Map<string, { hash: string; total: number; rows: SharedProject[]; at: number }>();
+const partialShared = sharedLinkState("protocol.partialShared", () => new Map<string, { hash: string; total: number; rows: SharedProject[]; at: number }>());
 
 export function incomingSync(grant: Grant, input: unknown): { status: number; body: object } {
   if (partialShared.size) for (const [id, pending] of partialShared) if (Date.now() - pending.at > 600_000) partialShared.delete(id);

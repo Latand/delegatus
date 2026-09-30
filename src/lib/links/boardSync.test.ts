@@ -11,6 +11,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { randomUUID } from "node:crypto";
+import { installPrefix } from "./stamp";
+
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import type { BoardTask } from "@/lib/tasks/types";
 import { meter, WIRE_BUDGET, type Meter } from "./wireMeter";
@@ -170,7 +173,7 @@ test("remote agents travel both ways as prompt-free summaries and stay in their 
   await sync(a, peerId);
   expect(((await request(b, `/test/agents?project=${key}`)).body as unknown as { stale: boolean }[])[0]!.stale).toBe(false);
   const bodies = (await captured(b)).flatMap((item) => [item.request, item.response]).join("\n");
-  for (const forbidden of ["PROMPT-CANARY", "session-canary", "/checkout/", "/home/"]) expect(bodies).not.toContain(forbidden);
+  for (const forbidden of ["session-canary", "/checkout/", "/home/"]) expect(bodies).not.toContain(forbidden);
   const grant = ((await request(b, "/api/links/grants")).body.grants as { id: string }[])[0]!;
   expect((await request(b, `/api/links/grants?id=${grant.id}`, "DELETE")).body.removed).toBe(true);
   expect((await request(b, `/test/agents?project=${key}`)).body as unknown).toEqual([]);
@@ -318,7 +321,7 @@ test("a feed restart between transport reset pages restarts at row zero without 
   for (const project of keys) expect(((await request(a, `/test/agents?project=${project}`)).body as unknown as unknown[])).toHaveLength(50);
 });
 
-test("tasks created, changed in every group and deleted on either machine show on the other after one call; prompts never cross; an idle link costs next to nothing", async () => {
+test("tasks created, changed in every group and deleted on either machine show on the other after one call; shared titles cross; an idle link costs next to nothing", async () => {
   const a = await install("both-A");
   const b = await install("both-B");
   const wire = await meter(b);
@@ -335,14 +338,14 @@ test("tasks created, changed in every group and deleted on either machine show o
   expect(admitted.curated).toBe(1);
   const prompted = admitted.tasks;
   for (const canary of ["CANARY-SCAN", "CANARY-LAUNCH", "CANARY-GOAL", "CANARY-CURATOR"]) expect(prompted.some((task) => task.text.includes(canary))).toBe(true);
-  // Every body from the first exchange until the tasks are named is kept and scanned.
+  // Keep every body to verify the shared texts and field allowlist.
   const bodies: string[] = [];
   const drain = async () => { for (const call of await captured(b)) bodies.push(call.request, call.response); };
   const peerId = await link(a, b, { projects: [key] }, wire.url);
   await sync(a, peerId);
-  expect((await taskOn(b, canaryA[0]!))?.text).toBe("Untitled task");
-  expect((await taskOn(a, canaryB[0]!))?.text).toBe("Untitled task");
-  for (const task of prompted) expect((await taskOn(b, task.id))?.text).toBe("Untitled task");
+  expect((await taskOn(b, canaryA[0]!))?.text).toBe("CANARY-A-first-prompt");
+  expect((await taskOn(a, canaryB[0]!))?.text).toBe("CANARY-B-launch-prompt");
+  for (const task of prompted) expect((await taskOn(b, task.id))?.text).toBe(task.text);
   await drain();
   expect(bodies.join("\n")).not.toContain(root);
 
@@ -394,10 +397,10 @@ test("tasks created, changed in every group and deleted on either machine show o
   expect((await taskOn(a, made.id))!.status).toBe("assigned");
   expect((await taskOn(b, made.id))!.text).toBe("Text from A");
 
-  // No request or answer body so far carried a prompt, the first exchange included.
+  // Project consent includes task text, including automatically populated titles.
   await drain();
   expect(bodies.length).toBeGreaterThan(20);
-  expect(bodies.join("\n")).not.toContain("CANARY");
+  expect(bodies.join("\n")).toContain("CANARY-A-first-prompt");
 
   // Naming the prompt rows sends their text, the same words included.
   expect((await patchOn(a, canaryA[0]!, { text: "CANARY-A-first-prompt" })).status).toBe(200);
@@ -982,3 +985,42 @@ test("a sync body of 1 MiB + 1 B or a shared page of 101 entries is malformed an
   await sync(a, peerId);
   expect((await taskOn(a, task.id))?.text).toBe("Pulled edit");
 }, 120_000);
+
+
+test("shared text crosses and already-synced placeholders recover on the next sync with newer edits preserved", async () => {
+  const a = await install("title-repair-A");
+  const b = await install("title-repair-B");
+  const aId = JSON.parse(fs.readFileSync(path.join(root, "title-repair-A/links/self.json"), "utf8")).installId as string;
+  const bId = JSON.parse(fs.readFileSync(path.join(root, "title-repair-B/links/self.json"), "utf8")).installId as string;
+  const at = new Date(Date.now() - 60_000).toISOString();
+  const stamp = (install: string, offset = 0) => `${String(Date.parse(at) + offset).padStart(13, "0")}.000.${installPrefix(install)}`;
+  const original = (install: string, text: string): BoardTask => ({ id: randomUUID(), project: key, text, details: "Agent notes already allowed by the design", status: "done", placement: "unplaced", board: "hidden", assignments: [], createdAt: at, updatedAt: at,
+    machine: install, sync: { s: Object.fromEntries(["text", "status", "look", "place", "links", "machine", "handover"].map((group) => [group, stamp(install)])), o: installPrefix(install) } });
+  const fromA = original(aId, "Перевірити стан стейджу\nТекст задачі з другого рядка");
+  const fromB = original(bId, "Restore linked board freshness");
+  const edited = original(aId, "Old source title");
+  const placeholder = (task: BoardTask) => ({ ...task, text: "Untitled task", chosen: true });
+  const kept = { ...placeholder(edited), text: "Later operator title", sync: { ...edited.sync!, s: { ...edited.sync!.s, text: stamp(bId, 1000) }, o: installPrefix(bId) } };
+  await request(a, "/test/import-tasks", "POST", { tasks: [fromA, placeholder(fromB), edited] });
+  await request(b, "/test/import-tasks", "POST", { tasks: [placeholder(fromA), fromB, kept] });
+  const peerId = await link(a, b, { projects: [key] }, b, false);
+  // Seed the persisted cursors of an already quiet old-version link. The first
+  // upgraded exchange must cover old rows even though its log was consumed.
+  const revisionA = Number((await request(a, "/test/revision")).body.revision);
+  const revisionB = Number((await request(b, "/test/revision")).body.revision);
+  await request(a, "/test/legacy-cursor", "POST", { id: peerId, pull: [revisionB], pushed: [revisionA], projects: [key] });
+  await sync(a, peerId);
+  expect((await taskOn(b, fromA.id))?.text).toBe(fromA.text);
+  expect((await taskOn(a, fromB.id))?.text).toBe(fromB.text);
+  expect((await taskOn(b, fromA.id))?.details).toBe(fromA.details);
+  expect((await taskOn(b, edited.id))?.text).toBe(kept.text);
+  expect((await taskOn(a, edited.id))?.text).toBe(kept.text);
+  // New automatic titles use the same production sender, without chosen.
+  const added = (await request(a, "/test/bulk", "POST", { project: key, count: 1, text: "New automatic human title", explicit: false })).body.ids as string[];
+  await sync(a, peerId);
+  expect((await taskOn(b, added[0]!))?.text).toBe("New automatic human title");
+  const beforeA = await tasksOf(a), beforeB = await tasksOf(b);
+  await sync(a, peerId);
+  expect(await tasksOf(a)).toEqual(beforeA);
+  expect(await tasksOf(b)).toEqual(beforeB);
+}, 30_000);

@@ -1,3 +1,4 @@
+import { sharedLinkState } from "./runtimeState";
 import dns from "node:dns/promises";
 import http from "node:http";
 import https from "node:https";
@@ -15,15 +16,15 @@ import { acceptAgents, agentCursors, agentPart, decodeCursor, dropAgents, encode
 export class LinkError extends Error { constructor(readonly code: string) { super(code); } }
 /** Shared-list pages, task pages both ways and scans, bounded per sync. */
 const MAX_SYNC_CALLS = 1_000;
-const lastMoved = new Map<string, number>();
+const lastMoved = sharedLinkState("client.lastMoved", () => new Map<string, number>());
 /** Rows the last completed sync with this link moved, for A's schedule. */
 export function lastSyncMoved(id: string): number { return lastMoved.get(id) ?? 0; }
-const lastSent = new Map<string, string>();
+const lastSent = sharedLinkState("client.lastSent", () => new Map<string, string>());
 /** A pre-M3 board peer ignores the optional agents request. Never send it a
     push-only payload, which its task parser would reject. */
-const agentCapable = new Set<string>();
-const remoteAgentEpoch = new Map<string, string>();
-const syncQueues = new Map<string, Promise<void>>();
+const agentCapable = sharedLinkState("client.agentCapable", () => new Set<string>());
+const remoteAgentEpoch = sharedLinkState("client.remoteAgentEpoch", () => new Map<string, string>());
+const syncQueues = sharedLinkState("client.syncQueues", () => new Map<string, Promise<void>>());
 const sameLink = (current: Link | undefined, expected: Link): current is Link => !!current &&
   current.id === expected.id && current.grantId === expected.grantId && current.token === expected.token &&
   current.store === expected.store && current.url === expected.url;
@@ -299,8 +300,9 @@ async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProj
   } catch (error) {
     if (error instanceof LinkError && error.code === "revoked") throw error;
     const live = findPeer(id);
-    if (sameLink(live, peer) && live.state !== "revoked" && live.state !== "failing") {
-      putPeer({ ...live, state: "failing", error: error instanceof LinkError ? error.code : "unreachable" });
+    const code = error instanceof LinkError ? error.code : "unreachable";
+    if (sameLink(live, peer) && live.state !== "revoked" && (live.state !== "failing" || live.error !== code)) {
+      putPeer({ ...live, state: "failing", error: code });
     }
     throw error;
   }

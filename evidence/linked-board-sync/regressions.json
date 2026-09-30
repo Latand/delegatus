@@ -1,0 +1,52 @@
+{
+  "mergeBase": "ce8abf18b7c07af31f8f7e36e66045b7a5bf41c4",
+  "runtime": "Bun 1.4.0",
+  "isolation": "Private state and ephemeral listeners; all heavy checks use the shared gate lock.",
+  "regressions": [
+    {
+      "test": "src/lib/links/runtimeState.test.ts",
+      "base": "fail: two separate production bundles concurrently call one link (maximum 2)",
+      "head": "pass: maximum 1; scheduler freshness after 960 seconds is visible through API handlers; malformed, quota and recovery errors follow real calls"
+    },
+    {
+      "test": "src/lib/links/taskSync.test.ts: peer arrivals preserve membership",
+      "base": "fail: board field is rejected as malformed",
+      "head": "pass: membership crosses; done default and overflow are hidden; no task or other field is lost; receipts and durable one-time marker survive process restart"
+    },
+    {
+      "test": "src/lib/links/boardSync.test.ts: shared text crosses",
+      "base": "fail: already-synced title remains Untitled task",
+      "head": "pass: next sync repairs both directions using old persisted cursors; real multiline text and existing details cross; newer edits and idle replay are preserved"
+    }
+  ],
+  "checks": {
+    "baseRegressions": {
+      "pass": 0,
+      "fail": 3
+    },
+    "focusedLinksAndAPI": {
+      "pass": 52,
+      "skip": 1,
+      "fail": 0,
+      "files": 8,
+      "skipReason": "Existing pre-linked-boards store rollback test skips when the merge base already includes taskSyncWrite."
+    },
+    "transportAndMemory": {
+      "pass": 4,
+      "fail": 0,
+      "scope": "task group round trips and idle bytes; M3 heap/RSS; edit bytes with 1000 linked projects; legacy title recovery"
+    },
+    "typescript": "pass: tsc --noEmit",
+    "eslint": "pass: changed links files, 0 errors, 5 warnings",
+    "build": "pass: bun run build, including MCP bundle",
+    "viewerRuntime": {
+      "pass": true,
+      "modulesLoaded": 22,
+      "modulesProbed": 22,
+      "getRootStatus": 200
+    },
+    "diffWhitespace": "pass"
+  },
+  "environmentComparison": "The initial Bun 1.3.3 transport/heap failures reproduce on unchanged merge-base sources; all three failing checks pass on the head under pinned Bun 1.4.0.",
+  "repair": "Runs automatically on the next agreed task exchange. linkedArrivalsBoardV1 and hidden preferences commit together; only remote-owned done tasks without an explicit board preference are changed. No deletion or content replacement. Existing receipts and other fields are retained; persisted marker makes retry/restart a no-op. Old task cursors are replaced by acknowledged wire-version-2 cursors after one idempotent scan both ways."
+}

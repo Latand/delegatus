@@ -1443,36 +1443,33 @@ and `details` 218.
 larger one is kept. Everything else is local and never crosses:
 `assignments` (transcript paths, pane pids, accounts), `holds` (M.4),
 `source` (a transcript path and a prompt), `origin`, `attachments`,
-`dueAt`/`dueTz`, `board`, `groupHidden`, create receipts and migration
+`dueAt`/`dueTz`, `groupHidden`, create receipts and migration
 markers.
 
-**Text nobody chose never crosses.** On `origin/main` a task's `text` is often
-a prompt. `planAdmissions` titles a conversation's placeholder with the scanned
-`entry.title` (`src/lib/tasks/membership.ts:469`), which is the AI title or the
-first prompt; a launch passes `launchDisplay.prompt`
-(`src/lib/tasks/launchMembership.ts:80`) and a pipeline its goal
-(`membership.ts:445`); `ensureTaskMembership` writes that as `text` (`:234`).
-The curator and the inbox scanner create tasks from transcript lines
-(`src/lib/tasks/curator.ts:282`, `src/lib/tasks/inboxScanner.ts:186`), and
-monitor and storage-incident cards carry local detail
-(`src/lib/monitor/seatTickController.ts:339`,
-`src/lib/state/durability.ts:1054`). No field of a stored row proves who
-chose its text, so a task's text crosses only when a local flag
-`chosen: true` says a person or an agent chose it. Only an explicit write sets
-it: an edit in the UI, `create_task` or `update_task` with `text`, a
-first-action refine, "Copy here", or a peer's row whose `text` group wins (it
-crossed, so it was chosen there). Every other write that sets `text` clears
-it: `createTask`, `patchTask` and `ensureTaskMembership` set it only when the
-caller passes `explicit` (the `/api/tasks` routes and the MCP bindings), so a
-writer added later stays private until it opts in. **A row without the flag
-is private**, and that includes every row written before M2: no read, first
-resync or share classifies it, so an old task whose text is a transcript
-prompt never crosses, edited or not. Such a row goes on the wire with
-`text: "Untitled task"` (`UNTITLED_TASK_TEXT`, `types.ts:4`) until an
-explicit write names it; `details`, which no automatic writer sets, crosses as
-stored. Setting the flag counts as a change of the `text` group, so the group
-gets a new stamp and the real text follows even when the explicit write kept
-the same words.
+**Shared projects consent to task titles and text (operator amendment, 2026-09-30).**
+The wire carries `text` regardless of `chosen`; `details` retains its existing
+allowlist and bounds. Assignments, sources, accounts, transcript paths, holds,
+attachments and deadlines remain local. The local `chosen` flag still serves
+local title-selection and agent-summary rules.
+
+`board` crosses as an optional `shown | hidden` preference for a newly arriving
+task. A done arrival with no preference is hidden. At the receiving project's
+shown-band limit, an arrival is stored hidden. Existing rows keep their local
+board preference, including choices made after arrival; `board` belongs to no
+LWW group. The sync apply uses the same 300-band admission limit as local creates.
+
+On the first upgraded task exchange, `linkedArrivalsBoardV1` hides previously
+arrived remote-owned done tasks with no explicit `board` preference. The task
+store commits the marker and changed preferences in one transaction. Every
+other task field and all receipts survive. Later attempts read the marker and
+leave restored preferences alone.
+
+Task cursor records carry `taskWireVersion: 2`. A cursor from the earlier format
+causes one full scan in each direction; v2 cursors resume ordinary incremental
+sync. An equal text stamp from the same sender may fill a local `Untitled task`
+placeholder with real text. The receiving copy's details remain intact in that
+case, and a newer local text stamp keeps its text. No manual retitle or cursor
+reset is needed. Scans and retries retain the normal tombstone and size fences.
 
 Per group, because the common collision is the operator dragging a card on one
 machine while an agent on the other flips its status; per-task LWW would drop
@@ -2014,7 +2011,7 @@ a row. A received row that breaks a bound fails its page (`malformed`, as
 
 **Echoes.** `o` names the install whose copy equals the row. A local write
 sets `o` to this install. An apply sets it to the sender only when the merged
-row, in its wire form (so a text withheld for lack of `chosen` is no difference), equals
+row, in its wire form, equals
 the row the sender sent, which means the sender already holds
 exactly this state; when a local group won the merge, `o` stays this install
 and the row goes back. A row is served to every link except the install named
@@ -2244,7 +2241,7 @@ floors and durable acknowledgements; the watermark fences, their digests, per-pr
 entries and `hwFull`, and the id exchange; `[revision, key]` positions; the `tasks` part of
 `boards/sync` in both directions, resync, restore detection and the
 fallback's restore marker, `gen.json` and the restore snapshot included; the
-`chosen` text flag, private when absent, and its wire substitution; the apply with its field
+local `chosen` text flag (wire substitution removed by the 2026-09-30 amendment); the apply with its field
 bounds (the repository length bound in `normalizeWorkLinkInput` included), its
 checks and budget; the `machine` rule judged by the link; A's schedule; the
 fenced handover; holds; "Copy here"; `TASK_RUNS_ELSEWHERE` at the five seams
@@ -2375,18 +2372,11 @@ Acceptance:
   restored through the fallback from a backup that holds it, and that task
   edited on A before the next call: after the call it is gone on both and B
   never receives it; a task created on A after the restore survives;
-- prompts: a scanned conversation whose first prompt carries a unique canary
-  goes through the real scan, `planAdmissions` and `admitConversations`; a
-  launch whose `launchDisplay.prompt` carries a second canary, a pipeline
-  whose goal carries a third, and a curator task from a transcript line with a
-  fourth each make a task; so does a fifth: a pre-M2 task row holding a
-  canary as its `text` (a placeholder, a monitor card and an operator task,
-  written in the stored shape `origin/main` writes, without the flag) is
-  loaded unedited and its project shared for the first time; no request or
-  answer body carries any canary through the first resync and the calls
-  after it (every body is scanned), and each task arrives as "Untitled task";
-  then `update_task` sets the text of each, the same words as before on one
-  of them, and each arrives with that text;
+- shared titles: tasks produced by scan admission, launch recovery, pipeline
+  goals and curator proposals carry their full text after project sharing;
+  no source, assignment, account or transcript-path field crosses. Old synced
+  placeholder copies recover on the first upgraded exchange, while newer
+  operator edits survive;
 - bounds: a stored task whose work link holds a 530 000-character repository
   is not sent, the link row names it, and the rows after it in the log still
   arrive; the exchange completes, a resync is then forced (`store` changed),
@@ -2590,7 +2580,7 @@ continue unless B's operator chooses "Revoke and stop its runs".
 | Answering a remote run's decision from A | a write over the link; B's board answers it in the first cut |
 | Other feeds (conversations) | extension path in §7; tasks and agent liveness moved into the MVP (M.5, M.6) |
 | Long-poll or server push for board sync | an idle link already costs about 0.3 MB a day at a 5-minute interval (M.9), and common proxies cut held requests at 60 s; revisit if 15 s while a board is open feels slow |
-| Syncing attachments, due dates, board visibility and group hides | outside the operator's field list; images are the only large field and would break the per-task byte budget |
+| Syncing attachments, due dates and group hides | outside the operator's field list; images are the only large field and would break the per-task byte budget |
 | Merging concurrent text edits character by character | the operator chose last write wins for the MVP (M.3) |
 | A toggle that refuses tasks the peer assigns to this machine | text edits steer work as much as a machine change does, so a machine-only toggle would protect little; the grant states the reach instead (M.8) |
 | Showing the machine a task was created on | `machine` defaults to it and the chip shows where it runs, which is what decides launches |

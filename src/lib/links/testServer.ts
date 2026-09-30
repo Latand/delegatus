@@ -18,6 +18,8 @@ import * as grants from "@/app/api/links/grants/route";
 import * as shared from "@/app/api/links/shared/route";
 import * as tasksRoute from "@/app/api/tasks/route";
 import * as taskOne from "@/app/api/tasks/[id]/route";
+import { forgetTaskExchange } from "./taskExchange";
+import { readTaskCursor, remoteStore } from "./boardLinks";
 import { ownBoardStoreId } from "./boardLinks";
 import { initializeStateCollections, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import { statePath } from "@/lib/configDir";
@@ -134,6 +136,17 @@ const server = http.createServer(async (request, response) => {
     if (path === "/test/measure-memory") { capturing = false; captured = []; captureWire = false; wire.length = 0; measureMemory = true; json(response, { ok: true }); return; }
     if (path === "/test/captured") { json(response, captured); if (query.get("reset") === "1") captured = []; return; }
     if (path === "/test/tasks") { json(response, loadTasks()); return; }
+    if (path === "/test/legacy-cursor") {
+      const input = body() as { id: string; pull: number[]; pushed: number[]; projects: string[] };
+      const opened = new SqliteStateCollection<{ key: string; store: string; shared: unknown[]; cursor?: unknown }>(statePath("state.sqlite"), {
+        collection: "board_links", schemaVersion: 1, busyMessage: "test board links busy", key: (row) => row.key,
+        decode: (value) => value as never, clone: structuredClone,
+      });
+      opened.boundedPatch(2, (tx) => tx.put({ key: `tasks:${input.id}`, store: remoteStore(input.id)!, shared: [], cursor: { pull: input.pull, pushed: input.pushed, pullCovered: input.projects, pushCovered: input.projects } }));
+      forgetTaskExchange(input.id);
+      json(response, { cursor: readTaskCursor(input.id, remoteStore(input.id)!) });
+      return;
+    }
     if (path === "/test/import-tasks") {
       const input = body() as { tasks: ReturnType<typeof loadTasks> };
       mutateTasks(() => ({ tasks: input.tasks, result: null }));

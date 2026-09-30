@@ -1,3 +1,5 @@
+import { repairLinkedTasks } from "./taskRepair";
+import { sharedLinkState } from "./runtimeState";
 /**
  * A's half of the `tasks` part of `boards/sync` (docs/design/linked-installs.md
  * M.5). A makes every request and carries both directions: it pulls B's log
@@ -13,16 +15,16 @@ import { isPosition, readLogPage, readScanPage, PAGE_ROWS, type Position } from 
 import { decodeWireRow, MalformedRow, type WireRow } from "./taskWire";
 import { taskFeedSource } from "@/lib/tasks/store";
 
-export class TaskSyncError extends Error { constructor(readonly code: "malformed" | "clock" | "quota") { super(code); } }
+export const TaskSyncError = sharedLinkState("taskExchange.errorClass", () => class TaskSyncError extends Error { constructor(readonly code: "malformed" | "clock" | "quota") { super(code); } });
 
 /** A scan covers at most this many projects; more wait for the next scan. */
 export const SCAN_PROJECTS = 200;
 /** A cursor that only moved past other projects' writes is saved this often. */
 const IDLE_CURSOR_SAVE_MS = 600_000;
-const lastSaved = new Map<string, number>();
+const lastSaved = sharedLinkState("taskExchange.lastSaved", () => new Map<string, number>());
 /** One exchange per link and peer store, kept across calls: a cursor that
     moved in memory is what the next call sends. */
-const exchanges = new Map<string, TaskExchange>();
+const exchanges = sharedLinkState("taskExchange.exchanges", () => new Map<string, TaskExchange>());
 
 export function taskExchange(link: { id: string; install: string; store: string }, self: { id: string; prefix: string }): TaskExchange {
   const key = `${link.id}:${link.store}:${link.install}:${self.id}`;
@@ -73,6 +75,7 @@ export class TaskExchange {
 
   /** Starts one sync: counts the rows it moves. */
   begin(): void {
+    repairLinkedTasks();
     this.movedRows = 0;
     this.pullMore = false;
     this.pushMore = false;
@@ -81,6 +84,9 @@ export class TaskExchange {
   /** The parts of the next request, or none while nothing is linked. */
   request(linked: ReadonlySet<string>): TaskRequest {
     if (!linked.size) return {};
+    // Sharing may become agreed midway through the connect-time exchange.
+    // Finish the repair before its first scan, so the following idle call writes nothing.
+    repairLinkedTasks();
     for (const covered of [this.pullCovered, this.pushCovered]) for (const key of covered) if (!linked.has(key)) { covered.delete(key); this.dirty = true; }
     const sorted = [...linked].sort();
     const request: TaskRequest = {};

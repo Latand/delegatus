@@ -1,3 +1,4 @@
+import { repairLinkedTasks } from "./taskRepair";
 /**
  * B's half of the `tasks` part of `boards/sync` (docs/design/linked-installs.md
  * M.5). B never calls out and holds no cursor: A names the position, B answers
@@ -31,6 +32,7 @@ export function serveTasks(grant: Grant, wire: Record<string, unknown>, agreed: 
   if (push !== undefined && !(object(push) && Array.isArray(push.rows) && push.rows.length <= PAGE_ROWS
     && (isPosition(push.through) !== (push.scan !== undefined)) && (push.scan === undefined || push.scan === null || (typeof push.scan === "string" && SCAN_CURSOR.test(push.scan))))) return { error: "malformed" };
   if (!agreed) return { parts: { tasks: { wait: true } }, moved: false };
+  repairLinkedTasks();
   const context = linkedContext();
   const link = linkedPeer("grant", grant.id);
   if (!context.self || !link) return { parts: { tasks: { wait: true } }, moved: false };

@@ -1,3 +1,4 @@
+import { sharedLinkState } from "./runtimeState";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -20,7 +21,7 @@ export type Link = { id: string; url: string; token: string; grantId: string; in
 type Grants = { v: 1; codes: PairCode[]; grants: Grant[] };
 type Peers = { v: 1; peers: Link[] };
 
-const memoryCounts = new Map<string, { requests: number; lastUsed: number; days: Record<string, number>; movedAt: number | null; flushedAt: number | null }>();
+const memoryCounts = sharedLinkState("state.memoryCounts", () => new Map<string, { requests: number; lastUsed: number; days: Record<string, number>; movedAt: number | null; flushedAt: number | null }>());
 export const linkFile = (name: "grants" | "peers" | "shared") => statePath(`links/${name}.json`);
 export const sha = (value: string) => createHash("sha256").update(value).digest("hex");
 
