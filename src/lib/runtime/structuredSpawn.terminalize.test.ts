@@ -9,6 +9,7 @@ import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import {
+  ADMISSION_RETRY_DEADLINE_MS,
   STALE_STRUCTURED_SPAWN_TIMEOUT_MS,
   recoverPendingStructuredSpawns,
   reconcileStructuredSpawnReplay,
@@ -86,6 +87,7 @@ test("a runtime-host transport failure becomes actionable on the structured spaw
   });
   if (begun.kind !== "created") throw new Error("expected structured launch creation");
   let admissionAttempts = 0;
+  let clock = 0;
   const unavailableClient = {
     command: async () => {
       admissionAttempts += 1;
@@ -106,9 +108,13 @@ test("a runtime-host transport failure becomes actionable on the structured spaw
     client: unavailableClient,
   }, {
     startHost: async () => { throw new Error("runtime admission must precede host start"); },
+    now: () => clock,
+    sleep: async (ms) => { clock += ms; },
   })).rejects.toThrow("runtime host request timed out");
 
-  expect(admissionAttempts).toBe(3);
+  /* Admission retries until its deadline (#2058), then gives up. */
+  expect(admissionAttempts).toBeGreaterThan(3);
+  expect(clock).toBeLessThanOrEqual(ADMISSION_RETRY_DEADLINE_MS);
   const failed = store.snapshot().receipts[begun.receipt.launchId];
   if (!failed) throw new Error("failed structured spawn receipt was unavailable");
   const actionableFailure = "structured spawn runtime host is unavailable; start agent-log-viewer through its CLI and check the CLI log for the host startup failure";

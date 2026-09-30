@@ -143,7 +143,7 @@ import type { RuntimeHostRequestHealth } from "@/lib/runtime/client";
 import type { ViewerDeploymentStatus, ViewerDeploymentSummary } from "@/lib/runtime/contracts";
 import { messageOriginRole, type MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { ledgerDeployment, ledgerDeployments } from "@/lib/runtime/deploymentLedger";
-import { resolveOriginalSend, resolveSendReceipt, type SendSettlementPorts } from "@/lib/runtime/sendSettlement";
+import { resolveOriginalSend, resolveSendReceipt, sendSettlementDue, type SendSettlementPorts } from "@/lib/runtime/sendSettlement";
 import { spawnAdmissionBodyDigest } from "@/lib/agent/spawnIdentity";
 import {
   SELECTED_TAIL_MAX_BYTES,
@@ -590,6 +590,7 @@ async function dispatchViewerControl(
     throw new McpDispatchVerdictError(message, {
       status: response.status,
       ...(text(result.code) ? { code: text(result.code) } : {}),
+      ...(result.admission === "refused" ? { admission: "refused" } : {}),
       ...(typeof result.expectedRevision === "number" || result.expectedRevision === null ? { expectedRevision: result.expectedRevision } : {}),
       ...(typeof result.retryAfterSeconds === "number" ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
       ...(Array.isArray(result.sentMessageIds) && result.sentMessageIds.every((id) => typeof id === "number") ? { sentMessageIds: result.sentMessageIds } : {}),
@@ -1480,18 +1481,32 @@ async function sendMessage(
   const transcriptPath = text(args.transcriptPath) || text(args.path);
   if (!conversationId && !transcriptPath) throw new Error("conversationId or transcriptPath is required");
   const message = requiredMessageText(args);
-  const outcome = await dispatchControl(control)("/api/tmux", {
-    pid: null,
-    path: transcriptPath,
-    ...(conversationId ? { conversationId } : {}),
-    clientMessageId: context?.binding?.downstreamKey ?? downstreamKey,
-    text: message,
-    images: [],
-    policy: "steer-or-queue",
-    /* #1117: an MCP send is inter-agent traffic by definition; the sender role
-       is the server's own caller attribution, so the feed can say WHO relayed. */
-    origin: mcpSenderOrigin(dependencies),
-  }, callerCapabilityHeaders());
+  let outcome: Record<string, unknown>;
+  try {
+    outcome = await dispatchControl(control)("/api/tmux", {
+      pid: null,
+      path: transcriptPath,
+      ...(conversationId ? { conversationId } : {}),
+      clientMessageId: context?.binding?.downstreamKey ?? downstreamKey,
+      text: message,
+      images: [],
+      policy: "steer-or-queue",
+      /* #1117: an MCP send is inter-agent traffic by definition; the sender role
+         is the server's own caller attribution, so the feed can say WHO relayed. */
+      origin: mcpSenderOrigin(dependencies),
+    }, callerCapabilityHeaders());
+  } catch (error) {
+    /* #2020: the Viewer's own answer that it refused before reserving
+       anything. Nothing exists under the downstream key, so the send settles
+       as not executed with that reason instead of an unknown outcome that no
+       later lookup could end. */
+    if (error instanceof McpDispatchVerdictError && error.details.admission === "refused"
+      && typeof error.details.operationId !== "string") {
+      const { admission: _admission, ...details } = error.details;
+      throw new McpDispatchNotExecutedError(error.message, details);
+    }
+    throw error;
+  }
   const receipt = objectRecord(outcome.receipt) ? outcome.receipt : null;
   const operationId = text(outcome.operationId) || text(receipt?.operationId);
   const settledOutcome = text(outcome.outcome);
@@ -6035,13 +6050,24 @@ async function recoverSend(
   if (found.kind === "ambiguous") {
     return { outcome: "unknown", evidence: "delivery-record", reason: "more than one delivery operation claims this key; the match is ambiguous", ids: {} };
   }
-  const receipt = found.current.readable ? found.current.value : found.receipt;
+  let receipt = found.current.readable ? found.current.value : found.receipt;
+  let unreadableNote = found.current.readable ? null : `; the current runtime answer could not be read (${found.current.reason})`;
+  /* #1866: a send past its settlement deadline is ended by this lookup, the
+     same way `message_receipt` ends it, or the caller holding only the
+     original key reads `in-flight` for ever. Before the deadline the lookup
+     stays an observation. */
+  if (receipt.state === "in-flight" && sendSettlementDue(found.operationId, ports)) {
+    const settled = await resolveSendReceipt(found.operationId, ports);
+    if (settled) {
+      receipt = settled;
+      unreadableNote = null;
+    }
+  }
   const ids: Record<string, string> = {
     operationId: found.operationId,
     ...(receipt.conversationId ? { conversationId: receipt.conversationId } : {}),
     ...(found.deliveryId ? { deliveryId: found.deliveryId } : {}),
   };
-  const unreadableNote = found.current.readable ? null : `; the current runtime answer could not be read (${found.current.reason})`;
   if (receipt.state === "delivered" || receipt.state === "failed") {
     return {
       outcome: "settled",

@@ -32,6 +32,7 @@ import type { FileEntry } from "@/lib/types";
 import { durableSemanticTitle } from "@/lib/title";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 import { isStructuredDeliveryControllerUnavailable } from "@/lib/runtime/structuredDeliveryController";
+import { SEND_SETTLEMENT_WINDOW_MS } from "@/lib/runtime/sendSettlement";
 
 import { requestAccountMigrationTick } from "./controllerSignal";
 import {
@@ -61,11 +62,39 @@ export interface MigrationPreview {
   previewRevision: number;
 }
 
+/** A delivery that never reached dispatch, returned to the queue with the
+    reason it could not go (#1974). */
+export interface HeldDeliveryDeferral {
+  outcome: "held";
+  cause: string;
+}
+
+export type HeldDeliveryAttemptOutcome = "delivered" | "failed" | "delivery-uncertain" | "held" | HeldDeliveryDeferral;
+
 export interface HeldDeliveryPort {
   /* `lease` is the drain's hold on the conversation's actuation section: a delivery that must claim again inside it
      passes the lease on rather than waiting for a section it already holds. */
-  deliver(input: { delivery: HeldDelivery; path: string; clientMessageId: string; lease?: ActuationLease }): Promise<"delivered" | "failed" | "delivery-uncertain" | "held">;
-  reconcileUncertain?(input: { delivery: HeldDelivery; path: string; clientMessageId: string }): Promise<"delivered" | "failed" | "delivery-uncertain" | "held">;
+  deliver(input: { delivery: HeldDelivery; path: string; clientMessageId: string; lease?: ActuationLease }): Promise<HeldDeliveryAttemptOutcome>;
+  reconcileUncertain?(input: { delivery: HeldDelivery; path: string; clientMessageId: string }): Promise<HeldDeliveryAttemptOutcome>;
+}
+
+export interface DrainHeldDeliveriesOptions {
+  now?: () => number;
+}
+
+/**
+ * The bound on a message that keeps failing before dispatch (#1866, #1974).
+ *
+ * The same window a receipt read uses to end an accepted send, measured from
+ * the send's acceptance, because each requeue restamps `assignedAt`. Past it
+ * the reservation is failed with the last cause and the `lost` disposition:
+ * nothing ever dispatched it, and the reservation this writes is the fence the
+ * delivery queue reads, so it cannot arrive afterwards and may be sent again.
+ */
+function unactuatedFailure(delivery: HeldDelivery, cause: string, now: number): string | null {
+  const acceptedAt = Date.parse(delivery.createdAt);
+  if (Number.isFinite(acceptedAt) && now - acceptedAt < SEND_SETTLEMENT_WINDOW_MS) return null;
+  return `not delivered in ${Math.round(SEND_SETTLEMENT_WINDOW_MS / 60_000)} min: ${cause}`;
 }
 
 const CLAIMABLE_RECEIPT_STATES = new Set(["starting", "pane-bound", "host-verified", "prompt-delivered", "path-pending"]);
@@ -1061,6 +1090,7 @@ export async function drainHeldDeliveries(
   conversationId: ViewerConversationId,
   delivery: HeldDeliveryPort,
   registry: AgentRegistry = agentRegistry(),
+  options: DrainHeldDeliveriesOptions = {},
 ): Promise<void> {
   const conversation = registry.conversation(conversationId);
   const current = conversation?.generations.at(-1);
@@ -1086,8 +1116,14 @@ export async function drainHeldDeliveries(
         const outcome = reconciling
           ? await delivery.reconcileUncertain!(input)
           : await delivery.deliver(input);
-        if (outcome === "held") {
-          if (!reconciling) registry.requeueUnactuatedDelivery(claimed.id);
+        if (outcome === "held" || typeof outcome === "object") {
+          if (!reconciling) {
+            /* A bare `held` is progress (a resume that just published, or a runtime
+               host briefly out of reach), so only a deferral with a cause is bounded. */
+            const failure = typeof outcome === "object" ? unactuatedFailure(claimed, outcome.cause, (options.now ?? Date.now)()) : null;
+            if (failure) registry.recordDeliveryOutcome(claimed.id, "failed", failure, "lost");
+            else registry.requeueUnactuatedDelivery(claimed.id);
+          }
         }
         else registry.recordDeliveryOutcome(claimed.id, outcome, outcome === "failed" ? "delivery failed and remains recoverable" : null);
       } catch {

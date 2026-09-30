@@ -57,7 +57,9 @@ afterAll(() => {
 const { conversationHostPOST } = await import("@/app/api/conversation-host/handlers");
 const { AgentRegistry } = await import("@/lib/agent/registry");
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
-const { sendDownstreamKey, viewerMcpRecoverableTools } = await import("./bindings");
+const { sendDownstreamKey, viewerMcpRecoverableTools, viewerMcpBindings, productionViewerControlDependencies } = await import("./bindings");
+const { createMcpToolService, MemoryMcpReceiptStore } = await import("./server");
+const { enqueueStructuredMessage } = await import("@/lib/runtime/structuredMessageDelivery");
 
 const transcriptPath = path.join(root, "recipient.jsonl");
 fs.writeFileSync(transcriptPath, "{}\n");
@@ -76,6 +78,8 @@ const generationId = recipient.generations.at(-1)!.id;
 /** Every text the structured host was handed, in order — the count is what
     says no recovery ever admitted a second copy of a message. */
 const admitted: { clientMessageId: string; text: string }[] = [];
+/** A test that needs the production `enqueueStructuredMessage` itself sets this. */
+let structuredSend: ((request: Parameters<typeof enqueueStructuredMessage>[0]) => ReturnType<typeof enqueueStructuredMessage>) | null = null;
 
 setConversationHostDependenciesForTests({
   collectImagePayloads: () => ({ images: [], error: null }),
@@ -85,6 +89,7 @@ setConversationHostDependenciesForTests({
      route handed it, under the caller's own key, with no digest of its own
      (the registry stamps one from the stored text). */
   enqueueStructuredMessage: async (request) => {
+    if (structuredSend) return structuredSend(request);
     const clientMessageId = request.clientMessageId ?? "";
     admitted.push({ clientMessageId, text: request.text });
     const operationId = `op_${admitted.length}`;
@@ -289,4 +294,114 @@ test("recovery leaves the durable records exactly as it found them", async () =>
 
   expect(JSON.stringify(registry.readOnlySnapshot())).toBe(before);
   expect(admitted.length).toBe(admissions);
+});
+
+/* #2020: a finished headless reviewer's row keeps the launch's publication
+   marker (`starting`, `pendingAction: "spawn"`, no host, no process). The
+   Viewer refuses a send to it before reserving anything, and the MCP call
+   used to record that refusal as a dispatch that may have run: the first
+   answer and every later lookup under the key said `outcome_unknown`. The
+   route and `enqueueStructuredMessage` here are the production ones; the
+   runtime host is a client that knows no session. */
+test("a send the Viewer refuses before reserving anything settles as not executed, then and on every lookup", async () => {
+  const begun = registry.beginSpawnRequest({ engine: "codex", cwd: root, launchProfile: { title: "headless reviewer" } });
+  const sessionId = crypto.randomUUID();
+  const settled = registry.settleSpawn(begun.receipt.launchId, {
+    key: { engine: "codex", sessionId },
+    artifactPath: path.join(root, `rollout-${sessionId}.jsonl`),
+    cwd: root,
+    accountId: "recovery-fixture-account",
+    launchProfile: begun.receipt.launchProfile,
+    status: "starting",
+    host: null,
+    claimEpoch: 0,
+    claimOwner: null,
+    pendingAction: "spawn",
+  });
+  if (settled.kind === "conflict") throw new Error(settled.code);
+  const reviewer = registry.conversation(settled.receipt.conversationId)!;
+
+  const domain = {
+    registrySnapshot: () => registry.readOnlySnapshot(),
+    attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_caller" }),
+    callerAttribution: () => ({ kind: "worker", conversationId: "conversation_caller" }),
+    recoveryPredecessors: () => [],
+    sendSettlementPorts: () => ({ registry, client: null }),
+  } as never;
+  const receipts = new MemoryMcpReceiptStore();
+  const service = () => createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(), domain), receipts, undefined, { recovery: viewerMcpRecoverableTools(domain) });
+  const posts: string[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    posts.push(new URL(request.url).pathname);
+    return conversationHostPOST(new NextRequest("http://127.0.0.1/api/conversation-host", {
+      method: "POST",
+      headers: { host: "127.0.0.1", "content-type": "application/json" },
+      body: await request.text(),
+    }));
+  } });
+  const saved = { url: process.env.LLV_VIEWER_CONTROL_URL, target: process.env.LLV_VIEWER_DEPLOY_TARGET, port: process.env.LLV_VIEWER_PORT };
+  process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
+  delete process.env.LLV_VIEWER_DEPLOY_TARGET;
+  delete process.env.LLV_VIEWER_PORT;
+  structuredSend = (request) => enqueueStructuredMessage(request, {
+    enabled: () => true,
+    registry: () => registry,
+    client: () => ({ readSession: async () => null }) as never,
+    requestMigrationTick: () => {},
+  });
+  const args = { clientRequestId: "refused-before-reservation", conversationId: reviewer.id, text: "round finished, one more question" };
+  try {
+    const first = await service().callTool("send_message", args);
+    expect(first).toMatchObject({ ok: false, details: { outcome: "not-executed", nextAction: "new-request-permitted", status: 503 } });
+    expect(JSON.stringify(first)).toContain("synchroniz");
+    const lookup = await service().callTool("send_message", { ...args, recoveryOnly: true });
+    expect(lookup).toMatchObject({ ok: false, details: { outcome: "not-executed", nextAction: "new-request-permitted" } });
+    expect(JSON.stringify(lookup)).toContain("synchroniz");
+    /* Nothing was reserved: the answer is the handler's own, and it said so. */
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)
+      .filter((held) => held.conversationId === reviewer.id)).toEqual([]);
+    expect(posts).toHaveLength(1);
+  } finally {
+    structuredSend = null;
+    await server.stop(true);
+    for (const [key, value] of [["LLV_VIEWER_CONTROL_URL", saved.url], ["LLV_VIEWER_DEPLOY_TARGET", saved.target], ["LLV_VIEWER_PORT", saved.port]] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+/* #1866: a dispatched send nothing ever answered read `in-flight` under its
+   original key for an hour, because the lookup never applied the settlement
+   deadline; only `message_receipt` did. Past the deadline the lookup now ends
+   it the same way. Before it, the lookup still only observes. */
+test("an original-key lookup past the settlement deadline ends an accepted send instead of answering in flight", async () => {
+  const text = "relay accepted and never answered";
+  const key = sendDownstreamKey("overdue-accepted-send");
+  const response = await send(key, text);
+  expect(response.status).toBe(200);
+  const { operationId } = await response.json() as { operationId: string };
+  const reservation = Object.values(registry.readOnlySnapshot().heldDeliveries)
+    .find((held) => held.clientMessageId === key)!;
+  /* Accepted while the recipient's host was reclaimed, and never dispatched. */
+  expect(reservation.state).toBe("assigned");
+
+  const lookupAt = (now: number) => viewerMcpRecoverableTools({
+    registrySnapshot: () => registry.readOnlySnapshot(),
+    sendSettlementPorts: () => ({ registry, client: null, now: () => now }),
+  } as never).send_message!.recover(bindingFor(key), { legacy: false, args: { text } });
+
+  const early = await lookupAt(Date.now());
+  expect(early).toMatchObject({ outcome: "accepted", facts: { state: "in-flight" }, ids: { operationId } });
+  expect(registry.readOnlySnapshot().heldDeliveries[reservation.id]?.state).toBe("assigned");
+
+  const overdue = await lookupAt(Date.now() + 11 * 60_000);
+  expect(overdue).toMatchObject({
+    outcome: "settled",
+    ids: { operationId },
+    facts: { state: "failed", duplicateRisk: true },
+  });
+  expect(overdue.reason).toEqual(expect.any(String));
+  /* The same answer `message_receipt` now gives, because the lookup wrote it. */
+  expect(registry.readOnlySnapshot().heldDeliveries[reservation.id]?.state).toBe("failed");
 });

@@ -2233,9 +2233,14 @@ export class McpDispatchUncertainError extends Error {
  * not-executed.
  */
 export class McpDispatchNotExecutedError extends Error {
-  constructor(message: string) {
+  /** What the server said when it refused before doing anything, kept on
+      the settled answer. */
+  readonly details: McpToolPayload;
+
+  constructor(message: string, details: McpToolPayload = {}) {
     super(message);
     this.name = "McpDispatchNotExecutedError";
+    this.details = details;
   }
 }
 
@@ -2764,7 +2769,7 @@ export function createMcpToolService(
              Only affirmative pre-dispatch proof closes an attempt. HTTP
              status, error text, and admitted IDs cannot establish termination. */
           outcome = error instanceof DeadlineExceededError ? "deadline" : "failure";
-          const refusal = error instanceof McpToolRefusal ? error.details : {};
+          const refusal = error instanceof McpToolRefusal || error instanceof McpDispatchNotExecutedError ? error.details : {};
           const admitted = typeof refusal.operationId === "string" || typeof refusal.launchId === "string";
           const proven = !admitted && (
             error instanceof McpDispatchNotExecutedError

@@ -2023,7 +2023,7 @@ test("a reclaimed send stays durably held while its accepted resume has no proce
       throw new Error("a publishing resume was started again");
     },
   });
-  expect(drainOutcome).toBe("held");
+  expect(drainOutcome).toMatchObject({ outcome: "held", cause: "the durable host record is still publishing ownership" });
   expect(duplicateRecoveries).toBe(0);
 });
 
@@ -2680,6 +2680,9 @@ test("migration-held delivery settles through the runtime journal after EngineHo
   expect(outcome).toBe("delivered");
 });
 
+/* The second read reaches no owner before any dispatch: the reservation goes
+   back to the queue with that reason, bounded by the drain (#1974), rather
+   than resting uncertain where nothing retries or settles it. */
 test("held delivery stays fenced when persisted ownership is unavailable", async () => {
   const registry = new AgentRegistry(path.join(sandbox, `registry-${registryNumber += 1}.json`));
   const request = {
@@ -2703,7 +2706,7 @@ test("held delivery stays fenced when persisted ownership is unavailable", async
     enabled: () => true,
     client: () => missingSessionClient,
     registry: () => registry,
-  })).toBe("delivery-uncertain");
+  })).toEqual({ outcome: "held", cause: "the durable registry has no current generation for this conversation" });
 });
 
 test("held delivery fences a missing runtime client without startup failure evidence", async () => {
@@ -2772,6 +2775,151 @@ test("an unsupported session read before dispatch retains the original held mess
   expect(commands).toHaveLength(1);
   expect(commands[0]).toMatchObject({ operationId: held.command.operationId, idempotencyKey: held.clientMessageId, text: held.text, images });
   expect(registry.snapshot().heldDeliveries[held.id]!.state).toBe("delivered");
+  registry.close();
+});
+
+/* #1974 part 2, the issue's own acceptance: a readiness read that fails
+   after the host was republished happens before anything is dispatched, so
+   the drained message goes back to the queue, message and attachments intact,
+   and is delivered once when readiness returns. It used to be recorded
+   `delivery-uncertain`, which nothing ever retried or settled as unsent. */
+test("a readiness read that fails after republication keeps the held message queued for one later delivery", async () => {
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  const imageStore = new RuntimeImageStore(path.join(sandbox, "republish-readiness-images"));
+  const images = imageStore.putMany([{ base64: PNG_BASE64, mime: "image/png" }]);
+  const held = registry.holdDelivery(conversation.id, "message across a republication", "republish-readiness-key", "runtime-images", images, null);
+  let ready = false;
+  let reads = 0;
+  const commands: unknown[] = [];
+  const dead = snapshot(conversation.id, "codex", true);
+  dead.sessions[0] = { ...dead.sessions[0]!, host: "dead" };
+  const client = {
+    readSession: sessionReader(async () => {
+      reads += 1;
+      if (ready) return snapshot(conversation.id, "codex", true);
+      /* The first read finds the host dead; the read after republication fails. */
+      if (reads % 2 === 1) return dead;
+      throw new Error("runtime host request timed out");
+    }),
+    command: async (command: unknown) => { commands.push(command); return { operationId: held.command.operationId, receipt: { status: "delivered" } }; },
+    operationStatus: async () => ({ operationId: held.command.operationId, receipt: { status: "delivered" } }),
+  } as unknown as RuntimeHostClient;
+  const drain = () => drainHeldDeliveries(conversation.id, {
+    deliver: async ({ delivery, path, clientMessageId }) => await deliverHeldStructuredMessage({
+      conversationId: conversation.id, path, deliveryId: delivery.id, clientMessageId,
+      text: delivery.text, imageRefs: delivery.runtimeImages, command: delivery.command,
+    }, { enabled: () => true, client: () => client, registry: () => registry, kick: async () => {}, republish: async () => true }) ?? "delivery-uncertain",
+  }, registry);
+
+  await drain();
+  expect(commands).toHaveLength(0);
+  expect(registry.snapshot().heldDeliveries[held.id]).toMatchObject({
+    state: "assigned", clientMessageId: held.clientMessageId, command: held.command,
+    text: held.text, runtimeImages: images,
+  });
+  ready = true;
+  await drain();
+  await drain();
+  expect(commands).toHaveLength(1);
+  expect(commands[0]).toMatchObject({ operationId: held.command.operationId, idempotencyKey: held.clientMessageId, text: held.text, images });
+  expect(registry.snapshot().heldDeliveries[held.id]!.state).toBe("delivered");
+  registry.close();
+});
+
+/* #1866: a message to a reclaimed conversation whose resume keeps failing
+   before dispatch stayed in flight for an hour. It now stays queued under its
+   one operation id and, once it has waited out the settlement window, fails
+   with the resume's own reason and the `lost` disposition: it never left, so
+   it is safe to send again. */
+test("a held message whose resume keeps failing stays queued, then fails with the resume's reason at the bound", async () => {
+  const { registry, conversation } = registryWithConversation();
+  const held = registry.holdDelivery(conversation.id, "message to a reclaimed agent", "reclaimed-resume-key");
+  const commands: unknown[] = [];
+  let resumes = 0;
+  const client = {
+    readSession: async () => null,
+    command: async (command: unknown) => { commands.push(command); throw new Error("no command may be dispatched"); },
+  } as unknown as RuntimeHostClient;
+  const drainAt = (now: number) => drainHeldDeliveries(conversation.id, {
+    deliver: async ({ delivery, path, clientMessageId }) => await deliverHeldStructuredMessage({
+      conversationId: conversation.id, path, deliveryId: delivery.id, clientMessageId, text: delivery.text, command: delivery.command,
+    }, {
+      enabled: () => true, client: () => client, registry: () => registry, kick: async () => {},
+      recover: async () => { resumes += 1; throw new Error("host resume did not publish within 60 s: runtime host request timed out"); },
+    }) ?? "delivery-uncertain",
+  }, registry, { now: () => now });
+
+  const acceptedAt = Date.parse(held.createdAt);
+  await drainAt(acceptedAt + 60_000);
+  await drainAt(acceptedAt + 5 * 60_000);
+  expect(resumes).toBe(2);
+  expect(registry.snapshot().heldDeliveries[held.id]).toMatchObject({ state: "assigned", command: held.command, text: held.text });
+
+  await drainAt(acceptedAt + 11 * 60_000);
+  expect(commands).toHaveLength(0);
+  const failed = registry.snapshot().heldDeliveries[held.id]!;
+  expect(failed.state).toBe("failed");
+  expect(failed.error).toContain("not delivered in 10 min");
+  expect(failed.error).toContain("host resume did not publish within 60 s");
+  expect(sendReceiptFor(registry.snapshot(), held.command.operationId)).toMatchObject({ state: "failed", duplicateRisk: false });
+  registry.close();
+});
+
+/* #2046: the first send to a reclaimed conversation raised a resume and then
+   failed "did not publish its transcript" while that resume was still
+   publishing; an identical resend seconds later found the host up. The send
+   now waits for the resume it raised, through the production recovery path,
+   and its one reservation is delivered once. Only the runtime spawn and its
+   staged probe are fixtures: the resume comes back staged and publishes on
+   the second probe. */
+test("the first send to a reclaimed conversation waits for the resume it raised and is delivered once", async () => {
+  const { registry, conversation } = registryWithConversation();
+  let published = false;
+  let probes = 0;
+  const commands: { operationId: string }[] = [];
+  const client = {
+    readSession: sessionReader(async () => published ? snapshot(conversation.id) : { ...snapshot(), sessions: [] }),
+    command: async (command: { operationId: string }) => {
+      commands.push(command);
+      return { operationId: command.operationId, receipt: { operationId: command.operationId, status: "delivered" } };
+    },
+    operationStatus: async (operationId: string) => ({ operationId, receipt: { operationId, status: "delivered" } }),
+  } as unknown as RuntimeHostClient;
+  const recover: typeof recoverDeadStructuredConversation = (request, dependencies) => recoverDeadStructuredConversation(request, {
+    ...dependencies,
+    transport: () => "structured",
+    resolveAccount: () => ({ engine: "codex", accountId: "default", kind: "managed", home: sandbox, transcriptRoot: sandbox, env: { NODE_ENV: "test" } }),
+    spawn: async (input) => ({
+      ok: true, target: null, path: null, launchId: input.receipt.launchId, conversationId: input.receipt.conversationId,
+      launched: true, retrySafe: false, initialMessage: "queued", state: "path-pending", transport: "structured",
+    }),
+    probeStagedLaunch: async (launchId, probed) => {
+      probes += 1;
+      const receipt = probed.readOnlySnapshot().receipts[launchId]!;
+      if (probes < 2) return receipt;
+      published = true;
+      return { ...receipt, state: "completed", artifactPath };
+    },
+    sleep: async () => {},
+  });
+
+  const sent = await enqueueStructuredMessage({
+    path: artifactPath, conversationId: conversation.id, clientMessageId: "first-send-after-resume", text: "the first send after a resume",
+  }, { enabled: () => true, client: () => client, registry: () => registry, recover, kick: () => {}, requestMigrationTick: () => {} });
+
+  expect(sent).toMatchObject({ ok: true, spawned: true, operationId: expect.any(String) });
+  expect(probes).toBe(2);
+  const reservation = Object.values(registry.snapshot().heldDeliveries).find((held) => held.clientMessageId === "first-send-after-resume")!;
+  expect(reservation.state).toBe("assigned");
+  await drainHeldDeliveries(conversation.id, {
+    deliver: async ({ delivery, path, clientMessageId }) => await deliverHeldStructuredMessage({
+      conversationId: conversation.id, path, deliveryId: delivery.id, clientMessageId, text: delivery.text, command: delivery.command,
+    }, { enabled: () => true, client: () => client, registry: () => registry, kick: async () => {}, recover }) ?? "delivery-uncertain",
+  }, registry);
+  expect(commands).toHaveLength(1);
+  expect(commands[0]).toMatchObject({ operationId: reservation.command.operationId });
+  expect(registry.snapshot().heldDeliveries[reservation.id]!.state).toBe("delivered");
   registry.close();
 });
 
