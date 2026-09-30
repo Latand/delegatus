@@ -128,6 +128,7 @@ services:
       - test
     environment:
       DELEGATUS_TELEMETRY: "0"
+      DELEGATUS_TELEMETRY_OVERRIDE: "0"
       HOME: ${HOME:-/home/user}
       HOSTNAME: 127.0.0.1
       PORT: ${DELEGATUS_TEST_PORT:-${LLV_TEST_PORT:-8901}}

@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { sendInstallPing, maySend, scheduleInstallPing, type PingPorts } from "./sender";
-import { installPingId, updatePreferences, telemetryFile, telemetryStatus } from "./store";
+import { installPingId, preferences, updatePreferences, telemetryFile, telemetryStatus } from "./store";
+import { GET } from "@/app/api/telemetry/route";
 import { ensureSelf } from "@/lib/links/self";
 import type { LauncherRecord } from "@/lib/selfUpdate/launcher";
 import { foldDelegatusEnvironment } from "../../../bin/envAlias.mjs";
@@ -141,6 +142,38 @@ test("shell Docker opt-outs override service.env and viewer-test stays disabled"
     }
   }
 });
+test("viewer-test stays disabled with inherited telemetry override aliases and positive shell overrides", async () => {
+  const inputs = [
+    { file: "DELEGATUS_TELEMETRY_OVERRIDE=1\n" },
+    { file: "LLV_TELEMETRY_OVERRIDE=1\n" },
+    { file: "", shell: { DELEGATUS_TELEMETRY_OVERRIDE: "1" } },
+    { file: "", shell: { LLV_TELEMETRY_OVERRIDE: "1" } },
+  ];
+  for (const input of inputs) {
+    const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "ping-viewer-test-"));
+    const envFile = path.join(fixtureDir, "service.env");
+    fs.writeFileSync(envFile, input.file);
+    const cleanEnv = { ...process.env };
+    for (const key of ["DELEGATUS_TELEMETRY", "LLV_TELEMETRY", "DELEGATUS_TELEMETRY_OVERRIDE", "LLV_TELEMETRY_OVERRIDE", "DO_NOT_TRACK", "DELEGATUS_ENV_FILE", "LLV_ENV_FILE"]) delete cleanEnv[key];
+    const configResult = Bun.spawnSync(["docker", "compose", "--profile", "*", "config", "--format", "json"], {
+      cwd: process.cwd(), env: { ...cleanEnv, DELEGATUS_ENV_FILE: envFile, ...input.shell }, stdout: "pipe", stderr: "pipe",
+    });
+    try {
+      expect(configResult.exitCode).toBe(0);
+      const config = JSON.parse(configResult.stdout.toString()) as { services: Record<string, { environment: Record<string, string> }> };
+      const fixture = harness();
+      updatePreferences({ enabled: true });
+      const testEnv = { ...config.services["viewer-test"]!.environment };
+      foldDelegatusEnvironment(testEnv, () => {});
+      fixture.ports.env = { ...fixture.ports.env, ...testEnv };
+      await sendInstallPing(fixture.ports);
+      expect(fixture.requests, JSON.stringify(input)).toHaveLength(0);
+      expect(fs.existsSync(telemetryFile("id")), JSON.stringify(input)).toBe(false);
+    } finally {
+      fs.rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  }
+});
 test("an opt-out while the mode probe runs prevents the send", async () => {
   const fixture = harness(); fixture.ports.mode.deploymentsEnabled = async () => { updatePreferences({ enabled: false }); return true; };
   await sendInstallPing(fixture.ports); expect(fixture.requests).toHaveLength(0);
@@ -174,6 +207,56 @@ test("a positive variable never overrides a saved opt-out", () => {
   updatePreferences({ enabled: false });
   expect(telemetryStatus({ DELEGATUS_TELEMETRY: "1" }).enabled).toBe(false);
   expect(maySend({ LLV_STATE_OWNER: "viewer", NODE_ENV: "production" })).toBe(true);
+});
+
+test("notice acknowledgement in another process preserves a confirmed opt-out", async () => {
+  const ready = path.join(root, "notice-write-ready");
+  const release = path.join(root, "notice-write-release");
+  const env = { ...process.env, LLV_STATE_DIR: root };
+  const childCode = `
+    import fs from "node:fs";
+    import { NextRequest } from "next/server";
+    import { PUT } from "./src/app/api/telemetry/route.ts";
+    const ready = ${JSON.stringify(ready)};
+    const release = ${JSON.stringify(release)};
+    const rename = fs.renameSync.bind(fs);
+    fs.renameSync = (from, to) => {
+      fs.writeFileSync(ready, "ready");
+      const wait = new Int32Array(new SharedArrayBuffer(4));
+      while (!fs.existsSync(release)) Atomics.wait(wait, 0, 0, 5);
+      return rename(from, to);
+    };
+    const response = await PUT(new NextRequest("http://localhost/api/telemetry", {
+      method: "PUT", headers: { "Content-Type": "application/json", Host: "localhost" },
+      body: JSON.stringify({ noticeDismissed: true }),
+    }));
+    if (!response.ok) throw new Error("Notice acknowledgement failed: " + response.status);
+  `;
+  const child = Bun.spawn(["bun", "-e", childCode], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+  const deadline = Date.now() + 5_000;
+  while (!fs.existsSync(ready) && Date.now() < deadline) await Bun.sleep(5);
+  const readySeen = fs.existsSync(ready);
+  const disable = readySeen ? Bun.spawnSync(["bun", "-e", `
+      import { NextRequest } from "next/server";
+      import { PUT } from "./src/app/api/telemetry/route.ts";
+      const response = await PUT(new NextRequest("http://localhost/api/telemetry", {
+        method: "PUT", headers: { "Content-Type": "application/json", Host: "localhost" },
+        body: JSON.stringify({ enabled: false }),
+      }));
+      if (!response.ok) throw new Error("Opt-out failed: " + response.status);
+    `], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }) : null;
+  fs.writeFileSync(release, "go");
+  const childExit = await child.exited;
+  const childError = await new Response(child.stderr).text();
+  expect(readySeen, "notice writer reached its atomic commit").toBe(true);
+  expect(disable?.exitCode).toBe(0, disable?.stderr.toString());
+  expect(childExit).toBe(0, childError);
+  expect(await (await GET()).json()).toMatchObject({ enabled: false, noticeDismissed: true });
+  expect(preferences()).toEqual({ enabled: false, noticeDismissed: true });
+  expect(telemetryStatus()).toMatchObject({ enabled: false, noticeDismissed: true });
+  const fixture = harness(); await sendInstallPing(fixture.ports);
+  expect(fixture.requests).toHaveLength(0);
+  expect(fs.existsSync(telemetryFile("id"))).toBe(false);
 });
 
 test("first send waits one minute; polling is one minute and unrefed", async () => {

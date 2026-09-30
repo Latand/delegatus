@@ -15,13 +15,27 @@ function write(name: string, value: unknown): void {
 }
 export function preferences(): { enabled: boolean; noticeDismissed: boolean } {
   const file = telemetryFile("preferences.json");
-  if (!fs.existsSync(file)) return { enabled: true, noticeDismissed: false };
-  const data = JSON.parse(fs.readFileSync(file, "utf8"));
-  if (typeof data.enabled !== "boolean" || typeof data.noticeDismissed !== "boolean") throw new Error("Invalid telemetry preferences");
-  return { enabled: data.enabled, noticeDismissed: data.noticeDismissed };
+  let data: { enabled: boolean; noticeDismissed: boolean } = { enabled: true, noticeDismissed: false };
+  if (fs.existsSync(file)) {
+    const saved = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (typeof saved.enabled !== "boolean" || typeof saved.noticeDismissed !== "boolean") throw new Error("Invalid telemetry preferences");
+    data = saved;
+  }
+  // Keep independently updated preferences in separate files so overlapping
+  // Viewer processes cannot overwrite one field with a stale copy of another.
+  for (const key of ["enabled", "noticeDismissed"] as const) {
+    const field = telemetryFile(`preferences/${key}`);
+    if (!fs.existsSync(field)) continue;
+    const value = fs.readFileSync(field, "utf8");
+    if (value !== "true" && value !== "false") throw new Error("Invalid telemetry preferences");
+    data[key] = value === "true";
+  }
+  return data;
 }
 export function updatePreferences(update: { enabled?: boolean; noticeDismissed?: boolean }): void {
-  write("preferences.json", { ...preferences(), ...update });
+  for (const key of ["enabled", "noticeDismissed"] as const) {
+    if (update[key] !== undefined) write(`preferences/${key}`, update[key]);
+  }
 }
 export function environmentOff(env: Readonly<Record<string, string | undefined>>): boolean {
   const telemetry = env.LLV_TELEMETRY_OVERRIDE || env.DELEGATUS_TELEMETRY || env.LLV_TELEMETRY;
