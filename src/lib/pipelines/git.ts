@@ -340,7 +340,9 @@ async function finishInterruptedCheckout(pipeline: Pipeline, branch: string, sta
   const tree = await exec("git", ["ls-tree", "-r", "--full-tree", "-z", "HEAD"], pipeline.worktreeDir, signal);
   if (tree.code !== 0) return failure("checking tracked paths in the interrupted pipeline checkout", tree);
   const trackedEntries = tree.stdout.split("\0").filter(Boolean).map((entry) => {
-    const [mode = "", type = "", sha = "", file = ""] = entry.split(/[\t ]/, 4);
+    const separator = entry.indexOf("\t");
+    const [mode = "", type = "", sha = ""] = entry.slice(0, separator).split(" ");
+    const file = separator < 0 ? "" : entry.slice(separator + 1);
     return { mode, type, sha, file };
   });
   const collisions: string[] = [];
@@ -385,9 +387,21 @@ async function finishInterruptedCheckout(pipeline: Pipeline, branch: string, sta
         return { ok: false, error: `the interrupted pipeline checkout contains a modified tracked path (${trackedEntry.file}); preserve it, move it aside, then retry-stage` };
       }
     }
-    const actual = await exec("git", ["hash-object", `--path=${trackedEntry.file}`, "--", trackedEntry.file], pipeline.worktreeDir, signal);
-    if (actual.code !== 0) return failure(`checking interrupted tracked path ${trackedEntry.file}`, actual);
-    if (actual.stdout.trim() !== trackedEntry.sha) {
+    let actualSha: string;
+    if (isExpectedSymlink) {
+      // A symlink blob stores the link text. Reading or hashing its path would
+      // follow the target and may run content filters, so hash readlink bytes
+      // using Git's blob object framing directly.
+      let link: Buffer;
+      try { link = fs.readlinkSync(candidate, { encoding: "buffer" }); }
+      catch (error) { return { ok: false, error: `checking interrupted tracked path ${trackedEntry.file}: ${error instanceof Error ? error.message : "symlink read failed"}` }; }
+      actualSha = crypto.createHash("sha1").update(`blob ${link.byteLength}\0`).update(link).digest("hex");
+    } else {
+      const actual = await exec("git", ["hash-object", `--path=${trackedEntry.file}`, "--", trackedEntry.file], pipeline.worktreeDir, signal);
+      if (actual.code !== 0) return failure(`checking interrupted tracked path ${trackedEntry.file}`, actual);
+      actualSha = actual.stdout.trim();
+    }
+    if (actualSha !== trackedEntry.sha) {
       return { ok: false, error: `the interrupted pipeline checkout contains a modified tracked path (${trackedEntry.file}); preserve it, move it aside, then retry-stage` };
     }
   }

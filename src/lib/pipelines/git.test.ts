@@ -352,6 +352,83 @@ for (const interruption of ["timeout", "cancellation"] as const) {
   }, 10_000);
 }
 
+test("interrupted checkout recovery preserves whitespace paths and symlinks across target states", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-interrupted-checkout-paths-"));
+  const source = path.join(root, "source");
+  const marker = path.join(root, "smudge-started");
+  try {
+    fs.mkdirSync(source);
+    git(source, "init", "--initial-branch=main");
+    fs.writeFileSync(path.join(source, ".gitattributes"), "zzslow filter=slow\n");
+    fs.writeFileSync(path.join(source, "my file.txt"), "space path content\n");
+    fs.writeFileSync(path.join(source, "my\tfile.txt"), "tab path content\n");
+    fs.writeFileSync(path.join(source, "00-target"), "existing target\n");
+    fs.symlinkSync("00-target", path.join(source, "link-existing"));
+    fs.symlinkSync("zzz-target", path.join(source, "link-missing"));
+    fs.writeFileSync(path.join(source, "zzslow"), "slow checkout trigger\n");
+    fs.writeFileSync(path.join(source, "zzz-target"), "late target\n");
+    git(source, "add", ".");
+    git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "-m", "base");
+    git(source, "config", "filter.slow.smudge", `printf ready > '${marker}'; sleep 120; cat`);
+    git(source, "config", "filter.slow.required", "true");
+    const subject = { ...pipeline(), repoDir: source, worktreeDir: path.join(root, "lane"), baseBranch: "main", baseRef: git(source, "rev-parse", "HEAD") };
+    const interrupted = await provisionPipelineWorktreeAsync(subject, async (command, args, cwd, signal) => {
+      if (args[0] === "worktree" && args[1] === "add") return realProvisionExec("timeout", ["--signal=KILL", "0.5s", command, ...args], cwd, signal);
+      return realProvisionExec(command, args, cwd, signal);
+    });
+    expect(interrupted.ok).toBe(false);
+    expect(fs.existsSync(marker)).toBe(true);
+    expect(fs.existsSync(path.join(subject.worktreeDir, "zzz-target"))).toBe(false);
+    expect(fs.lstatSync(path.join(subject.worktreeDir, "link-missing")).isSymbolicLink()).toBe(true);
+    git(source, "config", "filter.slow.smudge", "cat");
+    git(source, "config", "filter.slow.clean", "cat");
+
+    const retry = await provisionPipelineWorktreeAsync(subject, realProvisionExec);
+
+    expect(retry).toEqual({ ok: true, sha: subject.baseRef, baseBranch: "main" });
+    expect(fs.readFileSync(path.join(subject.worktreeDir, "my file.txt"), "utf8")).toBe("space path content\n");
+    expect(fs.readFileSync(path.join(subject.worktreeDir, "my\tfile.txt"), "utf8")).toBe("tab path content\n");
+    expect(fs.readlinkSync(path.join(subject.worktreeDir, "link-existing"))).toBe("00-target");
+    expect(fs.readlinkSync(path.join(subject.worktreeDir, "link-missing"))).toBe("zzz-target");
+    expect(fs.readFileSync(path.join(subject.worktreeDir, "link-missing"), "utf8")).toBe("late target\n");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}, 10_000);
+
+test("interrupted checkout recovery rejects and preserves a changed tracked symlink", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-interrupted-checkout-symlink-"));
+  const source = path.join(root, "source");
+  const marker = path.join(root, "smudge-started");
+  try {
+    fs.mkdirSync(source);
+    git(source, "init", "--initial-branch=main");
+    fs.writeFileSync(path.join(source, ".gitattributes"), "zzslow filter=slow\n");
+    fs.writeFileSync(path.join(source, "target"), "target\n");
+    fs.symlinkSync("target", path.join(source, "link"));
+    fs.writeFileSync(path.join(source, "zzslow"), "slow checkout trigger\n");
+    git(source, "add", ".");
+    git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "-m", "base");
+    git(source, "config", "filter.slow.smudge", `printf ready > '${marker}'; sleep 120; cat`);
+    git(source, "config", "filter.slow.required", "true");
+    const subject = { ...pipeline(), repoDir: source, worktreeDir: path.join(root, "lane"), baseBranch: "main", baseRef: git(source, "rev-parse", "HEAD") };
+    const interrupted = await provisionPipelineWorktreeAsync(subject, async (command, args, cwd, signal) => {
+      if (args[0] === "worktree" && args[1] === "add") return realProvisionExec("timeout", ["--signal=KILL", "0.5s", command, ...args], cwd, signal);
+      return realProvisionExec(command, args, cwd, signal);
+    });
+    expect(interrupted.ok).toBe(false);
+    expect(fs.existsSync(marker)).toBe(true);
+    fs.unlinkSync(path.join(subject.worktreeDir, "link"));
+    fs.symlinkSync("changed-target", path.join(subject.worktreeDir, "link"));
+    git(source, "config", "filter.slow.smudge", "cat");
+    git(source, "config", "filter.slow.clean", "cat");
+
+    const retry = await provisionPipelineWorktreeAsync(subject, realProvisionExec);
+
+    expect(retry).toMatchObject({ ok: false, error: "the interrupted pipeline checkout contains a modified tracked path (link); preserve it, move it aside, then retry-stage" });
+    expect(fs.readlinkSync(path.join(subject.worktreeDir, "link"))).toBe("changed-target");
+    expect(git(source, "worktree", "list", "--porcelain")).toContain("locked initializing");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}, 10_000);
+
 test("async adoption preserves untracked files and edits made after its safety scan", async () => {
   const source = path.join(publicationState, "source");
   fs.mkdirSync(source);
