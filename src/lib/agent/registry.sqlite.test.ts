@@ -2166,3 +2166,60 @@ test("a pre-note history imported into SQLite keeps its compacted key unknown", 
   const born = restarted.ensureConversation("codex", "/sessions/sqlite-born-after.jsonl", "default");
   expect(restarted.deliveryAdmissionForKey(born.id, "never-used-key")).toMatchObject({ outcome: "not-executed" });
 });
+
+/* #1974 part 1: under Bun 1.4.0 a multi-statement `exec` swallows a runtime
+   fault, so a migration block committed its first statements and set its
+   marker anyway. Each block is now one statement per run, so a fault throws
+   and rolls the whole block back. */
+test("a runtime fault inside a startup migration rolls the whole block back and throws", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "registry-migration-atomic-"));
+  const filename = path.join(directory, "registry.sqlite");
+  const seed = new AgentRegistry(path.join(directory, "seed.json"), undefined, undefined, { sqliteMode: "off" });
+  seed.ensureConversation("codex", "/sessions/migration-atomic.jsonl", null);
+  const initial = seed.snapshot();
+  try {
+    new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry }).close();
+    const raw = new Database(filename);
+    const triggers = () => raw.query<{ name: string; sql: string }, []>(
+      "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'registry_paths_%' ORDER BY name").all();
+    const meta = (key: string) => raw.query<{ value: string }, [string]>("SELECT value FROM registry_meta WHERE key = ?").get(key)?.value ?? null;
+    const paths = () => raw.query("SELECT path, conversation_id FROM registry_conversation_paths ORDER BY path").all();
+
+    // The trigger migration: its marker write faults after the triggers were replaced.
+    raw.run("DROP TRIGGER registry_paths_delete");
+    raw.run(`CREATE TRIGGER registry_paths_delete AFTER DELETE ON registry_rows WHEN OLD.collection = 'conversations' BEGIN
+      DELETE FROM registry_conversation_paths WHERE conversation_id = OLD.row_key AND 'legacy' = 'legacy';
+    END`);
+    raw.run("UPDATE registry_meta SET value = '1' WHERE key = 'conversation_paths_trigger_version'");
+    raw.run(`CREATE TRIGGER fault_trigger_marker BEFORE UPDATE ON registry_meta WHEN NEW.key = 'conversation_paths_trigger_version' BEGIN
+      SELECT RAISE(ABORT, 'injected marker fault');
+    END`);
+    const triggersBefore = triggers();
+    expect(() => new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry }))
+      .toThrow("injected marker fault");
+    expect(triggers()).toEqual(triggersBefore);
+    expect(meta("conversation_paths_trigger_version")).toBe("1");
+    raw.run("DROP TRIGGER fault_trigger_marker");
+    raw.run("UPDATE registry_meta SET value = '2' WHERE key = 'conversation_paths_trigger_version'");
+
+    // The path backfill: an intermediate statement faults before the marker.
+    raw.run("DELETE FROM registry_conversation_paths");
+    raw.run("DELETE FROM registry_meta WHERE key = 'conversation_paths_ready'");
+    raw.run(`CREATE TRIGGER fault_path_backfill BEFORE INSERT ON registry_conversation_paths BEGIN
+      SELECT RAISE(ABORT, 'injected backfill fault');
+    END`);
+    expect(() => new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry }))
+      .toThrow("injected backfill fault");
+    expect(meta("conversation_paths_ready")).toBeNull();
+    expect(paths()).toEqual([]);
+    raw.run("DROP TRIGGER fault_path_backfill");
+
+    const reopened = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry });
+    reopened.close();
+    expect(meta("conversation_paths_ready")).toBe("1");
+    expect(paths()).not.toEqual([]);
+    raw.close();
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

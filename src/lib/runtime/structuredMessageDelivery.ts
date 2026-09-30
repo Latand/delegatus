@@ -33,7 +33,7 @@ import {
   type RuntimeSession,
 } from "./contracts";
 import { republishStructuredDeliveryHost } from "./structuredDeliveryController";
-import { recoverDeadStructuredConversation } from "./structuredRecovery";
+import { recoverDeadStructuredConversation, StructuredResumeUnpublishedError } from "./structuredRecovery";
 import { runtimeImageCapability, runtimeImageRefsForUploads, runtimeImageStore, type RuntimeImageUpload } from "./runtimeImageStore";
 import { admitRuntimeImagePayload } from "./runtimeImageAdmission";
 import {
@@ -88,7 +88,7 @@ export type StructuredMessageResult =
      Without it a hold was the one acceptance a caller could never ask about
      afterwards, which put `queued` back at the end of the story. */
   | { ok: true; structured: true; target: string | null; outcome: "held"; operationId: string; spawned?: boolean }
-  | { ok: false; structured: true; outcome: "failed"; error: string; status: number; operationId?: string; receipt?: RuntimeOperationReceipt; successorConversationId?: string; transportUncertain?: true; code?: string; seatConversationId?: string };
+  | { ok: false; structured: true; outcome: "failed"; error: string; status: number; operationId?: string; receipt?: RuntimeOperationReceipt; successorConversationId?: string; transportUncertain?: true; code?: string; seatConversationId?: string; admission?: "refused" };
 
 export interface StructuredMessageDependencies {
   /** The actuation section a caller already holds for this conversation (the migration drain), handed down
@@ -142,6 +142,8 @@ export interface HeldStructuredMessageRequest {
   text: string;
   imageRefs?: StructuredImageRef[];
   command?: HeldDeliveryCommand;
+  /** The coordinator is reconciling an attempt that may have reached the host. */
+  reconcileUncertain?: boolean;
 }
 
 export interface HeldStructuredMessageDependencies {
@@ -155,26 +157,50 @@ export interface HeldStructuredMessageDependencies {
   recover?: typeof recoverDeadStructuredConversation;
 }
 
-export type HeldStructuredMessageOutcome = "delivered" | "failed" | "delivery-uncertain" | "held" | null;
+/** A held delivery that never reached dispatch, left queued with the reason
+    (#1974). The drain retries it as unactuated and fails it, naming this
+    cause, once it has waited out its bound. */
+export interface HeldForRetry {
+  outcome: "held";
+  cause: string;
+}
 
-function ownershipUnavailable(condition: ConversationDeliverabilityCondition = "synchronizing"): StructuredMessageResult {
-  return {
+export type HeldStructuredMessageOutcome = "delivered" | "failed" | "delivery-uncertain" | "held" | HeldForRetry | null;
+
+function heldForRetry(cause: string): HeldForRetry {
+  return { outcome: "held", cause };
+}
+
+/**
+ * Marks a refusal given before anything was reserved or dispatched (#2020).
+ *
+ * Nothing under the send's key exists when one of these answers, so the
+ * caller may record the send as not executed and say why. Without the mark a
+ * 503 with no operation id reads as "may have run", and every later lookup of
+ * the send answered `outcome_unknown` for ever.
+ */
+function refusedBeforeReservation<T extends Extract<StructuredMessageResult, { ok: false }>>(result: T): T {
+  return { ...result, admission: "refused" };
+}
+
+function ownershipUnavailable(condition: ConversationDeliverabilityCondition = "synchronizing"): Extract<StructuredMessageResult, { ok: false }> {
+  return refusedBeforeReservation({
     ok: false,
     structured: true,
     outcome: "failed",
     error: deliverabilityFailureMessage({ condition }),
     status: 503,
-  };
+  });
 }
 
 function legacyCommandUnavailable(): StructuredMessageResult {
-  return {
+  return refusedBeforeReservation({
     ok: false,
     structured: true,
     outcome: "failed",
     error: "legacy delivery cannot preserve structured command semantics",
     status: 409,
-  };
+  });
 }
 
 /** A send addressed to a terminally superseded round (issue #383) never forks
@@ -184,14 +210,14 @@ function supersededRejection(
   conversation: Pick<RegistryConversation, "id" | "supersededBy"> | null,
 ): StructuredMessageResult | null {
   if (!conversation?.supersededBy) return null;
-  return {
+  return refusedBeforeReservation({
     ok: false,
     structured: true,
     outcome: "failed",
     error: "superseded",
     status: 409,
     successorConversationId: registry.supersedenceChainTail(conversation.id),
-  };
+  });
 }
 
 function requiresStructuredCommand(request: StructuredMessageRequest): boolean {
@@ -244,13 +270,13 @@ function deliveryFailure(error: unknown): Extract<StructuredMessageResult, { ok:
  */
 function refusedIdempotencyKey(key: string): Extract<StructuredMessageResult, { ok: false }> | null {
   if (runtimeIdempotencyKeyAdmissible(key)) return null;
-  return {
+  return refusedBeforeReservation({
     ok: false,
     structured: true,
     outcome: "failed",
     error: `clientMessageId is longer than the ${RUNTIME_IDEMPOTENCY_KEY_LIMIT} characters the runtime journal admits, so no send was reserved`,
     status: 400,
-  };
+  });
 }
 
 function commandInput(request: StructuredMessageRequest) {
@@ -299,14 +325,19 @@ function persistedCurrentOwner(
 function heldOutcomeDuringRuntimeSynchronization(
   request: HeldStructuredMessageRequest,
   registry: AgentRegistry,
+  cause: string,
 ): HeldStructuredMessageOutcome {
+  // A failed read while reconciling a command that may already have reached
+  // the journal cannot authorize another attempt. Newly assigned rows have
+  // not dispatched yet and must keep a reason-bearing bounded deferral.
+  if (request.reconcileUncertain) return "delivery-uncertain";
   const owner = persistedCurrentOwner(request, registry);
-  // This path runs before command dispatch. Let the coordinator requeue a
-  // newly claimed attempt; when reconciling an older uncertain attempt it
-  // retains that uncertainty instead of treating a failed read as a retry.
-  if (owner?.kind === "structured") return "held";
-  if (owner?.kind !== "legacy") return "delivery-uncertain";
-  return requiresStructuredHeldCommand(request) ? "failed" : null;
+  // This path runs before command dispatch. Legacy ownership still belongs to
+  // its fallback path; every structured or unresolved owner gets a bounded
+  // retry that retains the runtime-read cause.
+  if (owner?.kind === "legacy") return requiresStructuredHeldCommand(request) ? "failed" : null;
+  const ownerHint = owner?.kind === "structured" ? "structured runtime owner is synchronizing" : "runtime owner is unavailable";
+  return heldForRetry(`${ownerHint}: ${cause}`);
 }
 
 /**
@@ -370,13 +401,13 @@ async function holdDuringRuntimeSynchronization(
    * runtime is reachable.
    */
   if (request.kind === "inject") {
-    return {
+    return refusedBeforeReservation({
       ok: false,
       structured: true,
       outcome: "failed",
       error: "structured delivery ownership is unavailable; injected context cannot be held for a later generation",
       status: 503,
-    };
+    });
   }
   /* The whole message is held, photo included. This used to be a flat 409 —
      "structured host image delivery is unavailable" — because publishing blobs
@@ -389,13 +420,17 @@ async function holdDuringRuntimeSynchronization(
   const rawImages = admission.rawImages ?? [];
   const suppliedRefs = request.imageRefs ?? [];
   if (rawImages.length > 0 && suppliedRefs.length > 0) {
-    return deliveryFailure(new Error("structured image payload is ambiguous"));
+    return refusedBeforeReservation(deliveryFailure(new Error("structured image payload is ambiguous")));
   }
   if (request.hasImages && rawImages.length === 0 && suppliedRefs.length === 0) {
-    return { ok: false, structured: true, outcome: "failed", error: "structured image payload is unavailable", status: 409 };
+    return refusedBeforeReservation({ ok: false, structured: true, outcome: "failed", error: "structured image payload is unavailable", status: 409 });
   }
   try {
     assertStructuredTextEnvelope(request.text);
+  } catch (error) {
+    return refusedBeforeReservation(deliveryFailure(error));
+  }
+  try {
     const idempotencyKey = request.clientMessageId?.trim() || `queue_${crypto.randomUUID()}`;
     const overlong = refusedIdempotencyKey(idempotencyKey);
     if (overlong) return overlong;
@@ -678,21 +713,35 @@ async function recoverReclaimedMessage(
       client,
     });
   } catch (error) {
+    const failure = `${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : String(error)}`;
+    if (error instanceof StructuredResumeUnpublishedError) {
+      const settled = registry.terminalizeHeldDelivery(reservation.id, failure);
+      return {
+        ok: false,
+        structured: true,
+        outcome: "failed",
+        error: settled.error ?? failure,
+        status: 503,
+        operationId: admitted.operationId,
+      };
+    }
+    requestDeliveryDrain(dependencies.kick ?? kickStructuredDeliveryQueue);
     return {
-      ok: false,
+      ok: true,
       structured: true,
-      outcome: "failed",
-      error: `${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : String(error)}`,
-      status: 503,
+      target: null,
+      outcome: "held",
       operationId: admitted.operationId,
     };
   }
   if (!recovered) {
+    const failure = deliverabilityFailureMessage({ condition: "reclaimed" });
+    const settled = registry.terminalizeHeldDelivery(reservation.id, failure);
     return {
       ok: false,
       structured: true,
       outcome: "failed",
-      error: deliverabilityFailureMessage({ condition: "reclaimed" }),
+      error: settled.error ?? failure,
       status: 503,
       operationId: admitted.operationId,
     };
@@ -717,20 +766,20 @@ export async function deliverHeldStructuredMessage(
   const registry = (dependencies.registry ?? agentRegistry)();
   const client = (dependencies.client ?? runtimeHostClient)();
   if (!client) {
-    return heldOutcomeDuringRuntimeSynchronization(request, registry);
+    return heldOutcomeDuringRuntimeSynchronization(request, registry, "runtime host client is unavailable");
   }
   let session: RuntimeSession | null;
   try {
     session = await readRuntimeSession(client, { conversationId: request.conversationId ?? undefined, artifactPath: request.path || undefined });
   } catch (error) {
     console.error("[structured delivery] runtime session read failed", error);
-    return heldOutcomeDuringRuntimeSynchronization(request, registry);
+    return heldOutcomeDuringRuntimeSynchronization(request, registry, error instanceof Error ? error.message : String(error));
   }
   recordStructuredRuntimeRecovery(session, dependencies.startupRecovered ?? markStructuredRuntimeSessionRecovered);
   if (!session) {
     const owner = persistedCurrentOwner(request, registry);
     if (owner?.kind === "legacy") {
-      return heldOutcomeDuringRuntimeSynchronization(request, registry);
+      return heldOutcomeDuringRuntimeSynchronization(request, registry, "runtime session is unavailable");
     }
     const deliverability = conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
       conversationId: request.conversationId,
@@ -738,11 +787,14 @@ export async function deliverHeldStructuredMessage(
     });
     /* A resume already publishing ownership keeps this reservation held. A
        second recovery would race the first host before either one could own
-       the operation. Only the durable reclaimed condition starts recovery. */
-    if (deliverability.condition === "synchronizing" || deliverability.condition === "deliverable") {
-      return "held";
-    }
-    if (deliverability.condition !== "reclaimed") return "delivery-uncertain";
+       the operation. Only the durable reclaimed condition starts recovery.
+
+       Every return from here to `client.command` below is made before
+       anything was dispatched, so the reservation goes back to the queue with
+       its message, attachments and operation id, and the reason (#1974). It
+       used to be recorded `delivery-uncertain`, which settlement must treat
+       as possibly executed, for a message that provably never left. */
+    if (deliverability.condition !== "reclaimed") return heldForRetry(deliverability.reason);
     try {
       const recovered = await (dependencies.recover ?? recoverDeadStructuredConversation)({
         path: request.path,
@@ -754,9 +806,9 @@ export async function deliverHeldStructuredMessage(
           void (dependencies.kick ?? kickStructuredDeliveryQueue)();
         },
       });
-      return recovered ? "held" : "delivery-uncertain";
-    } catch {
-      return "delivery-uncertain";
+      return recovered ? "held" : heldForRetry(deliverabilityFailureMessage({ condition: "reclaimed" }));
+    } catch (error) {
+      return heldForRetry(`${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   try {
@@ -766,12 +818,14 @@ export async function deliverHeldStructuredMessage(
       dependencies.republish ?? republishStructuredDeliveryHost,
     );
     session = refreshed.session;
-    if (refreshed.republished && (session.host === "dead" || session.host === "unhosted")) return "delivery-uncertain";
-  } catch {
-    return "delivery-uncertain";
+    if (refreshed.republished && (session.host === "dead" || session.host === "unhosted")) {
+      return heldForRetry("the recipient's host was republished without a live process");
+    }
+  } catch (error) {
+    return heldForRetry(`the recipient's host could not be made ready: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (session.hostKind === "tmux-legacy") return requiresStructuredHeldCommand(request) ? "failed" : null;
-  if (!isStructuredHostKind(session.hostKind)) return "delivery-uncertain";
+  if (!isStructuredHostKind(session.hostKind)) return heldForRetry("the recipient's runtime session is not a structured host");
   try {
     const refs = request.imageRefs ?? [];
     const imageCapability = session.capabilities.imageInput
@@ -829,11 +883,11 @@ export async function enqueueStructuredMessage(
       && request.origin?.role === RECOVERY_NOTICE_ORIGIN.role
       && isInterruptionObligationId(request.clientMessageId),
   });
-  if (deputyRefusal) return { ok: false, structured: true, outcome: "failed", ...deputyRefusal };
+  if (deputyRefusal) return refusedBeforeReservation({ ok: false, structured: true, outcome: "failed", ...deputyRefusal });
   if (!(dependencies.enabled ?? structuredHostsEnabled)()) return null;
   const imageAdmission = admitRuntimeImagePayload({ images: request.images ?? [] });
   if (imageAdmission.error) {
-    return { ok: false, structured: true, outcome: "failed", error: imageAdmission.error.error, status: imageAdmission.error.status };
+    return refusedBeforeReservation({ ok: false, structured: true, outcome: "failed", error: imageAdmission.error.error, status: imageAdmission.error.status });
   }
   const rawImages = imageAdmission.images;
   const registry = (dependencies.registry ?? agentRegistry)();
@@ -895,15 +949,15 @@ export async function enqueueStructuredMessage(
   try {
     assertStructuredTextEnvelope(request.text);
   } catch (error) {
-    return deliveryFailure(error);
+    return refusedBeforeReservation(deliveryFailure(error));
   }
   const suppliedRefs = request.imageRefs ?? [];
   const wantsImages = request.hasImages === true || rawImages.length > 0 || suppliedRefs.length > 0;
   if (request.hasImages && rawImages.length === 0 && suppliedRefs.length === 0) {
-    return { ok: false, structured: true, outcome: "failed", error: "structured image payload is unavailable", status: 409 };
+    return refusedBeforeReservation({ ok: false, structured: true, outcome: "failed", error: "structured image payload is unavailable", status: 409 });
   }
   if (rawImages.length > 0 && suppliedRefs.length > 0) {
-    return deliveryFailure(new Error("structured image payload is ambiguous"));
+    return refusedBeforeReservation(deliveryFailure(new Error("structured image payload is ambiguous")));
   }
   if (!session.conversationId.startsWith("conversation_")) return ownershipUnavailable();
   /* The superseded guard runs BEFORE dead-host recovery below: an implicit
@@ -971,13 +1025,13 @@ export async function enqueueStructuredMessage(
    * simply inject again once the switch has landed.
    */
   if (request.kind === "inject" && deliveryFence(conversation) === "held") {
-    return {
+    return refusedBeforeReservation({
       ok: false,
       structured: true,
       outcome: "failed",
       error: "an account switch is pending for this conversation; injected context cannot be held across it",
       status: 409,
-    };
+    });
   }
   let migrationOwnsSend = deliveryFence(conversation) === "held";
   /* Belt and braces for issue #1028: a send arriving while a switch is pending
@@ -1042,7 +1096,14 @@ export async function enqueueStructuredMessage(
       );
       session = refreshed.session;
     } catch (error) {
-      return deliveryFailure(error);
+      /* A transport read can fail after the dead host was republished. Keep
+         the known dead projection and continue into durable reservation plus
+         bounded recovery, so an original-key lookup can find the operation.
+         A deterministic refusal before admission closes the MCP receipt with
+         its actual reason instead of leaving it unknown forever. */
+      if (!isRuntimeHostTransportFailure(error)) {
+        return refusedBeforeReservation(deliveryFailure(error));
+      }
     }
   }
   const recoveryRequired = !migrationOwnsSend
@@ -1133,20 +1194,42 @@ export async function enqueueStructuredMessage(
         conversationId: session.conversationId as ViewerConversationId,
       }, { registry, client });
     } catch (error) {
+      const failure = `${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : "structured host recovery failed"}`;
+      if (recoveryReservation && error instanceof StructuredResumeUnpublishedError) {
+        const settled = registry.terminalizeHeldDelivery(recoveryReservation.id, failure);
+        return {
+          ok: false,
+          structured: true,
+          outcome: "failed",
+          error: settled.error ?? failure,
+          status: 503,
+          operationId: recoveryReservation.command.operationId,
+        };
+      }
+      if (!recoveryReservation) return ownershipUnavailable("reclaimed");
+      requestDeliveryDrain(dependencies.kick ?? kickStructuredDeliveryQueue);
+      return {
+        ok: true,
+        structured: true,
+        target: null,
+        outcome: "held",
+        operationId: recoveryReservation.command.operationId,
+      };
+    }
+    if (!recovered) {
+      /* Past the reservation: a recovery ran, so this is no pre-admission refusal. */
+      const failure = deliverabilityFailureMessage({ condition: "reclaimed" });
+      const settled = recoveryReservation
+        ? registry.terminalizeHeldDelivery(recoveryReservation.id, failure)
+        : null;
       return {
         ok: false,
         structured: true,
         outcome: "failed",
-        error: `${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : "structured host recovery failed"}`,
+        error: settled?.error ?? failure,
         status: 503,
         ...(recoveryReservation ? { operationId: recoveryReservation.command.operationId } : {}),
       };
-    }
-    if (!recovered) {
-      const failure = ownershipUnavailable("reclaimed");
-      return recoveryReservation
-        ? { ...failure, operationId: recoveryReservation.command.operationId }
-        : failure;
     }
     recoveredHost = recovered.spawned;
     try {

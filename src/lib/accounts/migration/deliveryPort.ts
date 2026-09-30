@@ -32,7 +32,7 @@ export function createMigrationDeliveryPort(
     }, lease ? { actuationLease: lease } : {});
     return migrationDeliveryOutcome(result);
   });
-  const deliverStructured = ({ delivery, path, clientMessageId }: HeldDeliveryInput) => structuredDelivery({
+  const deliverStructured = ({ delivery, path, clientMessageId }: HeldDeliveryInput, reconcileUncertain = false) => structuredDelivery({
     conversationId: delivery.conversationId,
     runtimeConversationId: delivery.runtimeConversationId,
     path,
@@ -40,6 +40,7 @@ export function createMigrationDeliveryPort(
     clientMessageId,
     text: delivery.text,
     command: delivery.command,
+    ...(reconcileUncertain ? { reconcileUncertain: true } : {}),
     ...(delivery.runtimeImages.length ? { imageRefs: delivery.runtimeImages } : {}),
   });
   return {
@@ -48,7 +49,7 @@ export function createMigrationDeliveryPort(
       return outcome ?? legacyDelivery(input);
     },
     async reconcileUncertain(input) {
-      return await deliverStructured(input) ?? "delivery-uncertain";
+      return await deliverStructured(input, true) ?? "delivery-uncertain";
     },
   };
 }

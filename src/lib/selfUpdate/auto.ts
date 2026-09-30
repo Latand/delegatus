@@ -18,10 +18,22 @@ export interface AutoPending {
   from: string | null;
   target: string;
 }
+/** Who switched automatic updates: the operator from the Update dialog or
+    from their own agent session, or the designated orchestrator seat through
+    the `auto_updates` MCP tool. `conversationId` names the session that
+    called the tool, and is null for the dialog. */
+export interface AutoWriter {
+  kind: "operator" | "seat";
+  conversationId: string | null;
+  via: "dialog" | "mcp";
+}
+export const DIALOG_WRITER: AutoWriter = { kind: "operator", conversationId: null, via: "dialog" };
 export interface AutoState {
   version: 1;
   enabled: boolean;
   changedAt: string | null;
+  /** Who made the change at `changedAt`; null before the first recorded one. */
+  changedBy: AutoWriter | null;
   off: { at: string; target: string; stage: "build" | "deploy" | "restart-web" | "restart-host"; reason: string } | null;
   green: Record<string, GreenVerdict>;
   waitingSince: string | null;
@@ -45,9 +57,11 @@ export interface AutoView {
   blockers: QuietBlockers | null;
   waitingSince: string | null;
   longWait: boolean;
+  changedAt?: string | null;
+  changedBy?: AutoWriter | null;
 }
 export function initialAuto(): AutoState {
-  return { version: 1, enabled: false, changedAt: null, off: null, green: {}, waitingSince: null, waitingTarget: null, lastBlockers: null, quietSince: null, noticeAt: null, pending: null, managedPending: null, rollbackPointer: null, rollbackCaptured: false };
+  return { version: 1, enabled: false, changedAt: null, changedBy: null, off: null, green: {}, waitingSince: null, waitingTarget: null, lastBlockers: null, quietSince: null, noticeAt: null, pending: null, managedPending: null, rollbackPointer: null, rollbackCaptured: false };
 }
 export function readAuto(file: string): AutoState {
   try {
@@ -59,8 +73,13 @@ export function writeAuto(file: string, value: AutoState): void {
   mkdirSync(dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.tmp`;
   const { pending: _pending, rollbackPointer: _rollbackPointer, rollbackCaptured: _rollbackCaptured, ...setting } = value;
-  writeFileSync(temporary, `${JSON.stringify(setting)}\n`, { mode: 0o600 });
-  renameSync(temporary, file);
+  try {
+    writeFileSync(temporary, `${JSON.stringify(setting)}\n`, { mode: 0o600 });
+    renameSync(temporary, file);
+  } catch (error) {
+    try { rmSync(temporary, { force: true }); } catch { /* preserve the write failure */ }
+    throw error;
+  }
 }
 /** Persist the intent before the launcher sees the request. */
 export function requestAutoRestart(record: LauncherRecord, role: LauncherRole, target: string, rollbackPointer: string | null, now: number, gateId: string, persist: (pending: AutoPending) => void): AutoPending {

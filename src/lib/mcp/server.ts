@@ -92,6 +92,7 @@ export const MCP_TOOL_NAMES = [
   "seat_tick_settings",
   "account_project_binding",
   "role_presets",
+  "auto_updates",
   "account_limits",
   "telegram_bot_chats",
   "telegram_bot_send",
@@ -167,6 +168,11 @@ const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
      receipt has to outlive this process either way: a replayed clientRequestId
      must answer with what the first call recorded rather than write again. */
   "role_presets",
+  /* Switches automatic updates when it carries `enabled`, recorded with its
+     writer in the Update dialog's history; a read changes nothing, but a
+     replayed clientRequestId must answer with what the first call recorded
+     rather than switch and record a second time. */
+  "auto_updates",
   /* Posts into a Telegram chat. A replayed clientRequestId must answer with
      the message ids the first call posted, never post a second time. */
   "telegram_bot_send",
@@ -2233,9 +2239,14 @@ export class McpDispatchUncertainError extends Error {
  * not-executed.
  */
 export class McpDispatchNotExecutedError extends Error {
-  constructor(message: string) {
+  /** What the server said when it refused before doing anything, kept on
+      the settled answer. */
+  readonly details: McpToolPayload;
+
+  constructor(message: string, details: McpToolPayload = {}) {
     super(message);
     this.name = "McpDispatchNotExecutedError";
+    this.details = details;
   }
 }
 
@@ -2764,7 +2775,7 @@ export function createMcpToolService(
              Only affirmative pre-dispatch proof closes an attempt. HTTP
              status, error text, and admitted IDs cannot establish termination. */
           outcome = error instanceof DeadlineExceededError ? "deadline" : "failure";
-          const refusal = error instanceof McpToolRefusal ? error.details : {};
+          const refusal = error instanceof McpToolRefusal || error instanceof McpDispatchNotExecutedError ? error.details : {};
           const admitted = typeof refusal.operationId === "string" || typeof refusal.launchId === "string";
           const proven = !admitted && (
             error instanceof McpDispatchNotExecutedError
@@ -3103,6 +3114,13 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Only the designated orchestrator seat and the operator's own session write; any other caller reads, and its write is refused with `role_presets_write_refused` before anything else is checked.",
     "The whole write is refused, and nothing is stored, when a row names an engine, model or effort outside the launch catalogue (`role_presets_invalid`, with the offending `violations` and `choices`) or when `expectedRevision` is not the current revision (`role_presets_stale_revision`, carrying the current registry to resend against). `expectedRevision` is optional.",
     "A write answers `{changed, revision, previousRevision, health, rows}`, each row as `{row, before, after}`. The revision check, the write and its audit record are one step under a lock shared by every process that writes the registry: every write is appended, with who made it, to `role-presets-audit.jsonl` beside role-presets.json, and a write whose record cannot be stored is undone and refused with `role_presets_audit_unavailable`. A change reaches launches that start after it; running agents keep the runtime they started on.",
+  ].join(" "),
+  auto_updates: [
+    "Read — and switch on or off — automatic updates of the Delegatus install that serves this MCP: the same state and the same switch as the Update dialog.",
+    "Enabling means: Delegatus follows `main`; once a newer merge's required checks are green it waits for a quiet window (no agent turns or pipeline stages running, the operator not active, no update in progress, enough free memory) and then deploys that revision by itself. A deployment that fails rolls back to the running release, and automatic updates then switch themselves off and say why (`off`) until someone turns them on again.",
+    "Called without `enabled` it is a read, open to every caller: `mode`, `availability` (`available`, or why this install cannot update itself), `enabled`, `off` (when and why they switched themselves off), `phase`, `target`, `green`, `blockers` (what the quiet window is waiting on), `waitingSince`, `longWait`, `changedAt`/`changedBy` and the latest switches as `recentChanges`.",
+    "`enabled: true|false` writes, and answers the same view afterwards. Only the designated orchestrator seat of the Delegatus project and the operator's own session write; any other caller, a seat of another project and a seat's parallel self included, is refused with `auto_updates_write_refused` (with a `reason`) before anything changes. Turning them on where `availability` is not `available` is refused with `auto_updates_unavailable`.",
+    "Every write is recorded with who made it and when, on the setting and in the Update dialog's history. Idempotent by clientRequestId.",
   ].join(" "),
   account_limits: "Read each account's last observed usage: per account `engine`, `accountId`, `active`, `fresh` (recent enough for the automatic switch to act on), `plan`, the `session` and `weekly` windows and every metered model tier as {usedPercent, resetsAt}, and `observedAt`. Narrow with `engine` and `accountId`. A read of the durable observations the accounts panel shows; it never asks a provider.",
   telegram_bot_chats: [
@@ -3887,6 +3905,11 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("The registry revision this change was made against; a stale one is refused with the current registry. Only with overrides."),
     detail: z.boolean().optional()
       .describe("true: a read also carries each role's shipped values, whether its prompt is overridden, and the launch choices. Ignored with overrides."),
+  }).passthrough(),
+  auto_updates: z.object({
+    clientRequestId: clientRequestIdSchema,
+    enabled: z.boolean().optional()
+      .describe("true turns automatic updates on, false turns them off. Omit to read the state."),
   }).passthrough(),
   account_limits: z.object({
     clientRequestId: clientRequestIdSchema,

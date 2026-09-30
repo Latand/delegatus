@@ -67,6 +67,9 @@ export interface DeliveryFailure {
   /** Set on a superseded-round rejection (issue #383): the live chain end the
       caller should redirect to instead of forking retired work. */
   successorConversationId?: string;
+  /** Set when the refusal came before anything was reserved or dispatched,
+      so the send provably did not happen (#2020). */
+  admission?: "refused";
 }
 
 /** A send or resume addressed to a terminally superseded round (issue #383)
@@ -84,6 +87,7 @@ function supersededRejection(
     error: "superseded",
     status: 409,
     successorConversationId: registry.supersedenceChainTail(conversation.id),
+    admission: "refused",
   };
 }
 

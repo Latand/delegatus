@@ -6570,6 +6570,74 @@ export class AgentRegistry {
     });
   }
 
+  /**
+   * Ends the publication marker a process-less launch left on its row (#2020).
+   *
+   * A headless flow reviewer is settled `starting` with `pendingAction:
+   * "spawn"` and no host, and nothing that watches hosts ever clears such a
+   * row: it read as `synchronizing` for good, so every message to the
+   * finished reviewer was refused. Applied only to the row this completed
+   * receipt settled, and only while that row names no host, no structured
+   * process and no claim. The row then reads `reclaimed`, and a later message
+   * resumes the reviewer's session like any other finished agent's.
+   */
+  endHostlessSpawn(launchId: string): boolean {
+    if (!this.hostlessSpawnMarker(this.readOnlySnapshot(), launchId)) return false;
+    return this.mutate((file) => {
+      const entry = this.hostlessSpawnMarker(file, launchId);
+      if (!entry) return false;
+      this.clearHostlessSpawnMarker(file, entry);
+      return true;
+    });
+  }
+
+  /**
+   * The startup half of {@link endHostlessSpawn}: rows that finished before
+   * the marker was ever cleared. `isRunning` answers for the process that
+   * launch started, so a reviewer still working keeps its fence: resuming it
+   * would put a second writer on the same session.
+   */
+  repairHostlessSpawnMarkers(isRunning: (launchId: string) => boolean): number {
+    const candidates = (file: RegistryFile) => Object.values(file.receipts)
+      .filter((receipt) => receipt.purpose === "launch" && receipt.transport === null)
+      .map((receipt) => receipt.launchId)
+      .filter((launchId) => this.hostlessSpawnMarker(file, launchId) !== null);
+    const pending = candidates(this.readOnlySnapshot()).filter((launchId) => !isRunning(launchId));
+    if (pending.length === 0) return 0;
+    const ended = new Set(pending);
+    return this.mutate((file) => {
+      let repaired = 0;
+      for (const launchId of candidates(file)) {
+        if (!ended.has(launchId)) continue;
+        this.clearHostlessSpawnMarker(file, this.hostlessSpawnMarker(file, launchId)!);
+        repaired += 1;
+      }
+      return repaired;
+    });
+  }
+
+  private hostlessSpawnMarker(file: RegistryFile, launchId: string): AgentRegistryEntry | null {
+    const receipt = file.receipts[launchId];
+    if (!receipt || receipt.state !== "completed" || receipt.transport !== null || !receipt.key) return null;
+    const entry = file.entries[sessionKeyId(receipt.key)];
+    if (!entry
+      || entry.pendingAction !== "spawn"
+      || entry.host !== null
+      || (entry.structuredHost !== null && entry.structuredHost !== undefined)
+      || entry.claimOwner !== null
+      || entry.artifactPath !== receipt.artifactPath) return null;
+    return entry;
+  }
+
+  private clearHostlessSpawnMarker(file: RegistryFile, entry: AgentRegistryEntry): void {
+    const keyId = sessionKeyId(entry.key);
+    const replacement = { ...entry, status: "dead" as const, pendingAction: null };
+    const changedHostPaths = activeHostPathsChangedByEntry(file, keyId, replacement);
+    const readinessBefore = migrationReadinessSignature(file, entry.key.engine, changedHostPaths);
+    Object.assign(entry, replacement, { updatedAt: now() });
+    advanceMigrationScopeRevision(file, entry.key.engine, readinessBefore, changedHostPaths);
+  }
+
   /** Clears an inactive structured row. Reconciliation callers supply their
       observed process and claim epoch so replacement rows fail the comparison
       inside the same registry mutation. */
@@ -8842,7 +8910,9 @@ export class AgentRegistry {
         && compareDeliveryAdmission(other, delivery) < 0)) return null;
       delivery.state = "delivery-uncertain";
       delivery.attempts += 1;
-      delivery.error = "delivery started; recovery requires an explicit outcome";
+      /* Keep the last proved pre-dispatch cause across another read attempt;
+         a command outcome below replaces it if dispatch actually proceeds. */
+      delivery.error ??= "delivery started; recovery requires an explicit outcome";
       syncDeliveryOperationOwnerState(file, delivery);
       if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
       return clone(delivery);
@@ -9150,8 +9220,16 @@ export class AgentRegistry {
     });
   }
 
-  requeueUnactuatedDelivery(id: string): HeldDelivery {
-    return this.placeDeliveryForRetry(id, true);
+  requeueUnactuatedDelivery(id: string, cause?: string): HeldDelivery {
+    return this.mutate((file) => {
+      const delivery = file.heldDeliveries[id];
+      if (!delivery) throw new Error("held delivery is unknown");
+      const retained = placeDeliveryForRetryInFile(file, delivery, true);
+      if (cause && (retained.state === "assigned" || retained.state === "held") && !retained.error) {
+        delivery.error = cause.slice(0, 240);
+      }
+      return clone(delivery);
+    }, { deliveryOnly: true });
   }
 
   private placeDeliveryForRetry(id: string, allowUncertain: boolean): HeldDelivery {
