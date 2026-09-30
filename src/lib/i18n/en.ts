@@ -4,6 +4,13 @@ import type { Dictionary } from ".";
    Plural entries use Intl.LDMLPluralRule forms; {name} placeholders are
    filled from t()'s params. uk.ts must mirror this key set. */
 export const en = {
+  "telemetry.settings": "Settings",
+  "telemetry.label": "Anonymous install ping",
+  "telemetry.locked": "Disabled by an environment variable.",
+  "telemetry.dismiss": "Got it",
+  "telemetry.close": "Close",
+  "telemetry.error": "Could not load or save the setting. Try again.",
+
   // Common, reused across components
   "common.serverUnavailable": "server unavailable",
   "common.loading": "loading…",

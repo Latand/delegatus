@@ -8,6 +8,7 @@ import net from "node:net";
 import { constants, homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { telemetryNotice } from "./telemetry-notice.mjs";
 import { agentStartupMessage } from "./agent-binaries.mjs";
 
 /* The checkout may be older than this file. No checkout sibling is linked
@@ -801,6 +802,7 @@ function printBanner(version, options, runtime, browser, debug) {
   console.log(browser === "opened" ? m.bannerOpened(url) : browser === "opening" ? m.bannerOpening(url) : m.bannerOpenUrl(url));
   console.log(m.bannerReads());
   console.log(agentStartupMessage(LANG));
+  console.log(telemetryNotice[LANG]);
   console.log(m.bannerStop());
   if (!debug) console.log(m.bannerDebug());
 }

@@ -9,7 +9,8 @@
     "run_worker_first": ["/api/*"]
   },
   "analytics_engine_datasets": [
-    { "binding": "SITE_EVENTS", "dataset": "site_events" }
+    { "binding": "SITE_EVENTS", "dataset": "site_events" },
+    { "binding": "INSTALLS", "dataset": "installs" }
   ],
   "routes": [
     { "pattern": "delegatus.org", "custom_domain": true },

@@ -4,6 +4,13 @@ import type { en } from "./en";
 /* Ukrainian mirror of en.ts. The `Record<keyof typeof en, …>` annotation fails
    the build if a key is missing or extra, keeping both locales in lockstep. */
 export const uk: Record<keyof typeof en, Message> = {
+  "telemetry.settings": "Налаштування",
+  "telemetry.label": "Анонімний пінг встановлення",
+  "telemetry.locked": "Вимкнено змінною середовища.",
+  "telemetry.dismiss": "Зрозуміло",
+  "telemetry.close": "Закрити",
+  "telemetry.error": "Не вдалося прочитати або зберегти налаштування. Спробуйте ще раз.",
+
   "common.serverUnavailable": "сервер недоступний",
   "common.loading": "завантаження…",
   "common.loadingCap": "Завантаження…",
