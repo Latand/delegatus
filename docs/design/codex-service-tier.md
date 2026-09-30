@@ -142,7 +142,7 @@ from the transcript instead.
 | role resolution | `spawnCommand.ts:348` → `resolveSpawnRole`, `src/lib/roles/registry.ts:195-215`; `explicitRuntime` at `registry.ts:213` | the role default is `role.value.config.serviceTier`. It applies only when `!explicitRuntime`, because the row's tier was chosen for the row's model. |
 | reasoning/tier validation | `spawnCommand.ts:390-394` `reasoningFromBody` (effort, fast) | replace the `fast` half with `codexLaunchTier(...)` (§3.1), called in the same place. It returns `{tier, source: "explicit"|"fast"|"role-default"|null}` or a 400 error: wrong engine, bad shape, `fast` and `serviceTier` disagreeing, or a tier with no resolved model. |
 | structured gate | `spawnCommand.ts:432-440` → `structuredSpawnGap`, `src/lib/runtime/spawnTransport.ts:52-54` | **delete** the `fast !== null` refusal and drop `fast` from the gap's request type |
-| request digest | `spawnCommand.ts:668-675` `requestDigestForAccount` | add `serviceTier: tier` so a replay with a different tier is a conflict and never adopts the other launch |
+| request digest | `spawnCommand.ts:668-675` `requestDigestForAccount` | add `serviceTier: tier` and its source when a tier is set (omit both for legacy no-tier identity) so a replay with a different tier is a conflict and never adopts the other launch |
 | account selection | `spawnCommand.ts:817-828` → `resolveHealthySpawnAccount`, `src/lib/accounts/manager.ts:66-143` (the Codex branch uses `selectProjectAccount` at `manager.ts:112-127`) | new optional argument `serviceTier: {id, model, required}`, applied as in §4 |
 | launch spec | `spawnCommand.ts:888-891` → `freshSpecFor`, `src/lib/agent/cli.ts:333`; `FreshSpecOptions.fast` at `cli.ts:178-180` | add `FreshSpecOptions.serviceTier?: string | null`. The Codex fresh spec writes `launchProfile.serviceTier` beside `fast` (`cli.ts:450`). The tmux command adds `-c service_tier=<id>` on the `cli.ts:437` line, replacing the `fast` mapping there when a tier is set. |
 | durable profile | `LaunchProfile`, `src/lib/accounts/migration/contracts.ts:56-60` | add `serviceTier?: string | null`. It is optional, so every stored generation still parses. |
@@ -160,10 +160,10 @@ from the transcript instead.
 | effective role | `EffectivePipelineRole = RoleConfig & …`, `types.ts:57-61` | gains `serviceTier?` through `RoleConfig` (§5). This is the resolved field, explicit or role default. |
 | create validation | shape checks at `src/lib/pipelines/engine.ts:5967-5971`; input built at `6022-6035`; `resolvePipelineRole`, `src/lib/pipelines/roles.ts:92-157` | shape check beside `effort`. The input copies `stage.serviceTier`. `resolvePipelineRole` resolves `serviceTier = stage value ?? (row engine/model unchanged ? row default : undefined)`, refuses a tier on a Claude stage, and sets `effectiveRole.serviceTier` plus `effectiveRole.serviceTierSource: "explicit" | "role-default"`. **An explicit stage tier is checked against the pool at create** (§4.3), so a create that can never launch is refused with the offered tiers named. |
 | draft snapshot | `draftStageInputs`, `engine.ts:6110-6125` | copy `serviceTier` like `effort` |
-| store | `isEffectiveRole` `src/lib/pipelines/store.ts:61-74`; `isStage` `store.ts:437-473` | accept an optional string `serviceTier` and `serviceTierSource`. `isStage` requires `stage.serviceTier === undefined || stage.serviceTier === effective.serviceTier ?? null`, the same consistency rule `effort` has at `store.ts:468`. |
+| store | `isEffectiveRole` `src/lib/pipelines/store.ts:61-74`; `isStage` `store.ts:437-473` | accept an optional string `serviceTier` and `serviceTierSource`. `isStage` requires `stage.serviceTier == null || stage.serviceTier === effective.serviceTier` (null/undefined inherit; only a non-null explicit value must equal the effective tier), the same consistency rule `effort` has at `store.ts:468`. |
 | launch | `spawnPipelineAgent`, `engine.ts:513-575`: `resolveProjectSpawnAfterLiveRead` at `522-531`, `freshSpecFor` at `540-549`, request digest at `567-575` | the tier-lacking accounts join `unavailableIds` (§4.2). A pinned `requestedAccountId` that lacks the tier refuses an explicit tier and drops a default one. `freshSpecFor(..., serviceTier)`. The digest adds `serviceTier`. |
 | host | same as §1.1 from "host options" on | same |
-| answer | `pipelineAcknowledgement` / `stageRuntime`, `src/lib/mcp/compactAnswers.ts:33-71` | `stageRuntime` returns `serviceTier` and `serviceTierSource`; the `stages[]` rows gain `serviceTier`; `runtimeLine` uses the label of §6 |
+| answer | `pipelineAcknowledgement` / `stageRuntime`, `src/lib/mcp/compactAnswers.ts:33-71` | `stageRuntime` returns `serviceTier` and `serviceTierSource`; the `stages[]` rows gain `serviceTier`; once launched, the runtime projection uses the attempt's actual tier and retains the preferred id for a visible fallback; `runtimeLine` uses the label of §6 |
 
 A stage's refusal at launch goes where every account refusal already goes: the
 throw from `spawnPipelineAgent` parks the stage with the reason on its record
@@ -239,7 +239,9 @@ make the override reach only the next unbound attempt.
   applying reconfigure retains the first stable snapshot as today.
 - **Account migration**: `src/lib/accounts/codexAppServer.ts:380-402` (the
   successor's `thread/resume`) and `migration/coordinator.ts:345` carry only
-  `fast`. The successor host resumes with the generation's `serviceTier`, and the
+  `fast`. The provider's direct successor-host adoption (`migration/provider.ts:346`)
+  also passes `launchServiceTier(input.profile)`; its standalone client resume
+  carries the exact profile tier. The successor host resumes with the generation's `serviceTier`, and the
   host-start check refuses it on a target account that lacks the tier. The
   migration then fails with the tier named, and the conversation stays on its
   source account. To move it, the operator picks Standard or Fast in the pill
@@ -249,15 +251,16 @@ make the override reach only the next unbound attempt.
 ## 2. Semantics
 
 **Value.** A `serviceTier` is a catalog tier id: lowercase, matching
-`^[a-z][a-z0-9_-]{0,31}$` (the bound `commands.ts:33` already uses). `"default"`
-is refused as a value, with "use `fast: false` for the standard tier", because no
-catalog lists it and one way to ask for standard is enough. `null` on a stage or
+`^[a-z][a-z0-9_-]{0,31}$` (the bound `commands.ts:33` already uses).
+The approved continuation admits `default` and `standard` as explicit
+standard-speed opt-outs; `standard` is translated to `default` at the Codex
+boundary. Neither needs a premium catalog offer. `null` on a stage or
 on override-stage means "inherit the role default"; on `spawn_agent`, `null` is
 the same as omitting it.
 
 **Resolution order, per launch** (first match wins):
 
-1. `serviceTier` from the call or the stage. **Required.**
+1. A non-null `serviceTier` from the call or the stage. **Required.** Null or undefined inherits the role tier. Explicit `default` or `standard` opts out of a role tier; `standard` is sent to Codex as `default`. These standard-speed aliases do not require a premium catalog offer.
 2. `fast: true` from the call, read as `priority`. **Required.** `fast: false`
    means standard: no tier is sent to the thread on the structured path, and the
    tmux flag stays as it is today.
@@ -268,12 +271,12 @@ the same as omitting it.
 
 **`fast` and `serviceTier` together.** `fast: true` with `serviceTier:
 "priority"` is accepted. `fast: true` with any other tier, or `fast: false` with
-any tier, is refused with 400: "fast and serviceTier disagree: fast:true is
+any non-standard tier, is refused with 400: "fast and serviceTier disagree: fast:true is
 serviceTier priority; send one of them". A call-level `fast` of either value
 replaces a role default.
 
 **`launchProfile.fast` stays meaningful.** It is written as the resolved tier's
-"fast-ness", `isFastTier(t) = t !== null && t !== "default"`, or as the caller's
+"fast-ness", `isFastTier(t) = t !== null && t !== "default" && t !== "standard"`, or as the caller's
 `fast` when no tier is set. Readers that compare `fast` (`structuredControls.ts:130-133`,
 the reconfigure `previousProfile` at `registry.ts:7433-7438`) retain their
 fast comparison. The rollback profile and its normalization additionally carry
@@ -485,7 +488,7 @@ with the three-account shape from the facts table: A and B `priority`, C
 
 | file | cases |
 |---|---|
-| `src/lib/accounts/codexServiceTiers.test.ts` (new) | reads `service_tiers[].id`; ignores `additional_speed_tiers`; missing file, bad JSON or absent model → `null`; `tierOffers` splits A/B/C correctly; `codexLaunchTier`: explicit, `fast: true` → priority, `fast: true`+`ultrafast` → error, `fast: false`+tier → error, `"default"` → error, Claude + tier → error, tier with no model → error, role default applied only when `roleDefaultApplies` |
+| `src/lib/accounts/codexServiceTiers.test.ts` (new) | reads `service_tiers[].id`; ignores `additional_speed_tiers`; missing file, bad JSON or absent model → `null`; `tierOffers` splits A/B/C correctly; `codexLaunchTier`: explicit, `fast: true` → priority, `fast: true`+`ultrafast` → error, `fast: false`+tier → error, `"default"`/`"standard"` → explicit standard speed, Claude + tier → error, tier with no model → error, role default applied only when `roleDefaultApplies` |
 | `src/lib/accounts/managerProjectBinding.test.ts` | direct launch, unbound project, required `ultrafast` → C even when routing points at A; named A + required → refusal naming C and `priority`; named A + preferred → A without the tier; C exhausted + required → exhausted refusal naming C; C exhausted + preferred → A or B without the tier; bound pool {A, B} + required → "no account in this project's pool offers" |
 | `src/lib/accounts/projectSelection.test.ts` | `unavailableIds` on an unbound `engine-default` project switches to a capacity pick among the rest (this pins the behaviour the design relies on) |
 | `src/app/api/spawn/route.test.ts` | `serviceTier` reaches `launchProfile.serviceTier` on the receipt; the request digest differs by tier; `fast: true` on the structured transport is admitted (the #239 refusal is gone) and records `priority`; 409 `service_tier_unavailable` before any receipt when the tier is not offered; the answer's `runtime` carries the tier |
@@ -495,7 +498,7 @@ with the three-account shape from the facts table: A and B `priority`, C
 | `src/lib/runtime/structuredSpawn.integration.test.ts` | the Codex host options carry `launchServiceTier(profile)`, for fresh and resumed launches |
 | `src/lib/pipelines/roles.test.ts` | explicit stage tier → `effectiveRole.serviceTier` with source `explicit`; role default applies only on the row's engine/model; Claude stage + tier → error |
 | `src/lib/pipelines/stageAccountBinding.test.ts` | stage launch: lacking accounts join `unavailableIds`; a pinned account without the tier parks the stage with the offered tiers named; a preferred tier falls back and launches without it |
-| `src/lib/pipelines/engine.test.ts` | create refuses an explicit tier that no account in the pool offers (violation on `stages[i].serviceTier`); override-stage sets it, clears it with `null`, and is refused on a stage that already ran an attempt |
+| `src/lib/pipelines/engine.test.ts` | create refuses an explicit tier that no account in the pool offers (violation on `stages[i].serviceTier`); override-stage sets it, inherits with `null`, opts out with `default`, and is refused on a stage that already ran an attempt |
 | `src/lib/pipelines/store.test.ts` or the existing store suite | `isStage` accepts a consistent `serviceTier` and refuses one that disagrees with `effectiveRole` |
 | `src/lib/mcp/schemaParity.test.ts` | the `create_pipeline` stage property list (`:685`) includes `serviceTier`; `spawn_agent` and `pipeline_action` publish `serviceTier`; a `spawn_agent` call with `serviceTier` reaches the binding unchanged |
 | `src/lib/mcp/compactAnswers.test.ts` | `runtimeLine` shows `/ultrafast` and the `(role default, if offered)` form |

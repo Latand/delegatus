@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { codexLaunchTier, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
 import { after, NextRequest, NextResponse } from "next/server";
 
 import { operatorLocale } from "@/lib/operator/settings";
@@ -288,7 +289,7 @@ export async function executeSpawnRequest(
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
-  let body: { engine?: unknown; model?: unknown; cwd?: unknown; prompt?: unknown; title?: unknown; images?: unknown; src?: unknown; parent?: unknown; parentConversationId?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown; clientAttemptId?: unknown; taskId?: unknown; role?: unknown; roleParams?: unknown; confirm?: unknown; reviews?: unknown; allowSubagents?: unknown; mcpServers?: unknown; plugins?: unknown; project?: unknown; supersedes?: unknown; launcherConversationId?: unknown; notifyLauncher?: unknown };
+  let body: { engine?: unknown; model?: unknown; cwd?: unknown; prompt?: unknown; title?: unknown; images?: unknown; src?: unknown; parent?: unknown; parentConversationId?: unknown; effort?: unknown; fast?: unknown; serviceTier?: unknown; accountId?: unknown; clientAttemptId?: unknown; taskId?: unknown; role?: unknown; roleParams?: unknown; confirm?: unknown; reviews?: unknown; allowSubagents?: unknown; mcpServers?: unknown; plugins?: unknown; project?: unknown; supersedes?: unknown; launcherConversationId?: unknown; notifyLauncher?: unknown };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -400,6 +401,11 @@ export async function executeSpawnRequest(
     if ("error" in validation) return NextResponse.json({ error: validation.error }, { status: 400 });
   }
 
+  const tierResolution = codexLaunchTier({ engine, model: selectedModel.model, fast: body.fast, serviceTier: body.serviceTier,
+    roleDefault: role.value?.config.serviceTier, roleDefaultApplies: !!role.value && !role.value.explicitRuntime });
+  if ("error" in tierResolution) return NextResponse.json({ error: tierResolution.error }, { status: 400 });
+  let launchTier = tierResolution.tier;
+
   const userPrompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   const prompt = roleSpawnPrompt(role.value, userPrompt);
   const { images, error: imageError } = collectImagePayloads(body);
@@ -436,7 +442,6 @@ export async function executeSpawnRequest(
       engine,
       model: selectedModel.model,
       hasImages: images.length > 0,
-      fast: reasoning.fast,
     }) ?? (engine === "copilot" ? (dependencies.copilotBinaryGap ?? copilotBinaryGap)() : null);
     if (gap) return NextResponse.json({ error: gap }, { status: 409 });
     /* The scaffold-composed prompt rides structured first-message delivery.
@@ -672,6 +677,7 @@ export async function executeSpawnRequest(
         model: selectedModel.model,
         effort: reasoning.effort,
         fast: reasoning.fast,
+        ...(tierResolution.tier ? { serviceTier: tierResolution.tier, serviceTierSource: tierResolution.source! } : {}),
         accountId,
         role: role.value?.role ?? null,
         title: launchTitle,
@@ -825,13 +831,14 @@ export async function executeSpawnRequest(
     try {
       account = existingAttempt && existingAttempt.accountId !== null && !(existingAttempt.accountPin && requestedAccountId)
         ? dependencies.resolveSpawnAccount(existingAttempt.engine, existingAttempt.accountId)
-        : await dependencies.resolveHealthySpawnAccount(engine, body.accountId, spawnProject, selectedModel.model);
+        : await dependencies.resolveHealthySpawnAccount(engine, body.accountId, spawnProject, selectedModel.model, launchTier ? { id: launchTier, model: selectedModel.model!, required: tierResolution.required } : undefined);
     } catch (error) {
       /* The record needs the operator, and until it gets them this launch
          selects nothing. A conflict, not a server fault: the request is well
          formed and the state it addresses is what is wrong — the same answer
          the reseat, the binding route and the task launch give for the same
          record, so one repair clears all of them. */
+      if (error instanceof CodexServiceTierUnavailableError) return NextResponse.json({ error: error.message, code: error.code }, { status: 409 });
       if (error instanceof AccountProjectBindingsUnreadableError) {
         return NextResponse.json({ error: error.message }, { status: 409 });
       }
@@ -870,6 +877,7 @@ export async function executeSpawnRequest(
     const queuedUntil = Number.isFinite(retryDeadline) && retryDeadline > Date.now()
       ? new Date(retryDeadline).toISOString()
       : null;
+    if (tierResolution.tier && account.serviceTier === null) launchTier = null;
     if (queuedUntil && requestedAccountId) {
       account = dependencies.resolveSpawnAccount(engine, requestedAccountId);
     }
@@ -877,6 +885,7 @@ export async function executeSpawnRequest(
     /* Idempotency binds the caller's requested account even when policy
        degrades that pin to a fallback account. A replay can therefore recover
        the admitted fallback while a changed pin still conflicts. */
+    if (existingAttempt) launchTier = existingAttempt.launchProfile.serviceTier ?? null;
     const digest = requestDigestForAccount(
       typeof body.accountId === "string" ? body.accountId : account.accountId,
       pinFallback || queuedUntil !== null,
@@ -888,7 +897,8 @@ export async function executeSpawnRequest(
       const specBase = freshSpecFor(engine, cwd, {
         model: selectedModel.model,
         effort: reasoning.effort,
-        fast: reasoning.fast,
+        fast: launchTier ? !["default", "standard"].includes(launchTier) : reasoning.fast,
+        serviceTier: launchTier,
         codexHome: engine === "codex" ? launchAccount.home : null,
         claudeConfigDir: engine === "claude" ? launchAccount.home : null,
         claudeProjectsDir: engine === "claude" ? launchAccount.transcriptRoot : null,
@@ -1045,13 +1055,15 @@ export async function executeSpawnRequest(
        visible, so a state directory that cannot be written to would otherwise
        let the crossing happen behind a perfectly ordinary spawn response. */
     /* A role launch states which model runs (docs/design/model-sizing-tiers.md §3). */
-    const runtime = role.value ? launchRuntimeLabel({
-      roleId: role.value.role,
-      variant: variantForParams(role.value.role, role.value.params),
+    const runtime = role.value || tierResolution.tier ? launchRuntimeLabel({
+      roleId: role.value?.role ?? null,
+      variant: variantForParams(role.value?.role, role.value?.params),
       engine,
       model: selectedModel.model,
       effort: reasoning.effort ?? null,
-      explicit: role.value.explicitRuntime,
+      explicit: role.value?.explicitRuntime ?? false,
+      serviceTier: launchTier,
+      preferredServiceTier: tierResolution.source === "role-default" ? tierResolution.tier : null,
     }) : null;
     const withAccountOverride = (body: SpawnResponse): SpawnResponse =>
       ({ ...body, ...(accountOverride ? { accountOverride } : {}), ...(runtime ? { runtime } : {}) });

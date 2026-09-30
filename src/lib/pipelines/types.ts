@@ -56,6 +56,9 @@ export type PipelineRoleRef = {
 };
 
 export type EffectivePipelineRole = RoleConfig & {
+  serviceTier?: string;
+  serviceTierSource?: "explicit" | "role-default";
+  preferredServiceTier?: string;
   roleId: PipelineRoleId | null;
   access: PipelineAccess;
   promptScaffold: string | null;
@@ -92,6 +95,7 @@ export type PipelineStageInput = {
   engine?: FlowEngine;
   model?: string | null;
   effort?: string | null;
+  serviceTier?: string | null;
   /** Repository mutation policy, enforced when the stage settles. It does not
       select the engine's tool/network sandbox. */
   access?: PipelineAccess;
@@ -1054,6 +1058,7 @@ export type PatchPipelineRequest = {
   engine?: FlowEngine;
   model?: string | null;
   effort?: string | null;
+  serviceTier?: string | null;
   /** for override-stage: the not-yet-started run stage's access. Review-loop
       stages stay read-only (the resolver rejects read-write there). */
   access?: PipelineAccess;

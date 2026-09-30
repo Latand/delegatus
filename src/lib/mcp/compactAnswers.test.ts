@@ -423,3 +423,17 @@ test("account_limits answers each account's windows and tiers, narrowed by engin
   expect(one.accounts.map((account) => account.accountId)).toEqual(["claude-b"]);
   await expect(bindings.account_limits({ clientRequestId: "limits-missing", accountId: "nobody" })).rejects.toThrow("no claude, codex or copilot account has the id nobody");
 });
+
+test("runtimeLine shows a role tier and the actual fallback after launch", async () => {
+  const { pipelineAcknowledgement } = await import("./compactAnswers");
+  const pipeline = pipelineCorpus(1)[0]!;
+  const stage = pipeline.stages[0]!;
+  stage.effectiveRole.serviceTier = "ultrafast";
+  stage.effectiveRole.serviceTierSource = "role-default";
+  pipeline.runs = [];
+  expect(pipelineAcknowledgement(pipeline).runtimeLine).toContain("/ultrafast (role default, if offered)");
+  const attempt = pipelineCorpus(1)[0]!.runs[0]!.attempts[0]!;
+  attempt.effectiveRole = { ...stage.effectiveRole, serviceTier: undefined, preferredServiceTier: "ultrafast" };
+  pipeline.runs = [{ stageId: stage.id, attempts: [attempt] }];
+  expect(pipelineAcknowledgement(pipeline).runtimeLine).toContain("/default (role default ultrafast not offered by an available account)");
+});

@@ -15056,3 +15056,30 @@ test("a stage conversation switched to another account continues on the message 
   expect(current.cursor?.activatedBy?.edge ?? null).not.toBe("fail");
   expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
 });
+
+test("null stage tier stores and launches the role preference; default opts out", async () => {
+  const h = harness();
+  h.ports.roleLookup = () => ({ engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast", promptScaffold: "Reviewer guidance" });
+  const stage = { id: "review", kind: "run", role: { roleId: "reviewer" }, serviceTier: null, prompt: "Review", next: null };
+  const pipeline = await create(h.ports, [stage] as never);
+  expect(loadPipelines()[0]?.stages[0]).toMatchObject({ serviceTier: null, effectiveRole: { serviceTier: "ultrafast", serviceTierSource: "role-default" } });
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  expect(h.spawnInputs[0]?.role).toMatchObject({ serviceTier: "ultrafast", serviceTierSource: "role-default" });
+  const draft = await createPipelineFromRequest({ task: "Tier overrides", repoDir: "/repo", autoStart: false, stages: [stage] as never }, h.ports);
+  expect(draft.error).toBeUndefined();
+  const optedOut = await patchPipeline(draft.pipeline!.id, { action: "override-stage", stageId: "review", serviceTier: "default" }, h.ports);
+  expect(optedOut.error).toBeUndefined();
+  expect(optedOut.pipeline?.stages[0]).toMatchObject({ serviceTier: "default", effectiveRole: { serviceTier: "default", serviceTierSource: "explicit" } });
+  const inherited = await patchPipeline(draft.pipeline!.id, { action: "override-stage", stageId: "review", serviceTier: null }, h.ports);
+  expect(inherited.error).toBeUndefined();
+  expect(inherited.pipeline?.stages[0]).toMatchObject({ serviceTier: null, effectiveRole: { serviceTier: "ultrafast", serviceTierSource: "role-default" } });
+  expect(pipeline.id).toBeTruthy();
+});
+
+test("create refuses an explicit service tier absent from the project's catalog pool", async () => {
+  const h = harness();
+  const created = await createPipelineFromRequest({ task: "Tier validation", repoDir: "/repo", autoStart: false, stages: [{ id: "review", kind: "run", engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "unlisted-tier", prompt: "Review", next: null }] }, h.ports);
+  expect(created.pipeline).toBeUndefined();
+  expect(created.violations).toContainEqual(expect.objectContaining({ field: "stages[0].serviceTier" }));
+  expect(created.error).toContain("offered:");
+});

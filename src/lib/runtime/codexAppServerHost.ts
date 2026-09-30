@@ -5,7 +5,7 @@ import { StructuredSendRefusedError } from "./engineHost";
 import type { FirstDispatchEvidence } from "./engineHost";
 import { basename } from "node:path";
 import { isNonblockingCodexQuestion } from "./codexAttention";
-import { codexTurnProfile } from "./codexTurnProfile";
+import { assertCatalogOffersTier, codexTurnProfile } from "./codexTurnProfile";
 import { StringDecoder } from "node:string_decoder";
 import { NativeCodexQueue, NativeQueueProtocolRefusal } from "./nativeCodexQueue";
 import { readCodexDeliveryHistory, findCodexHistoryDelivery, type CodexDeliveryHistoryResult } from "./codexHistoryReader";
@@ -181,6 +181,7 @@ type UnsequencedEvent = RuntimeEvent extends infer Event
   : never;
 
 export interface CodexAppServerHostOptions {
+  serviceTier?: string;
   cwd: string;
   codexHome?: string;
   binary?: string;
@@ -1465,6 +1466,7 @@ export class CodexAppServerHost implements EngineHost {
            An image send triggers another discovery attempt. */
         provisional.imageInputSupport = "unknown";
       }
+      if (options.serviceTier) assertCatalogOffersTier(provisional.modelCatalog, options.model, options.serviceTier);
       const config = headlessCodexThreadConfig(
         await provisional.rpc("config/read", { cwd: options.cwd, includeLayers: false }),
         options.allowSubagents === true,
@@ -1478,11 +1480,13 @@ export class CodexAppServerHost implements EngineHost {
       const result = threadId
         ? await provisional.resumeThreadTolerantly({
           threadId,
+          ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...(options.permissionProfile ? { permissions: options.permissionProfile } : {}),
           config,
         })
         : await provisional.rpc("thread/start", {
           cwd: options.cwd,
+          ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...(options.model ? { model: options.model } : {}),
           ...(options.permissionProfile
             ? { permissions: options.permissionProfile }

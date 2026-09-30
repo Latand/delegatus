@@ -272,3 +272,16 @@ test("a second process that writes between the read and the write makes the stal
   expect((await read()).roles.find((role) => role.id === "builder")!.config).toEqual({ engine: "claude", model: "opus", effort: "high" });
   expect(auditLines()).toEqual([]);
 });
+
+test("role_presets validates catalog-backed Codex tiers and persists a reviewer default", async () => {
+  const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
+  const account = createManagedCodexAccount("account C");
+  fs.writeFileSync(path.join(account.home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6-astra", service_tiers: [{ id: "priority" }, { id: "ultrafast" }] }] }));
+  const config = { engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast" };
+  await tools(SEAT).role_presets({ clientRequestId: "tier-role-default", overrides: { reviewer: { config } } });
+  expect((await read()).roles.find(role => role.id === "reviewer")?.config).toEqual(config);
+  expect(JSON.parse(fs.readFileSync(stateFile("role-presets.json"), "utf8")).schemaVersion).toBe(5);
+  const refused = await refusal(tools(SEAT).role_presets({ clientRequestId: "tier-role-unoffered", overrides: { reviewer: { config: { ...config, serviceTier: "unoffered" } } } }));
+  expect(refused.message).toContain("offered: priority, ultrafast");
+  expect((await read()).roles.find(role => role.id === "reviewer")?.config).toEqual(config);
+});

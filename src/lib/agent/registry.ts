@@ -2288,7 +2288,7 @@ function writeConversationLaunchProfile(
   // Explicit tier snapshots restore rollback exactly; speed-only edits clear a changed tier.
   const tier = generation.launchProfile.serviceTier ?? null;
   const serviceTier = patch.serviceTier !== undefined ? patch.serviceTier
-    : tier && patch.fast !== (tier !== "default") ? null : tier;
+    : tier && patch.fast !== (tier !== "default" && tier !== "standard") ? null : tier;
   const resolvedPatch = { ...patch, serviceTier };
   generation.launchProfile = emptyLaunchProfile({ ...generation.launchProfile, ...resolvedPatch });
   const entry = file.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })];

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { resolveRole } from "./registry";
+import { resolveRole, resolveSpawnRole } from "./registry";
 
 import * as stateOwnership from "@/lib/stateOwnership";
 
@@ -42,7 +42,7 @@ test("role overrides fail closed and preserve malformed or future-schema bytes",
   try {
     for (const content of [
       "{",
-      JSON.stringify({ schemaVersion: 5, overrides: {} }),
+      JSON.stringify({ schemaVersion: 6, overrides: {} }),
       JSON.stringify({ schemaVersion: 1, overrides: { builder: { config: { engine: "invalid" } } } }),
       JSON.stringify({ schemaVersion: 1, overrides: { builder: { config: { model: "fable", effort: "banana" } } } }),
       JSON.stringify({ schemaVersion: 1, overrides: { builder: { unexpected: true } } }),
@@ -338,4 +338,23 @@ test("the boot pass goes through the startup-mutation fence before it touches th
 
 test("the shipped retirement list names the stale frontend builder value", () => {
   expect(ROLE_MAPPING_RETIREMENTS).toEqual([{ id: "2026-09-builder-frontend-opus-xhigh", row: "builder:frontend", config: { engine: "claude", model: "opus", effort: "xhigh" } }]);
+});
+
+test("Codex role tier round trips at schema 5 and survives effort-only edits", () => {
+  const previous = process.env.LLV_STATE_DIR;
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-role-tier-"));
+  process.env.LLV_STATE_DIR = state;
+  try {
+    const config: RoleConfig = { engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast" };
+    saveRoleMapping({ reviewer: { config } });
+    expect(loadRoleOverrides().schemaVersion).toBe(5);
+    expect(loadRoleDefinitions().find(role => role.id === "reviewer")?.config.serviceTier).toBe("ultrafast");
+    const resolved = resolveSpawnRole({ role: "reviewer", roleParams: { diffSource: "#1" } });
+    expect(resolved.ok).toBeTrue();
+    if (resolved.ok) expect(resolved.value?.config.serviceTier).toBe("ultrafast");
+    saveRoleMapping({ reviewer: { config: { engine: "codex", model: "gpt-6-astra", effort: "xhigh" } } });
+    expect(loadRoleOverrides().overrides.reviewer?.config).toMatchObject({ effort: "xhigh", serviceTier: "ultrafast" });
+    saveRoleMapping({ reviewer: { config: { engine: "codex", model: "gpt-6-sol", effort: "high" } } });
+    expect(loadRoleOverrides().overrides.reviewer?.config?.serviceTier).toBeUndefined();
+  } finally { process.env.LLV_STATE_DIR = previous; fs.rmSync(state, { recursive: true, force: true }); }
 });

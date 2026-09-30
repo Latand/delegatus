@@ -127,3 +127,19 @@ describe("entryEffort for OpenClaw", () => {
       .toBeNull();
   });
 });
+
+test("service tier reads arbitrary catalog ids from argv and the newest applied thread setting", async () => {
+  const { entryServiceTier, entryFast } = await import("./effort");
+  const file = writeJsonl(".codex/service-tier.jsonl", [
+    { type: "event_msg", payload: { type: "thread_settings_applied", thread_settings: { service_tier: "priority" } } },
+    { type: "event_msg", payload: { type: "thread_settings_applied", thread_settings: { service_tier: "ultrafast" } } },
+  ]);
+  const record = entry(file);
+  expect(entryServiceTier(record)).toBe("ultrafast");
+  expect(entryFast(record)).toBeTrue();
+  argvByPid.set(987, ["codex", "-c", "service_tier=standard"]);
+  expect(entryServiceTier({ ...record, pid: 987 })).toBe("default");
+  expect(entryFast({ ...record, pid: 987 })).toBeFalse();
+  argvByPid.set(987, ["codex", "-c", "service_tier=ultrafast"]);
+  expect(entryServiceTier({ ...record, pid: 987 })).toBe("ultrafast");
+});

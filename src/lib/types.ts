@@ -252,8 +252,9 @@ export interface FileEntry {
   /** Reasoning-effort tier (minimal|low|medium|high|xhigh|max|ultra) or null
       when no reliable source exists (claude transcripts carry none). */
   effort?: string | null;
-  /** Codex service tier read from the live argv; null when unavailable. */
+  /** Codex speed read from argv or applied thread settings; null when unavailable. */
   fast?: boolean | null;
+  serviceTier?: string | null;
   /** Structured Claude prompt that is currently blocking the live agent. */
   pendingQuestion: PendingQuestion | null;
   /** The open bridge ask this conversation's orchestrator seat is sitting on

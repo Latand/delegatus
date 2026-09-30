@@ -383,6 +383,7 @@ export class CodexAppServerClient {
     model?: string | null;
     effort?: string | null;
     fast?: boolean | null;
+    serviceTier?: string | null;
     approvalPolicy?: string | null;
     sandbox?: string | null;
   } = {}): Promise<AppServerThreadRef> {
@@ -399,7 +400,7 @@ export class CodexAppServerClient {
       ...(options.path ? { path: options.path } : {}),
       ...(options.cwd ? { cwd: options.cwd } : {}),
       ...(options.model ? { model: options.model } : {}),
-      ...(options.fast != null ? { serviceTier: options.fast ? "priority" : "standard" } : {}),
+      ...(options.serviceTier ? { serviceTier: options.serviceTier === "standard" ? "default" : options.serviceTier } : options.fast != null ? { serviceTier: options.fast ? "priority" : "standard" } : {}),
       ...(options.approvalPolicy ? { approvalPolicy: options.approvalPolicy } : {}),
       ...(options.sandbox ? { sandbox: options.sandbox } : {}),
       config,

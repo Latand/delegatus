@@ -897,7 +897,7 @@ test("Codex successor provider accepts authenticated ChatGPT account responses a
     now: () => "2026-07-10T12:00:00.000Z",
     journalRoot: path.join(base, "provider-journal"),
   });
-  const profile = migrationSuccessorLaunchProfile(emptyLaunchProfile({ cwd: "/repo", model: "gpt-5.6-terra", effort: "high", fast: true, permissionMode: "never", readOnly: true, title: "Codex", goal: { objective: "Ship", status: "active", tokensUsed: null, timeUsedSeconds: null } }));
+  const profile = migrationSuccessorLaunchProfile(emptyLaunchProfile({ cwd: "/repo", model: "gpt-5.6-terra", effort: "high", fast: true, serviceTier: "ultrafast", permissionMode: "never", readOnly: true, title: "Codex", goal: { objective: "Ship", status: "active", tokensUsed: null, timeUsedSeconds: null } }));
   const recorded: string[] = [];
   const input = {
     engine: "codex",
@@ -923,7 +923,7 @@ test("Codex successor provider accepts authenticated ChatGPT account responses a
   expect(calls).toContain("target:name");
   expect(calls).toContain("target:goal");
   expect(threadName as string | null).toBe("migration successor · Ship");
-  expect(resumeOptions).toEqual({ path: receipt.path, cwd: "/repo", model: "gpt-5.6-terra", effort: "high", fast: true, approvalPolicy: "never", sandbox: "read-only" });
+  expect(resumeOptions).toEqual({ path: receipt.path, cwd: "/repo", model: "gpt-5.6-terra", effort: "high", fast: true, serviceTier: "ultrafast", approvalPolicy: "never", sandbox: "read-only" });
   expect(goalOptions).toEqual({ objective: "Ship", status: "active" });
   await provider.verify(receipt, { engine: "codex", targetAccountId: "target", launchProfile: profile });
   expect(calls.filter((call) => call === "target:read").length).toBeGreaterThanOrEqual(2);

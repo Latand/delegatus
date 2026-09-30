@@ -751,3 +751,21 @@ test("a selection the seat inherited never rides a send the face does not name",
   expect(sendRuntimeFrom(claudeSeat)).toBeUndefined();
   await act(async () => root.unmount());
 });
+
+test("ultrafast is visible and effort-only composer profiles preserve the thread tier", async () => {
+  const file = { ...codexFile, model: "gpt-6-astra", serviceTier: "ultrafast", fast: true };
+  const { host, root } = await renderPill(<RuntimePill file={file} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+  const pill = host.querySelector("[data-runtime-pill]")!;
+  expect(pill.textContent).toContain("Ultrafast");
+  await click(pill);
+  const speed = document.querySelector('[data-runtime-row="submenu"][data-runtime-value="speed"]')!;
+  expect(speed.textContent).toContain("Ultrafast tier");
+  await click(speed);
+  const standard = document.querySelector('[data-runtime-row="speed"][data-runtime-value="standard"]')!;
+  await click(standard);
+  expect(sendRuntimeFrom(file)).toMatchObject({ fast: false });
+  localStorage.setItem(key + ":profile", JSON.stringify({ model: "gpt-6-astra", effort: "xhigh", fast: true }));
+  expect(sendRuntimeFrom(file)).toMatchObject({ effort: "xhigh" });
+  expect(sendRuntimeFrom(file)).not.toHaveProperty("fast");
+  await act(async () => root.unmount());
+});

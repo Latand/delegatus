@@ -14,9 +14,9 @@ import { ROLE_IDS, ROLE_VARIANT_IDS, SCHEMA_2_VARIANT_IDS, SCHEMA_3_VARIANT_IDS,
 
 /** The newest schema this build reads and writes. A file is written at the
     lowest schema that holds its rows (see RoleOverridesFile). */
-export const ROLE_OVERRIDES_SCHEMA_VERSION = 4;
+export const ROLE_OVERRIDES_SCHEMA_VERSION = 5;
 const ROLE_REGISTRY_REVISION_VERSION = 1;
-const READABLE_SCHEMA_VERSIONS: readonly unknown[] = [1, 2, 3, 4];
+const READABLE_SCHEMA_VERSIONS: readonly unknown[] = [1, 2, 3, 4, 5];
 
 /** Shipped runtime of each builder variant; a saved variant mapping merges over it. */
 export const BUILDER_VARIANT_DEFAULTS = ROLE_VARIANT_DEFAULTS.builder;
@@ -48,11 +48,12 @@ function isRoleId(value: unknown): value is RoleId {
 
 function isPartialConfig(value: unknown): value is Partial<RoleConfig> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  if (Object.keys(value).some((key) => key !== "engine" && key !== "model" && key !== "effort")) return false;
-  const { engine, model, effort } = value as Partial<RoleConfig>;
+  if (Object.keys(value).some((key) => key !== "engine" && key !== "model" && key !== "effort" && key !== "serviceTier")) return false;
+  const { engine, model, effort, serviceTier } = value as Partial<RoleConfig>;
   if (engine !== undefined && engine !== "claude" && engine !== "codex") return false;
   if (model !== undefined && (typeof model !== "string" || model.length > 128)) return false;
   if (effort !== undefined && (typeof effort !== "string" || effort.length > 32)) return false;
+  if (serviceTier !== undefined && (typeof serviceTier !== "string" || !/^[a-z][a-z0-9_-]{0,31}$/.test(serviceTier))) return false;
   return true;
 }
 
@@ -87,6 +88,7 @@ function isCompatibleConfig(id: string, config: RoleConfig): boolean {
   if (config.model.length > 128 || /[\u0000-\u001f\u007f]/.test(config.model)) return false;
   if (config.engine === "claude" && !normalizeClaudeLaunchModel(config.model)) return false;
   if (config.engine === "codex" && !config.model.startsWith("gpt-")) return false;
+  if (config.serviceTier && config.engine !== "codex") return false;
   const scale = effortScale(config.engine, config.model)!;
   if (!scale.includes(config.effort)) {
     throw new RoleStoreError(`invalid role override: ${id}; effort for ${config.engine}/${config.model} must be one of: ${scale.join(", ")}`);
@@ -151,7 +153,8 @@ export function loadRoleOverrides(): RoleOverridesFile {
   return { schemaVersion: schemaVersionFor(overrides), overrides, ...(retirements ? { retirements } : {}) };
 }
 
-function schemaVersionFor(overrides: Partial<Record<RoleId, RoleOverride>>): 1 | 2 | 3 | 4 {
+function schemaVersionFor(overrides: Partial<Record<RoleId, RoleOverride>>): 1 | 2 | 3 | 4 | 5 {
+  if (Object.values(overrides).some(row => row?.config?.serviceTier || Object.values(row?.variants ?? {}).some(config => config?.serviceTier))) return 5;
   const variantKeys = Object.values(overrides).flatMap((override) => override?.variants ? Object.keys(override.variants) : []);
   const anyVariants = Object.values(overrides).some((override) => override?.variants !== undefined);
   if (!anyVariants) return 1;
@@ -211,7 +214,7 @@ export type RoleMappingPatch = {
 };
 
 export function sameConfig(left: RoleConfig, right: RoleConfig): boolean {
-  return left.engine === right.engine && left.model === right.model && left.effort === right.effort;
+  return left.engine === right.engine && left.model === right.model && left.effort === right.effort && left.serviceTier === right.serviceTier;
 }
 
 function isFullConfig(value: unknown): value is RoleConfig {
@@ -276,16 +279,23 @@ export function applyRoleMappingPatch(
     const shipped = ROLE_DEFAULTS.find((role) => role.id === id)!.config;
     const row: RoleOverride = { ...next[id] };
     if (change.promptScaffold === null) delete row.promptScaffold;
+    const retainingTier = (config: RoleConfig, previous?: Partial<RoleConfig>): RoleConfig => ({
+      ...config,
+      ...(config.serviceTier === undefined && previous?.engine === config.engine && previous?.model === config.model && previous.serviceTier
+        ? { serviceTier: previous.serviceTier } : {}),
+    });
     if (change.config !== undefined) {
-      if (change.config === null || sameConfig(change.config, shipped)) delete row.config;
-      else row.config = { engine: change.config.engine, model: change.config.model, effort: change.config.effort };
+      const config = change.config === null ? null : retainingTier(change.config, row.config);
+      if (config === null || sameConfig(config, shipped)) delete row.config;
+      else row.config = config;
     }
     if (change.variants !== undefined) {
       const variants = { ...row.variants };
       for (const [key, variant] of Object.entries(change.variants) as [RoleVariantId, RoleConfig | null][]) {
         const shippedVariant = shippedVariantConfig(id, key);
-        if (variant === null || (shippedVariant && sameConfig(variant, shippedVariant))) delete variants[key];
-        else variants[key] = { engine: variant.engine, model: variant.model, effort: variant.effort };
+        const config = variant === null ? null : retainingTier(variant, variants[key]);
+        if (config === null || (shippedVariant && sameConfig(config, shippedVariant))) delete variants[key];
+        else variants[key] = config;
       }
       if (Object.keys(variants).length) row.variants = variants;
       else delete row.variants;

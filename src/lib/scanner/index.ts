@@ -18,7 +18,7 @@ import type { ConversationCatalogEntry } from "./conversationCatalog";
 import { ctxFor } from "./context";
 import { lastAgentWorkAtFor, lastAssistantMessageAtFor, lastTurnFor } from "./turnDuration";
 import { discoverFiles, discoverFilesWithProjectCatalog } from "./discover";
-import { entryEffort, entryEffortResult, entryFast } from "./effort";
+import { entryEffort, entryEffortResult, entryFast, entryServiceTier } from "./effort";
 import { linkEntries } from "./links";
 import { entryModelsResult } from "./model";
 import { agentProcesses, outputHolders } from "./process";
@@ -347,6 +347,7 @@ async function listFilesInternal(
   // After pid assignment: the claude effort source is the live process argv.
   await forEachEntryBatchYielding(entries, async (entry) => {
     entry.effort = entryEffort(entry);
+    entry.serviceTier = entryServiceTier(entry);
     entry.fast = entryFast(entry);
     const pending = pendingQuestionFor(entry);
     entry.pendingQuestion = pending && entry.pid !== null

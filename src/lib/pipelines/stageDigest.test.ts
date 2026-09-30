@@ -98,3 +98,9 @@ test("digests of records stored before stop-after-fix existed are unchanged (#21
   /* The new option is its own configuration. */
   expect(stageDigest(reviewer({ to: "build", maxRounds: 3, onExhausted: "stop-after-fix" }))).not.toBe(stageDigest(reviewer({ to: "build", maxRounds: 3, onExhausted: "advance" })));
 });
+
+test("service tier and its required or preferred source participate in stage edits", () => {
+  const tier = stage({ effectiveRole: { ...stage().effectiveRole, serviceTier: "ultrafast", serviceTierSource: "explicit" } });
+  expect(stageDigest(tier)).not.toBe(stageDigest(stage()));
+  expect(stageDigest(tier)).not.toBe(stageDigest({ ...tier, effectiveRole: { ...tier.effectiveRole, serviceTierSource: "role-default" } }));
+});

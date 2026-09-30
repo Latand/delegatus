@@ -62,6 +62,9 @@ export function isEffectiveRole(value: unknown): value is EffectivePipelineRole 
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const role = value as Partial<EffectivePipelineRole>;
   if (role.engine !== "claude" && role.engine !== "codex") return false;
+  if (role.serviceTier !== undefined && (role.engine !== "codex" || typeof role.serviceTier !== "string" || !/^[a-z][a-z0-9_-]{0,31}$/.test(role.serviceTier))) return false;
+  if (role.preferredServiceTier !== undefined && (role.engine !== "codex" || typeof role.preferredServiceTier !== "string" || !/^[a-z][a-z0-9_-]{0,31}$/.test(role.preferredServiceTier))) return false;
+  if (role.serviceTierSource !== undefined && role.serviceTierSource !== "explicit" && role.serviceTierSource !== "role-default") return false;
   if (role.model !== null && typeof role.model !== "string") return false;
   if (role.model && role.engine === "claude" && !normalizeClaudeLaunchModel(role.model)) return false;
   if (role.model && role.engine === "codex" && (role.model.length > 128 || !role.model.startsWith("gpt-") || /[\u0000-\u001f\u007f]/.test(role.model))) return false;
@@ -448,6 +451,7 @@ function isStage(value: unknown): value is PipelineStage {
     (stage.engine === undefined || stage.engine === "claude" || stage.engine === "codex") &&
     (stage.model === undefined || stage.model === null || typeof stage.model === "string") &&
     (stage.effort === undefined || stage.effort === null || typeof stage.effort === "string") &&
+    (stage.serviceTier == null || typeof stage.serviceTier === "string") &&
     (stage.access === undefined || stage.access === "read-only" || stage.access === "read-write") &&
     (stage.sandbox === undefined || stage.sandbox === "full" || stage.sandbox === "restricted") &&
     (stage.outputs === undefined || (
@@ -466,6 +470,7 @@ function isStage(value: unknown): value is PipelineStage {
   if (stage.engine !== undefined && stage.engine !== effective.engine) return false;
   if (stage.model !== undefined && stage.model !== effective.model) return false;
   if (stage.effort !== undefined && stage.effort !== effective.effort) return false;
+  if (stage.serviceTier != null && stage.serviceTier !== effective.serviceTier) return false;
   if (stage.access !== undefined && stage.access !== effective.access) return false;
   if (referencedRoleId === null && effective.promptScaffold !== null) return false;
   if (referencedRoleId !== null && !effective.promptScaffold?.trim()) return false;

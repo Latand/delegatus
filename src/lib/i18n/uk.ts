@@ -752,6 +752,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "composer.modelGroup": "Модель",
   "composer.speedGroup": "Швидкість",
   "composer.speedStandard": "Стандартна",
+  "composer.speedTierNamed": "Рівень {tier}",
   "composer.speedFastTier": "Швидка — пріоритетний тариф",
   "composer.backTo": "Назад",
   "composer.nextMessageUses": "Наступне повідомлення: {model} · {effort}",

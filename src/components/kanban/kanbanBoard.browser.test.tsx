@@ -13633,3 +13633,45 @@ describe("seat panel carries no internal noise", () => {
     expect(failures).toEqual([]);
   }, 1_800_000);
 });
+
+describe("Codex service tier rendered evidence", () => {
+  browserTest("ultrafast appears on desktop and in the phone speed sheet in both locales", async () => {
+    const out = path.resolve(".artifacts/codex-service-tier");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const evidence: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1280, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=service-tier`, { width, height: 844 }, "light", locale, "reduce", width === 390);
+        try {
+          const pill = page.locator("[data-runtime-pill]");
+          await pill.waitFor();
+          if (width > 390) expect(await pill.textContent()).toContain("Ultrafast");
+          await pill.click();
+          const detail = width > 390 ? page.locator('[data-runtime-value="speed"]') : page.getByText(translate(locale, "composer.speedTierNamed", { tier: "Ultrafast" }), { exact: true });
+          await detail.waitFor();
+          if (width === 390) await detail.scrollIntoViewIfNeeded();
+          expect(await detail.textContent()).toContain("Ultrafast");
+          if (width > 390) {
+            const bounds = await page.locator("[data-runtime-popover]").boundingBox();
+            expect(bounds!.y).toBeGreaterThanOrEqual(0); expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(844);
+          }
+          const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+          expect(overflow).toBeFalse(); expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}-${width}.png`) });
+          const runtimeEvidence = { locale, width, face: await pill.textContent(), detail: await detail.textContent(), overflow, pageErrors };
+          await page.goto(`${server.base}?scenario=service-tier&mapping=1`);
+          const mapping = page.locator('[data-mapping-row="reviewer"] [data-mapping-service-tier]');
+          await mapping.waitFor(); await mapping.scrollIntoViewIfNeeded();
+          expect(await mapping.textContent()).toContain("ultrafast");
+          expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBeFalse();
+          await page.screenshot({ path: path.join(out, `mapping-${locale}-${width}.png`) });
+          evidence.push({ ...runtimeEvidence, mappingTier: await mapping.textContent() });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/codex-service-tier", { recursive: true });
+      fs.writeFileSync("evidence/codex-service-tier/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases: evidence }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});

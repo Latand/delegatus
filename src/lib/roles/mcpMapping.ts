@@ -1,3 +1,5 @@
+import { tierOffers } from "@/lib/accounts/codexServiceTiers";
+import { listCodexAccounts } from "@/lib/accounts/codex";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -29,6 +31,10 @@ export function roleLaunchChoices(): Record<MappingEngine, Record<string, readon
 export type RoleMappingViolation = { field: string; message: string; expected: string };
 
 function configViolations(field: string, config: RoleConfig): RoleMappingViolation[] {
+  if (config.serviceTier) {
+    const offers = tierOffers(listCodexAccounts(), config.model, config.serviceTier);
+    if (config.engine !== "codex" || !offers.offering.length) return [{ field: `${field}.serviceTier`, message: `serviceTier ${config.serviceTier} is not offered for ${config.model}; offered: ${offers.offered.join(", ") || "none"}`, expected: "Codex model/account catalog tier id" }];
+  }
   const engines: readonly string[] = MAPPING_ENGINES;
   if (!engines.includes(config.engine)) {
     return [{ field: `${field}.engine`, message: `unknown engine ${JSON.stringify(config.engine)}`, expected: `one of: ${MAPPING_ENGINES.join(", ")}` }];

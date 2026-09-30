@@ -99,16 +99,46 @@ export function entryEffortResult(entry: FileEntry): EntryEffortResult {
   return { value: effort ?? argv, complete };
 }
 
-/** Codex speed tier from the live process argv. Transcript records currently
-    do not carry a stable service-tier field, so unknown and stopped sessions
-    remain null. */
-export function entryFast(entry: FileEntry): boolean | null {
-  if (entry.engine !== "codex" || entry.pid === null) return null;
-  const argv = readArgv(entry.pid);
+const serviceTierCache = globalCache<[number, number, string | null]>("serviceTier");
+function normalizeServiceTier(value: unknown): string | null {
+  if (typeof value !== "string" || !/^[a-z][a-z0-9_-]{0,31}$/.test(value)) return null;
+  return value === "standard" ? "default" : value;
+}
+
+/** Codex thread settings survive structured starts, later turns and stopped sessions. */
+export function entryServiceTier(entry: FileEntry): string | null {
+  if (entry.engine !== "codex") return null;
+  const argv = entry.pid === null ? [] : readArgv(entry.pid);
   for (let i = 0; i < argv.length - 1; i++) {
     if (argv[i] !== "-c" && argv[i] !== "--config") continue;
-    const match = argv[i + 1].match(/^service_tier\s*=\s*"?(priority|standard)"?$/i);
-    if (match) return match[1].toLowerCase() === "priority";
+    const match = argv[i + 1].match(/^service_tier\s*=\s*"?([a-z][a-z0-9_-]{0,31})"?$/);
+    if (match) return normalizeServiceTier(match[1]);
   }
-  return null;
+  const mtimeMs = entry.mtime * 1000;
+  const cached = serviceTierCache.get(entry.path);
+  if (cached?.[0] === entry.size && cached[1] === mtimeMs) return cached[2];
+  const pick = (records: Record<string, unknown>[]) => {
+    for (const record of [...records].reverse()) {
+      const payload = recordValue(record.payload);
+      if (record.type !== "event_msg" || payload?.type !== "thread_settings_applied") continue;
+      const tier = normalizeServiceTier(recordValue(payload.thread_settings)?.service_tier);
+      if (tier) return tier;
+    }
+    return null;
+  };
+  const tail = tailRecordsResult(entry.path, entry.size, mtimeMs);
+  let tier = pick(tail.records);
+  let complete = tail.complete;
+  if (!tier) {
+    const head = headRecordsResult(entry.path, entry.size, mtimeMs);
+    tier = pick(head.records);
+    complete &&= head.complete;
+  }
+  if (complete) serviceTierCache.set(entry.path, [entry.size, mtimeMs, tier]);
+  return tier;
+}
+
+export function entryFast(entry: FileEntry): boolean | null {
+  const tier = entryServiceTier(entry);
+  return tier === null ? null : tier !== "default";
 }

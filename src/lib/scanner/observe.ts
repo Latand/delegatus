@@ -3,7 +3,7 @@ import { resolveTarget } from "../tmux";
 import { ctxFor } from "./context";
 import { lastAgentWorkAtFor, lastAssistantMessageAtFor, lastTurnFor } from "./turnDuration";
 import { discoverFiles } from "./discover";
-import { entryEffort, entryEffortResult, entryFast } from "./effort";
+import { entryEffort, entryEffortResult, entryFast, entryServiceTier } from "./effort";
 import { linkEntries } from "./links";
 import { entryModelsResult } from "./model";
 import { outputHolders } from "./process";
@@ -91,7 +91,7 @@ async function runObservation(signal?: AbortSignal): Promise<FileEntry[]> {
     }
   }, signal);
   assignTranscriptPids(entries);
-  await each(entries, (entry) => { entry.effort = entryEffort(entry); entry.fast = entryFast(entry); }, signal);
+  await each(entries, (entry) => { entry.effort = entryEffort(entry); entry.serviceTier = entryServiceTier(entry); entry.fast = entryFast(entry); }, signal);
   await each(entries, async (entry) => {
     const pending = pendingQuestionFor(entry);
     entry.pendingQuestion = pending && entry.pid !== null ? { ...pending, paneTarget: await resolveTarget(entry.pid) } : pending;
