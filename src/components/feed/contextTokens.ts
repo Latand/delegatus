@@ -126,8 +126,8 @@ export type ContextLedger = {
   claudeResponse(id: string | null, prompt: number | null, output: number): void;
   /** A Codex `token_count` with `last_token_usage`. */
   codexUsage(prompt: number, output: number, totalTokens: number | undefined): void;
-  /** A call the current response issued. */
-  member(id: string): void;
+  /** A call the current response issued. `hosted` marks one the provider runs and bills inside that response. */
+  member(id: string, hosted?: boolean): void;
   /** A result attached to a call. `quiet` records its size and shows no estimate. */
   result(id: string, chars: number, rasters: number, quiet?: boolean): void;
   /** Something else entered the prompt between two responses. */
@@ -155,6 +155,7 @@ export function createContextLedger(
   let round: Round | null = null;
   let pending: string[] = [];
   let pendingContaminated = false;
+  let pendingHosted = false;
   let lastTotal: number | undefined;
   let fresh = false;
 
@@ -175,11 +176,11 @@ export function createContextLedger(
     });
   };
 
-  const resolve = (closing: Round | null, nextPrompt: number | null) => {
+  const resolve = (closing: Round | null, nextPrompt: number | null, hosted = false) => {
     if (!closing || !closing.members.length) return;
     const { members } = closing;
     const growth = closing.before === null || nextPrompt === null ? 0 : nextPrompt - closing.before - closing.output;
-    const eligible = !closing.contaminated && !closing.partial && growth > 0
+    const eligible = !closing.contaminated && !closing.partial && !hosted && growth > 0
       && members.every((id) => sizes.has(id) && hasCard(id));
     if (eligible) {
       if (members.length === 1) emit(members[0], { n: growth, basis: "measured" });
@@ -212,12 +213,14 @@ export function createContextLedger(
     codexUsage(prompt, output, totalTokens) {
       if (totalTokens !== undefined && totalTokens === lastTotal) return;
       lastTotal = totalTokens;
-      resolve(round, prompt);
+      resolve(round, prompt, pendingHosted);
       round = open(prompt, output, pending, pendingContaminated);
       pending = [];
       pendingContaminated = false;
+      pendingHosted = false;
     },
-    member(id) {
+    member(id, hosted = false) {
+      if (hosted) pendingHosted = true;
       if (engine === "codex") pending.push(id);
       else round?.members.push(id);
     },
@@ -255,6 +258,7 @@ export function createContextLedger(
       currentId = undefined;
       pending = [];
       pendingContaminated = false;
+      pendingHosted = false;
       lastTotal = undefined;
       fresh = partial;
     },

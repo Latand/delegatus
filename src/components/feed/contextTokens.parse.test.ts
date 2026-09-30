@@ -120,6 +120,30 @@ describe("Claude", () => {
     expect(call.contextTokens).toEqual({ n: 389, basis: "estimate" });
   });
 
+  describe("a picture result", () => {
+    const pictureResult = (id: string) =>
+      JSON.stringify({
+        type: "user", timestamp: at(clock++),
+        message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" } }] }] },
+      });
+    const imageNote = (content = "[Image: original 780x2376, displayed at 657x2000. Multiply coordinates by 1.19 to map to original image.]") =>
+      JSON.stringify({ type: "user", isMeta: true, timestamp: at(clock++), message: { role: "user", content } });
+    const lines = (...between: string[]) => [claudeAssistant("m1", sonnet1, [toolUse("a", "Read")]), pictureResult("a"), ...between, example1Next()];
+
+    test("the harness's dimension note belongs to the result and the call is measured", () => {
+      expect(parse(claudeFile, lines(imageNote()))[0].contextTokens).toEqual({ n: 9_808, basis: "measured" });
+    });
+
+    test("typed text in the same place still keeps the call unmeasured", () => {
+      expect(parse(claudeFile, lines(imageNote("look at this too")))[0].contextTokens).toBeUndefined();
+    });
+
+    test("a dimension note that follows no picture result is foreign", () => {
+      const list = parse(claudeFile, [...example1(), imageNote(), example1Next()]);
+      expect(list[0].contextTokens?.basis).toBe("estimate");
+    });
+  });
+
   test("growth that is zero or negative keeps the estimate", () => {
     const shrunk = claudeAssistant("m2", { input: 1, read: 100, created: 0, output: 5 }, [text("done")]);
     expect(parse(claudeFile, [...example1(), shrunk])[0].contextTokens?.basis).toBe("estimate");
@@ -233,6 +257,12 @@ describe("Codex", () => {
       finalMessage(), tokenCount(9_050, 10, 10_110),
     ];
     expect(parse(codexFile, lines)[0].contextTokens?.basis).toBe("estimate");
+  });
+
+  test("a response that ran a hosted web search keeps the earlier round's estimate", () => {
+    const search = codexItem({ type: "web_search_call", status: "completed", action: { type: "search", query: "q" } });
+    const lines = [shellCall("c1"), shellOutput("c1", 4_000), tokenCount(1_000, 50, 1_050), search, finalMessage(), tokenCount(18_000, 10, 19_060)];
+    expect(parse(codexFile, lines)[0].contextTokens).toEqual({ n: 1_111, basis: "estimate" });
   });
 
   test("a call with no result has no number", () => {

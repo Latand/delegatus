@@ -398,6 +398,8 @@ const TMSG_RE = /<(teammate-message|agent-message)\b([^>]*)>([\s\S]*?)<\/\1>/g;
    install), agent-log-viewer/inbox (an install from before the rename) and the
    legacy .claude/viewer-inbox that old transcripts still reference. */
 const INBOX_PATH_RE = /\S*\/(?:delegatus\/inbox|agent-log-viewer\/inbox|\.claude\/viewer-inbox)\/([A-Za-z0-9._-]+\.(?:png|jpe?g|gif|webp))/gi;
+/** Claude Code's dimension note for a picture it returned from a tool. */
+const IMAGE_NOTE_RE = /^\[Image: original \d+x\d+/;
 
 interface InboxImageRef {
   name: string;
@@ -3060,7 +3062,11 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       if (p.type === "reasoning" || p.type === "agent_message") return addSvc(textPart(p.type));
       /* Calls the feed draws no card for still cost context: a member without a
          result keeps its round from crediting the visible calls beside it. */
-      if (p.type === "local_shell_call" || p.type === "web_search_call") ledger.member(textPart(p.call_id) || textPart(p.id) || "hidden-" + curSrc);
+      if (p.type === "local_shell_call" || p.type === "web_search_call") {
+        /* A hosted search bills its results inside the response that ran it, so
+           that response's prompt growth is not the previous round's alone. */
+        ledger.member(textPart(p.call_id) || textPart(p.id) || "hidden-" + curSrc, p.type === "web_search_call");
+      }
       return addRecord(ts, textPart(p.type) || "item", p);
     }
     finalizePendingCodexUsers();
@@ -3079,15 +3085,23 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     }
     addRecord(ts, textPart(obj.type) || tr("render.record"), obj);
   };
+  /* The call whose picture result the last record carried: Claude Code writes
+     the picture's dimension note as an isMeta user record right after it. */
+  let imageResultId: string | null = null;
   const renderClaude = (obj: Record<string, unknown>) => {
     const ts = obj.timestamp;
+    const followsImage = imageResultId;
+    imageResultId = null;
     /* A subagent's own records belong to a different conversation's context. */
     const sidechain = obj.isSidechain === true;
     if (obj.type === "attachment" && !sidechain && CONTEXT_ATTACHMENT_TYPES.has(textPart(rec(obj.attachment).type))) ledger.contaminate();
     if (obj.type === "user" && obj.message) {
       const content = rec(obj.message).content;
       const fileWrap = rec(rec(obj.toolUseResult).file);
-      if (!sidechain && (obj.isCompactSummary === true || !Array.isArray(content)
+      /* The harness's own companion to a picture result is part of that result. */
+      const imageNote = followsImage && obj.isMeta === true && typeof content === "string" && IMAGE_NOTE_RE.test(content);
+      if (imageNote) ledger.result(followsImage, content.length, 0, true);
+      if (!sidechain && !imageNote && (obj.isCompactSummary === true || !Array.isArray(content)
         || content.some((part) => !part || typeof part !== "object" || (part as Record<string, unknown>).type !== "tool_result"))) {
         ledger.contaminate();
       }
@@ -3130,7 +3144,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
               ? toolOutputFromBlocks(inner, (image) => (pictures === 1 ? withFileDimensions(image, fileWrap) : image))
               : { text: inner.map((x) => textPart(x.text)).join(" ") };
             addOutput(textPart(part.tool_use_id), output.text, part.is_error === true, undefined, ts, output.blocks,
-              output.rasters ?? inner.filter((block) => block.type === "image").length);
+              output.rasters ?? pictures);
+            if (pictures) imageResultId = textPart(part.tool_use_id) || null;
           }
         }
       }
