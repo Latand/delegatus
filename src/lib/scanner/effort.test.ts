@@ -143,3 +143,23 @@ test("service tier reads arbitrary catalog ids from argv and the newest applied 
   argvByPid.set(987, ["codex", "-c", "service_tier=ultrafast"]);
   expect(entryServiceTier({ ...record, pid: 987 })).toBe("ultrafast");
 });
+
+test("service tier stays unknown after newer settings leave the transcript tail", async () => {
+  const { entryServiceTier, entryFast } = await import("./effort");
+  const settings = (tier: string) => ({
+    type: "event_msg",
+    payload: { type: "thread_settings_applied", thread_settings: { service_tier: tier } },
+  });
+  const file = writeJsonl(".codex/service-tier-scrolled.jsonl", [
+    settings("ultrafast"),
+    ...Array.from({ length: 50 }, () => ({ type: "event_msg", payload: { type: "task_complete" } })),
+    settings("default"),
+  ]);
+  expect(entryServiceTier(entry(file))).toBe("default");
+  fs.appendFileSync(file, Array.from({ length: 150 }, () => JSON.stringify({
+    type: "event_msg", payload: { type: "agent_message", message: "x".repeat(1024) },
+  })).join("\n") + "\n");
+  const grown = entry(file, { mtime: 2 });
+  expect(entryServiceTier(grown)).toBeNull();
+  expect(entryFast(grown)).toBeNull();
+});

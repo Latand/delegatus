@@ -198,7 +198,8 @@ export async function resolveHealthySpawnAccount(
          that this project's binding permits, and the original failure stands
          rather than being answered with an account outside the pool. */
       if (!hasAutomatic) throw error;
-      return { ...contextForSpawn(engine, active), requestedAdmission: missingRequested };
+      return { ...contextForSpawn(engine, active), requestedAdmission: missingRequested,
+        ...(serviceTier ? { serviceTier: appliedTier } : {}) };
     }
   }
   /* The named account is a candidate whether or not the pool contains it — the

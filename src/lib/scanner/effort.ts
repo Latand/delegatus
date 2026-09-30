@@ -99,7 +99,7 @@ export function entryEffortResult(entry: FileEntry): EntryEffortResult {
   return { value: effort ?? argv, complete };
 }
 
-const serviceTierCache = globalCache<[number, number, string | null]>("serviceTier");
+const serviceTierCache = globalCache<[number, number, string | null]>("serviceTier-v2");
 function normalizeServiceTier(value: unknown): string | null {
   if (typeof value !== "string" || !/^[a-z][a-z0-9_-]{0,31}$/.test(value)) return null;
   return value === "standard" ? "default" : value;
@@ -127,14 +127,10 @@ export function entryServiceTier(entry: FileEntry): string | null {
     return null;
   };
   const tail = tailRecordsResult(entry.path, entry.size, mtimeMs);
-  let tier = pick(tail.records);
-  let complete = tail.complete;
-  if (!tier) {
-    const head = headRecordsResult(entry.path, entry.size, mtimeMs);
-    tier = pick(head.records);
-    complete &&= head.complete;
-  }
-  if (complete) serviceTierCache.set(entry.path, [entry.size, mtimeMs, tier]);
+  // An older head setting may have been overridden beyond both read windows.
+  // Without a setting in the tail, the current tier is unknown.
+  const tier = pick(tail.records);
+  if (tail.complete) serviceTierCache.set(entry.path, [entry.size, mtimeMs, tier]);
   return tier;
 }
 

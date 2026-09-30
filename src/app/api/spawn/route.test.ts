@@ -4272,3 +4272,53 @@ test("structured spawn binds the launch tier, runtime answer and replay digest b
     expect(Object.keys(store.readOnlySnapshot().receipts)).toHaveLength(count);
   } finally { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
 });
+
+test("a preferred role tier falls back without a tier when the named account is missing", async () => {
+  const { accountManager, resolveHealthySpawnAccount } = await import("@/lib/accounts/manager");
+  const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { saveRoleMapping } = await import("@/lib/roles/store");
+  const cwd = fs.mkdtempSync(path.join(routeSandbox, "service-tier-missing-account-"));
+  const store = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const previousRegistry = agentRegistry();
+  const account = createManagedCodexAccount("Fallback carrier");
+  fs.writeFileSync(path.join(account.home, "auth.json"), "{}", { mode: 0o600 });
+  fs.writeFileSync(path.join(account.home, "models_cache.json"), JSON.stringify({
+    models: [{ slug: "gpt-6-astra", service_tiers: [{ id: "priority" }] }],
+  }));
+  store.setEngineRouting("codex", account.id);
+  const previous = {
+    LLV_SPAWN_TRANSPORT: process.env.LLV_SPAWN_TRANSPORT,
+    LLV_STRUCTURED_HOSTS: process.env.LLV_STRUCTURED_HOSTS,
+    LLV_RUNTIME_HOST_SOCKET: process.env.LLV_RUNTIME_HOST_SOCKET,
+  };
+  Object.assign(process.env, {
+    LLV_SPAWN_TRANSPORT: "structured",
+    LLV_STRUCTURED_HOSTS: "1",
+    LLV_RUNTIME_HOST_SOCKET: path.join(cwd, "unused.sock"),
+  });
+  setAgentRegistryForTests(store);
+  saveRoleMapping({ builder: { config: { engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast" } } });
+  try {
+    const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+      method: "POST",
+      headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+      body: JSON.stringify({ role: "builder", accountId: "missing-account", cwd, title: "Review service tier", prompt: "Review", clientAttemptId: "tier-route-missing-account" }),
+    }), { ...structuredRouteDependencies(cwd), registry: () => store, defer: () => {}, resolveHealthySpawnAccount,
+      resolveSpawnAccount: (engine, id) => accountManager.resolveSpawn(engine, id) });
+    const body = await response.json();
+    expect({ status: response.status, error: body.error ?? null }).toEqual({ status: 202, error: null });
+    expect(body.runtime).toContain("/default (role default ultrafast not offered");
+    const receipt = Object.values(store.readOnlySnapshot().receipts).find(item => item.clientAttemptId === "tier-route-missing-account");
+    expect(receipt).toBeDefined();
+    expect(receipt?.accountId).toBe("missing-account");
+    expect(receipt?.launchProfile.serviceTier).toBeUndefined();
+    expect(receipt?.launchProfile.fast).not.toBeTrue();
+  } finally {
+    saveRoleMapping({ builder: { config: null } });
+    setAgentRegistryForTests(previousRegistry);
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
