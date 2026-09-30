@@ -846,3 +846,66 @@ test("a provider switched under a stale tab is keyed and named by what the route
   flushSync(() => { view.root.unmount(); });
   view.host.remove();
 });
+
+test("Soniox header freezes its target, shares Stop with the row, and cancels while loading", async () => {
+  const { conversationSpeech } = await import("./conversationSpeech");
+  const originalContext = globalThis.AudioContext;
+  const priorRaf = globalThis.requestAnimationFrame, priorCancel = globalThis.cancelAnimationFrame;
+  globalThis.requestAnimationFrame = (cb) => setTimeout(() => cb(0), 16) as unknown as number;
+  globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
+  const resumes: (() => void)[] = [];
+  let closed = 0;
+  globalThis.AudioContext = class {
+    state = "running";
+    resume() { return new Promise<void>((resolve) => resumes.push(resolve)); }
+    async close() { closed++; }
+  } as unknown as typeof AudioContext;
+  const info = { backend: "soniox", lockedByEnv: false, options: [{ id: "soniox", available: true, keyPath: "$CONFIG/soniox-api-key", model: "tts-rt-v2", voice: "Adrian", language: "en", cap: 4000 }] };
+  const requests: string[] = [];
+  globalThis.fetch = mock(async (_input, init) => {
+    if (!init?.method) return Response.json(info);
+    requests.push(JSON.parse(String(init.body)).text);
+    return new Promise<Response>(() => undefined);
+  }) as unknown as typeof fetch;
+  const scope = "header-test";
+  const speech = conversationSpeech(scope);
+  speech.select({ id: "old", text: "Frozen answer.", roots: () => [] });
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  flushSync(() => root.render(<><SpeakButton scope={scope} header /><SpeakButton scope={scope} text="Frozen answer." answerId="old" /></>));
+  await drainUpdates();
+  const header = host.querySelector<HTMLButtonElement>("[data-tts-header]")!;
+  header.dispatchEvent(new window.MouseEvent("contextmenu", { bubbles: true })); await drainUpdates(); // fresh authoritative config
+  try {
+    flushSync(() => header.click()); await drainUpdates();
+    expect(header.dataset.ttsPhase).toBe("loading"); expect(header.getAttribute("aria-busy")).toBe("true");
+    expect(host.querySelectorAll('[data-tts-phase="loading"]')).toHaveLength(2);
+    speech.select({ id: "new", text: "Newly visible answer.", roots: () => [] }); await drainUpdates();
+    expect(speech.getSnapshot().activeText).toBe("Frozen answer.");
+    flushSync(() => root.render(<><SpeakButton scope={scope} header /><SpeakButton scope={scope} text="Frozen answer grows." answerId="old" /></>));
+    await drainUpdates();
+    const row = host.querySelector<HTMLButtonElement>("[data-tts-trigger]:not([data-tts-header])")!;
+    expect(row.dataset.ttsPhase).toBe("loading");
+    flushSync(() => row.click()); await drainUpdates();
+    expect(header.dataset.ttsPhase).toBe("idle"); expect(closed).toBe(1);
+    resumes[0]!(); await drainUpdates(); expect(requests).toEqual([]);
+    flushSync(() => header.click()); resumes[1]!(); await drainUpdates();
+    expect(requests).toEqual(["Newly visible answer."]);
+    root.unmount();
+    // A control remount cannot kill the conversation-owned read.
+    expect(speech.getSnapshot().phase).toBe("loading"); speech.stop?.();
+    expect(speech.getSnapshot().phase).toBe("idle");
+  } finally { speech.stop?.(); globalThis.AudioContext = originalContext; globalThis.requestAnimationFrame = priorRaf; globalThis.cancelAnimationFrame = priorCancel; root.unmount(); }
+});
+
+test("feed lifetime stops navigation and preserves an explicit full-window transfer", async () => {
+  const { conversationSpeech, ownConversationFeed } = await import("./conversationSpeech");
+  const speech = conversationSpeech("transfer-test");
+  let stops = 0;
+  const stop = () => { stops++; speech.releaseStop(stop); };
+  const release = ownConversationFeed("transfer-test"); speech.claimStop(stop); release();
+  await Promise.resolve(); expect(stops).toBe(1);
+  const releaseCard = ownConversationFeed("transfer-test"); speech.claimStop(stop); speech.beginTransfer(); releaseCard();
+  await Promise.resolve(); expect(stops).toBe(1);
+  const releaseWindow = ownConversationFeed("transfer-test");
+  releaseWindow(); await Promise.resolve(); expect(stops).toBe(2);
+});

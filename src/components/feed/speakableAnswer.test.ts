@@ -27,3 +27,39 @@ test("one redacted result serves every fragment; new content and identity get in
   expect(createSpeakableAnswerResolver(other)(0)?.text).toBe("Other conversation.");
   expect(resolve(0)?.text).toBe(expected?.text);
 });
+
+test("visible selection groups later fragments, favors visible area and freezes text", async () => {
+  const { visibleSpeakableAnswer } = await import("./speakableAnswer");
+  const entries: FeedEntry[] = [
+    { anchorKey: null, key: "a", item: { kind: "prose", ts: "old", engine: "codex", text: "Old first fragment." } },
+    { anchorKey: null, key: "b", item: { kind: "prose", ts: "old", engine: "codex", text: "Visible fragment." } },
+    { anchorKey: null, key: "c", item: { kind: "prose", ts: "new", engine: "codex", text: "New answer." } },
+    { anchorKey: null, key: "d", item: { kind: "prose", ts: "code", engine: "codex", text: "```js\n42\n```" } },
+  ];
+  const selected = visibleSpeakableAnswer(entries, [{ index: 1, area: 100 }, { index: 2, area: 0 }]);
+  expect(selected?.text).toBe("Old first fragment.\n\nVisible fragment.");
+  expect(visibleSpeakableAnswer(entries, [{ index: 1, area: 10 }, { index: 2, area: 10 }])?.text).toBe("New answer.");
+  expect(visibleSpeakableAnswer(entries, [{ index: 0, area: 6 }, { index: 1, area: 6 }, { index: 2, area: 10 }])?.id).toBe("codex:old:a");
+  expect(visibleSpeakableAnswer(entries, [{ index: 3, area: 100 }])).toBeNull();
+  entries[1]!.item = { kind: "prose", ts: "old", engine: "codex", text: "Growing answer." };
+  expect(selected?.text).toEndWith("Visible fragment.");
+});
+
+test("fragment offsets distinguish repeated prose in the loaded answer", async () => {
+  const { answerFragmentOffset } = await import("./speakableAnswer");
+  const entries: FeedEntry[] = [0, 1, 2].map((index) => ({ anchorKey: null, key: String(index), item: { kind: "prose", ts: "same", engine: "codex", text: index === 1 ? "```js\n42\n```" : "The repeated sentence." } }));
+  const answer = speakableAnswer(entries, 2)!;
+  expect(answerFragmentOffset(entries, 0, answer)).toBe(0);
+  expect(answerFragmentOffset(entries, 1, answer)).toBeUndefined();
+  expect(answerFragmentOffset(entries, 2, answer)).toBeGreaterThan(0);
+});
+
+test("a tool boundary gives timestamp-sharing answers distinct identities", async () => {
+  const { visibleSpeakableAnswer } = await import("./speakableAnswer");
+  const entries: FeedEntry[] = [
+    { anchorKey: null, key: "before", item: { kind: "prose", ts: "same", engine: "codex", text: "Before the tool." } },
+    { anchorKey: null, key: "tool", item: { kind: "raw", text: "tool", err: false } },
+    { anchorKey: null, key: "after", item: { kind: "prose", ts: "same", engine: "codex", text: "After the tool." } },
+  ];
+  expect(visibleSpeakableAnswer(entries, [{ index: 0, area: 1 }])!.id).not.toBe(visibleSpeakableAnswer(entries, [{ index: 2, area: 1 }])!.id);
+});

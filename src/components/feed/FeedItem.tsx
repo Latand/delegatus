@@ -133,9 +133,9 @@ export const ENGINE_LABEL: Record<"codex" | "claude" | "openclaw" | "copilot", s
    (poll tick, camera state, files refresh) skips re-parsing markdown for
    every message that did not change. The provenance lookup arrives by context,
    so a resolved map re-renders exactly the memoized consumers. */
-export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText, resumesAsk }: {
+export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText, speakId, resumesAsk }: {
   item: Item;
-  speakText?: string;
+  speakText?: string; speakId?: string;
   /** Phone only: this seat row is the first after a parallel self's block, so
       its header also says which seat head it continues (null: the head has no
       text to quote). Absent: an ordinary row. */
@@ -201,7 +201,7 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText, re
             <div className="contents" data-tts-body>{mdBlocks(item.text)}</div>
           </div>
           <div data-mobile-message-actions className="-mx-3 -my-1.5 flex h-11 items-center">
-            {speakText ? <SpeakButton text={speakText} /> : null}
+            {speakText ? <SpeakButton text={speakText} answerId={speakId} /> : null}
             <CopyButton text={item.text} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />
           </div>
         </div>
@@ -237,7 +237,7 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText, re
           <div className="mb-0.5 flex min-h-6 items-center gap-1">
             {hhmm(item.ts) ? <span className="text-label tabular-nums text-muted">{hhmm(item.ts)}</span> : null}
             <span className="ml-auto flex shrink-0 items-center gap-0.5">
-              {speakText ? <SpeakButton text={speakText} /> : null}
+              {speakText ? <SpeakButton text={speakText} answerId={speakId} /> : null}
               <CopyButton text={item.text} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />
             </span>
           </div>

@@ -1,5 +1,7 @@
 "use client";
 
+import { SpeakButton } from "../feed/SpeakButton";
+
 import { ScrollText } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -444,6 +446,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
      (#1681). It REPLACES the seat sheet rather than stacking over it, and its
      close puts the seat sheet back. */
   const [tickSheetOpen, setTickSheetOpen] = useState(false);
+  const [speechMenuRequest, setSpeechMenuRequest] = useState<{ scope: string; nonce: number } | null>(null);
   const [reportsSheetOpen, setReportsSheetOpen] = useState(false);
   const [seatHandoff, setSeatHandoff] = useState(false);
   const holdsSeat = resolvedKey !== null && seatKey !== null && resolvedKey === seatKey;
@@ -579,6 +582,10 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
       return (
         <MobileConversationMenu
           file={activeFile}
+          onSpeechSettings={() => setSpeechMenuRequest((value) => ({ scope: activeFile.path, nonce: (value?.nonce ?? 0) + 1 }))}
+          attentionCount={host?.attentionCount ?? 0}
+          onAttention={(host?.attentionCount ?? 0) > 0 || host?.noticeDot ? () => nav.openSheet("attention") : undefined}
+          onReports={holdsSeat ? () => nav.push({ kind: "reports" }) : undefined}
           stage={stage}
           crowned={Boolean(favoritesApi?.has(conversationIdentity(activeFile)))}
           hostTaskCount={hostTaskCount}
@@ -697,7 +704,8 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
         back={canLeave}
         host={host}
         onOpenSearch={activeEntry ? undefined : onOpenSearch}
-        barAction={activeEntry && holdsSeat ? (
+        barAction={activeFile ? <SpeakButton scope={activeFile.path} header menuRequest={speechMenuRequest?.scope === activeFile.path ? speechMenuRequest.nonce : 0} /> : undefined}
+        secondaryBarAction={activeEntry && holdsSeat ? (
           /* The seat's own conversation opens its report log (#2146). */
           <button
             type="button"

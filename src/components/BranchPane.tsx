@@ -26,6 +26,8 @@ import { useAgentCapabilities } from "./useAgentCapabilities";
 import { DeadHostBanner } from "./runtime/DeadHostBanner";
 import { SupersededBanner } from "./runtime/SupersededBanner";
 import { FlipRow } from "./FlipRow";
+import { conversationSpeech } from "./feed/conversationSpeech";
+import { SpeakButton } from "./feed/SpeakButton";
 import { LogFeed } from "./LogFeed";
 import { paneState, type PaneState } from "./paneState";
 import { CtxChip, GoalChip, PlanChip } from "./PlanChip";
@@ -331,12 +333,13 @@ export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noCompose
               )}
               {neverStarted ? null : <ProcessStatusControls file={file} compact />}
               {showFavorite ? <FavoriteCrown id={cardId} cardRef={paneRef} /> : null}
+              <SpeakButton scope={file.path} header />
               {onToggleExpand ? (
                 <button
                   className={"inline-flex shrink-0 items-center justify-center rounded-[8px] border border-border bg-canvas px-1.5 py-0.5 text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"}
                   aria-label={expanded ? t("branch.collapseFull") : t("branch.expandFull", { title: cleanTitle(file.title, 60) })}
                   title={expanded ? t("branch.collapseFull") : t("branch.expandFull", { title: cleanTitle(file.title, 60) })}
-                  onClick={onToggleExpand}
+                  onClick={() => { conversationSpeech(file.path).beginTransfer(); onToggleExpand(); }}
                 >
                   {expanded ? <Minimize2 className="h-3 w-3" aria-hidden /> : <Maximize2 className="h-3 w-3" aria-hidden />}
                 </button>

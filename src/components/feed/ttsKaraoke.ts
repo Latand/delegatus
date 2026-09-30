@@ -121,8 +121,11 @@ function flatOffsetOf(flat: Flattened, node: Node, offset: number): number {
  * rendered text still shows, the nearest forward occurrence wins.
  */
 export function buildKaraokeMap(roots: readonly Element[], spoken: string): KaraokeMap | null {
-  const flat = flatten(roots);
-  const spokenWords = words(spoken);
+  const mappedRoots = roots.some((root) => root.closest("[data-tts-answer-index]"))
+    ? roots.filter((root) => root.closest("[data-tts-offset]")) : roots;
+  const flat = flatten(mappedRoots);
+  const offset = Number(mappedRoots[0]?.closest("[data-tts-offset]")?.getAttribute("data-tts-offset")) || 0;
+  const spokenWords = words(spoken).filter((word) => word.end > offset);
   const domWords = words(flat.text);
   if (!spokenWords.length || !domWords.length) return null;
 

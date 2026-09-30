@@ -333,7 +333,9 @@ const TOOL_RUN = [
   record(7, "user", [{ type: "tool_result", tool_use_id: "toolu_evidence_run", content: "src/board/projection.test.ts:\n✓ replays a band from the snapshot [11.20ms]\n✓ keeps the band order after a reload [3.90ms]\n✓ answers a stale revision with the current board [2.40ms]\n\n 3 pass\n 0 fail\nRan 3 tests across 1 file. [141.00ms]" }]),
   record(8, "assistant", [{ type: "text", text: "The projection replays every band from the snapshot, and the three board tests pass." }]),
 ].join("\n");
-const FEED = TOOLCARD ? `${BANDS}${TOOL_RUN}\n` : BANDS;
+const FAST_TTS = new URLSearchParams(location.search).has("fast-tts");
+const FAST_TTS_FEED = JSON.stringify({ type: "assistant", timestamp: iso(10), message: { role: "assistant", content: [{ type: "text", text: "The first sentence should start speaking immediately. The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately. Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken." }] } }) + "\n";
+const FEED = FAST_TTS ? FAST_TTS_FEED : TOOLCARD ? `${BANDS}${TOOL_RUN}\n` : BANDS;
 const tasks = TOOLCARD ? [{
   id: "task-projection", project: PROJECT, status: "assigned", placement: "unplaced", board: "shown",
   text: "Rebuild the board status projection\nReplay every band from the snapshot.",
@@ -1018,6 +1020,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({ error: "not_found" }, 404);
   }
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
+  if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/log/provenance" && AGENT_LABEL) return json((await deliveredAgentEvidence()).provenance);
   if (url.pathname === "/api/conversation-host" && method === "POST") {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
@@ -1201,6 +1204,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/orchestrator/seat") {
     // A lost optional read must never strand the composer's local wire fence.
     if (queueRecovery) return new Promise<Response>(() => {});
+    if (FAST_TTS && SEAT_NOISE) {
+      const file = files[0]!;
+      if (url.searchParams.get("scope") === "all") return json({ all: { conversationIds: [file.conversationId], paths: [file.path], previous: { conversationIds: [], paths: [] } } });
+      return json({ seat: { project: PROJECT, seatEpoch: 1, conversationId: file.conversationId, path: file.path, mandate: "Run the atlas board.", state: "active", designatedAt: iso(86_400), intent: { clientRequestId: "seat-fast-tts", mode: "existing", launchId: null, error: null } }, pending: null, exists: true });
+    }
     if (AGENT_LABEL) return json({ seat: {
       project: PROJECT, seatEpoch: 1, conversationId: "conversation_running", path: RUNNING_PATH,
       mandate: "Run the atlas board.", state: "active", designatedAt: iso(86_400),
@@ -1238,7 +1246,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const asked = JSON.parse(String(init?.body ?? "{}")) as { reqs?: Array<{ id: string; path: string; offset: number }> };
     const chunks: Record<string, { offset: number; start: number; size: number; data: string }> = {};
     (asked.reqs ?? []).forEach((request, index) => {
-      const body = SEAT_NOISE !== null ? (request.path === files[0]!.path && !files[0]!.spawn ? (files[0]!.engine === "codex" ? SEAT_CODEX_FEED : SEAT_FEED) : "") : request.path === RUNNING_PATH ? evidenceFeed : "";
+      const body = FAST_TTS ? FAST_TTS_FEED : SEAT_NOISE !== null ? (request.path === files[0]!.path && !files[0]!.spawn ? (files[0]!.engine === "codex" ? SEAT_CODEX_FEED : SEAT_FEED) : "") : request.path === RUNNING_PATH ? evidenceFeed : "";
       const from = Math.min(Math.max(request.offset, 0), body.length);
       chunks[String(index)] = { offset: body.length, start: from, size: body.length, data: body.slice(from) };
     });

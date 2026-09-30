@@ -1,0 +1,114 @@
+{
+  "measurement": "tap to first unmuted browser sample above 0.001; cold fresh pages; values returned by the completed initial cohort",
+  "answer": "The first sentence should start speaking immediately. The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately. Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken.",
+  "reference": "c49d27a33391f70b9d87b4c8f1a62a8b98058e8d",
+  "provider": {
+    "backend": "soniox",
+    "model": "tts-rt-v2",
+    "voice": "Adrian",
+    "language": "en",
+    "rate": 24000
+  },
+  "results": [
+    {
+      "trial": 1,
+      "revision": "base",
+      "latencyMs": 17172.4
+    },
+    {
+      "trial": 1,
+      "revision": "candidate",
+      "latencyMs": 496.5
+    },
+    {
+      "trial": 2,
+      "revision": "base",
+      "latencyMs": 19391.3
+    },
+    {
+      "trial": 2,
+      "revision": "candidate",
+      "latencyMs": 450.7
+    },
+    {
+      "trial": 3,
+      "revision": "base",
+      "latencyMs": 17470.1
+    },
+    {
+      "trial": 3,
+      "revision": "candidate",
+      "latencyMs": 707.5
+    },
+    {
+      "trial": 4,
+      "revision": "base",
+      "latencyMs": 17937.5
+    },
+    {
+      "trial": 4,
+      "revision": "candidate",
+      "latencyMs": 494.5
+    },
+    {
+      "trial": 5,
+      "revision": "base",
+      "latencyMs": 18665.7
+    },
+    {
+      "trial": 5,
+      "revision": "candidate",
+      "latencyMs": 496.7
+    },
+    {
+      "trial": 6,
+      "revision": "base",
+      "latencyMs": 18284.4
+    },
+    {
+      "trial": 6,
+      "revision": "candidate",
+      "latencyMs": 364.8
+    },
+    {
+      "trial": 7,
+      "revision": "base",
+      "latencyMs": 16150.9
+    },
+    {
+      "trial": 7,
+      "revision": "candidate",
+      "latencyMs": 449.6
+    },
+    {
+      "trial": 8,
+      "revision": "base",
+      "latencyMs": 18283.9
+    },
+    {
+      "trial": 8,
+      "revision": "candidate",
+      "latencyMs": 620.9
+    },
+    {
+      "trial": 9,
+      "revision": "base",
+      "latencyMs": 17384.4
+    },
+    {
+      "trial": 9,
+      "revision": "candidate",
+      "latencyMs": 453.5
+    },
+    {
+      "trial": 10,
+      "revision": "base",
+      "latencyMs": 18325.0
+    },
+    {
+      "trial": 10,
+      "revision": "candidate",
+      "latencyMs": 494.6
+    }
+  ]
+}

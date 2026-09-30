@@ -15,6 +15,16 @@ const MAX_AUDIO_BYTES = 32 * 1024 * 1024;
 const UPSTREAM_TIMEOUT_MS = 60_000;
 const MAX_CONCURRENT_SYNTHESES = 3;
 let activeSyntheses = 0;
+const sonioxStarts: number[] = [];
+function sonioxDelay(): number {
+  const now = Date.now();
+  while (sonioxStarts.length && sonioxStarts[0]! <= now - 60_000) sonioxStarts.shift();
+  return sonioxStarts.length >= 100 ? Math.max(1, Math.ceil((sonioxStarts[0]! + 60_000 - now) / 1000)) : 0;
+}
+function safeRetryAfter(value: string | null): string {
+  const seconds = value && /^\d+(?:\.\d+)?$/.test(value) ? Number(value) : 1;
+  return String(Math.max(1, Math.min(60, Math.ceil(seconds))));
+}
 
 function admitSynthesis(): (() => void) | null {
   if (activeSyntheses >= MAX_CONCURRENT_SYNTHESES) return null;
@@ -27,38 +37,41 @@ function admitSynthesis(): (() => void) | null {
   };
 }
 
-function boundedAudioStream(body: ReadableStream<Uint8Array>, release: () => void): ReadableStream<Uint8Array> {
+function boundedAudioStream(body: ReadableStream<Uint8Array>, release: () => void, signal: AbortSignal, clientSignal: AbortSignal): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   let bytes = 0;
+  let finished = false;
+  let abort: () => void;
+  const finish = () => { if (finished) return; finished = true; signal.removeEventListener("abort", abort); release(); };
   return new ReadableStream<Uint8Array>({
+    start(controller) {
+      abort = () => {
+        if (finished) return;
+        finish();
+        void reader.cancel().catch(() => undefined);
+        if (clientSignal.aborted) controller.close();
+        else controller.error(new DOMException("speech stream timed out", "TimeoutError"));
+      };
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) abort();
+    },
     async pull(controller) {
       try {
         const result = await reader.read();
-        if (result.done) {
-          release();
-          controller.close();
-          return;
-        }
+        if (finished) return;
+        if (result.done) { finish(); controller.close(); return; }
         bytes += result.value.byteLength;
         if (bytes > MAX_AUDIO_BYTES) {
-          await reader.cancel("TTS audio exceeded 32 MB");
-          release();
-          controller.error(new Error("TTS audio exceeded 32 MB"));
-          return;
+          finish(); void reader.cancel().catch(() => undefined);
+          controller.error(new Error("TTS audio exceeded 32 MB")); return;
         }
         controller.enqueue(result.value);
       } catch (error) {
-        release();
-        controller.error(error);
+        if (finished) return;
+        finish(); controller.error(error);
       }
     },
-    async cancel(reason) {
-      try {
-        await reader.cancel(reason);
-      } finally {
-        release();
-      }
-    },
+    async cancel(reason) { finish(); await reader.cancel(reason); },
   });
 }
 
@@ -79,6 +92,7 @@ function synthesisRequest(
   option: TtsBackendOption,
   apiKey: string,
   text: string,
+  fast = false,
 ): { url: string; headers: Record<string, string>; body: string; timestamped: boolean } {
   if (backend === "openai") {
     return {
@@ -96,7 +110,8 @@ function synthesisRequest(
         model: option.model,
         voice: option.voice,
         language: option.language ?? "en",
-        audio_format: "mp3",
+        audio_format: fast ? "pcm_s16le" : "mp3",
+        ...(fast ? { sample_rate: 24000 } : {}),
         text,
       }),
       timestamped: false,
@@ -121,11 +136,14 @@ function synthesisRequest(
  * provider from that. Percent-encoded, because a configured voice name is
  * arbitrary text and a header value is not.
  */
-function billedBy(backend: TtsBackend, option: TtsBackendOption): Record<string, string> {
+function billedBy(backend: TtsBackend, option: TtsBackendOption, fast = false): Record<string, string> {
   return {
     "x-tts-backend": backend,
     "x-tts-model": encodeURIComponent(option.model),
     "x-tts-voice": encodeURIComponent(option.voice),
+    "x-tts-language": encodeURIComponent(option.language ?? ""),
+    "x-tts-encoding": fast ? "pcm_s16le" : "mp3",
+    ...(fast ? { "x-tts-sample-rate": "24000", "x-tts-channels": "1" } : {}),
   };
 }
 
@@ -196,7 +214,10 @@ export async function POST(req: NextRequest): Promise<Response> {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return NextResponse.json({ error: "expected a JSON object" }, { status: 400 });
   }
-  const body = parsed as { text?: unknown };
+  const body = parsed as { text?: unknown; mode?: unknown };
+  if (body.mode !== undefined && body.mode !== "soniox-pcm") return NextResponse.json({ error: "invalid speech mode" }, { status: 400 });
+  const fast = body.mode === "soniox-pcm";
+  if (fast && backend !== "soniox") return NextResponse.json({ error: "speech backend changed; refresh configuration" }, { status: 409 });
   if (typeof body.text !== "string" || !body.text.trim()) {
     return NextResponse.json({ error: "text must be a non-empty string" }, { status: 400 });
   }
@@ -204,13 +225,19 @@ export async function POST(req: NextRequest): Promise<Response> {
     return NextResponse.json({ error: `text is too long (${MAX_TTS_TEXT_LENGTH} character limit)` }, { status: 413 });
   }
   const text = redactSecrets(body.text.trim());
+  if (backend === "soniox" && new TextEncoder().encode(text).byteLength > 4800) {
+    return NextResponse.json({ error: "text is too long (4800 UTF-8 byte limit)" }, { status: 413 });
+  }
+  const delay = backend === "soniox" ? sonioxDelay() : 0;
+  if (delay) return NextResponse.json({ error: "speech request rate exceeded" }, { status: 429, headers: { "retry-after": String(delay) } });
   const release = admitSynthesis();
   if (!release) return NextResponse.json({ error: "another read-aloud is in progress" }, { status: 429 });
 
-  const request = synthesisRequest(backend, option, apiKey, text);
+  const request = synthesisRequest(backend, option, apiKey, text, fast);
+  if (backend === "soniox") sonioxStarts.push(Date.now());
   let upstream: Response;
+  const signal = AbortSignal.any([req.signal, AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)]);
   try {
-    const signal = AbortSignal.any([req.signal, AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)]);
     upstream = await fetch(request.url, {
       method: "POST",
       headers: request.headers,
@@ -226,9 +253,14 @@ export async function POST(req: NextRequest): Promise<Response> {
     );
   }
 
+  if (signal.aborted) { void upstream.body?.cancel().catch(() => undefined); release(); return new Response(null, { status: 499 }); }
   if (!upstream.ok || !upstream.body) {
+    void upstream.body?.cancel().catch(() => undefined);
     release();
-    return NextResponse.json({ error: `${backend} TTS failed (HTTP ${upstream.status})` }, { status: 502 });
+    const status = backend === "soniox" && [400, 401, 402, 403, 429].includes(upstream.status) ? upstream.status : 502;
+    return NextResponse.json({ error: `${backend} TTS failed (HTTP ${upstream.status})` }, {
+      status, headers: status === 429 ? { "retry-after": safeRetryAfter(upstream.headers.get("retry-after")) } : {},
+    });
   }
 
   const contentType = upstream.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() ?? "";
@@ -256,24 +288,24 @@ export async function POST(req: NextRequest): Promise<Response> {
       { headers: { "cache-control": "no-store", ...billedBy(backend, option) } },
     );
   }
-  if (!contentType.startsWith("audio/")) {
-    void upstream.body.cancel();
+  if (!contentType.startsWith("audio/") || (fast && contentType !== "audio/pcm")) {
+    void upstream.body.cancel().catch(() => undefined);
     release();
     return NextResponse.json({ error: `${backend} TTS returned invalid audio` }, { status: 502 });
   }
   const contentLength = Number(upstream.headers.get("content-length"));
   if (Number.isFinite(contentLength) && contentLength > MAX_AUDIO_BYTES) {
-    void upstream.body.cancel();
+    void upstream.body.cancel().catch(() => undefined);
     release();
     return NextResponse.json({ error: `${backend} TTS audio is too large` }, { status: 502 });
   }
-  const boundedBody = boundedAudioStream(upstream.body, release);
+  const boundedBody = boundedAudioStream(upstream.body, release, signal, req.signal);
 
   return new Response(boundedBody, {
     headers: {
       "content-type": contentType,
       "cache-control": "no-store",
-      ...billedBy(backend, option),
+      ...billedBy(backend, option, fast),
     },
   });
 }
