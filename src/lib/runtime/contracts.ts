@@ -393,7 +393,7 @@ export interface RuntimeReconfigureCommand extends RuntimeCommandBase {
   effort: string;
   fast: boolean | null;
   accountId?: string;
-  previousProfile?: { model: string | null; effort: string | null; fast: boolean | null };
+  previousProfile?: { model: string | null; effort: string | null; fast: boolean | null; serviceTier?: string | null };
 }
 
 export type RuntimePendingReconfigure = Omit<RuntimeReconfigureCommand, "kind" | "operationId" | "conversationId" | "idempotencyKey" | "previousProfile"> & {

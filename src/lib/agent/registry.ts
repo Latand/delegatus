@@ -474,7 +474,7 @@ export type SpawnSettlement =
 
 export type SupersedenceReason = "stage-retry" | "recovery-spawn" | "manual";
 
-export type ConversationReconfigureProfile = Pick<LaunchProfile, "model" | "effort" | "fast">;
+export type ConversationReconfigureProfile = Pick<LaunchProfile, "model" | "effort" | "fast" | "serviceTier">;
 
 export interface ConversationReconfigureState {
   operationId: string;
@@ -1136,6 +1136,7 @@ function mergeResumeLaunchProfile(current: LaunchProfile, requested: LaunchProfi
     model: requested.model ?? current.model,
     effort: requested.effort ?? current.effort,
     fast: requested.fast ?? current.fast,
+    serviceTier: requested.serviceTier ?? current.serviceTier,
     permissionMode: requested.permissionMode ?? current.permissionMode,
     readOnly: requested.readOnly ?? current.readOnly,
     sandbox: requested.sandbox ?? current.sandbox ?? null,
@@ -2130,7 +2131,11 @@ function normalizeConversationReconfigure(value: unknown): ConversationReconfigu
     if ((item.model !== null && typeof item.model !== "string")
       || (item.effort !== null && typeof item.effort !== "string")
       || (item.fast !== null && typeof item.fast !== "boolean")) return null;
-    return { model: item.model ?? null, effort: item.effort ?? null, fast: item.fast ?? null };
+    if (item.serviceTier !== undefined && item.serviceTier !== null && typeof item.serviceTier !== "string") return null;
+    return {
+      model: item.model ?? null, effort: item.effort ?? null, fast: item.fast ?? null,
+      ...(item.serviceTier !== undefined ? { serviceTier: item.serviceTier } : {}),
+    };
   };
   const current = profile(candidate.profile);
   const previous = profile(candidate.previousProfile);
@@ -2280,10 +2285,15 @@ function writeConversationLaunchProfile(
   generation: NativeGeneration,
   patch: ConversationReconfigureProfile,
 ): void {
-  generation.launchProfile = emptyLaunchProfile({ ...generation.launchProfile, ...patch });
+  // Explicit tier snapshots restore rollback exactly; speed-only edits clear a changed tier.
+  const tier = generation.launchProfile.serviceTier ?? null;
+  const serviceTier = patch.serviceTier !== undefined ? patch.serviceTier
+    : tier && patch.fast !== (tier !== "default") ? null : tier;
+  const resolvedPatch = { ...patch, serviceTier };
+  generation.launchProfile = emptyLaunchProfile({ ...generation.launchProfile, ...resolvedPatch });
   const entry = file.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })];
   if (entry) {
-    entry.launchProfile = emptyLaunchProfile({ ...(entry.launchProfile ?? generation.launchProfile), ...patch });
+    entry.launchProfile = emptyLaunchProfile({ ...(entry.launchProfile ?? generation.launchProfile), ...resolvedPatch });
     entry.updatedAt = now();
   }
   conversation.updatedAt = now();
@@ -7369,7 +7379,7 @@ export class AgentRegistry {
 
   updateConversationLaunchProfile(
     id: ViewerConversationId,
-    patch: Pick<LaunchProfile, "model" | "effort" | "fast">,
+    patch: Pick<LaunchProfile, "model" | "effort" | "fast" | "serviceTier">,
   ): RegistryConversation {
     return this.mutate((file) => {
       const conversation = file.conversations[resolveConversationAlias(file, id)];
@@ -7436,6 +7446,7 @@ export class AgentRegistry {
           model: generation.launchProfile.model,
           effort: generation.launchProfile.effort,
           fast: generation.launchProfile.fast,
+          serviceTier: generation.launchProfile.serviceTier ?? null,
         };
       const state: ConversationReconfigureState = {
         operationId: claim.operationId,

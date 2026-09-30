@@ -223,13 +223,20 @@ make the override reach only the next unbound attempt.
   an omitted `fast` inherits the same thread tier the sent one named.
 - **Structured reconfigure from the pill**: `RuntimePill.tsx:327` always sends
   `fast` for Codex, and `src/lib/agent/reconfigure.ts:35` requires it. The patch
-  lands in `updateConversationLaunchProfile`
-  (`src/lib/agent/registry.ts:7370-7380`). The rule there: keep
+  reaches the shared `writeConversationLaunchProfile` path in
+  `src/lib/agent/registry.ts`, used by both `updateConversationLaunchProfile`
+  and `claimConversationReconfigure`. The rule there: keep
   `launchProfile.serviceTier` when `patch.fast === isFastTier(current tier)`;
   otherwise set it to `null`. So an operator who picks Standard gets standard,
   and an effort or model change keeps `ultrafast`. After a model change, the
   host-start check (§3.2) refuses a kept tier the new model does not offer, and
   the reconfigure reports that failure. It does not quietly run on a lower tier.
+  `previousProfile` carries the exact optional `serviceTier`, including an
+  explicit null when the stable profile had none. Both the structured command
+  snapshot and the registry's fallback snapshot record it; normalization retains
+  it. Failed and cancelled reconfigures restore that exact value through the
+  shared writer, overriding its speed-change clearing rule. Superseding an
+  applying reconfigure retains the first stable snapshot as today.
 - **Account migration**: `src/lib/accounts/codexAppServer.ts:380-402` (the
   successor's `thread/resume`) and `migration/coordinator.ts:345` carry only
   `fast`. The successor host resumes with the generation's `serviceTier`, and the
@@ -268,8 +275,10 @@ replaces a role default.
 **`launchProfile.fast` stays meaningful.** It is written as the resolved tier's
 "fast-ness", `isFastTier(t) = t !== null && t !== "default"`, or as the caller's
 `fast` when no tier is set. Readers that compare `fast` (`structuredControls.ts:130-133`,
-the reconfigure `previousProfile` at `registry.ts:7433-7438`) keep working
-unchanged.
+the reconfigure `previousProfile` at `registry.ts:7433-7438`) retain their
+fast comparison. The rollback profile and its normalization additionally carry
+`serviceTier` so a failed or cancelled speed change restores `ultrafast`
+exactly; a profile that began without a tier returns to no tier.
 
 **Model required.** A tier needs a resolved model: the call's, the stage's or
 the role's. A tier with no model is refused with "serviceTier needs a model: the
@@ -495,7 +504,7 @@ with the three-account shape from the facts table: A and B `priority`, C
 | `src/lib/scanner/effort.test.ts` | argv `service_tier=ultrafast`; `thread_settings_applied` in the tail; `standard` → `default` |
 | `src/components/RuntimePill.dom.test.tsx` | the face shows `· Ultrafast`; the speed row detail shows the tier word; choosing Standard sends `fast: false` |
 | `src/components/runtimeProfile` (the existing test beside it, or `RuntimePill.persistence.dom.test.tsx`) | `sendRuntimeFrom` omits `fast` when it equals the observed `file.fast` |
-| `src/lib/agent/registry` tests touching `updateConversationLaunchProfile` (by file path) | an equal fast-ness keeps the tier; a different one clears it; `mergeResumeLaunchProfile` keeps it |
+| `src/lib/agent/registry` tests touching `updateConversationLaunchProfile` (by file path) | an equal fast-ness keeps the tier; a different one clears it on both shared write callers; `mergeResumeLaunchProfile` keeps it; failed and cancelled reconfigures restore ultrafast exactly, and a no-tier stable profile returns to none |
 
 Also required: `bunx tsc --noEmit`, and
 `bun scripts/privacy-publication-gate.ts --base <merge-base>`. Fixtures name

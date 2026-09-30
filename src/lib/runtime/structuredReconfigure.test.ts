@@ -20,7 +20,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-function fixture(profile: Partial<{ model: string | null; effort: string | null; fast: boolean | null }> = {}, engine: "codex" | "copilot" = "codex") {
+function fixture(profile: Partial<{ model: string | null; effort: string | null; fast: boolean | null; serviceTier: string | null }> = {}, engine: "codex" | "copilot" = "codex") {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-reconfigure-"));
   roots.push(root);
   const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
@@ -545,7 +545,7 @@ test("a failed LWW reconfigure restores the last stable profile across an applyi
   });
   expect(second.kind).toBe("claimed");
   if (!second.state) throw new Error("second reconfigure claim did not persist ownership");
-  expect(second.state.previousProfile).toEqual({ model: "gpt-5.5", effort: "medium", fast: false });
+  expect(second.state.previousProfile).toEqual({ model: "gpt-5.5", effort: "medium", fast: false, serviceTier: null });
 
   target.registry.settleConversationReconfigure(
     target.conversationId,
@@ -1217,4 +1217,42 @@ test("account migration preserves conversation continuity without a duplicate ca
   expect(target.registry.conversationForPath(successorPath)?.id).toBe(target.conversationId);
   expect(target.registry.canonicalPath(target.transcript)).toBe(successorPath);
   expect(Object.values(target.registry.snapshot().conversations)).toHaveLength(1);
+});
+
+for (const serviceTier of ["ultrafast", null]) {
+  test(`failed reconfigure restores exact stable service tier ${serviceTier ?? "none"}`, async () => {
+    const target = fixture({ fast: !!serviceTier, serviceTier });
+    await expect(applyStructuredReconfigure(effect({ conversationId: target.conversationId, fast: false }), {
+      registry: target.registry,
+      releaseHost: async () => true,
+      recover: async () => { throw new Error("fixture replacement failed"); },
+    })).rejects.toThrow("fixture replacement failed");
+    const restored = target.registry.conversation(target.conversationId)!;
+    expect(restored.generations.at(-1)!.launchProfile.serviceTier ?? null).toBe(serviceTier);
+    expect(restored.reconfigure!.previousProfile.serviceTier).toBe(serviceTier);
+  });
+
+  test(`cancelled reconfigure restores exact stable service tier ${serviceTier ?? "none"} after persistence`, () => {
+    const target = fixture({ fast: !!serviceTier, serviceTier });
+    target.registry.claimConversationReconfigure(target.conversationId, {
+      operationId: "tier-switch", revision: 20,
+      profile: { model: "gpt-5.5", effort: "high", fast: false }, accountId: "pending-target",
+    });
+    expect(target.registry.conversation(target.conversationId)!.generations.at(-1)!.launchProfile.serviceTier ?? null).toBeNull();
+    target.registry.requestConversationReseat(target.conversationId, "pending-target", { operationId: "tier-switch", revision: 20 });
+    const migration = target.registry.conversation(target.conversationId)!.migration!;
+    expect(target.registry.cancelConversationSwitch(target.conversationId, migration.revision).kind).toBe("cancelled");
+    const restored = target.registry.conversation(target.conversationId)!;
+    expect(restored.reconfigure!.status).toBe("cancelled");
+    expect(restored.reconfigure!.previousProfile.serviceTier).toBe(serviceTier);
+    expect(restored.generations.at(-1)!.launchProfile.serviceTier ?? null).toBe(serviceTier);
+  });
+}
+
+test("the shared profile writer retains an equal speed and clears a different speed", () => {
+  const target = fixture({ fast: true, serviceTier: "ultrafast" });
+  target.registry.updateConversationLaunchProfile(target.conversationId, { model: "gpt-5.5", effort: "high", fast: true });
+  expect(target.registry.conversation(target.conversationId)!.generations.at(-1)!.launchProfile.serviceTier).toBe("ultrafast");
+  target.registry.updateConversationLaunchProfile(target.conversationId, { model: "gpt-5.5", effort: "high", fast: false });
+  expect(target.registry.conversation(target.conversationId)!.generations.at(-1)!.launchProfile.serviceTier ?? null).toBeNull();
 });
