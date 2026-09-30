@@ -503,19 +503,17 @@ export class SqliteAgentRegistryStore {
     this.grantJournalReady = true;
     const columns = this.db.query<{ name: string }, []>("PRAGMA table_info(registry_rows)").all();
     if (!columns.some((column) => column.name === "row_order")) {
-      this.db.exec(`
-        BEGIN IMMEDIATE;
-        ALTER TABLE registry_rows ADD COLUMN row_order INTEGER NOT NULL DEFAULT 0;
-        WITH ordered AS (
+      this.runAtomically([
+        "ALTER TABLE registry_rows ADD COLUMN row_order INTEGER NOT NULL DEFAULT 0",
+        `WITH ordered AS (
           SELECT rowid, ROW_NUMBER() OVER (PARTITION BY collection ORDER BY rowid) - 1 AS position
           FROM registry_rows
         )
         UPDATE registry_rows
-        SET row_order = (SELECT position FROM ordered WHERE ordered.rowid = registry_rows.rowid);
-        INSERT INTO registry_meta(key, value) VALUES ('schema_version', '2')
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value;
-        COMMIT;
-      `);
+        SET row_order = (SELECT position FROM ordered WHERE ordered.rowid = registry_rows.rowid)`,
+        `INSERT INTO registry_meta(key, value) VALUES ('schema_version', '2')
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      ]);
     }
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS registry_rows_collection_order
@@ -539,33 +537,32 @@ export class SqliteAgentRegistryStore {
     // Explicit UPSERT clauses keep overlapping generation/continuity paths
     // harmless, including writes from a predecessor release during handover.
     if (this.meta("conversation_paths_trigger_version") !== "2") {
-      this.db.transaction(() => {
-        this.db.exec(`
-          DROP TRIGGER IF EXISTS registry_paths_insert;
-          DROP TRIGGER IF EXISTS registry_paths_update;
-          DROP TRIGGER IF EXISTS registry_paths_delete;
-          CREATE TRIGGER registry_paths_insert AFTER INSERT ON registry_rows WHEN NEW.collection = 'conversations' BEGIN
-            INSERT INTO registry_conversation_paths SELECT json_extract(value, '$.path'), NEW.row_key FROM json_each(NEW.value_json, '$.generations') WHERE json_extract(value, '$.path') IS NOT NULL ON CONFLICT(path, conversation_id) DO NOTHING;
-            INSERT INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.continuityPaths') WHERE true ON CONFLICT(path, conversation_id) DO NOTHING;
-          END;
-          CREATE TRIGGER registry_paths_update AFTER UPDATE ON registry_rows WHEN NEW.collection = 'conversations' BEGIN
-            DELETE FROM registry_conversation_paths WHERE conversation_id = OLD.row_key;
-            INSERT INTO registry_conversation_paths SELECT json_extract(value, '$.path'), NEW.row_key FROM json_each(NEW.value_json, '$.generations') WHERE json_extract(value, '$.path') IS NOT NULL ON CONFLICT(path, conversation_id) DO NOTHING;
-            INSERT INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.continuityPaths') WHERE true ON CONFLICT(path, conversation_id) DO NOTHING;
-          END;
-          CREATE TRIGGER registry_paths_delete AFTER DELETE ON registry_rows WHEN OLD.collection = 'conversations' BEGIN
-            DELETE FROM registry_conversation_paths WHERE conversation_id = OLD.row_key;
-          END;
-          INSERT INTO registry_meta(key, value) VALUES ('conversation_paths_trigger_version', '2')
-          ON CONFLICT(key) DO UPDATE SET value = excluded.value;
-        `);
-      }).immediate();
+      this.runAtomically([
+        "DROP TRIGGER IF EXISTS registry_paths_insert",
+        "DROP TRIGGER IF EXISTS registry_paths_update",
+        "DROP TRIGGER IF EXISTS registry_paths_delete",
+        `CREATE TRIGGER registry_paths_insert AFTER INSERT ON registry_rows WHEN NEW.collection = 'conversations' BEGIN
+          INSERT INTO registry_conversation_paths SELECT json_extract(value, '$.path'), NEW.row_key FROM json_each(NEW.value_json, '$.generations') WHERE json_extract(value, '$.path') IS NOT NULL ON CONFLICT(path, conversation_id) DO NOTHING;
+          INSERT INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.continuityPaths') WHERE true ON CONFLICT(path, conversation_id) DO NOTHING;
+        END`,
+        `CREATE TRIGGER registry_paths_update AFTER UPDATE ON registry_rows WHEN NEW.collection = 'conversations' BEGIN
+          DELETE FROM registry_conversation_paths WHERE conversation_id = OLD.row_key;
+          INSERT INTO registry_conversation_paths SELECT json_extract(value, '$.path'), NEW.row_key FROM json_each(NEW.value_json, '$.generations') WHERE json_extract(value, '$.path') IS NOT NULL ON CONFLICT(path, conversation_id) DO NOTHING;
+          INSERT INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.continuityPaths') WHERE true ON CONFLICT(path, conversation_id) DO NOTHING;
+        END`,
+        `CREATE TRIGGER registry_paths_delete AFTER DELETE ON registry_rows WHEN OLD.collection = 'conversations' BEGIN
+          DELETE FROM registry_conversation_paths WHERE conversation_id = OLD.row_key;
+        END`,
+        `INSERT INTO registry_meta(key, value) VALUES ('conversation_paths_trigger_version', '2')
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      ]);
     }
     if (this.meta("conversation_paths_ready") !== "1") {
-      this.db.exec(`BEGIN IMMEDIATE;
-        INSERT OR IGNORE INTO registry_conversation_paths SELECT json_extract(g.value, '$.path'), r.row_key FROM registry_rows r, json_each(r.value_json, '$.generations') g WHERE r.collection = 'conversations' AND json_extract(g.value, '$.path') IS NOT NULL;
-        INSERT OR IGNORE INTO registry_conversation_paths SELECT p.value, r.row_key FROM registry_rows r, json_each(r.value_json, '$.continuityPaths') p WHERE r.collection = 'conversations';
-        INSERT OR REPLACE INTO registry_meta(key, value) VALUES ('conversation_paths_ready', '1'); COMMIT;`);
+      this.runAtomically([
+        "INSERT OR IGNORE INTO registry_conversation_paths SELECT json_extract(g.value, '$.path'), r.row_key FROM registry_rows r, json_each(r.value_json, '$.generations') g WHERE r.collection = 'conversations' AND json_extract(g.value, '$.path') IS NOT NULL",
+        "INSERT OR IGNORE INTO registry_conversation_paths SELECT p.value, r.row_key FROM registry_rows r, json_each(r.value_json, '$.continuityPaths') p WHERE r.collection = 'conversations'",
+        "INSERT OR REPLACE INTO registry_meta(key, value) VALUES ('conversation_paths_ready', '1')",
+      ]);
     }
     this.secureFiles();
     this.importFirstBoot(options.initialSnapshot, options.verifyImport);
@@ -1754,6 +1751,16 @@ export class SqliteAgentRegistryStore {
       "SELECT (SELECT data_version FROM pragma_data_version) AS dataVersion, total_changes() AS changes",
     ).get()!;
     return `${stamp.dataVersion}:${stamp.changes}`;
+  }
+
+  /** Runs a startup migration as one immediate transaction, one statement
+      per call. A multi-statement `exec` under Bun 1.4.0 swallows a runtime
+      fault and keeps running the statements after it (#1974), so a block
+      written that way could commit half a migration and its marker. */
+  private runAtomically(statements: readonly string[]): void {
+    this.db.transaction(() => {
+      for (const statement of statements) this.db.run(statement);
+    }).immediate();
   }
 
   private meta(key: string): string | null {
