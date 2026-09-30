@@ -1,14 +1,21 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync, appendFileSync } from "node:fs";
 import { dirname } from "node:path";
 
+import type { AutoWriter } from "./auto";
+
 export interface HistoryEntry {
   at: string;
-  by: "operator" | "auto";
-  kind: "build" | "restart-web" | "restart-host";
+  /** `seat` only on a switch of automatic updates the orchestrator seat made. */
+  by: "operator" | "auto" | "seat";
+  /** `auto-on`/`auto-off`: automatic updates were switched; `target` is the
+      revision they were aimed at then, or empty when there was none. */
+  kind: "build" | "restart-web" | "restart-host" | "auto-on" | "auto-off";
   target: string;
   from: string | null;
   outcome: "done" | "failed" | "fell-back";
   detail?: string;
+  /** Who switched automatic updates, on `auto-on`/`auto-off`. */
+  writer?: AutoWriter;
 }
 export function readHistory(file: string, limit = 20): HistoryEntry[] {
   try {

@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 
-import { cancelUntakenRequest, readAuto, requestAutoRestart, restorePointer, writeAuto, pruneReleaseWorktrees, type AutoState, type AutoView } from "./auto";
+import { cancelUntakenRequest, DIALOG_WRITER, readAuto, requestAutoRestart, restorePointer, writeAuto, pruneReleaseWorktrees, type AutoState, type AutoView, type AutoWriter } from "./auto";
 import { GreenReader, type GreenVerdict } from "./green";
 import { appendHistory, readHistory } from "./history";
 import { probeQuiet, type QuietBlockers, type QuietPorts } from "./quiet";
@@ -201,13 +201,20 @@ export class SelfUpdateService {
     void this.autoTick();
   }
 
-  async setAuto(enabled: boolean): Promise<ActionResult> {
+  /** The one switch of automatic updates: the Update dialog and the
+      `auto_updates` MCP tool both reach it through `POST /api/self-update/auto`.
+      Each write is recorded with its writer, on the setting and in the
+      history the dialog shows. */
+  async setAuto(enabled: boolean, writer: AutoWriter = DIALOG_WRITER): Promise<ActionResult> {
     // A prior snapshot may have cached a different launcher generation.
     if (enabled) this.decision = null;
     const decision = await this.decide();
     const availability = this.autoAvailability(decision);
     if (enabled && availability !== "available") return refuse(409, "auto-unavailable", `Automatic updates unavailable: ${availability}`);
-    this.auto = { ...this.auto, enabled, changedAt: new Date(this.deps.now()).toISOString(), off: enabled ? null : this.auto.off, quietSince: null };
+    const at = new Date(this.deps.now()).toISOString();
+    this.auto = { ...this.auto, enabled, changedAt: at, changedBy: writer, off: enabled ? null : this.auto.off, quietSince: null };
+    appendHistory(this.historyFile, { at, by: writer.kind === "seat" ? "seat" : "operator", kind: enabled ? "auto-on" : "auto-off",
+      target: this.slice.available?.sha ?? "", from: null, outcome: "done", writer });
     this.saveAuto();
     if (this.pollTimer) clearTimeout(this.pollTimer);
     this.pollTimer = null;
@@ -249,7 +256,8 @@ export class SelfUpdateService {
       : sha && !this.auto.green[sha] ? "checks" : "idle";
     return { availability: this.autoAvailability(decision), enabled: this.auto.enabled, off: this.auto.off, phase, target, green: sha ? this.auto.green[sha] ?? null : null,
       blockers: phase === "waiting" ? this.autoBlockers ?? this.auto.lastBlockers : null,
-      waitingSince: this.auto.waitingSince, longWait: phase === "waiting" && !!this.auto.waitingSince && this.deps.now() - Date.parse(this.auto.waitingSince) >= 24 * 60 * 60_000 };
+      waitingSince: this.auto.waitingSince, longWait: phase === "waiting" && !!this.auto.waitingSince && this.deps.now() - Date.parse(this.auto.waitingSince) >= 24 * 60 * 60_000,
+      changedAt: this.auto.changedAt, changedBy: this.auto.changedBy };
   }
 
   /** Re-read durable facts on every pass. A web restart replaces this object

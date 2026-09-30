@@ -9,9 +9,11 @@
    the operator's alone. */
 import { NextResponse, type NextRequest } from "next/server";
 
+import { internalServiceClaim } from "@/lib/agent/callerClaims";
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 
+import { DIALOG_WRITER, type AutoWriter } from "./auto";
 import { selfUpdateService, snapshotStream } from "./instance";
 import { refuse, type ActionResult } from "./service";
 import { CHECKOUT_STEPS, type CheckoutStepName } from "./types";
@@ -92,7 +94,24 @@ export async function postAuto(request: NextRequest): Promise<NextResponse> {
   if (typeof input.enabled !== "boolean") {
     return NextResponse.json({ error: "enabled must be a boolean", code: "bad-enabled" }, { status: 400, headers: noStore });
   }
-  return answer(await selfUpdateService().setAuto(input.enabled));
+  return answer(await selfUpdateService().setAuto(input.enabled, autoWriter(request, input.writer)));
+}
+
+const WRITER_CONVERSATION = /^[A-Za-z0-9_-]{1,128}$/;
+
+/* Who switched. The dialog is the operator. The `auto_updates` MCP tool
+   decides its caller's authority itself (the Delegatus seat or the operator's
+   own session) and names that caller as `writer`; the name is read only from
+   a request carrying the MCP server's verified service tag, so a page or a
+   script that writes one into the body is still recorded as the operator. */
+function autoWriter(request: NextRequest, claimed: unknown): AutoWriter {
+  const service = internalServiceClaim(request, { readOnly: true });
+  if (service.claim !== "valid" || service.service !== "mcp") return DIALOG_WRITER;
+  const writer = claimed && typeof claimed === "object" ? claimed as Record<string, unknown> : {};
+  const conversationId = typeof writer.conversationId === "string" && WRITER_CONVERSATION.test(writer.conversationId) ? writer.conversationId : null;
+  return writer.kind === "seat" && conversationId
+    ? { kind: "seat", conversationId, via: "mcp" }
+    : { kind: "operator", conversationId, via: "mcp" };
 }
 
 /** `{ key, retry? }`: `key` is the browser's id for this one press, so a

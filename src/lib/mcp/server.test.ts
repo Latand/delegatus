@@ -1766,6 +1766,7 @@ describe("MCP tool service", () => {
         "seat_tick_settings",
         "account_project_binding",
         "role_presets",
+        "auto_updates",
         "account_limits",
         "telegram_bot_chats",
         "telegram_bot_send",

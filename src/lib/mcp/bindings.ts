@@ -2674,6 +2674,53 @@ function withRecordAuthors<T extends { seq: number; role: string; ts: string | n
   return authors.size ? records.map((record, index) => (authors.has(index) ? { ...record, author: authors.get(index)! } : record)) : records;
 }
 
+type ViewerSeatRefusal = "deputy" | "not-designated" | "no-seat" | "cross-project" | "foreign-project";
+
+/**
+ * Whether the caller is the designated orchestrator seat of the project whose
+ * code this Delegatus serves — the authority `deploy_exact_sha` executes on,
+ * and `auto_updates` writes on. Each tool words its own refusal.
+ *
+ * #795 (superseding contract): authority is derived from the SERVER-ATTRIBUTED
+ * caller identity and nothing else: no operator confirmation, no authorization
+ * row, and never anything read out of prose or reasoning. The identity chain
+ * is the one production already trusts — process ancestry merged with the
+ * admission-injected spawn capability, checked against the durable per-project
+ * orchestrator designation.
+ */
+function viewerSeatAuthority(
+  dependencies: ViewerMcpDomainDependencies,
+): { ok: true; seat: ReturnType<typeof authorizedManagerSeats>[number] } | { ok: false; reason: ViewerSeatRefusal } {
+  const attribution = attributionOf(dependencies);
+  /* A deputy speaks as its seat everywhere except here and in rotation
+     (docs/design/ghost-seat.md §4 rule 4): a five-minute self runs neither the
+     one gated operation nor the one identity change. */
+  if (attribution.via?.deputy) return { ok: false, reason: "deputy" };
+  if (attribution.kind !== "manager" || !attribution.conversationId) return { ok: false, reason: "not-designated" };
+
+  /* A designated seat's authority is scoped to its own project. The seat this
+     conversation holds must be the seat of the caller's own canonical project —
+     a seat exercising that authority from another project's context is the
+     cross-project spend this refusal closes. */
+  const seats = dependencies.authorizedSeats?.()
+    ?? authorizedManagerSeats(productionManagerAuthoritySources());
+  const seat = seats.find((candidate) => candidate.conversationId === attribution.conversationId);
+  if (!seat) return { ok: false, reason: "no-seat" };
+  const callerProject = dependencies.callerProject ? dependencies.callerProject() : productionCallerProject();
+  if (callerProject && seat.project !== callerProject) return { ok: false, reason: "cross-project" };
+
+  /* #1321: being a designated seat says WHO, never WHAT. The Viewer serving
+     this MCP is one repository, so a designated seat of any other project
+     holds no authority over it at all. For a deploy the refusal is placed
+     ahead of the POST on purpose: past it the runtime host fetches the
+     canonical mirror and resolves the revision, so a foreign caller would
+     otherwise learn only "revision not found" and go looking for a better
+     SHA. Fails closed when the Viewer cannot name its own repository. */
+  const viewerProjects = dependencies.viewerProjects ? dependencies.viewerProjects() : viewerOwnProjects();
+  if (!seat.project || !viewerProjects.includes(seat.project)) return { ok: false, reason: "foreign-project" };
+  return { ok: true, seat };
+}
+
 async function deployExactSha(
   args: McpToolArgs,
   control: ViewerControlDependencies,
@@ -2682,66 +2729,19 @@ async function deployExactSha(
   const revision = required(args, "revision");
   if (!/^[0-9a-f]{40}$/i.test(revision)) throw new Error("revision must be a full 40-character commit SHA");
 
-  /* #795 (superseding contract) — the designated agent decides the deploy and
-     executes it directly. Authority is derived from the SERVER-ATTRIBUTED
-     caller identity and nothing else: no operator confirmation, no
-     authorization row, and never anything read out of prose or reasoning. The
-     identity chain is the one production already trusts — process ancestry
-     merged with the admission-injected spawn capability, checked against the
-     durable per-project orchestrator designation. */
-  const attribution = attributionOf(dependencies);
-  /* A deputy speaks as its seat everywhere except here and in rotation
-     (docs/design/ghost-seat.md §4 rule 4): a five-minute self runs neither the
-     one gated operation nor the one identity change. */
-  if (attribution.via?.deputy) {
-    throw new McpToolRefusal(
-      "a parallel self of the orchestrator does not deploy; say in your final message what should ship and the seat decides on its next turn.",
-      { code: "deputy_cannot_deploy", revision },
-    );
+  const authority = viewerSeatAuthority(dependencies);
+  if (!authority.ok) {
+    const refusals: Record<ViewerSeatRefusal, [string, string]> = {
+      deputy: ["a parallel self of the orchestrator does not deploy; say in your final message what should ship and the seat decides on its next turn.", "deputy_cannot_deploy"],
+      "not-designated": ["only the designated orchestrator executes deploys; this session is not attributed as a designated seat. Report the request over the bridge instead.", "deploy_caller_not_designated"],
+      "no-seat": ["only the designated orchestrator executes deploys; this session holds no validated seat. Report the request over the bridge instead.", "deploy_caller_not_designated"],
+      "cross-project": ["a designated orchestrator deploys only as its own project's seat; this session's seat belongs to another project", "deploy_cross_project"],
+      "foreign-project": ["this tool deploys the Delegatus application that serves this MCP, and nothing else; it cannot deploy the caller's project, and no Delegatus surface can. Report the request over the bridge instead.", "deploy_foreign_project"],
+    };
+    const [message, code] = refusals[authority.reason];
+    throw new McpToolRefusal(message, { code, revision });
   }
-  if (attribution.kind !== "manager" || !attribution.conversationId) {
-    throw new McpToolRefusal(
-      "only the designated orchestrator executes deploys; this session is not attributed as a designated seat. Report the request over the bridge instead.",
-      { code: "deploy_caller_not_designated", revision },
-    );
-  }
-
-  /* A designated seat's authority is scoped to its own project. The seat this
-     conversation holds must be the seat of the caller's own canonical project —
-     a seat exercising deploy authority from another project's context is the
-     cross-project spend this refusal closes. */
-  const seats = dependencies.authorizedSeats?.()
-    ?? authorizedManagerSeats(productionManagerAuthoritySources());
-  const seat = seats.find((candidate) => candidate.conversationId === attribution.conversationId);
-  if (!seat) {
-    throw new McpToolRefusal(
-      "only the designated orchestrator executes deploys; this session holds no validated seat. Report the request over the bridge instead.",
-      { code: "deploy_caller_not_designated", revision },
-    );
-  }
-  const callerProject = dependencies.callerProject ? dependencies.callerProject() : productionCallerProject();
-  if (callerProject && seat.project !== callerProject) {
-    throw new McpToolRefusal(
-      "a designated orchestrator deploys only as its own project's seat; this session's seat belongs to another project",
-      { code: "deploy_cross_project", revision },
-    );
-  }
-
-  /* #1321: being a designated seat says WHO may deploy, never WHAT. This tool
-     ships one repository — the Viewer serving this MCP — so a designated seat of
-     any other project holds no authority here at all, whatever SHA it names. The
-     refusal is placed ahead of the POST on purpose: past it the runtime host
-     fetches the canonical mirror and resolves the revision, so a foreign caller
-     would otherwise learn only "revision not found" and go looking for a better
-     SHA. Fails closed when the Viewer cannot name its own repository — a deploy
-     whose target is unproven is the one this closes. */
-  const viewerProjects = dependencies.viewerProjects ? dependencies.viewerProjects() : viewerOwnProjects();
-  if (!seat.project || !viewerProjects.includes(seat.project)) {
-    throw new McpToolRefusal(
-      "this tool deploys the Delegatus application that serves this MCP, and nothing else; it cannot deploy the caller's project, and no Delegatus surface can. Report the request over the bridge instead.",
-      { code: "deploy_foreign_project", revision },
-    );
-  }
+  const seat = authority.seat;
 
   const receipt = await control.post("/api/runtime/deployments", {
     revision,
@@ -3841,6 +3841,89 @@ function rolePresetsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDepende
     health: change.after.health,
     rows,
   });
+}
+
+/**
+ * auto_updates: read, and switch, automatic updates of this Delegatus install.
+ *
+ * The switch is the Update dialog's own: the tool posts to the same
+ * `POST /api/self-update/auto`, so the web process's one `setAuto` changes and
+ * the dialog, its "turned off because…" line and the automatic-update
+ * controller all read that change. No second state is kept here.
+ *
+ * - **Who writes.** The designated orchestrator seat of the project whose code
+ *   this Delegatus serves (`viewerSeatAuthority`, the authority
+ *   `deploy_exact_sha` executes on) and the operator's own session, the
+ *   gateway, as `role_presets` admits it. Every other caller reads, and its
+ *   write is refused with `auto_updates_write_refused` before the Viewer is
+ *   asked anything.
+ * - **What is recorded.** The route records the writer this tool names on
+ *   the setting and in the dialog's history, and trusts that name only from
+ *   a request carrying the MCP server's service tag.
+ */
+async function autoUpdatesTool(
+  args: McpToolArgs,
+  control: ViewerControlDependencies,
+  dependencies: ViewerMcpDomainDependencies,
+): Promise<McpToolPayload> {
+  if (args.enabled === undefined) return autoUpdatesAnswer(await readViewerControl(control, "/api/self-update"));
+  if (typeof args.enabled !== "boolean") throw new Error("enabled must be true or false; omit it to read");
+
+  const attribution = attributionOf(dependencies);
+  let writer: { kind: "operator" | "seat"; conversationId: string | null };
+  if (attribution.kind === "gateway") {
+    writer = { kind: "operator", conversationId: attribution.conversationId };
+  } else {
+    const authority = viewerSeatAuthority(dependencies);
+    if (!authority.ok) {
+      throw new McpToolRefusal(
+        "only the designated orchestrator of the Delegatus project and the operator's own session switch automatic updates; this session reads them. Report the request over the bridge instead.",
+        { code: "auto_updates_write_refused", reason: authority.reason === "no-seat" ? "not-designated" : authority.reason, callerKind: attribution.kind },
+      );
+    }
+    writer = { kind: "seat", conversationId: authority.seat.conversationId };
+  }
+
+  if (args.enabled) {
+    const current = autoUpdatesAnswer(await readViewerControl(control, "/api/self-update"));
+    if (current.availability !== "available") {
+      throw new McpToolRefusal(
+        `automatic updates cannot be turned on for this install (${String(current.availability)}); nothing was changed`,
+        { code: "auto_updates_unavailable", availability: current.availability },
+      );
+    }
+  }
+  return autoUpdatesAnswer(await control.post("/api/self-update/auto", {
+    enabled: args.enabled,
+    writer,
+    clientRequestId: requestId(args),
+  }));
+}
+
+/** The automatic-update part of the Update dialog's snapshot, and the latest
+    switches from its history. */
+function autoUpdatesAnswer(snapshot: Record<string, unknown>): McpToolPayload {
+  const auto = objectRecord(snapshot.auto) ? snapshot.auto : {};
+  const target = objectRecord(auto.target) ? auto.target : null;
+  const history = Array.isArray(snapshot.history) ? snapshot.history.filter(objectRecord) : [];
+  return {
+    mode: snapshot.mode ?? null,
+    availability: auto.availability ?? null,
+    enabled: auto.enabled === true,
+    off: auto.off ?? null,
+    phase: auto.phase ?? null,
+    target: target ? { sha: target.sha ?? null, short: target.short ?? null, version: target.version || null } : null,
+    green: auto.green ?? null,
+    blockers: auto.blockers ?? null,
+    waitingSince: auto.waitingSince ?? null,
+    longWait: auto.longWait === true,
+    changedAt: auto.changedAt ?? null,
+    changedBy: auto.changedBy ?? null,
+    recentChanges: history
+      .filter((entry) => entry.kind === "auto-on" || entry.kind === "auto-off")
+      .slice(0, 5)
+      .map((entry) => ({ at: entry.at, enabled: entry.kind === "auto-on", writer: entry.writer ?? null })),
+  };
 }
 
 /**
@@ -6303,6 +6386,7 @@ export function viewerMcpBindings(
     /* Same reason as above: this binding refuses by throwing. */
     account_project_binding: async (args) => accountProjectBindingTool(args, domainDependencies),
     role_presets: async (args) => rolePresetsTool(args, domainDependencies),
+    auto_updates: (args, context) => autoUpdatesTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     account_limits: async (args) => accountLimitsTool(args, domainDependencies),
     create_orchestrator: (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context)),
     send_message_to_orchestrator: (args, context) => sendMessageToOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
