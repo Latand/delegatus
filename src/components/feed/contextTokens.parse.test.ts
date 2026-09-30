@@ -265,6 +265,16 @@ describe("Codex", () => {
     expect(parse(codexFile, lines)[0].contextTokens).toEqual({ n: 1_111, basis: "estimate" });
   });
 
+  test("a result recorded twice for one call is sized once, by the model-facing output", () => {
+    const mcpCall = codexItem({ type: "function_call", name: "mcp__viewer__get_conversation", call_id: "call_x", arguments: "{}" });
+    const threadItem = codexEvent({
+      type: "item_completed",
+      item: { type: "McpToolCall", id: "call_x", server: "viewer", tool: "get_conversation", arguments: {}, status: "completed", result: { content: [{ type: "text", text: filler(7_200) }] } },
+    });
+    const list = parse(codexFile, [mcpCall, threadItem, shellOutput("call_x", 3_600)]);
+    expect(list.find((event) => event.id === "call_x")?.contextTokens).toEqual({ n: 1_000, basis: "estimate" });
+  });
+
   test("a call with no result has no number", () => {
     const [call] = parse(codexFile, [shellCall("c1")]);
     expect(call.contextTokens).toBeUndefined();

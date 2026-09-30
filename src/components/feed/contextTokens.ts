@@ -95,8 +95,16 @@ export function sumContextTokens(events: readonly Pick<ToolEvent, "status" | "co
 
 const NUMBER_LOCALE: Record<Locale, string> = { en: "en-US", uk: "uk-UA" };
 
+const numberFormats = new Map<Locale, Intl.NumberFormat>();
+
+function numberFormat(locale: Locale): Intl.NumberFormat {
+  let format = numberFormats.get(locale);
+  if (!format) numberFormats.set(locale, (format = new Intl.NumberFormat(NUMBER_LOCALE[locale])));
+  return format;
+}
+
 export function contextTokensTitle(t: ContextTokens, scope: "call" | "calls", locale: Locale): string {
-  const format = new Intl.NumberFormat(NUMBER_LOCALE[locale]);
+  const format = numberFormat(locale);
   const params = {
     count: t.n,
     n: format.format(t.n),
@@ -128,7 +136,9 @@ export type ContextLedger = {
   codexUsage(prompt: number, output: number, totalTokens: number | undefined): void;
   /** A call the current response issued. `hosted` marks one the provider runs and bills inside that response. */
   member(id: string, hosted?: boolean): void;
-  /** A result attached to a call. `quiet` records its size and shows no estimate. */
+  /** A result attached to a call. A repeat result for the same call replaces
+      the recorded size (the last, model-facing one wins); a `quiet` one adds to
+      it, records its size and shows no estimate. */
   result(id: string, chars: number, rasters: number, quiet?: boolean): void;
   /** Something else entered the prompt between two responses. */
   contaminate(): void;
@@ -226,7 +236,7 @@ export function createContextLedger(
     },
     result(id, chars, rasters, quiet = false) {
       const previous = sizes.get(id);
-      sizes.set(id, { chars: (previous?.chars ?? 0) + chars, rasters: (previous?.rasters ?? 0) + rasters });
+      sizes.set(id, quiet && previous ? { chars: previous.chars + chars, rasters: previous.rasters + rasters } : { chars, rasters });
       if (!previous && sizes.size > SIZE_LIMIT) sizes.delete(sizes.keys().next().value!);
       if (quiet) return;
       const total = sizes.get(id)!;
