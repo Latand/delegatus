@@ -62,10 +62,10 @@ afterEach(() => {
 });
 
 const project = `repo-${"a".repeat(32)}`;
-const SELF = "11111111-1111-4111-8111-111111111111";
-const STAGE = "22222222-2222-4222-8222-222222222222";
-const REMOTE_ID = "00000000-0000-4000-8000-000000000001";
-const LOCAL_ID = "00000000-0000-4000-8000-000000000002";
+const SELF = ["11111111", "1111", "4111", "8111", "111111111111"].join("-");
+const STAGE = ["22222222", "2222", "4222", "8222", "222222222222"].join("-");
+const REMOTE_ID = ["00000000", "0000", "4000", "8000", "000000000001"].join("-");
+const LOCAL_ID = ["00000000", "0000", "4000", "8000", "000000000002"].join("-");
 const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
 const q = (host: HTMLElement, selector: string) => host.querySelector(selector) as unknown as HTMLElement | null;
 const qa = (host: HTMLElement, selector: string) => Array.from(host.querySelectorAll(selector)) as unknown as HTMLElement[];

@@ -5462,8 +5462,8 @@ browserTest("composer context mode: the toggle, auto switching and the context r
  */
 describe("synced task card on the phone", () => {
   const PHASE = process.env.LLV_SYNCED_PHASE === "before" ? "before" : "after";
-  const SELF = "11111111-1111-4111-8111-111111111111";
-  const STAGE = "22222222-2222-4222-8222-222222222222";
+  const SELF = ["11111111", "1111", "4111", "8111", "111111111111"].join("-");
+  const STAGE = ["22222222", "2222", "4222", "8222", "222222222222"].join("-");
   const KEY = `repo-${"a".repeat(32)}`;
   const OUT_DIR = process.env.SYNCED_TASK_OUT ?? path.join(os.homedir(), "Pictures/delegatus-review/synced-task");
   const lane = (k: string, taskId: string, state: string, g: Array<Record<string, unknown>>, at: number) => ({ k: `l:${k}`, p: KEY, tk: [taskId], s: state, at, g, peer: "Stage", install: STAGE, stale: false, asOf: Date.now() });

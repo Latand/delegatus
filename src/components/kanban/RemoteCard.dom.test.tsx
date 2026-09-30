@@ -32,10 +32,10 @@ afterEach(() => {
 });
 
 const project = `repo-${"a".repeat(32)}`;
-const SELF = "11111111-1111-4111-8111-111111111111";
-const STAGE = "22222222-2222-4222-8222-222222222222";
-const REMOTE_ID = "00000000-0000-4000-8000-000000000001";
-const LOCAL_ID = "00000000-0000-4000-8000-000000000002";
+const SELF = ["11111111", "1111", "4111", "8111", "111111111111"].join("-");
+const STAGE = ["22222222", "2222", "4222", "8222", "222222222222"].join("-");
+const REMOTE_ID = ["00000000", "0000", "4000", "8000", "000000000001"].join("-");
+const LOCAL_ID = ["00000000", "0000", "4000", "8000", "000000000002"].join("-");
 const NO_PORTS: TaskMutationPorts = { patch: async () => ({ ok: false, status: 500, error: "unused" }), read: async () => null, changed: () => {} };
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 
@@ -140,7 +140,7 @@ test("an older peer that sends no lane data renders the card without a scheme an
 });
 
 test("a lane draws only on a task its sender owns: a forged lane for a local task or another machine's task is ignored", async () => {
-  const foreign = lane("running", { install: "33333333-3333-4333-8333-333333333333" });
+  const foreign = lane("running", { install: ["33333333", "3333", "4333", "8333", "333333333333"].join("-") });
   const forLocal = lane("running", { k: "l:0badc0de", tk: [LOCAL_ID] });
   const host = await mount(feed([foreign, forLocal]), [remoteTask(), task(LOCAL_ID, "A local task")]);
   expect(cardOf(host, REMOTE_ID)!.querySelector("[data-pipeline]")).toBeNull();

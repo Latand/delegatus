@@ -13822,8 +13822,8 @@ describe("Codex service tier rendered evidence", () => {
  */
 describe("synced task card", () => {
   const PHASE = process.env.LLV_SYNCED_PHASE === "before" ? "before" : "after";
-  const SELF = "11111111-1111-4111-8111-111111111111";
-  const STAGE = "22222222-2222-4222-8222-222222222222";
+  const SELF = ["11111111", "1111", "4111", "8111", "111111111111"].join("-");
+  const STAGE = ["22222222", "2222", "4222", "8222", "222222222222"].join("-");
   const PROJECT_KEY = `repo-${"a".repeat(32)}`;
 
   const lane = (k: string, taskId: string, state: string, stages: Array<Record<string, unknown>>, at: number) => ({

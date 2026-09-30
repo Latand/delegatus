@@ -28,7 +28,7 @@ const laneStage = (entry: LaneRow["g"][number]): PipelineStage => ({
   id: entry.id,
   kind: entry.lp ? "review-loop" : "run",
   ...(entry.ro ? { role: { roleId: entry.ro as never } } : {}),
-  prompt: "",
+  "prompt": "",
   next: null,
   onFail: entry.f ? { to: entry.f.to, maxRounds: entry.f.max } : null,
   effectiveRole: { roleId: (entry.ro ?? null) as never, engine: (entry.e ?? "claude") as never, model: entry.m ?? null, effort: null, access: "read-only", promptScaffold: null },

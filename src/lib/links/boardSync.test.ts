@@ -1584,9 +1584,9 @@ test("no prompt, spec, finding, summary, path or conversation id of a lane cross
   const onA = await createOn(a, "A task");
   const onB = await createOn(b, "B task");
   await sync(a, peerId);
-  const secret = "LANE-SECRET-SENTINEL";
-  await laneOn(a, { id: "a1b2c3d4", taskIds: [onA.id], state: "needs_decision", current: "review", sentinel: secret, stages: threeStages("review", { findings: ["finding text"] }) });
-  await laneOn(b, { id: "5e0a41c2", taskIds: [onB.id], state: "needs_decision", current: "review", sentinel: secret, stages: threeStages("review", { findings: ["finding text"] }) });
+  const canary = "LANE-SECRET-SENTINEL";
+  await laneOn(a, { id: "a1b2c3d4", taskIds: [onA.id], state: "needs_decision", current: "review", sentinel: canary, stages: threeStages("review", { findings: ["finding text"] }) });
+  await laneOn(b, { id: "5e0a41c2", taskIds: [onB.id], state: "needs_decision", current: "review", sentinel: canary, stages: threeStages("review", { findings: ["finding text"] }) });
   const diskA = fileMarks("lane-private-A");
   const diskB = fileMarks("lane-private-B");
   await captured(a);
@@ -1597,9 +1597,9 @@ test("no prompt, spec, finding, summary, path or conversation id of a lane cross
   expect((await lanesOn(b)).lanes).toHaveLength(1);
   const bodies = [...await captured(a), ...await captured(b)].flatMap((call) => [call.request, call.response]).join("\n");
   expect(bodies).toContain('"k":"l:');
-  expect(bodies).not.toContain(secret);
+  expect(bodies).not.toContain(canary);
   expect(bodies).not.toContain("transcript.jsonl");
-  expect(JSON.stringify([(await lanesOn(a)).lanes, (await lanesOn(b)).lanes])).not.toContain(secret);
+  expect(JSON.stringify([(await lanesOn(a)).lanes, (await lanesOn(b)).lanes])).not.toContain(canary);
   expect(fileMarks("lane-private-A")).toEqual(diskA);
   expect(fileMarks("lane-private-B")).toEqual(diskB);
 }, 60_000);

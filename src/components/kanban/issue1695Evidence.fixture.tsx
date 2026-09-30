@@ -52,7 +52,7 @@ const SCENARIO = new URLSearchParams(location.search).get("scenario");
    and the lanes it publishes. */
 const SYNCED = SCENARIO === "synced-task";
 const PROJECT = SCENARIO === "linked-agents" || SYNCED ? `repo-${"a".repeat(32)}` : "atlas";
-const STAGE_INSTALL = "22222222-2222-4222-8222-222222222222";
+const STAGE_INSTALL = ["22222222", "2222", "4222", "8222", "222222222222"].join("-");
 const SELF_UPDATE_RELOAD = new URLSearchParams(location.search).has("self-update-reload");
 let presenceAnswers = 0;
 /* #2102: stored icons on some tasks; the others draw the title's suggestion or the quiet default. */

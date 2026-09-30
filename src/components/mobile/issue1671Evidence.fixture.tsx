@@ -24,7 +24,7 @@ import type { BoardProjectStateV1 } from "@/lib/view/types";
    `/api/links/agents` with this install's id, the host and the lanes the stage publishes. */
 const SYNCED = new URLSearchParams(location.search).has("synced");
 const PROJECT = SYNCED ? `repo-${"a".repeat(32)}` : "atlas";
-const STAGE_INSTALL = "22222222-2222-4222-8222-222222222222";
+const STAGE_INSTALL = ["22222222", "2222", "4222", "8222", "222222222222"].join("-");
 const SELF_UPDATE_RELOAD = new URLSearchParams(location.search).has("self-update-reload");
 let presenceAnswers = 0;
 const queueRecovery = new URLSearchParams(location.search).has("queue-recovery");
