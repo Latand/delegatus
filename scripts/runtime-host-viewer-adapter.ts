@@ -162,7 +162,11 @@ function reportAdapterPhase(action: string, phase: string): void {
 /** While a transient network failure is retried, the deployment's phase says
     so, rather than the deploy reading as failed (#2220). */
 function reportNetworkRetry(detail: string): void {
-  reportAdapterPhase(adapterAction, `network unavailable, retrying: ${detail}`);
+  /* The runtime host accepts only plain words, digits, and hyphens in a
+     phase. Keep the cause (including the DNS hostname) while speaking that
+     bounded phase contract. */
+  const safeDetail = detail.replaceAll(".", "-").replace(/[^A-Za-z0-9 -]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
+  reportAdapterPhase(adapterAction, `network unavailable - retrying - ${safeDetail}`.slice(0, 160));
 }
 
 async function commandResult(argv: string[], options: { cwd?: string; timeoutMs?: number } = {}): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -236,7 +240,14 @@ function retryBuildNetwork(argv: string[], options: { cwd?: string } = {}): Prom
     throw new Error(output.length <= 2_000 ? output : `${output.slice(0, 1_000)}\n…\n${output.slice(-1_000)}`);
   }, {
     backoffMs: BUILD_NETWORK_BACKOFF_MS,
-    classify: connectionFailure,
+    classify: (error) => {
+      /* BuildKit prints recovery and step output before its final verdict. A
+         transient warning that recovered must not turn a later permanent
+         failure into three full builds. Classify only the failed verdict at
+         the end; retain the bounded full output in the thrown error. */
+      const verdict = error.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1) ?? error;
+      return connectionFailure(verdict);
+    },
     onRetry: reportNetworkRetry,
     action: "retry the deploy",
   });

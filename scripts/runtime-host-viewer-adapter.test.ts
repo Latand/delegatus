@@ -144,6 +144,69 @@ exec /usr/bin/git upload-pack ${quoted(remote)}
   }
 }, 45_000);
 
+test("issue 2220: the runtime host logs a DNS retry phase while the real canonical mirror fetch backs off", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-adapter-dns-phase-"));
+  const bin = path.join(sandbox, "bin");
+  const source = path.join(sandbox, "source");
+  const remote = path.join(sandbox, "canonical.git");
+  const state = path.join(sandbox, "state");
+  const mirror = path.join(state, "deployments", "canonical.git");
+  const helper = path.join(bin, "ssh-helper");
+  const attemptsFile = path.join(sandbox, "ssh-attempts");
+  const wrapper = path.join(bin, "adapter");
+  const quoted = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  const git = (cwd: string, ...args: string[]) => {
+    const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+    if (result.exitCode !== 0) throw new Error(result.stderr.toString() || `git ${args[0]} failed`);
+    return result.stdout.toString().trim();
+  };
+  fs.mkdirSync(bin, { recursive: true });
+  fs.mkdirSync(source);
+  fs.mkdirSync(remote);
+  try {
+    git(remote, "init", "--bare", "--initial-branch=main");
+    git(source, "init", "--initial-branch=main");
+    git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", "release");
+    const revision = git(source, "rev-parse", "HEAD");
+    git(source, "remote", "add", "origin", remote);
+    git(source, "push", "origin", "main");
+    fs.mkdirSync(path.dirname(mirror), { recursive: true });
+    git(sandbox, "clone", "--mirror", remote, mirror);
+    fs.writeFileSync(helper, `#!/bin/sh
+set -eu
+count=0
+[ ! -f ${quoted(attemptsFile)} ] || count=$(cat ${quoted(attemptsFile)})
+count=$((count + 1))
+printf '%s' "$count" > ${quoted(attemptsFile)}
+if [ "$count" -le 2 ]; then
+  printf '%s\\n' 'ssh: Could not resolve hostname github.com: Temporary failure in name resolution' >&2
+  exit 255
+fi
+exec /usr/bin/git upload-pack ${quoted(remote)}
+`, { mode: 0o700 });
+    fs.writeFileSync(wrapper, `#!/bin/sh
+set -eu
+export LLV_STATE_DIR=${quoted(state)}
+export LLV_VIEWER_CANONICAL_REMOTE=ssh://fixture/canonical.git
+export GIT_SSH_COMMAND=${quoted(helper)}
+exec ${quoted(process.execPath)} ${quoted(adapter)} "$@"
+`, { mode: 0o700 });
+    const lines: string[] = [];
+    const hostAdapter = HostCommandViewerDeploymentAdapter.fromExecutable(wrapper, {
+      stateFile: path.join(sandbox, "adapter-process.json"),
+      phaseLogIntervalMs: 10,
+      log: (...args) => { lines.push(args.map(String).join(" ")); },
+    });
+
+    await expect(hostAdapter.resolveRevision("origin/main")).resolves.toBe(revision);
+
+    expect(Number(fs.readFileSync(attemptsFile, "utf8"))).toBeGreaterThanOrEqual(3);
+    expect(lines.join("\n")).toContain("network unavailable - retrying - DNS lookup of github-com failed retrying");
+  } finally {
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
+}, 20_000);
+
 /** #1511: the candidate authenticates every connection when a token is
     configured (#1496), so the probe carries the credential of the endpoint it
     was pinned to. A candidate with no token configured carries none. */
@@ -423,6 +486,147 @@ function composeSnapshot(): string {
     },
   });
 }
+
+test("issue 2220: a recovered DNS warning does not retry a permanent final Docker build verdict", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-build-final-verdict-"));
+  const state = path.join(sandbox, "state");
+  const bin = path.join(sandbox, "bin");
+  const dockerLog = path.join(sandbox, "docker.log");
+  const phaseFile = path.join(sandbox, "phase.json");
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, "git"), `#!/bin/sh
+set -eu
+if [ "\${3:-}" = "rev-parse" ] && [ "\${4:-}" = "--is-bare-repository" ]; then printf 'true\\n'; exit 0; fi
+if [ "\${3:-}" = "worktree" ] && [ "\${4:-}" = "add" ]; then mkdir -p "$6"; printf 'services: {}\\n' > "$6/docker-compose.yml"; exit 0; fi
+if [ "\${3:-}" = "worktree" ] && [ "\${4:-}" = "remove" ]; then rm -rf "$6"; exit 0; fi
+if [ "\${3:-}" = "worktree" ] && [ "\${4:-}" = "prune" ]; then exit 0; fi
+if [ "\${3:-}" = "remote" ] || [ "\${3:-}" = "fetch" ]; then exit 0; fi
+if [ "\${3:-}" = "cat-file" ]; then exit 0; fi
+exit 1
+`, { mode: 0o700 });
+  fs.writeFileSync(path.join(bin, "docker"), `#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1 $2" = "compose --project-directory" ]; then printf '%s\\n' "$FAKE_COMPOSE"; exit 0; fi
+if [ "$1 $2" = "build --pull" ]; then
+  printf '%s\\n' 'lookup registry.example.invalid: no such host; recovered' >&2
+  printf '%s\\n' 'ERROR: failed to solve: failed to read dockerfile: open Dockerfile: no such file or directory' >&2
+  exit 1
+fi
+if [ "$1 $2" = "image rm" ]; then exit 0; fi
+exit 1
+`, { mode: 0o700 });
+  const child = Bun.spawn([process.execPath, adapter, "build-candidate"], {
+    cwd: root,
+    env: {
+      ...process.env,
+      HOME: path.join(sandbox, "runtime-home"),
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+      FAKE_COMPOSE: composeSnapshot(),
+      FAKE_DOCKER_LOG: dockerLog,
+      LLV_DEPLOYMENT_ADAPTER_PHASE_FILE: phaseFile,
+      LLV_DEPLOYMENT_ADAPTER_PROTOCOL: "1",
+      LLV_MCP_RUNTIME_ROOT: path.join(sandbox, "llv-mcp-runtime"),
+      LLV_STATE_DIR: state,
+      LLV_VIEWER_CANDIDATE_PORT_BASE: "28000",
+      LLV_VIEWER_CANONICAL_REMOTE: "ssh://fixture/canonical.git",
+      LLV_VIEWER_PORT: "1",
+    },
+    stdin: "pipe", stdout: "pipe", stderr: "pipe",
+  });
+  child.stdin.write(`${JSON.stringify({ deploymentId: "deploy-final-verdict", revision: "7".repeat(40) })}\n`);
+  child.stdin.end();
+  let code: number | null = null;
+  try {
+    for (let attempt = 0; attempt < 300; attempt += 1) {
+      if (fs.existsSync(phaseFile)) {
+        const phase = JSON.parse(fs.readFileSync(phaseFile, "utf8")) as { phase?: string };
+        if (phase.phase?.includes("network unavailable")) child.kill("SIGKILL");
+      }
+      const outcome = await Promise.race([
+        child.exited.then((value) => ({ done: true as const, value })),
+        Bun.sleep(10).then(() => ({ done: false as const })),
+      ]);
+      if (outcome.done) { code = outcome.value; break; }
+    }
+    if (code === null) { child.kill("SIGKILL"); code = await child.exited; }
+    const stderr = await new Response(child.stderr).text();
+    expect(code).toBe(1);
+    expect(stderr).toContain("failed to read dockerfile");
+    expect(fs.readFileSync(dockerLog, "utf8").split("\n").filter((line) => line.startsWith("build --pull"))).toHaveLength(1);
+    const phase = fs.existsSync(phaseFile) ? JSON.parse(fs.readFileSync(phaseFile, "utf8")) as { phase?: string } : {};
+    expect(phase.phase ?? "").not.toContain("network unavailable");
+  } finally {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
+}, 10_000);
+
+test("issue 2220: a final Docker DNS verdict starts the bounded build retry", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-build-dns-verdict-"));
+  const state = path.join(sandbox, "state");
+  const bin = path.join(sandbox, "bin");
+  const dockerLog = path.join(sandbox, "docker.log");
+  const phaseFile = path.join(sandbox, "phase.json");
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, "git"), `#!/bin/sh
+set -eu
+if [ "\${3:-}" = "rev-parse" ] && [ "\${4:-}" = "--is-bare-repository" ]; then printf 'true\\n'; exit 0; fi
+if [ "\${3:-}" = "worktree" ] && [ "\${4:-}" = "add" ]; then mkdir -p "$6"; printf 'services: {}\\n' > "$6/docker-compose.yml"; exit 0; fi
+if [ "\${3:-}" = "worktree" ] && [ "\${4:-}" = "remove" ]; then rm -rf "$6"; exit 0; fi
+if [ "\${3:-}" = "worktree" ] && [ "\${4:-}" = "prune" ]; then exit 0; fi
+if [ "\${3:-}" = "remote" ] || [ "\${3:-}" = "fetch" ] || [ "\${3:-}" = "cat-file" ]; then exit 0; fi
+exit 1
+`, { mode: 0o700 });
+  fs.writeFileSync(path.join(bin, "docker"), `#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1 $2" = "compose --project-directory" ]; then printf '%s\\n' "$FAKE_COMPOSE"; exit 0; fi
+if [ "$1 $2" = "build --pull" ]; then
+  count=$(grep -c '^build --pull' "$FAKE_DOCKER_LOG")
+  if [ "$count" = 1 ]; then
+    printf '%s\\n' 'ERROR: failed to solve: lookup registry.example.invalid on 127.0.0.11:53: no such host' >&2
+  else
+    printf '%s\\n' 'ERROR: failed to solve: failed to read dockerfile: open Dockerfile: no such file or directory' >&2
+  fi
+  exit 1
+fi
+if [ "$1 $2" = "image rm" ]; then exit 0; fi
+exit 1
+`, { mode: 0o700 });
+  const child = Bun.spawn([process.execPath, adapter, "build-candidate"], {
+    cwd: root,
+    env: {
+      ...process.env,
+      HOME: path.join(sandbox, "runtime-home"),
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+      FAKE_COMPOSE: composeSnapshot(),
+      FAKE_DOCKER_LOG: dockerLog,
+      LLV_DEPLOYMENT_ADAPTER_PHASE_FILE: phaseFile,
+      LLV_DEPLOYMENT_ADAPTER_PROTOCOL: "1",
+      LLV_MCP_RUNTIME_ROOT: path.join(sandbox, "llv-mcp-runtime"),
+      LLV_STATE_DIR: state,
+      LLV_VIEWER_CANDIDATE_PORT_BASE: "28000",
+      LLV_VIEWER_CANONICAL_REMOTE: "ssh://fixture/canonical.git",
+      LLV_VIEWER_PORT: "1",
+    },
+    stdin: "pipe", stdout: "pipe", stderr: "pipe",
+  });
+  child.stdin.write(`${JSON.stringify({ deploymentId: "deploy-dns-verdict", revision: "7".repeat(40) })}\n`);
+  child.stdin.end();
+  try {
+    const code = await child.exited;
+    const stderr = await new Response(child.stderr).text();
+    expect(code).toBe(1);
+    expect(stderr).toContain("failed to read dockerfile");
+    expect(fs.readFileSync(dockerLog, "utf8").split("\n").filter((line) => line.startsWith("build --pull"))).toHaveLength(2);
+    const phase = JSON.parse(fs.readFileSync(phaseFile, "utf8")) as { phase?: string };
+    expect(phase.phase).toContain("network unavailable");
+  } finally {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
+}, 20_000);
 
 test("bounded promoted verification retains the real 503 startup phase and category through a failed probe", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-promoted-startup-bound-"));
