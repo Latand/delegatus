@@ -26,6 +26,7 @@ export { StageToneMark } from "@/components/kanban/PipelineSection";
 import { StageGlyph } from "@/components/kanban/StageGlyph";
 import { stageIdentity } from "@/components/kanban/stageIdentity";
 import { stageDraftable, type PipelineActionKind } from "@/components/kanban/stagesModel";
+import type { ManagedOn } from "./remoteLaneSummary";
 
 import {
   latestAttempt, pipelineReviewHeads, pipelineStagePosition, pipelineStateLabel, stageChipLabel, stageConfigurable, stageDisplayName, stageLatestAttemptPlace, stageNames, stageRoleAside,
@@ -533,6 +534,11 @@ export interface PipelineBlockProps {
   /** Card density: what the card adds about its other pipelines ("+1
       paused"), at the right end of the block's last line. */
   aside?: React.ReactNode;
+  /** The lane runs on another machine and this block draws what that machine
+      published (docs/design/synced-task-card.md §6): the chain and the state
+      words as at home, and none of the ways to act on it. A lane that waits on
+      a person says where to answer instead of offering the answer. */
+  managedOn?: ManagedOn;
 }
 
 export interface StageConversation {
@@ -555,7 +561,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
   const selected = props.selected ?? NO_STAGES;
   const title = pipelineTitle(t, pipeline);
   const progress = pipelineProgress(t, summary, nameOf);
-  const answers = pipelineAnswers(pipeline, nameOf);
+  const answers = props.managedOn ? null : pipelineAnswers(pipeline, nameOf);
   const root = {
     "data-pipeline": pipeline.id,
     "data-density": density,
@@ -565,10 +571,10 @@ export function PipelineBlock(props: PipelineBlockProps) {
 
   if (density === "card") {
     const age = moved === null ? "" : humanizeDuration(blockAgeSeconds((nowMs - moved) / 1000));
-    const text = <WorkLinkText resolved={links} testId={pipeline.id} className="pb-pr" />;
+    const text = props.managedOn ? null : <WorkLinkText resolved={links} testId={pipeline.id} className="pb-pr" />;
     if (pipelineEnded(pipeline)) {
       return (
-        <span className="pblock" {...root}>
+        <span className="pblock" {...root} data-managed={props.managedOn ? "" : undefined}>
           <span className="pb-line ended">
             <span className="pb-ended">
               <StageToneMark state="passed" />
@@ -580,7 +586,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
         </span>
       );
     }
-    const reason = pipelineReason(t, pipeline, nameOf);
+    const reason = props.managedOn ? props.managedOn.reason : pipelineReason(t, pipeline, nameOf);
     /* Running says itself in the live pill; any other state that is not the
        operator's to answer says its word beside the age. */
     const word = needs || pipeline.state === "running" ? null : pipelineStateLabel(t, pipeline.state);
@@ -588,7 +594,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
     const reasonLine = reason ? <span className="pb-reason" data-pipeline-reason={pipeline.id}>{[reason, age].filter(Boolean).join(" · ")}</span> : null;
     const aside = props.aside ? <span className="pb-aside" data-pipeline-aside={pipeline.id}>{props.aside}</span> : null;
     return (
-      <span className="pblock" {...root}>
+      <span className="pblock" {...root} data-managed={props.managedOn ? "" : undefined}>
         <CardLine summary={summary} nameOf={nameOf} suffixes={suffixes} age={ageNode} tail={text} />
         {aside ? (
           <span className={`pb-line${reasonLine ? " reason" : " sub"}`}>{reasonLine}<span className="pb-grow" />{aside}</span>
@@ -608,9 +614,24 @@ export function PipelineBlock(props: PipelineBlockProps) {
   /* A completed lane's merge word stands in for its age (#2187 §6): the two
      side by side cut the lane's title at 1440 in uk. */
   const age = moved === null || laneMergeWord(pipeline) ? null : fmtAge(moved / 1000);
-  const graphOpen = Boolean(props.graphOpen && props.onToggleGraph && props.onOpenStage);
-  const report = !needs && pipeline.stageReports?.length ? pipeline.stageReports.at(-1)! : null;
-  const opener = (
+  const managed = props.managedOn ?? null;
+  const graphOpen = !managed && Boolean(props.graphOpen && props.onToggleGraph && props.onOpenStage);
+  const report = !managed && !needs && pipeline.stageReports?.length ? pipeline.stageReports.at(-1)! : null;
+  const openerBody = (
+    <>
+      {showTitle ? <span className="pb-title" data-pipeline-title={pipeline.id}>{title}</span> : null}
+      <span className="pb-meta">
+        {word ? <span className="pstate-word" data-pstate={pipeline.state}>{word}</span> : null}
+        <MergeWord pipeline={pipeline} nowMs={nowMs} />
+        {word && age ? <span className="pb-sep" aria-hidden="true">·</span> : null}
+        {age ? <span className="pb-when">{age}</span> : null}
+      </span>
+    </>
+  );
+  /* A lane managed elsewhere has no stages sheet to open: its head is text. */
+  const opener = managed ? (
+    <span className="pb-open managed" data-open-stages={pipeline.id}>{openerBody}</span>
+  ) : (
     <button
       type="button"
       className="pb-open"
@@ -620,18 +641,12 @@ export function PipelineBlock(props: PipelineBlockProps) {
       disabled={!props.onOpenStages}
       onClick={() => props.onOpenStages?.(pipeline)}
     >
-      {showTitle ? <span className="pb-title" data-pipeline-title={pipeline.id}>{title}</span> : null}
-      <span className="pb-meta">
-        {word ? <span className="pstate-word" data-pstate={pipeline.state}>{word}</span> : null}
-        <MergeWord pipeline={pipeline} nowMs={nowMs} />
-        {word && age ? <span className="pb-sep" aria-hidden="true">·</span> : null}
-        {age ? <span className="pb-when">{age}</span> : null}
-      </span>
+      {openerBody}
       <ChevronRight />
     </button>
   );
-  const acting = props.acting ? <span className="pb-acting" role="status" data-pipeline-acting={props.acting}>{t(`kanban.pipelineAct.pending.${props.acting}`)}</span> : null;
-  const controls = (
+  const acting = !managed && props.acting ? <span className="pb-acting" role="status" data-pipeline-acting={props.acting}>{t(`kanban.pipelineAct.pending.${props.acting}`)}</span> : null;
+  const controls = managed ? null : (
     <>
       {props.onToggleGraph && props.onOpenStage ? (
         <button
@@ -668,7 +683,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
      44 px ⋯ do not fit one line. */
   const chainHead = !showTitle && !graphOpen && !props.onMenu;
   return (
-    <div className="pblock" role="group" aria-label={t("kanban.pipelineAria", { title, progress })} {...root}>
+    <div className="pblock" role="group" aria-label={t("kanban.pipelineAria", { title, progress })} {...root} data-managed={managed ? "" : undefined}>
       {chainHead ? null : (
         <div className="pb-head">
           {opener}
@@ -684,27 +699,33 @@ export function PipelineBlock(props: PipelineBlockProps) {
           <WorkLinkRow resolved={links} showNoPr className="pb-links end" testId={pipeline.id} onMore={props.onWorkLinks ? (anchor) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, anchor) : undefined} />
         </>
       ) : (
-        <div className={finishFlagShown(pipeline, props.taskId) ? "pb-chain has-finish" : "pb-chain"}>
-          <ChainPills summary={summary} nameOf={nameOf} suffixes={suffixes} selected={selected} onOpenStage={props.onOpenStage} />
-          <FinishFlag pipeline={pipeline} taskId={props.taskId} />
-          <WorkLinkRow resolved={links} showNoPr className="pb-links" testId={pipeline.id} onMore={props.onWorkLinks ? (anchor) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, anchor) : undefined} />
+        <div className={!managed && finishFlagShown(pipeline, props.taskId) ? "pb-chain has-finish" : "pb-chain"}>
+          <ChainPills summary={summary} nameOf={nameOf} suffixes={suffixes} selected={selected} onOpenStage={managed ? undefined : props.onOpenStage} />
+          {managed ? null : <FinishFlag pipeline={pipeline} taskId={props.taskId} />}
+          {managed ? null : <WorkLinkRow resolved={links} showNoPr className="pb-links" testId={pipeline.id} onMore={props.onWorkLinks ? (anchor) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, anchor) : undefined} />}
           {chainHead ? <span className="pb-tail">{acting}{controls}{opener}</span> : null}
         </div>
       )}
-      {answers ? (
-        <AnswerPanel pipeline={pipeline} answers={answers} names={names} nameOf={nameOf} acting={props.acting ?? null} large={Boolean(props.largeAnswers)} onAnswer={props.onAnswer} />
-      ) : needs ? (
-        <div className="pb-answer">
-          {pipeline.state === "needs_review"
-            ? <p className="review-heads" data-review-heads={pipeline.id}>{pipelineReviewHeads(t, pipeline)}</p>
-            : <DecisionReport pipeline={pipeline} stage={parkedStage(pipeline)} names={names} nameOf={nameOf} />}
-        </div>
-      ) : null}
-      <FinishWaitNote pipeline={pipeline} taskId={props.taskId} />
-      <UnreviewedNote pipeline={pipeline} />
-      <MergeNote pipeline={pipeline} />
+      {managed ? (
+        managed.note ? <p className="pb-note" data-managed-on={managed.host}>{managed.note}</p> : null
+      ) : (
+        <>
+          {answers ? (
+            <AnswerPanel pipeline={pipeline} answers={answers} names={names} nameOf={nameOf} acting={props.acting ?? null} large={Boolean(props.largeAnswers)} onAnswer={props.onAnswer} />
+          ) : needs ? (
+            <div className="pb-answer">
+              {pipeline.state === "needs_review"
+                ? <p className="review-heads" data-review-heads={pipeline.id}>{pipelineReviewHeads(t, pipeline)}</p>
+                : <DecisionReport pipeline={pipeline} stage={parkedStage(pipeline)} names={names} nameOf={nameOf} />}
+            </div>
+          ) : null}
+          <FinishWaitNote pipeline={pipeline} taskId={props.taskId} />
+          <UnreviewedNote pipeline={pipeline} />
+          <MergeNote pipeline={pipeline} />
+        </>
+      )}
       {report ? <div className="pb-note"><StageReportLine pipeline={pipeline} entry={report} names={names} /></div> : null}
-      {pipeline.graphEdits?.length ? <GraphEditLine edit={pipeline.graphEdits.at(-1)!} /> : null}
+      {!managed && pipeline.graphEdits?.length ? <GraphEditLine edit={pipeline.graphEdits.at(-1)!} /> : null}
     </div>
   );
 }

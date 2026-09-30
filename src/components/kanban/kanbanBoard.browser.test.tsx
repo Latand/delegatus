@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { chromium, type Browser, type LaunchOptions, type Page } from "playwright-core";
 
@@ -13805,6 +13806,174 @@ describe("Codex service tier rendered evidence", () => {
       }
       fs.mkdirSync("evidence/codex-service-tier", { recursive: true });
       fs.writeFileSync("evidence/codex-service-tier/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases: evidence }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
+/*
+ * A task another machine runs (docs/design/synced-task-card.md §5-§7): the
+ * remote look, the host chip where "+ Agent" was, the owner's lanes drawn by
+ * the one stage chain, and the local cards beside them untouched. The feed is
+ * what `/api/links/agents` answers for a linked pair. One case runs the phases
+ * the PR names: `LLV_SYNCED_PHASE=before` against a checkout without the
+ * change renders the same scene and only takes pictures and the local card's
+ * readings; the default `after` also fails on every measurement below. Pictures
+ * go to `SYNCED_TASK_OUT`, else the review folder under the home directory.
+ */
+describe("synced task card", () => {
+  const PHASE = process.env.LLV_SYNCED_PHASE === "before" ? "before" : "after";
+  const SELF = ["11111111", "1111", "4111", "8111", "111111111111"].join("-");
+  const STAGE = ["22222222", "2222", "4222", "8222", "222222222222"].join("-");
+  const PROJECT_KEY = `repo-${"a".repeat(32)}`;
+
+  const lane = (k: string, taskId: string, state: string, stages: Array<Record<string, unknown>>, at: number) => ({
+    k: `l:${k}`, p: PROJECT_KEY, tk: [taskId], s: state, at, g: stages, peer: "Stage", install: STAGE, stale: false, asOf: Date.now(),
+  });
+  const feed = (label: string, withLanes: boolean) => {
+    const now = Date.now();
+    return {
+      agents: [], self: SELF, hosts: { [STAGE]: { label, linked: true } },
+      lanes: withLanes ? [
+        lane("5e0a41c2", "t-rem-run", "running", [
+          { id: "build", ro: "builder", st: "passed", n: 1, e: "codex", m: "gpt-6.1-sol" },
+          { id: "review", ro: "reviewer", st: "running", n: 2, r: 2, f: { to: "fix", max: 3, u: 1 }, e: "claude", m: "claude-opus-5" },
+          { id: "fix", ro: "builder", st: "pending", b: 1, e: "codex", m: "gpt-6.1-sol" },
+        ], now - 4 * 60_000),
+        lane("a1b2c3d4", "t-rem-wait", "needs_decision", [
+          { id: "build", ro: "builder", st: "passed", n: 1, e: "codex", m: "gpt-6.1-sol" },
+          { id: "review", ro: "reviewer", st: "needs_decision", n: 1, fc: 2, e: "claude", m: "claude-opus-5" },
+        ], now - 14 * 60_000),
+        lane("0badc0de", "t-rem-done", "completed", [
+          { id: "build", ro: "builder", st: "passed", n: 1, e: "codex", m: "gpt-6.1-sol" },
+          { id: "review", ro: "reviewer", st: "passed", n: 1, e: "claude", m: "claude-opus-5" },
+        ], now - 3 * 3_600_000),
+      ] : [],
+    };
+  };
+  /** The orchestrator's chat takes the top of the page; folded, the board fills it. */
+  const foldSeat = async (page: Page) => {
+    await page.evaluate((project) => localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { [project]: true }, placement: "top", width: null })), PROJECT_KEY);
+    await page.reload();
+  };
+  const OUT = process.env.SYNCED_TASK_OUT ?? path.join(os.homedir(), "Pictures/delegatus-review/synced-task");
+  const REMOTE_IDS = ["t-rem-run", "t-rem-wait", "t-rem-old", "t-rem-done"];
+
+  /** What a local card draws, so the two phases can be compared: its size, its surface and its words. */
+  const readLocal = (page: Page) => page.locator(card("t-search")).evaluate((node) => {
+    const style = getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    return {
+      width: Math.round(rect.width), height: Math.round(rect.height), backgroundImage: style.backgroundImage, backgroundColor: style.backgroundColor,
+      borderColor: style.borderTopColor, boxShadow: style.boxShadow, pills: node.querySelectorAll(".pb-pill[data-stage]").length,
+      text: (node.textContent ?? "").replace(/\d+[smhd]\b/g, "N").replace(/\s+/g, " ").trim(),
+      addAgent: Boolean(node.querySelector("[data-add-agent]")),
+    };
+  });
+
+  browserTest("remote cards read at a glance in light and dark, in en and uk, at 1440; the local card is the same before and after", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const scratch = path.resolve(".artifacts/synced-task-card");
+    fs.mkdirSync(scratch, { recursive: true });
+    const server = await serveEvidenceFixture(scratch, undefined, { "/api/links/agents": feed("Stage", true) });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const scheme of ["light", "dark"] as const) for (const locale of ["en", "uk"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=synced-task`, VIEWPORT, scheme, locale, "reduce");
+        try {
+          await foldSeat(page);
+          await page.locator(card("t-rem-run")).waitFor();
+          await page.waitForTimeout(400);
+          const local = await readLocal(page);
+          const localFile = path.join(OUT, `before-local-card-${scheme}-${locale}.json`);
+          if (PHASE === "before") fs.writeFileSync(localFile, JSON.stringify(local, null, 2) + "\n");
+          else if (fs.existsSync(localFile)) expect(local).toEqual(JSON.parse(fs.readFileSync(localFile, "utf8")));
+          /* The shelves scroll on their own: bring the running card and the finished one into view. */
+          await page.locator(card("t-rem-done")).scrollIntoViewIfNeeded();
+          await page.locator(card("t-rem-run")).scrollIntoViewIfNeeded();
+          await page.waitForTimeout(200);
+          await page.screenshot({ path: path.join(OUT, `${PHASE}-desktop-1440-${scheme}-${locale}.png`) });
+          for (const id of REMOTE_IDS) {
+            const target = page.locator(card(id));
+            await target.scrollIntoViewIfNeeded();
+            await target.screenshot({ path: path.join(OUT, `${PHASE}-desktop-card-${id.replace("t-rem-", "")}-${scheme}-${locale}.png`) });
+          }
+          if (PHASE === "after") {
+            const remote = page.locator(".card.remote");
+            expect(await remote.count()).toBe(REMOTE_IDS.length);
+            for (const id of REMOTE_IDS) {
+              const node = page.locator(card(id));
+              const read = await node.evaluate((element) => {
+                const cardRect = element.getBoundingClientRect();
+                const chip = element.querySelector<HTMLElement>(".host-chip");
+                const label = element.querySelector<HTMLElement>(".host-chip-label");
+                const age = element.querySelector<HTMLElement>(".foot .age");
+                const chipRect = chip?.getBoundingClientRect();
+                const ageRect = age?.getBoundingClientRect();
+                const overlap = Boolean(chipRect && ageRect && chipRect.left < ageRect.right && chipRect.right > ageRect.left && chipRect.top < ageRect.bottom && chipRect.bottom > ageRect.top);
+                return {
+                  stripe: getComputedStyle(element).backgroundImage.includes("repeating-linear-gradient"),
+                  border: getComputedStyle(element).borderTopColor,
+                  chipText: chip?.textContent ?? null,
+                  chipInside: Boolean(chipRect && chipRect.left >= cardRect.left - 0.5 && chipRect.right <= cardRect.right + 0.5),
+                  labelClipped: Boolean(label && label.scrollWidth > label.clientWidth + 0.5 && getComputedStyle(label).textOverflow !== "ellipsis"),
+                  ageLines: ageRect ? Math.round(ageRect.height / parseFloat(getComputedStyle(age!).lineHeight || "16")) : 0,
+                  overlap,
+                  addAgent: Boolean(element.querySelector("[data-add-agent]")),
+                  buttonsInLane: element.querySelectorAll(".pblock[data-managed] button, .pblock[data-managed] a, [data-managed-on] button").length,
+                  pills: [...element.querySelectorAll<HTMLElement>(".pb-pill[data-stage]")].map((pill) => pill.dataset.stage),
+                  note: element.querySelector("[data-managed-on]")?.textContent ?? null,
+                };
+              });
+              expect(read.stripe).toBe(true);
+              expect(read.border).not.toBe(local.borderColor);
+              expect(read.chipText).toBe(translate(locale, "kanban.remote.managedOn", { host: "Stage" }));
+              expect(read.chipInside).toBe(true);
+              expect(read.labelClipped).toBe(false);
+              expect(read.ageLines).toBeLessThanOrEqual(1);
+              expect(read.overlap).toBe(false);
+              expect(read.addAgent).toBe(false);
+              expect(read.buttonsInLane).toBe(0);
+              if (id === "t-rem-run") expect(read.pills).toEqual(["build", "review", "fix"]);
+              if (id === "t-rem-wait") expect(read.note).toContain(translate(locale, "pipelineBlock.remote.decisionTail", { host: "Stage" }));
+              if (id === "t-rem-old") expect(read.pills).toEqual([]);
+            }
+            expect(local.addAgent).toBe(true);
+            expect(await page.locator(`${card("t-search")}.remote`).count()).toBe(0);
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 240_000);
+
+  browserTest("a 100-character host label stays inside its card on the narrow shelf, on its own line when the age takes the first", async () => {
+    if (PHASE === "before") return;
+    fs.mkdirSync(OUT, { recursive: true });
+    const scratch = path.resolve(".artifacts/synced-task-card-long");
+    fs.mkdirSync(scratch, { recursive: true });
+    const label = `Stage ${"x".repeat(94)}`;
+    const server = await serveEvidenceFixture(scratch, undefined, { "/api/links/agents": feed(label, true) });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=synced-task`, VIEWPORT, "light", "en", "reduce");
+      try {
+        await foldSeat(page);
+        await page.locator(card("t-rem-done")).waitFor();
+        const read = await page.locator(card("t-rem-done")).evaluate((element) => {
+          const cardRect = element.getBoundingClientRect();
+          const chip = element.querySelector<HTMLElement>(".host-chip")!.getBoundingClientRect();
+          const label = element.querySelector<HTMLElement>(".host-chip-label")!;
+          const age = element.querySelector<HTMLElement>(".foot .age")!.getBoundingClientRect();
+          return { cardWidth: cardRect.width, inside: chip.left >= cardRect.left - 0.5 && chip.right <= cardRect.right + 0.5, ellipsis: getComputedStyle(label).textOverflow === "ellipsis" && label.scrollWidth > label.clientWidth,
+            overlap: chip.left < age.right && chip.right > age.left && chip.top < age.bottom && chip.bottom > age.top, ageHeight: age.height };
+        });
+        expect(read.inside).toBe(true);
+        expect(read.ellipsis).toBe(true);
+        expect(read.overlap).toBe(false);
+        expect(read.ageHeight).toBeLessThan(24);
+        await page.locator(card("t-rem-done")).screenshot({ path: path.join(OUT, "after-desktop-card-long-host-light-en.png") });
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
 });

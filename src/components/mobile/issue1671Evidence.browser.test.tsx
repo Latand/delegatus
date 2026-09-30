@@ -5449,3 +5449,153 @@ browserTest("composer context mode: the toggle, auto switching and the context r
   fs.mkdirSync(evidenceDir, { recursive: true });
   fs.writeFileSync(path.join(evidenceDir, "readings.json"), `${JSON.stringify({ readings }, null, 2)}\n`);
 }, 400_000);
+
+/*
+ * A task another machine runs, on the phone (docs/design/synced-task-card.md
+ * §8): the board card keeps to one button and gains its lane line and a
+ * passive host line under the remote stripe; the task screen draws each remote
+ * lane in a frame with no control, the chain standing vertical in its 342 px,
+ * and a passive host pill where "+ Agent" was. `LLV_SYNCED_PHASE=before`
+ * against a checkout without the change renders the same scene and only takes
+ * pictures and the local card's readings; the default `after` also fails on
+ * every measurement. Pictures go to `SYNCED_TASK_OUT`, else the review folder.
+ */
+describe("synced task card on the phone", () => {
+  const PHASE = process.env.LLV_SYNCED_PHASE === "before" ? "before" : "after";
+  const SELF = ["11111111", "1111", "4111", "8111", "111111111111"].join("-");
+  const STAGE = ["22222222", "2222", "4222", "8222", "222222222222"].join("-");
+  const KEY = `repo-${"a".repeat(32)}`;
+  const OUT_DIR = process.env.SYNCED_TASK_OUT ?? path.join(os.homedir(), "Pictures/delegatus-review/synced-task");
+  const lane = (k: string, taskId: string, state: string, g: Array<Record<string, unknown>>, at: number) => ({ k: `l:${k}`, p: KEY, tk: [taskId], s: state, at, g, peer: "Stage", install: STAGE, stale: false, asOf: Date.now() });
+  const feed = () => {
+    const now = Date.now();
+    return {
+      agents: [], self: SELF, hosts: { [STAGE]: { label: "Stage", linked: true } },
+      lanes: [
+        lane("5e0a41c2", "t-rem-run", "running", [
+          { id: "build", ro: "builder", st: "passed", n: 1, e: "codex", m: "gpt-6.1-sol" },
+          { id: "review", ro: "reviewer", st: "running", n: 2, r: 2, f: { to: "fix", max: 3, u: 1 }, e: "claude", m: "claude-opus-5" },
+          { id: "fix", ro: "builder", st: "pending", b: 1, e: "codex", m: "gpt-6.1-sol" },
+        ], now - 4 * 60_000),
+        lane("a1b2c3d4", "t-rem-wait", "needs_decision", [
+          { id: "build", ro: "builder", st: "passed", n: 1, e: "codex", m: "gpt-6.1-sol" },
+          { id: "review", ro: "reviewer", st: "needs_decision", n: 1, fc: 2, e: "claude", m: "claude-opus-5" },
+        ], now - 14 * 60_000),
+        lane("0badc0de", "t-rem-done", "completed", [
+          { id: "build", ro: "builder", st: "passed", n: 1, e: "codex", m: "gpt-6.1-sol" },
+          { id: "review", ro: "reviewer", st: "passed", n: 1, e: "claude", m: "claude-opus-5" },
+        ], now - 3 * 3_600_000),
+      ],
+    };
+  };
+  const readLocal = (page: Page) => page.locator('[data-phone-card="task:t-favicon"]').evaluate((node) => {
+    const style = getComputedStyle(node);
+    return { width: Math.round(node.getBoundingClientRect().width), height: Math.round(node.getBoundingClientRect().height), backgroundImage: style.backgroundImage,
+      backgroundColor: style.backgroundColor, boxShadow: style.boxShadow, text: (node.textContent ?? "").replace(/\d+[smhd]\b/g, "N").replace(/\s+/g, " ").trim() };
+  });
+
+  browserTest("remote cards and the task screen read at a glance at 390, light and dark, en and uk", async () => {
+    fs.mkdirSync(OUT_DIR, { recursive: true });
+    const { base, stop } = await serveFixture({ "/api/links/agents": feed() });
+    const browser = await launchChromium();
+    const failures: string[] = [];
+    try {
+      for (const scheme of SCHEMES) for (const lang of ["en", "uk"] as const) {
+        const tag = `${scheme}-${lang}`;
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme, reducedMotion: "reduce" });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        try {
+          const page = await context.newPage();
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          await page.goto(`${base}/?kanban=1&synced=1#p=${KEY}`);
+          await page.waitForSelector('[data-phone-card="task:t-rem-run"]', { timeout: 20_000 });
+          await pause(page, 800);
+          const local = await readLocal(page);
+          const localFile = path.join(OUT_DIR, `before-phone-local-card-${tag}.json`);
+          if (PHASE === "before") fs.writeFileSync(localFile, `${JSON.stringify(local, null, 2)}\n`);
+          else if (fs.existsSync(localFile)) expect(local).toEqual(JSON.parse(fs.readFileSync(localFile, "utf8")));
+          const cardSel = (id: string) => `[data-phone-card="task:${id}"]`;
+          await page.locator(cardSel("t-rem-run")).scrollIntoViewIfNeeded();
+          await pause(page, 300);
+          await page.screenshot({ path: path.join(OUT_DIR, `${PHASE}-phone-390-board-${tag}.png`) });
+          for (const id of ["t-rem-run", "t-rem-wait", "t-rem-old"]) {
+            await page.locator(cardSel(id)).scrollIntoViewIfNeeded();
+            await page.locator(cardSel(id)).screenshot({ path: path.join(OUT_DIR, `${PHASE}-phone-390-card-${id.replace("t-rem-", "")}-${tag}.png`) });
+          }
+          if (PHASE === "after") {
+            for (const id of ["t-rem-run", "t-rem-wait", "t-rem-old"]) {
+              const read = await page.locator(cardSel(id)).evaluate((node) => {
+                const rect = node.getBoundingClientRect();
+                const host = node.querySelector<HTMLElement>("[data-phone-card-host]");
+                return {
+                  tag: node.tagName, nested: node.querySelectorAll("button, a, input").length, stripe: getComputedStyle(node).backgroundImage.includes("repeating-linear-gradient"),
+                  shadow: getComputedStyle(node).boxShadow, host: host?.textContent ?? null,
+                  hostClipped: Boolean(host && host.scrollWidth > host.clientWidth + 0.5 && getComputedStyle(host.querySelector("span:last-child")!).textOverflow !== "ellipsis"),
+                  inside: rect.left >= -0.5 && rect.right <= innerWidth + 0.5, pills: [...node.querySelectorAll<HTMLElement>(".pb-pill[data-stage]")].map((pill) => pill.dataset.stage),
+                };
+              });
+              const fail = (what: string) => failures.push(`${tag} ${id}: ${what}`);
+              if (read.tag !== "BUTTON" || read.nested) fail(`the card is not one button with nothing inside (${read.tag}, ${read.nested})`);
+              if (!read.stripe) fail("no pinstripe in its computed background");
+              if (!read.shadow.includes("inset")) fail(`no tinted line in its shadow: ${read.shadow}`);
+              if (read.host !== translate(lang, "kanban.remote.managedOn", { host: "Stage" })) fail(`host line reads ${read.host}`);
+              if (read.hostClipped || !read.inside) fail("the host line is clipped or the card leaves the screen");
+              if (id === "t-rem-old" && read.pills.length) fail("an older peer's card draws a scheme");
+              if (id !== "t-rem-old" && !read.pills.length) fail("no stage pills on a card whose peer sent lanes");
+            }
+          }
+          /* The finished card waits on the Done tab. */
+          await page.locator('[data-phone-kanban-tab="done"]').click();
+          await pause(page, 500);
+          await page.locator(cardSel("t-rem-done")).scrollIntoViewIfNeeded().catch(() => {});
+          await page.screenshot({ path: path.join(OUT_DIR, `${PHASE}-phone-390-done-${tag}.png`) });
+          await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          await pause(page, 400);
+          for (const id of ["t-rem-run", "t-rem-wait"]) {
+            await page.locator(cardSel(id)).scrollIntoViewIfNeeded();
+            await page.locator(cardSel(id)).click();
+            await page.waitForSelector(`[data-phone-task-body="${id}"]`, { timeout: 10_000 });
+            await pause(page, 500);
+            await page.screenshot({ path: path.join(OUT_DIR, `${PHASE}-phone-390-task-${id.replace("t-rem-", "")}-${tag}.png`) });
+            if (PHASE === "after") {
+              const read = await page.evaluate(() => {
+                const bar = document.querySelector<HTMLElement>("[data-phone-task-bar]")!;
+                const pill = bar.querySelector<HTMLElement>("[data-phone-task-host]");
+                const status = bar.querySelector<HTMLElement>("[data-phone-task-status-pill]")!;
+                const frame = document.querySelector<HTMLElement>("[data-phone-task-remote-lanes] .phone-lane");
+                const tops = [...(frame?.querySelectorAll<HTMLElement>(".pb-pill[data-stage]") ?? [])].map((node) => Math.round(node.getBoundingClientRect().top));
+                const pillRect = pill?.getBoundingClientRect();
+                const statusRect = status.getBoundingClientRect();
+                return {
+                  pill: pill?.textContent ?? null, pillHeight: pillRect ? Math.round(pillRect.height) : 0, pillTag: pill?.tagName ?? null,
+                  add: Boolean(bar.querySelector("[data-phone-task-add-agent]")), barOverflow: bar.scrollWidth > bar.clientWidth + 0.5,
+                  pillOverlapsStatus: Boolean(pillRect && pillRect.left < statusRect.right && pillRect.right > statusRect.left),
+                  frameStripe: frame ? getComputedStyle(frame).backgroundImage.includes("repeating-linear-gradient") : false,
+                  frameControls: frame?.querySelectorAll("button, a, input").length ?? -1,
+                  vertical: tops.length > 1 && tops.every((top, index) => index === 0 || top > tops[index - 1]!), pills: tops.length,
+                  note: frame?.querySelector("[data-managed-on]")?.textContent ?? null, overflowX: document.documentElement.scrollWidth - innerWidth,
+                };
+              });
+              const fail = (what: string) => failures.push(`${tag} task ${id}: ${what}`);
+              if (read.pill !== translate(lang, "kanban.remote.managedOn", { host: "Stage" }) || read.pillTag !== "SPAN") fail(`host pill is ${read.pillTag} "${read.pill}"`);
+              if (read.pillHeight < 44) fail(`host pill is ${read.pillHeight} px tall`);
+              if (read.add) fail("+ Agent is still offered");
+              if (read.barOverflow || read.pillOverlapsStatus) fail("the bottom bar overflows or its two pills overlap");
+              if (!read.frameStripe) fail("the remote lane frame has no stripe");
+              if (read.frameControls !== 0) fail(`${read.frameControls} controls inside the remote lane`);
+              if (!read.vertical) fail("the chain does not stand vertical in the 342 px lane");
+              if (id === "t-rem-wait" && !read.note?.includes(translate(lang, "pipelineBlock.remote.decisionTail", { host: "Stage" }))) fail(`the waiting lane says "${read.note}"`);
+              if (read.overflowX > 0.5) fail("the page overflows sideways");
+            }
+            await page.goBack();
+            await page.waitForSelector(cardSel(id), { timeout: 10_000 });
+            await pause(page, 400);
+          }
+          if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); stop(); }
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 400_000);
+});
