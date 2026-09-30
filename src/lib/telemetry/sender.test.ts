@@ -249,8 +249,8 @@ test("notice acknowledgement in another process preserves a confirmed opt-out", 
   const childExit = await child.exited;
   const childError = await new Response(child.stderr).text();
   expect(readySeen, "notice writer reached its atomic commit").toBe(true);
-  expect(disable?.exitCode).toBe(0, disable?.stderr.toString());
-  expect(childExit).toBe(0, childError);
+  expect(disable?.exitCode, disable?.stderr.toString()).toBe(0);
+  expect(childExit, childError).toBe(0);
   expect(await (await GET()).json()).toMatchObject({ enabled: false, noticeDismissed: true });
   expect(preferences()).toEqual({ enabled: false, noticeDismissed: true });
   expect(telemetryStatus()).toMatchObject({ enabled: false, noticeDismissed: true });
