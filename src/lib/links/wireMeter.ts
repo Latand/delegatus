@@ -2,10 +2,10 @@
 import net from "node:net";
 
 /** Counts every byte on the TCP connections the sender opens to the receiver, both directions, headers included. */
-export type Meter = { url: string; up: number; down: number; connections: number; requests: Buffer[]; close: () => void };
+export type Meter = { url: string; up: number; down: number; connections: number; requests: Buffer[]; retarget: (target: string) => void; close: () => void };
 
 export async function meter(target: string): Promise<Meter> {
-  const port = Number(new URL(target).port);
+  let port = Number(new URL(target).port);
   const server = net.createServer((client) => {
     counts.connections++;
     const index = counts.requests.push(Buffer.alloc(0)) - 1;
@@ -17,7 +17,7 @@ export async function meter(target: string): Promise<Meter> {
     client.on("error", () => upstream.destroy());
     upstream.on("error", () => client.destroy());
   });
-  const counts: Meter = { url: "", up: 0, down: 0, connections: 0, requests: [], close: () => server.close() };
+  const counts: Meter = { url: "", up: 0, down: 0, connections: 0, requests: [], retarget: (target) => { port = Number(new URL(target).port); }, close: () => server.close() };
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   counts.url = `http://127.0.0.1:${(server.address() as net.AddressInfo).port}`;
   return counts;

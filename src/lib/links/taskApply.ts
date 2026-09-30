@@ -10,6 +10,7 @@ import { sharedLinkState } from "./runtimeState";
  */
 import { BOARD_TASKS_PER_PROJECT_LIMIT, deleteTask } from "@/lib/tasks/commands";
 import { mutateLinkedTasks, TASKS_FILE } from "@/lib/tasks/store";
+import { taskFingerprint } from "@/lib/tasks/revision";
 import { TASK_SYNC_GROUPS, UNTITLED_TASK_TEXT, type BoardTask, type TaskSyncGroup } from "@/lib/tasks/types";
 
 import { countBoardTasks } from "@/lib/tasks/boardVisibility";
@@ -66,10 +67,13 @@ function mergeRow(local: BoardTask | null, row: WireTask, link: ApplyLink, write
   }
   const merged: BoardTask = structuredClone(local);
   // Board is an arrival preference, outside the stamped sync groups. Older
-  // peers could not send it, so fill only an unset preference on a replay of
+  // peers could not send it, so fill an unset or automatic preference on a replay of
   // a task still owned by that peer. An explicit local choice always wins.
-  const boardChanged = row.board !== undefined && local.board === undefined && (local.machine ?? self.id) === link.install;
-  if (boardChanged) merged.board = row.board;
+  const boardChanged = row.board !== undefined && (local.board === undefined || local.boardAutoHidden === true) && local.boardChoice !== true && (local.machine ?? self.id) === link.install;
+  if (boardChanged) {
+    merged.board = row.board;
+    delete merged.boardAutoHidden;
+  }
   const stamps: Partial<Record<TaskSyncGroup, string>> = {};
   let won = false;
   for (const group of TASK_SYNC_GROUPS) {
@@ -153,10 +157,20 @@ export function applyTaskRows(rows: readonly WireRow[], link: ApplyLink, options
       if (position === undefined) {
         // Admission changes only the receiving board preference; every row is kept.
         merged.board = row.board ?? (row.status === "done" ? "hidden" : undefined);
-        if (merged.board !== "hidden" && countBoardTasks(tasks, merged.project, () => false) >= BOARD_TASKS_PER_PROJECT_LIMIT) merged.board = "hidden";
+        if (row.board === undefined && merged.board === "hidden") merged.boardAutoHidden = true;
+      }
+      // Recovery is also an admission. Keep the automatic default at capacity
+      // so a later source row can retry it without displacing a local choice.
+      if (merged.board !== "hidden" && (!local || local.board === "hidden")
+        && countBoardTasks(tasks, merged.project, () => false) >= BOARD_TASKS_PER_PROJECT_LIMIT) {
+        merged.board = "hidden";
+        merged.boardAutoHidden = true;
+      }
+      if (position === undefined) {
         tasks = [...tasks, merged];
         byId.set(merged.id, tasks.length - 1);
       } else {
+        if (taskFingerprint(merged) === taskFingerprint(local!)) continue;
         if (tasks === current) tasks = current.slice();
         tasks[position] = merged;
       }
