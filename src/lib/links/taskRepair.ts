@@ -18,7 +18,7 @@ export function repairLinkedTasks(filePath = TASKS_FILE): void {
     const marker = "linkedArrivalsBoardV1";
     if (state.migrations?.[marker]) return { state: undefined, result: undefined };
     const tasks = state.tasks.map((task) => task.sync && task.machine && task.machine !== self.id && task.status === "done" && task.board === undefined
-      ? { ...task, board: "hidden" as const } : task);
+      ? { ...task, board: "hidden" as const, boardAutoHidden: true as const } : task);
     return { state: { ...state, tasks, migrations: { ...state.migrations, [marker]: new Date().toISOString() } }, result: undefined };
   }, filePath);
   completed.add(filePath);

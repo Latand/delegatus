@@ -61,14 +61,14 @@ export class TaskExchange {
   private dirty = false;
   private moved = false;
   private peerTaskWireVersion: number;
-  private hasConsumedCursor: boolean;
+  private hasConsumedPull: boolean;
   /** Rows applied or sent over this exchange. */
   movedRows = 0;
 
   constructor(private readonly link: { id: string; install: string; store: string }, private readonly self: { id: string; prefix: string }) {
     const held = readTaskCursor(link.id, link.store);
     this.peerTaskWireVersion = readPeerTaskWireVersion(link.id, link.store);
-    this.hasConsumedCursor = Boolean(held && (held.pull !== null || held.pushed !== null || held.pullCovered.length || held.pushCovered.length));
+    this.hasConsumedPull = Boolean(held && (held.pull !== null || held.pullCovered.length));
     this.pull = held?.pull ?? null;
     this.pushed = held?.pushed ?? null;
     this.pullCovered = new Set(held?.pullCovered ?? []);
@@ -140,12 +140,14 @@ export class TaskExchange {
     const peerVersion = body.taskWireVersion;
     const upgradeVersion = typeof peerVersion === "number" && Number.isSafeInteger(peerVersion) && peerVersion > this.peerTaskWireVersion ? peerVersion : null;
     const tasks = body.tasks as Record<string, unknown> | undefined;
+    const replayPull = this.hasConsumedPull;
     if (tasks?.wait === true) {
       // B did not yet hold the shared lists this request assumed.
       this.inflight = null;
       this.pushMore = true;
       return;
     }
+    if (tasks) this.hasConsumedPull = true;
     if (this.inflight) {
       const ack = (body.ack as { push?: unknown } | undefined)?.push;
       const expected = this.inflight.kind === "log" ? this.inflight.through : this.inflight.next;
@@ -167,14 +169,14 @@ export class TaskExchange {
       }
       this.inflight = null;
     }
-    if (!tasks) { if (upgradeVersion !== null && linked.size) this.confirmPeerTaskWireUpgrade(upgradeVersion); return; }
+    if (!tasks) { if (upgradeVersion !== null && linked.size) this.confirmPeerTaskWireUpgrade(upgradeVersion, replayPull); return; }
     if (tasks.resync === true) {
       this.pull = null;
       this.pullCovered.clear();
       this.pullScan = null;
       this.pullMore = true;
       this.dirty = true;
-      if (upgradeVersion !== null) this.confirmPeerTaskWireUpgrade(upgradeVersion);
+      if (upgradeVersion !== null) this.confirmPeerTaskWireUpgrade(upgradeVersion, replayPull);
       return;
     }
     const rows = this.decode(tasks.rows);
@@ -192,7 +194,7 @@ export class TaskExchange {
         this.dirty = true;
       } else this.pullScan.after = tasks.scan;
       this.pullMore = true;
-      if (upgradeVersion !== null) this.confirmPeerTaskWireUpgrade(upgradeVersion);
+      if (upgradeVersion !== null) this.confirmPeerTaskWireUpgrade(upgradeVersion, replayPull);
       return;
     }
     if (!isPosition(tasks.cursor)) throw new TaskSyncError("malformed");
@@ -200,20 +202,23 @@ export class TaskExchange {
     this.pull = tasks.cursor;
     this.pullMore = tasks.more === true;
     if (rows.length) this.dirty = true;
-    if (upgradeVersion !== null) this.confirmPeerTaskWireUpgrade(upgradeVersion);
+    if (upgradeVersion !== null) this.confirmPeerTaskWireUpgrade(upgradeVersion, replayPull);
   }
 
-  /** Replays consumed cursors whenever a wire upgrade unlocks previously withheld data. */
-  private confirmPeerTaskWireUpgrade(version: number): void {
+  /** Replay even a fresh exchange: its first push preceded capability confirmation. */
+  private confirmPeerTaskWireUpgrade(version: number, replayPull: boolean): void {
     this.peerTaskWireVersion = version;
-    if (!this.hasConsumedCursor) return;
-    this.pull = null;
+    // The confirming response already used the advertised request version.
+    // Replay earlier pulls, while preserving a fresh v3 scan's current page.
+    if (replayPull) {
+      this.pull = null;
+      this.pullCovered.clear();
+      this.pullScan = null;
+      this.pullMore = true;
+    }
     this.pushed = null;
-    this.pullCovered.clear();
     this.pushCovered.clear();
-    this.pullScan = null;
     this.pushScan = null;
-    this.pullMore = true;
     this.pushMore = true;
     this.dirty = true;
   }
@@ -262,7 +267,6 @@ export class TaskExchange {
     if (!this.dirty && !(this.moved && now - (lastSaved.get(key) ?? 0) >= IDLE_CURSOR_SAVE_MS)) return;
     const cursor: TaskCursor = { pull: this.pull, pushed: this.pushed, pullCovered: [...this.pullCovered].sort(), pushCovered: [...this.pushCovered].sort() };
     writeTaskCursor(this.link.id, this.link.store, cursor, this.peerTaskWireVersion);
-    this.hasConsumedCursor = true;
     lastSaved.set(key, now);
     this.dirty = false;
     this.moved = false;

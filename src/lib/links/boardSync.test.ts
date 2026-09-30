@@ -6,7 +6,7 @@
  * `Buffer.byteLength` of what the test server received and answered.
  */
 import { afterAll, expect, test } from "bun:test";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +17,7 @@ import { installPrefix } from "./stamp";
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import type { BoardTask } from "@/lib/tasks/types";
 import { meter, WIRE_BUDGET, type Meter } from "./wireMeter";
+import { taskShowsOnBoard } from "@/lib/tasks/boardVisibility";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-board-sync-test-"));
 const remote = "code.example.test/acme/widget";
@@ -30,13 +31,13 @@ afterAll(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-async function install(name: string, extraRemotes: Record<string, string> = {}): Promise<string> {
+async function install(name: string, extraRemotes: Record<string, string> = {}, source = process.cwd()): Promise<string> {
   const state = path.join(root, name);
   fs.mkdirSync(state, { recursive: true });
   fs.writeFileSync(path.join(state, "project-remotes.json"), JSON.stringify({ schemaVersion: 1, remotes: { [key]: remote, ...extraRemotes } }));
   // Each install scans only its own homes, never the operator's transcripts.
   const home = path.join(state, "home");
-  const child = spawn(process.execPath, ["src/lib/links/testServer.ts", state], { cwd: process.cwd(), env: { ...process.env, LLV_STATE_DIR: state, XDG_CONFIG_HOME: path.join(state, "config"),
+  const child = spawn(process.execPath, ["src/lib/links/testServer.ts", state], { cwd: source, env: { ...process.env, LLV_STATE_DIR: state, XDG_CONFIG_HOME: path.join(state, "config"),
     HOME: home, LLV_CLAUDE_HOME: path.join(home, ".claude"), LLV_CODEX_HOME: path.join(home, ".codex") } });
   processes.push(child);
   const port = await new Promise<number>((resolve, reject) => {
@@ -99,6 +100,19 @@ async function patchOn(base: string, id: string, patch: Record<string, unknown>)
 }
 type Captured = { request: string; response: string };
 const captured = async (base: string, reset = true) => (await request(base, `/test/captured${reset ? "?reset=1" : ""}`)).body as unknown as Captured[];
+
+/** Execute the actual stage decoder/routes, with no branch or live install. */
+function oldSource(): string {
+  const source = path.join(root, "source-c18ab355");
+  if (fs.existsSync(source)) return source;
+  fs.mkdirSync(source);
+  const archive = spawnSync("git", ["archive", "c18ab355", "src", "bin", "tsconfig.json", "package.json"], { maxBuffer: 64 * 1024 * 1024 });
+  if (archive.status !== 0) throw new Error(`old source archive failed: ${archive.stderr.toString()}`);
+  const unpack = spawnSync("tar", ["-x", "-C", source], { input: archive.stdout });
+  if (unpack.status !== 0) throw new Error(`old source extraction failed: ${unpack.stderr.toString()}`);
+  fs.symlinkSync(path.join(process.cwd(), "node_modules"), path.join(source, "node_modules"), "dir");
+  return source;
+}
 
 // Exact strict task key set from the pre-board merge-base decoder.
 const LEGACY_TASK_KEYS = new Set(["id", "project", "text", "details", "status", "color", "icon", "priority", "placement", "pos", "workLinks", "machine", "handover", "createdAt", "updatedAt", "s"]);
@@ -1221,4 +1235,127 @@ test("task wire v3 keeps board sync compatible with a strict v2 peer in both upg
   expect(await taskOn(legacy, hidden.id)).toMatchObject({ text: hidden.text, board: "hidden" });
   expect(await taskOn(legacy, shown.id)).toMatchObject({ text: shown.text, board: "shown" });
   expect((await tasksOf(legacy)).filter((task) => task.id === hidden.id || task.id === shown.id)).toHaveLength(2);
+}, 60_000);
+
+
+test("fresh v3 linking replays pre-confirmation membership and persists it across restart", async () => {
+  let a = await install("fresh-membership-A");
+  let b = await install("fresh-membership-B");
+  const hidden = await createOn(a, "Pre-existing hidden", { board: "hidden", details: "Keep the original details" });
+  expect((await patchOn(a, hidden.id, { color: "sky" })).status).toBe(200);
+  const peerId = await link(a, b);
+  await sync(a, peerId);
+  const beforeRestart = await taskOn(b, hidden.id);
+  await stopInstall(a);
+  a = await install("fresh-membership-A");
+  await sync(a, peerId);
+  await stopInstall(b);
+  b = await install("fresh-membership-B");
+  expect(await taskOn(b, hidden.id)).toMatchObject({ text: hidden.text, details: hidden.details, color: "sky", board: "hidden" });
+  expect(beforeRestart?.board).toBe("hidden");
+  expect(taskShowsOnBoard((await taskOn(b, hidden.id))!, false)).toBe(false);
+  expect(await tasksOf(b)).toHaveLength(1);
+}, 60_000);
+
+for (const oldClient of [false, true]) {
+  test(`automatic hiding recovers shown done tasks after actual c18ab355 upgrade (${oldClient ? "old client" : "old server"})`, async () => {
+    const suffix = oldClient ? "client" : "server";
+    const aName = `shown-upgrade-A-${suffix}`, bName = `shown-upgrade-B-${suffix}`;
+    let a = await install(aName, {}, oldClient ? oldSource() : process.cwd());
+    let b = await install(bName, {}, oldClient ? process.cwd() : oldSource());
+    const via = await meter(b);
+    meters.push(via);
+    const peerId = await link(a, b, { projects: [key] }, via.url);
+    const originals: BoardTask[] = [];
+    // Both directions use the real old decoder, with explicitly shown done rows.
+    for (const side of [a, b]) {
+      const task = await createOn(side, `Shown done from ${side === a ? "A" : "B"}`, { board: "shown", details: "Keep details", color: "sky", icon: "check", priority: "high" });
+      expect((await patchOn(side, task.id, { status: "done", color: "sky", icon: "check", priority: "high" })).status).toBe(200);
+      originals.push((await taskOn(side, task.id))!);
+    }
+    const locallyHidden = await createOn(a, "Explicit local hide survives replay", { board: "shown" });
+    const oldSide = oldClient ? a : b;
+    const chosenHidden = await createOn(oldSide, "Repeat local hide of a done arrival", { board: "shown" });
+    expect((await patchOn(oldSide, chosenHidden.id, { status: "done" })).status).toBe(200);
+    const chosenShown = await createOn(oldSide, "Explicit local show survives replay", { board: "hidden" });
+    expect((await patchOn(oldSide, chosenShown.id, { status: "done" })).status).toBe(200);
+    await sync(a, peerId);
+    for (const side of [a, b]) for (const task of originals) {
+      expect(await taskOn(side, task.id)).toMatchObject({ text: task.text, details: task.details, status: "done", color: task.color, icon: task.icon, priority: task.priority });
+    }
+    // Exercise edits in both directions while the actual old decoder is still running.
+    expect((await patchOn(a, originals[0]!.id, { details: "Mixed-version edit from A" })).status).toBe(200);
+    expect((await patchOn(b, originals[1]!.id, { details: "Mixed-version edit from B" })).status).toBe(200);
+    await sync(a, peerId);
+    expect((await taskOn(b, originals[0]!.id))?.details).toBe("Mixed-version edit from A");
+    expect((await taskOn(a, originals[1]!.id))?.details).toBe("Mixed-version edit from B");
+    originals[0] = (await taskOn(a, originals[0]!.id))!;
+    originals[1] = (await taskOn(b, originals[1]!.id))!;
+    expect((await patchOn(b, locallyHidden.id, { board: "hidden" })).status).toBe(200);
+    // A repeated hide is still an explicit choice, even when the value is unchanged.
+    const newSide = oldClient ? b : a;
+    expect((await patchOn(newSide, chosenHidden.id, { board: "hidden" })).status).toBe(200);
+    expect((await patchOn(newSide, chosenShown.id, { board: "shown" })).status).toBe(200);
+    const recover = originals[oldClient ? 1 : 0]!;
+    if (oldClient) {
+      await stopInstall(a);
+      a = await install(aName);
+    } else {
+      await stopInstall(b);
+      b = await install(bName);
+      via.retarget(b);
+    }
+    await sync(a, peerId);
+    await sync(a, peerId);
+    const receiver = oldClient ? a : b;
+    // Check persistence before asserting recovery, so the base repro reaches restart too.
+    const recovered = await taskOn(receiver, recover.id);
+    await stopInstall(receiver);
+    if (oldClient) a = await install(aName);
+    else { b = await install(bName); via.retarget(b); }
+    await sync(a, peerId);
+    expect(recovered).toMatchObject({ board: "shown" });
+    expect(await taskOn(oldClient ? a : b, recover.id)).toMatchObject({ board: "shown" });
+    expect((await taskOn(oldClient ? b : a, chosenHidden.id))?.board).toBe("hidden");
+    expect((await taskOn(b, locallyHidden.id))?.board).toBe("hidden");
+    expect((await taskOn(oldClient ? b : a, chosenShown.id))?.board).toBe("shown");
+    for (const side of [a, b]) {
+      expect(await tasksOf(side)).toHaveLength(5);
+      for (const task of originals) {
+        expect(await taskOn(side, task.id)).toMatchObject({ board: "shown", id: task.id, text: task.text, details: task.details, color: task.color, icon: task.icon, priority: task.priority,
+          status: "done", placement: task.placement, machine: task.machine, createdAt: task.createdAt, updatedAt: task.updatedAt, sync: { s: task.sync!.s }, assignments: task.assignments });
+      }
+    }
+    // Edits remain bidirectional after upgrade as well.
+    expect((await patchOn(a, originals[0]!.id, { details: "Edited from A" })).status).toBe(200);
+    expect((await patchOn(b, originals[1]!.id, { details: "Edited from B" })).status).toBe(200);
+    await sync(a, peerId);
+    expect((await taskOn(b, originals[0]!.id))?.details).toBe("Edited from A");
+    expect((await taskOn(a, originals[1]!.id))?.details).toBe("Edited from B");
+  }, 60_000);
+}
+
+
+test("automatic membership recovery respects admission and retries when a band becomes available", async () => {
+  let a = await install("capacity-upgrade-A", {}, oldSource());
+  const b = await install("capacity-upgrade-B");
+  const peerId = await link(a, b);
+  const arrived = await createOn(a, "Shown done under a full receiving board", { board: "shown", details: "Keep capacity history" });
+  expect((await patchOn(a, arrived.id, { status: "done" })).status).toBe(200);
+  // Fill using the public create route, so the exact production limit applies.
+  const bands: BoardTask[] = [];
+  for (let i = 0; i < 300; i++) bands.push(await createOn(b, `Capacity band ${i}`));
+  await sync(a, peerId);
+  await stopInstall(a);
+  a = await install("capacity-upgrade-A");
+  await sync(a, peerId);
+  await sync(a, peerId);
+  expect((await taskOn(b, arrived.id))?.board).toBe("hidden");
+  expect((await tasksOf(b)).filter((task) => taskShowsOnBoard(task, false))).toHaveLength(300);
+  expect((await patchOn(b, bands[0]!.id, { board: "hidden" })).status).toBe(200);
+  expect((await patchOn(a, arrived.id, { details: "A later source edit retries admission" })).status).toBe(200);
+  await sync(a, peerId);
+  expect(await taskOn(b, arrived.id)).toMatchObject({ board: "shown", details: "A later source edit retries admission" });
+  expect((await tasksOf(b)).filter((task) => taskShowsOnBoard(task, false))).toHaveLength(300);
+  expect(await tasksOf(b)).toHaveLength(301);
 }, 60_000);
