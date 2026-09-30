@@ -21,6 +21,8 @@ export const TaskSyncError = sharedLinkState("taskExchange.errorClass", () => cl
 export const SCAN_PROJECTS = 200;
 /** A cursor that only moved past other projects' writes is saved this often. */
 const IDLE_CURSOR_SAVE_MS = 600_000;
+/** Membership omitted before an older v3 cursor confirmed its first peer. */
+const BOARD_MEMBERSHIP_REPLAY_VERSION = 1;
 const lastSaved = sharedLinkState("taskExchange.lastSaved", () => new Map<string, number>());
 /** One exchange per link and peer store, kept across calls: a cursor that
     moved in memory is what the next call sends. */
@@ -62,17 +64,29 @@ export class TaskExchange {
   private moved = false;
   private peerTaskWireVersion: number;
   private hasConsumedPull: boolean;
+  private boardReplayVersion: number;
   /** Rows applied or sent over this exchange. */
   movedRows = 0;
 
   constructor(private readonly link: { id: string; install: string; store: string }, private readonly self: { id: string; prefix: string }) {
     const held = readTaskCursor(link.id, link.store);
     this.peerTaskWireVersion = readPeerTaskWireVersion(link.id, link.store);
+    this.boardReplayVersion = held?.boardReplayVersion ?? 0;
     this.hasConsumedPull = Boolean(held && (held.pull !== null || held.pullCovered.length));
     this.pull = held?.pull ?? null;
     this.pushed = held?.pushed ?? null;
     this.pullCovered = new Set(held?.pullCovered ?? []);
     this.pushCovered = new Set(held?.pushCovered ?? []);
+    if (this.peerTaskWireVersion >= TASK_WIRE_VERSION && this.boardReplayVersion < BOARD_MEMBERSHIP_REPLAY_VERSION) {
+      // Earlier releases persisted v3 before replaying a fresh exchange's
+      // pre-confirmation push. Rescan the sender's rows with membership now.
+      this.pushed = null;
+      this.pushCovered.clear();
+      this.pushScan = null;
+      this.pushMore = true;
+      this.boardReplayVersion = BOARD_MEMBERSHIP_REPLAY_VERSION;
+      this.dirty = true;
+    }
   }
 
   private get peerPrefix() { return installPrefix(this.link.install); }
@@ -265,7 +279,7 @@ export class TaskExchange {
   save(now = Date.now()): void {
     const key = `${this.link.id}:${this.link.store}`;
     if (!this.dirty && !(this.moved && now - (lastSaved.get(key) ?? 0) >= IDLE_CURSOR_SAVE_MS)) return;
-    const cursor: TaskCursor = { pull: this.pull, pushed: this.pushed, pullCovered: [...this.pullCovered].sort(), pushCovered: [...this.pushCovered].sort() };
+    const cursor: TaskCursor = { pull: this.pull, pushed: this.pushed, pullCovered: [...this.pullCovered].sort(), pushCovered: [...this.pushCovered].sort(), boardReplayVersion: this.boardReplayVersion };
     writeTaskCursor(this.link.id, this.link.store, cursor, this.peerTaskWireVersion);
     lastSaved.set(key, now);
     this.dirty = false;

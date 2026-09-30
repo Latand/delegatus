@@ -15,10 +15,16 @@ export function repairLinkedTasks(filePath = TASKS_FILE): void {
   const self = context.self;
   assertStateStartupMutation(path.dirname(path.resolve(filePath)), "linked task board repair");
   mutateTasksFile((state) => {
-    const marker = "linkedArrivalsBoardV1";
+    const marker = "linkedArrivalsBoardV2";
     if (state.migrations?.[marker]) return { state: undefined, result: undefined };
-    const tasks = state.tasks.map((task) => task.sync && task.machine && task.machine !== self.id && task.status === "done" && task.board === undefined
-      ? { ...task, board: "hidden" as const, boardAutoHidden: true as const } : task);
+    const tasks = state.tasks.map((task) => {
+      if (!task.sync || !task.machine || task.machine === self.id || task.status !== "done") return task;
+      if (task.board === undefined) return { ...task, board: "hidden" as const, boardAutoHidden: true as const };
+      // Older releases stored automatic done-arrival hides as plain "hidden".
+      // Explicit choices written after the arrival-default release carry this marker.
+      if (task.board === "hidden" && task.boardAutoHidden === undefined && task.boardChoice !== true) return { ...task, boardAutoHidden: true as const };
+      return task;
+    });
     return { state: { ...state, tasks, migrations: { ...state.migrations, [marker]: new Date().toISOString() } }, result: undefined };
   }, filePath);
   completed.add(filePath);

@@ -7,7 +7,7 @@ import type { SharedProject } from "./state";
 /** A's task cursors for one link (M.3 "Link state"): what it has pulled from
     and pushed to the peer store named by `store`, and the linked projects
     whose rows have fully crossed each way. */
-export type TaskCursor = { pull: [number] | [number, string] | null; pushed: [number] | [number, string] | null; pullCovered: string[]; pushCovered: string[] };
+export type TaskCursor = { pull: [number] | [number, string] | null; pushed: [number] | [number, string] | null; pullCovered: string[]; pushCovered: string[]; boardReplayVersion?: number };
 type BoardLink = { key: string; store: string; shared: SharedProject[]; cursor?: TaskCursor; taskWireVersion?: number };
 const seed = { collection: "board_links", schemaVersion: 1, migrationId: "linked-boards-m1", key: (row: BoardLink) => row.key, loadRecords: (): BoardLink[] => [] };
 const cache = new Map<string, SqliteStateCollection<BoardLink>>();

@@ -601,7 +601,10 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   const presentationOnly = Object.keys(input).every((key) => PRESENTATION_KEYS.has(key) || key === "expectedProject" || key === "expectedRevision")
     && Object.keys(input).some((key) => PRESENTATION_KEYS.has(key));
   const updated: BoardTask = withTaskCompletion({ ...task, ...patch, updatedAt: presentationOnly ? task.updatedAt : now }, task);
-  if (Object.hasOwn(patch, "board")) delete updated.boardAutoHidden;
+  if (Object.hasOwn(patch, "board")) {
+    delete updated.boardAutoHidden;
+    updated.boardChoice = true;
+  }
   /* An explicit clear leaves `undefined` fields on the spread; drop them so the
      persisted row and its validator agree that the deadline is gone. */
   if (Object.hasOwn(patch, "dueAt") && patch.dueAt === undefined) {

@@ -406,7 +406,8 @@ const server = http.createServer(async (request, response) => {
     response.end(JSON.stringify({ error: error instanceof Error ? error.message : "error" }));
   }
 });
-server.listen(0, "127.0.0.1", async () => {
+const requestedPort = Number(process.argv.find((arg) => arg.startsWith("--port="))?.slice("--port=".length)) || 0;
+server.listen(requestedPort, "127.0.0.1", async () => {
   const port = (server.address() as { port: number }).port;
   if (process.argv[3] !== "--no-address") {
     const saved = await saveAddress(`http://127.0.0.1:${port}`, pathBasename(dir));

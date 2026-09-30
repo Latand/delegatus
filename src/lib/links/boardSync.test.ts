@@ -24,6 +24,7 @@ const remote = "code.example.test/acme/widget";
 const key = projectIdentityFromRemote(`https://${remote}`, "/")!.project;
 const processes: ChildProcessWithoutNullStreams[] = [];
 const installProcesses = new Map<string, ChildProcessWithoutNullStreams>();
+const installPorts = new Map<string, number>();
 const meters: Meter[] = [];
 afterAll(() => {
   for (const counts of meters) counts.close();
@@ -37,7 +38,8 @@ async function install(name: string, extraRemotes: Record<string, string> = {}, 
   fs.writeFileSync(path.join(state, "project-remotes.json"), JSON.stringify({ schemaVersion: 1, remotes: { [key]: remote, ...extraRemotes } }));
   // Each install scans only its own homes, never the operator's transcripts.
   const home = path.join(state, "home");
-  const child = spawn(process.execPath, ["src/lib/links/testServer.ts", state], { cwd: source, env: { ...process.env, LLV_STATE_DIR: state, XDG_CONFIG_HOME: path.join(state, "config"),
+  const preferredPort = installPorts.get(name);
+  const child = spawn(process.execPath, ["src/lib/links/testServer.ts", state, ...(preferredPort ? [`--port=${preferredPort}`] : [])], { cwd: source, env: { ...process.env, LLV_STATE_DIR: state, XDG_CONFIG_HOME: path.join(state, "config"),
     HOME: home, LLV_CLAUDE_HOME: path.join(home, ".claude"), LLV_CODEX_HOME: path.join(home, ".codex") } });
   processes.push(child);
   const port = await new Promise<number>((resolve, reject) => {
@@ -55,6 +57,7 @@ async function install(name: string, extraRemotes: Record<string, string> = {}, 
     setTimeout(() => reject(new Error(`test server did not start: ${errors}`)), 15_000).unref();
   });
   const url = `http://127.0.0.1:${port}`;
+  installPorts.set(name, port);
   installProcesses.set(url, child);
   return url;
 }
@@ -110,6 +113,19 @@ function oldSource(): string {
   if (archive.status !== 0) throw new Error(`old source archive failed: ${archive.stderr.toString()}`);
   const unpack = spawnSync("tar", ["-x", "-C", source], { input: archive.stdout });
   if (unpack.status !== 0) throw new Error(`old source extraction failed: ${unpack.stderr.toString()}`);
+  fs.symlinkSync(path.join(process.cwd(), "node_modules"), path.join(source, "node_modules"), "dir");
+  return source;
+}
+
+/** Merge-base processes used to seed state as it existed before this fix. */
+function mergeBaseSource(): string {
+  const source = path.join(root, "source-merge-base");
+  if (fs.existsSync(source)) return source;
+  fs.mkdirSync(source);
+  const archive = spawnSync("git", ["archive", "4baabbec88d86b5a9a69d178e2be9881d12fa7fe", "src", "bin", "tsconfig.json", "package.json"], { maxBuffer: 64 * 1024 * 1024 });
+  if (archive.status !== 0) throw new Error(`merge-base source archive failed: ${archive.stderr.toString()}`);
+  const unpack = spawnSync("tar", ["-x", "-C", source], { input: archive.stdout });
+  if (unpack.status !== 0) throw new Error(`merge-base source extraction failed: ${unpack.stderr.toString()}`);
   fs.symlinkSync(path.join(process.cwd(), "node_modules"), path.join(source, "node_modules"), "dir");
   return source;
 }
@@ -1256,6 +1272,89 @@ test("fresh v3 linking replays pre-confirmation membership and persists it acros
   expect(taskShowsOnBoard((await taskOn(b, hidden.id))!, false)).toBe(false);
   expect(await tasksOf(b)).toHaveLength(1);
 }, 60_000);
+
+test("an affected merge-base v3 cursor replays pre-confirmation membership once after upgrade", async () => {
+  const base = mergeBaseSource();
+  let a = await install("persisted-v3-A", {}, base);
+  let b = await install("persisted-v3-B", {}, base);
+  const hidden = await createOn(a, "Pre-existing hidden on merge base", { board: "hidden", details: "Preserve these details" });
+  const peerId = await link(a, b, { projects: [key] });
+  await sync(a, peerId);
+  await sync(a, peerId);
+  const missed = await taskOn(b, hidden.id);
+  expect(missed).toMatchObject({ text: hidden.text, details: hidden.details });
+  expect(missed?.board).toBeUndefined();
+
+  await stopInstall(a);
+  await stopInstall(b);
+  a = await install("persisted-v3-A");
+  b = await install("persisted-v3-B");
+  await sync(a, peerId);
+  await sync(a, peerId);
+  expect(await taskOn(b, hidden.id)).toMatchObject({ board: "hidden", text: hidden.text, details: hidden.details });
+  expect(await tasksOf(b)).toHaveLength(1);
+  const recoveredRevision = await request(b, "/test/revision");
+  await stopInstall(a);
+  await stopInstall(b);
+  a = await install("persisted-v3-A");
+  b = await install("persisted-v3-B");
+  await sync(a, peerId);
+  expect(await taskOn(b, hidden.id)).toMatchObject({ board: "hidden", text: hidden.text, details: hidden.details });
+  expect(await request(b, "/test/revision")).toEqual(recoveredRevision);
+}, 60_000);
+
+for (const upgradeAFirst of [false, true]) {
+  test(`merge-base automatic done-task hide recovers after mixed-version upgrade (${upgradeAFirst ? "A first" : "B first"})`, async () => {
+    const base = mergeBaseSource();
+    let a = await install(`legacy-hide-A-${upgradeAFirst}`, {}, base);
+    let b = await install(`legacy-hide-B-${upgradeAFirst}`, {}, oldSource());
+    const via = await meter(b);
+    meters.push(via);
+    const peerId = await link(a, b, { projects: [key] }, via.url);
+    const shown = await createOn(b, "Shown done from the old stage", { board: "shown", details: "Keep this payload", color: "sky" });
+    expect((await patchOn(b, shown.id, { status: "done" })).status).toBe(200);
+    const explicit = await createOn(b, "Keep an explicit local hide", { board: "shown", details: "Choice stays local" });
+    expect((await patchOn(b, explicit.id, { status: "done" })).status).toBe(200);
+    await sync(a, peerId);
+    const damaged = await taskOn(a, shown.id);
+    expect(damaged).toMatchObject({ board: "hidden", status: "done", details: "Keep this payload", color: "sky" });
+    expect(damaged?.boardAutoHidden).toBeUndefined();
+
+    // A real operator choice made after upgrade remains protected on replay.
+    if (upgradeAFirst) {
+      await stopInstall(a);
+      a = await install(`legacy-hide-A-${upgradeAFirst}`);
+      expect((await patchOn(a, explicit.id, { board: "hidden" })).status).toBe(200);
+      await sync(a, peerId);
+      await stopInstall(b);
+      b = await install(`legacy-hide-B-${upgradeAFirst}`);
+      via.retarget(b);
+    } else {
+      await stopInstall(b);
+      b = await install(`legacy-hide-B-${upgradeAFirst}`);
+      via.retarget(b);
+      await stopInstall(a);
+      a = await install(`legacy-hide-A-${upgradeAFirst}`);
+      expect((await patchOn(a, explicit.id, { board: "hidden" })).status).toBe(200);
+    }
+    await sync(a, peerId);
+    await sync(a, peerId);
+    expect(await taskOn(a, shown.id)).toMatchObject({ board: "shown", status: "done", details: "Keep this payload", color: "sky" });
+    expect(await taskOn(a, explicit.id)).toMatchObject({ board: "hidden", status: "done", details: "Choice stays local" });
+    expect(await tasksOf(a)).toHaveLength(2);
+    expect(await tasksOf(b)).toHaveLength(2);
+
+    // The recovered preference survives a later owner edit and idle replay.
+    expect((await patchOn(b, shown.id, { details: "Owner edit after upgrade" })).status).toBe(200);
+    await sync(a, peerId);
+    await sync(a, peerId);
+    expect(await taskOn(a, shown.id)).toMatchObject({ board: "shown", details: "Owner edit after upgrade", status: "done" });
+    expect(await taskOn(b, shown.id)).toMatchObject({ board: "shown", details: "Owner edit after upgrade", status: "done" });
+    expect(await taskOn(a, explicit.id)).toMatchObject({ board: "hidden", details: "Choice stays local" });
+    expect(await tasksOf(a)).toHaveLength(2);
+    expect(await tasksOf(b)).toHaveLength(2);
+  }, 60_000);
+}
 
 for (const oldClient of [false, true]) {
   test(`automatic hiding recovers shown done tasks after actual c18ab355 upgrade (${oldClient ? "old client" : "old server"})`, async () => {

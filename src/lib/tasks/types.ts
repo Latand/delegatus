@@ -195,9 +195,10 @@ export interface BoardTask {
       whatever this says (`boardVisibility`). The task itself is never deleted
       or archived and never leaves the task list. */
   board?: TaskBoardVisibility;
-  /** Local linked-arrival/admission default. An explicit board PATCH clears
-      it, even when reasserting hidden. Never crosses to a linked peer. */
+  /** Local linked-arrival/admission default. Never crosses to a linked peer. */
   boardAutoHidden?: true;
+  /** A local operator explicitly chose this task's board membership. */
+  boardChoice?: true;
   /** Colour label; absent means none. */
   color?: TaskColor;
   /** How soon to take the task; absent means normal, which is never stored.

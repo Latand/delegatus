@@ -69,7 +69,7 @@ function mergeRow(local: BoardTask | null, row: WireTask, link: ApplyLink, write
   // Board is an arrival preference, outside the stamped sync groups. Older
   // peers could not send it, so fill an unset or automatic preference on a replay of
   // a task still owned by that peer. An explicit local choice always wins.
-  const boardChanged = row.board !== undefined && (local.board === undefined || local.boardAutoHidden === true) && (local.machine ?? self.id) === link.install;
+  const boardChanged = row.board !== undefined && (local.board === undefined || local.boardAutoHidden === true) && local.boardChoice !== true && (local.machine ?? self.id) === link.install;
   if (boardChanged) {
     merged.board = row.board;
     delete merged.boardAutoHidden;
