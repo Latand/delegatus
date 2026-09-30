@@ -11,6 +11,7 @@ import { LOOPBACK_PROBE_HOSTS } from "@/runtime-host/deploymentProxy";
 import { ownBoardStoreId } from "./boardLinks";
 import { linkedContext } from "./linked";
 import { taskExchange, TaskSyncError } from "./taskExchange";
+import { TASK_WIRE_VERSION } from "./taskWire";
 import { acceptAgents, agentCursors, agentPart, decodeCursor, dropAgents, encodeCursor } from "./agentFeed";
 
 export class LinkError extends Error { constructor(readonly code: string) { super(code); } }
@@ -187,7 +188,7 @@ async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProj
       const outboundAgents = linked.size && agentCapable.has(id) ? agentPart(`peer:${id}`, agentState.pushed, linked, agentState.pushOffset) : null;
       const pushAgents = outboundAgents && ("rows" in outboundAgents || "reset" in outboundAgents) ? outboundAgents : null;
       const push = pushAgents ? { ...(taskParts.push ?? {}), agents: pushAgents } : taskParts.push;
-      const answer = await call(target, "/api/peer/v1/boards/sync", "POST", { v: 1, store: ownBoardStoreId(), now: Date.now(), s: localHash, have: remoteHash,
+      const answer = await call(target, "/api/peer/v1/boards/sync", "POST", { v: 1, store: ownBoardStoreId(), now: Date.now(), s: localHash, have: remoteHash, taskWireVersion: TASK_WIRE_VERSION,
         ...(batch ? { shared: batch, index: sent, total: local.length } : {}),
         ...(remoteTotal !== null ? { want: received.length } : {}), ...taskParts,
         ...(linked.size ? { agents: encodeCursor(agentState.pull), ...(agentState.pullOffset ? { agentPage: agentState.pullOffset } : {}) } : {}), ...(push ? { push } : {}) }, { "x-delegatus-peer": `${peer.grantId}.${peer.token}` });

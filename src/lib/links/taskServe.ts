@@ -7,7 +7,7 @@ import { repairLinkedTasks } from "./taskRepair";
 import { linkedPeer, linkedContext } from "./linked";
 import { applyTaskRows } from "./taskApply";
 import { isPosition, readLogPage, readScanPage, PAGE_ROWS, type Position } from "./taskFeed";
-import { decodeWireRow, MalformedRow } from "./taskWire";
+import { decodeWireRow, MalformedRow, TASK_WIRE_VERSION } from "./taskWire";
 import type { Grant } from "./state";
 import { taskFeedSource } from "@/lib/tasks/store";
 
@@ -56,7 +56,7 @@ export function serveTasks(grant: Grant, wire: Record<string, unknown>, agreed: 
     moved ||= rows.length > 0;
   }
   if (object(pull)) {
-    const filter = { self: context.self, skipPrefix: link.prefix };
+    const filter = { self: context.self, skipPrefix: link.prefix, includeBoard: typeof wire.taskWireVersion === "number" && wire.taskWireVersion >= TASK_WIRE_VERSION };
     if (object(scan)) {
       const projects = new Set((scan.p as string[]).filter((key) => link.projects.has(key)));
       // The position a resync ends on is read before its first row.

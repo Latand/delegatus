@@ -8,6 +8,7 @@ import { forgetGrantCount, grantView, isSharedProject, readGrants, readPeers, sa
 export { remoteProjects, updateRemoteProjects } from "./boardLinks";
 import { dropRemoteProjects, ownBoardStoreId, remoteProjects, remoteStore, updateRemoteProjects } from "./boardLinks";
 import { serveTasks } from "./taskServe";
+import { TASK_WIRE_VERSION } from "./taskWire";
 import { acceptAgents, agentPart, decodeCursor, dropAgents, touchAgents } from "./agentFeed";
 import { linkedPeer } from "./linked";
 
@@ -206,7 +207,7 @@ export function incomingSync(grant: Grant, input: unknown): { status: number; bo
   const agents = agreed && agentAfter !== undefined && projects.size ? agentPart(`grant:${grant.id}`, agentAfter, projects, agentPage as number) : undefined;
   // M.10: an idle call writes no grant file; a page with rows counts as movement.
   usedGrant(grant, served.moved || Boolean((pushAgents as { rows?: unknown[] } | undefined)?.rows?.length) || Boolean(agents && "rows" in agents));
-  return { status: 200, body: { v: 1, now: Date.now(), store: ownBoardStoreId(), s: localHash, taskWireVersion: 2,
+  return { status: 200, body: { v: 1, now: Date.now(), store: ownBoardStoreId(), s: localHash, taskWireVersion: TASK_WIRE_VERSION,
     ...(wire.s !== remoteHash ? { need: true } : {}),
     ...(sendLocal ? { shared: local.slice(want, want + 100), index: want, total: local.length } : {}), ...served.parts,
     ...(agents ? { agents } : {}), ...(agentAck !== undefined ? { agentAck } : {}) } };

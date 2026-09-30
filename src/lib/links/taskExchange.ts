@@ -12,7 +12,7 @@ import { readPeerTaskWireVersion, readTaskCursor, writeTaskCursor, type TaskCurs
 import { installPrefix } from "./stamp";
 import { applyTaskRows } from "./taskApply";
 import { isPosition, readLogPage, readScanPage, PAGE_ROWS, type Position } from "./taskFeed";
-import { decodeWireRow, MalformedRow, type WireRow } from "./taskWire";
+import { decodeWireRow, MalformedRow, TASK_WIRE_VERSION, type WireRow } from "./taskWire";
 import { taskFeedSource } from "@/lib/tasks/store";
 
 export const TaskSyncError = sharedLinkState("taskExchange.errorClass", () => class TaskSyncError extends Error { constructor(readonly code: "malformed" | "clock" | "quota") { super(code); } });
@@ -111,7 +111,7 @@ export class TaskExchange {
       else if (uncovered.length) this.pushScan = { p: uncovered.slice(0, SCAN_PROJECTS), after: "", full: false, at: null };
     }
     if (this.pushScan && !sameSet(linked, this.pushScan.p)) this.pushScan = null;
-    const filter = { self: this.self, skipPrefix: this.peerPrefix };
+    const filter = { self: this.self, skipPrefix: this.peerPrefix, includeBoard: this.peerTaskWireVersion >= TASK_WIRE_VERSION };
     if (this.pushScan) {
       const page = readScanPage(this.pushScan.after, { ...filter, projects: new Set(this.pushScan.p), skipPrefix: null });
       this.inflight = { kind: "scan", next: page.next, rows: page.rows.length };
@@ -137,7 +137,8 @@ export class TaskExchange {
 
   /** Folds one answer in: applies B's rows, then advances what B acknowledged. */
   accept(body: Record<string, unknown>, linked: ReadonlySet<string>): void {
-    const confirmsV2 = body.taskWireVersion === 2 && this.peerTaskWireVersion < 2;
+    const peerVersion = body.taskWireVersion;
+    const upgradeVersion = typeof peerVersion === "number" && Number.isSafeInteger(peerVersion) && peerVersion > this.peerTaskWireVersion ? peerVersion : null;
     const tasks = body.tasks as Record<string, unknown> | undefined;
     if (tasks?.wait === true) {
       // B did not yet hold the shared lists this request assumed.
@@ -166,14 +167,14 @@ export class TaskExchange {
       }
       this.inflight = null;
     }
-    if (!tasks) { if (confirmsV2 && linked.size) this.confirmPeerTaskWireV2(); return; }
+    if (!tasks) { if (upgradeVersion !== null && linked.size) this.confirmPeerTaskWireUpgrade(upgradeVersion); return; }
     if (tasks.resync === true) {
       this.pull = null;
       this.pullCovered.clear();
       this.pullScan = null;
       this.pullMore = true;
       this.dirty = true;
-      if (confirmsV2) this.confirmPeerTaskWireV2();
+      if (upgradeVersion !== null) this.confirmPeerTaskWireUpgrade(upgradeVersion);
       return;
     }
     const rows = this.decode(tasks.rows);
@@ -191,7 +192,7 @@ export class TaskExchange {
         this.dirty = true;
       } else this.pullScan.after = tasks.scan;
       this.pullMore = true;
-      if (confirmsV2) this.confirmPeerTaskWireV2();
+      if (upgradeVersion !== null) this.confirmPeerTaskWireUpgrade(upgradeVersion);
       return;
     }
     if (!isPosition(tasks.cursor)) throw new TaskSyncError("malformed");
@@ -199,12 +200,12 @@ export class TaskExchange {
     this.pull = tasks.cursor;
     this.pullMore = tasks.more === true;
     if (rows.length) this.dirty = true;
-    if (confirmsV2) this.confirmPeerTaskWireV2();
+    if (upgradeVersion !== null) this.confirmPeerTaskWireUpgrade(upgradeVersion);
   }
 
-  /** Replays consumed v1 cursors after processing the response that confirmed v2. */
-  private confirmPeerTaskWireV2(): void {
-    this.peerTaskWireVersion = 2;
+  /** Replays consumed cursors whenever a wire upgrade unlocks previously withheld data. */
+  private confirmPeerTaskWireUpgrade(version: number): void {
+    this.peerTaskWireVersion = version;
     if (!this.hasConsumedCursor) return;
     this.pull = null;
     this.pushed = null;
@@ -242,7 +243,8 @@ export class TaskExchange {
   hasPush(linked: ReadonlySet<string>): boolean {
     if (!linked.size) return false;
     if (this.pushScan || this.pushed === null || [...linked].some((key) => !this.pushCovered.has(key))) return true;
-    const page = readLogPage(this.pushed, { self: this.self, skipPrefix: this.peerPrefix, projects: linked });
+    const page = readLogPage(this.pushed, { self: this.self, skipPrefix: this.peerPrefix, projects: linked,
+      includeBoard: this.peerTaskWireVersion >= TASK_WIRE_VERSION });
     if (page.kind === "resync" || page.rows.length) return true;
     if (JSON.stringify(page.cursor) !== JSON.stringify(this.pushed)) this.moved = true;
     this.pushed = page.cursor;

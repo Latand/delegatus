@@ -322,6 +322,16 @@ const server = http.createServer(async (request, response) => {
     });
     let result: Response;
     const method = request.method ?? "GET";
+    // The merge-base task decoder rejects every key outside its v2 allowlist.
+    // Keep that strict failure in the HTTP integration harness for rolling upgrades.
+    if (path === "/api/peer/v1/boards/sync" && legacyTaskWire) {
+      const rows = (body().push as { rows?: unknown[] } | undefined)?.rows ?? [];
+      if (rows.some((row) => !!row && typeof row === "object" && !Array.isArray(row) && "board" in row)) {
+        response.statusCode = 400;
+        json(response, { error: "malformed" });
+        return;
+      }
+    }
     // Exercise the same proxy then route order used by the Viewer for peers.
     const perimeter = path === "/api/peer" || path.startsWith("/api/peer/") ? proxy(req) : null;
     if (perimeter && perimeter.headers.get("x-middleware-next") !== "1") result = perimeter;
@@ -349,7 +359,10 @@ const server = http.createServer(async (request, response) => {
     if (path === "/api/peer/v1/boards/sync" && legacyTaskWire && result.status === 200) {
       const legacy = JSON.parse(resultBody.toString("utf8")) as { taskWireVersion?: number; tasks?: { rows?: Record<string, unknown>[] } };
       delete legacy.taskWireVersion;
-      for (const row of legacy.tasks?.rows ?? []) if (typeof row.text === "string" && row.s) row.text = "Untitled task";
+      for (const row of legacy.tasks?.rows ?? []) {
+        delete row.board;
+        if (typeof row.text === "string" && row.s) row.text = "Untitled task";
+      }
       resultBody = Buffer.from(JSON.stringify(legacy));
     }
     if (path === "/api/peer/v1/boards/sync" && restartAgentFeedAfterPage) {

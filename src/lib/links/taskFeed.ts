@@ -32,6 +32,8 @@ export type FeedFilter = {
   projects: ReadonlySet<string>;
   /** Rows whose copy equals the peer's (`o`) are not served to it. */
   skipPrefix: string | null;
+  /** Older peers reject the board preference added in task wire v3. */
+  includeBoard?: boolean;
   filePath?: string;
 };
 
@@ -52,7 +54,7 @@ class Page {
 }
 
 function encoded(task: BoardTask, filter: FeedFilter) {
-  const { row, bytes } = encodeTask(task, filter.self);
+  const { row, bytes } = encodeTask(task, filter.self, { includeBoard: filter.includeBoard });
   return { row, bytes, stub: "withheld" in row };
 }
 

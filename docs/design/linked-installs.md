@@ -1464,9 +1464,13 @@ store commits the marker and changed preferences in one transaction. Every
 other task field and all receipts survive. Later attempts read the marker and
 leave restored preferences alone.
 
-Task cursor records carry `taskWireVersion: 2`. A cursor from the earlier format
+Task cursor records carry the peer's `taskWireVersion`. A cursor from before v2
 causes one full scan in each direction; v2 cursors resume ordinary incremental
-sync. An equal text stamp from the same sender may fill a local `Untitled task`
+sync. Task wire v3 adds board membership. A v3 sender advertises that capability
+in each request and response, sends the v2 task shape to older peers, and replays
+consumed cursors after the peer confirms v3 so board preferences catch up after
+an upgrade. Until then, each side keeps its local board preference. An equal
+text stamp from the same sender may fill a local `Untitled task`
 placeholder with real text. The receiving copy's details remain intact in that
 case, and a newer local text stamp keeps its text. No manual retitle or cursor
 reset is needed. Scans and retries retain the normal tombstone and size fences.

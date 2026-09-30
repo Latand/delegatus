@@ -65,6 +65,11 @@ function mergeRow(local: BoardTask | null, row: WireTask, link: ApplyLink, write
     return task;
   }
   const merged: BoardTask = structuredClone(local);
+  // Board is an arrival preference, outside the stamped sync groups. Older
+  // peers could not send it, so fill only an unset preference on a replay of
+  // a task still owned by that peer. An explicit local choice always wins.
+  const boardChanged = row.board !== undefined && local.board === undefined && (local.machine ?? self.id) === link.install;
+  if (boardChanged) merged.board = row.board;
   const stamps: Partial<Record<TaskSyncGroup, string>> = {};
   let won = false;
   for (const group of TASK_SYNC_GROUPS) {
@@ -87,7 +92,7 @@ function mergeRow(local: BoardTask | null, row: WireTask, link: ApplyLink, write
     stamps[group] = row.s[group];
     won = true;
   }
-  if (!won) return null;
+  if (!won) return boardChanged ? merged : null;
   if (row.updatedAt > merged.updatedAt) merged.updatedAt = row.updatedAt;
   merged.sync = { s: stamps, o: self.prefix };
   if (equalsSent(merged, row, self)) merged.sync.o = link.prefix;

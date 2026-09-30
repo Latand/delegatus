@@ -100,6 +100,15 @@ async function patchOn(base: string, id: string, patch: Record<string, unknown>)
 type Captured = { request: string; response: string };
 const captured = async (base: string, reset = true) => (await request(base, `/test/captured${reset ? "?reset=1" : ""}`)).body as unknown as Captured[];
 
+// Exact strict task key set from the pre-board merge-base decoder.
+const LEGACY_TASK_KEYS = new Set(["id", "project", "text", "details", "status", "color", "icon", "priority", "placement", "pos", "workLinks", "machine", "handover", "createdAt", "updatedAt", "s"]);
+function decodeLegacyTaskRow(row: Record<string, unknown>): void {
+  if (Object.keys(row).some((field) => !LEGACY_TASK_KEYS.has(field))) throw new Error("legacy task decoder rejected an unknown field");
+  expect(row.id).toMatch(/^[0-9a-f-]{36}$/);
+  expect(row.project).toBe(key);
+  expect(typeof row.text).toBe("string");
+}
+
 function fileMarks(name: string): Record<string, { size: number; mtimeMs: number }> {
   const marks: Record<string, { size: number; mtimeMs: number }> = {};
   const walk = (directory: string) => {
@@ -1152,4 +1161,64 @@ test("a receiver upgraded after its sender replays title recovery from its consu
   const upgradedReceiver = await install("sender-first-title-receiver");
   await sync(upgradedReceiver, peerId);
   expect(await taskOn(upgradedReceiver, task.id)).toMatchObject({ text: "Sender-first automatic title", details: "Preserve these details", status: "blocked" });
+}, 60_000);
+
+test("task wire v3 keeps board sync compatible with a strict v2 peer in both upgrade orders", async () => {
+  let current = await install("rolling-board-current");
+  const legacy = await install("rolling-board-legacy");
+  await request(legacy, "/test/legacy-task-wire?on=1");
+  const currentToLegacy = await link(current, legacy, { projects: [key] }, legacy, false);
+  const hidden = await createOn(current, "Hidden while peer is old", { board: "hidden" });
+  const shown = await createOn(current, "Shown while peer is old", { board: "shown" });
+  await sync(current, currentToLegacy);
+  expect((await taskOn(legacy, hidden.id))?.text).toBe(hidden.text);
+  expect((await taskOn(legacy, shown.id))?.text).toBe(shown.text);
+  const legacyRequests = await captured(legacy);
+  const sentRows = legacyRequests.flatMap((call) => {
+    const body = JSON.parse(call.request) as { push?: { rows?: Record<string, unknown>[] } };
+    return body.push?.rows ?? [];
+  });
+  expect(sentRows.some((row) => row.id === hidden.id)).toBe(true);
+  expect(sentRows.filter((row) => row.id === hidden.id || row.id === shown.id).every((row) => !("board" in row))).toBe(true);
+
+  // The old client sends the merge-base request shape (no taskWireVersion).
+  // The current production route must return rows its strict decoder accepts.
+  await request(current, "/test/capture?on=1");
+  await link(legacy, current, { projects: [key] }, current, false);
+  const calls = await captured(current);
+  const template = JSON.parse(calls.at(-1)!.request) as Record<string, unknown>;
+  template.tasks = { after: null, scan: { p: [key], after: "" } };
+  const legacyPeer = (JSON.parse(fs.readFileSync(path.join(root, "rolling-board-legacy", "links/peers.json"), "utf8")) as { peers: { url: string; grantId: string; token: string }[] }).peers
+    .find((peer) => peer.url === current)!;
+  const postAsLegacy = (wire: Record<string, unknown>) => fetch(`${current}/api/peer/v1/boards/sync`, { method: "POST", headers: {
+    "content-type": "application/json", "x-delegatus-peer": `${legacyPeer.grantId}.${legacyPeer.token}`,
+  }, body: JSON.stringify(wire) });
+  const modernResponse = await postAsLegacy(template);
+  expect(modernResponse.status).toBe(200);
+  const modernAnswer = await modernResponse.json() as { tasks?: { rows?: Record<string, unknown>[] } };
+  const modernRows = modernAnswer.tasks?.rows ?? [];
+  expect(modernRows.find((row) => row.id === hidden.id)?.board).toBe("hidden");
+  expect(modernRows.find((row) => row.id === shown.id)?.board).toBe("shown");
+
+  // An old client sends the same scan without advertising board support.
+  const oldRequest = { ...template };
+  delete oldRequest.taskWireVersion;
+  const response = await postAsLegacy(oldRequest);
+  expect(response.status).toBe(200);
+  const answer = await response.json() as { tasks?: { rows?: Record<string, unknown>[] } };
+  const oldClientRows = answer.tasks?.rows ?? [];
+  expect(oldClientRows.map((row) => row.id)).toContain(hidden.id);
+  expect(oldClientRows.map((row) => row.id)).toContain(shown.id);
+  for (const row of oldClientRows) decodeLegacyTaskRow(row);
+  expect(oldClientRows.find((row) => row.id === hidden.id)?.text).toBe(hidden.text);
+
+  // Restart the upgraded sender, then verify the peer's v3 confirmation
+  // replays the rows omitted during the old-peer interval without losing them.
+  await request(legacy, "/test/legacy-task-wire?on=0");
+  await stopInstall(current);
+  current = await install("rolling-board-current");
+  await sync(current, currentToLegacy);
+  expect(await taskOn(legacy, hidden.id)).toMatchObject({ text: hidden.text, board: "hidden" });
+  expect(await taskOn(legacy, shown.id)).toMatchObject({ text: shown.text, board: "shown" });
+  expect((await tasksOf(legacy)).filter((task) => task.id === hidden.id || task.id === shown.id)).toHaveLength(2);
 }, 60_000);

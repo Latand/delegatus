@@ -22,6 +22,9 @@ export type WireGone = { id: string; project: string; gone: string };
 export type WireStub = { id: string; project: string; withheld: string };
 export type WireRow = WireTask | WireGone | WireStub;
 
+/** v3 adds the optional board arrival preference; v2 peers reject unknown row fields. */
+export const TASK_WIRE_VERSION = 3;
+
 export const isWireGone = (row: WireRow): row is WireGone => "gone" in row;
 export const isWireStub = (row: WireRow): row is WireStub => "withheld" in row;
 export const isWireTask = (row: WireRow): row is WireTask => !isWireGone(row) && !isWireStub(row);
@@ -36,11 +39,11 @@ export class MalformedRow extends Error { constructor(readonly field: string) { 
 
 /** The row as it leaves this machine, or a withheld stub when a stored field
     breaks a bound (a repository written before the bound existed). */
-export function encodeTask(task: BoardTask, self: { id: string; prefix: string }): { row: WireTask | WireStub; bytes: number } {
+export function encodeTask(task: BoardTask, self: { id: string; prefix: string }, options: { includeBoard?: boolean } = {}): { row: WireTask | WireStub; bytes: number } {
   const s = Object.fromEntries(TASK_SYNC_GROUPS.map((group) => [group, effectiveStamp(task, group, self.prefix)])) as Record<TaskSyncGroup, string>;
   const row: WireTask = {
     id: task.id, project: task.project, text: task.text,
-    ...(task.board !== undefined ? { board: task.board } : {}),
+    ...(options.includeBoard !== false && task.board !== undefined ? { board: task.board } : {}),
     ...(task.details !== undefined ? { details: task.details } : {}), status: task.status,
     ...(task.color ? { color: task.color } : {}), ...(task.icon ? { icon: task.icon } : {}),
     ...(task.priority === "high" || task.priority === "low" ? { priority: task.priority } : {}),
