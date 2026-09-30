@@ -1,0 +1,462 @@
+{
+  "measurements": [
+    {
+      "width": 390,
+      "compact": false,
+      "beforeMaxDriftPx": 731.75,
+      "cvDisabledMaxDriftPx": 731.75,
+      "afterMaxDriftPx": 0.25,
+      "afterBottomGapPx": 0,
+      "phases": {
+        "prepend": {
+          "before": {
+            "maxDriftPx": 51.75,
+            "startTimeMs": 4455.2,
+            "endTimeMs": 5138.5,
+            "heightAtStartPx": 93001,
+            "heightAtEndPx": 93001
+          },
+          "after": {
+            "maxDriftPx": 0.25,
+            "startTimeMs": 4603.8,
+            "endTimeMs": 5303.8,
+            "heightAtStartPx": 93001,
+            "heightAtEndPx": 93001
+          }
+        },
+        "live-bottom": {
+          "before": {
+            "maxDriftPx": 51.75,
+            "startTimeMs": 5155.2,
+            "endTimeMs": 5788.5,
+            "heightAtStartPx": 93327,
+            "heightAtEndPx": 93327
+          },
+          "after": {
+            "maxDriftPx": 0.25,
+            "startTimeMs": 5320.5,
+            "endTimeMs": 5970.4,
+            "heightAtStartPx": 93327,
+            "heightAtEndPx": 93327
+          }
+        },
+        "late-image-above": {
+          "before": {
+            "maxDriftPx": 251.75,
+            "startTimeMs": 5805.1,
+            "endTimeMs": 6438.4,
+            "heightAtStartPx": 93527,
+            "heightAtEndPx": 93527
+          },
+          "after": {
+            "maxDriftPx": 0.25,
+            "startTimeMs": 5987.2,
+            "endTimeMs": 6637.1,
+            "heightAtStartPx": 93527,
+            "heightAtEndPx": 93527
+          }
+        },
+        "late-code-markdown-above": {
+          "before": {
+            "maxDriftPx": 731.75,
+            "startTimeMs": 6455.2,
+            "endTimeMs": 7105.1,
+            "heightAtStartPx": 94007,
+            "heightAtEndPx": 94007
+          },
+          "after": {
+            "maxDriftPx": 0.25,
+            "startTimeMs": 6653.7,
+            "endTimeMs": 7320.4,
+            "heightAtStartPx": 94007,
+            "heightAtEndPx": 94007
+          }
+        },
+        "toolbar-resize": {
+          "before": {
+            "maxDriftPx": 731.75,
+            "startTimeMs": 7121.8,
+            "endTimeMs": 7788.4,
+            "heightAtStartPx": 94007,
+            "heightAtEndPx": 94007
+          },
+          "after": {
+            "maxDriftPx": 0.25,
+            "startTimeMs": 7337.1,
+            "endTimeMs": 8087,
+            "heightAtStartPx": 94007,
+            "heightAtEndPx": 94007
+          }
+        }
+      }
+    },
+    {
+      "width": 390,
+      "compact": true,
+      "beforeMaxDriftPx": 14757.875,
+      "cvDisabledMaxDriftPx": 506.25,
+      "afterMaxDriftPx": 0.25,
+      "afterBottomGapPx": 0,
+      "phases": {
+        "prepend": {
+          "before": {
+            "maxDriftPx": 14757.875,
+            "startTimeMs": 5819.2,
+            "endTimeMs": 6519.2,
+            "heightAtStartPx": 7956,
+            "heightAtEndPx": 44154
+          },
+          "after": {
+            "maxDriftPx": 0.25,
+            "startTimeMs": 4591.6,
+            "endTimeMs": 5291.5,
+            "heightAtStartPx": 62091,
+            "heightAtEndPx": 92973
+          }
+        },
+        "live-bottom": {
+          "before": {
+            "maxDriftPx": 14757.875,
+            "startTimeMs": 6535.8,
+            "endTimeMs": 7185.8,
+            "heightAtStartPx": 44154,
+            "heightAtEndPx": 44198
+          },
+          "after": {
+            "maxDriftPx": 0.25,
+            "startTimeMs": 5308.3,
+            "endTimeMs": 5958.2,
+            "heightAtStartPx": 93299,
+            "heightAtEndPx": 93299
+          }
+        },
+        "late-image-above": {
+          "before": {
+            "maxDriftPx": 14751.875,
+            "startTimeMs": 7202.5,
+            "endTimeMs": 7835.8,
+            "heightAtStartPx": 44198,
+            "heightAtEndPx": 44198
+          },
+          "after": {
+            "maxDriftPx": 0.25,
+            "startTimeMs": 5974.8,
+            "endTimeMs": 6608.2,
+            "heightAtStartPx": 93499,
+            "heightAtEndPx": 93499
+          }
+        },
+        "late-code-markdown-above": {
+          "before": {
+            "maxDriftPx": 14751.875,
+            "startTimeMs": 7852.4,
+            "endTimeMs": 8502.4,
+            "heightAtStartPx": 44198,
+            "heightAtEndPx": 44198
+          },
+          "after": {
+            "maxDriftPx": 0.25,
+            "startTimeMs": 6624.8,
+            "endTimeMs": 7274.8,
+            "heightAtStartPx": 93811,
+            "heightAtEndPx": 93811
+          }
+        },
+        "toolbar-resize": {
+          "before": {
+            "maxDriftPx": 14751.875,
+            "startTimeMs": 8519.1,
+            "endTimeMs": 9202.4,
+            "heightAtStartPx": 44198,
+            "heightAtEndPx": 44198
+          },
+          "after": {
+            "maxDriftPx": 0.25,
+            "startTimeMs": 7291.5,
+            "endTimeMs": 7974.8,
+            "heightAtStartPx": 93811,
+            "heightAtEndPx": 93811
+          }
+        }
+      }
+    },
+    {
+      "width": 1440,
+      "compact": false,
+      "beforeMaxDriftPx": 0.5,
+      "cvDisabledMaxDriftPx": 0.5,
+      "afterMaxDriftPx": 0.5,
+      "afterBottomGapPx": 0,
+      "phases": {
+        "prepend": {
+          "before": {
+            "maxDriftPx": 0.5,
+            "startTimeMs": 2953.1,
+            "endTimeMs": 3686.3,
+            "heightAtStartPx": 71013,
+            "heightAtEndPx": 71013
+          },
+          "after": {
+            "maxDriftPx": 0.5,
+            "startTimeMs": 3288.4,
+            "endTimeMs": 4021.7,
+            "heightAtStartPx": 71013,
+            "heightAtEndPx": 71013
+          }
+        },
+        "live-bottom": {
+          "before": {
+            "maxDriftPx": 0.5,
+            "startTimeMs": 3703.1,
+            "endTimeMs": 4336.3,
+            "heightAtStartPx": 71306,
+            "heightAtEndPx": 71306
+          },
+          "after": {
+            "maxDriftPx": 0.5,
+            "startTimeMs": 4038.4,
+            "endTimeMs": 4688.3,
+            "heightAtStartPx": 71306,
+            "heightAtEndPx": 71306
+          }
+        },
+        "late-image-above": {
+          "before": {
+            "maxDriftPx": 0.5,
+            "startTimeMs": 4353,
+            "endTimeMs": 5002.9,
+            "heightAtStartPx": 71518,
+            "heightAtEndPx": 71518
+          },
+          "after": {
+            "maxDriftPx": 0.5,
+            "startTimeMs": 4705,
+            "endTimeMs": 5355,
+            "heightAtStartPx": 71518,
+            "heightAtEndPx": 71518
+          }
+        },
+        "late-code-markdown-above": {
+          "before": {
+            "maxDriftPx": 0.5,
+            "startTimeMs": 5019.6,
+            "endTimeMs": 5669.6,
+            "heightAtStartPx": 71806,
+            "heightAtEndPx": 71806
+          },
+          "after": {
+            "maxDriftPx": 0.5,
+            "startTimeMs": 5371.6,
+            "endTimeMs": 6005,
+            "heightAtStartPx": 71806,
+            "heightAtEndPx": 71806
+          }
+        },
+        "toolbar-resize": {
+          "before": {
+            "maxDriftPx": 0.5,
+            "startTimeMs": 5686.3,
+            "endTimeMs": 6419.5,
+            "heightAtStartPx": 71806,
+            "heightAtEndPx": 71806
+          },
+          "after": {
+            "maxDriftPx": 0.5,
+            "startTimeMs": 6021.6,
+            "endTimeMs": 6754.9,
+            "heightAtStartPx": 71806,
+            "heightAtEndPx": 71806
+          }
+        }
+      }
+    },
+    {
+      "width": 1440,
+      "compact": true,
+      "beforeMaxDriftPx": 9028,
+      "cvDisabledMaxDriftPx": 0.5,
+      "afterMaxDriftPx": 0.5,
+      "afterBottomGapPx": 0,
+      "phases": {
+        "prepend": {
+          "before": {
+            "maxDriftPx": 9028.0,
+            "startTimeMs": 3007.7,
+            "endTimeMs": 3707.7,
+            "heightAtStartPx": 7956,
+            "heightAtEndPx": 31503
+          },
+          "after": {
+            "maxDriftPx": 0.5,
+            "startTimeMs": 3458,
+            "endTimeMs": 4291.3,
+            "heightAtStartPx": 61518,
+            "heightAtEndPx": 61518
+          }
+        },
+        "live-bottom": {
+          "before": {
+            "maxDriftPx": 9028.0,
+            "startTimeMs": 3724.3,
+            "endTimeMs": 4357.6,
+            "heightAtStartPx": 31547,
+            "heightAtEndPx": 31547
+          },
+          "after": {
+            "maxDriftPx": 0.5,
+            "startTimeMs": 4307.9,
+            "endTimeMs": 4941.3,
+            "heightAtStartPx": 61807,
+            "heightAtEndPx": 61807
+          }
+        },
+        "late-image-above": {
+          "before": {
+            "maxDriftPx": 9028.0,
+            "startTimeMs": 4374.3,
+            "endTimeMs": 5024.3,
+            "heightAtStartPx": 31547,
+            "heightAtEndPx": 31547
+          },
+          "after": {
+            "maxDriftPx": 0.5,
+            "startTimeMs": 4957.9,
+            "endTimeMs": 5591.3,
+            "heightAtStartPx": 62019,
+            "heightAtEndPx": 62019
+          }
+        },
+        "late-code-markdown-above": {
+          "before": {
+            "maxDriftPx": 9028.0,
+            "startTimeMs": 5041,
+            "endTimeMs": 5674.3,
+            "heightAtStartPx": 31547,
+            "heightAtEndPx": 31547
+          },
+          "after": {
+            "maxDriftPx": 0.5,
+            "startTimeMs": 5607.9,
+            "endTimeMs": 6257.9,
+            "heightAtStartPx": 62019,
+            "heightAtEndPx": 62214
+          }
+        },
+        "toolbar-resize": {
+          "before": {
+            "maxDriftPx": 9028.0,
+            "startTimeMs": 5690.9,
+            "endTimeMs": 6390.9,
+            "heightAtStartPx": 31547,
+            "heightAtEndPx": 31547
+          },
+          "after": {
+            "maxDriftPx": 0.5,
+            "startTimeMs": 6274.6,
+            "endTimeMs": 7007.9,
+            "heightAtStartPx": 62214,
+            "heightAtEndPx": 62214
+          }
+        }
+      }
+    }
+  ],
+  "localRenderedFrames": [
+    {
+      "path": ".artifacts/scroll-history/before-390-false-before.png",
+      "sha256": "444d24abfc1a6035cc2e2825cc769c612bfbc2938d58787c08135af5b6922a51"
+    },
+    {
+      "path": ".artifacts/scroll-history/before-390-false-prepend.png",
+      "sha256": "f7f35f783b1113b31bc84e31a2718cdaaa68d12c1d1a8391d436a1720b66bd26"
+    },
+    {
+      "path": ".artifacts/scroll-history/before-390-false-after.png",
+      "sha256": "a7c14d1163fe9ab072bd32aa648b049d9285389acee6d1433a2ec7038d671969"
+    },
+    {
+      "path": ".artifacts/scroll-history/before-390-true-before.png",
+      "sha256": "576bb9dad9cdca83cb68d6b50910b5de0f02d93bd3ba5b3275728ba3367b2a43"
+    },
+    {
+      "path": ".artifacts/scroll-history/before-390-true-prepend.png",
+      "sha256": "360c93e528814fc360176b33fa6ed3c3df770f34046d57f8d955c92bdedbc8ec"
+    },
+    {
+      "path": ".artifacts/scroll-history/before-390-true-after.png",
+      "sha256": "b6f44e656b7a93f25335624f1be18d52717fbd189a3c4850210d4291fda05212"
+    },
+    {
+      "path": ".artifacts/scroll-history/before-1440-false-before.png",
+      "sha256": "cce2052c0ef69e4f9192e7d6bf188d4af15725151468de6906492ef31e772a05"
+    },
+    {
+      "path": ".artifacts/scroll-history/before-1440-false-prepend.png",
+      "sha256": "d9a8f6034006e3a4f064427e3f54987b6d9763d59369028720316fc928d2e37d"
+    },
+    {
+      "path": ".artifacts/scroll-history/before-1440-false-after.png",
+      "sha256": "ae545b84f3f807e98433f8baa2100cb7535de76bf0cbaf5ec9c08888120428b1"
+    },
+    {
+      "path": ".artifacts/scroll-history/before-1440-true-before.png",
+      "sha256": "f8035c40675a88cb45b48c3d0132642e2e65854d136138426928e35445a6e1f1"
+    },
+    {
+      "path": ".artifacts/scroll-history/before-1440-true-prepend.png",
+      "sha256": "b7f7ded8c6d499329a859f98d34bba14c66117286e46d23c5398b341b27706e3"
+    },
+    {
+      "path": ".artifacts/scroll-history/before-1440-true-after.png",
+      "sha256": "982defbc3844a625d96c0e7926206e70363c0a08a42ac0a20295b2310b70b58a"
+    },
+    {
+      "path": ".artifacts/scroll-history/after-390-false-before.png",
+      "sha256": "42deae726315a17482da2de85bdae174dabf4d2317cace23f94d9a9d75e349c2"
+    },
+    {
+      "path": ".artifacts/scroll-history/after-390-false-prepend.png",
+      "sha256": "ab32c13378c1673a4a305ca3870e534c81e835ad7ed37113e45a5e835c3cb426"
+    },
+    {
+      "path": ".artifacts/scroll-history/after-390-false-after.png",
+      "sha256": "7c1c43c59edd1ad29cc1a96104692bd78a0a73598938942246fdb36d4bcdc03c"
+    },
+    {
+      "path": ".artifacts/scroll-history/after-390-true-before.png",
+      "sha256": "1bd2bd36bf8485f6f672724ff7a4ef077166ba656e006e37434a8dac4ea8af49"
+    },
+    {
+      "path": ".artifacts/scroll-history/after-390-true-prepend.png",
+      "sha256": "ea44aff2e9dff19100558b7043e7645e2ad0670dc401720d2de1e981b33fbc4c"
+    },
+    {
+      "path": ".artifacts/scroll-history/after-390-true-after.png",
+      "sha256": "63219ec743add91a9b5e616a551f742355c34c1b9fefce0d2c37927016522118"
+    },
+    {
+      "path": ".artifacts/scroll-history/after-1440-false-before.png",
+      "sha256": "cce2052c0ef69e4f9192e7d6bf188d4af15725151468de6906492ef31e772a05"
+    },
+    {
+      "path": ".artifacts/scroll-history/after-1440-false-prepend.png",
+      "sha256": "d9a8f6034006e3a4f064427e3f54987b6d9763d59369028720316fc928d2e37d"
+    },
+    {
+      "path": ".artifacts/scroll-history/after-1440-false-after.png",
+      "sha256": "ae545b84f3f807e98433f8baa2100cb7535de76bf0cbaf5ec9c08888120428b1"
+    },
+    {
+      "path": ".artifacts/scroll-history/after-1440-true-before.png",
+      "sha256": "ad7eb970ac682b888b6bdd35a076ba790bd7cc138db76930045c3dcd7e6204ed"
+    },
+    {
+      "path": ".artifacts/scroll-history/after-1440-true-prepend.png",
+      "sha256": "e8f2ea10fee4fd9bc1f0b7b1fcd6f2099663e6b3afac9e4774a32c13ee27658d"
+    },
+    {
+      "path": ".artifacts/scroll-history/after-1440-true-after.png",
+      "sha256": "d98f533f4ab7856f0eaa21249c1997b5ef74c999044c08e0470a2a64ae33ef1c"
+    }
+  ]
+}
