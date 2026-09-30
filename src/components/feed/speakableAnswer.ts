@@ -46,8 +46,7 @@ export function createSpeakableAnswerResolver(entries: FeedEntry[]): (index: num
 }
 
 /** Largest visible prose area wins; ties favor the later loaded answer. */
-export function visibleSpeakableAnswer(entries: FeedEntry[], visible: readonly { index: number; area: number }[]): (NonNullable<ReturnType<typeof speakableAnswer>> & { id: string }) | null {
-  const resolve = createSpeakableAnswerResolver(entries);
+export function visibleSpeakableAnswer(entries: FeedEntry[], visible: readonly { index: number; area: number }[], resolve = createSpeakableAnswerResolver(entries)): (NonNullable<ReturnType<typeof speakableAnswer>> & { id: string }) | null {
   const candidates = new Map<number, { answer: NonNullable<ReturnType<typeof speakableAnswer>>; area: number }>();
   for (const fragment of visible) {
     if (!(fragment.area > 0)) continue;

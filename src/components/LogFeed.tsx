@@ -721,6 +721,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       frame = 0;
       const box = viewport.getBoundingClientRect();
       const clip = { left: Math.max(0, box.left), top: Math.max(0, box.top), right: Math.min(window.innerWidth, box.right), bottom: Math.min(window.innerHeight, box.bottom) };
+      if (clip.right <= clip.left || clip.bottom <= clip.top) { speech.selectFor(viewportOwner, null); return; }
       const visible = Array.from(viewport.querySelectorAll<HTMLElement>("[data-tts-answer-index]")).map((row) => {
         const body = row.querySelector("[data-tts-body]");
         if (!body) return { index: -1, area: 0 };
@@ -734,7 +735,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         }
         return { index: Number(row.dataset.ttsAnswerIndex), area };
       });
-      const answer = visibleSpeakableAnswer(feed.items, visible);
+      const answer = visibleSpeakableAnswer(feed.items, visible, answerFor);
       speech.selectFor(viewportOwner, answer ? { id: answer.id, text: answer.text, area: visible.filter((fragment) => fragment.index >= answer.firstIndex && fragment.index <= answer.lastIndex).reduce((sum, fragment) => sum + fragment.area, 0), order: answer.firstIndex, roots: () => speech.rootsFor(answer.id) } : null);
     };
     const schedule = () => { if (!frame) frame = requestAnimationFrame(measure); };
@@ -745,7 +746,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     const observer = new window.MutationObserver(schedule); observer.observe(viewport, { childList: true, subtree: true });
     schedule();
     return () => { cancelAnimationFrame(frame); observer.disconnect(); resize.disconnect(); speech.releaseViewport(viewportOwner); viewport.removeEventListener("scroll", schedule); window.removeEventListener("resize", schedule); window.removeEventListener("scroll", schedule, true); };
-  }, [feed.items, speechScope]);
+  }, [feed.items, speechScope, answerFor]);
 
   /* The image viewer steps through this conversation's pictures, all of them
      and in feed order, read from the records when it opens (#2144). */
