@@ -13633,3 +13633,45 @@ describe("seat panel carries no internal noise", () => {
     expect(failures).toEqual([]);
   }, 1_800_000);
 });
+
+describe("done task retention", () => {
+  browserTest("old staffed completions leave desktop and 390px board; task lists retain them", async () => {
+    const out = path.resolve("evidence/board-done-retention");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const frames: unknown[] = [];
+    try {
+      for (const width of [1440, 390]) {
+        const phone = width === 390;
+        const { page, context, pageErrors } = await openFixture(browser, `${server.base}?scenario=done-expiry`, { width, height: phone ? 844 : 900 }, "light", "en", "reduce", phone);
+        try {
+          if (phone) {
+            await page.locator('[data-phone-kanban-tab="done"]').click();
+            await page.waitForSelector('[data-phone-card="task:t-recent"]');
+          } else await page.waitForSelector(card("t-recent"));
+          const selector = (id: string) => phone ? `[data-phone-card="task:${id}"]` : card(id);
+          expect(await page.locator(selector("t-expired")).count()).toBe(0);
+          expect(await page.locator(selector("t-legacy")).count()).toBe(0);
+          expect(await page.locator(selector("t-recent")).count()).toBeGreaterThan(0);
+          await page.screenshot({ path: path.join(out, `${width}-board.png`) });
+          if (phone) {
+            await page.getByRole("button", { name: "More actions", exact: true }).click();
+            await page.getByRole("menuitem", { name: /^Tasks/ }).click();
+            await page.waitForSelector('[data-task-sheet-row="t-expired"]');
+            expect(await page.locator('[data-task-sheet-row="t-legacy"]').count()).toBe(1);
+          } else {
+            await page.getByRole("button", { name: "Toggle the task panel", exact: true }).click();
+            await page.waitForSelector("[data-task-panel]");
+            expect(await page.locator("[data-task-panel]").getByText("Retained completion history", { exact: true }).count()).toBe(1);
+            expect(await page.locator("[data-task-panel]").getByText("Legacy completion history", { exact: true }).count()).toBe(1);
+          }
+          await page.screenshot({ path: path.join(out, `${width}-task-list.png`) });
+          expect(pageErrors).toEqual([]);
+          frames.push({ width, expiredOnBoard: false, legacyOnBoard: false, recentOnBoard: true, retainedInTaskList: true, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "geometry.json"), JSON.stringify({ case: "done-retention", frames, failures: [] }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});

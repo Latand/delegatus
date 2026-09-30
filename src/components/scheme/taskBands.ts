@@ -133,6 +133,8 @@ export interface BandSources {
   untitled: string;
   /** Localized fallback for a review flow without a resolvable implementer. */
   reviewFlow?: string;
+  /** Kanban applies expiry with its seat and decision context after projection. */
+  deferDoneVisibility?: boolean;
 }
 
 interface Claims {
@@ -390,7 +392,11 @@ export function buildTaskBands(base: SchemeLayout, sources: BandSources): TaskBa
      that holds nothing has claimed nothing, so dropping it here releases no
      conversation and moves no other band's members. */
   return bands.filter((band) => band.origin !== "task" || !band.task
-    || taskShowsOnBoard(band.task, bandHoldsMembers(band))
+    || (sources.deferDoneVisibility && band.task.status === "done")
+    || taskShowsOnBoard(band.task, bandHoldsMembers(band), {
+      members: [...band.members.flatMap((member) => member.file ? [member.file] : []), ...band.mirrors.map((mirror) => mirror.file)],
+      pipelines: projection.tasks.flatMap((entry) => entry.executions.map((execution) => execution.pipeline)),
+    })
     || provisionalTaskIds.has(band.task.id));
 }
 

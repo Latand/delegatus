@@ -95,6 +95,7 @@ test("applying marks tasks done and deletes none, and a task named since the pla
   const { pipelineTaskIds, seatIdentities, transcriptOf, nowMs, idleMs } = input();
   const outcome = applyGhostSettlement(renamed, plan, { pipelineTaskIds, seatIdentities, transcriptOf, nowMs, idleMs }, "2026-09-24T12:00:00.000Z");
   expect(outcome.tasks).toHaveLength(backlog.length);
+  for (const id of outcome.settled) expect(outcome.tasks.find((task) => task.id === id)!.doneAt).toBe("2026-09-24T12:00:00.000Z");
   expect(outcome.settled).toEqual(["old-backfill", "fixture", "digest", "never-started", "retired-seat"]);
   expect(outcome.tasks.find((entry) => entry.id === "probe")!.status).toBe("assigned");
   expect(outcome.tasks.filter((entry) => entry.status === "done").map((entry) => entry.id).sort()).toEqual(["closed", "digest", "fixture", "never-started", "old-backfill", "retired-seat"]);

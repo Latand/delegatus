@@ -21,7 +21,7 @@ function row(index: number, overrides: Partial<BoardTask> = {}): BoardTask {
   return {
     id: `task-${index}`,
     project: "proj",
-    status: "done",
+    status: "assigned",
     text: `task ${index}`,
     placement: "unplaced",
     assignments: [],

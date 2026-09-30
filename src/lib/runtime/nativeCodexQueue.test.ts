@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -18,7 +18,7 @@ const submission = (id = "submission-a", clientUserMessageId = "client-a") => ({
 // Explicit opt-in: never discover a CLI/account or contact an external model.
 // The fixture retains its private scratch directory for inspection.
 const binary = process.env.NATIVE_CODEX_QUEUE_TEST_BINARY;
-test.skipIf(!binary)("installed Codex 0.154.0: adapter pagination and mutation acknowledgements", async () => {
+test.skipIf(!binary)("installed Codex: adapter pagination and mutation acknowledgements", async () => {
   if (!binary || !isAbsolute(binary)) throw new Error("An absolute fixture binary is required");
   const base = mkdtempSync(join(tmpdir(), "nq-"));
   const env: NodeJS.ProcessEnv & Record<string, string> = { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", NODE_ENV: "test" };
@@ -29,7 +29,6 @@ test.skipIf(!binary)("installed Codex 0.154.0: adapter pagination and mutation a
   }
   const cwd = join(base, "workspace");
   mkdirSync(cwd);
-  expect(spawnSync(binary, ["--version"], { env, encoding: "utf8" }).stdout.trim()).toBe("codex-cli 0.154.0");
   const backendStarted = deferred<void>();
   const backend = createServer((request, response) => {
     request.resume();

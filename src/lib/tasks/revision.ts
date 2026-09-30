@@ -27,7 +27,7 @@ export function taskRevision(task: BoardTask): string {
 }
 
 export function snapshotTasks(tasks: BoardTask[]) {
-  return new Map(tasks.map(task => [task.id, { ref: task, fingerprint: taskFingerprint(task), revision: taskRevision(task) }]));
+  return new Map(tasks.map(task => [task.id, { ref: task, fingerprint: taskFingerprint(task), revision: taskRevision(task), status: task.status }]));
 }
 
 /** Snapshot before the callback: writers can mutate nested assignments in place. */

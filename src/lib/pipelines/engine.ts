@@ -65,7 +65,8 @@ import { requestPipelineTick } from "./controllerSignal";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
 import { FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed } from "./failEdgeBudget";
-import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
+import { describeTransientGitFailure, transientGitFailure, type TransientGitFailure } from "@/lib/git/transientFailure";
+import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, resolvePipelineBase, synchronizePipelineRetryHead, WORKTREE_INITIALIZATION_HELD } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -1435,6 +1436,13 @@ const SPAWN_HOST_RETRY_MAX_MS = 60_000;
     tick for its full five-second timeout, so the backoff starts at fifteen
     seconds rather than one. */
 const APPROVED_REMOTE_HEAD_WAIT = { budgetMs: 10 * 60_000, retryBaseMs: 15_000, retryMaxMs: 60_000 };
+/** A lane whose provisioning met a transient Git or network failure — a
+    resolver that failed a lookup (#2220), a lock another Git process held
+    (#2115), a checkout the load killed at its bound (#2176) — provisions again
+    on this backoff: 5s, 10s, 20s, 40s, then 60s rounds, with at most three
+    minutes of added wait before it parks. Each retry is itself bounded by the
+    sixty-second Git bounds, and runs outside the pipeline lease. */
+const PROVISION_RETRY_WAIT = { budgetMs: 3 * 60_000, retryBaseMs: 5_000, retryMaxMs: 60_000 };
 /** Retired launches an attempt keeps; the host budget cannot mint more than
     sixteen, so the cap only guards the record against a future longer budget. */
 const RETIRED_LAUNCH_LIMIT = 25;
@@ -4583,9 +4591,13 @@ async function provisionPendingPipelines(ports: PipelinePorts): Promise<Map<stri
   const outcomes = new Map<string, PipelineProvisionOutcome>();
   let pending: Pipeline[];
   try {
+    const nowMs = unixMs(ports.now());
     pending = loadPipelinesForProjection().filter((pipeline) =>
       pipeline.state === "provisioning" && !pipeline.hiddenAt && !pipeline.closedAt
-      && (!publishesRemoteBranch(pipeline) || pipeline.delivery));
+      && (!publishesRemoteBranch(pipeline) || pipeline.delivery)
+      /* A lane waiting out a transient failure keeps its backoff: its own
+         scheduled tick provisions it when the wait falls due. */
+      && !(pipeline.provisioningWait && unixMs(pipeline.provisioningWait.retryAfter) > nowMs));
   } catch (error) {
     /* The lease-taking pass below reports an unreadable registry; this read
        having failed is not a second outage to announce. */
@@ -4657,7 +4669,7 @@ async function provisionPendingPipelines(ports: PipelinePorts): Promise<Map<stri
 /** Applies one pre-pass outcome under the lease, or declines it (#1799). The
     record is re-read here, so everything the decision rested on is checked
     against the record as it stands now. */
-function applyProvisionOutcome(pipeline: Pipeline, outcome: PipelineProvisionOutcome | undefined): boolean {
+function applyProvisionOutcome(pipeline: Pipeline, outcome: PipelineProvisionOutcome | undefined, ports: PipelinePorts): boolean {
   if (!outcome || pipeline.state !== "provisioning" || pipeline.hiddenAt || pipeline.closedAt) return false;
   const fence = provisionFence(pipeline);
   if ((Object.keys(fence) as Array<keyof typeof fence>).some((key) => fence[key] !== outcome.fence[key])) return false;
@@ -4667,13 +4679,51 @@ function applyProvisionOutcome(pipeline: Pipeline, outcome: PipelineProvisionOut
     pipeline.lastPassedCommit = outcome.base.baseRef;
   }
   if (outcome.error) {
-    park(pipeline, outcome.error);
+    deferOrParkProvisioning(pipeline, outcome.error, ports);
     return true;
   }
+  delete pipeline.provisioningWait;
   if (outcome.head) pipeline.lastPassedCommit = outcome.head;
   pipeline.state = "running";
   pipeline.stateDetail = null;
   return true;
+}
+
+/** The transient class of a provisioning failure, or null for a real one. A
+    worktree another live Git process is still initializing is a held lock. */
+function transientProvisioningFailure(error: string): TransientGitFailure | null {
+  if (error.startsWith(WORKTREE_INITIALIZATION_HELD)) return "lock";
+  return transientGitFailure(error);
+}
+
+/**
+ * A transient provisioning failure waits out a bounded backoff instead of
+ * parking the lane on its first sighting (#2115, #2176, #2220). The wait is
+ * spent between ticks, like every other controller wait: the lane stays in
+ * `provisioning` and its scheduled tick provisions it again, so nothing sleeps
+ * under the lease. A real error, and a transient one whose budget is spent,
+ * park with the cause and the action that clears it.
+ */
+function deferOrParkProvisioning(pipeline: Pipeline, error: string, ports: PipelinePorts): void {
+  const kind = transientProvisioningFailure(error);
+  if (!kind) {
+    delete pipeline.provisioningWait;
+    park(pipeline, error);
+    return;
+  }
+  const { cause, fix } = describeTransientGitFailure(kind, error);
+  const now = ports.now();
+  const next = nextBoundedWait(pipeline.provisioningWait, now, now, PROVISION_RETRY_WAIT);
+  if (!next) {
+    const wait = pipeline.provisioningWait;
+    const seconds = wait ? Math.round(Math.max(0, unixMs(now) - unixMs(wait.startedAt)) / 1_000) : 0;
+    delete pipeline.provisioningWait;
+    park(pipeline, `gave up after ${wait?.rounds ?? 0} retries over ${seconds}s: ${cause} (${error}); retry-stage ${fix}`);
+    return;
+  }
+  pipeline.provisioningWait = next.wait;
+  pipeline.stateDetail = `provisioning deferred: ${cause} (${error}); retry ${next.wait.rounds} at ${next.wait.retryAfter}`;
+  ports.scheduleTick?.(next.delayMs);
 }
 
 async function tickPipeline(
@@ -4691,7 +4741,7 @@ async function tickPipeline(
        recording what they produced. A lane the pre-pass did not reach — it was
        admitted after the pre-pass read the registry, or its record moved under
        the work — stays in `provisioning` and the next tick provisions it. */
-    applyProvisionOutcome(pipeline, provisioned.get(pipeline.id));
+    applyProvisionOutcome(pipeline, provisioned.get(pipeline.id), ports);
   } else if (pipeline.state === "running") {
     const stage = currentStage(pipeline);
     if (!stage) park(pipeline, "pipeline cursor points to an unknown stage");

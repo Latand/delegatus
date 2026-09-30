@@ -6,6 +6,26 @@ import type { BoardTask } from "./types";
 
 type ProjectSeats = NonNullable<ReturnType<typeof orchestratorSeatForOrUnknown>>;
 
+/** One lazy seat-store snapshot per project for a single task command. Create
+    a fresh reader for each command so later seat changes remain visible. */
+export function taskSeatHoldingSnapshot(
+  seatsFor: (project: string) => ProjectSeats | null = orchestratorSeatForOrUnknown,
+): (task: BoardTask) => SeatHolding {
+  const snapshots = new Map<string, ProjectSeats | null>();
+  return (task) => taskSeatHolding(task, (project) => {
+    if (!snapshots.has(project)) {
+      let seats: ProjectSeats | null;
+      try {
+        seats = seatsFor(project);
+      } catch {
+        seats = null;
+      }
+      snapshots.set(project, seats);
+    }
+    return snapshots.get(project)!;
+  });
+}
+
 /**
  * Whether a task holds its project's orchestrator seat conversation (#1695):
  * the one group a hide must refuse, because the seat stays on the board.

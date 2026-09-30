@@ -1,0 +1,22 @@
+{
+  "case": "done-retention",
+  "frames": [
+    {
+      "width": 1440,
+      "expiredOnBoard": false,
+      "legacyOnBoard": false,
+      "recentOnBoard": true,
+      "retainedInTaskList": true,
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "expiredOnBoard": false,
+      "legacyOnBoard": false,
+      "recentOnBoard": true,
+      "retainedInTaskList": true,
+      "pageErrors": []
+    }
+  ],
+  "failures": []
+}
