@@ -10,8 +10,8 @@ adding its bin directory to PATH. A desktop agent session can therefore reach
 MCP registration with its matching terminal command missing.
 
 The launcher printed the URL and log locations, without checking for either
-agent CLI. The setup guide already showed a missing-CLI state and install
-commands, disabled account actions until the CLI was found, and offered
+agent CLI. The setup guide already showed a missing-CLI state and installation
+guidance, disabled account actions until the CLI was found, and offered
 **Check again** (`EnginesStep.tsx`, `GET /api/accounts/cli`). Its presence probe
 runs only `--version`; presence does not prove that an account is signed in.
 

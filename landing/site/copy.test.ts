@@ -13,8 +13,9 @@ for (const agent of ["claude", "codex"]) {
     const prompt = installPrompt(agent);
     expect(prompt.indexOf(`${agent} --version`)).toBeLessThan(prompt.indexOf("bun add -g delegatus-cli"));
     expect(prompt).toContain('export PATH="$HOME/.bun/bin:$HOME/.local/bin:$PATH"');
+    expect(prompt).toContain('export BUN_INSTALL="$HOME/.bun"');
     expect(prompt).toContain(`${agent} mcp add viewer`);
-    expect(prompt).toContain('-- "$HOME/.bun/bin/bun" "$HOME/.bun/bin/delegatus-mcp"');
+    expect(prompt).toContain('-- "$(command -v bun)" "$HOME/.bun/bin/delegatus-mcp"');
     expect(prompt.indexOf(`${agent} mcp add viewer`)).toBeGreaterThan(prompt.indexOf("nohup"));
     expect(installPrompt(agent, "uk")).toBe(prompt + "\n\nВідповідай українською.");
   });

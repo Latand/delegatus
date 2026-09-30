@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -21,7 +21,7 @@ export function promptCommand(prompt, prefix) {
 }
 
 function shell(command, env) {
-  const result = spawnSync("/bin/bash", ["-c", command], { env, encoding: "utf8", timeout: 120_000 });
+  const result = spawnSync("/bin/bash", ["-c", command], { env, cwd: env.HOME, encoding: "utf8", timeout: 120_000 });
   if (result.error || result.status !== 0) throw new Error(`Prompt command failed: ${command}\n${result.error?.message ?? result.stderr}`);
   return result.stdout.trim();
 }
@@ -115,6 +115,7 @@ async function main() {
   // Start with a new home, no credentials and only runner system tools on PATH.
   const env = {
     HOME: home, PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "en_US.UTF-8", LC_ALL: "en_US.UTF-8",
+    BUN_INSTALL: path.join(home, ".bun"),
     TMPDIR: fixture, XDG_CONFIG_HOME: path.join(fixture, "config"), XDG_CACHE_HOME: path.join(fixture, "cache"),
     LLV_STATE_DIR: path.join(fixture, "state"), LLV_CODEX_HOME: path.join(home, ".codex"),
     LLV_CLAUDE_HOME: path.join(home, ".claude"), NEXT_TELEMETRY_DISABLED: "1",
@@ -131,7 +132,9 @@ async function main() {
     if (!(major > 1 || major === 1 && minor >= 4)) throw new Error("The prompt requires Bun 1.4+");
     // Same install command, substituting the exact subject this run verifies.
     // Target is passed via an env value rather than interpolated shell text.
-    shell(promptCommand(prompt, "bun add -g delegatus-cli").replace("delegatus-cli", '"$NEWCOMER_PACKAGE"'), { ...env, NEWCOMER_PACKAGE: target });
+    report.packageInstall = shell(promptCommand(prompt, "bun add -g delegatus-cli").replace("delegatus-cli", '"$NEWCOMER_PACKAGE"'), { ...env, NEWCOMER_PACKAGE: target }).replaceAll(home, "$HOME");
+    report.globalBin = shell("bun pm bin -g", env).replaceAll(home, "$HOME");
+    report.binEntries = readdirSync(path.join(home, ".bun/bin"));
     rows.push(await startCase("neither-cli", env, {
       message: "Claude Code CLI and Codex CLI were not found", presence: { claude: "missing", codex: "missing" },
       installer: "curl -fsSL https://claude.ai/install.sh | bash",

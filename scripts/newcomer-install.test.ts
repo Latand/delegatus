@@ -7,7 +7,7 @@ test("rehearsal consumes the shipped commands for both prompt variants", () => {
     expect(promptCommand(prompt, "bun add -g delegatus-cli")).toBe("bun add -g delegatus-cli");
     expect(promptCommand(prompt, "curl -fsSL https://bun.com/install")).toBe("curl -fsSL https://bun.com/install | bash");
     expect(promptCommand(prompt, `${agent} --version`)).toBe(`${agent} --version`);
-    expect(promptCommand(prompt, `${agent} mcp add viewer`)).toContain('-- "$HOME/.bun/bin/bun" "$HOME/.bun/bin/delegatus-mcp"');
+    expect(promptCommand(prompt, `${agent} mcp add viewer`)).toContain('-- "$(command -v bun)" "$HOME/.bun/bin/delegatus-mcp"');
     expect(promptCommand(prompt, "mkdir -p ~/.cache/delegatus")).toContain("~/.bun/bin/delegatus --no-open");
   }
 });

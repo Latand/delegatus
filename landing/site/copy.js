@@ -11,6 +11,7 @@
     "   `curl -fsSL https://bun.com/install | bash`, then use ~/.bun/bin/bun if",
     "   `bun` is not on PATH yet.",
     "   For every command below, include ~/.bun/bin and ~/.local/bin on PATH:",
+    "   `export BUN_INSTALL=\"$HOME/.bun\"`",
     "   `export PATH=\"$HOME/.bun/bin:$HOME/.local/bin:$PATH\"`",
   ];
 
@@ -46,8 +47,8 @@
   ];
 
   const mcpStep = {
-    claude: ["5. Register its MCP server for yourself using absolute paths (desktop sessions may have a different PATH):", "   `claude mcp add viewer -s user -- \"$HOME/.bun/bin/bun\" \"$HOME/.bun/bin/delegatus-mcp\"`"],
-    codex: ["5. Register its MCP server for yourself using absolute paths (desktop sessions may have a different PATH):", "   `codex mcp add viewer -- \"$HOME/.bun/bin/bun\" \"$HOME/.bun/bin/delegatus-mcp\"`"],
+    claude: ["5. Register its MCP server for yourself using absolute paths (desktop sessions may have a different PATH):", "   `claude mcp add viewer -s user -- \"$(command -v bun)\" \"$HOME/.bun/bin/delegatus-mcp\"`"],
+    codex: ["5. Register its MCP server for yourself using absolute paths (desktop sessions may have a different PATH):", "   `codex mcp add viewer -- \"$(command -v bun)\" \"$HOME/.bun/bin/delegatus-mcp\"`"],
   };
 
   function prompt(agent, lang) {
