@@ -1,7 +1,7 @@
 "use client";
 
 import { Flag, Link2, Settings } from "lucide-react";
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import { useLocale, type TFunction } from "@/lib/i18n";
 import { pipelineCompletedUnreviewed } from "@/lib/pipelines/failEdgeBudget";
@@ -32,7 +32,7 @@ import {
   type StageChipState,
 } from "./pipelineModel";
 import {
-  answerLabel, blockAgeSeconds, cardChain, cardChainLevels, laneMergeWord, mergeNeedsYou, mergeReasonText, parkedStage, pipelineAnswers, pipelineEnded, pipelineMovedAtMs, pipelineNeedsYou, pipelineReason, reviewStopFindings, reviewStopReason, sameTitle, screenCurrentStageId, STAGE_MARK, stageFindings,
+  answerLabel, blockAgeSeconds, cardChain, chainSteps, cardChainLevels, laneMergeWord, mergeNeedsYou, mergeReasonText, parkedStage, pipelineAnswers, pipelineEnded, pipelineMovedAtMs, pipelineNeedsYou, pipelineReason, reviewStopFindings, reviewStopReason, sameTitle, screenCurrentStageId, STAGE_MARK, stageFindings,
   type ChainItem, type PipelineAnswer, type PipelineAnswers, type PipelineBlockDensity, type ReviewStop,
 } from "./pipelineBlockModel";
 
@@ -141,8 +141,6 @@ function ChainPills({ summary, nameOf, suffixes, selected, onOpenStage }: {
   selected: ReadonlySet<string>;
   onOpenStage?: (pipeline: Pipeline, stage: PipelineStage) => void;
 }) {
-  const main = summary.chips.filter((chip) => !chip.branch);
-  const branches = summary.chips.filter((chip) => chip.branch);
   const pill = (chip: KanbanStageChip) => (
     <StagePill
       pipeline={summary.pipeline}
@@ -156,13 +154,18 @@ function ChainPills({ summary, nameOf, suffixes, selected, onOpenStage }: {
   );
   return (
     <div className="pb-pills" data-chain={summary.pipeline.id}>
-      {main.map((chip, index) => (
-        <span key={chip.stage.id} className="pb-step">
-          {index > 0 ? <span className="pb-arrow" aria-hidden="true">→</span> : null}
+      {chainSteps(summary.chips).map(({ chip, step, through, order }) => (
+        <span
+          key={chip.stage.id}
+          className="pb-step"
+          data-step={step}
+          data-through={through ? "1" : undefined}
+          style={{ "--pb-order": order } as CSSProperties}
+        >
+          {step === "next" ? <span className="pb-arrow" aria-hidden="true">→</span> : null}
           {pill(chip)}
         </span>
       ))}
-      {branches.map((chip) => <span key={chip.stage.id} className="pb-step">{pill(chip)}</span>)}
     </div>
   );
 }

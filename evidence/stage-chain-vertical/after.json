@@ -1,0 +1,949 @@
+{
+  "readings": {
+    "light": {
+      "t-chain-operator": {
+        "width": 228,
+        "direction": "column",
+        "steps": [
+          {
+            "stage": "build",
+            "kind": "first",
+            "through": false,
+            "left": 1170,
+            "top": 483.9375,
+            "right": 1232.4375,
+            "bottom": 505.9375,
+            "arrow": null,
+            "before": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          },
+          {
+            "stage": "review",
+            "kind": "next",
+            "through": false,
+            "left": 1170,
+            "top": 513.9375,
+            "right": 1272.359375,
+            "bottom": 535.9375,
+            "arrow": "none",
+            "before": {
+              "content": "\"\"",
+              "height": 8,
+              "left": 15,
+              "width": 1,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          },
+          {
+            "stage": "review-fix",
+            "kind": "branch",
+            "through": false,
+            "left": 1198,
+            "top": 543.9375,
+            "right": 1325.34375,
+            "bottom": 565.9375,
+            "arrow": null,
+            "before": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "\"\"",
+              "height": 19,
+              "left": 15,
+              "width": 13,
+              "borderLeft": "dashed",
+              "borderBottom": "dashed"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          }
+        ],
+        "overlaps": []
+      },
+      "t-chain-through": {
+        "width": 228,
+        "direction": "column",
+        "steps": [
+          {
+            "stage": "build",
+            "kind": "first",
+            "through": false,
+            "left": 1170,
+            "top": 735.9375,
+            "right": 1232.4375,
+            "bottom": 757.9375,
+            "arrow": null,
+            "before": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          },
+          {
+            "stage": "critique",
+            "kind": "next",
+            "through": false,
+            "left": 1170,
+            "top": 765.9375,
+            "right": 1276.84375,
+            "bottom": 787.9375,
+            "arrow": "none",
+            "before": {
+              "content": "\"\"",
+              "height": 8,
+              "left": 15,
+              "width": 1,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          },
+          {
+            "stage": "review",
+            "kind": "next",
+            "through": false,
+            "left": 1170,
+            "top": 825.9375,
+            "right": 1242.03125,
+            "bottom": 847.9375,
+            "arrow": "none",
+            "before": {
+              "content": "\"\"",
+              "height": 8,
+              "left": 15,
+              "width": 1,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          },
+          {
+            "stage": "critique-fix",
+            "kind": "branch",
+            "through": true,
+            "left": 1198,
+            "top": 795.9375,
+            "right": 1329.828125,
+            "bottom": 817.9375,
+            "arrow": null,
+            "before": {
+              "content": "\"\"",
+              "height": 30,
+              "left": 15,
+              "width": 1,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "\"\"",
+              "height": 19,
+              "left": 15,
+              "width": 13,
+              "borderLeft": "dashed",
+              "borderBottom": "dashed"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          }
+        ],
+        "overlaps": []
+      },
+      "t-chain-live": {
+        "width": 228,
+        "direction": "column",
+        "steps": [
+          {
+            "stage": "build",
+            "kind": "first",
+            "through": false,
+            "left": 878,
+            "top": 522,
+            "right": 940.4375,
+            "bottom": 544,
+            "arrow": null,
+            "before": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          },
+          {
+            "stage": "review",
+            "kind": "next",
+            "through": false,
+            "left": 878,
+            "top": 552,
+            "right": 950.03125,
+            "bottom": 574,
+            "arrow": "none",
+            "before": {
+              "content": "\"\"",
+              "height": 8,
+              "left": 15,
+              "width": 1,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          },
+          {
+            "stage": "merge",
+            "kind": "next",
+            "through": false,
+            "left": 878,
+            "top": 582,
+            "right": 947.46875,
+            "bottom": 604,
+            "arrow": "none",
+            "before": {
+              "content": "\"\"",
+              "height": 8,
+              "left": 15,
+              "width": 1,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          }
+        ],
+        "overlaps": []
+      },
+      "t-chain-long": {
+        "width": 228,
+        "direction": "column",
+        "steps": [
+          {
+            "stage": "build",
+            "kind": "first",
+            "through": false,
+            "left": 878,
+            "top": 268,
+            "right": 940.4375,
+            "bottom": 290,
+            "arrow": null,
+            "before": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          },
+          {
+            "stage": "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-bridge",
+            "kind": "next",
+            "through": false,
+            "left": 878,
+            "top": 298,
+            "right": 1106,
+            "bottom": 352,
+            "arrow": "none",
+            "before": {
+              "content": "\"\"",
+              "height": 8,
+              "left": 15,
+              "width": 1,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 3
+          }
+        ],
+        "overlaps": []
+      },
+      "t-chain-wide": {
+        "width": 428,
+        "direction": "row",
+        "steps": [
+          {
+            "stage": "build",
+            "kind": "first",
+            "through": false,
+            "left": 386,
+            "top": 683.25,
+            "right": 448.4375,
+            "bottom": 705.25,
+            "arrow": null,
+            "before": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          },
+          {
+            "stage": "review",
+            "kind": "next",
+            "through": false,
+            "left": 465.9375,
+            "top": 683.25,
+            "right": 568.296875,
+            "bottom": 705.25,
+            "arrow": "block",
+            "before": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          },
+          {
+            "stage": "review-fix",
+            "kind": "branch",
+            "through": false,
+            "left": 572.296875,
+            "top": 683.25,
+            "right": 699.640625,
+            "bottom": 705.25,
+            "arrow": null,
+            "before": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          }
+        ],
+        "overlaps": []
+      }
+    },
+    "dark": {
+      "t-chain-operator": {
+        "width": 228,
+        "direction": "column",
+        "steps": [
+          {
+            "stage": "build",
+            "kind": "first",
+            "through": false,
+            "left": 1170,
+            "top": 483.9375,
+            "right": 1232.4375,
+            "bottom": 505.9375,
+            "arrow": null,
+            "before": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          },
+          {
+            "stage": "review",
+            "kind": "next",
+            "through": false,
+            "left": 1170,
+            "top": 513.9375,
+            "right": 1272.359375,
+            "bottom": 535.9375,
+            "arrow": "none",
+            "before": {
+              "content": "\"\"",
+              "height": 8,
+              "left": 15,
+              "width": 1,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          },
+          {
+            "stage": "review-fix",
+            "kind": "branch",
+            "through": false,
+            "left": 1198,
+            "top": 543.9375,
+            "right": 1325.34375,
+            "bottom": 565.9375,
+            "arrow": null,
+            "before": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "\"\"",
+              "height": 19,
+              "left": 15,
+              "width": 13,
+              "borderLeft": "dashed",
+              "borderBottom": "dashed"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          }
+        ],
+        "overlaps": []
+      },
+      "t-chain-through": {
+        "width": 228,
+        "direction": "column",
+        "steps": [
+          {
+            "stage": "build",
+            "kind": "first",
+            "through": false,
+            "left": 1170,
+            "top": 735.9375,
+            "right": 1232.4375,
+            "bottom": 757.9375,
+            "arrow": null,
+            "before": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          },
+          {
+            "stage": "critique",
+            "kind": "next",
+            "through": false,
+            "left": 1170,
+            "top": 765.9375,
+            "right": 1276.84375,
+            "bottom": 787.9375,
+            "arrow": "none",
+            "before": {
+              "content": "\"\"",
+              "height": 8,
+              "left": 15,
+              "width": 1,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          },
+          {
+            "stage": "review",
+            "kind": "next",
+            "through": false,
+            "left": 1170,
+            "top": 825.9375,
+            "right": 1242.03125,
+            "bottom": 847.9375,
+            "arrow": "none",
+            "before": {
+              "content": "\"\"",
+              "height": 8,
+              "left": 15,
+              "width": 1,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          },
+          {
+            "stage": "critique-fix",
+            "kind": "branch",
+            "through": true,
+            "left": 1198,
+            "top": 795.9375,
+            "right": 1329.828125,
+            "bottom": 817.9375,
+            "arrow": null,
+            "before": {
+              "content": "\"\"",
+              "height": 30,
+              "left": 15,
+              "width": 1,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "\"\"",
+              "height": 19,
+              "left": 15,
+              "width": 13,
+              "borderLeft": "dashed",
+              "borderBottom": "dashed"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          }
+        ],
+        "overlaps": []
+      },
+      "t-chain-live": {
+        "width": 228,
+        "direction": "column",
+        "steps": [
+          {
+            "stage": "build",
+            "kind": "first",
+            "through": false,
+            "left": 878,
+            "top": 522,
+            "right": 940.4375,
+            "bottom": 544,
+            "arrow": null,
+            "before": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          },
+          {
+            "stage": "review",
+            "kind": "next",
+            "through": false,
+            "left": 878,
+            "top": 552,
+            "right": 950.03125,
+            "bottom": 574,
+            "arrow": "none",
+            "before": {
+              "content": "\"\"",
+              "height": 8,
+              "left": 15,
+              "width": 1,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          },
+          {
+            "stage": "merge",
+            "kind": "next",
+            "through": false,
+            "left": 878,
+            "top": 582,
+            "right": 947.46875,
+            "bottom": 604,
+            "arrow": "none",
+            "before": {
+              "content": "\"\"",
+              "height": 8,
+              "left": 15,
+              "width": 1,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          }
+        ],
+        "overlaps": []
+      },
+      "t-chain-long": {
+        "width": 228,
+        "direction": "column",
+        "steps": [
+          {
+            "stage": "build",
+            "kind": "first",
+            "through": false,
+            "left": 878,
+            "top": 268,
+            "right": 940.4375,
+            "bottom": 290,
+            "arrow": null,
+            "before": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          },
+          {
+            "stage": "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-bridge",
+            "kind": "next",
+            "through": false,
+            "left": 878,
+            "top": 298,
+            "right": 1106,
+            "bottom": 352,
+            "arrow": "none",
+            "before": {
+              "content": "\"\"",
+              "height": 8,
+              "left": 15,
+              "width": 1,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 3
+          }
+        ],
+        "overlaps": []
+      },
+      "t-chain-wide": {
+        "width": 428,
+        "direction": "row",
+        "steps": [
+          {
+            "stage": "build",
+            "kind": "first",
+            "through": false,
+            "left": 386,
+            "top": 683.25,
+            "right": 448.4375,
+            "bottom": 705.25,
+            "arrow": null,
+            "before": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          },
+          {
+            "stage": "review",
+            "kind": "next",
+            "through": false,
+            "left": 465.9375,
+            "top": 683.25,
+            "right": 568.296875,
+            "bottom": 705.25,
+            "arrow": "block",
+            "before": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          },
+          {
+            "stage": "review-fix",
+            "kind": "branch",
+            "through": false,
+            "left": 572.296875,
+            "top": 683.25,
+            "right": 699.640625,
+            "bottom": 705.25,
+            "arrow": null,
+            "before": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "after": {
+              "content": "none",
+              "height": 0,
+              "left": 0,
+              "width": 0,
+              "borderLeft": "solid",
+              "borderBottom": "solid"
+            },
+            "cut": false,
+            "inkOutside": false,
+            "nameLines": 1
+          }
+        ],
+        "overlaps": []
+      }
+    }
+  },
+  "failures": []
+}

@@ -112,6 +112,10 @@ const LABELS = SCENARIO === "issue1865";
    lane whose passed Build conversation took more work; and stage names of 40
    characters. */
 const LOOPS = SCENARIO === "graph-loops";
+/* The narrow card's stage chain (docs/design/narrow-card-stage-chain.md): lanes
+   on the Done and Blocked shelves, which draw the chain vertically, and the
+   same operator's lane in the wide Assigned column, which keeps its row. */
+const STAGE_CHAIN = SCENARIO === "stage-chain";
 /* #1820: the Overview draws the SAME board over every project, filtered to the
    cards a worker is working on right now. Two invented projects join `atlas`
    so the shared columns can be read across three, each bringing one card with
@@ -1111,8 +1115,49 @@ const unstartedPipelines: Pipeline[] = UNSTARTED ? [
   ownLane("s5", L("Retire flows, slice 5: freeze flows", "Прибрати флоу, зріз 5: заморозити флоу"), "t-lanes-flows", "closed", flowsRows, 2),
 ] : [];
 
+const stageChainPipelines: Pipeline[] = STAGE_CHAIN ? (() => {
+  const done = (at: number) => ({ startedAt: iso(at * MIN), completedAt: iso((at - 6) * MIN) });
+  const passVia = (stageId: string) => ({ activatedBy: { stageId, attempt: 1, edge: "pass" } });
+  const failVia = (stageId: string) => ({ activatedBy: { stageId, attempt: 1, edge: "fail" } });
+  /* The operator's lane: Build, Review fired once of three, the branch Review fix. */
+  const operator = (id: string, taskId: string, state: string) => pipeline(id, L("Keep the review fix on the card", "Залишити виправлення рев’ю на картці"), taskId, state,
+    [stage("build", "builder", "review"), stage("review", "reviewer", null, { kind: "run", onFail: { to: "review-fix", maxRounds: 3 } }), stage("review-fix", "builder", "review")],
+    [
+      { stageId: "build", attempts: [attempt(1, "passed", null, done(90))] },
+      { stageId: "review", attempts: [attempt(1, "failed", null, { ...done(70), ...passVia("build") })] },
+      { stageId: "review-fix", attempts: [attempt(1, "passed", null, { ...done(60), ...failVia("review") })] },
+    ], null, { closedAt: iso(50 * MIN) });
+  return [
+    operator("p-chain-operator", "t-chain-operator", "completed"),
+    operator("p-chain-wide", "t-chain-wide", "completed"),
+    /* A stage after the reviewer: the rail passes beside the branch to it. */
+    pipeline("p-chain-through", L("Critique, then review, with a fix between", "Критика, потім рев’ю, з виправленням між ними"), "t-chain-through", "completed",
+      [stage("build", "builder", "critique"), stage("critique", "architect", "review", { onFail: { to: "critique-fix", maxRounds: 2 } }), stage("critique-fix", "builder", "critique"), stage("review", "reviewer", null, { kind: "run" })],
+      [
+        { stageId: "build", attempts: [attempt(1, "passed", null, done(90))] },
+        { stageId: "critique", attempts: [attempt(1, "failed", null, { ...done(70), ...passVia("build") }), attempt(2, "passed", null, { ...done(50), ...passVia("critique-fix") })] },
+        { stageId: "critique-fix", attempts: [attempt(1, "passed", null, { ...done(60), ...failVia("critique") })] },
+        { stageId: "review", attempts: [attempt(1, "passed", null, { ...done(40), ...passVia("critique") })] },
+      ], null, { closedAt: iso(30 * MIN) }),
+    /* A running stage, a stage no attempt reached, and one name too long for the lane. */
+    pipeline("p-chain-live", L("Build, review and merge the export", "Зібрати, переглянути і злити експорт"), "t-chain-live", "running",
+      [stage("build", "builder", "review"), stage("review", "reviewer", "merge", { kind: "run" }), stage("merge", "cleaner", null)],
+      [
+        { stageId: "build", attempts: [attempt(1, "passed", null, done(30))] },
+        { stageId: "review", attempts: [attempt(1, "running", null, { startedAt: iso(10 * MIN), ...passVia("build") })] },
+      ], { stageId: "review", state: "running", input: null, activatedBy: null }),
+    pipeline("p-chain-long", L("Confirm every attachment arrives whole", "Підтвердити, що кожне вкладення доходить цілим"), "t-chain-long", "running",
+      [stage("build", "builder", "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-bridge"), stage("confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-bridge", "verifier", null)],
+      [
+        { stageId: "build", attempts: [attempt(1, "passed", null, done(30))] },
+        { stageId: "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-bridge", attempts: [attempt(1, "running", null, { startedAt: iso(8 * MIN), ...passVia("build") })] },
+      ], { stageId: "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-bridge", state: "running", input: null, activatedBy: null }),
+  ];
+})() : [];
+
 const pipelines: Pipeline[] = [
   ...unstartedPipelines,
+  ...stageChainPipelines,
   ...flatPipelines,
   ...reviewSpentPipelines,
   ...reviewStopPipelines,
@@ -1354,6 +1399,13 @@ const tasks: BoardTask[] = [
     task("t-loops-retry", "assigned", L("Migrate the ledger to the new schema", "Перенести реєстр на нову схему"), "", 6 * MIN),
     task("t-loops-rework", "assigned", L("Keep the draft when the tab closes", "Зберегти чернетку, коли вкладку закрито"), "", 1 * MIN),
     task("t-loops-long", "assigned", L("Export every old format the importer reads", "Експортувати кожен старий формат, який читає імпорт"), "", 1 * MIN),
+  ] : []),
+  ...(STAGE_CHAIN ? [
+    task("t-chain-operator", "done", L("Keep the review fix on the card", "Залишити виправлення рев’ю на картці"), "", 50 * MIN),
+    task("t-chain-through", "done", L("Critique, then review, with a fix between", "Критика, потім рев’ю, з виправленням між ними"), "", 55 * MIN),
+    task("t-chain-live", "blocked", L("Build, review and merge the export", "Зібрати, переглянути і злити експорт"), "", 10 * MIN),
+    task("t-chain-long", "blocked", L("Confirm every attachment arrives whole", "Підтвердити, що кожне вкладення доходить цілим"), "", 8 * MIN),
+    task("t-chain-wide", "assigned", L("Keep the review fix on the card, wide", "Залишити виправлення рев’ю на картці, широка"), "", 45 * MIN),
   ] : []),
   ...(LABELS ? [task("t-labels", "assigned", "Build the board header lane", "Design, build and critique; the critique sent the first build back.", 2 * MIN)] : []),
   ...(REVIEW_SPENT ? [task("t-review-spent", "assigned", "Show the retry count in the banner", "The last review failed, and the fix after it was never reviewed.", 3 * MIN)] : []),
