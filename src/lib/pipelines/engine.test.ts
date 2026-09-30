@@ -2088,7 +2088,13 @@ test("a terminal historical adoption settles without changing the cursor", async
   expect(adopted.conversationId).toBe("conversation_child");
 });
 
-test("a cross-engine historical adoption settles with the child runtime", async () => {
+test.each([
+  { engine: "claude", model: "claude-sonnet-4-6", serviceTier: undefined },
+  { engine: "codex", model: "gpt-6-sol", serviceTier: "priority" },
+  { engine: "codex", model: "gpt-6-astra", serviceTier: "ultrafast" },
+  { engine: "codex", model: "gpt-6-sol", serviceTier: undefined },
+] as const)("historical adoption replaces the source tier with $engine/$model/$serviceTier", async ({ engine, model, serviceTier }) => {
+  const runtime = { engine, model, effort: "high", ...(serviceTier ? { serviceTier } : {}) };
   const h = harness();
   const pipeline = await create(h.ports);
   const sourceRun = pipeline.runs.find((run) => run.stageId === "plan")!;
@@ -2098,8 +2104,11 @@ test("a cross-engine historical adoption settles with the child runtime", async 
     effectiveRole: {
       roleId: "architect",
       engine: "codex",
-      model: "gpt-5.6-sol",
+      model: "gpt-6-astra",
       effort: "high",
+      serviceTier: "ultrafast",
+      serviceTierSource: "role-default",
+      preferredServiceTier: "ultrafast",
       access: "read-only",
       promptScaffold: "Architect guidance",
     },
@@ -2124,11 +2133,11 @@ test("a cross-engine historical adoption settles with the child runtime", async 
   const registryPath = path.join(process.env.LLV_STATE_DIR!, "cross-engine-agent-registry.json");
   const registry = new AgentRegistry(registryPath);
   const begun = registry.beginSpawnRequest({
-    engine: "claude",
+    engine,
     cwd: "/repo",
     accountId: "claude-test",
     parentConversationId: "conversation_source_codex",
-    launchProfile: { model: "claude-sonnet-4-6", effort: "high", title: "Adopt cross-engine pipeline stage" },
+    launchProfile: { model, effort: "high", serviceTier: serviceTier ?? null, title: "Adopt cross-engine pipeline stage" },
     memberships: [{
       kind: "pipeline",
       containerId: pipeline.id,
@@ -2138,14 +2147,14 @@ test("a cross-engine historical adoption settles with the child runtime", async 
       stageOrder: 0,
       round: null,
       parentConversationId: "conversation_source_codex",
-      runtime: { engine: "claude", model: "claude-sonnet-4-6", effort: "high" },
+      runtime: { engine, model, effort: "high" },
     }],
   });
   if (begun.kind !== "created") throw new Error("cross-engine spawn reservation conflicted");
-  const childPath = "/claude/child-cross-engine.jsonl";
+  const childPath = `/${engine}/child-cross-engine.jsonl`;
   const childSessionId = crypto.randomUUID();
   const settled = registry.settleSpawn(begun.receipt.launchId, {
-    key: { engine: "claude", sessionId: childSessionId },
+    key: { engine, sessionId: childSessionId },
     artifactPath: childPath,
     cwd: "/repo",
     accountId: "claude-test",
@@ -2170,14 +2179,14 @@ test("a cross-engine historical adoption settles with the child runtime", async 
       sourceConversationId: "conversation_source_codex",
       conversationId: begun.receipt.conversationId,
       agentPath: childPath,
-      runtime: { engine: "claude", model: "claude-sonnet-4-6", effort: "high" },
+      runtime,
     }),
   ]);
   h.ports.pipelineAdoptionCandidates = () => candidates;
   const observedEngines: string[] = [];
-  h.ports.durableTurnEvidence = async (engine, transcriptPath) => {
-    observedEngines.push(engine);
-    if (engine !== "claude" || transcriptPath !== childPath) return null;
+  h.ports.durableTurnEvidence = async (observedEngine, transcriptPath) => {
+    observedEngines.push(observedEngine);
+    if (observedEngine !== engine || transcriptPath !== childPath) return null;
     return {
       turn: "terminal",
       message: {
@@ -2189,15 +2198,17 @@ test("a cross-engine historical adoption settles with the child runtime", async 
 
   await tickPipelines([entry(childPath)], h.ports);
 
-  expect(observedEngines).toContain("claude");
+  expect(observedEngines).toContain(engine);
   const adopted = loadPipelines()[0]!.runs.find((run) => run.stageId === "plan")!.attempts[1]!;
   expect(adopted.effectiveRole).toMatchObject({
     roleId: "architect",
-    engine: "claude",
-    model: "claude-sonnet-4-6",
-    effort: "high",
+    ...runtime,
     access: "read-only",
   });
+  expect(adopted.effectiveRole.serviceTier).toBe(serviceTier);
+  expect(adopted.effectiveRole.serviceTierSource).toBeUndefined();
+  expect(adopted.effectiveRole.preferredServiceTier).toBeUndefined();
+  expect(pipeline.runs[0]!.attempts[0]!.effectiveRole.serviceTier).toBe("ultrafast");
   expect(loadPipelines()[0]!.runs.find((run) => run.stageId === "plan")!.attempts[1]).toMatchObject({
     historical: true,
     state: "passed",

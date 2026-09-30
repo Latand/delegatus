@@ -284,4 +284,10 @@ test("role_presets validates catalog-backed Codex tiers and persists a reviewer 
   const refused = await refusal(tools(SEAT).role_presets({ clientRequestId: "tier-role-unoffered", overrides: { reviewer: { config: { ...config, serviceTier: "unoffered" } } } }));
   expect(refused.message).toContain("offered: priority, ultrafast");
   expect((await read()).roles.find(role => role.id === "reviewer")?.config).toEqual(config);
+  const cleared = { engine: "codex", model: "gpt-6-astra", effort: "high" };
+  await tools(SEAT).role_presets({ clientRequestId: "tier-role-clear", overrides: { reviewer: { config: cleared } } });
+  expect((await read()).roles.find(role => role.id === "reviewer")?.config).toEqual(cleared);
+  const saved = JSON.parse(fs.readFileSync(stateFile("role-presets.json"), "utf8"));
+  expect(saved.schemaVersion).toBeLessThan(5);
+  expect(JSON.stringify(saved)).not.toContain("serviceTier");
 });

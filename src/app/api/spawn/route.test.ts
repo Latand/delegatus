@@ -1852,7 +1852,10 @@ test("spawn admission grants Computer Use to an operator root Codex session only
   }
 });
 
-test("a materialized structured child is offered for pipeline attempt adoption", async () => {
+test.each([
+  { engine: "claude", model: "sonnet", serviceTier: undefined },
+  { engine: "codex", model: "gpt-6-sol", serviceTier: "priority" },
+] as const)("a materialized $engine child is offered for pipeline attempt adoption with its own tier", async ({ engine, model, serviceTier }) => {
   const cwd = fs.mkdtempSync(path.join(routeSandbox, "pipeline-adoption-"));
   const store = registry();
   const sourceSessionId = crypto.randomUUID();
@@ -1881,6 +1884,8 @@ test("a materialized structured child is offered for pipeline attempt adoption",
     const dependencies = {
       ...structuredRouteDependencies(cwd),
       registry: () => store,
+      resolveSpawnAccount: () => ({ engine, accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+      resolveHealthySpawnAccount: async () => ({ engine, accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" }, serviceTier }),
       defer: (work: () => Promise<void>) => { deferred.push(work); },
       pipelineAttemptTargetForSource: () => ({
         pipelineId: "pipeline-adoption",
@@ -1891,10 +1896,10 @@ test("a materialized structured child is offered for pipeline attempt adoption",
       spawnStructuredConversation: async (input: Parameters<SpawnRouteTestDependencies["spawnStructuredConversation"]>[0]) => {
         structuredLaunches += 1;
         const settled = store.settleSpawn(input.receipt.launchId, {
-          key: { engine: "claude", sessionId: crypto.randomUUID() },
+          key: { engine, sessionId: crypto.randomUUID() },
           artifactPath: childPath,
           cwd,
-          accountId: "claude-test",
+          accountId: "account-a",
           status: "starting",
           host: null,
           claimEpoch: 0,
@@ -1924,7 +1929,7 @@ test("a materialized structured child is offered for pipeline attempt adoption",
     const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
       method: "POST",
       headers: { origin: "http://127.0.0.1", host: "127.0.0.1", "content-type": "application/json", "x-llv-spawn-capability": capability },
-      body: JSON.stringify({ title: "Test semantic spawn", engine: "claude", model: "sonnet", cwd, prompt: "fallback", src: sourcePath, role: "builder", clientAttemptId: "pipeline_adoption_20260719" }),
+      body: JSON.stringify({ title: "Test semantic spawn", engine, model, serviceTier, cwd, prompt: "fallback", src: sourcePath, role: "builder", clientAttemptId: "pipeline_adoption_20260719" }),
     }), dependencies);
 
     expect({ status: response.status, body: await response.clone().json() }).toMatchObject({ status: 202 });
@@ -1938,8 +1943,8 @@ test("a materialized structured child is offered for pipeline attempt adoption",
         parentConversationId: source.id,
         round: null,
         runtime: {
-          engine: "claude",
-          model: "sonnet",
+          engine,
+          model,
           effort: expect.any(String),
         },
       }),
@@ -1947,8 +1952,8 @@ test("a materialized structured child is offered for pipeline attempt adoption",
     expect(new AgentRegistry(store.filename).snapshot().memberships[receipt.conversationId]).toEqual([
       expect.objectContaining({
         runtime: {
-          engine: "claude",
-          model: "sonnet",
+          engine,
+          model,
           effort: expect.any(String),
         },
       }),
@@ -1957,7 +1962,7 @@ test("a materialized structured child is offered for pipeline attempt adoption",
     const replay = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
       method: "POST",
       headers: { origin: "http://127.0.0.1", host: "127.0.0.1", "content-type": "application/json", "x-llv-spawn-capability": capability },
-      body: JSON.stringify({ title: "Test semantic spawn", engine: "claude", model: "sonnet", cwd, prompt: "fallback", src: sourcePath, role: "builder", clientAttemptId: "pipeline_adoption_20260719" }),
+      body: JSON.stringify({ title: "Test semantic spawn", engine, model, serviceTier, cwd, prompt: "fallback", src: sourcePath, role: "builder", clientAttemptId: "pipeline_adoption_20260719" }),
     }), dependencies);
     expect(replay.status).toBe(200);
     expect(structuredLaunches).toBe(1);
@@ -1968,9 +1973,10 @@ test("a materialized structured child is offered for pipeline attempt adoption",
         conversationId: expect.stringMatching(/^conversation_/),
         agentPath: childPath,
         runtime: {
-          engine: "claude",
-          model: "sonnet",
+          engine,
+          model,
           effort: expect.any(String),
+          ...(serviceTier ? { serviceTier } : {}),
         },
       }),
     }, {
@@ -1980,9 +1986,10 @@ test("a materialized structured child is offered for pipeline attempt adoption",
         conversationId: expect.stringMatching(/^conversation_/),
         agentPath: childPath,
         runtime: {
-          engine: "claude",
-          model: "sonnet",
+          engine,
+          model,
           effort: expect.any(String),
+          ...(serviceTier ? { serviceTier } : {}),
         },
       }),
     }]);

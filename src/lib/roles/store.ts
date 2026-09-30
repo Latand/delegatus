@@ -279,13 +279,8 @@ export function applyRoleMappingPatch(
     const shipped = ROLE_DEFAULTS.find((role) => role.id === id)!.config;
     const row: RoleOverride = { ...next[id] };
     if (change.promptScaffold === null) delete row.promptScaffold;
-    const retainingTier = (config: RoleConfig, previous?: Partial<RoleConfig>): RoleConfig => ({
-      ...config,
-      ...(config.serviceTier === undefined && previous?.engine === config.engine && previous?.model === config.model && previous.serviceTier
-        ? { serviceTier: previous.serviceTier } : {}),
-    });
     if (change.config !== undefined) {
-      const config = change.config === null ? null : retainingTier(change.config, row.config);
+      const config = change.config;
       if (config === null || sameConfig(config, shipped)) delete row.config;
       else row.config = config;
     }
@@ -293,7 +288,7 @@ export function applyRoleMappingPatch(
       const variants = { ...row.variants };
       for (const [key, variant] of Object.entries(change.variants) as [RoleVariantId, RoleConfig | null][]) {
         const shippedVariant = shippedVariantConfig(id, key);
-        const config = variant === null ? null : retainingTier(variant, variants[key]);
+        const config = variant;
         if (config === null || (shippedVariant && sameConfig(config, shippedVariant))) delete variants[key];
         else variants[key] = config;
       }

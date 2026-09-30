@@ -1103,7 +1103,7 @@ export function defaultPipelinePorts(
         /* Copilot is not a pipeline stage engine yet (design slice 4). */
         const runtimeEngine = receipt?.engine ?? conversation?.engine;
         if (runtimeEngine === "copilot") continue;
-        const runtime = membership.runtime ?? (receipt && runtimeEngine ? {
+        const runtime: PipelineAttemptConversationRef["runtime"] = membership.runtime ? { ...membership.runtime } : (receipt && runtimeEngine ? {
           engine: runtimeEngine,
           model: receipt.launchProfile.model,
           effort: receipt.launchProfile.effort,
@@ -1112,6 +1112,10 @@ export function defaultPipelinePorts(
           model: generation?.launchProfile.model ?? null,
           effort: generation?.launchProfile.effort ?? null,
         } : null);
+        const launchProfile = receipt?.launchProfile ?? generation?.launchProfile;
+        if (runtime?.engine === "codex" && launchProfile?.serviceTier) {
+          runtime.serviceTier = launchProfile.serviceTier;
+        }
         const candidates = grouped.get(membership.containerId) ?? [];
         candidates.push({
           stageId: membership.stageId,
@@ -2096,7 +2100,7 @@ export type PipelineAttemptConversationRef = {
   agentPath: string;
   paneId: string | null;
   startedAt: string | null;
-  runtime?: Pick<EffectivePipelineRole, "engine" | "model" | "effort"> | null;
+  runtime?: Pick<EffectivePipelineRole, "engine" | "model" | "effort" | "serviceTier"> | null;
 };
 
 export type PipelineAdoptionCandidate = PipelineAttemptConversationRef & { stageId: string };
@@ -2146,9 +2150,15 @@ export function adoptAttempt(
   if (!source) return null;
   const effectiveRole = structuredClone(source.effectiveRole ?? stage.effectiveRole);
   if (conversationRef.runtime) {
+    delete effectiveRole.serviceTier;
+    delete effectiveRole.serviceTierSource;
+    delete effectiveRole.preferredServiceTier;
     effectiveRole.engine = conversationRef.runtime.engine;
     effectiveRole.model = conversationRef.runtime.model;
     effectiveRole.effort = conversationRef.runtime.effort;
+    if (conversationRef.runtime.engine === "codex" && conversationRef.runtime.serviceTier) {
+      effectiveRole.serviceTier = conversationRef.runtime.serviceTier;
+    }
   }
   const attempt: PipelineStageAttempt = {
     n: run.attempts.length + 1,

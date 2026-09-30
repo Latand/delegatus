@@ -1133,6 +1133,8 @@ export async function executeSpawnRequest(
             engine: materialized.engine,
             model: materialized.launchProfile.model,
             effort: materialized.launchProfile.effort,
+            ...(materialized.engine === "codex" && materialized.launchProfile.serviceTier
+              ? { serviceTier: materialized.launchProfile.serviceTier } : {}),
           },
         });
       } catch (error) {
