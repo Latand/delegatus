@@ -13,10 +13,15 @@ type Step = {
 };
 type Job = { env: Record<string, string>; steps: Step[] };
 const names = ["privacy-publication", "privacy-tracker-audit"];
-const jobs = names.map((name) => {
+const workflows = names.map((name) => {
   const source = readFileSync(join(import.meta.dir, "..", ".github/workflows", `${name}.yml`), "utf8");
-  return (Bun.YAML.parse(source) as { jobs: Record<string, Job> }).jobs[name]!;
+  return Bun.YAML.parse(source) as {
+    // Bun's YAML 1.1 parser resolves the unquoted `on` key to `true`.
+    true: { push?: { branches: string[] } };
+    jobs: Record<string, Job>;
+  };
 });
+const jobs = workflows.map((workflow, index) => workflow.jobs[names[index]!]!);
 const step = (job: Job, name: string) => job.steps.find((entry) => entry.name === name)!;
 
 // Execute the actual inline workflow shell. The sudo double records apt
@@ -105,11 +110,12 @@ for (const [index, job] of jobs.entries()) {
   test(`${names[index]} cache key follows tools and runner image, with no candidate input`, () => {
     const baseline = run(job, "Resolve media tools cache");
     expect(baseline.code).toBe(0);
-    expect(baseline.output).toContain("key=privacy-media-v1-ubuntu24-20260930.1-X64-");
+    expect(baseline.output).toContain("key=privacy-media-v2-ubuntu24-20260930.1-X64-");
     expect(run(job, "Resolve media tools cache", { PRIVACY_MEDIA_PACKAGES: "ffmpeg" }).output).not.toBe(baseline.output);
     expect(run(job, "Resolve media tools cache", { ImageVersion: "20261001.1" }).output).not.toBe(baseline.output);
     const saveIndex = job.steps.findIndex((entry) => entry.uses?.startsWith("actions/cache/save@"));
     expect(saveIndex).toBeGreaterThan(0);
+    expect(job.steps[saveIndex]!.if).toBe("steps.media-cache.outputs.cache-hit != 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')");
     expect(job.steps.slice(0, saveIndex).filter((entry) => entry.uses?.startsWith("actions/checkout@"))[0]?.with?.ref)
       .toBe("${{ github.event.repository.default_branch }}");
     for (const entry of job.steps.slice(0, saveIndex + 1)) {
@@ -123,4 +129,13 @@ test("both required jobs use identical package lists and provisioning", () => {
   expect(jobs[0]!.env).toEqual(jobs[1]!.env);
   const media = (job: Job) => job.steps.filter((entry) => /media|inspection tools/.test(entry.name ?? ""));
   expect(media(jobs[0]!)).toEqual(media(jobs[1]!));
+});
+
+// Default-branch caches need a trusted push writer on hosts that give
+// publication/issue events read-only cache tokens.
+test("main pushes populate the same cache without requiring a tracker number", () => {
+  for (const workflow of workflows) expect(workflow.true.push?.branches).toEqual(["main"]);
+  expect(step(jobs[1]!, "Audit public tracker surfaces").if).toBe("github.event_name != 'push'");
+  expect(step(jobs[0]!, "Check out candidate as inspection input").with?.ref)
+    .toBe("${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}");
 });

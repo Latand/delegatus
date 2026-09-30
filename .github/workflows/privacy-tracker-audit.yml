@@ -1,6 +1,10 @@
 name: Privacy tracker audit
 
 on:
+  # Trusted pushes seed the default-branch cache. Target/issue events can
+  # restore it even when their cache token is read-only.
+  push:
+    branches: [main]
   issues:
     types: [opened, edited]
   issue_comment:
@@ -55,7 +59,7 @@ jobs:
           set -euo pipefail
           printf 'MEDIA_CACHE_DIR=%s/privacy-media\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
           package_hash="$(printf '%s' "$PRIVACY_MEDIA_PACKAGES" | sha256sum | cut -d ' ' -f 1)"
-          printf 'key=privacy-media-v1-%s-%s-%s-%s\n' \
+          printf 'key=privacy-media-v2-%s-%s-%s-%s\n' \
             "$ImageOS" "$ImageVersion" "$RUNNER_ARCH" "$package_hash" >> "$GITHUB_OUTPUT"
 
       - name: Restore media inspection tools
@@ -130,7 +134,7 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" "$MEDIA_CACHE_DIR"
 
       - name: Save media inspection tools
-        if: steps.media-cache.outputs.cache-hit != 'true'
+        if: steps.media-cache.outputs.cache-hit != 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         timeout-minutes: 3
         with:
@@ -138,6 +142,8 @@ jobs:
           key: ${{ steps.media-key.outputs.key }}
 
       - name: Audit public tracker surfaces
+        # A main push seeds tools only; publication events still always audit.
+        if: github.event_name != 'push'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: scripts/privacy-known-value-fingerprints.json
