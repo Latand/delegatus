@@ -45,6 +45,6 @@ export function agentStartupMessage(lang = "en", options = {}) {
     ? `  Agent CLI: ${available.join(", ")}. Увійдіть в обліковий запис у майстрі налаштування.`
     : `  Agent CLI: ${available.join(", ")}. Sign in through the setup guide to run agents.`;
   return lang === "uk"
-    ? "  Claude Code CLI і Codex CLI не знайдено. Для оркестратора встановіть один із них:\n  Claude Code: curl -fsSL https://claude.ai/install.sh | bash\n  Codex: bun add -g @openai/codex\n  Claude Desktop потребує окремого CLI. Codex.app може містити CLI; перевірте встановлення.\n  Після встановлення перезапустіть Delegatus і відкрийте майстер налаштування."
-    : "  Claude Code CLI and Codex CLI were not found. Install either to run an orchestrator:\n  Claude Code: curl -fsSL https://claude.ai/install.sh | bash\n  Codex: bun add -g @openai/codex\n  Claude Desktop requires a separate CLI. Codex.app may include a CLI; check its installation.\n  After installing, restart Delegatus and open the setup guide.";
+    ? "  Claude Code CLI і Codex CLI не знайдено. Для оркестратора встановіть один із них:\n  Claude Code: curl -fsSL https://claude.ai/install.sh | bash\n  Codex: curl -fsSL https://chatgpt.com/codex/install.sh | sh\n  Claude Desktop потребує окремого CLI. Codex.app може містити CLI; перевірте встановлення.\n  Після встановлення перезапустіть Delegatus і відкрийте майстер налаштування."
+    : "  Claude Code CLI and Codex CLI were not found. Install either to run an orchestrator:\n  Claude Code: curl -fsSL https://claude.ai/install.sh | bash\n  Codex: curl -fsSL https://chatgpt.com/codex/install.sh | sh\n  Claude Desktop requires a separate CLI. Codex.app may include a CLI; check its installation.\n  After installing, restart Delegatus and open the setup guide.";
 }

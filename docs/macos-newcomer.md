@@ -35,6 +35,9 @@ Verified upstream facts:
   a conventional macOS install layout covered by a fixture, not an upstream
   promise. [Codex CLI docs](https://developers.openai.com/codex/cli) also
   describe a separate terminal installation and sign-in.
+  The installed npm Codex entrypoint inspected locally uses a Node shebang.
+  The updated prompt and startup message use the documented native Codex
+  installer so a Mac with only Bun can follow the advice.
 
 No live logged-in Mac or desktop installer was available in this investigation.
 These documentation checks establish the supported Claude installation and the

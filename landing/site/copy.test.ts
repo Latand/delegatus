@@ -22,4 +22,6 @@ for (const agent of ["claude", "codex"]) {
 test("desktop-specific advice names only the verified Codex bundle and Claude separate installer", () => {
   expect(installPrompt("claude")).toContain("Claude Desktop requires a separate Claude Code CLI");
   expect(installPrompt("codex")).toContain("/Applications/Codex.app/Contents/Resources/codex");
+  expect(installPrompt("codex")).toContain("curl -fsSL https://chatgpt.com/codex/install.sh | sh");
+  expect(installPrompt("codex")).not.toContain("bun add -g @openai/codex");
 });

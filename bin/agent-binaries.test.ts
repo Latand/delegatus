@@ -17,7 +17,7 @@ test("clean machine has actionable English and Ukrainian guidance without loggin
   for (const lang of ["en", "uk"]) {
     const message = agentStartupMessage(lang, options);
     expect(message).toContain("curl -fsSL https://claude.ai/install.sh | bash");
-    expect(message).toContain("bun add -g @openai/codex");
+    expect(message).toContain("curl -fsSL https://chatgpt.com/codex/install.sh | sh");
     expect(message).toContain("Claude Desktop");
   }
 });

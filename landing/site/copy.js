@@ -24,7 +24,7 @@
       "2. Run `codex --version`. On macOS, if it is missing, check the executable",
       "   at /Applications/Codex.app/Contents/Resources/codex or the same path under ~/Applications.",
       "   If found, add that Resources directory to PATH for this session and verify `codex --version`.",
-      "   Otherwise install the CLI: `bun add -g @openai/codex`",
+      "   Otherwise install the native CLI: `curl -fsSL https://chatgpt.com/codex/install.sh | sh`",
       "   Verify `codex --version` again. If it still fails, stop and show the error.",
     ],
   };
