@@ -109,7 +109,9 @@ async function main() {
   const reportDirectory = path.resolve(process.argv[3] ?? "newcomer-report");
   if (!target) throw new Error("Usage: bun scripts/newcomer-install.mjs <tarball-or-npm-package> <report-directory>");
   mkdirSync(reportDirectory, { recursive: true });
-  const fixture = mkdtempSync(path.join(os.tmpdir(), "dlg-newcomer-"));
+  // macOS's per-user temp path can exhaust its Unix socket pathname limit
+  // before the runtime host's filename is appended. Keep this fixture short.
+  const fixture = mkdtempSync("/tmp/dlg-newcomer-");
   const home = path.join(fixture, "home");
   mkdirSync(home);
   // Start with a new home, no credentials and only runner system tools on PATH.
@@ -132,7 +134,7 @@ async function main() {
     if (!(major > 1 || major === 1 && minor >= 4)) throw new Error("The prompt requires Bun 1.4+");
     // Same install command, substituting the exact subject this run verifies.
     // Target is passed via an env value rather than interpolated shell text.
-    report.packageInstall = shell(promptCommand(prompt, "bun add -g delegatus-cli").replace("delegatus-cli", '"$NEWCOMER_PACKAGE"'), { ...env, NEWCOMER_PACKAGE: target }).replaceAll(home, "$HOME");
+    report.packageInstall = shell(promptCommand(prompt, "bun add -g delegatus-cli").replace("delegatus-cli", '"$NEWCOMER_PACKAGE"'), { ...env, NEWCOMER_PACKAGE: target }).replaceAll(home, "$HOME").replaceAll(target, "<package subject>");
     report.globalBin = shell("bun pm bin -g", env).replaceAll(home, "$HOME");
     report.binEntries = readdirSync(path.join(home, ".bun/bin"));
     rows.push(await startCase("neither-cli", env, {

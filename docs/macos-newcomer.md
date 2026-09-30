@@ -64,7 +64,8 @@ It never signs in or creates an orchestrator. The driver tracks each launcher
 it starts and shuts it down through its own child handle.
 
 Node supervises the driver while the installed package runs on the visitor's
-new Bun. The driver substitutes an ephemeral port for 8898 and a tracked background
+new Bun. A short private temp root keeps its runtime socket within macOS's path
+limit. The driver substitutes an ephemeral port for 8898 and a tracked background
 process for `nohup`. It deliberately leaves out downloading real agent CLIs:
 the missing case is the regression, and the stubs exercise discovery and MCP
 registration without authentication. The report artifact records each case,
