@@ -3075,26 +3075,82 @@ test("a headless reviewer that exits stops fencing its conversation, and a later
   expect(recovered).toBe(1);
 });
 
-test("the startup repair ends a finished hostless reviewer's marker and keeps a running one (#2020)", async () => {
+test("startup repair preserves parked hostless reviewer fences without death proof and ends proven-dead markers (#2020)", async () => {
   const finishedSession = crypto.randomUUID();
-  const runningSession = crypto.randomUUID();
+  const parkedSession = crypto.randomUUID();
+  const unverifiedSession = crypto.randomUUID();
   const implementer = writeCodexEntry("hostless-repair-implementer.jsonl", { id: crypto.randomUUID(), cwd: "/repo" }, Date.now() / 1_000);
   const finishedPath = writeCodexEntry(`rollout-2026-09-22T00-00-01-${finishedSession}.jsonl`, { id: finishedSession, cwd: "/repo" }, Date.now() / 1_000).path;
-  const runningPath = writeCodexEntry(`rollout-2026-09-22T00-00-02-${runningSession}.jsonl`, { id: runningSession, cwd: "/repo" }, Date.now() / 1_000).path;
+  const parkedPath = writeCodexEntry(`rollout-2026-09-22T00-00-02-${parkedSession}.jsonl`, { id: parkedSession, cwd: "/repo" }, Date.now() / 1_000).path;
+  const unverifiedPath = writeCodexEntry(`rollout-2026-09-22T00-00-03-${unverifiedSession}.jsonl`, { id: unverifiedSession, cwd: "/repo" }, Date.now() / 1_000).path;
   const finished = hostlessReviewerFlow("flow-hostless-finished", finishedSession, finishedPath, implementer.path);
   finished.state = "approved";
-  const running = hostlessReviewerFlow("flow-hostless-running", runningSession, runningPath, implementer.path);
-  /* This test process stands in for the reviewer that is still working. */
-  running.rounds[0]!.reviewerPid = process.pid;
-  running.rounds[0]!.reviewerIdentity = procBackend.processIdentity(process.pid);
-  const { registry } = settleHostlessReviewer(finished, finishedSession, finishedPath);
-  settleHostlessReviewer(running, runningSession, runningPath);
-  saveFlows([finished, running]);
+  const parked = hostlessReviewerFlow("flow-hostless-parked", parkedSession, parkedPath, implementer.path);
+  parked.state = "needs_decision";
+  parked.rounds[0]!.reviewerPid = process.pid;
+  parked.rounds[0]!.reviewerIdentity = procBackend.processIdentity(process.pid);
+  const unverified = hostlessReviewerFlow("flow-hostless-unverified", unverifiedSession, unverifiedPath, implementer.path);
+  unverified.state = "closed";
+  unverified.rounds[0]!.reviewerPid = process.pid;
+  unverified.rounds[0]!.reviewerIdentity = null;
+  const deadSession = crypto.randomUUID();
+  const deadPath = writeCodexEntry(`rollout-2026-09-22T00-00-04-${deadSession}.jsonl`, { id: deadSession, cwd: "/repo" }, Date.now() / 1_000).path;
+  const dead = hostlessReviewerFlow("flow-hostless-proven-dead", deadSession, deadPath, implementer.path);
+  dead.state = "closed";
+  dead.rounds[0]!.reviewerPid = 2_000_000_000;
+  dead.rounds[0]!.reviewerIdentity = "process-that-no-longer-exists";
+  const registry = agentRegistry();
+  const seedMarker = (flow: Flow, sessionId: string, reviewerPath: string) => {
+    const begun = registry.beginSpawnRequest({
+      engine: "codex",
+      cwd: flow.cwd,
+      launchProfile: emptyLaunchProfile({ cwd: flow.cwd, title: `Review marker ${flow.id}` }),
+    });
+    flow.rounds[0]!.launchId = begun.receipt.launchId;
+    const settled = registry.settleSpawn(begun.receipt.launchId, {
+      key: { engine: "codex", sessionId },
+      artifactPath: reviewerPath,
+      cwd: flow.cwd,
+      accountId: null,
+      launchProfile: begun.receipt.launchProfile,
+      status: "starting",
+      host: null,
+      claimEpoch: 0,
+      claimOwner: null,
+      pendingAction: "spawn",
+    });
+    if (settled.kind === "conflict") throw new Error(settled.code);
+  };
+  seedMarker(finished, finishedSession, finishedPath);
+  seedMarker(parked, parkedSession, parkedPath);
+  seedMarker(unverified, unverifiedSession, unverifiedPath);
+  seedMarker(dead, deadSession, deadPath);
+  saveFlows([finished, parked, unverified, dead]);
 
   /* The repair runs once per process, on the engine's first tick. */
-  (globalThis as { __llvHostlessReviewerMarkersRepaired?: boolean }).__llvHostlessReviewerMarkersRepaired = false;
-  await tickFlows([implementer]);
+  const repairState = globalThis as { __llvHostlessReviewerMarkersRepaired?: boolean };
+  const previousRepairState = repairState.__llvHostlessReviewerMarkersRepaired;
+  repairState.__llvHostlessReviewerMarkersRepaired = false;
+  const repair = registry.repairHostlessSpawnMarkers.bind(registry);
+  let repairAttempts = 0;
+  registry.repairHostlessSpawnMarkers = (isRunning) => {
+    repairAttempts += 1;
+    if (repairAttempts === 1) throw new Error("temporary registry read failure");
+    return repair(isRunning);
+  };
+  try {
+    await tickFlows([implementer]);
+    expect(repairAttempts).toBe(1);
+    await tickFlows([implementer]);
+    expect(repairAttempts).toBe(2);
+  } finally {
+    registry.repairHostlessSpawnMarkers = repair;
+    if (previousRepairState === undefined) delete repairState.__llvHostlessReviewerMarkersRepaired;
+    else repairState.__llvHostlessReviewerMarkersRepaired = previousRepairState;
+  }
 
   expect(registry.readOnlySnapshot().entries[`codex:${finishedSession}`]).toMatchObject({ status: "dead", pendingAction: null });
-  expect(registry.readOnlySnapshot().entries[`codex:${runningSession}`]).toMatchObject({ status: "starting", pendingAction: "spawn" });
+  expect(registry.readOnlySnapshot().entries[`codex:${deadSession}`]).toMatchObject({ status: "dead", pendingAction: null });
+  expect(registry.readOnlySnapshot().entries[`codex:${parkedSession}`]).toMatchObject({ status: "starting", pendingAction: "spawn" });
+  expect(registry.readOnlySnapshot().entries[`codex:${unverifiedSession}`]).toMatchObject({ status: "starting", pendingAction: "spawn" });
 });

@@ -372,6 +372,102 @@ test("a send the Viewer refuses before reserving anything settles as not execute
   }
 });
 
+test("an oversized send to a reclaimed host keeps its refusal reason through MCP recovery", async () => {
+  const previousRegistry = { registry, recipient, generationId };
+  const isolatedRegistry = new AgentRegistry(path.join(root, "reclaimed-oversized-registry.json"), undefined, undefined, { sqliteMode: "off" });
+  isolatedRegistry.reconcileConversations([{
+    engine: "codex",
+    path: transcriptPath,
+    accountId: "recovery-fixture-account",
+    launchProfile: emptyLaunchProfile({ cwd: root }),
+    turn: { state: "idle", source: "assistant", terminalAt: null },
+    observedAt: "2026-09-09T08:00:00.000Z",
+  }]);
+  registry = isolatedRegistry;
+  recipient = Object.values(registry.snapshot().conversations)[0]!;
+  generationId = recipient.generations.at(-1)!.id;
+  const generation = recipient.generations.at(-1)!;
+  const before = registry.readOnlySnapshot();
+  const saved = { url: process.env.LLV_VIEWER_CONTROL_URL, target: process.env.LLV_VIEWER_DEPLOY_TARGET, port: process.env.LLV_VIEWER_PORT };
+  let stopServer: (() => Promise<void>) | null = null;
+  try {
+    registry.upsert({
+      key: { engine: recipient.engine, sessionId: generation.id },
+      artifactPath: generation.path,
+      cwd: root,
+      accountId: generation.accountId,
+      launchProfile: generation.launchProfile,
+      status: "dead",
+      host: null,
+      structuredHost: {
+        kind: "codex-app-server",
+        endpoint: "stdio:reclaimed-recovery-fixture",
+        process: null,
+        eventCursor: 0,
+        protocolVersion: "v2",
+        writerClaimEpoch: 1,
+        activeTurnRef: null,
+        pendingAttention: [],
+        activeFlags: [],
+      },
+      claimEpoch: 1,
+      claimOwner: null,
+      pendingAction: null,
+    });
+
+    const domain = {
+      registrySnapshot: () => registry.readOnlySnapshot(),
+      attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_caller" }),
+      callerAttribution: () => ({ kind: "worker", conversationId: "conversation_caller" }),
+      recoveryPredecessors: () => [],
+      sendSettlementPorts: () => ({ registry, client: null }),
+    } as never;
+    const receipts = new MemoryMcpReceiptStore();
+    const service = () => createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(), domain), receipts, undefined, { recovery: viewerMcpRecoverableTools(domain) });
+    const posts: string[] = [];
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+      posts.push(new URL(request.url).pathname);
+      return conversationHostPOST(new NextRequest("http://127.0.0.1/api/conversation-host", {
+        method: "POST",
+        headers: { host: "127.0.0.1", "content-type": "application/json" },
+        body: await request.text(),
+      }));
+    } });
+    stopServer = () => server.stop(true);
+    process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
+    delete process.env.LLV_VIEWER_DEPLOY_TARGET;
+    delete process.env.LLV_VIEWER_PORT;
+    structuredSend = (request) => enqueueStructuredMessage(request, {
+      enabled: () => true,
+      registry: () => registry,
+      client: () => ({ readSession: async () => null }) as never,
+      requestMigrationTick: () => {},
+    });
+    const text = "x".repeat(32_001);
+    const args = { clientRequestId: "reclaimed-oversized-refusal", conversationId: recipient.id, text };
+    const first = await service().callTool("send_message", args);
+    expect(first).toMatchObject({ ok: false, details: { outcome: "not-executed", nextAction: "new-request-permitted", status: 413 } });
+    expect(JSON.stringify(first)).toContain("structured message text exceeds the 32000-byte envelope bound");
+
+    const lookup = await service().callTool("send_message", { ...args, recoveryOnly: true });
+    expect(lookup).toMatchObject({ ok: false, details: { outcome: "not-executed", nextAction: "new-request-permitted", status: 413 } });
+    expect(JSON.stringify(lookup)).toContain("structured message text exceeds the 32000-byte envelope bound");
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toEqual(Object.values(before.heldDeliveries));
+    expect(posts).toHaveLength(1);
+  } finally {
+    structuredSend = null;
+    await stopServer?.();
+    for (const [key, value] of [["LLV_VIEWER_CONTROL_URL", saved.url], ["LLV_VIEWER_DEPLOY_TARGET", saved.target], ["LLV_VIEWER_PORT", saved.port]] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    isolatedRegistry.close();
+    registry = previousRegistry.registry;
+    recipient = previousRegistry.recipient;
+    generationId = previousRegistry.generationId;
+  }
+});
+
 test("a transient readiness read after republish settles the original MCP key through durable admission", async () => {
   const previousRegistry = { registry, recipient, generationId };
   const isolatedRegistry = new AgentRegistry(path.join(root, "readiness-recovery-registry.json"), undefined, undefined, { sqliteMode: "off" });

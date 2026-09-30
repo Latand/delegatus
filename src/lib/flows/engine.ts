@@ -870,8 +870,9 @@ function endHeadlessReviewerMarker(round: Round): void {
 /** Proof that a round's recorded reviewer process is gone: its pid vanished
     or now carries another start identity. Missing evidence proves nothing. */
 function headlessReviewerProvenDead(round: Round): boolean {
-  if (!round.reviewerPid || !round.reviewerIdentity) return false;
+  if (!round.reviewerPid) return false;
   if (!pidAlive(round.reviewerPid)) return true;
+  if (!round.reviewerIdentity) return false;
   const current = procBackend.processIdentity(round.reviewerPid);
   return current !== null && current !== round.reviewerIdentity;
 }
@@ -884,7 +885,7 @@ function headlessReviewerMayRun(flows: readonly Flow[], launchId: string): boole
   for (const flow of flows) {
     const round = flow.rounds.find((candidate) => candidate.launchId === launchId);
     if (!round) continue;
-    if (round.reviewerPid && round.reviewerIdentity) return !headlessReviewerProvenDead(round);
+    if (round.reviewerPid) return !headlessReviewerProvenDead(round);
     return !TERMINAL_STATES.has(flow.state) && lastRound(flow) === round;
   }
   return false;
@@ -1574,9 +1575,10 @@ export async function tickFlows(entries: FileEntry[]): Promise<TickResult> {
   if (!store.__llvHostlessReviewerMarkersRepaired) {
     /* Reviewer rows that finished before their marker was ever cleared
        (#2020). Once per process: nothing writes the old shape any more. */
-    store.__llvHostlessReviewerMarkersRepaired = true;
     try {
-      agentRegistry().repairHostlessSpawnMarkers((launchId) => headlessReviewerMayRun(flows, launchId));
+      const persistedFlows = loadFlows();
+      agentRegistry().repairHostlessSpawnMarkers((launchId) => headlessReviewerMayRun(persistedFlows, launchId));
+      store.__llvHostlessReviewerMarkersRepaired = true;
     } catch (error) {
       console.error("[flows] hostless reviewer marker repair failed", error);
     }

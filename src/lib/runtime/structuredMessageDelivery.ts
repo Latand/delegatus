@@ -427,6 +427,10 @@ async function holdDuringRuntimeSynchronization(
   }
   try {
     assertStructuredTextEnvelope(request.text);
+  } catch (error) {
+    return refusedBeforeReservation(deliveryFailure(error));
+  }
+  try {
     const idempotencyKey = request.clientMessageId?.trim() || `queue_${crypto.randomUUID()}`;
     const overlong = refusedIdempotencyKey(idempotencyKey);
     if (overlong) return overlong;
