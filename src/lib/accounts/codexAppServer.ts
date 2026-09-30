@@ -149,7 +149,11 @@ export function codexAppServerEnvironment(home: string): NodeJS.ProcessEnv {
 
 /** Account status and sign-in use the same CLI locations as agent launches. */
 export function codexAccountBinary(env: NodeJS.ProcessEnv = process.env, lookup = {}): string {
-  return env.LLV_CODEX_BINARY || findAgentBinary("codex", lookup) || "codex";
+  if (env.LLV_CODEX_BINARY) return env.LLV_CODEX_BINARY;
+  // In Docker the bare command resolves to the host's nsenter shim. Keep that
+  // boundary instead of selecting a mounted host CLI inside the container.
+  if (env.LLV_DOCKER_NSENTER_SHIMS === "1") return "codex";
+  return findAgentBinary("codex", lookup) || "codex";
 }
 
 function spawnCodexAppServer(home: string, args: readonly string[]): CodexAppServerChild {

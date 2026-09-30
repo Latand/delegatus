@@ -16,6 +16,7 @@ test("account status and sign-in find a desktop-only Codex CLI and preserve an e
     const lookup = { home, platform: "darwin", envPath: "", includeSystem: false };
     expect(codexAccountBinary({ NODE_ENV: "test" }, lookup)).toBe(binary);
     expect(codexAccountBinary({ NODE_ENV: "test", LLV_CODEX_BINARY: "/custom/codex" }, lookup)).toBe("/custom/codex");
+    expect(codexAccountBinary({ NODE_ENV: "test", LLV_DOCKER_NSENTER_SHIMS: "1" }, lookup)).toBe("codex");
     expect(codexAccountBinary({ NODE_ENV: "test" }, { ...lookup, platform: "linux" })).toBe("codex");
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
