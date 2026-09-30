@@ -51,6 +51,11 @@ const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOSt
 
 function record(overrides: Partial<SeatTickSettingsAnswer> = {}): SeatTickSettingsAnswer {
   return {
+    maintenance: {
+      enabled: false, intervalHours: 3, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168,
+      updatedAt: null, setBy: null, live: null, lastRun: null,
+      nextEligibleAt: null, nextRunAt: null, waitingOn: "off", runsError: null,
+    },
     project: PROJECT,
     changed: false,
     at: new Date().toISOString(),

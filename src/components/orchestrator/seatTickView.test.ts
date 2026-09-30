@@ -19,6 +19,11 @@ const NOW = Date.parse("2026-09-18T12:00:00.000Z");
 
 function answer(overrides: Partial<SeatTickSettingsAnswer> = {}): SeatTickSettingsAnswer {
   return {
+    maintenance: {
+      enabled: false, intervalHours: 3, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168,
+      updatedAt: null, setBy: null, live: null, lastRun: null,
+      nextEligibleAt: null, nextRunAt: null, waitingOn: "off", runsError: null,
+    },
     project: "viewer",
     changed: false,
     at: "2026-09-18T12:00:00.000Z",

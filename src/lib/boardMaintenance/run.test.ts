@@ -109,3 +109,16 @@ test("production evidence gathering reads transcript and real branch activity; f
   const unknown = await maintenanceWorkEvidence(PROJECT, NOW, { ...sources, liveness: async () => { throw new Error("fixture unreadable"); } }, "/fixtures/missing-repository");
   expect(unknown[0].verdict).toBe("quiet"); expect(unknown[0].workers[0].lifecycle).toBe("unknown"); expect(unknown[0].lanes[0].branchCommitAt).toBeNull();
 });
+
+
+test("production observation distinguishes failed receipts, dead hosts, idle turns and provider waits", async () => {
+  const h = harness(); const run = claim();
+  const { observeMaintenanceRun } = await import("./run");
+  let receipt = { state: "completed", conversationId: "fixture-worker", launchId: "fixture-launch", artifactPath: "/fixtures/worker.jsonl", error: null } as Record<string, unknown>;
+  let activity = { conversationId: "fixture-worker", reason: "host_alive_turn_idle", lifecycle: "idle", host: { state: "alive" }, lastRecordAt: new Date(NOW + 1000).toISOString() };
+  const sources = { ...h.sources, registry: () => ({ spawnReceiptForClientAttempt: () => receipt }) as never, liveness: async () => [activity] as never };
+  expect((await observeMaintenanceRun(run, sources)).state).toBe("ended");
+  activity = { ...activity, reason: "provider_throttled", lifecycle: "waiting" }; expect((await observeMaintenanceRun(run, sources)).state).toBe("running");
+  activity = { ...activity, reason: "host_gone_turn_open", lifecycle: "stalled", host: { state: "gone" } }; expect((await observeMaintenanceRun(run, sources)).failure?.kind).toBe("host-died");
+  receipt = { ...receipt, state: "failed", error: "fixture launch failed" }; expect((await observeMaintenanceRun(run, sources)).failure?.kind).toBe("launch-failed");
+});

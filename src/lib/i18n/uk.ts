@@ -4316,6 +4316,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "seatTick.reason.interval": "інтервал",
   "seatTick.reason.childTerminal": "воркер завершився",
   "seatTick.reason.ownLaneSettled": "твоя гілка завершилась",
+  "seatTick.reason.maintenanceSettled": "обслуговування дошки завершено",
   "seatTick.reason.deploySettled": "твій деплой завершився",
   "seatTick.reason.permissionRequest": "чекає запит дозволу",
   "seatTick.outcome.landed": "доставлено",

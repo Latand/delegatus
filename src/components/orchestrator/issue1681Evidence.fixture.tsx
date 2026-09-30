@@ -64,6 +64,11 @@ function answer(): SeatTickSettingsAnswer {
   const onDefault = face === "default";
   const reason = onDefault ? null : "a release afternoon, so the seat is woken on a schedule of its own";
   return {
+    maintenance: {
+      enabled: false, intervalHours: 3, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168,
+      updatedAt: null, setBy: null, live: null, lastRun: null,
+      nextEligibleAt: null, nextRunAt: null, waitingOn: "off", runsError: null,
+    },
     project: PROJECT,
     changed: false,
     at: new Date().toISOString(),

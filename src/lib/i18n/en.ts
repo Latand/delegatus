@@ -4424,6 +4424,7 @@ export const en = {
   "seatTick.reason.interval": "interval",
   "seatTick.reason.childTerminal": "finished worker",
   "seatTick.reason.ownLaneSettled": "your lane settled",
+  "seatTick.reason.maintenanceSettled": "board maintenance finished",
   "seatTick.reason.deploySettled": "your deploy settled",
   "seatTick.reason.permissionRequest": "a permission request waits",
   "seatTick.outcome.landed": "landed",
