@@ -1,7 +1,7 @@
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineEdgeKind, PipelineStage, PipelineStageAttempt } from "@/lib/pipelines/types";
 import { edgeRoundsUsed } from "@/lib/pipelines/failEdgeBudget";
-import { LIVE_ATTEMPT_STATES, latestAttempt, pipelineCursorActive, stageAttempts, stageChipState, type StageChipState } from "@/components/pipelines/pipelineModel";
+import { LIVE_ATTEMPT_STATES, latestAttempt, pipelineCursorActive, stageAttempts, stageChipState, type StageChipState } from "@/lib/pipelines/stageChip";
 
 /**
  * The stage graph a kanban card draws for its pipeline (#1695 K5a), ported from

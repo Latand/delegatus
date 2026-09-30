@@ -5,7 +5,11 @@ import type { Pipeline, PipelineStage, StageFinding } from "@/lib/pipelines/type
 
 import type { KanbanPipeline, KanbanStageChip } from "@/components/kanban/kanbanModel";
 import { pipelineActionOptions } from "@/components/kanban/stagesModel";
-import { latestAttempt, stageAccess, type StageChipState } from "./pipelineModel";
+import { stageAccess, type StageChipState } from "./pipelineModel";
+import { latestAttempt } from "@/lib/pipelines/stageChip";
+import { pipelineMovedAtMs, stageFindings } from "@/lib/pipelines/laneReads";
+
+export { pipelineMovedAtMs, stageFindings };
 
 /*
  * What the one pipeline block (#2072 slice 3, docs/design/phone-kanban.md
@@ -48,23 +52,6 @@ export const STAGE_MARK: Record<StageChipState, StageMarkShape> = {
 export function blockAgeSeconds(seconds: number): number {
   const total = Math.max(0, Math.round(seconds));
   return total >= 60 ? Math.floor(total / 60) * 60 : total;
-}
-
-/** When the lane last moved, in ms: the newest start or end of any of its
-    attempts, else when it was created. The age every density prints. */
-export function pipelineMovedAtMs(pipeline: Pipeline): number | null {
-  let latest = 0;
-  for (const run of pipeline.runs) {
-    for (const attempt of run.attempts) {
-      for (const at of [attempt.startedAt, attempt.completedAt]) {
-        const ms = Date.parse(at ?? "");
-        if (Number.isFinite(ms) && ms > latest) latest = ms;
-      }
-    }
-  }
-  if (latest) return latest;
-  const created = Date.parse(pipeline.createdAt ?? "");
-  return Number.isFinite(created) ? created : null;
 }
 
 /** The title a pipeline shares with the task it sits on is not drawn twice. */
@@ -164,15 +151,6 @@ export function cardChainLevels(chips: readonly KanbanStageChip[]): ChainItem[][
   /* The narrowest: the current stage alone, for a name too long to share its
      line with even the counts. Every level before it holds two items or more. */
   return chips.length > 1 ? [...folds, [stage(chips[current]!)]] : folds;
-}
-
-/** A finding list as the stage reported it: ranked when it was, else the
-    plain strings with no rank. */
-export function stageFindings(pipeline: Pipeline, stageId: string): StageFinding[] {
-  const attempt = latestAttempt(pipeline, stageId);
-  return attempt?.report?.verdict.rankedFindings
-    ?? attempt?.verdict?.rankedFindings
-    ?? (attempt?.report?.verdict.findings ?? attempt?.verdict?.findings ?? []).map((text) => ({ severity: null, text }));
 }
 
 /** An answer the block gives in place, through the board's pipeline actions. */

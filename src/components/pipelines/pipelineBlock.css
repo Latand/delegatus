@@ -383,3 +383,10 @@
   .phone-lane .pblock .pb-links { margin-top: 6px; }
   .phone-lane .pblock .pb-links .wl-chip::after { inset: -13px -2px; }
 }
+
+/* ── A lane managed on another machine (docs/design/synced-task-card.md §6) ──
+   The head is text, not a button, so it never claims a touch target, and the
+   one sentence under the chain reads as the muted note it is. */
+.pblock .pb-open.managed { cursor: default; }
+@media (pointer: coarse) { .pblock .pb-open.managed { min-height: 0; } }
+.pblock p.pb-note[data-managed-on] { display: block; margin: 2px 0 0; font-size: var(--text-label); color: var(--color-muted); overflow-wrap: anywhere; }
