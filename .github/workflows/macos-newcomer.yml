@@ -12,6 +12,7 @@ on:
       - "bin/cli.mjs"
       - "bin/mcp-server.mjs"
       - "src/lib/agent/cli.ts"
+      - "src/lib/accounts/codexAppServer*"
       - "landing/site/copy*"
 
 permissions:
@@ -41,7 +42,7 @@ jobs:
       - name: Install the heavy-gate lock utility
         run: brew install flock
       - name: Verify prompt and detection regressions
-        run: bun test bin/agent-binaries.test.ts landing/site/copy.test.ts scripts/newcomer-install.test.ts
+        run: bun test bin/agent-binaries.test.ts landing/site/copy.test.ts scripts/newcomer-install.test.ts src/lib/accounts/codexAppServer.test.ts
       - name: Prepare checkout tarball or exact npm release
         id: package
         env:

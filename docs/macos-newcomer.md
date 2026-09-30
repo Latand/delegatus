@@ -46,6 +46,9 @@ it does not establish that every desktop release or renamed app bundle exposes
 that executable, or that desktop credentials transfer to Delegatus accounts.
 The updated prompts register MCP with absolute Bun and entrypoint paths so a
 new desktop session can start it even when the app's PATH predates Bun's install.
+The Codex account-status/sign-in client also used a bare `codex` command.
+It now shares the bundle-aware resolver with agent launches; otherwise a bundle
+could pass the presence check and still fail when connecting an account.
 
 ## Automated rehearsal
 
@@ -60,7 +63,9 @@ installs the selected package with the prompt's global-install command.
 launcher and setup API with neither CLI present, each engine separately on
 PATH, and a Codex stub under the user desktop bundle path. Stubs implement
 `--version` and MCP registration, returning failure for other commands. The
-report also admits the Viewer's read-only account-status and MCP-list probes;
+report also admits the Viewer's read-only account-status and MCP-list probes
+(including the exact account-client app-server invocation, which the stub
+rejects before reading any RPC);
 it refuses login or agent-execution requests and records every distinct call.
 It never signs in or creates an orchestrator. The driver tracks each launcher
 it starts and shuts it down through its own child handle.

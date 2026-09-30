@@ -17,7 +17,7 @@ test("prompt drift fails explicitly instead of skipping a missing step", () => {
 });
 
 test("read-only startup probes are allowed; logins and agent execution are refused", () => {
-  for (const call of ["--version", "auth status --json", "login status", "-c features.plugins=false mcp list --json"]) {
+  for (const call of ["--version", "auth status --json", "login status", "-c features.plugins=false mcp list --json", "-c cli_auth_credentials_store=file -c mcp_servers={} app-server"]) {
     expect(safeStubCall(call)).toBe(true);
   }
   for (const call of ["auth login --claudeai", "login --device-auth", "app-server", "exec hello", "--print hello", ""]) {

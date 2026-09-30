@@ -1,8 +1,26 @@
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { expect, test } from "bun:test";
 
-import { CodexAppServerClient, type CodexAppServerOptions } from "./codexAppServer";
+import { codexAccountBinary, CodexAppServerClient, type CodexAppServerOptions } from "./codexAppServer";
+
+test("account status and sign-in find a desktop-only Codex CLI and preserve an explicit override", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "dlg-account-binary-"));
+  try {
+    const binary = path.join(home, "Applications/Codex.app/Contents/Resources/codex");
+    fs.mkdirSync(path.dirname(binary), { recursive: true });
+    fs.writeFileSync(binary, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const lookup = { home, platform: "darwin", envPath: "", includeSystem: false };
+    expect(codexAccountBinary({ NODE_ENV: "test" }, lookup)).toBe(binary);
+    expect(codexAccountBinary({ NODE_ENV: "test", LLV_CODEX_BINARY: "/custom/codex" }, lookup)).toBe("/custom/codex");
+    expect(codexAccountBinary({ NODE_ENV: "test" }, { ...lookup, platform: "linux" })).toBe("codex");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
 
 class FakeChild extends EventEmitter {
   readonly pid = 4242;

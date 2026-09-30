@@ -1,6 +1,7 @@
 import { withoutUnsupportedApiCredentials } from "../environmentIsolation";
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { findAgentBinary } from "../../../bin/agent-binaries.mjs";
 
 import {
   CodexAppServerProtocolError,
@@ -146,8 +147,13 @@ export function codexAppServerEnvironment(home: string): NodeJS.ProcessEnv {
   return { ...withoutUnsupportedApiCredentials(process.env), CODEX_HOME: home };
 }
 
+/** Account status and sign-in use the same CLI locations as agent launches. */
+export function codexAccountBinary(env: NodeJS.ProcessEnv = process.env, lookup = {}): string {
+  return env.LLV_CODEX_BINARY || findAgentBinary("codex", lookup) || "codex";
+}
+
 function spawnCodexAppServer(home: string, args: readonly string[]): CodexAppServerChild {
-  const child = spawn(process.env.LLV_CODEX_BINARY || "codex", [...args], {
+  const child = spawn(codexAccountBinary(), [...args], {
     env: codexAppServerEnvironment(home),
     stdio: ["pipe", "pipe", "pipe"],
     detached: true,

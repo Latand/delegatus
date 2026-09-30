@@ -21,7 +21,11 @@ export function promptCommand(prompt, prefix) {
 
 /** Startup can read account status and registered MCPs without signing in. */
 export function safeStubCall(call) {
-  return ["--version", "auth status --json", "login status", "-c features.plugins=false mcp list --json"].includes(call)
+  return ["--version", "auth status --json", "login status", "-c features.plugins=false mcp list --json",
+    // The account-status client disables MCP and uses file credentials. The
+    // stub exits 97 before any RPC, so this cannot sign in or execute a turn.
+    "-c cli_auth_credentials_store=file -c mcp_servers={} app-server",
+  ].includes(call)
     || call.startsWith("mcp add viewer ");
 }
 
