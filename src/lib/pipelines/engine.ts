@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { accountManager, resolveProjectSpawnAfterLiveRead } from "@/lib/accounts/manager";
 import { selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
@@ -143,6 +144,7 @@ export type PipelineStageSpawn = {
   "transcript": string | null;
   paneId: string | null;
   accountId?: string | null;
+  serviceTier?: string | null;
 };
 
 /** Identity of the agent host a stage attempt owns, as a close reports it. */
@@ -454,11 +456,18 @@ function stageAccountRefusal(
   project: string,
   ports: PipelinePorts,
 ): StageAccountRefusal | null {
-  if (!ports.allowedAccountIds) return null;
   const violations: PipelineValidationViolation[] = [];
   for (const [index, stage] of stages.entries()) {
     const requested = stage.account?.trim();
-    if (!requested) continue;
+    const tier = stage.effectiveRole.serviceTier;
+    if (tier && tier !== "default" && tier !== "standard" && stage.effectiveRole.serviceTierSource === "explicit") {
+      const read = stageAccountPool(ports, project, "codex");
+      if ("refusal" in read) return read.refusal;
+      const accounts = listCodexAccounts().filter(account => (read.pool === null || read.pool.includes(account.id)) && (!requested || account.id === requested));
+      const offers = tierOffers(accounts, stage.effectiveRole.model!, tier);
+      if (!offers.offering.length) violations.push({ field: `stages[${index}].serviceTier`, message: `no account in this project's pool offers serviceTier ${tier}; offered: ${offers.offered.join(", ") || "none"}`, expected: "tier offered by the stage model/account" });
+    }
+    if (!requested || !ports.allowedAccountIds) continue;
     const engine = stage.effectiveRole.engine;
     const read = stageAccountPool(ports, project, engine);
     if ("refusal" in read) return read.refusal;
@@ -520,18 +529,31 @@ async function spawnPipelineAgent(
      outside it is refused, and an allowed set with no capacity left is
      REPORTED. Neither case falls back onto an account the project forbids;
      the throw parks the stage with the reason on the record. */
-  const resolution = await resolveProjectSpawnAfterLiveRead(input.role.engine, {
-    project: input.project,
-    requestedId: input.requestedAccountId,
-    /* The model this stage will actually launch, so the account's capacity is
-       judged on the window that model draws on (#1796). */
-    model: input.role.model,
-    ...(input.unavailableAccountIds?.length
-      ? { unavailableIds: input.unavailableAccountIds }
-      : {}),
-  });
+  const desiredTier = input.role.serviceTier;
+  let serviceTier = desiredTier ?? null;
+  const accounts = input.role.engine === "codex" ? listCodexAccounts() : [];
+  const pool = allowedAccountIdsForProject(input.project, input.role.engine);
+  const candidates = accounts.filter(account => (pool === null || pool.includes(account.id))
+    && (!input.requestedAccountId || account.id === input.requestedAccountId));
+  const offers = desiredTier ? tierOffers(candidates, input.role.model!, desiredTier) : null;
+  const required = input.role.serviceTierSource !== "role-default";
+  if (offers && !offers.offering.length) {
+    if (required) throw new CodexServiceTierUnavailableError(`no account in this project's pool offers serviceTier ${desiredTier} for ${input.role.model}; offered: ${offers.offered.join(", ") || "none"}`);
+    serviceTier = null;
+  }
+  const request = {
+    project: input.project, requestedId: input.requestedAccountId, model: input.role.model,
+    ...((input.unavailableAccountIds?.length || (serviceTier && offers?.lacking.length))
+      ? { unavailableIds: [...input.unavailableAccountIds ?? [], ...(serviceTier ? offers?.lacking ?? [] : [])] } : {}),
+  };
+  let resolution = await resolveProjectSpawnAfterLiveRead(input.role.engine, request);
+  if (resolution.kind !== "available" && serviceTier && !required) {
+    serviceTier = null;
+    resolution = await resolveProjectSpawnAfterLiveRead(input.role.engine, { ...request, unavailableIds: input.unavailableAccountIds ?? [] });
+  }
   if (resolution.kind !== "available") {
-    throw new Error(projectAccountRefusalDetail(resolution, input.role.engine, input.project));
+    throw new Error(projectAccountRefusalDetail(resolution, input.role.engine, input.project)
+      + (serviceTier ? `; serviceTier ${serviceTier} offered by: ${candidates.filter(account => offers?.offering.includes(account.id)).map(account => account.label).join(", ")}` : ""));
   }
   const account = resolution.account;
   const parent = parentIdentity(input.parentPath);
@@ -542,6 +564,7 @@ async function spawnPipelineAgent(
   const specBase = freshSpecFor(input.role.engine, input.cwd, {
     model: input.role.model,
     effort: input.role.effort,
+    serviceTier,
     /* Pipeline access is enforced at settlement. Passing it to the engine
        would make the repository policy silently select the sandbox again. */
     readOnly: false,
@@ -571,6 +594,7 @@ async function spawnPipelineAgent(
     engine: input.role.engine,
     model: input.role.model,
     effort: input.role.effort,
+    ...(serviceTier ? { serviceTier } : {}),
     runtimeProfile: input.runtimeProfile,
     cwd: input.cwd,
     parentConversationId: parent.conversationId,
@@ -630,6 +654,7 @@ async function spawnPipelineAgent(
       "transcript": identityPublished ? begun.receipt.artifactPath : null,
       paneId: begun.receipt.verifiedHost?.paneId ?? begun.receipt.pane?.paneId ?? null,
       accountId: begun.receipt.accountId ?? account.accountId,
+      serviceTier: begun.receipt.launchProfile.serviceTier ?? null,
     };
   }
 
@@ -667,6 +692,7 @@ async function spawnPipelineAgent(
     transcript,
     paneId: null,
     accountId: begun.receipt.accountId ?? account.accountId,
+    serviceTier,
   };
 }
 
@@ -1078,7 +1104,7 @@ export function defaultPipelinePorts(
         /* Copilot is not a pipeline stage engine yet (design slice 4). */
         const runtimeEngine = receipt?.engine ?? conversation?.engine;
         if (runtimeEngine === "copilot") continue;
-        const runtime = membership.runtime ?? (receipt && runtimeEngine ? {
+        const runtime: PipelineAttemptConversationRef["runtime"] = membership.runtime ? { ...membership.runtime } : (receipt && runtimeEngine ? {
           engine: runtimeEngine,
           model: receipt.launchProfile.model,
           effort: receipt.launchProfile.effort,
@@ -1087,6 +1113,10 @@ export function defaultPipelinePorts(
           model: generation?.launchProfile.model ?? null,
           effort: generation?.launchProfile.effort ?? null,
         } : null);
+        const launchProfile = receipt?.launchProfile ?? generation?.launchProfile;
+        if (runtime?.engine === "codex" && launchProfile?.serviceTier) {
+          runtime.serviceTier = launchProfile.serviceTier;
+        }
         const candidates = grouped.get(membership.containerId) ?? [];
         candidates.push({
           stageId: membership.stageId,
@@ -2078,7 +2108,7 @@ export type PipelineAttemptConversationRef = {
   agentPath: string;
   paneId: string | null;
   startedAt: string | null;
-  runtime?: Pick<EffectivePipelineRole, "engine" | "model" | "effort"> | null;
+  runtime?: Pick<EffectivePipelineRole, "engine" | "model" | "effort" | "serviceTier"> | null;
 };
 
 export type PipelineAdoptionCandidate = PipelineAttemptConversationRef & { stageId: string };
@@ -2128,9 +2158,15 @@ export function adoptAttempt(
   if (!source) return null;
   const effectiveRole = structuredClone(source.effectiveRole ?? stage.effectiveRole);
   if (conversationRef.runtime) {
+    delete effectiveRole.serviceTier;
+    delete effectiveRole.serviceTierSource;
+    delete effectiveRole.preferredServiceTier;
     effectiveRole.engine = conversationRef.runtime.engine;
     effectiveRole.model = conversationRef.runtime.model;
     effectiveRole.effort = conversationRef.runtime.effort;
+    if (conversationRef.runtime.engine === "codex" && conversationRef.runtime.serviceTier) {
+      effectiveRole.serviceTier = conversationRef.runtime.serviceTier;
+    }
   }
   const attempt: PipelineStageAttempt = {
     n: run.attempts.length + 1,
@@ -2282,6 +2318,17 @@ async function reconcileHistoricalAttempts(pipeline: Pipeline, entries: FileEntr
 function attachReviewFlowAttempt(attempt: PipelineStageAttempt, flow: Flow): void {
   attempt.flowId = flow.id;
   const round = flow.rounds.at(-1);
+  if (round?.spawnStartedAt && round.reviewerRole && attempt.effectiveRole.serviceTierSource === "role-default") {
+    if (round.reviewerRole.serviceTier) {
+      attempt.effectiveRole.serviceTier = round.reviewerRole.serviceTier;
+      delete attempt.effectiveRole.preferredServiceTier;
+    }
+    else {
+      attempt.effectiveRole.preferredServiceTier = round.reviewerRole.preferredServiceTier
+        ?? attempt.effectiveRole.preferredServiceTier ?? attempt.effectiveRole.serviceTier;
+      delete attempt.effectiveRole.serviceTier;
+    }
+  }
   attempt.launchId = round?.launchId ?? attempt.launchId;
   attempt.sessionId = round?.sessionId ?? attempt.sessionId;
   attempt.agentPath = round?.reviewerPath ?? attempt.agentPath;
@@ -3675,6 +3722,12 @@ async function spawnRunStage(
     attempt.agentPath = spawned.transcript;
     attempt.paneId = spawned.paneId;
     attempt.accountId = spawned.accountId ?? attempt.accountId ?? null;
+    if (spawned.serviceTier !== undefined && attempt.effectiveRole.serviceTierSource === "role-default") {
+      if (spawned.serviceTier === null) {
+        attempt.effectiveRole.preferredServiceTier = attempt.effectiveRole.serviceTier;
+        delete attempt.effectiveRole.serviceTier;
+      } else attempt.effectiveRole.serviceTier = spawned.serviceTier;
+    }
     attempt.state = "running";
     setCursorState(pipeline, stage.id, "running");
     if (pipeline.stateDetail?.startsWith("rate limited until ")
@@ -4349,6 +4402,10 @@ async function tickReviewStage(
       engine: attempt.effectiveRole.engine,
       model: attempt.effectiveRole.model,
       effort: attempt.effectiveRole.effort,
+      ...(attempt.effectiveRole.serviceTier ? {
+        serviceTier: attempt.effectiveRole.serviceTier,
+        serviceTierSource: attempt.effectiveRole.serviceTierSource,
+      } : {}),
     };
     const created = await ports.createFlow({
       implementerPath: implementer.agentPath,
@@ -4364,7 +4421,7 @@ async function tickReviewStage(
       mode: "auto",
       reviewerMode: "headless",
       reviewerSandbox: pipelineStageSandbox(attemptStage(stage, attempt)),
-      roundLimit: 5,
+      roundLimit: DEFAULT_FAIL_EDGE_ROUNDS,
     }, entries);
     if (!created.flow) {
       park(pipeline, `creating the review flow failed: ${created.error ?? "unknown error"}`, attempt);
@@ -6019,6 +6076,9 @@ function normalizeStages(
     if (stage.effort !== undefined && stage.effort !== null && typeof stage.effort !== "string") {
       violations.push({ field: at("effort"), message: `stage ${id} effort must be a string or null`, expected: "effort string supported by the stage engine, or null to inherit the role default" });
     }
+    if (stage.serviceTier !== undefined && stage.serviceTier !== null && typeof stage.serviceTier !== "string") {
+      violations.push({ field: at("serviceTier"), message: "serviceTier must be a string or null", expected: "Codex catalog tier id, null to inherit" });
+    }
     if (stage.sandbox !== undefined && stage.sandbox !== "full" && stage.sandbox !== "restricted") {
       violations.push({ field: at("sandbox"), message: `stage ${id} sandbox must be full or restricted`, expected: STAGE_SANDBOX_SHAPE });
     }
@@ -6076,6 +6136,7 @@ function normalizeStages(
       ...(stage.engine !== undefined ? { engine: stage.engine } : {}),
       ...(stage.model !== undefined ? { model: typeof stage.model === "string" ? stage.model.trim() || null : null } : {}),
       ...(stage.effort !== undefined ? { effort: typeof stage.effort === "string" ? stage.effort.trim() || null : null } : {}),
+      ...(stage.serviceTier !== undefined ? { serviceTier: stage.serviceTier } : {}),
       ...(stage.access !== undefined ? { access: stage.access } : {}),
       ...(stage.sandbox !== undefined ? { sandbox: stage.sandbox } : {}),
       ...(outputs !== undefined ? { outputs } : {}),
@@ -6086,7 +6147,7 @@ function normalizeStages(
     };
     const resolved = preservedStage ? { role: preservedStage.effectiveRole } : resolvePipelineRole(input, stage.kind as PipelineStage["kind"], lookup);
     if (!resolved.role) {
-      const field = "field" in resolved && resolved.field === "model" ? "model" : "role";
+      const field = "field" in resolved && resolved.field ? resolved.field : "role";
       violations.push({
         field: at(field),
         message: "error" in resolved && resolved.error ? resolved.error : "invalid stage role",
@@ -6165,6 +6226,7 @@ function draftStageInputs(stages: PipelineStage[]): PipelineStageInput[] {
     ...(stage.engine !== undefined ? { engine: stage.engine } : {}),
     ...(stage.model !== undefined ? { model: stage.model } : {}),
     ...(stage.effort !== undefined ? { effort: stage.effort } : {}),
+    ...(stage.serviceTier !== undefined ? { serviceTier: stage.serviceTier } : {}),
     ...(stage.access !== undefined ? { access: stage.access } : {}),
     ...(stage.sandbox !== undefined ? { sandbox: stage.sandbox } : {}),
     ...(stage.outputs !== undefined ? { outputs: [...stage.outputs] } : {}),
@@ -8336,7 +8398,7 @@ export async function patchPipeline(
       const unbound = unboundLiveAttemptRefusal(pipeline, target.id);
       if (unbound) return unbound;
       const reach = stageEditReach(pipeline, target.id);
-      const changesRoleOrRuntime = req.role !== undefined || req.engine !== undefined || req.model !== undefined || req.effort !== undefined;
+      const changesRoleOrRuntime = req.role !== undefined || req.engine !== undefined || req.model !== undefined || req.effort !== undefined || req.serviceTier !== undefined;
       if (!changesRoleOrRuntime && req.prompt === undefined && req.account === undefined) return { error: "override-stage needs at least one field to change", status: 400 };
       /* Validate the runtime types up front: resolvePipelineRole treats a
          non-string, non-null model/effort as absent and silently uses the
@@ -8345,6 +8407,7 @@ export async function patchPipeline(
       if (req.engine !== undefined && req.engine !== "claude" && req.engine !== "codex") return { error: "engine must be claude or codex", status: 400 };
       if (req.model !== undefined && req.model !== null && typeof req.model !== "string") return { error: "model must be a string or null", status: 400 };
       if (req.effort !== undefined && req.effort !== null && typeof req.effort !== "string") return { error: "effort must be a string or null", status: 400 };
+      if (req.serviceTier != null && typeof req.serviceTier !== "string") return { error: "serviceTier must be a string or null", status: 400 };
 
       /* Resolve the role/runtime combination through the same path creation uses
          (resolvePipelineRole), so a stage override honors canonical role
@@ -8379,6 +8442,7 @@ export async function patchPipeline(
             engine: req.engine !== undefined ? req.engine : resetRuntime ? undefined : target.engine,
             model: req.model !== undefined ? req.model : resetRuntime ? undefined : target.model,
             effort: req.effort !== undefined ? req.effort : resetRuntime ? undefined : target.effort,
+            serviceTier: req.serviceTier !== undefined ? req.serviceTier : resetRuntime ? undefined : target.serviceTier,
             access: target.access,
           },
           target.kind,
@@ -8394,12 +8458,15 @@ export async function patchPipeline(
         target.engine = resolved.role.engine;
         target.model = resolved.role.model;
         target.effort = resolved.role.effort;
+        target.serviceTier = req.serviceTier !== undefined ? req.serviceTier : resetRuntime ? undefined : target.serviceTier;
         target.access = resolved.role.access;
         /* Belt-and-braces: resolvePipelineRole already enforces these bounds, but
            re-check so a future resolver change can never persist a poisoned record. */
         if (!isEffectiveRole(target.effectiveRole)) return { error: "stage role is not a valid engine/model/effort combination", status: 400 };
         const overrideSizingRefusal = stageSizingRefusal(pipeline.stages, graphEditBriefer(actor, pipeline, ports), ports, new Set([target.id]));
         if (overrideSizingRefusal) return { error: overrideSizingRefusal.error, status: 400 };
+        const tierRefusal = stageAccountRefusal([target], pipeline.project, ports);
+        if (tierRefusal) return tierRefusal;
       }
 
       if (req.prompt !== undefined) {

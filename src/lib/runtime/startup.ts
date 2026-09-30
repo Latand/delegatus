@@ -43,6 +43,7 @@ import { claudeHostLaunchPaths, materializeStructuredHostAccess, recoverPendingS
 import { conversationTurnLiveness, readTranscriptEvidence, transcriptEvidenceFromRecords, type TranscriptEventKind, type TurnLivenessDependencies } from "./liveness";
 import { markStructuredHostStartupProgress, type StructuredHostStartupPhase } from "./startupStatus";
 import { startupDiagnostic } from "../startupDiagnostics";
+import { launchServiceTier } from "./codexTurnProfile";
 import {
   interruptionContinuationText,
   interruptionObligationDirectory,
@@ -1437,6 +1438,7 @@ async function adoptStructuredHostsPass(
           codexHome: owner?.home,
           fileAuthCredentials: owner?.kind === "managed",
           model: entry.launchProfile?.model ?? undefined,
+          serviceTier: entry.launchProfile ? launchServiceTier(entry.launchProfile) : undefined,
           effort: entry.launchProfile?.effort ?? undefined,
           allowSubagents: entry.launchProfile?.allowSubagents ?? false,
           mcpServers: entry.launchProfile?.mcpServers ?? ["viewer"],

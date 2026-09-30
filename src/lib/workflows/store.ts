@@ -1,3 +1,4 @@
+import { DEFAULT_REVIEW_ROUNDS } from "@/lib/reviewHistory/limits";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -74,7 +75,7 @@ export function seededTemplatesFromRoles(): WorkflowTemplate[] {
         kind: "review-loop",
         reviewer,
         fixer,
-        roundLimit: 5,
+        roundLimit: DEFAULT_REVIEW_ROUNDS,
         reviewerMode: "headless",
       },
     ],
@@ -93,7 +94,7 @@ export function seededTemplatesFromRoles(): WorkflowTemplate[] {
         kind: "review-loop",
         reviewer,
         fixer,
-        roundLimit: 5,
+        roundLimit: DEFAULT_REVIEW_ROUNDS,
         reviewerMode: "headless",
       },
     ],
@@ -187,7 +188,7 @@ function reviewStageOf(value: Partial<ReviewStage>): ReviewStage | null {
     kind: "review-loop",
     reviewer,
     fixer: normalizeFixer(value.fixer),
-    roundLimit: Number.isInteger(value.roundLimit) && (value.roundLimit as number) >= 0 ? Math.min(value.roundLimit as number, 50) : 5,
+    roundLimit: Number.isInteger(value.roundLimit) && (value.roundLimit as number) >= 0 ? Math.min(value.roundLimit as number, 50) : DEFAULT_REVIEW_ROUNDS,
     reviewerMode: value.reviewerMode === "pane" ? "pane" : "headless",
   };
 }

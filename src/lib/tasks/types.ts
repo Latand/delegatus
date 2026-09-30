@@ -188,13 +188,17 @@ export interface BoardTask {
   origin?: TaskOrigin;
   /** Whether an EMPTY band may be drawn for this task. Absent means shown — the
       default for every task the operator or an agent creates. `hidden` is only
-      ever written by an explicit «Remove from board», by the task panel's
-      preference control, or once by the legacy-task migration, and it is a
+      written by an explicit «Remove from board», by the task panel's
+      preference control, by a migration or by linked-task admission, and it is a
       preference rather than a claim about membership: a task whose band
       resolves a conversation, a mirror, a container or a draft is drawn
       whatever this says (`boardVisibility`). The task itself is never deleted
       or archived and never leaves the task list. */
   board?: TaskBoardVisibility;
+  /** Local linked-arrival/admission default. Never crosses to a linked peer. */
+  boardAutoHidden?: true;
+  /** A local operator explicitly chose this task's board membership. */
+  boardChoice?: true;
   /** Colour label; absent means none. */
   color?: TaskColor;
   /** How soon to take the task; absent means normal, which is never stored.

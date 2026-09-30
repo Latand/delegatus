@@ -1,3 +1,4 @@
+import { DEFAULT_REVIEW_ROUNDS } from "@/lib/reviewHistory/limits";
 import type { Flow, Round } from "@/lib/flows/types";
 import { groupDirectReviewers } from "@/lib/review/directReviewGrouping";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -171,7 +172,7 @@ export function directReviewFlows(input: DirectReviewGroupsInput): Flow[] {
       /* Pane semantics keep the front card's composer usable on a still-open
          reviewer; finished rounds drop it via the deck's own `finished` gate. */
       reviewerMode: "pane",
-      roundLimit: 0,
+      roundLimit: DEFAULT_REVIEW_ROUNDS,
       /* An unfinished latest round is actionable. Verdict, terminal evidence,
          or W-idle settlement parks the group as compact history. */
       state: last.verdict === null && last.error === null ? "reviewing" : "done_comment",

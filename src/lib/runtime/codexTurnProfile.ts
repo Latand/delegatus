@@ -23,3 +23,16 @@ export function codexTurnProfile(settings: RuntimeSendSettings | undefined, defa
   if (settings.fast !== undefined && settings.serviceTierForTurn === undefined) result.serviceTierForTurn = settings.fast ? "priority" : "default";
   return result;
 }
+
+/** Launch tiers belong to the thread, including every adoption and resume. */
+export function launchServiceTier(profile: { serviceTier?: string | null; fast: boolean | null }): string | undefined {
+  return profile.serviceTier === "standard" ? "default" : profile.serviceTier ?? (profile.fast === true ? "priority" : undefined);
+}
+
+export function assertCatalogOffersTier(catalog: unknown, model: string | undefined, tier: string | undefined): void {
+  if (!tier || tier === "default" || tier === "standard") return;
+  const rows = catalog && typeof catalog === "object" && "data" in catalog && Array.isArray(catalog.data) ? catalog.data : [];
+  const row = rows.find(row => row && typeof row === "object" && (model ? row.id === model || row.model === model : row.isDefault === true));
+  const offered = Array.isArray(row?.serviceTiers) ? row.serviceTiers.map((value: { id?: unknown }) => value?.id).filter((id: unknown) => typeof id === "string") : [];
+  if (!offered.includes(tier)) throw new Error(`requested Codex service tier ${tier} is not offered for ${model ?? "default model"} on this account; offered: ${offered.join(", ") || "none (catalog unavailable)"}`);
+}

@@ -161,7 +161,7 @@ describe("directReviewFlows", () => {
     expect(flow.rounds[0]!.findingsCount).toBe(3);
     expect(flow.rounds[0]!.reviewedAt).toBe("2026-07-10T02:00:00.000Z");
     expect(flow.state).toBe("reviewing");
-    expect(flow.roundLimit).toBe(0);
+    expect(flow.roundLimit).toBe(3);
   });
 
   test("a shared board task groups reviewers across distinct builder conversations and generations", () => {

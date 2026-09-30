@@ -458,6 +458,7 @@ export async function dispatchStructuredControl(
                 model: generation.launchProfile.model,
                 effort: generation.launchProfile.effort,
                 fast: generation.launchProfile.fast,
+                serviceTier: generation.launchProfile.serviceTier ?? null,
               },
             }
           : {

@@ -3,7 +3,9 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 
-import { ArrowRight, ArrowUpToLine, Check, ChevronRight, Loader2, Play, X } from "@/components/icons";
+import { ArrowRight, ArrowUpToLine, Check, ChevronRight, Layers, Loader2, Play, X } from "@/components/icons";
+import { ContextToggle } from "./ContextToggle";
+import { turnReading, useContextMode } from "./composerContextMode";
 import { CircleAlert, RotateCcw } from "lucide-react";
 
 import type { TFunction } from "@/lib/i18n";
@@ -53,6 +55,7 @@ import {
   cancelOutbox,
   claimOutboxDispatch,
   clearParkedOutbox,
+  enqueueContextOutbox,
   enqueueOutbox,
   retryOutbox,
   markOutboxResponded,
@@ -75,6 +78,7 @@ import {
   updateOutbox,
   useOutbox,
   useTranscriptEchoes,
+  withdrawContextOutbox,
   type OutboxEntry,
   type OutboxState,
 } from "./conversation/outbox";
@@ -1739,7 +1743,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       if (value) sessionStorage.setItem(draftKey(cardId), value);
       else sessionStorage.removeItem(draftKey(cardId));
     },
-    submit: (overrideText) => queueSubmit(overrideText),
+    submit: (overrideText) => submitDraft(overrideText),
     imageCapability: structuredSession ? structuredImageCapability ?? null : null,
     /* #1224: this composer delivers a general file by writing it to the
        conversation's inbox and naming its path, so it takes any file. */
@@ -1761,6 +1765,26 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      conversation. Returns "" for every other card and whenever nothing is pending. */
   const drainBridgeTurnStart = useBridgeTurnStartDrain(voiceEnabled, { conversationId: cardId });
   const { text, textRef, setText, setTextState, inputRef, setStatus, busy, setBusy, voiceSending, attachments } = composer;
+  /* CONTEXT MODE (docs/design/composer-context-mode.md). Offered on a Codex
+     conversation on the structured plane, where the operator's draft can be
+     added to the thread's context instead of sent as a message that interrupts
+     the running turn. Everywhere else the machine does not run. */
+  const [injectsPending, setInjectsPending] = useState(0);
+  const [reconcilingSend, setReconcilingSend] = useState(() =>
+    typeof window !== "undefined" && readPendingDeliveries(cardId).some((entry) => entry.reconciling));
+  const contextEngine = structuredSession?.session.sessionKey?.engine ?? file.engine;
+  const contextOffered = contextEngine === "codex" && (caps.surface === "structured" || caps.surface === "dead");
+  const contextSupported = Boolean(structuredSession?.session.capabilities?.inject);
+  const contextMachine = useContextMode({
+    cardId,
+    active: contextOffered,
+    reading: turnReading(structuredSession?.session.turn),
+    supported: contextSupported,
+    dictating: composer.dictationRecording,
+    inFlight: injectsPending > 0 || busy || voiceSending || reconcilingSend || composerSubmissionSaving(cardId),
+  });
+  const contextShown = contextOffered && contextMachine.snapshot.shown === "context";
+  const contextBlocked = contextShown && !contextSupported;
   const attachmentDraftHydrated = useRef(false);
   const isMobile = useIsMobile(viewActive);
   /* The runtime's own connection, for the phone's Queue slot (§4.2): while the
@@ -1768,6 +1792,10 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      path. */
   const runtimeBus = useRuntimeBusState(viewActive);
   const runtimeOffline = runtimeBus.enabled && runtimeBus.connection === "offline";
+  /* Context has no outbox to wait in: an insertion is either answered now or
+     left unconfirmed, so with the runtime offline it is refused before
+     anything is filed and the draft stays in the field. */
+  const contextOffline = contextShown && runtimeOffline;
   /* One in-flight slot action at a time — Stop or Respawn. */
   const [slotBusy, setSlotBusy] = useState(false);
   /* Interrupt / compact / attach-terminal / mode chip moved into the unified
@@ -1841,8 +1869,6 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     return true;
   };
   const [immediateRuntimeReceipts, setImmediateRuntimeReceipts] = useState<RuntimeReceipt[]>(() => readRecoveryReceipts(cardId));
-  const [reconcilingSend, setReconcilingSend] = useState(() =>
-    typeof window !== "undefined" && readPendingDeliveries(cardId).some((entry) => entry.reconciling));
   const [replayGenerationAvailable, setReplayGenerationAvailable] = useState(() =>
     typeof window !== "undefined" && readPendingDeliveries(cardId).some((entry) => entry.payloadComplete !== false));
   /* Operation ids whose settled problem rows the user dismissed (issue #264
@@ -3701,7 +3727,10 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   rowRecovery.current = {
     check: (key) => {
       const entry = readOutbox(cardId).find((candidate) => candidate.id === key);
-      if (entry?.deliveryUncertain && !entry.launchOwned) {
+      /* An injection has no admission lookup: the engine does not deduplicate
+         it, so its check is only ever the receipt reconciliation and the
+         operation read below. */
+      if (entry?.deliveryUncertain && !entry.launchOwned && entry.intent !== "context") {
         void resolveUnknownAdmission(entry);
         return;
       }
@@ -3713,7 +3742,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       if (operationId && !operationId.includes(":")) {
         const original = receipt ?? {
           operationId, idempotencyKey: entry!.id, conversationId: cardId,
-          kind: "send" as const, status: "pending" as const,
+          kind: entry!.intent === "context" ? "inject" as const : "send" as const, status: "pending" as const,
           at: new Date(entry!.at).toISOString(), revision: 0,
         };
         readOperationBack({ operationId, idempotencyKey: original.idempotencyKey, original }, true);
@@ -4101,7 +4130,39 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     const requestedFiles = attachments.filesRef.current.map((file) => ({ ...file }));
     const reference = viewerSelectedContext();
     const snapshotText = textRef.current;
+    /* Capacity is a pre-flight refusal like the send path's: with every slot
+       holding an unresolved operation the words stay in the field. */
+    if (!outboxCanAdmit(readOutbox(cardId))) {
+      setStatus({ kind: "err", text: t("composer.outboxFull") });
+      return;
+    }
     const clientMessageId = mintIdempotencyKey();
+    /* THE ROW, AT THE INSTANT OF THE PRESS. It is filed straight into
+       `delivering` with `intent: "context"`, so the composer's dispatcher has
+       nothing to pick, and it becomes the transcript record's own row through
+       the same join a send uses. */
+    const contextRow = enqueueContextOutbox(cardId, {
+      id: clientMessageId,
+      text: requestedText,
+      images: 0,
+      ...(requestedFiles.length ? { files: requestedFiles.length } : {}),
+      at: nowMs(),
+      contextTurn: structuredSession.session.turn === "running" ? "running" : "idle",
+      echoBaseline: transcriptEchoCount(cardId, requestedText),
+      ...(reference.state === "selected" ? {
+        selectedContext: {
+          state: "selected" as const,
+          conversationId: reference.conversationId,
+          ...(reference.project ? { project: reference.project } : {}),
+          ...(reference.label ? { label: reference.label } : {}),
+        },
+      } : {}),
+    });
+    if (!contextRow) {
+      setStatus({ kind: "err", text: t("composer.outboxFull") });
+      return;
+    }
+    setInjectsPending((count) => count + 1);
     setText("");
     /* THE STAGED DOCUMENTS STAY UNTIL THE ANSWER. Clearing them now would be
        unrecoverable: the restore path rebuilds a file slot WITHOUT its bytes —
@@ -4130,13 +4191,36 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         ...(reference ? { selectedContext: reference } : {}),
       }).finally(() => {
         for (const file of requestedFiles) injectingFileIds.current.delete(file.id);
+        setInjectsPending((count) => Math.max(0, count - 1));
       });
+      /* THE ROW SETTLES FIRST, whoever the composer shows now. An operation id
+         or a receipt in the answer means an operation exists, so the row stays
+         and follows it; an answer with neither that is not ambiguous is a
+         refusal above the delivery attempt, and the row goes without a trace.
+         A lost answer proves nothing either way: the words may be in the
+         thread, so the row stays marked unconfirmed and offers only a read. */
+      const rowEntry = () => readOutbox(cardId).find((candidate) => candidate.id === clientMessageId);
+      const operationExists = Boolean(answer.operationId || answer.receipt);
+      const answerLost = answer.error === "network" || answer.delivery === "uncertain";
+      if (operationExists) {
+        const entry = rowEntry();
+        const patch = entry && answer.receipt ? outboxReceiptPatch(entry, answer.receipt.status, answer.receipt, nowMs()) : null;
+        updateOutbox(cardId, clientMessageId, {
+          ...(answer.operationId ?? answer.receipt?.operationId ? { operationId: answer.operationId ?? answer.receipt?.operationId } : {}),
+          ...patch,
+        });
+      } else if (!answer.ok && answerLost) {
+        updateOutbox(cardId, clientMessageId, { deliveryUncertain: true });
+      } else if (!answer.ok) {
+        withdrawContextOutbox(cardId, clientMessageId);
+      }
+      const restoreDraft = !answer.ok && !operationExists && !answerLost;
       /* The composer may show another conversation by now, or none. The answer
          settles the conversation that pressed it, in its stored draft, and
          leaves the words and status on screen to their owner. */
       if (payloadOwner.current !== cardId) {
         if (answer.ok) forgetDraftFiles(cardId, requestedFiles.map((file) => file.id));
-        else if (snapshotText && !sessionStorage.getItem(draftKey(cardId))) sessionStorage.setItem(draftKey(cardId), snapshotText);
+        else if (restoreDraft && snapshotText && !sessionStorage.getItem(draftKey(cardId))) sessionStorage.setItem(draftKey(cardId), snapshotText);
         return;
       }
       if (answer.ok) {
@@ -4144,6 +4228,18 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
            once the insertion has been observed in the thread. */
         setStatus({ kind: "ok", text: t("inject.submitted") });
         attachments.settleDelivered([], requestedFiles);
+        return;
+      }
+      if (answerLost) {
+        /* No draft comes back: handing the words over again would invite a
+           second insertion under a new key, which the engine cannot
+           deduplicate. The row says whether they arrived. */
+        setStatus({ kind: "info", text: t("composer.context.unconfirmed") });
+        return;
+      }
+      if (operationExists) {
+        /* A named operation that failed settles on its row, with Edit there. */
+        setStatus(null);
         return;
       }
       /* A REFUSAL GIVES THE DRAFT BACK — and never over something the operator
@@ -4226,6 +4322,28 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     else queueSubmit(undefined, { policy: "steer-if-active" });
   };
 
+  /* WHAT THE DRAFT BECOMES. In context mode Enter, Send and dictation add the
+     draft to the thread's context; otherwise they are the ordinary queue-first
+     send. A submission is never converted from one kind to the other: when
+     context mode is on but the host cannot inject, the draft stays where it is
+     and the reason is shown. Quick-ack and the menu's own actions call their
+     own path and keep their meaning in both modes. */
+  const submitDraft = (overrideText?: string) => {
+    if (contextShown) {
+      if (contextBlocked) {
+        setStatus({ kind: "err", text: t("composer.context.blocked") });
+        return;
+      }
+      if (contextOffline) {
+        setStatus({ kind: "err", text: t("composer.context.offline") });
+        return;
+      }
+      injectContext();
+      return;
+    }
+    queueSubmit(overrideText);
+  };
+
   /* Every submission method funnels through the queue-first path (round-1 P1#1):
      the Send button (this form submit), the Enter key (ComposerBar → the
      composer's `submit`), and one-tap dictation (`stopAndSend` → the same
@@ -4234,7 +4352,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      Enter — never a bypassed direct `send()`. */
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
-    queueSubmit();
+    submitDraft();
   };
 
   /* Mode chip, interrupt, compact, and attach-terminal now live in the unified
@@ -4276,7 +4394,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   const composerHasDraft = text.trim().length > 0 || attachments.images.length > 0 || attachments.files.length > 0;
   const slotKind = composerSlotKind({
     killed: hostGone,
-    offline: runtimeOffline,
+    offline: runtimeOffline && !contextOffline,
     working: phoneState === "working",
     hasDraft: composerHasDraft,
   });
@@ -4348,7 +4466,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   const phonePlaceholder = hostGone
     ? t(phoneState === "killed" ? "mobile2.composer.placeholderKilled" : "mobile2.composer.placeholderStopped")
     : runtimeOffline
-      ? t("mobile2.composer.placeholderOffline")
+      ? t(contextShown ? "composer.context.placeholderOffline" : "mobile2.composer.placeholderOffline")
       : phoneState === "held"
         ? t("mobile2.composer.placeholderHeld")
         : null;
@@ -4504,7 +4622,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
          line is the only instruction and stays. */
       composer={{ ...composer, status: payloadDiagnostics && composer.status && ([t("composer.admissionTimedOut"), t("composer.deliveryUnconfirmed")].includes(composer.status.text)
         || displayedRuntimeReceipts.some(receipt => receipt.reason === composer.status!.text)) ? null : composer.status }}
-      placeholder={placeholder ?? (isMobile && phonePlaceholder
+      placeholder={contextShown && !(isMobile && phonePlaceholder) ? t("composer.context.placeholder") : placeholder ?? (isMobile && phonePlaceholder
         ? phonePlaceholder
         : unresolvedOwnership
           ? t("composer.placeholderResolving")
@@ -4516,10 +4634,12 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       sendSlot={isMobile ? { kind: slotKind, busy: slotBusy, ...SLOT[slotKind] } : null}
       textareaAriaLabel={t("composer.textAria")}
       imageAriaLabel={t("composer.addAttachments")}
-      sendLabelIdle={spawnMode ? t("composer.launchAgent") : t("composer.sendToAgent")}
+      sendLabelIdle={contextShown ? t("composer.context.send") : spawnMode ? t("composer.launchAgent") : t("composer.sendToAgent")}
+      sendIcon={contextShown ? Layers : undefined}
+      mode={contextShown ? "context" : undefined}
       sendLabelRecording={t("composer.stopAndSend")}
       sendTitleRecording={t("composer.stopAndSendTitle")}
-      sendIdleClassName="border-accent bg-accent hover:opacity-90"
+      sendIdleClassName={contextShown ? "border-info bg-info hover:opacity-90" : "border-accent bg-accent hover:opacity-90"}
       sendMenuLabel={t("composer.sendMenuTitle")}
       /* ArrowUp/ArrowDown in an empty composer walk what is queued and what
          was already sent, newest first (issue #561). */
@@ -4613,6 +4733,15 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       onAlternateSubmit={nativeQueueEnabled ? queueForCodex : undefined}
       onParallelSubmit={seatProject ? askInParallel : undefined}
       sendMenuActions={[
+        ...(contextOffered
+          ? [{
+            id: "context-auto",
+            label: t("composer.context.auto"),
+            description: t("composer.context.autoHint"),
+            checked: contextMachine.snapshot.autoEnabled,
+            onSelect: () => contextMachine.controller.setAuto(!contextMachine.snapshot.autoEnabled),
+          } as const]
+          : []),
         ...(seatProject
           ? [{
             id: "ask-in-parallel",
@@ -4685,6 +4814,10 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       sendPayloadAvailable={replayGenerationAvailable}
       sendDisabledReason={deadHostBlocksSend
         ? t("deadHost.sendBlocked")
+        : contextBlocked
+          ? t("composer.context.blocked")
+        : contextOffline
+          ? t("composer.context.offline")
         : reconcilingSend
           ? t("composer.payloadChecking")
           : effectiveSendBlockedReason ?? undefined}
@@ -4717,15 +4850,32 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       leftSlot={
         /* The compact model/reasoning pill (issue #390): lives in the quiet
            bottom row, left of the image picker, on exactly the surfaces the
-           capability matrix keeps the runtime control visible. */
-        caps.controls.runtime.state !== "hidden" ? (
-          <RuntimePill
-            file={file}
-            surface={caps.surface}
-            runtimeSettings={structuredSession?.session.capabilities?.runtimeSettings ?? null}
-            runtimeSession={structuredSession?.session ?? null}
-          />
-        ) : null
+           capability matrix keeps the runtime control visible. The Context
+           toggle sits beside it where the conversation offers one. */
+        caps.controls.runtime.state === "hidden" && !contextOffered ? null : <>
+          {caps.controls.runtime.state !== "hidden" ? (
+            <RuntimePill
+              file={file}
+              surface={caps.surface}
+              runtimeSettings={structuredSession?.session.capabilities?.runtimeSettings ?? null}
+              runtimeSession={structuredSession?.session ?? null}
+            />
+          ) : null}
+          {contextOffered ? (
+            <ContextToggle
+              on={contextShown}
+              auto={contextMachine.snapshot.followsAgent}
+              /* A mode already on screen can always be left. */
+              disabledReason={contextShown || contextSupported
+                ? undefined
+                : structuredSession ? t("inject.unsupported") : t("composer.context.noHost")}
+              onPress={() => {
+                if (contextShown || contextSupported) contextMachine.controller.press();
+                else setStatus({ kind: "info", text: structuredSession ? t("inject.unsupported") : t("composer.context.noHost") });
+              }}
+            />
+          ) : null}
+        </>
       }
     />
   );
@@ -4734,6 +4884,12 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     <form
       ref={composerBox.ref}
       onSubmit={handleSubmit}
+      /* Typing and IME composition hold an automatic mode flip back, so the
+         field never changes meaning under a word being written. */
+      onInput={contextOffered ? () => contextMachine.controller.noteEdit() : undefined}
+      onCompositionStart={contextOffered ? () => contextMachine.controller.setComposing(true) : undefined}
+      onCompositionUpdate={contextOffered ? () => contextMachine.controller.noteEdit() : undefined}
+      onCompositionEnd={contextOffered ? () => contextMachine.controller.setComposing(false) : undefined}
       data-testid={isMobile ? "bounded-mobile-composer" : undefined}
       /* ONE BOX, ONE CONTRACT (#1629).
 
@@ -4780,6 +4936,15 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           adoption flap, a pane-target flap hiding the composer), so its
           deletion pass can still see who held focus. */}
       <ComposerFocusContinuity claimKeys={[cardId, file.path]} />
+      {contextOffered ? (
+        <span role="status" aria-live="polite" data-testid="composer-context-announcement" className="sr-only">
+          {contextMachine.snapshot.announcement === "on"
+            ? t("composer.context.announceOn")
+            : contextMachine.snapshot.announcement === "off"
+              ? t("composer.context.announceOff")
+              : ""}
+        </span>
+      ) : null}
       {/* #844: what the NEXT turn will point at, shown before the operator
           commits to it. Only when a card is actually selected — an explicit
           empty selection is an answer worth persisting on the sent record, but a

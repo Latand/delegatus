@@ -241,3 +241,11 @@ for (const [engine, model] of [["codex", "gpt-5.6-luna"], ["claude", "opus"]] as
       .toBe(`stage effort for ${engine}/${model} must be one of: low, medium, high, xhigh, max`);
   });
 }
+
+test("null inherits the role tier, explicit priority overrides and default opts out", () => {
+  const lookup = () => ({ engine: "codex" as const, model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast", promptScaffold: "Reviewer guidance" });
+  for (const serviceTier of [undefined, null]) expect(resolvePipelineRole({ role: { roleId: "reviewer" }, serviceTier }, "run", lookup).role).toMatchObject({ serviceTier: "ultrafast", serviceTierSource: "role-default" });
+  for (const serviceTier of ["priority", "default", "standard"]) expect(resolvePipelineRole({ role: { roleId: "reviewer" }, serviceTier }, "run", lookup).role).toMatchObject({ serviceTier, serviceTierSource: "explicit" });
+  expect(resolvePipelineRole({ model: "gpt-6-sol" }, "run", lookup).role?.serviceTier).toBeUndefined();
+  expect(resolvePipelineRole({ engine: "claude", model: "opus", serviceTier: "ultrafast" }, "run", lookup).error).toContain("Codex only");
+});

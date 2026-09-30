@@ -20,7 +20,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-function fixture(profile: Partial<{ model: string | null; effort: string | null; fast: boolean | null }> = {}, engine: "codex" | "copilot" = "codex") {
+function fixture(profile: Partial<{ model: string | null; effort: string | null; fast: boolean | null; serviceTier: string | null }> = {}, engine: "codex" | "copilot" = "codex") {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-reconfigure-"));
   roots.push(root);
   const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
@@ -545,7 +545,7 @@ test("a failed LWW reconfigure restores the last stable profile across an applyi
   });
   expect(second.kind).toBe("claimed");
   if (!second.state) throw new Error("second reconfigure claim did not persist ownership");
-  expect(second.state.previousProfile).toEqual({ model: "gpt-5.5", effort: "medium", fast: false });
+  expect(second.state.previousProfile).toEqual({ model: "gpt-5.5", effort: "medium", fast: false, serviceTier: null });
 
   target.registry.settleConversationReconfigure(
     target.conversationId,
@@ -1217,4 +1217,83 @@ test("account migration preserves conversation continuity without a duplicate ca
   expect(target.registry.conversationForPath(successorPath)?.id).toBe(target.conversationId);
   expect(target.registry.canonicalPath(target.transcript)).toBe(successorPath);
   expect(Object.values(target.registry.snapshot().conversations)).toHaveLength(1);
+});
+
+for (const serviceTier of ["ultrafast", null]) {
+  test(`failed reconfigure restores exact stable service tier ${serviceTier ?? "none"}`, async () => {
+    const target = fixture({ fast: !!serviceTier, serviceTier });
+    await expect(applyStructuredReconfigure(effect({ conversationId: target.conversationId, fast: false }), {
+      registry: target.registry,
+      releaseHost: async () => true,
+      recover: async () => { throw new Error("fixture replacement failed"); },
+    })).rejects.toThrow("fixture replacement failed");
+    const restored = target.registry.conversation(target.conversationId)!;
+    expect(restored.generations.at(-1)!.launchProfile.serviceTier ?? null).toBe(serviceTier);
+    expect(restored.reconfigure!.previousProfile.serviceTier).toBe(serviceTier);
+  });
+
+  test(`cancelled reconfigure restores exact stable service tier ${serviceTier ?? "none"} after persistence`, () => {
+    const target = fixture({ fast: !!serviceTier, serviceTier });
+    target.registry.claimConversationReconfigure(target.conversationId, {
+      operationId: "tier-switch", revision: 20,
+      profile: { model: "gpt-5.5", effort: "high", fast: false }, accountId: "pending-target",
+    });
+    expect(target.registry.conversation(target.conversationId)!.generations.at(-1)!.launchProfile.serviceTier ?? null).toBeNull();
+    target.registry.requestConversationReseat(target.conversationId, "pending-target", { operationId: "tier-switch", revision: 20 });
+    const migration = target.registry.conversation(target.conversationId)!.migration!;
+    expect(target.registry.cancelConversationSwitch(target.conversationId, migration.revision).kind).toBe("cancelled");
+    const restored = target.registry.conversation(target.conversationId)!;
+    expect(restored.reconfigure!.status).toBe("cancelled");
+    expect(restored.reconfigure!.previousProfile.serviceTier).toBe(serviceTier);
+    expect(restored.generations.at(-1)!.launchProfile.serviceTier ?? null).toBe(serviceTier);
+  });
+}
+
+test("the shared profile writer retains an equal speed and clears a different speed", () => {
+  const target = fixture({ fast: true, serviceTier: "ultrafast" });
+  target.registry.updateConversationLaunchProfile(target.conversationId, { model: "gpt-5.5", effort: "high", fast: true });
+  expect(target.registry.conversation(target.conversationId)!.generations.at(-1)!.launchProfile.serviceTier).toBe("ultrafast");
+  target.registry.updateConversationLaunchProfile(target.conversationId, { model: "gpt-5.5", effort: "high", fast: false });
+  expect(target.registry.conversation(target.conversationId)!.generations.at(-1)!.launchProfile.serviceTier ?? null).toBeNull();
+});
+
+test("an effort edit from the pill keeps ultrafast after thread settings scroll out of the tail", async () => {
+  const { agentRegistry } = await import("@/lib/agent/registry");
+  const { entryServiceTier } = await import("@/lib/scanner/effort");
+  const { defaults } = await import("@/components/runtimeProfile");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-scrolled-tier-reconfigure-"));
+  roots.push(root);
+  const transcript = path.join(root, `rollout-${crypto.randomUUID()}.jsonl`);
+  fs.writeFileSync(transcript, JSON.stringify({
+    type: "event_msg", payload: { type: "thread_settings_applied", thread_settings: { service_tier: "ultrafast" } },
+  }) + "\n" + Array.from({ length: 200 }, () => JSON.stringify({
+    type: "event_msg", payload: { type: "agent_message", message: "x".repeat(1024) },
+  })).join("\n") + "\n");
+  const registry = agentRegistry();
+  const conversation = registry.ensureConversation("codex", transcript, null);
+  registry.updateConversationLaunchProfile(conversation.id, {
+    model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast",
+  });
+  const file: import("@/lib/types").FileEntry = {
+    path: transcript, root: "codex-sessions", name: path.basename(transcript), project: "fixture", title: "agent",
+    engine: "codex", kind: "session", fmt: "codex", parent: null, mtime: 1, size: fs.statSync(transcript).size,
+    activity: "idle", proc: null, pid: null, model: "gpt-6-astra", effort: "high", pendingQuestion: null, waitingInput: null,
+  };
+  file.serviceTier = entryServiceTier(file);
+  file.fast = file.serviceTier === null ? null : file.serviceTier !== "default";
+  expect(file.serviceTier).toBe("ultrafast");
+  let recoveredTier: string | null | undefined;
+  expect(await applyStructuredReconfigure(effect({
+    operationId: "scrolled-tier-effort", conversationId: conversation.id,
+    model: "gpt-6-astra", effort: "xhigh", fast: defaults(file).fast,
+  }), {
+    registry,
+    releaseHost: async () => true,
+    recover: async () => {
+      recoveredTier = registry.launchProfileForPath(transcript)?.serviceTier;
+      return { target: null, path: transcript, conversationId: conversation.id, spawned: true };
+    },
+  })).toBe("applied");
+  expect(recoveredTier).toBe("ultrafast");
+  expect(registry.launchProfileForPath(transcript)).toMatchObject({ effort: "xhigh", fast: true, serviceTier: "ultrafast" });
 });

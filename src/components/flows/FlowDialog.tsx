@@ -1,5 +1,6 @@
 "use client";
 
+import { DEFAULT_REVIEW_ROUNDS } from "@/lib/reviewHistory/limits";
 import { useEffect, useId, useState } from "react";
 
 import { effortScale } from "@/lib/agent/efforts";
@@ -83,7 +84,7 @@ export function FlowDialog({ file, onClose }: { file: FileEntry; onClose: () => 
   const [baseMode, setBaseMode] = useState<"head" | "merge-base">("head");
   const [mode, setMode] = useState<"auto" | "manual">("auto");
   const [reviewerMode, setReviewerMode] = useState<"headless" | "pane">("headless");
-  const [roundLimit, setRoundLimit] = useState(5);
+  const [roundLimit, setRoundLimit] = useState(DEFAULT_REVIEW_ROUNDS);
   const [spec, setSpec] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -238,7 +239,7 @@ export function FlowDialog({ file, onClose }: { file: FileEntry; onClose: () => 
             max={20}
             value={roundLimit}
             className="h-8 rounded-[8px] border border-border bg-canvas px-2 text-[11.5px] font-normal text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            onChange={(event) => setRoundLimit(Math.max(1, Math.min(20, Number(event.target.value) || 5)))}
+            onChange={(event) => setRoundLimit(Math.max(1, Math.min(20, Number(event.target.value) || DEFAULT_REVIEW_ROUNDS)))}
           />
         </label>
       </div>

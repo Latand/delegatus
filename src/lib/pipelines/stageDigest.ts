@@ -48,6 +48,7 @@ export function stageDigestInput(stage: Pick<PipelineStage, "prompt" | "account"
       engine: runtime.engine,
       model: runtime.model ?? null,
       effort: runtime.effort ?? null,
+      ...(runtime.serviceTier ? { serviceTier: runtime.serviceTier, serviceTierSource: runtime.serviceTierSource } : {}),
       access: runtime.access ?? null,
       promptScaffold: runtime.promptScaffold ?? null,
     },

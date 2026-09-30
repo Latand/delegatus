@@ -60,9 +60,11 @@ From an agent:
      "baseMode": "head" | "merge-base",
      "mode": "auto" | "manual",
      "reviewerMode": "headless" | "pane",
-     "roundLimit": 5
+     "roundLimit": 3
    }
    ```
+
+   Choose review rounds from risk = consequences × probability: low risk 1; normal risk 2; high risk (data loss, security, production, runtime host, migrations) 3. The default is 3. More than 3 only when the operator asks; state the reason in the brief. Unlimited review requires an explicit operator request and `roundLimit: 0`.
 
    A role is `{engine: "claude"|"codex", model: string|null, effort: string|null}`
    (codex effort: low|medium|high|xhigh). `GET /api/flows` lists flows and the
@@ -101,8 +103,9 @@ From an agent:
 - `needs_decision: "reviewer verdict was unparseable"` — read the round
   artifact. A usage-limit banner means the reviewer engine ran out of quota:
   switch `roles.reviewer` in `flows.json`, then `retry-round`.
-- Round limit reached — `{"action":"extend","rounds":N}` to keep going, or
-  `close`.
+- Round limit reached — `close`, or `{"action":"extend","rounds":N}` to a
+  revised budget of at most 3. More than 3 only when the operator asks; state
+  the reason in the brief.
 
 ## Conventions
 

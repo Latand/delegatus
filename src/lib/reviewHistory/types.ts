@@ -203,7 +203,7 @@ export type Flow = {
   /** Pipeline-owned flows may opt their reviewer into the restrictive engine
       sandbox. Omitted flows keep full host access. */
   reviewerSandbox?: "full" | "restricted";
-  roundLimit: number; // default 5; 0 = unlimited
+  roundLimit: number; // default 3; 0 = unlimited
   state: FlowState;
   pausedState?: FlowState | null;
   /** Human-readable reason shown on the strip for needs_decision/paused. */

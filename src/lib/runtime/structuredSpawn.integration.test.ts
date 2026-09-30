@@ -6106,3 +6106,28 @@ test("a launch whose runtime calls time out through a handoff's warm-up still co
     journal.close();
   }
 });
+
+test("default host launch carries the exact tier on fresh and resumed profiles", async () => {
+  const { defaultStartHost } = await import("./structuredSpawn");
+  for (const resumed of [false, true]) {
+    const cwd = fs.mkdtempSync(path.join(sandbox, "tier-host-"));
+    const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+    const launchProfile = emptyLaunchProfile({ cwd, model: "gpt-6-astra", serviceTier: "ultrafast", fast: true });
+    const sessionId = crypto.randomUUID();
+    const transcript = resumed ? path.join(cwd, `rollout-${sessionId}.jsonl`) : null;
+    if (transcript) fs.writeFileSync(transcript, JSON.stringify({ type: "session_meta", payload: { id: sessionId } }) + "\n");
+    const conversation = transcript ? registry.ensureConversation("codex", transcript, "account-a") : null;
+    if (transcript) registry.upsert({ key: { engine: "codex", sessionId }, artifactPath: transcript, cwd, accountId: "account-a", launchProfile, status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+    const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured", launchProfile, ...(transcript ? { purpose: "resume-successor", expectedArtifactPath: transcript, conversationId: conversation!.id } : {}) });
+    if (begun.kind !== "created") throw new Error("tier fixture receipt missing");
+    const seen: CodexAppServerHostOptions[] = [];
+    const capture = async (options: CodexAppServerHostOptions) => { seen.push(options); throw new Error("captured tier host options"); };
+    const start = spyOn(CodexAppServerHost, "start").mockImplementation(capture);
+    const adopt = spyOn(CodexAppServerHost, "adopt").mockImplementation(async (_id, options) => capture(options));
+    try {
+      await expect(defaultStartHost({ engine: "codex", registry, receipt: begun.receipt, spec: { command: "codex", engine: "codex", cwd, windowName: "tier", transcript: transcript ?? undefined, launchProfile }, account: { engine: "codex", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }, prompt: "", client: {} as RuntimeHostClient }, "fixture-capability")).rejects.toThrow("captured tier host options");
+      expect(seen[0]?.serviceTier).toBe("ultrafast");
+      expect(resumed ? adopt.mock.calls.length : start.mock.calls.length).toBe(1);
+    } finally { start.mockRestore(); adopt.mockRestore(); }
+  }
+});

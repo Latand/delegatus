@@ -13,6 +13,13 @@
   const t = (key) => strings[lang][key] ?? strings.en[key] ?? key;
   const escapeHtml = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
+  function countEvent(event, agent) {
+    const body = { event, lang, ...(agent ? { agent } : {}) };
+    try {
+      navigator.sendBeacon("/api/event", new Blob([JSON.stringify(body)], { type: "application/json" }));
+    } catch { /* Counting is best-effort and never blocks the visitor's action. */ }
+  }
+
   // ---------- Install boxes ----------
 
   const template = document.getElementById("install-template");
@@ -105,6 +112,7 @@
     });
 
     box.copy.addEventListener("click", async () => {
+      countEvent("copy_prompt", box.agent);
       const ok = await writeClipboard(prompt(box.agent, lang));
       if (!ok) return;
       box.copy.setAttribute("data-copied", "");
@@ -126,6 +134,7 @@
     });
 
     box.copyCmd.addEventListener("click", async () => {
+      countEvent("copy_legacy");
       const ok = await writeClipboard("bunx delegatus-cli");
       if (!ok) return;
       box.copyCmd.setAttribute("data-copied", "");
@@ -586,6 +595,7 @@
     }
     if (data.type !== "dlg:state" || typeof data.step !== "number") return;
     const moved = data.step !== live.step;
+    if (live === hero && live.step === 0 && data.step === 1) countEvent("demo_start");
     live.step = data.step;
     if (live !== hero) return;
     heroStep = data.step;
@@ -650,6 +660,7 @@
 
   function enterFullscreen(live) {
     if (fsLive) return;
+    countEvent("fullscreen_open");
     fsLive = live;
     fsNative = false;
     fsScroll = { left: scrollX, top: scrollY };

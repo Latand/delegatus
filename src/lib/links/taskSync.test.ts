@@ -406,10 +406,11 @@ test("peer arrivals preserve membership, bound bands, and repair legacy done arr
   expect(find(file, hidden.id)!.board).toBe("hidden");
   expect(find(file, shown.id)!.board).toBe("shown");
   const repaired = find(file, legacy.id)!;
-  const { board: _board, revision: _revision, ...rest } = repaired as TaskWithRevision;
+  const { board: _board, boardAutoHidden: _automatic, revision: _revision, ...rest } = repaired as TaskWithRevision;
   const { revision: _oldRevision, ...originalFields } = before as TaskWithRevision;
   expect(rest).toEqual(originalFields);
   expect(repaired.board).toBe("hidden");
+  expect(repaired.boardAutoHidden).toBe(true);
   expect(loadTasksFile(file).recentCreates).toEqual(receipts);
   expect(find(file, privateTask.id)!.board).toBeUndefined();
   const marker = loadTasksFile(file).migrations;

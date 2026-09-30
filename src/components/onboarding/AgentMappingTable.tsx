@@ -111,7 +111,7 @@ function customPrompt(roles: readonly MappingCatalogItem[], row: RowKey): boolea
 }
 
 function same(left: RoleConfig | null, right: RoleConfig | null): boolean {
-  return !!left && !!right && left.engine === right.engine && left.model === right.model && left.effort === right.effort;
+  return !!left && !!right && left.engine === right.engine && left.model === right.model && left.effort === right.effort && left.serviceTier === right.serviceTier;
 }
 
 /** The request body for a set of row changes; `null` resets a row. */
@@ -223,7 +223,7 @@ const SELECT = "h-8 w-full min-w-0 rounded-[8px] border border-border bg-canvas 
 /** "Opus 5.5 · xhigh": a runtime as the model select names it. */
 function runtimeName(config: RoleConfig): string {
   const model = ENGINE_MODELS[config.engine].find((option) => option.id === config.model)?.label ?? config.model;
-  return `${model} · ${config.effort}`;
+  return `${model} · ${config.effort}${config.serviceTier ? ` · ${config.serviceTier}` : ""}`;
 }
 
 /* The server refuses the light models a row may not run (docs/design/model-sizing-tiers.md
@@ -285,7 +285,7 @@ function RowControls({ row, config, shipped, reset, promptCustom, statuses, layo
      column when a row is changed. */
   const roleCell = (
     <span className="flex min-w-0 flex-col">
-      <span className="min-w-0 truncate text-body font-semibold text-primary" title={label}>{label}</span>
+      <span className="min-w-0 truncate text-body font-semibold text-primary" title={config.serviceTier ? `${label} · ${config.serviceTier}` : label}>{label}{config.serviceTier ? <span data-mapping-service-tier> · {config.serviceTier}</span> : null}</span>
       {changed ? (
         <span className="flex items-center gap-1 text-label text-secondary">
           <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />

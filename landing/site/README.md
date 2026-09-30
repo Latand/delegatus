@@ -64,6 +64,106 @@ position comes back. PNGs go to `/tmp/landing-fullscreen-renders/`.
 | `build.ts` | bundles the demo, compiles the product stylesheet, assembles `dist/` |
 | `capture.ts` | the render driver |
 
+## Worker configuration and publication
+
+`landing/wrangler.jsonc` is the source of the `delegatus-landing` Worker
+configuration. It retains the compatibility date, the two custom domains,
+`workers_dev: false` and static 404 handling of the existing deployment.
+Assets now come directly from `landing/site/dist/`. Only `/api/*` runs the
+script first; every other path remains a static asset. `ASSETS` is the asset
+fallback and `SITE_EVENTS` binds the Analytics Engine dataset `site_events`.
+The account id and tokens belong in the deployer's protected environment
+(`CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`), never in this config.
+
+From the repository root:
+
+```sh
+flock /var/tmp/llv-heavy-gate.lock bun landing/site/build.ts
+bunx wrangler deploy --config landing/wrangler.jsonc --dry-run
+```
+
+After merge, the authorized deployer publishes with
+`bunx wrangler deploy --config landing/wrangler.jsonc` using the same protected
+environment. There is no need to copy the build into a separate deploy
+directory. The build and dry-run do not publish anything. Account eligibility
+for Analytics Engine is checked on publication; a binding refusal must be
+brought to the operator before continuing.
+
+## Site event contract
+
+The page uses `navigator.sendBeacon` to POST JSON to `/api/event` on these
+actions. Copy events count button clicks, including attempts where clipboard
+access fails. Hero starts count the visitor sending the demo's waiting request;
+loading an iframe, choosing a step and the demo's later steps do not count.
+Opening any frame full screen counts once, including the Safari overlay.
+
+| `event` | Required fields besides `event` |
+| --- | --- |
+| `copy_prompt` | `lang`: `en` or `uk`; `agent`: `claude` or `codex` |
+| `copy_legacy` | `lang`: `en` or `uk` |
+| `demo_start` | `lang`: `en` or `uk` |
+| `fullscreen_open` | `lang`: `en` or `uk` |
+
+Every extra field, unknown event, invalid value, malformed JSON or body over
+1024 bytes receives 400 and writes nothing. Valid events receive 204 and write
+exactly one point. The Worker adds only `request.cf.country` (a two-letter
+code, or an empty string when unavailable). It stores no cookie, id or IP.
+
+For the metrics reader, ordered fields in `site_events` are `blob1 = event`,
+`blob2 = agent` (empty for the other events), `blob3 = lang`, `blob4 = country`,
+`double1 = 1`, `index1 = event`. Use `SUM(_sample_interval * double1)` for
+counts so Analytics Engine sampling is represented. The footer discloses the
+existing Cloudflare Web Analytics beacon and these four actions in EN/UK.
+
+Focused checks:
+
+```sh
+bun test landing/worker.test.ts
+LANDING_RENDER_DIR="$HOME/Pictures/delegatus-review/site-metrics" \
+  flock /var/tmp/llv-heavy-gate.lock bun landing/site/capture.ts --check-events
+LANDING_RENDER_DIR="$HOME/Pictures/delegatus-review/site-metrics" \
+  flock /var/tmp/llv-heavy-gate.lock bun landing/site/capture.ts
+```
+
+`--check-events` exercises the real page and handler at both widths and in
+both languages with a local recording binding; it writes no Cloudflare data.
+It checks both install boxes and agents, legacy copies, hero start, full-screen
+open/close, no events on load or unrelated controls, and unavailable analytics.
+
+### Analytics Engine permissions
+
+Runtime [`writeDataPoint`](https://developers.cloudflare.com/analytics/analytics-engine/get-started/)
+uses the Worker binding directly, with no API token. Uploading a Worker with
+an `analytics_engine` binding requires Account → Workers Scripts → Edit
+(API name [`Workers Scripts Write`](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/versions/methods/create/)),
+already used by the landing's deploy token. Reading the
+[SQL API](https://developers.cloudflare.com/analytics/analytics-engine/sql-api/)
+requires Account → Account Analytics → Read and belongs to the metrics reader.
+
+Observation on 2026-09-30: deploy token verification, zone and Worker settings
+returned HTTP 200; the deployed Worker had no bindings. SQL
+`SELECT 'permission_probe' AS message` and `SHOW TABLES` both returned HTTP 403
+`Authorization error`. Account information did not establish Analytics Engine
+eligibility; the permission catalog returned 403 (9109). The operator accepted
+proceeding with S3/S4 and checking account eligibility on publication after
+merge. SQL read access is handled separately for the metrics script.
+
+To create its separate read-only token in the Cloudflare dashboard:
+
+1. Open **My Profile → API Tokens → Create Token → Create Custom Token**.
+2. Name it for the metrics reader. Add **Account → Account Analytics → Read**.
+3. Under **Account Resources**, select **Include → Specific account**, choosing
+   the account that owns the landing Worker. Set any desired IP restrictions
+   and expiry.
+4. Choose **Continue to summary → Create Token**. Save the token once in the
+   protected local secret source used by the metrics reader; never paste it
+   into the repository, logs or a pull request.
+5. Using that source, repeat `SELECT 'permission_probe' AS message` and
+   `SHOW TABLES` through the SQL API. A dataset table appears after its first
+   data point. After publication, a copy click should appear in the metrics
+   script within minutes. If Cloudflare requests Analytics Engine activation,
+   the operator enables it for the account before the deployer retries.
+
 ## How the demo works
 
 `demo/demo.tsx` renders `@/components/Viewer`, the same component the product

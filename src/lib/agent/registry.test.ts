@@ -4104,3 +4104,69 @@ test("held steering keeps its policy across registry reload", () => {
   const reopened = new AgentRegistry(store.filename);
   expect(reopened.snapshot().heldDeliveries[held.id]!.command).toMatchObject({policy: "steer-or-queue", operationId: "steer-held-operation"});
 });
+
+for (const { tier, fast, expected } of [
+  { tier: "ultrafast", fast: false, expected: null },
+  { tier: "ultrafast", fast: true, expected: "ultrafast" },
+  { tier: "ultrafast", fast: null, expected: "ultrafast" },
+  { tier: "standard", fast: true, expected: null },
+  { tier: "standard", fast: false, expected: "standard" },
+]) {
+  test(`resume merge resolves stored ${tier} with requested fast=${fast}`, () => {
+    const store = registry();
+    const pathname = `/sessions/${crypto.randomUUID()}.jsonl`;
+    const conversation = store.ensureConversation("codex", pathname, null);
+    store.updateConversationLaunchProfile(conversation.id, {
+      model: "gpt-6-astra", effort: "high", fast: tier === "ultrafast", serviceTier: tier,
+    });
+    const begun = store.beginSpawnRequest({
+      engine: "codex", cwd: "/repo", accountId: null, conversationId: conversation.id,
+      purpose: "resume-successor", launchProfile: { fast },
+    });
+    expect(begun.receipt.launchProfile.serviceTier).toBe(expected);
+    expect(begun.receipt.launchProfile.fast).toBe(fast ?? (tier === "ultrafast"));
+  });
+}
+
+test("a completed same-path resume replay preserves a later service-tier reconfiguration", () => {
+  const store = registry();
+  const pathname = `/sessions/${crypto.randomUUID()}.jsonl`;
+  const conversation = store.ensureConversation("codex", pathname, null);
+  store.updateConversationLaunchProfile(conversation.id, {
+    model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast",
+  });
+  const begun = store.beginSpawnRequest({
+    engine: "codex", cwd: "/repo", accountId: null, conversationId: conversation.id,
+    purpose: "resume-successor", transport: "tmux", launchProfile: { effort: "medium", fast: false },
+  });
+  expect(store.settleSpawn(begun.receipt.launchId, spawnEntry(pathname)).kind).toBe("settled");
+  const profile = () => store.conversation(conversation.id)!.generations.at(-1)!.launchProfile;
+  expect(profile()).toMatchObject({ effort: "medium", fast: false });
+  expect(profile().serviceTier ?? null).toBeNull();
+  store.updateConversationLaunchProfile(conversation.id, {
+    model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast",
+  });
+  expect(store.settleSpawn(begun.receipt.launchId, spawnEntry(pathname)).kind).toBe("settled");
+  expect(profile()).toMatchObject({ effort: "high", fast: true, serviceTier: "ultrafast" });
+});
+
+test("a late structured same-path recovery preserves the newer durable profile", () => {
+  const store = registry();
+  const pathname = `/sessions/${crypto.randomUUID()}.jsonl`;
+  const conversation = store.ensureConversation("codex", pathname, null);
+  store.updateConversationLaunchProfile(conversation.id, {
+    model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast",
+  });
+  const begun = store.beginSpawnRequest({
+    engine: "codex", cwd: "/repo", accountId: null, conversationId: conversation.id,
+    purpose: "resume-successor", transport: "structured",
+  });
+  expect(begun.receipt.launchProfile.serviceTier).toBe("ultrafast");
+  store.updateConversationLaunchProfile(conversation.id, {
+    model: "gpt-6.1-sol", effort: "xhigh", fast: true, serviceTier: "priority",
+  });
+  expect(store.settleSpawn(begun.receipt.launchId, spawnEntry(pathname)).kind).toBe("settled");
+  expect(store.conversation(conversation.id)!.generations.at(-1)!.launchProfile).toMatchObject({
+    model: "gpt-6.1-sol", effort: "xhigh", fast: true, serviceTier: "priority",
+  });
+});

@@ -81,7 +81,7 @@ test("normalizeStages injects the codex-low fixer default and review defaults", 
   const review = res.stages[1]!;
   if (review.kind !== "review-loop") throw new Error("expected review stage");
   expect(review.fixer).toEqual(defaultFixerFromRoles());
-  expect(review.roundLimit).toBe(5);
+  expect(review.roundLimit).toBe(3);
   expect(review.reviewerMode).toBe("headless");
 });
 
@@ -132,8 +132,9 @@ test("templates seed the canonical fullstack pipeline on first load", () => {
   const fullstack = templates.find((template) => template.name === "fullstack")!;
   expect(fullstack.stages.at(-1)?.kind).toBe("review-loop");
   expect(fullstack.stages[0]?.kind === "implement" && fullstack.stages[0].agent).toMatchObject({ model: "gpt-6-astra", effort: "medium" });
-  expect(fullstack.stages[1]?.kind === "implement" && fullstack.stages[1].agent.model).toBe("opus");
+  expect(fullstack.stages[1]?.kind === "implement" && fullstack.stages[1].agent).toEqual(roleConfigFromReference({ role: "builder", roleParams: { mode: "plain", domain: "frontend" } })!);
   const review = fullstack.stages.at(-1)!;
+  expect(review).toMatchObject({ roundLimit: 3 });
   expect(review.kind === "review-loop" && review.reviewer.model).toBe("gpt-6-astra");
   expect(templates.map((template) => template.name)).toContain("Astra medium → Astra xhigh review");
 });
@@ -416,3 +417,9 @@ for (const managed of [undefined, "role-registry"] as const) {
     }
   });
 }
+
+test.each([0, 7])("normalization retains an explicit review limit %s", (roundLimit) => {
+  const result = normalizeStages([IMPLEMENT, { ...REVIEW, roundLimit }]);
+  if ("error" in result) throw new Error(result.error);
+  expect(result.stages[1]).toMatchObject({ kind: "review-loop", roundLimit });
+});

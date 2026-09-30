@@ -43,8 +43,8 @@ function legacyDraft(over: Partial<Pipeline> = {}): Pipeline {
 }
 
 const PLAN = {
-  ok: true, stageId: "reviewer", implementerStageId: "builder", fixerStageId: "reviewer-fix", reviewLimit: 5, reviewLimitSource: "default",
-  reviewerActivations: 5, legacyAttempts: 0, stages: [],
+  ok: true, stageId: "reviewer", implementerStageId: "builder", fixerStageId: "reviewer-fix", reviewLimit: 3, reviewLimitSource: "default",
+  reviewerActivations: 3, legacyAttempts: 0, stages: [],
 };
 
 type Call = { method: string; body: Record<string, unknown> | null };
@@ -123,8 +123,8 @@ test("a legacy draft shows the conversion preview and converts only on the expli
 });
 
 test("a refused preview lists why, offers the recommended finite limit and no convert button", async () => {
-  const refusal = { ok: false, stageId: "reviewer", reviewLimit: null, recommendedReviewLimit: 5, implementerCandidates: ["plan", "builder"], refusals: [
-    { code: "unlimited-limit", message: "the review limit is unlimited; choose a finite limit (recommended 5)" },
+  const refusal = { ok: false, stageId: "reviewer", reviewLimit: null, recommendedReviewLimit: 3, implementerCandidates: ["plan", "builder"], refusals: [
+    { code: "unlimited-limit", message: "the review limit is unlimited; choose a finite limit (recommended 3)" },
     { code: "ambiguous-implementer", message: "more than one run stage passes into reviewer" },
   ] };
   const calls = serve(() => ({ json: { ok: true, pipeline: legacyDraft(), revision: "r".repeat(64), legacyReviewPreview: refusal } }));
@@ -140,11 +140,11 @@ test("a refused preview lists why, offers the recommended finite limit and no co
   const select = panel.querySelector("select[data-legacy-implementer]") as HTMLSelectElement;
   expect([...select.options].map((option) => option.value)).toEqual(["", "plan", "builder"]);
   setValue(select, "builder");
-  flushSync(() => button(host, "Use 5 rounds").click());
-  expect((panel.querySelector("input[type=number]") as HTMLInputElement).value).toBe("5");
+  flushSync(() => button(host, "Use 3 rounds").click());
+  expect((panel.querySelector("input[type=number]") as HTMLInputElement).value).toBe("3");
   flushSync(() => button(host, "Preview conversion").click());
   await settle();
-  expect(calls[1]!.body).toEqual({ action: "preview-legacy-review", stageId: "reviewer", reviewLimit: 5, implementerStageId: "builder" });
+  expect(calls[1]!.body).toEqual({ action: "preview-legacy-review", stageId: "reviewer", reviewLimit: 3, implementerStageId: "builder" });
   flushSync(() => root.unmount());
 });
 

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import { CODEX_SOL_MODEL } from "@/lib/agent/models";
 
-import { applyRoleOverride, normalizeFlowSpec } from "./commands";
+import { applyRoleOverride, normalizeFlowSpec, rolesFromRequest } from "./commands";
 import type { RoleConfig } from "./types";
 
 test("flow spec request accepts trimmed text and rejects non-text input", () => {
@@ -15,6 +15,14 @@ test("flow spec request accepts trimmed text and rejects non-text input", () => 
 });
 
 const base: RoleConfig = { engine: "codex", model: "gpt-5.6", effort: "high" };
+
+test("flow creation preserves an explicit reviewer tier and its role-default provenance", () => {
+  for (const serviceTierSource of ["explicit", "role-default"] as const) {
+    const roles = { implementer: base, reviewer: { engine: "codex" as const, model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast", serviceTierSource } };
+    expect(rolesFromRequest({ roles } as never)?.reviewer).toEqual(roles.reviewer);
+  }
+  expect(rolesFromRequest({ roles: { implementer: base, reviewer: { ...base, serviceTier: 42 } } } as never)).toBeNull();
+});
 
 test("applyRoleOverride merges only the provided fields and blanks to null (issue #118)", () => {
   /* A partial override touches just the reviewer model, keeping engine/effort. */

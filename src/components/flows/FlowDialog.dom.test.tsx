@@ -3,6 +3,8 @@ import { Window } from "happy-dom";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { FlowDialog } from "./FlowDialog";
+import { BulkActionBar } from "@/components/scheme/BulkActionBar";
+import type { SchemeNode } from "@/components/scheme/layout";
 import type { FileEntry } from "@/lib/types";
 
 const dom = new Window();
@@ -61,5 +63,57 @@ test.each([
     flushSync(() => [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Start"))!.click());
     expect(posts).toHaveLength(1);
     expect(posts[0]).toMatchObject({ roles: { implementer: { model: to, effort: expected } } });
+  } finally { flushSync(() => root.unmount()); }
+});
+
+test.each([undefined, 7, ""])("flow form displays default 3 and submits selection %s", async (selection) => {
+  const role = { engine: "codex", model: "gpt-6.1-sol", effort: "medium" };
+  const posts: Record<string, unknown>[] = [];
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    if (init?.method === "POST") posts.push(JSON.parse(String(init.body)));
+    return { ok: true, json: async () => ({ presets: [{ name: "saved", implementer: role, reviewer: role }] }) };
+  }) as unknown as typeof fetch;
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => root.render(<FlowDialog file={{ path: "/example.jsonl" } as FileEntry} onClose={() => {}} />));
+    await Bun.sleep(10);
+    expect(host.textContent).toContain("default 3");
+    const input = host.querySelector('input[type="number"]') as HTMLInputElement;
+    expect(input.value).toBe("3");
+    if (selection !== undefined) {
+      const key = Object.keys(input).find((key) => key.startsWith("__reactProps$"))!;
+      const props = (input as unknown as Record<string, { onChange: (event: unknown) => void }>)[key]!;
+      flushSync(() => props.onChange({ target: { value: String(selection) } }));
+    }
+    flushSync(() => [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Start"))!.click());
+    expect(posts[0]!.roundLimit).toBe(selection === "" ? 3 : selection ?? 3);
+  } finally { flushSync(() => root.unmount()); }
+});
+
+test.each([undefined, 7, ""])("bulk form defaults to 3 and submits selection %s", async (selection) => {
+  const posts: Record<string, unknown>[] = [];
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    if (init?.method === "POST") posts.push(JSON.parse(String(init.body)));
+    return { ok: true, json: async () => ({ presets: [] }) };
+  }) as unknown as typeof fetch;
+  const node = { file: { path: "/example.jsonl", title: "Example", engine: "codex", root: "codex-sessions", kind: "session", fmt: "codex", activity: "idle" } } as SchemeNode;
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => root.render(<BulkActionBar project="demo" nodes={[node]} flowsByImpl={new Map()} onRemove={() => {}} onFit={() => {}} onExit={() => {}} />));
+    flushSync(() => [...host.querySelectorAll("button")].find((button) => button.textContent === "Flow 1/1")!.click());
+    await Bun.sleep(10);
+    expect(host.textContent).toContain("default 3");
+    const input = host.querySelector('input[type="number"]') as HTMLInputElement;
+    expect(input.value).toBe("3");
+    if (selection !== undefined) {
+      const key = Object.keys(input).find((key) => key.startsWith("__reactProps$"))!;
+      const props = (input as unknown as Record<string, { onChange: (event: unknown) => void }>)[key]!;
+      flushSync(() => props.onChange({ target: { value: String(selection) } }));
+    }
+    flushSync(() => [...host.querySelectorAll("button")].find((button) => button.textContent === "Start 1 flows")!.click());
+    await Bun.sleep(10);
+    expect(posts[0]!.roundLimit).toBe(selection === "" ? 3 : selection ?? 3);
   } finally { flushSync(() => root.unmount()); }
 });

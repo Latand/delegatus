@@ -52,6 +52,13 @@ function registry(): AgentRegistry {
 
 type SpawnRouteTestDependencies = NonNullable<Parameters<typeof POST.withDependencies>[1]>;
 
+async function withSandboxRuntimeSocket<T>(run: () => Promise<T>): Promise<T> {
+  const previous = process.env.LLV_RUNTIME_HOST_SOCKET;
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(routeSandbox, "unused-runtime.sock");
+  try { return await run(); }
+  finally { if (previous === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET = previous; }
+}
+
 function structuredRouteDependencies(cwd: string): SpawnRouteTestDependencies {
   return {
     registry: agentRegistry,
@@ -1845,7 +1852,10 @@ test("spawn admission grants Computer Use to an operator root Codex session only
   }
 });
 
-test("a materialized structured child is offered for pipeline attempt adoption", async () => {
+test.each([
+  { engine: "claude", model: "sonnet", serviceTier: undefined },
+  { engine: "codex", model: "gpt-6-sol", serviceTier: "priority" },
+] as const)("a materialized $engine child is offered for pipeline attempt adoption with its own tier", async ({ engine, model, serviceTier }) => {
   const cwd = fs.mkdtempSync(path.join(routeSandbox, "pipeline-adoption-"));
   const store = registry();
   const sourceSessionId = crypto.randomUUID();
@@ -1874,6 +1884,8 @@ test("a materialized structured child is offered for pipeline attempt adoption",
     const dependencies = {
       ...structuredRouteDependencies(cwd),
       registry: () => store,
+      resolveSpawnAccount: () => ({ engine, accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+      resolveHealthySpawnAccount: async () => ({ engine, accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" }, serviceTier }),
       defer: (work: () => Promise<void>) => { deferred.push(work); },
       pipelineAttemptTargetForSource: () => ({
         pipelineId: "pipeline-adoption",
@@ -1884,10 +1896,10 @@ test("a materialized structured child is offered for pipeline attempt adoption",
       spawnStructuredConversation: async (input: Parameters<SpawnRouteTestDependencies["spawnStructuredConversation"]>[0]) => {
         structuredLaunches += 1;
         const settled = store.settleSpawn(input.receipt.launchId, {
-          key: { engine: "claude", sessionId: crypto.randomUUID() },
+          key: { engine, sessionId: crypto.randomUUID() },
           artifactPath: childPath,
           cwd,
-          accountId: "claude-test",
+          accountId: "account-a",
           status: "starting",
           host: null,
           claimEpoch: 0,
@@ -1917,7 +1929,7 @@ test("a materialized structured child is offered for pipeline attempt adoption",
     const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
       method: "POST",
       headers: { origin: "http://127.0.0.1", host: "127.0.0.1", "content-type": "application/json", "x-llv-spawn-capability": capability },
-      body: JSON.stringify({ title: "Test semantic spawn", engine: "claude", model: "sonnet", cwd, prompt: "fallback", src: sourcePath, role: "builder", clientAttemptId: "pipeline_adoption_20260719" }),
+      body: JSON.stringify({ title: "Test semantic spawn", engine, model, serviceTier, cwd, prompt: "fallback", src: sourcePath, role: "builder", clientAttemptId: "pipeline_adoption_20260719" }),
     }), dependencies);
 
     expect({ status: response.status, body: await response.clone().json() }).toMatchObject({ status: 202 });
@@ -1931,8 +1943,8 @@ test("a materialized structured child is offered for pipeline attempt adoption",
         parentConversationId: source.id,
         round: null,
         runtime: {
-          engine: "claude",
-          model: "sonnet",
+          engine,
+          model,
           effort: expect.any(String),
         },
       }),
@@ -1940,8 +1952,8 @@ test("a materialized structured child is offered for pipeline attempt adoption",
     expect(new AgentRegistry(store.filename).snapshot().memberships[receipt.conversationId]).toEqual([
       expect.objectContaining({
         runtime: {
-          engine: "claude",
-          model: "sonnet",
+          engine,
+          model,
           effort: expect.any(String),
         },
       }),
@@ -1950,7 +1962,7 @@ test("a materialized structured child is offered for pipeline attempt adoption",
     const replay = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
       method: "POST",
       headers: { origin: "http://127.0.0.1", host: "127.0.0.1", "content-type": "application/json", "x-llv-spawn-capability": capability },
-      body: JSON.stringify({ title: "Test semantic spawn", engine: "claude", model: "sonnet", cwd, prompt: "fallback", src: sourcePath, role: "builder", clientAttemptId: "pipeline_adoption_20260719" }),
+      body: JSON.stringify({ title: "Test semantic spawn", engine, model, serviceTier, cwd, prompt: "fallback", src: sourcePath, role: "builder", clientAttemptId: "pipeline_adoption_20260719" }),
     }), dependencies);
     expect(replay.status).toBe(200);
     expect(structuredLaunches).toBe(1);
@@ -1961,9 +1973,10 @@ test("a materialized structured child is offered for pipeline attempt adoption",
         conversationId: expect.stringMatching(/^conversation_/),
         agentPath: childPath,
         runtime: {
-          engine: "claude",
-          model: "sonnet",
+          engine,
+          model,
           effort: expect.any(String),
+          ...(serviceTier ? { serviceTier } : {}),
         },
       }),
     }, {
@@ -1973,9 +1986,10 @@ test("a materialized structured child is offered for pipeline attempt adoption",
         conversationId: expect.stringMatching(/^conversation_/),
         agentPath: childPath,
         runtime: {
-          engine: "claude",
-          model: "sonnet",
+          engine,
+          model,
           effort: expect.any(String),
+          ...(serviceTier ? { serviceTier } : {}),
         },
       }),
     }]);
@@ -2748,7 +2762,7 @@ test("operator-authenticated non-browser calls still require lineage", async () 
   expect(await response.json()).toEqual({ error: expect.stringContaining("src") });
 });
 
-test("agent callers cannot grant themselves native sub-agent permission", async () => {
+test("agent callers cannot grant themselves native sub-agent permission", async () => withSandboxRuntimeSocket(async () => {
   const store = agentRegistry();
   const capability = crypto.randomBytes(32).toString("base64url");
   const callerPath = `/sessions/caller-${crypto.randomUUID()}.jsonl`;
@@ -2770,7 +2784,7 @@ test("agent callers cannot grant themselves native sub-agent permission", async 
     claimOwner: null,
     pendingAction: null,
   });
-  const response = await POST(new NextRequest("http://127.0.0.1:8898/api/spawn", {
+  const response = await POST.withDependencies(new NextRequest("http://127.0.0.1:8898/api/spawn", {
     method: "POST",
     headers: {
       host: "127.0.0.1:8898",
@@ -2778,15 +2792,15 @@ test("agent callers cannot grant themselves native sub-agent permission", async 
       "x-llv-spawn-capability": capability,
     },
     body: JSON.stringify({ title: "Test semantic spawn", src: callerPath, role: "orchestrator", prompt: "Delegate orchestration", allowSubagents: true }),
-  }));
+  }), { ...structuredRouteDependencies(routeSandbox), engineReadiness: () => "connected" });
 
   expect(response.status).toBe(403);
   expect(await response.json()).toEqual({ error: "allowSubagents requires an authenticated Viewer operator spawn" });
-});
+}));
 
-test("operator callers may grant native sub-agent permission", async () => {
+test("operator callers may grant native sub-agent permission", async () => withSandboxRuntimeSocket(async () => {
   const capability = rotateOperatorSpawnCapability();
-  const response = await POST(new NextRequest("http://127.0.0.1:8898/api/spawn", {
+  const response = await POST.withDependencies(new NextRequest("http://127.0.0.1:8898/api/spawn", {
     method: "POST",
     headers: {
       host: "127.0.0.1:8898",
@@ -2794,11 +2808,11 @@ test("operator callers may grant native sub-agent permission", async () => {
       "x-llv-spawn-capability": capability,
     },
     body: JSON.stringify({ title: "Test semantic spawn", src: "/caller.jsonl", role: "orchestrator", prompt: "Delegate orchestration", allowSubagents: true }),
-  }));
+  }), { ...structuredRouteDependencies(routeSandbox), engineReadiness: () => "connected" });
 
   expect(response.status).toBe(400);
   expect(await response.json()).toEqual({ error: "working directory is required" });
-});
+}));
 
 test("operator and agent structured Claude role launches both retain bypass permissions", async () => {
   const cwd = fs.mkdtempSync(path.join(routeSandbox, "operator-permission-"));
@@ -4211,4 +4225,100 @@ test("a seat deputy's spawn is parented to the seat and keeps the deputy as its 
   });
   if (child.kind !== "created") throw new Error("expected create");
   expect(store.snapshot().lineageEdges[child.receipt.conversationId]?.parentConversationId).toBe(seat.id);
+});
+
+test("structured spawn binds the launch tier, runtime answer and replay digest before dispatch", async () => {
+  const { CodexServiceTierUnavailableError } = await import("@/lib/accounts/codexServiceTiers");
+  const cwd = fs.mkdtempSync(path.join(routeSandbox, "service-tier-route-"));
+  const store = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const previous = { LLV_SPAWN_TRANSPORT: process.env.LLV_SPAWN_TRANSPORT, LLV_STRUCTURED_HOSTS: process.env.LLV_STRUCTURED_HOSTS, LLV_RUNTIME_HOST_SOCKET: process.env.LLV_RUNTIME_HOST_SOCKET };
+  Object.assign(process.env, { LLV_SPAWN_TRANSPORT: "structured", LLV_STRUCTURED_HOSTS: "1", LLV_RUNTIME_HOST_SOCKET: path.join(cwd, "unused.sock") });
+  const selections: unknown[] = [];
+  let fallback = false;
+  const dependencies: SpawnRouteTestDependencies = { ...structuredRouteDependencies(cwd), registry: () => store, defer: () => {},
+    resolveSpawnAccount: () => ({ engine: "codex", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+    resolveHealthySpawnAccount: async (_engine, _account, _project, _model, tier) => {
+      selections.push(tier);
+      if (tier?.id === "unlisted-tier") throw new CodexServiceTierUnavailableError("serviceTier unlisted-tier unavailable; offered: priority, ultrafast");
+      return { engine: "codex", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" }, serviceTier: fallback ? null : tier?.id };
+    },
+  };
+  const post = (body: Record<string, unknown>) => POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", { method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" }, body: JSON.stringify({ engine: "codex", model: "gpt-6-astra", effort: "high", cwd, title: "Review service tier", prompt: "Review", ...body }) }), dependencies);
+  try {
+    const response = await post({ serviceTier: "ultrafast", clientAttemptId: "tier-route-explicit" });
+    const body = await response.json();
+    expect({ status: response.status, body: response.status === 202 ? null : body }).toEqual({ status: 202, body: null });
+    expect(body).toMatchObject({ runtime: "codex/gpt-6-astra/high/ultrafast" });
+    expect(Object.values(store.readOnlySnapshot().receipts).find(receipt => receipt.clientAttemptId === "tier-route-explicit")?.launchProfile).toMatchObject({ serviceTier: "ultrafast", fast: true });
+    expect(selections[0]).toEqual({ id: "ultrafast", model: "gpt-6-astra", required: true });
+    expect((await post({ serviceTier: "priority", clientAttemptId: "tier-route-explicit" })).status).toBe(409);
+    expect((await post({ fast: true, clientAttemptId: "tier-route-fast" })).status).toBe(202);
+    expect(Object.values(store.readOnlySnapshot().receipts).find(receipt => receipt.clientAttemptId === "tier-route-fast")?.launchProfile.serviceTier).toBe("priority");
+    const { saveRoleMapping } = await import("@/lib/roles/store");
+    saveRoleMapping({ builder: { config: { engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast" } } });
+    fallback = true;
+    const preferred = { role: "builder", engine: undefined, model: undefined, effort: undefined, clientAttemptId: "tier-route-role-default" };
+    const firstFallback = await post(preferred);
+    expect(firstFallback.status).toBe(202);
+    expect((await firstFallback.json()).runtime).toContain("/default (role default ultrafast not offered");
+    const replayFallback = await post(preferred);
+    expect(replayFallback.status).toBe(202);
+    expect((await replayFallback.json()).runtime).toContain("/default (role default ultrafast not offered");
+    saveRoleMapping({ builder: { config: null } });
+    const count = Object.keys(store.readOnlySnapshot().receipts).length;
+    const refused = await post({ serviceTier: "unlisted-tier", clientAttemptId: "tier-route-refused" });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ code: "service_tier_unavailable", error: expect.stringContaining("offered: priority, ultrafast") });
+    expect(Object.keys(store.readOnlySnapshot().receipts)).toHaveLength(count);
+  } finally { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
+});
+
+test("a preferred role tier falls back without a tier when the named account is missing", async () => {
+  const { accountManager, resolveHealthySpawnAccount } = await import("@/lib/accounts/manager");
+  const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { saveRoleMapping } = await import("@/lib/roles/store");
+  const cwd = fs.mkdtempSync(path.join(routeSandbox, "service-tier-missing-account-"));
+  const store = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const previousRegistry = agentRegistry();
+  const account = createManagedCodexAccount("Fallback carrier");
+  fs.writeFileSync(path.join(account.home, "auth.json"), "{}", { mode: 0o600 });
+  fs.writeFileSync(path.join(account.home, "models_cache.json"), JSON.stringify({
+    models: [{ slug: "gpt-6-astra", service_tiers: [{ id: "priority" }] }],
+  }));
+  store.setEngineRouting("codex", account.id);
+  const previous = {
+    LLV_SPAWN_TRANSPORT: process.env.LLV_SPAWN_TRANSPORT,
+    LLV_STRUCTURED_HOSTS: process.env.LLV_STRUCTURED_HOSTS,
+    LLV_RUNTIME_HOST_SOCKET: process.env.LLV_RUNTIME_HOST_SOCKET,
+  };
+  Object.assign(process.env, {
+    LLV_SPAWN_TRANSPORT: "structured",
+    LLV_STRUCTURED_HOSTS: "1",
+    LLV_RUNTIME_HOST_SOCKET: path.join(cwd, "unused.sock"),
+  });
+  setAgentRegistryForTests(store);
+  saveRoleMapping({ builder: { config: { engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast" } } });
+  try {
+    const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+      method: "POST",
+      headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+      body: JSON.stringify({ role: "builder", accountId: "missing-account", cwd, title: "Review service tier", prompt: "Review", clientAttemptId: "tier-route-missing-account" }),
+    }), { ...structuredRouteDependencies(cwd), registry: () => store, defer: () => {}, resolveHealthySpawnAccount,
+      resolveSpawnAccount: (engine, id) => accountManager.resolveSpawn(engine, id) });
+    const body = await response.json();
+    expect({ status: response.status, error: body.error ?? null }).toEqual({ status: 202, error: null });
+    expect(body.runtime).toContain("/default (role default ultrafast not offered");
+    const receipt = Object.values(store.readOnlySnapshot().receipts).find(item => item.clientAttemptId === "tier-route-missing-account");
+    expect(receipt).toBeDefined();
+    expect(receipt?.accountId).toBe("missing-account");
+    expect(receipt?.launchProfile.serviceTier).toBeUndefined();
+    expect(receipt?.launchProfile.fast).not.toBeTrue();
+  } finally {
+    saveRoleMapping({ builder: { config: null } });
+    setAgentRegistryForTests(previousRegistry);
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });

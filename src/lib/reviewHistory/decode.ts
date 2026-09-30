@@ -1,3 +1,4 @@
+import { DEFAULT_REVIEW_ROUNDS } from "@/lib/reviewHistory/limits";
 import type { Flow, Round } from "./types";
 
 const SAFE_HOST_CLAIM_SESSION = /^(?:claude|codex):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -38,6 +39,7 @@ export function decodeFlow(value: unknown, options: { project?: (value: string) 
     ...flow,
     project: options.project?.(flow.project) ?? flow.project,
     revision: flow.revision ?? 0,
+    roundLimit: Number.isInteger(flow.roundLimit) && flow.roundLimit >= 0 ? flow.roundLimit : DEFAULT_REVIEW_ROUNDS,
     targetSha: flow.targetSha ?? null,
     implementerConversationId: flow.implementerConversationId ?? null,
     reviewerFallback: flow.reviewerFallback === undefined && flow.roles.reviewer.engine === "codex"

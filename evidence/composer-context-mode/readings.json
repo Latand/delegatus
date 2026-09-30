@@ -1,0 +1,389 @@
+{
+  "readings": [
+    {
+      "width": 390,
+      "locale": "en",
+      "scheme": "dark",
+      "idle": {
+        "pressed": "false",
+        "disabled": false,
+        "width": 44,
+        "height": 44
+      },
+      "enterMs": 702,
+      "running": {
+        "toggle": {
+          "pressed": "true",
+          "disabled": false,
+          "width": 44,
+          "height": 44
+        },
+        "borderStyle": "dashed"
+      },
+      "flickerKeptContext": true,
+      "exitMs": 2526,
+      "typingGuardMs": 1496,
+      "enter": {
+        "injects": [
+          "Add the release note to the plan."
+        ],
+        "sends": 0,
+        "chip": "Context"
+      },
+      "joined": {
+        "bubbles": 1,
+        "confirmed": 1,
+        "chips": 1
+      },
+      "failed": {
+        "edit": 1,
+        "replay": 0,
+        "text": "ContextRebuild the board status projectionSecond note the host refuses.This Codex host cannot add context.Edit"
+      },
+      "uncertain": {
+        "check": 1,
+        "edit": 0,
+        "replay": 0
+      },
+      "geometry": {
+        "pageOverflow": false,
+        "toolsRow": {
+          "scrollWidth": 350,
+          "clientWidth": 350
+        },
+        "smallest": 44,
+        "untouched": [
+          "voice-call-button 32x32"
+        ],
+        "small": [],
+        "pillWidth": 109,
+        "sameLine": true,
+        "overlaps": false
+      }
+    },
+    {
+      "width": 390,
+      "locale": "en",
+      "scheme": "dark",
+      "noInject": {
+        "before": {
+          "pressed": "false",
+          "disabled": true,
+          "width": 44,
+          "height": 44
+        },
+        "after": {
+          "pressed": "false",
+          "disabled": true,
+          "width": 44,
+          "height": 44
+        },
+        "reasonVisible": true,
+        "reason": "This conversation's Codex host has not advertised context injection."
+      }
+    },
+    {
+      "width": 390,
+      "locale": "uk",
+      "scheme": "dark",
+      "idle": {
+        "pressed": "false",
+        "disabled": false,
+        "width": 44,
+        "height": 44
+      },
+      "enterMs": 702,
+      "running": {
+        "toggle": {
+          "pressed": "true",
+          "disabled": false,
+          "width": 44,
+          "height": 44
+        },
+        "borderStyle": "dashed"
+      },
+      "enter": {
+        "injects": [
+          "Add the uk note to the plan."
+        ],
+        "sends": 0,
+        "chip": "Контекст"
+      },
+      "joined": {
+        "bubbles": 1,
+        "confirmed": 1,
+        "chips": 1
+      },
+      "geometry": {
+        "pageOverflow": false,
+        "toolsRow": {
+          "scrollWidth": 350,
+          "clientWidth": 350
+        },
+        "smallest": 44,
+        "untouched": [
+          "voice-call-button 32x32"
+        ],
+        "small": [],
+        "pillWidth": 109,
+        "sameLine": true,
+        "overlaps": false
+      }
+    },
+    {
+      "width": 390,
+      "locale": "uk",
+      "scheme": "dark",
+      "noInject": {
+        "before": {
+          "pressed": "false",
+          "disabled": true,
+          "width": 44,
+          "height": 44
+        },
+        "after": {
+          "pressed": "false",
+          "disabled": true,
+          "width": 44,
+          "height": 44
+        },
+        "reasonVisible": true,
+        "reason": "Хост Codex цієї розмови не повідомив про підтримку додавання в контекст."
+      }
+    },
+    {
+      "width": 390,
+      "locale": "en",
+      "scheme": "light",
+      "idle": {
+        "pressed": "false",
+        "disabled": false,
+        "width": 44,
+        "height": 44
+      },
+      "enterMs": 702,
+      "running": {
+        "toggle": {
+          "pressed": "true",
+          "disabled": false,
+          "width": 44,
+          "height": 44
+        },
+        "borderStyle": "dashed"
+      },
+      "enter": {
+        "injects": [
+          "Add the en note to the plan."
+        ],
+        "sends": 0,
+        "chip": "Context"
+      },
+      "joined": {
+        "bubbles": 1,
+        "confirmed": 1,
+        "chips": 1
+      },
+      "geometry": {
+        "pageOverflow": false,
+        "toolsRow": {
+          "scrollWidth": 350,
+          "clientWidth": 350
+        },
+        "smallest": 44,
+        "untouched": [
+          "voice-call-button 32x32"
+        ],
+        "small": [],
+        "pillWidth": 109,
+        "sameLine": true,
+        "overlaps": false
+      }
+    },
+    {
+      "width": 390,
+      "locale": "en",
+      "scheme": "light",
+      "noInject": {
+        "before": {
+          "pressed": "false",
+          "disabled": true,
+          "width": 44,
+          "height": 44
+        },
+        "after": {
+          "pressed": "false",
+          "disabled": true,
+          "width": 44,
+          "height": 44
+        },
+        "reasonVisible": true,
+        "reason": "This conversation's Codex host has not advertised context injection."
+      }
+    },
+    {
+      "width": 1440,
+      "locale": "en",
+      "scheme": "dark",
+      "idle": {
+        "pressed": "false",
+        "disabled": false,
+        "width": 106.4,
+        "height": 28
+      },
+      "enterMs": 702,
+      "running": {
+        "toggle": {
+          "pressed": "true",
+          "disabled": false,
+          "width": 106.4,
+          "height": 28
+        },
+        "borderStyle": "dashed"
+      },
+      "flickerKeptContext": true,
+      "exitMs": 2558,
+      "typingGuardMs": 1501,
+      "enter": {
+        "injects": [
+          "Add the release note to the plan."
+        ],
+        "sends": 0,
+        "chip": "Context"
+      },
+      "joined": {
+        "bubbles": 1,
+        "confirmed": 1,
+        "chips": 1
+      },
+      "failed": {
+        "edit": 1,
+        "replay": 0,
+        "text": "ContextRebuild the board status projectionSecond note the host refuses.This Codex host cannot add context.Edit"
+      },
+      "uncertain": {
+        "check": 1,
+        "edit": 0,
+        "replay": 0
+      },
+      "geometry": {
+        "pageOverflow": false,
+        "toolsRow": {
+          "scrollWidth": 229,
+          "clientWidth": 229
+        },
+        "smallest": 28,
+        "untouched": [
+          "voice-call-button 32x32"
+        ],
+        "small": [
+          "button[aria-label=Dictate] 32x32",
+          "button[aria-label=Add to the agent's context] 34x34",
+          "button[aria-label=Send options] 32x34",
+          "button[aria-label=Model and reasoning — applies to your next message — GPT-5.6-Sol, High,data-runtime-pill=true] 116x28",
+          "button[data-composer-context-toggle=on,aria-label=Context mode] 106x28",
+          "button[aria-label=Add files or images] 32x32"
+        ],
+        "pillWidth": 116,
+        "sameLine": true,
+        "overlaps": false
+      }
+    },
+    {
+      "width": 1440,
+      "locale": "en",
+      "scheme": "dark",
+      "noInject": {
+        "before": {
+          "pressed": "false",
+          "disabled": true,
+          "width": 106.4,
+          "height": 28
+        },
+        "after": {
+          "pressed": "false",
+          "disabled": true,
+          "width": 106.4,
+          "height": 28
+        },
+        "reasonVisible": true,
+        "reason": "This conversation's Codex host has not advertised context injection."
+      }
+    },
+    {
+      "width": 1440,
+      "locale": "uk",
+      "scheme": "dark",
+      "idle": {
+        "pressed": "false",
+        "disabled": false,
+        "width": 115.2,
+        "height": 28
+      },
+      "enterMs": 704,
+      "running": {
+        "toggle": {
+          "pressed": "true",
+          "disabled": false,
+          "width": 115.2,
+          "height": 28
+        },
+        "borderStyle": "dashed"
+      },
+      "enter": {
+        "injects": [
+          "Add the uk note to the plan."
+        ],
+        "sends": 0,
+        "chip": "Контекст"
+      },
+      "joined": {
+        "bubbles": 1,
+        "confirmed": 1,
+        "chips": 1
+      },
+      "geometry": {
+        "pageOverflow": false,
+        "toolsRow": {
+          "scrollWidth": 249,
+          "clientWidth": 249
+        },
+        "smallest": 28,
+        "untouched": [
+          "voice-call-button 32x32"
+        ],
+        "small": [
+          "button[aria-label=Надиктувати] 32x32",
+          "button[aria-label=Додати в контекст агента] 34x34",
+          "button[aria-label=Дії відправки] 32x34",
+          "button[aria-label=Модель і міркування — застосується до наступного повідомлення — GPT-5.6-Sol, Високі,data-runtime-pill=true] 128x28",
+          "button[data-composer-context-toggle=on,aria-label=Режим контексту] 115x28",
+          "button[aria-label=Додати файли або картинки] 32x32"
+        ],
+        "pillWidth": 128,
+        "sameLine": true,
+        "overlaps": false
+      }
+    },
+    {
+      "width": 1440,
+      "locale": "uk",
+      "scheme": "dark",
+      "noInject": {
+        "before": {
+          "pressed": "false",
+          "disabled": true,
+          "width": 115.2,
+          "height": 28
+        },
+        "after": {
+          "pressed": "false",
+          "disabled": true,
+          "width": 115.2,
+          "height": 28
+        },
+        "reasonVisible": true,
+        "reason": "Хост Codex цієї розмови не повідомив про підтримку додавання в контекст."
+      }
+    }
+  ]
+}
