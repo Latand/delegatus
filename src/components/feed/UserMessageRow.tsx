@@ -7,7 +7,7 @@ import type { SelectedContextPreview } from "@/lib/selection/selectedContext";
 import type { MessageSender } from "@/lib/team/contract";
 import { SenderLine } from "@/components/team/SenderLine";
 
-import { ChevronUp } from "../icons";
+import { ChevronUp, Layers } from "../icons";
 import { SelectedContextBadge } from "../SelectedContextBadge";
 import { CopyButton } from "./CopyButton";
 import { MESSAGE_ACTION } from "./actionStyles";
@@ -48,6 +48,7 @@ export function UserMessageRow({
   below,
   rowAttributes,
   sender,
+  tone,
 }: {
   text: string;
   /** What the copy control puts on the clipboard; defaults to {@link text}. */
@@ -62,6 +63,9 @@ export function UserMessageRow({
   rowAttributes?: Record<string, string | undefined>;
   /** Who sent it, in a team (sign-in-and-team §6.7). Absent draws nothing. */
   sender?: MessageSender | null;
+  /** `context` marks a message that was added to the agent's context rather
+      than sent to it: a dashed bubble and a chip, colour and border only. */
+  tone?: "context";
 }) {
   const isMobile = useIsMobile();
   const long = text.length > LONG_MESSAGE;
@@ -69,6 +73,12 @@ export function UserMessageRow({
   return (
     <div className="my-3 flex flex-col items-end" {...rowAttributes}>
       {sender ? <SenderLine sender={sender} mobile={isMobile} /> : null}
+      {tone === "context" ? (
+        <span data-message-context-chip className="mb-0.5 inline-flex items-center gap-1 text-caption font-semibold text-info">
+          <Layers className="h-3 w-3" aria-hidden />
+          {tr("outbox.context.chip")}
+        </span>
+      ) : null}
       <div
         className="group/msg flex w-full items-start justify-end gap-1.5"
         data-mobile-message={isMobile ? "user" : undefined}
@@ -78,9 +88,9 @@ export function UserMessageRow({
             15 px on the phone (README §2.6). */}
         <div
           data-user-bubble
-          className={isMobile
+          className={`${isMobile
             ? "max-w-[86%] whitespace-pre-wrap break-words rounded-surface bg-user px-3 py-[9px] text-title leading-[1.45]"
-            : `${BUBBLE_MEASURE} whitespace-pre-wrap break-words rounded-surface bg-user px-4 py-2.5`}
+            : `${BUBBLE_MEASURE} whitespace-pre-wrap break-words rounded-surface bg-user px-4 py-2.5`}${tone === "context" ? " border border-dashed border-info/45" : ""}`}
         >
           {/* #844: what this turn pointed at, from the reference persisted on
               the record itself — the same badge the composer showed before the

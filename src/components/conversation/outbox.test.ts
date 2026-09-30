@@ -8,6 +8,8 @@ import {
   cancelOutbox,
   claimOutboxDispatch,
   compactOutboxQueue,
+  editContextOutbox,
+  enqueueContextOutbox,
   enqueueOutbox,
   markOutboxResponded,
   nextDispatch,
@@ -18,6 +20,8 @@ import {
   OPERATION_READ_TIMEOUT_MS,
   operationReadDue,
   operationsToReconcile,
+  outboxEntryUnresolved,
+  releaseHeldOutbox,
   readOperationShared,
   outboxHistory,
   OUTBOX_DELIVERED_TTL_MS,
@@ -39,6 +43,7 @@ import {
   transcriptEchoObservationId,
   updateOutbox,
   visibleOutbox,
+  withdrawContextOutbox,
   type OutboxEntry,
   type TranscriptEchoObservation,
 } from "./outbox";
@@ -2498,5 +2503,102 @@ describe("readOperationShared", () => {
     second.release();
     // The cancelled read counted as no failure; the arrival reset the spacing.
     expect(operationReadDue("op-rejoin", now + OPERATION_RECONCILE_INTERVAL_MS)).toBe(true);
+  });
+});
+
+describe("an injection into the thread's context (composer context mode)", () => {
+  const CARD = "context-card";
+  const inject = (id: string, text = "the schema is in db/schema.sql") =>
+    enqueueContextOutbox(CARD, { id, text, images: 0, at: Date.now(), contextTurn: "running" });
+
+  test("the row is filed delivering with the context intent, and nothing dispatches it", () => {
+    const row = inject("ctx-1");
+    expect(row).toMatchObject({ state: "delivering", intent: "context", contextTurn: "running" });
+    expect(nextDispatch(readOutbox(CARD))).toBeNull();
+    expect(claimOutboxDispatch(CARD, "ctx-1")).toBeNull();
+    /* Even forced back to queued, the dispatcher passes it by. */
+    updateOutbox(CARD, "ctx-1", { state: "queued" });
+    expect(nextDispatch(readOutbox(CARD))).toBeNull();
+    expect(claimOutboxDispatch(CARD, "ctx-1")).toBeNull();
+  });
+
+  test("a delivering context row does not hold the wire fence against ordinary sends", () => {
+    inject("ctx-1");
+    const ordinary = submit(CARD, "send-1", "a normal message");
+    expect(nextDispatch(readOutbox(CARD))?.id).toBe(ordinary!.id);
+    expect(claimOutboxDispatch(CARD, "send-1")?.id).toBe("send-1");
+  });
+
+  test("a failed row cannot be retried, and a held one cannot be released", () => {
+    inject("ctx-1");
+    updateOutbox(CARD, "ctx-1", { state: "failed", error: "boom" });
+    retryOutbox(CARD, "ctx-1");
+    expect(readOutbox(CARD).find((entry) => entry.id === "ctx-1")!.state).toBe("failed");
+
+    inject("ctx-2");
+    updateOutbox(CARD, "ctx-2", { heldForSwitch: true });
+    expect(releaseHeldOutbox(CARD)).toEqual([]);
+    expect(readOutbox(CARD).find((entry) => entry.id === "ctx-2")!.heldForSwitch).toBe(true);
+  });
+
+  test("a reloaded row is never dispatchable: an unanswered one reads unconfirmed, an answered one keeps its state", () => {
+    inject("ctx-lost");
+    inject("ctx-named");
+    updateOutbox(CARD, "ctx-named", { operationId: "op-9" });
+    resetOutboxForTests();
+    const reloaded = readOutbox(CARD);
+    const lost = reloaded.find((entry) => entry.id === "ctx-lost")!;
+    const named = reloaded.find((entry) => entry.id === "ctx-named")!;
+    expect(lost).toMatchObject({ state: "delivering", deliveryUncertain: true, text: "the schema is in db/schema.sql" });
+    expect(named).toMatchObject({ state: "delivering", operationId: "op-9" });
+    expect(named.deliveryUncertain).toBeUndefined();
+    expect(nextDispatch(reloaded)).toBeNull();
+  });
+
+  test("a reloaded row that was queued comes back as delivering, never queued", () => {
+    inject("ctx-1");
+    updateOutbox(CARD, "ctx-1", { state: "queued", operationId: "op-1" });
+    resetOutboxForTests();
+    expect(readOutbox(CARD)[0]).toMatchObject({ state: "delivering", intent: "context" });
+  });
+
+  test("an unresolved row holds a slot only while the answer is awaited", () => {
+    const row = inject("ctx-1")!;
+    expect(outboxEntryUnresolved(row)).toBe(true);
+    expect(outboxEntryUnresolved({ ...row, state: "failed" })).toBe(false);
+    expect(outboxEntryUnresolved({ ...row, state: "delivered" })).toBe(false);
+    expect(outboxEntryUnresolved({ ...row, deliveryUncertain: true })).toBe(false);
+    expect(outboxEntryUnresolved({ ...row, state: "failed", deliveryUncertain: true })).toBe(false);
+  });
+
+  test("a full queue of unresolved sends refuses another injection", () => {
+    for (let index = 0; index < OUTBOX_LIMIT; index += 1) submit(CARD, `pending-${index}`, `message ${index}`);
+    expect(inject("ctx-full")).toBeNull();
+    expect(readOutbox(CARD).some((entry) => entry.id === "ctx-full")).toBe(false);
+  });
+
+  test("withdrawing removes only a context row, and only by its id", () => {
+    inject("ctx-1");
+    const ordinary = submit(CARD, "send-1", "keep me");
+    withdrawContextOutbox(CARD, "send-1");
+    expect(readOutbox(CARD).map((entry) => entry.id)).toEqual(["ctx-1", ordinary!.id]);
+    withdrawContextOutbox(CARD, "ctx-1");
+    expect(readOutbox(CARD).map((entry) => entry.id)).toEqual([ordinary!.id]);
+  });
+
+  test("Edit takes a proven-failed row away and returns its words; anything else stays", () => {
+    inject("ctx-fail", "words to edit");
+    updateOutbox(CARD, "ctx-fail", { state: "failed", error: "refused" });
+    inject("ctx-unsure");
+    updateOutbox(CARD, "ctx-unsure", { state: "failed", deliveryUncertain: true });
+    inject("ctx-live");
+    const ordinary = submit(CARD, "send-1", "ordinary");
+    updateOutbox(CARD, "send-1", { state: "failed" });
+
+    expect(editContextOutbox(CARD, "ctx-unsure")).toBeNull();
+    expect(editContextOutbox(CARD, "ctx-live")).toBeNull();
+    expect(editContextOutbox(CARD, ordinary!.id)).toBeNull();
+    expect(editContextOutbox(CARD, "ctx-fail")?.text).toBe("words to edit");
+    expect(readOutbox(CARD).map((entry) => entry.id)).toEqual(["ctx-unsure", "ctx-live", ordinary!.id]);
   });
 });
