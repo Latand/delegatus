@@ -337,6 +337,7 @@ export function reviewerCommand(
   if (codexAccount?.managed) args.unshift("-c", "cli_auth_credentials_store=file");
   if (role.model) args.push("-m", role.model);
   if (role.effort) args.push("-c", `model_reasoning_effort=${role.effort}`);
+  if (role.serviceTier) args.push("-c", `service_tier=${role.serviceTier === "standard" ? "default" : role.serviceTier}`);
   return {
     command: resolveBinary("codex"),
     args,

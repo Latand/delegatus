@@ -14,3 +14,16 @@ test("invalid explicit profiles fail without a model or effort fallback", () => 
   expect(() => codexTurnProfile({ effort: "low" }, {}, catalog)).toThrow("unavailable for this model");
   expect(() => codexTurnProfile({ serviceTier: "unsupported" }, {}, catalog)).toThrow("service tier is invalid");
 });
+
+test("thread tier persists exactly and the live catalog fails closed", async () => {
+  const { launchServiceTier, assertCatalogOffersTier } = await import("./codexTurnProfile");
+  expect(launchServiceTier({ fast: true, serviceTier: "ultrafast" })).toBe("ultrafast");
+  expect(launchServiceTier({ fast: true })).toBe("priority");
+  expect(launchServiceTier({ fast: false })).toBeUndefined();
+  expect(launchServiceTier({ fast: false, serviceTier: "standard" })).toBe("default");
+  const tiers = { data: [{ id: "gpt-6-astra", serviceTiers: [{ id: "priority" }, { id: "ultrafast" }] }] };
+  expect(() => assertCatalogOffersTier(tiers, "gpt-6-astra", "ultrafast")).not.toThrow();
+  expect(() => assertCatalogOffersTier(tiers, "gpt-6-astra", "warp")).toThrow("priority, ultrafast");
+  expect(() => assertCatalogOffersTier(null, "gpt-6-astra", "ultrafast")).toThrow("catalog unavailable");
+  expect(() => assertCatalogOffersTier(null, "gpt-6-astra", "default")).not.toThrow();
+});

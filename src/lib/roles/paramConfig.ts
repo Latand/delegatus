@@ -82,9 +82,14 @@ export function launchRuntimeLabel(input: {
   model: string | null;
   effort: string | null;
   explicit: boolean;
+  serviceTier?: string | null;
+  serviceTierSource?: "explicit" | "role-default";
+  preferredServiceTier?: string | null;
 }): string {
   const role = input.roleId ? `${input.roleId}${input.variant ? `·${input.variant}` : ""} ` : "";
-  return `${role}${input.engine}/${input.model ?? "default"}/${input.effort ?? "default"}${input.explicit ? " (explicit)" : ""}`;
+  const tier = input.serviceTier ? `/${input.serviceTier}${input.serviceTierSource === "role-default" ? " (role default, if offered)" : ""}`
+    : input.preferredServiceTier ? `/default (role default ${input.preferredServiceTier} not offered by an available account)` : "";
+  return `${role}${input.engine}/${input.model ?? "default"}/${input.effort ?? "default"}${tier}${input.explicit ? " (explicit)" : ""}`;
 }
 
 /** The parameters that select each variant, as a caller names them. */

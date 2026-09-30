@@ -70,13 +70,14 @@ export interface AttachLaunchProfile {
   cwd?: string | null;
   model?: string | null;
   effort?: string | null;
+  serviceTier?: string | null;
   allowSubagents?: boolean;
   mcpServers?: readonly string[];
 }
 
 export interface AttachResolverDeps {
   files: FileEntry[];
-  resumeSpecFor: (root: string, path: string, options?: { model?: string | null; effort?: string | null; allowSubagents?: boolean; mcpServers?: readonly string[]; cwd?: string | null; hostTerminal?: boolean; accountId?: string | null }) => ResumeSpec | null;
+  resumeSpecFor: (root: string, path: string, options?: { model?: string | null; effort?: string | null; serviceTier?: string | null; allowSubagents?: boolean; mcpServers?: readonly string[]; cwd?: string | null; hostTerminal?: boolean; accountId?: string | null }) => ResumeSpec | null;
   accountIdForPath: (path: string) => string;
   accountLabelFor: (engine: AgentEngine, accountId: string) => string;
   /** The conversation's live launch profile (#663). Authoritative for cwd,
@@ -122,6 +123,7 @@ export function resolveAttachCommand(path: string, deps: AttachResolverDeps): At
        resuming on the latter silently reverts the operator's model choice. */
     model: profile?.model ?? target.entry.launchModel ?? target.entry.model,
     effort: profile?.effort ?? target.entry.effort,
+    serviceTier: profile?.serviceTier,
     allowSubagents: profile?.allowSubagents ?? deps.allowSubagentsForPath?.(target.entry.path),
     mcpServers: profile?.mcpServers ?? deps.mcpServersForPath?.(target.entry.path),
     cwd: effectiveCwd,
@@ -151,7 +153,7 @@ export interface LaunchAttachReceipt {
   cwd: string;
   accountId: string | null;
   key: { engine: AgentEngine; sessionId: string } | null;
-  launchProfile: { model: string | null; effort: string | null; fast: boolean | null; allowSubagents?: boolean; mcpServers?: readonly string[] };
+  launchProfile: { model: string | null; effort: string | null; fast: boolean | null; serviceTier?: string | null; allowSubagents?: boolean; mcpServers?: readonly string[] };
   transport: SpawnReceipt["transport"];
   state: SpawnReceipt["state"];
   purpose: SpawnReceipt["purpose"];
@@ -170,7 +172,7 @@ export interface LaunchAttachDeps {
     sessionId: string,
     cwd: string,
     home: string,
-    options?: { model?: string | null; effort?: string | null; fast?: boolean | null; allowSubagents?: boolean; mcpServers?: readonly string[]; hostTerminal?: boolean },
+    options?: { model?: string | null; effort?: string | null; fast?: boolean | null; serviceTier?: string | null; allowSubagents?: boolean; mcpServers?: readonly string[]; hostTerminal?: boolean },
   ) => ResumeSpec | null;
   homeForAccount: (engine: AgentEngine, accountId: string) => string | null;
   accountLabelFor: (engine: AgentEngine, accountId: string) => string;
@@ -202,6 +204,7 @@ export function resolveLaunchAttachCommand(deps: LaunchAttachDeps): AttachResolu
     model: receipt.launchProfile.model,
     effort: receipt.launchProfile.effort,
     fast: receipt.launchProfile.fast,
+    serviceTier: receipt.launchProfile.serviceTier,
     allowSubagents: receipt.launchProfile.allowSubagents,
     /* Re-apply the launch's recorded MCP allowlist (PR #610) so the resumed
        command enforces the same server scope the launch ran under. */

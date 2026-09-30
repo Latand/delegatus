@@ -272,7 +272,7 @@ export function RuntimePill({
   /* The structured face follows what the conversation runs. A poll that brings
      a different runtime replaces the face unless the operator's own change is
      still in flight; an applied change stands until the runtime moves. */
-  const observedKey = `${file.model ?? ""}|${file.launchModel ?? ""}|${file.effort ?? ""}|${file.fast ?? ""}`;
+  const observedKey = `${file.model ?? ""}|${file.launchModel ?? ""}|${file.effort ?? ""}|${file.fast ?? ""}|${file.serviceTier ?? ""}`;
   const seenObserved = useRef({ key: observedKey, path: file.path });
   /* eslint-disable react-hooks/set-state-in-effect -- syncing the face to the
      runtime the poll observed, the same external-store sync as the load above. */
@@ -647,7 +647,13 @@ export function RuntimePill({
 
   const faceModelShort = modelShortLabel(engine, face.model);
   const faceTier = tierWord(t, face.effort, isMobile);
-  const faceLabel = `${t("composer.runtimePill")} — ${modelLabel(engine, face.model)}, ${faceTier}`;
+  const serviceTier = engine === "codex" && file.serviceTier && face.fast === !["default", "standard"].includes(file.serviceTier) ? file.serviceTier : null;
+  const namedTier = serviceTier ? serviceTier.charAt(0).toUpperCase() + serviceTier.slice(1) : null;
+  const speedDetail = serviceTier === "priority" ? t("composer.speedFastTier")
+    : serviceTier && !["default", "standard"].includes(serviceTier) ? t("composer.speedTierNamed", { tier: namedTier! })
+    : face.fast ? t("composer.speedFastTier") : t("composer.speedStandard");
+  const tierSuffix = namedTier && !["default", "standard"].includes(serviceTier!) ? ` · ${namedTier}` : "";
+  const faceLabel = `${t("composer.runtimePill")} — ${modelLabel(engine, face.model)}, ${faceTier}${tierSuffix}`;
   /* At the account's limit the chip stops offering a reasoning tier the next
      message cannot use and names the wall instead (mobile v2 §4.2, §4.4); its
      sheet leads with the accounts that can take the message. */
@@ -708,7 +714,7 @@ export function RuntimePill({
           <>
             <Zap className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden />
             <span className="max-w-[52vw] truncate md:max-w-[16rem]">
-              {faceModelShort} · {faceTier}
+              {faceModelShort} · {faceTier}{tierSuffix}
             </span>
             {/* A pick waiting for the next message marks the pill it was made on, so the answer to «did it
                 take» stays where the tap was once the popover closes (#1846 critique). */}
@@ -744,6 +750,7 @@ export function RuntimePill({
           face={face}
           efforts={efforts}
           speedShown={speedShown}
+          speedDetail={speedDetail}
           panel={panel}
           setPanel={setPanel}
           effortLocked={effortLocked}
@@ -769,6 +776,7 @@ export function RuntimePill({
           face={face}
           efforts={efforts}
           speedShown={speedShown}
+          speedDetail={speedDetail}
           effortLocked={effortLocked}
           modelLocked={modelLocked}
           speedLocked={speedLocked}
@@ -886,6 +894,7 @@ interface PanelProps {
   face: RuntimeDraft;
   efforts: readonly string[];
   speedShown: boolean;
+  speedDetail: string;
   effortLocked: boolean;
   modelLocked: boolean;
   speedLocked: boolean;
@@ -897,7 +906,7 @@ interface PanelProps {
 }
 
 function RuntimePopover({
-  t, engine, modelOptions, account, nameOf, accountChoice, face, efforts, speedShown, panel, setPanel,
+  t, engine, modelOptions, account, nameOf, accountChoice, face, efforts, speedShown, speedDetail, panel, setPanel,
   effortLocked, modelLocked, speedLocked, lockReason,
   onSelectEffort, onSelectModel, onSelectFast, onClose, at, owner,
 }: PanelProps & {
@@ -915,9 +924,9 @@ function RuntimePopover({
 
   // Rows for the current panel (document order), each with an enabled flag.
   const rows = useMemo(() => buildRows({
-    t, engine, modelOptions, face, efforts, speedShown, panel, effortLocked, modelLocked, speedLocked, lockReason,
+    t, engine, modelOptions, face, efforts, speedShown, speedDetail, panel, effortLocked, modelLocked, speedLocked, lockReason,
     onSelectEffort, onSelectModel, onSelectFast, onOpenPanel: setPanel, accountChoice, accountOptions, nameOf,
-  }), [t, engine, face, efforts, speedShown, panel, effortLocked, modelLocked, speedLocked, lockReason,
+  }), [t, engine, face, efforts, speedShown, speedDetail, panel, effortLocked, modelLocked, speedLocked, lockReason,
     onSelectEffort, onSelectModel, onSelectFast, setPanel, accountChoice, accountOptions, nameOf, modelOptions]);
 
   const focusableIndexes = useMemo(
@@ -1076,7 +1085,7 @@ function EngineAccountsFeed({ engine, onAccounts }: {
 }
 
 function buildRows({
-  t, engine, modelOptions, face, efforts, speedShown, panel, effortLocked, modelLocked, speedLocked, lockReason,
+  t, engine, modelOptions, face, efforts, speedShown, speedDetail, panel, effortLocked, modelLocked, speedLocked, lockReason,
   onSelectEffort, onSelectModel, onSelectFast, onOpenPanel, accountChoice, accountOptions, nameOf,
 }: Omit<PanelProps, "onClose" | "account"> & {
   panel: Panel;
@@ -1162,7 +1171,7 @@ function buildRows({
   if (speedShown) {
     submenus.push({
       key: "speed", kind: "submenu", label: t("composer.speedGroup"),
-      detail: face.fast ? t("composer.speedFastTier") : t("composer.speedStandard"),
+      detail: speedDetail,
       checked: false, enabled: true, submenu: "speed", role: "menuitem", activate: () => onOpenPanel("speed"),
     });
   }
@@ -1242,7 +1251,7 @@ function MenuRow({
 // ---------------------------------------------------------------------------
 
 function RuntimeSheet({
-  t, engine, modelOptions, account, nameOf, accountChoice, owner, face, efforts, speedShown,
+  t, engine, modelOptions, account, nameOf, accountChoice, owner, face, efforts, speedShown, speedDetail,
   effortLocked, modelLocked, speedLocked, lockReason, limit = null,
   onSelectEffort, onSelectModel, onSelectFast, onClose,
 }: PanelProps & { limit?: RateLimitState | null; owner: Document }) {
@@ -1344,7 +1353,7 @@ function RuntimeSheet({
         {speedShown ? (
           <SheetSection label={t("composer.speedGroup")}>
             <SheetRow label={t("composer.speedStandard")} checked={!face.fast} disabled={speedLocked} reason={speedLocked ? lockReason : undefined} onSelect={() => onSelectFast(false)} />
-            <SheetRow label={t("composer.speedFastTier")} checked={face.fast} disabled={speedLocked} reason={speedLocked ? lockReason : undefined} onSelect={() => onSelectFast(true)} />
+            <SheetRow label={speedDetail === t("composer.speedStandard") ? t("composer.speedFastTier") : speedDetail} checked={face.fast} disabled={speedLocked} reason={speedLocked ? lockReason : undefined} onSelect={() => onSelectFast(true)} />
           </SheetSection>
         ) : null}
       </div>

@@ -171,6 +171,8 @@ test("update-draft re-reads the binding when a draft moves to another project", 
   const created = await createPipelineFromRequest(draft(RESERVED), portsAcross(), {
     allowOperatorDraftWithoutLineage: true,
   });
+  // A legacy draft has no delivery ownership; current claimed lanes cannot move repositories.
+  if (created.pipeline) { delete created.pipeline.delivery; savePipelines([created.pipeline]); }
   const id = created.pipeline?.id;
   if (!id) throw new Error(`draft was not created: ${created.error}`);
 
@@ -192,6 +194,8 @@ test("update-draft moves a draft whose pin the destination project allows", asyn
   const created = await createPipelineFromRequest(draft(RESERVED), portsAcross(), {
     allowOperatorDraftWithoutLineage: true,
   });
+  // A legacy draft has no delivery ownership; current claimed lanes cannot move repositories.
+  if (created.pipeline) { delete created.pipeline.delivery; savePipelines([created.pipeline]); }
   const id = created.pipeline?.id;
   if (!id) throw new Error(`draft was not created: ${created.error}`);
 
@@ -338,4 +342,40 @@ test("a damaged binding record answers create and override with the same conflic
   } finally {
     clearAccountFixture(BINDINGS_SOURCE);
   }
+});
+
+test("stage tier narrows selection and the durable launch profile; role fallback is explicit", async () => {
+  const { createManagedCodexAccount, listCodexAccounts } = await import("@/lib/accounts/codex");
+  const { agentRegistry } = await import("@/lib/agent/registry");
+  const accountA = createManagedCodexAccount("account A");
+  const accountB = createManagedCodexAccount("account B");
+  for (const account of [accountA, accountB]) {
+    fs.writeFileSync(path.join(account.home, "auth.json"), "{}");
+    fs.writeFileSync(path.join(account.home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6-astra", service_tiers: [{ id: "priority" }, ...(account.id === accountB.id ? [{ id: "ultrafast" }] : [])] }] }));
+  }
+  const input = { ...spawnInput(null), role: { ...spawnInput(null).role, engine: "codex" as const, model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast", serviceTierSource: "explicit" as "explicit" | "role-default" }, clientAttemptId: "tier-stage-required" };
+  const reserved: string[] = [];
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => ({ kind: "available", account: accountManager.resolveSpawn("codex", accountB.id) }));
+  try {
+    // Stop at the missing sandbox runtime after reservation; no host is started.
+    await expect(defaultPipelinePorts().spawnAgent(input, reservation => { reserved.push(reservation.launchId); })).rejects.toThrow("runtime host");
+    expect(resolve.mock.calls[0]?.[1]?.unavailableIds).toEqual(listCodexAccounts().filter(account => account.id !== accountB.id).map(account => account.id));
+    expect(agentRegistry().readOnlySnapshot().receipts[reserved[0]!]!.launchProfile).toMatchObject({ serviceTier: "ultrafast", fast: true });
+    const count = reserved.length;
+    await expect(defaultPipelinePorts().spawnAgent({ ...input, requestedAccountId: accountA.id }, reservation => { reserved.push(reservation.launchId); })).rejects.toThrow("offered: priority");
+    expect(reserved).toHaveLength(count);
+    // Exhausted preferred pool retries the same project without the tier exclusion.
+    resolve.mockImplementationOnce(() => ({ kind: "unavailable", allowedAccountIds: [accountA.id, accountB.id] }))
+      .mockImplementation(() => ({ kind: "available", account: accountManager.resolveSpawn("codex", accountA.id) }));
+    await expect(defaultPipelinePorts().spawnAgent({ ...input, role: { ...input.role, serviceTierSource: "role-default" }, clientAttemptId: "tier-stage-preferred" }, reservation => { reserved.push(reservation.launchId); })).rejects.toThrow("runtime host");
+    expect(agentRegistry().readOnlySnapshot().receipts[reserved.at(-1)!]!.launchProfile.serviceTier).toBeNull();
+    expect(resolve.mock.calls.at(-1)?.[1]?.unavailableIds).toEqual([]);
+    const ports = portsAllowing(null);
+    ports.roleLookup = () => ({ engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast", promptScaffold: "Reviewer guidance" });
+    const created = await createPipelineFromRequest({ ...draft(), stages: [{ ...draft().stages[0]!, serviceTier: null }] }, ports, { allowOperatorDraftWithoutLineage: true });
+    expect(created.pipeline?.stages[0]).toMatchObject({ serviceTier: null, effectiveRole: { serviceTier: "ultrafast", serviceTierSource: "role-default" } });
+    const priority = await patchPipeline(created.pipeline!.id, { action: "override-stage", stageId: "build", serviceTier: "priority" }, ports);
+    expect(priority.error).toBeUndefined();
+    expect(priority.pipeline?.stages[0]).toMatchObject({ serviceTier: "priority", effectiveRole: { serviceTier: "priority", serviceTierSource: "explicit" } });
+  } finally { resolve.mockRestore(); }
 });

@@ -17,6 +17,7 @@ export type RoleConfig = {
   engine: RoleEngine;
   model: string;
   effort: string;
+  serviceTier?: string;
 };
 
 type RoleParameterBase = {
@@ -114,8 +115,9 @@ export type RoleOverridesFile = {
   /** 1 without variants; 2 with only the variants an older build knew; 3 once
       a newer variant (builder trivial/docs, reviewer trivial) is stored, and 4
       once a fix row (builder frontend-fixes/docs-fixes) is, so an older build
-      degrades to its defaults instead of misreading the row. */
-  schemaVersion: 1 | 2 | 3 | 4;
+      refuses unsupported rows instead of misreading them. Schema 5 carries a
+      Codex service tier on a row or variant. */
+  schemaVersion: 1 | 2 | 3 | 4 | 5;
   overrides: Partial<Record<RoleId, RoleOverride>>;
   retirements?: Record<string, RoleMappingRetirementRecord>;
 };

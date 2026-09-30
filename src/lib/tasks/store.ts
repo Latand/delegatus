@@ -548,11 +548,14 @@ function taskSyncWrite(filePath: string): { write: TaskSyncWrite; companion: Non
   const companion = tombstoneCollection(legacyDatabasePath(filePath), true)!;
   const puts = new Map<string, TombstoneRow>();
   const removed = new Set<string>();
+  const preservedStamps = new Set<string>();
   const write: TaskSyncWrite = {
     linked: context.all, self: context.self, now: Date.now,
     read: (key) => puts.get(key) ?? (removed.has(key) ? null : companion.get(key)),
     put: (row) => { const key = tombstoneRowKey(row); puts.set(key, row); removed.delete(key); },
     remove: (key) => { puts.delete(key); removed.add(key); },
+    preserveStamp: (id, group) => { preservedStamps.add(`${id}:${group}`); },
+    isStampPreserved: (id, group) => preservedStamps.has(`${id}:${group}`),
   };
   return { write, companion, pending: () => ({ records: [...puts.values()], deleteKeys: [...removed] }) };
 }

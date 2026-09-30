@@ -58,6 +58,7 @@ export interface LaunchProfile {
   model: string | null;
   effort: string | null;
   fast: boolean | null;
+  serviceTier?: string | null;
   permissionMode: string | null;
   /** Legacy launches use this as their engine restriction. Pipeline launches
       with an explicit sandbox use it as durable repository-policy metadata. */

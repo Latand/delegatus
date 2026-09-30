@@ -704,6 +704,39 @@ test("the mapping shows the small-change and docs rows, a reset row with Restore
   }
 });
 
+test("the mapping effort edit carries a stored Codex tier for role and variant rows", async () => {
+  const { mergeRoleDefinitions } = await import("@/lib/roles/store");
+  const config = { engine: "codex" as const, model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast" };
+  const roles = mergeRoleDefinitions({ reviewer: { config, variants: { trivial: config } } }).map((role) => ({ ...role, promptPreview: role.promptScaffold }));
+  rolesBody = { schemaVersion: 5, roles };
+  requests.length = 0;
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => root.render(<OnboardingDialog mode="mapping" marker={null} onClose={() => {}} />));
+    await until(() => Boolean(host.querySelector("[data-mapping-row]")));
+    for (const row of ["reviewer", "reviewer:trivial"]) {
+      requests.length = 0;
+      const effort = host.querySelectorAll(`[data-mapping-row='${row}'] select`)[1] as HTMLSelectElement;
+      flushSync(() => {
+        effort.value = "xhigh";
+        effort.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await until(() => requests.some((request) => request.method === "PUT"));
+      const edited = { ...config, effort: "xhigh" };
+      expect(requests.find((request) => request.method === "PUT")?.body).toEqual({
+        overrides: { reviewer: row === "reviewer" ? { config: edited } : { variants: { trivial: edited } } },
+      });
+      await until(() => !host.querySelector("[aria-busy='true']"));
+    }
+  } finally {
+    flushSync(() => root.unmount());
+    host.remove();
+    rolesBody = { schemaVersion: 2, roles: [] };
+  }
+});
+
 /* docs/design/agent-prompt-contract.md §2.10 I: a role whose prompt text this
    install replaced says so, and one action puts the shipped text back. */
 test("the mapping marks a replaced prompt and restores the shipped one", async () => {

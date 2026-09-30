@@ -59,7 +59,7 @@ export function defaults(file: FileEntry): RuntimeDraft {
   const observed = observedModelId(file);
   const model = models.some((item) => item.id === observed) || (engine === "copilot" && !!observed && /^[a-z0-9][a-z0-9.-]{0,127}$/.test(observed)) ? observed! : models[0]!.id;
   const efforts = effortScale(engine, model) ?? [];
-  return { model, effort: efforts.includes(file.effort ?? "") ? file.effort! : efforts[0]!, fast: file.fast ?? false };
+  return { model, effort: efforts.includes(file.effort ?? "") ? file.effort! : efforts[0]!, fast: file.serviceTier ? !["default", "standard"].includes(file.serviceTier) : file.fast ?? false };
 }
 
 /** The live-tmux persisted draft (full), or the conversation's defaults. */
@@ -208,7 +208,7 @@ export function sendRuntimeFrom(file: FileEntry): RuntimeProfile | undefined {
   const runtime: RuntimeProfile = {};
   if (profile.model) runtime.model = profile.model;
   if (profile.effort) runtime.effort = profile.effort;
-  if (engine === "codex" && typeof profile.fast === "boolean") runtime.fast = profile.fast;
+  if (engine === "codex" && typeof profile.fast === "boolean" && profile.fast !== (file.fast ?? null)) runtime.fast = profile.fast;
   return Object.keys(runtime).length ? runtime : undefined;
 }
 

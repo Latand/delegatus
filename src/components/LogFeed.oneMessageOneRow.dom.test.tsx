@@ -100,7 +100,7 @@ import { LogFeed } from "./LogFeed";
 import { setLogFeedDependenciesForTests } from "./logFeedDependencies";
 import { TmuxComposer } from "./TmuxComposer";
 import {
-  enqueueOutbox, outboxReceiptPatch, readOutbox, resetOutboxForTests, updateOutbox,
+  enqueueContextOutbox, enqueueOutbox, outboxReceiptPatch, readOutbox, resetOutboxForTests, updateOutbox,
 } from "./conversation/outbox";
 import { resetRenderedMessageRowsForTests } from "./conversation/renderedRows";
 import { resetMessageRowRecoveryForTests } from "./conversation/rowRecovery";
@@ -1218,6 +1218,127 @@ test("a send not yet admitted is not hidden by an equal-text record that names a
   expect(own!.bubble).toBe(before.bubble);
   expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(2);
   expect(readOutbox(CARD)[0]!.retiredEchoId).toBeUndefined();
+  await act(async () => root.unmount());
+  host.remove();
+});
+
+const CONTEXT_TEXT = "The schema lives in db/schema.sql and the seed data in db/seed.sql.";
+const contextRow = (id: string, extra: Record<string, unknown> = {}) =>
+  enqueueContextOutbox(CARD, { id, text: CONTEXT_TEXT, images: 0, at: Date.now(), contextTurn: "running", ...extra });
+
+test("a context row keeps its chip, and its record lands in it as one row", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root: Root = createRoot(host);
+  const submittedAt = Date.now();
+  contextRow("key-context");
+  await settle(() => root.render(surface()));
+
+  const first = reading(host);
+  expect(first.rows).toBe(1);
+  expect(first.phase).toBe("pending");
+  expect(first.row!.getAttribute("data-message-intent")).toBe("context");
+  expect(host.querySelectorAll("[data-message-context-chip]")).toHaveLength(1);
+
+  /* The answer names the operation; the receipt stream settles it. */
+  const entry = () => readOutbox(CARD).find((candidate) => candidate.id === "key-context")!;
+  await settle(() => updateOutbox(CARD, "key-context", { operationId: "operation-context" }));
+  const patch = outboxReceiptPatch(entry(), "delivered", {
+    operationId: "operation-context", idempotencyKey: "key-context", conversationId: CARD,
+    kind: "inject", status: "delivered", at: new Date(submittedAt + 1_000).toISOString(),
+    admittedAt: new Date(submittedAt).toISOString(), revision: 2,
+  } as RuntimeReceipt, submittedAt + 2_000);
+  if (patch) await settle(() => updateOutbox(CARD, "key-context", patch));
+
+  await settle(() => {
+    lines = [codexStructuredUserLine(new Date(submittedAt + 3_000).toISOString(), CONTEXT_TEXT, deliveryDedupToken("operation-context"))];
+  });
+  await settle(() => root.render(surface()));
+
+  const adopted = reading(host);
+  expect(adopted.rows).toBe(1);
+  expect(adopted.bubbles).toBe(1);
+  expect(adopted.row).toBe(first.row);
+  expect(adopted.phase).toBe("confirmed");
+  expect(host.querySelectorAll("[data-message-context-chip]")).toHaveLength(1);
+  expect(adopted.row!.getAttribute("data-message-intent")).toBe("context");
+  await act(async () => root.unmount());
+  host.remove();
+});
+
+test("a record that names an operation the row does not carry yet is withheld until the registry answers", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root: Root = createRoot(host);
+  const submittedAt = Date.now();
+  const early = deliveryDedupToken("operation-early");
+  /* The registry's read stays open: the row was never told its operation, so
+     the record cannot be named by anything the browser holds. */
+  let answerProvenance: (() => void) | null = null;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input).startsWith("/api/log/provenance")) {
+      await new Promise<void>((resolve) => { answerProvenance = resolve; });
+      return Response.json({ messages: {}, occurrences: [], submissions: { [early]: "key-early" } });
+    }
+    if (String(input) === "/api/tmux/targets") return Response.json({ targets: {} });
+    return new Response("{}", { status: 404 });
+  }) as typeof fetch;
+  contextRow("key-early");
+  await settle(() => {
+    lines = [codexStructuredUserLine(new Date(submittedAt + 500).toISOString(), CONTEXT_TEXT, early)];
+  });
+  await settle(() => root.render(surface()));
+
+  const held = reading(host);
+  expect(held.rows).toBe(1);
+  expect(held.bubbles).toBe(1);
+  expect(held.phase).toBe("pending");
+
+  await settle(() => answerProvenance?.());
+  await settle(() => root.render(surface()));
+  const bound = reading(host);
+  expect(bound.rows).toBe(1);
+  expect(bound.bubbles).toBe(1);
+  expect(bound.row).toBe(held.row);
+  expect(bound.phase).toBe("confirmed");
+  expect(host.querySelectorAll("[data-message-context-chip]")).toHaveLength(1);
+  await act(async () => root.unmount());
+  host.remove();
+});
+
+test("a failed context row offers Edit and no Retry, and Edit puts the words back in the draft", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root: Root = createRoot(host);
+  contextRow("key-failed");
+  await settle(() => updateOutbox(CARD, "key-failed", { state: "failed", error: "unsupported injection: the host does not support history injection" }));
+  await settle(() => root.render(surface()));
+
+  expect(reading(host).phase).toBe("failed");
+  const edit = host.querySelector<HTMLButtonElement>("[data-outbox-edit]");
+  expect(edit).not.toBeNull();
+  expect(host.querySelector("[data-outbox-retry]")).toBeNull();
+  expect(host.textContent).toContain(translate("en", "receipt.human.injectUnsupported"));
+
+  await settle(() => edit!.click());
+  expect(readOutbox(CARD).some((candidate) => candidate.id === "key-failed")).toBe(false);
+  expect(host.querySelector("textarea")!.value).toContain(CONTEXT_TEXT);
+  expect(host.querySelectorAll("[data-message-row]")).toHaveLength(0);
+  await act(async () => root.unmount());
+  host.remove();
+});
+
+test("an unconfirmed context row offers only Check status", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root: Root = createRoot(host);
+  contextRow("key-unsure");
+  await settle(() => updateOutbox(CARD, "key-unsure", { deliveryUncertain: true }));
+  await settle(() => root.render(surface()));
+
+  expect(host.querySelector("[data-outbox-edit]")).toBeNull();
+  expect(host.querySelector("[data-outbox-retry]")).toBeNull();
+  expect(host.textContent).toContain(translate("en", "outbox.context.unconfirmed"));
   await act(async () => root.unmount());
   host.remove();
 });

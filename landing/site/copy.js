@@ -82,6 +82,7 @@
       "reach.tab3": "Reports",
       "reach.phoneAlt": "Delegatus on a phone with invented data: the harbor-api board, with the task that needs a decision first.",
       "foot.does": "The prompt installs Delegatus, connects its MCP server to your agent and starts it on this machine. Then you pick a project and create its orchestrator.",
+      "foot.analytics": "This site counts visits with Cloudflare Web Analytics (no cookies), clicks on its copy buttons, demo starts and full-screen opens.",
       "foot.needs": "macOS or Linux (Windows through WSL 2) · Bun 1.4+ · Claude Code or Codex",
       "meta.title": "Delegatus: delegate everything",
       "meta.description":
@@ -168,6 +169,7 @@
       "nav.docsShort": "Довідка",
       "nav.lang": "Мова",
       "hero.title": "Делегуй усе.",
+      "foot.analytics": "Сайт рахує відвідування через Cloudflare Web Analytics (без cookies), натискання кнопок копіювання, запуски демо та відкриття на весь екран.",
       "hero.sub":
         "Скажи одному агенту, що треба зробити. Він запускає розробників і рев’юерів, перевіряє роботу і звітує.",
       "hero.replay": "Ще раз",

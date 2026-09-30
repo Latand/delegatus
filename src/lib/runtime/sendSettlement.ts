@@ -123,7 +123,7 @@ export const SEND_UNSETTLEABLE_REASON =
  * take longer to become an answer. It is generous enough that an ordinary
  * drain, host recovery or reconnection finishes well inside it.
  */
-const SEND_SETTLEMENT_WINDOW_MS = 10 * 60_000;
+export const SEND_SETTLEMENT_WINDOW_MS = 10 * 60_000;
 
 /**
  * The ceiling on the in-turn exemption below.
@@ -553,6 +553,18 @@ function pastSettlementDeadline(
 }
 
 /**
+ * Whether an accepted send is past the deadline at which a read of it must end
+ * it (#1866). Read-only: the original-key lookup asks this before it lets the
+ * settling read {@link resolveSendReceipt} answer in place of its projection.
+ */
+export function sendSettlementDue(operationId: string, ports: SendSettlementPorts = {}): boolean {
+  const registry = ports.registry ?? agentRegistry();
+  const file = registry.readOnlySnapshot();
+  const subject = settlementSubject(retryAttemptOwner(file, operationId), deliveryForOperation(file, operationId));
+  return subject !== null && pastSettlementDeadline(registry, file, subject, ports);
+}
+
+/**
  * What became of one accepted send, settled if it is past its deadline.
  *
  * The registry projection can lag the journal by a whole drain — the queue
@@ -692,8 +704,9 @@ function settleProjection(
  * it accepts a binding somebody else established, answers from the registry's
  * own records and the journal's CURRENT row, and can neither enqueue, retry,
  * withdraw, settle, fence nor spawn. Nothing here writes: a reservation that is
- * past its settlement deadline is reported exactly as it rests, because a
- * lookup is an observation and `message_receipt` is where a send is ENDED.
+ * past its settlement deadline is reported exactly as it rests. The MCP
+ * original-key lookup then ends such a send through {@link resolveSendReceipt},
+ * the same settling read `message_receipt` makes (#1866).
  *
  * The answer is closed. `found` names exactly one operation; `absent` means
  * the records hold nothing under that key — an observation, never proof that

@@ -30,7 +30,7 @@ Object.assign(globalThis, {
 });
 
 const { SelfUpdateView } = await import("./SelfUpdateView");
-const { actionError } = await import("./selfUpdateCopy");
+const { actionError, day } = await import("./selfUpdateCopy");
 type ActionError = import("./selfUpdateCopy").ActionError;
 const { setLocale } = await import("@/lib/i18n");
 
@@ -178,6 +178,23 @@ describe("automatic updates", () => {
     const uk = render(s);
     expect(text(section(uk, "auto"))).toContain("Автооновлення");
     expect(text(section(uk, "auto"))).toContain("Працюють ходи агентів: 2");
+  });
+
+  test("a switch of automatic updates is listed with who made it and when", () => {
+    const s = snapshot();
+    s.auto = { availability: "available", enabled: true, off: null, phase: "idle", target: null, green: null, blockers: null, waitingSince: null, longWait: false,
+      changedAt: AT, changedBy: { kind: "seat", conversationId: "conversation_seat", via: "mcp" } };
+    s.history = [
+      { at: AT, by: "seat", kind: "auto-on", target: "", from: null, outcome: "done", writer: { kind: "seat", conversationId: "conversation_seat", via: "mcp" } },
+      { at: AT, by: "operator", kind: "auto-off", target: "", from: null, outcome: "done", writer: { kind: "operator", conversationId: null, via: "dialog" } },
+    ];
+    const rows = [...section(render(s), "auto")!.querySelectorAll("li")].map(text);
+    expect(rows).toEqual([`Automatic updates on · by the orchestrator · ${day(AT, "en")} 12:04`, `Automatic updates off · by you · ${day(AT, "en")} 12:04`]);
+    flushSync(() => root!.unmount());
+    host?.remove();
+    setLocale("uk");
+    const uk = [...section(render(s), "auto")!.querySelectorAll("li")].map(text);
+    expect(uk).toEqual([`Автооновлення увімкнено · оркестратор · ${day(AT, "uk")} 12:04`, `Автооновлення вимкнено · вручну · ${day(AT, "uk")} 12:04`]);
   });
 
   test.each([

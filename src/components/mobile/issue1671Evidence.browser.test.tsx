@@ -5198,3 +5198,237 @@ browserTest("narrow card: a finished lane on the task screen stands its stages o
   fs.writeFileSync(path.join(evidence, `phone-${stamp}.json`), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
   expect(failures).toEqual([]);
 }, 300_000);
+
+/*
+ * Composer context mode (docs/design/composer-context-mode.md §9.2): the Codex
+ * composer's Context toggle, its auto switching with the turn, and the context
+ * row, on the real Viewer at 390 and 1440 in en and uk.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "composer context mode"
+ *
+ * Readings go to `evidence/composer-context-mode/readings.json`; frames to
+ * `.artifacts/composer-context-mode/`, which is not committed.
+ */
+type ContextEvidence = {
+  contextTurn: string;
+  injects: Array<{ text?: string }>;
+  sends: unknown[];
+  injectsEchoed: number;
+  setContextTurn(turn: "idle" | "running"): Promise<void>;
+  publishContextReceipt(status: string, reason?: string): Promise<void>;
+  echoInjects(): void;
+};
+const contextHook = (page: Page, call: "idle" | "running") => page.evaluate((turn) => (window as unknown as { evidence: ContextEvidence }).evidence.setContextTurn(turn), call);
+const composerMode = (page: Page) => page.evaluate(() => document.querySelector("[data-composer-mode]")?.getAttribute("data-composer-mode") ?? "normal");
+const toggleReading = (page: Page) => page.evaluate(() => {
+  const button = document.querySelector<HTMLElement>("[data-composer-context-toggle]");
+  const box = button?.getBoundingClientRect();
+  return button && box ? {
+    pressed: button.getAttribute("aria-pressed"), disabled: button.getAttribute("aria-disabled") === "true",
+    width: Math.round(box.width * 10) / 10, height: Math.round(box.height * 10) / 10,
+  } : null;
+});
+const waitForMode = async (page: Page, want: string, timeoutMs: number) => {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (await composerMode(page) === want) return Date.now() - started;
+    await page.waitForTimeout(25);
+  }
+  throw new Error(`the composer never reached mode ${want} within ${timeoutMs} ms`);
+};
+
+browserTest("composer context mode: the toggle, auto switching and the context row at 390 and 1440 in en and uk", async () => {
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const out = path.resolve(".artifacts/composer-context-mode");
+  fs.mkdirSync(out, { recursive: true });
+  const readings: Array<Record<string, unknown>> = [];
+  const combos = [
+    { width: 390, locale: "en", scheme: "dark" }, { width: 390, locale: "uk", scheme: "dark" }, { width: 390, locale: "en", scheme: "light" },
+    { width: 1440, locale: "en", scheme: "dark" }, { width: 1440, locale: "uk", scheme: "dark" },
+  ] as const;
+  try {
+    for (const { width, locale, scheme } of combos) {
+      const phone = width === 390;
+      const full = locale === "en" && scheme === "dark";
+      const tag = `${width}-${locale}-${scheme}`;
+      const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 900 }, colorScheme: scheme, ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+      try {
+        await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+        const page = await context.newPage();
+        const reading: Record<string, unknown> = { width, locale, scheme };
+        const text = (key: string) => translate(locale, key as never);
+
+        await page.goto(`${base}/?context-mode=1#c=conversation_running`);
+        const input = page.locator("textarea:visible").first();
+        await page.waitForSelector("[data-composer-context-toggle]");
+        await page.waitForTimeout(600);
+
+        /* 1: idle, off; the phone's target is 44 x 44. */
+        reading.idle = await toggleReading(page);
+        expect((reading.idle as { pressed: string }).pressed).toBe("false");
+        if (phone) expect(reading.idle).toMatchObject({ width: 44, height: 44 });
+        await page.screenshot({ path: path.join(out, `${tag}-1-idle.png`) });
+
+        /* 2: the turn starts; off at +300 ms, on by +700 ms, dashed box. */
+        const started = Date.now();
+        await contextHook(page, "running");
+        await page.waitForTimeout(Math.max(0, 300 - (Date.now() - started)));
+        expect(await composerMode(page)).toBe("normal");
+        await page.waitForTimeout(Math.max(0, 700 - (Date.now() - started)));
+        const onAt = Date.now() - started + await waitForMode(page, "context", 1_000);
+        reading.enterMs = onAt;
+        reading.running = { toggle: await toggleReading(page), borderStyle: await page.evaluate(() => getComputedStyle(document.querySelector("[data-composer-mode]")!).borderStyle) };
+        expect((reading.running as { borderStyle: string }).borderStyle).toBe("dashed");
+        expect((reading.running as { toggle: { pressed: string } }).toggle.pressed).toBe("true");
+        await page.screenshot({ path: path.join(out, `${tag}-2-running.png`) });
+
+        if (full) {
+          /* 3: a one-second idle flicker keeps the mode. */
+          await contextHook(page, "idle");
+          await page.waitForTimeout(1_000);
+          expect(await composerMode(page)).toBe("context");
+          await contextHook(page, "running");
+          await page.waitForTimeout(600);
+          expect(await composerMode(page)).toBe("context");
+          reading.flickerKeptContext = true;
+
+          /* 4: idle for real: still on at +2000 ms, off by +3000 ms. */
+          const idleAt = Date.now();
+          await contextHook(page, "idle");
+          await page.waitForTimeout(2_000 - (Date.now() - idleAt));
+          expect(await composerMode(page)).toBe("context");
+          reading.exitMs = Date.now() - idleAt + await waitForMode(page, "normal", 1_500);
+          expect(reading.exitMs as number).toBeLessThanOrEqual(3_100);
+
+          /* 5: a key is down when the turn starts; the switch waits out the typing quiet. */
+          await input.click();
+          await page.keyboard.press("a");
+          const keyAt = Date.now();
+          await contextHook(page, "running");
+          await page.waitForTimeout(1_000);
+          expect(await composerMode(page)).toBe("normal");
+          await waitForMode(page, "context", 2_000);
+          reading.typingGuardMs = Date.now() - keyAt;
+          expect(reading.typingGuardMs as number).toBeGreaterThanOrEqual(1_450);
+          await input.fill("");
+        }
+
+        /* 6: Enter in context mode files one context row within a frame and posts to inject only. */
+        const line = full ? "Add the release note to the plan." : `Add the ${locale} note to the plan.`;
+        await input.fill(line);
+        await input.press("Enter");
+        await page.waitForSelector('[data-message-intent="context"][data-outbox-state="delivering"]', { timeout: 500 });
+        const posted = await page.evaluate(() => {
+          const hook = (window as unknown as { evidence: ContextEvidence }).evidence;
+          return { injects: hook.injects.map((body) => body.text), sends: hook.sends.length };
+        });
+        expect(posted.injects).toEqual([line]);
+        expect(posted.sends).toBe(0);
+        reading.enter = { ...posted, chip: await page.locator("[data-message-context-chip]").first().innerText() };
+        await page.screenshot({ path: path.join(out, `${tag}-6-row.png`) });
+
+        /* 7: the record lands; one bubble carries the text, confirmed, still with the chip. */
+        await page.evaluate(() => (window as unknown as { evidence: ContextEvidence }).evidence.echoInjects());
+        await page.evaluate(() => (window as unknown as { evidence: ContextEvidence }).evidence.publishContextReceipt("delivered"));
+        await page.waitForSelector('[data-message-row="confirmed"]', { timeout: 10_000 });
+        await page.waitForTimeout(400);
+        reading.joined = await page.evaluate((needle) => ({
+          bubbles: [...document.querySelectorAll("[data-user-bubble]")].filter((element) => element.textContent?.includes(needle)).length,
+          confirmed: document.querySelectorAll('[data-message-row="confirmed"] [data-user-bubble]').length,
+          chips: document.querySelectorAll("[data-message-context-chip]").length,
+        }), line);
+        expect(reading.joined).toMatchObject({ bubbles: 1, chips: 1 });
+        await page.screenshot({ path: path.join(out, `${tag}-7-joined.png`) });
+
+        if (full) {
+          /* 8: a refused injection shows its reason and Edit, and no replay. */
+          await input.fill("Second note the host refuses.");
+          await input.press("Enter");
+          await page.waitForSelector('[data-outbox-state="delivering"]', { timeout: 500 });
+          await page.evaluate(() => (window as unknown as { evidence: ContextEvidence }).evidence.publishContextReceipt("failed", "unsupported-injection"));
+          await page.waitForSelector("[data-outbox-edit]", { timeout: 5_000 });
+          reading.failed = await page.evaluate(() => ({
+            edit: document.querySelectorAll("[data-outbox-edit]").length,
+            replay: document.querySelectorAll("[data-outbox-retry], [data-outbox-operation-retry]").length,
+            text: document.querySelector("[data-outbox-edit]")?.closest("[data-outbox-entry]")?.textContent ?? "",
+          }));
+          expect(reading.failed).toMatchObject({ edit: 1, replay: 0 });
+          expect((reading.failed as { text: string }).text.length).toBeGreaterThan(0);
+          await page.screenshot({ path: path.join(out, `${tag}-8-failed.png`) });
+
+          /* 9: an unknown fate offers Check status only. */
+          await page.locator("[data-outbox-edit]").click();
+          await input.fill("Third note whose answer is lost.");
+          await input.press("Enter");
+          await page.waitForFunction(() => (window as unknown as { evidence: ContextEvidence }).evidence.injects.length === 3, undefined, { timeout: 2_000 });
+          await page.evaluate(() => (window as unknown as { evidence: ContextEvidence }).evidence.publishContextReceipt("uncertain"));
+          await page.locator("[data-outbox-progress]").first().click();
+          await page.waitForSelector("[data-outbox-check]", { timeout: 5_000 });
+          reading.uncertain = await page.evaluate(() => ({
+            check: document.querySelectorAll("[data-outbox-check]").length,
+            edit: document.querySelectorAll("[data-outbox-edit]").length,
+            replay: document.querySelectorAll("[data-outbox-retry], [data-outbox-operation-retry]").length,
+          }));
+          expect(reading.uncertain).toMatchObject({ edit: 0, replay: 0 });
+          expect((reading.uncertain as { check: number }).check).toBeGreaterThan(0);
+          await page.screenshot({ path: path.join(out, `${tag}-9-uncertain.png`) });
+        }
+
+        /* 11: geometry with the mode on. */
+        reading.geometry = await page.evaluate(() => {
+          const unit = document.querySelector<HTMLElement>('[data-testid="composer-input-unit"]');
+          const all = [...(unit?.querySelectorAll<HTMLElement>("button, [role=button], select, a") ?? [])]
+            .map((element) => ({ element, box: element.getBoundingClientRect() })).filter(({ box }) => box.width > 0 && box.height > 0);
+          /* The voice-call button is 32 px on the phone before this change and is not part of it; it is recorded in
+             `untouched` and left out of the 44 px reading. */
+          const controls = all.filter(({ element }) => element.getAttribute("data-testid") !== "voice-call-button");
+          const untouched = all.filter(({ element }) => element.getAttribute("data-testid") === "voice-call-button").map(({ box }) => `voice-call-button ${Math.round(box.width)}x${Math.round(box.height)}`);
+          const pill = document.querySelector<HTMLElement>("[data-runtime-pill]")?.getBoundingClientRect() ?? null;
+          const chip = document.querySelector<HTMLElement>("[data-composer-context-toggle]")?.getBoundingClientRect() ?? null;
+          const overlaps = controls.some(({ box: a }, i) => controls.some(({ box: b }, j) => i < j
+            && a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5));
+          const row = document.querySelector<HTMLElement>("[data-composer-context-toggle]")?.parentElement?.closest<HTMLElement>("div") ?? null;
+          return {
+            pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+            toolsRow: row ? { scrollWidth: row.scrollWidth, clientWidth: row.clientWidth } : null,
+            smallest: Math.round(Math.min(...controls.map(({ box }) => Math.min(box.width, box.height)))),
+            untouched,
+            small: controls.filter(({ box }) => Math.min(box.width, box.height) < 44).map(({ element, box }) => `${element.tagName.toLowerCase()}[${[...element.attributes].filter((a) => a.name.startsWith("data-") || a.name === "aria-label").map((a) => `${a.name}=${a.value}`).join(",")}] ${Math.round(box.width)}x${Math.round(box.height)}`),
+            pillWidth: pill ? Math.round(pill.width) : null,
+            sameLine: pill && chip ? Math.abs((pill.top + pill.height / 2) - (chip.top + chip.height / 2)) < 12 : null,
+            overlaps,
+          };
+        });
+        const geometry = reading.geometry as { pageOverflow: boolean; toolsRow: { scrollWidth: number; clientWidth: number } | null; smallest: number; pillWidth: number | null; sameLine: boolean | null; overlaps: boolean };
+        expect(geometry.pageOverflow).toBe(false);
+        expect(geometry.overlaps).toBe(false);
+        if (geometry.toolsRow) expect(geometry.toolsRow.scrollWidth).toBeLessThanOrEqual(geometry.toolsRow.clientWidth);
+        if (phone) {
+          expect(geometry.smallest).toBeGreaterThanOrEqual(44);
+          if (geometry.pillWidth !== null) expect(geometry.pillWidth).toBeGreaterThanOrEqual(60);
+        } else if (geometry.sameLine !== null) expect(geometry.sameLine).toBe(true);
+        readings.push(reading);
+
+        /* 10: a host that has not advertised injection: a disabled toggle that says why, as text. */
+        const bare = await context.newPage();
+        await bare.goto(`${base}/?context-mode=noinject#c=conversation_running`);
+        await bare.waitForSelector("[data-composer-context-toggle]");
+        await bare.waitForTimeout(600);
+        const before = await toggleReading(bare);
+        await bare.locator("[data-composer-context-toggle]").click({ force: true });
+        const reason = text("inject.unsupported");
+        await bare.getByText(reason).first().waitFor({ state: "visible", timeout: 2_000 });
+        const after = await toggleReading(bare);
+        readings.push({ width, locale, scheme, noInject: { before, after, reasonVisible: true, reason } });
+        expect(before).toMatchObject({ disabled: true, pressed: "false" });
+        expect(after).toMatchObject({ disabled: true, pressed: "false" });
+        await bare.screenshot({ path: path.join(out, `${tag}-10-noinject.png`) });
+      } finally { await context.close(); }
+    }
+  } finally { await browser.close(); stop(); }
+  const evidenceDir = path.resolve("evidence/composer-context-mode");
+  fs.mkdirSync(evidenceDir, { recursive: true });
+  fs.writeFileSync(path.join(evidenceDir, "readings.json"), `${JSON.stringify({ readings }, null, 2)}\n`);
+}, 400_000);

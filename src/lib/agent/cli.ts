@@ -178,6 +178,7 @@ export interface FreshSpecOptions {
   /** Codex only: true → `service_tier=priority` ("Fast" in the TUI), false →
       `service_tier=standard`; unset leaves the user's config.toml default. */
   fast?: boolean | null;
+  serviceTier?: string | null;
   readOnly?: boolean;
   /** Claude only: override the CLI permission mode for a fresh launch. */
   permissionMode?: string | null;
@@ -239,6 +240,7 @@ export interface ResumeSpecOptions {
   effort?: string | null;
   /** Codex only: override the service tier when reopening a conversation. */
   fast?: boolean | null;
+  serviceTier?: string | null;
   /** Execution policy inherited from the generation being replaced. */
   readOnly?: boolean | null;
   permissionMode?: string | null;
@@ -434,7 +436,8 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
   for (const override of codexMcpRuntimeOverrides(home, cwd, mcpServers)) args.push("-c", override);
   if (options.model) args.push("-m", options.model);
   if (options.effort) args.push("-c", `model_reasoning_effort=${options.effort}`);
-  if (options.fast != null) args.push("-c", `service_tier=${options.fast ? "priority" : "standard"}`);
+  if (options.serviceTier) args.push("-c", `service_tier=${options.serviceTier === "standard" ? "default" : options.serviceTier}`);
+  else if (options.fast != null) args.push("-c", `service_tier=${options.fast ? "priority" : "standard"}`);
   if (options.readOnly) args.push("--sandbox", "read-only");
   if (!options.allowSubagents) args.push("--disable", "multi_agent");
   const command = args.map(shellQuote).join(" ");
@@ -447,7 +450,8 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
       cwd,
       model: options.model ?? null,
       effort: options.effort ?? null,
-      fast: options.fast ?? null,
+      fast: options.serviceTier ? !["default", "standard"].includes(options.serviceTier) : options.fast ?? null,
+      serviceTier: options.serviceTier ?? null,
       permissionMode: options.readOnly ? "never" : null,
       readOnly: options.readOnly ?? false,
       allowSubagents: options.allowSubagents ?? false,
@@ -573,7 +577,8 @@ export function resumeSpecForSession(
   for (const override of codexMcpRuntimeOverrides(home, cwd, mcpServers)) command += ` -c ${shellQuote(override)}`;
   if (options.model) command += ` -m ${shellQuote(options.model)}`;
   if (options.effort) command += ` -c ${shellQuote(`model_reasoning_effort=${options.effort}`)}`;
-  if (options.fast != null) command += ` -c ${shellQuote(`service_tier=${options.fast ? "priority" : "standard"}`)}`;
+  if (options.serviceTier) command += ` -c ${shellQuote(`service_tier=${options.serviceTier === "standard" ? "default" : options.serviceTier}`)}`;
+  else if (options.fast != null) command += ` -c ${shellQuote(`service_tier=${options.fast ? "priority" : "standard"}`)}`;
   if (options.readOnly) command += " --sandbox read-only";
   if (options.permissionMode && ["untrusted", "on-request", "never"].includes(options.permissionMode)) {
     command += ` --ask-for-approval ${shellQuote(options.permissionMode)}`;
@@ -585,7 +590,7 @@ export function resumeSpecForSession(
     cwd,
     windowName: "codex-resume",
     engine: "codex",
-    launchProfile: { ...emptyLaunchProfileForResume(cwd, options.model ?? null, options.effort ?? null), fast: options.fast ?? null, readOnly: options.readOnly ?? null, permissionMode: options.permissionMode ?? null, allowSubagents: options.allowSubagents ?? false, mcpServers, plugins: grantedPlugins(options.plugins) },
+    launchProfile: { ...emptyLaunchProfileForResume(cwd, options.model ?? null, options.effort ?? null), fast: options.serviceTier ? !["default", "standard"].includes(options.serviceTier) : options.fast ?? null, serviceTier: options.serviceTier ?? null, readOnly: options.readOnly ?? null, permissionMode: options.permissionMode ?? null, allowSubagents: options.allowSubagents ?? false, mcpServers, plugins: grantedPlugins(options.plugins) },
   };
 }
 

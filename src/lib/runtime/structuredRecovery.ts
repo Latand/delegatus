@@ -15,7 +15,13 @@ import { accountPark, type AccountPark } from "./accountPark";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
 import { reconcileDeadStructuredRegistryHost } from "./registry";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
-import { spawnStructuredConversation } from "./structuredSpawn";
+import { stagedLaunchRecovery } from "./stagedRecovery";
+import {
+  failStagedResume,
+  recoverStagedStructuredLaunch,
+  RESUME_PUBLICATION_BOUND_MS,
+  spawnStructuredConversation,
+} from "./structuredSpawn";
 import { spawnTransport } from "./spawnTransport";
 
 export interface StructuredRecoveryRequest {
@@ -70,6 +76,88 @@ export interface StructuredRecoveryDependencies {
     owns: () => Promise<boolean>;
     releaseHost: (key: SessionKey) => Promise<boolean>;
   };
+  /** The staged-launch probe and settlement a resume's publication is driven
+      through; tests substitute the runtime boundary behind them. */
+  probeStagedLaunch?: typeof recoverStagedStructuredLaunch;
+  failStagedLaunch?: typeof failStagedResume;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/** A resume that could not publish its host within its bound (#2046). The
+    attempt is settled failed and its host retired before this is thrown, so
+    the conversation reads `reclaimed` again and the reason is the answer. */
+export class StructuredResumeUnpublishedError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "StructuredResumeUnpublishedError";
+  }
+}
+
+const RESUME_PUBLICATION_POLL_MS = 1_000;
+
+/**
+ * Drives a resume that came back staged to publication, or to a failure that
+ * names why, within {@link RESUME_PUBLICATION_BOUND_MS} (#2046).
+ *
+ * A resume used to be answered "did not publish its transcript" the moment
+ * its launch came back staged, while it went on publishing: the send that
+ * raised it failed, and an identical resend seconds later found the host up.
+ * The send now waits for the resume it caused. The probe is the launch's own
+ * staged recovery, admitted here whatever the conversation belongs to: a
+ * resume carries no first message, so the probe can only publish the host.
+ */
+async function awaitResumePublication(
+  launchId: string,
+  registry: AgentRegistry,
+  client: RuntimeHostClient,
+  dependencies: StructuredRecoveryDependencies,
+): Promise<string | null> {
+  const now = dependencies.now ?? Date.now;
+  const sleep = dependencies.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const probe = dependencies.probeStagedLaunch ?? recoverStagedStructuredLaunch;
+  const staged = registry.readOnlySnapshot().receipts[launchId];
+  const deadline = (stagedLaunchRecovery(staged)?.startedAt ?? now()) + RESUME_PUBLICATION_BOUND_MS;
+  for (;;) {
+    const receipt = await probe(launchId, registry, client, { now, eligible: () => true });
+    if (receipt.state === "completed") return receipt.artifactPath;
+    if (receipt.state === "failed" || receipt.state === "conflicted") {
+      throw new StructuredResumeUnpublishedError(receipt.error ?? "host resume did not publish");
+    }
+    if (now() >= deadline) {
+      const reason = `host resume did not publish within ${RESUME_PUBLICATION_BOUND_MS / 1_000} s: ${stagedLaunchRecovery(receipt)?.reason ?? "publication pending"}`;
+      const failed = await (dependencies.failStagedLaunch ?? failStagedResume)(launchId, registry, client, reason);
+      const settled = failed.receipt ?? registry.readOnlySnapshot().receipts[launchId];
+      if (settled?.state === "completed") return settled.artifactPath;
+      throw new StructuredResumeUnpublishedError(settled?.error ?? reason);
+    }
+    await sleep(Math.min(RESUME_PUBLICATION_POLL_MS, Math.max(0, deadline - now())));
+  }
+}
+
+/**
+ * Ends the resume that fences a row whose recorded process still lives, when
+ * that resume can no longer publish (#2028). Such a row made every recovery
+ * throw {@link StructuredRecoverySynchronizingError} for good: the relay or
+ * drain that meets the fence is where it gets settled. Answers whether the
+ * fencing launch left its staged state, so the caller reads the row again.
+ */
+async function settleParkedResumeFence(
+  registry: AgentRegistry,
+  key: SessionKey,
+  client: RuntimeHostClient | null,
+  dependencies: StructuredRecoveryDependencies,
+): Promise<boolean> {
+  if (!client) return false;
+  const snapshot = registry.readOnlySnapshot();
+  const launchId = snapshot.entries[sessionKeyId(key)]?.structuredHostOperationId;
+  const receipt = launchId ? snapshot.receipts[launchId] : null;
+  if (!launchId || !receipt || receipt.purpose !== "resume-successor"
+    || receipt.state !== "path-pending" || !stagedLaunchRecovery(receipt)) return false;
+  const settled = await (dependencies.probeStagedLaunch ?? recoverStagedStructuredLaunch)(launchId, registry, client, {
+    now: dependencies.now,
+  });
+  return settled.state !== "path-pending";
 }
 
 /** A live structured process is still fenced while its durable row carries a
@@ -243,6 +331,12 @@ async function recoverCandidate(
     const park = dependencies.park ?? defaultParkResolver;
     let current = candidateFor(registry, request, Boolean(ownership), park);
     if (!current) return null;
+    const client = dependencies.client === undefined ? runtimeHostClient() : dependencies.client;
+    if (current.hostProcessLive && !current.hostLive
+      && await settleParkedResumeFence(registry, current.key, client, dependencies)) {
+      current = candidateFor(registry, request, Boolean(ownership), park);
+      if (!current) return null;
+    }
     if (current.hostProcessLive && !current.hostLive) {
       throw new StructuredRecoverySynchronizingError();
     }
@@ -267,7 +361,6 @@ async function recoverCandidate(
       current = candidateFor(registry, request, true, park);
       if (!current) return null;
     }
-    const client = dependencies.client === undefined ? runtimeHostClient() : dependencies.client;
     if (!client) throw new Error("structured recovery runtime host is unavailable");
     /* #1279: a resume whose conversation RECORDS an account continues on it —
        the session lives in that home and nothing is being chosen. A resume of a
@@ -319,7 +412,14 @@ async function recoverCandidate(
       registry,
       client,
     });
-    if (!response.ok || !response.path) throw new Error("structured recovery host did not publish its transcript");
+    let publishedPath = response.ok ? response.path : null;
+    /* A staged resume with no path has not published its host yet. One that
+       names its path has, and only its transcript is pending. */
+    if (response.ok && !publishedPath && response.state === "path-pending") {
+      publishedPath = await awaitResumePublication(response.launchId ?? begun.receipt.launchId, registry, client, dependencies)
+        ?? current.path;
+    }
+    if (!response.ok || !publishedPath) throw new Error("structured recovery host did not publish its transcript");
     try {
       await assertOwnership();
     } catch (error) {
@@ -330,7 +430,7 @@ async function recoverCandidate(
     (dependencies.requestDeliveryDrain ?? requestAccountMigrationTick)();
     return {
       target: null,
-      path: response.path,
+      path: publishedPath,
       conversationId: current.conversationId,
       spawned: true,
     };

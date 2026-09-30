@@ -1,0 +1,19 @@
+{
+  "name": "delegatus-landing",
+  "main": "worker.ts",
+  "compatibility_date": "2026-09-01",
+  "assets": {
+    "directory": "./site/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "404-page",
+    "run_worker_first": ["/api/*"]
+  },
+  "analytics_engine_datasets": [
+    { "binding": "SITE_EVENTS", "dataset": "site_events" }
+  ],
+  "routes": [
+    { "pattern": "delegatus.org", "custom_domain": true },
+    { "pattern": "www.delegatus.org", "custom_domain": true }
+  ],
+  "workers_dev": false
+}

@@ -9,13 +9,13 @@
    `managed.json`, the automatic policy and managed request intent in
    `auto.json`, and the launcher's own record. A fresh process reads them
    back, so the surface carries on where the previous one stopped. */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 
-import { cancelUntakenRequest, readAuto, requestAutoRestart, restorePointer, writeAuto, pruneReleaseWorktrees, type AutoState, type AutoView } from "./auto";
+import { cancelUntakenRequest, DIALOG_WRITER, readAuto, requestAutoRestart, restorePointer, writeAuto, pruneReleaseWorktrees, type AutoState, type AutoView, type AutoWriter } from "./auto";
 import { GreenReader, type GreenVerdict } from "./green";
-import { appendHistory, readHistory } from "./history";
+import { appendHistory, findAutoSwitchRequest, readHistory, storeAutoSwitchResponse } from "./history";
 import { probeQuiet, type QuietBlockers, type QuietPorts } from "./quiet";
 import { activeRestartGate, beginRestartGate, endRestartGate, restartGateFile } from "./restartGate";
 import { headOf, releaseDirFor } from "./release";
@@ -102,15 +102,25 @@ export interface ServiceDeps {
 /** A refusal carries a code the client words; `error` is the same in
     English for API readers and logs, and `detail` is machine output (the
     runtime host's own refusal). */
-export type ActionResult = { ok: true } | { ok: false; status: number; code: RefusalCode; error: string; detail?: string };
+export type ActionResult = { ok: true; replaySnapshot?: Snapshot } | { ok: false; status: number; code: RefusalCode | "auto-persistence-failed" | "auto-switch-superseded"; error: string; detail?: string };
 type DeploymentResult = ActionResult & { deliveryUncertain?: boolean };
 
-export function refuse(status: number, code: RefusalCode, error: string, detail?: string): ActionResult {
+export function refuse(status: number, code: RefusalCode | "auto-persistence-failed" | "auto-switch-superseded", error: string, detail?: string): ActionResult {
   return { ok: false, status, code, error, ...(detail ? { detail } : {}) };
 }
 
 function busy(state: Exclude<Busy, null>): ActionResult {
   return refuse(409, `busy-${state}`, `Busy: ${state}`);
+}
+
+function restoreFile(file: string, bytes: Buffer | null): void {
+  if (bytes === null) {
+    rmSync(file, { force: true });
+    return;
+  }
+  const temporary = `${file}.${process.pid}.rollback`;
+  writeFileSync(temporary, bytes, { mode: 0o600 });
+  renameSync(temporary, file);
 }
 
 const MODE_TTL_MS = 30_000;
@@ -149,6 +159,8 @@ export class SelfUpdateService {
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private deploymentWatch: ReturnType<typeof setInterval> | null = null;
   private auto: AutoState;
+  private autoSwitchSequence = 0;
+  private committedAutoSwitchSequence = 0;
   private autoTimer: ReturnType<typeof setInterval> | null = null;
   private autoRunning = false;
   private autoBlockers: QuietBlockers | null = null;
@@ -201,19 +213,72 @@ export class SelfUpdateService {
     void this.autoTick();
   }
 
-  async setAuto(enabled: boolean): Promise<ActionResult> {
+  /** The one switch of automatic updates: the Update dialog and the
+      `auto_updates` MCP tool both reach it through `POST /api/self-update/auto`.
+      Each write is recorded with its writer, on the setting and in the
+      history the dialog shows. */
+  async setAuto(enabled: boolean, writer: AutoWriter = DIALOG_WRITER, requestId?: string): Promise<ActionResult> {
+    const sequence = ++this.autoSwitchSequence;
+    const receiptId = requestId ? createHash("sha256").update(requestId).digest("hex") : undefined;
+    if (receiptId) {
+      const previous = findAutoSwitchRequest(this.historyFile, receiptId);
+      if (previous) {
+        const replaySnapshot = previous.response && typeof previous.response === "object" ? previous.response as Snapshot : undefined;
+        return { ok: true, ...(replaySnapshot ? { replaySnapshot } : {}) };
+      }
+    }
     // A prior snapshot may have cached a different launcher generation.
     if (enabled) this.decision = null;
     const decision = await this.decide();
     const availability = this.autoAvailability(decision);
     if (enabled && availability !== "available") return refuse(409, "auto-unavailable", `Automatic updates unavailable: ${availability}`);
-    this.auto = { ...this.auto, enabled, changedAt: new Date(this.deps.now()).toISOString(), off: enabled ? null : this.auto.off, quietSince: null };
-    this.saveAuto();
+    const at = new Date(this.deps.now()).toISOString();
+    const previousAuto = this.auto;
+    const requestedAuto = { ...previousAuto, enabled, changedAt: at, changedBy: writer, off: enabled ? null : previousAuto.off, quietSince: null };
+    let replaySnapshot: Snapshot;
+    try {
+      // Snapshot construction can refresh deployment state and settle an
+      // automatic rollback. Prepare first; the commit below overlays this
+      // request on whatever controller state that work left current.
+      replaySnapshot = await this.buildSnapshot(requestedAuto);
+    } catch (error) {
+      return refuse(500, "auto-persistence-failed", "Automatic update setting could not be recorded", error instanceof Error ? error.message : undefined);
+    }
+    if (this.committedAutoSwitchSequence > sequence) {
+      return refuse(409, "auto-switch-superseded", "A newer automatic update switch has already been applied");
+    }
+    const currentAuto = this.auto;
+    const autoBeforeCommit = currentAuto;
+    const nextAuto = { ...currentAuto, enabled, changedAt: at, changedBy: writer, off: enabled ? null : currentAuto.off, quietSince: null };
+    replaySnapshot.auto = this.autoView(decision, replaySnapshot, nextAuto);
+    replaySnapshot.meta.pollMinutes = nextAuto.enabled ? 15 : this.deps.pollMinutes;
+    let previousAutoFile: Buffer | null;
+    let previousHistoryFile: Buffer | null;
+    try {
+      previousAutoFile = existsSync(this.autoFile) ? readFileSync(this.autoFile) : null;
+      previousHistoryFile = existsSync(this.historyFile) ? readFileSync(this.historyFile) : null;
+    } catch (error) {
+      return refuse(500, "auto-persistence-failed", "Automatic update setting could not be recorded", error instanceof Error ? error.message : undefined);
+    }
+    try {
+      writeAuto(this.autoFile, nextAuto);
+      appendHistory(this.historyFile, { at, by: writer.kind === "seat" ? "seat" : "operator", kind: enabled ? "auto-on" : "auto-off",
+        target: this.slice.available?.sha ?? "", from: null, outcome: "done", writer, ...(receiptId ? { requestId: receiptId } : {}) });
+      if (receiptId) storeAutoSwitchResponse(this.historyFile, receiptId, replaySnapshot);
+      this.auto = nextAuto;
+      this.committedAutoSwitchSequence = sequence;
+    } catch (error) {
+      this.auto = autoBeforeCommit;
+      try { restoreFile(this.autoFile, previousAutoFile); } catch { /* keep the original write failure */ }
+      try { restoreFile(this.historyFile, previousHistoryFile); } catch { /* keep the original write failure */ }
+      return refuse(500, "auto-persistence-failed", "Automatic update setting could not be recorded", error instanceof Error ? error.message : undefined);
+    }
+    this.changes.emit();
     if (this.pollTimer) clearTimeout(this.pollTimer);
     this.pollTimer = null;
     if (enabled) { this.ensureChecked(); void this.autoTick(); }
     else this.schedulePoll();
-    return { ok: true };
+    return { ok: true, ...(receiptId ? { replaySnapshot } : {}) };
   }
 
   private autoAvailability(decision: ModeDecision): AutoView["availability"] {
@@ -233,23 +298,24 @@ export class SelfUpdateService {
     return "available";
   }
 
-  private autoView(decision: ModeDecision, snapshot: Snapshot): AutoView {
+  private autoView(decision: ModeDecision, snapshot: Snapshot, auto: AutoState = this.auto): AutoView {
     const built = snapshot.installed.sha;
-    const target = this.auto.off ? (this.described.get(this.auto.off.target) ?? { ...UNKNOWN_REVISION, sha: this.auto.off.target, short: shortSha(this.auto.off.target) })
-      : this.auto.managedPending?.target ?? this.slice.available ?? (built && (snapshot.serving.web?.sha !== built || snapshot.serving.runtimeHost?.sha !== built) ? snapshot.installed : null);
+    const target = auto.off ? (this.described.get(auto.off.target) ?? { ...UNKNOWN_REVISION, sha: auto.off.target, short: shortSha(auto.off.target) })
+      : auto.managedPending?.target ?? this.slice.available ?? (built && (snapshot.serving.web?.sha !== built || snapshot.serving.runtimeHost?.sha !== built) ? snapshot.installed : null);
     const sha = target?.sha ?? null;
-    const pending = this.auto.pending;
-    const managedPending = this.auto.managedPending;
-    const phase: AutoView["phase"] = !this.auto.enabled && !pending && !managedPending ? "idle"
+    const pending = auto.pending;
+    const managedPending = auto.managedPending;
+    const phase: AutoView["phase"] = !auto.enabled && !pending && !managedPending ? "idle"
       : pending ? pending.role === "web" ? "restarting-web" : "restarting-host"
       : managedPending || decision.mode === "managed" && snapshot.update.state === "running" && snapshot.update.trigger === "auto" ? "deploying"
       : snapshot.update.state === "running" && snapshot.update.trigger === "auto" ? "building"
-      : sha && this.auto.green[sha] && this.auto.green[sha].state !== "green" ? "not-green"
-      : this.auto.waitingSince ? "waiting"
-      : sha && !this.auto.green[sha] ? "checks" : "idle";
-    return { availability: this.autoAvailability(decision), enabled: this.auto.enabled, off: this.auto.off, phase, target, green: sha ? this.auto.green[sha] ?? null : null,
-      blockers: phase === "waiting" ? this.autoBlockers ?? this.auto.lastBlockers : null,
-      waitingSince: this.auto.waitingSince, longWait: phase === "waiting" && !!this.auto.waitingSince && this.deps.now() - Date.parse(this.auto.waitingSince) >= 24 * 60 * 60_000 };
+      : sha && auto.green[sha] && auto.green[sha].state !== "green" ? "not-green"
+      : auto.waitingSince ? "waiting"
+      : sha && !auto.green[sha] ? "checks" : "idle";
+    return { availability: this.autoAvailability(decision), enabled: auto.enabled, off: auto.off, phase, target, green: sha ? auto.green[sha] ?? null : null,
+      blockers: phase === "waiting" ? this.autoBlockers ?? auto.lastBlockers : null,
+      waitingSince: auto.waitingSince, longWait: phase === "waiting" && !!auto.waitingSince && this.deps.now() - Date.parse(auto.waitingSince) >= 24 * 60 * 60_000,
+      changedAt: auto.changedAt, changedBy: auto.changedBy };
   }
 
   /** Re-read durable facts on every pass. A web restart replaces this object
@@ -929,6 +995,10 @@ export class SelfUpdateService {
   }
 
   async snapshot(): Promise<Snapshot> {
+    return this.buildSnapshot();
+  }
+
+  private async buildSnapshot(replayAuto?: AutoState): Promise<Snapshot> {
     const decision = await this.decide();
     const now = this.deps.now();
     const base = {
@@ -953,9 +1023,13 @@ export class SelfUpdateService {
       processes: { web: { ...stoppedProcess(), tail: [] }, runtimeHost: { ...stoppedProcess(), tail: [] } },
       busy: null,
     };
-    snapshot.auto = this.autoView(decision, snapshot);
+    // Ordinary reads use the controller state after awaited deployment
+    // refreshes. Receipt snapshots pass replayAuto to preserve their original
+    // immutable response across later changes.
+    const auto = replayAuto ?? this.auto;
+    snapshot.auto = this.autoView(decision, snapshot, auto);
     snapshot.history = readHistory(this.historyFile);
-    snapshot.meta.pollMinutes = this.auto.enabled ? 15 : this.deps.pollMinutes;
+    snapshot.meta.pollMinutes = auto.enabled ? 15 : this.deps.pollMinutes;
     return snapshot;
   }
 

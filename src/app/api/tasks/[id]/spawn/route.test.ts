@@ -31,6 +31,41 @@ function seed(tasks: BoardTask[]): BoardTask[] {
   return tasks;
 }
 
+test("task retry refuses a retained tier when its resolved account changes to one without the offer", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "llv-task-tier-refusal-"));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const begun = registry.beginSpawnRequest({ engine: "codex", cwd, accountId: "account-a", origin: { kind: "operator" },
+    launchProfile: emptyLaunchProfile({ cwd, model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast", title: "Retry review" }) });
+  registry.failSpawn(begun.receipt.launchId, "account unavailable");
+  fs.writeFileSync(path.join(cwd, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6-astra", service_tiers: [{ id: "priority" }] }] }));
+  const tasks: BoardTask[] = [{ id: "10410001-89c5-0064-9118-51661c4f1042", project: "repo", text: "Retry review", status: "inbox",
+    placement: "pinned", pos: { x: 0, y: 0 }, createdAt: "2026-09-30T00:00:00Z", updatedAt: "2026-09-30T00:00:00Z",
+    assignments: [{ launchId: begun.receipt.launchId, clientAttemptId: begun.receipt.clientAttemptId, conversationId: begun.receipt.conversationId,
+      path: null, panePid: null, state: "failed", error: "account unavailable", at: "2026-09-30T00:00:00Z", accountId: "account-a", engine: "codex" }] }];
+  let launches = 0, mutations = 0;
+  try {
+    const response = await POST.withDependencies(new NextRequest(`http://127.0.0.1/api/tasks/${tasks[0]!.id}/spawn`, {
+      method: "POST", headers: { origin: "http://127.0.0.1", host: "127.0.0.1", "content-type": "application/json" },
+      body: JSON.stringify({ retryOfLaunchId: begun.receipt.launchId }),
+    }), { params: Promise.resolve({ id: tasks[0]!.id }) }, {
+      registry: () => registry, loadTasks: () => seed(tasks),
+      mutateTasks: () => { mutations += 1; throw new Error("refusal must precede task mutation"); },
+      resolveSpawnAccount: (_engine, previous) => {
+        expect(previous).toBe("account-a");
+        return { engine: "codex", accountId: "account-b", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } };
+      },
+      resolveSpawnedTranscriptPath: async () => null,
+      spawnAgentWithPrompt: async () => { launches += 1; throw new Error("refusal must precede launch"); },
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "service_tier_unavailable", error: expect.stringContaining("offered: priority") });
+    expect(launches).toBe(0); expect(mutations).toBe(0);
+    expect(Object.keys(registry.readOnlySnapshot().receipts)).toHaveLength(1);
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test("task spawn rejects an explicit unknown model before receipt or assignment mutation", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "llv-task-model-admission-"));
   const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
@@ -155,6 +190,99 @@ test("task retry preserves a failed receipt's historical model without fresh-lau
 
   expect(response.status).toBe(500);
   expect(launchedModel).toBe(historicalModel);
+});
+
+test("task retry retains an explicit ultrafast tier in the command, receipt and request identity", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "llv-task-model-retry-"));
+  fs.writeFileSync(path.join(cwd, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6-astra", service_tiers: [{ id: "ultrafast" }, { id: "priority" }] }] }));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const historicalModel = "gpt-6-astra";
+  const begun = registry.beginSpawnRequest({
+    engine: "codex",
+    cwd,
+    accountId: "codex-test",
+    origin: { kind: "operator" },
+    launchProfile: emptyLaunchProfile({ cwd, model: historicalModel, effort: "high", fast: true, serviceTier: "ultrafast", title: "Retry a historical task-spawn model" }),
+  });
+  if (begun.kind !== "created") throw new Error("expected historical task launch receipt");
+  registry.failSpawn(begun.receipt.launchId, "historical launch failed before pane creation");
+  let tasks: BoardTask[] = [{
+    id: "10410001-89c5-0064-9118-51661c4f1041",
+    project: "live-log-viewer-next",
+    status: "inbox",
+    text: "Retry a historical task-spawn model",
+    placement: "pinned",
+    pos: { x: 0, y: 0 },
+    assignments: [{
+      launchId: begun.receipt.launchId,
+      clientAttemptId: begun.receipt.clientAttemptId,
+      conversationId: begun.receipt.conversationId,
+      path: null,
+      panePid: null,
+      state: "failed",
+      error: "historical launch failed before pane creation",
+      at: "2026-08-19T12:00:00.000Z",
+      accountId: "codex-test",
+      engine: "codex",
+    }],
+    createdAt: "2026-08-19T12:00:00.000Z",
+    updatedAt: "2026-08-19T12:00:00.000Z",
+  }];
+  let launchedSpec: unknown;
+  const dependencies = {
+    registry: () => registry,
+    loadTasks: () => seed(tasks),
+    mutateTasks: (mutator: (current: BoardTask[]) => { tasks?: BoardTask[]; result: unknown }) => {
+      const mutation = mutator(tasks);
+      if (mutation.tasks) tasks = mutation.tasks;
+      return mutation.result;
+    },
+    resolveSpawnAccount: () => ({
+      engine: "codex" as const,
+      accountId: "codex-test",
+      kind: "managed" as const,
+      home: cwd,
+      transcriptRoot: cwd,
+      env: { NODE_ENV: "test" },
+    }),
+    resolveSpawnedTranscriptPath: async () => null,
+    spawnAgentWithPrompt: async (spec: unknown) => {
+      launchedSpec = spec;
+      throw new Error("retry reached the launch seam");
+    },
+  } as Parameters<typeof POST.withDependencies>[2];
+  const response = await POST.withDependencies(new NextRequest(
+    `http://127.0.0.1/api/tasks/${tasks[0]!.id}/spawn`,
+    {
+      method: "POST",
+      headers: { origin: "http://127.0.0.1", host: "127.0.0.1", "content-type": "application/json" },
+      body: JSON.stringify({ retryOfLaunchId: begun.receipt.launchId }),
+    },
+  ), { params: Promise.resolve({ id: tasks[0]!.id }) }, dependencies);
+
+  expect(response.status).toBe(500);
+  const result = await response.json();
+  const retried = registry.readOnlySnapshot().receipts[result.launchId]!;
+  expect(launchedSpec).toMatchObject({ command: expect.stringContaining("service_tier=ultrafast"), launchProfile: expect.objectContaining({ serviceTier: "ultrafast", fast: true }) });
+  expect(retried.launchProfile).toMatchObject({ model: historicalModel, serviceTier: "ultrafast", fast: true });
+  // The tier is part of attempt identity: equal speed with a different explicit tier gets a new digest.
+  const priority = registry.beginSpawnRequest({
+    engine: "codex", cwd, accountId: "codex-test", origin: { kind: "operator" },
+    launchProfile: emptyLaunchProfile({ cwd, model: historicalModel, effort: "high", fast: true, serviceTier: "priority", title: "Retry a historical task-spawn model" }),
+  });
+  registry.failSpawn(priority.receipt.launchId, "priority launch failed before pane creation");
+  tasks[0]!.assignments.push({ ...tasks[0]!.assignments[0]!, launchId: priority.receipt.launchId, clientAttemptId: priority.receipt.clientAttemptId, conversationId: priority.receipt.conversationId });
+  const priorityResponse = await POST.withDependencies(new NextRequest(
+    `http://127.0.0.1/api/tasks/${tasks[0]!.id}/spawn`, {
+      method: "POST", headers: { origin: "http://127.0.0.1", host: "127.0.0.1", "content-type": "application/json" },
+      body: JSON.stringify({ retryOfLaunchId: priority.receipt.launchId }),
+    },
+  ), { params: Promise.resolve({ id: tasks[0]!.id }) }, dependencies);
+  expect(priorityResponse.status).toBe(500);
+  const priorityResult = await priorityResponse.json();
+  const priorityRetry = registry.readOnlySnapshot().receipts[priorityResult.launchId]!;
+  expect(priorityRetry.launchProfile.serviceTier).toBe("priority");
+  expect(priorityRetry.requestDigest).not.toBe(retried.requestDigest);
 });
 
 test("task attribution failure replays one launched pane into one durable assignment", async () => {

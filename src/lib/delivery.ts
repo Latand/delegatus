@@ -1,7 +1,7 @@
 import { registeredHostForPath } from "@/lib/conversation/registeredHost";
 import { resumeEligibility, resumeSpecFor } from "@/lib/agent/cli";
 import type { AgentReconfiguration } from "@/lib/agent/reconfigure";
-import { agentRegistry, deliveryMayHaveArrived, type AgentRegistry, type AgentRegistryEntry, type RegistryConversation, type TmuxHostEvidence } from "@/lib/agent/registry";
+import { agentRegistry, deliveryMayHaveArrived, serviceTierForSpeed, type AgentRegistry, type AgentRegistryEntry, type RegistryConversation, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { accountManager, ProjectAccountRefusedError, resolveResumeAccountId } from "@/lib/accounts/manager";
 import { AccountProjectBindingsUnreadableError } from "@/lib/accounts/projectBindings";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -67,6 +67,9 @@ export interface DeliveryFailure {
   /** Set on a superseded-round rejection (issue #383): the live chain end the
       caller should redirect to instead of forking retired work. */
   successorConversationId?: string;
+  /** Set when the refusal came before anything was reserved or dispatched,
+      so the send provably did not happen (#2020). */
+  admission?: "refused";
 }
 
 /** A send or resume addressed to a terminally superseded round (issue #383)
@@ -84,6 +87,7 @@ function supersededRejection(
     error: "superseded",
     status: 409,
     successorConversationId: registry.supersedenceChainTail(conversation.id),
+    admission: "refused",
   };
 }
 
@@ -208,6 +212,7 @@ export async function reconfigureConversation(
   }
   const buildSpec = (profile: AgentRegistryEntry["launchProfile"]) => (overrides.resumeSpecFor ?? resumeSpecFor)(entry.root, entry.path, {
     ...config,
+    serviceTier: serviceTierForSpeed(profile?.serviceTier, config.fast),
     accountId: resumeAccount,
     readOnly: profile?.readOnly ?? null,
     permissionMode: profile?.permissionMode ?? null,
@@ -561,6 +566,8 @@ export async function resumeConversation(
   const specOptions = {
     model: entry.launchModel ?? entry.model,
     effort: entry.effort,
+    fast: profile?.fast,
+    serviceTier: profile?.serviceTier,
     accountId: resumeAccount,
     allowSubagents: profile?.allowSubagents,
     plugins: profile?.plugins,
@@ -997,7 +1004,9 @@ async function actuateConversationMessage(
     const spec = (overrides.resumeSpecFor ?? resumeSpecFor)(entry.root, entry.path, {
       model: message.resumeModel ?? entry.launchModel ?? entry.model,
       effort: message.resumeEffort ?? entry.effort,
-      ...(typeof message.resumeFast === "boolean" ? { fast: message.resumeFast } : {}),
+      fast: message.resumeFast ?? entryProfile?.fast,
+      serviceTier: typeof message.resumeFast === "boolean"
+        ? serviceTierForSpeed(entryProfile?.serviceTier, message.resumeFast) : entryProfile?.serviceTier,
       accountId: entryAccount,
       allowSubagents: entryProfile?.allowSubagents,
       plugins: entryProfile?.plugins,
@@ -1035,6 +1044,8 @@ async function actuateConversationMessage(
     const rootSpec = (overrides.resumeSpecFor ?? resumeSpecFor)(root.root, root.path, {
       model: root.launchModel ?? root.model,
       effort: root.effort,
+      fast: rootProfile?.fast,
+      serviceTier: rootProfile?.serviceTier,
       accountId: rootAccount,
       allowSubagents: rootProfile?.allowSubagents,
       plugins: rootProfile?.plugins,

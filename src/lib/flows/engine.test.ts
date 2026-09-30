@@ -1,5 +1,6 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -2966,3 +2967,319 @@ test("a flow reviewer joins the task its implementer holds; an implementer witho
   expect(created.origin).toEqual({ kind: "flow", key: "flow-legacy", refinement: "pending" });
   expect(created.assignments.map((assignment) => assignment.conversationId).sort()).toEqual([fallback.receipt.conversationId, legacy.id].sort());
 });
+
+/* #2020: a headless reviewer is settled `starting` with a publication marker
+   and no host. Nothing cleared that marker when the reviewer exited, so the
+   row read `synchronizing` for good and every later message to the finished
+   reviewer was refused with nothing reserved. */
+function hostlessReviewerFlow(id: string, sessionId: string, reviewerPath: string, implementerPath: string): Flow {
+  const startedAt = new Date().toISOString();
+  return {
+    id,
+    template: "implement-review-loop",
+    project: "repo",
+    cwd: "/repo",
+    implementerPath,
+    roles: {
+      implementer: { engine: "codex", model: null, effort: "high" },
+      reviewer: { engine: "codex", model: null, effort: "xhigh" },
+    },
+    reviewerFallback: null,
+    baseRef: "base",
+    baseMode: "head",
+    mode: "manual",
+    reviewerMode: "headless",
+    roundLimit: 5,
+    state: "reviewing",
+    pausedState: null,
+    stateDetail: null,
+    rounds: [{
+      n: 1,
+      reviewerPath,
+      reviewerRole: { engine: "codex", model: null, effort: "xhigh" },
+      accountId: null,
+      attemptedAccounts: ["codex:default"],
+      autoRetryCount: 0,
+      sessionId,
+      reviewerPid: 999_999_999,
+      reviewerIdentity: "999999999:gone",
+      reviewerPane: null,
+      findingsPath: null,
+      triggeredBy: "marker",
+      readyNote: null,
+      reviewHeadSha: null,
+      verdict: null,
+      findingsCount: null,
+      startedAt,
+      spawnStartedAt: startedAt,
+      relayStartedAt: null,
+      relayDelivery: null,
+      reviewedAt: null,
+      terminalAt: null,
+      relayedAt: null,
+      error: null,
+    }],
+    createdAt: startedAt,
+    closedAt: null,
+  } as unknown as Flow;
+}
+
+/** What `settleReviewerSpawn` writes for a headless reviewer at launch. */
+function settleHostlessReviewer(flow: Flow, sessionId: string, reviewerPath: string) {
+  const registry = agentRegistry();
+  const round = flow.rounds[0]!;
+  const begun = reserveReviewerSpawn(flow, round, flow.roles.reviewer, null, registry);
+  const settled = registry.settleSpawn(begun.receipt.launchId, {
+    key: { engine: "codex", sessionId },
+    artifactPath: reviewerPath,
+    cwd: flow.cwd,
+    accountId: null,
+    status: "starting",
+    host: null,
+    claimEpoch: 0,
+    claimOwner: null,
+    pendingAction: "spawn",
+  });
+  if (settled.kind === "conflict") throw new Error(settled.code);
+  return { registry, launchId: begun.receipt.launchId, conversationId: settled.receipt.conversationId };
+}
+
+test("a headless reviewer that exits stops fencing its conversation, and a later message resumes it (#2020)", async () => {
+  const { conversationDeliverabilityFromRecord } = await import("@/lib/conversation/deliverability");
+  const sessionId = crypto.randomUUID();
+  const implementer = writeCodexEntry("hostless-implementer.jsonl", { id: crypto.randomUUID(), cwd: "/repo" }, Date.now() / 1_000);
+  const reviewer = writeCodexEntry(`rollout-2026-09-22T00-00-00-${sessionId}.jsonl`, { id: sessionId, cwd: "/repo" }, Date.now() / 1_000);
+  const flow = hostlessReviewerFlow("flow-hostless-reviewer", sessionId, reviewer.path, implementer.path);
+  const { registry, conversationId } = settleHostlessReviewer(flow, sessionId, reviewer.path);
+  fs.mkdirSync(path.dirname(outputPathFor(flow.id, 1)), { recursive: true });
+  fs.writeFileSync(outputPathFor(flow.id, 1), "VERDICT: APPROVE\n\nNo findings.\n");
+  saveFlows([flow]);
+
+  await tickFlows([implementer, reviewer]);
+
+  expect(loadFlows().find((item) => item.id === flow.id)?.rounds[0]?.verdict).toBe("APPROVE");
+  expect(registry.readOnlySnapshot().entries[`codex:${sessionId}`]).toMatchObject({ status: "dead", pendingAction: null, host: null });
+  const request = { conversationId, path: reviewer.path };
+  expect(conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
+    conversationId, transcriptPath: reviewer.path,
+  }).condition).toBe("reclaimed");
+
+  let recovered = 0;
+  const sent = await enqueueStructuredMessage({ ...request, text: "one more question about round 1", clientMessageId: "hostless-reviewer-question" }, {
+    enabled: () => true,
+    registry: () => registry,
+    client: () => ({ readSession: async () => null }) as unknown as RuntimeHostClient,
+    requestMigrationTick: () => {},
+    recover: async () => { recovered += 1; return null; },
+  });
+  expect(sent).toMatchObject({ operationId: expect.any(String) });
+  expect(recovered).toBe(1);
+});
+
+test("startup repair preserves parked hostless reviewer fences without death proof and ends proven-dead markers (#2020)", async () => {
+  const finishedSession = crypto.randomUUID();
+  const parkedSession = crypto.randomUUID();
+  const unverifiedSession = crypto.randomUUID();
+  const implementer = writeCodexEntry("hostless-repair-implementer.jsonl", { id: crypto.randomUUID(), cwd: "/repo" }, Date.now() / 1_000);
+  const finishedPath = writeCodexEntry(`rollout-2026-09-22T00-00-01-${finishedSession}.jsonl`, { id: finishedSession, cwd: "/repo" }, Date.now() / 1_000).path;
+  const parkedPath = writeCodexEntry(`rollout-2026-09-22T00-00-02-${parkedSession}.jsonl`, { id: parkedSession, cwd: "/repo" }, Date.now() / 1_000).path;
+  const unverifiedPath = writeCodexEntry(`rollout-2026-09-22T00-00-03-${unverifiedSession}.jsonl`, { id: unverifiedSession, cwd: "/repo" }, Date.now() / 1_000).path;
+  const finished = hostlessReviewerFlow("flow-hostless-finished", finishedSession, finishedPath, implementer.path);
+  finished.state = "approved";
+  const parked = hostlessReviewerFlow("flow-hostless-parked", parkedSession, parkedPath, implementer.path);
+  parked.state = "needs_decision";
+  parked.rounds[0]!.reviewerPid = process.pid;
+  parked.rounds[0]!.reviewerIdentity = procBackend.processIdentity(process.pid);
+  const unverified = hostlessReviewerFlow("flow-hostless-unverified", unverifiedSession, unverifiedPath, implementer.path);
+  unverified.state = "closed";
+  unverified.rounds[0]!.reviewerPid = process.pid;
+  unverified.rounds[0]!.reviewerIdentity = null;
+  const deadSession = crypto.randomUUID();
+  const deadPath = writeCodexEntry(`rollout-2026-09-22T00-00-04-${deadSession}.jsonl`, { id: deadSession, cwd: "/repo" }, Date.now() / 1_000).path;
+  const dead = hostlessReviewerFlow("flow-hostless-proven-dead", deadSession, deadPath, implementer.path);
+  dead.state = "closed";
+  dead.rounds[0]!.reviewerPid = 2_000_000_000;
+  dead.rounds[0]!.reviewerIdentity = "process-that-no-longer-exists";
+  const registry = agentRegistry();
+  const seedMarker = (flow: Flow, sessionId: string, reviewerPath: string) => {
+    const begun = registry.beginSpawnRequest({
+      engine: "codex",
+      cwd: flow.cwd,
+      launchProfile: emptyLaunchProfile({ cwd: flow.cwd, title: `Review marker ${flow.id}` }),
+    });
+    flow.rounds[0]!.launchId = begun.receipt.launchId;
+    const settled = registry.settleSpawn(begun.receipt.launchId, {
+      key: { engine: "codex", sessionId },
+      artifactPath: reviewerPath,
+      cwd: flow.cwd,
+      accountId: null,
+      launchProfile: begun.receipt.launchProfile,
+      status: "starting",
+      host: null,
+      claimEpoch: 0,
+      claimOwner: null,
+      pendingAction: "spawn",
+    });
+    if (settled.kind === "conflict") throw new Error(settled.code);
+  };
+  seedMarker(finished, finishedSession, finishedPath);
+  seedMarker(parked, parkedSession, parkedPath);
+  seedMarker(unverified, unverifiedSession, unverifiedPath);
+  seedMarker(dead, deadSession, deadPath);
+  saveFlows([finished, parked, unverified, dead]);
+
+  /* The repair runs once per process, on the engine's first tick. */
+  const repairState = globalThis as { __llvHostlessReviewerMarkersRepaired?: boolean };
+  const previousRepairState = repairState.__llvHostlessReviewerMarkersRepaired;
+  repairState.__llvHostlessReviewerMarkersRepaired = false;
+  const repair = registry.repairHostlessSpawnMarkers.bind(registry);
+  let repairAttempts = 0;
+  registry.repairHostlessSpawnMarkers = (isRunning) => {
+    repairAttempts += 1;
+    if (repairAttempts === 1) throw new Error("temporary registry read failure");
+    return repair(isRunning);
+  };
+  try {
+    await tickFlows([implementer]);
+    expect(repairAttempts).toBe(1);
+    await tickFlows([implementer]);
+    expect(repairAttempts).toBe(2);
+  } finally {
+    registry.repairHostlessSpawnMarkers = repair;
+    if (previousRepairState === undefined) delete repairState.__llvHostlessReviewerMarkersRepaired;
+    else repairState.__llvHostlessReviewerMarkersRepaired = previousRepairState;
+  }
+
+  expect(registry.readOnlySnapshot().entries[`codex:${finishedSession}`]).toMatchObject({ status: "dead", pendingAction: null });
+  expect(registry.readOnlySnapshot().entries[`codex:${deadSession}`]).toMatchObject({ status: "dead", pendingAction: null });
+  expect(registry.readOnlySnapshot().entries[`codex:${parkedSession}`]).toMatchObject({ status: "starting", pendingAction: "spawn" });
+  expect(registry.readOnlySnapshot().entries[`codex:${unverifiedSession}`]).toMatchObject({ status: "starting", pendingAction: "spawn" });
+});
+
+test("a legacy review relay resumes with the durable ultrafast tier", async () => {
+  const previousHome = process.env.LLV_CODEX_HOME;
+  const home = path.join(process.env.LLV_STATE_DIR!, "relay-ultrafast-home");
+  process.env.LLV_CODEX_HOME = home;
+  const sessionId = crypto.randomUUID();
+  const implementerPath = path.join(home, "sessions", `rollout-${sessionId}.jsonl`);
+  fs.mkdirSync(path.dirname(implementerPath), { recursive: true });
+  fs.writeFileSync(implementerPath, JSON.stringify({ type: "session_meta", payload: { id: sessionId, cwd: "/repo" } }) + "\n");
+  const registry = agentRegistry();
+  const conversation = registry.ensureConversation("codex", implementerPath, null);
+  registry.updateConversationLaunchProfile(conversation.id, {
+    model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast",
+  });
+  const flow = raceFlow({ implementerPath, implementerConversationId: conversation.id });
+  let delivered = false;
+  try {
+    expect(await sendToImplementer(flow, new Map([[implementerPath, entryFor(implementerPath, 1)]]), "review findings", {
+      recover: async () => null,
+      deliver: async ({ spec }) => {
+        expect(spec.command).toContain("service_tier=ultrafast");
+        expect(spec.launchProfile).toMatchObject({ fast: true, serviceTier: "ultrafast" });
+        delivered = true;
+        return { ok: true, outcome: "resumed", target: "%7" };
+      },
+    })).toBe(implementerPath);
+    expect(delivered).toBeTrue();
+  } finally {
+    if (previousHome === undefined) delete process.env.LLV_CODEX_HOME;
+    else process.env.LLV_CODEX_HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test.each(["pane", "headless"] as const)("$0 reviewer prefers tier-offering accounts and records required or preferred admission", async (reviewerMode) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reviewer-tier-"));
+  const cwd = path.join(root, "repo");
+  fs.mkdirSync(cwd);
+  expect(spawnSync("git", ["init", "-b", "main"], { cwd }).status).toBe(0);
+  expect(spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", "Base"], { cwd }).status).toBe(0);
+  const codex = await import("@/lib/accounts/codex");
+  const accounts = ["account-a", "account-c"].map((id) => ({
+    id, label: id === "account-a" ? "Account A" : "Account C", kind: "managed" as const,
+    home: path.join(root, id), sessionsDir: path.join(root, id, "sessions"),
+    authPresent: true, loginPane: null, createdAt: 0,
+  }));
+  const catalog = (id: string, offers: boolean) => {
+    const home = accounts.find(account => account.id === id)!.home;
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(path.join(home, "models_cache.json"), JSON.stringify({ models: [{
+      slug: "gpt-6-astra", service_tiers: [{ id: "priority" }, ...(offers ? [{ id: "ultrafast" }] : [])],
+    }] }));
+  };
+  const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const previousRegistry = agentRegistry();
+  const registry = new AgentRegistry(path.join(root, "registry.json"));
+  setAgentRegistryForTests(registry);
+  const accountList = spyOn(codex, "listCodexAccounts").mockReturnValue(accounts);
+  const tmux = await import("@/lib/tmux");
+  const exec = await import("./exec");
+  const paneLaunch = spyOn(tmux, "spawnAgentWithPrompt").mockImplementation(async () => { throw new Error("captured pane launch"); });
+  const headlessLaunch = spyOn(exec, "startHeadlessReview").mockImplementation(() => { throw new Error("captured headless launch"); });
+  try {
+    registry.setEngineRouting("codex", "account-a");
+    for (const scenario of ["explicit", "preferred", "preferred-exhausted", "required-exhausted", "required-missing", "preferred-missing", "pool-excludes-offering", "pinned-required", "pinned-preferred", "attempted-offering"] as const) {
+      const missing = scenario === "required-missing" || scenario === "preferred-missing";
+      const exhausted = scenario === "preferred-exhausted" || scenario === "required-exhausted";
+      const preferred = scenario.startsWith("preferred") || scenario === "pinned-preferred";
+      catalog("account-a", false); catalog("account-c", !missing);
+      const now = new Date().toISOString();
+      registry.recordQuotaEvaluation({ engine: "codex", bootId: "tier-fixture", signature: null, minimumGapMs: 0, now,
+        observations: accounts.map(account => ({
+          engine: "codex", accountId: account.id, authenticated: true, authCheckedAt: now, observedAt: now,
+          bootId: "tier-fixture", provenance: { source: "live", reason: null, staleSince: null },
+          limits: { session: { usedPercent: account.id === "account-c" ? exhausted ? 100 : 20 : 0, resetsAt: Math.floor(Date.now() / 1000) + 3600 }, weekly: null, capturedAt: Math.floor(Date.now() / 1000), plan: null },
+        })),
+      });
+      seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: accounts
+        .filter(account => scenario !== "pool-excludes-offering" || account.id === "account-a")
+        .map(account => ({ engine: "codex", accountId: account.id, project: "tier-project", createdAt: now })) });
+      paneLaunch.mockClear(); headlessLaunch.mockClear();
+      const implementer = writeCodexEntry(`reviewer-tier-${reviewerMode}-${scenario}.jsonl`, { id: crypto.randomUUID(), cwd }, Date.now() / 1000);
+      const flow = raceFlow({ id: `tier-${reviewerMode}-${scenario}`, project: "tier-project", cwd, implementerPath: implementer.path, reviewerMode, state: "spawning",
+        roles: { implementer: { engine: "codex", model: null, effort: "high" }, reviewer: {
+          engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast",
+          serviceTierSource: preferred ? "role-default" : "explicit",
+        } } });
+      flow.rounds = [newRound(flow, "button", null)];
+      const round = flow.rounds[0]!;
+      if (scenario.startsWith("pinned")) round.accountId = "account-a";
+      if (scenario === "attempted-offering") round.attemptedAccounts = ["codex:account-c"];
+      saveFlows([flow]);
+      await tickFlow(flow, [implementer], new Map([[implementer.path, implementer]]), () => saveFlows([flow]));
+      if (["required-missing", "required-exhausted", "pool-excludes-offering", "pinned-required"].includes(scenario)) {
+        expect(flow.state).toBe("needs_decision");
+        if (scenario === "required-exhausted") expect(flow.stateDetail).toMatch(/exhausted|no allowed codex account has capacity/);
+        else expect(flow.stateDetail).toContain("offers serviceTier ultrafast");
+        expect(paneLaunch).not.toHaveBeenCalled(); expect(headlessLaunch).not.toHaveBeenCalled();
+        expect(round.launchId).toBeNull();
+        expect(round.accountId).toBe(scenario === "pinned-required" ? "account-a" : null);
+        continue;
+      }
+      const fallback = scenario === "preferred-exhausted" || scenario === "preferred-missing" || scenario === "pinned-preferred";
+      const applied = fallback ? undefined : "ultrafast";
+      expect(round.accountId).toBe(fallback ? "account-a" : "account-c");
+      expect(round.reviewerRole?.serviceTier).toBe(applied);
+      expect(registry.readOnlySnapshot().receipts[round.launchId!]!.launchProfile.serviceTier ?? null).toBe(applied ?? null);
+      if (reviewerMode === "pane") {
+        expect(paneLaunch).toHaveBeenCalledTimes(1);
+        const spec = paneLaunch.mock.calls[0]![0];
+        if (applied) expect(spec.command).toContain("service_tier=ultrafast");
+        else expect(spec.command).not.toContain("service_tier=");
+        expect(spec.command).toContain(accounts.find(account => account.id === round.accountId)!.home);
+      } else {
+        expect(headlessLaunch).toHaveBeenCalledTimes(1);
+        expect(headlessLaunch.mock.calls[0]![2].serviceTier).toBe(applied);
+        expect(headlessLaunch.mock.calls[0]![6]?.home).toBe(accounts.find(account => account.id === round.accountId)!.home);
+      }
+      if (fallback) expect(round.reviewerRole?.preferredServiceTier).toBe("ultrafast");
+    }
+  } finally {
+    paneLaunch.mockRestore(); headlessLaunch.mockRestore(); accountList.mockRestore();
+    setAgentRegistryForTests(previousRegistry);
+    clearAccountFixture(BINDINGS_SOURCE);
+    saveFlows([]);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 20_000);

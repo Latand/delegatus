@@ -28,6 +28,11 @@ const { compactLiveness, stageReportAcknowledgement } = await import("./compactA
 const { agentRegistry } = await import("@/lib/agent/registry");
 const { CORPUS_BODY_MARKERS, pipelineCorpus } = await import("@/lib/pipelines/fixtures/corpus");
 const { savePipelines } = await import("@/lib/pipelines/store");
+const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
+let requestedTicks = 0;
+// Bind all controller signals in this suite to its own in-process controller.
+const restorePipelineTick = registerPipelineTick(async () => { requestedTicks += 1; });
+afterAll(restorePipelineTick);
 agentRegistry().ensureConversation("codex", creatorPath, null);
 
 const CURRENT_HEAD = execFileSync("git", ["rev-parse", "HEAD"], { cwd: process.cwd(), encoding: "utf8" }).trim();
@@ -290,6 +295,7 @@ test("list_pipelines state open and compact answer small rows for the lanes that
 });
 
 test("pipeline_action answers the acknowledgement for every accepted action (#1845)", async () => {
+  const ticksBefore = requestedTicks;
   const pipeline = reviewedPipeline();
   const graphEdit = { seq: 1, at: "2026-09-19T00:00:00.000Z", action: "override-stage", stageId: "build", effect: "applied", appliesFromAttempt: 7, summary: "overrode build" };
   const bindings = viewerMcpBindings(undefined, undefined, {
@@ -315,6 +321,8 @@ test("pipeline_action answers the acknowledgement for every accepted action (#18
   }
   const edited = await bindings.pipeline_action({ clientRequestId: "ack-edit", pipelineId: pipeline.id, action: "override-stage", stageId: "build" });
   expect(edited).toMatchObject({ pipelineId: pipeline.id, graphEdit });
+  await Promise.resolve();
+  expect(requestedTicks).toBeGreaterThan(ticksBefore);
 });
 
 test("agent_activity compact rows drop paths, host detail and the reports (#1845)", () => {
@@ -422,4 +430,18 @@ test("account_limits answers each account's windows and tiers, narrowed by engin
   const one = await bindings.account_limits({ clientRequestId: "limits-one", accountId: "claude-b" }) as { accounts: Array<{ accountId: string }> };
   expect(one.accounts.map((account) => account.accountId)).toEqual(["claude-b"]);
   await expect(bindings.account_limits({ clientRequestId: "limits-missing", accountId: "nobody" })).rejects.toThrow("no claude, codex or copilot account has the id nobody");
+});
+
+test("runtimeLine shows a role tier and the actual fallback after launch", async () => {
+  const { pipelineAcknowledgement } = await import("./compactAnswers");
+  const pipeline = pipelineCorpus(1)[0]!;
+  const stage = pipeline.stages[0]!;
+  stage.effectiveRole.serviceTier = "ultrafast";
+  stage.effectiveRole.serviceTierSource = "role-default";
+  pipeline.runs = [];
+  expect(pipelineAcknowledgement(pipeline).runtimeLine).toContain("/ultrafast (role default, if offered)");
+  const attempt = pipelineCorpus(1)[0]!.runs[0]!.attempts[0]!;
+  attempt.effectiveRole = { ...stage.effectiveRole, serviceTier: undefined, preferredServiceTier: "ultrafast" };
+  pipeline.runs = [{ stageId: stage.id, attempts: [attempt] }];
+  expect(pipelineAcknowledgement(pipeline).runtimeLine).toContain("/default (role default ultrafast not offered by an available account)");
 });

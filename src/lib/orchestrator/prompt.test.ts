@@ -75,8 +75,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 31, and a v30 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(31);
+test("the default mandate is at version 32, and a v31 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(32);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -102,9 +102,11 @@ test("the default mandate is at version 31, and a v30 seat reads as stale", () =
      pipeline whose review is a reviewer and a fix stage, teaches one verdict
      vocabulary, names no stack, and gives the seat its personality. v31
      (docs/design/board-maintenance-report.md §8) tells the seat how to read
-     the board maintenance report it is sent when it is seated. */
+     the board maintenance report it is sent when it is seated. v32 adds
+     risk-based review budgets and the default of three rounds. */
   expect(orchestratorMandateStale(30)).toBe(true);
-  expect(orchestratorMandateStale(31)).toBe(false);
+  expect(orchestratorMandateStale(31)).toBe(true);
+  expect(orchestratorMandateStale(32)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -142,6 +144,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   29: "220722434e6ce6a265155097b000d1ec5cbf6461e67e7d39193b61cae5b6318a",
   30: "9743e8688175e3e08fd07d54df961ff363b8798b049d50ff11973e7bf2624e69",
   31: "e1583b032cf61e67f50b486172f974ae2a2ae03649cc666b0738b010247c106d",
+  32: "032c79825baef89c4f62fca96d0eeb5ac9f3f5a68aea62f316ce19d408d42e74",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -800,4 +803,21 @@ test("the delivered mandate names no Viewer, and the v29 clock heading still mar
   expect(kept).toContain(reworded);
   expect(kept).not.toContain(ORCHESTRATOR_VIEWER_CLOCK_HEADING);
   expect(kept.split("you never schedule yourself")).toHaveLength(2);
+});
+
+test("the mandate chooses an explicit review budget from consequences and probability", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Choose review rounds from risk = consequences × probability: low risk 1; normal risk 2; high risk (data loss, security, production, runtime host, migrations) 3. The default is 3. More than 3 only when the operator asks; state the reason in the brief.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("unlimited");
+});
+
+test("agent-facing review skills agree with the mandate's risk budget", () => {
+  for (const name of ["delegatus-conveyor", "review-loop"]) {
+    const skill = fs.readFileSync(path.join(import.meta.dir, `../../../.claude/skills/${name}/SKILL.md`), "utf8");
+    expect(skill).toContain("risk = consequences × probability: low risk 1; normal risk 2; high risk (data loss, security, production, runtime host, migrations) 3.");
+    expect(skill).toContain("The default is 3. More than 3 only when the operator asks; state the reason in the brief.");
+    expect(skill).not.toMatch(/roundLimit"?:? ?5|5–7 substantive|9–13/);
+  }
+  const reviewLoop = fs.readFileSync(path.join(import.meta.dir, "../../../.claude/skills/review-loop/SKILL.md"), "utf8");
+  expect(reviewLoop).toContain('"roundLimit": 3');
+  expect(reviewLoop).toContain("Unlimited review requires an explicit operator request and `roundLimit: 0`.");
 });

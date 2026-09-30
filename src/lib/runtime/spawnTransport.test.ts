@@ -27,7 +27,7 @@ describe("spawnTransport", () => {
       { ...host, LLV_RUNTIME_EVENTS: "0" },
     ]) {
       const transport = spawnTransport(env);
-      const gap = structuredSpawnGap({ engine: "claude", model: "fable", hasImages: false, fast: null }, env);
+      const gap = structuredSpawnGap({ engine: "claude", model: "fable", hasImages: false }, env);
       expect(transport === "tmux" || gap === null).toBeTrue();
     }
   });
@@ -66,7 +66,7 @@ describe("spawnTransport", () => {
       LLV_RUNTIME_HOST_SOCKET: "/run/llv/runtime.sock",
       NEXT_PUBLIC_RUNTIME_UI: "0",
     })).toBe("structured");
-    expect(structuredSpawnGap({ engine: "claude", model: "fable", hasImages: false, fast: null }, {
+    expect(structuredSpawnGap({ engine: "claude", model: "fable", hasImages: false }, {
       LLV_SPAWN_TRANSPORT: "structured",
       LLV_RUNTIME_HOST_SOCKET: "/run/llv/runtime.sock",
       NEXT_PUBLIC_RUNTIME_UI: "0",
@@ -90,12 +90,12 @@ describe("structuredSpawnGap", () => {
   };
 
   test("accepts the supported pane-less shape", () => {
-    expect(structuredSpawnGap({ engine: "codex", model: "gpt-5.6-sol", hasImages: false, fast: null }, enabled)).toBeNull();
+    expect(structuredSpawnGap({ engine: "codex", model: "gpt-5.6-sol", hasImages: false }, enabled)).toBeNull();
   });
 
   test("accepts a deployment that only declares its runtime socket", () => {
     expect(
-      structuredSpawnGap({ engine: "claude", model: "fable", hasImages: false, fast: null }, {
+      structuredSpawnGap({ engine: "claude", model: "fable", hasImages: false }, {
         LLV_RUNTIME_HOST_SOCKET: "/run/llv/runtime.sock",
       }),
     ).toBeNull();
@@ -110,18 +110,18 @@ describe("structuredSpawnGap", () => {
     [{ ...enabled, LLV_RUNTIME_EVENTS: "false" }, "LLV_RUNTIME_EVENTS=0"],
     [{ ...enabled, NEXT_PUBLIC_RUNTIME_UI: "'0'" }, "NEXT_PUBLIC_RUNTIME_UI=0"],
   ] as const)("names the explicit rollback that blocks the spawn", (env, gap) => {
-    expect(structuredSpawnGap({ engine: "claude", model: "fable", hasImages: false, fast: null }, env)).toContain(gap);
+    expect(structuredSpawnGap({ engine: "claude", model: "fable", hasImages: false }, env)).toContain(gap);
   });
 
   test("negotiates Claude images and Codex image-capable models", () => {
-    expect(structuredSpawnGap({ engine: "claude", model: "fable", hasImages: true, fast: null }, enabled)).toBeNull();
-    expect(structuredSpawnGap({ engine: "codex", model: "gpt-5.6-sol", hasImages: true, fast: null }, enabled)).toBeNull();
-    expect(structuredSpawnGap({ engine: "codex", model: "gpt-6-astra", hasImages: true, fast: null }, enabled)).toBeNull();
-    expect(structuredSpawnGap({ engine: "codex", model: "gpt-5.3-codex-spark", hasImages: true, fast: null }, enabled))
+    expect(structuredSpawnGap({ engine: "claude", model: "fable", hasImages: true }, enabled)).toBeNull();
+    expect(structuredSpawnGap({ engine: "codex", model: "gpt-5.6-sol", hasImages: true }, enabled)).toBeNull();
+    expect(structuredSpawnGap({ engine: "codex", model: "gpt-6-astra", hasImages: true }, enabled)).toBeNull();
+    expect(structuredSpawnGap({ engine: "codex", model: "gpt-5.3-codex-spark", hasImages: true }, enabled))
       .toContain("does not advertise image input");
   });
 
-  test("names Codex service-tier selection as an unsupported spawn feature", () => {
-    expect(structuredSpawnGap({ engine: "codex", model: "gpt-5.6-sol", hasImages: false, fast: true }, enabled)).toContain("Codex service tier");
+  test("admits Codex launches with service-tier support on the structured transport", () => {
+    expect(structuredSpawnGap({ engine: "codex", model: "gpt-5.6-sol", hasImages: false }, enabled)).toBeNull();
   });
 });

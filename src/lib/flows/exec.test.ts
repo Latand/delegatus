@@ -25,6 +25,14 @@ const EVENTS = [
   JSON.stringify({ item: { type: "agent_message", text: "VERDICT: APPROVE\n\nLooks good." } }),
 ].join("\n");
 
+test.each(["ultrafast", "priority", "default", "standard"])("headless reviewer command carries and normalizes admitted service tier %s", (serviceTier) => {
+  const built = reviewerCommand({ engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier }, "Review", "review.txt", process.env.LLV_STATE_DIR!);
+  const tierIndex = built.args.indexOf(`service_tier=${serviceTier === "standard" ? "default" : serviceTier}`);
+  expect(tierIndex).toBeGreaterThan(0);
+  expect(built.args[tierIndex - 1]).toBe("-c");
+  if (serviceTier === "standard") expect(built.args).not.toContain("service_tier=standard");
+});
+
 test("reviewer group escalation kills a TERM-resistant child after the leader exits", () => {
   let leaderAlive = true;
   let childAlive = true;

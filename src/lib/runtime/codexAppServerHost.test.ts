@@ -5478,3 +5478,34 @@ describe("two-phase steering", () => {
     } finally { await host.release(); }
   });
 });
+
+describe("Codex launch service tier", () => {
+  test("fresh and resumed threads set ultrafast and every send inherits", async () => {
+    for (const threadId of [undefined, "tier-thread"]) {
+      const server = new FakeAppServer("tier-thread");
+      server.modelList = [{ id: "gpt-6-astra", isDefault: true, serviceTiers: [{ id: "priority" }, { id: "ultrafast" }] }];
+      const options = { cwd: "/repo", model: "gpt-6-astra", serviceTier: "ultrafast", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, {}) };
+      const host = await (threadId ? CodexAppServerHost.adopt(threadId, options) : CodexAppServerHost.start(options));
+      try {
+        expect(server.requests.find(request => request.method === (threadId ? "thread/resume" : "thread/start"))?.params).toMatchObject({ serviceTier: "ultrafast" });
+        await host.send({ id: "tier-first", text: "begin" });
+        await host.send({ id: "tier-steer", text: "continue", expectedTurnId: "turn-1" });
+        server.notify("turn/completed", { threadId: host.identity.threadId, turn: { id: "turn-1", status: "completed" } });
+        await new Promise(resolve => setTimeout(resolve, 0));
+        await host.send({ id: "tier-later", text: "next turn" });
+        const sends = server.requests.filter(request => request.method === "turn/start" || request.method === "turn/steer");
+        expect(sends.map(request => request.method)).toEqual(["turn/start", "turn/steer", "turn/start"]);
+        for (const send of sends) { expect(send.params).not.toHaveProperty("serviceTier"); expect(send.params).not.toHaveProperty("serviceTierForTurn"); }
+      } finally { await host.release(); }
+    }
+  });
+  test("catalog without the tier or an unavailable catalog refuses before thread start", async () => {
+    for (const unavailable of [false, true]) {
+      const server = new FakeAppServer("tier-refused");
+      server.modelList = [{ id: "gpt-6-astra", serviceTiers: [{ id: "priority" }] }];
+      if (unavailable) server.modelListFailuresRemaining = 1;
+      await expect(CodexAppServerHost.start({ cwd: "/repo", model: "gpt-6-astra", serviceTier: "ultrafast", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, {}) })).rejects.toThrow(unavailable ? "catalog unavailable" : "priority");
+      expect(server.requests.some(request => request.method === "thread/start")).toBeFalse();
+    }
+  });
+});

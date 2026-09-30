@@ -77,14 +77,14 @@ describe("preview", () => {
     expect(JSON.stringify(pipeline)).toBe(before);
     expect(preview).toMatchObject({
       stageId: "reviewer", implementerStageId: "builder", fixerStageId: "reviewer-fix",
-      reviewLimit: LEGACY_REVIEW_FLOW_ROUND_LIMIT, reviewLimitSource: "default", reviewerActivations: 5, legacyAttempts: 0,
+      reviewLimit: LEGACY_REVIEW_FLOW_ROUND_LIMIT, reviewLimitSource: "default", reviewerActivations: 3, legacyAttempts: 0,
     });
     expect(preview.stages.map((stage) => stage.id)).toEqual(["architect", "builder", "reviewer", "reviewer-fix"]);
     const [architect, builder, reviewer, fixer] = preview.stages;
     /* The reviewer keeps its id, prompt, role snapshot, pass successor and unknown fields. */
     expect(reviewer).toMatchObject({
       id: "reviewer", kind: "run", "prompt": "Review reviewer", next: null, role: { roleId: "reviewer" },
-      effectiveRole: role("reviewer", "read-only"), onFail: { to: "reviewer-fix", maxRounds: 5, onExhausted: "advance" }, legacyNote: "unknown field",
+      effectiveRole: role("reviewer", "read-only"), onFail: { to: "reviewer-fix", maxRounds: 3, onExhausted: "advance" }, legacyNote: "unknown field",
     });
     /* The fixer is a builder fix round on the fix row (agent-prompt-contract.md
        §3 (a)), takes the findings input, then hands back to the reviewer. */
@@ -195,13 +195,14 @@ describe("preview", () => {
 
   test("a finite flow limit N becomes N reviewer activations under advance, never a clamp", () => {
     const pipeline = FIVE_DRAFT();
-    for (const limit of [1, 2, 3, 9]) {
+    for (const limit of [1, 2, 3, 5, 9]) {
       const preview = ok(previewLegacyReviewConversion(pipeline, {}, { flowRoundLimit: limit }));
       expect(preview).toMatchObject({ reviewLimit: limit, reviewLimitSource: "flow", reviewerActivations: limit });
       expect(preview.stages.find((stage) => stage.id === "reviewer")!.onFail).toEqual({ to: "reviewer-fix", maxRounds: limit, onExhausted: "advance" });
     }
     /* An explicit limit is the caller's edit and wins over the recorded one. */
     expect(ok(previewLegacyReviewConversion(pipeline, { reviewLimit: 2 }, { flowRoundLimit: 7 }))).toMatchObject({ reviewLimit: 2, reviewLimitSource: "request" });
+    expect(ok(previewLegacyReviewConversion(pipeline, { reviewLimit: 7 }, { flowRoundLimit: 2 }))).toMatchObject({ reviewLimit: 7, reviewLimitSource: "request", reviewerActivations: 7 });
     /* The counters differ: advance runs the reviewer maxRounds times, park once more. */
     expect(reviewerActivationsForLimit(4, "advance")).toBe(4);
     expect(reviewerActivationsForLimit(4, "park")).toBe(5);
@@ -212,7 +213,7 @@ describe("preview", () => {
   test("unlimited, zero and over-bound limits are refused with a recommended finite limit", () => {
     const pipeline = FIVE_DRAFT();
     const unlimited = refused(previewLegacyReviewConversion(pipeline, {}, { flowRoundLimit: 0 }));
-    expect(unlimited).toMatchObject({ reviewLimit: null, recommendedReviewLimit: 5 });
+    expect(unlimited).toMatchObject({ reviewLimit: null, recommendedReviewLimit: 3 });
     expect(unlimited.refusals.map((refusal) => refusal.code)).toEqual(["unlimited-limit"]);
     expect(refused(previewLegacyReviewConversion(pipeline, { reviewLimit: 0 })).refusals[0]!.code).toBe("unlimited-limit");
     const over = refused(previewLegacyReviewConversion(pipeline, {}, { flowRoundLimit: 12 }));
@@ -220,7 +221,7 @@ describe("preview", () => {
     expect(over.refusals[0]!.message).toContain("12");
     expect(refused(previewLegacyReviewConversion(pipeline, { reviewLimit: 2.5 })).refusals[0]!.code).toBe("limit-out-of-range");
     /* The editable fix is the recommendation. */
-    expect(ok(previewLegacyReviewConversion(pipeline, { reviewLimit: unlimited.recommendedReviewLimit }, { flowRoundLimit: 0 })).reviewLimit).toBe(5);
+    expect(ok(previewLegacyReviewConversion(pipeline, { reviewLimit: unlimited.recommendedReviewLimit }, { flowRoundLimit: 0 })).reviewLimit).toBe(3);
   });
 
   test("a stage with an unsettled legacy attempt is live and refused", () => {
@@ -249,7 +250,7 @@ describe("apply and revert", () => {
     expect(preview.legacyAttempts).toBe(2);
     const conversion = applyLegacyReviewConversion(pipeline, preview, RECEIPT);
 
-    expect(conversion).toMatchObject({ ...RECEIPT, stageId: "review", fixerStageId: "review-fix", implementerStageId: "build", reviewLimit: 5, reviewLimitSource: "default" });
+    expect(conversion).toMatchObject({ ...RECEIPT, stageId: "review", fixerStageId: "review-fix", implementerStageId: "build", reviewLimit: 3, reviewLimitSource: "default" });
     /* The immutable snapshot is the definition as it was, byte for byte. */
     expect(JSON.stringify(conversion.original.stages)).toBe(JSON.stringify(original.stages));
     expect(JSON.stringify(conversion.original.run)).toBe(JSON.stringify(original.runs[1]));

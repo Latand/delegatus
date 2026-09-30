@@ -18,6 +18,9 @@ export interface TaskSyncWrite {
   read(key: string): TombstoneRow | null;
   put(row: TombstoneRow): void;
   remove(key: string): void;
+  /** Keep an accepted equal-stamp placeholder recovery from becoming a local edit. */
+  preserveStamp(id: string, group: TaskSyncGroup): void;
+  isStampPreserved(id: string, group: TaskSyncGroup): boolean;
 }
 
 /** Local digest of a group. `chosen` belongs to the text group: naming a task
@@ -98,6 +101,8 @@ export function stampLinkedRows(tasks: BoardTask[], before: ReadonlyMap<string, 
     for (const group of TASK_SYNC_GROUPS) {
       const changed = !prior || prior.digests[group] !== groupDigest(task, group);
       const setByWriter = stamps[group] !== undefined && stamps[group] !== prior?.stamps[group];
+      const preserved = prior !== undefined && stamps[group] === prior.stamps[group] && write.isStampPreserved(task.id, group);
+      if (preserved) continue;
       if (setByWriter) continue;
       if (changed) { stamps[group] = fresh(task.project); local = true; }
       else stamps[group] ??= prior.stamps[group] ?? derivedStamp(prior.updatedAt, write.self.prefix);

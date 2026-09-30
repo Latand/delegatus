@@ -1,3 +1,4 @@
+import { sharedLinkState } from "./runtimeState";
 /** Ephemeral, bounded agent summaries for one linked-board connection (M.6). */
 import { createHash, randomBytes } from "node:crypto";
 
@@ -15,8 +16,8 @@ export type Cursor = { epoch: string; version: number };
 type Part = { after: Cursor | null; rows?: Change[]; reset?: true; more?: true; cursor: Cursor };
 const PROJECT = /^repo-[0-9a-f]{32}$/;
 const AGENT_ENGINES: ReadonlySet<Engine> = new Set(["claude", "codex", "copilot", "openclaw"]);
-const feeds = new Map<string, AgentFeed>();
-const received = new Map<string, { rows: Map<string, AgentRow>; at: number; reset?: { cursor: Cursor; rows: Map<string, AgentRow> } }>();
+const feeds = sharedLinkState("agentFeed.feeds", () => new Map<string, AgentFeed>());
+const received = sharedLinkState("agentFeed.received", () => new Map<string, { rows: Map<string, AgentRow>; at: number; reset?: { cursor: Cursor; rows: Map<string, AgentRow> } }>());
 
 function safeId(value: unknown): string | null { return typeof value === "string" && /^[a-zA-Z0-9._-]{1,64}$/.test(value) ? value : null; }
 function rowFor(file: FileEntry, tasks: ReturnType<typeof loadTasksForList>, projects: ReadonlySet<string>): AgentRow | null {
@@ -143,7 +144,7 @@ export class AgentFeed {
 }
 
 export function agentFeed(id: string): AgentFeed { let feed = feeds.get(id); if (!feed) { feed = new AgentFeed(id); feeds.set(id, feed); } return feed; }
-const cursors = new Map<string, { pull: Cursor | null; pushed: Cursor | null; pullOffset: number; pushOffset: number; projectsKey: string }>();
+const cursors = sharedLinkState("agentFeed.cursors", () => new Map<string, { pull: Cursor | null; pushed: Cursor | null; pullOffset: number; pushOffset: number; projectsKey: string }>());
 export function agentCursors(id: string): { pull: Cursor | null; pushed: Cursor | null; pullOffset: number; pushOffset: number; projectsKey: string } {
   let state = cursors.get(id);
   if (!state) { state = { pull: null, pushed: null, pullOffset: 0, pushOffset: 0, projectsKey: "" }; cursors.set(id, state); }

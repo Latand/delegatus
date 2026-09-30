@@ -29,7 +29,7 @@ asks for:
 - **Reviewer mode** — headless (one-shot `codex exec` / `claude -p`, edit
   tools disabled, nothing to clean up) or pane (an interactive tmux agent you
   can watch and interrogate).
-- **Round limit** — a forced pause after N rounds (default 5), extendable.
+- **Round limit** — a forced pause after N rounds (default 3; higher or unlimited limits require an explicit selection), extendable.
 - **Specification and acceptance criteria** — optional pinned review context,
   stored with the flow and shown to every fresh reviewer. Leave it blank and
   the kickoff asks the implementer to create `spec.md` before its first

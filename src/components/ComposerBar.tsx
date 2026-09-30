@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import type { CSSProperties, ReactNode } from "react";
 
 import { ChevronDown, Loader2, Play, Square } from "@/components/icons";
+import type { LucideIcon } from "lucide-react";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useLocale } from "@/lib/i18n";
 import type { UseComposerReturn } from "@/hooks/useComposer";
@@ -22,6 +23,9 @@ export interface SendMenuAction {
   description?: string;
   disabled?: boolean;
   tone?: "ok";
+  /** A setting rather than an action: rendered as a checkbox item, and choosing
+      it leaves the menu open so the new state can be read. */
+  checked?: boolean;
   onSelect: () => void;
 }
 
@@ -177,6 +181,11 @@ export interface ComposerBarProps {
       conversation (docs/design/ghost-seat.md §6.6). Absent everywhere else,
       where the chord does nothing. */
   onParallelSubmit?: () => void;
+  /** The glyph of the idle send control; `Play` when absent. */
+  sendIcon?: LucideIcon;
+  /** `context` paints the input box as an injection target (dashed info
+      border). Colour and border only, so a mode flip never moves geometry. */
+  mode?: "context";
 }
 
 const NO_HISTORY: readonly string[] = [];
@@ -247,17 +256,27 @@ function SendMenu({ label, actions, onClose, position, owner }: {
         <button
           key={action.id}
           type="button"
-          role="menuitem"
+          role={action.checked === undefined ? "menuitem" : "menuitemcheckbox"}
+          aria-checked={action.checked}
           disabled={action.disabled}
           onClick={() => {
             action.onSelect();
-            onClose();
+            if (action.checked === undefined) onClose();
           }}
           className={`flex w-full items-start gap-2 rounded-control px-2 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 ${
             action.tone === "ok" ? "hover:bg-success/10" : "hover:bg-sunken"
           }`}
         >
-          <Play className={`mt-[2px] h-3.5 w-3.5 shrink-0 ${action.tone === "ok" ? "text-success" : "text-muted"}`} aria-hidden />
+          {action.checked === undefined ? (
+            <Play className={`mt-[2px] h-3.5 w-3.5 shrink-0 ${action.tone === "ok" ? "text-success" : "text-muted"}`} aria-hidden />
+          ) : (
+            <span
+              aria-hidden
+              className={`mt-[2px] inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border text-[10px] leading-none ${action.checked ? "border-info bg-info text-white" : "border-border text-transparent"}`}
+            >
+              ✓
+            </span>
+          )}
           <span className="min-w-0 flex-1">
             <span className="block text-ui font-semibold text-primary">{action.label}</span>
             {action.description ? <span className="block text-caption leading-snug text-muted">{action.description}</span> : null}
@@ -300,6 +319,8 @@ export function ComposerBar({
   pinInput = false,
   onAlternateSubmit,
   onParallelSubmit,
+  sendIcon: SendIcon = Play,
+  mode,
 }: ComposerBarProps) {
   const {
     displayText,
@@ -381,7 +402,7 @@ export function ComposerBar({
     ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
     : slotKind === "stop"
       ? <Square className="h-3.5 w-3.5" fill="currentColor" aria-hidden />
-      : <Play className="h-4 w-4" aria-hidden />;
+      : <SendIcon className="h-4 w-4" aria-hidden />;
 
   /* The phone paints a 32 px visual inside the 44 px target; the desktop button
      is the control itself, unchanged. Stop takes the primary fill so it never
@@ -619,10 +640,11 @@ export function ComposerBar({
             transcript (column), exactly as before. */}
         <div
           data-mobile2-composer={isMobile ? slotKind : undefined}
+          data-composer-mode={mode}
           className={
             isMobile
-              ? "flex flex-col rounded-surface border border-border bg-sunken px-2 pb-0.5 pt-1 focus-within:border-accent/55"
-              : `flex rounded-control border border-border bg-sunken focus-within:ring-2 focus-within:ring-accent/40 ${
+              ? `flex flex-col rounded-surface border bg-sunken px-2 pb-0.5 pt-1 ${mode === "context" ? "border-dashed border-info/60 focus-within:border-info" : "border-border focus-within:border-accent/55"}`
+              : `flex rounded-control border bg-sunken ${mode === "context" ? "border-dashed border-info/60 focus-within:ring-2 focus-within:ring-info/40" : "border-border focus-within:ring-2 focus-within:ring-accent/40"} ${
                   dictationRecording ? "flex-col gap-1.5 p-2.5" : "items-end gap-1 py-1 pl-2.5 pr-1"
                 }`
           }

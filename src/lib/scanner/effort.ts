@@ -1,4 +1,5 @@
 import type { FileEntry } from "../types";
+import { agentRegistry, RegistryReadError } from "../agent/registry";
 import { headRecordsResult, tailRecordsResult } from "./activity";
 import { globalCache } from "./caches";
 import { recordValue, recordsValue, stringValue } from "./json";
@@ -99,16 +100,73 @@ export function entryEffortResult(entry: FileEntry): EntryEffortResult {
   return { value: effort ?? argv, complete };
 }
 
-/** Codex speed tier from the live process argv. Transcript records currently
-    do not carry a stable service-tier field, so unknown and stopped sessions
-    remain null. */
-export function entryFast(entry: FileEntry): boolean | null {
-  if (entry.engine !== "codex" || entry.pid === null) return null;
-  const argv = readArgv(entry.pid);
+const serviceTierCache = globalCache<[number, number, string | null]>("serviceTier-v2");
+function normalizeServiceTier(value: unknown): string | null {
+  if (typeof value !== "string" || !/^[a-z][a-z0-9_-]{0,31}$/.test(value)) return null;
+  return value === "standard" ? "default" : value;
+}
+
+/** Codex thread settings survive structured starts, later turns and stopped sessions. */
+export function entryServiceTier(entry: FileEntry, durableTiers?: ReadonlyMap<string, string | null>): string | null {
+  if (entry.engine !== "codex") return null;
+  const argv = entry.pid === null ? [] : readArgv(entry.pid);
   for (let i = 0; i < argv.length - 1; i++) {
     if (argv[i] !== "-c" && argv[i] !== "--config") continue;
-    const match = argv[i + 1].match(/^service_tier\s*=\s*"?(priority|standard)"?$/i);
-    if (match) return match[1].toLowerCase() === "priority";
+    const match = argv[i + 1].match(/^service_tier\s*=\s*"?([a-z][a-z0-9_-]{0,31})"?$/);
+    if (match) return normalizeServiceTier(match[1]);
   }
-  return null;
+  const mtimeMs = entry.mtime * 1000;
+  const cached = serviceTierCache.get(entry.path);
+  if (cached?.[0] === entry.size && cached[1] === mtimeMs) return cached[2] ?? durableServiceTier(entry, durableTiers);
+  const pick = (records: Record<string, unknown>[]) => {
+    for (const record of [...records].reverse()) {
+      const payload = recordValue(record.payload);
+      if (record.type !== "event_msg" || payload?.type !== "thread_settings_applied") continue;
+      const tier = normalizeServiceTier(recordValue(payload.thread_settings)?.service_tier);
+      if (tier) return tier;
+    }
+    return null;
+  };
+  const tail = tailRecordsResult(entry.path, entry.size, mtimeMs);
+  // An older head setting may have been overridden beyond both read windows.
+  // When the tail cannot answer, use the durable profile rather than an old head setting.
+  const tier = pick(tail.records);
+  if (tail.complete) serviceTierCache.set(entry.path, [entry.size, mtimeMs, tier]);
+  return tier ?? durableServiceTier(entry, durableTiers);
+}
+
+/** One registry walk per scan, including misses. Conversation generations win
+    over continuity aliases and receipts in the same order as registry lookup. */
+export function durableServiceTierIndex(registry = agentRegistry()): ReadonlyMap<string, string | null> {
+  const tiers = new Map<string, string | null>();
+  try {
+    const snapshot = registry.readOnlySnapshot();
+    const put = (pathname: string, profile: { serviceTier?: string | null; fast?: boolean | null }) => {
+      if (!tiers.has(pathname)) tiers.set(pathname, normalizeServiceTier(profile.serviceTier)
+        ?? (profile.fast === true ? "priority" : profile.fast === false ? "default" : null));
+    };
+    for (const conversation of Object.values(snapshot.conversations)) {
+      for (const generation of conversation.generations) put(generation.path, generation.launchProfile);
+      const current = conversation.generations.at(-1);
+      if (current) for (const pathname of conversation.continuityPaths) put(pathname, current.launchProfile);
+    }
+    for (const receipt of Object.values(snapshot.receipts)) {
+      if (receipt.artifactPath) put(receipt.artifactPath, receipt.launchProfile);
+    }
+  } catch (error) {
+    if (!(error instanceof RegistryReadError)) throw error;
+  }
+  return tiers;
+}
+
+function durableServiceTier(entry: FileEntry, tiers?: ReadonlyMap<string, string | null>): string | null {
+  if (tiers) return tiers.get(entry.path) ?? null;
+  try {
+    const profile = agentRegistry().launchProfileForPath(entry.path);
+    return normalizeServiceTier(profile?.serviceTier)
+      ?? (profile?.fast === true ? "priority" : profile?.fast === false ? "default" : null);
+  } catch (error) {
+    if (error instanceof RegistryReadError) return null;
+    throw error;
+  }
 }
