@@ -182,8 +182,8 @@ async function main(): Promise<number> {
     requested,
     { mirrorDir, remote: canonicalRemote },
     {
-      run: command,
-      ensureMirror: () => ensureCanonicalMirror({ deploymentDir, mirrorDir, remote: canonicalRemote }, { run: command }),
+      run: (argv) => command(argv),
+      ensureMirror: () => ensureCanonicalMirror({ deploymentDir, mirrorDir, remote: canonicalRemote }, { run: (argv) => command(argv) }),
     },
   );
   const image = `${DOCKER_NAMES.imageRepository}:hostboot-${revision}`;

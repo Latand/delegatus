@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { realExec, type ExecPort, type ExecResult } from "@/lib/workflows/provision";
 import { controllerCommitIdentityArgs } from "@/lib/git/controllerCommitIdentity";
+import { networkFailureIsTransient } from "@/lib/git/transientFailure";
 import { procBackend } from "@/lib/proc";
 import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, withDeliveryMutationAsync } from "./store";
 
@@ -224,8 +225,12 @@ export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: P
     if (listing.code !== 0) return failure("checking pipeline worktree initialization", listing);
     const entry = listing.stdout.split("\0\0").map((record) => record.split("\0"))
       .find((fields) => fields.includes(`branch refs/heads/${branch}`));
-    if (!entry || entry.includes("locked initializing") || entry.some((field) => field.startsWith("prunable"))) {
+    if (!entry || entry.some((field) => field.startsWith("prunable"))) {
       return { ok: false, error: "the pipeline worktree has not finished initializing" };
+    }
+    if (entry.includes("locked initializing")) {
+      const finished = await finishInterruptedCheckout(pipeline, start, exec, signal);
+      if (!finished.ok) return finished;
     }
     // Preserve existing files; a retry may adopt only a complete tracked tree.
     // Untracked files do not affect completeness and remain untouched.
@@ -252,6 +257,53 @@ export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: P
     return { ok: false, error: "the pipeline worktree does not match its selected start commit" };
   }
   return { ok: true, sha: base.stdout.trim(), baseBranch: pipeline.baseBranch };
+}
+
+/** What a retry says while a live Git process still initializes the worktree
+    a previous attempt began. The controller retries it; nothing is touched. */
+export const WORKTREE_INITIALIZATION_HELD = "the pipeline worktree is still being initialized by git process";
+
+/** A live Git process working on this checkout: the add that created it
+    names it in its argv, its checkout child carries it as GIT_WORK_TREE, and
+    anything else runs inside it. Only Git writes a checkout's index. */
+function liveGitOwner(worktreeDir: string): number | null {
+  const inside = (candidate: string | null) => candidate === worktreeDir || Boolean(candidate?.startsWith(`${worktreeDir}${path.sep}`));
+  for (const candidate of procBackend.listProcesses()) {
+    if (!/^git(?:-|$)/.test(path.basename(candidate.argv[0] ?? ""))) continue;
+    if (candidate.argv.includes(worktreeDir) || inside(candidate.cwd)
+      || procBackend.readEnvVar(candidate.pid, "GIT_WORK_TREE") === worktreeDir) return candidate.pid;
+  }
+  return null;
+}
+
+/**
+ * Finishes the checkout a killed `git worktree add` began (#2176).
+ *
+ * `git worktree add` locks the new entry `initializing`, writes the branch and
+ * HEAD, runs `git reset --hard` to populate it, and unlocks. A child killed at
+ * its bound stops between the second and the last step: the lock stays, the
+ * index lock its checkout held stays, and every later attempt used to refuse
+ * the entry for ever. With no Git process left on the checkout, doing the two
+ * remaining steps is exactly what Git itself would have done. It runs only
+ * while the checkout sits at the commit the add was creating, so no stage can
+ * have run in it; untracked files are left alone.
+ */
+async function finishInterruptedCheckout(pipeline: Pipeline, start: string, exec: ProvisionExecPort, signal?: AbortSignal): Promise<PipelineGitResult> {
+  const owner = liveGitOwner(pipeline.worktreeDir);
+  if (owner !== null) return { ok: false, error: `${WORKTREE_INITIALIZATION_HELD} ${owner}` };
+  const head = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir, signal);
+  if (head.code !== 0) return failure("reading the interrupted pipeline checkout", head);
+  if (head.stdout.trim() !== start) {
+    return { ok: false, error: `the interrupted pipeline checkout is at ${head.stdout.trim()}, not its start commit ${start}; remove the worktree and retry-stage` };
+  }
+  const gitDir = await exec("git", ["rev-parse", "--path-format=absolute", "--git-dir"], pipeline.worktreeDir, signal);
+  if (gitDir.code !== 0 || !gitDir.stdout.trim()) return failure("locating the interrupted pipeline checkout", gitDir);
+  fs.rmSync(path.join(gitDir.stdout.trim(), "index.lock"), { force: true });
+  const checkout = await exec("git", ["reset", "--hard", "--quiet", "--no-recurse-submodules"], pipeline.worktreeDir, signal);
+  if (checkout.code !== 0) return failure("finishing the interrupted pipeline checkout", checkout);
+  const unlock = await exec("git", ["worktree", "unlock", pipeline.worktreeDir], pipeline.repoDir, signal);
+  if (unlock.code !== 0) return failure("unlocking the finished pipeline checkout", unlock);
+  return { ok: true, sha: start };
 }
 
 function changedWorktreePaths(
@@ -408,18 +460,6 @@ export type PipelineRemoteHeadResult =
   | { ok: true; sha: string }
   | { ok: false; error: string; transient: boolean };
 
-/* Checked first: an SSH login the server refused can also print "Connection
-   closed by …", and that is a credential problem no retry fixes. */
-const REMOTE_READ_REFUSED = /permission denied|authentication failed|host key verification failed|could not read (username|password)|repository not found|does not appear to be a git repository|returned error: 40[134]/i;
-const REMOTE_READ_TRANSPORT = /timed out|could not resolve host|temporary failure in name resolution|connection refused|connection reset|connection closed by|network is unreachable|no route to host|failed to connect to|returned error: 5\d\d/i;
-
-/** Whether a failed remote read is one the network failed (#1692): it says
-    nothing about the branch, so asking again is sound. A refused login, a
-    missing repository and anything unrecognized are not. */
-function remoteReadFailureIsTransient(error: string): boolean {
-  return !REMOTE_READ_REFUSED.test(error) && REMOTE_READ_TRANSPORT.test(error);
-}
-
 /** Reads the authoritative remote pipeline branch without relying on a stale
     tracking ref. Approval fences use this alongside the clean local HEAD. The
     read is time-bounded like the publication read: an unbounded `ls-remote`
@@ -428,7 +468,7 @@ function remoteReadFailureIsTransient(error: string): boolean {
 export function currentPipelineRemoteBranchHead(pipeline: Pipeline, exec: ExecPort): PipelineRemoteHeadResult {
   if (!validPipelineBranch(pipeline.branch)) return { ok: false, error: "the pipeline branch is invalid", transient: false };
   const remote = readRemotePipelineBranch(pipeline, exec, "checking the remote pipeline branch");
-  if (!remote.ok) return { ok: false, error: remote.error, transient: remoteReadFailureIsTransient(remote.error) };
+  if (!remote.ok) return { ok: false, error: remote.error, transient: networkFailureIsTransient(remote.error) };
   if (!/^[0-9a-f]{40}$/i.test(remote.sha)) return { ok: false, error: "the remote pipeline branch has no exact commit SHA", transient: false };
   return { ok: true, sha: remote.sha };
 }

@@ -302,7 +302,7 @@ test("async exec reports launch errors, pre-abort, and a killed timeout without 
 });
 
 for (const interruption of ["timeout", "cancellation"] as const) {
-  test(`async checkout rejects ${interruption} and cannot adopt its incomplete worktree on retry`, async () => {
+  test(`async checkout rejects ${interruption}, and the retry finishes the checkout it began (#2176)`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-interrupted-checkout-"));
     const source = path.join(root, "source");
     const marker = path.join(root, "smudge-started");
@@ -335,10 +335,15 @@ for (const interruption of ["timeout", "cancellation"] as const) {
       expect(git(source, "worktree", "list", "--porcelain")).toContain("locked initializing");
       expect(fs.existsSync(path.join(subject.worktreeDir, "tracked.txt"))).toBe(false);
       fs.writeFileSync(path.join(subject.worktreeDir, "keep.txt"), "preserve partial checkout\n");
-      const retry = await provisionPipelineWorktreeAsync(subject, realProvisionExec);
-      expect(fs.readFileSync(path.join(subject.worktreeDir, "keep.txt"), "utf8")).toBe("preserve partial checkout\n");
       expect(result.ok).toBe(false);
-      expect(retry.ok).toBe(false);
+      // No Git process is left on the checkout: the retry does what the killed add had left to do.
+      git(source, "config", "filter.slow.smudge", "cat");
+      git(source, "config", "filter.slow.clean", "cat");
+      const retry = await provisionPipelineWorktreeAsync(subject, realProvisionExec);
+      expect(retry).toEqual({ ok: true, sha: subject.baseRef, baseBranch: "main" });
+      expect(fs.readFileSync(path.join(subject.worktreeDir, "tracked.txt"), "utf8")).toBe("complete file\n");
+      expect(fs.readFileSync(path.join(subject.worktreeDir, "keep.txt"), "utf8")).toBe("preserve partial checkout\n");
+      expect(git(source, "worktree", "list", "--porcelain")).not.toContain("locked");
     } finally {
       abort.abort();
       await pending;
@@ -347,7 +352,7 @@ for (const interruption of ["timeout", "cancellation"] as const) {
   }, 10_000);
 }
 
-test("async adoption rejects missing tracked files and retains a complete checkout with untracked files", async () => {
+test("async adoption finishes an abandoned initialization, rejects missing tracked files and retains untracked files", async () => {
   const source = path.join(publicationState, "source");
   fs.mkdirSync(source);
   git(source, "init", "--initial-branch=main");
@@ -358,13 +363,37 @@ test("async adoption rejects missing tracked files and retains a complete checko
   expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(true);
   fs.writeFileSync(path.join(subject.worktreeDir, "keep.txt"), "preserve\n");
   git(source, "worktree", "lock", "--reason", "initializing", subject.worktreeDir);
-  expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(false);
-  git(source, "worktree", "unlock", subject.worktreeDir);
+  expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(true);
+  expect(git(source, "worktree", "list", "--porcelain")).not.toContain("locked");
   git(source, "worktree", "lock", "--reason", "preserve checkout", subject.worktreeDir);
   expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(true);
   fs.unlinkSync(path.join(subject.worktreeDir, "tracked.txt"));
   expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(false);
   expect(fs.readFileSync(path.join(subject.worktreeDir, "keep.txt"), "utf8")).toBe("preserve\n");
+});
+
+test.skipIf(process.platform === "win32")("an initialization a live Git process still holds is left alone and reported as held (#2176)", async () => {
+  const source = path.join(publicationState, "source");
+  fs.mkdirSync(source);
+  git(source, "init", "--initial-branch=main");
+  fs.writeFileSync(path.join(source, "tracked.txt"), "complete file\n");
+  git(source, "add", ".");
+  git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "-m", "base");
+  const subject = { ...pipeline(), repoDir: source, worktreeDir: path.join(publicationState, "lane"), baseBranch: "main", baseRef: git(source, "rev-parse", "HEAD") };
+  expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(true);
+  git(source, "worktree", "lock", "--reason", "initializing", subject.worktreeDir);
+  fs.unlinkSync(path.join(subject.worktreeDir, "tracked.txt"));
+  // A Git process still working inside the checkout, as a slow add's checkout would be.
+  const owner = Bun.spawn(["git", "-C", subject.worktreeDir, "-c", "alias.hold=!sleep 5", "hold"], { stdout: "ignore", stderr: "ignore" });
+  try {
+    await Bun.sleep(200);
+    const held = await provisionPipelineWorktreeAsync(subject, realProvisionExec);
+    expect(held).toEqual({ ok: false, error: `the pipeline worktree is still being initialized by git process ${owner.pid}` });
+    expect(git(source, "worktree", "list", "--porcelain")).toContain("locked initializing");
+    expect(fs.existsSync(path.join(subject.worktreeDir, "tracked.txt"))).toBe(false);
+  } finally { owner.kill("SIGKILL"); await owner.exited; }
+  expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(true);
+  expect(fs.readFileSync(path.join(subject.worktreeDir, "tracked.txt"), "utf8")).toBe("complete file\n");
 });
 
 test("default base fetches and resolves origin/main without inspecting a dirty stale checkout", () => {

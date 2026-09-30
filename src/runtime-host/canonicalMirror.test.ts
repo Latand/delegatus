@@ -95,3 +95,91 @@ test("a request that names neither a branch of the canonical repository nor a SH
   expect(fixture.queries).toEqual([]);
   expect(fixture.ensuredCount()).toBe(0);
 });
+
+/* #2220: a flaky resolver refused two deploy_exact_sha calls at once with
+   "Could not resolve host: github.com". The mirror is real here, fetched from
+   a local canonical repository, and only the resolver's answer is injected. */
+function canonicalFixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-canonical-dns-"));
+  sandboxes.push(root);
+  const git = (cwd: string, ...args: string[]) => {
+    const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+    if (result.exitCode !== 0) throw new Error(result.stderr.toString() || `git ${args[0]} failed`);
+    return result.stdout.toString().trim();
+  };
+  const source = path.join(root, "source");
+  fs.mkdirSync(source);
+  git(source, "init", "--initial-branch=main");
+  git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", "release");
+  const head = git(source, "rev-parse", "HEAD");
+  const deploymentDir = path.join(root, "deployments");
+  const mirrorDir = path.join(deploymentDir, "canonical.git");
+  const run = async (argv: string[]): Promise<string> => {
+    const [command, ...args] = argv;
+    if (command !== "git") throw new Error(`unexpected command ${command}`);
+    return git(root, ...args);
+  };
+  return { root, source, head, deploymentDir, mirrorDir, run };
+}
+
+const DNS_REFUSAL = "fatal: unable to access 'https://github.com/example/delegatus.git/': Could not resolve host: github.com";
+
+test("a fetch the resolver failed once is retried and the deploy resolves its revision (#2220)", async () => {
+  const fixture = canonicalFixture();
+  const options = { deploymentDir: fixture.deploymentDir, mirrorDir: fixture.mirrorDir, remote: fixture.source };
+  let fetches = 0;
+  const retries: string[] = [];
+  const sleeps: number[] = [];
+  const run = async (argv: string[]) => {
+    if (argv.includes("fetch") && ++fetches === 1) throw new Error(DNS_REFUSAL);
+    return fixture.run(argv);
+  };
+  const dependencies = {
+    run,
+    sleep: async (ms: number) => { sleeps.push(ms); },
+    onRetry: (detail: string) => { retries.push(detail); },
+  };
+  const revision = await resolveCanonicalRevision("origin/main", options, {
+    ...dependencies,
+    ensureMirror: () => ensureCanonicalMirror(options, dependencies),
+  });
+  expect(revision).toBe(fixture.head);
+  expect(fetches).toBe(2);
+  expect(sleeps).toEqual([2_000]);
+  expect(retries).toHaveLength(1);
+  expect(retries[0]).toContain("DNS lookup of github.com failed");
+});
+
+test("a resolver that never answers fails the deploy naming the host, the attempts and the fix (#2220)", async () => {
+  const fixture = canonicalFixture();
+  const options = { deploymentDir: fixture.deploymentDir, mirrorDir: fixture.mirrorDir, remote: fixture.source };
+  let fetches = 0;
+  const sleeps: number[] = [];
+  const run = async (argv: string[]) => {
+    if (argv.includes("fetch")) { fetches += 1; throw new Error(DNS_REFUSAL); }
+    return fixture.run(argv);
+  };
+  const failure = ensureCanonicalMirror(options, { run, sleep: async (ms: number) => { sleeps.push(ms); } });
+  await expect(failure).rejects.toThrow(/DNS lookup of github\.com failed on 3 attempts/);
+  await expect(failure).rejects.toThrow(/Could not resolve host: github\.com/);
+  await expect(failure).rejects.toThrow(/retry the deploy once the network resolves the host/);
+  expect(fetches).toBe(3);
+  expect(sleeps).toEqual([2_000, 4_000]);
+});
+
+test("a refused login or a missing repository fails the fetch at once, never retried (#2220)", async () => {
+  for (const refusal of [
+    "remote: Invalid username or token.\nfatal: Authentication failed for 'https://github.com/example/delegatus.git/'",
+    "remote: Repository not found.\nfatal: repository 'https://github.com/example/missing.git/' not found",
+  ]) {
+    const fixture = canonicalFixture();
+    const options = { deploymentDir: fixture.deploymentDir, mirrorDir: fixture.mirrorDir, remote: fixture.source };
+    let fetches = 0;
+    const run = async (argv: string[]) => {
+      if (argv.includes("fetch")) { fetches += 1; throw new Error(refusal); }
+      return fixture.run(argv);
+    };
+    await expect(ensureCanonicalMirror(options, { run, sleep: async () => {} })).rejects.toThrow(refusal);
+    expect(fetches).toBe(1);
+  }
+});

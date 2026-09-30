@@ -44,6 +44,7 @@ import {
   viewerRegistryBackendMode,
 } from "../src/runtime-host/candidateContainer";
 import { ensureCanonicalMirror, resolveCanonicalRevision } from "../src/runtime-host/canonicalMirror";
+import { connectionFailure, retryTransientNetwork } from "../src/lib/git/transientFailure";
 import { allocateBuiltCandidatePort, candidatePortsFromEnvironmentLists, isCandidatePortAvailable } from "../src/runtime-host/candidatePort";
 import { withBootstrapMcpHealthProbeAdmission } from "../src/runtime-host/bootstrapMcpHealthProbeAdmission";
 import { viewerCandidateContainerName, viewerCandidateImageName, viewerComposeSnapshotPath } from "../src/runtime-host/deploymentArtifacts";
@@ -148,6 +149,7 @@ function removeDurableFile(filename: string): void {
 }
 
 let reportedAdapterPhase: string | null = null;
+let adapterAction = "unknown";
 
 function reportAdapterPhase(action: string, phase: string): void {
   if (!adapterPhaseFile) return;
@@ -155,6 +157,12 @@ function reportAdapterPhase(action: string, phase: string): void {
   if (reported === reportedAdapterPhase) return;
   reportedAdapterPhase = reported;
   writeDurableJson(adapterPhaseFile, { action, phase, updatedAt: new Date().toISOString() });
+}
+
+/** While a transient network failure is retried, the deployment's phase says
+    so, rather than the deploy reading as failed (#2220). */
+function reportNetworkRetry(detail: string): void {
+  reportAdapterPhase(adapterAction, `network unavailable, retrying: ${detail}`);
 }
 
 async function commandResult(argv: string[], options: { cwd?: string; timeoutMs?: number } = {}): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -166,7 +174,11 @@ async function commandResult(argv: string[], options: { cwd?: string; timeoutMs?
     env: withoutUnsupportedApiCredentials(process.env),
   });
   const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  return { code, stdout: stdout.trim(), stderr: stderr.trim() };
+  /* A child the bound killed prints nothing about why; name the bound, which
+     is also what lets a network step's retry recognize it. */
+  const timedOut = options.timeoutMs !== undefined && child.signalCode === "SIGKILL";
+  const bound = timedOut ? `${argv.slice(0, 4).join(" ")} timed out after ${Math.round(options.timeoutMs! / 1_000)}s` : "";
+  return { code, stdout: stdout.trim(), stderr: [bound, stderr.trim()].filter(Boolean).join("\n") };
 }
 
 async function command(argv: string[], options: { cwd?: string; timeoutMs?: number } = {}): Promise<string> {
@@ -178,8 +190,33 @@ async function command(argv: string[], options: { cwd?: string; timeoutMs?: numb
 async function ensureMirror(): Promise<void> {
   await ensureCanonicalMirror(
     { deploymentDir, mirrorDir, remote: canonicalRemote },
-    { run: command },
+    { run: command, onRetry: reportNetworkRetry },
   );
+}
+
+/* The image build's registry pulls and the package install reach the network
+   too (#2220: the Dockerfile frontend pull failed on "no such host"). Only a
+   name-resolution or connection failure is retried, twice, 10 s and then 30 s
+   later; the build cache keeps every finished layer, so a retry resumes where
+   the network failed. The 30-minute `build-candidate` deadline bounds the
+   whole of it. */
+const BUILD_NETWORK_BACKOFF_MS = [10_000, 30_000] as const;
+
+/** `command`, for a build step: BuildKit prints its verdict last, after the
+    progress lines, so the error keeps the tail beside the head `command`
+    keeps, and the retry classifies what the step actually died of. */
+function retryBuildNetwork(argv: string[], options: { cwd?: string } = {}): Promise<string> {
+  return retryTransientNetwork(async () => {
+    const { code, stdout, stderr } = await commandResult(argv, options);
+    if (code === 0) return stdout;
+    const output = stderr || `${argv[0]} failed`;
+    throw new Error(output.length <= 2_000 ? output : `${output.slice(0, 1_000)}\n…\n${output.slice(-1_000)}`);
+  }, {
+    backoffMs: BUILD_NETWORK_BACKOFF_MS,
+    classify: connectionFailure,
+    onRetry: reportNetworkRetry,
+    action: "retry the deploy",
+  });
 }
 
 async function resolveRevision(requested: string): Promise<string> {
@@ -282,13 +319,13 @@ async function buildCandidate(deploymentId: string, revision: string): Promise<V
       "--profile", "*", "config", "--format", "json",
     ]);
     writeComposeConfig(container, composeConfig);
-    await command([
+    await retryBuildNetwork([
       "docker", "build", "--pull",
       "--build-arg", `LLV_RUNTIME_HOME=${runtimeHome}`,
       "--label", `dev.live-log-viewer.revision=${revision}`,
       "-t", image, sourceDir,
     ]);
-    await command([process.execPath, "install", "--frozen-lockfile", "--production"], { cwd: sourceDir });
+    await retryBuildNetwork([process.execPath, "install", "--frozen-lockfile", "--production"], { cwd: sourceDir });
     await command([process.execPath, "run", "build:mcp"], { cwd: sourceDir });
     mcpRuntime = mcpRuntimeStore.stagePreparedPackage(sourceDir, deploymentId, revision);
     mcpRuntimeStore.installStableLauncher(deploymentPackageRoot);
@@ -1265,6 +1302,7 @@ async function delegatedHealthProbeAdmission(
 async function main(): Promise<unknown> {
   if (process.env.LLV_DEPLOYMENT_ADAPTER_PROTOCOL !== "1") throw new Error("deployment adapter protocol is required");
   const action = process.argv[2];
+  adapterAction = String(action ?? "unknown");
   const input = JSON.parse(await Bun.stdin.text()) as Record<string, unknown>;
   reportAdapterPhase(String(action ?? "unknown"), "recovering an interrupted Viewer release switch");
   recoverInterruptedReleaseSwitch();

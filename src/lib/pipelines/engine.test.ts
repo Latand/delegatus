@@ -2676,6 +2676,254 @@ test("an unavailable remote parks the admitted pipeline with the words the refus
   expect(h.calls.some((call) => call.includes("worktree add"))).toBe(false);
 });
 
+/* A resolver that fails one lookup in six (#2220), a ref lock another Git
+   process holds for a moment (#2115), and a checkout the load killed at its
+   bound (#2176): each is retried by the controller on a bounded backoff
+   instead of parking the lane on its first sighting. */
+function provisionRetryClock(h: ReturnType<typeof harness>): { scheduled: number[]; advance: (ms: number) => void } {
+  const scheduled: number[] = [];
+  let clock = Date.parse("2026-09-25T15:20:00.000Z");
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    now: () => new Date(clock).toISOString(),
+  });
+  return { scheduled, advance: (ms) => { clock += ms; } };
+}
+
+const DNS_FAILURE = "ssh: Could not resolve hostname github.com: Temporary failure in name resolution\nfatal: Could not read from remote repository.";
+
+test("a base fetch the resolver failed once is retried with backoff, and the lane starts (#2220)", async () => {
+  const h = harness();
+  savePipelines([]);
+  const { scheduled, advance } = provisionRetryClock(h);
+  const baseExec = h.ports.exec;
+  let fetches = 0;
+  h.ports.provisionExec = async (command, args, cwd) => {
+    const gitArgs = command === "timeout" ? args.slice(args.indexOf("git") + 1) : args;
+    if (gitArgs[0] === "fetch" && ++fetches === 1) return { code: 128, stdout: "", stderr: DNS_FAILURE };
+    return baseExec(command, args, cwd);
+  };
+  await createPipelineFromRequest({ task: "Flaky resolver", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
+
+  await tickPipelines([], h.ports);
+  const waiting = loadPipelines()[0]!;
+  expect(waiting.state).toBe("provisioning");
+  expect(waiting.stateDetail).toContain("DNS lookup of github.com failed");
+  expect(waiting.stateDetail).toContain("retry 1 at");
+  expect(scheduled).toEqual([5_000]);
+  expect(h.calls.some((call) => call.includes("worktree add"))).toBe(false);
+
+  advance(5_000);
+  await tickPipelines([], h.ports);
+  expect(fetches).toBe(2);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", baseRef: ORIGIN_MAIN_SHA, stateDetail: null });
+  expect(loadPipelines()[0]!.provisioningWait).toBeUndefined();
+});
+
+test("a lane waiting out its provisioning backoff is not provisioned early (#2220)", async () => {
+  const h = harness();
+  savePipelines([]);
+  const { advance } = provisionRetryClock(h);
+  const baseExec = h.ports.exec;
+  let fetches = 0;
+  h.ports.provisionExec = async (command, args, cwd) => {
+    const gitArgs = command === "timeout" ? args.slice(args.indexOf("git") + 1) : args;
+    if (gitArgs[0] === "fetch" && ++fetches === 1) return { code: 128, stdout: "", stderr: DNS_FAILURE };
+    return baseExec(command, args, cwd);
+  };
+  await createPipelineFromRequest({ task: "Early tick", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
+  await tickPipelines([], h.ports);
+  // An unrelated wake-up four seconds later leaves the backoff alone.
+  advance(4_000);
+  await tickPipelines([], h.ports);
+  expect(fetches).toBe(1);
+  expect(loadPipelines()[0]!.state).toBe("provisioning");
+});
+
+test("a missing base branch or a refused login parks on the first attempt, never retried (#2220)", async () => {
+  for (const stderr of [
+    "fatal: couldn't find remote ref refs/heads/main",
+    "Permission denied (publickey).\nfatal: Could not read from remote repository.",
+  ]) {
+    const h = harness();
+    savePipelines([]);
+    const { scheduled } = provisionRetryClock(h);
+    const baseExec = h.ports.exec;
+    let fetches = 0;
+    h.ports.provisionExec = async (command, args, cwd) => {
+      const gitArgs = command === "timeout" ? args.slice(args.indexOf("git") + 1) : args;
+      if (gitArgs[0] === "fetch") { fetches += 1; return { code: 128, stdout: "", stderr }; }
+      return baseExec(command, args, cwd);
+    };
+    await createPipelineFromRequest({ task: "Real error", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
+    await tickPipelines([], h.ports);
+    expect(fetches).toBe(1);
+    expect(scheduled).toEqual([]);
+    expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: `fetching origin/main: ${stderr.trim()}` });
+  }
+});
+
+test("a resolver that never recovers parks after the bounded budget and names the host and the fix (#2220)", async () => {
+  const h = harness();
+  savePipelines([]);
+  const { scheduled, advance } = provisionRetryClock(h);
+  const baseExec = h.ports.exec;
+  let fetches = 0;
+  h.ports.provisionExec = async (command, args, cwd) => {
+    const gitArgs = command === "timeout" ? args.slice(args.indexOf("git") + 1) : args;
+    if (gitArgs[0] === "fetch") { fetches += 1; return { code: 128, stdout: "", stderr: DNS_FAILURE }; }
+    return baseExec(command, args, cwd);
+  };
+  await createPipelineFromRequest({ task: "Dead resolver", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
+  for (let pass = 0; pass < 20 && loadPipelines()[0]!.state === "provisioning"; pass += 1) {
+    await tickPipelines([], h.ports);
+    advance(scheduled.at(-1) ?? 0);
+  }
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toMatch(/^gave up after 6 retries over 180s: DNS lookup of github\.com failed/);
+  expect(parked.stateDetail).toContain("retry-stage");
+  expect(parked.stateDetail).toContain("fetching origin/main: ssh: Could not resolve hostname github.com");
+  expect(parked.provisioningWait).toBeUndefined();
+  /* The whole wait is bounded: every backoff is at most a minute, and the
+     sum of what was booked never exceeds the three-minute budget. */
+  expect(Math.max(...scheduled)).toBeLessThanOrEqual(60_000);
+  expect(scheduled.reduce((sum, delay) => sum + delay, 0)).toBeLessThanOrEqual(180_000);
+  expect(fetches).toBe(scheduled.length + 1);
+});
+
+async function realProvisioningRepo(name: string) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), `llv-${name}-`));
+  const repo = path.join(root, "repo");
+  const { realExec } = await import("@/lib/workflows/provision");
+  const git = (cwd: string, ...args: string[]) => {
+    const result = realExec("git", args, cwd);
+    if (result.code !== 0) throw new Error(result.stderr || result.stdout);
+    return result.stdout.trim();
+  };
+  fs.mkdirSync(repo);
+  git(repo, "init", "--initial-branch=main");
+  git(repo, "config", "user.name", "Fixture");
+  git(repo, "config", "user.email", "noreply@example.com");
+  git(repo, "config", "commit.gpgSign", "false");
+  return { root, repo, git, realExec };
+}
+
+test("a ref lock another Git process holds is retried, and the lane provisions once it is released (#2115)", async () => {
+  savePipelines([]);
+  const { root, repo, git, realExec } = await realProvisioningRepo("ref-lock");
+  try {
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "complete file\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-m", "base");
+    const base = git(repo, "rev-parse", "HEAD");
+    const h = harness();
+    const { scheduled, advance } = provisionRetryClock(h);
+    const { realProvisionExec } = await import("./git");
+    h.ports.exec = realExec;
+    h.ports.provisionExec = realProvisionExec;
+    const created = await createPipelineFromRequest({ task: "Concurrent lane", repoDir: repo, baseRef: base, stages: RUN_STAGES as never, publication: "internal" }, h.ports);
+    const lane = created.pipeline!;
+    const branch = lane.delivery?.disposition === "owner" ? lane.delivery.target.branch.replace(/^refs\/heads\//, "") : lane.branch;
+    /* What a concurrent `git worktree add` or ref update leaves for a moment:
+       the loose ref's lock file. */
+    const lock = path.join(repo, ".git", "refs", "heads", `${branch}.lock`);
+    fs.mkdirSync(path.dirname(lock), { recursive: true });
+    fs.writeFileSync(lock, "");
+
+    await tickPipelines([], h.ports);
+    const waiting = loadPipelines()[0]!;
+    expect(waiting.state).toBe("provisioning");
+    expect(waiting.stateDetail).toContain("a Git lock was held");
+    expect(scheduled).toEqual([5_000]);
+
+    fs.rmSync(lock);
+    advance(5_000);
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]).toMatchObject({ state: "running", baseRef: base, stateDetail: null });
+    expect(git(lane.worktreeDir, "rev-parse", "HEAD")).toBe(base);
+    expect(fs.readFileSync(path.join(lane.worktreeDir, "tracked.txt"), "utf8")).toBe("complete file\n");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}, 10_000);
+
+test("a failed attempt that already created the branch and worktree is adopted by the retry (#2115)", async () => {
+  savePipelines([]);
+  const { root, repo, git, realExec } = await realProvisioningRepo("adopt-created");
+  try {
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "complete file\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-m", "base");
+    const base = git(repo, "rev-parse", "HEAD");
+    const h = harness();
+    const { advance } = provisionRetryClock(h);
+    const { realProvisionExec } = await import("./git");
+    h.ports.exec = realExec;
+    let adds = 0;
+    /* The add really runs and creates both, then reports the lock race the
+       issue quotes: the branch and the worktree exist although git failed. */
+    h.ports.provisionExec = async (command, args, cwd, signal) => {
+      const result = await realProvisionExec(command, args, cwd, signal);
+      if (args[0] === "worktree" && args[1] === "add" && ++adds === 1) {
+        return { code: 128, stdout: "", stderr: `fatal: cannot lock ref 'refs/heads/${args[3]}': Unable to create '${repo}/.git/refs/heads/${args[3]}.lock': File exists.` };
+      }
+      return result;
+    };
+    const created = await createPipelineFromRequest({ task: "Adopt lane", repoDir: repo, baseRef: base, stages: RUN_STAGES as never, publication: "internal" }, h.ports);
+    for (let pass = 0; pass < 3 && loadPipelines()[0]!.state === "provisioning"; pass += 1) {
+      await tickPipelines([], h.ports);
+      advance(60_000);
+    }
+    expect(loadPipelines()[0]).toMatchObject({ state: "running", baseRef: base });
+    expect(git(created.pipeline!.worktreeDir, "rev-parse", "HEAD")).toBe(base);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}, 10_000);
+
+test("a checkout killed at its bound is finished by the retry instead of parking on its initialization lock (#2176)", async () => {
+  savePipelines([]);
+  const { root, repo, git, realExec } = await realProvisioningRepo("killed-checkout");
+  const marker = path.join(root, "smudge-started");
+  try {
+    fs.writeFileSync(path.join(repo, ".gitattributes"), "tracked.txt filter=slow\n");
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "complete file\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-m", "base");
+    const base = git(repo, "rev-parse", "HEAD");
+    /* A checkout that cannot finish inside its bound: the host under load. */
+    git(repo, "config", "filter.slow.smudge", `printf ready > '${marker}'; sleep 120; cat`);
+    git(repo, "config", "filter.slow.required", "true");
+    const h = harness();
+    const { scheduled, advance } = provisionRetryClock(h);
+    const { realProvisionExec } = await import("./git");
+    h.ports.exec = realExec;
+    // The production port, with the sixty-second checkout bound cut to half a second.
+    h.ports.provisionExec = async (command, args, cwd, signal) => args[0] === "worktree" && args[1] === "add"
+      ? realProvisionExec("timeout", ["--signal=KILL", "0.5s", command, ...args], cwd, signal)
+      : realProvisionExec(command, args, cwd, signal);
+    const created = await createPipelineFromRequest({ task: "Loaded host", repoDir: repo, baseRef: base, stages: RUN_STAGES as never, publication: "internal" }, h.ports);
+    const lane = created.pipeline!;
+
+    await tickPipelines([], h.ports);
+    expect(fs.existsSync(marker)).toBe(true);
+    const waiting = loadPipelines()[0]!;
+    expect(waiting.state).toBe("provisioning");
+    expect(waiting.stateDetail).toContain("checkout interrupted or timed out");
+    expect(scheduled).toEqual([5_000]);
+    expect(git(repo, "worktree", "list", "--porcelain")).toContain("locked initializing");
+    fs.writeFileSync(path.join(lane.worktreeDir, "keep.txt"), "untracked work survives\n");
+
+    // The load passes; the retry finishes the checkout the killed one began.
+    git(repo, "config", "filter.slow.smudge", "cat");
+    git(repo, "config", "filter.slow.clean", "cat");
+    advance(5_000);
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]).toMatchObject({ state: "running", baseRef: base, stateDetail: null });
+    expect(fs.readFileSync(path.join(lane.worktreeDir, "tracked.txt"), "utf8")).toBe("complete file\n");
+    expect(fs.readFileSync(path.join(lane.worktreeDir, "keep.txt"), "utf8")).toBe("untracked work survives\n");
+    expect(git(repo, "worktree", "list", "--porcelain")).not.toContain("locked");
+    expect(git(lane.worktreeDir, "status", "--porcelain", "--untracked-files=no")).toBe("");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}, 15_000);
+
 test("repository admission fails before pipeline persistence or provisioning", async () => {
   const h = harness();
   savePipelines([]);
@@ -6793,6 +7041,7 @@ test("an internal terminal pass an older build left waiting on publication close
 test("an internal pipeline pinned to a baseRef is created and provisioned with the network unreachable (#1692)", async () => {
   const h = harness();
   const { remoteCalls } = networkDown(h);
+  const { scheduled, advance } = provisionRetryClock(h);
   savePipelines([]);
 
   const created = await createPipelineFromRequest({ task: "Pinned offline", repoDir: "/repo", baseRef: ORIGIN_MAIN_SHA, stages: RUN_STAGES as never }, h.ports);
@@ -6802,20 +7051,28 @@ test("an internal pipeline pinned to a baseRef is created and provisioned with t
   expect(remoteCalls).toEqual([]);
 
   /* Without a pin the base is the CONTROLLER's to resolve (#1799), so the
-     create itself still touches no remote; the remote that cannot answer parks
-     the admitted lane rather than letting it guess a base. */
+     create itself still touches no remote; the remote that cannot answer is
+     asked again on a bounded backoff (#2220), and then parks the admitted
+     lane rather than letting it guess a base. */
   savePipelines([]);
   const unpinned = await createPipelineFromRequest({ task: "Unpinned offline", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
   expect(unpinned.pipeline).toMatchObject({ state: "provisioning", baseBranch: "main", baseRef: "" });
   expect(remoteCalls).toEqual([]);
 
   await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "provisioning", baseRef: "" });
+  expect(loadPipelines()[0]!.stateDetail).toStartWith("provisioning deferred: the network connection failed (fetching origin/main: ssh: connect to host example.invalid port 22: Connection timed out");
+  for (let pass = 0; pass < 20 && loadPipelines()[0]!.state === "provisioning"; pass += 1) {
+    advance(scheduled.at(-1)!);
+    await tickPipelines([], h.ports);
+  }
 
   const parked = loadPipelines()[0]!;
   expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toStartWith("fetching origin/main: ssh: connect to host example.invalid port 22: Connection timed out");
+  expect(parked.stateDetail).toContain("fetching origin/main: ssh: connect to host example.invalid port 22: Connection timed out");
   expect(parked.baseRef).toBe("");
-  expect(remoteCalls).toEqual(["timeout --signal=KILL 60s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main"]);
+  expect(new Set(remoteCalls)).toEqual(new Set(["timeout --signal=KILL 60s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main"]));
+  expect(remoteCalls).toHaveLength(scheduled.length + 1);
 });
 
 test("pipeline creation accepts the two publication policies and refuses anything else (#1692)", async () => {
