@@ -39,8 +39,9 @@ alignment. All four final bottom gaps after a new message are 0 px.
 
 The review fix restores #1978's released-phone line alignment after vertical
 reader input finishes, using `scrollend` to include touch momentum. It uses
-the previous three-step, same-direction bound within that settle and records
-the settled position as the reader anchor and remount memory. History prepends
+smooth `scrollBy` (instant under reduced motion), with the previous three-step,
+same-direction bound across successive `scrollend` events, and records
+the finished position as the reader anchor and remount memory. History prepends
 and ResizeObserver compensation never arm alignment; there is no rest timer.
 The edge helper clears negative-margin action controls with their message
 and uses the ink's half-pixel tolerance when leaving a row. The strengthened
@@ -79,6 +80,31 @@ remains unmeasured. The synthetic history scene is not the phone shell;
 leave the observed content's total height unchanged remain outside this
 measurement and the aggregate ResizeObserver's coverage.
 
+## Gesture-glide review correction
+
+The prior fix's synchronous loop moved the phone anchor 21 px (full) or 22 px
+(compact) in one frame in the committed touch-up trace. After restoring native
+smooth scrolling, the released settle travels 21 px over four moving frames
+in both feeds: 6, 11, 3 and 1 px. The largest step is 11 px; the trace meets
+the review's alternative acceptance of a settle spread over several frames.
+The existing long-history case now labels `touch-rest` separately, asserts at
+least three moving frames and requires the largest step to be smaller than
+the total travel. Its summary records travel, largest step and moving frames.
+Stationary drift remains 0.25 px at 390 and 0.5 px at 1440, compact and full;
+all four bottom gaps remain 0 px. Refreshed phone and desktop frames were
+visually inspected. The #1978 header and title now describe the released-phone
+rest assertions they enforce.
+
+The new glide assertion fails against the archived previous head: its largest
+released-frame step equals its entire 22 px travel. It passes with the fix.
+The two browser cases pass (22 assertions across their final runs); the four
+separate DOM files pass 32 tests with 4 optional skips. TypeScript exits 0;
+the privacy gate passes. Scoped lint matches the archived head's four existing
+ref errors and nine warnings; disabling that existing rule yields zero errors.
+All checks used fresh isolated state, config and temp directories. A first
+archive browser attempt hit Chromium's Unix socket path limit; rerunning with
+a shorter fresh temp root reached the expected regression assertion failure.
+
 Changed source files: `src/components/LogFeed.tsx`, `src/app/globals.css`,
 `src/components/feed/SpeakMenu.tsx` (obsolete containment comment),
 `src/components/mobile/issue1671Evidence.fixture.tsx`, and the existing phone
@@ -98,7 +124,7 @@ Final verification commands and counts:
 
 | Command | Result |
 | --- | --- |
-| `LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN="$CHROME_BIN" bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t 'long conversation scroll\|#1978'` | 2 pass, 32 filtered, 12 assertions; includes copy controls and bottom-follow |
+| `LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN="$CHROME_BIN" bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t 'long conversation scroll\|#1978'` | 2 pass across final case runs, 22 assertions; includes copy controls, released glide and bottom-follow |
 | `bun test src/components/LogFeed.prependAnchor.dom.test.tsx` | 10 pass, 4 optional transport/browser cases skipped, 37 assertions |
 | `bun test src/components/LogFeed.mobileChrome.dom.test.tsx` | 6 pass, 33 assertions |
 | `bun test src/components/LogFeed.outboxTailOrder.dom.test.tsx` | 10 pass, 25 assertions |
@@ -109,7 +135,7 @@ Final verification commands and counts:
 
 The DOM suites run in separate processes; combining them contaminates their
 shared browser globals and test dependency seam. Final relevant checks have
-34 passes, 4 optional skips and no failures. No broad suite touched live state.
+32 passes, 4 optional skips and no failures. No broad suite touched live state.
 
 Unfiltered scoped lint used
 `bun run lint src/components/LogFeed.tsx src/components/feed/SpeakMenu.tsx src/components/mobile/issue1671Evidence.browser.test.tsx src/components/mobile/issue1671Evidence.fixture.tsx`.

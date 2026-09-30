@@ -432,6 +432,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const scrollbarPointerRef = useRef<{ fromBottom: number } | null>(null);
   const feedTouchRef = useRef<{ x: number; y: number } | null>(null);
   const gestureRestPending = useRef(false);
+  const autoAlignRef = useRef<{ delta: number; count: number } | null>(null);
   const pillTouchRef = useRef<{ x: number; y: number } | null>(null);
   const restoreInitializedPathRef = useRef<string | null>(null);
   const pendingRestoreRef = useRef<PendingRestore | null>(null);
@@ -493,17 +494,22 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      this step. Record the settled boundary as the shared reader anchor. */
   const alignGestureRest = (el: HTMLDivElement) => {
     if (!gestureRestPending.current || feedTouchRef.current) return;
-    gestureRestPending.current = false;
-    if (!onPhoneLayout() || magnetRef.current) return;
-    // Clearing a row can expose ink in its enclosing tall card. Finish that
-    // same settle in one direction, with the released alignment's old bound.
-    let previous = 0;
-    for (let step = 0; step < 3; step++) {
-      const delta = restingDelta(el);
-      if (!delta || (previous && Math.sign(previous) !== Math.sign(delta))) break;
-      el.scrollTop += delta;
-      previous = delta;
+    if (!onPhoneLayout() || magnetRef.current) {
+      gestureRestPending.current = false;
+      return;
     }
+    const delta = restingDelta(el);
+    const previous = autoAlignRef.current;
+    // Clearing a row can expose ink in its enclosing tall card. Continue on
+    // the glide's next scrollend, without reversing or exceeding three moves.
+    if (delta && (!previous || (Math.sign(previous.delta) === Math.sign(delta) && previous.count < 3))) {
+      autoAlignRef.current = { delta, count: (previous?.count ?? 0) + 1 };
+      markProgrammaticScroll();
+      const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      el.scrollBy({ top: delta, behavior: reduce ? "auto" : "smooth" });
+      return;
+    }
+    gestureRestPending.current = false;
     readerAnchor.current = viewportAnchor(el, `${memoryKey}\0${tailPath}`);
     if (memoryKey && tailPath) rememberScroll(memoryKey, {
       magnet: false,
@@ -729,6 +735,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     pendingRestoreRef.current = null;
     readerAnchor.current = null;
     gestureRestPending.current = false;
+    autoAlignRef.current = null;
   }, [tailPath]);
 
   useLayoutEffect(() => {
@@ -1363,6 +1370,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const markUserScroll = (direction: number | null): void => {
     const el = scroller.current;
     if (!el) return;
+    autoAlignRef.current = null;
     if (direction !== null && direction !== 0) gestureRestPending.current = true;
     scrollCauseRef.current = {
       kind: "user",

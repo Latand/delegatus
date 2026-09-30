@@ -18,8 +18,8 @@
           },
           "after": {
             "maxDriftPx": 0.25,
-            "startTimeMs": 4542.8,
-            "endTimeMs": 5242.8,
+            "startTimeMs": 4086.1,
+            "endTimeMs": 4736,
             "heightAtStartPx": 93008,
             "heightAtEndPx": 93008
           }
@@ -34,9 +34,9 @@
           },
           "after": {
             "maxDriftPx": 0.25,
-            "startTimeMs": 5259.5,
-            "endTimeMs": 5909.4,
-            "heightAtStartPx": 93334,
+            "startTimeMs": 4752.8,
+            "endTimeMs": 5402.7,
+            "heightAtStartPx": 93008,
             "heightAtEndPx": 93334
           }
         },
@@ -50,8 +50,8 @@
           },
           "after": {
             "maxDriftPx": 0.25,
-            "startTimeMs": 5926,
-            "endTimeMs": 6576,
+            "startTimeMs": 5419.3,
+            "endTimeMs": 6052.7,
             "heightAtStartPx": 93534,
             "heightAtEndPx": 93534
           }
@@ -66,8 +66,8 @@
           },
           "after": {
             "maxDriftPx": 0.25,
-            "startTimeMs": 6592.7,
-            "endTimeMs": 7242.7,
+            "startTimeMs": 6069.4,
+            "endTimeMs": 6719.3,
             "heightAtStartPx": 94014,
             "heightAtEndPx": 94014
           }
@@ -82,12 +82,17 @@
           },
           "after": {
             "maxDriftPx": 0.25,
-            "startTimeMs": 7259.4,
-            "endTimeMs": 7976,
+            "startTimeMs": 6736,
+            "endTimeMs": 7419.3,
             "heightAtStartPx": 94014,
             "heightAtEndPx": 94014
           }
         }
+      },
+      "gestureRest": {
+        "gestureRestMaxStep": 11,
+        "gestureRestTravel": 21,
+        "gestureRestMovingFrames": 4
       }
     },
     {
@@ -108,8 +113,8 @@
           },
           "after": {
             "maxDriftPx": 0.25,
-            "startTimeMs": 4342.1,
-            "endTimeMs": 5008.7,
+            "startTimeMs": 4158.5,
+            "endTimeMs": 4825.1,
             "heightAtStartPx": 92980,
             "heightAtEndPx": 92980
           }
@@ -124,8 +129,8 @@
           },
           "after": {
             "maxDriftPx": 0.25,
-            "startTimeMs": 5025.4,
-            "endTimeMs": 5675.3,
+            "startTimeMs": 4841.8,
+            "endTimeMs": 5475,
             "heightAtStartPx": 93306,
             "heightAtEndPx": 93306
           }
@@ -140,8 +145,8 @@
           },
           "after": {
             "maxDriftPx": 0.25,
-            "startTimeMs": 5692.1,
-            "endTimeMs": 6325.3,
+            "startTimeMs": 5491.7,
+            "endTimeMs": 6125.1,
             "heightAtStartPx": 93506,
             "heightAtEndPx": 93506
           }
@@ -156,8 +161,8 @@
           },
           "after": {
             "maxDriftPx": 0.25,
-            "startTimeMs": 6342,
-            "endTimeMs": 6975.3,
+            "startTimeMs": 6141.7,
+            "endTimeMs": 6775,
             "heightAtStartPx": 93818,
             "heightAtEndPx": 93818
           }
@@ -172,12 +177,17 @@
           },
           "after": {
             "maxDriftPx": 0.25,
-            "startTimeMs": 6992,
-            "endTimeMs": 7692,
+            "startTimeMs": 6791.7,
+            "endTimeMs": 7458.4,
             "heightAtStartPx": 93818,
             "heightAtEndPx": 93818
           }
         }
+      },
+      "gestureRest": {
+        "gestureRestMaxStep": 11,
+        "gestureRestTravel": 21,
+        "gestureRestMovingFrames": 4
       }
     },
     {
@@ -198,9 +208,9 @@
           },
           "after": {
             "maxDriftPx": 0.5,
-            "startTimeMs": 3092.7,
-            "endTimeMs": 3842.7,
-            "heightAtStartPx": 47388,
+            "startTimeMs": 2833.9,
+            "endTimeMs": 3534,
+            "heightAtStartPx": 71013,
             "heightAtEndPx": 71013
           }
         },
@@ -214,8 +224,8 @@
           },
           "after": {
             "maxDriftPx": 0.5,
-            "startTimeMs": 3859.3,
-            "endTimeMs": 4492.7,
+            "startTimeMs": 3550.6,
+            "endTimeMs": 4183.9,
             "heightAtStartPx": 71306,
             "heightAtEndPx": 71306
           }
@@ -230,8 +240,8 @@
           },
           "after": {
             "maxDriftPx": 0.5,
-            "startTimeMs": 4509.4,
-            "endTimeMs": 5142.6,
+            "startTimeMs": 4200.6,
+            "endTimeMs": 4850.5,
             "heightAtStartPx": 71518,
             "heightAtEndPx": 71518
           }
@@ -246,8 +256,8 @@
           },
           "after": {
             "maxDriftPx": 0.5,
-            "startTimeMs": 5159.2,
-            "endTimeMs": 5792.6,
+            "startTimeMs": 4867.2,
+            "endTimeMs": 5500.5,
             "heightAtStartPx": 71806,
             "heightAtEndPx": 71806
           }
@@ -262,12 +272,17 @@
           },
           "after": {
             "maxDriftPx": 0.5,
-            "startTimeMs": 5809.2,
-            "endTimeMs": 6509.3,
+            "startTimeMs": 5517.1,
+            "endTimeMs": 6217.2,
             "heightAtStartPx": 71806,
             "heightAtEndPx": 71806
           }
         }
+      },
+      "gestureRest": {
+        "gestureRestMaxStep": 0,
+        "gestureRestTravel": 0,
+        "gestureRestMovingFrames": 0
       }
     },
     {
@@ -288,8 +303,8 @@
           },
           "after": {
             "maxDriftPx": 0.5,
-            "startTimeMs": 3055.6,
-            "endTimeMs": 3772.3,
+            "startTimeMs": 2817.7,
+            "endTimeMs": 3501,
             "heightAtStartPx": 61518,
             "heightAtEndPx": 61518
           }
@@ -304,8 +319,8 @@
           },
           "after": {
             "maxDriftPx": 0.5,
-            "startTimeMs": 3788.9,
-            "endTimeMs": 4422.2,
+            "startTimeMs": 3517.7,
+            "endTimeMs": 4151,
             "heightAtStartPx": 61807,
             "heightAtEndPx": 61807
           }
@@ -320,8 +335,8 @@
           },
           "after": {
             "maxDriftPx": 0.5,
-            "startTimeMs": 4438.9,
-            "endTimeMs": 5072.2,
+            "startTimeMs": 4167.6,
+            "endTimeMs": 4801,
             "heightAtStartPx": 62019,
             "heightAtEndPx": 62019
           }
@@ -336,9 +351,9 @@
           },
           "after": {
             "maxDriftPx": 0.5,
-            "startTimeMs": 5088.9,
-            "endTimeMs": 5755.5,
-            "heightAtStartPx": 62019,
+            "startTimeMs": 4817.6,
+            "endTimeMs": 5467.6,
+            "heightAtStartPx": 62214,
             "heightAtEndPx": 62214
           }
         },
@@ -352,12 +367,17 @@
           },
           "after": {
             "maxDriftPx": 0.5,
-            "startTimeMs": 5772.2,
-            "endTimeMs": 6522.1,
+            "startTimeMs": 5484.3,
+            "endTimeMs": 6167.6,
             "heightAtStartPx": 62214,
             "heightAtEndPx": 62214
           }
         }
+      },
+      "gestureRest": {
+        "gestureRestMaxStep": 0,
+        "gestureRestTravel": 0,
+        "gestureRestMovingFrames": 0
       }
     }
   ],

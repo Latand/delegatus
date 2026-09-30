@@ -1203,10 +1203,10 @@ browserTest("#1865: the phone names a stage and its attempt in the queue row and
  *     22 px controls;
  *   - with the task strip right above the feed, the first visible feed row
  *     starts at or below the strip's bottom edge, and while following the tail no glyph line or control straddles its
- *     top edge, including after the card opens. Released offsets are recorded
- *     across long results, drags and remounts. The long-history case below
- *     now owns released-reader stability: a deliberate partial line stays at
- *     the chosen offset, so those readings no longer require automatic snaps.
+ *     top edge, including after the card opens. Released phone rests are
+ *     asserted across long results, drags, control overhangs and remounts.
+ *     The long-history case below separately asserts reader stability through
+ *     prepends and late layout, which never arm gesture-end alignment.
  *
  * Readings go to `evidence/issue-1978/phone.json`; frames to `.artifacts/issue-1978/`.
  */
@@ -1349,7 +1349,7 @@ async function feedAtRest(page: Page): Promise<void> {
   if (still < 4) throw new Error("the feed never came to rest");
 }
 
-browserTest("#1978: copy controls stay apart and followed content clears the task strip", async () => {
+browserTest("#1978: copy controls stay apart and followed content and released phone rests clear the task strip", async () => {
   fs.mkdirSync(EDGE_OUT, { recursive: true });
   fs.mkdirSync(EDGE_EVIDENCE, { recursive: true });
   const { base: fixtureBase, stop } = await serveFixture();
@@ -5276,7 +5276,10 @@ browserTest("long conversation scroll: history and late layout preserve the read
         await phase("wheel-up", () => page.mouse.wheel(0, -20));
         if (width === 390) {
           const cdp = await context.newCDPSession(page);
-          await phase("touch-up", () => touch(cdp, along([190, 260], [190, 295]), 24));
+          await phase("touch-up", async () => {
+            await touch(cdp, along([190, 260], [190, 295]), 24);
+            await page.evaluate(() => { (window as unknown as { scrollTrace: { phase: string } }).scrollTrace.phase = "touch-rest"; });
+          });
           await cdp.detach();
         }
         await page.evaluate(() => { (window as unknown as { scrollTrace: { phase: string } }).scrollTrace.phase = "steady"; });
@@ -5307,7 +5310,11 @@ browserTest("long conversation scroll: history and late layout preserve the read
           trace.running = false;
           const baseline = trace.frames.filter((f) => f.phase === "steady").at(-1)!.anchorY;
           const stationary = trace.frames.filter((f) => ["prepend", "live-bottom", "late-image-above", "late-code-markdown-above", "toolbar-resize"].includes(f.phase));
-          return { frames: trace.frames, baseline, maxDrift: Math.max(...stationary.map((f) => Math.abs(f.anchorY - baseline))) };
+          const rest = trace.frames.filter((f) => f.phase === "touch-rest");
+          const restSteps = rest.slice(1).map((f, i) => Math.abs(f.anchorY - rest[i].anchorY));
+          return { frames: trace.frames, baseline, maxDrift: Math.max(...stationary.map((f) => Math.abs(f.anchorY - baseline))),
+            gestureRestMaxStep: Math.max(0, ...restSteps), gestureRestTravel: restSteps.reduce((sum, step) => sum + step, 0),
+            gestureRestMovingFrames: restSteps.filter((step) => step > 0).length };
         });
 
         console.log(`scroll-history width=${width} compact=${compact} maxDrift=${result.maxDrift}`);
@@ -5328,5 +5335,13 @@ browserTest("long conversation scroll: history and late layout preserve the read
   fs.mkdirSync("evidence/scroll-history", { recursive: true });
   const label = process.env.LLV_SCROLL_MEASUREMENT ?? "after";
   fs.writeFileSync(`evidence/scroll-history/${label}.json`, `${JSON.stringify({ readings }, null, 2)}\n`);
-  if (label === "after") for (const reading of readings as Array<{ maxDrift: number }>) expect(reading.maxDrift).toBeLessThanOrEqual(3);
+  if (label === "after") for (const reading of readings as Array<{ width: number; maxDrift: number; gestureRestMaxStep: number; gestureRestTravel: number; gestureRestMovingFrames: number }>) {
+    expect(reading.maxDrift).toBeLessThanOrEqual(3);
+    if (reading.width === 390) {
+      // Native smooth scrolling follows the browser's easing curve. Require
+      // the settle to span several frames, rather than a one-frame snap.
+      expect(reading.gestureRestMaxStep).toBeLessThan(reading.gestureRestTravel);
+      expect(reading.gestureRestMovingFrames).toBeGreaterThanOrEqual(3);
+    }
+  }
 }, 120_000);

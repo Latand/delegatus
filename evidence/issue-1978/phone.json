@@ -311,13 +311,13 @@
         "rest-137": {
           "command": {
             "x": 314,
-            "y": 1640.25,
+            "y": 1633.25,
             "width": 44,
             "height": 44
           },
           "output": {
             "x": 308,
-            "y": 1718.25,
+            "y": 1711.25,
             "width": 44,
             "height": 44
           },
@@ -329,26 +329,26 @@
           "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 1367
+            "fromBottom": 1360
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
             "key": "div: 1.Read bands.ts · :1–6130s",
-            "top": 117,
-            "bottom": 139
+            "top": 110,
+            "bottom": 132
           }
         },
         "rest-211": {
           "command": {
             "x": 314,
-            "y": 1881.25,
+            "y": 1995.25,
             "width": 44,
             "height": 44
           },
           "output": {
             "x": 308,
-            "y": 1959.25,
+            "y": 2073.25,
             "width": 44,
             "height": 44
           },
@@ -360,45 +360,45 @@
           "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 1608
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "row:22:0",
-            "top": 115.75,
-            "bottom": 187.5
-          }
-        },
-        "rest-173": {
-          "command": {
-            "x": 314,
-            "y": 2001.25,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 2079.25,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 34,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 0,
-            "fromBottom": 1728
+            "fromBottom": 1722
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
             "key": "row:21:0",
-            "top": 116.25,
-            "bottom": 229.75
+            "top": 110.25,
+            "bottom": 223.75
+          }
+        },
+        "rest-173": {
+          "command": {
+            "x": 314,
+            "y": 2198.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 2276.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1925
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "row:19:0",
+            "top": 110,
+            "bottom": 223.5
           }
         },
         "rest-control-overhang": {
@@ -767,13 +767,13 @@
         "rest-137": {
           "command": {
             "x": 314,
-            "y": 1640.25,
+            "y": 1611.25,
             "width": 44,
             "height": 44
           },
           "output": {
             "x": 308,
-            "y": 1718.25,
+            "y": 1689.25,
             "width": 44,
             "height": 44
           },
@@ -785,14 +785,14 @@
           "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 1367
+            "fromBottom": 1338
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
-            "key": "div: 1.Read bands.ts · :1–6130s",
-            "top": 117,
-            "bottom": 139
+            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
+            "top": 1261.25,
+            "bottom": 1400.25
           }
         },
         "rest-211": {
@@ -829,13 +829,13 @@
         "rest-173": {
           "command": {
             "x": 314,
-            "y": 2001.25,
+            "y": 2079.25,
             "width": 44,
             "height": 44
           },
           "output": {
             "x": 308,
-            "y": 2079.25,
+            "y": 2157.25,
             "width": 44,
             "height": 44
           },
@@ -847,14 +847,14 @@
           "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 1728
+            "fromBottom": 1806
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
-            "key": "row:21:0",
-            "top": 116.25,
-            "bottom": 229.75
+            "key": "row:20:0",
+            "top": 110.5,
+            "bottom": 182.25
           }
         },
         "rest-control-overhang": {
