@@ -1099,3 +1099,57 @@ test("placeholder title repair follows the saved task stamp across a peer reinst
   await sync(receiver, peerId);
   expect((await taskOn(receiver, task.id))?.text).toBe("Title from the previous install");
 }, 60_000);
+
+test("an old peer cannot consume title recovery before its wire upgrade, including across receiver restart", async () => {
+  const receiver = await install("rolling-title-receiver");
+  const source = await install("rolling-title-source");
+  const sourceId = JSON.parse(fs.readFileSync(path.join(root, "rolling-title-source/links/self.json"), "utf8")).installId as string;
+  const at = new Date(Date.now() - 60_000).toISOString();
+  const stamp = `${String(Date.parse(at)).padStart(13, "0")}.000.${installPrefix(sourceId)}`;
+  const task: BoardTask = { id: randomUUID(), project: key, text: "Original automatic title", details: "Shared task details",
+    status: "inbox", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at, machine: sourceId,
+    sync: { s: Object.fromEntries(["text", "status", "look", "place", "links", "machine", "handover"].map((group) => [group, stamp])), o: installPrefix(sourceId) } };
+  const peerId = await link(receiver, source, { projects: [key] }, source, false);
+  await request(source, "/test/import-tasks", "POST", { tasks: [task] });
+  await request(receiver, "/test/import-tasks", "POST", { tasks: [{ ...task, text: "Untitled task", chosen: true }] });
+  await request(source, "/test/capture?on=1");
+  await request(source, "/test/legacy-task-wire?on=1");
+
+  await sync(receiver, peerId);
+  expect((await taskOn(receiver, task.id))?.text).toBe("Untitled task");
+  const oldPeerPages = (await captured(source)).map((call) => JSON.parse(call.response) as { taskWireVersion?: number; tasks?: { rows?: { text?: string }[] } });
+  expect(oldPeerPages.some((page) => page.tasks?.rows?.some((row) => row.text === "Untitled task"))).toBe(true);
+  expect(oldPeerPages.every((page) => page.taskWireVersion === undefined)).toBe(true);
+
+  await stopInstall(receiver);
+  const restarted = await install("rolling-title-receiver");
+  expect((await taskOn(restarted, task.id))?.text).toBe("Untitled task");
+  await sync(restarted, peerId);
+  expect((await taskOn(restarted, task.id))?.text).toBe("Untitled task");
+
+  await request(source, "/test/legacy-task-wire?on=0");
+  await sync(restarted, peerId);
+  expect(await taskOn(restarted, task.id)).toMatchObject({ text: "Original automatic title", details: "Shared task details", status: "inbox" });
+}, 60_000);
+
+test("a receiver upgraded after its sender replays title recovery from its consumed legacy cursor", async () => {
+  const receiver = await install("sender-first-title-receiver");
+  const source = await install("sender-first-title-source");
+  const sourceId = JSON.parse(fs.readFileSync(path.join(root, "sender-first-title-source/links/self.json"), "utf8")).installId as string;
+  const at = new Date(Date.now() - 60_000).toISOString();
+  const stamp = `${String(Date.parse(at)).padStart(13, "0")}.000.${installPrefix(sourceId)}`;
+  const task: BoardTask = { id: randomUUID(), project: key, text: "Sender-first automatic title", details: "Preserve these details",
+    status: "blocked", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at, machine: sourceId,
+    sync: { s: Object.fromEntries(["text", "status", "look", "place", "links", "machine", "handover"].map((group) => [group, stamp])), o: installPrefix(sourceId) } };
+  const peerId = await link(receiver, source, { projects: [key] }, source, false);
+  await request(source, "/test/import-tasks", "POST", { tasks: [task] });
+  await request(receiver, "/test/import-tasks", "POST", { tasks: [{ ...task, text: "Untitled task", chosen: true }] });
+  const revisionReceiver = Number((await request(receiver, "/test/revision")).body.revision);
+  const revisionSource = Number((await request(source, "/test/revision")).body.revision);
+  await request(receiver, "/test/legacy-cursor", "POST", { id: peerId, pull: [revisionSource], pushed: [revisionReceiver], projects: [key] });
+
+  await stopInstall(receiver);
+  const upgradedReceiver = await install("sender-first-title-receiver");
+  await sync(upgradedReceiver, peerId);
+  expect(await taskOn(upgradedReceiver, task.id)).toMatchObject({ text: "Sender-first automatic title", details: "Preserve these details", status: "blocked" });
+}, 60_000);

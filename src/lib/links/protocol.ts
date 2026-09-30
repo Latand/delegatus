@@ -206,7 +206,7 @@ export function incomingSync(grant: Grant, input: unknown): { status: number; bo
   const agents = agreed && agentAfter !== undefined && projects.size ? agentPart(`grant:${grant.id}`, agentAfter, projects, agentPage as number) : undefined;
   // M.10: an idle call writes no grant file; a page with rows counts as movement.
   usedGrant(grant, served.moved || Boolean((pushAgents as { rows?: unknown[] } | undefined)?.rows?.length) || Boolean(agents && "rows" in agents));
-  return { status: 200, body: { v: 1, now: Date.now(), store: ownBoardStoreId(), s: localHash,
+  return { status: 200, body: { v: 1, now: Date.now(), store: ownBoardStoreId(), s: localHash, taskWireVersion: 2,
     ...(wire.s !== remoteHash ? { need: true } : {}),
     ...(sendLocal ? { shared: local.slice(want, want + 100), index: want, total: local.length } : {}), ...served.parts,
     ...(agents ? { agents } : {}), ...(agentAck !== undefined ? { agentAck } : {}) } };

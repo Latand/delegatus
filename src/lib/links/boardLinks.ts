@@ -85,14 +85,19 @@ export function dropRemoteProjects(id: string): void {
 
 export function readTaskCursor(id: string, store: string): TaskCursor | null {
   const row = readRow(`tasks:${id}`);
-  // The first v2 exchange scans both ways to restore previously withheld titles.
-  return row?.cursor && row.store === store && row.taskWireVersion === 2 ? row.cursor : null;
+  return row?.cursor && row.store === store ? row.cursor : null;
+}
+
+/** The peer's task encoding is known only after it advertises it in a reply. */
+export function readPeerTaskWireVersion(id: string, store: string): number {
+  const row = readRow(`tasks:${id}`);
+  return row?.store === store ? row.taskWireVersion ?? 0 : 0;
 }
 
 /** Writes only a changed cursor. */
-export function writeTaskCursor(id: string, store: string, cursor: TaskCursor): void {
+export function writeTaskCursor(id: string, store: string, cursor: TaskCursor, peerTaskWireVersion: number): void {
   const key = `tasks:${id}`;
-  const next: BoardLink = { key, store, shared: [], cursor, taskWireVersion: 2 };
+  const next: BoardLink = { key, store, shared: [], cursor, taskWireVersion: peerTaskWireVersion };
   const held = readRow(key);
   if (held && JSON.stringify(held) === JSON.stringify(next)) return;
   collection(true)!.boundedPatch(2, (tx) => {

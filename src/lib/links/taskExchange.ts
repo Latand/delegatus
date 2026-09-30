@@ -8,7 +8,7 @@ import { sharedLinkState } from "./runtimeState";
  * back, is rebuilt by scanning its rows by key; the merge is idempotent, so a
  * row sent twice changes nothing.
  */
-import { readTaskCursor, writeTaskCursor, type TaskCursor } from "./boardLinks";
+import { readPeerTaskWireVersion, readTaskCursor, writeTaskCursor, type TaskCursor } from "./boardLinks";
 import { installPrefix } from "./stamp";
 import { applyTaskRows } from "./taskApply";
 import { isPosition, readLogPage, readScanPage, PAGE_ROWS, type Position } from "./taskFeed";
@@ -60,11 +60,15 @@ export class TaskExchange {
   private pushMore = false;
   private dirty = false;
   private moved = false;
+  private peerTaskWireVersion: number;
+  private hasConsumedCursor: boolean;
   /** Rows applied or sent over this exchange. */
   movedRows = 0;
 
   constructor(private readonly link: { id: string; install: string; store: string }, private readonly self: { id: string; prefix: string }) {
     const held = readTaskCursor(link.id, link.store);
+    this.peerTaskWireVersion = readPeerTaskWireVersion(link.id, link.store);
+    this.hasConsumedCursor = Boolean(held && (held.pull !== null || held.pushed !== null || held.pullCovered.length || held.pushCovered.length));
     this.pull = held?.pull ?? null;
     this.pushed = held?.pushed ?? null;
     this.pullCovered = new Set(held?.pullCovered ?? []);
@@ -133,6 +137,7 @@ export class TaskExchange {
 
   /** Folds one answer in: applies B's rows, then advances what B acknowledged. */
   accept(body: Record<string, unknown>, linked: ReadonlySet<string>): void {
+    const confirmsV2 = body.taskWireVersion === 2 && this.peerTaskWireVersion < 2;
     const tasks = body.tasks as Record<string, unknown> | undefined;
     if (tasks?.wait === true) {
       // B did not yet hold the shared lists this request assumed.
@@ -161,13 +166,14 @@ export class TaskExchange {
       }
       this.inflight = null;
     }
-    if (!tasks) return;
+    if (!tasks) { if (confirmsV2 && linked.size) this.confirmPeerTaskWireV2(); return; }
     if (tasks.resync === true) {
       this.pull = null;
       this.pullCovered.clear();
       this.pullScan = null;
       this.pullMore = true;
       this.dirty = true;
+      if (confirmsV2) this.confirmPeerTaskWireV2();
       return;
     }
     const rows = this.decode(tasks.rows);
@@ -185,6 +191,7 @@ export class TaskExchange {
         this.dirty = true;
       } else this.pullScan.after = tasks.scan;
       this.pullMore = true;
+      if (confirmsV2) this.confirmPeerTaskWireV2();
       return;
     }
     if (!isPosition(tasks.cursor)) throw new TaskSyncError("malformed");
@@ -192,6 +199,22 @@ export class TaskExchange {
     this.pull = tasks.cursor;
     this.pullMore = tasks.more === true;
     if (rows.length) this.dirty = true;
+    if (confirmsV2) this.confirmPeerTaskWireV2();
+  }
+
+  /** Replays consumed v1 cursors after processing the response that confirmed v2. */
+  private confirmPeerTaskWireV2(): void {
+    this.peerTaskWireVersion = 2;
+    if (!this.hasConsumedCursor) return;
+    this.pull = null;
+    this.pushed = null;
+    this.pullCovered.clear();
+    this.pushCovered.clear();
+    this.pullScan = null;
+    this.pushScan = null;
+    this.pullMore = true;
+    this.pushMore = true;
+    this.dirty = true;
   }
 
   private decode(value: unknown): WireRow[] {
@@ -236,7 +259,8 @@ export class TaskExchange {
     const key = `${this.link.id}:${this.link.store}`;
     if (!this.dirty && !(this.moved && now - (lastSaved.get(key) ?? 0) >= IDLE_CURSOR_SAVE_MS)) return;
     const cursor: TaskCursor = { pull: this.pull, pushed: this.pushed, pullCovered: [...this.pullCovered].sort(), pushCovered: [...this.pushCovered].sort() };
-    writeTaskCursor(this.link.id, this.link.store, cursor);
+    writeTaskCursor(this.link.id, this.link.store, cursor, this.peerTaskWireVersion);
+    this.hasConsumedCursor = true;
     lastSaved.set(key, now);
     this.dirty = false;
     this.moved = false;

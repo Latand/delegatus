@@ -46,6 +46,7 @@ let restartAgentFeedAfterPage: string | null = null;
 let padSync = 0;
 let maxSyncBody = 0;
 let failSync: number | null = null;
+let legacyTaskWire = false;
 let badInfo = false;
 let grantDeleteStatus: number | null = null;
 let holdNextSync: "request" | "response" | "task-response" | null = null;
@@ -132,6 +133,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     if (path === "/test/clock") { clockOffset = Number(query.get("offset") ?? 0); json(response, { clockOffset }); return; }
+    if (path === "/test/legacy-task-wire") { legacyTaskWire = query.get("on") === "1"; json(response, { legacyTaskWire }); return; }
     if (path === "/test/capture") { capturing = query.get("on") !== "0"; captured = []; json(response, { capturing }); return; }
     if (path === "/test/measure-memory") { capturing = false; captured = []; captureWire = false; wire.length = 0; measureMemory = true; json(response, { ok: true }); return; }
     if (path === "/test/captured") { json(response, captured); if (query.get("reset") === "1") captured = []; return; }
@@ -344,6 +346,12 @@ const server = http.createServer(async (request, response) => {
     }
     else result = Response.json({ error: "not found" }, { status: 404 });
     let resultBody = Buffer.from(await result.arrayBuffer());
+    if (path === "/api/peer/v1/boards/sync" && legacyTaskWire && result.status === 200) {
+      const legacy = JSON.parse(resultBody.toString("utf8")) as { taskWireVersion?: number; tasks?: { rows?: Record<string, unknown>[] } };
+      delete legacy.taskWireVersion;
+      for (const row of legacy.tasks?.rows ?? []) if (typeof row.text === "string" && row.s) row.text = "Untitled task";
+      resultBody = Buffer.from(JSON.stringify(legacy));
+    }
     if (path === "/api/peer/v1/boards/sync" && restartAgentFeedAfterPage) {
       const agents = (JSON.parse(resultBody.toString("utf8")) as { agents?: { reset?: boolean; more?: boolean } }).agents;
       if (agents?.reset && agents.more) {
