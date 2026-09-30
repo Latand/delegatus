@@ -222,6 +222,7 @@ export class TaskExchange {
   /** Replay even a fresh exchange: its first push preceded capability confirmation. */
   private confirmPeerTaskWireUpgrade(version: number, replayPull: boolean): void {
     this.peerTaskWireVersion = version;
+    if (version >= TASK_WIRE_VERSION) this.boardReplayVersion = BOARD_MEMBERSHIP_REPLAY_VERSION;
     // The confirming response already used the advertised request version.
     // Replay earlier pulls, while preserving a fresh v3 scan's current page.
     if (replayPull) {
