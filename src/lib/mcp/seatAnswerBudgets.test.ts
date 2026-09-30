@@ -140,7 +140,7 @@ test("seat_tick_settings acknowledges a write in 300 B, edits one note line for 
     const verbose = await mcp.call("seat_tick_settings", { verbose: true });
     expect(verbose.payload.monitorPrompt).toBe(note);
     expect(JSON.stringify(verbose.payload).split(JSON.stringify(note).slice(1, -1)).length - 1).toBe(1);
-    expect(verbose.bytes).toBeLessThanOrEqual(Buffer.byteLength(JSON.stringify(note)) + 1_024);
+    expect(verbose.bytes).toBeLessThanOrEqual(Buffer.byteLength(JSON.stringify(note)) + 1_424);
 
     console.log(`[#2030] seat_tick_settings: write ${written.bytes} B, cadence write ${cadence.bytes} B, replaceLine sent ${replaced.sentBytes} B / answered ${replaced.bytes} B, verbose ${verbose.bytes} B for a ${Buffer.byteLength(note)} B note`);
   } finally {

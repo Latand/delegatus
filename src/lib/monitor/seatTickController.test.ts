@@ -6451,3 +6451,14 @@ test("a report the seat filed under the project's old key, before the key was fo
     resetProjectAliasesForTests();
   }
 });
+
+
+test("maintenance settles before gather and launches after the wake; scratch check never opts in", async () => {
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  const order: string[] = [];
+  const deliver = rig.deps.deliver!;
+  rig.deps.deliver = async (...args) => { order.push("wake"); return deliver(...args); };
+  rig.deps.maintenance = { reconcile: async () => { order.push("settle"); return "maintenance: fixture settled"; }, launchIfDue: async () => { order.push("launch"); return "maintenance: fixture launched"; } };
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(order).toEqual(["settle", "wake", "launch"]); expect(record?.detail).toContain("maintenance: fixture settled"); expect(record?.detail).toContain("maintenance: fixture launched");
+});

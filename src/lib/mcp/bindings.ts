@@ -1,3 +1,10 @@
+import { archiveConversationPaths } from "@/lib/board/archivePlacement";
+import { maintainerCallerOf, maintainerTaskWriteRefusal, maintenanceChange, type MaintainerCaller } from "@/lib/boardMaintenance/guard";
+import { recordMaintenanceChange, recordMaintenanceLogGap } from "@/lib/boardMaintenance/store";
+import { maintenanceLaneIsOpen } from "@/lib/boardMaintenance/evidence";
+import { boardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
+import { isMutatingMcpTool } from "./server";
+import { permitMaintainerTool } from "./toolAllowlist";
 import { boardSelection } from "./boardSelection";
 import { budgetPage } from "./budgetPage";
 import crypto from "node:crypto";
@@ -53,7 +60,6 @@ import {
 import type { AttentionRequestV1, FocusIntent, FocusTarget, ZoomIntent } from "@/lib/attention/types";
 import { applyBoardCommand } from "@/lib/board/command";
 import { boardFor } from "@/lib/board/store";
-import { MAX_BOARD_MUTATIONS_PER_REQUEST, MAX_BOARD_PATH_LIST_ITEMS } from "@/lib/board/validation";
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
 import { backoffDelayMs, DeadlineExceededError, deadlineSignal } from "@/lib/deadline";
 import { cancelRound, closeFlow, patchFlow } from "@/lib/flows/commands";
@@ -1581,12 +1587,32 @@ function taskTextLanguageWarnings(value: unknown, dependencies?: ViewerMcpDomain
   return warning ? { warnings: [warning] } : {};
 }
 
+function maintenanceCaller(dependencies: ViewerMcpDomainDependencies): MaintainerCaller | null {
+  const conversationId = attributionOf(dependencies).conversationId;
+  if (!conversationId || !dependencies.registrySnapshot) return null;
+  return maintainerCallerOf(conversationId, dependencies.registrySnapshot());
+}
+function assertMaintenanceWrite(caller: MaintainerCaller | null, args: McpToolArgs, task?: BoardTask, create = false, openPipeline?: string, liveAgent?: string): void {
+  if (!caller) return;
+  const refusal = maintainerTaskWriteRefusal({ caller, args, task, create, openPipeline, liveAgent });
+  if (refusal) throw new McpToolRefusal(refusal.error, { code: refusal.code, field: refusal.field, status: 403 });
+}
+function logMaintenanceWrite(caller: MaintainerCaller | null, tool: "create_task" | "update_task", before: BoardTask | undefined, after: BoardTask, fields: string[]): void {
+  if (!caller?.run || fields.length === 0) return;
+  try { recordMaintenanceChange(caller.run.runId, maintenanceChange(tool, before, after, fields)); }
+  catch {
+    try { recordMaintenanceLogGap(caller.run.runId); } catch { console.error("[board maintenance] change log and gap marker could not be written"); }
+  }
+}
+
 async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   /* A new task runs on the machine that creates it (M.4); "here" is the only
      machine a create names. */
   if (args.machine !== undefined && args.machine !== "here") {
     throw new McpToolRefusal("machine accepts only \"here\": a new task runs on the machine that creates it", { code: "TASK_INVALID_FIELD", field: "machine", status: 400 });
   }
+  const maintainer = dependencies ? maintenanceCaller(dependencies) : null;
+  assertMaintenanceWrite(maintainer, args, undefined, true);
   const input: CreateTaskInput = {
     ...args,
     placement: args.placement ?? "unplaced",
@@ -1600,6 +1626,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
     };
   });
   if (!result.ok) throw new McpToolRefusal(result.error, { code: result.code ?? (result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD"), field: result.field, status: result.status });
+  if (!result.replay) logMaintenanceWrite(maintainer, "create_task", undefined, result.task, Object.keys(result.task));
   return { ...taskAcknowledgement(result.task, args, result.replay ? [] : Object.keys(result.task)), replay: result.replay, ...(result.notes ? { notes: result.notes } : {}), ...taskTextLanguageWarnings(args.text, dependencies) };
 }
 
@@ -1637,18 +1664,46 @@ async function refineBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
 }
 
 async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
-  if (args.refine !== undefined) return refineBoardTask(args, dependencies);
+  const maintainer = maintenanceCaller(dependencies);
+  if (args.refine !== undefined) {
+    if (maintainer) throw new McpToolRefusal("Maintenance uses explicit taskId and text for retitling.", { code: "maintainer_delete_refused", status: 403 });
+    return refineBoardTask(args, dependencies);
+  }
   const taskId = required(args, "taskId");
   const patch = withoutKeys(args, ["taskId", "clientRequestId", "full", "compact"]);
   let changedFields: string[] = [];
+  let prior: BoardTask | undefined;
+  let liveAgent: string | undefined;
+  const checkedAssignments = new Set<string>();
+  const assignmentKey = (a: BoardTask["assignments"][number]) => JSON.stringify([a.conversationId, a.launchId, a.path, a.state]);
+  if (maintainer && args.status === "done") {
+    const task = loadTasks().find(t => t.id === taskId);
+    for (const assignment of task?.assignments ?? []) {
+      checkedAssignments.add(assignmentKey(assignment));
+      const id = assignment.conversationId;
+      if (!id) {
+        if (assignment.state === "spawning" || assignment.state === "handoff") liveAgent = assignment.launchId ?? "pending launch";
+        continue;
+      }
+      const snapshot = await agentLivenessSnapshot({ conversationId: id, limit: 1 }, dependencies.livenessSources());
+      const record = snapshot.conversations[0];
+      if (!record || record.lifecycle === "starting" || record.host.state === "unknown" || record.host.state === "alive" && record.turnState !== "idle") liveAgent = id;
+    }
+  }
   const result = mutateTasks((tasks) => {
-    const before = fieldValues(tasks.find(task => task.id === taskId));
+    prior = tasks.find(task => task.id === taskId);
+    const pipelines = dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [];
+    const open = pipelines.find(p => p.taskIds?.includes(taskId) && maintenanceLaneIsOpen(p));
+    if (maintainer && args.status === "done" && prior?.assignments.some(a => !checkedAssignments.has(assignmentKey(a)))) liveAgent = "a new assignment whose liveness has not been checked";
+    assertMaintenanceWrite(maintainer ? maintenanceCaller(dependencies) : null, args, prior, false, open?.id, liveAgent);
+    const before = fieldValues(prior);
     const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", seatHolding: taskSeatHoldingSnapshot(), explicit: true,
       workLinks: taskWorkLinkContext(() => dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? []) });
     if (outcome.ok) changedFields = changedFieldNames(before, outcome.task);
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
   });
   if (!result.ok) throw new McpToolRefusal(result.error, { code: result.code ?? (result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD"), field: result.field, status: result.status });
+  logMaintenanceWrite(maintainer, "update_task", prior, result.task, changedFields);
   return { ...taskAcknowledgement(result.task, args, changedFields), ...(result.notes ? { notes: result.notes } : {}), ...taskTextLanguageWarnings(args.text, dependencies) };
 }
 
@@ -3591,6 +3646,7 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   const current = readSettings(project);
 
   const change: SeatTickSettingsChange = {};
+  if (args.maintenance !== undefined) change.maintenance = args.maintenance as SeatTickSettingsChange["maintenance"];
   if (args.enabled !== undefined) change.enabled = args.enabled as boolean;
   if (args.wakeIntervalMinutes !== undefined) change.wakeIntervalMinutes = args.wakeIntervalMinutes as number | null;
   if (args.reason !== undefined) change.reason = args.reason as string | null;
@@ -3619,6 +3675,7 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   const own = callerProject ? canonicalOrchestratorProject(callerProject) : null;
   let settings = current;
   let changed = false;
+  let maintenanceNotes: string[] | undefined;
   if (Object.keys(change).length > 0) {
     const actor: SeatTickSettingsActor = {
       kind: attribution.kind,
@@ -3631,6 +3688,7 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     if (!applied.ok) throw new Error(applied.error);
     writeSettings(project, applied.settings);
     settings = applied.settings;
+    maintenanceNotes = applied.notes;
     changed = true;
   }
 
@@ -3645,6 +3703,7 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
 
   const verbose = args.verbose === true || args.full === true;
   const { monitorPrompt: storedPrompt, reason: storedReason, ...settingsWithoutPrompt } = settings;
+  delete settingsWithoutPrompt.maintenance;
   /* #2030: a write is acknowledged, never read back. The caller holds what it
      sent; the revision and the stored length are what it needs to know the row
      took it. A change to another project's tick still says so out loud. */
@@ -3653,6 +3712,7 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
       changed,
       revision: recordRevision(settings),
       changedFields: Object.keys(change),
+      ...(maintenanceNotes ? { notes: maintenanceNotes } : {}),
       monitorPromptLength: storedPrompt?.length ?? 0,
       ...(own === project ? {} : { project, scope: "other-project", callerProject: own }),
       ...reportAsk,
@@ -3687,6 +3747,7 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     monitorPromptLength: storedPrompt?.length ?? 0,
     revision: recordRevision(settings),
     ...(changed ? { changedFields: Object.keys(change) } : {}),
+    ...(maintenanceNotes ? { notes: maintenanceNotes } : {}),
     /* A full read names nothing it left out (#2030). */
     ...(echoPrompt ? {} : {
       omittedFieldCount: 1,
@@ -3702,6 +3763,7 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     /* What a project that has never been configured runs on, so a caller can
        see what it is restoring before it restores it. */
     ...(verbose ? { defaults: seatTickScheduleDefaults(project) } : {}),
+    maintenance: boardMaintenanceAnswer(project, effective, { verbose }),
     defaultWakeIntervalMinutes: Math.round(SEAT_TICK_WAKE_INTERVAL_MS / 60_000),
     /* Why the tick is mute, when it is (#1746). A seat that is enabled, on a
        twenty-minute interval and receiving nothing was reading a settings
@@ -5105,66 +5167,6 @@ function resolveArchiveTargetFromFiles(
   };
 }
 
-function writeArchivePlacement(
-  project: string,
-  action: "archive" | "unarchive",
-  paths: readonly string[],
-  snapshot: RegistrySnapshot,
-  dependencies: ViewerMcpDomainDependencies,
-): { appliedPaths: ReadonlySet<string> } {
-  let board = dependencies.boardFor(project);
-  const appliedPaths = new Set<string>();
-  const uniquePaths = [...new Set(paths)];
-  const batchSize = action === "archive"
-    ? MAX_BOARD_PATH_LIST_ITEMS
-    : MAX_BOARD_MUTATIONS_PER_REQUEST;
-  for (let offset = 0; offset < uniquePaths.length; offset += batchSize) {
-    const batch = uniquePaths.slice(offset, offset + batchSize);
-    let settled = false;
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      const pendingPaths = batch.filter((pathname) => action === "archive"
-        ? !board.prefs.hidden.includes(pathname)
-        : board.prefs.hidden.includes(pathname));
-      if (pendingPaths.length === 0) {
-        settled = true;
-        break;
-      }
-
-      const previousBoard = board;
-      const result = dependencies.applyBoardCommand({
-        schemaVersion: 1,
-        project,
-        baseRevision: board.revision,
-        ...(action === "archive"
-          ? { patch: { hidden: pendingPaths } }
-          : {
-              mutations: pendingPaths.map((pathname) => ({
-                kind: "restore" as const,
-                path: pathname,
-                placement: "auto" as const,
-              })),
-            }),
-      }, snapshot);
-      board = result.board;
-      if (result.ok && result.applied) {
-        const hiddenBefore = new Set(previousBoard.prefs.hidden);
-        const hiddenAfter = new Set(board.prefs.hidden);
-        for (const pathname of uniquePaths) {
-          const changed = action === "archive"
-            ? !hiddenBefore.has(pathname) && hiddenAfter.has(pathname)
-            : hiddenBefore.has(pathname) && !hiddenAfter.has(pathname);
-          if (changed) appliedPaths.add(pathname);
-        }
-        settled = true;
-        break;
-      }
-    }
-    if (!settled) {
-      throw new Error(`board state changed repeatedly while ${action === "archive" ? "archiving" : "unarchiving"} conversations`);
-    }
-  }
-  return { appliedPaths };
-}
 
 async function archiveConversationAction(
   args: McpToolArgs,
@@ -5189,7 +5191,7 @@ async function archiveConversationAction(
 
     for (const [project, projectMembers] of grouped) {
       throwIfCallEnded(context);
-      const write = writeArchivePlacement(
+      const write = archiveConversationPaths(
         project,
         action,
         projectMembers.flatMap(({ target }) => target.transcriptPaths),
@@ -5976,6 +5978,10 @@ export function viewerMcpToolPolicy(
       // An admitted agent's read surface is independent of role/seat identity.
       // Resolve authority only where the policy uses it. Bindings still verify
       // their own operation authority and recoverable receipts before dispatch.
+      if (!hostHealthProbe && isMutatingMcpTool(tool) && maintenanceCaller(domainDependencies)) {
+        const verdict = permitMaintainerTool(tool, args);
+        if (!verdict.allowed) return verdict;
+      }
       if (!hostHealthProbe && !mcpToolNeedsCallerIdentity(tool, args)) return { allowed: true };
       return policy.permit(tool, args);
     },

@@ -86,7 +86,14 @@ export interface SeatTickSettingsActor {
   via?: { deputy: string };
 }
 
+export interface BoardMaintenanceSetting {
+  enabled: boolean;
+  intervalHours: number;
+  updatedAt: string;
+  setBy: SeatTickSettingsActor;
+}
 export interface SeatTickSettings {
+  maintenance?: BoardMaintenanceSetting | null;
   project: string;
   /** Whether the Viewer ticks this project at all. */
   enabled: boolean;
@@ -112,6 +119,8 @@ export interface SeatTickSettings {
 /** The settings as one check should read them: the record with its expiry
     already applied. */
 export interface EffectiveSeatTickSettings {
+  maintenance: { enabled: boolean; intervalHours: number; intervalMs: number };
+  maintenanceSetting?: BoardMaintenanceSetting | null;
   enabled: boolean;
   wakeIntervalMs: number;
   reason: string | null;
@@ -143,6 +152,7 @@ export interface EffectiveSeatTickSettings {
 }
 
 export interface SeatTickSettingsChange {
+  maintenance?: { enabled?: boolean; intervalHours?: number | string | null };
   enabled?: boolean;
   /** `null` restores the default interval. */
   wakeIntervalMinutes?: number | null;
@@ -202,12 +212,21 @@ function normalizeInterval(value: unknown): number | null {
   return Math.min(SEAT_TICK_MAX_WAKE_INTERVAL_MINUTES, value);
 }
 
+function normalizeMaintenance(value: unknown): BoardMaintenanceSetting | null {
+  if (!value || typeof value !== "object") return null;
+  const r = value as Partial<BoardMaintenanceSetting>;
+  const actor = normalizeActor(r.setBy);
+  return typeof r.enabled === "boolean" && Number.isInteger(r.intervalHours) && r.intervalHours! >= 1 && r.intervalHours! <= 168 && isoOrNull(r.updatedAt) && actor
+    ? { enabled: r.enabled, intervalHours: r.intervalHours!, updatedAt: r.updatedAt!, setBy: actor } : null;
+}
+
 function normalizeRow(project: string, value: unknown): SeatTickSettings {
   const empty = defaultSeatTickSettings(project);
   if (!value || typeof value !== "object" || Array.isArray(value)) return empty;
   const raw = value as Record<string, unknown>;
   return {
     project,
+    ...(normalizeMaintenance(raw.maintenance) ? { maintenance: normalizeMaintenance(raw.maintenance) } : {}),
     enabled: raw.enabled !== false,
     wakeIntervalMinutes: normalizeInterval(raw.wakeIntervalMinutes),
     reason: typeof raw.reason === "string" && raw.reason.trim() ? raw.reason.slice(0, REASON_LIMIT) : null,
@@ -329,11 +348,14 @@ export function effectiveSeatTickSettings(
   nowMs: number,
   defaultWakeIntervalMs: number,
 ): EffectiveSeatTickSettings {
+  const intervalHours = settings.maintenance?.intervalHours ?? 3;
+  const maintenance = { enabled: settings.maintenance?.enabled ?? false, intervalHours, intervalMs: intervalHours * 3_600_000 };
   const expiry = settings.until ? Date.parse(settings.until) : Number.NaN;
   const lapsed = Number.isFinite(expiry) && expiry <= nowMs && !seatTickSettingsAreDefault(settings);
   const configured = settings.updatedAt !== null;
   if (lapsed || seatTickSettingsAreDefault(settings)) {
     return {
+      maintenance, maintenanceSetting: settings.maintenance,
       enabled: true,
       wakeIntervalMs: defaultWakeIntervalMs,
       reason: null,
@@ -349,6 +371,7 @@ export function effectiveSeatTickSettings(
     };
   }
   return {
+    maintenance, maintenanceSetting: settings.maintenance,
     enabled: settings.enabled,
     wakeIntervalMs: settings.wakeIntervalMinutes === null
       ? defaultWakeIntervalMs
@@ -378,15 +401,15 @@ export function effectiveSeatTickSettings(
  */
 export function seatTickSettingsAfterLapse(
   project: string,
-  lapsed: Pick<EffectiveSeatTickSettings, "monitorPrompt" | "updatedAt" | "setBy">,
+  lapsed: Pick<EffectiveSeatTickSettings, "monitorPrompt" | "updatedAt" | "setBy"> & Partial<Pick<EffectiveSeatTickSettings, "maintenanceSetting">>,
 ): SeatTickSettings {
   const restored = defaultSeatTickSettings(project);
-  if (!lapsed.monitorPrompt) return restored;
-  return { ...restored, monitorPrompt: lapsed.monitorPrompt, updatedAt: lapsed.updatedAt, setBy: lapsed.setBy };
+  if (!lapsed.monitorPrompt && !lapsed.maintenanceSetting) return restored;
+  return { ...restored, ...(lapsed.maintenanceSetting ? { maintenance: lapsed.maintenanceSetting } : {}), monitorPrompt: lapsed.monitorPrompt, updatedAt: lapsed.updatedAt, setBy: lapsed.setBy };
 }
 
 export type SeatTickSettingsChangeResult =
-  | { ok: true; settings: SeatTickSettings }
+  | { ok: true; settings: SeatTickSettings; notes?: string[] }
   | { ok: false; error: string };
 
 /**
@@ -404,7 +427,7 @@ export function applySeatTickSettingsChange(
   change: SeatTickSettingsChange,
   context: { at: string; actor: SeatTickSettingsActor },
 ): SeatTickSettingsChangeResult {
-  const touched = ["enabled", "wakeIntervalMinutes", "reason", "monitorPrompt", "until"].filter((key) => Object.hasOwn(change, key));
+  const touched = ["enabled", "wakeIntervalMinutes", "reason", "monitorPrompt", "until", "maintenance"].filter((key) => Object.hasOwn(change, key));
   if (touched.length === 0) return { ok: false, error: "a tick settings change needs at least one field" };
 
   const enabled = Object.hasOwn(change, "enabled") ? change.enabled : current.enabled;
@@ -461,8 +484,29 @@ export function applySeatTickSettingsChange(
     }
   }
 
+  let maintenance = current.maintenance;
+  const notes: string[] = [];
+  if (Object.hasOwn(change, "maintenance")) {
+    const raw = change.maintenance;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: "maintenance must be an object" };
+    const on = Object.hasOwn(raw, "enabled") ? raw.enabled : maintenance?.enabled ?? false;
+    if (typeof on !== "boolean") return { ok: false, error: "maintenance.enabled must be a boolean" };
+    let hours = maintenance?.intervalHours ?? 3;
+    if (Object.hasOwn(raw, "intervalHours")) {
+      const given = raw.intervalHours;
+      const number = typeof given === "number" ? given : typeof given === "string" && given.trim() ? Number(given) : NaN;
+      if (given === null) hours = 3;
+      else if (!Number.isFinite(number)) notes.push("maintenance.intervalHours was not a number; kept the stored interval");
+      else {
+        hours = Math.max(1, Math.min(168, Math.round(number)));
+        if (hours !== given) notes.push(`maintenance.intervalHours normalized to ${hours}`);
+      }
+    }
+    maintenance = { enabled: on, intervalHours: hours, updatedAt: context.at, setBy: context.actor };
+  }
   const next: SeatTickSettings = {
     project: current.project,
+    ...(maintenance ? { maintenance } : {}),
     enabled,
     wakeIntervalMinutes,
     reason,
@@ -484,9 +528,9 @@ export function applySeatTickSettingsChange(
      ended: turning a tick back on says nothing about the words a seat left for
      its own wakes, and `monitorPrompt: null` is how those words are withdrawn. */
   if (seatTickSettingsAreDefault(next)) {
-    return { ok: true, settings: { ...next, wakeIntervalMinutes: null, reason: null, until: null } };
+    return { ok: true, settings: { ...next, wakeIntervalMinutes: null, reason: null, until: null }, ...(notes.length ? { notes } : {}) };
   }
-  return { ok: true, settings: next };
+  return { ok: true, settings: next, ...(notes.length ? { notes } : {}) };
 }
 
 /** Where a line edit lands in the note; see {@link LineTarget}. */

@@ -116,6 +116,7 @@ export async function PUT(req: NextRequest): Promise<NextResponse<SeatTickSettin
      one place that decides what each field may be, and it names the field and
      the rule in the refusal it returns. */
   const change: SeatTickSettingsChange = {};
+  if (body.maintenance !== undefined) change.maintenance = body.maintenance as SeatTickSettingsChange["maintenance"];
   if (body.enabled !== undefined) change.enabled = body.enabled as boolean;
   if (body.wakeIntervalMinutes !== undefined) change.wakeIntervalMinutes = body.wakeIntervalMinutes as number | null;
   if (body.reason !== undefined) change.reason = body.reason as string | null;
@@ -142,7 +143,7 @@ export async function PUT(req: NextRequest): Promise<NextResponse<SeatTickSettin
     const applied = applySeatTickSettingsChange(readSeatTickSettings(project), change, { at: new Date().toISOString(), actor });
     if (!applied.ok) return NextResponse.json({ error: applied.error }, { status: 400 });
     writeSeatTickSettings(project, applied.settings);
-    return NextResponse.json(seatTickSettingsAnswer(project, true, actor), { headers: NO_STORE });
+    return NextResponse.json({ ...seatTickSettingsAnswer(project, true, actor), ...(applied.notes ? { notes: applied.notes } : {}) }, { headers: NO_STORE });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "seat tick settings could not be written" }, { status: 500 });
   }
