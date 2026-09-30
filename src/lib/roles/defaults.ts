@@ -240,7 +240,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
   },
   {
     id: "maintainer", name: "Maintainer",
-    description: "Keeps one project's board current: statuses, blocked reasons, half-done tasks and inbox attention. Delegatus starts it on the seat tick.",
+    description: "Keeps a project's board current: statuses, blocked reasons, half-done tasks and inbox attention. Runs on the seat tick.",
     config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "medium" },
     parameters: [], promptScaffold: `${MAINTAINER_BODY} ${SHARED_RULES}`,
     safetyFences: ["Files stay untouched: no edits, staging, commits or pushes in any repository; git and gh are for reading.", "Write the board only through create_task and update_task. Never delete, hide or overwrite details, or mark done a task with an open pipeline or live agent."],
