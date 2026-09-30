@@ -241,7 +241,10 @@ You can start agents yourself and choose which account each one uses.
 Start a Claude Code, Codex or GitHub Copilot agent from a task or the Create
 button. Pick the model and reasoning effort, then send messages, images and
 files from the composer. The agent's window has buttons to interrupt,
-resume or stop it. Agents use the bundled [MCP server](#mcp-server-for-agents)
+resume or stop it. In a Codex conversation, the composer's **Context** toggle
+sends the draft into the running turn as context: Auto follows the turn, and a
+press overrides it for that card. A Codex agent can also run on a service tier
+you set per launch, stage or role. Agents use the bundled [MCP server](#mcp-server-for-agents)
 to reach the board, tasks, pipelines and each other's conversations. The
 orchestrator does its work through the same server.
 
@@ -362,7 +365,8 @@ Delegatus can take your messages by voice and read answers aloud.
   [docs/transcription.md](docs/transcription.md).
 - **Read aloud.** The speaker button on an answer reads it with OpenAI,
   ElevenLabs or Soniox speech, billed to your own API key. Right-click the
-  button to pick the provider.
+  button to pick the provider. With Soniox the answer in view also starts from
+  the conversation header, and the first sentence plays as soon as it arrives.
 - **Voice conversation.** A Codex agent that Delegatus hosts offers a
   continuous voice conversation from its composer.
 
