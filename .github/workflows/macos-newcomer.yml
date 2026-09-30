@@ -78,7 +78,8 @@ jobs:
       - name: Rehearse clean first start without logins or agent runs
         env:
           NEWCOMER_PACKAGE: ${{ steps.package.outputs.target }}
-        run: bun scripts/newcomer-install.mjs "$NEWCOMER_PACKAGE" "$RUNNER_TEMP/newcomer-report"
+        # Node supervises the probe; the installed launcher uses its own Bun.
+        run: node scripts/newcomer-install.mjs "$NEWCOMER_PACKAGE" "$RUNNER_TEMP/newcomer-report"
       - name: Record short report
         if: always()
         uses: actions/upload-artifact@v4

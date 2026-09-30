@@ -56,6 +56,7 @@ async function startCase(label, env, expected, reportDirectory) {
   });
   let output = "";
   let spawnError;
+  let failure;
   child.once("error", (error) => { spawnError = error; });
   const collect = (chunk) => { output = (output + chunk).slice(-200_000); };
   child.stdout.on("data", collect);
@@ -81,11 +82,15 @@ async function startCase(label, env, expected, reportDirectory) {
     if (expected.installer && !output.includes(expected.installer)) throw new Error(`${label}: missing actionable installation command`);
     if (expected.available && output.includes("CLI were not found")) throw new Error(`${label}: available CLI still reported missing`);
     return { case: label, rootStatus: 200, cli: presence, message: expected.message, passed: true };
+  } catch (error) {
+    failure = error;
+    throw error;
   } finally {
     try { await stop(child); } finally {
       // The fixture has no personal identities or credentials; keep diagnostic
       // logs bounded and replace its generated home before uploading.
       writeFileSync(path.join(reportDirectory, `${label}.log`), output.replaceAll(env.HOME, "$HOME"));
+      if (failure) writeFileSync(path.join(reportDirectory, `${label}-error.txt`), String(failure.message).replaceAll(env.HOME, "$HOME") + "\n");
     }
   }
 }
@@ -152,6 +157,9 @@ async function main() {
     if (calls.some((call) => call !== "--version" && !call.startsWith("mcp add viewer"))) throw new Error("A stub received a login or agent-run command");
     report.stubCommands = [...new Set(calls.map((call) => call.replaceAll(home, "$HOME")))];
     report.passed = true;
+  } catch (error) {
+    report.error = error.message.replaceAll(home, "$HOME");
+    throw error;
   } finally {
     writeFileSync(path.join(reportDirectory, "report.json"), JSON.stringify(report, null, 2) + "\n");
   }

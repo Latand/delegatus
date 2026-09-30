@@ -60,7 +60,8 @@ only `--version` and MCP registration; the report refuses any other call.
 It never signs in or creates an orchestrator. The driver tracks each launcher
 it starts and shuts it down through its own child handle.
 
-The driver substitutes an ephemeral port for 8898 and a tracked background
+Node supervises the driver while the installed package runs on the visitor's
+new Bun. The driver substitutes an ephemeral port for 8898 and a tracked background
 process for `nohup`. It deliberately leaves out downloading real agent CLIs:
 the missing case is the regression, and the stubs exercise discovery and MCP
 registration without authentication. The report artifact records each case,
@@ -70,7 +71,7 @@ job has a 35-minute limit; each first start has a 60-second limit.
 Run after packing on a Mac:
 
 ```sh
-bun scripts/newcomer-install.mjs /path/to/delegatus-cli.tgz /path/to/report
+node scripts/newcomer-install.mjs /path/to/delegatus-cli.tgz /path/to/report
 ```
 
 ## Five-minute manual checklist
