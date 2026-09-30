@@ -43,12 +43,9 @@ const EXACT = 0.01;
    feed step back and forth by a pixel forever. */
 const SLIVER_PX = 1;
 
-/* Moves are whole CSS pixels, since the browser does not honour a sub-pixel
-   scroll move. Back (revealing the cut row) rounds up, so the row ends at most
-   a pixel below the edge; forward (letting it leave) rounds down, so what is
-   left of it is a sliver and the row after it is not pushed above the edge. */
+/* Back (revealing the cut row) rounds up, so the row starts below the edge.
+   Forward clears the row and its controls to the ink's half-pixel tolerance. */
 const backPx = (value: number) => Math.ceil(value - EXACT);
-const forwardPx = (value: number) => Math.floor(value + EXACT);
 
 const ROW_SELECTOR = "[data-feed-key], li, [data-tool-row]";
 /* Rows of a run or a list sit a few pixels apart; an edge in that gap is on a
@@ -81,8 +78,14 @@ export function rowEdgeCut(scroller: HTMLElement): EdgeCut | null {
     /* Leaving forward clears the frame of a row it closes too (a run's card
        ends a few pixels under its last call), or that frame's edge stays
        behind as a sliver of a cut row. */
-    const bottom = around.reduce((lowest, end) => (end >= rect.bottom && end - rect.bottom <= FRAME_PX ? Math.max(lowest, end) : lowest), rect.bottom);
-    return { hidden: backPx(edge - rect.top), shown: forwardPx(bottom - edge) };
+    let bottom = around.reduce((lowest, end) => (end >= rect.bottom && end - rect.bottom <= FRAME_PX ? Math.max(lowest, end) : lowest), rect.bottom);
+    // Negative action margins can put a tap target below its row's box.
+    // Leaving that row clears the target too, including fractional pixels.
+    for (const control of row.querySelectorAll("button")) {
+      const box = control.getBoundingClientRect();
+      if (box.height <= MAX_CONTROL_PX && box.bottom - rect.bottom <= FRAME_PX) bottom = Math.max(bottom, box.bottom);
+    }
+    return { hidden: backPx(edge - rect.top), shown: Math.ceil(bottom - edge - 0.5) };
   }
   return null;
 }
@@ -185,7 +188,17 @@ export function inkEdgeCut(scroller: HTMLElement): EdgeCut | null {
       if (hit && hit !== scroller && scroller.contains(hit) && !roots.includes(hit)) roots.push(hit);
     }
   }
-  const ink = bandInk(roots, scroller, edge - BAND_PX, edge + BAND_PX);
+  // Phone action rows have negative margins: a control can cross the edge
+  // after its enclosing message has already left it. Include that overhang
+  // in the same ink reading, even when the next row starts on a boundary.
+  const overhangs: Span[] = [];
+  for (const control of scroller.querySelectorAll("button")) {
+    const rect = control.getBoundingClientRect();
+    if (rect.height > MAX_CONTROL_PX || rect.top >= edge || rect.bottom <= edge) continue;
+    overhangs.push({ top: rect.top, bottom: rect.bottom });
+    span = { top: Math.min(span.top, rect.top), bottom: Math.max(span.bottom, rect.bottom) };
+  }
+  const ink = [...bandInk(roots, scroller, edge - BAND_PX, edge + BAND_PX), ...overhangs];
   /* After a move of `delta` the edge sits at `edge + delta` in today's
      coordinates; half a pixel of overlap is rounding, not a cut. */
   const crosses = (delta: number) => ink.some((line) => line.top < edge + delta - 0.5 && line.bottom > edge + delta + 0.5);
@@ -210,7 +223,12 @@ export function inkEdgeCut(scroller: HTMLElement): EdgeCut | null {
     whichever is shorter and still inside the scroll range. A row that fits is
     aligned whole; otherwise the ink under the edge. Zero when nothing is cut. */
 export function restingDelta(scroller: HTMLElement): number {
-  const cut = rowEdgeCut(scroller) ?? inkEdgeCut(scroller);
+  const row = rowEdgeCut(scroller);
+  const ink = inkEdgeCut(scroller);
+  // A whole-row landing must also clear an action overhanging its neighbour.
+  const cut = row && (row.hidden || row.shown)
+    ? { hidden: Math.max(row.hidden, ink?.hidden ?? 0), shown: Math.max(row.shown, ink?.shown ?? 0) }
+    : ink;
   if (!cut) return 0;
   const room = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop;
   const forward = cut.shown <= room ? cut.shown : Infinity;

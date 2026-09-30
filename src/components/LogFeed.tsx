@@ -124,7 +124,7 @@ const FOCUS_CAP = typeof window !== "undefined" && window.matchMedia("(pointer: 
 const EMPTY_FEED: FeedSnapshot = { items: [], hiddenServiceCount: 0 };
 
 /** How long after a programmatic glue an untagged not-at-bottom scroll event
-    is treated as layout settling (content-visibility estimates, pane resizes)
+    is treated as layout settling (initial row windows, pane resizes)
     and glued again. Input-tagged releases bypass this window. */
 const GLUE_SETTLE_MS = 300;
 
@@ -133,13 +133,6 @@ const GLUE_SETTLE_MS = 300;
 function onPhoneLayout(): boolean {
   return typeof window !== "undefined" && window.matchMedia?.(MOBILE_LAYOUT_QUERY).matches === true;
 }
-
-/** Quiet time after the last scroll event before a released phone feed moves
-    to the nearest line boundary (#1978): momentum has ended by then. */
-const REST_ALIGN_MS = 160;
-/** Settles in a row, without the operator's input between them, before the
-    feed stops trying; one is the norm, the band clearance makes a second rare. */
-const MAX_AUTO_ALIGNS = 3;
 
 type ScrollCause =
   | { kind: "programmatic" }
@@ -193,6 +186,8 @@ interface PrependViewportProps {
   prependGen: number;
   visibleCount: number;
   following: RefObject<boolean>;
+  readerAnchor: RefObject<ViewportAnchor | null>;
+  onRestore: () => void;
 }
 
 /* The before-mutation lifecycle reads the current viewport, including gestures
@@ -219,13 +214,17 @@ class PrependViewport extends Component<PrependViewportProps> {
       ? feedRows(el).find((candidate) => candidate.dataset.feedToolSources?.split(" ").includes(anchor.toolSource!))
       : null);
     if (!row) return;
-    // Measure the residual after native anchoring, avoiding double compensation.
+    // Measure the residual so an already restored layout is not compensated twice.
     const bounds = el.getBoundingClientRect();
     const delta = row.getBoundingClientRect().top - bounds.top - anchor.offset;
     // Compact panes can sit inside the scaled project canvas. DOM rectangles
     // use viewport pixels while scrollTop uses untransformed layout pixels.
     const scale = el.offsetHeight ? bounds.height / el.offsetHeight : 1;
-    if (delta && scale > 0) el.scrollTop += delta / scale;
+    if (delta && scale > 0) {
+      this.props.onRestore();
+      el.scrollTop += delta / scale;
+    }
+    this.props.readerAnchor.current = { path: anchor.path, key: row.dataset.feedKey!, offset: anchor.offset };
   }
 
   render() { return this.props.children; }
@@ -406,6 +405,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     magnet ? (compact ? TAIL_CAP : FOCUS_CAP) : 0,
   );
   const scroller = useRef<HTMLDivElement | null>(null);
+  const readerAnchor = useRef<ViewportAnchor | null>(null);
   const content = useRef<HTMLDivElement | null>(null);
   const olderRequestRef = useRef<object | null>(null);
   const historyOwnerRef = useRef<object>({});
@@ -431,6 +431,8 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      lives through the gesture; a stamped programmatic cause still wins. */
   const scrollbarPointerRef = useRef<{ fromBottom: number } | null>(null);
   const feedTouchRef = useRef<{ x: number; y: number } | null>(null);
+  const gestureRestPending = useRef(false);
+  const autoAlignRef = useRef<{ delta: number; count: number } | null>(null);
   const pillTouchRef = useRef<{ x: number; y: number } | null>(null);
   const restoreInitializedPathRef = useRef<string | null>(null);
   const pendingRestoreRef = useRef<PendingRestore | null>(null);
@@ -468,8 +470,6 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      the content alone. The spacer sits outside `content`, whose resize
      observer would otherwise re-glue. */
   const tailSpacer = useRef<HTMLDivElement | null>(null);
-  const restTimer = useRef<number | null>(null);
-  const autoAlignRef = useRef<{ delta: number; count: number } | null>(null);
   const alignFollowedTop = (el: HTMLElement) => {
     const spacer = tailSpacer.current;
     if (!spacer) return;
@@ -489,32 +489,34 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     spacer.style.height = `${plan.spacer}px`;
     el.scrollTop = el.scrollHeight;
   };
-  /* Released from the tail, a feed that came to rest mid-line moves by the
-     shorter way to a line boundary, once the finger is off the glass and the
-     momentum has run out. */
-  const scheduleRestAlign = () => {
-    if (!onPhoneLayout()) return;
-    if (restTimer.current !== null) window.clearTimeout(restTimer.current);
-    restTimer.current = window.setTimeout(() => {
-      restTimer.current = null;
-      const el = scroller.current;
-      if (!el || magnetRef.current || feedTouchRef.current) return;
-      const delta = restingDelta(el);
-      if (!delta) return;
-      /* A settle never undoes the one before it, and gives up after a few
-         in a row: the operator's next touch, wheel or key starts afresh. */
-      const previous = autoAlignRef.current;
-      if (previous && (Math.sign(previous.delta) !== Math.sign(delta) || previous.count >= MAX_AUTO_ALIGNS)) return;
+  /* Only a reader gesture may align a released phone feed. The browser's
+     scrollend includes momentum; prepends and resize restoration never arm
+     this step. Record the settled boundary as the shared reader anchor. */
+  const alignGestureRest = (el: HTMLDivElement) => {
+    if (!gestureRestPending.current || feedTouchRef.current) return;
+    if (!onPhoneLayout() || magnetRef.current) {
+      gestureRestPending.current = false;
+      return;
+    }
+    const delta = restingDelta(el);
+    const previous = autoAlignRef.current;
+    // Clearing a row can expose ink in its enclosing tall card. Continue on
+    // the glide's next scrollend, without reversing or exceeding three moves.
+    if (delta && (!previous || (Math.sign(previous.delta) === Math.sign(delta) && previous.count < 3))) {
       autoAlignRef.current = { delta, count: (previous?.count ?? 0) + 1 };
       markProgrammaticScroll();
       const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
       el.scrollBy({ top: delta, behavior: reduce ? "auto" : "smooth" });
-    }, REST_ALIGN_MS);
+      return;
+    }
+    gestureRestPending.current = false;
+    readerAnchor.current = viewportAnchor(el, `${memoryKey}\0${tailPath}`);
+    if (memoryKey && tailPath) rememberScroll(memoryKey, {
+      magnet: false,
+      fromBottom: distanceFromBottom(el),
+      anchor: viewportAnchor(el, tailPath),
+    });
   };
-  useEffect(() => () => {
-    if (restTimer.current !== null) window.clearTimeout(restTimer.current);
-  }, []);
-
   const markProgrammaticScroll = () => {
     if (scrollCauseRef.current?.kind !== "user") {
       scrollCauseRef.current = { kind: "programmatic" };
@@ -731,6 +733,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     filePathRef.current = tailPath;
     restoreInitializedPathRef.current = null;
     pendingRestoreRef.current = null;
+    readerAnchor.current = null;
+    gestureRestPending.current = false;
+    autoAlignRef.current = null;
   }, [tailPath]);
 
   useLayoutEffect(() => {
@@ -784,13 +789,20 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     if (!el || !inner) return;
     const observer = new ResizeObserver(() => {
       if (magnetRef.current) glue();
-      else {
-        restorePendingPosition();
-        /* Rows that grew or shrank above a released feed move it without a
-           scroll event; it settles on a row edge again (#1978), as a fresh
-           layout, since a settle's own scroll never resizes anything. */
-        autoAlignRef.current = null;
-        scheduleRestAlign();
+      else if (!restorePendingPosition()) {
+        // Native anchoring may choose the newly prepended predecessor instead
+        // of the message being read. Own the same anchor across later layout.
+        const anchor = readerAnchor.current;
+        if (!anchor) return;
+        const row = rowForAnchor(el, anchor.key);
+        if (!row) return;
+        const bounds = el.getBoundingClientRect();
+        const scale = el.offsetHeight ? bounds.height / el.offsetHeight : 1;
+        const delta = row.getBoundingClientRect().top - bounds.top - anchor.offset;
+        if (delta && scale > 0) {
+          markProgrammaticScroll();
+          el.scrollTop += delta / scale;
+        }
       }
     });
     observer.observe(inner);
@@ -1359,6 +1371,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     const el = scroller.current;
     if (!el) return;
     autoAlignRef.current = null;
+    if (direction !== null && direction !== 0) gestureRestPending.current = true;
     scrollCauseRef.current = {
       kind: "user",
       fromBottom: distanceFromBottom(el),
@@ -1440,6 +1453,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
            capture measures this scroller's rendered height against the usable
            visual viewport to prove the transcript owns its ≥60% share. */
         data-log-feed-scroller
+        // Prepend and resize share the reader's message anchor. Letting the
+        // browser independently choose another row causes double restoration.
+        style={{ overflowAnchor: "none" }}
         data-tail-lines-start={tail.linesStart}
         data-tail-line-count={tail.lines.length}
         className={compact ? "min-h-0 flex-1 overflow-y-auto py-3" : "min-h-0 flex-1 overflow-y-auto py-6"}
@@ -1449,7 +1465,6 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         onPointerDownCapture={(event) => {
           if (event.button === 0 && pointerHitsVerticalScrollbar(event.currentTarget, event.clientX)) {
             scrollbarPointerRef.current = { fromBottom: distanceFromBottom(event.currentTarget) };
-            autoAlignRef.current = null;
             scrollCauseRef.current = null;
           }
         }}
@@ -1469,7 +1484,6 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         }}
         onTouchEndCapture={() => {
           feedTouchRef.current = null;
-          scheduleRestAlign();
         }}
         onTouchCancelCapture={() => { feedTouchRef.current = null; }}
         onKeyDownCapture={(event) => {
@@ -1477,6 +1491,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
           else if (["ArrowDown", "End", "PageDown"].includes(event.key)) markUserScroll(1);
           else if ([" ", "Spacebar"].includes(event.key)) markUserScroll(event.shiftKey ? -1 : 1);
         }}
+        onScrollEnd={(event) => alignGestureRest(event.currentTarget)}
         onScroll={(event) => {
           const el = event.currentTarget;
           const fromBottom = distanceFromBottom(el);
@@ -1503,7 +1518,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
           if (userReturnedToBottom && !magnetRef.current) setMagnet(true, true);
           else if ((userReleasedMagnet || !atBottom) && magnetRef.current) {
             /* Off-bottom right after a programmatic glue is layout settling
-               (content-visibility estimates, pane resizes during a scheme
+               (initial row windows, pane resizes during a scheme
                reshuffle) — hold the magnet and glue again. A preceding input
                event identifies an operator release inside the same window. */
             if (settling && !userInitiated) glue();
@@ -1516,12 +1531,14 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
               anchor: magnetRef.current ? null : viewportAnchor(el, tailPath ?? file.path),
             });
           }
+          if (magnetRef.current) readerAnchor.current = null;
+          else if (cause?.kind !== "programmatic") readerAnchor.current = viewportAnchor(el, `${memoryKey}\0${tailPath}`);
           if (el.scrollTop < 120 && canRevealOlder && !tail.loadingOlder && !tail.loading) revealOlder();
-          if (!magnetRef.current) scheduleRestAlign();
         }}
       >
       <PrependViewport scroller={scroller} identity={`${memoryKey}\0${tailPath}`}
-        prependGen={tail.prependGen} visibleCount={visibleCount} following={magnetRef}>
+        prependGen={tail.prependGen} visibleCount={visibleCount} following={magnetRef}
+        readerAnchor={readerAnchor} onRestore={markProgrammaticScroll}>
       <div
         ref={content}
         /* Whether this feed has settled, readable off the page: a surface that
@@ -1606,7 +1623,6 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                     key={row.key}
                     data-feed-key={row.anchorKey}
                     data-feed-kind="user"
-                    className={compact ? "feed-cv" : undefined}
                   >
                     <FeedMessageRow
                       entry={row.entry}
@@ -1625,9 +1641,11 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                  second name over it (ghost-seat.md §6.1). */
               const foldResumes = resumes !== undefined && phone && item.kind === "prose";
               return (
-                /* Session-stable keys: a row keeps its DOM node while the
-                   window slides. Compact panes live on the zoomable canvas:
-                   off-screen rows skip layout/paint via content-visibility. */
+                /* Keep measured row heights when history is inserted. Skipping
+                   offscreen layout with a guessed intrinsic height invalidates
+                   the prepend snapshot, then shifts the reader again as those
+                   rows enter the viewport. The bounded render window limits
+                   row count; session-stable keys retain their DOM nodes. */
                 <div
                   key={row.key}
                   data-feed-key={anchorKey ?? undefined}
@@ -1635,7 +1653,6 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                   data-feed-tool-sources={item.kind === "cmd-group" ? item.calls.map((call) => call.srcCall).join(" ")
                     : item.kind === "tool" ? String(item.srcCall) : undefined}
                   data-feed-source-id={"sourceId" in item ? item.sourceId : undefined}
-                  className={compact ? "feed-cv" : undefined}
                 >
                   {resumes && !foldResumes ? <SeatSpeakerLine resumes={resumes} engine={file.engine} /> : null}
                   <GalleryOwnerProvider value={item}>

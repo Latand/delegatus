@@ -84,9 +84,8 @@ function anchorOnScreen(rect: { top: number; bottom: number; left: number; right
  * keyboard path moves into it on the very same commit.
  *
  * Shared by the menu and the refusal alert, which are the same popover anchored
- * to the same trigger: an inline `absolute` alert is clipped by the message row
- * (`.feed-cv` carries `content-visibility: auto`, hence paint containment) and
- * painted over by the next message, which is what #1024 condemned.
+ * to the same trigger. A fixed portal keeps the alert above subsequent
+ * messages and outside the feed's scrolling clip (#1024).
  *
  * Also reports whether the trigger is still on screen, which is measured even
  * while the caller renders nothing — a caller that hides itself when the

@@ -607,7 +607,8 @@ ctx chip all become Badge calls; ad-hoc `#fff2d6`/`#7a5300`-style pairs die.
   keep their structure; this pass is surfaces, type, and control placement.
 - No behavior changes to feed parsing, polling, chime, presence, or tmux
   actions — `ProcessStatusControls`' escalation logic, lazy tool-body
-  mounting, `feed-cv` virtualization, IntersectionObserver pausing all stay.
+  mounting and IntersectionObserver pausing all stay. Feed height estimates
+  were later removed to preserve reader anchors through history loads.
 - No i18n string rewrites except where a spec names one (menu items); casing
   fixes are CSS.
 
