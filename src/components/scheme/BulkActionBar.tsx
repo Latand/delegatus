@@ -1,5 +1,6 @@
 "use client";
 
+import { DEFAULT_REVIEW_ROUNDS } from "@/lib/reviewHistory/limits";
 import { CircleCheck, CircleX, Focus, Loader2, OctagonMinus, Repeat2, RotateCcw, Square, Trash2, X } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 
@@ -422,7 +423,7 @@ function BulkFlowPopover({
   const [presets, setPresets] = useState<FlowsResponse["presets"]>([]);
   const [presetName, setPresetName] = useState<string | null>(null);
   const [mode, setMode] = useState<"auto" | "manual">("auto");
-  const [roundLimit, setRoundLimit] = useState(5);
+  const [roundLimit, setRoundLimit] = useState(DEFAULT_REVIEW_ROUNDS);
 
   useEffect(() => {
     let cancelled = false;
@@ -485,7 +486,7 @@ function BulkFlowPopover({
             max={20}
             value={roundLimit}
             className="h-8 rounded-[8px] border border-border bg-canvas px-2 text-[11.5px] font-normal text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            onChange={(event) => setRoundLimit(Math.max(1, Math.min(20, Number(event.target.value) || 5)))}
+            onChange={(event) => setRoundLimit(Math.max(1, Math.min(20, Number(event.target.value) || DEFAULT_REVIEW_ROUNDS)))}
           />
         </label>
         <div className="flex items-end justify-end gap-1.5">

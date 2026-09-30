@@ -1,3 +1,4 @@
+import { codexModelServiceTiers, tierOffers, CodexServiceTierUnavailableError } from "./codexServiceTiers";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { accountForSpawn, activeCodexAccountId, codexAccountsMutationLocked, codexHomeOwningSessionPath, CorruptCodexAccountsError, createManagedCodexAccount, listCodexAccounts, setActiveCodexAccount, UnknownAccountError, type CodexAccount } from "./codex";
 import { activeClaudeAccountId, claudeAccountForSpawn, claudeAccountsMutationLocked, claudeHomeOwningTranscript, claudeAccountEnvironment, CorruptClaudeAccountsError, createManagedClaudeAccount, listClaudeAccounts, readClaudeProviderRuntime, setActiveClaudeAccount, UnknownClaudeAccountError } from "./claude";
@@ -25,6 +26,7 @@ function contextForSpawn(engine: "claude" | "codex", requested?: string | null) 
 export type HealthySpawnAccountResolution = AccountContext & {
   admission?: SpawnAccountAdmission;
   requestedAdmission?: SpawnAccountAdmission;
+  serviceTier?: string | null;
 };
 
 /**
@@ -70,6 +72,7 @@ export async function resolveHealthySpawnAccount(
      cannot name, and resolves exactly as an unbound one always did. */
   project: string | null = null,
   model?: string | null,
+  serviceTier?: { id: string; model: string; required: boolean },
 ): Promise<HealthySpawnAccountResolution> {
   if (engine === "copilot") {
     const selected = selectProjectAccount({
@@ -125,15 +128,34 @@ export async function resolveHealthySpawnAccount(
      even when an account IS named, because it is also the fallback the branches
      below reach for, and a fallback that skipped the rule would be the same
      defect one level down. */
-  const firstPick = selectProjectAccount(selectionInput);
+  let appliedTier = engine === "codex" ? serviceTier?.id ?? null : null;
+  const tierAccounts = engine === "codex" ? listCodexAccounts() : [];
+  const candidates = named ? tierAccounts.filter(account => account.id === named)
+    : tierAccounts.filter(account => allowed === null || allowed.has(account.id));
+  const offers = serviceTier && engine === "codex" ? tierOffers(candidates, serviceTier.model, serviceTier.id) : null;
+  const labels = offers?.offering.map(id => tierAccounts.find(account => account.id === id)?.label ?? "account").join(", ") || "none";
+  if (offers && !offers.offering.length) {
+    if (serviceTier!.required) {
+      const allOffers = tierOffers(tierAccounts, serviceTier!.model, serviceTier!.id);
+      const availableLabels = allOffers.offering.map(id => tierAccounts.find(account => account.id === id)?.label ?? "account").join(", ") || "none";
+      throw new CodexServiceTierUnavailableError(`${named ? "named account does not offer" : allowed ? "no account in this project's pool offers" : "no Codex account offers"} serviceTier ${serviceTier!.id} for ${serviceTier!.model}; offered: ${offers.offered.join(", ") || "none"}; accounts that offer it: ${availableLabels}`);
+    }
+    appliedTier = null;
+  }
+  const tierSelection = appliedTier && offers ? { ...selectionInput, unavailableIds: offers.lacking } : selectionInput;
+  const firstPick = selectProjectAccount(tierSelection);
   /* A pool refused on a Codex exhaustion that may be history is read live
      once before the launch is turned away (task 8feee404). */
-  const automatic = named === null && firstPick.kind === "exhausted" && engine === "codex"
-    && await refreshStaleExhaustion(engine, firstPick.allowedAccountIds, { model })
-    ? selectProjectAccount({ ...selectionInput, observations: registry.quotaObservations(engine) })
+  let automatic = named === null && firstPick.kind === "exhausted" && engine === "codex"
+    && await refreshStaleExhaustion(engine, appliedTier && offers ? firstPick.allowedAccountIds.filter(id => offers.offering.includes(id)) : firstPick.allowedAccountIds, { model })
+    ? selectProjectAccount({ ...tierSelection, observations: registry.quotaObservations(engine) })
     : firstPick;
+  if (named === null && automatic.kind !== "available" && appliedTier && !serviceTier!.required) {
+    appliedTier = null;
+    automatic = selectProjectAccount({ ...selectionInput, observations: registry.quotaObservations(engine) });
+  }
   if (named === null && automatic.kind !== "available") {
-    throw new ProjectAccountRefusedError(automatic, engine, project);
+    throw new ProjectAccountRefusedError(automatic, engine, project, appliedTier ? `serviceTier ${appliedTier} is offered by: ${labels}` : undefined);
   }
   if (named !== null) {
     const pinned = selectProjectAccount({ ...selectionInput, requestedId: named, requestedChoice: "explicit" });
@@ -152,7 +174,7 @@ export async function resolveHealthySpawnAccount(
      is how this seam has always resolved it. Reading a missing id as a missing
      ANSWER would turn that into a throw. */
   const hasAutomatic = automatic.kind === "available" && recordUnreadable === null;
-  const active = hasAutomatic ? automatic.accountId ?? undefined : undefined;
+  const active = automatic.kind === "available" && recordUnreadable === null ? automatic.accountId ?? undefined : undefined;
   const routed = named ?? active;
   const missingRequested = classifySpawnAccountAdmission({
     enabled: false,
@@ -163,7 +185,12 @@ export async function resolveHealthySpawnAccount(
   });
   if (engine === "codex") {
     try {
-      return contextForSpawn(engine, routed);
+      const context = contextForSpawn(engine, routed);
+      if (appliedTier && serviceTier && !tierOffers([{ id: context.accountId, home: context.home }], serviceTier.model, appliedTier).offering.length) {
+        if (serviceTier.required) throw new CodexServiceTierUnavailableError(`selected account does not offer serviceTier ${appliedTier}; offered: ${(codexModelServiceTiers(context.home, serviceTier.model) ?? []).map(tier => tier.id).join(", ") || "none"}`);
+        appliedTier = null;
+      }
+      return { ...context, ...(serviceTier ? { serviceTier: appliedTier } : {}) };
     } catch (error) {
       if (named === null || !(error instanceof UnknownAccountError)) throw error;
       /* The named account does not exist, and the automatic rule produced no
@@ -171,7 +198,8 @@ export async function resolveHealthySpawnAccount(
          that this project's binding permits, and the original failure stands
          rather than being answered with an account outside the pool. */
       if (!hasAutomatic) throw error;
-      return { ...contextForSpawn(engine, active), requestedAdmission: missingRequested };
+      return { ...contextForSpawn(engine, active), requestedAdmission: missingRequested,
+        ...(serviceTier ? { serviceTier: appliedTier } : {}) };
     }
   }
   /* The named account is a candidate whether or not the pool contains it — the
@@ -554,7 +582,7 @@ export const accountManager: AccountManager = {
     if (engine === "copilot") return copilotAccountForSpawn(requested ?? null);
     return contextForSpawn(engine, requested ?? agentRegistry().engineRouting(engine).activeAccountId ?? undefined);
   },
-  resolveHeadlessSpawn(engine, requested, excludedIds, project, model) {
+  resolveHeadlessSpawn(engine, requested, excludedIds, project, model, unavailableIds) {
     if (engine === "copilot") {
       const selected = selectProjectAccount({
         project: null,
@@ -564,6 +592,7 @@ export const accountManager: AccountManager = {
         bindings: [],
         preferredId: requested ?? activeCopilotAccountId(),
         excludedIds,
+        unavailableIds,
         unbound: "capacity",
         model,
       });
@@ -580,6 +609,7 @@ export const accountManager: AccountManager = {
          preference here, and it stays one — the fence is the candidate set. */
       preferredId: requested ?? agentRegistry().engineRouting(engine).activeAccountId,
       excludedIds,
+      unavailableIds,
       /* This path has always been the rate-limit-aware one, bound project or
          not, and stays so — the binding only narrows what it may pick from. */
       unbound: "capacity",

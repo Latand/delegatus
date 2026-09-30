@@ -14,6 +14,7 @@ import { Viewer } from "@/components/Viewer";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { Pipeline } from "@/lib/pipelines/types";
+import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
@@ -113,7 +114,11 @@ const RUNNING_PATH = `/state/agent-log-viewer/shared/accounts/claude/${ACCOUNT}/
 /* `?seatnoise=<i..v>` (docs/design/seat-panel-noise.md): the running conversation is an orchestrator seat, on a
    structured host, in the state the case names; the driver opens it in the focus view. */
 const SEAT_NOISE = new URLSearchParams(location.search).get("seatnoise");
-const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE !== null;
+/* Composer context mode (docs/design/composer-context-mode.md, `?context-mode=1`): the running conversation is a
+   Codex conversation on a structured host that can inject. `noinject` serves the same session without the
+   capability. The driver flips the turn and publishes receipts through `evidence`. */
+const CONTEXT_MODE = new URLSearchParams(location.search).get("context-mode");
+const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE !== null || CONTEXT_MODE !== null;
 const NEXT_ACCOUNT = new URLSearchParams(location.search).get("next") || "relief";
 
 /* With the deck asked for (#1795 below), the running conversation is the round
@@ -175,10 +180,20 @@ if (SEAT_NOISE !== null) {
   else if (SEAT_NOISE === "iv") seatOn("codex", "gpt-5.6-sol", "low", "iv-old");
   else if (SEAT_NOISE === "v") seatOn("codex", "gpt-5.6-sol", "high", "v");
 }
+if (CONTEXT_MODE !== null) seatOn("codex", "gpt-5.6-sol", "high", "");
 const SEAT_CODEX_FEED = `${[
   JSON.stringify({ type: "event_msg", timestamp: iso(480), payload: { type: "user_message", message: "Keep the search fix moving." } }),
   JSON.stringify({ type: "event_msg", timestamp: iso(120), payload: { type: "agent_message", message: "Search: the verifier passed on the second attempt. Nothing needs you." } }),
 ].join("\n")}\n`;
+/* The injected record, once the driver lets it land: the structured-user marker carries the digest of the operation
+   the inject answer named, which is what joins it to the composer's own row. */
+function contextModeFeed(): string {
+  const lines = evidence.injects.slice(0, evidence.injectsEchoed).map((body, index) => {
+    const marker = `<!-- llv:structured-user dedup=${deliveryDedupToken(`operation-inject-${index + 1}`)} -->`;
+    return JSON.stringify({ type: "event_msg", timestamp: iso(0), payload: { type: "user_message", message: `${marker}\n${String(body.text)}` } });
+  });
+  return lines.length === 0 ? SEAT_CODEX_FEED : `${SEAT_CODEX_FEED}${lines.join("\n")}\n`;
+}
 const SEAT_FEED = `${[
   JSON.stringify({ type: "user", timestamp: iso(480), message: { role: "user", content: "Keep the search fix moving." }, promptSource: "typed", origin: { kind: "human" } }),
   JSON.stringify({ type: "assistant", timestamp: iso(420), message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_seat_search", name: "ToolSearch", input: { query: "select:mcp__viewer__list_pipelines", max_results: 1 } }] } }),
@@ -264,6 +279,24 @@ const evidence = {
   storeSeatProfile() { writeProfile(files[0]!, { model: "gpt-5.6", effort: "low" }); },
   rotateSeat() { seatOn("claude", "opus", "high", "iv-new"); return getRuntimeBus().refresh(); },
   refuseNextPipelinePatch: false,
+  /* Composer context mode: the turn the runtime reports, every inject and send the composer posted, the receipts the
+     driver publishes for injections, and the switch that appends the injected record to the transcript. */
+  contextTurn: "idle" as "idle" | "running",
+  injects: [] as Array<Record<string, unknown>>,
+  sends: [] as Array<Record<string, unknown>>,
+  contextReceipts: [] as Array<Record<string, unknown>>,
+  injectsEchoed: 0,
+  echoInjects() { evidence.injectsEchoed = evidence.injects.length; },
+  setContextTurn(turn: "idle" | "running") { evidence.contextTurn = turn; return getRuntimeBus().refresh(); },
+  publishContextReceipt(status: string, reason?: string) {
+    const body = evidence.injects.at(-1);
+    if (!body) return Promise.resolve();
+    evidence.contextReceipts = [{
+      operationId: `operation-inject-${evidence.injects.length}`, idempotencyKey: body.idempotencyKey, conversationId: body.conversationId,
+      kind: "inject", status, ...(reason ? { reason } : {}), at: new Date().toISOString(), revision: evidence.contextReceipts.length + 2,
+    }];
+    return getRuntimeBus().refresh();
+  },
   /* Every task PATCH the phone's columns sent (#2072 slice 4). */
   taskPatches: [] as Array<{ id: string; body: Record<string, unknown> }>,
   /* Every Allow once / Deny a Needs-you row sent (#2215). */
@@ -1132,10 +1165,14 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({
       schemaVersion: 1, snapshotSeq: (snapshotReads += 1), retentionFloorSeq: 0, structuredHostsEnabled: true, runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 1,
       sessions: [{
-        conversationId: SEAT_NOISE !== null ? files[0]!.conversationId : "conversation_running", sessionKey: { engine: SEAT_NOISE !== null ? files[0]!.engine : "claude", sessionId: "running-session" }, hostKind: SEAT_NOISE !== null && files[0]!.engine === "codex" ? "codex-app-server" : "claude-broker", host: "hosted",
-        turn: queueRecovery ? "idle" : "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: ACCOUNT,
+        conversationId: SEAT_NOISE !== null ? files[0]!.conversationId : "conversation_running", sessionKey: { engine: SEAT_NOISE !== null || CONTEXT_MODE !== null ? files[0]!.engine : "claude", sessionId: "running-session" }, hostKind: (SEAT_NOISE !== null || CONTEXT_MODE !== null) && files[0]!.engine === "codex" ? "codex-app-server" : "claude-broker", host: "hosted",
+        turn: CONTEXT_MODE !== null ? evidence.contextTurn : queueRecovery ? "idle" : "running", provenance: "structured", revision: 1, attentionIds: [],
+        recentReceipts: CONTEXT_MODE !== null ? evidence.contextReceipts : [], accountId: ACCOUNT,
         parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: SEAT_NOISE !== null ? files[0]!.path : RUNNING_PATH,
-        capabilities: { steer: false, structuredAttention: true }, activeTurnId: queueRecovery ? null : "turn-1", pendingReconfigure: null,
+        capabilities: CONTEXT_MODE !== null
+          ? { steer: true, structuredAttention: true, ...(CONTEXT_MODE === "noinject" ? {} : { inject: true }) }
+          : { steer: false, structuredAttention: true },
+        activeTurnId: CONTEXT_MODE !== null ? (evidence.contextTurn === "running" ? "turn-1" : null) : queueRecovery ? null : "turn-1", pendingReconfigure: null,
       }],
       attentions: [], recentOperations: [], edges: [], flows: [], workflows: [], tasks: [], deployments: [],
     });
@@ -1221,6 +1258,19 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     return json({ seat: null, pending: null, exists: true });
   }
+  if (CONTEXT_MODE !== null && url.pathname === "/api/runtime/inject") {
+    const body = JSON.parse(String(init?.body));
+    evidence.injects.push(body);
+    const operationId = `operation-inject-${evidence.injects.length}`;
+    return json({ operationId, receipt: {
+      operationId, idempotencyKey: body.idempotencyKey, conversationId: body.conversationId, kind: "inject",
+      status: "delivering", at: new Date().toISOString(), revision: 1,
+    } }, 202);
+  }
+  if (CONTEXT_MODE !== null && url.pathname === "/api/runtime/send") {
+    evidence.sends.push(JSON.parse(String(init?.body)));
+    return json({ error: "the context-mode fixture accepts no send" }, 409);
+  }
   if (queueRecovery && url.pathname === "/api/runtime/send") {
     const body = JSON.parse(String(init?.body));
     const sends = JSON.parse(sessionStorage.getItem("evidence-queue-sends") ?? "[]");
@@ -1234,7 +1284,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   /* The feed's poll transport (the fixture has no log stream). */
   if (url.pathname === "/api/logs" && method === "POST") {
-    const evidenceFeed = AGENT_LABEL ? (await deliveredAgentEvidence()).feed : FEED;
+    const evidenceFeed = CONTEXT_MODE !== null ? contextModeFeed() : AGENT_LABEL ? (await deliveredAgentEvidence()).feed : FEED;
     const asked = JSON.parse(String(init?.body ?? "{}")) as { reqs?: Array<{ id: string; path: string; offset: number }> };
     const chunks: Record<string, { offset: number; start: number; size: number; data: string }> = {};
     (asked.reqs ?? []).forEach((request, index) => {

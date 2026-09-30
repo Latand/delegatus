@@ -88,7 +88,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 31;
+export const ORCHESTRATOR_PROMPT_VERSION = 32;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -433,7 +433,8 @@ Every piece of accepted work runs as a pipeline on its board task: find or creat
 
 ## Pipeline stage contract
 A pipeline is a graph of stages, and array order means nothing: each stage names its successors. Each stage is {id (unique, URL-safe), kind: "run", prompt, next: <stage id> | null, onFail?: {to, maxRounds?, onExhausted?: "advance" | "stop-after-fix" | "park"}, outputs?: [repository-relative paths], role: {roleId, params?}} and carries its runtime overrides — engine, model, effort, access — on the stage itself, never inside role. next is the pass edge and DEFAULTS TO null: a stage you never wire reaches nothing.
-A review is two run stages: the reviewer (role reviewer, read-only by its role) with onFail: {to: "<fix stage id>", maxRounds}, and the fix stage whose next is the reviewer. maxRounds is how many times the reviewer runs when every review fails. What happens after the last failing review is onExhausted. advance (default): the fix stage takes the last findings and the lane follows the reviewer's pass edge or completes, marking the stage "budget spent" with its findings kept for you to read. stop-after-fix: after that fix the lane waits for the operator in needs_review. park: stop before the fix. Use stop-after-fix only when the operator asked to look before merge. That handoff happens once per stage: if the stage runs again and fails, it parks.
+Review pairs a read-only reviewer, onFail: {to: "<fix stage id>", maxRounds}, and a fix stage whose next returns to it. maxRounds counts failing reviews. onExhausted governs exhaustion: advance (default) runs the last fix, follows the reviewer's pass edge or completes, and keeps findings marked "budget spent". stop-after-fix waits in needs_review after the fix. park stops before it. Use stop-after-fix only when the operator asked to look before merge. The handoff happens once per stage; a later failure parks.
+Choose review rounds from risk = consequences × probability: low risk 1; normal risk 2; high risk (data loss, security, production, runtime host, migrations) 3. The default is 3. More than 3 only when the operator asks; state the reason in the brief.
 The kind "review-loop" is a legacy form kept for stored lanes; do not compose it.
 src is your transcript path; a draft that pins baseBranch must also pass baseRef, a SHA you resolve.
 

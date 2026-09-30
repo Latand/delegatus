@@ -9,7 +9,7 @@
  */
 import { expect, test } from "bun:test";
 
-import { type TFunction, translate } from "@/lib/i18n";
+import { type MessageKey, type TFunction, translate } from "@/lib/i18n";
 
 import { messageRowModel } from "./messageRow";
 import type { OutboxEntry } from "./outbox";
@@ -208,4 +208,67 @@ test("only a proven failure may replay the admitted operation", () => {
     } as OutboxEntry["deliveryReceipt"],
   }), { nowMs: AT + 90_000 });
   expect(unresolved.discardable).toBe(true);
+});
+
+/* Context rows (composer context mode, spec §5.4). */
+const contextEntry = (overrides: Partial<OutboxEntry>): OutboxEntry =>
+  entry({ intent: "context", state: "delivering", contextTurn: "running", ...overrides });
+
+test("a context row names its own progress instead of a send's", () => {
+  const cases: Array<[Partial<OutboxEntry>, "en" | "uk", MessageKey]> = [
+    [{}, "en", "inject.submitting"],
+    [{ operationId: "op-1" }, "en", "outbox.context.waitingStep"],
+    [{ operationId: "op-1", contextTurn: "idle" }, "en", "outbox.context.stored"],
+    [{ operationId: "op-1" }, "uk", "outbox.context.waitingStep"],
+    [{ operationId: "op-1", contextTurn: "idle" }, "uk", "outbox.context.stored"],
+  ];
+  for (const [overrides, locale, key] of cases) {
+    const row = messageRowModel(t(locale), contextEntry(overrides), { nowMs: AT + 1_000 });
+    expect(row.phase).toBe("pending");
+    expect(row.transport).toBe(translate(locale, key));
+    expect(row.failure).toBeNull();
+    expect(row.cancellable).toBe(false);
+    expect(row.discardable).toBe(false);
+  }
+});
+
+test("a delivered context row reads in the agent's context", () => {
+  for (const locale of ["en", "uk"] as const) {
+    const row = messageRowModel(t(locale), contextEntry({ state: "delivered", operationId: "op-1" }));
+    expect(row.phase).toBe("confirmed");
+    expect(row.transport).toBe(translate(locale, "outbox.context.inContext"));
+  }
+});
+
+test("an unconfirmed context row offers Check status only and never a failure", () => {
+  for (const overrides of [{ deliveryUncertain: true as const }, { state: "failed" as const, deliveryUncertain: true as const }]) {
+    for (const locale of ["en", "uk"] as const) {
+      const row = messageRowModel(t(locale), contextEntry(overrides));
+      expect(row.phase).toBe("pending");
+      expect(row.uncertain).toBe(true);
+      expect(row.recovery).toBe("check");
+      expect(row.failure).toBeNull();
+      expect(row.transport).toBe(translate(locale, "outbox.context.unconfirmed"));
+    }
+  }
+});
+
+test("a proven failure of a context row offers Edit, with the reason in both languages", () => {
+  const reasons: Array<[string, MessageKey]> = [
+    ["unsupported injection: the host does not support history injection", "receipt.human.injectUnsupported"],
+    ["blocking attention is pending on this thread", "receipt.human.injectAttention"],
+  ];
+  for (const [raw, key] of reasons) {
+    for (const locale of ["en", "uk"] as const) {
+      const row = messageRowModel(t(locale), contextEntry({ state: "failed", error: raw }));
+      expect(row.phase).toBe("failed");
+      expect(row.failure?.action).toBe("edit");
+      expect(row.failure?.reason).toBe(translate(locale, key));
+      expect(row.recovery).toBeNull();
+    }
+  }
+  const generic = messageRowModel(t("en"), contextEntry({ state: "failed", error: "something odd" }));
+  expect(generic.failure?.action).toBe("edit");
+  expect(generic.failure?.reason).toBe(translate("en", "outbox.failure.generic"));
+  expect(generic.failure?.detail).toBe("something odd");
 });

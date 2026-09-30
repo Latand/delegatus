@@ -8,7 +8,9 @@ import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, stepBackgroundWait } from "@/lib/pi
 import { loadPipelines } from "@/lib/pipelines/store";
 import { freshSpecFor, resumeSpecFor } from "@/lib/agent/cli";
 import { accountManager, resolveResumeAccountId } from "@/lib/accounts/manager";
-import { projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
+import { listCodexAccounts } from "@/lib/accounts/codex";
+import { tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
+import { allowedAccountIdsForProject, projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { deliverToTranscriptHost } from "@/lib/agent/transcriptHost";
@@ -249,6 +251,10 @@ export function reserveReviewerSpawn(
     origin: { kind: "container", container: "flow", containerId: flow.id, creatorConversationId: null },
     launchProfile: emptyLaunchProfile({
       cwd: flow.cwd,
+      model: role.model,
+      effort: role.effort,
+      serviceTier: role.serviceTier ?? null,
+      fast: role.serviceTier ? role.serviceTier !== "default" && role.serviceTier !== "standard" : null,
       parentConversationId: owner.id,
       title: reviewerTitle,
     }),
@@ -485,7 +491,10 @@ export async function sendToImplementer(
      allowed. That half is a pick, so it goes through the shared automatic
      decision — this project's pool, then capacity — and a fenced pool or an
      unreadable record refuses here, before the relay delivers anything. */
+  const profile = registry.launchProfileForPath(entry.path);
   const spec = resumeSpecFor(entry.root, entry.path, {
+    fast: profile?.fast,
+    serviceTier: profile?.serviceTier,
     model: entry.launchModel ?? entry.model,
     effort: entry.effort,
     accountId: entry.engine === "claude" || entry.engine === "codex"
@@ -495,9 +504,9 @@ export async function sendToImplementer(
         flow.project,
       )
       : null,
-    allowSubagents: agentRegistry().launchProfileForPath(entry.path)?.allowSubagents,
-    mcpServers: agentRegistry().launchProfileForPath(entry.path)?.mcpServers,
-    plugins: agentRegistry().launchProfileForPath(entry.path)?.plugins,
+    allowSubagents: profile?.allowSubagents,
+    mcpServers: profile?.mcpServers,
+    plugins: profile?.plugins,
   });
   if (!spec) throw new Error("implementer session cannot be resumed");
   overrides.onTransportSelected?.("legacy");
@@ -720,14 +729,39 @@ function settleReviewerSpawn(flow: Flow, round: Round, role: RoleConfig, account
   round.reviewerConversationId = settled.conversation.id;
 }
 
-/* Rate-limit-aware account + role selection (issue #117): pane reviewers use the
-   flow's reviewer role, headless reviewers pick an account excluding ones already
-   attempted this round, parking the flow when every account is exhausted. Freezes
-   round.reviewerRole here at launch, re-picking up an override applied before the
-   spawn (over the newRound snapshot). */
+function reviewerTierForAccount(role: RoleConfig, account: AccountContext): RoleConfig {
+  if (!role.serviceTier) return role;
+  if (role.engine !== "codex" || !role.model) throw new CodexServiceTierUnavailableError("reviewer serviceTier requires a Codex model");
+  const offers = tierOffers([{ id: account.accountId, home: account.home }], role.model, role.serviceTier);
+  if (offers.offering.length) return role;
+  if (role.serviceTierSource !== "role-default") {
+    throw new CodexServiceTierUnavailableError(`selected reviewer account does not offer serviceTier ${role.serviceTier}; offered: ${offers.offered.join(", ") || "none"}`);
+  }
+  return withoutPreferredReviewerTier(role);
+}
+
+function withoutPreferredReviewerTier(role: RoleConfig): RoleConfig {
+  const { serviceTier, ...standard } = role;
+  return { ...standard, preferredServiceTier: serviceTier };
+}
+
+/* Freeze the role actually admitted on the selected account for this round. */
 function prepareReviewerLaunch(flow: Flow, round: Round): PreparedReviewerLaunch {
-  if (flow.reviewerMode === "pane") {
-    const role = flow.roles.reviewer;
+  let role = round.accountId ? reviewerRoleFor(flow, round) : flow.roles.reviewer;
+  const required = role.serviceTierSource !== "role-default";
+  let lacking: string[] = [];
+  if (role.serviceTier) {
+    if (role.engine !== "codex" || !role.model) throw new CodexServiceTierUnavailableError("reviewer serviceTier requires a Codex model");
+    const pool = allowedAccountIdsForProject(flow.project, role.engine);
+    const candidates = listCodexAccounts().filter(account => (pool === null || pool.includes(account.id))
+      && (!round.accountId || account.id === round.accountId));
+    const offers = tierOffers(candidates, role.model, role.serviceTier);
+    if (!offers.offering.length) {
+      if (required) throw new CodexServiceTierUnavailableError(`no account in this project's reviewer pool offers serviceTier ${role.serviceTier} for ${role.model}; offered: ${offers.offered.join(", ") || "none"}`);
+      role = withoutPreferredReviewerTier(role);
+    } else lacking = offers.lacking;
+  }
+  if (flow.reviewerMode === "pane" || round.accountId) {
     /* #1279: the flow's project fences this pick too. A round with no account
        yet draws one from the project's pool, capacity-aware, exactly as the
        headless path below does. A round that already has one is carrying the
@@ -735,32 +769,47 @@ function prepareReviewerLaunch(flow: Flow, round: Round): PreparedReviewerLaunch
        retry never silently adopt a different one — so it is passed as a pin,
        and a frozen account the project forbids parks the flow with the reason
        rather than being quietly re-seated mid-round. */
-    const resolution = accountManager.resolveProjectSpawn(role.engine, {
+    const request = {
       project: flow.project,
       requestedId: round.accountId,
       model: role.model,
-    });
+      unavailableIds: lacking,
+    };
+    let resolution = accountManager.resolveProjectSpawn(role.engine, request);
+    if (resolution.kind !== "available" && role.serviceTier && !required) {
+      role = withoutPreferredReviewerTier(role);
+      resolution = accountManager.resolveProjectSpawn(role.engine, { ...request, unavailableIds: [] });
+    }
     if (resolution.kind !== "available") {
       throw new Error(projectAccountRefusalDetail(resolution, role.engine, flow.project));
     }
     const account = resolution.account;
+    role = reviewerTierForAccount(role, account);
     round.accountId = account.accountId;
     round.reviewerRole = { ...role };
     return { role, account };
   }
-  const decision = chooseHeadlessReviewer(
-    flow.roles.reviewer,
-    flow.reviewerFallback,
+  const choose = (primary: RoleConfig, unavailableIds: string[], fallback: RoleConfig | null | undefined) => chooseHeadlessReviewer(
+    primary,
+    fallback,
     round.attemptedAccounts ?? [],
     /* The project is passed down so the automatic rate-limit switch draws from
        the project's allowed set only. Every allowed account exhausted parks the
        flow with `rateLimitStateDetail`, exactly as it already did — it just
        can no longer reach an account the project forbids to avoid parking. */
-    (engine, requestedId, excludedIds, model) => accountManager.resolveHeadlessSpawn(engine, requestedId ?? null, excludedIds ?? [], flow.project, model),
+    (engine, requestedId, excludedIds, model) => accountManager.resolveHeadlessSpawn(engine, requestedId ?? null, excludedIds ?? [], flow.project, model,
+      engine === primary.engine ? unavailableIds : []),
   );
+  // Tier eligibility removes candidates; attempted accounts only order them.
+  let decision = choose(role, lacking, role.serviceTier ? null : flow.reviewerFallback);
+  if (decision.kind !== "available" && role.serviceTier && !required) {
+    role = withoutPreferredReviewerTier(role);
+    decision = choose(role, [], flow.reviewerFallback);
+  }
   if (decision.kind === "exhausted") throw new ReviewerAccountsExhaustedError(decision.resetsAt);
   if (decision.kind === "unavailable") throw new Error("no authenticated reviewer account is available");
-  const { role, account } = decision;
+  const { account } = decision;
+  role = reviewerTierForAccount(decision.role, account);
   round.reviewerRole = { ...role };
   round.accountId = account.accountId;
   const accountKey = `${account.engine}:${account.accountId}`;
@@ -786,6 +835,7 @@ async function launchReviewer(
     const spec = freshSpecFor(role.engine, flow.cwd, {
       model: role.model,
       effort: role.effort,
+      serviceTier: role.serviceTier,
       readOnly: restricted,
       codexHome: account.engine === "codex" ? account.home : null,
       claudeConfigDir: account.engine === "claude" ? account.home : null,

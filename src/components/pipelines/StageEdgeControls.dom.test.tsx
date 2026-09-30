@@ -149,3 +149,13 @@ test("a stored park edge shows a third, disabled option so the select never misr
   flushSync(() => root.unmount());
   host.remove();
 });
+
+test("board fail edge displays the default budget and retains a selected higher value", () => {
+  const { pipeline, stage } = oneStagePipeline();
+  stage.onFail = { to: "implement", maxRounds: 7 };
+  const { host, root } = mount(<StageEdgeControls pipeline={pipeline} stage={stage} />);
+  try {
+    expect(host.textContent).toContain("default 3");
+    expect((host.querySelector('input[type="number"]') as HTMLInputElement).value).toBe("7");
+  } finally { flushSync(() => root.unmount()); }
+});

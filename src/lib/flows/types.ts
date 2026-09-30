@@ -31,7 +31,8 @@ export type CreateFlowRequest = {
   mode: "auto" | "manual";
   reviewerMode: "headless" | "pane";
   reviewerSandbox?: "full" | "restricted";
-  roundLimit: number;
+  /** Defaults to 3; 0 selects unlimited explicitly. */
+  roundLimit?: number;
 };
 
 export type FlowAction =

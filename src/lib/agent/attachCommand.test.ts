@@ -209,6 +209,52 @@ test("a finalized launch composes from its durable receipt while the scanner cat
   }
 });
 
+for (const { serviceTier, fast, expectedTier } of [
+  { serviceTier: "ultrafast", fast: true, expectedTier: "ultrafast" },
+  { serviceTier: undefined, fast: true, expectedTier: "priority" },
+  { serviceTier: undefined, fast: null, expectedTier: null },
+]) {
+  test(`receipt attach preserves service tier ${serviceTier ?? `legacy fast=${fast}`}`, () => {
+    const receipt = launchDeps().receipt!;
+    const res = resolveLaunchAttachCommand(launchDeps({
+      receipt: {
+        ...receipt,
+        launchProfile: { model: "gpt-6-astra", effort: "high", fast, serviceTier },
+      },
+    }));
+    expect(res.ok).toBeTrue();
+    if (res.ok) {
+      if (expectedTier) {
+        expect(res.value.command).toContain(`-c 'service_tier=${expectedTier}'`);
+      } else {
+        expect(res.value.command).not.toContain("service_tier=");
+      }
+      if (serviceTier === "ultrafast") expect(res.value.command).not.toContain("service_tier=priority");
+    }
+  });
+}
+
+for (const serviceTier of ["ultrafast", undefined]) {
+  test(`path attach preserves service tier ${serviceTier ?? "unset"}`, () => {
+    const entry = file({ path: "/repo/rollout.jsonl", engine: "codex", root: "codex-sessions", cwd: WORKTREE });
+    const res = resolveAttachCommand(entry.path, deps([entry], {
+      launchProfileForPath: () => ({ model: "gpt-6-astra", effort: "high", serviceTier }),
+      resumeSpecFor: (_root, _path, options) => resumeSpecForSession(
+        "codex", SESSION_ID, options?.cwd ?? WORKTREE, "/repo/.codex-home", options,
+      ),
+    }));
+    expect(res.ok).toBeTrue();
+    if (res.ok) {
+      if (serviceTier) {
+        expect(res.value.command).toContain("-c 'service_tier=ultrafast'");
+        expect(res.value.command).not.toContain("service_tier=priority");
+      } else {
+        expect(res.value.command).not.toContain("service_tier=");
+      }
+    }
+  });
+}
+
 test("P1#6: a materialized transcript is preferred and resolved through the full path flow", () => {
   const byPath = { ok: true as const, value: { engine: "codex" as const, accountId: "work", accountLabel: "work · codex", cwd: "/repo/worktree", command: "codex resume from-path", cdCommand: "cd '/repo/worktree'", fullCommand: "cd '/repo/worktree' && codex resume from-path" } };
   const res = resolveLaunchAttachCommand(launchDeps({ materializedPath: "/repo/rollout.jsonl", resolveByPath: () => byPath }));

@@ -17,6 +17,7 @@ import type { RuntimeSessionView } from "@/hooks/useRuntime";
 import { agentCapabilitiesFromViews } from "./useAgentCapabilities";
 import { writeProfile } from "./runtimeProfile";
 import { appendComposerDraft, TmuxComposer } from "./TmuxComposer";
+import { CONTEXT_AUTO_STORAGE_KEY } from "./composerContextMode";
 import { resetRetainedQueueAdmissionsForTests } from "./retainedQueueAdmissions";
 import { readOutbox, resetOutboxForTests } from "./conversation/outbox";
 import { setTmuxComposerRuntimeDependenciesForTests } from "./tmuxComposerRuntime";
@@ -191,6 +192,11 @@ beforeEach(() => {
   injectAnswer = { ok: true, status: 202, receipt: { status: "queued" }, operationId: "inject-1" };
   holdInjection = false;
   releaseInjection = null;
+  /* These cases are about the one-shot action and the ordinary submissions
+     beside it. With auto on, a running turn would put the composer in context
+     mode and Enter would inject, so the suite pins auto off and keeps the mode
+     manual (normal). The mode itself is covered by TmuxComposer.contextMode. */
+  localStorage.setItem(CONTEXT_AUTO_STORAGE_KEY, "0");
   setRuntimeUiEnabledForTests(false);
   setTmuxComposerRuntimeDependenciesForTests({
     nativeQueue: queueTransport,

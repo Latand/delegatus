@@ -4345,3 +4345,7 @@ test("spawn_agent applies the sizing rules on the service's bound first dispatch
   expect(opus.dispatched).toHaveLength(1);
   expect(opus.dispatched[0]?.roleParams).toMatchObject({ size: "trivial" });
 });
+
+test("spawn dispatch body retains an explicit Codex service tier", () => {
+  expect(spawnDispatchBody({ clientRequestId: "tier-dispatch", engine: "codex", model: "gpt-6-astra", serviceTier: "ultrafast", fast: true }, "tier-attempt")).toMatchObject({ serviceTier: "ultrafast", fast: true, clientAttemptId: "tier-attempt" });
+});

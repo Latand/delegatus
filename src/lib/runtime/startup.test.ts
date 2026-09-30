@@ -145,7 +145,11 @@ test("startup retry preserves a host registered after the first attempt fails", 
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
-test("server startup delegates managed rows with file credentials and their launch profile", async () => {
+test.each([
+  { name: "explicit tier", fast: true, serviceTier: "ultrafast", expectedTier: "ultrafast" },
+  { name: "legacy fast", fast: true, serviceTier: undefined, expectedTier: "priority" },
+  { name: "unset", fast: null, serviceTier: undefined, expectedTier: undefined },
+])("server startup delegates managed rows with file credentials and their launch profile ($name)", async ({ fast, serviceTier, expectedTier }) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-"));
   const stateDirectory = path.join(directory, "state");
   const previousStateDirectory = process.env.LLV_STATE_DIR;
@@ -168,7 +172,8 @@ test("server startup delegates managed rows with file credentials and their laun
       cwd: "/repo",
       model: "gpt-5.4-mini",
       effort: "high",
-      fast: null,
+      fast,
+      serviceTier,
       permissionMode: null,
       readOnly: true,
       allowSubagents: true,
@@ -221,6 +226,7 @@ test("server startup delegates managed rows with file credentials and their laun
   }
   const codexCleanup = (codexOptions as { releaseCleanup?: () => void }).releaseCleanup;
   const claudeCleanup = (claudeOptions as { releaseCleanup?: () => void }).releaseCleanup;
+  expect((codexOptions as { serviceTier?: string }).serviceTier).toBe(expectedTier);
   expect(codexOptions).toMatchObject({
     cwd: "/repo",
     codexHome: "/managed",

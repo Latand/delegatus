@@ -474,7 +474,7 @@ export type SpawnSettlement =
 
 export type SupersedenceReason = "stage-retry" | "recovery-spawn" | "manual";
 
-export type ConversationReconfigureProfile = Pick<LaunchProfile, "model" | "effort" | "fast">;
+export type ConversationReconfigureProfile = Pick<LaunchProfile, "model" | "effort" | "fast" | "serviceTier">;
 
 export interface ConversationReconfigureState {
   operationId: string;
@@ -1130,12 +1130,18 @@ function correlatePathPendingReceipts(file: RegistryFile, observations: Conversa
   return matches;
 }
 
+export function serviceTierForSpeed(tier: string | null | undefined, fast: boolean | null | undefined): string | null {
+  return tier && fast === (tier !== "default" && tier !== "standard") ? tier : null;
+}
+
 function mergeResumeLaunchProfile(current: LaunchProfile, requested: LaunchProfile): LaunchProfile {
+  const tier = requested.serviceTier ?? current.serviceTier;
   return {
     cwd: requested.cwd || current.cwd,
     model: requested.model ?? current.model,
     effort: requested.effort ?? current.effort,
     fast: requested.fast ?? current.fast,
+    serviceTier: requested.fast == null ? tier : serviceTierForSpeed(tier, requested.fast),
     permissionMode: requested.permissionMode ?? current.permissionMode,
     readOnly: requested.readOnly ?? current.readOnly,
     sandbox: requested.sandbox ?? current.sandbox ?? null,
@@ -2130,7 +2136,11 @@ function normalizeConversationReconfigure(value: unknown): ConversationReconfigu
     if ((item.model !== null && typeof item.model !== "string")
       || (item.effort !== null && typeof item.effort !== "string")
       || (item.fast !== null && typeof item.fast !== "boolean")) return null;
-    return { model: item.model ?? null, effort: item.effort ?? null, fast: item.fast ?? null };
+    if (item.serviceTier !== undefined && item.serviceTier !== null && typeof item.serviceTier !== "string") return null;
+    return {
+      model: item.model ?? null, effort: item.effort ?? null, fast: item.fast ?? null,
+      ...(item.serviceTier !== undefined ? { serviceTier: item.serviceTier } : {}),
+    };
   };
   const current = profile(candidate.profile);
   const previous = profile(candidate.previousProfile);
@@ -2280,10 +2290,14 @@ function writeConversationLaunchProfile(
   generation: NativeGeneration,
   patch: ConversationReconfigureProfile,
 ): void {
-  generation.launchProfile = emptyLaunchProfile({ ...generation.launchProfile, ...patch });
+  // Explicit tier snapshots restore rollback exactly; speed-only edits clear a changed tier.
+  const tier = generation.launchProfile.serviceTier ?? null;
+  const serviceTier = patch.serviceTier !== undefined ? patch.serviceTier : serviceTierForSpeed(tier, patch.fast);
+  const resolvedPatch = { ...patch, serviceTier };
+  generation.launchProfile = emptyLaunchProfile({ ...generation.launchProfile, ...resolvedPatch });
   const entry = file.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })];
   if (entry) {
-    entry.launchProfile = emptyLaunchProfile({ ...(entry.launchProfile ?? generation.launchProfile), ...patch });
+    entry.launchProfile = emptyLaunchProfile({ ...(entry.launchProfile ?? generation.launchProfile), ...resolvedPatch });
     entry.updatedAt = now();
   }
   conversation.updatedAt = now();
@@ -6099,6 +6113,15 @@ export class AgentRegistry {
       file.engineRouting[conversation.engine].revision += 1;
     }
     const settledGeneration = conversation.generations.find((generation) => generation.path === entry.artifactPath);
+    // Same-path tmux resumes publish their accepted profile. Structured recovery may
+    // settle after a newer reconfigure has already replaced it.
+    if (settledGeneration && receipt.purpose === "resume-successor" && receipt.transport !== "structured"
+      && receipt.state !== "completed"
+      && !isDeepStrictEqual(settledGeneration.launchProfile, receipt.launchProfile)) {
+      settledGeneration.launchProfile = receipt.launchProfile;
+      file.conversationRevision[conversation.engine] += 1;
+      file.engineRouting[conversation.engine].revision += 1;
+    }
     const receiptTitle = durableSemanticTitle(receipt.launchProfile.title, 120);
     if (settledGeneration && receiptTitle && !durableSemanticTitle(settledGeneration.launchProfile.title, 120)) {
       settledGeneration.launchProfile.title = receiptTitle;
@@ -7437,7 +7460,7 @@ export class AgentRegistry {
 
   updateConversationLaunchProfile(
     id: ViewerConversationId,
-    patch: Pick<LaunchProfile, "model" | "effort" | "fast">,
+    patch: Pick<LaunchProfile, "model" | "effort" | "fast" | "serviceTier">,
   ): RegistryConversation {
     return this.mutate((file) => {
       const conversation = file.conversations[resolveConversationAlias(file, id)];
@@ -7504,6 +7527,7 @@ export class AgentRegistry {
           model: generation.launchProfile.model,
           effort: generation.launchProfile.effort,
           fast: generation.launchProfile.fast,
+          serviceTier: generation.launchProfile.serviceTier ?? null,
         };
       const state: ConversationReconfigureState = {
         operationId: claim.operationId,

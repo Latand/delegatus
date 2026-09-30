@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
+registerPipelineTick(async () => {});
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -682,7 +684,7 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     const stage = stages?.items?.properties;
 
     expect(Object.keys(stage ?? {}).sort()).toEqual([
-      "access", "account", "effort", "engine", "id", "kind", "model", "next", "onFail", "outputs", "prompt", "role", "sandbox",
+      "access", "account", "effort", "engine", "id", "kind", "model", "next", "onFail", "outputs", "prompt", "role", "sandbox", "serviceTier",
     ]);
     expect(stage?.kind?.enum).toEqual(["run", "review-loop"]);
     expect(stage?.engine?.enum).toEqual(["claude", "codex"]);
@@ -1088,4 +1090,26 @@ test("telegram_bot_send_document publishes its own schema and the text tool's st
     expect(rejected.isError).toBe(true);
     expect(seen).toHaveLength(1);
   });
+});
+
+test("Codex tier is published on all launch surfaces and preserved through MCP dispatch", async () => {
+  let captured: unknown;
+  await withProtocolClient(inertBindings({ spawn_agent: async args => { captured = args; return {}; } }), async client => {
+    const listed = await client.listTools();
+    for (const name of ["spawn_agent", "pipeline_action"]) expect(listed.tools.find(tool => tool.name === name)?.inputSchema.properties).toHaveProperty("serviceTier");
+    await client.callTool({ name: "spawn_agent", arguments: { clientRequestId: "tier-schema-spawn", cwd: "/repo", title: "Review tier", prompt: "Review", engine: "codex", model: "gpt-6-astra", serviceTier: "ultrafast" } });
+    expect(captured).toMatchObject({ serviceTier: "ultrafast" });
+  });
+});
+
+test("MCP pipeline tools describe default 3 and accept an explicit higher budget", async () => {
+  await withProtocolClient(inertBindings(), async (client) => {
+    const { tools } = await client.listTools();
+    for (const name of ["create_pipeline", "pipeline_action"]) {
+      const tool = tools.find((tool) => tool.name === name)!;
+      expect(tool.description).toContain("defaults to 3");
+      expect(JSON.stringify(tool.inputSchema)).toContain("default 3");
+    }
+  });
+  expect(TOOL_INPUT_SCHEMAS.pipeline_action.safeParse({ clientRequestId: "higher-budget", pipelineId: "p", action: "set-edge", stageId: "review", edge: "fail", to: "fix", maxRounds: 7 }).success).toBe(true);
 });

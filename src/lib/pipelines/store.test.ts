@@ -922,3 +922,26 @@ test("startup admission warns with its phase when one hold exceeds 100 ms", asyn
     expect(fields.heldMs).toBeGreaterThanOrEqual(100);
   } finally { warn.mockRestore(); }
 }));
+
+test("stage store permits null inheritance and checks only explicit tier equality", async () => isolatedDelivery(() => {
+  const pipeline = deliveryFixture("tier-store");
+  const stage = pipeline.stages[0]!;
+  stage.serviceTier = null;
+  stage.effectiveRole.serviceTier = "ultrafast";
+  stage.effectiveRole.serviceTierSource = "role-default";
+  savePipelines([pipeline]);
+  expect(loadPipelines()[0]?.stages[0]?.effectiveRole.serviceTier).toBe("ultrafast");
+  stage.serviceTier = "priority";
+  expect(() => savePipelines([pipeline])).toThrow();
+  stage.effectiveRole.serviceTier = "priority";
+  stage.effectiveRole.serviceTierSource = "explicit";
+  savePipelines([pipeline]);
+  expect(loadPipelines()[0]?.stages[0]?.serviceTier).toBe("priority");
+}));
+
+test("stored review budgets remain unchanged", async () => isolatedDelivery(() => {
+  const record = deliveryFixture("stored-review-budget");
+  record.stages[0]!.onFail = { to: "build", maxRounds: 5 };
+  savePipelines([record]);
+  expect(loadPipelines()[0]!.stages[0]!.onFail!.maxRounds).toBe(5);
+}));

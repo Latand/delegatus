@@ -1,3 +1,4 @@
+import { DEFAULT_REVIEW_ROUNDS } from "@/lib/reviewHistory/limits";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
 
 import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_STAGES } from "./limits";
@@ -25,14 +26,14 @@ import type {
 
 export const LEGACY_REVIEW_LOOP_KIND = "review-loop" as const;
 
-/** The round limit every review flow the pipeline engine created carried. */
-export const LEGACY_REVIEW_FLOW_ROUND_LIMIT = 5;
+/** The fallback when a legacy stage has no recorded review flow limit. */
+export const LEGACY_REVIEW_FLOW_ROUND_LIMIT = DEFAULT_REVIEW_ROUNDS;
 
 /** Conversion history a record keeps; the store refuses more, so the action refuses first. */
 export const MAX_LEGACY_REVIEW_CONVERSIONS = 32;
 
 /** The finite limit a refused preview offers in place of the recorded one. */
-export const RECOMMENDED_REVIEW_LIMIT = 5;
+export const RECOMMENDED_REVIEW_LIMIT = DEFAULT_REVIEW_ROUNDS;
 
 export type LegacyReviewLoopStage = PipelineStage & { kind: typeof LEGACY_REVIEW_LOOP_KIND };
 

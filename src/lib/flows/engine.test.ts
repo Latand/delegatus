@@ -1,5 +1,6 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -3154,3 +3155,131 @@ test("startup repair preserves parked hostless reviewer fences without death pro
   expect(registry.readOnlySnapshot().entries[`codex:${parkedSession}`]).toMatchObject({ status: "starting", pendingAction: "spawn" });
   expect(registry.readOnlySnapshot().entries[`codex:${unverifiedSession}`]).toMatchObject({ status: "starting", pendingAction: "spawn" });
 });
+
+test("a legacy review relay resumes with the durable ultrafast tier", async () => {
+  const previousHome = process.env.LLV_CODEX_HOME;
+  const home = path.join(process.env.LLV_STATE_DIR!, "relay-ultrafast-home");
+  process.env.LLV_CODEX_HOME = home;
+  const sessionId = crypto.randomUUID();
+  const implementerPath = path.join(home, "sessions", `rollout-${sessionId}.jsonl`);
+  fs.mkdirSync(path.dirname(implementerPath), { recursive: true });
+  fs.writeFileSync(implementerPath, JSON.stringify({ type: "session_meta", payload: { id: sessionId, cwd: "/repo" } }) + "\n");
+  const registry = agentRegistry();
+  const conversation = registry.ensureConversation("codex", implementerPath, null);
+  registry.updateConversationLaunchProfile(conversation.id, {
+    model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast",
+  });
+  const flow = raceFlow({ implementerPath, implementerConversationId: conversation.id });
+  let delivered = false;
+  try {
+    expect(await sendToImplementer(flow, new Map([[implementerPath, entryFor(implementerPath, 1)]]), "review findings", {
+      recover: async () => null,
+      deliver: async ({ spec }) => {
+        expect(spec.command).toContain("service_tier=ultrafast");
+        expect(spec.launchProfile).toMatchObject({ fast: true, serviceTier: "ultrafast" });
+        delivered = true;
+        return { ok: true, outcome: "resumed", target: "%7" };
+      },
+    })).toBe(implementerPath);
+    expect(delivered).toBeTrue();
+  } finally {
+    if (previousHome === undefined) delete process.env.LLV_CODEX_HOME;
+    else process.env.LLV_CODEX_HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test.each(["pane", "headless"] as const)("$0 reviewer prefers tier-offering accounts and records required or preferred admission", async (reviewerMode) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reviewer-tier-"));
+  const cwd = path.join(root, "repo");
+  fs.mkdirSync(cwd);
+  expect(spawnSync("git", ["init", "-b", "main"], { cwd }).status).toBe(0);
+  expect(spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", "Base"], { cwd }).status).toBe(0);
+  const codex = await import("@/lib/accounts/codex");
+  const accounts = ["account-a", "account-c"].map((id) => ({
+    id, label: id === "account-a" ? "Account A" : "Account C", kind: "managed" as const,
+    home: path.join(root, id), sessionsDir: path.join(root, id, "sessions"),
+    authPresent: true, loginPane: null, createdAt: 0,
+  }));
+  const catalog = (id: string, offers: boolean) => {
+    const home = accounts.find(account => account.id === id)!.home;
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(path.join(home, "models_cache.json"), JSON.stringify({ models: [{
+      slug: "gpt-6-astra", service_tiers: [{ id: "priority" }, ...(offers ? [{ id: "ultrafast" }] : [])],
+    }] }));
+  };
+  const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const previousRegistry = agentRegistry();
+  const registry = new AgentRegistry(path.join(root, "registry.json"));
+  setAgentRegistryForTests(registry);
+  const accountList = spyOn(codex, "listCodexAccounts").mockReturnValue(accounts);
+  const tmux = await import("@/lib/tmux");
+  const exec = await import("./exec");
+  const paneLaunch = spyOn(tmux, "spawnAgentWithPrompt").mockImplementation(async () => { throw new Error("captured pane launch"); });
+  const headlessLaunch = spyOn(exec, "startHeadlessReview").mockImplementation(() => { throw new Error("captured headless launch"); });
+  try {
+    registry.setEngineRouting("codex", "account-a");
+    for (const scenario of ["explicit", "preferred", "preferred-exhausted", "required-exhausted", "required-missing", "preferred-missing", "pool-excludes-offering", "pinned-required", "pinned-preferred", "attempted-offering"] as const) {
+      const missing = scenario === "required-missing" || scenario === "preferred-missing";
+      const exhausted = scenario === "preferred-exhausted" || scenario === "required-exhausted";
+      const preferred = scenario.startsWith("preferred") || scenario === "pinned-preferred";
+      catalog("account-a", false); catalog("account-c", !missing);
+      const now = new Date().toISOString();
+      registry.recordQuotaEvaluation({ engine: "codex", bootId: "tier-fixture", signature: null, minimumGapMs: 0, now,
+        observations: accounts.map(account => ({
+          engine: "codex", accountId: account.id, authenticated: true, authCheckedAt: now, observedAt: now,
+          bootId: "tier-fixture", provenance: { source: "live", reason: null, staleSince: null },
+          limits: { session: { usedPercent: account.id === "account-c" ? exhausted ? 100 : 20 : 0, resetsAt: Math.floor(Date.now() / 1000) + 3600 }, weekly: null, capturedAt: Math.floor(Date.now() / 1000), plan: null },
+        })),
+      });
+      seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: accounts
+        .filter(account => scenario !== "pool-excludes-offering" || account.id === "account-a")
+        .map(account => ({ engine: "codex", accountId: account.id, project: "tier-project", createdAt: now })) });
+      paneLaunch.mockClear(); headlessLaunch.mockClear();
+      const implementer = writeCodexEntry(`reviewer-tier-${reviewerMode}-${scenario}.jsonl`, { id: crypto.randomUUID(), cwd }, Date.now() / 1000);
+      const flow = raceFlow({ id: `tier-${reviewerMode}-${scenario}`, project: "tier-project", cwd, implementerPath: implementer.path, reviewerMode, state: "spawning",
+        roles: { implementer: { engine: "codex", model: null, effort: "high" }, reviewer: {
+          engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast",
+          serviceTierSource: preferred ? "role-default" : "explicit",
+        } } });
+      flow.rounds = [newRound(flow, "button", null)];
+      const round = flow.rounds[0]!;
+      if (scenario.startsWith("pinned")) round.accountId = "account-a";
+      if (scenario === "attempted-offering") round.attemptedAccounts = ["codex:account-c"];
+      saveFlows([flow]);
+      await tickFlow(flow, [implementer], new Map([[implementer.path, implementer]]), () => saveFlows([flow]));
+      if (["required-missing", "required-exhausted", "pool-excludes-offering", "pinned-required"].includes(scenario)) {
+        expect(flow.state).toBe("needs_decision");
+        if (scenario === "required-exhausted") expect(flow.stateDetail).toMatch(/exhausted|no allowed codex account has capacity/);
+        else expect(flow.stateDetail).toContain("offers serviceTier ultrafast");
+        expect(paneLaunch).not.toHaveBeenCalled(); expect(headlessLaunch).not.toHaveBeenCalled();
+        expect(round.launchId).toBeNull();
+        expect(round.accountId).toBe(scenario === "pinned-required" ? "account-a" : null);
+        continue;
+      }
+      const fallback = scenario === "preferred-exhausted" || scenario === "preferred-missing" || scenario === "pinned-preferred";
+      const applied = fallback ? undefined : "ultrafast";
+      expect(round.accountId).toBe(fallback ? "account-a" : "account-c");
+      expect(round.reviewerRole?.serviceTier).toBe(applied);
+      expect(registry.readOnlySnapshot().receipts[round.launchId!]!.launchProfile.serviceTier ?? null).toBe(applied ?? null);
+      if (reviewerMode === "pane") {
+        expect(paneLaunch).toHaveBeenCalledTimes(1);
+        const spec = paneLaunch.mock.calls[0]![0];
+        if (applied) expect(spec.command).toContain("service_tier=ultrafast");
+        else expect(spec.command).not.toContain("service_tier=");
+        expect(spec.command).toContain(accounts.find(account => account.id === round.accountId)!.home);
+      } else {
+        expect(headlessLaunch).toHaveBeenCalledTimes(1);
+        expect(headlessLaunch.mock.calls[0]![2].serviceTier).toBe(applied);
+        expect(headlessLaunch.mock.calls[0]![6]?.home).toBe(accounts.find(account => account.id === round.accountId)!.home);
+      }
+      if (fallback) expect(round.reviewerRole?.preferredServiceTier).toBe("ultrafast");
+    }
+  } finally {
+    paneLaunch.mockRestore(); headlessLaunch.mockRestore(); accountList.mockRestore();
+    setAgentRegistryForTests(previousRegistry);
+    clearAccountFixture(BINDINGS_SOURCE);
+    saveFlows([]);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 20_000);

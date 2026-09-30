@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 
@@ -17,6 +18,9 @@ import { resolveSendReceipt, sendReceiptFor } from "./runtime/sendSettlement";
 import { recoverDeadStructuredConversation } from "./runtime/structuredRecovery";
 import type { FileEntry } from "./types";
 import { TmuxDeliveryUncertainError } from "./tmux";
+import { resumeSpecForSession, type ResumeSpecOptions } from "./agent/cli";
+import { beginRegistryResume } from "./agent/transcriptHost";
+import { resolveAttachCommand } from "./agent/attachCommand";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-delivery-test-"));
 const failure: DeliveryFailure = { ok: false, outcome: "failed", error: "resume unavailable", status: 503 };
@@ -1709,4 +1713,136 @@ test("a viewer-spawned child with its own registered pane can stop independently
   });
   expect(result).toMatchObject({ ok: true, target: KILL_HOST.paneId });
   expect(killed).toEqual([KILL_HOST.paneId]);
+});
+
+function tmuxTierFixture(live = false) {
+  const sessionId = crypto.randomUUID();
+  const pathname = path.join(SANDBOX, `${sessionId}.jsonl`);
+  fs.writeFileSync(pathname, "");
+  const registry = new AgentRegistry(path.join(SANDBOX, "tier-registry.json"));
+  setAgentRegistryForTests(registry);
+  const key = { engine: "codex" as const, sessionId };
+  registry.upsert({
+    key, artifactPath: pathname, cwd: SANDBOX, accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: SANDBOX, title: "Tier continuity fixture" }),
+    status: live ? "idle" : "dead", host: live ? KILL_HOST : null,
+    claimEpoch: 1, claimOwner: null, pendingAction: null,
+  });
+  const conversation = registry.ensureConversation("codex", pathname, null);
+  registry.updateConversationLaunchProfile(conversation.id, {
+    model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast",
+  });
+  const entry: FileEntry = {
+    path: pathname, root: "codex-sessions", name: path.basename(pathname), project: "fixture",
+    title: "Tier continuity fixture", engine: "codex", kind: "session", fmt: "codex", parent: null,
+    mtime: 1, size: 0, activity: "idle", proc: live ? "running" : null,
+    pid: live ? KILL_HOST.agent.pid : null, model: "gpt-6-astra", effort: "high", fast: true,
+    pendingQuestion: null, waitingInput: null,
+  };
+  const stub = path.join(SANDBOX, "codex-mcp-stub");
+  fs.writeFileSync(stub, `#!/bin/sh\nprintf '[{"name":"viewer"}]'\n`);
+  fs.chmodSync(stub, 0o755);
+  const resumeSpecFor = (_root: string, _path: string, options: ResumeSpecOptions = {}) => {
+    const previous = process.env.LLV_CODEX_BINARY;
+    process.env.LLV_CODEX_BINARY = stub;
+    try {
+      return resumeSpecForSession("codex", sessionId, SANDBOX, path.join(SANDBOX, "codex-home"), options);
+    } finally {
+      if (previous === undefined) delete process.env.LLV_CODEX_BINARY;
+      else process.env.LLV_CODEX_BINARY = previous;
+    }
+  };
+  return { registry, key, entry, conversation, resumeSpecFor };
+}
+
+test("tmux Resume carries the stored ultrafast tier into the command", async () => {
+  const { registry, entry, resumeSpecFor } = tmuxTierFixture();
+  let command = "";
+  const outcome = await resumeConversation(entry.path, {
+    registry, pathAllowed: () => true, listFiles: async () => [entry],
+    recover: async () => null, liveOwnership: () => null, resumeSpecFor,
+    deliver: async ({ spec }) => {
+      command = spec!.command;
+      return { ok: true, outcome: "resumed", target: "%7" };
+    },
+  });
+  expect(outcome).toMatchObject({ ok: true, outcome: "resumed" });
+  expect(command).toContain("-c 'service_tier=ultrafast'");
+  expect(command).not.toContain("service_tier=priority");
+});
+
+for (const resumeFast of [undefined, true, false]) {
+  test(`tmux message reopen resolves ultrafast with resumeFast=${resumeFast}`, async () => {
+    const { entry, resumeSpecFor } = tmuxTierFixture();
+    let command = "";
+    const outcome = await deliverConversationMessage({
+      pid: null, path: entry.path, text: "Continue", images: [], resumeFast,
+    }, {
+      pathAllowed: () => true, listFiles: async () => [entry], recover: async () => null, resumeSpecFor,
+      deliver: async ({ spec }) => {
+        command = spec!.command;
+        return { ok: true, outcome: "resumed", target: "%7" };
+      },
+    });
+    expect(outcome).toMatchObject({ ok: true });
+    expect(command).toContain(`-c 'service_tier=${resumeFast === false ? "standard" : "ultrafast"}'`);
+    expect(command).not.toContain("service_tier=priority");
+    if (resumeFast === false) expect(command).not.toContain("service_tier=ultrafast");
+  });
+}
+
+for (const fast of [true, false]) {
+  test(`tmux reconfigure ${fast ? "effort only keeps ultrafast" : "to Standard clears the durable tier and attach"}`, async () => {
+    const { registry, key, entry, conversation, resumeSpecFor } = tmuxTierFixture(true);
+    let command = "";
+    const outcome = await reconfigureConversation(entry.path, { model: "gpt-6-astra", effort: "medium", fast }, {
+      registry, pathAllowed: () => true, listFiles: async () => [entry], resumeSpecFor,
+      livePaneHost: async () => null, paneScreen: async () => "›\n? for shortcuts",
+      killHost: async () => true,
+      deliver: async ({ spec }) => {
+        command = spec!.command;
+        const prepared = beginRegistryResume(entry, spec!, registry);
+        if (!prepared) throw new Error("expected registry resume");
+        expect(registry.settleSpawn(prepared.receipt.launchId, {
+          key, artifactPath: entry.path, cwd: SANDBOX, accountId: null,
+          launchProfile: prepared.receipt.launchProfile, status: "idle", host: null,
+          claimEpoch: 1, claimOwner: null, pendingAction: null,
+        }).kind).toBe("settled");
+        return { ok: true, outcome: "resumed", target: "%7" };
+      },
+    });
+    expect(outcome).toMatchObject({ ok: true, outcome: "reconfigured" });
+    expect(command).toContain(`-c 'service_tier=${fast ? "ultrafast" : "standard"}'`);
+    const durableProfile = registry.conversation(conversation.id)!.generations.at(-1)!.launchProfile;
+    expect(durableProfile).toMatchObject({ effort: "medium", fast });
+    expect(durableProfile.serviceTier ?? null).toBe(fast ? "ultrafast" : null);
+    // Re-read the durable profile and drive the real path-attach composer.
+    const attached = resolveAttachCommand(entry.path, {
+      files: [entry], resumeSpecFor, accountIdForPath: () => "fixture",
+      accountLabelFor: () => "Fixture", launchProfileForPath: pathname => registry.launchProfileForPath(pathname),
+    });
+    expect(attached.ok).toBe(true);
+    if (!attached.ok) throw new Error(attached.error);
+    if (fast) expect(attached.value.command).toContain("service_tier=ultrafast");
+    else expect(attached.value.command).not.toContain("service_tier=ultrafast");
+  });
+}
+
+test("tmux branch relay carries the root's ultrafast tier into its reopen command", async () => {
+  const { entry, resumeSpecFor } = tmuxTierFixture();
+  const branch = { ...entry, path: path.join(SANDBOX, "branch.jsonl"), parent: entry.path };
+  let command = "";
+  const outcome = await deliverConversationMessage({
+    pid: null, path: branch.path, text: "Continue branch", images: [], resumeFast: false,
+  }, {
+    pathAllowed: () => true, listFiles: async () => [branch, entry], recover: async () => null,
+    resumeSpecFor: (root, pathname, options) => pathname === entry.path ? resumeSpecFor(root, pathname, options) : null,
+    deliver: async ({ spec, payload }) => {
+      command = spec!.command;
+      expect(payload).toContain("Continue branch");
+      return { ok: true, outcome: "resumed", target: "%7" };
+    },
+  });
+  expect(outcome).toMatchObject({ ok: true });
+  expect(command).toContain("-c 'service_tier=ultrafast'");
 });
