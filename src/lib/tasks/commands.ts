@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { isTaskAttachment } from "./attachments";
 import { taskRevision } from "./revision";
 import { isoNow } from "./helpers";
+import { withTaskCompletion } from "./completion";
 import { countBoardTasks, taskShowsOnBoard } from "./boardVisibility";
 import { admissionSnapshot } from "./groupHide";
 import { readTaskColorInput } from "./colorRule";
@@ -169,6 +170,7 @@ export interface TaskCommandDeps {
       {@link countBoardTasks} for why guessing it from stored rows is worse than
       not answering. */
   hasBoardMembers?: (task: BoardTask) => boolean;
+  seatHolding?: (task: BoardTask) => SeatHolding;
   /** A person or an agent chose the text (the task routes, the MCP tools):
       it may cross to a linked board. Every other writer leaves it private
       (docs/design/linked-installs.md M.3). */
@@ -363,14 +365,14 @@ export function createTask(
 
   const board = Object.hasOwn(input, "board") ? normalizeBoardVisibility(input.board) : undefined;
   if (board === null) return { ok: false, error: "invalid board visibility", status: 400, code: "TASK_INVALID_FIELD", field: "board" };
+  const now = deps.now?.() ?? isoNow();
   /* The bound is on bands, so only a task that will occupy one is counted
      against it: a task created off the board joins the history, which has no
      cap, and no durable identity is ever refused to keep a display small. */
-  if (board !== "hidden" && countBoardTasks(existing, project, deps.hasBoardMembers ?? (() => false)) >= BOARD_TASKS_PER_PROJECT_LIMIT) {
+  if (board !== "hidden" && countBoardTasks(existing, project, deps.hasBoardMembers ?? (() => false), (task) => ({ now: Date.parse(now), holdsSeat: deps.seatHolding?.(task) === "holds" })) >= BOARD_TASKS_PER_PROJECT_LIMIT) {
     return boardFullError("project");
   }
 
-  const now = deps.now?.() ?? isoNow();
   const id = deps.id?.() ?? crypto.randomUUID();
   const task: BoardTask = {
     id,
@@ -519,8 +521,11 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
        this call was handed, the serialized read-modify-write around it (see
        `mutateTasks`) is what stops two writers taking the last slot at once. */
     const hasMembers = options.hasBoardMembers ?? (() => false);
-    if (board === "shown" && !taskShowsOnBoard(task, hasMembers(task))
-      && countBoardTasks(existing, task.project, hasMembers) >= BOARD_TASKS_PER_PROJECT_LIMIT) {
+    const visibility = { now: Date.parse(now), holdsSeat: options.seatHolding?.(task) === "holds" };
+    const candidate = withTaskCompletion({ ...task, ...patch, board, updatedAt: now }, task);
+    if (board === "shown" && taskShowsOnBoard(candidate, hasMembers(candidate), visibility)
+      && !taskShowsOnBoard(task, hasMembers(task), visibility)
+      && countBoardTasks(existing, task.project, hasMembers, (row) => ({ now: Date.parse(now), holdsSeat: options.seatHolding?.(row) === "holds" })) >= BOARD_TASKS_PER_PROJECT_LIMIT) {
       return boardFullError("board");
     }
     patch.board = board;
@@ -594,7 +599,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
      hide records its own instant in `groupHidden.at`. */
   const presentationOnly = Object.keys(input).every((key) => PRESENTATION_KEYS.has(key) || key === "expectedProject" || key === "expectedRevision")
     && Object.keys(input).some((key) => PRESENTATION_KEYS.has(key));
-  const updated: BoardTask = { ...task, ...patch, updatedAt: presentationOnly ? task.updatedAt : now };
+  const updated: BoardTask = withTaskCompletion({ ...task, ...patch, updatedAt: presentationOnly ? task.updatedAt : now }, task);
   /* An explicit clear leaves `undefined` fields on the spread; drop them so the
      persisted row and its validator agree that the deadline is gone. */
   if (Object.hasOwn(patch, "dueAt") && patch.dueAt === undefined) {
@@ -739,7 +744,7 @@ export function dismissUnstartedLaunch(existing: BoardTask[], id: string, ref: A
   if (!matched) return { ok: true, tasks: existing, task };
   const placeholder = task.origin?.refinement === "pending" && (task.origin.kind === "launch" || task.origin.kind === "conversation");
   const settled = placeholder && !options.linkedPipeline && task.status !== "done" && assignments.every((assignment) => assignment.state === "failed");
-  const updated: BoardTask = { ...task, assignments, ...(settled ? { status: "done" as const } : {}), updatedAt: now };
+  const updated: BoardTask = withTaskCompletion({ ...task, assignments, ...(settled ? { status: "done" as const } : {}), updatedAt: now }, task);
   const tasks = existing.slice();
   tasks[index] = updated;
   return { ok: true, tasks, task: updated };

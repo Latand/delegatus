@@ -1,3 +1,4 @@
+import { withTaskCompletion } from "./completion";
 import { HANDOFF_DIGEST_TITLE_PREFIX, isProbePrompt } from "./internalConversations";
 import type { BoardTask } from "./types";
 
@@ -158,7 +159,7 @@ export function applyGhostSettlement(
   const next = tasks.map((task) => {
     if (!planned.has(task.id) || !confirmed.has(task.id)) return task;
     settled.push(task.id);
-    return { ...task, status: "done" as const, updatedAt: now };
+    return withTaskCompletion({ ...task, status: "done" as const, updatedAt: now }, task);
   });
   return { tasks: next, settled };
 }

@@ -25,6 +25,7 @@ import { tombstoneCollection, tombstoneRowKey, type TombstoneRow } from "@/lib/l
 
 import { snapshotTasks, stampTaskRevisions, taskFingerprint, taskRevision } from "./revision";
 import { isTaskAttachment } from "./attachments";
+import { withTaskCompletion } from "./completion";
 import type { RecentCreate } from "./commands";
 import type { AssignmentState, BoardTask, TaskAssignment, TaskBoardVisibility, TaskPlacement, TaskSource, TaskStatus, TaskOrigin } from "./types";
 
@@ -34,12 +35,30 @@ export const TASKS_FILE = statePath("tasks.json");
 // omitted placement/revision. Response coercion must not migrate other rows.
 const persistedRows = new WeakMap<BoardTask, unknown>();
 function committedRows(tasks: BoardTask[], before: ReturnType<typeof snapshotTasks>, replacements: boolean, sync?: { write: TaskSyncWrite; groups: ReadonlyMap<string, GroupSnapshot> }): unknown[] {
-  for (const task of tasks) task.project = canonicalProject(task.project);
+  for (const task of tasks) {
+    task.project = canonicalProject(task.project);
+    const prior = before.get(task.id);
+    const completed = withTaskCompletion(task, prior ? { ...task, status: prior.status } : task);
+    Object.assign(task, completed);
+    if (task.status !== "done") {
+      delete task.doneAt;
+      delete task.doneAdmissions;
+    }
+  }
+  /* A lazy legacy backfill is a real row change and gets a new fence. */
+  for (const [id, prior] of before) {
+    const stored = persistedRows.get(prior.ref) as BoardTask | undefined;
+    if (stored && (stored.doneAt !== prior.ref.doneAt || JSON.stringify(stored.doneAdmissions) !== JSON.stringify(prior.ref.doneAdmissions))) {
+      before.set(id, { ...prior, fingerprint: taskFingerprint(stored) });
+    }
+  }
   if (sync) stampLinkedRows(tasks, sync.groups, sync.write, taskFingerprint);
   stampTaskRevisions(tasks, before, replacements);
   return tasks.map(task => {
     const prior = before.get(task.id);
-    return prior && taskRevision(task) === prior.revision && persistedRows.has(prior.ref)
+    const stored = prior ? persistedRows.get(prior.ref) as BoardTask | undefined : undefined;
+    return prior && taskRevision(task) === prior.revision && stored
+      && stored.doneAt === task.doneAt && JSON.stringify(stored.doneAdmissions) === JSON.stringify(task.doneAdmissions)
       ? persistedRows.get(prior.ref) : task;
   });
 }
@@ -194,7 +213,7 @@ function coerceTask(value: unknown): BoardTask | null {
      priority, loads as normal. */
   if (task.priority !== undefined && task.priority !== "high" && task.priority !== "low") delete task.priority;
   try { Object.assign(task, { revision: taskRevision(task) }); } catch { return null; }
-  return task;
+  return withTaskCompletion(task);
 }
 
 export function isTask(value: unknown): value is BoardTask {

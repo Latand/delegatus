@@ -142,7 +142,7 @@ test("create_task publishes board membership, and a full board still takes a hid
     ...Array.from({ length: BOARD_TASKS_PER_PROJECT_LIMIT }, (_, index) => ({
       id: `band-cap-${index}`,
       project,
-      status: "done" as const,
+      status: "assigned" as const,
       text: `band ${index}`,
       placement: "unplaced" as const,
       board: "shown" as const,
@@ -177,5 +177,28 @@ test("create_task publishes board membership, and a full board still takes a hid
     expect(stored.board).toBe("hidden");
     expect(stored.text).toBe("recorded off the board");
     expect(loadTasks()).toHaveLength(before + 1);
+  } finally { await p.close(); }
+});
+
+test("expired completions remain available through list, id selection, search and get_task", async () => {
+  const project = "done-history-project";
+  const row = {
+    id: "done-history-row", project, text: "Searchable completion history", status: "done" as const,
+    placement: "unplaced" as const, assignments: [], createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-02T00:00:00Z",
+  };
+  saveTasks([...loadTasks(), row]);
+  const p = await protocol();
+  try {
+    for (const [index, filter] of [{}, { ids: [row.id] }, { query: "completion history" }].entries()) {
+      const answer = (await p.client.callTool({ name: "list_tasks", arguments: {
+        clientRequestId: `done-history-list-${index}`, project, ...filter,
+      } })).structuredContent as { tasks: Array<{ id: string }> };
+      expect(answer.tasks.map((task) => task.id)).toEqual([row.id]);
+    }
+    const answer = (await p.client.callTool({ name: "get_task", arguments: {
+      clientRequestId: "done-history-get", taskId: row.id,
+    } })).structuredContent as { task: TaskWithRevision & { doneAt?: string } };
+    expect(answer.task.id).toBe(row.id);
+    expect(answer.task.doneAt).toBe(row.updatedAt);
   } finally { await p.close(); }
 });

@@ -8,6 +8,7 @@ import { recordTeamEvent, refuseAnonymous, teamActor } from "@/lib/team";
 import { attachmentPath, sweepAttachments } from "@/lib/tasks/attachments";
 import { loadPipelines } from "@/lib/pipelines/store";
 import { projectTaskPipelineIds, type TaskPipelineReadModel } from "@/lib/pipelines/taskBinding";
+import { taskSeatHolding } from "@/lib/tasks/seatHolding";
 import { createTask, type CreateTaskInput, type CreateTaskResult } from "@/lib/tasks/commands";
 import { loadTasks, mutateTasksFile } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -77,7 +78,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; t
       /* An attachment ref only becomes task-owned once its bytes are actually
          in the store — a stale/forged ref is rejected loudly, never dangling. */
       attachmentExists: (att) => fs.existsSync(attachmentPath(att)),
-      explicit: true,
+      explicit: true, seatHolding: taskSeatHolding,
     });
     /* Persist only a fresh create; a validation failure or a replay (which left
        the list and receipts untouched) skips the rewrite. */
