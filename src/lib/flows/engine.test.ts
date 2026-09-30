@@ -2966,3 +2966,135 @@ test("a flow reviewer joins the task its implementer holds; an implementer witho
   expect(created.origin).toEqual({ kind: "flow", key: "flow-legacy", refinement: "pending" });
   expect(created.assignments.map((assignment) => assignment.conversationId).sort()).toEqual([fallback.receipt.conversationId, legacy.id].sort());
 });
+
+/* #2020: a headless reviewer is settled `starting` with a publication marker
+   and no host. Nothing cleared that marker when the reviewer exited, so the
+   row read `synchronizing` for good and every later message to the finished
+   reviewer was refused with nothing reserved. */
+function hostlessReviewerFlow(id: string, sessionId: string, reviewerPath: string, implementerPath: string): Flow {
+  const startedAt = new Date().toISOString();
+  return {
+    id,
+    template: "implement-review-loop",
+    project: "repo",
+    cwd: "/repo",
+    implementerPath,
+    roles: {
+      implementer: { engine: "codex", model: null, effort: "high" },
+      reviewer: { engine: "codex", model: null, effort: "xhigh" },
+    },
+    reviewerFallback: null,
+    baseRef: "base",
+    baseMode: "head",
+    mode: "manual",
+    reviewerMode: "headless",
+    roundLimit: 5,
+    state: "reviewing",
+    pausedState: null,
+    stateDetail: null,
+    rounds: [{
+      n: 1,
+      reviewerPath,
+      reviewerRole: { engine: "codex", model: null, effort: "xhigh" },
+      accountId: null,
+      attemptedAccounts: ["codex:default"],
+      autoRetryCount: 0,
+      sessionId,
+      reviewerPid: 999_999_999,
+      reviewerIdentity: "999999999:gone",
+      reviewerPane: null,
+      findingsPath: null,
+      triggeredBy: "marker",
+      readyNote: null,
+      reviewHeadSha: null,
+      verdict: null,
+      findingsCount: null,
+      startedAt,
+      spawnStartedAt: startedAt,
+      relayStartedAt: null,
+      relayDelivery: null,
+      reviewedAt: null,
+      terminalAt: null,
+      relayedAt: null,
+      error: null,
+    }],
+    createdAt: startedAt,
+    closedAt: null,
+  } as unknown as Flow;
+}
+
+/** What `settleReviewerSpawn` writes for a headless reviewer at launch. */
+function settleHostlessReviewer(flow: Flow, sessionId: string, reviewerPath: string) {
+  const registry = agentRegistry();
+  const round = flow.rounds[0]!;
+  const begun = reserveReviewerSpawn(flow, round, flow.roles.reviewer, null, registry);
+  const settled = registry.settleSpawn(begun.receipt.launchId, {
+    key: { engine: "codex", sessionId },
+    artifactPath: reviewerPath,
+    cwd: flow.cwd,
+    accountId: null,
+    status: "starting",
+    host: null,
+    claimEpoch: 0,
+    claimOwner: null,
+    pendingAction: "spawn",
+  });
+  if (settled.kind === "conflict") throw new Error(settled.code);
+  return { registry, launchId: begun.receipt.launchId, conversationId: settled.receipt.conversationId };
+}
+
+test("a headless reviewer that exits stops fencing its conversation, and a later message resumes it (#2020)", async () => {
+  const { conversationDeliverabilityFromRecord } = await import("@/lib/conversation/deliverability");
+  const sessionId = crypto.randomUUID();
+  const implementer = writeCodexEntry("hostless-implementer.jsonl", { id: crypto.randomUUID(), cwd: "/repo" }, Date.now() / 1_000);
+  const reviewer = writeCodexEntry(`rollout-2026-09-22T00-00-00-${sessionId}.jsonl`, { id: sessionId, cwd: "/repo" }, Date.now() / 1_000);
+  const flow = hostlessReviewerFlow("flow-hostless-reviewer", sessionId, reviewer.path, implementer.path);
+  const { registry, conversationId } = settleHostlessReviewer(flow, sessionId, reviewer.path);
+  fs.mkdirSync(path.dirname(outputPathFor(flow.id, 1)), { recursive: true });
+  fs.writeFileSync(outputPathFor(flow.id, 1), "VERDICT: APPROVE\n\nNo findings.\n");
+  saveFlows([flow]);
+
+  await tickFlows([implementer, reviewer]);
+
+  expect(loadFlows().find((item) => item.id === flow.id)?.rounds[0]?.verdict).toBe("APPROVE");
+  expect(registry.readOnlySnapshot().entries[`codex:${sessionId}`]).toMatchObject({ status: "dead", pendingAction: null, host: null });
+  const request = { conversationId, path: reviewer.path };
+  expect(conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
+    conversationId, transcriptPath: reviewer.path,
+  }).condition).toBe("reclaimed");
+
+  let recovered = 0;
+  const sent = await enqueueStructuredMessage({ ...request, text: "one more question about round 1", clientMessageId: "hostless-reviewer-question" }, {
+    enabled: () => true,
+    registry: () => registry,
+    client: () => ({ readSession: async () => null }) as unknown as RuntimeHostClient,
+    requestMigrationTick: () => {},
+    recover: async () => { recovered += 1; return null; },
+  });
+  expect(sent).toMatchObject({ operationId: expect.any(String) });
+  expect(recovered).toBe(1);
+});
+
+test("the startup repair ends a finished hostless reviewer's marker and keeps a running one (#2020)", async () => {
+  const finishedSession = crypto.randomUUID();
+  const runningSession = crypto.randomUUID();
+  const implementer = writeCodexEntry("hostless-repair-implementer.jsonl", { id: crypto.randomUUID(), cwd: "/repo" }, Date.now() / 1_000);
+  const finishedPath = writeCodexEntry(`rollout-2026-09-22T00-00-01-${finishedSession}.jsonl`, { id: finishedSession, cwd: "/repo" }, Date.now() / 1_000).path;
+  const runningPath = writeCodexEntry(`rollout-2026-09-22T00-00-02-${runningSession}.jsonl`, { id: runningSession, cwd: "/repo" }, Date.now() / 1_000).path;
+  const finished = hostlessReviewerFlow("flow-hostless-finished", finishedSession, finishedPath, implementer.path);
+  finished.state = "approved";
+  const running = hostlessReviewerFlow("flow-hostless-running", runningSession, runningPath, implementer.path);
+  /* This test process stands in for the reviewer that is still working. */
+  running.rounds[0]!.reviewerPid = process.pid;
+  running.rounds[0]!.reviewerIdentity = procBackend.processIdentity(process.pid);
+  const { registry } = settleHostlessReviewer(finished, finishedSession, finishedPath);
+  settleHostlessReviewer(running, runningSession, runningPath);
+  saveFlows([finished, running]);
+
+  /* The repair runs once per process, on the engine's first tick. */
+  (globalThis as { __llvHostlessReviewerMarkersRepaired?: boolean }).__llvHostlessReviewerMarkersRepaired = false;
+  await tickFlows([implementer]);
+
+  expect(registry.readOnlySnapshot().entries[`codex:${finishedSession}`]).toMatchObject({ status: "dead", pendingAction: null });
+  expect(registry.readOnlySnapshot().entries[`codex:${runningSession}`]).toMatchObject({ status: "starting", pendingAction: "spawn" });
+});

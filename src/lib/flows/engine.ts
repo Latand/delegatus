@@ -21,6 +21,8 @@ import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDeliver
 import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import type { AccountPark } from "@/lib/runtime/accountPark";
 import { recoverDeadStructuredConversation } from "@/lib/runtime/structuredRecovery";
+import { pidAlive } from "@/lib/agent/headless";
+import { procBackend } from "@/lib/proc";
 import { isShellCommand } from "@/lib/status";
 import { cleanTitle, durableSemanticTitle, firstPromptLine, semanticTitle } from "@/lib/title";
 import { killPane, paneInfo, spawnAgentWithPrompt, TmuxDeliveryUncertainError } from "@/lib/tmux";
@@ -55,6 +57,7 @@ const READY_RE = /^REVIEW_READY:\s*(.*)$/m;
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const store = globalThis as unknown as {
   __llvFlowTick?: boolean;
+  __llvHostlessReviewerMarkersRepaired?: boolean;
   __llvFlowRelayLeases?: Map<string, Promise<void>>;
 };
 const relayStartedThisProcess = new Set<string>();
@@ -857,8 +860,39 @@ export function recordHeadlessLaunch(round: Round, launched: HeadlessReviewLaunc
   if (launched.identity) round.launchLeaseUntil = null;
 }
 
+/** #2020: a headless reviewer that is gone stops fencing its conversation.
+    Its row otherwise stays `starting` with a publication marker for good, and
+    every message to the finished reviewer is refused as synchronizing. */
+function endHeadlessReviewerMarker(round: Round): void {
+  if (round.launchId) agentRegistry().endHostlessSpawn(round.launchId);
+}
+
+/** Proof that a round's recorded reviewer process is gone: its pid vanished
+    or now carries another start identity. Missing evidence proves nothing. */
+function headlessReviewerProvenDead(round: Round): boolean {
+  if (!round.reviewerPid || !round.reviewerIdentity) return false;
+  if (!pidAlive(round.reviewerPid)) return true;
+  const current = procBackend.processIdentity(round.reviewerPid);
+  return current !== null && current !== round.reviewerIdentity;
+}
+
+/** Whether the reviewer a headless launch started may still be running. A
+    launch no round names has nothing left to run it. A recorded process
+    answers from the kernel; without one, only the live round of an open flow
+    can still be starting its reviewer. */
+function headlessReviewerMayRun(flows: readonly Flow[], launchId: string): boolean {
+  for (const flow of flows) {
+    const round = flow.rounds.find((candidate) => candidate.launchId === launchId);
+    if (!round) continue;
+    if (round.reviewerPid && round.reviewerIdentity) return !headlessReviewerProvenDead(round);
+    return !TERMINAL_STATES.has(flow.state) && lastRound(flow) === round;
+  }
+  return false;
+}
+
 function retryHeadlessRound(flow: Flow, round: Round): void {
   forgetHeadlessReview(flow.id, round.n, round);
+  endHeadlessReviewerMarker(round);
   clearHeadlessReviewArtifacts(flow.id, round.n);
   Object.assign(round, {
     reviewerPath: null,
@@ -1280,6 +1314,7 @@ export async function tickFlow(
       if (status?.status === "lost" && launchLeaseActive(round)) return JSON.stringify(flow) !== before;
       if (status?.status === "running") return JSON.stringify(flow) !== before;
       if (status?.status === "lost") {
+        if (headlessReviewerProvenDead(round)) endHeadlessReviewerMarker(round);
         const fallback = fallbackReviewFromTranscript(round, entriesByPath, reviewerRoleFor(flow, round).engine);
         if (fallback) applyVerdict(flow, round, fallback);
         else markNeedsDecision(flow, "reviewer tracking was lost before a verdict could be recovered");
@@ -1287,6 +1322,7 @@ export async function tickFlow(
       }
       if (status) {
         forgetHeadlessReview(flow.id, round.n, round);
+        endHeadlessReviewerMarker(round);
         /* The last-message artifact can lag or contain only an interim Codex
            message. The persisted rollout is authoritative once it carries a
            verdict, and consulting it before retry prevents duplicate reviewers. */
@@ -1535,6 +1571,16 @@ export async function tickFlows(entries: FileEntry[]): Promise<TickResult> {
   store.__llvFlowTick = true;
   const flows = cloneFlows(loadFlowsForTick());
   const base = flowTickBase(flows);
+  if (!store.__llvHostlessReviewerMarkersRepaired) {
+    /* Reviewer rows that finished before their marker was ever cleared
+       (#2020). Once per process: nothing writes the old shape any more. */
+    store.__llvHostlessReviewerMarkersRepaired = true;
+    try {
+      agentRegistry().repairHostlessSpawnMarkers((launchId) => headlessReviewerMayRun(flows, launchId));
+    } catch (error) {
+      console.error("[flows] hostless reviewer marker repair failed", error);
+    }
+  }
   const changedIds = new Set<string>();
   try {
     const entriesByPath = new Map(entries.map((entry) => [entry.path, entry]));
