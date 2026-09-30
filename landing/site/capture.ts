@@ -734,13 +734,13 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
     });
     await page.locator('.sec-open [data-view="conversation"]').click();
     await frameOf(page, ".live-open");
-    await page.evaluate(() => { (window as PerfWindow).perfRecords.length = 0; });
+    await page.evaluate(() => { (window as unknown as PerfWindow).perfRecords.length = 0; });
     await page.locator('.sec-open [data-view="search"]').click();
     await page.locator(".live-open .demo-retry").waitFor();
-    const falseAck = await page.evaluate(() => (window as PerfWindow).perfRecords.some((r) => r.type === "view-ack" && r.view === "search"));
+    const falseAck = await page.evaluate(() => (window as unknown as PerfWindow).perfRecords.some((r) => r.type === "view-ack" && r.view === "search"));
     if (falseAck || await frame.locator("[data-search-result]").count()) throw new Error("empty Search was acknowledged ready");
     await page.locator(".live-open").screenshot({ path: path.join(out, `${perfLabel}-${viewport.name}-search-retry.png`) });
-    await frame.evaluate(() => (window as PerfWindow).restoreSearch());
+    await frame.evaluate(() => (window as unknown as PerfWindow).restoreSearch());
     await page.locator(".live-open .demo-retry").click();
     const recovered = await frameOf(page, ".live-open");
     if (recovered !== frame || await recovered.locator("[data-search-result]").count() !== 3) throw new Error("retry did not recover Search in place");
@@ -763,7 +763,7 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
       await frameOf(page, ".live-hero");
       const readyMs = await page.evaluate(() => performance.now());
       await page.waitForTimeout(700);
-      return page.evaluate((readyMs) => ({ readyMs, navigation: performance.getEntriesByType("navigation")[0]?.toJSON(), records: (window as PerfWindow).perfRecords }), readyMs);
+      return page.evaluate((readyMs) => ({ readyMs, navigation: performance.getEntriesByType("navigation")[0]?.toJSON(), records: (window as unknown as PerfWindow).perfRecords }), readyMs);
     });
     await page.screenshot({ path: path.join(out, `${perfLabel}-${viewport.name}-loaded.png`) });
     if (process.argv.includes("--load-only")) return;
@@ -774,12 +774,12 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
         const button = page.locator(`button[data-step="${step}"]`);
         await button.scrollIntoViewIfNeeded();
         await page.waitForTimeout(500);
-        await page.evaluate(() => { (window as PerfWindow).stepClick = 0; document.addEventListener("click", () => { (window as PerfWindow).stepClick = performance.now(); }, { once: true, capture: true }); });
+        await page.evaluate(() => { (window as unknown as PerfWindow).stepClick = 0; document.addEventListener("click", () => { (window as unknown as PerfWindow).stepClick = performance.now(); }, { once: true, capture: true }); });
         await button.click();
         await page.waitForFunction(step => document.querySelector("[data-step-hint]")?.getAttribute("data-step") === String(step), step);
         const current = await frameOf(page, ".live-hero");
         await current.waitForFunction(step => document.documentElement.dataset.demoStep === String(step), step);
-        const stateMs = await page.evaluate(() => performance.now() - (window as PerfWindow).stepClick);
+        const stateMs = await page.evaluate(() => performance.now() - (window as unknown as PerfWindow).stepClick);
         if (step === 2) await current.waitForFunction(() => document.body.innerText.replace(/\s+/g, " ").includes("Idempotent refunds"));
         if (step === 3) await current.waitForFunction(() => document.body.innerText.replace(/\s+/g, " ").includes("Build passed"));
         if (step === 4) {
@@ -802,7 +802,7 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
             continue;
           }
         }
-        rows.push({ step, stateMs, visibleMs: await page.evaluate(() => performance.now() - (window as PerfWindow).stepClick) });
+        rows.push({ step, stateMs, visibleMs: await page.evaluate(() => performance.now() - (window as unknown as PerfWindow).stepClick) });
       }
       return rows;
     });
@@ -811,7 +811,7 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
       const hero = await frameOf(page, ".live-hero");
       await hero.locator(`[aria-label="${translate("en", "composer.sendToAgent")}"]`).first().click();
       await page.waitForFunction(() => document.querySelector("[data-step-hint]")?.getAttribute("data-step") === "5", undefined, { timeout: 30_000 });
-      return page.evaluate(() => (window as PerfWindow).perfRecords.filter((r) => r.type === "message" && r.data?.type === "dlg:state"));
+      return page.evaluate(() => (window as unknown as PerfWindow).perfRecords.filter((r) => r.type === "message" && r.data?.type === "dlg:state"));
     });
     await trace("tabs", async () => {
       await page.locator(".live-open").scrollIntoViewIfNeeded();
@@ -864,8 +864,8 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
       }
       return rows;
     });
-    result.frames = await Promise.all(page.frames().map(async frame => ({ url: frame.url(), records: await frame.evaluate(() => (window as PerfWindow).perfRecords) })));
-    const acknowledgements = await page.evaluate(() => (window as PerfWindow).perfRecords.filter((r) => r.type === "view-ack"));
+    result.frames = await Promise.all(page.frames().map(async frame => ({ url: frame.url(), records: await frame.evaluate(() => (window as unknown as PerfWindow).perfRecords) })));
+    const acknowledgements = await page.evaluate(() => (window as unknown as PerfWindow).perfRecords.filter((r) => r.type === "view-ack"));
     result.acknowledgements = acknowledgements;
     if (perfLabel === "after" && acknowledgements.some((r) =>
       (r.view === "search" && r.results !== 3) || (r.phone && r.view === "conversation" && r.screen !== "chat"))) {
@@ -887,7 +887,7 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
     const frames = await Promise.all(page.frames().map(async frame => frame.evaluate(() => ({
       url: location.href, hash: location.hash, screen: document.querySelector("[data-mobile2-screen]")?.getAttribute("data-mobile2-screen"),
       search: document.querySelector<HTMLInputElement>("[data-search-input]")?.value,
-      results: document.querySelectorAll("[data-search-result]").length, records: (window as PerfWindow).perfRecords,
+      results: document.querySelectorAll("[data-search-result]").length, records: (window as unknown as PerfWindow).perfRecords,
     })).catch(() => null)));
     fs.writeFileSync(path.join(out, `${perfLabel}-${viewport.name}-failure.json`), JSON.stringify({ error: String(error), frames }, null, 2));
     throw error;
@@ -936,7 +936,11 @@ for (const lang of ["en", "uk"] as Locale[]) {
       await page.evaluate((top) => window.scrollTo(0, top), y);
       await settle(page, 150);
     }
-    for (const selector of [".live-run", ".live-open", ".live-phone"]) await frameOf(page, selector);
+    for (const selector of [".live-run", ".live-open", ".live-phone"]) {
+      // Keep the lazy frame visible while its initial view renders.
+      await page.locator(selector).scrollIntoViewIfNeeded();
+      await frameOf(page, selector);
+    }
     await settle(page, 3000);
 
     await shoot(page, ".hero", `${key}-1-hero.png`);
