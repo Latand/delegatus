@@ -1,3 +1,4 @@
+import { sharedLinkState } from "./runtimeState";
 import { randomBytes, randomUUID } from "node:crypto";
 
 import { tokensMatch } from "@/lib/authToken";
@@ -7,6 +8,7 @@ import { forgetGrantCount, grantView, isSharedProject, readGrants, readPeers, sa
 export { remoteProjects, updateRemoteProjects } from "./boardLinks";
 import { dropRemoteProjects, ownBoardStoreId, remoteProjects, remoteStore, updateRemoteProjects } from "./boardLinks";
 import { serveTasks } from "./taskServe";
+import { TASK_WIRE_VERSION } from "./taskWire";
 import { acceptAgents, agentPart, decodeCursor, dropAgents, touchAgents } from "./agentFeed";
 import { linkedPeer } from "./linked";
 
@@ -133,7 +135,7 @@ export function revokeGrant(id: string): boolean {
 }
 
 export function grantRows() { return readGrants().grants.map(grantView); }
-const peerCalls = new Map<string, number>();
+const peerCalls = sharedLinkState("protocol.peerCalls", () => new Map<string, number>());
 export function markPeerCall(id: string, at: number): void { peerCalls.set(id, at); }
 export function peerRows() { return readPeers().peers.map(({ token: _token, ...peer }) => ({ ...peer, lastCall: peerCalls.get(peer.id) ?? peer.lastCall })); }
 export function findPeer(id: string): Link | undefined { return readPeers().peers.find((peer) => peer.id === id); }
@@ -151,7 +153,7 @@ export function removePeer(id: string): Link | undefined {
 }
 
 export const sharedDigest = (projects: SharedProject[]) => sha(JSON.stringify(projects)).slice(0, 8);
-const partialShared = new Map<string, { hash: string; total: number; rows: SharedProject[]; at: number }>();
+const partialShared = sharedLinkState("protocol.partialShared", () => new Map<string, { hash: string; total: number; rows: SharedProject[]; at: number }>());
 
 export function incomingSync(grant: Grant, input: unknown): { status: number; body: object } {
   if (partialShared.size) for (const [id, pending] of partialShared) if (Date.now() - pending.at > 600_000) partialShared.delete(id);
@@ -205,7 +207,7 @@ export function incomingSync(grant: Grant, input: unknown): { status: number; bo
   const agents = agreed && agentAfter !== undefined && projects.size ? agentPart(`grant:${grant.id}`, agentAfter, projects, agentPage as number) : undefined;
   // M.10: an idle call writes no grant file; a page with rows counts as movement.
   usedGrant(grant, served.moved || Boolean((pushAgents as { rows?: unknown[] } | undefined)?.rows?.length) || Boolean(agents && "rows" in agents));
-  return { status: 200, body: { v: 1, now: Date.now(), store: ownBoardStoreId(), s: localHash,
+  return { status: 200, body: { v: 1, now: Date.now(), store: ownBoardStoreId(), s: localHash, taskWireVersion: TASK_WIRE_VERSION,
     ...(wire.s !== remoteHash ? { need: true } : {}),
     ...(sendLocal ? { shared: local.slice(want, want + 100), index: want, total: local.length } : {}), ...served.parts,
     ...(agents ? { agents } : {}), ...(agentAck !== undefined ? { agentAck } : {}) } };

@@ -10,6 +10,7 @@ import type { Live } from "./useSelfUpdateFeed";
 import {
   appliedCopy,
   clock,
+  day,
   duration,
   headerStatus,
   checkErrorText,
@@ -369,7 +370,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
   );
 }
 
-function AutoSection({ s, state, actions, t }: { s: Snapshot; state: ViewState; actions: ViewActions; t: TFunction }) {
+function AutoSection({ s, state, actions, t, locale }: { s: Snapshot; state: ViewState; actions: ViewActions; t: TFunction; locale: "en" | "uk" }) {
   const auto = s.auto;
   if (!auto) return null;
   const available = auto.availability === "available";
@@ -412,7 +413,10 @@ function AutoSection({ s, state, actions, t }: { s: Snapshot; state: ViewState; 
         <details>
           <summary className="cursor-pointer text-ui font-semibold">{t("selfUpdate.auto.history")}</summary>
           <ol className="m-0 mt-2 flex list-none flex-col gap-1 p-0 text-label text-secondary">
-            {s.history.map((entry, index) => <li key={`${entry.at}-${index}`}>{t(`selfUpdate.auto.history.${entry.kind}`)} · {entry.target.slice(0, 7)} · {t(entry.by === "auto" ? "selfUpdate.auto.byAuto" : "selfUpdate.auto.byOperator")} · {t(`selfUpdate.auto.outcome.${entry.outcome}`)}</li>)}
+            {s.history.map((entry, index) => <li key={`${entry.at}-${index}`}>{entry.kind === "auto-on" || entry.kind === "auto-off"
+              /* A switch of the setting: who made it and when. */
+              ? <>{t(`selfUpdate.auto.history.${entry.kind}`)} · {t(entry.by === "seat" ? "selfUpdate.auto.bySeat" : "selfUpdate.auto.byOperator")} · {day(entry.at, locale)} {clock(entry.at)}</>
+              : <>{t(`selfUpdate.auto.history.${entry.kind}`)} · {entry.target.slice(0, 7)} · {t(entry.by === "auto" ? "selfUpdate.auto.byAuto" : "selfUpdate.auto.byOperator")} · {t(`selfUpdate.auto.outcome.${entry.outcome}`)}</>}</li>)}
           </ol>
         </details>
       ) : null}
@@ -671,7 +675,7 @@ export function SelfUpdateView({ snapshot: s, live, state, actions }: { snapshot
     <div data-mode={s.mode} className="flex flex-col gap-4 max-sm:gap-3">
       {banner}
       <Header s={s} state={state} actions={actions} t={t} locale={locale} />
-      <AutoSection s={s} state={state} actions={actions} t={t} />
+      <AutoSection s={s} state={state} actions={actions} t={t} locale={locale} />
       {/* Two columns from 900 px; below that the restart blocks come first,
           since they are what the operator reaches for after an update, and
           the long log tails go last. */}

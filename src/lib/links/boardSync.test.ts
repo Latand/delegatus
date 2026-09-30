@@ -11,6 +11,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { randomUUID } from "node:crypto";
+import { installPrefix } from "./stamp";
+
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import type { BoardTask } from "@/lib/tasks/types";
 import { meter, WIRE_BUDGET, type Meter } from "./wireMeter";
@@ -97,6 +100,15 @@ async function patchOn(base: string, id: string, patch: Record<string, unknown>)
 type Captured = { request: string; response: string };
 const captured = async (base: string, reset = true) => (await request(base, `/test/captured${reset ? "?reset=1" : ""}`)).body as unknown as Captured[];
 
+// Exact strict task key set from the pre-board merge-base decoder.
+const LEGACY_TASK_KEYS = new Set(["id", "project", "text", "details", "status", "color", "icon", "priority", "placement", "pos", "workLinks", "machine", "handover", "createdAt", "updatedAt", "s"]);
+function decodeLegacyTaskRow(row: Record<string, unknown>): void {
+  if (Object.keys(row).some((field) => !LEGACY_TASK_KEYS.has(field))) throw new Error("legacy task decoder rejected an unknown field");
+  expect(row.id).toMatch(/^[0-9a-f-]{36}$/);
+  expect(row.project).toBe(key);
+  expect(typeof row.text).toBe("string");
+}
+
 function fileMarks(name: string): Record<string, { size: number; mtimeMs: number }> {
   const marks: Record<string, { size: number; mtimeMs: number }> = {};
   const walk = (directory: string) => {
@@ -170,7 +182,7 @@ test("remote agents travel both ways as prompt-free summaries and stay in their 
   await sync(a, peerId);
   expect(((await request(b, `/test/agents?project=${key}`)).body as unknown as { stale: boolean }[])[0]!.stale).toBe(false);
   const bodies = (await captured(b)).flatMap((item) => [item.request, item.response]).join("\n");
-  for (const forbidden of ["PROMPT-CANARY", "session-canary", "/checkout/", "/home/"]) expect(bodies).not.toContain(forbidden);
+  for (const forbidden of ["session-canary", "/checkout/", "/home/"]) expect(bodies).not.toContain(forbidden);
   const grant = ((await request(b, "/api/links/grants")).body.grants as { id: string }[])[0]!;
   expect((await request(b, `/api/links/grants?id=${grant.id}`, "DELETE")).body.removed).toBe(true);
   expect((await request(b, `/test/agents?project=${key}`)).body as unknown).toEqual([]);
@@ -318,7 +330,7 @@ test("a feed restart between transport reset pages restarts at row zero without 
   for (const project of keys) expect(((await request(a, `/test/agents?project=${project}`)).body as unknown as unknown[])).toHaveLength(50);
 });
 
-test("tasks created, changed in every group and deleted on either machine show on the other after one call; prompts never cross; an idle link costs next to nothing", async () => {
+test("tasks created, changed in every group and deleted on either machine show on the other after one call; shared titles cross; an idle link costs next to nothing", async () => {
   const a = await install("both-A");
   const b = await install("both-B");
   const wire = await meter(b);
@@ -335,14 +347,14 @@ test("tasks created, changed in every group and deleted on either machine show o
   expect(admitted.curated).toBe(1);
   const prompted = admitted.tasks;
   for (const canary of ["CANARY-SCAN", "CANARY-LAUNCH", "CANARY-GOAL", "CANARY-CURATOR"]) expect(prompted.some((task) => task.text.includes(canary))).toBe(true);
-  // Every body from the first exchange until the tasks are named is kept and scanned.
+  // Keep every body to verify the shared texts and field allowlist.
   const bodies: string[] = [];
   const drain = async () => { for (const call of await captured(b)) bodies.push(call.request, call.response); };
   const peerId = await link(a, b, { projects: [key] }, wire.url);
   await sync(a, peerId);
-  expect((await taskOn(b, canaryA[0]!))?.text).toBe("Untitled task");
-  expect((await taskOn(a, canaryB[0]!))?.text).toBe("Untitled task");
-  for (const task of prompted) expect((await taskOn(b, task.id))?.text).toBe("Untitled task");
+  expect((await taskOn(b, canaryA[0]!))?.text).toBe("CANARY-A-first-prompt");
+  expect((await taskOn(a, canaryB[0]!))?.text).toBe("CANARY-B-launch-prompt");
+  for (const task of prompted) expect((await taskOn(b, task.id))?.text).toBe(task.text);
   await drain();
   expect(bodies.join("\n")).not.toContain(root);
 
@@ -394,10 +406,10 @@ test("tasks created, changed in every group and deleted on either machine show o
   expect((await taskOn(a, made.id))!.status).toBe("assigned");
   expect((await taskOn(b, made.id))!.text).toBe("Text from A");
 
-  // No request or answer body so far carried a prompt, the first exchange included.
+  // Project consent includes task text, including automatically populated titles.
   await drain();
   expect(bodies.length).toBeGreaterThan(20);
-  expect(bodies.join("\n")).not.toContain("CANARY");
+  expect(bodies.join("\n")).toContain("CANARY-A-first-prompt");
 
   // Naming the prompt rows sends their text, the same words included.
   expect((await patchOn(a, canaryA[0]!, { text: "CANARY-A-first-prompt" })).status).toBe(200);
@@ -982,3 +994,231 @@ test("a sync body of 1 MiB + 1 B or a shared page of 101 entries is malformed an
   await sync(a, peerId);
   expect((await taskOn(a, task.id))?.text).toBe("Pulled edit");
 }, 120_000);
+
+
+test("shared text crosses and already-synced placeholders recover on the next sync with newer edits preserved", async () => {
+  const a = await install("title-repair-A");
+  const b = await install("title-repair-B");
+  const aId = JSON.parse(fs.readFileSync(path.join(root, "title-repair-A/links/self.json"), "utf8")).installId as string;
+  const bId = JSON.parse(fs.readFileSync(path.join(root, "title-repair-B/links/self.json"), "utf8")).installId as string;
+  const at = new Date(Date.now() - 60_000).toISOString();
+  const stamp = (install: string, offset = 0) => `${String(Date.parse(at) + offset).padStart(13, "0")}.000.${installPrefix(install)}`;
+  const original = (install: string, text: string): BoardTask => ({ id: randomUUID(), project: key, text, details: "Agent notes already allowed by the design", status: "done", placement: "unplaced", board: "hidden", assignments: [], createdAt: at, updatedAt: at,
+    machine: install, sync: { s: Object.fromEntries(["text", "status", "look", "place", "links", "machine", "handover"].map((group) => [group, stamp(install)])), o: installPrefix(install) } });
+  const fromA = original(aId, "Перевірити стан стейджу\nТекст задачі з другого рядка");
+  const fromB = original(bId, "Restore linked board freshness");
+  const edited = original(aId, "Old source title");
+  const placeholder = (task: BoardTask) => ({ ...task, text: "Untitled task", chosen: true });
+  const kept = { ...placeholder(edited), text: "Later operator title", sync: { ...edited.sync!, s: { ...edited.sync!.s, text: stamp(bId, 1000) }, o: installPrefix(bId) } };
+  await request(a, "/test/import-tasks", "POST", { tasks: [fromA, placeholder(fromB), edited] });
+  await request(b, "/test/import-tasks", "POST", { tasks: [placeholder(fromA), fromB, kept] });
+  const peerId = await link(a, b, { projects: [key] }, b, false);
+  // Seed the persisted cursors of an already quiet old-version link. The first
+  // upgraded exchange must cover old rows even though its log was consumed.
+  const revisionA = Number((await request(a, "/test/revision")).body.revision);
+  const revisionB = Number((await request(b, "/test/revision")).body.revision);
+  await request(a, "/test/legacy-cursor", "POST", { id: peerId, pull: [revisionB], pushed: [revisionA], projects: [key] });
+  await sync(a, peerId);
+  expect((await taskOn(b, fromA.id))?.text).toBe(fromA.text);
+  expect((await taskOn(a, fromB.id))?.text).toBe(fromB.text);
+  expect((await taskOn(b, fromA.id))?.details).toBe(fromA.details);
+  expect((await taskOn(b, edited.id))?.text).toBe(kept.text);
+  expect((await taskOn(a, edited.id))?.text).toBe(kept.text);
+  // New automatic titles use the same production sender, without chosen.
+  const added = (await request(a, "/test/bulk", "POST", { project: key, count: 1, text: "New automatic human title", explicit: false })).body.ids as string[];
+  await sync(a, peerId);
+  expect((await taskOn(b, added[0]!))?.text).toBe("New automatic human title");
+  const beforeA = await tasksOf(a), beforeB = await tasksOf(b);
+  await sync(a, peerId);
+  expect(await tasksOf(a)).toEqual(beforeA);
+  expect(await tasksOf(b)).toEqual(beforeB);
+}, 30_000);
+
+test("an in-flight placeholder repair keeps the source's concurrent title and details through resync and restart", async () => {
+  const receiver = await install("title-race-receiver");
+  const source = await install("title-race-source");
+  const sourceId = JSON.parse(fs.readFileSync(path.join(root, "title-race-source/links/self.json"), "utf8")).installId as string;
+  const at = new Date(Date.now() - 60_000).toISOString();
+  const stamp = `${String(Date.parse(at)).padStart(13, "0")}.000.${installPrefix(sourceId)}`;
+  const task: BoardTask = { id: randomUUID(), project: key, text: "Title from the captured response", details: "Details from the captured response",
+    status: "inbox", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at, machine: sourceId,
+    sync: { s: Object.fromEntries(["text", "status", "look", "place", "links", "machine", "handover"].map((group) => [group, stamp])), o: installPrefix(sourceId) } };
+  const placeholder = { ...task, text: "Untitled task" };
+  await request(source, "/test/import-tasks", "POST", { tasks: [task] });
+  await request(receiver, "/test/import-tasks", "POST", { tasks: [placeholder] });
+  const peerId = await link(receiver, source, { projects: [key] }, source, false);
+  const revisionReceiver = Number((await request(receiver, "/test/revision")).body.revision);
+  const revisionSource = Number((await request(source, "/test/revision")).body.revision);
+  await request(receiver, "/test/legacy-cursor", "POST", { id: peerId, pull: [revisionSource], pushed: [revisionReceiver], projects: [key] });
+
+  await request(source, "/test/hold-sync?side=task-response");
+  const inFlight = fetch(`${receiver}/api/links/peers/${peerId}`, { method: "POST" });
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if ((await request(source, "/test/sync-held")).body.held) break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  expect((await request(source, "/test/sync-held")).body.held).toBe(true);
+  expect((await patchOn(source, task.id, { text: "Newer source title", details: "Newer source details" })).status).toBe(200);
+  const sourceEdit = (await taskOn(source, task.id))!;
+  expect(sourceEdit.text).toBe("Newer source title");
+  // Stop the exchange after it consumes the held, stale response. This keeps
+  // a later page from hiding whether the repair minted a local text stamp.
+  await request(source, "/test/fail-sync?on=1");
+  await request(source, "/test/release-sync");
+  await inFlight;
+
+  // The delayed reply carries the old title and stamp. Applying it may repair
+  // the placeholder, but must not turn old content into a newer local edit.
+  const repaired = (await taskOn(receiver, task.id))!;
+  expect(repaired).toMatchObject({ text: "Title from the captured response", details: "Details from the captured response" });
+  expect(repaired.sync?.s.text).toBe(stamp);
+  await request(source, "/test/fail-sync?on=0");
+  await sync(receiver, peerId);
+  expect(await taskOn(receiver, task.id)).toMatchObject({ text: "Newer source title", details: "Newer source details" });
+  expect(await taskOn(source, task.id)).toMatchObject({ text: "Newer source title", details: "Newer source details" });
+  const beforeRestart = await tasksOf(receiver);
+  await stopInstall(receiver);
+  const restarted = await install("title-race-receiver");
+  expect(await taskOn(restarted, task.id)).toMatchObject({ text: "Newer source title", details: "Newer source details" });
+  await sync(restarted, peerId);
+  expect(await tasksOf(restarted)).toEqual(beforeRestart);
+}, 60_000);
+
+test("placeholder title repair follows the saved task stamp across a peer reinstall and consumed cursor", async () => {
+  const receiver = await install("legacy-title-receiver");
+  await install("legacy-title-old-source");
+  const oldSourceId = JSON.parse(fs.readFileSync(path.join(root, "legacy-title-old-source/links/self.json"), "utf8")).installId as string;
+  const currentSource = await install("legacy-title-new-source");
+  const at = new Date(Date.now() - 60_000).toISOString();
+  const stamp = `${String(Date.parse(at)).padStart(13, "0")}.000.${installPrefix(oldSourceId)}`;
+  const task: BoardTask = { id: randomUUID(), project: key, text: "Title from the previous install", details: "Keep the existing details",
+    status: "inbox", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at, machine: oldSourceId,
+    sync: { s: Object.fromEntries(["text", "status", "look", "place", "links", "machine", "handover"].map((group) => [group, stamp])), o: installPrefix(oldSourceId) } };
+  await request(currentSource, "/test/import-tasks", "POST", { tasks: [task] });
+  await request(receiver, "/test/import-tasks", "POST", { tasks: [{ ...task, text: "Untitled task" }] });
+  const peerId = await link(receiver, currentSource, { projects: [key] }, currentSource, false);
+  const revisionReceiver = Number((await request(receiver, "/test/revision")).body.revision);
+  const revisionSource = Number((await request(currentSource, "/test/revision")).body.revision);
+  await request(receiver, "/test/legacy-cursor", "POST", { id: peerId, pull: [revisionSource], pushed: [revisionReceiver], projects: [key] });
+
+  await sync(receiver, peerId);
+  expect(await taskOn(receiver, task.id)).toMatchObject({ text: "Title from the previous install", details: "Keep the existing details", machine: oldSourceId });
+  const repaired = (await taskOn(receiver, task.id))!;
+  expect(repaired.sync?.s.text).toBe(stamp);
+  await sync(receiver, peerId);
+  expect((await taskOn(receiver, task.id))?.text).toBe("Title from the previous install");
+}, 60_000);
+
+test("an old peer cannot consume title recovery before its wire upgrade, including across receiver restart", async () => {
+  const receiver = await install("rolling-title-receiver");
+  const source = await install("rolling-title-source");
+  const sourceId = JSON.parse(fs.readFileSync(path.join(root, "rolling-title-source/links/self.json"), "utf8")).installId as string;
+  const at = new Date(Date.now() - 60_000).toISOString();
+  const stamp = `${String(Date.parse(at)).padStart(13, "0")}.000.${installPrefix(sourceId)}`;
+  const task: BoardTask = { id: randomUUID(), project: key, text: "Original automatic title", details: "Shared task details",
+    status: "inbox", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at, machine: sourceId,
+    sync: { s: Object.fromEntries(["text", "status", "look", "place", "links", "machine", "handover"].map((group) => [group, stamp])), o: installPrefix(sourceId) } };
+  const peerId = await link(receiver, source, { projects: [key] }, source, false);
+  await request(source, "/test/import-tasks", "POST", { tasks: [task] });
+  await request(receiver, "/test/import-tasks", "POST", { tasks: [{ ...task, text: "Untitled task", chosen: true }] });
+  await request(source, "/test/capture?on=1");
+  await request(source, "/test/legacy-task-wire?on=1");
+
+  await sync(receiver, peerId);
+  expect((await taskOn(receiver, task.id))?.text).toBe("Untitled task");
+  const oldPeerPages = (await captured(source)).map((call) => JSON.parse(call.response) as { taskWireVersion?: number; tasks?: { rows?: { text?: string }[] } });
+  expect(oldPeerPages.some((page) => page.tasks?.rows?.some((row) => row.text === "Untitled task"))).toBe(true);
+  expect(oldPeerPages.every((page) => page.taskWireVersion === undefined)).toBe(true);
+
+  await stopInstall(receiver);
+  const restarted = await install("rolling-title-receiver");
+  expect((await taskOn(restarted, task.id))?.text).toBe("Untitled task");
+  await sync(restarted, peerId);
+  expect((await taskOn(restarted, task.id))?.text).toBe("Untitled task");
+
+  await request(source, "/test/legacy-task-wire?on=0");
+  await sync(restarted, peerId);
+  expect(await taskOn(restarted, task.id)).toMatchObject({ text: "Original automatic title", details: "Shared task details", status: "inbox" });
+}, 60_000);
+
+test("a receiver upgraded after its sender replays title recovery from its consumed legacy cursor", async () => {
+  const receiver = await install("sender-first-title-receiver");
+  const source = await install("sender-first-title-source");
+  const sourceId = JSON.parse(fs.readFileSync(path.join(root, "sender-first-title-source/links/self.json"), "utf8")).installId as string;
+  const at = new Date(Date.now() - 60_000).toISOString();
+  const stamp = `${String(Date.parse(at)).padStart(13, "0")}.000.${installPrefix(sourceId)}`;
+  const task: BoardTask = { id: randomUUID(), project: key, text: "Sender-first automatic title", details: "Preserve these details",
+    status: "blocked", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at, machine: sourceId,
+    sync: { s: Object.fromEntries(["text", "status", "look", "place", "links", "machine", "handover"].map((group) => [group, stamp])), o: installPrefix(sourceId) } };
+  const peerId = await link(receiver, source, { projects: [key] }, source, false);
+  await request(source, "/test/import-tasks", "POST", { tasks: [task] });
+  await request(receiver, "/test/import-tasks", "POST", { tasks: [{ ...task, text: "Untitled task", chosen: true }] });
+  const revisionReceiver = Number((await request(receiver, "/test/revision")).body.revision);
+  const revisionSource = Number((await request(source, "/test/revision")).body.revision);
+  await request(receiver, "/test/legacy-cursor", "POST", { id: peerId, pull: [revisionSource], pushed: [revisionReceiver], projects: [key] });
+
+  await stopInstall(receiver);
+  const upgradedReceiver = await install("sender-first-title-receiver");
+  await sync(upgradedReceiver, peerId);
+  expect(await taskOn(upgradedReceiver, task.id)).toMatchObject({ text: "Sender-first automatic title", details: "Preserve these details", status: "blocked" });
+}, 60_000);
+
+test("task wire v3 keeps board sync compatible with a strict v2 peer in both upgrade orders", async () => {
+  let current = await install("rolling-board-current");
+  const legacy = await install("rolling-board-legacy");
+  await request(legacy, "/test/legacy-task-wire?on=1");
+  const currentToLegacy = await link(current, legacy, { projects: [key] }, legacy, false);
+  const hidden = await createOn(current, "Hidden while peer is old", { board: "hidden" });
+  const shown = await createOn(current, "Shown while peer is old", { board: "shown" });
+  await sync(current, currentToLegacy);
+  expect((await taskOn(legacy, hidden.id))?.text).toBe(hidden.text);
+  expect((await taskOn(legacy, shown.id))?.text).toBe(shown.text);
+  const legacyRequests = await captured(legacy);
+  const sentRows = legacyRequests.flatMap((call) => {
+    const body = JSON.parse(call.request) as { push?: { rows?: Record<string, unknown>[] } };
+    return body.push?.rows ?? [];
+  });
+  expect(sentRows.some((row) => row.id === hidden.id)).toBe(true);
+  expect(sentRows.filter((row) => row.id === hidden.id || row.id === shown.id).every((row) => !("board" in row))).toBe(true);
+
+  // The old client sends the merge-base request shape (no taskWireVersion).
+  // The current production route must return rows its strict decoder accepts.
+  await request(current, "/test/capture?on=1");
+  await link(legacy, current, { projects: [key] }, current, false);
+  const calls = await captured(current);
+  const template = JSON.parse(calls.at(-1)!.request) as Record<string, unknown>;
+  template.tasks = { after: null, scan: { p: [key], after: "" } };
+  const legacyPeer = (JSON.parse(fs.readFileSync(path.join(root, "rolling-board-legacy", "links/peers.json"), "utf8")) as { peers: { url: string; grantId: string; token: string }[] }).peers
+    .find((peer) => peer.url === current)!;
+  const postAsLegacy = (wire: Record<string, unknown>) => fetch(`${current}/api/peer/v1/boards/sync`, { method: "POST", headers: {
+    "content-type": "application/json", "x-delegatus-peer": `${legacyPeer.grantId}.${legacyPeer.token}`,
+  }, body: JSON.stringify(wire) });
+  const modernResponse = await postAsLegacy(template);
+  expect(modernResponse.status).toBe(200);
+  const modernAnswer = await modernResponse.json() as { tasks?: { rows?: Record<string, unknown>[] } };
+  const modernRows = modernAnswer.tasks?.rows ?? [];
+  expect(modernRows.find((row) => row.id === hidden.id)?.board).toBe("hidden");
+  expect(modernRows.find((row) => row.id === shown.id)?.board).toBe("shown");
+
+  // An old client sends the same scan without advertising board support.
+  const oldRequest = { ...template };
+  delete oldRequest.taskWireVersion;
+  const response = await postAsLegacy(oldRequest);
+  expect(response.status).toBe(200);
+  const answer = await response.json() as { tasks?: { rows?: Record<string, unknown>[] } };
+  const oldClientRows = answer.tasks?.rows ?? [];
+  expect(oldClientRows.map((row) => row.id)).toContain(hidden.id);
+  expect(oldClientRows.map((row) => row.id)).toContain(shown.id);
+  for (const row of oldClientRows) decodeLegacyTaskRow(row);
+  expect(oldClientRows.find((row) => row.id === hidden.id)?.text).toBe(hidden.text);
+
+  // Restart the upgraded sender, then verify the peer's v3 confirmation
+  // replays the rows omitted during the old-peer interval without losing them.
+  await request(legacy, "/test/legacy-task-wire?on=0");
+  await stopInstall(current);
+  current = await install("rolling-board-current");
+  await sync(current, currentToLegacy);
+  expect(await taskOn(legacy, hidden.id)).toMatchObject({ text: hidden.text, board: "hidden" });
+  expect(await taskOn(legacy, shown.id)).toMatchObject({ text: shown.text, board: "shown" });
+  expect((await tasksOf(legacy)).filter((task) => task.id === hidden.id || task.id === shown.id)).toHaveLength(2);
+}, 60_000);

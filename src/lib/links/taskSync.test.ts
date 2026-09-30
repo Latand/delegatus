@@ -1,4 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import type { TaskWithRevision } from "@/lib/tasks/revision";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,8 +8,10 @@ import path from "node:path";
 
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { deleteTask, patchTask, createTask } from "@/lib/tasks/commands";
-import { loadTasks, mutateTasks, mutateLinkedTasks, taskFeedSource } from "@/lib/tasks/store";
-import { UNTITLED_TASK_TEXT, type BoardTask } from "@/lib/tasks/types";
+import { loadTasks, loadTasksFile, mutateTasksFile, mutateTasks, mutateLinkedTasks, taskFeedSource } from "@/lib/tasks/store";
+import { BOARD_TASKS_PER_PROJECT_LIMIT } from "@/lib/tasks/commands";
+import { countBoardTasks } from "@/lib/tasks/boardVisibility";
+import { type BoardTask } from "@/lib/tasks/types";
 import { readStateCollectionRevision } from "@/lib/state/sqliteStateStore";
 
 import { updateRemoteProjects } from "./boardLinks";
@@ -196,23 +200,23 @@ test("apply: machine is taken only from the owner's link, a handover must name t
   expect(ahead).toEqual({ changed: 0, refused: "clock" });
 });
 
-test("text nobody chose crosses as Untitled task until an explicit write names it, the same words included", () => {
+test("shared project text crosses with or without an explicit chosen flag", () => {
   const { file } = linkedInstall();
   const placeholder = create(file, "CANARY-first-prompt secret words", key, false);
-  expect(wire(find(file, placeholder.id)!).text).toBe(UNTITLED_TASK_TEXT);
+  expect(wire(find(file, placeholder.id)!).text).toBe("CANARY-first-prompt secret words");
   const before = find(file, placeholder.id)!.sync!.s.text!;
   edit(file, placeholder.id, { text: "CANARY-first-prompt secret words" });
   const named = find(file, placeholder.id)!;
   expect(named.chosen).toBe(true);
   expect(named.sync!.s.text! > before).toBe(true);
   expect(wire(named).text).toBe("CANARY-first-prompt secret words");
-  // A later automatic text write makes it private again.
+  // Later automatic titles cross under the same project consent.
   mutateTasks((tasks) => {
     const outcome = patchTask(tasks, placeholder.id, { text: "Automatic retitle" });
     if (!outcome.ok) throw new Error(outcome.error);
     return { tasks: outcome.tasks, result: null };
   }, file);
-  expect(wire(find(file, placeholder.id)!).text).toBe(UNTITLED_TASK_TEXT);
+  expect(wire(find(file, placeholder.id)!).text).toBe("Automatic retitle");
 });
 
 test("wire bounds: a stored 530 000-character repository is withheld as a stub, and the largest valid row stays under 170 KB", () => {
@@ -327,7 +331,7 @@ test("with no project linked nothing is stamped and no tombstone collection is c
   expect(readStateCollectionRevision(db, "task_tombstones")).toBeNull();
 });
 
-test("admission placeholders from a launch prompt or a pipeline goal, and curator cards, never cross with their text", async () => {
+test("shared admission titles cross while their sources and assignments stay local", async () => {
   const { file } = linkedInstall();
   const { ensureTaskMembership } = await import("@/lib/tasks/membership");
   const made = mutateTasks((tasks) => {
@@ -342,8 +346,9 @@ test("admission placeholders from a launch prompt or a pipeline goal, and curato
   expect(made).toHaveLength(3);
   for (const id of made) {
     const row = wire(find(file, id)!);
-    expect(row.text).toBe(UNTITLED_TASK_TEXT);
-    expect(JSON.stringify(row)).not.toContain("CANARY");
+    expect(row.text).toBe(find(file, id)!.text);
+    expect(row).not.toHaveProperty("source");
+    expect(row).not.toHaveProperty("assignments");
   }
 });
 
@@ -351,7 +356,6 @@ test("admission placeholders from a launch prompt or a pipeline goal, and curato
    database. Its store is taken from the merge base with main and loaded
    beside the current modules. */
 const mergeBase = (() => {
-  const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
   const base = spawnSync("git", ["merge-base", "HEAD", "origin/main"], { encoding: "utf8" });
   if (base.status !== 0) return null;
   const source = spawnSync("git", ["show", `${base.stdout.trim()}:src/lib/tasks/store.ts`], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
@@ -377,4 +381,73 @@ test.skipIf(mergeBase === null)("a release reading the database without the chan
   } finally {
     fs.rmSync(older, { force: true });
   }
+});
+
+
+test("peer arrivals preserve membership, bound bands, and repair legacy done arrivals once without losing fields", () => {
+  const { file, db } = linkedInstall();
+  const at = Date.now();
+  const legacy = peerRow({ id: randomUUID(), status: "done", details: "Keep the evidence" }, at);
+  // The pre-fix receiver stored this shape, with no board field.
+  mutateTasks(() => ({ tasks: [{ ...legacy, assignments: [], chosen: true, sync: { s: legacy.s, o: installPrefix(PEER) } }], result: null }), file);
+  mutateTasksFile((state) => ({ state: { ...state, recentCreates: [{ clientRequestId: "legacy-arrival-receipt", taskId: legacy.id }] }, result: null }), file);
+  const receipts = loadTasksFile(file).recentCreates;
+  const before = find(file, legacy.id)!;
+  const privateTask = create(file, "Local completed task");
+  edit(file, privateTask.id, { status: "done" });
+  const done = peerRow({ id: randomUUID(), status: "done" }, at);
+  const hidden = peerRow({ id: randomUUID(), board: "hidden" }, at);
+  const shown = peerRow({ id: randomUUID(), status: "done", board: "shown" }, at);
+  const decode = (row: WireTask) => decodeWireRow(row);
+  // Encoding and decoding must carry membership, including hidden open tasks.
+  const hiddenWire = encodeTask({ ...before, id: hidden.id, status: "inbox", board: "hidden" }, { id: PEER, prefix: installPrefix(PEER) }).row;
+  applyTaskRows([done, decode(hiddenWire as WireTask), decode(shown)], peerLink, { filePath: file });
+  expect(find(file, done.id)!.board).toBe("hidden");
+  expect(find(file, hidden.id)!.board).toBe("hidden");
+  expect(find(file, shown.id)!.board).toBe("shown");
+  const repaired = find(file, legacy.id)!;
+  const { board: _board, revision: _revision, ...rest } = repaired as TaskWithRevision;
+  const { revision: _oldRevision, ...originalFields } = before as TaskWithRevision;
+  expect(rest).toEqual(originalFields);
+  expect(repaired.board).toBe("hidden");
+  expect(loadTasksFile(file).recentCreates).toEqual(receipts);
+  expect(find(file, privateTask.id)!.board).toBeUndefined();
+  const marker = loadTasksFile(file).migrations;
+  expect(Object.keys(marker ?? {}).some((name) => name.includes("linkedArrivals"))).toBe(true);
+  // Fill the shown band allowance, then keep every overflow task off-board.
+  mutateTasks((tasks) => {
+    let next = tasks;
+    while (countBoardTasks(next, key, () => false) < BOARD_TASKS_PER_PROJECT_LIMIT) {
+      const result = createTask(next, { project: key, text: "Local band", placement: "unplaced" });
+      if (!result.ok) throw new Error(result.error);
+      next = result.tasks;
+    }
+    return { tasks: next, result: null };
+  }, file);
+  const overflow = [peerRow({ id: randomUUID(), board: "shown" }, at), peerRow({ id: randomUUID() }, at)];
+  applyTaskRows(overflow, peerLink, { filePath: file });
+  expect(countBoardTasks(loadTasks(file), key, () => false)).toBe(BOARD_TASKS_PER_PROJECT_LIMIT);
+  for (const row of overflow) expect(find(file, row.id)!.board).toBe("hidden");
+  // A later local choice is preserved; replaying the repair changes no revision.
+  edit(file, shown.id, { board: "hidden" });
+  edit(file, legacy.id, { board: "shown" });
+  const revision = readStateCollectionRevision(db, "tasks");
+  applyTaskRows([], peerLink, { filePath: file });
+  expect(readStateCollectionRevision(db, "tasks")).toBe(revision);
+  expect(find(file, legacy.id)!.board).toBe("shown");
+  expect(loadTasksFile(file).migrations).toEqual(marker);
+  expect(loadTasks(file)).toHaveLength(BOARD_TASKS_PER_PROJECT_LIMIT + 5);
+  // A new process has no in-memory guard: the durable marker must still win.
+  mutateTasks((tasks) => {
+    for (const task of tasks) if (task.id === legacy.id) delete task.board;
+    return { tasks, result: null };
+  }, file);
+  const afterChoice = readStateCollectionRevision(db, "tasks");
+  const replay = spawnSync(process.execPath, ["-e", 'import { repairLinkedTasks } from "./src/lib/links/taskRepair.ts"; repairLinkedTasks(process.argv[1]);', file], {
+    cwd: process.cwd(), env: { ...process.env }, encoding: "utf8", timeout: 15_000,
+  });
+  expect(replay.status).toBe(0);
+  expect(readStateCollectionRevision(db, "tasks")).toBe(afterChoice);
+  expect(find(file, legacy.id)!.board).toBeUndefined();
+  expect(loadTasksFile(file).recentCreates).toEqual(receipts);
 });

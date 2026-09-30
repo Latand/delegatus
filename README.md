@@ -521,6 +521,10 @@ The tools, by area:
   (the same patch as the Settings agent mapping; a model outside the launch
   catalogue is refused, and every write is logged to `role-presets-audit.jsonl`
   beside `role-presets.json`);
+- **updates:** `auto_updates` reads the automatic-update state the Update
+  dialog shows and, for the Delegatus project's orchestrator seat and your own
+  session, turns automatic updates on or off (the same switch as the dialog;
+  each switch is listed in the dialog's history with who made it);
 - **Telegram bot:** `telegram_bot_chats`, `telegram_bot_send` (posts to a
   chat you allowed in the Telegram panel, signed with the calling
   conversation), `telegram_bot_send_document` (posts a report file from

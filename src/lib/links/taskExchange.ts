@@ -1,3 +1,5 @@
+import { repairLinkedTasks } from "./taskRepair";
+import { sharedLinkState } from "./runtimeState";
 /**
  * A's half of the `tasks` part of `boards/sync` (docs/design/linked-installs.md
  * M.5). A makes every request and carries both directions: it pulls B's log
@@ -6,23 +8,23 @@
  * back, is rebuilt by scanning its rows by key; the merge is idempotent, so a
  * row sent twice changes nothing.
  */
-import { readTaskCursor, writeTaskCursor, type TaskCursor } from "./boardLinks";
+import { readPeerTaskWireVersion, readTaskCursor, writeTaskCursor, type TaskCursor } from "./boardLinks";
 import { installPrefix } from "./stamp";
 import { applyTaskRows } from "./taskApply";
 import { isPosition, readLogPage, readScanPage, PAGE_ROWS, type Position } from "./taskFeed";
-import { decodeWireRow, MalformedRow, type WireRow } from "./taskWire";
+import { decodeWireRow, MalformedRow, TASK_WIRE_VERSION, type WireRow } from "./taskWire";
 import { taskFeedSource } from "@/lib/tasks/store";
 
-export class TaskSyncError extends Error { constructor(readonly code: "malformed" | "clock" | "quota") { super(code); } }
+export const TaskSyncError = sharedLinkState("taskExchange.errorClass", () => class TaskSyncError extends Error { constructor(readonly code: "malformed" | "clock" | "quota") { super(code); } });
 
 /** A scan covers at most this many projects; more wait for the next scan. */
 export const SCAN_PROJECTS = 200;
 /** A cursor that only moved past other projects' writes is saved this often. */
 const IDLE_CURSOR_SAVE_MS = 600_000;
-const lastSaved = new Map<string, number>();
+const lastSaved = sharedLinkState("taskExchange.lastSaved", () => new Map<string, number>());
 /** One exchange per link and peer store, kept across calls: a cursor that
     moved in memory is what the next call sends. */
-const exchanges = new Map<string, TaskExchange>();
+const exchanges = sharedLinkState("taskExchange.exchanges", () => new Map<string, TaskExchange>());
 
 export function taskExchange(link: { id: string; install: string; store: string }, self: { id: string; prefix: string }): TaskExchange {
   const key = `${link.id}:${link.store}:${link.install}:${self.id}`;
@@ -58,11 +60,15 @@ export class TaskExchange {
   private pushMore = false;
   private dirty = false;
   private moved = false;
+  private peerTaskWireVersion: number;
+  private hasConsumedCursor: boolean;
   /** Rows applied or sent over this exchange. */
   movedRows = 0;
 
   constructor(private readonly link: { id: string; install: string; store: string }, private readonly self: { id: string; prefix: string }) {
     const held = readTaskCursor(link.id, link.store);
+    this.peerTaskWireVersion = readPeerTaskWireVersion(link.id, link.store);
+    this.hasConsumedCursor = Boolean(held && (held.pull !== null || held.pushed !== null || held.pullCovered.length || held.pushCovered.length));
     this.pull = held?.pull ?? null;
     this.pushed = held?.pushed ?? null;
     this.pullCovered = new Set(held?.pullCovered ?? []);
@@ -73,6 +79,7 @@ export class TaskExchange {
 
   /** Starts one sync: counts the rows it moves. */
   begin(): void {
+    repairLinkedTasks();
     this.movedRows = 0;
     this.pullMore = false;
     this.pushMore = false;
@@ -81,6 +88,9 @@ export class TaskExchange {
   /** The parts of the next request, or none while nothing is linked. */
   request(linked: ReadonlySet<string>): TaskRequest {
     if (!linked.size) return {};
+    // Sharing may become agreed midway through the connect-time exchange.
+    // Finish the repair before its first scan, so the following idle call writes nothing.
+    repairLinkedTasks();
     for (const covered of [this.pullCovered, this.pushCovered]) for (const key of covered) if (!linked.has(key)) { covered.delete(key); this.dirty = true; }
     const sorted = [...linked].sort();
     const request: TaskRequest = {};
@@ -101,7 +111,7 @@ export class TaskExchange {
       else if (uncovered.length) this.pushScan = { p: uncovered.slice(0, SCAN_PROJECTS), after: "", full: false, at: null };
     }
     if (this.pushScan && !sameSet(linked, this.pushScan.p)) this.pushScan = null;
-    const filter = { self: this.self, skipPrefix: this.peerPrefix };
+    const filter = { self: this.self, skipPrefix: this.peerPrefix, includeBoard: this.peerTaskWireVersion >= TASK_WIRE_VERSION };
     if (this.pushScan) {
       const page = readScanPage(this.pushScan.after, { ...filter, projects: new Set(this.pushScan.p), skipPrefix: null });
       this.inflight = { kind: "scan", next: page.next, rows: page.rows.length };
@@ -127,6 +137,8 @@ export class TaskExchange {
 
   /** Folds one answer in: applies B's rows, then advances what B acknowledged. */
   accept(body: Record<string, unknown>, linked: ReadonlySet<string>): void {
+    const peerVersion = body.taskWireVersion;
+    const upgradeVersion = typeof peerVersion === "number" && Number.isSafeInteger(peerVersion) && peerVersion > this.peerTaskWireVersion ? peerVersion : null;
     const tasks = body.tasks as Record<string, unknown> | undefined;
     if (tasks?.wait === true) {
       // B did not yet hold the shared lists this request assumed.
@@ -155,13 +167,14 @@ export class TaskExchange {
       }
       this.inflight = null;
     }
-    if (!tasks) return;
+    if (!tasks) { if (upgradeVersion !== null && linked.size) this.confirmPeerTaskWireUpgrade(upgradeVersion); return; }
     if (tasks.resync === true) {
       this.pull = null;
       this.pullCovered.clear();
       this.pullScan = null;
       this.pullMore = true;
       this.dirty = true;
+      if (upgradeVersion !== null) this.confirmPeerTaskWireUpgrade(upgradeVersion);
       return;
     }
     const rows = this.decode(tasks.rows);
@@ -179,6 +192,7 @@ export class TaskExchange {
         this.dirty = true;
       } else this.pullScan.after = tasks.scan;
       this.pullMore = true;
+      if (upgradeVersion !== null) this.confirmPeerTaskWireUpgrade(upgradeVersion);
       return;
     }
     if (!isPosition(tasks.cursor)) throw new TaskSyncError("malformed");
@@ -186,6 +200,22 @@ export class TaskExchange {
     this.pull = tasks.cursor;
     this.pullMore = tasks.more === true;
     if (rows.length) this.dirty = true;
+    if (upgradeVersion !== null) this.confirmPeerTaskWireUpgrade(upgradeVersion);
+  }
+
+  /** Replays consumed cursors whenever a wire upgrade unlocks previously withheld data. */
+  private confirmPeerTaskWireUpgrade(version: number): void {
+    this.peerTaskWireVersion = version;
+    if (!this.hasConsumedCursor) return;
+    this.pull = null;
+    this.pushed = null;
+    this.pullCovered.clear();
+    this.pushCovered.clear();
+    this.pullScan = null;
+    this.pushScan = null;
+    this.pullMore = true;
+    this.pushMore = true;
+    this.dirty = true;
   }
 
   private decode(value: unknown): WireRow[] {
@@ -213,7 +243,8 @@ export class TaskExchange {
   hasPush(linked: ReadonlySet<string>): boolean {
     if (!linked.size) return false;
     if (this.pushScan || this.pushed === null || [...linked].some((key) => !this.pushCovered.has(key))) return true;
-    const page = readLogPage(this.pushed, { self: this.self, skipPrefix: this.peerPrefix, projects: linked });
+    const page = readLogPage(this.pushed, { self: this.self, skipPrefix: this.peerPrefix, projects: linked,
+      includeBoard: this.peerTaskWireVersion >= TASK_WIRE_VERSION });
     if (page.kind === "resync" || page.rows.length) return true;
     if (JSON.stringify(page.cursor) !== JSON.stringify(this.pushed)) this.moved = true;
     this.pushed = page.cursor;
@@ -230,7 +261,8 @@ export class TaskExchange {
     const key = `${this.link.id}:${this.link.store}`;
     if (!this.dirty && !(this.moved && now - (lastSaved.get(key) ?? 0) >= IDLE_CURSOR_SAVE_MS)) return;
     const cursor: TaskCursor = { pull: this.pull, pushed: this.pushed, pullCovered: [...this.pullCovered].sort(), pushCovered: [...this.pushCovered].sort() };
-    writeTaskCursor(this.link.id, this.link.store, cursor);
+    writeTaskCursor(this.link.id, this.link.store, cursor, this.peerTaskWireVersion);
+    this.hasConsumedCursor = true;
     lastSaved.set(key, now);
     this.dirty = false;
     this.moved = false;

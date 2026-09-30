@@ -1,19 +1,19 @@
 /**
  * A task on the wire of `boards/sync` (docs/design/linked-installs.md M.5).
  * Only the merged groups cross; assignments, holds, sources, attachments,
- * deadlines and board visibility never do. A text nobody chose crosses as
- * "Untitled task" (M.3). Every field has a bound, checked by the sender before
+ * deadlines and group hides never do. Project sharing consents to task text;
+ * board membership crosses on arrival. Every field has a bound, checked by the sender before
  * it encodes a row and by the receiver like a local write.
  */
 import { boundedRepository, MAX_WORK_LINKS, type StoredWorkLink } from "@/lib/forge/workLinks";
 import { readTaskIconInput } from "@/lib/tasks/taskIcon";
-import { TASK_COLORS, TASK_DETAILS_LIMIT, TASK_SYNC_GROUPS, TASK_TEXT_LIMIT, UNTITLED_TASK_TEXT, type BoardTask, type TaskColor, type TaskPlacement, type TaskStatus, type TaskSyncGroup } from "@/lib/tasks/types";
+import { TASK_COLORS, TASK_DETAILS_LIMIT, TASK_SYNC_GROUPS, TASK_TEXT_LIMIT, type BoardTask, type TaskBoardVisibility, type TaskColor, type TaskPlacement, type TaskStatus, type TaskSyncGroup } from "@/lib/tasks/types";
 
 import { isStamp } from "./stamp";
 import { effectiveStamp, newestStamp } from "./taskStamp";
 
 export type WireTask = {
-  id: string; project: string; text: string; details?: string; status: TaskStatus;
+  id: string; project: string; text: string; details?: string; status: TaskStatus; board?: TaskBoardVisibility;
   color?: TaskColor; icon?: string; priority?: "high" | "low"; placement: TaskPlacement; pos?: { x: number; y: number };
   workLinks?: StoredWorkLink[]; machine: string; handover?: { to: string };
   createdAt: string; updatedAt: string; s: Record<TaskSyncGroup, string>;
@@ -21,6 +21,9 @@ export type WireTask = {
 export type WireGone = { id: string; project: string; gone: string };
 export type WireStub = { id: string; project: string; withheld: string };
 export type WireRow = WireTask | WireGone | WireStub;
+
+/** v3 adds the optional board arrival preference; v2 peers reject unknown row fields. */
+export const TASK_WIRE_VERSION = 3;
 
 export const isWireGone = (row: WireRow): row is WireGone => "gone" in row;
 export const isWireStub = (row: WireRow): row is WireStub => "withheld" in row;
@@ -36,10 +39,11 @@ export class MalformedRow extends Error { constructor(readonly field: string) { 
 
 /** The row as it leaves this machine, or a withheld stub when a stored field
     breaks a bound (a repository written before the bound existed). */
-export function encodeTask(task: BoardTask, self: { id: string; prefix: string }): { row: WireTask | WireStub; bytes: number } {
+export function encodeTask(task: BoardTask, self: { id: string; prefix: string }, options: { includeBoard?: boolean } = {}): { row: WireTask | WireStub; bytes: number } {
   const s = Object.fromEntries(TASK_SYNC_GROUPS.map((group) => [group, effectiveStamp(task, group, self.prefix)])) as Record<TaskSyncGroup, string>;
   const row: WireTask = {
-    id: task.id, project: task.project, text: task.chosen ? task.text : UNTITLED_TASK_TEXT,
+    id: task.id, project: task.project, text: task.text,
+    ...(options.includeBoard !== false && task.board !== undefined ? { board: task.board } : {}),
     ...(task.details !== undefined ? { details: task.details } : {}), status: task.status,
     ...(task.color ? { color: task.color } : {}), ...(task.icon ? { icon: task.icon } : {}),
     ...(task.priority === "high" || task.priority === "low" ? { priority: task.priority } : {}),
@@ -70,7 +74,7 @@ function validWorkLink(value: unknown): value is StoredWorkLink {
     && Object.keys(value).length === 5;
 }
 
-const GROUP_KEYS = new Set(["id", "project", "text", "details", "status", "color", "icon", "priority", "placement", "pos", "workLinks", "machine", "handover", "createdAt", "updatedAt", "s"]);
+const GROUP_KEYS = new Set(["id", "project", "text", "details", "status", "color", "icon", "priority", "placement", "pos", "workLinks", "machine", "handover", "createdAt", "updatedAt", "s", "board"]);
 
 function validateWireTask(row: Record<string, unknown>): asserts row is WireTask {
   const fail = (field: string): never => { throw new MalformedRow(field); };
@@ -79,6 +83,7 @@ function validateWireTask(row: Record<string, unknown>): asserts row is WireTask
   if (typeof row.project !== "string" || !PROJECT.test(row.project)) fail("project");
   if (typeof row.text !== "string" || !row.text.trim() || row.text.length > TASK_TEXT_LIMIT) fail("text");
   if (row.details !== undefined && (typeof row.details !== "string" || row.details.length > TASK_DETAILS_LIMIT)) fail("details");
+  if (row.board !== undefined && row.board !== "hidden" && row.board !== "shown") fail("board");
   if (!["inbox", "assigned", "blocked", "done"].includes(row.status as string)) fail("status");
   if (row.color !== undefined && !(TASK_COLORS as readonly unknown[]).includes(row.color)) fail("color");
   if (row.icon !== undefined) { const icon = readTaskIconInput(row.icon); if (icon.kind !== "set" || icon.icon !== row.icon) fail("icon"); }

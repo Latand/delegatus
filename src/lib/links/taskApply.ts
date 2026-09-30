@@ -1,3 +1,4 @@
+import { sharedLinkState } from "./runtimeState";
 /**
  * The apply, one function on both sides (docs/design/linked-installs.md M.5):
  * per group the larger stamp wins and an equal stamp keeps the local value;
@@ -7,9 +8,12 @@
  * When no group wins nothing is written, so a replay or an echo costs no
  * revision.
  */
-import { deleteTask } from "@/lib/tasks/commands";
+import { BOARD_TASKS_PER_PROJECT_LIMIT, deleteTask } from "@/lib/tasks/commands";
 import { mutateLinkedTasks, TASKS_FILE } from "@/lib/tasks/store";
-import { TASK_SYNC_GROUPS, type BoardTask, type TaskSyncGroup } from "@/lib/tasks/types";
+import { TASK_SYNC_GROUPS, UNTITLED_TASK_TEXT, type BoardTask, type TaskSyncGroup } from "@/lib/tasks/types";
+
+import { countBoardTasks } from "@/lib/tasks/boardVisibility";
+import { repairLinkedTasks } from "./taskRepair";
 
 import { stampMs } from "./stamp";
 import { effectiveStamp, newestStamp, raiseFloor, type TaskSyncWrite } from "./taskStamp";
@@ -23,7 +27,7 @@ export type ApplyOutcome = { changed: number; refused?: "clock" | "quota" };
 export const CLOCK_AHEAD_LIMIT_MS = 3_600_000;
 /** M.8: rows that changed something, per link and UTC day. */
 export const DAILY_ROW_BUDGET = 5_000;
-const budgets = new Map<string, { day: string; rows: number }>();
+const budgets = sharedLinkState("taskApply.budgets", () => new Map<string, { day: string; rows: number }>());
 
 const rowStamps = (row: WireRow) => isWireGone(row) ? [row.gone] : isWireStub(row) ? [row.withheld] : Object.values(row.s);
 
@@ -61,20 +65,34 @@ function mergeRow(local: BoardTask | null, row: WireTask, link: ApplyLink, write
     return task;
   }
   const merged: BoardTask = structuredClone(local);
+  // Board is an arrival preference, outside the stamped sync groups. Older
+  // peers could not send it, so fill only an unset preference on a replay of
+  // a task still owned by that peer. An explicit local choice always wins.
+  const boardChanged = row.board !== undefined && local.board === undefined && (local.machine ?? self.id) === link.install;
+  if (boardChanged) merged.board = row.board;
   const stamps: Partial<Record<TaskSyncGroup, string>> = {};
   let won = false;
   for (const group of TASK_SYNC_GROUPS) {
     const held = effectiveStamp(local, group, self.prefix);
     stamps[group] = held;
-    if (row.s[group] <= held) continue;
+    // v1 sent an unchosen title as a placeholder under its real text stamp.
+    // A v2 rescan can fill that exact placeholder. A newer local edit keeps
+    // its stamp and wins as usual; no other equal-stamp field is replaced.
+    const restoresTitle = group === "text" && row.s.text === held && local.text === UNTITLED_TASK_TEXT && row.text !== UNTITLED_TASK_TEXT;
+    if (row.s[group] <= held && !restoresTitle) continue;
     // Only the owner hands a task on, judged by the link the call came over.
     if (group === "machine" && (local.machine ?? self.id) !== link.install) continue;
     if (group === "handover" && row.handover && row.handover.to !== link.install) continue;
-    assignGroup(merged, row, group);
+    if (restoresTitle) {
+      merged.text = row.text;
+      merged.chosen = true;
+      write.preserveStamp(row.id, group);
+    }
+    else assignGroup(merged, row, group);
     stamps[group] = row.s[group];
     won = true;
   }
-  if (!won) return null;
+  if (!won) return boardChanged ? merged : null;
   if (row.updatedAt > merged.updatedAt) merged.updatedAt = row.updatedAt;
   merged.sync = { s: stamps, o: self.prefix };
   if (equalsSent(merged, row, self)) merged.sync.o = link.prefix;
@@ -86,6 +104,7 @@ function mergeRow(local: BoardTask | null, row: WireTask, link: ApplyLink, write
  * row that breaks a bound (the whole page fails, nothing is applied).
  */
 export function applyTaskRows(rows: readonly WireRow[], link: ApplyLink, options: { now?: number; filePath?: string } = {}): ApplyOutcome {
+  repairLinkedTasks(options.filePath ?? TASKS_FILE);
   if (!rows.length) return { changed: 0 };
   const now = options.now ?? Date.now();
   if (rows.some((row) => rowStamps(row).some((stamp) => stampMs(stamp) > now + CLOCK_AHEAD_LIMIT_MS))) return { changed: 0, refused: "clock" };
@@ -132,6 +151,9 @@ export function applyTaskRows(rows: readonly WireRow[], link: ApplyLink, options
       const merged = mergeRow(local, row, link, write);
       if (!merged) continue;
       if (position === undefined) {
+        // Admission changes only the receiving board preference; every row is kept.
+        merged.board = row.board ?? (row.status === "done" ? "hidden" : undefined);
+        if (merged.board !== "hidden" && countBoardTasks(tasks, merged.project, () => false) >= BOARD_TASKS_PER_PROJECT_LIMIT) merged.board = "hidden";
         tasks = [...tasks, merged];
         byId.set(merged.id, tasks.length - 1);
       } else {

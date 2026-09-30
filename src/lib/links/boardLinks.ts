@@ -8,7 +8,7 @@ import type { SharedProject } from "./state";
     and pushed to the peer store named by `store`, and the linked projects
     whose rows have fully crossed each way. */
 export type TaskCursor = { pull: [number] | [number, string] | null; pushed: [number] | [number, string] | null; pullCovered: string[]; pushCovered: string[] };
-type BoardLink = { key: string; store: string; shared: SharedProject[]; cursor?: TaskCursor };
+type BoardLink = { key: string; store: string; shared: SharedProject[]; cursor?: TaskCursor; taskWireVersion?: number };
 const seed = { collection: "board_links", schemaVersion: 1, migrationId: "linked-boards-m1", key: (row: BoardLink) => row.key, loadRecords: (): BoardLink[] => [] };
 const cache = new Map<string, SqliteStateCollection<BoardLink>>();
 
@@ -88,10 +88,16 @@ export function readTaskCursor(id: string, store: string): TaskCursor | null {
   return row?.cursor && row.store === store ? row.cursor : null;
 }
 
+/** The peer's task encoding is known only after it advertises it in a reply. */
+export function readPeerTaskWireVersion(id: string, store: string): number {
+  const row = readRow(`tasks:${id}`);
+  return row?.store === store ? row.taskWireVersion ?? 0 : 0;
+}
+
 /** Writes only a changed cursor. */
-export function writeTaskCursor(id: string, store: string, cursor: TaskCursor): void {
+export function writeTaskCursor(id: string, store: string, cursor: TaskCursor, peerTaskWireVersion: number): void {
   const key = `tasks:${id}`;
-  const next: BoardLink = { key, store, shared: [], cursor };
+  const next: BoardLink = { key, store, shared: [], cursor, taskWireVersion: peerTaskWireVersion };
   const held = readRow(key);
   if (held && JSON.stringify(held) === JSON.stringify(next)) return;
   collection(true)!.boundedPatch(2, (tx) => {

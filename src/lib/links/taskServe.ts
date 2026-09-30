@@ -1,3 +1,4 @@
+import { repairLinkedTasks } from "./taskRepair";
 /**
  * B's half of the `tasks` part of `boards/sync` (docs/design/linked-installs.md
  * M.5). B never calls out and holds no cursor: A names the position, B answers
@@ -6,7 +7,7 @@
 import { linkedPeer, linkedContext } from "./linked";
 import { applyTaskRows } from "./taskApply";
 import { isPosition, readLogPage, readScanPage, PAGE_ROWS, type Position } from "./taskFeed";
-import { decodeWireRow, MalformedRow } from "./taskWire";
+import { decodeWireRow, MalformedRow, TASK_WIRE_VERSION } from "./taskWire";
 import type { Grant } from "./state";
 import { taskFeedSource } from "@/lib/tasks/store";
 
@@ -31,6 +32,7 @@ export function serveTasks(grant: Grant, wire: Record<string, unknown>, agreed: 
   if (push !== undefined && !(object(push) && Array.isArray(push.rows) && push.rows.length <= PAGE_ROWS
     && (isPosition(push.through) !== (push.scan !== undefined)) && (push.scan === undefined || push.scan === null || (typeof push.scan === "string" && SCAN_CURSOR.test(push.scan))))) return { error: "malformed" };
   if (!agreed) return { parts: { tasks: { wait: true } }, moved: false };
+  repairLinkedTasks();
   const context = linkedContext();
   const link = linkedPeer("grant", grant.id);
   if (!context.self || !link) return { parts: { tasks: { wait: true } }, moved: false };
@@ -54,7 +56,7 @@ export function serveTasks(grant: Grant, wire: Record<string, unknown>, agreed: 
     moved ||= rows.length > 0;
   }
   if (object(pull)) {
-    const filter = { self: context.self, skipPrefix: link.prefix };
+    const filter = { self: context.self, skipPrefix: link.prefix, includeBoard: typeof wire.taskWireVersion === "number" && wire.taskWireVersion >= TASK_WIRE_VERSION };
     if (object(scan)) {
       const projects = new Set((scan.p as string[]).filter((key) => link.projects.has(key)));
       // The position a resync ends on is read before its first row.

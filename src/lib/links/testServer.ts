@@ -18,6 +18,8 @@ import * as grants from "@/app/api/links/grants/route";
 import * as shared from "@/app/api/links/shared/route";
 import * as tasksRoute from "@/app/api/tasks/route";
 import * as taskOne from "@/app/api/tasks/[id]/route";
+import { forgetTaskExchange } from "./taskExchange";
+import { readTaskCursor, remoteStore } from "./boardLinks";
 import { ownBoardStoreId } from "./boardLinks";
 import { initializeStateCollections, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import { statePath } from "@/lib/configDir";
@@ -44,9 +46,10 @@ let restartAgentFeedAfterPage: string | null = null;
 let padSync = 0;
 let maxSyncBody = 0;
 let failSync: number | null = null;
+let legacyTaskWire = false;
 let badInfo = false;
 let grantDeleteStatus: number | null = null;
-let holdNextSync: "request" | "response" | null = null;
+let holdNextSync: "request" | "response" | "task-response" | null = null;
 let syncHeld = false;
 let releaseSync: (() => void) | null = null;
 const syncBodySizes: number[] = [];
@@ -130,10 +133,22 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     if (path === "/test/clock") { clockOffset = Number(query.get("offset") ?? 0); json(response, { clockOffset }); return; }
+    if (path === "/test/legacy-task-wire") { legacyTaskWire = query.get("on") === "1"; json(response, { legacyTaskWire }); return; }
     if (path === "/test/capture") { capturing = query.get("on") !== "0"; captured = []; json(response, { capturing }); return; }
     if (path === "/test/measure-memory") { capturing = false; captured = []; captureWire = false; wire.length = 0; measureMemory = true; json(response, { ok: true }); return; }
     if (path === "/test/captured") { json(response, captured); if (query.get("reset") === "1") captured = []; return; }
     if (path === "/test/tasks") { json(response, loadTasks()); return; }
+    if (path === "/test/legacy-cursor") {
+      const input = body() as { id: string; pull: number[]; pushed: number[]; projects: string[] };
+      const opened = new SqliteStateCollection<{ key: string; store: string; shared: unknown[]; cursor?: unknown }>(statePath("state.sqlite"), {
+        collection: "board_links", schemaVersion: 1, busyMessage: "test board links busy", key: (row) => row.key,
+        decode: (value) => value as never, clone: structuredClone,
+      });
+      opened.boundedPatch(2, (tx) => tx.put({ key: `tasks:${input.id}`, store: remoteStore(input.id)!, shared: [], cursor: { pull: input.pull, pushed: input.pushed, pullCovered: input.projects, pushCovered: input.projects } }));
+      forgetTaskExchange(input.id);
+      json(response, { cursor: readTaskCursor(input.id, remoteStore(input.id)!) });
+      return;
+    }
     if (path === "/test/import-tasks") {
       const input = body() as { tasks: ReturnType<typeof loadTasks> };
       mutateTasks(() => ({ tasks: input.tasks, result: null }));
@@ -255,7 +270,8 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     if (path === "/test/hold-sync") {
-      holdNextSync = new URL(request.url ?? "/", "http://localhost").searchParams.get("side") === "response" ? "response" : "request";
+      const side = new URL(request.url ?? "/", "http://localhost").searchParams.get("side");
+      holdNextSync = side === "response" || side === "task-response" ? side : "request";
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ holdNextSync }));
       return;
@@ -306,6 +322,16 @@ const server = http.createServer(async (request, response) => {
     });
     let result: Response;
     const method = request.method ?? "GET";
+    // The merge-base task decoder rejects every key outside its v2 allowlist.
+    // Keep that strict failure in the HTTP integration harness for rolling upgrades.
+    if (path === "/api/peer/v1/boards/sync" && legacyTaskWire) {
+      const rows = (body().push as { rows?: unknown[] } | undefined)?.rows ?? [];
+      if (rows.some((row) => !!row && typeof row === "object" && !Array.isArray(row) && "board" in row)) {
+        response.statusCode = 400;
+        json(response, { error: "malformed" });
+        return;
+      }
+    }
     // Exercise the same proxy then route order used by the Viewer for peers.
     const perimeter = path === "/api/peer" || path.startsWith("/api/peer/") ? proxy(req) : null;
     if (perimeter && perimeter.headers.get("x-middleware-next") !== "1") result = perimeter;
@@ -330,6 +356,15 @@ const server = http.createServer(async (request, response) => {
     }
     else result = Response.json({ error: "not found" }, { status: 404 });
     let resultBody = Buffer.from(await result.arrayBuffer());
+    if (path === "/api/peer/v1/boards/sync" && legacyTaskWire && result.status === 200) {
+      const legacy = JSON.parse(resultBody.toString("utf8")) as { taskWireVersion?: number; tasks?: { rows?: Record<string, unknown>[] } };
+      delete legacy.taskWireVersion;
+      for (const row of legacy.tasks?.rows ?? []) {
+        delete row.board;
+        if (typeof row.text === "string" && row.s) row.text = "Untitled task";
+      }
+      resultBody = Buffer.from(JSON.stringify(legacy));
+    }
     if (path === "/api/peer/v1/boards/sync" && restartAgentFeedAfterPage) {
       const agents = (JSON.parse(resultBody.toString("utf8")) as { agents?: { reset?: boolean; more?: boolean } }).agents;
       if (agents?.reset && agents.more) {
@@ -340,8 +375,10 @@ const server = http.createServer(async (request, response) => {
     // Whitespace after the JSON keeps it valid; only the size cap refuses it.
     if (path === "/api/peer/v1/boards/sync" && padAnswer > resultBody.byteLength) resultBody = Buffer.concat([resultBody, Buffer.alloc(padAnswer - resultBody.byteLength, " ")]);
     if (captureWire && path.startsWith("/api/peer/v1/") && wire.length < 30) wire.push({ path, request: Buffer.concat(chunks).toString("utf8"), response: resultBody.toString("utf8") });
+    const heldBody = path === "/api/peer/v1/boards/sync" && holdNextSync
+      ? JSON.parse((holdNextSync === "request" ? Buffer.concat(chunks) : resultBody).toString("utf8")) as { index?: number; tasks?: { rows?: unknown[] } } : null;
     if (path === "/api/peer/v1/boards/sync" && holdNextSync &&
-        JSON.parse((holdNextSync === "response" ? resultBody : Buffer.concat(chunks)).toString("utf8")).index === 0) {
+        (holdNextSync === "task-response" ? (heldBody?.tasks?.rows?.length ?? 0) > 0 : heldBody?.index === 0)) {
       holdNextSync = null;
       syncHeld = true;
       await new Promise<void>((resolve) => { releaseSync = resolve; });
