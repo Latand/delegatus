@@ -58,8 +58,10 @@ installs the selected package with the prompt's global-install command.
 
 `scripts/newcomer-install.mjs` reads both shipped prompts. It verifies the
 launcher and setup API with neither CLI present, each engine separately on
-PATH, and a Codex stub under the user desktop bundle path. Stub commands allow
-only `--version` and MCP registration; the report refuses any other call.
+PATH, and a Codex stub under the user desktop bundle path. Stubs implement
+`--version` and MCP registration, returning failure for other commands. The
+report also admits the Viewer's read-only account-status and MCP-list probes;
+it refuses login or agent-execution requests and records every distinct call.
 It never signs in or creates an orchestrator. The driver tracks each launcher
 it starts and shuts it down through its own child handle.
 

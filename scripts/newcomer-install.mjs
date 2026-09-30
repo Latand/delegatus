@@ -1,7 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
@@ -18,6 +17,16 @@ export function promptCommand(prompt, prefix) {
   const command = [...prompt.matchAll(/`([^`\n]+)`/g)].map((match) => match[1]).find((value) => value.startsWith(prefix));
   if (!command) throw new Error(`Install prompt has no command starting with ${prefix}`);
   return command;
+}
+
+/** Startup can read account status and registered MCPs without signing in. */
+export function safeStubCall(call) {
+  return ["--version", "auth status --json", "login status", "-c features.plugins=false mcp list --json"].includes(call)
+    || call.startsWith("mcp add viewer ");
+}
+
+function publicFixtureText(value, home) {
+  return value.replaceAll(realpathSync(home), "$HOME").replaceAll(home, "$HOME");
 }
 
 function shell(command, env) {
@@ -69,6 +78,7 @@ async function startCase(label, env, expected, reportDirectory) {
       if (child.exitCode !== null || child.signalCode !== null) throw new Error(`${label}: launcher exited before readiness`);
       try {
         const response = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(2_000) });
+        await response.arrayBuffer();
         if (response.status === 200 && output.includes(expected.message)) {
           const probe = await fetch(`http://127.0.0.1:${port}/api/accounts/cli`, { signal: AbortSignal.timeout(5_000) });
           if (probe.status !== 200) throw new Error(`CLI presence returned ${probe.status}`);
@@ -89,8 +99,8 @@ async function startCase(label, env, expected, reportDirectory) {
     try { await stop(child); } finally {
       // The fixture has no personal identities or credentials; keep diagnostic
       // logs bounded and replace its generated home before uploading.
-      writeFileSync(path.join(reportDirectory, `${label}.log`), output.replaceAll(env.HOME, "$HOME"));
-      if (failure) writeFileSync(path.join(reportDirectory, `${label}-error.txt`), String(failure.message).replaceAll(env.HOME, "$HOME") + "\n");
+      writeFileSync(path.join(reportDirectory, `${label}.log`), publicFixtureText(output, env.HOME));
+      if (failure) writeFileSync(path.join(reportDirectory, `${label}-error.txt`), publicFixtureText(String(failure.message), env.HOME) + "\n");
     }
   }
 }
@@ -134,8 +144,8 @@ async function main() {
     if (!(major > 1 || major === 1 && minor >= 4)) throw new Error("The prompt requires Bun 1.4+");
     // Same install command, substituting the exact subject this run verifies.
     // Target is passed via an env value rather than interpolated shell text.
-    report.packageInstall = shell(promptCommand(prompt, "bun add -g delegatus-cli").replace("delegatus-cli", '"$NEWCOMER_PACKAGE"'), { ...env, NEWCOMER_PACKAGE: target }).replaceAll(home, "$HOME").replaceAll(target, "<package subject>");
-    report.globalBin = shell("bun pm bin -g", env).replaceAll(home, "$HOME");
+    report.packageInstall = publicFixtureText(shell(promptCommand(prompt, "bun add -g delegatus-cli").replace("delegatus-cli", '"$NEWCOMER_PACKAGE"'), { ...env, NEWCOMER_PACKAGE: target }), home).replaceAll(target, "<package subject>");
+    report.globalBin = publicFixtureText(shell("bun pm bin -g", env), home);
     report.binEntries = readdirSync(path.join(home, ".bun/bin"));
     rows.push(await startCase("neither-cli", env, {
       message: "Claude Code CLI and Codex CLI were not found", presence: { claude: "missing", codex: "missing" },
@@ -159,11 +169,12 @@ async function main() {
       message: "Agent CLI: codex. Sign in", available: true, presence: { claude: "missing", codex: "found" },
     }, reportDirectory));
     const calls = readFileSync(audit, "utf8").trim().split("\n");
-    if (calls.some((call) => call !== "--version" && !call.startsWith("mcp add viewer"))) throw new Error("A stub received a login or agent-run command");
-    report.stubCommands = [...new Set(calls.map((call) => call.replaceAll(home, "$HOME")))];
+    report.stubCommands = [...new Set(calls.map((call) => publicFixtureText(call, home)))];
+    const forbidden = calls.filter((call) => !safeStubCall(call));
+    if (forbidden.length) throw new Error(`Stub received unexpected commands: ${publicFixtureText(forbidden.join("; "), home)}`);
     report.passed = true;
   } catch (error) {
-    report.error = error.message.replaceAll(home, "$HOME");
+    report.error = publicFixtureText(error.message, home);
     throw error;
   } finally {
     writeFileSync(path.join(reportDirectory, "report.json"), JSON.stringify(report, null, 2) + "\n");
