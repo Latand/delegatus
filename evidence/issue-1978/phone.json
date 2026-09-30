@@ -94,13 +94,13 @@
         "long-7": {
           "command": {
             "x": 314,
-            "y": 1545.25,
+            "y": 1546.25,
             "width": 44,
             "height": 44
           },
           "output": {
             "x": 308,
-            "y": 1623.25,
+            "y": 1624.25,
             "width": 44,
             "height": 44
           },
@@ -109,35 +109,29 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": [
-            {
-              "text": "<button Copy output>",
-              "top": 109,
-              "bottom": 153
-            }
-          ],
+          "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 1272
+            "fromBottom": 1273
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
             "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1195.25,
-            "bottom": 1334.25
+            "top": 1196.25,
+            "bottom": 1335.25
           }
         },
         "long-13": {
           "command": {
             "x": 314,
-            "y": 1539.25,
+            "y": 1546.25,
             "width": 44,
             "height": 44
           },
           "output": {
             "x": 308,
-            "y": 1617.25,
+            "y": 1624.25,
             "width": 44,
             "height": 44
           },
@@ -146,60 +140,29 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": [
-            {
-              "text": "1",
-              "top": 107,
-              "bottom": 121
-            },
-            {
-              "text": "band",
-              "top": 107,
-              "bottom": 121
-            },
-            {
-              "text": "(",
-              "top": 107,
-              "bottom": 121
-            },
-            {
-              "text": "0",
-              "top": 107,
-              "bottom": 121
-            },
-            {
-              "text": "): replay the snapshot row and keep the projecti",
-              "top": 107,
-              "bottom": 121
-            },
-            {
-              "text": "<button Copy output>",
-              "top": 103,
-              "bottom": 147
-            }
-          ],
+          "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 1266
+            "fromBottom": 1273
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
             "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1189.25,
-            "bottom": 1328.25
+            "top": 1196.25,
+            "bottom": 1335.25
           }
         },
         "long-19": {
           "command": {
             "x": 314,
-            "y": 1533.25,
+            "y": 1546.25,
             "width": 44,
             "height": 44
           },
           "output": {
             "x": 308,
-            "y": 1611.25,
+            "y": 1624.25,
             "width": 44,
             "height": 44
           },
@@ -208,60 +171,29 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": [
-            {
-              "text": "1",
-              "top": 101,
-              "bottom": 115
-            },
-            {
-              "text": "band",
-              "top": 101,
-              "bottom": 115
-            },
-            {
-              "text": "(",
-              "top": 101,
-              "bottom": 115
-            },
-            {
-              "text": "0",
-              "top": 101,
-              "bottom": 115
-            },
-            {
-              "text": "): replay the snapshot row and keep the projecti",
-              "top": 101,
-              "bottom": 115
-            },
-            {
-              "text": "<button Copy output>",
-              "top": 97,
-              "bottom": 141
-            }
-          ],
+          "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 1260
+            "fromBottom": 1273
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
             "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1183.25,
-            "bottom": 1322.25
+            "top": 1196.25,
+            "bottom": 1335.25
           }
         },
         "long-26": {
           "command": {
             "x": 314,
-            "y": 1526.25,
+            "y": 1546.25,
             "width": 44,
             "height": 44
           },
           "output": {
             "x": 308,
-            "y": 1604.25,
+            "y": 1624.25,
             "width": 44,
             "height": 44
           },
@@ -270,35 +202,29 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": [
-            {
-              "text": "<button Copy output>",
-              "top": 90,
-              "bottom": 134
-            }
-          ],
+          "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 1253
+            "fromBottom": 1273
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
             "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1176.25,
-            "bottom": 1315.25
+            "top": 1196.25,
+            "bottom": 1335.25
           }
         },
         "long-34": {
           "command": {
             "x": 314,
-            "y": 1518.25,
+            "y": 1494.25,
             "width": 44,
             "height": 44
           },
           "output": {
             "x": 308,
-            "y": 1596.25,
+            "y": 1572.25,
             "width": 44,
             "height": 44
           },
@@ -307,60 +233,29 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": [
-            {
-              "text": "2",
-              "top": 103.25,
-              "bottom": 117.25
-            },
-            {
-              "text": "band",
-              "top": 103.25,
-              "bottom": 117.25
-            },
-            {
-              "text": "(",
-              "top": 103.25,
-              "bottom": 117.25
-            },
-            {
-              "text": "1",
-              "top": 103.25,
-              "bottom": 117.25
-            },
-            {
-              "text": "): replay the snapshot row and keep the projecti",
-              "top": 103.25,
-              "bottom": 117.25
-            },
-            {
-              "text": "<button Copy output>",
-              "top": 82,
-              "bottom": 126
-            }
-          ],
+          "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 1245
+            "fromBottom": 1221
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
             "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1168.25,
-            "bottom": 1307.25
+            "top": 1144.25,
+            "bottom": 1283.25
           }
         },
         "long-43": {
           "command": {
             "x": 314,
-            "y": 1509.25,
+            "y": 1494.25,
             "width": 44,
             "height": 44
           },
           "output": {
             "x": 308,
-            "y": 1587.25,
+            "y": 1572.25,
             "width": 44,
             "height": 44
           },
@@ -369,35 +264,29 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": [
-            {
-              "text": "<button Copy output>",
-              "top": 73,
-              "bottom": 117
-            }
-          ],
+          "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 1236
+            "fromBottom": 1221
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
             "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1159.25,
-            "bottom": 1298.25
+            "top": 1144.25,
+            "bottom": 1283.25
           }
         },
         "long-55": {
           "command": {
             "x": 314,
-            "y": 1497.25,
+            "y": 1494.25,
             "width": 44,
             "height": 44
           },
           "output": {
             "x": 308,
-            "y": 1575.25,
+            "y": 1572.25,
             "width": 44,
             "height": 44
           },
@@ -406,55 +295,29 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": [
-            {
-              "text": "3",
-              "top": 99.5,
-              "bottom": 113.5
-            },
-            {
-              "text": "band",
-              "top": 99.5,
-              "bottom": 113.5
-            },
-            {
-              "text": "(",
-              "top": 99.5,
-              "bottom": 113.5
-            },
-            {
-              "text": "2",
-              "top": 99.5,
-              "bottom": 113.5
-            },
-            {
-              "text": "): replay the snapshot row and keep the projecti",
-              "top": 99.5,
-              "bottom": 113.5
-            }
-          ],
+          "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 1224
+            "fromBottom": 1221
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
             "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1147.25,
-            "bottom": 1286.25
+            "top": 1144.25,
+            "bottom": 1283.25
           }
         },
         "rest-137": {
           "command": {
             "x": 314,
-            "y": 1634.25,
+            "y": 1640.25,
             "width": 44,
             "height": 44
           },
           "output": {
             "x": 308,
-            "y": 1712.25,
+            "y": 1718.25,
             "width": 44,
             "height": 44
           },
@@ -466,26 +329,26 @@
           "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 1361
+            "fromBottom": 1367
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
             "key": "div: 1.Read bands.ts · :1–6130s",
-            "top": 111,
-            "bottom": 133
+            "top": 117,
+            "bottom": 139
           }
         },
         "rest-211": {
           "command": {
             "x": 314,
-            "y": 1871.25,
+            "y": 1881.25,
             "width": 44,
             "height": 44
           },
           "output": {
             "x": 308,
-            "y": 1949.25,
+            "y": 1959.25,
             "width": 44,
             "height": 44
           },
@@ -497,26 +360,26 @@
           "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 1598
+            "fromBottom": 1608
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
             "key": "row:22:0",
-            "top": 105.75,
-            "bottom": 177.5
+            "top": 115.75,
+            "bottom": 187.5
           }
         },
         "rest-173": {
           "command": {
             "x": 314,
-            "y": 2054.25,
+            "y": 2001.25,
             "width": 44,
             "height": 44
           },
           "output": {
             "x": 308,
-            "y": 2132.25,
+            "y": 2079.25,
             "width": 44,
             "height": 44
           },
@@ -525,23 +388,48 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": [
-            {
-              "text": "Replay band 21 and say what moved.",
-              "top": 96.5,
-              "bottom": 113.5
-            }
-          ],
+          "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 1781
+            "fromBottom": 1728
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
-            "key": "row:20:0",
-            "top": 85.5,
-            "bottom": 157.25
+            "key": "row:21:0",
+            "top": 116.25,
+            "bottom": 229.75
+          }
+        },
+        "rest-control-overhang": {
+          "command": {
+            "x": 314,
+            "y": 4033.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 4111.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 3760
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "row:1:0",
+            "top": 115.75,
+            "bottom": 229.25
           }
         },
         "reopened": {
@@ -555,14 +443,14 @@
           "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 0
+            "fromBottom": 1957
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
-            "key": "row:20:0",
-            "top": 107.5,
-            "bottom": 179.25
+            "key": "row:1:0",
+            "top": 115.75,
+            "bottom": 229.25
           }
         }
       },
@@ -662,13 +550,13 @@
         "long-7": {
           "command": {
             "x": 314,
-            "y": 1545.25,
+            "y": 1546.25,
             "width": 44,
             "height": 44
           },
           "output": {
             "x": 308,
-            "y": 1623.25,
+            "y": 1624.25,
             "width": 44,
             "height": 44
           },
@@ -677,35 +565,29 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": [
-            {
-              "text": "<button Copy output>",
-              "top": 109,
-              "bottom": 153
-            }
-          ],
+          "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 1272
+            "fromBottom": 1273
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
             "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1195.25,
-            "bottom": 1334.25
+            "top": 1196.25,
+            "bottom": 1335.25
           }
         },
         "long-13": {
           "command": {
             "x": 314,
-            "y": 1539.25,
+            "y": 1546.25,
             "width": 44,
             "height": 44
           },
           "output": {
             "x": 308,
-            "y": 1617.25,
+            "y": 1624.25,
             "width": 44,
             "height": 44
           },
@@ -714,60 +596,29 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": [
-            {
-              "text": "1",
-              "top": 107,
-              "bottom": 121
-            },
-            {
-              "text": "band",
-              "top": 107,
-              "bottom": 121
-            },
-            {
-              "text": "(",
-              "top": 107,
-              "bottom": 121
-            },
-            {
-              "text": "0",
-              "top": 107,
-              "bottom": 121
-            },
-            {
-              "text": "): replay the snapshot row and keep the projecti",
-              "top": 107,
-              "bottom": 121
-            },
-            {
-              "text": "<button Copy output>",
-              "top": 103,
-              "bottom": 147
-            }
-          ],
+          "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 1266
+            "fromBottom": 1273
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
             "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1189.25,
-            "bottom": 1328.25
+            "top": 1196.25,
+            "bottom": 1335.25
           }
         },
         "long-19": {
           "command": {
             "x": 314,
-            "y": 1533.25,
+            "y": 1546.25,
             "width": 44,
             "height": 44
           },
           "output": {
             "x": 308,
-            "y": 1611.25,
+            "y": 1624.25,
             "width": 44,
             "height": 44
           },
@@ -776,60 +627,29 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": [
-            {
-              "text": "1",
-              "top": 101,
-              "bottom": 115
-            },
-            {
-              "text": "band",
-              "top": 101,
-              "bottom": 115
-            },
-            {
-              "text": "(",
-              "top": 101,
-              "bottom": 115
-            },
-            {
-              "text": "0",
-              "top": 101,
-              "bottom": 115
-            },
-            {
-              "text": "): replay the snapshot row and keep the projecti",
-              "top": 101,
-              "bottom": 115
-            },
-            {
-              "text": "<button Copy output>",
-              "top": 97,
-              "bottom": 141
-            }
-          ],
+          "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 1260
+            "fromBottom": 1273
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
             "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1183.25,
-            "bottom": 1322.25
+            "top": 1196.25,
+            "bottom": 1335.25
           }
         },
         "long-26": {
           "command": {
             "x": 314,
-            "y": 1526.25,
+            "y": 1546.25,
             "width": 44,
             "height": 44
           },
           "output": {
             "x": 308,
-            "y": 1604.25,
+            "y": 1624.25,
             "width": 44,
             "height": 44
           },
@@ -838,35 +658,29 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": [
-            {
-              "text": "<button Copy output>",
-              "top": 90,
-              "bottom": 134
-            }
-          ],
+          "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 1253
+            "fromBottom": 1273
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
             "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1176.25,
-            "bottom": 1315.25
+            "top": 1196.25,
+            "bottom": 1335.25
           }
         },
         "long-34": {
           "command": {
             "x": 314,
-            "y": 1518.25,
+            "y": 1494.25,
             "width": 44,
             "height": 44
           },
           "output": {
             "x": 308,
-            "y": 1596.25,
+            "y": 1572.25,
             "width": 44,
             "height": 44
           },
@@ -875,60 +689,29 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": [
-            {
-              "text": "2",
-              "top": 103.25,
-              "bottom": 117.25
-            },
-            {
-              "text": "band",
-              "top": 103.25,
-              "bottom": 117.25
-            },
-            {
-              "text": "(",
-              "top": 103.25,
-              "bottom": 117.25
-            },
-            {
-              "text": "1",
-              "top": 103.25,
-              "bottom": 117.25
-            },
-            {
-              "text": "): replay the snapshot row and keep the projecti",
-              "top": 103.25,
-              "bottom": 117.25
-            },
-            {
-              "text": "<button Copy output>",
-              "top": 82,
-              "bottom": 126
-            }
-          ],
+          "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 1245
+            "fromBottom": 1221
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
             "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1168.25,
-            "bottom": 1307.25
+            "top": 1144.25,
+            "bottom": 1283.25
           }
         },
         "long-43": {
           "command": {
             "x": 314,
-            "y": 1509.25,
+            "y": 1494.25,
             "width": 44,
             "height": 44
           },
           "output": {
             "x": 308,
-            "y": 1587.25,
+            "y": 1572.25,
             "width": 44,
             "height": 44
           },
@@ -937,35 +720,29 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": [
-            {
-              "text": "<button Copy output>",
-              "top": 73,
-              "bottom": 117
-            }
-          ],
+          "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 1236
+            "fromBottom": 1221
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
             "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1159.25,
-            "bottom": 1298.25
+            "top": 1144.25,
+            "bottom": 1283.25
           }
         },
         "long-55": {
           "command": {
             "x": 314,
-            "y": 1497.25,
+            "y": 1494.25,
             "width": 44,
             "height": 44
           },
           "output": {
             "x": 308,
-            "y": 1575.25,
+            "y": 1572.25,
             "width": 44,
             "height": 44
           },
@@ -974,55 +751,29 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": [
-            {
-              "text": "3",
-              "top": 99.5,
-              "bottom": 113.5
-            },
-            {
-              "text": "band",
-              "top": 99.5,
-              "bottom": 113.5
-            },
-            {
-              "text": "(",
-              "top": 99.5,
-              "bottom": 113.5
-            },
-            {
-              "text": "2",
-              "top": 99.5,
-              "bottom": 113.5
-            },
-            {
-              "text": "): replay the snapshot row and keep the projecti",
-              "top": 99.5,
-              "bottom": 113.5
-            }
-          ],
+          "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 1224
+            "fromBottom": 1221
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
             "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1147.25,
-            "bottom": 1286.25
+            "top": 1144.25,
+            "bottom": 1283.25
           }
         },
         "rest-137": {
           "command": {
             "x": 314,
-            "y": 1631.25,
+            "y": 1640.25,
             "width": 44,
             "height": 44
           },
           "output": {
             "x": 308,
-            "y": 1709.25,
+            "y": 1718.25,
             "width": 44,
             "height": 44
           },
@@ -1034,69 +785,26 @@
           "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 1358
+            "fromBottom": 1367
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
             "key": "div: 1.Read bands.ts · :1–6130s",
-            "top": 108,
-            "bottom": 130
+            "top": 117,
+            "bottom": 139
           }
         },
         "rest-211": {
           "command": {
             "x": 314,
-            "y": 1889.25,
+            "y": 1876.25,
             "width": 44,
             "height": 44
           },
           "output": {
             "x": 308,
-            "y": 1967.25,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 34,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [
-            {
-              "text": "<button Copy message (Markdown)>",
-              "top": 73.75,
-              "bottom": 117.75
-            }
-          ],
-          "tail": {
-            "spacer": 0,
-            "fromBottom": 1616
-          },
-          "overhangs": [],
-          "slivers": [
-            {
-              "key": "row:21:0",
-              "top": 4.25,
-              "bottom": 117.75
-            }
-          ],
-          "firstRow": {
-            "key": "row:21:0",
-            "top": 4.25,
-            "bottom": 117.75
-          }
-        },
-        "rest-173": {
-          "command": {
-            "x": 314,
-            "y": 2073.25,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 2151.25,
+            "y": 1954.25,
             "width": 44,
             "height": 44
           },
@@ -1108,14 +816,76 @@
           "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 1800
+            "fromBottom": 1603
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
-            "key": "row:20:0",
-            "top": 104.5,
-            "bottom": 176.25
+            "key": "row:22:0",
+            "top": 110.75,
+            "bottom": 182.5
+          }
+        },
+        "rest-173": {
+          "command": {
+            "x": 314,
+            "y": 2001.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 2079.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1728
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "row:21:0",
+            "top": 116.25,
+            "bottom": 229.75
+          }
+        },
+        "rest-control-overhang": {
+          "command": {
+            "x": 314,
+            "y": 4033.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 4111.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 3760
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "row:1:0",
+            "top": 115.75,
+            "bottom": 229.25
           }
         },
         "reopened": {
@@ -1129,14 +899,14 @@
           "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 0
+            "fromBottom": 1957
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
-            "key": "row:20:0",
-            "top": 107.5,
-            "bottom": 179.25
+            "key": "row:1:0",
+            "top": 115.75,
+            "bottom": 229.25
           }
         }
       },

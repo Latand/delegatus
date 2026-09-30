@@ -31,12 +31,21 @@ reader's message down. The height-estimate control reproduces those late-layout
 shifts; live-bottom updates and viewport resize add no independent shift.
 
 The fix keeps actual row layout within the existing bounded render window
-(`LogFeed.tsx:1612`), removes released-reader rest snapping (`:490`), and makes
-prepend and resize share a stable message anchor (`:189,227,766,1503`). The
-scroller disables native anchoring (`:1427`); the existing ResizeObserver
+(`src/components/LogFeed.tsx`), and makes prepend and resize share a stable
+message anchor. The scroller disables native anchoring; the existing ResizeObserver
 restores the same anchor's offset before paint. Compensation uses the canvas
 scale for compact panes. Bottom-follow still uses its existing glue and
 alignment. All four final bottom gaps after a new message are 0 px.
+
+The review fix restores #1978's released-phone line alignment after vertical
+reader input finishes, using `scrollend` to include touch momentum. It uses
+the previous three-step, same-direction bound within that settle and records
+the settled position as the reader anchor and remount memory. History prepends
+and ResizeObserver compensation never arm alignment; there is no rest timer.
+The edge helper clears negative-margin action controls with their message
+and uses the ink's half-pixel tolerance when leaving a row. The strengthened
+#1978 browser case again checks every released rest, adds a wheel settle at a
+control overhang, and checks the remembered position after reopening.
 
 The driver is the existing
 `src/components/mobile/issue1671Evidence.browser.test.tsx`, case
@@ -64,13 +73,17 @@ frames at `.artifacts/scroll-history/`. Phone and desktop before/after frames
 were visually inspected. Raw PNGs stay local as required by the repository.
 Chromium emulates touch and viewport resize; physical mobile browser chrome
 and WebKit were not exercised.
+The multi-pane canvas performance trade-off from removing content-visibility
+remains unmeasured. The synthetic history scene is not the phone shell;
+#1978's released-rest case uses the phone shell. Balanced height changes that
+leave the observed content's total height unchanged remain outside this
+measurement and the aggregate ResizeObserver's coverage.
 
 Changed source files: `src/components/LogFeed.tsx`, `src/app/globals.css`,
 `src/components/feed/SpeakMenu.tsx` (obsolete containment comment),
 `src/components/mobile/issue1671Evidence.fixture.tsx`, and the existing phone
-driver. The driver also updates the earlier edge-alignment case so only
-followed content must align to the task strip: a released reader retains their
-chosen partial line. Its measurements are refreshed in
+driver. The earlier edge-alignment case checks followed content and released
+rests against the task strip. Its measurements are refreshed in
 `evidence/issue-1978/phone.json`. Evidence files in this directory are new.
 The composer context, linked sync and review-defaults lanes were untouched.
 
@@ -105,6 +118,10 @@ as the baseline LogFeed; the other touched TypeScript files have zero errors or
 warnings. Comparing baseline and final JSON reports found no new diagnostic.
 The same command with `--rule 'react-hooks/refs: off'` exits 0 with the nine
 existing warnings. Repository lint configuration was unchanged.
+The review fix reran scoped lint for LogFeed, feedTopEdge and the phone driver:
+the same suppression exits 0, with the nine existing LogFeed warnings and no
+helper or driver warnings. TypeScript and the four separate DOM suites passed
+again after the edge-helper correction.
 
 An additional starting-window sanity check,
 `bun test src/components/LogFeed.startingWindow.dom.test.tsx`, has 4 passes and

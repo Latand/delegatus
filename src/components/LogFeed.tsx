@@ -64,7 +64,7 @@ import { BoundedLru } from "./feed/scrollMemory";
 import { ConversationAttention } from "./runtime/ConversationAttention";
 import { createSpeakableAnswerResolver } from "./feed/speakableAnswer";
 import { isSubagent } from "./projectModel";
-import { tailPlan } from "./feedTopEdge";
+import { restingDelta, tailPlan } from "./feedTopEdge";
 import { TaskHeader } from "./TaskHeader";
 import { TurnStatusBar } from "./TurnStatusBar";
 import { logFeedDependencies } from "./logFeedDependencies";
@@ -431,6 +431,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      lives through the gesture; a stamped programmatic cause still wins. */
   const scrollbarPointerRef = useRef<{ fromBottom: number } | null>(null);
   const feedTouchRef = useRef<{ x: number; y: number } | null>(null);
+  const gestureRestPending = useRef(false);
   const pillTouchRef = useRef<{ x: number; y: number } | null>(null);
   const restoreInitializedPathRef = useRef<string | null>(null);
   const pendingRestoreRef = useRef<PendingRestore | null>(null);
@@ -487,9 +488,29 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     spacer.style.height = `${plan.spacer}px`;
     el.scrollTop = el.scrollHeight;
   };
-  /* A released reader owns their offset. Snapping after a gesture or resize
-     moves the anchor and suppresses native anchoring for later media layout.
-     Only the followed tail receives top-edge alignment. */
+  /* Only a reader gesture may align a released phone feed. The browser's
+     scrollend includes momentum; prepends and resize restoration never arm
+     this step. Record the settled boundary as the shared reader anchor. */
+  const alignGestureRest = (el: HTMLDivElement) => {
+    if (!gestureRestPending.current || feedTouchRef.current) return;
+    gestureRestPending.current = false;
+    if (!onPhoneLayout() || magnetRef.current) return;
+    // Clearing a row can expose ink in its enclosing tall card. Finish that
+    // same settle in one direction, with the released alignment's old bound.
+    let previous = 0;
+    for (let step = 0; step < 3; step++) {
+      const delta = restingDelta(el);
+      if (!delta || (previous && Math.sign(previous) !== Math.sign(delta))) break;
+      el.scrollTop += delta;
+      previous = delta;
+    }
+    readerAnchor.current = viewportAnchor(el, `${memoryKey}\0${tailPath}`);
+    if (memoryKey && tailPath) rememberScroll(memoryKey, {
+      magnet: false,
+      fromBottom: distanceFromBottom(el),
+      anchor: viewportAnchor(el, tailPath),
+    });
+  };
   const markProgrammaticScroll = () => {
     if (scrollCauseRef.current?.kind !== "user") {
       scrollCauseRef.current = { kind: "programmatic" };
@@ -707,6 +728,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     restoreInitializedPathRef.current = null;
     pendingRestoreRef.current = null;
     readerAnchor.current = null;
+    gestureRestPending.current = false;
   }, [tailPath]);
 
   useLayoutEffect(() => {
@@ -1341,6 +1363,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const markUserScroll = (direction: number | null): void => {
     const el = scroller.current;
     if (!el) return;
+    if (direction !== null && direction !== 0) gestureRestPending.current = true;
     scrollCauseRef.current = {
       kind: "user",
       fromBottom: distanceFromBottom(el),
@@ -1460,6 +1483,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
           else if (["ArrowDown", "End", "PageDown"].includes(event.key)) markUserScroll(1);
           else if ([" ", "Spacebar"].includes(event.key)) markUserScroll(event.shiftKey ? -1 : 1);
         }}
+        onScrollEnd={(event) => alignGestureRest(event.currentTarget)}
         onScroll={(event) => {
           const el = event.currentTarget;
           const fromBottom = distanceFromBottom(el);

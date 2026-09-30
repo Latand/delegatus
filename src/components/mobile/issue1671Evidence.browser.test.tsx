@@ -1429,6 +1429,20 @@ browserTest("#1978: copy controls stay apart and followed content clears the tas
             await feedAtRest(page);
             readings[`rest-${distance}`] = await readInk(page);
           }
+          // A phone action's negative margin can leave its control under the
+          // edge after the enclosing message has gone. Exercise that narrow
+          // overhang with a real wheel settle, rather than relying on a drag
+          // landing on its fractional boundary by chance.
+          await page.evaluate(() => {
+            const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            const control = feed.querySelector<HTMLElement>('[aria-label="Copy message (Markdown)"]')!;
+            feed.scrollTop += control.getBoundingClientRect().bottom
+              - (feed.getBoundingClientRect().top + feed.clientTop) - 2.75;
+          });
+          await pause(page, 400);
+          await page.mouse.wheel(0, 2);
+          await feedAtRest(page);
+          readings["rest-control-overhang"] = await readInk(page);
           await page.screenshot({ path: path.join(EDGE_OUT, `${key}-rest.png`) });
           /* Close to the board and come back to the conversation through
              history: the feed comes back where it was left and still rests
@@ -1460,9 +1474,6 @@ browserTest("#1978: copy controls stay apart and followed content clears the tas
           for (const [moment, reading] of Object.entries(readings)) {
             if (reading.stripBottom === null) fail(`${moment}: no task strip above the feed`);
             else if (reading.feedTop < reading.stripBottom - 0.5) fail(`${moment}: the feed starts above the strip's bottom edge`);
-            // Released readers keep their chosen partial line. Only following
-            // the tail aligns the edge (long-history scroll specification).
-            if (!["following", "opened"].includes(moment)) continue;
             if (reading.cutLines.length) fail(`${moment}: lines cut by the feed's top edge: ${JSON.stringify(reading.cutLines)}`);
             if (reading.slivers.length) fail(`${moment}: rows showing only a sliver under the edge: ${JSON.stringify(reading.slivers)}`);
             if (!reading.firstRow) fail(`${moment}: no feed row on screen`);
@@ -5217,7 +5228,6 @@ browserTest("long conversation scroll: history and late layout preserve the read
         page.on("pageerror", (error) => errors.push(error.message));
         await page.goto(`${base}/?scroll-history=1${compact ? "&compact=1" : ""}`);
         await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length === 120);
-        if (process.env.LLV_SCROLL_DISABLE_CV === "1") await page.addStyleTag({ content: ".feed-cv { content-visibility: visible; }" });
         await page.waitForTimeout(500);
         const scroller = page.locator("[data-log-feed-scroller]");
         // Start within the oldest loaded answer, then drive actual upward input.
