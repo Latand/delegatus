@@ -47,6 +47,9 @@ jobs:
         env:
           RELEASE_REF: ${{ github.ref }}
           RELEASE_NAME: ${{ github.ref_name }}
+          # Next's package build type-checks the full repository. The default
+          # Node heap on an ARM macOS runner is too small for that graph.
+          NODE_OPTIONS: --max-old-space-size=6144
         shell: bash
         run: |
           set -euo pipefail
