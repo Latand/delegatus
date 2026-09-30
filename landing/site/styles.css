@@ -266,7 +266,7 @@ h1 { font-size: clamp(2.6rem, 5.6vw, 5.6rem); line-height: 1.02; }
   mask-image: linear-gradient(#000 45%, transparent);
   transition: max-height 520ms var(--ease);
 }
-.prompt[data-open="true"] pre { max-height: 60em; -webkit-mask-image: none; mask-image: none; }
+.prompt[data-open="true"] pre { max-height: none; -webkit-mask-image: none; mask-image: none; }
 .prompt-more {
   display: flex; align-items: center; gap: 6px; margin: 0 -18px; width: calc(100% + 36px);
   justify-content: center; height: 36px; font-size: 13px; color: var(--cream-3);

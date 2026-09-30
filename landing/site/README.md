@@ -38,6 +38,14 @@ width and fails unless every step shows the visitor's request exactly once in
 the orchestrator's chat, above the orchestrator's answer.
 
 ```
+CHROME_BIN=/usr/bin/google-chrome-stable bun landing/site/capture.ts --check-prompt
+```
+
+expands the Claude Code and Codex install prompts in the hero and the footer,
+in both languages and widths, and fails unless the whole prompt can be read to
+its last line, with nothing clipped by the prompt's box or a container around it.
+
+```
 CHROME_BIN=/usr/bin/google-chrome-stable bun landing/site/capture.ts --check-fullscreen
 ```
 

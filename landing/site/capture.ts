@@ -20,6 +20,12 @@
  * and that the page's scroll position comes back; PNGs go to
  * LANDING_RENDER_DIR (default /tmp/landing-fullscreen-renders/).
  *
+ * `--check-prompt` expands both install prompts (Claude Code and Codex) in the
+ * hero and the footer, in both languages and widths, and fails unless the
+ * whole prompt can be read: nothing in it is clipped by the prompt or by an
+ * ancestor, and its last line sits inside the page. PNGs go to
+ * LANDING_RENDER_DIR.
+ *
  * `--check-request=10` renders nothing: it plays the hero's script that many
  * times in each language and width and fails unless every step shows the
  * visitor's request exactly once in the orchestrator's chat, above the reply.
@@ -58,6 +64,7 @@ const only = process.argv.find((arg) => arg.startsWith("--only="))?.slice("--onl
 const checkRuns = Number(process.argv.find((arg) => arg.startsWith("--check-request="))?.slice("--check-request=".length) ?? 0);
 const fullscreenCheck = process.argv.includes("--check-fullscreen");
 const eventsCheck = process.argv.includes("--check-events");
+const promptCheck = process.argv.includes("--check-prompt");
 const eventPoints: DataPoint[] = [];
 const eventBodies: unknown[] = [];
 const swipeCheck = process.argv.find((arg) => arg.startsWith("--check-swipe="))?.slice("--check-swipe=".length);
@@ -149,6 +156,57 @@ async function checkRequest(lang: Locale, viewport: (typeof VIEWPORTS)[number], 
     await settle(page, TIMES_MS[at - 1]!);
     const seen = await requestBubbles(hero, lang);
     if (seen.copies !== 1 || seen.belowAnswer > 0 || (at >= 2 && !seen.answered)) failures.push(`${lang}-${viewport.name} run ${run} step ${at}: ${JSON.stringify(seen)}`);
+  }
+  await context.close();
+  return failures;
+}
+
+/* The install prompts, expanded: every line has to be readable, so the last
+   step the agent is told to take is not cut off by the prompt's own box or by
+   anything around it. */
+async function checkPromptExpansion(lang: Locale, viewport: (typeof VIEWPORTS)[number]): Promise<string[]> {
+  const context = await browser.newContext({
+    viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, colorScheme: "dark",
+    ...(viewport.phone ? { hasTouch: true, isMobile: true } : {}),
+  });
+  const page = await context.newPage();
+  const failures: string[] = [];
+  await page.goto(`${base}?lang=${lang}`);
+  for (const slot of ["hero", "footer"]) {
+    for (const agent of ["claude", "codex"]) {
+      const label = `${lang}-${viewport.name} ${slot} ${agent}`;
+      const root = `[data-install="${slot}"]`;
+      await page.locator(`${root} [role="tab"][data-agent="${agent}"]`).scrollIntoViewIfNeeded();
+      await page.locator(`${root} [role="tab"][data-agent="${agent}"]`).click();
+      if (await page.locator(`${root} .prompt`).getAttribute("data-open") !== "true") await page.locator(`${root} .prompt-more`).click();
+      await settle(page, 700);
+      const seen = await page.evaluate(({ root, agent, lang }) => {
+        const pre = document.querySelector<HTMLElement>(`${root} .prompt pre`)!;
+        const expected = (window as unknown as { DLG: { copy: { prompt: (agent: string, lang: string) => string } } }).DLG.copy.prompt(agent, lang);
+        const lastLine = expected.trim().split("\n").pop()!.trim();
+        const shown = (pre.textContent ?? "").trim();
+        const range = document.createRange();
+        range.selectNodeContents(pre);
+        const rects = [...range.getClientRects()].filter((rect) => rect.height > 0);
+        const inkBottom = Math.max(...rects.map((rect) => rect.bottom));
+        /* The lowest edge any ancestor that clips its content leaves visible. */
+        let visibleBottom = Infinity;
+        for (let el: HTMLElement | null = pre; el; el = el.parentElement) {
+          const overflowY = getComputedStyle(el).overflowY;
+          if (overflowY !== "visible") visibleBottom = Math.min(visibleBottom, el.getBoundingClientRect().bottom);
+        }
+        return {
+          complete: shown.endsWith(lastLine), lastLine,
+          innerClipped: pre.scrollHeight - pre.clientHeight,
+          ancestorClipped: Math.round(inkBottom - visibleBottom),
+        };
+      }, { root, agent, lang });
+      if (!seen.complete) failures.push(`${label}: the prompt does not end with its last line ${JSON.stringify(seen.lastLine)}`);
+      if (seen.innerClipped > 1) failures.push(`${label}: the prompt box hides ${seen.innerClipped}px of the prompt`);
+      if (seen.ancestorClipped > 1) failures.push(`${label}: a container hides ${seen.ancestorClipped}px of the prompt`);
+      await page.locator(`${root} .prompt`).screenshot({ path: path.join(out, `prompt-${label.replaceAll(" ", "-")}.png`) });
+      await page.locator(`${root} .prompt-more`).click();
+    }
   }
   await context.close();
   return failures;
@@ -545,6 +603,21 @@ async function checkEvents() {
 if (eventsCheck) {
   try { await checkEvents(); } finally { await browser.close(); server.stop(true); }
   process.exit(0);
+}
+
+if (promptCheck) {
+  const failures: string[] = [];
+  try {
+    for (const lang of ["en", "uk"] as Locale[]) {
+      for (const viewport of VIEWPORTS) {
+        if (only && only !== `${lang}-${viewport.name}`) continue;
+        failures.push(...await checkPromptExpansion(lang, viewport));
+      }
+    }
+  } finally { await browser.close(); server.stop(true); }
+  for (const failure of failures) console.error(failure);
+  console.log(failures.length ? `${failures.length} clipped prompt(s)` : "every expanded prompt reads to its last line");
+  process.exit(failures.length ? 1 : 0);
 }
 
 if (fullscreenCheck) {
