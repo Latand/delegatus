@@ -23,5 +23,5 @@ export function claim(now = NOW): MaintenanceRun {
 export function input(enabled = true): SeatTickCheckInput {
   const actor = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
   const row = { ...defaultSeatTickSettings(PROJECT), maintenance: { enabled, intervalHours: 3, updatedAt: new Date(NOW).toISOString(), setBy: actor } };
-  return { project: PROJECT, now: NOW, seat: { ...SEAT, path: null, designatedAt: null, turn: "idle", activity: null }, pipelines: [], ownLanes: [], tasks: [], events: [], pullRequests: [], pullRequestsUnavailable: null, signals: [], children: [], changeFingerprint: "fixture", state: emptySeatTickState(), policy: DEFAULT_SEAT_TICK_POLICY, settings: effectiveSeatTickSettings(row, NOW, SEAT_TICK_WAKE_INTERVAL_MS) };
+  return { project: PROJECT, now: NOW, seat: { ...SEAT, path: null, designatedAt: null, turn: "idle", activity: null }, pipelines: [], ownLanes: [], tasks: [], events: [], pullRequests: [], pullRequestsUnavailable: null, signals: [], children: [], childrenUnavailable: null, changeFingerprint: "fixture", state: emptySeatTickState(), policy: DEFAULT_SEAT_TICK_POLICY, settings: effectiveSeatTickSettings(row, NOW, SEAT_TICK_WAKE_INTERVAL_MS) };
 }

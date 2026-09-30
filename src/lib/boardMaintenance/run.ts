@@ -156,9 +156,9 @@ async function launchRun(run: MaintenanceRun, ports: BoardMaintenancePorts): Pro
     const previous = previousMaintenanceRun(run.project, run.runId);
     const evidence = await (ports.evidence ?? ((project, now, cwd) => maintenanceWorkEvidence(project, now, ports.sources, cwd)))(run.project, ports.sources.now(), run.repoDir);
     const holding = taskSeatHoldingSnapshot();
-    let deployment: ReturnType<SeatTickSources["latestDeployment"]> = null;
+    let deployment: ReturnType<SeatTickSources["latestDeployment"]> = { state: "ok", value: null };
     try { deployment = ports.sources.latestDeployment(); } catch { /* installs without a deployment ledger */ }
-    const productionLine = viewerOwnProjectKeys().includes(run.project) ? `Delegatus deployment: ${deployment?.revision ?? "unread"}; confirm it succeeded and git merge-base --is-ancestor <merge sha> <deployed revision>.` : "Delegatus records no deployments for this project. Read its instruction files for how it ships; when they name none, a merged pull request is shipped.";
+    const productionLine = viewerOwnProjectKeys().includes(run.project) ? `Delegatus deployment: ${(deployment.state === "ok" ? deployment.value?.revision : null) ?? "unread"}; confirm it succeeded and git merge-base --is-ancestor <merge sha> <deployed revision>.` : "Delegatus records no deployments for this project. Read its instruction files for how it ships; when they name none, a merged pull request is shipped.";
     const brief = maintenanceBrief({ run, previous, previousCardText: tasks.find(t => t.id === previous?.taskId)?.text ?? null, seatTaskIds: tasks.filter(t => t.project === run.project && holding(t) === "holds").map(t => t.id), productionLine, evidence, openCount: tasks.filter(t => t.project === run.project && t.status !== "done").length, now: ports.sources.now() });
     const body = { role: "maintainer", roleParams: {}, cwd: run.repoDir, project: run.project, "prompt": brief, title: tasks.find(t => t.id === run.taskId)?.text.split("\n")[0], taskId: run.taskId, clientAttemptId: run.runId, mcpServers: ["viewer"], notifyLauncher: false };
     // Persist the exact spawn payload before dispatch; restart replays the same digest.
@@ -208,7 +208,7 @@ export async function launchBoardMaintenanceIfDue(input: SeatTickCheckInput, por
   if (!input.seat) return "maintenance: waits for a seat";
   const held = readMaintenanceProject(input.project)?.currentRunId;
   if (held && maintenanceRunIsLive(readMaintenanceRun(held)!)) return null;
-  try { const deploy = ports.sources.latestDeployment(); if (deploy && !deploy.terminal) return "maintenance: waits, a deployment is running"; } catch { /* No ledger on standalone installs. */ }
+  try { const deploy = ports.sources.latestDeployment(); if (deploy.state === "ok" && deploy.value && !deploy.value.terminal) return "maintenance: waits, a deployment is running"; } catch { /* No ledger on standalone installs. */ }
   const registry = ports.sources.registry();
   const conversation = registry.conversation(input.seat.conversationId as `conversation_${string}`);
   const repoDir = repoDirForProject(input.project, ports.sources) ?? conversation?.generations.at(-1)?.launchProfile.cwd ?? null;

@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { statePath } from "@/lib/configDir";
 import { loadTasks } from "@/lib/tasks/store";
 import { AgentRegistry } from "@/lib/agent/registry";
-import { defaultSeatTickSources } from "@/lib/monitor/seatTickSources";
+import { defaultSeatTickSources, type SeatTickSources } from "@/lib/monitor/seatTickSources";
 import { productionBoardMaintenanceController, type BoardMaintenancePorts, type MaintenanceObservation } from "./run";
 import { claim, sandbox, input, PROJECT, NOW } from "./testFixture";
 import { readMaintenanceProject, readMaintenanceRun, recordMaintenanceChange } from "./store";
@@ -15,16 +15,16 @@ function harness() {
   const bodies: Record<string, unknown>[] = [], archived: string[] = [];
   let observation: MaintenanceObservation = { state: "running" };
   let response = { status: 202, body: { state: "starting", conversationId: ["conversation", "fixture-worker"].join("_"), launchId: "fixture-launch", path: "/fixtures/worker.jsonl" } as Record<string, unknown> };
-  const sources = { ...defaultSeatTickSources(), now: () => now, tasks, pipelines: () => [{ repoDir: "/fixtures/repository", project: PROJECT, createdAt: new Date(NOW).toISOString() } as never], registry: () => registry, latestDeployment: () => null };
+  const sources: SeatTickSources = { ...defaultSeatTickSources(), now: () => now, tasks, pipelines: () => [{ repoDir: "/fixtures/repository", project: PROJECT, createdAt: new Date(NOW).toISOString() } as never], registry: () => registry, latestDeployment: () => ({ state: "ok", value: null }) };
   const ports: BoardMaintenancePorts = { sources, evidence: async () => [], archive: run => { archived.push(run.runId); }, locale: () => "uk", timeZone: () => "UTC", launch: async body => { bodies.push(body); return response; }, observe: async () => observation };
   return { controller: productionBoardMaintenanceController(sources, ports), sources, bodies, archived, run: () => readMaintenanceRun(readMaintenanceProject(PROJECT)!.currentRunId!)!, observe: (value: MaintenanceObservation) => { observation = value; }, respond: (value: typeof response) => { response = value; }, now: (value: number) => { now = value; } };
 }
 test("off, no seat, live run and deploy defer without spending the slot", async () => {
   const h = harness(); await h.controller.launchIfDue(input(false)); expect(h.bodies).toHaveLength(0);
   await h.controller.launchIfDue({ ...input(), seat: null }); expect(readMaintenanceProject(PROJECT)).toBeNull();
-  h.sources.latestDeployment = () => ({ terminal: false } as never);
+  h.sources.latestDeployment = () => ({ state: "ok", value: { terminal: false } as never });
   expect(await h.controller.launchIfDue(input())).toContain("deployment"); expect(readMaintenanceProject(PROJECT)).toBeNull();
-  h.sources.latestDeployment = () => null;
+  h.sources.latestDeployment = () => ({ state: "ok", value: null });
   await h.controller.launchIfDue(input()); await h.controller.launchIfDue(input()); expect(h.bodies).toHaveLength(1);
 });
 test("card exists before spawn, with icon, colour, description and task binding in body", async () => {
@@ -121,4 +121,13 @@ test("production observation distinguishes failed receipts, dead hosts, idle tur
   activity = { ...activity, reason: "provider_throttled", lifecycle: "waiting" }; expect((await observeMaintenanceRun(run, sources)).state).toBe("running");
   activity = { ...activity, reason: "host_gone_turn_open", lifecycle: "stalled", host: { state: "gone" } }; expect((await observeMaintenanceRun(run, sources)).failure?.kind).toBe("host-died");
   receipt = { ...receipt, state: "failed", error: "fixture launch failed" }; expect((await observeMaintenanceRun(run, sources)).failure?.kind).toBe("launch-failed");
+});
+
+for (const state of ["terminal", "unreadable"] as const) test(`${state} deployment ledger permits maintenance`, async () => {
+  const h = harness();
+  h.sources.latestDeployment = () => state === "terminal"
+    ? { state: "ok", value: { terminal: true } as never }
+    : { state: "unreadable", error: "fixture unreadable" };
+  await h.controller.launchIfDue(input());
+  expect(h.bodies).toHaveLength(1);
 });

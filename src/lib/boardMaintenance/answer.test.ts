@@ -22,3 +22,10 @@ test("unreadable store answers beside editable setting", () => {
   const answer = boardMaintenanceAnswer(PROJECT, input().settings, { ...ports, runs: () => { throw new Error("fixture unreadable"); } });
   expect(answer.enabled).toBe(true); expect(answer.runsError).toBe("fixture unreadable");
 });
+
+test("a readable empty deployment ledger does not hold the timer", () => {
+  held = sandbox();
+  const realLedgerPorts = { ...ports, deploying: undefined };
+  const answer = boardMaintenanceAnswer(PROJECT, input().settings, realLedgerPorts);
+  expect(answer.waitingOn).toBeNull();
+});

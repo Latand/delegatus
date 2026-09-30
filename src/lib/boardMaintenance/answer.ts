@@ -57,7 +57,7 @@ export function boardMaintenanceAnswer(project: string, settings: EffectiveSeatT
   let waitingOn: BoardMaintenanceAnswer["waitingOn"] = !m.enabled ? "off" : live ? "live-run" : eligible !== null && eligible > now ? "interval" : null;
   if (!waitingOn) {
     if (!(ports.seat ?? (key => !!orchestratorSeatFor(key).active))(project)) waitingOn = "no-seat";
-    else { try { if ((ports.deploying ?? (() => { const d = latestLedgerDeployment(); return !!d && !d.terminal; }))()) waitingOn = "deployment"; } catch { /* standalone installation */ } }
+    else { try { if ((ports.deploying ?? (() => { const d = latestLedgerDeployment(); return d.state === "ok" && !!d.value && !d.value.terminal; }))()) waitingOn = "deployment"; } catch { /* standalone installation */ } }
   }
   let interval: number | null = ports.checkIntervalMs ?? null;
   let check = ports.lastCheckAt;

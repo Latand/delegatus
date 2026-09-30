@@ -8,7 +8,7 @@ let held: ReturnType<typeof sandbox>;
 afterEach(() => held?.restore());
 test("each task refusal has a clear code, with hidden create allowed", () => {
   held = sandbox(); const run = claim(); const caller = { conversationId: "fixture-worker", project: PROJECT, run };
-  const task = { id: "aabbccdd", project: PROJECT, text: "fixture", status: "assigned", assignments: [] } as BoardTask;
+  const task = { id: "aabbccdd", project: PROJECT, text: "fixture", status: "assigned", assignments: [], placement: "unplaced", createdAt: run.claimedAt, updatedAt: run.claimedAt } satisfies BoardTask;
   const refuse = (args: Record<string, unknown>, more = {}) => maintainerTaskWriteRefusal({ caller, task, args, ...more });
   expect(refuse({ status: "done" }, { openPipeline: "lane" })?.code).toBe("maintainer_done_refused");
   expect(refuse({ status: "done" }, { liveAgent: "worker" })?.code).toBe("maintainer_done_refused");
