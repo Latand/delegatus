@@ -156,6 +156,7 @@ export const en = {
   "links.peerCodePlaceholder": "Code from the other install",
   "links.peerName": "Name on this machine",
   "links.revoked": "Revoked",
+  "links.syncWaiting": "Waiting for a successful sync",
   "links.syncNow": "Sync now",
   "links.syncedAt": "Synced {date}",
   "links.remove": "Remove",

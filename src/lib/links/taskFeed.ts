@@ -7,6 +7,10 @@
  */
 import { taskFeedSource, TASKS_FILE } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
+import { taskShowsOnBoard } from "@/lib/tasks/boardVisibility";
+import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
+import { lastScannedFiles } from "@/lib/scanner/scanCache";
+import { loadPipelinesForList } from "@/lib/pipelines/store";
 
 import { encodeTask, type WireRow } from "./taskWire";
 import { isTombstone, tombstoneCollection, tombstoneKey, tombstoneRowKey } from "./tombstones";
@@ -58,6 +62,28 @@ function encoded(task: BoardTask, filter: FeedFilter) {
   return { row, bytes, stub: "withheld" in row };
 }
 
+/** Only the owner can age a task out of export: replicas retain their rows and
+ * do not have the owner's admissions or completion time. Passing hasMembers
+ * keeps manual board preferences out of sync policy; the done expiry still
+ * uses the board's exact predicate, including resurfacing and seat exceptions.
+ * Context is read lazily, once per page, so idle feeds do no extra store work. */
+function exportableTasks(filter: FeedFilter): (task: BoardTask) => boolean {
+  const holdsSeat = taskSeatHoldingSnapshot();
+  let files: ReturnType<typeof lastScannedFiles> | undefined;
+  let pipelines: ReturnType<typeof loadPipelinesForList> | undefined;
+  const now = Date.now();
+  return (task) => task.status !== "done" || (!!task.machine && task.machine !== filter.self.id) || taskShowsOnBoard(task, true, {
+    now,
+    get holdsSeat() { return holdsSeat(task) === "holds"; },
+    get members() {
+      files ??= lastScannedFiles() ?? [];
+      return files.filter((file) => task.assignments.some((assignment) =>
+        (assignment.conversationId && assignment.conversationId === file.conversationId) || assignment.path === file.path));
+    },
+    get pipelines() { return pipelines ??= loadPipelinesForList(); },
+  });
+}
+
 /** One log page after `after`, or `resync` when the log no longer reaches
     back that far (or the position is from another store). */
 export function readLogPage(after: Position, filter: FeedFilter): LogPage {
@@ -70,6 +96,7 @@ export function readLogPage(after: Position, filter: FeedFilter): LogPage {
   if (revision === current && !key) return { kind: "page", rows: [], cursor: after, more: false, withheld: [] };
   const tombstones = tombstoneCollection(source.database, false);
   const page = new Page();
+  const exportable = exportableTasks(filter);
   let cursor: Position = after;
   let scanned = 0;
   let position = { revision, key };
@@ -86,7 +113,7 @@ export function readLogPage(after: Position, filter: FeedFilter): LogPage {
           // A key changed again later reappears at its later pair.
           if (entry.valueJson !== null && entry.rowRevision === entry.revision) {
             const task = source.parse(entry.valueJson);
-            if (task && filter.projects.has(task.project) && task.sync?.o !== filter.skipPrefix) row = { ...encoded(task, filter), id };
+            if (task && filter.projects.has(task.project) && task.sync?.o !== filter.skipPrefix && exportable(task)) row = { ...encoded(task, filter), id };
           }
         } else {
           const tomb = tombstones?.get(tombstoneKey(id));
@@ -130,6 +157,7 @@ export function readScanPage(after: string, filter: FeedFilter): ScanPage {
   const source = taskFeedSource(filter.filePath ?? TASKS_FILE);
   if (!source) return { rows: [], next: null, withheld: [] };
   const page = new Page();
+  const exportable = exportableTasks(filter);
   let cursor = after;
   let read = 0;
   if (!cursor.startsWith("g:")) {
@@ -138,7 +166,7 @@ export function readScanPage(after: string, filter: FeedFilter): ScanPage {
       const batch = source.keyRange(from, "t:\uffff", SCAN_BATCH);
       for (const task of batch) {
         read++;
-        if (filter.projects.has(task.project)) {
+        if (filter.projects.has(task.project) && exportable(task)) {
           const row = encoded(task, filter);
           if (!page.add(row.row, row.bytes, task.id, row.stub)) return { rows: page.rows, next: cursor, withheld: page.withheld };
         }

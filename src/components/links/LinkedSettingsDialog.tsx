@@ -22,7 +22,7 @@ type State = {
 };
 type SharedState = { shared: { v: 1; all: boolean; projects: string[] }; known: { key: string; name: string }[]; states: { id: string; label: string; projects: { key: string; name: string; state: string }[] }[] };
 type PeerState = { peers: { id: string; label: string; url: string; state: string; error: string | null; lastCall: number | null }[] };
-type GrantState = { grants: { id: string; label: string; created: number; requests: number; today: number; sevenDays: number; lastUsed: number | null }[] };
+type GrantState = { grants: { id: string; label: string; created: number; requests: number; today: number; sevenDays: number; lastUsed: number | null; lastCall?: number | null; state?: string; error?: string | null }[] };
 type Role = "accept" | "connect";
 type CodeState = { id: string; expiresAt: number; wrongAttempts: number; used: boolean; burned: boolean };
 
@@ -42,6 +42,7 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   // One error per source, so each answer shows where the action was taken.
   const [loadError, setLoadError] = useState(false);
+  const [linkReadError, setLinkReadError] = useState(false);
   const [selfError, setSelfError] = useState<string | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
@@ -100,12 +101,20 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
       setAddress(state.self?.publicUrl ?? "");
       setLabel(state.self?.label ?? "");
     }).catch(() => { if (active) setLoadError(true); });
-    void refresh().catch(() => { if (active) setLoadError(true); });
-    return () => { active = false; };
+    let readingLinks = false;
+    const readLinks = () => {
+      if (document.hidden || readingLinks) return;
+      readingLinks = true;
+      void refresh().then(() => { if (active) setLinkReadError(false); }).catch(() => { if (active) setLinkReadError(true); })
+        .finally(() => { readingLinks = false; });
+    };
+    readLinks();
+    const timer = window.setInterval(readLinks, 5000);
+    return () => { active = false; window.clearInterval(timer); };
   }, []);
   // The role is picked once, when the first answers are in: a machine with a
   // saved address or someone connected to it accepts, any other connects.
-  const ready = loadError || (value !== null && grants !== null);
+  const ready = loadError || linkReadError || (value !== null && grants !== null);
   useEffect(() => {
     if (role === null && ready) setRole(value?.self?.publicUrl || grants?.grants.length ? "accept" : "connect");
   }, [ready]);
@@ -196,7 +205,7 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
         </header>
         <div className="space-y-5 overflow-y-auto px-4 py-5 sm:px-6">
           <p className="text-ui text-muted">{t("links.intro")}</p>
-          {loadError ? <p role="alert" data-linked-state="unavailable" data-linked-severity="error" className="rounded-[8px] bg-danger-soft px-3 py-2 text-ui text-danger">{t("links.state.unavailable")}</p> : null}
+          {loadError || linkReadError ? <p role="alert" data-linked-state="unavailable" data-linked-severity="error" className="rounded-[8px] bg-danger-soft px-3 py-2 text-ui text-danger">{t("links.state.unavailable")}</p> : null}
           {shown === "open-to-internet" ? <p data-linked-banner="" role="note" className="rounded-[8px] bg-danger-soft px-3 py-2 text-ui text-danger">{t("links.state.open-to-internet")}</p> : null}
           <div role="radiogroup" aria-label={t("links.role.label")} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {roles.map((option) => (
@@ -299,11 +308,11 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
             {peers?.peers.map((peer) => <div key={peer.id} className="rounded-[8px] border border-border p-3 text-ui" data-linked-peer={peer.state}>
               <p className="font-semibold text-primary">{t("links.peerRow", { name: peer.label })}</p>
               <p className="text-muted">{peer.state === "revoked" ? t("links.revoked") : peer.url}</p>
-              {peer.lastCall ? <p className="mt-1 text-muted">{t("links.syncedAt", { date: new Date(peer.lastCall).toLocaleString() })}</p> : null}
+              <p className="mt-1 text-muted" data-linked-sync={peer.state === "failing" ? "failing" : peer.lastCall ? "synced" : "waiting"}>{peer.lastCall ? t("links.syncedAt", { date: new Date(peer.lastCall).toLocaleString() }) : t("links.syncWaiting")}</p>
               {peer.error ? <p className="mt-1 text-danger" data-linked-peer-error={peer.error}>{peerErrorMessage(t, peer.error, peer.label)}</p> : null}
               <div className="mt-2 flex gap-2"><button type="button" disabled={busy} onClick={() => void linkedAction(`/api/links/peers/${encodeURIComponent(peer.id)}`, "POST")} className="min-h-11 rounded-[8px] border border-border px-3 text-primary disabled:opacity-50">{t("links.syncNow")}</button><button type="button" disabled={busy} onClick={() => void linkedAction(`/api/links/peers/${encodeURIComponent(peer.id)}`, "DELETE")} className="min-h-11 rounded-[8px] border border-border px-3 text-primary">{t("links.remove")}</button></div>
             </div>)}
-            {grants?.grants.map((grant) => <div key={grant.id} data-linked-grant="" className="flex items-center justify-between gap-2 rounded-[8px] border border-border p-3 text-ui"><span>{t("links.grantRow", { name: grant.label })} · {t("links.counts", { today: grant.today, seven: grant.sevenDays })}</span><button type="button" disabled={busy} onClick={() => void linkedAction(`/api/links/grants?id=${encodeURIComponent(grant.id)}`, "DELETE")} className="min-h-11 rounded-[8px] border border-border px-3">{t("links.revoke")}</button></div>)}
+            {grants?.grants.map((grant) => <div key={grant.id} data-linked-grant="" className="flex items-center justify-between gap-2 rounded-[8px] border border-border p-3 text-ui"><div><p>{t("links.grantRow", { name: grant.label })} · {t("links.counts", { today: grant.today, seven: grant.sevenDays })}</p><p className="mt-1 text-muted" data-linked-sync={grant.error ? "failing" : grant.lastCall ? "synced" : "waiting"}>{grant.lastCall ? t("links.syncedAt", { date: new Date(grant.lastCall).toLocaleString() }) : t("links.syncWaiting")}</p>{grant.error ? <p className="mt-1 text-danger" data-linked-grant-error={grant.error}>{peerErrorMessage(t, grant.error, grant.label)}</p> : null}</div><button type="button" disabled={busy} onClick={() => void linkedAction(`/api/links/grants?id=${encodeURIComponent(grant.id)}`, "DELETE")} className="min-h-11 rounded-[8px] border border-border px-3">{t("links.revoke")}</button></div>)}
           </section>
           <section className="space-y-3 border-t border-border pt-5" aria-label={t("links.sharedProjects")}>
             <h3 className="text-body font-semibold text-primary">{t("links.sharedProjects")}</h3>

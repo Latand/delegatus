@@ -155,6 +155,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "links.peerCodePlaceholder": "Код з іншої машини",
   "links.peerName": "Назва на цій машині",
   "links.revoked": "Доступ відкликано",
+  "links.syncWaiting": "Очікуємо успішної синхронізації",
   "links.syncNow": "Синхронізувати",
   "links.syncedAt": "Синхронізовано {date}",
   "links.remove": "Видалити",

@@ -1,0 +1,16 @@
+{
+  "1440-en": {
+    "statuses": [
+      "failing",
+      "failing"
+    ],
+    "pageErrors": []
+  },
+  "390-uk": {
+    "statuses": [
+      "failing",
+      "failing"
+    ],
+    "pageErrors": []
+  }
+}

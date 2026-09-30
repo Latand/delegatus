@@ -45,7 +45,7 @@ describe("linked boards M3 remote agents", () => {
     fs.mkdirSync(out, { recursive: true });
     const project = `repo-${"a".repeat(32)}`;
     const server = await serveEvidenceFixture(out, undefined, {
-      "/api/links/agents": { agents: [{ k: `a:${"3".repeat(16)}`, p: project, t: "copilot agent", e: "copilot", m: "model", st: "working", at: Date.now(), peer: "Machine B", stale: false }] },
+      "/api/links/agents": { agents: [{ k: `a:${"3".repeat(16)}`, p: project, t: "copilot agent", e: "copilot", m: "model", st: "working", at: Date.now(), peer: "Machine B", stale: false, asOf: Date.now() }] },
     });
     const browser = await chromium.launch(LAUNCH);
     try {
@@ -73,9 +73,9 @@ describe("linked boards M3 remote agents", () => {
     const now = Date.now();
     const server = await serveEvidenceFixture(out, undefined, {
       "/api/links/agents": { agents: [
-        { k: `a:${"1".repeat(16)}`, p: project, t: "Review the sync budget", e: "claude", m: "claude-opus-5", st: "working", task: "t-search", at: now - 180_000, peer: "Machine B", stale: false,
+        { k: `a:${"1".repeat(16)}`, p: project, t: "Review the sync budget", e: "claude", m: "claude-opus-5", st: "working", task: "t-search", at: now - 180_000, peer: "Machine B", stale: true, asOf: now,
           pl: { id: "pipeline-1", state: "running", stage: "review", stageState: "running" } },
-        { k: `a:${"2".repeat(16)}`, p: project, t: "codex agent", e: "codex", m: "gpt-6-sol", st: "done", at: now - 600_000, peer: "Machine B", stale: true, asOf: now - 960_000 },
+        { k: `a:${"2".repeat(16)}`, p: project, t: "codex agent", e: "codex", m: "gpt-6-sol", st: "done", at: now - 600_000, peer: "Machine B", stale: false, asOf: now - 960_000 },
       ] },
     });
     const browser = await chromium.launch(LAUNCH);
@@ -91,6 +91,7 @@ describe("linked boards M3 remote agents", () => {
           expect(await bound.locator("[data-remote-agent]").isVisible()).toBe(false);
           await bound.locator("summary").click();
           expect(await bound.locator("[data-remote-agent]").count()).toBe(1);
+          expect(await bound.locator('[data-stale="true"]').count()).toBe(0);
           expect(await bound.locator("button, a, input").count()).toBe(0);
           const geometry = await bound.evaluate((node) => ({ width: node.getBoundingClientRect().width, overflow: node.scrollWidth > node.clientWidth + 1 }));
           expect(geometry.width).toBeLessThanOrEqual(width);
@@ -13797,6 +13798,50 @@ describe("Codex service tier rendered evidence", () => {
       }
       fs.mkdirSync("evidence/codex-service-tier", { recursive: true });
       fs.writeFileSync("evidence/codex-service-tier/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases: evidence }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
+describe("linked board sync health", () => {
+  browserTest("open links show waiting, successful sync and honest failure in both directions", async () => {
+    const out = path.resolve(".artifacts/linked-board-sync-health");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/links": { self: { label: "Machine B", publicUrl: "https://board.example.test", check: null }, state: "ok", entry: { port: 8897, publishable: true }, keyOn: true },
+      "/api/links/shared": { shared: { v: 1, all: false, projects: [] }, known: [], states: [] },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const evidence: Record<string, unknown> = {};
+    try {
+      for (const [width, locale] of [[1440, "en"], [390, "uk"]] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, server.base, { width, height: 900 }, "light", locale, "reduce", width === 390);
+        let phase = "waiting";
+        try {
+          await page.clock.install();
+          const status = () => ({ lastCall: phase === "waiting" ? null : Date.now() - 10_000, state: phase === "failing" ? "failing" : "active", error: phase === "failing" ? "malformed" : null });
+          await page.route("**/api/links/peers", (route) => route.fulfill({ json: { peers: [{ id: "peer", label: "Machine A", url: "https://peer.example.test", ...status() }] } }));
+          await page.route("**/api/links/grants", (route) => route.fulfill({ json: { grants: [{ id: "grant", label: "Machine A", today: 3, sevenDays: 12, ...status() }] } }));
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-linked-settings")));
+          await page.locator('[data-linked-sync="waiting"]').first().waitFor();
+          expect(await page.locator('[data-linked-sync="waiting"]').count()).toBe(2);
+          for (const next of ["synced", "failing"]) {
+            phase = next;
+            await page.clock.fastForward(5000);
+            await page.locator(`[data-linked-sync="${next}"]`).first().waitFor();
+            expect(await page.locator(`[data-linked-sync="${next}"]`).count()).toBe(2);
+            if (next === "failing") {
+              expect(await page.locator('[data-linked-peer-error="malformed"]').count()).toBe(1);
+              expect(await page.locator('[data-linked-grant-error="malformed"]').count()).toBe(1);
+            }
+          }
+          await page.locator('[data-linked-grant]').scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${width}-${locale}.png`) });
+          evidence[`${width}-${locale}`] = { statuses: await page.locator('[data-linked-sync]').evaluateAll((rows) => rows.map((row) => row.getAttribute("data-linked-sync"))), pageErrors };
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/linked-board-sync-health", { recursive: true });
+      fs.writeFileSync("evidence/linked-board-sync-health/rendered.json", JSON.stringify(evidence, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
 });

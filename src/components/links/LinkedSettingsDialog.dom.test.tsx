@@ -345,3 +345,29 @@ test("everything that worked before still calls the same routes", async () => {
   await click(byText(en("links.cancelCode"))!);
   expect(posted("DELETE", "/api/links/codes?id=ABCDEF").length).toBe(1);
 });
+
+
+test("sync state is visible for outgoing and incoming links, including waiting and errors", async () => {
+  serve({ status: 200, body: {} }, { peers: [peer({ lastCall: 123456, state: "failing", error: "unreachable" })], grants: [grant({ lastCall: 123456 }), grant({ id: "pending", lastCall: null }), grant({ id: "failed", lastCall: 123456, error: "malformed" })] });
+  await mount();
+  expect([...document.querySelectorAll("[data-linked-sync]")].map((node) => node.getAttribute("data-linked-sync"))).toEqual(["failing", "synced", "waiting", "failing"]);
+  expect(document.querySelector('[data-linked-sync="waiting"]')!.textContent).toBe(en("links.syncWaiting"));
+  expect(document.querySelector('[data-linked-grant-error="malformed"]')!.textContent).toBe(en("links.peerError.version", { name: "home-pc" }));
+});
+
+
+test("successful link polling cannot hide an initial settings read failure", async () => {
+  serve({ status: 200, body: {} });
+  const read = globalThis.fetch;
+  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => String(input) === "/api/links" ? Promise.resolve(Response.json({ error: "unavailable" }, { status: 503 })) : read(input, init)) as typeof fetch;
+  await mount();
+  expect(document.querySelector('[data-linked-state="unavailable"]')!.textContent).toBe(en("links.state.unavailable"));
+});
+
+test("failed link metadata reads keep an honest error beside the settings", async () => {
+  serve({ status: 200, body: {} });
+  const read = globalThis.fetch;
+  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => String(input) === "/api/links/peers" ? Promise.resolve(Response.json({ error: "unavailable" }, { status: 503 })) : read(input, init)) as typeof fetch;
+  await mount();
+  expect(document.querySelector('[data-linked-state="unavailable"]')!.textContent).toBe(en("links.state.unavailable"));
+});
