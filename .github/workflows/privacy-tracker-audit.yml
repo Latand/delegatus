@@ -26,6 +26,9 @@ permissions:
 jobs:
   privacy-tracker-audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PRIVACY_MEDIA_PACKAGES: ffmpeg tesseract-ocr tesseract-ocr-eng tesseract-ocr-ukr
     steps:
       - name: Check out trusted audit implementation
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -41,38 +44,98 @@ jobs:
       - name: Install trusted dependencies
         run: bun install --frozen-lockfile
 
-      # A stalled apt mirror hung this step for 20+ minutes three times on
-      # 2026-09-02 (#1456): fail fast with a hard timeout and one retry.
-      #
-      # The runner image also configures third-party apt sources this job never
-      # installs from. On 2026-09-09 Google's Chrome index served a Packages.gz
-      # that did not match the hash its own InRelease declared, and `apt-get
-      # update` fails as a whole when a single source fails, so both privacy
-      # jobs died before their gate ran, on every branch (#1605). All four
-      # packages come from the Ubuntu archives, so the update reads those
-      # sources alone and an index nothing here installs from can no longer
-      # block publication. Every apt error still fails the step, and a package
-      # missing from the Ubuntu archives still fails the install.
-      - name: Install media inspection tools
-        timeout-minutes: 4
+      # Scanner tools: ffmpeg supplies ffprobe; OCR uses exactly eng+ukr.
+      # Bootstrap stays inline in the trusted workflow. Candidate files never
+      # select packages, cache keys, sources, or commands. Save before inspection,
+      # with no deferred post-job write or partial-key fallback.
+      - name: Resolve media tools cache
+        id: media-key
+        shell: bash
         run: |
-          # Ubuntu 24.04 runner images keep the archives in deb822 form under
-          # sources.list.d; 22.04 and earlier keep them in sources.list.
+          set -euo pipefail
+          printf 'MEDIA_CACHE_DIR=%s/privacy-media\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          package_hash="$(printf '%s' "$PRIVACY_MEDIA_PACKAGES" | sha256sum | cut -d ' ' -f 1)"
+          printf 'key=privacy-media-v1-%s-%s-%s-%s\n' \
+            "$ImageOS" "$ImageVersion" "$RUNNER_ARCH" "$package_hash" >> "$GITHUB_OUTPUT"
+
+      - name: Restore media inspection tools
+        id: media-cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        timeout-minutes: 3
+        env:
+          SEGMENT_DOWNLOAD_TIMEOUT_MINS: 2
+        with:
+          path: ${{ runner.temp }}/privacy-media
+          key: ${{ steps.media-key.outputs.key }}
+
+      - name: Download media inspection tools (cold cache)
+        if: steps.media-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$MEDIA_CACHE_DIR/archives/partial" "$MEDIA_CACHE_DIR/lists/partial"
           ubuntu_sources="$(mktemp -d)"
           if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
             cp /etc/apt/sources.list.d/ubuntu.sources "$ubuntu_sources/"
           fi
-          APT_OPTS='-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30'
-          APT_OPTS="$APT_OPTS -o Dir::Etc::sourcelist=/etc/apt/sources.list"
-          APT_OPTS="$APT_OPTS -o Dir::Etc::sourceparts=$ubuntu_sources"
+          apt_opts=(
+            -o Acquire::Retries=1
+            -o Acquire::http::Timeout=15
+            -o Acquire::https::Timeout=15
+            -o APT::Update::Error-Mode=any
+            -o Dir::Etc::sourcelist=/etc/apt/sources.list
+            -o "Dir::Etc::sourceparts=$ubuntu_sources"
+            -o "Dir::Cache::archives=$MEDIA_CACHE_DIR/archives"
+            -o "Dir::State::lists=$MEDIA_CACHE_DIR/lists"
+          )
+          read -r -a packages <<< "$PRIVACY_MEDIA_PACKAGES"
           for attempt in 1 2; do
-            if sudo apt-get $APT_OPTS update \
-              && sudo apt-get $APT_OPTS install --yes ffmpeg tesseract-ocr tesseract-ocr-eng tesseract-ocr-ukr; then
+            if sudo timeout --kill-after=5s 90s apt-get "${apt_opts[@]}" update \
+              && sudo timeout --kill-after=5s 180s apt-get "${apt_opts[@]}" install \
+                --yes --download-only --reinstall --no-install-recommends "${packages[@]}"; then
               exit 0
             fi
-            echo "apt install attempt $attempt failed"
+            echo "::warning title=Privacy tools provisioning::Ubuntu index/package download attempt $attempt of 2 failed or timed out; privacy inspection has not run."
           done
+          echo "::error title=Privacy tools provisioning::Ubuntu package network/index provisioning failed after two bounded attempts. This is an infrastructure failure before privacy inspection; inspect apt diagnostics above."
           exit 1
+
+      - name: Install media inspection tools (offline)
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          read -r -a packages <<< "$PRIVACY_MEDIA_PACKAGES"
+          if ! sudo apt-get \
+            -o "Dir::Cache::archives=$MEDIA_CACHE_DIR/archives" \
+            -o "Dir::State::lists=$MEDIA_CACHE_DIR/lists" \
+            -o APT::Keep-Downloaded-Packages=true \
+            install --yes --no-download --reinstall --no-install-recommends "${packages[@]}"; then
+            echo "::error title=Privacy tools provisioning::Offline cached-package installation failed before privacy inspection. No network fallback is permitted."
+            exit 1
+          fi
+          ffmpeg -version
+          ffprobe -version
+          languages="$(tesseract --list-langs)"
+          for language in eng ukr; do
+            if ! grep -qx "$language" <<< "$languages"; then
+              echo "::error title=Privacy tools provisioning::Required OCR language $language is missing."
+              exit 1
+            fi
+          done
+          # apt's locks/partial downloads are ephemeral and never cached.
+          sudo rm -rf "$MEDIA_CACHE_DIR/archives/partial" "$MEDIA_CACHE_DIR/lists/partial"
+          sudo rm -f "$MEDIA_CACHE_DIR/archives/lock" "$MEDIA_CACHE_DIR/lists/lock"
+          sudo chown -R "$(id -u):$(id -g)" "$MEDIA_CACHE_DIR"
+
+      - name: Save media inspection tools
+        if: steps.media-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        timeout-minutes: 3
+        with:
+          path: ${{ runner.temp }}/privacy-media
+          key: ${{ steps.media-key.outputs.key }}
 
       - name: Audit public tracker surfaces
         env:
