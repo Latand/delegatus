@@ -84,18 +84,37 @@ export function parseArguments(argv: string[]): { revision: string; mode: Runtim
   return { revision: requested, mode };
 }
 
-async function command(argv: string[], options: { cwd?: string } = {}): Promise<string> {
-  const child = Bun.spawn(argv, {
+async function command(argv: string[], options: { cwd?: string; timeoutMs?: number } = {}): Promise<string> {
+  const command = options.timeoutMs === undefined ? argv : ["/usr/bin/setsid", "--wait", ...argv];
+  const child = Bun.spawn(command, {
     cwd: options.cwd,
     stdout: "pipe",
     stderr: "pipe",
     env: withoutUnsupportedApiCredentials(process.env),
   });
-  const [stdout, stderr, code] = await Promise.all([
+  const output = Promise.all([
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
     child.exited,
-  ]);
+  ] as const);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = options.timeoutMs === undefined ? null : new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), options.timeoutMs);
+  });
+  const result = timeout ? await Promise.race([output, timeout]) : await output;
+  let stdout: string;
+  let stderr: string;
+  let code: number;
+  if (result === "timeout") {
+    try { process.kill(-child.pid, "SIGKILL"); } catch {
+      try { child.kill("SIGKILL"); } catch { /* the command already exited */ }
+    }
+    [stdout, stderr, code] = await output;
+    stderr = `command timed out after ${Math.round(options.timeoutMs! / 1_000)}s${stderr.trim() ? `\n${stderr.trim()}` : ""}`;
+  } else {
+    if (timer) clearTimeout(timer);
+    [stdout, stderr, code] = result;
+  }
   if (code !== 0) throw new Error((stderr.trim() || `${argv[0]} failed`).slice(0, 1000));
   return stdout.trim();
 }
@@ -182,8 +201,8 @@ async function main(): Promise<number> {
     requested,
     { mirrorDir, remote: canonicalRemote },
     {
-      run: (argv) => command(argv),
-      ensureMirror: () => ensureCanonicalMirror({ deploymentDir, mirrorDir, remote: canonicalRemote }, { run: (argv) => command(argv) }),
+      run: (argv, options) => command(argv, options),
+      ensureMirror: () => ensureCanonicalMirror({ deploymentDir, mirrorDir, remote: canonicalRemote }, { run: (argv, options) => command(argv, options) }),
     },
   );
   const image = `${DOCKER_NAMES.imageRepository}:hostboot-${revision}`;

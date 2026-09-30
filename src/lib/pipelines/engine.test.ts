@@ -2924,6 +2924,84 @@ test("a checkout killed at its bound is finished by the retry instead of parking
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }, 15_000);
 
+test("interrupted checkout recovery preserves an untracked directory that blocks a tracked file", async () => {
+  savePipelines([]);
+  const { root, repo, git, realExec } = await realProvisioningRepo("interrupted-checkout-collision");
+  const marker = path.join(root, "smudge-started");
+  try {
+    fs.writeFileSync(path.join(repo, ".gitattributes"), "tracked.txt filter=slow\n");
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "complete file\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-m", "base");
+    const base = git(repo, "rev-parse", "HEAD");
+    git(repo, "config", "filter.slow.smudge", `printf ready > '${marker}'; sleep 120; cat`);
+    git(repo, "config", "filter.slow.required", "true");
+    const h = harness();
+    const { scheduled, advance } = provisionRetryClock(h);
+    const { realProvisionExec } = await import("./git");
+    h.ports.exec = realExec;
+    h.ports.provisionExec = async (command, args, cwd, signal) => args[0] === "worktree" && args[1] === "add"
+      ? realProvisionExec("timeout", ["--signal=KILL", "0.5s", command, ...args], cwd, signal)
+      : realProvisionExec(command, args, cwd, signal);
+    const created = await createPipelineFromRequest({ task: "Collision recovery", repoDir: repo, baseRef: base, stages: RUN_STAGES as never, publication: "internal" }, h.ports);
+    const lane = created.pipeline!;
+    await tickPipelines([], h.ports);
+    expect(fs.existsSync(marker)).toBe(true);
+    const collision = path.join(lane.worktreeDir, "tracked.txt");
+    fs.rmSync(collision, { recursive: true, force: true });
+    fs.mkdirSync(collision);
+    fs.writeFileSync(path.join(collision, "operator-note.txt"), "keep this operator file\n");
+    git(repo, "config", "filter.slow.smudge", "cat");
+    git(repo, "config", "filter.slow.clean", "cat");
+
+    advance(5_000);
+    await tickPipelines([], h.ports);
+
+    expect(JSON.stringify(loadPipelines()[0])).toContain("untracked content blocking tracked paths");
+    expect(fs.readFileSync(path.join(collision, "operator-note.txt"), "utf8")).toBe("keep this operator file\n");
+    expect(git(repo, "worktree", "list", "--porcelain")).toContain("locked initializing");
+    expect(scheduled).toEqual([5_000]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}, 15_000);
+
+test("interrupted checkout recovery parks before overwriting a tracked edit", async () => {
+  savePipelines([]);
+  const { root, repo, git, realExec } = await realProvisioningRepo("interrupted-checkout-edit");
+  const marker = path.join(root, "smudge-started");
+  try {
+    fs.writeFileSync(path.join(repo, ".gitattributes"), "tracked.txt filter=slow\n");
+    fs.writeFileSync(path.join(repo, "a.txt"), "original operator file\n");
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "complete file\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-m", "base");
+    const base = git(repo, "rev-parse", "HEAD");
+    git(repo, "config", "filter.slow.smudge", `printf ready > '${marker}'; sleep 120; cat`);
+    git(repo, "config", "filter.slow.required", "true");
+    const h = harness();
+    const { advance } = provisionRetryClock(h);
+    const { realProvisionExec } = await import("./git");
+    h.ports.exec = realExec;
+    h.ports.provisionExec = async (command, args, cwd, signal) => args[0] === "worktree" && args[1] === "add"
+      ? realProvisionExec("timeout", ["--signal=KILL", "0.5s", command, ...args], cwd, signal)
+      : realProvisionExec(command, args, cwd, signal);
+    const created = await createPipelineFromRequest({ task: "Edit recovery", repoDir: repo, baseRef: base, stages: RUN_STAGES as never, publication: "internal" }, h.ports);
+    const lane = created.pipeline!;
+    await tickPipelines([], h.ports);
+    expect(fs.existsSync(marker)).toBe(true);
+    const edited = path.join(lane.worktreeDir, "a.txt");
+    fs.writeFileSync(edited, "operator edit to preserve\n");
+    git(repo, "config", "filter.slow.smudge", "cat");
+    git(repo, "config", "filter.slow.clean", "cat");
+
+    advance(5_000);
+    await tickPipelines([], h.ports);
+
+    expect(JSON.stringify(loadPipelines()[0])).toContain("modified tracked path");
+    expect(fs.readFileSync(edited, "utf8")).toBe("operator edit to preserve\n");
+    expect(git(repo, "worktree", "list", "--porcelain")).toContain("locked initializing");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}, 15_000);
+
 test("repository admission fails before pipeline persistence or provisioning", async () => {
   const h = harness();
   savePipelines([]);

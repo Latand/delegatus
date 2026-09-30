@@ -39,6 +39,16 @@ import { mcpProbeEnvironment, runBootstrapRelease } from "./runtime-host-viewer-
 const root = path.resolve(import.meta.dir, "..");
 const adapter = path.join(root, "scripts", "runtime-host-viewer-adapter.ts");
 
+function stopRecordedSleep(pidFile: string): void {
+  if (!fs.existsSync(pidFile)) return;
+  const pid = Number(fs.readFileSync(pidFile, "utf8"));
+  if (!Number.isInteger(pid) || pid < 1) return;
+  try {
+    const command = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0", 1)[0];
+    if (path.basename(command ?? "") === "sleep") process.kill(pid, "SIGKILL");
+  } catch { /* the timeout already reaped the recorded helper child */ }
+}
+
 test("candidate MCP probes read through the candidate Viewer endpoint", () => {
   const environment = mcpProbeEnvironment(
     "http://candidate.invalid",
@@ -53,6 +63,86 @@ test("candidate MCP probes read through the candidate Viewer endpoint", () => {
   expect(environment.LLV_VIEWER_CONTROL_URL).toBe("http://candidate.invalid");
   expect(environment.LLV_VIEWER_DEPLOY_TARGET).toBe("/state/candidate-target.json");
 });
+
+test("resolve-revision retries a real fetch after killing a hanging SSH descendant", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-adapter-mirror-timeout-"));
+  const state = path.join(sandbox, "state");
+  const bin = path.join(sandbox, "bin");
+  const source = path.join(sandbox, "source");
+  const remote = path.join(sandbox, "canonical.git");
+  const mirror = path.join(state, "deployments", "canonical.git");
+  const helper = path.join(bin, "ssh-helper");
+  const started = path.join(sandbox, "ssh-started");
+  const childPidFile = path.join(sandbox, "ssh-child.pid");
+  fs.mkdirSync(bin, { recursive: true });
+  fs.mkdirSync(source);
+  fs.mkdirSync(remote);
+  const git = (cwd: string, ...args: string[]) => {
+    const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+    if (result.exitCode !== 0) throw new Error(result.stderr.toString() || `git ${args[0]} failed`);
+    return result.stdout.toString().trim();
+  };
+  const quoted = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  try {
+    git(remote, "init", "--bare", "--initial-branch=main");
+    git(source, "init", "--initial-branch=main");
+    git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", "release");
+    const revision = git(source, "rev-parse", "HEAD");
+    git(source, "remote", "add", "origin", remote);
+    git(source, "push", "origin", "main");
+    fs.mkdirSync(path.dirname(mirror), { recursive: true });
+    git(sandbox, "clone", "--mirror", remote, mirror);
+    fs.writeFileSync(helper, `#!/bin/sh
+set -eu
+if [ ! -f ${quoted(started)} ]; then
+  : > ${quoted(started)}
+  (sleep 120) &
+  echo $! > ${quoted(childPidFile)}
+  wait
+fi
+exec /usr/bin/git upload-pack ${quoted(remote)}
+`, { mode: 0o700 });
+
+    const child = Bun.spawn(["/usr/bin/setsid", "--wait", process.execPath, adapter, "resolve-revision"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        GIT_SSH_COMMAND: helper,
+        LLV_DEPLOYMENT_ADAPTER_PROTOCOL: "1",
+        LLV_STATE_DIR: state,
+        LLV_VIEWER_CANONICAL_REMOTE: "ssh://fixture/canonical.git",
+        LLV_VIEWER_PORT: "1",
+      },
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    child.stdin.write(JSON.stringify({ revision: "origin/main" }) + "\n");
+    child.stdin.end();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), 40_000); });
+    const result = await Promise.race([child.exited, timeout]);
+    if (result === "timeout") {
+      try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); }
+      await child.exited;
+    } else if (timer) clearTimeout(timer);
+    const stdout = await new Response(child.stdout).text();
+    const stderr = await new Response(child.stderr).text();
+    expect(result).not.toBe("timeout");
+    expect(result).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({ revision });
+    expect(stderr).toBe("");
+    expect(fs.existsSync(started)).toBe(true);
+    const childPid = Number(fs.readFileSync(childPidFile, "utf8"));
+    expect(Number.isInteger(childPid)).toBe(true);
+    const stateLine = fs.existsSync(`/proc/${childPid}/stat`) ? fs.readFileSync(`/proc/${childPid}/stat`, "utf8") : "";
+    expect(stateLine.split(" ")[2] === "Z" || !stateLine).toBe(true);
+    expect(git("/", "--git-dir", mirror, "rev-parse", "refs/heads/main")).toBe(revision);
+  } finally {
+    stopRecordedSleep(childPidFile);
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
+}, 45_000);
 
 /** #1511: the candidate authenticates every connection when a token is
     configured (#1496), so the probe carries the credential of the endpoint it

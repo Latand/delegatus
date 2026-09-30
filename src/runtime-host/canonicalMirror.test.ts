@@ -18,9 +18,11 @@ test("restart replaces an interrupted initial clone with a validated mirror", as
   const incomingDir = `${mirrorDir}.incoming`;
   const validMirrors = new Set<string>();
   const calls: string[][] = [];
+  const networkTimeouts: number[] = [];
   let cloneAttempts = 0;
-  const run = async (argv: string[]): Promise<string> => {
+  const run = async (argv: string[], options?: { timeoutMs?: number }): Promise<string> => {
     calls.push(argv);
+    if (argv.includes("clone") || argv.includes("fetch")) networkTimeouts.push(options?.timeoutMs ?? 0);
     if (argv[0] === "git" && argv[1] === "clone") {
       cloneAttempts += 1;
       const destination = argv.at(-1)!;
@@ -49,6 +51,7 @@ test("restart replaces an interrupted initial clone with a validated mirror", as
   expect(fs.existsSync(incomingDir)).toBe(false);
   expect(calls.some((argv) => argv.includes("set-url"))).toBe(true);
   expect(calls.some((argv) => argv.includes("fetch"))).toBe(true);
+  expect(networkTimeouts).toEqual([25_000, 25_000, 25_000]);
 });
 
 function resolver(objects: Record<string, string>) {
@@ -165,6 +168,51 @@ test("a resolver that never answers fails the deploy naming the host, the attemp
   await expect(failure).rejects.toThrow(/retry the deploy once the network resolves the host/);
   expect(fetches).toBe(3);
   expect(sleeps).toEqual([2_000, 4_000]);
+});
+
+test("clone and fetch retries share one budget inside the resolve-revision action deadline", async () => {
+  const deploymentDir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-canonical-shared-budget-"));
+  sandboxes.push(deploymentDir);
+  const mirrorDir = path.join(deploymentDir, "canonical.git");
+  const validMirrors = new Set<string>();
+  const networkTimeouts: number[] = [];
+  const sleeps: number[] = [];
+  let elapsedMs = 0;
+  let clones = 0;
+  const run = async (argv: string[], options?: { timeoutMs?: number }): Promise<string> => {
+    if (argv.includes("clone")) {
+      const timeoutMs = options?.timeoutMs ?? 0;
+      networkTimeouts.push(timeoutMs);
+      elapsedMs += timeoutMs;
+      clones += 1;
+      if (clones < 3) throw new Error(`git clone timed out after ${timeoutMs / 1_000}s`);
+      const destination = argv.at(-1)!;
+      fs.mkdirSync(destination, { recursive: true });
+      validMirrors.add(destination);
+      return "";
+    }
+    if (argv.includes("rev-parse")) {
+      const directory = argv[argv.indexOf("--git-dir") + 1]!;
+      return validMirrors.has(directory) ? "true" : "false";
+    }
+    if (argv.includes("fetch")) {
+      const timeoutMs = options?.timeoutMs ?? 0;
+      networkTimeouts.push(timeoutMs);
+      elapsedMs += timeoutMs;
+      throw new Error(`git fetch timed out after ${timeoutMs / 1_000}s`);
+    }
+    return "";
+  };
+
+  await expect(ensureCanonicalMirror({ deploymentDir, mirrorDir, remote: "ssh://canonical" }, {
+    run,
+    now: () => elapsedMs,
+    sleep: async (ms) => { sleeps.push(ms); elapsedMs += ms; },
+  })).rejects.toThrow("canonical mirror network budget timed out");
+  expect(networkTimeouts).toEqual([25_000, 25_000, 25_000, 19_000]);
+  expect(clones).toBe(3);
+  expect(sleeps).toEqual([2_000, 4_000, 2_000, 4_000]);
+  expect(elapsedMs).toBeLessThanOrEqual(106_000);
 });
 
 test("a refused login or a missing repository fails the fetch at once, never retried (#2220)", async () => {

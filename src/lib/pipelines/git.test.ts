@@ -352,7 +352,7 @@ for (const interruption of ["timeout", "cancellation"] as const) {
   }, 10_000);
 }
 
-test("async adoption finishes an abandoned initialization, rejects missing tracked files and retains untracked files", async () => {
+test("async adoption preserves untracked files and edits made after its safety scan", async () => {
   const source = path.join(publicationState, "source");
   fs.mkdirSync(source);
   git(source, "init", "--initial-branch=main");
@@ -365,6 +365,25 @@ test("async adoption finishes an abandoned initialization, rejects missing track
   git(source, "worktree", "lock", "--reason", "initializing", subject.worktreeDir);
   expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(true);
   expect(git(source, "worktree", "list", "--porcelain")).not.toContain("locked");
+  git(source, "worktree", "lock", "--reason", "initializing", subject.worktreeDir);
+  const tracked = path.join(subject.worktreeDir, "tracked.txt");
+  const changedAfterScan = "concurrent operator edit\n";
+  let injected = false;
+  const racingExec = async (command: string, args: string[], cwd: string, signal?: AbortSignal) => {
+    const result = await realProvisionExec(command, args, cwd, signal);
+    if (!injected && command === "git" && args[0] === "rev-parse" && args.includes("--git-dir")) {
+      injected = true;
+      fs.writeFileSync(tracked, changedAfterScan);
+    }
+    return result;
+  };
+  const recovered = await provisionPipelineWorktreeAsync(subject, racingExec);
+  expect(injected).toBe(true);
+  expect(recovered.ok).toBe(false);
+  expect(fs.readFileSync(tracked, "utf8")).toBe(changedAfterScan);
+  expect(git(source, "worktree", "list", "--porcelain")).toContain("locked initializing");
+  fs.writeFileSync(tracked, "complete file\n");
+  git(source, "worktree", "unlock", subject.worktreeDir);
   git(source, "worktree", "lock", "--reason", "preserve checkout", subject.worktreeDir);
   expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(true);
   fs.unlinkSync(path.join(subject.worktreeDir, "tracked.txt"));
@@ -1345,4 +1364,45 @@ test("publication refuses an accepted revision that is not an exact commit SHA",
     error: "the accepted pipeline revision is not an exact commit SHA: HEAD",
   });
   expect(calls).toEqual([]);
+});
+
+test("interrupted checkout recovery refuses a locked same-branch worktree owned by another clone", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-foreign-initializing-"));
+  const repoA = path.join(root, "repo-a");
+  const repoB = path.join(root, "repo-b");
+  const worktree = path.join(root, "lane-worktree");
+  try {
+    fs.mkdirSync(repoA);
+    git(repoA, "init", "--initial-branch=main");
+    git(repoA, "config", "user.name", "Fixture");
+    git(repoA, "config", "user.email", "noreply@example.com");
+    git(repoA, "config", "commit.gpgSign", "false");
+    fs.writeFileSync(path.join(repoA, "tracked.txt"), "foreign lane work\n");
+    git(repoA, "add", "tracked.txt");
+    git(repoA, "commit", "-m", "shared base");
+    const base = git(repoA, "rev-parse", "HEAD");
+    const subject = pipeline();
+    const branch = subject.branch;
+    git(repoA, "branch", branch, base);
+    git(root, "clone", repoA, repoB);
+    git(repoB, "branch", branch, base);
+    git(repoB, "worktree", "add", worktree, branch);
+    git(repoB, "worktree", "lock", "--reason=initializing", worktree);
+    const foreignGitDir = git(worktree, "rev-parse", "--path-format=absolute", "--git-dir");
+    fs.writeFileSync(path.join(foreignGitDir, "index.lock"), "foreign lock\n");
+
+    subject.repoDir = repoA;
+    subject.worktreeDir = worktree;
+    subject.baseBranch = "main";
+    subject.baseRef = base;
+    const result = await provisionPipelineWorktreeAsync(subject, realProvisionExec);
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.error).toContain("not registered to this lane");
+    expect(fs.readFileSync(path.join(worktree, "tracked.txt"), "utf8")).toBe("foreign lane work\n");
+    expect(fs.readFileSync(path.join(foreignGitDir, "index.lock"), "utf8")).toBe("foreign lock\n");
+    expect(git(repoB, "worktree", "list", "--porcelain")).toContain("locked initializing");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

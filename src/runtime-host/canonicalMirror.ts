@@ -23,15 +23,19 @@ export interface CanonicalMirrorDependencies {
   /** Told each time a transient network failure is about to be retried, so
       the deployment can say "network unavailable, retrying" meanwhile. */
   onRetry?(detail: string): void;
+  /** Replaced in tests so the shared network budget can be exercised quickly. */
+  now?(): number;
 }
 
 /* A resolver that fails one lookup in six refused two deploys outright
-   (#2220). Three attempts two and four seconds apart ride that out; each
-   fetch is bounded at 25 seconds, so the worst case (3 × 25 s + 6 s = 81 s)
-   stays inside the 110-second `resolve-revision` action deadline. A refused
-   login, a missing repository and anything unrecognized fail at once. */
+   (#2220). Clone and fetch share 100 seconds of network time. Each attempt is
+   bounded at 25 seconds, with at most six seconds of backoff; even a failed
+   clone followed by fetch retries settles within 106 seconds of the
+   110-second `resolve-revision` action deadline. Refused login, missing repo
+   and unrecognized errors fail at once. */
 const MIRROR_NETWORK_BACKOFF_MS = [2_000, 4_000] as const;
-const MIRROR_FETCH_TIMEOUT_MS = 25_000;
+const MIRROR_NETWORK_TIMEOUT_MS = 25_000;
+const MIRROR_NETWORK_BUDGET_MS = 100_000;
 
 function retryMirrorNetwork<T>(dependencies: CanonicalMirrorDependencies, operation: () => Promise<T>): Promise<T> {
   return retryTransientNetwork(operation, {
@@ -60,12 +64,29 @@ export async function ensureCanonicalMirror(
   dependencies: CanonicalMirrorDependencies,
 ): Promise<void> {
   fs.mkdirSync(options.deploymentDir, { recursive: true, mode: 0o700 });
+  const now = dependencies.now ?? Date.now;
+  const networkDeadline = now() + MIRROR_NETWORK_BUDGET_MS;
+  let lastNetworkFailure = "no network failure was recorded";
+  const runNetwork: CanonicalMirrorDependencies["run"] = async (argv) => {
+    const remainingMs = networkDeadline - now();
+    if (remainingMs <= 0) {
+      throw new Error(`canonical mirror network budget timed out after ${MIRROR_NETWORK_BUDGET_MS / 1_000}s; last network failure: ${lastNetworkFailure}`);
+    }
+    try {
+      return await dependencies.run(argv, { timeoutMs: Math.min(MIRROR_NETWORK_TIMEOUT_MS, remainingMs) });
+    } catch (error) {
+      lastNetworkFailure = error instanceof Error ? error.message : String(error);
+      throw error;
+    }
+  };
+  const networkDependencies: CanonicalMirrorDependencies = { ...dependencies, run: runNetwork };
+  const retryNetwork = <T>(operation: () => Promise<T>) => retryMirrorNetwork(networkDependencies, operation);
   const incomingDir = `${options.mirrorDir}.incoming`;
   if (!await isValidBareMirror(options.mirrorDir, dependencies.run)) {
     fs.rmSync(options.mirrorDir, { recursive: true, force: true });
-    await retryMirrorNetwork(dependencies, async () => {
+    await retryNetwork(async () => {
       fs.rmSync(incomingDir, { recursive: true, force: true });
-      await dependencies.run(["git", "clone", "--mirror", options.remote, incomingDir]);
+      await runNetwork(["git", "clone", "--mirror", options.remote, incomingDir]);
     });
     if (!await isValidBareMirror(incomingDir, dependencies.run)) throw new Error("canonical mirror clone is invalid");
     fs.renameSync(incomingDir, options.mirrorDir);
@@ -74,9 +95,8 @@ export async function ensureCanonicalMirror(
     fs.rmSync(incomingDir, { recursive: true, force: true });
   }
   await dependencies.run(["git", "--git-dir", options.mirrorDir, "remote", "set-url", "origin", options.remote]);
-  await retryMirrorNetwork(dependencies, () => dependencies.run(
+  await retryNetwork(() => runNetwork(
     ["git", "--git-dir", options.mirrorDir, "fetch", "--prune", "origin", "+refs/heads/*:refs/heads/*"],
-    { timeoutMs: MIRROR_FETCH_TIMEOUT_MS },
   ));
 }
 

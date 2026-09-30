@@ -166,17 +166,40 @@ function reportNetworkRetry(detail: string): void {
 }
 
 async function commandResult(argv: string[], options: { cwd?: string; timeoutMs?: number } = {}): Promise<{ code: number; stdout: string; stderr: string }> {
-  const child = Bun.spawn(["/usr/bin/setpriv", "--pdeathsig", "KILL", "--", ...argv], {
+  const command = options.timeoutMs === undefined
+    ? ["/usr/bin/setpriv", "--pdeathsig", "KILL", "--", ...argv]
+    : ["/usr/bin/setsid", "--wait", "/usr/bin/setpriv", "--pdeathsig", "KILL", "--", ...argv];
+  const child = Bun.spawn(command, {
     cwd: options.cwd,
-    ...(options.timeoutMs ? { timeout: options.timeoutMs, killSignal: "SIGKILL" as const } : {}),
     stdout: "pipe",
     stderr: "pipe",
     env: withoutUnsupportedApiCredentials(process.env),
   });
-  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited] as const);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = options.timeoutMs === undefined ? null : new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), options.timeoutMs);
+  });
+  const result = timeout ? await Promise.race([output, timeout]) : await output;
+  let stdout: string;
+  let stderr: string;
+  let code: number;
+  let timedOut = false;
+  if (result === "timeout") {
+    timedOut = true;
+    try { process.kill(-child.pid, "SIGKILL"); } catch {
+      try { child.kill("SIGKILL"); } catch { /* the command already exited */ }
+    }
+    // A transport helper can outlive Git while keeping the pipes open. Do not
+    // retry until every process in this command's owned group has exited and
+    // both streams have reached EOF.
+    [stdout, stderr, code] = await output;
+  } else {
+    if (timer) clearTimeout(timer);
+    [stdout, stderr, code] = result;
+  }
   /* A child the bound killed prints nothing about why; name the bound, which
      is also what lets a network step's retry recognize it. */
-  const timedOut = options.timeoutMs !== undefined && child.signalCode === "SIGKILL";
   const bound = timedOut ? `${argv.slice(0, 4).join(" ")} timed out after ${Math.round(options.timeoutMs! / 1_000)}s` : "";
   return { code, stdout: stdout.trim(), stderr: [bound, stderr.trim()].filter(Boolean).join("\n") };
 }
