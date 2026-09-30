@@ -129,8 +129,10 @@ export interface AccountManager {
    * automatic pick silently drawn from every account on a bound project — the
    * fence failing open at the one seam whose whole job is to hold it. Required,
    * a new caller has to answer the question.
+   * `unavailableIds` removes ineligible accounts; `excludedIds` only
+   * deprioritizes accounts already attempted.
    */
-  resolveHeadlessSpawn(engine: AccountEngineName, requestedId: string | null, excludedIds: string[], project: string | null, model?: string | null): HeadlessSpawnAvailability;
+  resolveHeadlessSpawn(engine: AccountEngineName, requestedId: string | null, excludedIds: string[], project: string | null, model?: string | null, unavailableIds?: string[]): HeadlessSpawnAvailability;
   /** The one seam every project-owned launch resolves its account through. */
   resolveProjectSpawn(engine: AccountEngineName, request: ProjectSpawnRequest): ProjectSpawnResolution;
   resolveTranscriptOwner(engine: AccountEngineName, transcript: string): AccountContext | null;

@@ -39,7 +39,7 @@ export function spawnTransport(env: Readonly<Record<string, string | undefined>>
 }
 
 export function structuredSpawnGap(
-  request: { engine: AgentEngine; model: string | null; hasImages: boolean; fast: boolean | null },
+  request: { engine: AgentEngine; model: string | null; hasImages: boolean },
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): string | null {
   if (!structuredHostsEnabled(env)) return "structured spawn is rolled back by LLV_STRUCTURED_HOSTS=0";
@@ -48,9 +48,6 @@ export function structuredSpawnGap(
   if (!runtimeUiEnabled(env)) return "structured spawn requires the runtime UI (NEXT_PUBLIC_RUNTIME_UI=0 removes the viewer controls)";
   if (request.hasImages && request.engine === "codex" && !codexModelSupportsImages(request.model)) {
     return CODEX_STRUCTURED_IMAGE_REASON;
-  }
-  if (request.engine === "codex" && request.fast !== null) {
-    return "structured Codex spawn does not support an explicit Codex service tier";
   }
   return null;
 }

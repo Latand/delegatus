@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -126,4 +126,106 @@ describe("entryEffort for OpenClaw", () => {
     expect(entryEffort(openclawEntry("openclaw-unknown.jsonl", [thinkingLevel("turbo", "oc-level-unknown")])))
       .toBeNull();
   });
+});
+
+test("service tier reads arbitrary catalog ids from argv and the newest applied thread setting", async () => {
+  const { entryServiceTier } = await import("./effort");
+  const file = writeJsonl(".codex/service-tier.jsonl", [
+    { type: "event_msg", payload: { type: "thread_settings_applied", thread_settings: { service_tier: "priority" } } },
+    { type: "event_msg", payload: { type: "thread_settings_applied", thread_settings: { service_tier: "ultrafast" } } },
+  ]);
+  const record = entry(file);
+  expect(entryServiceTier(record)).toBe("ultrafast");
+  argvByPid.set(987, ["codex", "-c", "service_tier=standard"]);
+  expect(entryServiceTier({ ...record, pid: 987 })).toBe("default");
+  argvByPid.set(987, ["codex", "-c", "service_tier=ultrafast"]);
+  expect(entryServiceTier({ ...record, pid: 987 })).toBe("ultrafast");
+});
+
+test("service tier stays unknown after newer settings leave the transcript tail", async () => {
+  const { entryServiceTier } = await import("./effort");
+  const settings = (tier: string) => ({
+    type: "event_msg",
+    payload: { type: "thread_settings_applied", thread_settings: { service_tier: tier } },
+  });
+  const file = writeJsonl(".codex/service-tier-scrolled.jsonl", [
+    settings("ultrafast"),
+    ...Array.from({ length: 50 }, () => ({ type: "event_msg", payload: { type: "task_complete" } })),
+    settings("default"),
+  ]);
+  expect(entryServiceTier(entry(file))).toBe("default");
+  fs.appendFileSync(file, Array.from({ length: 150 }, () => JSON.stringify({
+    type: "event_msg", payload: { type: "agent_message", message: "x".repeat(1024) },
+  })).join("\n") + "\n");
+  const grown = entry(file, { mtime: 2 });
+  expect(entryServiceTier(grown)).toBeNull();
+});
+
+test("a scrolled-out tier uses the durable profile for the pill without reviving stale settings", async () => {
+  const { agentRegistry } = await import("../agent/registry");
+  const { entryServiceTier } = await import("./effort");
+  const { defaults } = await import("@/components/runtimeProfile");
+  const settings = (tier: string) => ({
+    type: "event_msg",
+    payload: { type: "thread_settings_applied", thread_settings: { service_tier: tier } },
+  });
+  const file = writeJsonl(".codex/durable-service-tier.jsonl", [
+    settings("ultrafast"),
+    ...Array.from({ length: 200 }, () => ({ type: "event_msg", payload: { type: "agent_message", message: "x".repeat(1024) } })),
+  ]);
+  const registry = agentRegistry();
+  const conversation = registry.ensureConversation("codex", file, null);
+  registry.updateConversationLaunchProfile(conversation.id, {
+    model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast",
+  });
+  const record = entry(file, { model: "gpt-6-astra", effort: "high" });
+  record.serviceTier = entryServiceTier(record);
+  record.fast = record.serviceTier === null ? null : record.serviceTier !== "default";
+  expect(record.serviceTier).toBe("ultrafast");
+  expect(defaults(record).fast).toBeTrue();
+  // A profile change must be visible even when the transcript cache identity stays the same.
+  registry.updateConversationLaunchProfile(conversation.id, { model: "gpt-6-astra", effort: "high", fast: false, serviceTier: null });
+  expect(entryServiceTier(record)).toBe("default");
+  record.serviceTier = entryServiceTier(record);
+  record.fast = record.serviceTier === null ? null : record.serviceTier !== "default";
+  expect(defaults(record).fast).toBeFalse();
+  fs.appendFileSync(file, JSON.stringify(settings("priority")) + "\n");
+  expect(entryServiceTier(entry(file, { mtime: 2 }))).toBe("priority");
+});
+
+test("a scan indexes durable tiers once for registered and missing paths, then refreshes on the next scan", async () => {
+  const { agentRegistry } = await import("../agent/registry");
+  const { durableServiceTierIndex, entryServiceTier } = await import("./effort");
+  const registry = agentRegistry();
+  const file = writeJsonl(".codex/indexed-tier.jsonl", []);
+  const alias = writeJsonl(".codex/indexed-alias.jsonl", []);
+  const missing = writeJsonl(".codex/indexed-missing.jsonl", []);
+  const conversation = registry.ensureConversation("codex", file, null);
+  registry.updateConversationLaunchProfile(conversation.id, { model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" });
+  const snapshot = structuredClone(registry.readOnlySnapshot());
+  const original = snapshot.conversations[conversation.id]!;
+  const synthetic = { ...snapshot, conversations: { [original.id]: { ...original, continuityPaths: [alias] } }, receipts: {} };
+  for (let i = 0; i < 2000; i += 1) {
+    synthetic.conversations[`conversation_synthetic-${i}`] = { ...original, id: `conversation_synthetic-${i}`, generations: [{ ...original.generations[0]!, path: `synthetic/${i}.jsonl` }], continuityPaths: [] };
+  }
+  const receipt = { artifactPath: file, launchProfile: { serviceTier: "priority" } };
+  synthetic.receipts = Object.fromEntries(Array.from({ length: 4000 }, (_, i) => [`receipt-${i}`, { ...receipt, artifactPath: i === 0 ? file : `receipt/${i}.jsonl` }])) as typeof snapshot.receipts;
+  const reads = spyOn(registry, "readOnlySnapshot").mockReturnValue(synthetic);
+  const lookup = spyOn(registry, "launchProfileForPath").mockImplementation(() => { throw new Error("scan performed a linear lookup"); });
+  try {
+    const tiers = durableServiceTierIndex(registry);
+    const registeredEntry = entry(file), missingEntry = entry(missing);
+    for (let i = 0; i < 2000; i += 1) {
+      expect(entryServiceTier(i % 2 ? missingEntry : registeredEntry, tiers)).toBe(i % 2 ? null : "ultrafast");
+    }
+    expect(entryServiceTier(entry(alias), tiers)).toBe("ultrafast");
+    expect(tiers.get("receipt/1.jsonl")).toBe("priority");
+    expect(reads).toHaveBeenCalledTimes(1);
+    expect(lookup).not.toHaveBeenCalled();
+    synthetic.conversations[original.id]!.generations[0]!.launchProfile = { ...original.generations[0]!.launchProfile, serviceTier: "default" };
+    const refreshed = durableServiceTierIndex(registry);
+    expect(entryServiceTier(entry(file), refreshed)).toBe("default");
+  } finally {
+    reads.mockRestore(); lookup.mockRestore();
+  }
 });

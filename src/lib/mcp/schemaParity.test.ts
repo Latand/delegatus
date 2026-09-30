@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
+registerPipelineTick(async () => {});
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -682,7 +684,7 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     const stage = stages?.items?.properties;
 
     expect(Object.keys(stage ?? {}).sort()).toEqual([
-      "access", "account", "effort", "engine", "id", "kind", "model", "next", "onFail", "outputs", "prompt", "role", "sandbox",
+      "access", "account", "effort", "engine", "id", "kind", "model", "next", "onFail", "outputs", "prompt", "role", "sandbox", "serviceTier",
     ]);
     expect(stage?.kind?.enum).toEqual(["run", "review-loop"]);
     expect(stage?.engine?.enum).toEqual(["claude", "codex"]);
@@ -1087,5 +1089,15 @@ test("telegram_bot_send_document publishes its own schema and the text tool's st
     const rejected = await client.callTool({ name: "telegram_bot_send_document", arguments: { clientRequestId: "doc-parity-long", chat: "team-reports", document: { path: "/sandbox/handoff/weekly.md", caption: "x".repeat(1025) } } });
     expect(rejected.isError).toBe(true);
     expect(seen).toHaveLength(1);
+  });
+});
+
+test("Codex tier is published on all launch surfaces and preserved through MCP dispatch", async () => {
+  let captured: unknown;
+  await withProtocolClient(inertBindings({ spawn_agent: async args => { captured = args; return {}; } }), async client => {
+    const listed = await client.listTools();
+    for (const name of ["spawn_agent", "pipeline_action"]) expect(listed.tools.find(tool => tool.name === name)?.inputSchema.properties).toHaveProperty("serviceTier");
+    await client.callTool({ name: "spawn_agent", arguments: { clientRequestId: "tier-schema-spawn", cwd: "/repo", title: "Review tier", prompt: "Review", engine: "codex", model: "gpt-6-astra", serviceTier: "ultrafast" } });
+    expect(captured).toMatchObject({ serviceTier: "ultrafast" });
   });
 });

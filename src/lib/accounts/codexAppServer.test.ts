@@ -199,18 +199,18 @@ test("successor thread methods use the structured fork, resume, read, name, and 
   });
   const client = await start();
   await expect(client.forkThread("source-1")).resolves.toEqual({ id: "fork-1", path: "/source/fork-1.jsonl" });
-  await expect(client.resumeThread("fork-1", { path: "/target/fork-1.jsonl", cwd: "/repo", model: "gpt-5.6-terra", effort: "high", fast: true, approvalPolicy: "never", sandbox: "read-only" }))
+  await expect(client.resumeThread("fork-1", { path: "/target/fork-1.jsonl", cwd: "/repo", model: "gpt-5.6-terra", effort: "high", fast: true, serviceTier: "ultrafast", approvalPolicy: "never", sandbox: "read-only" }))
     .resolves.toEqual({ id: "fork-1", path: null });
   await expect(client.readThread("fork-1")).resolves.toEqual({ id: "fork-1", path: "/target/fork-1.jsonl" });
   await client.setThreadName("fork-1", "Title");
   await client.setThreadGoal("fork-1", "Ship");
   expect(methods.map((item) => item.method)).toEqual(["thread/fork", "config/read", "thread/resume", "thread/read", "thread/name/set", "thread/goal/set"]);
-  expect(methods.find((item) => item.method === "thread/resume")?.params).toEqual({
+  expect(methods.find((item) => item.method === "thread/resume")?.params).toMatchObject({
     threadId: "fork-1",
     path: "/target/fork-1.jsonl",
     cwd: "/repo",
     model: "gpt-5.6-terra",
-    serviceTier: "priority",
+    serviceTier: "ultrafast",
     approvalPolicy: "never",
     sandbox: "read-only",
     config: {

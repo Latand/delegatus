@@ -31,7 +31,7 @@ const SUMMARY_CHARS = 2_000;
  * digests a guarded graph edit names next — what `create_pipeline` answers.
  */
 export function pipelineAcknowledgement(pipeline: Pipeline) {
-  const stages = (pipeline.stages ?? []).map((stage) => ({ stage, runtime: stageRuntime(stage) }));
+  const stages = (pipeline.stages ?? []).map((stage) => ({ stage, runtime: stageRuntime(stage, pipeline) }));
   return {
     pipelineId: pipeline.id,
     state: pipeline.state,
@@ -48,6 +48,7 @@ export function pipelineAcknowledgement(pipeline: Pipeline) {
       engine: runtime.engine,
       model: runtime.model,
       effort: runtime.effort,
+      ...(runtime.serviceTier ? { serviceTier: runtime.serviceTier, serviceTierSource: runtime.serviceTierSource } : {}),
     })),
     runtimeLine: stages.map(({ stage, runtime }) => `${stage.id}: ${launchRuntimeLabel(runtime)}`).join(" · "),
     stageDigests: stageDigests(pipeline.stages ?? []),
@@ -61,7 +62,8 @@ export function pipelineAcknowledgement(pipeline: Pipeline) {
  * create, those input fields are present only when the caller sent them, and a
  * fix stage carries them only when its implementer did.
  */
-function stageRuntime(stage: PipelineStage) {
+function stageRuntime(stage: PipelineStage, pipeline: Pipeline) {
+  const actual = latestOperationalStageAttempt(pipeline, stage.id)?.effectiveRole ?? stage.effectiveRole;
   const roleId = stage.effectiveRole?.roleId ?? stage.role?.roleId ?? null;
   return {
     roleId,
@@ -69,6 +71,9 @@ function stageRuntime(stage: PipelineStage) {
     engine: stage.effectiveRole?.engine ?? stage.engine ?? "claude",
     model: stage.effectiveRole?.model ?? stage.model ?? null,
     effort: stage.effectiveRole?.effort ?? stage.effort ?? null,
+    serviceTier: actual?.serviceTier,
+    serviceTierSource: actual?.serviceTierSource,
+    preferredServiceTier: actual?.preferredServiceTier,
     explicit: stage.engine !== undefined || (stage.model !== undefined && stage.model !== null),
   };
 }

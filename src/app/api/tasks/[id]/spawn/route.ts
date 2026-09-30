@@ -10,6 +10,7 @@ import {
   resolveProjectSpawnAccount,
 } from "@/lib/accounts/manager";
 import { AccountProjectBindingsUnreadableError } from "@/lib/accounts/projectBindings";
+import { tierOffers } from "@/lib/accounts/codexServiceTiers";
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { AccountContext } from "@/lib/accounts/contracts";
@@ -296,12 +297,21 @@ async function postTaskSpawn(
       { status: fenced ? 409 : 400 },
     );
   }
+  const serviceTier = retryOf?.launchProfile.serviceTier ?? null;
+  if (engine === "codex" && serviceTier) {
+    const offers = launchModel ? tierOffers([{ id: account.accountId, home: account.home }], launchModel, serviceTier) : null;
+    if (!offers?.offering.length) return NextResponse.json({
+      error: `selected account does not offer serviceTier ${serviceTier}; offered: ${offers?.offered.join(", ") || "none"}`,
+      code: "service_tier_unavailable",
+    }, { status: 409 });
+  }
   const shape = {
     engine,
     cwd: cwdResult.cwd,
     model: launchModel,
     effort: reasoning.effort,
     fast: reasoning.fast,
+    ...(serviceTier ? { serviceTier } : {}),
     accountId: account.accountId,
   };
   const clientAttemptId = typeof body.clientAttemptId === "string"
@@ -313,6 +323,7 @@ async function postTaskSpawn(
     model: launchModel,
     effort: reasoning.effort,
     fast: reasoning.fast,
+    serviceTier,
     codexHome: engine === "codex" ? account.home : null,
     claudeConfigDir: engine === "claude" ? account.home : null,
     claudeProjectsDir: engine === "claude" ? account.transcriptRoot : null,

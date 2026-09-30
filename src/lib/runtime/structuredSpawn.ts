@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { AccountContext } from "@/lib/accounts/contracts";
+import { launchServiceTier } from "./codexTurnProfile";
 import { accountManager } from "@/lib/accounts/manager";
 import { claudeSettingsPath } from "@/lib/accounts/claude";
 import { claudeValidityFromLimitRead } from "@/lib/accounts/spawnHealth";
@@ -1706,6 +1707,7 @@ export async function defaultStartHost(
       cwd: input.spec.cwd,
       codexHome: input.account.home,
       fileAuthCredentials: input.account.kind === "managed",
+      serviceTier: launchServiceTier(profile),
       model: profile.model ?? undefined,
       effort: profile.effort ?? undefined,
       allowSubagents: profile.allowSubagents,

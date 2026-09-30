@@ -324,7 +324,7 @@ test("structured reconfigure validates and enters the runtime command channel", 
     effort: "high",
     fast: true,
     accountId: "codex-work",
-    previousProfile: { model: null, effort: null, fast: null },
+    previousProfile: { model: null, effort: null, fast: null, serviceTier: null },
   }]);
 
   const invalid = await dispatchStructuredControl({
@@ -1339,4 +1339,23 @@ test("«send on the current account» releases the hold and wakes the queue, onc
   expect(await applyConversationMigration({ conversationId: fixture.conversationId, action: "keep-current" }, dependencies))
     .toMatchObject({ status: 200, body: { keepCurrent: "nothing-held" } });
   expect(kicks).toBe(2);
+});
+
+test("structured reconfigure captures an exact ultrafast rollback profile before choosing Standard", async () => {
+  const fixture = structuredConversation();
+  fixture.registry.updateConversationLaunchProfile(fixture.conversationId as `conversation_${string}`, {
+    model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast",
+  });
+  const commands: unknown[] = [];
+  const client = { command: async (command: unknown) => {
+    commands.push(command);
+    return { operationId: "tier-standard", receipt: { operationId: "tier-standard", status: "pending" }, replayed: false };
+  } } as unknown as RuntimeHostClient;
+  const result = await dispatchStructuredControl({ path: fixture.path, conversationId: "", action: "reconfigure", reconfiguration: { model: "gpt-6-astra", effort: "high", fast: false } }, {
+    registry: fixture.registry, client, operationId: () => "tier-standard", enabled: () => true,
+  });
+  expect(result?.status).toBe(202);
+  expect(commands).toEqual([expect.objectContaining({
+    fast: false, previousProfile: { model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" },
+  })]);
 });

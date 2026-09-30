@@ -1,6 +1,7 @@
 import { configForParams, listRoles, roleFenceBlock, roleScaffoldBody, validateRoleParams } from "@/lib/roles/registry";
 import { ORCHESTRATOR_WITHOUT_MANDATE_RULES } from "@/lib/roles/defaults";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
+import { codexLaunchTier } from "@/lib/accounts/codexServiceTiers";
 import { effortScale } from "@/lib/agent/efforts";
 import { validateLaunchModel } from "@/lib/agent/models";
 import { defaultRoleParameterValue } from "@/lib/roles/parameters";
@@ -22,6 +23,7 @@ export type PipelineRoleDefaults = {
   engine: "claude" | "codex";
   model: string | null;
   effort: string | null;
+  serviceTier?: string;
   access?: "read-only" | "read-write";
   promptScaffold?: string | null;
 };
@@ -90,10 +92,10 @@ export function validatePipelineRoleParams(roleId: string, params: Record<string
 }
 
 export function resolvePipelineRole(
-  stage: Pick<PipelineStage, "role" | "engine" | "model" | "effort" | "access">,
+  stage: Pick<PipelineStage, "role" | "engine" | "model" | "effort" | "serviceTier" | "access">,
   kind: PipelineStageKind,
   lookup?: PipelineRoleLookup | null,
-): { role?: EffectivePipelineRole; error?: string; field?: "model" } {
+): { role?: EffectivePipelineRole; error?: string; field?: "model" | "serviceTier" } {
   const ref = stage.role;
   if (ref !== undefined && (!ref || typeof ref !== "object" || Array.isArray(ref))) {
     return { error: "stage role must be an object" };
@@ -127,6 +129,10 @@ export function resolvePipelineRole(
   const engine = stage.engine ?? registered?.engine ?? builder.engine;
   const model = value(stage.model, registered?.model ?? builder.model);
   const effort = value(stage.effort, registered?.effort ?? builder.effort);
+  const row = registered ?? builder;
+  const tier = codexLaunchTier({ engine, model, fast: undefined, serviceTier: stage.serviceTier,
+    roleDefault: row.serviceTier, roleDefaultApplies: engine === row.engine && model === row.model });
+  if ("error" in tier) return { error: tier.error, field: "serviceTier" };
   if (model) {
     const validation = validateLaunchModel(engine, model);
     if ("error" in validation) return { error: validation.error, field: "model" };
@@ -150,6 +156,7 @@ export function resolvePipelineRole(
       engine,
       model,
       effort,
+      ...(tier.tier ? { serviceTier: tier.tier, serviceTierSource: tier.required ? "explicit" as const : "role-default" as const } : {}),
       access: kind === "review-loop" ? "read-only" : stage.access ?? registered?.access ?? builder.access ?? "read-write",
       promptScaffold,
     },

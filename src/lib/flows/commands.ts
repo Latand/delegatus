@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 
 import { effortScale } from "@/lib/agent/efforts";
+import { SERVICE_TIER_PATTERN } from "@/lib/accounts/codexServiceTiers";
 import { validateLaunchModel } from "@/lib/agent/models";
 import { agentRegistry } from "@/lib/agent/registry";
 import { headCwd } from "@/lib/agent/transcript";
@@ -30,10 +31,14 @@ function validateRole(value: unknown): RoleConfig | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const role = value as Partial<RoleConfig>;
   if (role.engine !== "claude" && role.engine !== "codex") return null;
+  if (role.serviceTier != null && (role.engine !== "codex" || typeof role.serviceTier !== "string"
+    || !SERVICE_TIER_PATTERN.test(role.serviceTier) || !role.model)) return null;
   return {
     engine: role.engine,
     model: typeof role.model === "string" && role.model.trim() ? role.model.trim() : null,
     effort: typeof role.effort === "string" && role.effort.trim() ? role.effort.trim() : null,
+    ...(role.serviceTier ? { serviceTier: role.serviceTier,
+      serviceTierSource: role.serviceTierSource === "role-default" ? "role-default" as const : "explicit" as const } : {}),
   };
 }
 

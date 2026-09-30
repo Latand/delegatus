@@ -2088,7 +2088,13 @@ test("a terminal historical adoption settles without changing the cursor", async
   expect(adopted.conversationId).toBe("conversation_child");
 });
 
-test("a cross-engine historical adoption settles with the child runtime", async () => {
+test.each([
+  { engine: "claude", model: "claude-sonnet-4-6", serviceTier: undefined },
+  { engine: "codex", model: "gpt-6-sol", serviceTier: "priority" },
+  { engine: "codex", model: "gpt-6-astra", serviceTier: "ultrafast" },
+  { engine: "codex", model: "gpt-6-sol", serviceTier: undefined },
+] as const)("historical adoption replaces the source tier with $engine/$model/$serviceTier", async ({ engine, model, serviceTier }) => {
+  const runtime = { engine, model, effort: "high", ...(serviceTier ? { serviceTier } : {}) };
   const h = harness();
   const pipeline = await create(h.ports);
   const sourceRun = pipeline.runs.find((run) => run.stageId === "plan")!;
@@ -2098,8 +2104,11 @@ test("a cross-engine historical adoption settles with the child runtime", async 
     effectiveRole: {
       roleId: "architect",
       engine: "codex",
-      model: "gpt-5.6-sol",
+      model: "gpt-6-astra",
       effort: "high",
+      serviceTier: "ultrafast",
+      serviceTierSource: "role-default",
+      preferredServiceTier: "ultrafast",
       access: "read-only",
       promptScaffold: "Architect guidance",
     },
@@ -2124,11 +2133,11 @@ test("a cross-engine historical adoption settles with the child runtime", async 
   const registryPath = path.join(process.env.LLV_STATE_DIR!, "cross-engine-agent-registry.json");
   const registry = new AgentRegistry(registryPath);
   const begun = registry.beginSpawnRequest({
-    engine: "claude",
+    engine,
     cwd: "/repo",
     accountId: "claude-test",
     parentConversationId: "conversation_source_codex",
-    launchProfile: { model: "claude-sonnet-4-6", effort: "high", title: "Adopt cross-engine pipeline stage" },
+    launchProfile: { model, effort: "high", serviceTier: serviceTier ?? null, title: "Adopt cross-engine pipeline stage" },
     memberships: [{
       kind: "pipeline",
       containerId: pipeline.id,
@@ -2138,14 +2147,14 @@ test("a cross-engine historical adoption settles with the child runtime", async 
       stageOrder: 0,
       round: null,
       parentConversationId: "conversation_source_codex",
-      runtime: { engine: "claude", model: "claude-sonnet-4-6", effort: "high" },
+      runtime: { engine, model, effort: "high" },
     }],
   });
   if (begun.kind !== "created") throw new Error("cross-engine spawn reservation conflicted");
-  const childPath = "/claude/child-cross-engine.jsonl";
+  const childPath = `/${engine}/child-cross-engine.jsonl`;
   const childSessionId = crypto.randomUUID();
   const settled = registry.settleSpawn(begun.receipt.launchId, {
-    key: { engine: "claude", sessionId: childSessionId },
+    key: { engine, sessionId: childSessionId },
     artifactPath: childPath,
     cwd: "/repo",
     accountId: "claude-test",
@@ -2170,14 +2179,14 @@ test("a cross-engine historical adoption settles with the child runtime", async 
       sourceConversationId: "conversation_source_codex",
       conversationId: begun.receipt.conversationId,
       agentPath: childPath,
-      runtime: { engine: "claude", model: "claude-sonnet-4-6", effort: "high" },
+      runtime,
     }),
   ]);
   h.ports.pipelineAdoptionCandidates = () => candidates;
   const observedEngines: string[] = [];
-  h.ports.durableTurnEvidence = async (engine, transcriptPath) => {
-    observedEngines.push(engine);
-    if (engine !== "claude" || transcriptPath !== childPath) return null;
+  h.ports.durableTurnEvidence = async (observedEngine, transcriptPath) => {
+    observedEngines.push(observedEngine);
+    if (observedEngine !== engine || transcriptPath !== childPath) return null;
     return {
       turn: "terminal",
       message: {
@@ -2189,15 +2198,17 @@ test("a cross-engine historical adoption settles with the child runtime", async 
 
   await tickPipelines([entry(childPath)], h.ports);
 
-  expect(observedEngines).toContain("claude");
+  expect(observedEngines).toContain(engine);
   const adopted = loadPipelines()[0]!.runs.find((run) => run.stageId === "plan")!.attempts[1]!;
   expect(adopted.effectiveRole).toMatchObject({
     roleId: "architect",
-    engine: "claude",
-    model: "claude-sonnet-4-6",
-    effort: "high",
+    ...runtime,
     access: "read-only",
   });
+  expect(adopted.effectiveRole.serviceTier).toBe(serviceTier);
+  expect(adopted.effectiveRole.serviceTierSource).toBeUndefined();
+  expect(adopted.effectiveRole.preferredServiceTier).toBeUndefined();
+  expect(pipeline.runs[0]!.attempts[0]!.effectiveRole.serviceTier).toBe("ultrafast");
   expect(loadPipelines()[0]!.runs.find((run) => run.stageId === "plan")!.attempts[1]).toMatchObject({
     historical: true,
     state: "passed",
@@ -15390,4 +15401,59 @@ test("a stage conversation switched to another account continues on the message 
   expect(current.runs.find((run) => run.stageId === "recover")?.attempts ?? []).toEqual([]);
   expect(current.cursor?.activatedBy?.edge ?? null).not.toBe("fail");
   expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
+});
+
+test("null stage tier stores and launches the role preference; default opts out", async () => {
+  const h = harness();
+  h.ports.roleLookup = () => ({ engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast", promptScaffold: "Reviewer guidance" });
+  const stage = { id: "review", kind: "run", role: { roleId: "reviewer" }, serviceTier: null, prompt: "Review", next: null };
+  const pipeline = await create(h.ports, [stage] as never);
+  expect(loadPipelines()[0]?.stages[0]).toMatchObject({ serviceTier: null, effectiveRole: { serviceTier: "ultrafast", serviceTierSource: "role-default" } });
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  expect(h.spawnInputs[0]?.role).toMatchObject({ serviceTier: "ultrafast", serviceTierSource: "role-default" });
+  const draft = await createPipelineFromRequest({ task: "Tier overrides", repoDir: "/repo", autoStart: false, stages: [stage] as never }, h.ports);
+  expect(draft.error).toBeUndefined();
+  const optedOut = await patchPipeline(draft.pipeline!.id, { action: "override-stage", stageId: "review", serviceTier: "default" }, h.ports);
+  expect(optedOut.error).toBeUndefined();
+  expect(optedOut.pipeline?.stages[0]).toMatchObject({ serviceTier: "default", effectiveRole: { serviceTier: "default", serviceTierSource: "explicit" } });
+  const inherited = await patchPipeline(draft.pipeline!.id, { action: "override-stage", stageId: "review", serviceTier: null }, h.ports);
+  expect(inherited.error).toBeUndefined();
+  expect(inherited.pipeline?.stages[0]).toMatchObject({ serviceTier: null, effectiveRole: { serviceTier: "ultrafast", serviceTierSource: "role-default" } });
+  expect(pipeline.id).toBeTruthy();
+});
+
+test("create refuses an explicit service tier absent from the project's catalog pool", async () => {
+  const h = harness();
+  const created = await createPipelineFromRequest({ task: "Tier validation", repoDir: "/repo", autoStart: false, stages: [{ id: "review", kind: "run", engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "unlisted-tier", prompt: "Review", next: null }] }, h.ports);
+  expect(created.pipeline).toBeUndefined();
+  expect(created.violations).toContainEqual(expect.objectContaining({ field: "stages[0].serviceTier" }));
+  expect(created.error).toContain("offered:");
+});
+
+test("review-loop forwards the role-default service tier to its flow and reflects the admitted round", async () => {
+  const h = harness();
+  const lookup = h.ports.roleLookup;
+  h.ports.roleLookup = (id, parameters) => id === "reviewer"
+    ? { engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast", promptScaffold: "Reviewer guidance" }
+    : lookup!(id, parameters);
+  await create(h.ports, [
+    { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
+    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.flowRequests[0]?.roles?.reviewer).toMatchObject({ serviceTier: "ultrafast", serviceTierSource: "role-default" });
+  const { pipelineAcknowledgement } = await import("@/lib/mcp/compactAnswers");
+  expect(pipelineAcknowledgement(loadPipelines()[0]!).runtimeLine).toContain("/ultrafast (role default, if offered)");
+  const flow = [...h.flows.values()][0]!;
+  flow.roles = h.flowRequests[0]!.roles!;
+  flow.rounds = [{ ...newRound(flow, "button", null), spawnStartedAt: new Date().toISOString(),
+    reviewerRole: { engine: "codex", model: "gpt-6-astra", effort: "high", preferredServiceTier: "ultrafast", serviceTierSource: "role-default" } }];
+  await tickPipelines([], h.ports);
+  const attempt = loadPipelines()[0]!.runs.find(run => run.stageId === "review")!.attempts[0]!;
+  expect(attempt.effectiveRole.serviceTier).toBeUndefined();
+  expect(attempt.effectiveRole.preferredServiceTier).toBe("ultrafast");
+  expect(pipelineAcknowledgement(loadPipelines()[0]!).runtimeLine).toContain("/default (role default ultrafast not offered by an available account)");
 });

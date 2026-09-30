@@ -7,4 +7,7 @@ export type RuntimeRoleConfig = {
   engine: RuntimeEngine;
   model: string | null;
   effort: string | null;
+  serviceTier?: string;
+  serviceTierSource?: "explicit" | "role-default";
+  preferredServiceTier?: string;
 };

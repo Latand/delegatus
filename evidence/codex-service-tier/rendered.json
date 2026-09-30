@@ -1,0 +1,41 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "cases": [
+    {
+      "locale": "en",
+      "width": 1280,
+      "face": "6-Astra · High · Ultrafast",
+      "detail": "SpeedUltrafast tier",
+      "overflow": false,
+      "pageErrors": [],
+      "mappingTier": " · ultrafast"
+    },
+    {
+      "locale": "en",
+      "width": 390,
+      "face": "6-Astra · high",
+      "detail": "Ultrafast tier",
+      "overflow": false,
+      "pageErrors": [],
+      "mappingTier": " · ultrafast"
+    },
+    {
+      "locale": "uk",
+      "width": 1280,
+      "face": "6-Astra · Високі · Ultrafast",
+      "detail": "ШвидкістьРівень Ultrafast",
+      "overflow": false,
+      "pageErrors": [],
+      "mappingTier": " · ultrafast"
+    },
+    {
+      "locale": "uk",
+      "width": 390,
+      "face": "6-Astra · high",
+      "detail": "Рівень Ultrafast",
+      "overflow": false,
+      "pageErrors": [],
+      "mappingTier": " · ultrafast"
+    }
+  ]
+}

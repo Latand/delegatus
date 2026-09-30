@@ -762,6 +762,7 @@ export const en = {
   "composer.modelGroup": "Model",
   "composer.speedGroup": "Speed",
   "composer.speedStandard": "Standard",
+  "composer.speedTierNamed": "{tier} tier",
   "composer.speedFastTier": "Fast — priority tier",
   "composer.backTo": "Back",
   "composer.nextMessageUses": "Next message: {model} · {effort}",

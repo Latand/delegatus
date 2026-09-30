@@ -3240,6 +3240,8 @@ const pipelineStageSchema = z.object({
     .describe("Stage-level model override, or null to inherit the role default. Must be a model the stage engine supports."),
   effort: z.string().nullable().optional()
     .describe("Stage-level effort override, or null to inherit the role default. Must be an effort the stage engine supports."),
+  serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).nullable().optional()
+    .describe("Codex service tier: a catalog id, or null to inherit the role tier. Explicit default or standard opts out of a role tier."),
   access: z.enum(["read-only", "read-write"]).optional()
     .describe("Repository mutation policy enforced at settlement. A review-loop stage is always read-only. This does not select the sandbox or remove network, SSH, gh, or read tools."),
   sandbox: z.enum(["full", "restricted"]).optional()
@@ -3337,6 +3339,9 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Agent CLI. copilot runs the GitHub Copilot CLI over ACP on the structured transport; its account is named or the selected one (no automatic pick), model auto or an id the account offers, effort none…max."),
     model: z.string().optional(),
     effort: z.string().optional(),
+    serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional()
+      .describe("Codex only: catalog tier id such as priority or ultrafast; refused if the model/account does not offer it. default or standard opts out of a role tier."),
+    fast: z.boolean().optional().describe("Codex speed: true means priority; must agree with serviceTier when both are present."),
     role: z.enum(ROLE_IDS).optional(),
     roleParams: z.record(z.string(), z.unknown()).optional()
       .describe("Role-specific parameters. Bounded integers accept numeric strings, clamp to their declared role bounds, and report the applied value in clamped."),
@@ -3478,6 +3483,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     engine: pipelineStageSchema.shape.engine.describe("override-stage: runtime engine."),
     model: pipelineStageSchema.shape.model.describe("override-stage: runtime model, or null to inherit."),
     effort: pipelineStageSchema.shape.effort.describe("override-stage: reasoning effort, or null to inherit."),
+    serviceTier: pipelineStageSchema.shape.serviceTier.describe("override-stage: Codex tier, null to inherit; default or standard opts out."),
     access: pipelineStageSchema.shape.access.describe("override-stage: repository mutation policy."),
     account: pipelineStageSchema.shape.account.describe("override-stage: account pin, or null to clear it."),
     "prompt": z.string().optional().describe("override-stage: replacement prompt."),
@@ -3894,9 +3900,9 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   role_presets: z.object({
     clientRequestId: clientRequestIdSchema,
     overrides: z.record(z.string(), z.object({
-      config: z.object({ engine: z.string(), model: z.string(), effort: z.string() }).nullable().optional()
+      config: z.object({ engine: z.string(), model: z.string(), effort: z.string(), serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional() }).nullable().optional()
         .describe("A full { engine, model, effort } sets the role's row; null resets it to the shipped default."),
-      variants: z.record(z.string(), z.object({ engine: z.string(), model: z.string(), effort: z.string() }).nullable()).optional()
+      variants: z.record(z.string(), z.object({ engine: z.string(), model: z.string(), effort: z.string(), serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional() }).nullable()).optional()
         .describe("Builder and reviewer only, keyed by variant (trivial, frontend, docs, apply-fixes, frontend-fixes, docs-fixes; reviewer: trivial). A full config sets the variant, null resets it."),
       promptScaffold: z.null().optional().describe("null restores the shipped prompt text. A scaffold cannot be set from here."),
     }).passthrough()).optional()

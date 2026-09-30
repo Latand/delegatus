@@ -21,6 +21,7 @@ import { legacyBaselineRevision, legacyImportAllowed, type LegacyImportOutcome }
 import { importStateCollection, readStateImport, recordStateImportMirror, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import { assertStateMutationAllowed } from "@/lib/state/stateMutationBarrier";
 import { ClaudeStreamBrokerHost } from "@/lib/runtime/claudeStreamBrokerHost";
+import { launchServiceTier } from "@/lib/runtime/codexTurnProfile";
 import { CodexAppServerHost } from "@/lib/runtime/codexAppServerHost";
 import { StructuredHostAdoptionCleanupError } from "@/lib/runtime/engineHost";
 import { hasStructuredDeliveryHost, publishStructuredDeliveryHost, releaseStructuredDeliveryHost, requireStructuredDeliveryControllerPublication } from "@/lib/runtime/structuredDeliveryController";
@@ -349,6 +350,7 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
       fileAuthCredentials: input.target.kind === "managed",
       model: input.profile.model ?? undefined,
       effort: input.profile.effort ?? undefined,
+      serviceTier: launchServiceTier(input.profile),
       ...access.codex,
       ...access.host,
       approvalPolicy,
@@ -1768,6 +1770,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
         model: profile.model,
         effort: profile.effort,
         fast: profile.fast,
+        ...(profile.serviceTier ? { serviceTier: profile.serviceTier } : {}),
         approvalPolicy,
         sandbox: launchProfileCodexSandbox(profile),
       });

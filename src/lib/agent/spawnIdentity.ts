@@ -8,6 +8,8 @@ export interface SpawnRequestIdentity {
   model: string | null;
   effort: string | null;
   fast: boolean | null;
+  serviceTier?: string | null;
+  serviceTierSource?: "explicit" | "fast" | "role-default";
   accountId: string | null;
   role: string | null;
   title: string;
