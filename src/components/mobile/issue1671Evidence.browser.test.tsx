@@ -5599,3 +5599,109 @@ describe("synced task card on the phone", () => {
     if (failures.length) throw new Error(failures.join("\n"));
   }, 400_000);
 });
+
+/*
+ * Tool call context tokens (docs/design/tool-call-tokens.md): the feed's real
+ * tool rows, drawn from one parsed conversation that holds a call in each of
+ * the four bands, a pair sharing a measured round, a call with nothing to
+ * count, and the worst-case row of §11 — an error chip, 59 s and ~99.9k —
+ * at 390 and 1440 px, light and dark, in both languages.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable \
+ *     CONTEXT_TOKENS_PNG_DIR=docs/design/tool-call-tokens \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "tool call context tokens"
+ */
+describe("tool call context tokens", () => {
+  const measureRows = `(() => {
+    const box = (el) => { const r = el.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
+    const lineHeight = parseFloat(getComputedStyle(document.body).lineHeight) || 16;
+    const rows = [...document.querySelectorAll('[data-tool-row], [data-testid="mcp-call-card"] summary')].map((row) => {
+      const caption = row.querySelector("[data-context-tokens]");
+      const title = row.querySelector("span.flex-1");
+      const value = caption && caption.querySelector("span:not([aria-hidden])");
+      const cap = caption ? box(caption) : null;
+      const r = box(row);
+      return {
+        label: (row.textContent || "").trim().slice(0, 70),
+        row: r,
+        caption: cap,
+        band: caption ? Number(caption.getAttribute("data-context-band")) : null,
+        basis: caption ? caption.getAttribute("data-context-basis") : null,
+        text: caption ? caption.textContent : null,
+        title: caption ? caption.getAttribute("title") : null,
+        color: value ? getComputedStyle(value).color : null,
+        weight: value ? Number(getComputedStyle(value).fontWeight) : null,
+        titleWidth: title ? box(title).width : null,
+        pushedOut: [...row.children].filter((child) => box(child).right > r.right + 0.5).map((child) => (child.textContent || "").trim().slice(0, 20) + " +" + Math.round(box(child).right - r.right) + "px"),
+        oneLine: cap ? cap.height < lineHeight * 1.6 : null,
+        inside: cap ? cap.left >= r.left - 0.5 && cap.right <= r.right + 0.5 && cap.top >= r.top - 1 && cap.bottom <= r.bottom + 1 : null,
+      };
+    });
+    return { rows, scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth };
+  })()`;
+
+  type Reading = {
+    label: string; row: { height: number }; caption: { height: number } | null; band: number | null; basis: string | null;
+    text: string | null; title: string | null; color: string | null; weight: number | null; titleWidth: number | null;
+    oneLine: boolean | null; inside: boolean | null; pushedOut: string[];
+  };
+
+  browserTest("every band, the shared pair and the worst-case row hold their geometry in both themes and languages", async () => {
+    const { openFixture } = await import("@/components/kanban/issue1695BrowserHarness");
+    const pngDir = path.resolve(process.env.CONTEXT_TOKENS_PNG_DIR ?? ".artifacts/context-tokens");
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(OUT, "src/components/feed/__fixtures__/contextTokens.fixture.tsx");
+    const browser = await launchChromium();
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const width of [390, 1440]) {
+        for (const scheme of SCHEMES) {
+          for (const lang of ["en", "uk"] as const) {
+            const tag = `${width}px ${scheme} ${lang}`;
+            const { context, page, pageErrors } = await openFixture(browser, server.base, { width, height: 1500 }, scheme, lang, "no-preference", width < 500, width < 500 ? 2 : 1);
+            try {
+              await page.locator("[data-context-tokens-feed]").waitFor();
+              const read = await page.evaluate(measureRows) as { rows: Reading[]; scrollWidth: number; clientWidth: number };
+              readings[tag] = read.rows.map((row) => ({ label: row.label, band: row.band, basis: row.basis, text: row.text, height: row.row.height, titleWidth: row.titleWidth }));
+              const captions = read.rows.filter((row) => row.caption);
+              if (!read.rows.some((row) => row.label.includes("Listing pipelines") && row.caption)) failures.push(`${tag}: the MCP row carries no caption`);
+              const bare = read.rows.find((row) => !row.caption && row.label.includes("ls tmp"));
+              if (!bare) failures.push(`${tag}: the uncaptioned baseline row is missing`);
+              const bands = new Set(captions.map((row) => row.band));
+              for (const band of [0, 1, 2, 3]) if (!bands.has(band)) failures.push(`${tag}: no row in band ${band}`);
+              for (const row of captions) {
+                const at = `${tag} "${row.label}"`;
+                if (!row.oneLine) failures.push(`${at}: the caption wraps`);
+                if (!row.inside) failures.push(`${at}: the caption leaves its row`);
+                if (row.pushedOut.length) failures.push(`${at}: ${row.pushedOut.join(", ")} is pushed past the row's edge`);
+                if (bare && Math.abs(row.row.height - bare.row.height) > 1) failures.push(`${at}: row is ${row.row.height}px, baseline ${bare.row.height}px`);
+                if (width === 390 && (row.titleWidth ?? 0) < 96) failures.push(`${at}: the title keeps only ${row.titleWidth}px`);
+                if (!row.title || !/\d/.test(row.title)) failures.push(`${at}: no hover title`);
+                if ((row.basis === "measured") === (row.text ?? "").includes("~")) failures.push(`${at}: basis ${row.basis} but caption "${row.text}"`);
+              }
+              /* Each band reads heavier than the one below: the colours differ and the weight never drops. */
+              const byBand = [0, 1, 2, 3].map((band) => captions.find((row) => row.band === band));
+              for (let band = 1; band < 4; band += 1) {
+                const low = byBand[band - 1]; const high = byBand[band];
+                if (low && high && low.color === high.color) failures.push(`${tag}: bands ${band - 1} and ${band} share the colour ${high.color}`);
+                if (low && high && (high.weight ?? 0) < (low.weight ?? 0)) failures.push(`${tag}: band ${band} is lighter than band ${band - 1}`);
+              }
+              if ((byBand[3]?.weight ?? 0) < 600) failures.push(`${tag}: band 3 is not semibold`);
+              const worst = captions.find((row) => row.text?.includes("99.9k"));
+              if (!worst) failures.push(`${tag}: the worst-case row is missing`);
+              const unit = lang === "uk" ? "токен" : "token";
+              if (!captions.every((row) => (row.title ?? "").includes(unit))) failures.push(`${tag}: a hover title is not in ${lang}`);
+              if (read.scrollWidth > read.clientWidth + 0.5) failures.push(`${tag}: the page overflows sideways`);
+              if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join(" | ")}`);
+              await page.locator("[data-context-tokens-feed]").screenshot({ path: path.join(pngDir, `tool-call-tokens-${width}-${scheme}-${lang}.png`) });
+            } finally { await context.close(); }
+          }
+        }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.mkdirSync("evidence/tool-call-tokens", { recursive: true });
+    fs.writeFileSync("evidence/tool-call-tokens/rows.json", `${JSON.stringify({ readings }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 120_000);
+});

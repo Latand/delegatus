@@ -24,6 +24,7 @@ import { decodeTerminalText } from "./ansi";
 import { elapsedDurationMs, timestampMilliseconds } from "./duration";
 import { diffFromApplyPatch, diffFromCodexFileChange, normalizeEdit, type DiffModel, type FileDiff } from "./diff";
 import { feedCopy, taskText } from "./toolMeaning";
+import { createContextLedger, sumContextTokens, type ContextTokens } from "./contextTokens";
 import { familyOf, isToolSchemaLoader, summarizeTool, type ArgChip, type FeedEngine, type ToolFamily } from "./tools";
 
 /* Feed labels resolve against the active locale at build/render time; a locale
@@ -134,6 +135,10 @@ export type ToolEvent = {
   durationMs?: number;
   /** Result timestamp, once the tool result attaches (end of the run). */
   endTs?: unknown;
+  /** Tokens this call's result added to the conversation's context
+      (docs/design/tool-call-tokens.md). Absent while the call runs and
+      whenever the transcript gives no basis; never zero. */
+  contextTokens?: ContextTokens;
   /** stderr split from the combined result, rendered in its own disclosure. */
   stderr?: string;
   stderrTruncated?: boolean;
@@ -248,6 +253,8 @@ export type CmdGroupItem = {
   okCount: number;
   errCount: number;
   hasErr: boolean;
+  /** Sum of the settled calls' context tokens (docs/design/tool-call-tokens.md). */
+  contextTokens?: ContextTokens;
   /** True while this is the live trailing run: one expanded aggregate that
       shows every command and its output immediately. Flips to false when the
       run settles (a new turn appends after it, or the session stops being
@@ -444,6 +451,15 @@ function textPart(value: unknown): string {
     reads files and so cannot be imported into a client bundle; both definitions
     describe the same on-disk value. */
 const OPENCLAW_SYNTHETIC_PROVIDER = "openclaw";
+
+/** Claude attachment records whose content enters the prompt between two
+    responses, so the round they fall in cannot be measured (§3.3 of
+    docs/design/tool-call-tokens.md). Everyday reminders are not listed. */
+const CONTEXT_ATTACHMENT_TYPES: ReadonlySet<string> = new Set([
+  "queued_command", "edited_text_file", "environment", "file", "nested_memory", "hook_additional_context",
+  "deferred_tools_delta", "mcp_instructions_delta", "agent_listing_delta", "skill_listing", "instructions",
+  "compact_file_reference", "thinking_drop",
+]);
 
 /** Narrow a session's configured engine to the set the rows carry. */
 function feedEngine(engine: string): FeedEngine {
@@ -719,7 +735,9 @@ function normalizeCodexUserContent(content: unknown): CodexUserContent {
 type ToolImageBlock = Extract<ToolOutputBlock, { type: "image" }>;
 /** A tool result parsed for the card: the flattened text every consumer reads,
     and — only when a picture survived — the ordered blocks the card draws. */
-type ToolOutput = { text: string; blocks?: ToolOutputBlock[] };
+type ToolOutput = { text: string; blocks?: ToolOutputBlock[];
+  /** Pictures the result carried, drawable or not: each costs context tokens. */
+  rasters?: number };
 
 const BASE64_BODY_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
@@ -752,6 +770,7 @@ function toolOutputFromBlocks(parts: unknown[], decorate: (image: ToolImageBlock
   const texts: string[] = [];
   const blocks: ToolOutputBlock[] = [];
   let pictures = 0;
+  let rasters = 0;
   const pushText = (text: string) => {
     if (!text) return;
     texts.push(text);
@@ -776,6 +795,7 @@ function toolOutputFromBlocks(parts: unknown[], decorate: (image: ToolImageBlock
       continue;
     }
     if (block.type === "input_image" || block.type === "image") {
+      rasters += 1;
       const image = toolImageBlock(block);
       if (image) {
         pictures += 1;
@@ -789,7 +809,7 @@ function toolOutputFromBlocks(parts: unknown[], decorate: (image: ToolImageBlock
     const type = redactTranscriptText(textPart(block.type)).slice(0, ATTACHMENT_TYPE_MAX);
     pushText(`[${type ? tr("render.toolOutputType", { type }) : tr("render.toolOutput")}]`);
   }
-  return { text: texts.join("\n"), ...(pictures ? { blocks } : {}) };
+  return { text: texts.join("\n"), ...(pictures ? { blocks } : {}), ...(rasters ? { rasters } : {}) };
 }
 
 /** Responses custom tools return either plain text or typed text blocks, and a
@@ -1621,6 +1641,28 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
 
   const entryIndex = (seq: number): number => (entries.length ? seq - entries[0].seq : -1);
 
+  /* Context tokens per tool call (docs/design/tool-call-tokens.md): the ledger
+     settles each value once, when a result attaches (estimate) or when the next
+     response's usage lands (measured / shared), and this patch is the only way
+     it reaches a row. A measured or shared value is never replaced by an
+     estimate, and an unchanged value changes no identity. */
+  const ledger = createContextLedger(feedEngine(cfg.engine), (id, value) => {
+    const callRec = calls.get(id);
+    if (!callRec) return;
+    const held = callRec.event.contextTokens;
+    if (held) {
+      if (held.basis !== "estimate" && value.basis === "estimate") return;
+      if (held.n === value.n && held.basis === value.basis && held.round?.total === value.round?.total && held.round?.calls === value.round?.calls) return;
+    }
+    const event = retainSessionOwner({ ...callRec.event, contextTokens: value }, sessionOwnership.get(callRec.event));
+    callRec.event = event;
+    const idx = entryIndex(callRec.seq);
+    if (idx >= 0 && idx < entries.length && entries[idx].item.kind === "tool") {
+      entries[idx] = { ...entries[idx], item: event };
+      snapshot = null;
+    }
+  }, (id) => calls.has(id));
+
   const push = (item: Item, submissionDedup?: string): number => {
     entries.push({ seq: pushSeq, bornSrc: curSrc, src: curSrc, reasoningBoundary, item,
       ...(submissionDedup ? { submissionDedup } : {}) });
@@ -2008,7 +2050,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   };
   /* Attaches a result copy-on-write: the record gets a fresh ToolEvent and the
      owning entry a fresh item, so exactly one row changes identity. */
-  const attach = (callRec: CallRec | undefined, output: string, errFlag?: boolean, rawSession?: string, resultTs?: unknown, blocks?: ToolOutputBlock[]) => {
+  const attach = (callRec: CallRec | undefined, output: string, errFlag?: boolean, rawSession?: string, resultTs?: unknown, blocks?: ToolOutputBlock[], measure?: { chars: number; rasters: number }) => {
     if (!callRec) return null;
     const code = output.match(/exited with code (\d+)/)?.[1];
     /* Codex interactive-shell wall time, read before the preamble is stripped, so
@@ -2145,15 +2187,20 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     /* A wakeup that just failed no longer supersedes the prior valid one — its
        result changed the active/superseded assignment across the set. */
     if (wakeup && wakeup.failed) recomputeWakeupStates();
+    /* An operation the open exec window claimed is sized but shows no estimate
+       of its own: the outer exec either stays visible and carries the number,
+       or is represented by these rows and splits its value over them (§3.4). */
+    if (measure) ledger.result(event.id, measure.chars, measure.rasters, execWindow?.seen.has(event.id) === true);
     return event;
   };
   const schemaLoaderCalls = new Set<string>();
-  const addOutput = (callId: string | undefined, output: string, err?: boolean, rawSession?: string, resultTs?: unknown, blocks?: ToolOutputBlock[]) => {
+  const addOutput = (callId: string | undefined, output: string, err?: boolean, rawSession?: string, resultTs?: unknown, blocks?: ToolOutputBlock[], rasters?: number) => {
     if (!callId || schemaLoaderCalls.has(callId)) return;
     pendingExecs.delete(callId);
     if (execWindow?.id === callId) {
       if (!execWindow.remaining.length && execWindow.seen.size && !err && !/^\s*(?:Script (?:running|failed)|\w*Error:)/i.test(output)) {
         representedExecs.add(callId);
+        ledger.represent(callId, [...execWindow.seen]);
         snapshot = null;
       }
       execWindow = null;
@@ -2177,7 +2224,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     const pictured = !viewed || err || blocks?.some((block) => block.type === "image")
       ? blocks
       : [...(output ? [{ type: "text" as const, text: output }] : []), { type: "image" as const, path: viewed }];
-    const event = attach(calls.get(callId), output, err, rawSession, resultTs, pictured);
+    const event = attach(calls.get(callId), output, err, rawSession, resultTs, pictured, { chars: output.length, rasters: rasters ?? 0 });
     if (!event && output && showSvc) push({ kind: "svc", text: "output: " + redactSecrets(output).slice(0, 200) });
   };
   /* A `view_image_tool_call` event names the file the call with that id opened
@@ -2282,6 +2329,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       ...event,
       ts: existing.event.ts,
       ...(event.status !== "run" ? { endTs: event.endTs ?? event.ts } : {}),
+      ...(event.contextTokens === undefined && existing.event.contextTokens ? { contextTokens: existing.event.contextTokens } : {}),
     };
     existing.event = next;
     const idx = entryIndex(existing.seq);
@@ -2371,7 +2419,9 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     });
     upsertCodexThreadTool({ ...base, status, statusLabel: codexThreadStatusLabel(status) });
     if (status !== "run") {
-      attach(calls.get(id), toolOutputText(opts.output), status === "err", undefined, opts.timing.endTs ?? opts.timing.ts, opts.blocks);
+      const threadOutput = toolOutput(opts.output);
+      attach(calls.get(id), threadOutput.text, status === "err", undefined, opts.timing.endTs ?? opts.timing.ts, opts.blocks,
+        { chars: threadOutput.text.length, rasters: threadOutput.rasters ?? 0 });
     }
     const current = calls.get(id)?.event;
     if (!current) return;
@@ -2569,7 +2619,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       const status = codexThreadToolStatus(item, lifecycle);
       upsertCodexThreadTool({ ...base, status, statusLabel: codexThreadStatusLabel(status) });
       if (status !== "run") {
-        attach(calls.get(id), codexCommandOutput(item), status === "err", undefined, timing.endTs ?? timing.ts);
+        const commandOutput = codexCommandOutput(item);
+        attach(calls.get(id), commandOutput, status === "err", undefined, timing.endTs ?? timing.ts, undefined, { chars: commandOutput.length, rasters: 0 });
       }
       const current = calls.get(id)?.event;
       if (current) {
@@ -2799,6 +2850,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const addCodexEventUser = (ts: unknown, text: string) =>
     addCodexUserRecord(ts, { ...decodeCodexStructuredUserText(text), rawText: text, attachments: [] });
   const addCompact = (ts: unknown, meta?: { trigger?: string; preTokens?: number }) => {
+    ledger.contaminate();
     push({ kind: "compact", ts, trigger: meta?.trigger, preTokens: meta?.preTokens });
   };
   /* The Claude compact summary follows its boundary record; attach it there,
@@ -2844,7 +2896,10 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       reasoningBoundary += 1;
     }
     if (obj.type === "event_msg") {
-      if (p.type === "user_message" && p.message) return addCodexEventUser(ts, textPart(p.message));
+      if (p.type === "user_message" && p.message) {
+        ledger.contaminate();
+        return addCodexEventUser(ts, textPart(p.message));
+      }
       const lifecycle = codexThreadItemKind(p.type);
       const threadItem = rec(p.item);
       /* The thread lifecycle's own records of a user message (#1398) are
@@ -2853,6 +2908,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
          on screen and opens no second one. */
       if (codexThreadItemKind(threadItem.type) === "usermessage" && (lifecycle === "itemcompleted" || lifecycle === "itemstarted")) {
         if (lifecycle === "itemstarted") return addSvc(`${textPart(threadItem.type)} ${lifecycle}`);
+        ledger.contaminate();
         return addCodexUserRecord(codexThreadTiming(p, ts).ts, normalizeCodexUserContent(threadItem.content));
       }
       finalizePendingCodexUsers();
@@ -2874,6 +2930,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
         return addNote(tr("render.taskComplete") + (ts ? " · " + hhmm(ts) : ""));
       }
       if (p.type === "context_compacted") {
+        ledger.contaminate();
         if (codexCompacted) return void (codexCompacted = null);
         return addCompact(ts);
       }
@@ -2890,7 +2947,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
         if (!mcp) return addSvc("mcp_tool_call_end");
         const parsed = codexMcpResult(p.result);
         const call = existing ?? registerCall(newToolEvent({ ts, id, tool: `mcp__${mcp.serverName}__${mcp.toolName}`, args: mcp.args, engine: "codex", mcp }));
-        attach(call, parsed.output, parsed.error, undefined, ts);
+        attach(call, parsed.output, parsed.error, undefined, ts, undefined, { chars: parsed.output.length, rasters: 0 });
         if (call.event.mcp && parsed.result) {
           const event = { ...call.event, mcp: { ...call.event.mcp, result: boundedMcpRecord(parsed.result) } };
           call.event = event;
@@ -2899,6 +2956,11 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
           snapshot = null;
         }
         return;
+      }
+      if (p.type === "token_count") {
+        const last = rec(rec(p.info).last_token_usage);
+        const prompt = num(last.input_tokens);
+        if (prompt !== undefined) ledger.codexUsage(prompt, num(last.output_tokens) ?? 0, num(rec(rec(p.info).total_token_usage).total_tokens));
       }
       if (p.type === "view_image_tool_call") {
         addViewedImagePath(textPart(p.call_id), textPart(p.path));
@@ -2930,6 +2992,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       const directItemType = textPart(p.type);
       if (!directItemType.includes("_") && renderCodexThreadItem(p, codexThreadTiming(p, ts), "itemcompleted", "response-assistant")) return;
       if (p.type === "message") {
+        if (p.role !== "assistant") ledger.contaminate();
         if (p.role === "user") return addCodexResponseUser(ts, p.content);
         finalizePendingCodexUsers();
         const text = normalizeCodexUserContent(p.content).text;
@@ -2942,6 +3005,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
         return addSysMsg(text, textPart(p.role));
       }
       finalizePendingCodexUsers();
+      if (p.type === "function_call" && textPart(p.call_id)) ledger.member(textPart(p.call_id));
       if (p.type === "function_call") {
         let args: Record<string, unknown> = {};
         try {
@@ -2972,12 +3036,13 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       }
       if (p.type === "function_call_output") {
         const rawSession = toolOutputSession(p.output);
-        const { text: output, blocks } = toolOutput(p.output);
-        return addOutput(textPart(p.call_id), output, toolOutputFailed(output), rawSession, ts, blocks);
+        const { text: output, blocks, rasters } = toolOutput(p.output);
+        return addOutput(textPart(p.call_id), output, toolOutputFailed(output), rawSession, ts, blocks, rasters);
       }
       /* Fresh rollouts wrap apply_patch as a "custom_tool_call": `input` is the
          raw patch text directly (unlike function_call, whose `arguments` is a
          JSON-encoded string), so no JSON.parse step is needed here. */
+      if (p.type === "custom_tool_call" && (textPart(p.call_id) || textPart(p.id))) ledger.member(textPart(p.call_id) || textPart(p.id));
       if (p.type === "custom_tool_call" && textPart(p.name) === "apply_patch") {
         return void addPatch(ts, textPart(p.input), textPart(p.call_id) || textPart(p.id));
       }
@@ -2989,10 +3054,13 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       }
       if (p.type === "custom_tool_call_output") {
         const rawSession = toolOutputSession(p.output);
-        const { text: output, blocks } = toolOutput(p.output);
-        return addOutput(textPart(p.call_id), output, toolOutputFailed(output), rawSession, ts, blocks);
+        const { text: output, blocks, rasters } = toolOutput(p.output);
+        return addOutput(textPart(p.call_id), output, toolOutputFailed(output), rawSession, ts, blocks, rasters);
       }
       if (p.type === "reasoning" || p.type === "agent_message") return addSvc(textPart(p.type));
+      /* Calls the feed draws no card for still cost context: a member without a
+         result keeps its round from crediting the visible calls beside it. */
+      if (p.type === "local_shell_call" || p.type === "web_search_call") ledger.member(textPart(p.call_id) || textPart(p.id) || "hidden-" + curSrc);
       return addRecord(ts, textPart(p.type) || "item", p);
     }
     finalizePendingCodexUsers();
@@ -3000,6 +3068,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       return addNote(`${tr("render.codexSessionCreated")} · ${textPart(p.model)} · ${textPart(p.cwd)}`);
     }
     if (obj.type === "compacted") {
+      ledger.contaminate();
       codexCompacted = { src: curSrc };
       return addCompact(ts);
     }
@@ -3012,9 +3081,16 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   };
   const renderClaude = (obj: Record<string, unknown>) => {
     const ts = obj.timestamp;
+    /* A subagent's own records belong to a different conversation's context. */
+    const sidechain = obj.isSidechain === true;
+    if (obj.type === "attachment" && !sidechain && CONTEXT_ATTACHMENT_TYPES.has(textPart(rec(obj.attachment).type))) ledger.contaminate();
     if (obj.type === "user" && obj.message) {
       const content = rec(obj.message).content;
       const fileWrap = rec(rec(obj.toolUseResult).file);
+      if (!sidechain && (obj.isCompactSummary === true || !Array.isArray(content)
+        || content.some((part) => !part || typeof part !== "object" || (part as Record<string, unknown>).type !== "tool_result"))) {
+        ledger.contaminate();
+      }
       /* The post-compaction summary is injected as a user record, but it is
          the compactor talking — fold it into the boundary marker instead of
          rendering a giant bubble the user never wrote. */
@@ -3053,14 +3129,27 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
             const output = pictures
               ? toolOutputFromBlocks(inner, (image) => (pictures === 1 ? withFileDimensions(image, fileWrap) : image))
               : { text: inner.map((x) => textPart(x.text)).join(" ") };
-            addOutput(textPart(part.tool_use_id), output.text, part.is_error === true, undefined, ts, output.blocks);
+            addOutput(textPart(part.tool_use_id), output.text, part.is_error === true, undefined, ts, output.blocks,
+              output.rasters ?? inner.filter((block) => block.type === "image").length);
           }
         }
       }
       return;
     }
     if (obj.type === "assistant" && obj.message) {
-      for (const part of arr(rec(obj.message).content)) {
+      const message = rec(obj.message);
+      const counted = !sidechain && textPart(message.model) !== "<synthetic>";
+      if (counted) {
+        const usage = rec(message.usage);
+        const input = num(usage.input_tokens);
+        const read = num(usage.cache_read_input_tokens);
+        const created = num(usage.cache_creation_input_tokens);
+        const measured = input !== undefined || read !== undefined || created !== undefined;
+        ledger.claudeResponse(textPart(message.id) || textPart(obj.requestId) || null,
+          measured ? (input ?? 0) + (read ?? 0) + (created ?? 0) : null, num(usage.output_tokens) ?? 0);
+      }
+      for (const part of arr(message.content)) {
+        if (counted && part.type === "tool_use" && textPart(part.id)) ledger.member(textPart(part.id));
         if (part.type === "text" && textPart(part.text).trim()) {
           addProse(ts, textPart(part.text), textPart(obj.uuid) || undefined);
         }
@@ -3120,6 +3209,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       return;
     }
     if (obj.type === "system" && obj.subtype === "compact_boundary") {
+      if (!sidechain) ledger.contaminate();
       const meta = rec(obj.compactMetadata);
       return addCompact(ts, { trigger: textPart(meta.trigger) || undefined, preTokens: num(meta.preTokens) });
     }
@@ -3385,7 +3475,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     } else renderPlain(line);
   };
 
-  const reset = () => {
+  const reset = (start: number) => {
+    ledger.reset(start > 0);
     entries.length = 0;
     conversationCwd = cfg.cwd ?? "";
     reasoningBoundary = 0;
@@ -3431,6 +3522,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const dropBefore = (start: number): boolean => {
     const crossedEchoSeam = entries.some((entry) => entry.bornSrc < start && entry.src >= start);
     const crossedOpenTurn = turnOpen && turnStartedSrc !== null && turnStartedSrc < start;
+    const orphaned: string[] = [];
     while (entries.length && entries[0].src < start) {
       const gone = entries.shift()!;
       snapshot = null;
@@ -3439,13 +3531,32 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
         const callRec = calls.get(gone.item.id);
         /* A later tool_result for an evicted call now falls back to the svc
            row, exactly like a full re-parse of the shortened window would. */
-        if (callRec && callRec.seq === gone.seq) calls.delete(gone.item.id);
+        if (callRec && callRec.seq === gone.seq) {
+          calls.delete(gone.item.id);
+          orphaned.push(...ledger.forget(gone.item.id));
+        }
       }
       const tkey = tmsgKeyBySeq.get(gone.seq);
       if (tkey !== undefined) {
         tmsgKeyBySeq.delete(gone.seq);
         if (tmsgSeqs.get(tkey) === gone.seq) tmsgSeqs.delete(tkey);
       }
+    }
+    /* Rows a now-evicted code-mode exec stood for fall back to the estimate of
+       their own result, as a re-parse of the shortened window would show: it has
+       no exec to take a share from. */
+    for (const id of orphaned) {
+      const callRec = calls.get(id);
+      if (!callRec?.event.contextTokens) continue;
+      const { contextTokens: _stale, ...rest } = callRec.event;
+      const event = retainSessionOwner(rest, sessionOwnership.get(callRec.event));
+      callRec.event = event;
+      const idx = entryIndex(callRec.seq);
+      if (idx >= 0 && idx < entries.length && entries[idx].item.kind === "tool") {
+        entries[idx] = { ...entries[idx], item: event };
+        snapshot = null;
+      }
+      ledger.estimate(id);
     }
     for (const [src, count] of hiddenSvcBySrc) {
       if (src >= start) break;
@@ -3558,6 +3669,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
           const byTool: Record<string, number> = {};
           let okCount = 0;
           let errCount = 0;
+          const contextTokens = sumContextTokens(grouped.map((entry) => entry.item));
           let groupEndedAt = grouped.at(-1)?.item.endTs ?? grouped.at(-1)?.item.ts;
           let groupEndedAtMs = timestampMilliseconds(groupEndedAt);
           for (const entry of grouped) {
@@ -3582,6 +3694,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
             okCount,
             errCount,
             hasErr: errCount > 0,
+            ...(contextTokens ? { contextTokens } : {}),
             active: isLiveTail,
           };
         }
@@ -3603,7 +3716,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     /* A window that moved backwards (prepended history, truncation reset) or
        past unseen lines cannot be resumed — re-parse it whole. */
     if (consumedEnd === null || end < consumedEnd || start > consumedEnd || start < lastStart) {
-      reset();
+      reset(start);
       consumedEnd = start;
     }
     /* Same window, different bytes: a session that outlives its pane (#1432,
@@ -3611,12 +3724,12 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
        line count. The last consumed line is the cheapest witness; when it no
        longer matches, nothing consumed can be trusted. */
     if (consumedEnd > start && lines[consumedEnd - start - 1] !== lastConsumedLine) {
-      reset();
+      reset(start);
       consumedEnd = start;
     }
     lastStart = start;
     if (dropBefore(start)) {
-      reset();
+      reset(start);
       consumedEnd = start;
     }
     for (let i = consumedEnd - start; i < lines.length; i += 1) {

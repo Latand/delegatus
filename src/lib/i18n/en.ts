@@ -1849,6 +1849,17 @@ export const en = {
   "tools.durationSec": "{n}s",
   "tools.durationMin": "{m}m {s}s",
   "tools.durationMs": "{n}ms",
+  "tools.contextTokens.measured": { one: "{n} token added to the context by this call", other: "{n} tokens added to the context by this call" },
+  "tools.contextTokens.shared": {
+    one: "Approximately {n} token added to the context by this call: its share, by result size, of {total} measured for {calls} parallel calls",
+    other: "Approximately {n} tokens added to the context by this call: its share, by result size, of {total} measured for {calls} parallel calls",
+  },
+  "tools.contextTokens.estimate": {
+    one: "Approximately {n} token added to the context by this call, estimated from the size of its result",
+    other: "Approximately {n} tokens added to the context by this call, estimated from the size of its result",
+  },
+  "tools.contextTokens.groupMeasured": { one: "{n} token added to the context by these calls", other: "{n} tokens added to the context by these calls" },
+  "tools.contextTokens.groupEstimate": { one: "Approximately {n} token added to the context by these calls", other: "Approximately {n} tokens added to the context by these calls" },
   "tools.ranAt": "{start}–{end}",
   "tools.nestedWaits": { one: "{count} follow-up", other: "{count} follow-ups" },
 

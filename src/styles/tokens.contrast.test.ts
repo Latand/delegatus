@@ -47,6 +47,7 @@ test("state text roles clear the small-text contrast floor on every surface they
   const successSoft = values("color-success-soft");
   const warning = values("color-warning");
   const warningSoft = values("color-warning-soft");
+  const caution = values("color-caution");
 
   for (const scheme of [0, 1]) {
     const surfaces = [canvas[scheme], card[scheme], sunken[scheme], board[scheme], well[scheme], quiet[scheme]].filter(Boolean);
@@ -55,11 +56,20 @@ test("state text roles clear the small-text contrast floor on every surface they
       expect(contrast(muted[scheme], surface)).toBeGreaterThanOrEqual(AA_SMALL_TEXT);
       expect(contrast(success[scheme], surface)).toBeGreaterThanOrEqual(AA_SMALL_TEXT);
       expect(contrast(warning[scheme], surface)).toBeGreaterThanOrEqual(AA_SMALL_TEXT);
+      expect(contrast(caution[scheme], surface)).toBeGreaterThanOrEqual(AA_SMALL_TEXT);
     }
     /* Both roles are also used as text on their own -soft fill (chips, cards). */
     expect(contrast(success[scheme], successSoft[scheme])).toBeGreaterThanOrEqual(AA_SMALL_TEXT);
     expect(contrast(warning[scheme], warningSoft[scheme])).toBeGreaterThanOrEqual(AA_SMALL_TEXT);
   }
+});
+
+/* The tool-call token caption (docs/design/tool-call-tokens.md) adds one role,
+   `caution`, for the 10 000–19 999 band. Its two dark blocks must agree. */
+test("the caution role exists once per scheme and both dark blocks agree", () => {
+  const caution = values("color-caution");
+  expect(caution.length).toBe(3);
+  expect(caution[1]).toBe(caution[2]);
 });
 
 /* The Delegatus brand fill carries the label of every filled primary action, so
@@ -122,7 +132,7 @@ test("the design system §1.5 table documents the shipped token values", () => {
   expect(section).toContain("#");
 
   /* §1.5 row label → the `--color-*` token it documents. */
-  const documented = { "text-muted": "color-muted", success: "color-success", warning: "color-warning" } as const;
+  const documented = { "text-muted": "color-muted", success: "color-success", warning: "color-warning", caution: "color-caution" } as const;
 
   for (const [label, token] of Object.entries(documented)) {
     const [light, dark] = values(token);
