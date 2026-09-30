@@ -709,21 +709,35 @@ async function recoverReclaimedMessage(
       client,
     });
   } catch (error) {
+    const failure = `${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : String(error)}`;
+    if (error instanceof StructuredResumeUnpublishedError) {
+      const settled = registry.terminalizeHeldDelivery(reservation.id, failure);
+      return {
+        ok: false,
+        structured: true,
+        outcome: "failed",
+        error: settled.error ?? failure,
+        status: 503,
+        operationId: admitted.operationId,
+      };
+    }
+    requestDeliveryDrain(dependencies.kick ?? kickStructuredDeliveryQueue);
     return {
-      ok: false,
+      ok: true,
       structured: true,
-      outcome: "failed",
-      error: `${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : String(error)}`,
-      status: 503,
+      target: null,
+      outcome: "held",
       operationId: admitted.operationId,
     };
   }
   if (!recovered) {
+    const failure = deliverabilityFailureMessage({ condition: "reclaimed" });
+    const settled = registry.terminalizeHeldDelivery(reservation.id, failure);
     return {
       ok: false,
       structured: true,
       outcome: "failed",
-      error: deliverabilityFailureMessage({ condition: "reclaimed" }),
+      error: settled.error ?? failure,
       status: 503,
       operationId: admitted.operationId,
     };
@@ -1078,7 +1092,14 @@ export async function enqueueStructuredMessage(
       );
       session = refreshed.session;
     } catch (error) {
-      return deliveryFailure(error);
+      /* A transport read can fail after the dead host was republished. Keep
+         the known dead projection and continue into durable reservation plus
+         bounded recovery, so an original-key lookup can find the operation.
+         A deterministic refusal before admission closes the MCP receipt with
+         its actual reason instead of leaving it unknown forever. */
+      if (!isRuntimeHostTransportFailure(error)) {
+        return refusedBeforeReservation(deliveryFailure(error));
+      }
     }
   }
   const recoveryRequired = !migrationOwnsSend

@@ -57,13 +57,14 @@ afterAll(() => {
 const { conversationHostPOST } = await import("@/app/api/conversation-host/handlers");
 const { AgentRegistry } = await import("@/lib/agent/registry");
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+const { RuntimeHostUnavailableError } = await import("@/lib/runtime/client");
 const { sendDownstreamKey, viewerMcpRecoverableTools, viewerMcpBindings, productionViewerControlDependencies } = await import("./bindings");
 const { createMcpToolService, MemoryMcpReceiptStore } = await import("./server");
 const { enqueueStructuredMessage } = await import("@/lib/runtime/structuredMessageDelivery");
 
 const transcriptPath = path.join(root, "recipient.jsonl");
 fs.writeFileSync(transcriptPath, "{}\n");
-const registry = new AgentRegistry(path.join(root, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+let registry = new AgentRegistry(path.join(root, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
 registry.reconcileConversations([{
   engine: "codex",
   path: transcriptPath,
@@ -72,8 +73,8 @@ registry.reconcileConversations([{
   turn: { state: "idle", source: "assistant", terminalAt: null },
   observedAt: "2026-09-09T08:00:00.000Z",
 }]);
-const recipient = Object.values(registry.snapshot().conversations)[0]!;
-const generationId = recipient.generations.at(-1)!.id;
+let recipient = Object.values(registry.snapshot().conversations)[0]!;
+let generationId = recipient.generations.at(-1)!.id;
 
 /** Every text the structured host was handed, in order — the count is what
     says no recovery ever admitted a second copy of a message. */
@@ -368,6 +369,162 @@ test("a send the Viewer refuses before reserving anything settles as not execute
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+  }
+});
+
+test("a transient readiness read after republish settles the original MCP key through durable admission", async () => {
+  const previousRegistry = { registry, recipient, generationId };
+  const isolatedRegistry = new AgentRegistry(path.join(root, "readiness-recovery-registry.json"), undefined, undefined, { sqliteMode: "off" });
+  isolatedRegistry.reconcileConversations([{
+    engine: "codex",
+    path: transcriptPath,
+    accountId: "recovery-fixture-account",
+    launchProfile: emptyLaunchProfile({ cwd: root }),
+    turn: { state: "idle", source: "assistant", terminalAt: null },
+    observedAt: "2026-09-09T08:00:00.000Z",
+  }]);
+  registry = isolatedRegistry;
+  recipient = Object.values(registry.snapshot().conversations)[0]!;
+  generationId = recipient.generations.at(-1)!.id;
+  const generation = recipient.generations.at(-1)!;
+  registry.upsert({
+    key: { engine: recipient.engine, sessionId: generation.id },
+    artifactPath: generation.path,
+    cwd: root,
+    accountId: generation.accountId,
+    launchProfile: generation.launchProfile,
+    status: "dead",
+    host: null,
+    structuredHost: {
+      kind: "codex-app-server",
+      endpoint: "stdio:recovery-fixture",
+      process: null,
+      eventCursor: 0,
+      protocolVersion: "v2",
+      writerClaimEpoch: 1,
+      activeTurnRef: null,
+      pendingAttention: [],
+      activeFlags: [],
+    },
+    claimEpoch: 1,
+    claimOwner: null,
+    pendingAction: null,
+  });
+  const runtimeSession = (host: "dead" | "hosted") => ({
+    conversationId: recipient.id,
+    sessionKey: { engine: recipient.engine, sessionId: generation.id },
+    hostKind: "codex-app-server",
+    host,
+    turn: "idle",
+    provenance: "structured",
+    revision: 1,
+    attentionIds: [],
+    recentReceipts: [],
+    accountId: generation.accountId,
+    parentConversationId: null,
+    flowId: null,
+    workflowId: null,
+    cwd: root,
+    artifactPath: generation.path,
+    capabilities: { steer: true, structuredAttention: true },
+    activeTurnId: null,
+  }) as never;
+  let reads = 0;
+  let commandCount = 0;
+  const client = {
+    readSession: async () => {
+      reads += 1;
+      if (reads === 1) return runtimeSession("dead");
+      if (reads === 2) throw new RuntimeHostUnavailableError("runtime host request timed out");
+      return runtimeSession("hosted");
+    },
+    command: async ({ operationId }: { operationId: string }) => {
+      commandCount += 1;
+      return { operationId, receipt: { status: "delivered" } };
+    },
+    operationStatus: async (operationId: string) => ({ operationId, receipt: { status: "delivered" } }),
+  } as never;
+  const domain = {
+    registrySnapshot: () => registry.readOnlySnapshot(),
+    attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_caller" }),
+    callerAttribution: () => ({ kind: "worker", conversationId: "conversation_caller" }),
+    recoveryPredecessors: () => [],
+    sendSettlementPorts: () => ({ registry, client }),
+  } as never;
+  const receipts = new MemoryMcpReceiptStore();
+  const service = () => createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(), domain), receipts, undefined, { recovery: viewerMcpRecoverableTools(domain) });
+  const posts: string[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    posts.push(new URL(request.url).pathname);
+    return conversationHostPOST(new NextRequest("http://127.0.0.1/api/conversation-host", {
+      method: "POST",
+      headers: { host: "127.0.0.1", "content-type": "application/json" },
+      body: await request.text(),
+    }));
+  } });
+  const saved = { url: process.env.LLV_VIEWER_CONTROL_URL, target: process.env.LLV_VIEWER_DEPLOY_TARGET, port: process.env.LLV_VIEWER_PORT };
+  process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
+  delete process.env.LLV_VIEWER_DEPLOY_TARGET;
+  delete process.env.LLV_VIEWER_PORT;
+  structuredSend = (request) => enqueueStructuredMessage(request, {
+    enabled: () => true,
+    registry: () => registry,
+    client: () => client,
+    republish: async () => true,
+    recover: async () => {
+      registry.upsert({
+        key: { engine: recipient.engine, sessionId: generation.id },
+        artifactPath: generation.path,
+        cwd: root,
+        accountId: generation.accountId,
+        launchProfile: generation.launchProfile,
+        status: "idle",
+        host: null,
+        structuredHost: {
+          kind: "codex-app-server",
+          endpoint: "stdio:recovery-fixture",
+          process: { pid: process.pid, startIdentity: null },
+          eventCursor: 0,
+          protocolVersion: "v2",
+          writerClaimEpoch: 2,
+          activeTurnRef: null,
+          pendingAttention: [],
+          activeFlags: [],
+        },
+        claimEpoch: 2,
+        claimOwner: "structured-host:recovery-fixture",
+        pendingAction: null,
+      });
+      return { target: null, path: generation.path, conversationId: recipient.id, spawned: true } as never;
+    },
+    requestMigrationTick: () => {},
+    kick: () => {},
+  });
+  const args = { clientRequestId: "republish-read-timeout", conversationId: recipient.id, text: "deliver after readiness retry" };
+  try {
+    const first = await service().callTool("send_message", args);
+    expect(first).toMatchObject({ ok: true });
+    expect(JSON.stringify(first)).not.toContain("outcome_unknown");
+
+    const recovered = await service().callTool("send_message", { ...args, recoveryOnly: true });
+    expect(recovered).toMatchObject({ ok: true });
+    expect(JSON.stringify(recovered)).not.toContain("outcome_unknown");
+    expect(reads).toBeGreaterThanOrEqual(3);
+    expect(commandCount).toBe(1);
+    expect(posts).toHaveLength(1);
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)
+      .filter((held) => held.clientMessageId === sendDownstreamKey(args.clientRequestId))).toHaveLength(1);
+  } finally {
+    structuredSend = null;
+    await server.stop(true);
+    for (const [key, value] of [["LLV_VIEWER_CONTROL_URL", saved.url], ["LLV_VIEWER_DEPLOY_TARGET", saved.target], ["LLV_VIEWER_PORT", saved.port]] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    isolatedRegistry.close();
+    registry = previousRegistry.registry;
+    recipient = previousRegistry.recipient;
+    generationId = previousRegistry.generationId;
   }
 });
 

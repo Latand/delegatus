@@ -2868,7 +2868,9 @@ test("a held message whose resume keeps failing stays queued, then fails with th
 test("a terminal resume failure fences its reservation before a competing resend can drain", async () => {
   const { registry, conversation } = registryWithConversation();
   const dead = snapshot(conversation.id);
-  dead.sessions[0] = { ...dead.sessions[0]!, host: "dead" };
+  /* Missing runtime rows take the reclaimed helper directly; a dead row
+     alone takes the separate refresh/recovery branch. */
+  dead.sessions = [];
   let reads = 0;
   let recoveryClock = Date.now();
   const arrivals: string[] = [];
@@ -2932,6 +2934,36 @@ test("a terminal resume failure fences its reservation before a competing resend
   expect(arrivals).toEqual(["one user message"]);
   expect(Object.values(registry.snapshot().heldDeliveries)
     .filter((delivery) => delivery.clientMessageId === "resume-timeout-original")[0]).toMatchObject({ state: "failed" });
+  registry.close();
+});
+
+test("a transient missing-session recovery keeps its original reservation pending", async () => {
+  const { registry, conversation } = registryWithConversation();
+  let kicks = 0;
+  const client = {
+    readSession: sessionReader(async () => ({ ...snapshot(conversation.id), sessions: [] })),
+    command: async () => { throw new Error("a transient recovery must not dispatch"); },
+  } as unknown as RuntimeHostClient;
+  const pending = await enqueueStructuredMessage({
+    path: artifactPath,
+    conversationId: conversation.id,
+    clientMessageId: "transient-resume-original",
+    text: "one pending user message",
+    hasImages: false,
+  }, {
+    enabled: () => true,
+    client: () => client,
+    registry: () => registry,
+    recover: async () => { throw new Error("runtime host request timed out"); },
+    kick: () => { kicks += 1; },
+  });
+
+  expect(pending).toMatchObject({ ok: true, outcome: "held", operationId: expect.any(String) });
+  const original = Object.values(registry.snapshot().heldDeliveries)
+    .find((delivery) => delivery.clientMessageId === "transient-resume-original")!;
+  expect(original).toMatchObject({ state: "assigned", text: "one pending user message" });
+  expect(pending).toMatchObject({ operationId: original.command.operationId });
+  expect(kicks).toBe(1);
   registry.close();
 });
 
@@ -3694,7 +3726,7 @@ for (const projection of ["missing-session", "unhosted-projection"] as const) {
     };
 
     // ── The resume fails: the account lock is busy ────────────────────────────
-    const refused = await enqueueStructuredMessage(message, {
+    const pending = await enqueueStructuredMessage(message, {
       ...dependencies,
       recover: async () => {
         recoveryCalls += 1;
@@ -3714,11 +3746,10 @@ for (const projection of ["missing-session", "unhosted-projection"] as const) {
     });
     expect(reservedBeforeRecovery[0]!.runtimeImages).toEqual([imageRef]);
     expect(stores).toBe(1);
-    // The failure names the reason and the operation, so the browser can show
-    // one retry against this message rather than a bare 503.
-    expect(refused).toMatchObject({ ok: false, outcome: "failed", status: 503 });
-    expect((refused as { error: string }).error).toContain("account lock is busy");
-    expect((refused as { operationId?: string }).operationId)
+    // A transient recovery error keeps the same durable operation pending;
+    // the queue remains its sole actuator while the host becomes ready.
+    expect(pending).toMatchObject({ ok: true, outcome: "held" });
+    expect((pending as { operationId?: string }).operationId)
       .toBe(reservedBeforeRecovery[0]!.command.operationId);
     expect(commands).toHaveLength(0);
 
