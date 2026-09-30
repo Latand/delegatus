@@ -35,6 +35,21 @@ import { chromium, type Frame, type Page } from "playwright-core";
 import { translate, type Locale } from "@/lib/i18n";
 
 import { buildWorld } from "./demo/world";
+import worker, { type DataPoint } from "../worker";
+
+type PerfRecord = {
+  type: string;
+  view?: string;
+  results?: number;
+  phone?: boolean;
+  screen?: string;
+  data?: { type?: string };
+};
+type PerfWindow = Window & {
+  perfRecords: PerfRecord[];
+  stepClick: number;
+  restoreSearch(): void;
+};
 
 const here = path.dirname(new URL(import.meta.url).pathname);
 const dist = process.env.LANDING_DIST_DIR ?? path.join(here, "dist");
@@ -42,6 +57,9 @@ const out = process.env.LANDING_RENDER_DIR ?? path.join(os.homedir(), "Pictures/
 const only = process.argv.find((arg) => arg.startsWith("--only="))?.slice("--only=".length) ?? null;
 const checkRuns = Number(process.argv.find((arg) => arg.startsWith("--check-request="))?.slice("--check-request=".length) ?? 0);
 const fullscreenCheck = process.argv.includes("--check-fullscreen");
+const eventsCheck = process.argv.includes("--check-events");
+const eventPoints: DataPoint[] = [];
+const eventBodies: unknown[] = [];
 const swipeCheck = process.argv.find((arg) => arg.startsWith("--check-swipe="))?.slice("--check-swipe=".length);
 if (!fs.existsSync(path.join(dist, "demo/demo.js"))) throw new Error("landing/site/dist is not built: run bun landing/site/build.ts first");
 fs.mkdirSync(out, { recursive: true });
@@ -50,6 +68,13 @@ const server = Bun.serve({
   hostname: "127.0.0.1",
   port: 0,
   async fetch(request) {
+    if (new URL(request.url).pathname.startsWith("/api/")) {
+      if (eventsCheck) eventBodies.push(await request.clone().json());
+      return worker.fetch(request, {
+        SITE_EVENTS: { writeDataPoint: (point) => { eventPoints.push(point); } },
+        ASSETS: { fetch: async () => new Response("not found", { status: 404 }) },
+      });
+    }
     let pathname = decodeURIComponent(new URL(request.url).pathname);
     if (pathname.endsWith("/")) pathname += "index.html";
     const file = Bun.file(path.join(dist, path.normalize(pathname)));
@@ -402,7 +427,7 @@ async function checkFullscreen() {
             await page.setViewportSize({ width: viewport.width === 1440 ? 1100 : 360, height: viewport.height === 900 ? 700 : 640 });
             await settle(page, 700);
             const resized = await measure(selector);
-            const [rw, rh] = resized.viewport.split("x").map(Number);
+            const [rw] = resized.viewport.split("x").map(Number);
             const [w2, h2] = resized.layout.split("x").map(Number);
             const [, hh2] = resized.host.split("x").map(Number);
             if (w2 !== rw || h2 !== hh2 || resized.transform !== "none") fail(`after resize iframe ${resized.layout} in ${resized.viewport}`);
@@ -432,6 +457,91 @@ async function checkFullscreen() {
   for (const failure of failures) console.error(failure);
   console.log(failures.length ? `${failures.length} failure(s)` : `${rows.length} full-screen cases hold`);
   return failures.length === 0;
+}
+
+// The browser sends real beacons to the local Worker with a recording binding.
+// No external analytics request is made by this check.
+async function checkEvents() {
+  if (process.env.LANDING_URL) throw new Error("--check-events requires the local recording server");
+  const rows: Record<string, unknown>[] = [];
+  for (const lang of ["en", "uk"] as Locale[]) {
+    for (const viewport of VIEWPORTS) {
+      const key = `${lang}-${viewport.name}`;
+      if (only && only !== key) continue;
+      const context = await browser.newContext({
+        viewport: { width: viewport.width, height: viewport.height },
+        ...(viewport.phone ? { hasTouch: true, isMobile: true } : {}),
+      });
+      const page = await context.newPage();
+      const errors: string[] = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.addInitScript(() => {
+        Object.defineProperty(navigator, "clipboard", { value: { writeText: async () => {} } });
+      });
+      eventPoints.length = 0;
+      eventBodies.length = 0;
+      const action = async (run: () => Promise<unknown>, event: string, agent = "") => {
+        const before = eventPoints.length;
+        const response = page.waitForResponse((response) =>
+          new URL(response.url()).pathname === "/api/event" && response.request().method() === "POST");
+        await run();
+        if ((await response).status() !== 204) throw new Error(`${key}: ${event} did not return 204`);
+        await settle(page, 100);
+        const expected = { blobs: [event, agent, lang, ""], doubles: [1], indexes: [event] };
+        if (eventPoints.length !== before + 1 || JSON.stringify(eventPoints.at(-1)) !== JSON.stringify(expected)) {
+          throw new Error(`${key}: wrong or duplicated ${event} data point`);
+        }
+        const body = { event, lang, ...(agent ? { agent } : {}) };
+        if (JSON.stringify(eventBodies.at(-1)) !== JSON.stringify(body)) throw new Error(`${key}: unexpected beacon fields`);
+      };
+      try {
+        await page.goto(`${base}?lang=${lang}`);
+        const hero = await frameOf(page, ".live-hero");
+        await settle(page, 300);
+        if (eventPoints.length) throw new Error(`${key}: load counted an event`);
+        for (const install of ["hero", "footer"]) {
+          const slot = `[data-install="${install}"]`;
+          for (const agent of ["claude", "codex"]) {
+            await page.locator(`${slot} [data-agent="${agent}"]`).click();
+            await action(() => page.locator(`${slot} [data-copy-prompt]`).click(), "copy_prompt", agent);
+          }
+          await page.locator(`${slot} .legacy-link`).click();
+          await action(() => page.locator(`${slot} [data-copy-cmd]`).click(), "copy_legacy");
+          await page.locator(`${slot} .legacy-link`).click();
+        }
+        await action(() => hero.locator(`[aria-label="${translate(lang, "composer.sendToAgent")}"]`).first().click(), "demo_start");
+        await page.locator('button[data-step="5"]').click();
+        await action(() => page.locator('.hero .fs-btn').click(), "fullscreen_open");
+        await page.locator('.hero .fs-btn').click();
+        await page.waitForFunction(() => !document.documentElement.classList.contains("fs-lock"));
+        await settle(page, 200);
+        if (eventPoints.length !== 8) throw new Error(`${key}: unrelated controls counted events`);
+        const points = [...eventPoints];
+        // Missing/throwing beacon support cannot break copy or full-screen controls.
+        await page.evaluate(() => { Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: undefined }); });
+        await page.locator('[data-install="hero"] [data-copy-prompt]').click();
+        if (await page.locator('[data-install="hero"] [data-copy-prompt]').getAttribute("data-copied") === null) {
+          throw new Error(`${key}: unavailable analytics blocked copy`);
+        }
+        await page.evaluate(() => { Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: () => { throw new Error("blocked"); } }); });
+        await page.locator('.hero .fs-btn').click();
+        await page.waitForFunction(() => document.documentElement.classList.contains("fs-lock"));
+        await page.locator('.hero .fs-btn').click();
+        await page.waitForFunction(() => !document.documentElement.classList.contains("fs-lock"));
+        if (errors.length) throw new Error(`${key}: ${errors.join("; ")}`);
+        rows.push({ key, points, beacons: [...eventBodies], errors });
+        console.log(`${key}: 8 real beacons, exact points; unavailable analytics leaves actions working`);
+      } finally {
+        await context.close();
+      }
+    }
+  }
+  fs.writeFileSync(path.join(out, "events-check.json"), `${JSON.stringify(rows, null, 2)}\n`);
+}
+
+if (eventsCheck) {
+  try { await checkEvents(); } finally { await browser.close(); server.stop(true); }
+  process.exit(0);
 }
 
 if (fullscreenCheck) {
@@ -621,13 +731,13 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
     });
     await page.locator('.sec-open [data-view="conversation"]').click();
     await frameOf(page, ".live-open");
-    await page.evaluate(() => { (window as any).perfRecords.length = 0; });
+    await page.evaluate(() => { (window as PerfWindow).perfRecords.length = 0; });
     await page.locator('.sec-open [data-view="search"]').click();
     await page.locator(".live-open .demo-retry").waitFor();
-    const falseAck = await page.evaluate(() => (window as any).perfRecords.some((r: any) => r.type === "view-ack" && r.view === "search"));
+    const falseAck = await page.evaluate(() => (window as PerfWindow).perfRecords.some((r) => r.type === "view-ack" && r.view === "search"));
     if (falseAck || await frame.locator("[data-search-result]").count()) throw new Error("empty Search was acknowledged ready");
     await page.locator(".live-open").screenshot({ path: path.join(out, `${perfLabel}-${viewport.name}-search-retry.png`) });
-    await frame.evaluate(() => (window as any).restoreSearch());
+    await frame.evaluate(() => (window as PerfWindow).restoreSearch());
     await page.locator(".live-open .demo-retry").click();
     const recovered = await frameOf(page, ".live-open");
     if (recovered !== frame || await recovered.locator("[data-search-result]").count() !== 3) throw new Error("retry did not recover Search in place");
@@ -650,23 +760,23 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
       await frameOf(page, ".live-hero");
       const readyMs = await page.evaluate(() => performance.now());
       await page.waitForTimeout(700);
-      return page.evaluate((readyMs) => ({ readyMs, navigation: performance.getEntriesByType("navigation")[0]?.toJSON(), records: (window as any).perfRecords }), readyMs);
+      return page.evaluate((readyMs) => ({ readyMs, navigation: performance.getEntriesByType("navigation")[0]?.toJSON(), records: (window as PerfWindow).perfRecords }), readyMs);
     });
     await page.screenshot({ path: path.join(out, `${perfLabel}-${viewport.name}-loaded.png`) });
     if (process.argv.includes("--load-only")) return;
     await trace("steps", async () => {
       const rows = [];
-      const hero = await frameOf(page, ".live-hero");
+      await frameOf(page, ".live-hero");
       for (const step of [2, 3, 4, 5, 0]) {
         const button = page.locator(`button[data-step="${step}"]`);
         await button.scrollIntoViewIfNeeded();
         await page.waitForTimeout(500);
-        await page.evaluate(() => { (window as any).stepClick = 0; document.addEventListener("click", () => { (window as any).stepClick = performance.now(); }, { once: true, capture: true }); });
+        await page.evaluate(() => { (window as PerfWindow).stepClick = 0; document.addEventListener("click", () => { (window as PerfWindow).stepClick = performance.now(); }, { once: true, capture: true }); });
         await button.click();
         await page.waitForFunction(step => document.querySelector("[data-step-hint]")?.getAttribute("data-step") === String(step), step);
         const current = await frameOf(page, ".live-hero");
         await current.waitForFunction(step => document.documentElement.dataset.demoStep === String(step), step);
-        const stateMs = await page.evaluate(() => performance.now() - (window as any).stepClick);
+        const stateMs = await page.evaluate(() => performance.now() - (window as PerfWindow).stepClick);
         if (step === 2) await current.waitForFunction(() => document.body.innerText.replace(/\s+/g, " ").includes("Idempotent refunds"));
         if (step === 3) await current.waitForFunction(() => document.body.innerText.replace(/\s+/g, " ").includes("Build passed"));
         if (step === 4) {
@@ -689,7 +799,7 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
             continue;
           }
         }
-        rows.push({ step, stateMs, visibleMs: await page.evaluate(() => performance.now() - (window as any).stepClick) });
+        rows.push({ step, stateMs, visibleMs: await page.evaluate(() => performance.now() - (window as PerfWindow).stepClick) });
       }
       return rows;
     });
@@ -698,7 +808,7 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
       const hero = await frameOf(page, ".live-hero");
       await hero.locator(`[aria-label="${translate("en", "composer.sendToAgent")}"]`).first().click();
       await page.waitForFunction(() => document.querySelector("[data-step-hint]")?.getAttribute("data-step") === "5", undefined, { timeout: 30_000 });
-      return page.evaluate(() => (window as any).perfRecords.filter((r: any) => r.type === "message" && r.data?.type === "dlg:state"));
+      return page.evaluate(() => (window as PerfWindow).perfRecords.filter((r) => r.type === "message" && r.data?.type === "dlg:state"));
     });
     await trace("tabs", async () => {
       await page.locator(".live-open").scrollIntoViewIfNeeded();
@@ -751,10 +861,10 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
       }
       return rows;
     });
-    result.frames = await Promise.all(page.frames().map(async frame => ({ url: frame.url(), records: await frame.evaluate(() => (window as any).perfRecords) })));
-    const acknowledgements = await page.evaluate(() => (window as any).perfRecords.filter((r: any) => r.type === "view-ack"));
+    result.frames = await Promise.all(page.frames().map(async frame => ({ url: frame.url(), records: await frame.evaluate(() => (window as PerfWindow).perfRecords) })));
+    const acknowledgements = await page.evaluate(() => (window as PerfWindow).perfRecords.filter((r) => r.type === "view-ack"));
     result.acknowledgements = acknowledgements;
-    if (perfLabel === "after" && acknowledgements.some((r: any) =>
+    if (perfLabel === "after" && acknowledgements.some((r) =>
       (r.view === "search" && r.results !== 3) || (r.phone && r.view === "conversation" && r.screen !== "chat"))) {
       fs.writeFileSync(path.join(out, `${perfLabel}-${viewport.name}-invalid-ack.json`), JSON.stringify(acknowledgements, null, 2));
       throw new Error("demo acknowledged a view before its content rendered");
@@ -767,14 +877,14 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
     }
     fs.writeFileSync(path.join(out, `${perfLabel}-${viewport.name}.json`), JSON.stringify(result, null, 2));
     console.log(`${perfLabel}-${viewport.name}: complete`);
-    if (perfLabel === "after" && (result.language as any).value.some((row: any) => Math.abs(row.delta) > 2)) throw new Error("language switch moved the page");
+    if (perfLabel === "after" && (result.language as { value: { delta: number }[] }).value.some((row) => Math.abs(row.delta) > 2)) throw new Error("language switch moved the page");
     if (errors.length) throw new Error(errors.join("\n"));
   } catch (error) {
     await page.screenshot({ path: path.join(out, `${perfLabel}-${viewport.name}-failure.png`) });
     const frames = await Promise.all(page.frames().map(async frame => frame.evaluate(() => ({
       url: location.href, hash: location.hash, screen: document.querySelector("[data-mobile2-screen]")?.getAttribute("data-mobile2-screen"),
       search: document.querySelector<HTMLInputElement>("[data-search-input]")?.value,
-      results: document.querySelectorAll("[data-search-result]").length, records: (window as any).perfRecords,
+      results: document.querySelectorAll("[data-search-result]").length, records: (window as PerfWindow).perfRecords,
     })).catch(() => null)));
     fs.writeFileSync(path.join(out, `${perfLabel}-${viewport.name}-failure.json`), JSON.stringify({ error: String(error), frames }, null, 2));
     throw error;

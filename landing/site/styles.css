@@ -417,6 +417,7 @@ kbd {
 }
 .band-meta a:hover { color: var(--ink); }
 .band-meta code { font-size: 13px; }
+.band-analytics { margin: 20px 0 0; color: var(--ink-2); font-size: 13px; line-height: 1.6; text-wrap: pretty; }
 .num { font-variant-numeric: tabular-nums; }
 
 /* ---------- Tablet ---------- */
