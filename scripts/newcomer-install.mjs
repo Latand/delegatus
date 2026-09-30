@@ -135,6 +135,8 @@ async function main() {
     TMPDIR: fixture, XDG_CONFIG_HOME: path.join(fixture, "config"), XDG_CACHE_HOME: path.join(fixture, "cache"),
     LLV_STATE_DIR: path.join(fixture, "state"), LLV_CODEX_HOME: path.join(home, ".codex"),
     LLV_CLAUDE_HOME: path.join(home, ".claude"), NEXT_TELEMETRY_DISABLED: "1",
+    // This clean environment drops CI itself; fence the production launcher explicitly.
+    DELEGATUS_TELEMETRY: "0",
   };
   const rows = [];
   const report = { platform: process.platform, source: target.endsWith(".tgz") ? "checkout tarball" : "npm release", rows, passed: false };

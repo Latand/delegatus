@@ -53,6 +53,9 @@
 
   function prompt(agent, lang) {
     const lines = [...promptHead, ...cliStep[agent], ...delegatusSteps, ...mcpStep[agent], ...promptTail];
+    lines.push("", lang === "uk"
+      ? "Наприкінці встановлення покажи користувачеві: Delegatus раз на добу надсилає випадковий id, версію, ОС, архітектуру й тип встановлення на delegatus.org. Вимкнути можна в Налаштуваннях, через DELEGATUS_TELEMETRY=0 або DO_NOT_TRACK=1."
+      : "At the end of the install, show the user: Delegatus sends a random id, version, OS, architecture and install kind to delegatus.org once a day. Turn off in Settings, with DELEGATUS_TELEMETRY=0 or DO_NOT_TRACK=1.");
     if (lang === "uk") lines.push("", "Відповідай українською.");
     return lines.join("\n");
   }

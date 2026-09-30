@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import fs from "node:fs";
 import vm from "node:vm";
+import { telemetryNotice } from "../../bin/telemetry-notice.mjs";
 
 export function installPrompt(agent: string, lang = "en"): string {
   const context = { window: { DLG: {} as { copy?: { prompt: (agent: string, lang: string) => string } } } };
@@ -17,7 +18,11 @@ for (const agent of ["claude", "codex"]) {
     expect(prompt).toContain(`${agent} mcp add viewer`);
     expect(prompt).toContain('-- "$(command -v bun)" "$HOME/.bun/bin/delegatus-mcp"');
     expect(prompt.indexOf(`${agent} mcp add viewer`)).toBeGreaterThan(prompt.indexOf("nohup"));
-    expect(installPrompt(agent, "uk")).toBe(prompt + "\n\nВідповідай українською.");
+    const ukrainian = installPrompt(agent, "uk");
+    expect(prompt).toContain(`At the end of the install, show the user: ${telemetryNotice.en}`);
+    expect(ukrainian).toContain(`Наприкінці встановлення покажи користувачеві: ${telemetryNotice.uk}`);
+    expect(ukrainian.endsWith("\n\nВідповідай українською.")).toBe(true);
+    expect(ukrainian.slice(0, ukrainian.indexOf("Наприкінці встановлення"))).toBe(prompt.slice(0, prompt.indexOf("At the end of the install")));
   });
 }
 test("desktop-specific advice names only the verified Codex bundle and Claude separate installer", () => {

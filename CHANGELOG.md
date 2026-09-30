@@ -8,6 +8,14 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+### Added
+- Anonymous install ping, enabled by default and disclosed on first start.
+  Once per UTC day the production Viewer sends only a separate random id,
+  version, OS, architecture and install kind to delegatus.org. Disable it in
+  Settings, with `DELEGATUS_TELEMETRY=0` or `DO_NOT_TRACK=1`. Tests, builds,
+  development servers and CI send nothing. The landing Worker validates the
+  payload and stores it with Cloudflare country in the `installs` dataset.
+
 ## [1.8.0] — 2026-09-30
 
 ### Added
