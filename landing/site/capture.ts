@@ -475,9 +475,10 @@ async function checkEvents() {
       const page = await context.newPage();
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
-      await page.addInitScript(() => {
+      await page.addInitScript((phone) => {
         Object.defineProperty(navigator, "clipboard", { value: { writeText: async () => {} } });
-      });
+        if (phone) Object.defineProperty(document, "fullscreenEnabled", { value: false });
+      }, viewport.phone);
       eventPoints.length = 0;
       eventBodies.length = 0;
       const action = async (run: () => Promise<unknown>, event: string, agent = "") => {
@@ -519,6 +520,7 @@ async function checkEvents() {
         const points = [...eventPoints];
         // Missing/throwing beacon support cannot break copy or full-screen controls.
         await page.evaluate(() => { Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: undefined }); });
+        await page.locator('[data-install="hero"] [data-copy-prompt]').evaluate((button) => button.removeAttribute("data-copied"));
         await page.locator('[data-install="hero"] [data-copy-prompt]').click();
         if (await page.locator('[data-install="hero"] [data-copy-prompt]').getAttribute("data-copied") === null) {
           throw new Error(`${key}: unavailable analytics blocked copy`);
@@ -528,9 +530,10 @@ async function checkEvents() {
         await page.waitForFunction(() => document.documentElement.classList.contains("fs-lock"));
         await page.locator('.hero .fs-btn').click();
         await page.waitForFunction(() => !document.documentElement.classList.contains("fs-lock"));
+        if (eventPoints.length !== 8) throw new Error(`${key}: unavailable analytics wrote a point`);
         if (errors.length) throw new Error(`${key}: ${errors.join("; ")}`);
         rows.push({ key, points, beacons: [...eventBodies], errors });
-        console.log(`${key}: 8 real beacons, exact points; unavailable analytics leaves actions working`);
+        console.log(`${key}: 8 real beacons, exact points, ${viewport.phone ? "overlay" : "native"} full screen; unavailable analytics leaves actions working`);
       } finally {
         await context.close();
       }
