@@ -27,6 +27,7 @@ import { materializeStructuredHostAccess, READ_ONLY_STAGE_PERMISSION_PROFILE } f
 import { normalizeVoiceDeliveries, type RuntimeVoiceDelivery } from "./voiceDelivery";
 import { projectVoiceDeliveryBodies } from "./voiceBodyProjection";
 import type { NativeQueueRecord } from "./nativeQueueContracts";
+import type { NativeQueuedSubmission } from "./nativeCodexQueue";
 import {
   COORDINATOR_VOICE_PERSONA,
   VOICE_PERSONA_FILE,
@@ -157,6 +158,10 @@ class FakeAppServer extends EventEmitter {
   turnsError: string | null = null;
   userAgent = "codex_desktop_app/0.144.1 (Linux)";
   paginatedHistory = false;
+  nativeQueueItems: NativeQueuedSubmission[] = [];
+  nativeQueueStartError: string | null = null;
+  beforeNativeQueueStart: (() => void) | null = null;
+  nativeQueueListNotification: { method: string; params: Record<string, unknown> } | null = null;
   /* Rejects only hydrated reads (includeTurns), the way codex 0.151+ paginated
      threads do; metadata-only reads and thread/turns/list keep answering. */
   hydratedReadError: string | null = null;
@@ -240,9 +245,25 @@ class FakeAppServer extends EventEmitter {
     const method = message.method;
     if (typeof method === "string" && this.ignoredMethods.includes(method)) return;
     if (method === "initialize") return this.respond(message.id, { userAgent: this.userAgent });
-    if (method === "thread/queue/list") return this.paginatedHistory
-      ? this.respond(message.id, { data: [], nextCursor: null })
-      : this.respondError(message.id, "method not found");
+    if (method === "thread/queue/list") {
+      if (!this.paginatedHistory) return this.respondError(message.id, "method not found");
+      if (this.nativeQueueListNotification) this.notify(this.nativeQueueListNotification.method, this.nativeQueueListNotification.params);
+      return this.respond(message.id, { data: this.nativeQueueItems, nextCursor: null });
+    }
+    if (method === "thread/queue/start") {
+      this.beforeNativeQueueStart?.();
+      if (this.nativeQueueStartError) {
+        this.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id,
+          error: { code: -32600, message: this.nativeQueueStartError } })}\n`);
+        return;
+      }
+      const queued = this.nativeQueueItems.shift()!;
+      const turn = { id: "recovered-native-turn", status: "inProgress", items: [] };
+      this.notify("turn/started", { threadId: this.threadId, turn });
+      this.notify("item/completed", { threadId: this.threadId, turnId: turn.id,
+        item: { type: "userMessage", clientId: queued.clientUserMessageId, content: queued.input } });
+      return this.respond(message.id, { turn });
+    }
     if (method === "account/read") return this.respond(message.id, { account: { type: "chatgpt", planType: "pro" }, requiresOpenaiAuth: false });
     if (method === "model/list") {
       if (this.modelListFailuresRemaining > 0) {
@@ -3088,6 +3109,85 @@ describe("CodexAppServerHost", () => {
     fs.rmSync(directory, { recursive: true, force: true });
   });
 
+  for (const scenario of ["idle", "active", "attention", "paused", "unknown-status", "system-error", "start-during-list"]) {
+    test(`native cold recovery starts only an observed idle unblocked head (${scenario})`, async () => {
+      const threadId = `cold-queue-${scenario}`;
+      const eventStore = new MemoryEventStore();
+      if (scenario === "paused") {
+        eventStore.append(threadId, { kind: "turn-started", turnId: "paused-turn", seq: 1 });
+        eventStore.append(threadId, { kind: "turn-ended", turnId: "paused-turn", status: "interrupted", seq: 2 });
+      }
+      const server = new FakeAppServer(threadId, threadId, false,
+        scenario === "active" ? [{ id: "running-turn", status: "inProgress", items: [] }] : [],
+        scenario === "unknown-status" ? undefined : { type: scenario === "active" ? "active" : scenario === "system-error" ? "systemError" : "idle" },
+        scenario === "attention" ? { id: "blocked-request", method: "item/commandExecution/requestApproval", params: { threadId, command: "fixture" } } : null);
+      server.userAgent = "codex_desktop_app/0.159.0 (Linux)";
+      server.paginatedHistory = true;
+      server.nativeQueueItems = [{ id: "retained-head", clientUserMessageId: "original-client", input: [{ type: "text", text: "retained input" }] }];
+      if (scenario === "start-during-list") server.nativeQueueListNotification = {
+        method: "turn/started", params: { threadId, turn: { id: "auto-dispatched-turn" } },
+      };
+      const host = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server) });
+      try {
+        const starts = server.requests.filter(request => request.method === "thread/queue/start");
+        expect(starts).toHaveLength(scenario === "idle" ? 1 : 0);
+        expect(server.requests.filter(request => request.method === "thread/queue/add" || request.method === "turn/start")).toHaveLength(0);
+        if (scenario === "idle") {
+          expect(starts[0]?.params).toEqual({ threadId, queuedSubmissionId: "retained-head" });
+          expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: "recovered-native-turn" });
+          expect(eventStore.load(threadId).filter(event => event.kind === "item")).toEqual([
+            expect.objectContaining({ item: expect.objectContaining({ clientId: "original-client" }) }),
+          ]);
+        }
+      } finally { await host.release(); }
+    });
+  }
+
+  test("native cold recovery leaves an authoritative start refusal with the native owner", async () => {
+    const threadId = "cold-queue-race-refusal";
+    const server = new FakeAppServer(threadId, threadId, false, [], { type: "idle" });
+    server.userAgent = "codex_desktop_app/0.154.0 (Linux)";
+    server.paginatedHistory = true;
+    server.nativeQueueItems = [{ id: "observed-head", clientUserMessageId: "original-client", input: [{ type: "text", text: "retained" }] }];
+    server.nativeQueueStartError = "queued message no longer exists";
+    server.beforeNativeQueueStart = () => { server.nativeQueueItems.shift(); };
+    const host = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+    try {
+      expect(server.requests.filter(request => request.method === "thread/queue/start")).toHaveLength(1);
+      expect(server.requests.filter(request => request.method === "thread/queue/add" || request.method === "turn/start")).toHaveLength(0);
+      expect(server.nativeQueueItems).toHaveLength(0);
+      expect((await host.health()).status).toBe("idle");
+    } finally { await host.release(); }
+  });
+
+  test("native cold recovery reports a refusal when the same idle head remains", async () => {
+    const threadId = "cold-queue-start-refused";
+    const server = new FakeAppServer(threadId, threadId, false, [], { type: "idle" });
+    server.userAgent = "codex_desktop_app/0.159.0 (Linux)";
+    server.paginatedHistory = true;
+    server.nativeQueueItems = [{ id: "observed-head", clientUserMessageId: "original-client", input: [{ type: "text", text: "retained" }] }];
+    server.nativeQueueStartError = "provider configuration refused";
+    await expect(CodexAppServerHost.adopt(threadId, {
+      cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
+    })).rejects.toThrow("provider configuration refused");
+    expect(server.requests.filter(request => request.method === "thread/queue/start")).toHaveLength(1);
+    expect(server.nativeQueueItems).toHaveLength(1);
+  });
+
+  test("native cold recovery never retries an unacknowledged start", async () => {
+    const threadId = "cold-queue-lost-start-reply";
+    const server = new FakeAppServer(threadId, threadId, false, [], { type: "idle" }, null, ["thread/queue/start"]);
+    server.userAgent = "codex_desktop_app/0.159.0 (Linux)";
+    server.paginatedHistory = true;
+    server.nativeQueueItems = [{ id: "observed-head", clientUserMessageId: "original-client", input: [{ type: "text", text: "retained" }] }];
+    await expect(CodexAppServerHost.adopt(threadId, {
+      cwd: "/repo", requestTimeoutMs: 20, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
+    })).rejects.toThrow("Native queue mutation outcome is uncertain");
+    expect(server.requests.filter(request => request.method === "thread/queue/start")).toHaveLength(1);
+    expect(server.requests.filter(request => request.method === "thread/queue/add" || request.method === "turn/start")).toHaveLength(0);
+    expect(server.nativeQueueItems).toHaveLength(1);
+  });
+
   test("a native queue turn started during resume survives its idle snapshot", async () => {
     const threadId = "queue-start-during-idle-resume";
     const turnId = "queued-turn";
@@ -3096,12 +3196,16 @@ describe("CodexAppServerHost", () => {
       { method: "thread/status/changed", params: { threadId, status: { type: "active", activeFlags: ["running"] } } },
       { method: "turn/started", params: { threadId, turn: { id: turnId } } },
     ]);
+    server.userAgent = "codex_desktop_app/0.154.0 (Linux)";
+    server.paginatedHistory = true;
+    server.nativeQueueItems = [{ id: "already-dispatched-head", clientUserMessageId: "original-client", input: [{ type: "text", text: "retained" }] }];
     const host = await CodexAppServerHost.adopt(threadId, {
       cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server),
     });
     try {
       expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: turnId });
       expect(eventStore.load(threadId).filter(event => event.kind === "turn-ended")).toEqual([]);
+      expect(server.requests.filter(request => request.method === "thread/queue/start")).toHaveLength(0);
       await host.interrupt(turnId);
       expect(server.requests.some(request => request.method === "turn/interrupt")).toBeTrue();
     } finally {

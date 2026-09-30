@@ -25,7 +25,7 @@ function sse(type: string, data: object) {
 async function fixture() {
   const version = spawnSync(codexBinary, ["--version"], { encoding: "utf8" });
   expect(version.status).toBe(0);
-  expect(version.stdout.trim()).toBe("codex-cli 0.154.0");
+  expect(version.stdout.trim()).toMatch(/^codex-cli \d+\.\d+\.\d+$/);
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), "inj-real-"));
   const model = "fixture-model";
   const requests: Array<{ body: { input?: unknown[] } }> = [];

@@ -31,7 +31,7 @@ on:
   workflow_dispatch:
     inputs:
       native_queue_campaign:
-        description: Run twenty independent large-image cold recovery checks
+        description: Run twenty large-image cold recovery checks per supported Codex CLI
         type: boolean
         default: false
 
@@ -69,6 +69,7 @@ jobs:
       max-parallel: 4
       matrix:
         repetition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        codex: [0.154.0, 0.159.0]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -86,8 +87,8 @@ jobs:
           bun-version: ${{ steps.pin.outputs.version }}
       - run: bun install --frozen-lockfile
       - name: Install the pinned native Codex fixture CLI
-        run: npm install --prefix "$RUNNER_TEMP/native-codex" --no-save --ignore-scripts @openai/codex@0.154.0
-      - name: Exercise coalesced resume and native queue dispatch
+        run: npm install --prefix "$RUNNER_TEMP/native-codex" --no-save --ignore-scripts @openai/codex@${{ matrix.codex }}
+      - name: Exercise cold resume and native queue dispatch
         shell: bash
         env:
           EXPECTED_BUN: ${{ steps.pin.outputs.version }}
@@ -95,12 +96,42 @@ jobs:
           set -euo pipefail
           test "$(bun --version)" = "$EXPECTED_BUN"
           scratch="$(mktemp -d /var/tmp/nq-XXXXXX)"
-          export HOME="$scratch/home" XDG_CONFIG_HOME="$scratch/config" LLV_STATE_DIR="$scratch/state" TMPDIR="$scratch/tmp"
-          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$LLV_STATE_DIR" "$TMPDIR"
+          export HOME="$scratch/home" XDG_CONFIG_HOME="$scratch/config" LLV_STATE_DIR="$scratch/state" TMPDIR="$scratch/tmp" CODEX_HOME="$scratch/codex"
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$LLV_STATE_DIR" "$TMPDIR" "$CODEX_HOME"
           export NATIVE_CODEX_QUEUE_TEST_BINARY="$RUNNER_TEMP/native-codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
           bun test src/lib/runtime/nativeQueueHost.integration.test.ts -t 'recovery \(large\)' 2>&1 | tee "$scratch/result.log"
           grep -q '1 pass' "$scratch/result.log"
           grep -q '0 fail' "$scratch/result.log"
+
+  native-codex-runtime:
+    if: github.event_name != 'workflow_dispatch' || !inputs.native_queue_campaign
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        codex: [0.154.0, 0.159.0]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Resolve the image's Bun pin
+        id: pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t pins < <(grep -oE 'npm install -g bun@[0-9]+\.[0-9]+\.[0-9]+' Dockerfile | sed 's/.*bun@//' | sort -u)
+          test "${#pins[@]}" -eq 1
+          printf 'version=%s\n' "${pins[0]}" >> "$GITHUB_OUTPUT"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: ${{ steps.pin.outputs.version }}
+      - run: bun install --frozen-lockfile
+      - name: Install a supported native Codex fixture CLI
+        run: npm install --prefix "$RUNNER_TEMP/native-codex" --no-save --ignore-scripts @openai/codex@${{ matrix.codex }}
+      - name: Verify native queue, history, status and inherited Voice contracts
+        run: bun scripts/verify-native-codex-runtime.ts "$RUNNER_TEMP/native-codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
 
   bun-runtime:
     if: github.event_name != 'workflow_dispatch' || !inputs.native_queue_campaign
@@ -201,12 +232,6 @@ jobs:
           mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$LLV_STATE_DIR" "$TMPDIR"
           bun scripts/build-mcp.ts
           bun test src/lib/mcp/answerSizes.test.ts
-
-      - name: Install the pinned native Codex fixture CLI
-        run: npm install --prefix "$RUNNER_TEMP/native-codex" --no-save --ignore-scripts @openai/codex@0.154.0
-
-      - name: Verify native queue, history, status and inherited Voice contracts
-        run: bun scripts/verify-native-codex-runtime.ts "$RUNNER_TEMP/native-codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
 
       # The same environment the image's build stage sets. NODE_ENV belongs to
       # the build and not to the install above, which needs the dev

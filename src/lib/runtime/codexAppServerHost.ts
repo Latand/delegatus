@@ -1499,6 +1499,11 @@ export class CodexAppServerHost implements EngineHost {
       if (granted.length > 0) await provisional.verifyPluginGrant(granted, config);
       provisional.rememberConfirmedDeliveries(result);
       provisional.restoreEvents();
+      // Capture a previously observed interruption before resume history
+      // terminalizes a turn lost with the old process. Only the former records
+      // a pause the operator already saw and must keep across adoption.
+      const previousTurn = provisional.events.findLast(event => event.kind === "turn-started" || event.kind === "turn-ended");
+      const deliberatelyPaused = previousTurn?.kind === "turn-ended" && previousTurn.status === "interrupted";
       provisional.beginBufferedNotificationReconciliation();
       provisional.flushPreRestoreEvents();
       provisional.flushPreRestoreMessages(threadId ? result : null);
@@ -1506,6 +1511,7 @@ export class CodexAppServerHost implements EngineHost {
       provisional.reconcileAfterOpen(threadStatus(result), resumedActiveTurnId(result));
       provisional.endBufferedNotificationReconciliation();
       await provisional.initializeNativeQueue();
+      if (threadId && !deliberatelyPaused && threadStatus(result)?.type === "idle") await provisional.recoverIdleNativeQueue();
       return provisional;
     } catch (error) {
       try {
@@ -1663,6 +1669,29 @@ export class CodexAppServerHost implements EngineHost {
       },
     };
     this.notifyStateListeners();
+  }
+
+  /** Cold resume can leave the native queue retained but paused. Resume
+      its observed head through Codex's atomic idle start; never re-add input.
+      Naming the observed submission also prevents a concurrent auto-dispatch
+      from making this request consume the next entry instead. */
+  private async recoverIdleNativeQueue(): Promise<void> {
+    const queue = this.nativeQueue?.queue;
+    const snapshot = queue?.read();
+    const head = snapshot && !snapshot.stale ? snapshot.items?.[0] : null;
+    if (!queue || !head || this.engineStatus !== "idle" || this.activeTurnId || this.hasBlockingAttention()) return;
+    try {
+      await queue.start(head.id);
+    } catch (error) {
+      // Auto-dispatch may win after the snapshot. An authoritative refusal
+      // needs a fresh observation of that race; other faults fail adoption.
+      // An uncertain write is never retried.
+      if (error instanceof NativeQueueProtocolRefusal) {
+        const current = await queue.refresh();
+        if (this.activeTurnId || (!current.stale && current.items && !current.items.some(item => item.id === head.id))) return;
+      }
+      throw error;
+    }
   }
 
   private async readDeliveryHistory(clientIds: string[], timeoutMs = this.requestTimeoutMs,

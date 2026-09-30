@@ -26,7 +26,7 @@ interface WorkflowStep {
 }
 
 const workflow = Bun.YAML.parse(workflowSource) as {
-  jobs: Record<string, { if?: string; strategy?: { matrix: { repetition: number[] } }; steps: WorkflowStep[] }>;
+  jobs: Record<string, { if?: string; strategy?: { matrix: { repetition?: number[]; codex?: string[] } }; steps: WorkflowStep[] }>;
 };
 const steps = workflow.jobs["bun-runtime"].steps;
 const scripts = steps.map((step) => step.run ?? "");
@@ -98,14 +98,32 @@ test("the job runs at the pull request's own commit", () => {
   expect(checkout?.with?.ref).toContain("github.event.pull_request.head.sha");
 });
 
-test("the native queue campaign is manual-only and exercises twenty real cases", () => {
+test("the native queue campaign is manual-only and exercises twenty cases per supported CLI", () => {
   const campaign = workflow.jobs["native-queue-campaign"];
   expect(campaign.if).toBe("github.event_name == 'workflow_dispatch' && inputs.native_queue_campaign");
   expect(campaign.strategy?.matrix.repetition).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
-  const run = campaign.steps.find(step => step.name === "Exercise coalesced resume and native queue dispatch")!.run!;
+  expect(campaign.strategy?.matrix.codex).toEqual(["0.154.0", "0.159.0"]);
+  const run = campaign.steps.find(step => step.name === "Exercise cold resume and native queue dispatch")!.run!;
   expect(run).toContain("bun test src/lib/runtime/nativeQueueHost.integration.test.ts");
   expect(run).toContain("NATIVE_CODEX_QUEUE_TEST_BINARY=");
   expect(run).toContain("grep -q '1 pass'");
   expect(run).toContain("set -euo pipefail");
   expect(workflow.jobs["bun-runtime"].if).toBe("github.event_name != 'workflow_dispatch' || !inputs.native_queue_campaign");
+});
+
+test("both supported Codex CLIs run the full native contracts at the proposed commit", () => {
+  const job = workflow.jobs["native-codex-runtime"];
+  expect(job.if).toBe(workflow.jobs["bun-runtime"].if);
+  expect(job.strategy?.matrix.codex).toEqual(["0.154.0", "0.159.0"]);
+  expect(job.steps.find(step => step.uses?.startsWith("actions/checkout@"))?.with?.ref)
+    .toContain("github.event.pull_request.head.sha");
+  expect(job.steps.find(step => step.uses?.startsWith("oven-sh/setup-bun@"))?.with?.["bun-version"])
+    .toBe("${{ steps.pin.outputs.version }}");
+  expect(job.steps.some(step => step.run?.includes("@openai/codex@${{ matrix.codex }}"))).toBeTrue();
+  expect(job.steps.some(step => step.run?.includes("bun scripts/verify-native-codex-runtime.ts") && !step.run.includes("--steering-only"))).toBeTrue();
+  for (const step of job.steps) {
+    expect(step.if).toBeUndefined();
+    expect(step["continue-on-error"]).toBeUndefined();
+    for (const swallow of ["|| true", "set +e"]) expect(step.run ?? "").not.toContain(swallow);
+  }
 });

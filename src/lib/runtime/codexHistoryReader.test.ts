@@ -354,7 +354,7 @@ describe("bounded canonical history", () => {
 
 // Opt in with an explicit executable. CI without the CLI still runs every seam test.
 const nativeCli = process.env.LLV_CODEX_HISTORY_CLI;
-test.skipIf(!nativeCli)("real Codex 0.154: isolated Responses, multi-page history, original-key persistence across restart", async () => {
+test.skipIf(!nativeCli)("real Codex: isolated Responses, multi-page history, original-key persistence across restart", async () => {
   const root = mkdtempSync("/tmp/chr-");
   const env: NodeJS.ProcessEnv & Record<string, string> = { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", NODE_ENV: "test" };
   for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_STATE_DIR", "TMPDIR"]) {
@@ -431,11 +431,11 @@ plugins = false
   }
   const init = async (client: Client) => {
     const result = await client.rpc("initialize", { clientInfo: { name: "history_reader_fixture", version: "1" }, capabilities: { experimentalApi: true } }, 5000) as { userAgent: string };
-    expect(result.userAgent).toContain("/0.154.0");
+    expect(result.userAgent).toMatch(/\/\d+\.\d+\.\d+/);
     expect(await client.rpc("account/read", { refreshToken: false }, 5000)).toMatchObject({ account: null });
   };
   try {
-    expect(spawnSync(nativeCli!, ["--version"], { env, cwd, encoding: "utf8" }).stdout.trim()).toBe("codex-cli 0.154.0");
+    expect(spawnSync(nativeCli!, ["--version"], { env, cwd, encoding: "utf8" }).stdout.trim()).toMatch(/^codex-cli \d+\.\d+\.\d+$/);
     let client = startClient(); await init(client);
     // Same reason as the native queue fixture: no command is ever run here, and
     // a sandboxed thread makes this case depend on a helper the runner lacks.
