@@ -12,6 +12,7 @@ import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { FileEntry } from "@/lib/types";
 import { serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
 import { translate } from "@/lib/i18n";
 import { FAKE_SAFETY_COMMAND, FAKE_SAFETY_REASON } from "@/lib/runtime/fixtures/fakeClaudePermissionCli";
 import { suggestTaskIcon } from "@/lib/tasks/taskIconSuggest";
@@ -5134,3 +5135,66 @@ browserTest("seat panel noise: cases i-v hold no internal noise on the phone at 
   fs.writeFileSync(path.join(evidence, "phone.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
   if (failures.length) throw new Error(failures.join("\n"));
 }, 900_000);
+
+/*
+ * The narrow card's stage chain (docs/design/narrow-card-stage-chain.md) on the
+ * phone's task screen at 390 px. A finished lane's chain is about 342 px wide,
+ * so it stands its stages one under another on a rail, the fail branch
+ * indented under its reviewer. The same rules the desktop shelf card is held to
+ * (`stageChainMeasure.ts`), light and dark, with the touch pointer's 30 px pills.
+ * STAGE_CHAIN_STAMP=before takes the "before" frames on a checkout without the
+ * change and asserts nothing.
+ *
+ *   STAGE_CHAIN_PNG_DIR=… LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "narrow card"
+ */
+browserTest("narrow card: a finished lane on the task screen stands its stages one under another on a rail at 390, in light and dark", async () => {
+  const stamp = process.env.STAGE_CHAIN_STAMP === "before" ? "before" : "after";
+  const out = path.resolve(process.env.STAGE_CHAIN_PNG_DIR ?? path.join(process.env.HOME ?? ".", "Pictures/delegatus-review/stage-chain-vertical"));
+  fs.mkdirSync(out, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const failures: string[] = [];
+  const readings: Record<string, StageChainLane> = {};
+  try {
+    for (const scheme of ["light", "dark"] as const) {
+      for (const task of ["t-chain-fix", "t-chain-through"] as const) {
+        const key = `${task}-390-${scheme}`;
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
+        await context.addInitScript(() => { localStorage.setItem("llv_lang", "en"); });
+        try {
+          const page = await context.newPage();
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          await page.goto(`${fixtureBase}/?kanban=1&stage-chain=1#p=atlas`);
+          await page.waitForSelector(`[data-phone-card="task:${task}"]`, { timeout: 20_000 });
+          await pause(page, 600);
+          await page.locator(`[data-phone-card="task:${task}"]`).click();
+          await page.waitForSelector(`[data-mobile2-task="${task}"] [data-phone-task-body="${task}"]`, { timeout: 10_000 });
+          /* A finished lane folds behind one row; the chain is what its row opens. */
+          await page.locator("[data-phone-task-ended]").click();
+          await page.waitForSelector(`[data-mobile2-task="${task}"] .pblock[data-density="task"]`, { timeout: 10_000 });
+          await page.mouse.move(0, 0);
+          await pause(page, 600);
+          if (task === "t-chain-fix") await page.screenshot({ path: path.join(out, `${stamp}-390-phone-${scheme}.png`) });
+          else await page.screenshot({ path: path.join(out, `${stamp}-390-phone-through-${scheme}.png`) });
+          const lane = await page.evaluate(measureStageChain(`[data-mobile2-task="${task}"] .pblock[data-density="task"]`)) as StageChainLane | null;
+          if (!lane) { failures.push(`${key}: no lane row drawn`); continue; }
+          readings[key] = lane;
+          expect(pageErrors).toEqual([]);
+          if (stamp === "before") continue;
+          failures.push(...stageChainFailures(key, lane));
+          const pills = lane.steps.map((step) => Math.round(step.bottom - step.top));
+          if (pills.some((height) => height < 30)) failures.push(`${key}: a pill is under the touch pointer's 30 px (${pills.join(", ")})`);
+        } finally { await context.close(); }
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  const evidence = path.resolve("evidence/stage-chain-vertical");
+  fs.mkdirSync(evidence, { recursive: true });
+  fs.writeFileSync(path.join(evidence, `phone-${stamp}.json`), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+  expect(failures).toEqual([]);
+}, 300_000);
