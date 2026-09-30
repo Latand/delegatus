@@ -1,8 +1,9 @@
 # Codex native queue cold recovery
 
 Verification date: 2026-09-30. Baseline: `ce8abf18b7c07af31f8f7e36e66045b7a5bf41c4`.
-This closes the native-queue compatibility deferral in
+This addresses the native-queue compatibility deferral in
 [active-turn steering validation](active-turn-steering-validation.md).
+Queues stranded before deployment need the manual remedy in Production impact.
 
 ## Reproduction before the change
 
@@ -37,10 +38,10 @@ A bounded raw JSON-RPC probe used a credential-free loopback Responses server,
 one held active turn and one queued text input. Each CLI generation used the
 same private Codex home. The probe stopped only its recorded child, resumed
 the saved thread in a new child, observed for 12 seconds, listed the queue,
-and explicitly started a retained head when present. The retained driver is
-`scripts/probe-native-codex-queue.mjs`; repeat each cell under the isolated
-environment below with `bun scripts/probe-native-codex-queue.mjs "$CLI" SIGTERM`
-or `SIGKILL`. This table records the fresh fix-round comparison.
+and explicitly started a retained head when present. This table preserves
+the recorded SIGTERM/SIGKILL comparison. The one-off probe was removed after
+review; ongoing real-CLI coverage lives in
+`src/lib/runtime/nativeQueueHost.integration.test.ts`, run by CI on both versions.
 
 | Signal / CLI | Resume snapshot | Queue after 12 seconds | Provider requests | Native start events |
 | --- | --- | --- | ---: | --- |
@@ -104,6 +105,25 @@ conditions and remain respected. Production impact is inferred from the real
 CLI probes and the production adapter exercised by the tests. No live
 conversation or deployed runtime was inspected or restarted.
 
+Deploying this fix leaves queues already stranded by a pre-fix cold adoption
+on 0.159.0 paused. The old host appended a history-derived `turn-ended` event
+with `status: "interrupted"` and no `interruptionSource`. That ledger is
+indistinguishable from a recorded deliberate pause, so later adoptions keep
+skipping automatic recovery. Repeated restarts do not clear it. This exclusion
+preserves legacy operator pauses; automatic recovery applies to interruptions
+newly reconciled by the fixed host, which records their history origin.
+
+For an affected conversation, open it in Delegatus, wait until it is idle and
+resolve any blocking attention, then use **Відправити чергу зараз**
+(**Send the queue now**) in the **У черзі до Codex** (**Queued for Codex**)
+panel. This sends the existing native queue head through `thread/queue/start`
+without submitting another copy. Check that the queued input appears in the
+conversation before taking another action. This remedy is an explicit choice
+to resume the queue; use it only when the pause should end. Its idle fence is
+covered by `NativeQueuePanel.dom.test.tsx`; the existing host test
+`native cold recovery starts only an observed idle unblocked head (paused)`
+covers the legacy ledger's continued exclusion.
+
 ## Recovery and CI
 
 After native queue discovery on adoption, Delegatus starts only a fresh
@@ -113,7 +133,8 @@ live interruption is captured before cold history reconciliation and preserves
 the operator's pause. A terminal interruption inferred from history carries
 `interruptionSource: "history"` durably, so a failed adoption does not turn it
 into a pause on the next attempt. Existing untagged events retain their pause
-meaning. Fresh thread creation does not run recovery.
+meaning, including the stranded pre-fix ledgers described above. Fresh thread
+creation does not run recovery.
 
 Recovery names the exact native submission ID. Codex arbitrates idle state
 atomically, so an auto-dispatch race cannot consume a different head. No input
@@ -154,9 +175,6 @@ No timeout was increased and recovery contains no version branch.
 - `scripts/verify-native-codex-runtime.ts`: remove the obsolete pin-only hint.
 - `.github/workflows/bun-runtime.yml`, `scripts/bun-runtime-workflow.test.ts`:
   full native runner matrix and workflow verification.
-- `scripts/probe-native-codex-queue.mjs`: retained, bounded raw protocol probe
-  for both shutdown signals, with a credential-free environment and cleanup
-  limited to the children it started.
 - `docs/design/native-codex-runtime.md`, this report: current recovery and evidence.
 
 ## Verification commands and results
@@ -234,13 +252,48 @@ in the comparison table above ran under fresh isolated roots, one at a time.
 - Final focused host/workflow/large-race check: 152/0 (23 unrelated cases
   filtered); the final 0.154.0 barrier again coalesced one real automatic start.
 - `bun node_modules/typescript/bin/tsc --noEmit`: exit 0.
-- Touched-file lint, including the retained probe and event type: exit 0,
+- Touched-file lint, including the then-retained probe and event type: exit 0,
   four pre-existing unused-variable warnings.
 - Runtime-host rehearsal under the pinned Bun 1.4.0: passed; succession in
   1,007 ms, listener and private socket each answered 27/27 polls over 15 s,
   with 13 abandoned peers on each. Docker calls were stubbed.
 - `bun run privacy:check`: passed with known-value fingerprints and commit
   checks enabled; staged diff review and whitespace checks passed.
+
+## Legacy exclusion and probe removal
+
+The next review confirmed the legacy untagged-ledger exclusion. This fix round
+takes its documentation option: Production impact now states which queues
+remain stranded and gives the existing queue-panel remedy. Runtime behavior
+is unchanged. The standalone raw probe is removed and its comparison table
+remains above; no documentation instructs readers to run the removed driver.
+
+Fresh checks ran sequentially under separate `mktemp -d /tmp/queue-review-fix-…`
+roots with isolated `LLV_STATE_DIR`, `XDG_CONFIG_HOME`, `TMPDIR`, `CODEX_HOME`
+and `HOME`. Uptime was checked between heavy runs.
+
+- Real-CLI cold command from Reproduction before the change: 2/0 on 0.154.0
+  and 2/0 on 0.159.0. The large 0.154.0 case coalesced one automatic start;
+  the large 0.159.0 case observed one retained idle resume and recovered through
+  the host's named start. One unrelated case was filtered in each run.
+- `bun test src/lib/runtime/codexAppServerHost.test.ts src/lib/runtime/nativeQueueRuntime.test.ts scripts/bun-runtime-workflow.test.ts`:
+  199/0, including the legacy paused ledger and queue-level manual start.
+- `bun test src/components/NativeQueuePanel.dom.test.tsx`: 31/0, including
+  the idle-only queue start. Existing React `act` warnings remain.
+- `bun node_modules/typescript/bin/tsc --noEmit`: exit 0.
+- Focused lint of the host, host tests, cold integration and workflow tests:
+  exit 0, zero errors and three existing unused-variable warnings.
+- `bun scripts/verify-runtime-host.ts --runtime "$BUN"`, with `$BUN` naming
+  the pinned Bun 1.4.0: passed. Succession completed in 1,016 ms; the private
+  listener and socket each answered 27/27 polls over 15 seconds, with 13
+  abandoned peers each. Docker calls were stubbed.
+- Pre-commit privacy check passed with an explicit list of the remaining changed
+  publication files, known-value fingerprints and commit checks enabled.
+  The default selector initially reported `inspection_error: 1` because the
+  earlier branch commit added the now-deleted probe. `bun run privacy:check`
+  is repeated after committing, when the branch diff includes its removal.
+- Diff review and `git diff --check`: passed. The removed probe has no
+  remaining references in docs, scripts, workflows or source.
 
 ## Unverified
 

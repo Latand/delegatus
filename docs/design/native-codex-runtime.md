@@ -98,7 +98,10 @@ atomic start RPC after reconciling resume notifications. A previously recorded
 interruption, live turn or blocking attention keeps the queue paused. Recovery
 never re-adds the input; canonical history still owns delivery settlement.
 See [cold-recovery evidence](codex-native-queue-cold-recovery.md) for the version
-comparison, production impact and checks.
+comparison, production impact and checks. Queues already stranded by a pre-fix
+cold adoption remain paused because their untagged interruption also represents
+a legacy operator pause. Use the queue panel's **Send the queue now** control
+when idle to resume them, as described in that report's Production impact.
 
 The runtime integration fixture uses the real CLI and native persistence against
 a loopback Responses server. Only its authentication/catalog projection is
