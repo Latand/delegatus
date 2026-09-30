@@ -33,7 +33,7 @@ import {
   type RuntimeSession,
 } from "./contracts";
 import { republishStructuredDeliveryHost } from "./structuredDeliveryController";
-import { recoverDeadStructuredConversation } from "./structuredRecovery";
+import { recoverDeadStructuredConversation, StructuredResumeUnpublishedError } from "./structuredRecovery";
 import { runtimeImageCapability, runtimeImageRefsForUploads, runtimeImageStore, type RuntimeImageUpload } from "./runtimeImageStore";
 import { admitRuntimeImagePayload } from "./runtimeImageAdmission";
 import {
@@ -142,6 +142,8 @@ export interface HeldStructuredMessageRequest {
   text: string;
   imageRefs?: StructuredImageRef[];
   command?: HeldDeliveryCommand;
+  /** The coordinator is reconciling an attempt that may have reached the host. */
+  reconcileUncertain?: boolean;
 }
 
 export interface HeldStructuredMessageDependencies {
@@ -323,14 +325,19 @@ function persistedCurrentOwner(
 function heldOutcomeDuringRuntimeSynchronization(
   request: HeldStructuredMessageRequest,
   registry: AgentRegistry,
+  cause: string,
 ): HeldStructuredMessageOutcome {
+  // A failed read while reconciling a command that may already have reached
+  // the journal cannot authorize another attempt. Newly assigned rows have
+  // not dispatched yet and must keep a reason-bearing bounded deferral.
+  if (request.reconcileUncertain) return "delivery-uncertain";
   const owner = persistedCurrentOwner(request, registry);
-  // This path runs before command dispatch. Let the coordinator requeue a
-  // newly claimed attempt; when reconciling an older uncertain attempt it
-  // retains that uncertainty instead of treating a failed read as a retry.
-  if (owner?.kind === "structured") return "held";
-  if (owner?.kind !== "legacy") return "delivery-uncertain";
-  return requiresStructuredHeldCommand(request) ? "failed" : null;
+  // This path runs before command dispatch. Legacy ownership still belongs to
+  // its fallback path; every structured or unresolved owner gets a bounded
+  // retry that retains the runtime-read cause.
+  if (owner?.kind === "legacy") return requiresStructuredHeldCommand(request) ? "failed" : null;
+  const ownerHint = owner?.kind === "structured" ? "structured runtime owner is synchronizing" : "runtime owner is unavailable";
+  return heldForRetry(`${ownerHint}: ${cause}`);
 }
 
 /**
@@ -741,20 +748,20 @@ export async function deliverHeldStructuredMessage(
   const registry = (dependencies.registry ?? agentRegistry)();
   const client = (dependencies.client ?? runtimeHostClient)();
   if (!client) {
-    return heldOutcomeDuringRuntimeSynchronization(request, registry);
+    return heldOutcomeDuringRuntimeSynchronization(request, registry, "runtime host client is unavailable");
   }
   let session: RuntimeSession | null;
   try {
     session = await readRuntimeSession(client, { conversationId: request.conversationId ?? undefined, artifactPath: request.path || undefined });
   } catch (error) {
     console.error("[structured delivery] runtime session read failed", error);
-    return heldOutcomeDuringRuntimeSynchronization(request, registry);
+    return heldOutcomeDuringRuntimeSynchronization(request, registry, error instanceof Error ? error.message : String(error));
   }
   recordStructuredRuntimeRecovery(session, dependencies.startupRecovered ?? markStructuredRuntimeSessionRecovered);
   if (!session) {
     const owner = persistedCurrentOwner(request, registry);
     if (owner?.kind === "legacy") {
-      return heldOutcomeDuringRuntimeSynchronization(request, registry);
+      return heldOutcomeDuringRuntimeSynchronization(request, registry, "runtime session is unavailable");
     }
     const deliverability = conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
       conversationId: request.conversationId,
@@ -1162,21 +1169,42 @@ export async function enqueueStructuredMessage(
         conversationId: session.conversationId as ViewerConversationId,
       }, { registry, client });
     } catch (error) {
+      const failure = `${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : "structured host recovery failed"}`;
+      if (recoveryReservation && error instanceof StructuredResumeUnpublishedError) {
+        const settled = registry.terminalizeHeldDelivery(recoveryReservation.id, failure);
+        return {
+          ok: false,
+          structured: true,
+          outcome: "failed",
+          error: settled.error ?? failure,
+          status: 503,
+          operationId: recoveryReservation.command.operationId,
+        };
+      }
+      if (!recoveryReservation) return ownershipUnavailable("reclaimed");
+      requestDeliveryDrain(dependencies.kick ?? kickStructuredDeliveryQueue);
       return {
-        ok: false,
+        ok: true,
         structured: true,
-        outcome: "failed",
-        error: `${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : "structured host recovery failed"}`,
-        status: 503,
-        ...(recoveryReservation ? { operationId: recoveryReservation.command.operationId } : {}),
+        target: null,
+        outcome: "held",
+        operationId: recoveryReservation.command.operationId,
       };
     }
     if (!recovered) {
       /* Past the reservation: a recovery ran, so this is no pre-admission refusal. */
-      const { admission: _admission, ...failure } = ownershipUnavailable("reclaimed");
-      return recoveryReservation
-        ? { ...failure, operationId: recoveryReservation.command.operationId }
-        : failure;
+      const failure = deliverabilityFailureMessage({ condition: "reclaimed" });
+      const settled = recoveryReservation
+        ? registry.terminalizeHeldDelivery(recoveryReservation.id, failure)
+        : null;
+      return {
+        ok: false,
+        structured: true,
+        outcome: "failed",
+        error: settled?.error ?? failure,
+        status: 503,
+        ...(recoveryReservation ? { operationId: recoveryReservation.command.operationId } : {}),
+      };
     }
     recoveredHost = recovered.spawned;
     try {

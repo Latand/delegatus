@@ -1116,13 +1116,18 @@ export async function drainHeldDeliveries(
         const outcome = reconciling
           ? await delivery.reconcileUncertain!(input)
           : await delivery.deliver(input);
+        if (reconciling && outcome === "delivery-uncertain") return;
         if (outcome === "held" || typeof outcome === "object") {
           if (!reconciling) {
             /* A bare `held` is progress (a resume that just published, or a runtime
                host briefly out of reach), so only a deferral with a cause is bounded. */
-            const failure = typeof outcome === "object" ? unactuatedFailure(claimed, outcome.cause, (options.now ?? Date.now)()) : null;
+            const priorDeferralCause = claimed.error === "delivery started; recovery requires an explicit outcome"
+              ? null
+              : claimed.error;
+            const cause = priorDeferralCause ?? (typeof outcome === "object" ? outcome.cause : null);
+            const failure = cause ? unactuatedFailure(claimed, cause, (options.now ?? Date.now)()) : null;
             if (failure) registry.recordDeliveryOutcome(claimed.id, "failed", failure, "lost");
-            else registry.requeueUnactuatedDelivery(claimed.id);
+            else registry.requeueUnactuatedDelivery(claimed.id, cause ?? undefined);
           }
         }
         else registry.recordDeliveryOutcome(claimed.id, outcome, outcome === "failed" ? "delivery failed and remains recoverable" : null);

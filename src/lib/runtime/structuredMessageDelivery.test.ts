@@ -2118,10 +2118,9 @@ test("a dead structured host names reclamation when its recovery fails", async (
   });
 
   expect(result).toMatchObject({
-    ok: false,
-    status: 503,
+    ok: true,
+    outcome: "held",
     operationId: expect.any(String),
-    error: "conversation host was reclaimed; automatic resume did not establish a deliverable host: recovery process failed to publish",
   });
   expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{
     command: { operationId: expect.any(String) },
@@ -2467,10 +2466,10 @@ test("structured recovery failures remain admitted, avoid delivery, and allow a 
   };
 
   await expect(enqueueStructuredMessage(request, dependencies)).resolves.toMatchObject({
-    ok: false,
+    ok: true,
     structured: true,
-    outcome: "failed",
-    status: 503,
+    outcome: "held",
+    operationId: expect.any(String),
   });
   expect(commands).toEqual([]);
   expect(registry.pendingDeliveries(conversation.id)).toHaveLength(1);
@@ -2701,7 +2700,7 @@ test("held delivery stays fenced when persisted ownership is unavailable", async
     client: () => null,
     registry: () => registry,
     startupFailed: () => true,
-  })).toBe("delivery-uncertain");
+  })).toMatchObject({ outcome: "held", cause: expect.stringContaining("runtime host client is unavailable") });
   expect(await deliverHeldStructuredMessage(request, {
     enabled: () => true,
     client: () => missingSessionClient,
@@ -2720,7 +2719,7 @@ test("held delivery fences a missing runtime client without startup failure evid
     enabled: () => true,
     client: () => null,
     startupFailed: () => false,
-  })).toBe("delivery-uncertain");
+  })).toMatchObject({ outcome: "held", cause: expect.stringContaining("runtime host client is unavailable") });
 });
 
 test("held delivery keeps a persisted structured owner queued when no dispatch was possible", async () => {
@@ -2738,7 +2737,7 @@ test("held delivery keeps a persisted structured owner queued when no dispatch w
     client: () => null,
     registry: () => registry,
     startupFailed: () => true,
-  })).toBe("held");
+  })).toMatchObject({ outcome: "held", cause: expect.stringContaining("structured runtime owner is synchronizing") });
 });
 
 test("an unsupported session read before dispatch retains the original held message and image for one later delivery", async () => {
@@ -2866,6 +2865,128 @@ test("a held message whose resume keeps failing stays queued, then fails with th
   registry.close();
 });
 
+test("a terminal resume failure fences its reservation before a competing resend can drain", async () => {
+  const { registry, conversation } = registryWithConversation();
+  const dead = snapshot(conversation.id);
+  dead.sessions[0] = { ...dead.sessions[0]!, host: "dead" };
+  let reads = 0;
+  let recoveryClock = Date.now();
+  const arrivals: string[] = [];
+  const client = {
+    readSession: sessionReader(async () => ++reads === 1 ? dead : snapshot(conversation.id)),
+    command: async ({ operationId, text }: { operationId: string; text: string }) => {
+      arrivals.push(text);
+      return { operationId, receipt: { status: "delivered" } };
+    },
+    operationStatus: async (operationId: string) => ({ operationId, receipt: { status: "delivered" } }),
+  } as unknown as RuntimeHostClient;
+  const recover: typeof recoverDeadStructuredConversation = (request, dependencies) => recoverDeadStructuredConversation(request, {
+    ...dependencies,
+    transport: () => "structured",
+    resolveAccount: () => ({ engine: "codex", accountId: "default", kind: "managed", home: sandbox, transcriptRoot: sandbox, env: { NODE_ENV: "test" } }),
+    spawn: async (input) => ({
+      ok: true, target: null, path: null, launchId: input.receipt.launchId, conversationId: input.receipt.conversationId,
+      launched: true, retrySafe: false, initialMessage: "queued", state: "path-pending", transport: "structured",
+    }),
+    probeStagedLaunch: async (launchId, probed) => probed.readOnlySnapshot().receipts[launchId]!,
+    failStagedLaunch: async (launchId, probed, _runtime, reason) => {
+      probed.failSpawn(launchId, reason);
+      return { claimed: true, receipt: probed.readOnlySnapshot().receipts[launchId] ?? null };
+    },
+    now: () => recoveryClock,
+    sleep: async (ms) => { recoveryClock += ms; },
+  });
+  const failed = await enqueueStructuredMessage({
+    path: artifactPath,
+    conversationId: conversation.id,
+    clientMessageId: "resume-timeout-original",
+    text: "one user message",
+    hasImages: false,
+  }, {
+    enabled: () => true,
+    client: () => client,
+    registry: () => registry,
+    recover,
+  });
+
+  expect(failed).toMatchObject({ ok: false, outcome: "failed", error: expect.stringContaining("host resume did not publish within 60 s") });
+  const original = Object.values(registry.snapshot().heldDeliveries)
+    .find((delivery) => delivery.clientMessageId === "resume-timeout-original")!;
+  expect(original).toMatchObject({ state: "failed", text: "", error: expect.stringContaining("host resume did not publish within 60 s") });
+
+  const competing = await enqueueStructuredMessage({
+    path: artifactPath,
+    conversationId: conversation.id,
+    clientMessageId: "resume-timeout-new-key",
+    text: "one user message",
+    hasImages: false,
+  }, { enabled: () => true, client: () => client, registry: () => registry, kick: () => {} });
+  expect(competing).toMatchObject({ ok: true });
+  await drainHeldDeliveries(conversation.id, {
+    deliver: async ({ delivery, path, clientMessageId }) => await deliverHeldStructuredMessage({
+      conversationId: conversation.id, path, deliveryId: delivery.id, clientMessageId,
+      text: delivery.text, imageRefs: delivery.runtimeImages, command: delivery.command,
+    }, { enabled: () => true, client: () => client, registry: () => registry, kick: async () => {} }) ?? "delivery-uncertain",
+  }, registry);
+
+  expect(arrivals).toEqual(["one user message"]);
+  expect(Object.values(registry.snapshot().heldDeliveries)
+    .filter((delivery) => delivery.clientMessageId === "resume-timeout-original")[0]).toMatchObject({ state: "failed" });
+  registry.close();
+});
+
+test("persistent initial runtime-read failures retain payload and cause until bounded lost settlement", async () => {
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  const image: StructuredImageRef = { sha256: "d".repeat(64), mime: "image/png", bytes: 67 };
+  const held = registry.holdDelivery(conversation.id, "read timeout with attachment", "initial-read-timeout", "runtime-images", [image]);
+  const client = {
+    readSession: sessionReader(async () => { throw new Error("runtime host request timed out"); }),
+    command: async () => { throw new Error("pre-dispatch read failures must not dispatch"); },
+  } as unknown as RuntimeHostClient;
+  const drainAt = (now: number) => drainHeldDeliveries(conversation.id, {
+    deliver: async ({ delivery, path, clientMessageId }) => await deliverHeldStructuredMessage({
+      conversationId: conversation.id, path, deliveryId: delivery.id, clientMessageId,
+      text: delivery.text, imageRefs: delivery.runtimeImages, command: delivery.command,
+    }, { enabled: () => true, client: () => client, registry: () => registry }) ?? "delivery-uncertain",
+  }, registry, { now: () => now });
+  const acceptedAt = Date.parse(held.createdAt);
+
+  await drainAt(acceptedAt + 60_000);
+  await drainAt(acceptedAt + 5 * 60_000);
+  expect(registry.snapshot().heldDeliveries[held.id]).toMatchObject({
+    state: "assigned", clientMessageId: held.clientMessageId, command: held.command,
+    text: held.text, runtimeImages: [image], error: expect.stringContaining("runtime host request timed out"),
+  });
+  await drainAt(acceptedAt + 11 * 60_000);
+  expect(registry.snapshot().heldDeliveries[held.id]).toMatchObject({
+    state: "failed", text: held.text, clientMessageId: held.clientMessageId,
+    command: held.command, runtimeImages: [image], error: expect.stringContaining("runtime host request timed out"),
+  });
+  expect(sendReceiptFor(registry.snapshot(), held.command.operationId)).toMatchObject({ state: "failed", duplicateRisk: false });
+  registry.close();
+});
+
+test("an absent runtime client and owner settles its assigned reservation with the cause", async () => {
+  const { registry, conversation } = registryWithConversation();
+  const held = registry.holdDelivery(conversation.id, "wait for missing owner", "missing-runtime-owner");
+  const drainAt = (now: number) => drainHeldDeliveries(conversation.id, {
+    deliver: async ({ delivery, path, clientMessageId }) => await deliverHeldStructuredMessage({
+      conversationId: conversation.id, path, deliveryId: delivery.id, clientMessageId,
+      text: delivery.text, command: delivery.command,
+    }, { enabled: () => true, client: () => null, registry: () => registry }) ?? "delivery-uncertain",
+  }, registry, { now: () => now });
+  const acceptedAt = Date.parse(held.createdAt);
+
+  await drainAt(acceptedAt + 60_000);
+  await drainAt(acceptedAt + 11 * 60_000);
+  expect(registry.snapshot().heldDeliveries[held.id]).toMatchObject({
+    state: "failed", error: expect.stringContaining("runtime owner is unavailable"),
+  });
+  expect(sendReceiptFor(registry.snapshot(), held.command.operationId)).toMatchObject({ state: "failed", duplicateRisk: false });
+  registry.close();
+});
+
 /* #2046: the first send to a reclaimed conversation raised a resume and then
    failed "did not publish its transcript" while that resume was still
    publishing; an identical resend seconds later found the host up. The send
@@ -2933,6 +3054,7 @@ test("a failed session read while reconciling an uncertain send does not authori
     deliver: async () => { throw new Error("uncertain sends must only be reconciled"); },
     reconcileUncertain: async ({ delivery, path, clientMessageId }) => await deliverHeldStructuredMessage({
       conversationId: conversation.id, path, deliveryId: delivery.id, clientMessageId, text: delivery.text,
+      reconcileUncertain: true,
     }, {
       enabled: () => true, registry: () => registry,
       client: () => ({ readSession: async () => { throw new Error("runtime request method is unsupported"); },
@@ -3006,7 +3128,7 @@ test("held delivery stays uncertain during a transient structured snapshot failu
     enabled: () => true,
     client: () => client,
     startupFailed: () => false,
-  })).toBe("delivery-uncertain");
+  })).toMatchObject({ outcome: "held", cause: expect.stringContaining("runtime socket timed out") });
 });
 
 test("structured message routing holds composer delivery when migration owns the fence", async () => {
@@ -3416,9 +3538,9 @@ test("a dead-host send of text AND an image is durable before a failing resume, 
   });
   expect(reservedBeforeRecovery!.runtimeImages).toEqual([imageRef]);
   expect(stores).toBe(1);
-  // The failure names the operation, so the browser can follow this message
-  // instead of being told only that something went wrong.
-  expect(refused).toMatchObject({ ok: false, outcome: "failed", status: 503 });
+  // The pending response names the operation so the browser can track the
+  // durable reservation while the host becomes available.
+  expect(refused).toMatchObject({ ok: true, outcome: "held" });
   expect((refused as { operationId?: string }).operationId)
     .toBe(reservedBeforeRecovery!.command.operationId);
   expect(commands).toHaveLength(0);

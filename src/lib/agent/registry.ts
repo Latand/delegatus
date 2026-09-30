@@ -8910,7 +8910,9 @@ export class AgentRegistry {
         && compareDeliveryAdmission(other, delivery) < 0)) return null;
       delivery.state = "delivery-uncertain";
       delivery.attempts += 1;
-      delivery.error = "delivery started; recovery requires an explicit outcome";
+      /* Keep the last proved pre-dispatch cause across another read attempt;
+         a command outcome below replaces it if dispatch actually proceeds. */
+      delivery.error ??= "delivery started; recovery requires an explicit outcome";
       syncDeliveryOperationOwnerState(file, delivery);
       if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
       return clone(delivery);
@@ -9218,8 +9220,16 @@ export class AgentRegistry {
     });
   }
 
-  requeueUnactuatedDelivery(id: string): HeldDelivery {
-    return this.placeDeliveryForRetry(id, true);
+  requeueUnactuatedDelivery(id: string, cause?: string): HeldDelivery {
+    return this.mutate((file) => {
+      const delivery = file.heldDeliveries[id];
+      if (!delivery) throw new Error("held delivery is unknown");
+      const retained = placeDeliveryForRetryInFile(file, delivery, true);
+      if (cause && (retained.state === "assigned" || retained.state === "held") && !retained.error) {
+        delivery.error = cause.slice(0, 240);
+      }
+      return clone(delivery);
+    }, { deliveryOnly: true });
   }
 
   private placeDeliveryForRetry(id: string, allowUncertain: boolean): HeldDelivery {
