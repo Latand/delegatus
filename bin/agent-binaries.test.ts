@@ -61,7 +61,7 @@ test("installed launcher runs with Bun alone and no Node on PATH", () => {
   fs.mkdirSync(bin, { recursive: true });
   fs.symlinkSync(process.execPath, path.join(bin, "bun"));
   const child = spawnSync(new URL("./cli.mjs", import.meta.url).pathname, ["--version"], {
-    env: { HOME: root, PATH: bin, LLV_STATE_DIR: path.join(root, "state"), LANG: "en_US.UTF-8" }, encoding: "utf8", timeout: 10_000,
+    env: { HOME: root, PATH: bin, LLV_STATE_DIR: path.join(root, "state"), LANG: "en_US.UTF-8", NODE_ENV: "test" }, encoding: "utf8", timeout: 10_000,
   });
   expect(child.stderr).toBe("");
   expect(child.status).toBe(0);
@@ -83,7 +83,7 @@ test("MCP entrypoint starts with Bun alone and closes on EOF", () => {
   fs.chmodSync(launcher, 0o755);
   fs.writeFileSync(path.join(fixture, "dist/mcp-server.mjs"), 'process.stdout.write("Bun MCP fixture\\n"); process.stdin.resume();');
   const child = spawnSync(launcher, [], {
-    env: { HOME: root, PATH: bin, LLV_STATE_DIR: path.join(root, "mcp-state"), LANG: "en_US.UTF-8" },
+    env: { HOME: root, PATH: bin, LLV_STATE_DIR: path.join(root, "mcp-state"), LANG: "en_US.UTF-8", NODE_ENV: "test" },
     input: "", encoding: "utf8", timeout: 10_000,
   });
   expect(child.stderr).not.toContain("No such file or directory");
