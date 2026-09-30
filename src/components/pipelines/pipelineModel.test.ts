@@ -54,6 +54,7 @@ import {
   defaultStageWiring,
   canAddReviewAfter,
   optimisticAddReview,
+  optimisticSetEdge,
   optimisticAddStage,
   optimisticRemoveStage,
   optimisticReorderStage,
@@ -1326,7 +1327,7 @@ describe("optimistic stage mutations (issue #221 §3 — instant add/remove)", (
     expect(next.stages.map((stage) => stage.id)).toEqual(["a", "stage-3", "stage-3-fix", "b"]);
     const [implement, reviewer, fixer] = next.stages;
     expect(implement!.next).toBe("stage-3");
-    expect(reviewer).toMatchObject({ kind: "run", next: "b", onFail: { to: "stage-3-fix", maxRounds: 5, onExhausted: "advance" } });
+    expect(reviewer).toMatchObject({ kind: "run", next: "b", onFail: { to: "stage-3-fix", maxRounds: 3, onExhausted: "advance" } });
     expect(reviewer!.effectiveRole.access).toBe("read-only");
     expect(fixer).toMatchObject({ kind: "run", next: "stage-3", onFail: null });
     expect(fixer!.effectiveRole.access).toBe("read-write");
@@ -1789,4 +1790,10 @@ describe("needs_review", () => {
     expect(pipelineReviewHeads(en, { ...lane, state: "closed" })).toBeNull();
     expect(pipelineReviewHeads(en, null)).toBeNull();
   });
+});
+
+test.each([undefined, 7])("optimistic fail edge defaults to 3 and keeps explicit %s", (maxRounds) => {
+  const before = pipeline({ stages: [stage("a"), stage("b")] });
+  const next = optimisticSetEdge(before, "a", "fail", "b", maxRounds);
+  expect(next.stages[0]!.onFail).toEqual({ to: "b", maxRounds: maxRounds ?? 3 });
 });

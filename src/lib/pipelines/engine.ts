@@ -4421,7 +4421,7 @@ async function tickReviewStage(
       mode: "auto",
       reviewerMode: "headless",
       reviewerSandbox: pipelineStageSandbox(attemptStage(stage, attempt)),
-      roundLimit: 5,
+      roundLimit: DEFAULT_FAIL_EDGE_ROUNDS,
     }, entries);
     if (!created.flow) {
       park(pipeline, `creating the review flow failed: ${created.error ?? "unknown error"}`, attempt);

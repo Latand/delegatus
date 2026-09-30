@@ -1,4 +1,4 @@
-import { MAX_PIPELINE_STAGES } from "@/lib/pipelines/limits";
+import { DEFAULT_FAIL_EDGE_ROUNDS, MAX_PIPELINE_STAGES } from "@/lib/pipelines/limits";
 import { roleNameById } from "@/components/builderCopy";
 import { reviewerBindingTargetsForRound } from "@/components/flows/flowModel";
 import { currentConversationFile, currentMemberPath, isArchivedPredecessor } from "@/lib/accounts/identity";
@@ -1628,10 +1628,8 @@ export function canAddReviewAfter(pipeline: Pick<Pipeline, "stages">, index: num
   return reviewLoopChainValid(kinds);
 }
 
-/** The round limit a converted review's fail edge takes, the one every review
-    flow carried (`LEGACY_REVIEW_FLOW_ROUND_LIMIT`, which lives beside a Node-only
-    digest and so cannot load in the browser). The echo carries the stored value. */
-const ADDED_REVIEW_ROUNDS = 5;
+/** Default for a newly added review. The server echo carries any stored selection. */
+const ADDED_REVIEW_ROUNDS = DEFAULT_FAIL_EDGE_ROUNDS;
 
 /**
  * The pipeline as it will look once the board's Add review persists (#2187
@@ -1726,7 +1724,7 @@ export function optimisticSetEdge(
     stages: pipeline.stages.map((stage) => {
       if (stage.id !== stageId) return stage;
       if (edge === "pass") return { ...stage, next: to };
-      return { ...stage, onFail: to === null ? null : { to, maxRounds: maxRounds ?? 5, ...(onExhausted ? { onExhausted } : {}) } };
+      return { ...stage, onFail: to === null ? null : { to, maxRounds: maxRounds ?? DEFAULT_FAIL_EDGE_ROUNDS, ...(onExhausted ? { onExhausted } : {}) } };
     }),
   };
 }

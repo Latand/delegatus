@@ -1,3 +1,4 @@
+import { DEFAULT_REVIEW_ROUNDS } from "@/lib/reviewHistory/limits";
 import crypto from "node:crypto";
 import path from "node:path";
 
@@ -261,7 +262,7 @@ export async function createFlowFromRequest(
     mode: req.mode === "manual" ? "manual" : "auto",
     reviewerMode: req.reviewerMode === "pane" ? "pane" : "headless",
     ...(req.reviewerSandbox === "restricted" ? { reviewerSandbox: "restricted" as const } : {}),
-    roundLimit: Number.isInteger(req.roundLimit) && req.roundLimit > 0 ? Math.min(req.roundLimit, 50) : 5,
+    roundLimit: typeof req.roundLimit === "number" && Number.isInteger(req.roundLimit) && req.roundLimit >= 0 ? Math.min(req.roundLimit, 50) : DEFAULT_REVIEW_ROUNDS,
     state: "waiting_ready",
     pausedState: null,
     stateDetail: null,

@@ -1890,7 +1890,7 @@ export const en = {
   "flowDialog.transitions": "transitions",
   "flowDialog.auto": "auto",
   "flowDialog.manual": "manual (gate every step)",
-  "flowDialog.roundLimit": "round limit",
+  "flowDialog.roundLimit": "round limit (default 3)",
   "flowDialog.creating": "creating…",
   "flowDialog.start": "▶ Start",
 
@@ -2227,7 +2227,7 @@ export const en = {
   "pipelineSlot.failEdgeLabel": "On fail, loop back to",
   "pipelineSlot.failEdgeNone": "— park for the operator",
   "pipelineSlot.failEdgeSelf": "↺ this stage (retry itself)",
-  "pipelineSlot.failEdgeRounds": "Max loop rounds",
+  "pipelineSlot.failEdgeRounds": "Max loop rounds (default 3)",
   "pipelineSlot.failEdgeExhausted": "When the rounds are spent",
   "pipelineSlot.failEdgeExhaustedOption.advance": "Fix, then continue",
   "pipelineSlot.failEdgeExhaustedOption.stop-after-fix": "Fix, then wait for me",

@@ -306,3 +306,25 @@ test("issue 1065: advance still refuses a fixing flow whose relay the delivery j
     .toEqual({ error: "flow cannot advance from its current state", status: 409 });
   expect(loadFlows()[0]).toMatchObject({ state: "fixing", rounds: [{ relayedAt: "2026-08-20T16:47:52.921Z" }] });
 });
+
+test.each([undefined, 0, 7])("flow creation defaults to 3 and preserves explicit limit %s", async (roundLimit) => {
+  saveFlows([]);
+  const transcript = path.join(import.meta.dir, "fixtures", "codex-review-2026-07-12.jsonl");
+  const implementer = registry.ensureConversation("codex", transcript, null);
+  const result = await createFlowFromRequest({ implementerPath: transcript, implementerConversationId: implementer.id, deliverKickoff: false,
+    roles: { implementer: { engine: "codex", model: "gpt-5.6-sol", effort: "high" }, reviewer: { engine: "codex", model: "gpt-5.6-sol", effort: "high" } },
+    baseMode: "head", mode: "auto", reviewerMode: "headless",
+    baseRef: "a".repeat(40), ...(roundLimit === undefined ? {} : { roundLimit }),
+  }, []);
+  expect(result.error).toBeUndefined();
+  expect(result.flow!.roundLimit).toBe(roundLimit ?? 3);
+  expect(loadFlows()[0]!.roundLimit).toBe(roundLimit ?? 3);
+});
+
+test("flow decode supplies a finite missing limit and retains stored selections", async () => {
+  const { decodeFlow } = await import("@/lib/reviewHistory/decode");
+  const flow = { id: "decoder-fixture", template: "implement-review-loop", cwd: "/repo", implementerPath: "/fixture.jsonl", baseRef: "main", rounds: [], roles: { reviewer: { engine: "codex", model: null, effort: null } } };
+  for (const roundLimit of [undefined, null, -1, 0, 5, 7]) {
+    expect(decodeFlow({ ...flow, roundLimit })!.roundLimit).toBe(roundLimit == null || roundLimit < 0 ? 3 : roundLimit);
+  }
+});

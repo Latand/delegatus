@@ -1513,3 +1513,10 @@ No question in this document remains for the operator.
 | check that pipelines are finished, then remove review flows from the prompt | §2.8 checks the engine; §2.10 E composes reviews as run stages and never names flows |
 | fix-round runtime by a matrix, automatic, or a new role; light models only when told exactly what and where | Part 3 (a), decided: the matrix, filled in automatically; §2.10 B fix rows and apply-fixes guidance; §2.10 G |
 | "the verdict vocabulary must be done" | §2.1–§2.4 |
+
+### Review budget (mandate v32)
+
+Choose review rounds from risk = consequences × probability: low risk 1;
+normal risk 2; high risk (data loss, security, production, runtime host,
+migrations) 3. The default is 3. More than 3 only when the operator asks;
+state the reason in the brief. Stored limits remain unchanged.

@@ -938,3 +938,10 @@ test("stage store permits null inheritance and checks only explicit tier equalit
   savePipelines([pipeline]);
   expect(loadPipelines()[0]?.stages[0]?.serviceTier).toBe("priority");
 }));
+
+test("stored review budgets remain unchanged", async () => isolatedDelivery(() => {
+  const record = deliveryFixture("stored-review-budget");
+  record.stages[0]!.onFail = { to: "build", maxRounds: 5 };
+  savePipelines([record]);
+  expect(loadPipelines()[0]!.stages[0]!.onFail!.maxRounds).toBe(5);
+}));

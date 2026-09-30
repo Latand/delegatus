@@ -11214,7 +11214,7 @@ test("stop-after-fix is accepted wherever a fail edge takes its option (#2187)",
 /* #2187 §3.2: every new review-loop stage is converted where it enters the
    plan, so none of them reaches the embedded flow that parks at its round
    limit without a last fix. */
-const CONVERTED_REVIEWER_EDGE = { to: "review-fix", maxRounds: 5, onExhausted: "advance" };
+const CONVERTED_REVIEWER_EDGE = { to: "review-fix", maxRounds: 3, onExhausted: "advance" };
 
 function expectConvertedReview(pipeline: Pipeline, implementer: string, reviewNext: string | null) {
   const review = pipeline.stages.find((stage) => stage.id === "review")!;
@@ -11258,14 +11258,14 @@ test("add-stage on a draft converts a review-loop, and that draft started and fa
 
   expect((await patchPipeline(id, { action: "start" }, h.ports)).error).toBeUndefined();
   const { pipeline, reviews } = await driveWithController(h, new Set(["review"]));
-  expect(reviews).toBe(5);
+  expect(reviews).toBe(3);
   expect(pipeline.state).toBe("completed");
   expect(pipeline.stateDetail).toBe(FAIL_EDGE_BUDGET_SPENT_DETAIL);
   const fixes = pipeline.runs.find((run) => run.stageId === "review-fix")!.attempts;
-  expect(fixes).toHaveLength(5);
-  expect(fixes.at(-1)!.activatedBy).toEqual({ stageId: "review", attempt: 5, edge: "fail", budgetSpent: true });
-  expect(fixes.at(-1)!.input).toContain("P2 evidence gap 5");
-  expect(pipelineCompletedUnreviewed(pipeline)).toEqual({ stageId: "review", reviewedHead: REVIEW_HEADS[4], currentHead: REVIEW_HEADS[5], findings: 1 });
+  expect(fixes).toHaveLength(3);
+  expect(fixes.at(-1)!.activatedBy).toEqual({ stageId: "review", attempt: 3, edge: "fail", budgetSpent: true });
+  expect(fixes.at(-1)!.input).toContain("P2 evidence gap 3");
+  expect(pipelineCompletedUnreviewed(pipeline)).toEqual({ stageId: "review", reviewedHead: REVIEW_HEADS[2], currentHead: REVIEW_HEADS[3], findings: 1 });
   expect(h.calls.some((call) => call.startsWith("flow:"))).toBe(false);
 });
 
@@ -11386,7 +11386,7 @@ test("set-edge rewires future edges and freezes traversed evidence (#353)", asyn
   expect(cycle.pipeline?.stages[2]?.onFail).toEqual({ to: "build", maxRounds: 2 });
   /* Defaulted budget mirrors the review flow's round limit. */
   const defaulted = await patchPipeline(id, { action: "set-edge", stageId: "build", edge: "fail", to: "plan" }, ports);
-  expect(defaulted.pipeline?.stages[1]?.onFail).toEqual({ to: "plan", maxRounds: 5 });
+  expect(defaulted.pipeline?.stages[1]?.onFail).toEqual({ to: "plan", maxRounds: 3 });
   /* Clearing works. */
   const cleared = await patchPipeline(id, { action: "set-edge", stageId: "build", edge: "fail", to: null }, ports);
   expect(cleared.pipeline?.stages[1]?.onFail).toBeNull();
@@ -15456,4 +15456,27 @@ test("review-loop forwards the role-default service tier to its flow and reflect
   expect(attempt.effectiveRole.serviceTier).toBeUndefined();
   expect(attempt.effectiveRole.preferredServiceTier).toBe("ultrafast");
   expect(pipelineAcknowledgement(loadPipelines()[0]!).runtimeLine).toContain("/default (role default ultrafast not offered by an available account)");
+});
+
+test.each([undefined, 7])("pipeline review default and explicit higher budget %s survive creation and store reload", async (maxRounds) => {
+  const h = harness();
+  savePipelines([]);
+  const result = await createPipelineFromRequest({ task: "Review budget", repoDir: "/repo", autoStart: false,
+    stages: BUDGET_STAGES({ to: "build", ...(maxRounds === undefined ? {} : { maxRounds }) }) as never,
+  }, h.ports);
+  expect(result.error).toBeUndefined();
+  expect(result.pipeline!.stages[1]!.onFail!.maxRounds).toBe(maxRounds ?? 3);
+  expect(loadPipelines()[0]!.stages[1]!.onFail!.maxRounds).toBe(maxRounds ?? 3);
+  const patched = await patchPipeline(result.pipeline!.id, { action: "set-edge", stageId: "critique", edge: "fail", to: "build", ...(maxRounds === undefined ? {} : { maxRounds }) }, h.ports);
+  expect(patched.error).toBeUndefined();
+  expect(patched.pipeline!.stages[1]!.onFail!.maxRounds).toBe(maxRounds ?? 3);
+});
+
+test("an omitted pipeline review budget runs three reviews before the last fix completes", async () => {
+  const h = movingHeadHarness();
+  await create(h.ports, BUDGET_STAGES({ to: "build" }, null) as never);
+  const { pipeline } = await driveWithController(h);
+  expect(pipeline.state).toBe("completed");
+  expect(pipeline.runs.find((run) => run.stageId === "critique")!.attempts).toHaveLength(3);
+  expect(pipeline.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(4);
 });

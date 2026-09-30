@@ -1101,3 +1101,15 @@ test("Codex tier is published on all launch surfaces and preserved through MCP d
     expect(captured).toMatchObject({ serviceTier: "ultrafast" });
   });
 });
+
+test("MCP pipeline tools describe default 3 and accept an explicit higher budget", async () => {
+  await withProtocolClient(inertBindings(), async (client) => {
+    const { tools } = await client.listTools();
+    for (const name of ["create_pipeline", "pipeline_action"]) {
+      const tool = tools.find((tool) => tool.name === name)!;
+      expect(tool.description).toContain("defaults to 3");
+      expect(JSON.stringify(tool.inputSchema)).toContain("default 3");
+    }
+  });
+  expect(TOOL_INPUT_SCHEMAS.pipeline_action.safeParse({ clientRequestId: "higher-budget", pipelineId: "p", action: "set-edge", stageId: "review", edge: "fail", to: "fix", maxRounds: 7 }).success).toBe(true);
+});

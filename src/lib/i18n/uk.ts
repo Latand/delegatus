@@ -1834,7 +1834,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "flowDialog.transitions": "переходи",
   "flowDialog.auto": "авто",
   "flowDialog.manual": "вручну (гейт на кожен крок)",
-  "flowDialog.roundLimit": "ліміт раундів",
+  "flowDialog.roundLimit": "ліміт раундів (типово 3)",
   "flowDialog.creating": "створюю…",
   "flowDialog.start": "▶ Запустити",
 
@@ -2165,7 +2165,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "pipelineSlot.failEdgeLabel": "У разі невдачі — назад до",
   "pipelineSlot.failEdgeNone": "— зупинка для оператора",
   "pipelineSlot.failEdgeSelf": "↺ цей етап (повтор себе)",
-  "pipelineSlot.failEdgeRounds": "Макс. раундів циклу",
+  "pipelineSlot.failEdgeRounds": "Макс. раундів циклу (типово 3)",
   "pipelineSlot.failEdgeExhausted": "Коли раунди вичерпано",
   "pipelineSlot.failEdgeExhaustedOption.advance": "Виправити й продовжити",
   "pipelineSlot.failEdgeExhaustedOption.stop-after-fix": "Виправити й чекати на мене",
