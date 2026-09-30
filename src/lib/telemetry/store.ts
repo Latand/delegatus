@@ -24,7 +24,9 @@ export function updatePreferences(update: { enabled?: boolean; noticeDismissed?:
   write("preferences.json", { ...preferences(), ...update });
 }
 export function environmentOff(env: Readonly<Record<string, string | undefined>>): boolean {
-  return env.DELEGATUS_TELEMETRY === "0" || (env.DELEGATUS_TELEMETRY === undefined && env.LLV_TELEMETRY === "0") || env.DO_NOT_TRACK === "1";
+  const telemetry = env.LLV_TELEMETRY_OVERRIDE || env.DELEGATUS_TELEMETRY || env.LLV_TELEMETRY;
+  const doNotTrack = env.DO_NOT_TRACK_OVERRIDE || env.DO_NOT_TRACK;
+  return telemetry === "0" || doNotTrack === "1";
 }
 export function telemetryStatus(env: Readonly<Record<string, string | undefined>> = process.env) {
   const p = preferences();

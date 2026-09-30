@@ -6,6 +6,7 @@ import { sendInstallPing, maySend, scheduleInstallPing, type PingPorts } from ".
 import { installPingId, updatePreferences, telemetryFile, telemetryStatus } from "./store";
 import { ensureSelf } from "@/lib/links/self";
 import type { LauncherRecord } from "@/lib/selfUpdate/launcher";
+import { foldDelegatusEnvironment } from "../../../bin/envAlias.mjs";
 
 let root: string;
 const old = process.env.LLV_STATE_DIR;
@@ -54,6 +55,91 @@ test("the switch persists and environment always wins", async () => {
   expect(telemetryStatus(fixture.ports.env)).toMatchObject({ enabled: false, locked: true });
   await sendInstallPing(fixture.ports); expect(fixture.requests).toHaveLength(0);
   fixture.ports.env = { NODE_ENV: "production", LLV_STATE_OWNER: "viewer" }; await sendInstallPing(fixture.ports); expect(fixture.requests).toHaveLength(1);
+});
+test("resolved Docker service.env opt-outs suppress the sender for both production services", async () => {
+  for (const optOut of ["DELEGATUS_TELEMETRY=0", "DO_NOT_TRACK=1", "LLV_TELEMETRY=0"]) {
+    const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "ping-compose-env-"));
+    const envFile = path.join(fixtureDir, "service.env");
+    fs.writeFileSync(envFile, `${optOut}\n`);
+    const cleanEnv = { ...process.env };
+    for (const key of ["DELEGATUS_TELEMETRY", "LLV_TELEMETRY", "DO_NOT_TRACK", "DELEGATUS_ENV_FILE", "LLV_ENV_FILE"]) delete cleanEnv[key];
+    const configResult = Bun.spawnSync(["docker", "compose", "--profile", "*", "config", "--format", "json"], {
+      cwd: process.cwd(),
+      env: { ...cleanEnv, DELEGATUS_ENV_FILE: envFile },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    try {
+      expect(configResult.exitCode).toBe(0);
+      const config = JSON.parse(configResult.stdout.toString()) as { services: Record<string, { environment: Record<string, string> }> };
+      for (const serviceName of ["viewer", "runtime-host"]) {
+        const fixture = harness();
+        updatePreferences({ enabled: true });
+        const serviceEnv = { ...config.services[serviceName]!.environment };
+        foldDelegatusEnvironment(serviceEnv, () => {});
+        fixture.ports.env = { ...fixture.ports.env, ...serviceEnv };
+        await sendInstallPing(fixture.ports);
+        expect(fixture.requests, `${optOut} in ${serviceName}`).toHaveLength(0);
+      }
+    } finally {
+      fs.rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  }
+});
+test("an empty resolved Docker service.env keeps the default-on sender", async () => {
+  const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "ping-compose-default-"));
+  const envFile = path.join(fixtureDir, "service.env");
+  fs.writeFileSync(envFile, "");
+  const cleanEnv = { ...process.env };
+  for (const key of ["DELEGATUS_TELEMETRY", "LLV_TELEMETRY", "DO_NOT_TRACK", "DELEGATUS_ENV_FILE", "LLV_ENV_FILE"]) delete cleanEnv[key];
+  const configResult = Bun.spawnSync(["docker", "compose", "--profile", "*", "config", "--format", "json"], {
+    cwd: process.cwd(), env: { ...cleanEnv, DELEGATUS_ENV_FILE: envFile }, stdout: "pipe", stderr: "pipe",
+  });
+  try {
+    expect(configResult.exitCode).toBe(0);
+    const config = JSON.parse(configResult.stdout.toString()) as { services: Record<string, { environment: Record<string, string> }> };
+    const serviceEnv = { ...config.services.viewer!.environment };
+    foldDelegatusEnvironment(serviceEnv, () => {});
+    const fixture = harness();
+    fixture.ports.env = { ...fixture.ports.env, ...serviceEnv };
+    await sendInstallPing(fixture.ports);
+    expect(fixture.requests).toHaveLength(1);
+  } finally {
+    fs.rmSync(fixtureDir, { recursive: true, force: true });
+  }
+});
+test("shell Docker opt-outs override service.env and viewer-test stays disabled", async () => {
+  for (const shell of [{ DELEGATUS_TELEMETRY: "0" }, { LLV_TELEMETRY: "0" }, { DO_NOT_TRACK: "1" }]) {
+    const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "ping-compose-shell-"));
+    const envFile = path.join(fixtureDir, "service.env");
+    fs.writeFileSync(envFile, "DELEGATUS_TELEMETRY=1\nDO_NOT_TRACK=0\n");
+    const cleanEnv = { ...process.env };
+    for (const key of ["DELEGATUS_TELEMETRY", "LLV_TELEMETRY", "DO_NOT_TRACK", "DELEGATUS_ENV_FILE", "LLV_ENV_FILE"]) delete cleanEnv[key];
+    const configResult = Bun.spawnSync(["docker", "compose", "--profile", "*", "config", "--format", "json"], {
+      cwd: process.cwd(), env: { ...cleanEnv, DELEGATUS_ENV_FILE: envFile, ...shell }, stdout: "pipe", stderr: "pipe",
+    });
+    try {
+      expect(configResult.exitCode).toBe(0);
+      const config = JSON.parse(configResult.stdout.toString()) as { services: Record<string, { environment: Record<string, string> }> };
+      for (const serviceName of ["viewer", "runtime-host"]) {
+        const fixture = harness();
+        updatePreferences({ enabled: true });
+        const serviceEnv = { ...config.services[serviceName]!.environment };
+        foldDelegatusEnvironment(serviceEnv, () => {});
+        fixture.ports.env = { ...fixture.ports.env, ...serviceEnv };
+        await sendInstallPing(fixture.ports);
+        expect(fixture.requests, `${JSON.stringify(shell)} in ${serviceName}`).toHaveLength(0);
+      }
+      const viewerTestEnv = { ...config.services["viewer-test"]!.environment };
+      foldDelegatusEnvironment(viewerTestEnv, () => {});
+      const testFixture = harness();
+      testFixture.ports.env = { ...testFixture.ports.env, ...viewerTestEnv };
+      await sendInstallPing(testFixture.ports);
+      expect(testFixture.requests).toHaveLength(0);
+    } finally {
+      fs.rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  }
 });
 test("an opt-out while the mode probe runs prevents the send", async () => {
   const fixture = harness(); fixture.ports.mode.deploymentsEnabled = async () => { updatePreferences({ enabled: false }); return true; };
