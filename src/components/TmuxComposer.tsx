@@ -1792,6 +1792,10 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      path. */
   const runtimeBus = useRuntimeBusState(viewActive);
   const runtimeOffline = runtimeBus.enabled && runtimeBus.connection === "offline";
+  /* Context has no outbox to wait in: an insertion is either answered now or
+     left unconfirmed, so with the runtime offline it is refused before
+     anything is filed and the draft stays in the field. */
+  const contextOffline = contextShown && runtimeOffline;
   /* One in-flight slot action at a time — Stop or Respawn. */
   const [slotBusy, setSlotBusy] = useState(false);
   /* Interrupt / compact / attach-terminal / mode chip moved into the unified
@@ -4330,6 +4334,10 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         setStatus({ kind: "err", text: t("composer.context.blocked") });
         return;
       }
+      if (contextOffline) {
+        setStatus({ kind: "err", text: t("composer.context.offline") });
+        return;
+      }
       injectContext();
       return;
     }
@@ -4386,7 +4394,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   const composerHasDraft = text.trim().length > 0 || attachments.images.length > 0 || attachments.files.length > 0;
   const slotKind = composerSlotKind({
     killed: hostGone,
-    offline: runtimeOffline,
+    offline: runtimeOffline && !contextOffline,
     working: phoneState === "working",
     hasDraft: composerHasDraft,
   });
@@ -4458,7 +4466,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   const phonePlaceholder = hostGone
     ? t(phoneState === "killed" ? "mobile2.composer.placeholderKilled" : "mobile2.composer.placeholderStopped")
     : runtimeOffline
-      ? t("mobile2.composer.placeholderOffline")
+      ? t(contextShown ? "composer.context.placeholderOffline" : "mobile2.composer.placeholderOffline")
       : phoneState === "held"
         ? t("mobile2.composer.placeholderHeld")
         : null;
@@ -4614,7 +4622,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
          line is the only instruction and stays. */
       composer={{ ...composer, status: payloadDiagnostics && composer.status && ([t("composer.admissionTimedOut"), t("composer.deliveryUnconfirmed")].includes(composer.status.text)
         || displayedRuntimeReceipts.some(receipt => receipt.reason === composer.status!.text)) ? null : composer.status }}
-      placeholder={contextShown ? t("composer.context.placeholder") : placeholder ?? (isMobile && phonePlaceholder
+      placeholder={contextShown && !(isMobile && phonePlaceholder) ? t("composer.context.placeholder") : placeholder ?? (isMobile && phonePlaceholder
         ? phonePlaceholder
         : unresolvedOwnership
           ? t("composer.placeholderResolving")
@@ -4808,6 +4816,8 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         ? t("deadHost.sendBlocked")
         : contextBlocked
           ? t("composer.context.blocked")
+        : contextOffline
+          ? t("composer.context.offline")
         : reconcilingSend
           ? t("composer.payloadChecking")
           : effectiveSendBlockedReason ?? undefined}

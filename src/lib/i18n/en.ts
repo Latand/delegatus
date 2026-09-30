@@ -3207,6 +3207,8 @@ export const en = {
   "composer.context.send": "Add to the agent's context",
   "composer.context.noHost": "Context needs this conversation's Codex host to be running.",
   "composer.context.blocked": "Context mode is on, but this host cannot add context now. Switch to a normal message to send.",
+  "composer.context.offline": "Context mode is on, but the runtime is offline, so nothing can be added now. The draft stays here. Switch to a normal message to queue it for reconnect.",
+  "composer.context.placeholderOffline": "offline \u00b7 context cannot be added until it reconnects",
   "composer.context.unconfirmed": "No answer from the server. The message row will show whether it was added.",
   "outbox.context.chip": "Context",
   "outbox.context.waitingStep": "Joins the running turn at its next step",

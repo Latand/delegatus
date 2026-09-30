@@ -7,7 +7,8 @@ import { createRoot, type Root } from "react-dom/client";
 
 import type { FileEntry } from "@/lib/types";
 import { setLocale, translate } from "@/lib/i18n";
-import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
+import { setRuntimeBusForTests, setRuntimeUiEnabledForTests, type RuntimeBus, type RuntimeBusState } from "@/hooks/runtimeBus";
+import { emptyStore, type ConnectionState } from "@/components/runtime/runtimeModel";
 import type { NativeQueueDependencies } from "@/hooks/useNativeQueue";
 import type { NativeQueueRecord } from "@/lib/runtime/nativeQueueContracts";
 import type { RuntimeSessionView } from "@/hooks/useRuntime";
@@ -49,8 +50,9 @@ Object.assign(globalThis, {
   File: dom.File,
   URL: dom.URL,
 });
+let mobile = false;
 (dom as unknown as { matchMedia: (query: string) => unknown }).matchMedia = (query: string) => ({
-  matches: false, media: query, addEventListener() {}, removeEventListener() {},
+  matches: mobile, media: query, addEventListener() {}, removeEventListener() {},
 });
 
 /* A send or queue hand-off that carries a document keeps the complete
@@ -164,6 +166,7 @@ beforeEach(() => {
   holdInjection = false;
   releaseInjection = null;
   engine = "codex";
+  mobile = false;
   setRuntimeUiEnabledForTests(false);
   setTmuxComposerRuntimeDependenciesForTests({
     nativeQueue: queueTransport,
@@ -574,4 +577,61 @@ test("a submission being saved holds the mode across a debounced turn boundary, 
   expect(toggle(host)!.getAttribute("data-composer-context-toggle")).not.toBe("on");
   expect(modeOf(host)).toBeNull();
   root.unmount();
+});
+
+/* A bus whose connection the test drives. One frozen state per connection:
+   `useSyncExternalStore` compares snapshots by identity. */
+const offlineState: RuntimeBusState = {
+  enabled: true,
+  structuredHostsEnabled: true,
+  connection: "offline" satisfies ConnectionState,
+  resyncedAt: null,
+  lastEventAt: null,
+  store: emptyStore(),
+};
+const offlineBus: RuntimeBus = {
+  getState: () => offlineState,
+  subscribe: () => () => {},
+  subscribeFilesRevision: () => () => {},
+  start: () => {},
+  stop: () => {},
+  refresh: async () => true,
+};
+
+test("with the runtime offline, context mode refuses before anything is filed and keeps the draft", async () => {
+  turn = "running";
+  mobile = true;
+  setRuntimeBusForTests(offlineBus);
+  const fetches: string[] = [];
+  const { host, root } = await mount();
+  const mountFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string) => {
+    fetches.push(String(input));
+    return mountFetch(input as never);
+  }) as unknown as typeof fetch;
+  expect(modeOf(host)).toBe("context");
+  await type(host, "words that must stay");
+
+  /* The phone's slot is not Queue: nothing here waits for a reconnect. */
+  const slot = host.querySelector<HTMLButtonElement>("[data-mobile2-send]")!;
+  expect(slot.getAttribute("data-mobile2-send")).toBe("send");
+  expect(slot.textContent).not.toContain("Queue");
+  /* The offline placeholder wins over the context one, in its context wording. */
+  expect(textarea(host).getAttribute("placeholder")).toContain("offline");
+  expect(textarea(host).getAttribute("placeholder")).not.toContain("delivered on reconnect");
+  /* The reason is on screen before any press. */
+  expect(host.querySelector("[data-testid=composer-send-blocked]")?.textContent).toContain("runtime is offline");
+
+  await settle(() => press(textarea(host), "Enter"));
+  await clickSend(host);
+  await settle(() => {});
+  expect(injections).toEqual([]);
+  expect(sends).toEqual([]);
+  expect(queueWrites).toEqual([]);
+  expect(fetches.filter((url) => url.startsWith("/api/runtime/"))).toEqual([]);
+  expect(contextRows()).toEqual([]);
+  expect(textarea(host).value).toBe("words that must stay");
+  expect(host.textContent).toContain("runtime is offline");
+  root.unmount();
+  setRuntimeBusForTests(null);
 });
