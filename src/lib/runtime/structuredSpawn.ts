@@ -57,8 +57,13 @@ export type SpawnedStructuredHost = EngineHost & {
 
 export const INITIAL_MESSAGE_TIMEOUT_MS = 30_000;
 const INITIAL_MESSAGE_POLL_MS = 250;
-export const ADMISSION_RETRY_ATTEMPTS = 3;
+/** How long a launch's idempotent runtime calls keep retrying a transport
+    failure (#2058). A launch about thirty seconds after a runtime-host handoff
+    met calls near five seconds against a three-second budget; this spans the
+    new host's warm-up and stays inside the durable setup bound. */
+export const ADMISSION_RETRY_DEADLINE_MS = 30_000;
 const ADMISSION_RETRY_BACKOFF_MS = 250;
+const ADMISSION_RETRY_MAX_BACKOFF_MS = 2_000;
 /**
  * Operational ownership bound for one synchronous setup generation. It gives
  * host start, binding, first delivery, and publication one five-minute caller
@@ -220,24 +225,30 @@ export function materializeStructuredHostAccess(
 /** Runtime admission calls carry the durable launch id as their idempotency
     key, so a replay lands on the original receipt. Production #367 saw
     simultaneous launches turn transient socket timeouts into terminal failed
-    receipts; transport-level failures are retried before giving up. */
+    receipts; transport-level failures are retried before giving up, with a
+    doubling backoff, until {@link ADMISSION_RETRY_DEADLINE_MS} has passed
+    (#2058). The time spent counts both the clock and the backoff asked for,
+    so a caller whose sleep returns at once still reaches the deadline. */
 export async function withRuntimeAdmissionRetry<T>(
   request: () => Promise<T>,
-  options: { attempts?: number; sleep?: (ms: number) => Promise<void> } = {},
+  options: { deadlineMs?: number; sleep?: (ms: number) => Promise<void>; now?: () => number } = {},
 ): Promise<T> {
-  const attempts = options.attempts ?? ADMISSION_RETRY_ATTEMPTS;
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+  const now = options.now ?? Date.now;
+  const deadlineMs = options.deadlineMs ?? ADMISSION_RETRY_DEADLINE_MS;
+  const startedAt = now();
+  let backedOff = 0;
+  for (let attempt = 1; ; attempt += 1) {
     try {
       return await request();
     } catch (error) {
       if (!isRuntimeHostTransportFailure(error)) throw error;
-      lastError = error;
-      if (attempt < attempts) await sleep(ADMISSION_RETRY_BACKOFF_MS * attempt);
+      const backoff = Math.min(ADMISSION_RETRY_MAX_BACKOFF_MS, ADMISSION_RETRY_BACKOFF_MS * 2 ** (attempt - 1));
+      if (Math.max(now() - startedAt, backedOff) + backoff > deadlineMs) throw error;
+      backedOff += backoff;
+      await sleep(backoff);
     }
   }
-  throw lastError;
 }
 const INITIAL_MESSAGE_DELIVERED = new Set(["delivered", "turn-started", "steered"]);
 const INITIAL_MESSAGE_FAILED = new Set(["failed", "rejected", "uncertain", "interrupted"]);
@@ -455,6 +466,89 @@ async function structuredSpawnEffectForLaunch(
   }
 }
 
+interface LaunchReapOptions {
+  /** The launch operation's journal status as last read, null when unread.
+      Only a non-terminal status is failed, and an unread one only when
+      `failUnreadOperation` says so. */
+  spawnStatus: string | null;
+  failUnreadOperation?: boolean;
+  releaseHost?: (key: SessionKey) => Promise<boolean>;
+  terminateHostProcess?: (expected: ProcessIdentity) => Promise<boolean>;
+}
+
+/**
+ * Fails one launch and retires what it started: the terminal receipt is
+ * claimed first, so a concurrent completion or same-key successor wins
+ * atomically and this caller never releases a host it no longer owns; then
+ * the runtime operation is failed, and the registered host is released or,
+ * failing that, the recorded process is stopped while the row still names it.
+ */
+async function failStructuredLaunchAndReap(
+  launchId: string,
+  registry: AgentRegistry,
+  client: RuntimeHostClient,
+  reason: string,
+  options: LaunchReapOptions,
+): Promise<{ claimed: boolean; receipt: SpawnReceipt | null }> {
+  const failure = registry.failStructuredSpawn(launchId, reason);
+  if (!failure.claimed) {
+    return { claimed: false, receipt: failure.receipt ?? registry.readOnlySnapshot().receipts[launchId] ?? null };
+  }
+  const spawnStatus = options.spawnStatus;
+  if ((spawnStatus === null && options.failUnreadOperation)
+    || spawnStatus === "pending" || spawnStatus === "queued" || spawnStatus === "delivering") {
+    try {
+      await client.transitionOperation(launchId, "failed", { reason });
+    } catch (error) {
+      console.error("[spawn] runtime operation failure did not settle during reconciliation", {
+        launchId,
+        error: structuredSpawnFailureReason(error),
+      });
+    }
+  }
+  const cleanup = failure.cleanup;
+  if (cleanup) {
+    let released = false;
+    const entryBeforeRelease = registry.readOnlySnapshot().entries[sessionKeyId(cleanup.key)];
+    if (cleanup.releaseRegisteredHost && entryBeforeRelease?.structuredHostOperationId === launchId) {
+      try {
+        released = await (options.releaseHost ?? releaseStructuredDeliveryHost)(cleanup.key);
+      } catch (error) {
+        console.error("[spawn] registered host release failed during reconciliation", {
+          launchId,
+          error: structuredSpawnFailureReason(error),
+        });
+      }
+    }
+    if (!released && cleanup.process) {
+      const entryBeforeTermination = registry.readOnlySnapshot().entries[sessionKeyId(cleanup.key)];
+      const stillOwned = cleanup.releaseRegisteredHost
+        ? entryBeforeTermination?.structuredHostOperationId === launchId
+        : entryBeforeTermination?.structuredHostOperationId == null
+          && entryBeforeTermination.artifactPath === failure.receipt?.artifactPath
+          && entryBeforeTermination.status === "dead"
+          && entryBeforeTermination.claimOwner === null;
+      if (stillOwned) {
+        try {
+          const terminated = await (options.terminateHostProcess ?? terminateVerifiedStructuredSpawnProcess)(cleanup.process);
+          if (!terminated && cleanup.process.pid !== process.pid) {
+            console.error("[spawn] staged host termination remained unconfirmed", {
+              launchId,
+              pid: cleanup.process.pid,
+            });
+          }
+        } catch (error) {
+          console.error("[spawn] staged host termination failed during reconciliation", {
+            launchId,
+            error: structuredSpawnFailureReason(error),
+          });
+        }
+      }
+    }
+  }
+  return { claimed: true, receipt: registry.readOnlySnapshot().receipts[launchId] ?? null };
+}
+
 export async function reconcileStructuredSpawnReplay(
   launchId: string,
   registry: AgentRegistry,
@@ -475,7 +569,10 @@ export async function reconcileStructuredSpawnReplay(
   const current = registry.readOnlySnapshot().receipts[launchId];
   if (!current) throw new Error("unknown spawn receipt");
   if (stagedLaunchRecovery(current)) {
-    const recovered = await recoverStagedStructuredLaunch(launchId, registry, client, { now: options.now });
+    const recovered = await recoverStagedStructuredLaunch(launchId, registry, client, {
+      now: options.now,
+      reap: { releaseHost: options.releaseHost, terminateHostProcess: options.terminateHostProcess },
+    });
     return { ...recovered, initialMessage: recovered.state === "completed" ? "delivered" : "queued" };
   }
   if (current.state === "completed") {
@@ -620,71 +717,19 @@ export async function reconcileStructuredSpawnReplay(
     }
   }
   if (terminalReason) {
-    terminalReason = terminalReason.slice(0, 240);
-    /* Claim the terminal receipt before any asynchronous cleanup. A concurrent
-       completion or same-key successor then wins atomically and prevents this
-       stale replay from releasing its host. */
-    const failure = registry.failStructuredSpawn(launchId, terminalReason);
+    const failure = await failStructuredLaunchAndReap(launchId, registry, client, terminalReason.slice(0, 240), {
+      spawnStatus: spawnOperation?.receipt.status ?? null,
+      releaseHost: options.releaseHost,
+      terminateHostProcess: options.terminateHostProcess,
+    });
     if (!failure.claimed) {
-      const settled = failure.receipt ?? registry.readOnlySnapshot().receipts[launchId] ?? current;
+      const settled = failure.receipt ?? current;
       return {
         ...settled,
         initialMessage: settled.state === "completed" ? "delivered" : "failed",
       };
     }
-    const spawnStatus = spawnOperation?.receipt.status;
-    if (spawnStatus === "pending" || spawnStatus === "queued" || spawnStatus === "delivering") {
-      try {
-        await client.transitionOperation(launchId, "failed", { reason: terminalReason });
-      } catch (error) {
-        console.error("[spawn] runtime operation failure did not settle during reconciliation", {
-          launchId,
-          error: structuredSpawnFailureReason(error),
-        });
-      }
-    }
-    const cleanup = failure.cleanup;
-    if (cleanup) {
-      let released = false;
-      const entryBeforeRelease = registry.readOnlySnapshot().entries[sessionKeyId(cleanup.key)];
-      if (cleanup.releaseRegisteredHost && entryBeforeRelease?.structuredHostOperationId === launchId) {
-        try {
-          released = await (options.releaseHost ?? releaseStructuredDeliveryHost)(cleanup.key);
-        } catch (error) {
-          console.error("[spawn] registered host release failed during reconciliation", {
-            launchId,
-            error: structuredSpawnFailureReason(error),
-          });
-        }
-      }
-      if (!released && cleanup.process) {
-        const entryBeforeTermination = registry.readOnlySnapshot().entries[sessionKeyId(cleanup.key)];
-        const stillOwned = cleanup.releaseRegisteredHost
-          ? entryBeforeTermination?.structuredHostOperationId === launchId
-          : entryBeforeTermination?.structuredHostOperationId == null
-            && entryBeforeTermination.artifactPath === failure.receipt?.artifactPath
-            && entryBeforeTermination.status === "dead"
-            && entryBeforeTermination.claimOwner === null;
-        if (stillOwned) {
-          try {
-            const terminated = await (options.terminateHostProcess ?? terminateVerifiedStructuredSpawnProcess)(cleanup.process);
-            if (!terminated && cleanup.process.pid !== process.pid) {
-              console.error("[spawn] staged host termination remained unconfirmed", {
-                launchId,
-                pid: cleanup.process.pid,
-              });
-            }
-          } catch (error) {
-            console.error("[spawn] staged host termination failed during reconciliation", {
-              launchId,
-              error: structuredSpawnFailureReason(error),
-            });
-          }
-        }
-      }
-    }
-    const failed = registry.readOnlySnapshot().receipts[launchId] ?? current;
-    return { ...failed, initialMessage: "failed" };
+    return { ...(failure.receipt ?? current), initialMessage: "failed" };
   }
   const receipt = registry.readOnlySnapshot().receipts[launchId] ?? current;
   return {
@@ -1785,6 +1830,71 @@ async function cleanupHost(host: SpawnedStructuredHost | null, binding: HostBind
 export { stagedLaunchRecovery, type StagedLaunchRecovery };
 export const STAGED_RECOVERY_BUDGET_MS = 10 * 60_000;
 export const STAGED_RECOVERY_MAX_CHECKS = 16;
+/**
+ * How long a resume may take to publish its host (#2028, #2046).
+ *
+ * A resume re-opens a session that already exists: there is no first message
+ * to deliver and no transcript to wait for, only a host to publish. A resume
+ * that came back three seconds after the send that raised it, and runtime
+ * calls measured near five seconds while a runtime-host handoff settled, both
+ * fit well inside a minute. It stays far below the ten-minute settlement
+ * window, so a resume that cannot publish is reported as its own failure
+ * before the send it carried would be settled as unverified.
+ */
+export const RESUME_PUBLICATION_BOUND_MS = 60_000;
+
+/**
+ * Why a staged launch that no probe will ever advance must end now, or null.
+ *
+ * Two shapes: a resume still unpublished past its bound, and any recovery
+ * stopped or out of budget before it published. Both were only flagged, so
+ * their receipt stayed `path-pending` and the row stayed fenced for good
+ * (#2028). A pipeline stage's own launch is left to the pipeline engine,
+ * which fails it through its stage. Only `unpublished` qualifies: past that
+ * phase a first message may have been dispatched.
+ */
+function unadvanceableStagedLaunch(
+  receipt: SpawnReceipt,
+  recovery: StagedLaunchRecovery | null,
+  pipelineMember: boolean,
+  now: number,
+): string | null {
+  if (!recovery || receipt.state !== "path-pending" || recovery.phase !== "unpublished") return null;
+  const resume = receipt.purpose === "resume-successor";
+  if (!resume && pipelineMember) return null;
+  if (resume && now - recovery.startedAt >= RESUME_PUBLICATION_BOUND_MS) {
+    return `host resume did not publish within ${RESUME_PUBLICATION_BOUND_MS / 1_000} s: ${recovery.reason}`;
+  }
+  if (recovery.stopped || now - recovery.startedAt >= STAGED_RECOVERY_BUDGET_MS || recovery.checks >= STAGED_RECOVERY_MAX_CHECKS) {
+    return `${resume ? "host resume" : "launch"} did not publish: ${recovery.reason}`;
+  }
+  return null;
+}
+
+/**
+ * Settles a staged launch that will never publish as failed, and retires the
+ * host it started (#2028). The receipt is claimed first, which also clears the
+ * row's publication marker when the row names this launch, so the
+ * conversation reads `reclaimed` and the next message resumes it cleanly. An
+ * idle host of a finished stage loses nothing: its session is in its
+ * transcript.
+ */
+export async function failStagedResume(
+  launchId: string,
+  registry: AgentRegistry,
+  client: RuntimeHostClient,
+  reason: string,
+  options: Omit<LaunchReapOptions, "spawnStatus" | "failUnreadOperation"> = {},
+): Promise<{ claimed: boolean; receipt: SpawnReceipt | null }> {
+  const operation = await client.operationStatus(launchId).catch(() => null);
+  const failed = await failStructuredLaunchAndReap(launchId, registry, client, reason.slice(0, 240), {
+    ...options,
+    spawnStatus: operation?.receipt.status ?? null,
+    failUnreadOperation: true,
+  });
+  if (failed.claimed) stagedContinuations.delete(launchId);
+  return failed;
+}
 function writeStagedRecovery(registry: AgentRegistry, launchId: string, recovery: StagedLaunchRecovery): void {
   registry.preserveSpawnArtifactOwnership(launchId, STAGED_RECOVERY_PREFIX + JSON.stringify(recovery));
 }
@@ -1821,7 +1931,7 @@ export async function recoverStagedStructuredLaunch(
   launchId: string,
   registry: AgentRegistry,
   client: RuntimeHostClient,
-  options: { now?: () => number; eligible?: () => boolean } = {},
+  options: { now?: () => number; eligible?: () => boolean; reap?: Omit<LaunchReapOptions, "spawnStatus" | "failUnreadOperation"> } = {},
 ): Promise<SpawnReceipt> {
   const inFlight = stagedRecoveryWork.get(launchId);
   if (inFlight) return inFlight;
@@ -1829,16 +1939,24 @@ export async function recoverStagedStructuredLaunch(
     const read = () => registry.readOnlySnapshot().receipts[launchId]!;
     const receipt = read();
     if (!receipt) throw new Error("unknown staged launch receipt");
-    // Pipeline launches are advanced only by the engine's outside-lease probe.
-    // Startup reconciliation also runs under pipeline admission, and a generic
-    // reaper must not dispatch through a paused or replaced attempt.
-    const memberships = registry.readOnlySnapshot().memberships[registry.canonicalConversationId(receipt.conversationId)] ?? [];
-    if (!options.eligible && memberships.some((membership) => membership.kind === "pipeline")) return receipt;
     let recovery = stagedLaunchRecovery(receipt);
     const now = options.now ?? Date.now;
     // Foreground setup owns this launch until it explicitly hands recovery
     // back. A different live process cannot race its publication or send.
     if (receipt.admissionOwner && processIdentityStatus(receipt.admissionOwner) !== "dead") return receipt;
+    const memberships = registry.readOnlySnapshot().memberships[registry.canonicalConversationId(receipt.conversationId)] ?? [];
+    const pipelineMember = memberships.some((membership) => membership.kind === "pipeline");
+    /* Before the gates below: a launch that no process can advance is exactly
+       the one that must end, whoever holds its host (#2028). */
+    const unadvanceable = unadvanceableStagedLaunch(receipt, recovery, pipelineMember, now());
+    if (unadvanceable) {
+      const failed = await failStagedResume(launchId, registry, client, unadvanceable, options.reap);
+      return failed.receipt ?? read();
+    }
+    // Pipeline launches are advanced only by the engine's outside-lease probe.
+    // Startup reconciliation also runs under pipeline admission, and a generic
+    // reaper must not dispatch through a paused or replaced attempt.
+    if (!options.eligible && pipelineMember) return receipt;
     if (!recovery || receipt.state !== "path-pending" || recovery.stopped || now() < recovery.nextTryAt
       || options.eligible?.() === false) return receipt;
     const continuation = stagedContinuations.get(launchId);
@@ -1971,6 +2089,7 @@ export async function spawnStructuredConversation(
   const deliverFirst = dependencies.deliverFirst ?? defaultDeliverFirst;
   const processIdentity = dependencies.processIdentity ?? (() => captureProcessIdentity(process.pid));
   const now = dependencies.now ?? Date.now;
+  const admissionRetry = { now, ...(dependencies.sleep ? { sleep: dependencies.sleep } : {}) };
   const operationId = input.receipt.launchId;
   const resumeSessionId = structuredResumeSessionId(input);
   const resumeKey = resumeSessionId ? sessionKey(input.engine, resumeSessionId) : null;
@@ -2022,7 +2141,7 @@ export async function spawnStructuredConversation(
       accountId: input.account.accountId,
       parentConversationId: input.receipt.parentConversationId,
       ...(input.receipt.purpose === "resume-successor" ? { sessionId: structuredResumeSessionId(input) } : {}),
-    }));
+    }), admissionRetry);
     input = admittedStructuredLaunchInput(input);
     const capability = input.registry.rotateSpawnCapabilityForReceipt(input.receipt.launchId);
     input.registry.setReceiptViewerMcpTransport(input.receipt.launchId,
@@ -2224,7 +2343,7 @@ export async function spawnStructuredConversation(
       }
     }
     await withinDurableSetup(
-      withRuntimeAdmissionRetry(() => input.client.transitionOperation(operationId, "delivered")),
+      withRuntimeAdmissionRetry(() => input.client.transitionOperation(operationId, "delivered"), admissionRetry),
     );
     const settled = input.registry.finalizeStructuredSpawn(input.receipt.launchId);
     stagedContinuations.delete(operationId);

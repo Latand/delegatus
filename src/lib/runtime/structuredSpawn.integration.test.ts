@@ -26,7 +26,7 @@ import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { readStructuredHostRecords, terminateStructuredHostTree } from "./structuredHostControl";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { recoverDeadStructuredConversation } from "./structuredRecovery";
-import { INITIAL_MESSAGE_TIMEOUT_MS, STALE_STRUCTURED_SPAWN_TIMEOUT_MS, stagedLaunchRecovery, STAGED_RECOVERY_BUDGET_MS, STRUCTURED_SPAWN_DURABLE_SETUP_TIMEOUT_MS, reconcileStructuredSpawnReplay, recoverPendingStructuredSpawns, spawnStructuredConversation, StructuredInitialMessageTimeoutError, claudeHostLaunchPaths, structuredClaudeLaunchForm, structuredClaudePermissionMode, structuredClaudeSpawnPolicyBaseSettingsPath, waitForStructuredInitialMessage, withRuntimeAdmissionRetry, type SpawnedStructuredHost } from "./structuredSpawn";
+import { ADMISSION_RETRY_DEADLINE_MS, INITIAL_MESSAGE_TIMEOUT_MS, STALE_STRUCTURED_SPAWN_TIMEOUT_MS, stagedLaunchRecovery, STAGED_RECOVERY_BUDGET_MS, STRUCTURED_SPAWN_DURABLE_SETUP_TIMEOUT_MS, reconcileStructuredSpawnReplay, recoverPendingStructuredSpawns, spawnStructuredConversation, StructuredInitialMessageTimeoutError, claudeHostLaunchPaths, structuredClaudeLaunchForm, structuredClaudePermissionMode, structuredClaudeSpawnPolicyBaseSettingsPath, waitForStructuredInitialMessage, withRuntimeAdmissionRetry, type SpawnedStructuredHost } from "./structuredSpawn";
 import { materializeStructuredTerminal } from "./structuredTerminal";
 import { structuredContentDigest } from "./structuredContent";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
@@ -5232,6 +5232,7 @@ test("issue 367: a post-kill relaunch that exhausts admission never leaves a liv
   const begun = beginLegacySpawnFixture(registry, { engine: "claude", cwd, transport: "structured", launchProfile });
   if (begun.kind !== "created") throw new Error("spawn receipt was unavailable");
   let admissionAttempts = 0;
+  let clock = 0;
   const deadClient = {
     ...client,
     command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
@@ -5256,9 +5257,13 @@ test("issue 367: a post-kill relaunch that exhausts admission never leaves a liv
   }, {
     startHost: async () => { throw new Error("admission never reached host start"); },
     processIdentity: () => ({ pid: process.pid, startIdentity: "test-process" }),
+    now: () => clock,
+    sleep: async (ms) => { clock += ms; },
   })).rejects.toThrow("runtime host request timed out");
 
-  expect(admissionAttempts).toBe(3);
+  /* Admission retries until its deadline (#2058), then gives up. */
+  expect(admissionAttempts).toBeGreaterThan(3);
+  expect(clock).toBeLessThanOrEqual(ADMISSION_RETRY_DEADLINE_MS);
   const failed = registry.snapshot().receipts[begun.receipt.launchId];
   expect(failed).toMatchObject({ state: "failed", key: null, artifactPath: null });
   expect(failed?.error).toContain("structured spawn runtime host is unavailable");
@@ -5908,4 +5913,196 @@ describe.each(["http", "stdio"] as const)("a Claude spawn born on a non-routed a
       }
     }
   }, 30_000);
+});
+
+/* #2028: a builder's resume staged itself onto the row, hit "runtime host
+   request timed out" before it published, and parked as staged recovery
+   `unpublished`. The pipeline gate kept every generic probe away from it, a
+   recovery that did run was only ever flagged, and the live process under
+   the marker made every relay throw "structured recovery is synchronizing"
+   for good. A parked resume past its publication bound is now settled failed
+   and its host retired, at startup and wherever a relay meets the fence. */
+async function parkedPipelineResume(label: string) {
+  const id = crypto.randomUUID();
+  const cwd = path.join(sandbox, `parked-resume-${label}-${id}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const artifactPath = path.join(cwd, `${id}.jsonl`);
+  fs.writeFileSync(artifactPath, `${JSON.stringify({ type: "session_meta", payload: { id, cwd } })}\n`);
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeClient(journal);
+  const launchProfile = emptyLaunchProfile({ cwd });
+  const conversation = registry.ensureConversation("codex", artifactPath, "codex-subscription");
+  registry.rememberMembership(conversation.id, {
+    kind: "pipeline", containerId: `pipeline-${id}`, role: "builder", slot: "build:1",
+    stageId: "build", stageOrder: 0, round: 1, parentConversationId: null,
+  });
+  const begun = beginLegacySpawnFixture(registry, {
+    engine: "codex", cwd, transport: "structured", accountId: "codex-subscription",
+    conversationId: conversation.id, purpose: "resume-successor", expectedArtifactPath: artifactPath, launchProfile,
+  });
+  if (begun.kind !== "created") throw new Error("resume receipt was unavailable");
+  const host = new RoundTripHost("codex", artifactPath, id);
+  /* The staged host's own process: alive, and this test's to stop. */
+  const staged = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
+  const response = await spawnStructuredConversation({
+    engine: "codex",
+    receipt: begun.receipt,
+    spec: { command: "codex", cwd, windowName: "resume", engine: "codex", transcript: artifactPath, launchProfile },
+    account: { engine: "codex", accountId: "codex-subscription", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
+    "prompt": "",
+    registry,
+    client,
+  }, {
+    startHost: async () => host,
+    bindHost: async (targetRegistry, key, runningHost, claimOwner, claimEpoch) => {
+      const state = await runningHost.health();
+      targetRegistry.setStructuredHostClaimed(key, {
+        kind: "codex-app-server", endpoint: state.endpoint, process: staged, eventCursor: state.eventCursor,
+        protocolVersion: state.protocolVersion, writerClaimEpoch: claimEpoch, activeTurnRef: state.activeTurnRef,
+        pendingAttention: state.pendingAttention, activeFlags: state.activeFlags,
+      }, "idle", claimOwner, claimEpoch);
+      return () => {};
+    },
+    publishHost: async () => { throw new RuntimeHostUnavailableError("runtime host request timed out"); },
+    processIdentity: () => staged,
+  });
+  expect(response).toMatchObject({ state: "path-pending", path: null });
+  expect(stagedLaunchRecovery(registry.snapshot().receipts[begun.receipt.launchId])).toMatchObject({ phase: "unpublished" });
+  expect(registry.snapshot().entries[`codex:${id}`]).toMatchObject({
+    pendingAction: "spawn", structuredHostOperationId: begun.receipt.launchId, structuredHost: { process: staged },
+  });
+  return { id, cwd, artifactPath, registry, journal, client, conversation, launchId: begun.receipt.launchId, host };
+}
+
+test("startup settles a pipeline resume parked unpublished past its bound and retires its host", async () => {
+  const parked = await parkedPipelineResume("startup");
+  try {
+    /* Inside the bound the launch is left to finish publishing. */
+    await recoverPendingStructuredSpawns(parked.registry, parked.client);
+    expect(parked.registry.snapshot().receipts[parked.launchId]?.state).toBe("path-pending");
+
+    await recoverPendingStructuredSpawns(parked.registry, parked.client, { now: () => Date.now() + 61_000 });
+
+    expect(parked.registry.snapshot().receipts[parked.launchId]).toMatchObject({
+      state: "failed",
+      error: expect.stringContaining("host resume did not publish within 60 s: runtime host request timed out"),
+    });
+    expect(parked.registry.snapshot().entries[`codex:${parked.id}`]).toMatchObject({
+      status: "dead", pendingAction: null, claimOwner: null,
+    });
+    expect(parked.host.releaseCount).toBe(1);
+    expect((await parked.client.operationStatus(parked.launchId))?.receipt.status).toBe("failed");
+  } finally {
+    parked.journal.close();
+  }
+});
+
+test("a relay that meets a parked resume's fence settles it and resumes the conversation once", async () => {
+  const parked = await parkedPipelineResume("relay");
+  const spawned: string[] = [];
+  const recover = (now: number) => recoverDeadStructuredConversation({ path: parked.artifactPath, conversationId: parked.conversation.id }, {
+    registry: parked.registry,
+    client: parked.client,
+    transport: () => "structured",
+    resolveAccount: () => ({ engine: "codex", accountId: "codex-subscription", kind: "managed", home: parked.cwd, transcriptRoot: parked.cwd, env: { NODE_ENV: "test" } }),
+    spawn: async (input) => {
+      spawned.push(input.receipt.launchId);
+      return {
+        ok: true, target: null, path: parked.artifactPath, launchId: input.receipt.launchId, conversationId: input.receipt.conversationId,
+        launched: true, retrySafe: false, initialMessage: "delivered", state: "settled", transport: "structured",
+      };
+    },
+    now: () => now,
+    requestDeliveryDrain: () => {},
+  });
+  try {
+    await expect(recover(Date.now())).rejects.toThrow("structured recovery is synchronizing while a live host owner remains");
+    expect(spawned).toHaveLength(0);
+
+    await expect(recover(Date.now() + 61_000)).resolves.toMatchObject({ spawned: true, path: parked.artifactPath });
+    expect(parked.registry.snapshot().receipts[parked.launchId]).toMatchObject({
+      state: "failed", error: expect.stringContaining("host resume did not publish within 60 s"),
+    });
+    expect(parked.host.releaseCount).toBe(1);
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]).not.toBe(parked.launchId);
+  } finally {
+    parked.journal.close();
+  }
+});
+
+/* #2058: a structured launch about thirty seconds after a runtime-host
+   handoff met calls slower than the client's three-second budget, and three
+   quick retries turned that into a failed launch. The idempotent launch calls
+   now ride out the handoff within a bounded deadline. The runtime answers
+   "timed out" for the first eight seconds of an injected clock, before
+   identity staging (the spawn command) and after it (the settling
+   transition), and the launch still completes. */
+test("a launch whose runtime calls time out through a handoff's warm-up still completes", async () => {
+  const id = crypto.randomUUID();
+  const cwd = path.join(sandbox, `handoff-warmup-${id}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const artifactPath = path.join(cwd, `${id}.jsonl`);
+  fs.writeFileSync(artifactPath, `${JSON.stringify({ type: "session_meta", payload: { id, cwd } })}\n`);
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  let clock = 0;
+  const warmingUp = () => clock < 8_000;
+  const calls = { command: 0, transition: 0 };
+  const base = runtimeClient(journal);
+  const client: RuntimeHostClient = {
+    ...base,
+    command: async (command) => {
+      calls.command += 1;
+      if (warmingUp()) throw new RuntimeHostUnavailableError("runtime host request timed out");
+      return base.command(command);
+    },
+    transitionOperation: async (...args) => {
+      calls.transition += 1;
+      if (calls.transition <= 2) throw new RuntimeHostUnavailableError("runtime host request timed out");
+      return base.transitionOperation(...args);
+    },
+  };
+  const begun = beginLegacySpawnFixture(registry, {
+    engine: "codex", cwd, transport: "structured", accountId: "codex-subscription", clientAttemptId: `handoff-${id}`,
+  });
+  if (begun.kind !== "created") throw new Error("spawn receipt was unavailable");
+  const host = new RoundTripHost("codex", artifactPath, id);
+  const owner = { pid: process.pid, startIdentity: "handoff-test-process" };
+  try {
+    const response = await spawnStructuredConversation({
+      engine: "codex",
+      receipt: begun.receipt,
+      spec: { command: "codex", cwd, windowName: "handoff", engine: "codex", transcript: artifactPath },
+      account: { engine: "codex", accountId: "codex-subscription", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
+      "prompt": "",
+      registry,
+      client,
+    }, {
+      startHost: async () => host,
+      bindHost: async (targetRegistry, key, runningHost, claimOwner, claimEpoch) => {
+        const state = await runningHost.health();
+        targetRegistry.setStructuredHostClaimed(key, {
+          kind: "codex-app-server", endpoint: state.endpoint, process: owner, eventCursor: state.eventCursor,
+          protocolVersion: state.protocolVersion, writerClaimEpoch: claimEpoch, activeTurnRef: state.activeTurnRef,
+          pendingAttention: state.pendingAttention, activeFlags: state.activeFlags,
+        }, "idle", claimOwner, claimEpoch);
+        return () => {};
+      },
+      publishHost: async () => async () => {},
+      processIdentity: () => owner,
+      now: () => clock,
+      sleep: async (ms) => { clock += ms; },
+    });
+
+    expect(response).toMatchObject({ launched: true, state: "settled" });
+    expect(registry.snapshot().receipts[begun.receipt.launchId]?.state).toBe("completed");
+    expect(calls.command).toBeGreaterThan(3);
+    expect(calls.transition).toBe(3);
+    expect(clock).toBeGreaterThanOrEqual(8_000);
+    expect(clock).toBeLessThan(30_000);
+  } finally {
+    journal.close();
+  }
 });

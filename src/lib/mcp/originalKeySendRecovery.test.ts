@@ -57,11 +57,14 @@ afterAll(() => {
 const { conversationHostPOST } = await import("@/app/api/conversation-host/handlers");
 const { AgentRegistry } = await import("@/lib/agent/registry");
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
-const { sendDownstreamKey, viewerMcpRecoverableTools } = await import("./bindings");
+const { RuntimeHostUnavailableError } = await import("@/lib/runtime/client");
+const { sendDownstreamKey, viewerMcpRecoverableTools, viewerMcpBindings, productionViewerControlDependencies } = await import("./bindings");
+const { createMcpToolService, MemoryMcpReceiptStore } = await import("./server");
+const { enqueueStructuredMessage } = await import("@/lib/runtime/structuredMessageDelivery");
 
 const transcriptPath = path.join(root, "recipient.jsonl");
 fs.writeFileSync(transcriptPath, "{}\n");
-const registry = new AgentRegistry(path.join(root, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+let registry = new AgentRegistry(path.join(root, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
 registry.reconcileConversations([{
   engine: "codex",
   path: transcriptPath,
@@ -70,12 +73,14 @@ registry.reconcileConversations([{
   turn: { state: "idle", source: "assistant", terminalAt: null },
   observedAt: "2026-09-09T08:00:00.000Z",
 }]);
-const recipient = Object.values(registry.snapshot().conversations)[0]!;
-const generationId = recipient.generations.at(-1)!.id;
+let recipient = Object.values(registry.snapshot().conversations)[0]!;
+let generationId = recipient.generations.at(-1)!.id;
 
 /** Every text the structured host was handed, in order — the count is what
     says no recovery ever admitted a second copy of a message. */
 const admitted: { clientMessageId: string; text: string }[] = [];
+/** A test that needs the production `enqueueStructuredMessage` itself sets this. */
+let structuredSend: ((request: Parameters<typeof enqueueStructuredMessage>[0]) => ReturnType<typeof enqueueStructuredMessage>) | null = null;
 
 setConversationHostDependenciesForTests({
   collectImagePayloads: () => ({ images: [], error: null }),
@@ -85,6 +90,7 @@ setConversationHostDependenciesForTests({
      route handed it, under the caller's own key, with no digest of its own
      (the registry stamps one from the stored text). */
   enqueueStructuredMessage: async (request) => {
+    if (structuredSend) return structuredSend(request);
     const clientMessageId = request.clientMessageId ?? "";
     admitted.push({ clientMessageId, text: request.text });
     const operationId = `op_${admitted.length}`;
@@ -289,4 +295,366 @@ test("recovery leaves the durable records exactly as it found them", async () =>
 
   expect(JSON.stringify(registry.readOnlySnapshot())).toBe(before);
   expect(admitted.length).toBe(admissions);
+});
+
+/* #2020: a finished headless reviewer's row keeps the launch's publication
+   marker (`starting`, `pendingAction: "spawn"`, no host, no process). The
+   Viewer refuses a send to it before reserving anything, and the MCP call
+   used to record that refusal as a dispatch that may have run: the first
+   answer and every later lookup under the key said `outcome_unknown`. The
+   route and `enqueueStructuredMessage` here are the production ones; the
+   runtime host is a client that knows no session. */
+test("a send the Viewer refuses before reserving anything settles as not executed, then and on every lookup", async () => {
+  const begun = registry.beginSpawnRequest({ engine: "codex", cwd: root, launchProfile: { title: "headless reviewer" } });
+  const sessionId = crypto.randomUUID();
+  const settled = registry.settleSpawn(begun.receipt.launchId, {
+    key: { engine: "codex", sessionId },
+    artifactPath: path.join(root, `rollout-${sessionId}.jsonl`),
+    cwd: root,
+    accountId: "recovery-fixture-account",
+    launchProfile: begun.receipt.launchProfile,
+    status: "starting",
+    host: null,
+    claimEpoch: 0,
+    claimOwner: null,
+    pendingAction: "spawn",
+  });
+  if (settled.kind === "conflict") throw new Error(settled.code);
+  const reviewer = registry.conversation(settled.receipt.conversationId)!;
+
+  const domain = {
+    registrySnapshot: () => registry.readOnlySnapshot(),
+    attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_caller" }),
+    callerAttribution: () => ({ kind: "worker", conversationId: "conversation_caller" }),
+    recoveryPredecessors: () => [],
+    sendSettlementPorts: () => ({ registry, client: null }),
+  } as never;
+  const receipts = new MemoryMcpReceiptStore();
+  const service = () => createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(), domain), receipts, undefined, { recovery: viewerMcpRecoverableTools(domain) });
+  const posts: string[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    posts.push(new URL(request.url).pathname);
+    return conversationHostPOST(new NextRequest("http://127.0.0.1/api/conversation-host", {
+      method: "POST",
+      headers: { host: "127.0.0.1", "content-type": "application/json" },
+      body: await request.text(),
+    }));
+  } });
+  const saved = { url: process.env.LLV_VIEWER_CONTROL_URL, target: process.env.LLV_VIEWER_DEPLOY_TARGET, port: process.env.LLV_VIEWER_PORT };
+  process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
+  delete process.env.LLV_VIEWER_DEPLOY_TARGET;
+  delete process.env.LLV_VIEWER_PORT;
+  structuredSend = (request) => enqueueStructuredMessage(request, {
+    enabled: () => true,
+    registry: () => registry,
+    client: () => ({ readSession: async () => null }) as never,
+    requestMigrationTick: () => {},
+  });
+  const args = { clientRequestId: "refused-before-reservation", conversationId: reviewer.id, text: "round finished, one more question" };
+  try {
+    const first = await service().callTool("send_message", args);
+    expect(first).toMatchObject({ ok: false, details: { outcome: "not-executed", nextAction: "new-request-permitted", status: 503 } });
+    expect(JSON.stringify(first)).toContain("synchroniz");
+    const lookup = await service().callTool("send_message", { ...args, recoveryOnly: true });
+    expect(lookup).toMatchObject({ ok: false, details: { outcome: "not-executed", nextAction: "new-request-permitted" } });
+    expect(JSON.stringify(lookup)).toContain("synchroniz");
+    /* Nothing was reserved: the answer is the handler's own, and it said so. */
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)
+      .filter((held) => held.conversationId === reviewer.id)).toEqual([]);
+    expect(posts).toHaveLength(1);
+  } finally {
+    structuredSend = null;
+    await server.stop(true);
+    for (const [key, value] of [["LLV_VIEWER_CONTROL_URL", saved.url], ["LLV_VIEWER_DEPLOY_TARGET", saved.target], ["LLV_VIEWER_PORT", saved.port]] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("an oversized send to a reclaimed host keeps its refusal reason through MCP recovery", async () => {
+  const previousRegistry = { registry, recipient, generationId };
+  const isolatedRegistry = new AgentRegistry(path.join(root, "reclaimed-oversized-registry.json"), undefined, undefined, { sqliteMode: "off" });
+  isolatedRegistry.reconcileConversations([{
+    engine: "codex",
+    path: transcriptPath,
+    accountId: "recovery-fixture-account",
+    launchProfile: emptyLaunchProfile({ cwd: root }),
+    turn: { state: "idle", source: "assistant", terminalAt: null },
+    observedAt: "2026-09-09T08:00:00.000Z",
+  }]);
+  registry = isolatedRegistry;
+  recipient = Object.values(registry.snapshot().conversations)[0]!;
+  generationId = recipient.generations.at(-1)!.id;
+  const generation = recipient.generations.at(-1)!;
+  const before = registry.readOnlySnapshot();
+  const saved = { url: process.env.LLV_VIEWER_CONTROL_URL, target: process.env.LLV_VIEWER_DEPLOY_TARGET, port: process.env.LLV_VIEWER_PORT };
+  let stopServer: (() => Promise<void>) | null = null;
+  try {
+    registry.upsert({
+      key: { engine: recipient.engine, sessionId: generation.id },
+      artifactPath: generation.path,
+      cwd: root,
+      accountId: generation.accountId,
+      launchProfile: generation.launchProfile,
+      status: "dead",
+      host: null,
+      structuredHost: {
+        kind: "codex-app-server",
+        endpoint: "stdio:reclaimed-recovery-fixture",
+        process: null,
+        eventCursor: 0,
+        protocolVersion: "v2",
+        writerClaimEpoch: 1,
+        activeTurnRef: null,
+        pendingAttention: [],
+        activeFlags: [],
+      },
+      claimEpoch: 1,
+      claimOwner: null,
+      pendingAction: null,
+    });
+
+    const domain = {
+      registrySnapshot: () => registry.readOnlySnapshot(),
+      attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_caller" }),
+      callerAttribution: () => ({ kind: "worker", conversationId: "conversation_caller" }),
+      recoveryPredecessors: () => [],
+      sendSettlementPorts: () => ({ registry, client: null }),
+    } as never;
+    const receipts = new MemoryMcpReceiptStore();
+    const service = () => createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(), domain), receipts, undefined, { recovery: viewerMcpRecoverableTools(domain) });
+    const posts: string[] = [];
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+      posts.push(new URL(request.url).pathname);
+      return conversationHostPOST(new NextRequest("http://127.0.0.1/api/conversation-host", {
+        method: "POST",
+        headers: { host: "127.0.0.1", "content-type": "application/json" },
+        body: await request.text(),
+      }));
+    } });
+    stopServer = () => server.stop(true);
+    process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
+    delete process.env.LLV_VIEWER_DEPLOY_TARGET;
+    delete process.env.LLV_VIEWER_PORT;
+    structuredSend = (request) => enqueueStructuredMessage(request, {
+      enabled: () => true,
+      registry: () => registry,
+      client: () => ({ readSession: async () => null }) as never,
+      requestMigrationTick: () => {},
+    });
+    const text = "x".repeat(32_001);
+    const args = { clientRequestId: "reclaimed-oversized-refusal", conversationId: recipient.id, text };
+    const first = await service().callTool("send_message", args);
+    expect(first).toMatchObject({ ok: false, details: { outcome: "not-executed", nextAction: "new-request-permitted", status: 413 } });
+    expect(JSON.stringify(first)).toContain("structured message text exceeds the 32000-byte envelope bound");
+
+    const lookup = await service().callTool("send_message", { ...args, recoveryOnly: true });
+    expect(lookup).toMatchObject({ ok: false, details: { outcome: "not-executed", nextAction: "new-request-permitted", status: 413 } });
+    expect(JSON.stringify(lookup)).toContain("structured message text exceeds the 32000-byte envelope bound");
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toEqual(Object.values(before.heldDeliveries));
+    expect(posts).toHaveLength(1);
+  } finally {
+    structuredSend = null;
+    await stopServer?.();
+    for (const [key, value] of [["LLV_VIEWER_CONTROL_URL", saved.url], ["LLV_VIEWER_DEPLOY_TARGET", saved.target], ["LLV_VIEWER_PORT", saved.port]] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    isolatedRegistry.close();
+    registry = previousRegistry.registry;
+    recipient = previousRegistry.recipient;
+    generationId = previousRegistry.generationId;
+  }
+});
+
+test("a transient readiness read after republish settles the original MCP key through durable admission", async () => {
+  const previousRegistry = { registry, recipient, generationId };
+  const isolatedRegistry = new AgentRegistry(path.join(root, "readiness-recovery-registry.json"), undefined, undefined, { sqliteMode: "off" });
+  isolatedRegistry.reconcileConversations([{
+    engine: "codex",
+    path: transcriptPath,
+    accountId: "recovery-fixture-account",
+    launchProfile: emptyLaunchProfile({ cwd: root }),
+    turn: { state: "idle", source: "assistant", terminalAt: null },
+    observedAt: "2026-09-09T08:00:00.000Z",
+  }]);
+  registry = isolatedRegistry;
+  recipient = Object.values(registry.snapshot().conversations)[0]!;
+  generationId = recipient.generations.at(-1)!.id;
+  const generation = recipient.generations.at(-1)!;
+  registry.upsert({
+    key: { engine: recipient.engine, sessionId: generation.id },
+    artifactPath: generation.path,
+    cwd: root,
+    accountId: generation.accountId,
+    launchProfile: generation.launchProfile,
+    status: "dead",
+    host: null,
+    structuredHost: {
+      kind: "codex-app-server",
+      endpoint: "stdio:recovery-fixture",
+      process: null,
+      eventCursor: 0,
+      protocolVersion: "v2",
+      writerClaimEpoch: 1,
+      activeTurnRef: null,
+      pendingAttention: [],
+      activeFlags: [],
+    },
+    claimEpoch: 1,
+    claimOwner: null,
+    pendingAction: null,
+  });
+  const runtimeSession = (host: "dead" | "hosted") => ({
+    conversationId: recipient.id,
+    sessionKey: { engine: recipient.engine, sessionId: generation.id },
+    hostKind: "codex-app-server",
+    host,
+    turn: "idle",
+    provenance: "structured",
+    revision: 1,
+    attentionIds: [],
+    recentReceipts: [],
+    accountId: generation.accountId,
+    parentConversationId: null,
+    flowId: null,
+    workflowId: null,
+    cwd: root,
+    artifactPath: generation.path,
+    capabilities: { steer: true, structuredAttention: true },
+    activeTurnId: null,
+  }) as never;
+  let reads = 0;
+  let commandCount = 0;
+  const client = {
+    readSession: async () => {
+      reads += 1;
+      if (reads === 1) return runtimeSession("dead");
+      if (reads === 2) throw new RuntimeHostUnavailableError("runtime host request timed out");
+      return runtimeSession("hosted");
+    },
+    command: async ({ operationId }: { operationId: string }) => {
+      commandCount += 1;
+      return { operationId, receipt: { status: "delivered" } };
+    },
+    operationStatus: async (operationId: string) => ({ operationId, receipt: { status: "delivered" } }),
+  } as never;
+  const domain = {
+    registrySnapshot: () => registry.readOnlySnapshot(),
+    attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_caller" }),
+    callerAttribution: () => ({ kind: "worker", conversationId: "conversation_caller" }),
+    recoveryPredecessors: () => [],
+    sendSettlementPorts: () => ({ registry, client }),
+  } as never;
+  const receipts = new MemoryMcpReceiptStore();
+  const service = () => createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(), domain), receipts, undefined, { recovery: viewerMcpRecoverableTools(domain) });
+  const posts: string[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    posts.push(new URL(request.url).pathname);
+    return conversationHostPOST(new NextRequest("http://127.0.0.1/api/conversation-host", {
+      method: "POST",
+      headers: { host: "127.0.0.1", "content-type": "application/json" },
+      body: await request.text(),
+    }));
+  } });
+  const saved = { url: process.env.LLV_VIEWER_CONTROL_URL, target: process.env.LLV_VIEWER_DEPLOY_TARGET, port: process.env.LLV_VIEWER_PORT };
+  process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
+  delete process.env.LLV_VIEWER_DEPLOY_TARGET;
+  delete process.env.LLV_VIEWER_PORT;
+  structuredSend = (request) => enqueueStructuredMessage(request, {
+    enabled: () => true,
+    registry: () => registry,
+    client: () => client,
+    republish: async () => true,
+    recover: async () => {
+      registry.upsert({
+        key: { engine: recipient.engine, sessionId: generation.id },
+        artifactPath: generation.path,
+        cwd: root,
+        accountId: generation.accountId,
+        launchProfile: generation.launchProfile,
+        status: "idle",
+        host: null,
+        structuredHost: {
+          kind: "codex-app-server",
+          endpoint: "stdio:recovery-fixture",
+          process: { pid: process.pid, startIdentity: null },
+          eventCursor: 0,
+          protocolVersion: "v2",
+          writerClaimEpoch: 2,
+          activeTurnRef: null,
+          pendingAttention: [],
+          activeFlags: [],
+        },
+        claimEpoch: 2,
+        claimOwner: "structured-host:recovery-fixture",
+        pendingAction: null,
+      });
+      return { target: null, path: generation.path, conversationId: recipient.id, spawned: true } as never;
+    },
+    requestMigrationTick: () => {},
+    kick: () => {},
+  });
+  const args = { clientRequestId: "republish-read-timeout", conversationId: recipient.id, text: "deliver after readiness retry" };
+  try {
+    const first = await service().callTool("send_message", args);
+    expect(first).toMatchObject({ ok: true });
+    expect(JSON.stringify(first)).not.toContain("outcome_unknown");
+
+    const recovered = await service().callTool("send_message", { ...args, recoveryOnly: true });
+    expect(recovered).toMatchObject({ ok: true });
+    expect(JSON.stringify(recovered)).not.toContain("outcome_unknown");
+    expect(reads).toBeGreaterThanOrEqual(3);
+    expect(commandCount).toBe(1);
+    expect(posts).toHaveLength(1);
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)
+      .filter((held) => held.clientMessageId === sendDownstreamKey(args.clientRequestId))).toHaveLength(1);
+  } finally {
+    structuredSend = null;
+    await server.stop(true);
+    for (const [key, value] of [["LLV_VIEWER_CONTROL_URL", saved.url], ["LLV_VIEWER_DEPLOY_TARGET", saved.target], ["LLV_VIEWER_PORT", saved.port]] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    isolatedRegistry.close();
+    registry = previousRegistry.registry;
+    recipient = previousRegistry.recipient;
+    generationId = previousRegistry.generationId;
+  }
+});
+
+/* #1866: a dispatched send nothing ever answered read `in-flight` under its
+   original key for an hour, because the lookup never applied the settlement
+   deadline; only `message_receipt` did. Past the deadline the lookup now ends
+   it the same way. Before it, the lookup still only observes. */
+test("an original-key lookup past the settlement deadline ends an accepted send instead of answering in flight", async () => {
+  const text = "relay accepted and never answered";
+  const key = sendDownstreamKey("overdue-accepted-send");
+  const response = await send(key, text);
+  expect(response.status).toBe(200);
+  const { operationId } = await response.json() as { operationId: string };
+  const reservation = Object.values(registry.readOnlySnapshot().heldDeliveries)
+    .find((held) => held.clientMessageId === key)!;
+  /* Accepted while the recipient's host was reclaimed, and never dispatched. */
+  expect(reservation.state).toBe("assigned");
+
+  const lookupAt = (now: number) => viewerMcpRecoverableTools({
+    registrySnapshot: () => registry.readOnlySnapshot(),
+    sendSettlementPorts: () => ({ registry, client: null, now: () => now }),
+  } as never).send_message!.recover(bindingFor(key), { legacy: false, args: { text } });
+
+  const early = await lookupAt(Date.now());
+  expect(early).toMatchObject({ outcome: "accepted", facts: { state: "in-flight" }, ids: { operationId } });
+  expect(registry.readOnlySnapshot().heldDeliveries[reservation.id]?.state).toBe("assigned");
+
+  const overdue = await lookupAt(Date.now() + 11 * 60_000);
+  expect(overdue).toMatchObject({
+    outcome: "settled",
+    ids: { operationId },
+    facts: { state: "failed", duplicateRisk: true },
+  });
+  expect(overdue.reason).toEqual(expect.any(String));
+  /* The same answer `message_receipt` now gives, because the lookup wrote it. */
+  expect(registry.readOnlySnapshot().heldDeliveries[reservation.id]?.state).toBe("failed");
 });
