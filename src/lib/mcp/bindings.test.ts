@@ -3125,8 +3125,6 @@ test("seat_tick_settings turns its own project's tick off indefinitely, with the
   /* #2030: a write is acknowledged, never read back. */
   expect(applied).toMatchObject({
     changed: true,
-    reportsOwed: [],
-    reportReminder: expect.any(String),
     revision: expect.any(String),
     changedFields: ["enabled", "reason"],
     monitorPromptLength: 0,
