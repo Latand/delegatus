@@ -173,6 +173,7 @@ async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableA
   ]);
   await Promise.all([
     copyFile(path.resolve("bin/cli.mjs"), path.join(bin, "cli.mjs")),
+    copyFile(path.resolve("bin/agent-binaries.mjs"), path.join(bin, "agent-binaries.mjs")),
     options.unevaluableAddress === undefined
       ? copyFile(path.resolve("bin/server-runtime.mjs"), path.join(bin, "server-runtime.mjs"))
       : writeFile(path.join(bin, "server-runtime.mjs"), unevaluableProbeModule(options.unevaluableAddress)),

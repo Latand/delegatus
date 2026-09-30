@@ -10,8 +10,28 @@
     "1. Run `bun --version`. If Bun is missing or older than 1.4, install it with",
     "   `curl -fsSL https://bun.com/install | bash`, then use ~/.bun/bin/bun if",
     "   `bun` is not on PATH yet.",
-    "2. Install the CLI: `bun add -g delegatus-cli`",
-    "3. Start it in the background so it keeps running after this session:",
+    "   For every command below, include ~/.bun/bin and ~/.local/bin on PATH:",
+    "   `export PATH=\"$HOME/.bun/bin:$HOME/.local/bin:$PATH\"`",
+  ];
+
+  const cliStep = {
+    claude: [
+      "2. Run `claude --version`. Claude Desktop requires a separate Claude Code CLI.",
+      "   If the command is missing, install it: `curl -fsSL https://claude.ai/install.sh | bash`",
+      "   Verify `claude --version` again. If it still fails, stop and show the error.",
+    ],
+    codex: [
+      "2. Run `codex --version`. On macOS, if it is missing, check the executable",
+      "   at /Applications/Codex.app/Contents/Resources/codex or the same path under ~/Applications.",
+      "   If found, add that Resources directory to PATH for this session and verify `codex --version`.",
+      "   Otherwise install the CLI: `bun add -g @openai/codex`",
+      "   Verify `codex --version` again. If it still fails, stop and show the error.",
+    ],
+  };
+
+  const delegatusSteps = [
+    "3. Install the CLI: `bun add -g delegatus-cli`",
+    "4. Start it in the background so it keeps running after this session:",
     "   `mkdir -p ~/.cache/delegatus && nohup ~/.bun/bin/delegatus --no-open > ~/.cache/delegatus/server.log 2>&1 &`",
     "   Wait up to 60 seconds for http://127.0.0.1:8898/ to answer. If it does",
     "   not, show me the last 30 lines of that log.",
@@ -19,19 +39,19 @@
 
   const promptTail = [
     "   (it becomes available in your next session).",
-    "5. Give me the link to open. The setup guide there connects my agents,",
+    "6. Give me the link to open. The setup guide there connects my agents,",
     "   picks a project and creates its orchestrator.",
     "",
     "On native Windows, stop after step 1 and tell me to run this inside WSL 2.",
   ];
 
   const mcpStep = {
-    claude: ["4. Register its MCP server for yourself:", "   `claude mcp add viewer -s user -- delegatus-mcp`"],
-    codex: ["4. Register its MCP server for yourself:", "   `codex mcp add viewer -- delegatus-mcp`"],
+    claude: ["5. Register its MCP server for yourself using absolute paths (desktop sessions may have a different PATH):", "   `claude mcp add viewer -s user -- \"$HOME/.bun/bin/bun\" \"$HOME/.bun/bin/delegatus-mcp\"`"],
+    codex: ["5. Register its MCP server for yourself using absolute paths (desktop sessions may have a different PATH):", "   `codex mcp add viewer -- \"$HOME/.bun/bin/bun\" \"$HOME/.bun/bin/delegatus-mcp\"`"],
   };
 
   function prompt(agent, lang) {
-    const lines = [...promptHead, ...mcpStep[agent], ...promptTail];
+    const lines = [...promptHead, ...cliStep[agent], ...delegatusSteps, ...mcpStep[agent], ...promptTail];
     if (lang === "uk") lines.push("", "Відповідай українською.");
     return lines.join("\n");
   }
