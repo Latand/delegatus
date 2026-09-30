@@ -1770,6 +1770,8 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      added to the thread's context instead of sent as a message that interrupts
      the running turn. Everywhere else the machine does not run. */
   const [injectsPending, setInjectsPending] = useState(0);
+  const [reconcilingSend, setReconcilingSend] = useState(() =>
+    typeof window !== "undefined" && readPendingDeliveries(cardId).some((entry) => entry.reconciling));
   const contextEngine = structuredSession?.session.sessionKey?.engine ?? file.engine;
   const contextOffered = contextEngine === "codex" && (caps.surface === "structured" || caps.surface === "dead");
   const contextSupported = Boolean(structuredSession?.session.capabilities?.inject);
@@ -1779,7 +1781,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     reading: turnReading(structuredSession?.session.turn),
     supported: contextSupported,
     dictating: composer.dictationRecording,
-    inFlight: injectsPending > 0 || busy,
+    inFlight: injectsPending > 0 || busy || voiceSending || reconcilingSend || composerSubmissionSaving(cardId),
   });
   const contextShown = contextOffered && contextMachine.snapshot.shown === "context";
   const contextBlocked = contextShown && !contextSupported;
@@ -1863,8 +1865,6 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     return true;
   };
   const [immediateRuntimeReceipts, setImmediateRuntimeReceipts] = useState<RuntimeReceipt[]>(() => readRecoveryReceipts(cardId));
-  const [reconcilingSend, setReconcilingSend] = useState(() =>
-    typeof window !== "undefined" && readPendingDeliveries(cardId).some((entry) => entry.reconciling));
   const [replayGenerationAvailable, setReplayGenerationAvailable] = useState(() =>
     typeof window !== "undefined" && readPendingDeliveries(cardId).some((entry) => entry.payloadComplete !== false));
   /* Operation ids whose settled problem rows the user dismissed (issue #264

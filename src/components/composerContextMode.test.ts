@@ -134,6 +134,16 @@ test("an injection in flight holds the flip until its answer", () => {
   expect(stepContextMode(armed.state, { ...armed.inputs, inFlight: false }, 1_000).shown).toBe("context");
 });
 
+test("a voice send in flight holds the mode across a debounced boundary in either direction", () => {
+  const exit = run([[0, { reading: "running" }], [100, { reading: "running", inFlight: true }], [200, { reading: "idle", inFlight: true }], [200 + CONTEXT_EXIT_AFTER_MS + 500, { reading: "idle", inFlight: true }]]);
+  expect(exit.state.shown).toBe("context");
+  expect(stepContextMode(exit.state, { ...exit.inputs, inFlight: false }, 200 + CONTEXT_EXIT_AFTER_MS + 600).shown).toBe("normal");
+
+  const enter = run([[0, { reading: "idle" }], [100, { reading: "idle", inFlight: true }], [200, { reading: "running", inFlight: true }], [200 + CONTEXT_ENTER_AFTER_MS + 500, { reading: "running", inFlight: true }]]);
+  expect(enter.state.shown).toBe("normal");
+  expect(stepContextMode(enter.state, { ...enter.inputs, inFlight: false }, 200 + CONTEXT_ENTER_AFTER_MS + 600).shown).toBe("context");
+});
+
 test("a manual press holds across a short idle gap and clears at the next boundary", () => {
   let { state } = run([[0, { reading: "running" }]]);
   state = pressContextToggle(state, true);

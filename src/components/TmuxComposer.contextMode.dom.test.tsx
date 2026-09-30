@@ -14,7 +14,8 @@ import type { RuntimeSessionView } from "@/hooks/useRuntime";
 
 import { agentCapabilitiesFromViews } from "./useAgentCapabilities";
 import { TmuxComposer } from "./TmuxComposer";
-import { CONTEXT_AUTO_STORAGE_KEY } from "./composerContextMode";
+import { CONTEXT_AUTO_STORAGE_KEY, CONTEXT_EXIT_AFTER_MS } from "./composerContextMode";
+import { withComposerSubmission } from "@/lib/composerSubmissionPayloads";
 import { resetRetainedQueueAdmissionsForTests } from "./retainedQueueAdmissions";
 import { readOutbox, resetOutboxForTests } from "./conversation/outbox";
 import { setTmuxComposerRuntimeDependenciesForTests } from "./tmuxComposerRuntime";
@@ -550,5 +551,27 @@ test("a Ukrainian composer names the toggle and its state in Ukrainian", async (
   const { host, root } = await mount();
   expect(toggle(host)!.getAttribute("aria-label")).toBe(translate("uk", "composer.context.toggleAria"));
   expect(host.textContent).toContain(translate("uk", "composer.context.toggle"));
+  root.unmount();
+});
+
+test("a submission being saved holds the mode across a debounced turn boundary, then the flip lands", async () => {
+  turn = "running";
+  const { host, root } = await mount();
+  expect(modeOf(host)).toBe("context");
+
+  let releaseSave!: () => void;
+  const saving = withComposerSubmission(CARD, () => new Promise<void>((resolve) => { releaseSave = resolve; }));
+  turn = "idle";
+  await rerender(root);
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, CONTEXT_EXIT_AFTER_MS + 100)); });
+  await rerender(root);
+  expect(toggle(host)!.getAttribute("data-composer-context-toggle")).toBe("on");
+  expect(modeOf(host)).toBe("context");
+
+  releaseSave();
+  await saving;
+  await rerender(root);
+  expect(toggle(host)!.getAttribute("data-composer-context-toggle")).not.toBe("on");
+  expect(modeOf(host)).toBeNull();
   root.unmount();
 });
