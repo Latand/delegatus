@@ -13,6 +13,8 @@ import { deckKey } from "@/components/scheme/agentLinks";
 import type { TaskBand } from "@/components/scheme/taskBands";
 import type { TaskWorkflowProjection } from "@/components/tasks/taskWorkflowModel";
 import { workingSince } from "@/components/workingSince";
+import { taskShowsOnBoard } from "@/lib/tasks/boardVisibility";
+import { bandHoldsMembers } from "@/components/scheme/taskBands";
 
 import { pastAttempts, stageViews, type PastAttempt, type StageView, type WorkingConversations } from "./pipelineGraph";
 import { placeholderTitle } from "./placeholderTitle";
@@ -703,6 +705,10 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       ? groupHideState(task, { members: members.map((member) => member.file), pipelines: summaries.map((summary) => summary.pipeline), seat: input.seat })
       : { hidden: false, resurfaced: null };
     const holdsSeat = Boolean(task && input.seat && seatAssignment(task.assignments, input.seat));
+    if (task && !taskShowsOnBoard({ ...task, status, ...(status === "done" && task.status !== "done" ? { doneAt: new Date(now * 1000).toISOString() } : {}) }, bandHoldsMembers(band), {
+      now: now * 1000, holdsSeat, seat: input.seat,
+      members: members.map((member) => member.file), pipelines,
+    })) return [];
     const color = task?.color && (TASK_COLORS as readonly string[]).includes(task.color) ? task.color : null;
     /* A placeholder no agent will name any more borrows its conversation's
        title rather than staying «Untitled task» for good. */

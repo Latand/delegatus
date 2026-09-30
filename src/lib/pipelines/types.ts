@@ -797,6 +797,10 @@ export type Pipeline = {
   pausedAt?: string | null;
   resumedAt?: string | null;
   stateDetail: string | null;
+  /** The bounded backoff a lane in `provisioning` is waiting out after a
+      transient Git or network failure (#2115, #2176, #2220). Cleared when
+      provisioning succeeds or parks. */
+  provisioningWait?: PipelineBoundedWait;
   srcPath: string | null;
   srcConversationId: string | null;
   /** The seat's parallel self that created the lane on the seat's behalf

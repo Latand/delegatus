@@ -201,6 +201,52 @@
   .pblock .pb-act { min-height: 44px; }
 }
 
+/* ── Task density: a narrow lane draws the chain vertically ─────────────────
+   Under 380 px (every shelf card, the phone's 342 px lane) the stages stand
+   one under another, joined by a 1 px rail, and a fail branch hangs off its
+   reviewer on a dashed elbow. The wide lane keeps its row and its arrows; the
+   data-step / --pb-order the chain writes are read only here
+   (docs/design/narrow-card-stage-chain.md). */
+.pblock[data-density="task"] {
+  container: pb-lane / inline-size;
+  --pb-chain-gap: 8px;
+  --pb-rail-x: 15px;
+  --pb-branch-indent: 28px;
+  --pb-rail: var(--border-strong);
+}
+@container pb-lane (max-width: 379.98px) {
+  .pblock .pb-chain { flex-wrap: wrap; row-gap: 4px; }
+  .pblock .pb-chain > .pb-pills { flex-direction: column; align-items: flex-start; flex-wrap: nowrap; gap: var(--pb-chain-gap); }
+  .pblock .pb-chain .pb-arrow { display: none; }
+  .pblock .pb-chain .pb-step { position: relative; order: var(--pb-order, 0); max-width: 100%; }
+  /* The rail runs from the row above's bottom border to this pill's top
+     border: none before the first step, none after the last. */
+  .pblock .pb-chain .pb-step[data-step="next"]::before,
+  .pblock .pb-chain .pb-step[data-step="branch"][data-through]::before {
+    content: ""; position: absolute; pointer-events: none;
+    left: var(--pb-rail-x); top: calc(-1 * var(--pb-chain-gap));
+    width: 1px; background: var(--pb-rail);
+  }
+  .pblock .pb-chain .pb-step[data-step="next"]::before { height: var(--pb-chain-gap); }
+  /* The main line passes beside a branch to the stage after its reviewer. */
+  .pblock .pb-chain .pb-step[data-step="branch"][data-through]::before { height: calc(100% + var(--pb-chain-gap)); }
+  .pblock .pb-chain .pb-step[data-step="branch"] { padding-left: var(--pb-branch-indent); }
+  /* The elbow leaves the reviewer's rail and lands on the branch pill's middle. */
+  .pblock .pb-chain .pb-step[data-step="branch"]::after {
+    content: ""; position: absolute; pointer-events: none; box-sizing: border-box;
+    left: var(--pb-rail-x); top: calc(-1 * var(--pb-chain-gap));
+    width: calc(var(--pb-branch-indent) - var(--pb-rail-x)); height: calc(var(--pb-chain-gap) + 50%);
+    border-left: 1px dashed var(--pb-rail); border-bottom: 1px dashed var(--pb-rail);
+  }
+  /* A name wraps inside its pill; nothing ellipsizes in the vertical chain. */
+  .pblock .pb-chain .pb-pill { height: auto; min-height: 22px; padding-block: 2px; }
+  .pblock .pb-chain .pb-pill .pb-name { white-space: normal; overflow-wrap: anywhere; }
+  .pblock .pb-chain .pb-pill .pret, .pblock .pb-chain .pb-pill .ccircle { flex-shrink: 0; }
+  @media (pointer: coarse) {
+    .pblock[data-density="task"] .pb-chain .pb-pill { min-height: 30px; }
+  }
+}
+
 /* ── Card density: one line, passive ─────────────────────────────────────── */
 .pblock[data-density="card"] { gap: 2px; }
 .pblock .pb-line { display: flex; align-items: center; gap: 6px; min-width: 0; }

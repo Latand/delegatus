@@ -8,7 +8,7 @@ import type { KanbanStageChip } from "@/components/kanban/kanbanModel";
 import { STAGE_TONE } from "@/components/kanban/pipelineGraph";
 
 import {
-  answerLabel, blockAgeSeconds, cardChainLevels, currentChipIndex, laneMergeWord, mergeNeedsYou, mergeReasonText, pipelineAnswers, pipelineReason, reviewStop, reviewStopFindings, sameTitle, STAGE_MARK, type ChainItem,
+  answerLabel, blockAgeSeconds, cardChainLevels, chainSteps, currentChipIndex, laneMergeWord, mergeNeedsYou, mergeReasonText, pipelineAnswers, pipelineReason, reviewStop, reviewStopFindings, sameTitle, STAGE_MARK, type ChainItem,
 } from "./pipelineBlockModel";
 import type { StageChipState } from "./pipelineModel";
 
@@ -211,4 +211,19 @@ test("a completed lane's merge says its word, and a stopped one asks with two pl
   expect(mergeNeedsYou({ ...stopped, dismissedAt: "2026-09-25T10:05:00.000Z" } as Pipeline)).toBe(false);
   expect(pipelineAnswers({ ...stopped, dismissedAt: "2026-09-25T10:05:00.000Z" } as Pipeline, (entry) => entry.id)).toBeNull();
   expect(mergeNeedsYou({ ...stopped, dismissedAt: "2026-09-25T09:00:00.000Z" } as Pipeline)).toBe(true);
+});
+
+test("the vertical chain puts each branch under its reviewer, and the rail passes a branch only when a stage follows it", () => {
+  const withFail = (id: string, to: string) => ({ ...chip(id, "passed"), stage: { ...stage(id), onFail: { to, maxRounds: 2 } } as unknown as PipelineStage });
+  const read = (steps: ReturnType<typeof chainSteps>) => steps.map((entry) => `${entry.chip.stage.id}:${entry.step}${entry.through ? "+" : ""}:${entry.order}`);
+  /* The operator's lane: the reviewer is last, so its branch closes the chain. */
+  expect(read(chainSteps([chip("build", "passed"), withFail("review", "fix"), chip("fix", "passed", true)])))
+    .toEqual(["build:first:0", "review:next:2", "fix:branch:3"]);
+  /* A stage after the reviewer: the branch lands between them and the rail passes it. */
+  expect(read(chainSteps([chip("build", "passed"), withFail("critique", "critique-fix"), chip("review", "passed"), chip("critique-fix", "passed", true)])))
+    .toEqual(["build:first:0", "critique:next:2", "review:next:4", "critique-fix:branch+:3"]);
+  /* No main chip fails to the branch: it keeps its place at the end. */
+  expect(read(chainSteps([chip("build", "passed"), chip("review", "passed"), chip("diagnose", "needs_decision", true)])))
+    .toEqual(["build:first:0", "review:next:2", "diagnose:branch:3"]);
+  expect(read(chainSteps([chip("only", "running")]))).toEqual(["only:first:0"]);
 });

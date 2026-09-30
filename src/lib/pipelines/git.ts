@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { realExec, type ExecPort, type ExecResult } from "@/lib/workflows/provision";
 import { controllerCommitIdentityArgs } from "@/lib/git/controllerCommitIdentity";
+import { networkFailureIsTransient } from "@/lib/git/transientFailure";
 import { procBackend } from "@/lib/proc";
 import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, withDeliveryMutationAsync } from "./store";
 
@@ -215,6 +216,7 @@ export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: P
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   if (killedAtBound(add)) return { ok: false, error: "git worktree add: checkout interrupted or timed out after 60s" };
   if (add.signal || add.code === null) return failure("git worktree add interrupted", add);
+  let finishedInterruptedCheckout = false;
   if (add.code !== 0) {
     const probe = await exec("git", ["rev-parse", "--abbrev-ref", "HEAD"], pipeline.worktreeDir, signal);
     if (probe.code !== 0 || probe.stdout.trim() !== branch) return failure("git worktree add", add);
@@ -224,8 +226,13 @@ export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: P
     if (listing.code !== 0) return failure("checking pipeline worktree initialization", listing);
     const entry = listing.stdout.split("\0\0").map((record) => record.split("\0"))
       .find((fields) => fields.includes(`branch refs/heads/${branch}`));
-    if (!entry || entry.includes("locked initializing") || entry.some((field) => field.startsWith("prunable"))) {
+    if (!entry || entry.some((field) => field.startsWith("prunable"))) {
       return { ok: false, error: "the pipeline worktree has not finished initializing" };
+    }
+    if (entry.includes("locked initializing")) {
+      const finished = await finishInterruptedCheckout(pipeline, branch, start, exec, signal);
+      if (!finished.ok) return finished;
+      finishedInterruptedCheckout = true;
     }
     // Preserve existing files; a retry may adopt only a complete tracked tree.
     // Untracked files do not affect completeness and remain untouched.
@@ -251,7 +258,173 @@ export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: P
   if (base.stdout.trim() !== expectedHead) {
     return { ok: false, error: "the pipeline worktree does not match its selected start commit" };
   }
+  if (finishedInterruptedCheckout) {
+    const unlock = await exec("git", ["worktree", "unlock", pipeline.worktreeDir], pipeline.repoDir, signal);
+    if (unlock.code !== 0) return failure("unlocking the finished pipeline checkout", unlock);
+  }
   return { ok: true, sha: base.stdout.trim(), baseBranch: pipeline.baseBranch };
+}
+
+/** What a retry says while a live Git process still initializes the worktree
+    a previous attempt began. The controller retries it; nothing is touched. */
+export const WORKTREE_INITIALIZATION_HELD = "the pipeline worktree is still being initialized by git process";
+
+/** A live Git process working on this checkout: the add that created it
+    names it in its argv, its checkout child carries it as GIT_WORK_TREE, and
+    anything else runs inside it. Only Git writes a checkout's index. */
+function liveGitOwner(worktreeDir: string): number | null {
+  const inside = (candidate: string | null) => candidate === worktreeDir || Boolean(candidate?.startsWith(`${worktreeDir}${path.sep}`));
+  for (const candidate of procBackend.listProcesses()) {
+    if (!/^git(?:-|$)/.test(path.basename(candidate.argv[0] ?? ""))) continue;
+    if (candidate.argv.includes(worktreeDir) || inside(candidate.cwd)
+      || procBackend.readEnvVar(candidate.pid, "GIT_WORK_TREE") === worktreeDir) return candidate.pid;
+  }
+  return null;
+}
+
+/**
+ * Finishes the checkout a killed `git worktree add` began (#2176).
+ *
+ * `git worktree add` locks the new entry `initializing`, writes the branch and
+ * HEAD, runs `git reset --hard` to populate it, and unlocks. A child killed at
+ * its bound stops between the second and the last step: the lock stays, the
+ * index lock its checkout held stays, and every later attempt used to refuse
+ * the entry for ever. With no Git process left on the checkout, doing the two
+ * remaining steps is exactly what Git itself would have done. It runs only
+ * while the checkout sits at the commit the add was creating, so no stage can
+ * have run in it. It rebuilds the index and checks out only missing files;
+ * checkout-index never overwrites a file that appeared after the safety scan.
+ */
+async function finishInterruptedCheckout(pipeline: Pipeline, branch: string, start: string, exec: ProvisionExecPort, signal?: AbortSignal): Promise<PipelineGitResult> {
+  const owner = liveGitOwner(pipeline.worktreeDir);
+  if (owner !== null) return { ok: false, error: `${WORKTREE_INITIALIZATION_HELD} ${owner}` };
+
+  // A worktree path can be occupied by another clone that happens to have
+  // the same branch and commit. Prove both the registration and repository
+  // identity from the lane's owning repository before touching its lock/index.
+  const listing = await exec("git", ["worktree", "list", "--porcelain", "-z"], pipeline.repoDir, signal);
+  if (listing.code !== 0) return failure("checking the interrupted pipeline worktree registration", listing);
+  const entry = listing.stdout.split("\0\0").map((record) => record.split("\0"))
+    .find((fields) => fields.includes(`worktree ${pipeline.worktreeDir}`));
+  if (!entry || !entry.includes(`branch refs/heads/${branch}`) || !entry.includes("locked initializing")) {
+    return { ok: false, error: "the interrupted pipeline checkout is not registered to this lane; preserve it and inspect the repository before retrying" };
+  }
+  const registeredPath = entry.find((field) => field.startsWith("worktree "))?.slice("worktree ".length);
+  try {
+    if (!registeredPath || fs.realpathSync(registeredPath) !== fs.realpathSync(pipeline.worktreeDir)) {
+      return { ok: false, error: "the interrupted pipeline checkout path does not match this lane; preserve it and inspect the repository before retrying" };
+    }
+  } catch {
+    return { ok: false, error: "the interrupted pipeline checkout path does not match this lane; preserve it and inspect the repository before retrying" };
+  }
+  const commonDir = await exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], pipeline.worktreeDir, signal);
+  const repoCommonDir = await exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], pipeline.repoDir, signal);
+  if (commonDir.code !== 0 || repoCommonDir.code !== 0 || !commonDir.stdout.trim() || !repoCommonDir.stdout.trim()) {
+    return failure("verifying the interrupted pipeline checkout repository", commonDir.code !== 0 ? commonDir : repoCommonDir);
+  }
+  try {
+    if (fs.realpathSync(commonDir.stdout.trim()) !== fs.realpathSync(repoCommonDir.stdout.trim())) {
+      return { ok: false, error: "the interrupted pipeline checkout belongs to a different repository; preserve it and retry after restoring this lane's worktree path" };
+    }
+  } catch {
+    return { ok: false, error: "the interrupted pipeline checkout repository could not be verified; preserve it and inspect the worktree before retrying" };
+  }
+
+  const head = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir, signal);
+  if (head.code !== 0) return failure("reading the interrupted pipeline checkout", head);
+  if (head.stdout.trim() !== start) {
+    return { ok: false, error: `the interrupted pipeline checkout is at ${head.stdout.trim()}, not its start commit ${start}; remove the worktree and retry-stage` };
+  }
+  // A checkout killed while Git is building its index can leave an empty
+  // index, so use the selected start tree as the source of tracked paths.
+  const tree = await exec("git", ["ls-tree", "-r", "--full-tree", "-z", "HEAD"], pipeline.worktreeDir, signal);
+  if (tree.code !== 0) return failure("checking tracked paths in the interrupted pipeline checkout", tree);
+  const trackedEntries = tree.stdout.split("\0").filter(Boolean).map((entry) => {
+    const separator = entry.indexOf("\t");
+    const [mode = "", type = "", sha = ""] = entry.slice(0, separator).split(" ");
+    const file = separator < 0 ? "" : entry.slice(separator + 1);
+    return { mode, type, sha, file };
+  });
+  const collisions: string[] = [];
+  const missingTrackedPaths: string[] = [];
+  for (const trackedEntry of trackedEntries) {
+    if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+    if (trackedEntry.type === "commit") continue; // --no-recurse-submodules leaves submodule contents alone.
+    const parts = trackedEntry.file.split("/");
+    let candidate = pipeline.worktreeDir;
+    let fileInfo: fs.Stats | null = null;
+    let blocked = false;
+    for (let index = 0; index < parts.length; index += 1) {
+      candidate = path.join(candidate, parts[index]!);
+      try { fileInfo = fs.lstatSync(candidate); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") { fileInfo = null; break; }
+        if ((error as NodeJS.ErrnoException).code === "ENOTDIR") { blocked = true; break; }
+        return { ok: false, error: `checking interrupted checkout path ${trackedEntry.file}: ${error instanceof Error ? error.message : "filesystem read failed"}` };
+      }
+      if (index < parts.length - 1 && (!fileInfo.isDirectory() || fileInfo.isSymbolicLink())) { blocked = true; break; }
+      if (index === parts.length - 1 && fileInfo.isDirectory()) {
+        const hasContent = (directory: string): boolean => fs.readdirSync(directory, { withFileTypes: true }).some((child) => {
+          if (child.isDirectory() && !child.isSymbolicLink()) return hasContent(path.join(directory, child.name));
+          return true;
+        });
+        try { blocked = hasContent(candidate); }
+        catch (error) { return { ok: false, error: `checking interrupted checkout path ${trackedEntry.file}: ${error instanceof Error ? error.message : "filesystem read failed"}` }; }
+      }
+    }
+    if (blocked) { collisions.push(trackedEntry.file); continue; }
+    if (!fileInfo) {
+      missingTrackedPaths.push(trackedEntry.file);
+      continue; // A missing file is ordinary interrupted checkout state.
+    }
+    const isExpectedSymlink = trackedEntry.mode === "120000";
+    if (fileInfo.isSymbolicLink() !== isExpectedSymlink) {
+      return { ok: false, error: `the interrupted pipeline checkout contains a modified tracked path (${trackedEntry.file}); preserve it, move it aside, then retry-stage` };
+    }
+    if (trackedEntry.mode !== "120000" && trackedEntry.mode !== "160000") {
+      const expectedExecutable = trackedEntry.mode === "100755";
+      if (Boolean(fileInfo.mode & 0o111) !== expectedExecutable) {
+        return { ok: false, error: `the interrupted pipeline checkout contains a modified tracked path (${trackedEntry.file}); preserve it, move it aside, then retry-stage` };
+      }
+    }
+    let actualSha: string;
+    if (isExpectedSymlink) {
+      // A symlink blob stores the link text. Reading or hashing its path would
+      // follow the target and may run content filters, so hash readlink bytes
+      // using Git's blob object framing directly.
+      let link: Buffer;
+      try { link = fs.readlinkSync(candidate, { encoding: "buffer" }); }
+      catch (error) { return { ok: false, error: `checking interrupted tracked path ${trackedEntry.file}: ${error instanceof Error ? error.message : "symlink read failed"}` }; }
+      actualSha = crypto.createHash("sha1").update(`blob ${link.byteLength}\0`).update(link).digest("hex");
+    } else {
+      const actual = await exec("git", ["hash-object", `--path=${trackedEntry.file}`, "--", trackedEntry.file], pipeline.worktreeDir, signal);
+      if (actual.code !== 0) return failure(`checking interrupted tracked path ${trackedEntry.file}`, actual);
+      actualSha = actual.stdout.trim();
+    }
+    if (actualSha !== trackedEntry.sha) {
+      return { ok: false, error: `the interrupted pipeline checkout contains a modified tracked path (${trackedEntry.file}); preserve it, move it aside, then retry-stage` };
+    }
+  }
+  if (collisions.length > 0) {
+    return { ok: false, error: `the interrupted pipeline checkout has untracked content blocking tracked paths (${collisions.slice(0, 3).join(", ")}); preserve it, move it aside, then retry-stage` };
+  }
+  const staged = await exec("git", ["diff", "--cached", "--quiet", "--diff-filter=ACMRT", "HEAD", "--"], pipeline.worktreeDir, signal);
+  if (staged.code === 1) return { ok: false, error: "the interrupted pipeline checkout contains staged tracked changes; preserve them, move them aside, then retry-stage" };
+  if (staged.code !== 0) return failure("checking staged changes in the interrupted pipeline checkout", staged);
+  const stillOwned = liveGitOwner(pipeline.worktreeDir);
+  if (stillOwned !== null) return { ok: false, error: `${WORKTREE_INITIALIZATION_HELD} ${stillOwned}` };
+  const gitDir = await exec("git", ["rev-parse", "--path-format=absolute", "--git-dir"], pipeline.worktreeDir, signal);
+  if (gitDir.code !== 0 || !gitDir.stdout.trim()) return failure("locating the interrupted pipeline checkout", gitDir);
+  fs.rmSync(path.join(gitDir.stdout.trim(), "index.lock"), { force: true });
+  const index = await exec("git", ["read-tree", "HEAD"], pipeline.worktreeDir, signal);
+  if (index.code !== 0) return failure("rebuilding the interrupted pipeline checkout index", index);
+  // Checkout only files proven missing. If one appears after the scan, Git
+  // refuses to overwrite it; every already-present path stays untouched.
+  if (missingTrackedPaths.length > 0) {
+    const checkout = await exec("git", ["checkout-index", "--", ...missingTrackedPaths], pipeline.worktreeDir, signal);
+    if (checkout.code !== 0) return failure("finishing the interrupted pipeline checkout", checkout);
+  }
+  return { ok: true, sha: start };
 }
 
 function changedWorktreePaths(
@@ -408,18 +581,6 @@ export type PipelineRemoteHeadResult =
   | { ok: true; sha: string }
   | { ok: false; error: string; transient: boolean };
 
-/* Checked first: an SSH login the server refused can also print "Connection
-   closed by …", and that is a credential problem no retry fixes. */
-const REMOTE_READ_REFUSED = /permission denied|authentication failed|host key verification failed|could not read (username|password)|repository not found|does not appear to be a git repository|returned error: 40[134]/i;
-const REMOTE_READ_TRANSPORT = /timed out|could not resolve host|temporary failure in name resolution|connection refused|connection reset|connection closed by|network is unreachable|no route to host|failed to connect to|returned error: 5\d\d/i;
-
-/** Whether a failed remote read is one the network failed (#1692): it says
-    nothing about the branch, so asking again is sound. A refused login, a
-    missing repository and anything unrecognized are not. */
-function remoteReadFailureIsTransient(error: string): boolean {
-  return !REMOTE_READ_REFUSED.test(error) && REMOTE_READ_TRANSPORT.test(error);
-}
-
 /** Reads the authoritative remote pipeline branch without relying on a stale
     tracking ref. Approval fences use this alongside the clean local HEAD. The
     read is time-bounded like the publication read: an unbounded `ls-remote`
@@ -428,7 +589,7 @@ function remoteReadFailureIsTransient(error: string): boolean {
 export function currentPipelineRemoteBranchHead(pipeline: Pipeline, exec: ExecPort): PipelineRemoteHeadResult {
   if (!validPipelineBranch(pipeline.branch)) return { ok: false, error: "the pipeline branch is invalid", transient: false };
   const remote = readRemotePipelineBranch(pipeline, exec, "checking the remote pipeline branch");
-  if (!remote.ok) return { ok: false, error: remote.error, transient: remoteReadFailureIsTransient(remote.error) };
+  if (!remote.ok) return { ok: false, error: remote.error, transient: networkFailureIsTransient(remote.error) };
   if (!/^[0-9a-f]{40}$/i.test(remote.sha)) return { ok: false, error: "the remote pipeline branch has no exact commit SHA", transient: false };
   return { ok: true, sha: remote.sha };
 }

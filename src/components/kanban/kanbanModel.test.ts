@@ -47,6 +47,7 @@ function task(id: string, status: TaskStatus, paths: readonly string[] = [], ext
     project: "fixture",
     text: `Task ${id}\nWhat ${id} is about`,
     status,
+    ...(status === "done" ? { doneAt: new Date(NOW * 1000).toISOString() } : {}),
     placement: "unplaced",
     assignments: paths.map((path, index) => ({ path, conversationId: path.startsWith("/fixture/conversation-") ? `conversation_fixture_${path.match(/(\d+)/)![1]}` : `conversation_elided_${id}_${index}`, panePid: null, state: "delivered", error: null, at: "2026-09-14T10:00:00.000Z" })),
     createdAt: `2026-09-14T10:${String(Number(id.replace(/\D/g, "")) % 60).padStart(2, "0")}:00.000Z`,
@@ -77,7 +78,7 @@ function layout(files: readonly FileEntry[]): SchemeLayout {
 function model(tasks: readonly BoardTask[], files: readonly FileEntry[], options: { pipelines?: Pipeline[]; query?: string; overrides?: Map<string, TaskStatus> } = {}) {
   const pipelines = options.pipelines ?? [];
   const projection = projectTaskWorkflows([...tasks], pipelines, [], [...files]);
-  const bands = buildTaskBands(layout(files), { tasks, projection, untitled: "Untitled task" });
+  const bands = buildTaskBands(layout(files), { tasks, projection, untitled: "Untitled task", deferDoneVisibility: true });
   return buildKanbanModel({ bands, tasks, pipelines, projection, files, query: options.query, statusOverrides: options.overrides, now: NOW });
 }
 
@@ -1048,4 +1049,27 @@ test("every column but the Inbox keeps today's order whatever the priorities say
     expect(withPriority).toEqual(["low-working", "normal-recent", "high-older", "normal-idle", "low-idle", "normal-odd", "high-idle-old"]);
     expect(withPriority).toEqual(order(tasks.map(({ priority: _priority, ...row }) => row as BoardTask)));
   }
+});
+
+test("done expiry uses the board clock and preserves the seat, fresh decisions and reopened tasks", () => {
+  const doneAt = new Date((NOW - 3 * 24 * 60 * 60) * 1000).toISOString();
+  const worker = file(90);
+  const asking = file(91, { pendingQuestion: { askedAt: new Date((NOW + 1) * 1000).toISOString() } as FileEntry["pendingQuestion"] });
+  const seatWorker = file(92);
+  const rows = [
+    task("expired", "done", [worker.path], { doneAt }),
+    task("asking", "done", [asking.path], { doneAt }),
+    task("seat-work", "done", [seatWorker.path, worker.path], { doneAt }),
+  ];
+  const files = [worker, asking, seatWorker];
+  const projection = projectTaskWorkflows(rows, [], [], files);
+  const bands = buildTaskBands(layout(files), { tasks: rows, projection, untitled: "Task", deferDoneVisibility: true });
+  const input = { bands, tasks: rows, projection, files, pipelines: [], seat: { conversationIds: [seatWorker.conversationId!], paths: [] } };
+  const boundary = buildKanbanModel({ ...input, now: NOW });
+  expect(boundary.columns.done.cards.map((card) => card.task!.id).sort()).toEqual(["asking", "expired", "seat-work"]);
+  const later = buildKanbanModel({ ...input, now: NOW + 2 });
+  expect(later.columns.done.cards.map((card) => card.task!.id).sort()).toEqual(["asking", "seat-work"]);
+  expect(later.offBoard.map((task) => task.id)).toEqual(["expired"]);
+  const reopened = buildKanbanModel({ ...input, now: NOW + 2, statusOverrides: new Map([["expired", "assigned" as const]]) });
+  expect(reopened.columns.assigned.cards.map((card) => card.task!.id)).toEqual(["expired"]);
 });

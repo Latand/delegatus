@@ -4,6 +4,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 
 import { isoNow } from "./helpers";
+import { withTaskCompletion } from "./completion";
 import { internalConversationKind } from "./internalConversations";
 import { mutateTasks } from "./store";
 import { UNTITLED_TASK_TEXT, type BoardTask, type TaskAssignment, type TaskOrigin } from "./types";
@@ -180,7 +181,7 @@ export function ensureTaskMembership(existing: readonly BoardTask[], input: Memb
   let changed = false;
   const commit = (index: number, next: { task: BoardTask; changed: boolean }) => {
     if (!next.changed) return;
-    tasks[index] = next.task;
+    tasks[index] = withTaskCompletion(next.task, tasks[index]!);
     changed = true;
   };
 

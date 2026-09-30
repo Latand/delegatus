@@ -647,6 +647,44 @@ if (KANBAN) {
       kanbanTasks.push(kanbanTask(taskId, "assigned", title, { updatedAt: iso(300) }));
     }
   }
+  /* The narrow card's stage chain (`?stage-chain=1`, docs/design/narrow-card-stage-chain.md):
+     finished lanes, whose task screen draws the chain at 390 px — the lane is
+     about 342 px, so it reads vertically. One lane is the operator's: Build,
+     Review fired once of three, the branch Review fix. The other has a stage
+     after its reviewer, so the rail passes beside the branch. */
+  if (new URLSearchParams(location.search).has("stage-chain")) {
+    const uk = localStorage.getItem("llv_lang") === "uk";
+    const L = (en: string, ua: string) => (uk ? ua : en);
+    const run = (key: string, stageId: string, n: number, state: string, ago: number, over: Record<string, unknown> = {}) => {
+      const path = kanbanConversation(`${key} · ${stageId} ${n}`, "settled", ago);
+      return { n, state, startedAt: iso(ago + 600), completedAt: iso(ago), agentPath: path, conversationId: idOf(path), activatedBy: null,
+        effectiveRole: stageId === "build" || stageId.endsWith("-fix") ? kanbanRole("builder") : kanbanRole("reviewer"),
+        verdict: state === "passed" ? { status: "pass", findings: [] } : { status: "fail", findings: ["P2 — the count hides behind the chip."] }, ...over };
+    };
+    const via = (stageId: string, edge: "pass" | "fail") => ({ activatedBy: { stageId, attempt: 1, edge } });
+    const fix = kanbanLane("lane-chain-fix", L("Keep the review fix on the card", "Залишити виправлення рев’ю на картці"), ["t-chain-fix"], "completed", [
+      { id: "build", attempts: [run("fix", "build", 1, "passed", 7_200)] },
+      { id: "review", role: "reviewer", onFail: { to: "review-fix", maxRounds: 3 }, attempts: [run("fix", "review", 1, "failed", 6_000, via("build", "pass"))] },
+      { id: "review-fix", attempts: [run("fix", "review-fix", 1, "passed", 5_000, via("review", "fail"))] },
+    ]);
+    fix.stages[1] = { ...fix.stages[1]!, next: null };
+    const through = kanbanLane("lane-chain-through", L("Critique, then review, with a fix between", "Критика, потім рев’ю, з виправленням між ними"), ["t-chain-through"], "completed", [
+      { id: "build", attempts: [run("through", "build", 1, "passed", 9_000)] },
+      { id: "critique", role: "architect", onFail: { to: "critique-fix", maxRounds: 2 }, attempts: [run("through", "critique", 1, "failed", 7_000, via("build", "pass")), run("through", "critique", 2, "passed", 4_000, via("critique-fix", "pass"))] },
+      { id: "critique-fix", attempts: [run("through", "critique-fix", 1, "passed", 5_500, via("critique", "fail"))] },
+      { id: "review", role: "reviewer", attempts: [run("through", "review", 1, "passed", 3_000, via("critique", "pass"))] },
+    ]);
+    through.stages[1] = { ...through.stages[1]!, next: "review" };
+    through.stages[2] = { ...through.stages[2]!, next: "critique" };
+    through.stages[3] = { ...through.stages[3]!, next: null };
+    kanbanPipelines.push(fix, through);
+    kanbanLinks.pipelines[fix.id] = prLinks(2348, "merged");
+    kanbanLinks.pipelines[through.id] = { links: [], noPr: true };
+    kanbanTasks.push(
+      kanbanTask("t-chain-fix", "assigned", L("Keep the review fix on the card", "Залишити виправлення рев’ю на картці"), { updatedAt: iso(300) }),
+      kanbanTask("t-chain-through", "assigned", L("Critique, then review, with a fix between", "Критика, потім рев’ю, з виправленням між ними"), { updatedAt: iso(400) }),
+    );
+  }
   /* #2187 §4.6, §6 (`?merge-states=1`): one task per state of a completed
      lane's automatic merge — waiting for checks, updating from main, merge
      stopped with its two answers, merged by Delegatus — read on the task

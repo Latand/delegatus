@@ -1,4 +1,9 @@
 import type { BoardTask, TaskAssignment } from "./types";
+import { groupHideState } from "./groupHide";
+import { withTaskCompletion } from "./completion";
+
+export const DONE_TASK_BOARD_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
+export type BoardVisibilityContext = Partial<Parameters<typeof groupHideState>[1]> & { now?: number; holdsSeat?: boolean };
 
 /**
  * The board's empty-band preference, and the rule that applies it.
@@ -10,7 +15,9 @@ import type { BoardTask, TaskAssignment } from "./types";
  * repair is a per-task flag, not a deletion and not an archive — the task list
  * keeps every row, and «Show on board» puts a band back at any time.
  *
- * The flag is honoured only while the task has nothing on the board, so hiding
+ * Done tasks expire after DONE_TASK_BOARD_RETENTION_MS, with the seat and
+ * hidden-group resurfacing exceptions. For other tasks the flag is honoured
+ * only while the task has nothing on the board, so hiding
  * can never lose a live conversation. WHAT COUNTS AS HOLDING SOMETHING is the
  * whole question, and it is answered where it can be: at render, by what the
  * band actually resolved (`bandHoldsMembers` in `scheme/taskBands`), which is
@@ -86,9 +93,22 @@ export function taskHasBoardMembers(task: BoardTask, keys: BoardConversationKeys
  * `hasMembers` is the caller's answer to the membership question — for the
  * board, what its band resolved. It is passed in rather than computed here so
  * that the surface which can actually see the scene is the one that answers,
- * and every other surface has to say out loud that it is guessing.
+ * and every other surface has to say out loud that it is guessing. Completion
+ * age precedes that preference. New admissions and decision requests reuse the
+ * group-hide rule with completion plus retention as the implicit hide instant.
  */
-export function taskShowsOnBoard(task: BoardTask, hasMembers: boolean): boolean {
+export function taskShowsOnBoard(task: BoardTask, hasMembers: boolean, context: BoardVisibilityContext = {}): boolean {
+  if (task.status === "done") {
+    const completed = withTaskCompletion(task);
+    const expires = Date.parse(completed.doneAt!) + DONE_TASK_BOARD_RETENTION_MS;
+    if ((context.now ?? Date.now()) > expires) {
+      if (context.holdsSeat) return true;
+      const hide = groupHideState({ ...completed, groupHidden: { at: new Date(expires).toISOString(), by: "operator", admitted: completed.doneAdmissions } }, {
+        members: context.members ?? [], pipelines: context.pipelines ?? [], seat: context.seat,
+      });
+      return !hide.hidden;
+    }
+  }
   return task.board !== "hidden" || hasMembers;
 }
 
@@ -115,11 +135,12 @@ export function countBoardTasks(
   tasks: readonly BoardTask[],
   project: string,
   hasMembers: (task: BoardTask) => boolean,
+  context: (task: BoardTask) => BoardVisibilityContext = () => ({}),
 ): number {
   let count = 0;
   for (const task of tasks) {
     if (task.project !== project) continue;
-    if (taskShowsOnBoard(task, hasMembers(task))) count += 1;
+    if (taskShowsOnBoard(task, hasMembers(task), context(task))) count += 1;
   }
   return count;
 }

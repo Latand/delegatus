@@ -6,7 +6,7 @@ import { dirname, isAbsolute, join } from "node:path";
 const binary = process.argv[2];
 const selection = process.argv[3];
 if (selection !== undefined && selection !== "--steering-only") throw new Error("Only --steering-only is supported as a selection");
-if (!binary || !isAbsolute(binary) || !existsSync(binary)) throw new Error("Pass an absolute Codex fixture executable (full suite requires 0.154.0)");
+if (!binary || !isAbsolute(binary) || !existsSync(binary)) throw new Error("Pass an absolute Codex fixture executable");
 const roots = mkdtempSync(join(tmpdir(), "n-"));
 const bin = join(roots, "bin"); mkdirSync(bin); symlinkSync(process.execPath, join(bin, "bun"));
 const env: NodeJS.ProcessEnv = {

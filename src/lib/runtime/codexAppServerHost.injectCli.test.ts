@@ -128,7 +128,7 @@ function readRollout(file: string): RolloutRecord[] {
 }
 
 test.skipIf(!installed)(
-  "real Codex 0.154 acknowledges thread/inject_items with {} and persists a raw Responses user item, starting no turn",
+  "real Codex acknowledges thread/inject_items with {} and persists a raw Responses user item, starting no turn",
   async () => {
     const home = privateHome();
     const probe = startAppServer(home);
