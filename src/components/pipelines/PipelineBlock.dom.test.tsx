@@ -238,6 +238,40 @@ test("the task row says its state once, drops a title the task already has, and 
   expect(running.querySelector("[data-graph-toggle], [data-pipeline-menu], [data-answer-action]")).toBeNull();
 });
 
+test("the task chain tags each step for the narrow lane's vertical layout, and keeps its arrows for the wide row", () => {
+  /* Build → Critique (fails to Critique fix) → Review, then the branch: the critique's fix sits under it, and a stage follows. */
+  const stages = [stage("build", "builder", "critique"), stage("critique", "reviewer", "review", { onFail: { to: "critique-fix", maxRounds: 2 } }), stage("critique-fix", "builder", "critique"), stage("review", "reviewer", null)];
+  const through = searchPipeline({
+    stages, state: "completed", cursor: null,
+    runs: stages.map((entry) => ({ stageId: entry.id, attempts: [attempt(1, "passed", 600)] })),
+  } as unknown as Partial<Pipeline>);
+  const host = mount(<PipelineBlock summary={summarizePipeline(through)} density="task" nowMs={NOW_MS} onOpenStage={() => {}} />);
+  const steps = [...host.querySelectorAll<HTMLElement>(".pb-pills > .pb-step")];
+  expect(steps.map((step) => step.querySelector<HTMLElement>(".pb-pill")!.dataset.stage)).toEqual(["build", "critique", "review", "critique-fix"]);
+  expect(steps.map((step) => step.dataset.step)).toEqual(["first", "next", "next", "branch"]);
+  expect(steps.map((step) => step.dataset.through ?? null)).toEqual([null, null, null, "1"]);
+  expect(steps.map((step) => step.style.getPropertyValue("--pb-order"))).toEqual(["0", "2", "4", "3"]);
+  /* The wide row is the DOM as it was: an arrow before each later main step and none before the first or the branch. */
+  expect(host.querySelectorAll(".pb-arrow").length).toBe(2);
+  expect(steps.map((step) => Boolean(step.querySelector(":scope > .pb-arrow")))).toEqual([false, true, true, false]);
+
+  /* The operator's lane: the reviewer is the last stage, so nothing passes its branch. */
+  const fixStages = [stage("build", "builder", "review"), stage("review", "reviewer", null, { onFail: { to: "review-fix", maxRounds: 3 } }), stage("review-fix", "builder", "review")];
+  const fix = searchPipeline({
+    stages: fixStages, state: "completed", cursor: null,
+    runs: fixStages.map((entry) => ({ stageId: entry.id, attempts: [attempt(1, "passed", 600)] })),
+  } as unknown as Partial<Pipeline>);
+  const lane = mount(<PipelineBlock summary={summarizePipeline(fix)} density="task" nowMs={NOW_MS} onOpenStage={() => {}} />);
+  const laneSteps = [...lane.querySelectorAll<HTMLElement>(".pb-pills > .pb-step")];
+  expect(laneSteps.map((step) => step.dataset.step)).toEqual(["first", "next", "branch"]);
+  expect(laneSteps.some((step) => step.dataset.through)).toBe(false);
+  expect(laneSteps.map((step) => step.style.getPropertyValue("--pb-order"))).toEqual(["0", "2", "3"]);
+
+  /* The card density's fold and the screen density draw no data-step at all. */
+  const card = mount(<PipelineBlock summary={summarizePipeline(fix)} density="card" nowMs={NOW_MS} />);
+  expect(card.querySelector("[data-step]")).toBeNull();
+});
+
 test("the stage chain is the lane's head where the card's ⋯ holds its actions; a lane with a ⋯ or a title of its own keeps its head row (#2148)", () => {
   const opened: string[] = [];
   const menus: string[] = [];

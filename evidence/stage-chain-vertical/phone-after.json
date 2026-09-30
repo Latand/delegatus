@@ -1,0 +1,439 @@
+{
+  "readings": {
+    "t-chain-fix-390-light": {
+      "width": 342,
+      "direction": "column",
+      "steps": [
+        {
+          "stage": "build",
+          "kind": "first",
+          "through": false,
+          "left": 24,
+          "top": 273,
+          "right": 86.4375,
+          "bottom": 303,
+          "arrow": null,
+          "before": {
+            "content": "none",
+            "height": 0,
+            "left": 0,
+            "width": 0,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "after": {
+            "content": "none",
+            "height": 0,
+            "left": 0,
+            "width": 0,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "cut": false,
+          "inkOutside": false,
+          "nameLines": 1
+        },
+        {
+          "stage": "review",
+          "kind": "next",
+          "through": false,
+          "left": 24,
+          "top": 311,
+          "right": 126.359375,
+          "bottom": 341,
+          "arrow": "none",
+          "before": {
+            "content": "\"\"",
+            "height": 8,
+            "left": 15,
+            "width": 1,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "after": {
+            "content": "none",
+            "height": 0,
+            "left": 0,
+            "width": 0,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "cut": false,
+          "inkOutside": false,
+          "nameLines": 1
+        },
+        {
+          "stage": "review-fix",
+          "kind": "branch",
+          "through": false,
+          "left": 52,
+          "top": 349,
+          "right": 179.34375,
+          "bottom": 379,
+          "arrow": null,
+          "before": {
+            "content": "none",
+            "height": 0,
+            "left": 0,
+            "width": 0,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "after": {
+            "content": "\"\"",
+            "height": 23,
+            "left": 15,
+            "width": 13,
+            "borderLeft": "dashed",
+            "borderBottom": "dashed"
+          },
+          "cut": false,
+          "inkOutside": false,
+          "nameLines": 1
+        }
+      ],
+      "overlaps": []
+    },
+    "t-chain-through-390-light": {
+      "width": 342,
+      "direction": "column",
+      "steps": [
+        {
+          "stage": "build",
+          "kind": "first",
+          "through": false,
+          "left": 24,
+          "top": 273,
+          "right": 86.4375,
+          "bottom": 303,
+          "arrow": null,
+          "before": {
+            "content": "none",
+            "height": 0,
+            "left": 0,
+            "width": 0,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "after": {
+            "content": "none",
+            "height": 0,
+            "left": 0,
+            "width": 0,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "cut": false,
+          "inkOutside": false,
+          "nameLines": 1
+        },
+        {
+          "stage": "critique",
+          "kind": "next",
+          "through": false,
+          "left": 24,
+          "top": 311,
+          "right": 130.84375,
+          "bottom": 341,
+          "arrow": "none",
+          "before": {
+            "content": "\"\"",
+            "height": 8,
+            "left": 15,
+            "width": 1,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "after": {
+            "content": "none",
+            "height": 0,
+            "left": 0,
+            "width": 0,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "cut": false,
+          "inkOutside": false,
+          "nameLines": 1
+        },
+        {
+          "stage": "review",
+          "kind": "next",
+          "through": false,
+          "left": 24,
+          "top": 387,
+          "right": 96.03125,
+          "bottom": 417,
+          "arrow": "none",
+          "before": {
+            "content": "\"\"",
+            "height": 8,
+            "left": 15,
+            "width": 1,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "after": {
+            "content": "none",
+            "height": 0,
+            "left": 0,
+            "width": 0,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "cut": false,
+          "inkOutside": false,
+          "nameLines": 1
+        },
+        {
+          "stage": "critique-fix",
+          "kind": "branch",
+          "through": true,
+          "left": 52,
+          "top": 349,
+          "right": 183.828125,
+          "bottom": 379,
+          "arrow": null,
+          "before": {
+            "content": "\"\"",
+            "height": 38,
+            "left": 15,
+            "width": 1,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "after": {
+            "content": "\"\"",
+            "height": 23,
+            "left": 15,
+            "width": 13,
+            "borderLeft": "dashed",
+            "borderBottom": "dashed"
+          },
+          "cut": false,
+          "inkOutside": false,
+          "nameLines": 1
+        }
+      ],
+      "overlaps": []
+    },
+    "t-chain-fix-390-dark": {
+      "width": 342,
+      "direction": "column",
+      "steps": [
+        {
+          "stage": "build",
+          "kind": "first",
+          "through": false,
+          "left": 24,
+          "top": 273,
+          "right": 86.4375,
+          "bottom": 303,
+          "arrow": null,
+          "before": {
+            "content": "none",
+            "height": 0,
+            "left": 0,
+            "width": 0,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "after": {
+            "content": "none",
+            "height": 0,
+            "left": 0,
+            "width": 0,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "cut": false,
+          "inkOutside": false,
+          "nameLines": 1
+        },
+        {
+          "stage": "review",
+          "kind": "next",
+          "through": false,
+          "left": 24,
+          "top": 311,
+          "right": 126.359375,
+          "bottom": 341,
+          "arrow": "none",
+          "before": {
+            "content": "\"\"",
+            "height": 8,
+            "left": 15,
+            "width": 1,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "after": {
+            "content": "none",
+            "height": 0,
+            "left": 0,
+            "width": 0,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "cut": false,
+          "inkOutside": false,
+          "nameLines": 1
+        },
+        {
+          "stage": "review-fix",
+          "kind": "branch",
+          "through": false,
+          "left": 52,
+          "top": 349,
+          "right": 179.34375,
+          "bottom": 379,
+          "arrow": null,
+          "before": {
+            "content": "none",
+            "height": 0,
+            "left": 0,
+            "width": 0,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "after": {
+            "content": "\"\"",
+            "height": 23,
+            "left": 15,
+            "width": 13,
+            "borderLeft": "dashed",
+            "borderBottom": "dashed"
+          },
+          "cut": false,
+          "inkOutside": false,
+          "nameLines": 1
+        }
+      ],
+      "overlaps": []
+    },
+    "t-chain-through-390-dark": {
+      "width": 342,
+      "direction": "column",
+      "steps": [
+        {
+          "stage": "build",
+          "kind": "first",
+          "through": false,
+          "left": 24,
+          "top": 273,
+          "right": 86.4375,
+          "bottom": 303,
+          "arrow": null,
+          "before": {
+            "content": "none",
+            "height": 0,
+            "left": 0,
+            "width": 0,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "after": {
+            "content": "none",
+            "height": 0,
+            "left": 0,
+            "width": 0,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "cut": false,
+          "inkOutside": false,
+          "nameLines": 1
+        },
+        {
+          "stage": "critique",
+          "kind": "next",
+          "through": false,
+          "left": 24,
+          "top": 311,
+          "right": 130.84375,
+          "bottom": 341,
+          "arrow": "none",
+          "before": {
+            "content": "\"\"",
+            "height": 8,
+            "left": 15,
+            "width": 1,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "after": {
+            "content": "none",
+            "height": 0,
+            "left": 0,
+            "width": 0,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "cut": false,
+          "inkOutside": false,
+          "nameLines": 1
+        },
+        {
+          "stage": "review",
+          "kind": "next",
+          "through": false,
+          "left": 24,
+          "top": 387,
+          "right": 96.03125,
+          "bottom": 417,
+          "arrow": "none",
+          "before": {
+            "content": "\"\"",
+            "height": 8,
+            "left": 15,
+            "width": 1,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "after": {
+            "content": "none",
+            "height": 0,
+            "left": 0,
+            "width": 0,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "cut": false,
+          "inkOutside": false,
+          "nameLines": 1
+        },
+        {
+          "stage": "critique-fix",
+          "kind": "branch",
+          "through": true,
+          "left": 52,
+          "top": 349,
+          "right": 183.828125,
+          "bottom": 379,
+          "arrow": null,
+          "before": {
+            "content": "\"\"",
+            "height": 38,
+            "left": 15,
+            "width": 1,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "after": {
+            "content": "\"\"",
+            "height": 23,
+            "left": 15,
+            "width": 13,
+            "borderLeft": "dashed",
+            "borderBottom": "dashed"
+          },
+          "cut": false,
+          "inkOutside": false,
+          "nameLines": 1
+        }
+      ],
+      "overlaps": []
+    }
+  },
+  "failures": []
+}

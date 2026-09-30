@@ -13,6 +13,7 @@ import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, 
 import { openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { clipTitle } from "./taskText";
+import { measureStageChain, stageChainFailures, type StageChainLane as Lane } from "@/components/pipelines/stageChainMeasure";
 
 /*
  * The one rendered-evidence driver for the kanban board. Every case here runs
@@ -13674,4 +13675,86 @@ describe("done task retention", () => {
       fs.writeFileSync(path.join(out, "geometry.json"), JSON.stringify({ case: "done-retention", frames, failures: [] }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
+});
+
+describe("narrow card: the pipeline stages read as one vertical chain", () => {
+  /*
+   * docs/design/narrow-card-stage-chain.md over `?scenario=stage-chain`. A lane
+   * narrower than 380 px (every shelf card) stands its stages one under
+   * another, joined by a 1 px rail, with a fail branch indented under its
+   * reviewer on a dashed elbow. The Assigned column's lane is wide and keeps
+   * its row and its arrows. Read at 1440 px in both colour schemes, from
+   * geometry and from computed style.
+   *
+   * STAGE_CHAIN_STAMP=before records the same frames on a checkout without the
+   * change and asserts nothing about the vertical layout; it is how the
+   * "before" renders are taken. Frames go to STAGE_CHAIN_PNG_DIR
+   * (default ~/Pictures/delegatus-review/stage-chain-vertical).
+   */
+  const STAMP = process.env.STAGE_CHAIN_STAMP === "before" ? "before" : "after";
+  const PNG_DIR = process.env.STAGE_CHAIN_PNG_DIR ?? path.join(process.env.HOME ?? ".", "Pictures/delegatus-review/stage-chain-vertical");
+  const byStage = (lane: Lane, stage: string) => lane.steps.find((step) => step.stage === stage)!;
+  const NARROW = ["t-chain-operator", "t-chain-through", "t-chain-live", "t-chain-long"] as const;
+  const seatFolded = `try { localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })); } catch {}`;
+
+  browserTest("a shelf card stands its stages one under another on a rail, the branch indented under its reviewer; the wide lane keeps its row, in light and dark", async () => {
+    const out = path.resolve(".artifacts/stage-chain-vertical");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(PNG_DIR, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, Record<string, Lane>> = {};
+    try {
+      for (const scheme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stage-chain`, { width: 1440, height: 1100 }, scheme, "en");
+        try {
+          await context.addInitScript(seatFolded);
+          await page.reload();
+          await page.waitForSelector(`${card("t-chain-operator")} .pblock[data-density="task"]`, { timeout: 30_000 });
+          await page.waitForTimeout(600);
+          const lanes: Record<string, Lane> = {};
+          for (const task of [...NARROW, "t-chain-wide"]) {
+            await page.locator(card(task)).scrollIntoViewIfNeeded();
+            await page.waitForTimeout(150);
+            lanes[task] = await page.evaluate(measureStageChain(`[data-kanban-board] .card[data-id="task:${task}"] .pblock[data-density="task"]`)) as Lane;
+            if (!lanes[task]) throw new Error(`${scheme} ${task}: no lane row drawn`);
+          }
+          readings[scheme] = lanes;
+          const done = page.locator('[data-kanban-board] [data-status="done"]').first();
+          await done.screenshot({ path: path.join(PNG_DIR, `${STAMP}-1440-narrow-${scheme}.png`) });
+          await page.locator('[data-kanban-board] [data-status="blocked"]').first().screenshot({ path: path.join(PNG_DIR, `${STAMP}-1440-narrow-blocked-${scheme}.png`) });
+          await page.locator(card("t-chain-wide")).scrollIntoViewIfNeeded();
+          await page.locator(card("t-chain-wide")).screenshot({ path: path.join(PNG_DIR, `${STAMP}-1440-wide-${scheme}.png`) });
+          if (STAMP === "before") { expect(pageErrors).toEqual([]); continue; }
+
+          const fail = (text: string) => failures.push(`${scheme}: ${text}`);
+          for (const task of NARROW) failures.push(...stageChainFailures(`${scheme} ${task}`, lanes[task]!));
+          const through = lanes["t-chain-through"]!;
+          const order = through.steps.slice().sort((a, b) => a.top - b.top).map((step) => step.stage);
+          if (order.join() !== "build,critique,critique-fix,review") fail(`t-chain-through: drawn order ${order.join()}`);
+          const operator = lanes["t-chain-operator"]!;
+          if (operator.steps.length !== 3 || byStage(operator, "review-fix").kind !== "branch") fail("t-chain-operator: expected build, review and the review-fix branch");
+          /* A name too long for the lane wraps inside its pill. */
+          const long = lanes["t-chain-long"]!.steps.find((step) => step.stage.startsWith("confirm"))!;
+          if (long.nameLines < 2) fail(`t-chain-long: the long name is on ${long.nameLines} line(s), expected it wrapped`);
+
+          /* The wide lane keeps its row: a horizontal chain, its arrows, no rail. */
+          const wide = lanes["t-chain-wide"]!;
+          if (wide.width < 380) fail(`t-chain-wide: the lane is ${wide.width} px wide, expected a wide one`);
+          if (wide.direction !== "row") fail(`t-chain-wide: the chain is ${wide.direction}, expected row`);
+          for (const step of wide.steps.slice(1, 2)) if (step.arrow !== "inline" && step.arrow !== "block" && step.arrow !== "flex") fail(`t-chain-wide/${step.stage}: the arrow is ${step.arrow}`);
+          for (const step of wide.steps) {
+            if (step.before.content !== "none" && step.before.content !== "normal") fail(`t-chain-wide/${step.stage}: draws a rail`);
+            if (step.after.content !== "none" && step.after.content !== "normal") fail(`t-chain-wide/${step.stage}: draws an elbow`);
+          }
+          if (Math.abs(wide.steps[0]!.top - wide.steps[1]!.top) > 1) fail("t-chain-wide: the main stages are not on one row");
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.mkdirSync("evidence/stage-chain-vertical", { recursive: true });
+    fs.writeFileSync(`evidence/stage-chain-vertical/${STAMP}.json`, `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 180_000);
 });
