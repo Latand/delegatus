@@ -57,6 +57,7 @@ let routeRequests: { method: string; pathname: string }[] = [];
 let service: SelfUpdateService | null = null;
 let releaseTarget: { revision: string } | null = { revision: RELEASE };
 let heldAutoAnswer: { applied(): void; release: Promise<void>; used: boolean } | null = null;
+let heldSnapshotHealth: { entered(): void; release: Promise<void>; used: boolean; skip: number } | null = null;
 const saved: Record<string, string | undefined> = {};
 
 beforeAll(() => {
@@ -109,6 +110,7 @@ beforeEach(() => {
   setSelfUpdateServiceForTests(service);
   routeRequests = [];
   heldAutoAnswer = null;
+  heldSnapshotHealth = null;
 });
 
 afterEach(() => {
@@ -121,6 +123,7 @@ afterEach(() => {
   }
   fs.rmSync(sandbox, { recursive: true, force: true });
   heldAutoAnswer = null;
+  heldSnapshotHealth = null;
 });
 
 function serviceDeps(dir: string): ServiceDeps {
@@ -138,7 +141,18 @@ function serviceDeps(dir: string): ServiceDeps {
     createRunner: () => { throw new Error("no runner in managed mode"); },
     requestRestart: () => { throw new Error("no restart in this fixture"); },
     processAlive: () => true,
-    hostHealth: async () => null,
+    hostHealth: async () => {
+      if (heldSnapshotHealth && heldSnapshotHealth.skip > 0) {
+        heldSnapshotHealth.skip -= 1;
+        return null;
+      }
+      if (heldSnapshotHealth && !heldSnapshotHealth.used) {
+        heldSnapshotHealth.used = true;
+        heldSnapshotHealth.entered();
+        await heldSnapshotHealth.release;
+      }
+      return null;
+    },
     requestDeployment: async () => { throw new Error("no deployment in this fixture"); },
     readDeployment: async () => null,
     findDeploymentByIdempotencyKey: async () => null,
@@ -334,6 +348,59 @@ test("a lost downstream answer cannot replay a seat switch over a newer operator
   expect(view.history?.filter((entry) => entry.kind === "auto-on")).toHaveLength(1);
   expect(view.history?.slice(0, 2).map((entry) => entry.kind)).toEqual(["auto-off", "auto-on"]);
   expect(posts().filter((request) => request.pathname === "/api/self-update/auto")).toHaveLength(3);
+});
+
+test("a newer operator disable wins while the seat is building its switch snapshot", async () => {
+  let entered!: () => void;
+  let resume!: () => void;
+  const healthEntered = new Promise<void>((resolve) => { entered = resolve; });
+  const releaseHealth = new Promise<void>((resolve) => { resume = resolve; });
+  heldSnapshotHealth = { entered, release: releaseHealth, used: false, skip: 1 };
+  const opened = await session(SEAT);
+  try {
+    const seatEnable = opened.call({ clientRequestId: "overlapping-seat-enable", enabled: true });
+    await healthEntered;
+    expect(await dialogSwitch({ enabled: false })).toBe(202);
+    resume();
+    const result = await seatEnable;
+    expect(result.failed).toBe(true);
+    expect(result.payload).toMatchObject({ ok: false });
+    expect(result.payload.error).toContain("newer automatic update switch");
+  } finally {
+    resume();
+    await opened.close();
+  }
+
+  const view = await dialog();
+  expect(view.auto).toMatchObject({ enabled: false, changedBy: { kind: "operator", conversationId: null, via: "dialog" } });
+  expect(JSON.parse(fs.readFileSync(autoFile(), "utf8"))).toMatchObject({ enabled: false, changedBy: { kind: "operator", via: "dialog" } });
+  expect(view.history?.map((entry) => [entry.kind, entry.by, entry.writer?.via])).toEqual([["auto-off", "operator", "dialog"]]);
+});
+
+test("a switch crossing history compaction replays after service reconstruction without changing newer state", async () => {
+  const historyFile = path.join(sandbox, "self-update", "history.jsonl");
+  fs.mkdirSync(path.dirname(historyFile), { recursive: true });
+  const rows = Array.from({ length: 1_000 }, (_, index) => JSON.stringify({ at: new Date(index * 1_000).toISOString(), by: "operator", kind: "restart-web", target: String(index), from: null, outcome: "done" }));
+  fs.writeFileSync(historyFile, `${rows.join("\n")}\n`);
+
+  const request = { clientRequestId: "seat-off-at-compaction", enabled: false };
+  const first = await once(SEAT, request);
+  expect(first.failed).toBe(false);
+  expect(first.payload).toMatchObject({ enabled: false, changedBy: { kind: "seat", conversationId: SEAT_ID } });
+  const compactedRows = fs.readFileSync(historyFile, "utf8").trim().split("\n");
+  expect(compactedRows).toHaveLength(500);
+  expect((await dialog()).history?.filter((entry) => entry.kind === "auto-off" && entry.writer?.conversationId === SEAT_ID)).toHaveLength(1);
+
+  expect(await dialogSwitch({ enabled: true })).toBe(202);
+  service!.stop();
+  service = new SelfUpdateService(serviceDeps(path.join(sandbox, "self-update")));
+  setSelfUpdateServiceForTests(service);
+  const replay = await once(SEAT, request);
+  expect(replay.failed).toBe(false);
+  expect(replay.payload).toMatchObject({ enabled: false, changedBy: { kind: "seat", conversationId: SEAT_ID } });
+  expect(replay.payload.changedAt).toBe(first.payload.changedAt);
+  expect((await dialog()).auto).toMatchObject({ enabled: true, changedBy: { kind: "operator", conversationId: null, via: "dialog" } });
+  expect(JSON.parse(fs.readFileSync(autoFile(), "utf8"))).toMatchObject({ enabled: true, changedBy: { kind: "operator", via: "dialog" } });
 });
 
 test.each(["history", "setting"] as const)("a failed %s persistence leaves the MCP switch and dialog view unchanged", async (failure) => {

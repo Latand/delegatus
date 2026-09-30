@@ -102,10 +102,10 @@ export interface ServiceDeps {
 /** A refusal carries a code the client words; `error` is the same in
     English for API readers and logs, and `detail` is machine output (the
     runtime host's own refusal). */
-export type ActionResult = { ok: true; replaySnapshot?: Snapshot } | { ok: false; status: number; code: RefusalCode | "auto-persistence-failed"; error: string; detail?: string };
+export type ActionResult = { ok: true; replaySnapshot?: Snapshot } | { ok: false; status: number; code: RefusalCode | "auto-persistence-failed" | "auto-switch-superseded"; error: string; detail?: string };
 type DeploymentResult = ActionResult & { deliveryUncertain?: boolean };
 
-export function refuse(status: number, code: RefusalCode | "auto-persistence-failed", error: string, detail?: string): ActionResult {
+export function refuse(status: number, code: RefusalCode | "auto-persistence-failed" | "auto-switch-superseded", error: string, detail?: string): ActionResult {
   return { ok: false, status, code, error, ...(detail ? { detail } : {}) };
 }
 
@@ -159,6 +159,8 @@ export class SelfUpdateService {
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private deploymentWatch: ReturnType<typeof setInterval> | null = null;
   private auto: AutoState;
+  private autoSwitchSequence = 0;
+  private committedAutoSwitchSequence = 0;
   private autoTimer: ReturnType<typeof setInterval> | null = null;
   private autoRunning = false;
   private autoBlockers: QuietBlockers | null = null;
@@ -216,6 +218,7 @@ export class SelfUpdateService {
       Each write is recorded with its writer, on the setting and in the
       history the dialog shows. */
   async setAuto(enabled: boolean, writer: AutoWriter = DIALOG_WRITER, requestId?: string): Promise<ActionResult> {
+    const sequence = ++this.autoSwitchSequence;
     const receiptId = requestId ? createHash("sha256").update(requestId).digest("hex") : undefined;
     if (receiptId) {
       const previous = findAutoSwitchRequest(this.historyFile, receiptId);
@@ -232,6 +235,17 @@ export class SelfUpdateService {
     const at = new Date(this.deps.now()).toISOString();
     const previousAuto = this.auto;
     const nextAuto = { ...previousAuto, enabled, changedAt: at, changedBy: writer, off: enabled ? null : previousAuto.off, quietSince: null };
+    let replaySnapshot: Snapshot;
+    try {
+      // Snapshot construction may await host health. Prepare it before any
+      // durable write, then let the latest completed switch own the commit.
+      replaySnapshot = await this.buildSnapshot(nextAuto);
+    } catch (error) {
+      return refuse(500, "auto-persistence-failed", "Automatic update setting could not be recorded", error instanceof Error ? error.message : undefined);
+    }
+    if (this.committedAutoSwitchSequence > sequence) {
+      return refuse(409, "auto-switch-superseded", "A newer automatic update switch has already been applied");
+    }
     let previousAutoFile: Buffer | null;
     let previousHistoryFile: Buffer | null;
     try {
@@ -240,14 +254,13 @@ export class SelfUpdateService {
     } catch (error) {
       return refuse(500, "auto-persistence-failed", "Automatic update setting could not be recorded", error instanceof Error ? error.message : undefined);
     }
-    let replaySnapshot: Snapshot;
     try {
       writeAuto(this.autoFile, nextAuto);
       appendHistory(this.historyFile, { at, by: writer.kind === "seat" ? "seat" : "operator", kind: enabled ? "auto-on" : "auto-off",
         target: this.slice.available?.sha ?? "", from: null, outcome: "done", writer, ...(receiptId ? { requestId: receiptId } : {}) });
-      replaySnapshot = await this.buildSnapshot(nextAuto);
       if (receiptId) storeAutoSwitchResponse(this.historyFile, receiptId, replaySnapshot);
       this.auto = nextAuto;
+      this.committedAutoSwitchSequence = sequence;
     } catch (error) {
       this.auto = previousAuto;
       try { restoreFile(this.autoFile, previousAutoFile); } catch { /* keep the original write failure */ }

@@ -21,19 +21,24 @@ export interface HistoryEntry {
   /** The response snapshot returned for the first delivery of that switch. */
   response?: unknown;
 }
-export function readHistory(file: string, limit = 20): HistoryEntry[] {
+function readPersistedHistory(file: string): HistoryEntry[] {
   try {
     return readFileSync(file, "utf8").split("\n").flatMap((line) => {
       try {
         const value = JSON.parse(line) as HistoryEntry;
-        if (!value || typeof value.at !== "string" || typeof value.kind !== "string") return [];
-        const visible = { ...value };
-        delete visible.requestId;
-        delete visible.response;
-        return [visible];
+        return value && typeof value.at === "string" && typeof value.kind === "string" ? [value] : [];
       } catch { return []; }
-    }).slice(-limit).reverse();
+    });
   } catch { return []; }
+}
+
+export function readHistory(file: string, limit = 20): HistoryEntry[] {
+  return readPersistedHistory(file).slice(-limit).reverse().map((entry) => {
+    const visible = { ...entry };
+    delete visible.requestId;
+    delete visible.response;
+    return visible;
+  });
 }
 
 export function findAutoSwitchRequest(file: string, requestId: string): HistoryEntry | null {
@@ -76,7 +81,7 @@ export function appendHistory(file: string, entry: HistoryEntry): void {
   mkdirSync(dirname(file), { recursive: true });
   appendFileSync(file, `${JSON.stringify(entry)}\n`);
   if (readFileSync(file, "utf8").split("\n").length - 1 > 1_000) {
-    const latest = readHistory(file, 500).reverse();
+    const latest = readPersistedHistory(file).slice(-500);
     const temporary = `${file}.${process.pid}.tmp`;
     writeFileSync(temporary, latest.map((item) => JSON.stringify(item)).join("\n") + "\n");
     renameSync(temporary, file);
