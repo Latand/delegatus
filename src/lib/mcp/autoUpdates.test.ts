@@ -12,6 +12,7 @@ import { GET as snapshotRoute } from "@/app/api/self-update/route";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV } from "@/lib/agent/spawnPolicy";
+import type { ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import {
   productionViewerControlDependencies,
   viewerMcpBindings,
@@ -20,7 +21,9 @@ import {
   type ViewerMcpDomainDependencies,
 } from "@/lib/mcp/bindings";
 import { MemoryMcpReceiptStore, createMcpToolService, createViewerMcpServer } from "@/lib/mcp/server";
+import { initialAuto, writeAuto } from "@/lib/selfUpdate/auto";
 import { setSelfUpdateServiceForTests } from "@/lib/selfUpdate/instance";
+import { writeManagedRecord } from "@/lib/selfUpdate/managed";
 import { SelfUpdateService, type ServiceDeps } from "@/lib/selfUpdate/service";
 import type { Snapshot } from "@/lib/selfUpdate/types";
 
@@ -58,6 +61,7 @@ let service: SelfUpdateService | null = null;
 let releaseTarget: { revision: string } | null = { revision: RELEASE };
 let heldAutoAnswer: { applied(): void; release: Promise<void>; used: boolean } | null = null;
 let heldSnapshotHealth: { entered(): void; release: Promise<void>; used: boolean; skip: number } | null = null;
+let deploymentAnswer: ViewerDeploymentStatus | null = null;
 const saved: Record<string, string | undefined> = {};
 
 beforeAll(() => {
@@ -111,6 +115,7 @@ beforeEach(() => {
   routeRequests = [];
   heldAutoAnswer = null;
   heldSnapshotHealth = null;
+  deploymentAnswer = null;
 });
 
 afterEach(() => {
@@ -124,6 +129,7 @@ afterEach(() => {
   fs.rmSync(sandbox, { recursive: true, force: true });
   heldAutoAnswer = null;
   heldSnapshotHealth = null;
+  deploymentAnswer = null;
 });
 
 function serviceDeps(dir: string): ServiceDeps {
@@ -154,7 +160,7 @@ function serviceDeps(dir: string): ServiceDeps {
       return null;
     },
     requestDeployment: async () => { throw new Error("no deployment in this fixture"); },
-    readDeployment: async () => null,
+    readDeployment: async () => deploymentAnswer,
     findDeploymentByIdempotencyKey: async () => null,
     releaseTarget: () => releaseTarget,
     prepareCheckRepo: async () => path.join(dir, "check.git"),
@@ -241,6 +247,27 @@ async function dialogSwitch(body: Record<string, unknown>): Promise<number> {
 }
 
 const autoFile = () => path.join(sandbox, "self-update", "auto.json");
+function seedTerminalRollback(): void {
+  const clientKey = "rollback-case";
+  const deploymentId = "rollback-deployment";
+  const idempotencyKey = `self-update-${RELEASE.slice(0, 12)}-${clientKey}`;
+  const at = "2026-09-30T10:00:00.000Z";
+  fs.mkdirSync(path.dirname(autoFile()), { recursive: true });
+  writeAuto(autoFile(), { ...initialAuto(), enabled: true,
+    managedPending: { target: { sha: RELEASE, short: RELEASE.slice(0, 7), version: "", date: "" }, clientKey, at } });
+  writeManagedRecord(path.join(sandbox, "self-update", "managed.json"), {
+    deploymentId, idempotencyKey, trigger: "auto", target: RELEASE, targetShort: RELEASE.slice(0, 7), targetVersion: null,
+    requestedAt: at, observed: { image: at }, lastStep: "image", finishedAt: null, phase: "building", error: null, servingProgress: null,
+  });
+  deploymentAnswer = {
+    deploymentId, idempotencyKey, requestedRevision: RELEASE, revision: RELEASE, phase: "rolled-back", terminal: true,
+    candidate: null, previous: null, mcpRuntime: { candidate: null, previous: null, publications: [], health: [] }, health: [],
+    error: "candidate health failed", owner: { pid: 102, startIdentity: null }, createdAt: at, updatedAt: at, revisionNumber: 2,
+  } as unknown as ViewerDeploymentStatus;
+  service!.stop();
+  service = new SelfUpdateService(serviceDeps(path.join(sandbox, "self-update")));
+  setSelfUpdateServiceForTests(service);
+}
 const posts = () => routeRequests.filter((request) => request.method === "POST");
 
 test("any caller reads the state the Update dialog shows, and a read changes nothing", async () => {
@@ -278,6 +305,30 @@ test("the Delegatus seat turns automatic updates on and off, and the dialog and 
     ["auto-off", "seat", SEAT_ID],
     ["auto-on", "seat", SEAT_ID],
   ]);
+});
+
+test("a disable during snapshot preparation preserves and returns a completed rollback", async () => {
+  seedTerminalRollback();
+  const result = await once(SEAT, { clientRequestId: "disable-after-rollback", enabled: false });
+  expect(result.failed).toBe(false);
+  expect(result.payload).toMatchObject({ enabled: false, off: { reason: "candidate health failed" }, phase: "idle" });
+  const durable = JSON.parse(fs.readFileSync(autoFile(), "utf8"));
+  expect(durable).toMatchObject({ enabled: false, off: { reason: "candidate health failed" }, managedPending: null });
+  expect(durable.changedBy).toMatchObject({ kind: "seat", conversationId: SEAT_ID, via: "mcp" });
+  const view = await dialog();
+  expect(view.auto).toMatchObject({ enabled: false, off: { reason: "candidate health failed" }, phase: "idle" });
+  expect(JSON.parse(fs.readFileSync(autoFile(), "utf8"))).toMatchObject({ off: { reason: "candidate health failed" }, managedPending: null });
+});
+
+test("an ordinary MCP read returns the rollback state refreshed by that same read", async () => {
+  seedTerminalRollback();
+  const result = await once(WORKER, { clientRequestId: "read-observes-rollback" });
+  expect(result.failed).toBe(false);
+  expect(result.payload).toMatchObject({ enabled: false, off: { reason: "candidate health failed" }, phase: "idle" });
+  expect(JSON.parse(fs.readFileSync(autoFile(), "utf8"))).toMatchObject({
+    enabled: false, off: { reason: "candidate health failed" }, managedPending: null,
+  });
+  expect((await dialog()).auto).toMatchObject({ enabled: false, off: { reason: "candidate health failed" }, phase: "idle" });
 });
 
 test("the operator's own session writes, recorded as the operator", async () => {

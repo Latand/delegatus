@@ -234,18 +234,24 @@ export class SelfUpdateService {
     if (enabled && availability !== "available") return refuse(409, "auto-unavailable", `Automatic updates unavailable: ${availability}`);
     const at = new Date(this.deps.now()).toISOString();
     const previousAuto = this.auto;
-    const nextAuto = { ...previousAuto, enabled, changedAt: at, changedBy: writer, off: enabled ? null : previousAuto.off, quietSince: null };
+    const requestedAuto = { ...previousAuto, enabled, changedAt: at, changedBy: writer, off: enabled ? null : previousAuto.off, quietSince: null };
     let replaySnapshot: Snapshot;
     try {
-      // Snapshot construction may await host health. Prepare it before any
-      // durable write, then let the latest completed switch own the commit.
-      replaySnapshot = await this.buildSnapshot(nextAuto);
+      // Snapshot construction can refresh deployment state and settle an
+      // automatic rollback. Prepare first; the commit below overlays this
+      // request on whatever controller state that work left current.
+      replaySnapshot = await this.buildSnapshot(requestedAuto);
     } catch (error) {
       return refuse(500, "auto-persistence-failed", "Automatic update setting could not be recorded", error instanceof Error ? error.message : undefined);
     }
     if (this.committedAutoSwitchSequence > sequence) {
       return refuse(409, "auto-switch-superseded", "A newer automatic update switch has already been applied");
     }
+    const currentAuto = this.auto;
+    const autoBeforeCommit = currentAuto;
+    const nextAuto = { ...currentAuto, enabled, changedAt: at, changedBy: writer, off: enabled ? null : currentAuto.off, quietSince: null };
+    replaySnapshot.auto = this.autoView(decision, replaySnapshot, nextAuto);
+    replaySnapshot.meta.pollMinutes = nextAuto.enabled ? 15 : this.deps.pollMinutes;
     let previousAutoFile: Buffer | null;
     let previousHistoryFile: Buffer | null;
     try {
@@ -262,7 +268,7 @@ export class SelfUpdateService {
       this.auto = nextAuto;
       this.committedAutoSwitchSequence = sequence;
     } catch (error) {
-      this.auto = previousAuto;
+      this.auto = autoBeforeCommit;
       try { restoreFile(this.autoFile, previousAutoFile); } catch { /* keep the original write failure */ }
       try { restoreFile(this.historyFile, previousHistoryFile); } catch { /* keep the original write failure */ }
       return refuse(500, "auto-persistence-failed", "Automatic update setting could not be recorded", error instanceof Error ? error.message : undefined);
@@ -989,10 +995,10 @@ export class SelfUpdateService {
   }
 
   async snapshot(): Promise<Snapshot> {
-    return this.buildSnapshot(this.auto);
+    return this.buildSnapshot();
   }
 
-  private async buildSnapshot(auto: AutoState): Promise<Snapshot> {
+  private async buildSnapshot(replayAuto?: AutoState): Promise<Snapshot> {
     const decision = await this.decide();
     const now = this.deps.now();
     const base = {
@@ -1017,6 +1023,10 @@ export class SelfUpdateService {
       processes: { web: { ...stoppedProcess(), tail: [] }, runtimeHost: { ...stoppedProcess(), tail: [] } },
       busy: null,
     };
+    // Ordinary reads use the controller state after awaited deployment
+    // refreshes. Receipt snapshots pass replayAuto to preserve their original
+    // immutable response across later changes.
+    const auto = replayAuto ?? this.auto;
     snapshot.auto = this.autoView(decision, snapshot, auto);
     snapshot.history = readHistory(this.historyFile);
     snapshot.meta.pollMinutes = auto.enabled ? 15 : this.deps.pollMinutes;
