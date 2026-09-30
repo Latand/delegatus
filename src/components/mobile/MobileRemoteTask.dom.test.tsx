@@ -179,6 +179,15 @@ test("the task screen draws each remote lane in a remote frame with no control, 
   expect(frame.querySelectorAll("[data-answer-action]")).toHaveLength(0);
 });
 
+test("a remote task's screen does not say it has no agents while the peer's lane runs, and a local task's screen still does", async () => {
+  const noAgents = translate("en", "mobile2.kanban.noAgents");
+  const remote = await mountTask(feed([lane("running")]), remoteTask());
+  expect(q(remote, "[data-phone-task-remote-lanes]")).not.toBeNull();
+  expect(remote.textContent).not.toContain(noAgents);
+  const local = await mountTask(feed([]), task(LOCAL_ID, "A local task"));
+  expect(local.textContent).toContain(noAgents);
+});
+
 test("a local task's screen keeps its + Agent and draws no host pill", async () => {
   const host = await mountTask(feed([]), task(LOCAL_ID, "A local task"));
   expect(q(host, "[data-phone-task-add-agent]")).not.toBeNull();
