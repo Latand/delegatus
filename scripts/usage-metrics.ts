@@ -205,13 +205,17 @@ async function canonical(path: string): Promise<string> {
 }
 const inside = (root: string, path: string) => { const r = relative(root, path); return !r || (!r.startsWith("..") && !isAbsolute(r)); };
 
-export async function appendHistory(path: string, report: Report): Promise<void> {
+export async function appendHistory(path: string, report: Report, systemHome = homedir()): Promise<void> {
   const target = await canonical(resolve(path));
   const repo = await canonical(resolve(import.meta.dir, ".."));
-  const home = process.env.HOME || homedir();
-  const homeConfig = join(home, ".config");
-  const xdgConfig = process.env.XDG_CONFIG_HOME || homeConfig;
-  const protectedRoots = [repo, ...[homeConfig, xdgConfig].flatMap(root => APP_DIR_NAMES.map(name => join(root, name))), join(home, ".claude/viewer-state"), join(home, ".claude/viewer-inbox"), process.env.LLV_STATE_DIR].filter((p): p is string => !!p);
+  const homes = [...new Set([systemHome, process.env.HOME].filter((home): home is string => !!home))];
+  const configRoots = [...new Set([...homes.map(home => join(home, ".config")), process.env.XDG_CONFIG_HOME || join(homedir(), ".config")])];
+  const protectedRoots = [
+    repo,
+    ...configRoots.flatMap(root => APP_DIR_NAMES.map(name => join(root, name))),
+    ...homes.flatMap(home => [join(home, ".claude/viewer-state"), join(home, ".claude/viewer-inbox")]),
+    process.env.LLV_STATE_DIR,
+  ].filter((p): p is string => !!p);
   for (const root of protectedRoots) if (inside(await canonical(resolve(root)), target)) throw new Error("unsafe history location");
   // Also refuse another checkout. A home-level dotfiles repository must not
   // disallow the specification's default ~/.local/share history location.

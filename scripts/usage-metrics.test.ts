@@ -214,6 +214,51 @@ test("append-only history retains all GitHub days and window uniques and refuses
   }
 });
 
+test("history protects passwd and environment homes when they differ", async () => {
+  const scratch = await mkdtemp("/var/tmp/usage-metrics-split-home-");
+  const passwdHome = join(scratch, "passwd-home");
+  const envHome = join(scratch, "env-home");
+  const xdg = join(envHome, ".config");
+  const originalState = process.env.LLV_STATE_DIR;
+  const originalHome = process.env.HOME;
+  const originalXdg = process.env.XDG_CONFIG_HOME;
+  try {
+    process.env.HOME = envHome;
+    process.env.XDG_CONFIG_HOME = xdg;
+    delete process.env.LLV_STATE_DIR;
+    const report = await collect(parseOptions([], now), fixtureIO(), now);
+
+    for (const home of [passwdHome, envHome]) {
+      for (const appName of APP_DIR_NAMES) {
+        const tasks = join(home, ".config", appName, "state", "tasks.json");
+        await mkdir(join(home, ".config", appName, "state"), { recursive: true });
+        await writeFile(tasks, "[]", "utf8");
+        await expect(appendHistory(tasks, report, passwdHome)).rejects.toThrow("unsafe history location");
+        expect(await readFile(tasks, "utf8")).toBe("[]");
+      }
+      for (const legacyName of ["viewer-state", "viewer-inbox"]) {
+        const legacyFile = join(home, ".claude", legacyName, "tasks.json");
+        await mkdir(join(home, ".claude", legacyName), { recursive: true });
+        await writeFile(legacyFile, "[]", "utf8");
+        await expect(appendHistory(legacyFile, report, passwdHome)).rejects.toThrow("unsafe history location");
+        expect(await readFile(legacyFile, "utf8")).toBe("[]");
+      }
+    }
+
+    const external = join(scratch, "external", "history.jsonl");
+    await appendHistory(external, report, passwdHome);
+    expect((await readFile(external, "utf8")).trim()).toBe(JSON.stringify(report));
+  } finally {
+    if (originalState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = originalState;
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = originalXdg;
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
 test("date and option validation rejects invalid or ambiguous windows", () => {
   for (const args of [["--from", "2026-02-30"], ["--to", "2027-01-01"], ["--from", "2026-01-01"], ["--history"], ["--unknown"], ["--date", "2026-08-31"]]) expect(() => parseOptions(args, now)).toThrow();
   expect(parseOptions([], now).history).toEndWith(".local/share/delegatus-metrics/history.jsonl");
