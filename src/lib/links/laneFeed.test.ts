@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { summarizePipeline } from "@/components/kanban/kanbanModel";
+import { summarizePipeline } from "@/components/kanban/pipelineSummary";
 import { buildPipeline } from "@/lib/pipelines/store";
 import type { Pipeline, PipelineStage, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -153,6 +153,27 @@ test("200 agents and 200 lanes reset in pages of at most 50 entries and 80 KB, a
   expect(pages).toBe(8);
   expect(receivedAgentRows(id)).toHaveLength(200);
   expect(receivedLaneRows(id)).toHaveLength(200);
+});
+
+test("a receiver holds at most 200 lane rows a link, the newest, through a reset of 250 and then churn", () => {
+  const base = laneRowsFor(() => [three("5e0a41c2", [taskId(1)])], [task(1)], projects, owns)[0]!;
+  const row = (n: number): LaneRow => ({ ...base, k: `l:${hex(n)}`, at: 1_700_000_000_000 + n });
+  const id = "lane-cap-receiver";
+  const send = (rows: unknown[], extra: { reset?: boolean; more?: boolean; version: number }) =>
+    acceptAgents(id, { cursor: encodeCursor({ epoch: "00000000000000cc", version: extra.version }), rows, ...(extra.reset ? { reset: true } : {}), ...(extra.more ? { more: true } : {}) }, projects);
+  for (let page = 0; page < 5; page++) {
+    expect(send(Array.from({ length: 50 }, (_v, n) => row(page * 50 + n + 1)), { reset: page === 0, more: page < 4, version: 1 })).toBe(true);
+  }
+  expect(receivedLaneRows(id)).toHaveLength(200);
+  expect(new Set(receivedLaneRows(id).map((lane) => lane.k)).has(`l:${hex(1)}`)).toBe(false);
+  expect(new Set(receivedLaneRows(id).map((lane) => lane.k)).has(`l:${hex(250)}`)).toBe(true);
+  // Churn: fifty lanes leave, then fifty arrive; the held set returns to the cap and never passes it.
+  const gone = Array.from({ length: 50 }, (_v, n) => ({ k: `l:${hex(n + 51)}`, gone: true }));
+  expect(send(gone, { version: 2 })).toBe(true);
+  expect(receivedLaneRows(id)).toHaveLength(150);
+  expect(send(Array.from({ length: 50 }, (_v, n) => row(n + 251)), { version: 3 })).toBe(true);
+  expect(receivedLaneRows(id)).toHaveLength(200);
+  expect(Buffer.byteLength(JSON.stringify(receivedLaneRows(id)))).toBeLessThanOrEqual(200 * MAX_LANE_ROW_BYTES);
 });
 
 test("a page stops before the entry that would pass 80 KB, and every entry still arrives", () => {

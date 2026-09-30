@@ -320,10 +320,17 @@ function LooseLine({ item, now }: { item: PhoneCard; now: number }) {
 }
 
 /** What agents do that the pipeline line does not already say (§3.4). */
-function AgentsLine({ item, nowMs }: { item: PhoneCard; nowMs: number }) {
+function AgentsLine({ item, nowMs, remote }: { item: PhoneCard; nowMs: number; remote: boolean }) {
   const { t } = useLocale();
   const agents = item.agents;
   if (!agents) return null;
+  /* A synced task has no local agents by design: the peer runs them, and its
+     lane above says so. The word "no agents yet" would contradict that lane,
+     so a remote card keeps the working count and the age and drops the word
+     (the desktop card does the same). */
+  const word = agents.conversations ? t("mobile2.kanban.agents", { count: agents.conversations }) : remote ? null : t("mobile2.kanban.noAgents");
+  const lead = Boolean(agents.working || word);
+  if (!lead && agents.atMs <= 0) return null;
   return (
     <span data-phone-card-agents="" className="flex min-w-0 items-center gap-[5px] text-label tabular-nums text-muted">
       {agents.working ? (
@@ -332,11 +339,11 @@ function AgentsLine({ item, nowMs }: { item: PhoneCard; nowMs: number }) {
             <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-success motion-safe:animate-pulse" />
             {t("mobile2.kanban.working", { count: agents.working })}
           </span>
-          <Sep />
+          {word || agents.atMs > 0 ? <Sep /> : null}
         </>
       ) : null}
-      <span className="shrink-0">{agents.conversations ? t("mobile2.kanban.agents", { count: agents.conversations }) : t("mobile2.kanban.noAgents")}</span>
-      {agents.atMs > 0 ? <><Sep /><span className="shrink-0">{ageText(t, agents.atMs, nowMs)}</span></> : null}
+      {word ? <span className="shrink-0">{word}</span> : null}
+      {agents.atMs > 0 ? <>{word ? <Sep /> : null}<span className="shrink-0">{ageText(t, agents.atMs, nowMs)}</span></> : null}
     </span>
   );
 }
@@ -455,7 +462,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
         <PipelineBlock summary={item.shown} density="card" nowMs={nowMs} taskTitle={item.kind === "task" ? title : null} aside={othersText(t, item)} />
       ) : null}
       {loose ? <LooseLine item={item} now={now} /> : <AskLine item={item} />}
-      <AgentsLine item={item} nowMs={nowMs} />
+      <AgentsLine item={item} nowMs={nowMs} remote={remote !== null} />
       <ClearedLine item={item} nowMs={nowMs} />
       {remote ? <RemoteCardLines remote={remote} title={title} nowMs={nowMs} withLane={!item.shown} /> : null}
     </>

@@ -145,19 +145,27 @@ prompt wrote crosses.
 | `tk` | the tasks of `p` the lane serves | 1–4 UUIDs |
 | `s` | pipeline state | `provisioning`, `running`, `needs_decision`, `needs_review`, `paused`, `completed`, `closed` (drafts are not published) |
 | `at` | when the lane last moved, ms (`pipelineMovedAtMs`) | safe integer ≥ 0 |
-| `g` | stages in the owner's chip order: pass path, other stages, fail-only branches (`summarizePipeline`, `src/components/kanban/kanbanModel.ts:344`) | 1–8 entries (`MAX_PIPELINE_STAGES`, `src/lib/pipelines/limits.ts:16`) |
+| `g` | stages in the owner's chip order: pass path, other stages, fail-only branches (`summarizePipeline`, `src/components/kanban/pipelineSummary.ts`) | 1–8 entries (`MAX_PIPELINE_STAGES`, `src/lib/pipelines/limits.ts:16`) |
 | `g[].id` | stage id | `^[A-Za-z0-9_-]{1,64}$`, unique in the row |
 | `g[].ro` | role id, optional; the receiver names the stage from id and role as `stageDisplayName` does (`src/components/pipelines/pipelineModel.ts:804`) | same pattern |
 | `g[].lp` | `1` for a legacy `review-loop` stage | literal 1 |
-| `g[].st` | the chip state the owner's board draws (`StageChipState`, `pipelineModel.ts:176`) | 8 values |
+| `g[].st` | the chip state the owner's board draws (`StageChipState`, `src/lib/pipelines/stageChip.ts`) | 8 values |
 | `g[].n` | operational attempts; absent means none yet, and the pill draws as waiting | 1–999 |
 | `g[].r` | review rounds of a legacy review-loop stage | 1–999 |
 | `g[].b` | `1` when the stage sits off the pass path (a fail-only branch) | literal 1 |
-| `g[].f` | fail edge: target, its round limit and the rounds it fired (`KanbanLoop`, `kanbanModel.ts:73`) | `to` names a stage of `g`; `max` 1–99 (continue-review grants raise it past 9); `u` 0–99 |
+| `g[].f` | fail edge: target, its round limit and the rounds it fired (`KanbanLoop`, `pipelineSummary.ts`) | `to` names a stage of `g`; `max` 1–99 (continue-review grants raise it past 9); `u` 0–99 |
 | `g[].fc` | how many findings the latest verdict carried, a count only | 1–50, clamped by the sender (`MAX_STAGE_REPORT_FINDINGS`) |
 | `g[].e`, `g[].m` | engine and model of the stage's effective role, for the model glyph; the same identifiers agent rows already carry | `^[a-zA-Z0-9._-]{1,64}$` |
 
 A lane that leaves the feed becomes `{"k":"l:…","gone":true}`, 30 bytes.
+
+**Server-safe encoder.** The feed runs in the Viewer's server graph, so the
+encoder imports only modules that hold no React: `pipelineSummary.ts` (the
+chain `summarizePipeline` builds), `src/lib/pipelines/stageChip.ts` (the chip
+state and the attempt reads under it) and `src/lib/pipelines/laneReads.ts`
+(`pipelineMovedAtMs`, `stageFindings`). The board models re-export them, so
+every surface still reads one definition. A module that imports a hook there
+fails `next build`, which `tsc` and `bun test` do not see.
 
 **Size.** Encoded, a row is at most **4 096 bytes**: 3 783 with every string
 at 64 characters, 8 stages, every optional key and 4 tasks. Rows built from the
@@ -263,15 +271,15 @@ the old peer updates. §10 weighs this against the alternatives.
 
 | What | Budget | Held by |
 |---|---|---|
-| Idle call | **+0 B** in request and answer: no new key; the agents cursor already travels (M.9: ≤ 200 B each) | the existing idle-bytes assertions in `boardSync.test.ts` stay unchanged and green |
-| Per task, task wire | **+0 B** | `TASK_WIRE_VERSION` unchanged |
-| Per task, lanes | ≤ 3 rows: typically 0.43–0.51 KB each (≈ 1.5 KB a task), at most 4 096 B each (≤ 12 KB a task); sent once per feed reset and again only when the row changes | row bound test; a stage flip test |
-| A stage change | the changed lane row plus ≤ 300 B over all the calls it causes (the M.9 "changed task" rule applied to a lane) | measured-transport test |
-| Per link direction | ≤ 200 lane rows: ≈ 100 KB for a reset on measured shapes, ≤ 800 KB at the bounds, in pages of ≤ 50 entries and ≤ 80 KB | reset test |
-| One body | agents part ≤ 80 KB (was ≤ 75 KB); worst body ≈ 734 KB, under the 1 MiB refusal | page bound test |
-| Receiver memory | ≤ 200 rows a link: ≈ 100 KB measured shape, ≤ 800 KB bound | the M.9 memory test runs with 200 lanes a side and lane churn; heap growth < 256 KB still gates |
-| Disk, both sides | **0 B** | M.9 "remote agents on disk" check extended to lanes |
-| Idle CPU | unchanged: an unchanged registry array skips the rebuild | M.9 CPU test |
+| Idle call | **+0 B** in request and answer: no new key; the agents cursor already travels (M.9: ≤ 200 B each) | `boardSync.test.ts` "lane rows add nothing to an idle call…" (≤ 200 B each way with a lane on both sides); the idle-bytes assertions of the M.9 tests stay unchanged and green |
+| Per task, task wire | **+0 B** | no task-wire code changes; `boardSync.test.ts` "task wire v3 keeps board sync compatible with a strict v2 peer…" and "a peer at c18ab355 keeps syncing…" stay green |
+| Per task, lanes | ≤ 3 rows: typically 0.43–0.51 KB each (≈ 1.5 KB a task), at most 4 096 B each (≤ 12 KB a task); sent once per feed reset and again only when the row changes | `laneFeed.test.ts` "300 eligible lanes publish 200, … at most three a task" and "a row past the bounds is dropped alone…" (4 096 B decode bound, widest row); "lanes share the agents part…" (a row is sent again only when it changes) |
+| A stage change | the changed lane row plus ≤ 300 B over all the calls it causes (the M.9 "changed task" rule applied to a lane) | `boardSync.test.ts` "lane rows add nothing to an idle call, and one stage flip costs its row plus at most 300 bytes" |
+| Per link direction | ≤ 200 lane rows: ≈ 100 KB for a reset on measured shapes, ≤ 800 KB at the bounds, in pages of ≤ 50 entries and ≤ 80 KB | `laneFeed.test.ts` "200 agents and 200 lanes reset in pages of at most 50 entries and 80 KB…"; `boardSync.test.ts` "120 lanes reset over the real link…" |
+| One body | agents part ≤ 80 KB (was ≤ 75 KB); worst body ≈ 734 KB, under the 1 MiB refusal | `laneFeed.test.ts` "a page stops before the entry that would pass 80 KB…" |
+| Receiver memory | ≤ 200 rows a link: ≈ 100 KB measured shape, ≤ 800 KB bound | the 200-row cap in `acceptAgents` and the 4 096-byte decode bound, driven by `laneFeed.test.ts` "a receiver holds at most 200 lane rows a link…" (a reset of 250 and then churn) and "a row past the bounds…". The M.9 memory tests (`boardSync.test.ts`) hold no lanes and do not gate this row |
+| Disk, both sides | **0 B** | `boardSync.test.ts` "no prompt, spec, finding, summary, path or conversation id of a lane crosses, and a lane exchange writes no disk state" |
+| Idle CPU | unchanged: a rewritten pipeline array that changes no row sends no row | `laneFeed.test.ts` "lanes share the agents part…" (a rewritten pipeline array sends no row). The M.9 CPU test holds no lanes and does not gate this row |
 
 ### 3.7 What never crosses
 
@@ -559,8 +567,9 @@ Run touched test files by path, never whole directories against live state
    findings, summaries and stage reports all contain a sentinel string. The
    sentinel appears in no captured sync body (the harness keeps every body
    since its last reset).
-6. **No disk.** Lanes on both sides write no file and no row (the M.9 check
-   for remote agents, extended).
+6. **No disk.** Lanes on both sides write no file and no row (the lane-private
+   case of item 5, which compares the two installs' file marks before and
+   after the exchange).
 7. **Receiver projection** (a DOM test beside `PipelineBlock`). For each state
    of §7, `remoteLaneSummary` → `PipelineBlock` in task and card density
    renders without throwing, draws one pill per stage with the row's states,

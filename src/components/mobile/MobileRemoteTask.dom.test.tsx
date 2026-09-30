@@ -148,6 +148,15 @@ test("the board card of a remote task stays one button, draws the lane's card li
   expect(local.querySelector("[data-phone-card-host]")).toBeNull();
 });
 
+test("a remote card with no local conversation does not say it has no agents, and a local card still does", async () => {
+  const host = await mountBoard(feed([lane("running")]), [remoteTask(), task(LOCAL_ID, "A local task")]);
+  const noAgents = translate("en", "mobile2.kanban.noAgents");
+  const remote = q(host, `[data-phone-card="task:${REMOTE_ID}"]`)!;
+  expect(remote.textContent).not.toContain(noAgents);
+  const local = q(host, `[data-phone-card="task:${LOCAL_ID}"]`)!;
+  expect(local.querySelector("[data-phone-card-agents]")?.textContent).toContain(noAgents);
+});
+
 test("an older peer's card is marked remote from the task alone, with no lane line and no error", async () => {
   const host = await mountBoard({ agents: [], lanes: [], self: SELF, hosts: { [STAGE]: { label: "Stage", linked: true } } }, [remoteTask()]);
   const card = q(host, `[data-phone-card="task:${REMOTE_ID}"]`)!;

@@ -5,12 +5,12 @@
  * prompt, spec, finding text, summary, path or conversation id is ever read
  * into one.
  */
-import { summarizePipeline } from "@/components/kanban/kanbanModel";
-import { pipelineMovedAtMs, stageFindings } from "@/components/pipelines/pipelineBlockModel";
+import { summarizePipeline } from "@/components/kanban/pipelineSummary";
+import { pipelineMovedAtMs, stageFindings } from "@/lib/pipelines/laneReads";
 import { stageIdentity } from "@/components/kanban/stageIdentity";
 import { MAX_PIPELINE_STAGES, MAX_STAGE_REPORT_FINDINGS } from "@/lib/pipelines/limits";
 import type { Pipeline } from "@/lib/pipelines/types";
-import type { StageChipState } from "@/components/pipelines/pipelineModel";
+import type { StageChipState } from "@/lib/pipelines/stageChip";
 import type { BoardTask } from "@/lib/tasks/types";
 
 export type LaneState = "provisioning" | "running" | "needs_decision" | "needs_review" | "paused" | "completed" | "closed";
