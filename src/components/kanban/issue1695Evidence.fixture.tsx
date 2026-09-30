@@ -45,8 +45,14 @@ import type { BoardProjectStateV1 } from "@/lib/view/types";
  * or a state directory. Driven by the `issue1695*.browser.test.tsx` files.
  */
 
-const PROJECT = new URLSearchParams(location.search).get("scenario") === "linked-agents" ? `repo-${"a".repeat(32)}` : "atlas";
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
+/* A task another machine runs (docs/design/synced-task-card.md): four tasks owned by the linked stage
+   install, one of them with no lane (an older peer), beside the board's own local ones. The page
+   answers nothing about them; the driver serves `/api/links/agents` with this install's id, the host
+   and the lanes it publishes. */
+const SYNCED = SCENARIO === "synced-task";
+const PROJECT = SCENARIO === "linked-agents" || SYNCED ? `repo-${"a".repeat(32)}` : "atlas";
+const STAGE_INSTALL = "22222222-2222-4222-8222-222222222222";
 const SELF_UPDATE_RELOAD = new URLSearchParams(location.search).has("self-update-reload");
 let presenceAnswers = 0;
 /* #2102: stored icons on some tasks; the others draw the title's suggestion or the quiet default. */
@@ -71,7 +77,7 @@ const STAGES = SCENARIO === "stages" || ACCOUNTS || AGENT_REPORT;
 const FLAT = SCENARIO === "pipeline-block";
 const UK = localStorage.getItem("llv_lang") === "uk";
 const L = (en: string, uk: string) => (UK ? uk : en);
-const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT;
+const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT || SYNCED;
 /* #1846: `&runtime=structured` answers the runtime snapshot with one structured session, for the running
    verify conversation, so its composer's runtime pill and the board's account chip both draw. */
 /* The seat-noise scenario (docs/design/seat-panel-noise.md) seats the orchestrator on a structured host too,
@@ -1388,6 +1394,12 @@ const tasks: BoardTask[] = [
   task("t-queue", "done", "Preserve native queue recovery through journal compaction", "", 4 * 24 * 60 * MIN),
   task("t-old", "done", "An empty task someone took off the board", "", 9 * 24 * 60 * MIN, [], { board: "hidden" }),
   ...(PIPELINES ? [task("t-rounds", "assigned", "Rework the retry banner until review passes", "", 12 * MIN)] : []),
+  ...(SYNCED ? [
+    task("t-rem-run", "assigned", L("Ship the synced task card", "Випустити картку синхронізованої задачі"), L("Show the other machine's stages on the card and mark it as managed there.", "Показати етапи з іншої машини на картці й позначити, що нею керують там."), 6 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
+    task("t-rem-wait", "assigned", L("Answer the deploy question on the stage box", "Відповісти на питання про розгортання на стенді"), "", 14 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
+    task("t-rem-old", "assigned", L("A task from a peer that predates lane rows", "Задача від вузла, що ще не знає про рядки етапів"), "", 31 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
+    task("t-rem-done", "done", L("Publish the linked boards guide", "Опублікувати посібник зі зв’язаних дошок"), "", 3 * 60 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
+  ] : []),
   ...(MANY ? [task("t-many", "assigned", "Kanban: say what each pipeline of a task does", "Five pipelines on one card: two running, three finished.", 5 * MIN)] : []),
   ...(MARKS ? [task("t-marks", "assigned", "Say who runs each stage, and how often an edge fired", "Two pipelines: one fail edge fired twice of three, one with its budget spent.", 4 * MIN)] : []),
   ...(GLYPHS ? [

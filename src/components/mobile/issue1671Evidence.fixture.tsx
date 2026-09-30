@@ -19,7 +19,12 @@ import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 
-const PROJECT = "atlas";
+/* `?synced=1` (docs/design/synced-task-card.md §8): the kanban scene's project is a linked one
+   (a repository key), and four of its tasks run on the linked stage install. The driver serves
+   `/api/links/agents` with this install's id, the host and the lanes the stage publishes. */
+const SYNCED = new URLSearchParams(location.search).has("synced");
+const PROJECT = SYNCED ? `repo-${"a".repeat(32)}` : "atlas";
+const STAGE_INSTALL = "22222222-2222-4222-8222-222222222222";
 const SELF_UPDATE_RELOAD = new URLSearchParams(location.search).has("self-update-reload");
 let presenceAnswers = 0;
 const queueRecovery = new URLSearchParams(location.search).has("queue-recovery");
@@ -578,6 +583,16 @@ if (KANBAN) {
     kanbanTask("t-attention", "inbox", "request_attention: the target blinks, intent open opens the conversation (#1696)", { updatedAt: iso(86_400) }),
     kanbanTask("t-tray", "inbox", "Hide the Hidden tray when it holds nothing", { color: "amber", updatedAt: iso(5 * 3_600) }),
   );
+  if (SYNCED) {
+    const uk = localStorage.getItem("llv_lang") === "uk";
+    const L = (en: string, ua: string) => (uk ? ua : en);
+    kanbanTasks.push(
+      kanbanTask("t-rem-run", "assigned", L("Ship the synced task card\nShow the other machine's stages on the card and mark it as managed there.", "Випустити картку синхронізованої задачі\nПоказати етапи з іншої машини на картці й позначити, що нею керують там."), { machine: STAGE_INSTALL, updatedAt: iso(360) }),
+      kanbanTask("t-rem-wait", "assigned", L("Answer the deploy question on the stage box", "Відповісти на питання про розгортання на стенді"), { machine: STAGE_INSTALL, updatedAt: iso(840) }),
+      kanbanTask("t-rem-old", "assigned", L("A task from a peer that predates lane rows", "Задача від вузла, що ще не знає про рядки етапів"), { machine: STAGE_INSTALL, updatedAt: iso(1_860) }),
+      kanbanTask("t-rem-done", "done", L("Publish the linked boards guide", "Опублікувати посібник зі зв’язаних дошок"), { machine: STAGE_INSTALL, updatedAt: iso(3 * 3_600) }),
+    );
+  }
   if (ASKS_SCENE) {
     const asked = (title: string, role: string, gist: string, minutesAgo: number) => {
       const path = kanbanConversation(title, "settled", minutesAgo * 60);
@@ -1053,6 +1068,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({ error: "not_found" }, 404);
   }
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
+  /* The linked stage install's agents and lanes (`?synced=1`): the driver serves them. */
+  if (SYNCED && url.pathname === "/api/links/agents") return serverFetch(url.pathname + url.search);
   if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/log/provenance" && AGENT_LABEL) return json((await deliveredAgentEvidence()).provenance);
   if (url.pathname === "/api/conversation-host" && method === "POST") {

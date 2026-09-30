@@ -39,6 +39,7 @@ import { KanbanDraftContext, KanbanTaskComposer, type KanbanDraftActions } from 
 import type { CardEditField } from "./CardInlineText";
 import { KanbanCard, resurfaceText, statusLabel, TASK_COLOR_HEX } from "./KanbanCard";
 import { RemoteAgents, type RemoteAgentView } from "./RemoteAgents";
+import { remoteCardsFor, useRemoteFeed, type RemoteCard } from "./remoteFeed";
 import { MoreGlyph } from "./kanbanGlyphs";
 import { buildKanbanModel, KANBAN_STATUSES, type KanbanCard as KanbanCardModel, type KanbanModel } from "./kanbanModel";
 import { KanbanMenu, KanbanPopover, useOverlay, type KanbanMenuItem } from "./kanbanMenus";
@@ -299,25 +300,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const [query, setQuery] = useState("");
   const [linkQuery, setLinkQuery] = useState("");
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(EMPTY_SET);
-  const [remoteAgentFeed, setRemoteAgentFeed] = useState<{ project: string; rows: RemoteAgentView[] } | null>(null);
-  const remoteAgents = !props.overview && remoteAgentFeed?.project === project
-    ? remoteAgentFeed.rows.filter((row) => row.p === project)
-    : [];
-  useEffect(() => {
-    if (!/^repo-[0-9a-f]{32}$/.test(project) || props.overview) return;
-    let live = true;
-    const refresh = async () => {
-      try {
-        const answer = await fetch(`/api/links/agents?project=${encodeURIComponent(project)}`);
-        if (!answer.ok) return;
-        const payload = await answer.json() as { agents?: RemoteAgentView[] };
-        if (live) setRemoteAgentFeed({ project, rows: Array.isArray(payload.agents) ? payload.agents : [] });
-      } catch { /* Keep the last in-memory rows until the next local read. */ }
-    };
-    void refresh();
-    const timer = window.setInterval(refresh, 15_000);
-    return () => { live = false; window.clearInterval(timer); };
-  }, [project, props.overview]);
+  /* The other machines' agents and lanes. On the Overview the feed
+     covers every linked project, and only its lanes and hosts are drawn. */
+  const remoteFeed = useRemoteFeed(props.overview ? null : project);
+  const remoteAgents = !props.overview && remoteFeed ? remoteFeed.agents.filter((row) => row.p === project) : [];
+  const remoteCards = useMemo(() => remoteCardsFor(allTasks, remoteFeed), [allTasks, remoteFeed]);
   const [dragHint, setDragHint] = useState(false);
   const menu = useOverlay<
     { kind: "status" | "card" | "colour" | "icon"; cardId: string } | { kind: "column"; status: TaskStatus } | { kind: "tray" } | { kind: "create" } | { kind: "reader"; key: string; stop: ReaderStop } | { kind: "link"; key: string } | { kind: "stop"; key: string }
@@ -2478,6 +2465,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       collapsed={collapsed}
       nowMs={modelNow * 1000}
       remoteAgents={remoteAgents}
+      remoteCards={remoteCards}
       pendingIds={controller}
       editing={editing}
       failedEdits={failedEdits}
@@ -2868,7 +2856,7 @@ type CardHandlers = Pick<
   | "projectNames" | "onOpenProject"
 >;
 
-function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, remoteAgents, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, onColumnMenu, cardProps }: {
+function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, remoteAgents, remoteCards, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, onColumnMenu, cardProps }: {
   status: TaskStatus;
   /** Which column holds the wide share and the controls that move it (#1841);
       null where every column is already full width. */
@@ -2899,6 +2887,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   collapsed: ReadonlySet<string>;
   nowMs: number;
   remoteAgents: readonly RemoteAgentView[];
+  remoteCards: ReadonlyMap<string, RemoteCard>;
   pendingIds: { pending(id: string): boolean };
   onColumnMenu: (anchor: HTMLElement) => void;
   cardProps: CardHandlers;
@@ -2915,6 +2904,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
       collapsed={collapsed.has(card.id)}
       nowMs={nowMs}
       remoteAgents={card.task ? remoteAgents.filter((row) => row.task === card.task!.id) : []}
+      remote={card.task ? remoteCards.get(card.task.id) ?? null : null}
       readerKeys={readerKeysByCard.get(card.id) ?? ""}
       stagePanels={panelsByCard.get(card.id) ?? ""}
       acting={actingByCard.get(card.id) ?? ""}

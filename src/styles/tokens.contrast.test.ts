@@ -202,3 +202,33 @@ test("a waiting glyph's drained silhouette still clears the graphical-object flo
     }
   }
 });
+
+/* A task another machine runs wears a 6% info-hue pinstripe over its card
+   (docs/design/synced-task-card.md §5.2). The stripe is translucent, so the
+   darkest pixel text can land on is the surface with 6% of the info hue mixed
+   in; muted text keeps the small-text floor over it on both card surfaces, in
+   both schemes, and secondary text keeps a wider one. 7% would put dark muted
+   text on the card at exactly 4.50, so 6% is the ceiling. */
+test("the remote-card pinstripe leaves muted and secondary text above their floors on the card and the quiet card", () => {
+  const STRIPE = 0.06;
+  expect(TOKENS).toMatch(/--remote-stripe:\s*color-mix\(in srgb, var\(--color-info\) 6%, transparent\)/);
+  const mix = (surface: string, ink: string): string => `#${[1, 3, 5].map((offset) => {
+    const base = parseInt(surface.slice(offset, offset + 2), 16);
+    const tint = parseInt(ink.slice(offset, offset + 2), 16);
+    return Math.round(base * (1 - STRIPE) + tint * STRIPE).toString(16).padStart(2, "0");
+  }).join("")}`;
+  const info = values("color-info");
+  const muted = values("color-muted");
+  const secondary = values("color-secondary");
+  const card = values("surface-card");
+  const quiet = values("surface-quiet");
+  for (const scheme of [0, 1]) {
+    for (const surface of [card[scheme], quiet[scheme]]) {
+      const darkest = mix(surface, info[scheme]);
+      expect(contrast(muted[scheme], darkest)).toBeGreaterThanOrEqual(AA_SMALL_TEXT);
+      expect(contrast(secondary[scheme], darkest)).toBeGreaterThanOrEqual(6);
+    }
+    /* The mark beside the host label is a graphical object: 3:1 over the chip's card fill. */
+    expect(contrast(info[scheme], card[scheme])).toBeGreaterThanOrEqual(3);
+  }
+});

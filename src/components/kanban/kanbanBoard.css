@@ -288,6 +288,19 @@
 .kb .card.flash { animation: kb-flash var(--motion-slow) var(--ease-standard) 2; }
 @keyframes kb-flash { 50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 35%, transparent); } }
 .kb .card.done { background: var(--surface-quiet); }
+/* A card whose task runs on another machine (docs/design/synced-task-card.md
+   §5): a translucent pinstripe over whatever surface the card has, and an
+   info-tinted border. The stripe never sets a background colour, so a done
+   card keeps its quiet fill beneath it. */
+.remote-surface {
+  --remote-edge: color-mix(in srgb, var(--color-info) 40%, var(--border-default));
+  --remote-pattern: repeating-linear-gradient(135deg, var(--remote-stripe) 0 3px, transparent 3px 10px);
+  background-image: var(--remote-pattern);
+}
+/* The card's own `background` shorthand resets the image, so the desktop card
+   says it again after it, with the specificity to win. */
+.kb .card.remote { border-color: var(--remote-edge); background-image: var(--remote-pattern); }
+.kb .card.remote:hover { border-color: color-mix(in srgb, var(--color-info) 60%, var(--border-default)); }
 .kb .card.done .title { color: var(--color-secondary); }
 .kb .card .label { position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 0 2px 2px 0; background: var(--label, transparent); }
 .kb .card .saving { position: absolute; left: 12px; right: 12px; top: 0; height: 2px; border-radius: 0 0 2px 2px; background: var(--color-accent); transform-origin: left; animation: kb-saving 900ms var(--ease-standard) infinite; display: none; }
@@ -367,6 +380,12 @@
 .kb .card .add { display: inline-flex; align-items: center; gap: 4px; height: var(--target, 32px); margin-block: calc((16px - var(--target, 32px)) / 2); padding: 0 8px; border-radius: var(--radius-control); font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); }
 .kb .card .add .plus { color: var(--color-accent); font-size: 14px; line-height: 1; }
 .kb .card .add:hover { background: var(--surface-well); color: var(--color-primary); }
+/* Where "+ Agent" would start work here, a passive chip says where it starts.
+   Solid, so it sits clear of the stripe; the label clamps to one line and, when
+   the age and the chip do not share a line, the chip drops to its own and ends it. */
+.host-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; height: 20px; padding: 0 6px; margin-left: auto; border-radius: var(--radius-control); border: 1px solid var(--border-default); background: var(--surface-card); font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); }
+.host-chip-icon { width: 12px; height: 12px; flex: none; color: var(--color-info); }
+.host-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kb .card .album svg { width: 14px; height: 14px; color: var(--color-muted); }
 .kb .card .album .album-new { display: inline-flex; align-items: center; gap: 4px; margin-left: 2px; color: var(--color-accent); white-space: nowrap; }
 .kb .card .album .album-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-accent); }

@@ -35,6 +35,8 @@ import type { PipelinePorts } from "./pipelinePorts";
 import { ReaderSlot, type ReaderPlacement } from "./KanbanReaders";
 import { StageDraftPanel } from "./StageDraft";
 import { RemoteAgents, type RemoteAgentView } from "./RemoteAgents";
+import { HostChip, RemoteLanes } from "./RemoteLanes";
+import type { RemoteCard } from "./remoteFeed";
 import type { StageDrafts } from "./stageDrafts";
 import type { PipelineActionKind } from "./stagesModel";
 
@@ -171,6 +173,9 @@ const MemberTile = memo(function MemberTile({ member, workspace, onOpen }: { mem
 
 export interface KanbanCardProps {
   remoteAgents?: readonly RemoteAgentView[];
+  /** The task runs on another linked machine: the card takes the remote
+      look, draws that machine's lanes, and says where to manage it. */
+  remote?: RemoteCard | null;
   card: KanbanCardModel;
   status: TaskStatus;
   pending: boolean;
@@ -382,7 +387,8 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const openTiles = new Set(readerKeys.filter((key) => tileKeys.has(key)));
   const reasons = card.needsYou ? reasonsText(t, card.reasons) : "";
   const cleared = !card.needsYou ? card.cleared[0] ?? null : null;
-  const aria = [title, statusText, card.working ? t("kanban.activityWorking", { count: card.working }) : "", reasons, collapsed ? t("kanban.collapsed") : ""]
+  const remote = card.task ? props.remote ?? null : null;
+  const aria = [title, statusText, card.working ? t("kanban.activityWorking", { count: card.working }) : "", reasons, collapsed ? t("kanban.collapsed") : "", remote ? t("kanban.remote.hint", { host: remote.host }) : ""]
     .filter(Boolean)
     .join(", ");
   /* The card's one status hue is its edge (§3.4): amber while it owes the
@@ -424,7 +430,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       {card.working ? <span className="foot-meta working num" data-foot-working={card.working}>{t("kanban.activityWorking", { count: card.working })}</span> : null}
       {card.conversations
         ? <span className="foot-meta num" data-foot-conversations={card.conversations}>{t("kanban.activityConversations", { count: card.conversations })}</span>
-        : card.pipelines.length === 0 ? <span className="foot-meta" data-foot-none="">{t("kanban.activityNoAgent")}</span> : null}
+        : card.pipelines.length === 0 && !remote ? <span className="foot-meta" data-foot-none="">{t("kanban.activityNoAgent")}</span> : null}
     </>
   );
   /* Several pipelines on one card: the running ones stay on top, and once the
@@ -478,8 +484,9 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const style = hex ? ({ "--label": hex, "--label-strong": hex } as React.CSSProperties) : undefined;
   return (
     <article
-      className={`card${status === "done" ? " done" : ""} ${workspace ? "work" : "shelf"}${collapsed ? " folded" : ""}${reading ? " has-reader" : ""}`}
+      className={`card${status === "done" ? " done" : ""} ${workspace ? "work" : "shelf"}${collapsed ? " folded" : ""}${reading ? " has-reader" : ""}${remote ? " remote remote-surface" : ""}`}
       data-id={card.id}
+      data-remote={remote ? remote.install : undefined}
       data-kanban-card={card.id}
       data-pending={pending ? "1" : "0"}
       data-collapsed={collapsed ? "1" : "0"}
@@ -723,6 +730,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
               {completedOpen ? foldedPipelines.map(pipelineRow) : null}
             </div>
           ) : null}
+          {remote ? <RemoteLanes remote={remote} title={title} nowMs={nowMs} /> : null}
         </>
       ) : null}
 
@@ -830,7 +838,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
             pipelines={card.pipelines.map((summary) => summary.pipeline)}
             files={card.members.map((member) => member.file)}
           />
-          {props.onAddAgent ? (
+          {remote ? <HostChip remote={remote} /> : props.onAddAgent ? (
             <button type="button" className="add" data-add-agent={card.id} aria-label={t("kanban.addAgentAria", { title })} onClick={() => props.onAddAgent!(card)}>
               <span className="plus" aria-hidden="true">+</span> {t("kanban.addAgent")}
             </button>

@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, ArrowRight, ArrowUp, Ban, Check, CircleCheck, EyeOff, Inbox, MessageSquare, Plus, TriangleAlert, UserRoundCheck } from "lucide-react";
+import { ArrowDown, ArrowLeftRight, ArrowRight, ArrowUp, Ban, Check, CircleCheck, EyeOff, Inbox, MessageSquare, Plus, TriangleAlert, UserRoundCheck } from "lucide-react";
 import {
   useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState,
   type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type TouchEvent as ReactTouchEvent,
@@ -14,6 +14,9 @@ import { KANBAN_STATUSES, type KanbanCard as KanbanCardModel } from "@/component
 import { subjectOf } from "@/components/kanban/cardDismissal";
 import { statusLabel, TASK_COLOR_HEX } from "@/components/kanban/KanbanCard";
 import { RemoteAgents, type RemoteAgentView } from "@/components/kanban/RemoteAgents";
+import { useManagedOnText } from "@/components/kanban/RemoteLanes";
+import { remoteCardsFor, useRemoteFeed, type RemoteCard } from "@/components/kanban/remoteFeed";
+import { remoteLaneNote, remoteLaneSummary } from "@/components/pipelines/remoteLaneSummary";
 import { pipelineTitle } from "@/components/kanban/PipelineSection";
 import { useTaskMutations, type StatusMoveOutcome, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
@@ -360,8 +363,35 @@ function ClearedLine({ item, nowMs }: { item: PhoneCard; nowMs: number }) {
   );
 }
 
-function CardView({ item, now, project, remoteAgents, onOpen, onLongPress, onDismiss, onUndo }: {
+/** The one lane of a remote task the board card shows: an open one before an
+    ended one, the newest first (the feed is ordered newest first). */
+function shownRemoteLane(remote: RemoteCard) {
+  return remote.lanes.find((lane) => lane.s !== "completed" && lane.s !== "closed") ?? remote.lanes[0] ?? null;
+}
+
+/** A task that runs on another machine: its lane as the card density draws it,
+    then the passive line naming where it is managed (docs/design/synced-task-card.md §8). */
+function RemoteCardLines({ remote, title, nowMs, withLane }: { remote: RemoteCard; title: string; nowMs: number; withLane: boolean }) {
+  const { t, locale } = useLocale();
+  const { label, hint } = useManagedOnText(remote);
+  const lane = withLane ? shownRemoteLane(remote) : null;
+  const summary = useMemo(() => (lane ? remoteLaneSummary(lane, title) : null), [lane, title]);
+  const managedOn = useMemo(() => (lane ? remoteLaneNote(t, lane, remote.host, lane.stale ? { asOf: lane.asOf, locale } : null) : null), [t, locale, lane, remote.host]);
+  return (
+    <>
+      {summary && managedOn ? <PipelineBlock summary={summary} density="card" nowMs={nowMs} taskTitle={title} managedOn={managedOn} /> : null}
+      <span data-phone-card-host={remote.install} title={hint} className="flex min-w-0 items-center gap-1 text-label font-semibold leading-tight text-secondary">
+        <ArrowLeftRight className="h-3 w-3 shrink-0 text-info" aria-hidden />
+        <span className="min-w-0 truncate">{label}</span>
+      </span>
+    </>
+  );
+}
+
+function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPress, onDismiss, onUndo }: {
   item: PhoneCard;
+  /** The task runs on another linked machine. */
+  remote: RemoteCard | null;
   /** Epoch seconds. */
   now: number;
   /** The card's project, on a board that spans several (#2098). */
@@ -427,11 +457,18 @@ function CardView({ item, now, project, remoteAgents, onOpen, onLongPress, onDis
       {loose ? <LooseLine item={item} now={now} /> : <AskLine item={item} />}
       <AgentsLine item={item} nowMs={nowMs} />
       <ClearedLine item={item} nowMs={nowMs} />
+      {remote ? <RemoteCardLines remote={remote} title={title} nowMs={nowMs} withLane={!item.shown} /> : null}
     </>
   );
-  const tone = `${item.kind === "task" && item.finished && !item.need ? QUIET : ""} ${item.edge ? EDGE[item.edge] : ""}`;
+  const quiet = item.kind === "task" && item.finished && !item.need;
+  const tone = `${quiet ? QUIET : ""} ${item.edge ? EDGE[item.edge] : ""}${remote ? " remote-surface" : ""}`;
   const aside = onDismiss || onUndo;
   const className = aside ? BODY : `${CARD} ${tone}`;
+  /* The phone draws no borders, so the remote card's tinted line joins the
+     shadows its colour edge and its lift already write. */
+  const faceStyle = aside ? undefined : remote
+    ? { boxShadow: [colour ? colour.boxShadow : quiet ? null : "var(--shadow-1)", "inset 0 0 0 1px var(--remote-edge)"].filter(Boolean).join(", ") }
+    : colour;
   const data = {
     "data-phone-card": item.key,
     "data-phone-card-kind": item.kind,
@@ -441,9 +478,9 @@ function CardView({ item, now, project, remoteAgents, onOpen, onLongPress, onDis
     "data-phone-card-pipeline": item.shown?.pipeline.id,
   };
   const face = onOpen ? (
-    <button type="button" {...data} aria-label={label} className={className} style={aside ? undefined : colour} onClick={onOpen}>{body}</button>
+    <button type="button" {...data} aria-label={remote ? `${label}, ${t("kanban.remote.hint", { host: remote.host })}` : label} className={className} style={faceStyle} onClick={onOpen}>{body}</button>
   ) : (
-    <div {...data} className={className} style={aside ? undefined : colour}>{body}</div>
+    <div {...data} className={className} style={faceStyle}>{body}</div>
   );
   return (
     <>
@@ -704,25 +741,10 @@ export function MobileKanban(props: MobileKanbanProps) {
   const nav = useMobileNavStore();
   const navState = useMobileNav();
   const ids = useId().replace(/:/g, "");
-  const [remoteAgentFeed, setRemoteAgentFeed] = useState<{ project: string; rows: RemoteAgentView[] } | null>(null);
-  const remoteAgents = remoteAgentFeed?.project === project
-    ? remoteAgentFeed.rows.filter((row) => row.p === project)
-    : [];
-  useEffect(() => {
-    if (!/^repo-[0-9a-f]{32}$/.test(project)) return;
-    let live = true;
-    const refresh = async () => {
-      try {
-        const answer = await fetch(`/api/links/agents?project=${encodeURIComponent(project)}`);
-        if (!answer.ok) return;
-        const payload = await answer.json() as { agents?: RemoteAgentView[] };
-        if (live) setRemoteAgentFeed({ project, rows: Array.isArray(payload.agents) ? payload.agents : [] });
-      } catch { /* Preserve the last rows while the Viewer is unavailable. */ }
-    };
-    void refresh();
-    const timer = window.setInterval(refresh, 15_000);
-    return () => { live = false; window.clearInterval(timer); };
-  }, [project]);
+  /* A board that spans several projects (#2098) reads every linked project's lanes. */
+  const remoteFeed = useRemoteFeed(props.projectLabel ? null : project);
+  const remoteAgents = remoteFeed && !props.projectLabel ? remoteFeed.agents.filter((row) => row.p === project) : [];
+  const remoteCards = useMemo(() => remoteCardsFor(storedTasks, remoteFeed), [storedTasks, remoteFeed]);
 
   /* The desktop's mutations: a move or a hide shows at once, is written with
      the task's revision as its guard, and a refusal puts the card back. The
@@ -999,6 +1021,7 @@ export function MobileKanban(props: MobileKanbanProps) {
       now={now}
       project={projectLabel?.(item.card.project) ?? null}
       remoteAgents={item.card.task ? remoteAgents.filter((row) => row.task === item.card.task!.id) : []}
+      remote={item.card.task ? remoteCards.get(item.card.task.id) ?? null : null}
       onOpen={open(item)}
       onLongPress={() => openSheet(item)}
       onDismiss={item.reasons.length ? () => sendCardDismissal(item, false) : null}

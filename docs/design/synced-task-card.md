@@ -383,12 +383,14 @@ work would start here now says where it starts.
 | `kanban.remote.managedOn` | Managed on {host} | Керується на {host} |
 | `kanban.remote.notLinked` | Runs on {host} (not linked) | Виконується на {host} (не під'єднана) |
 | `kanban.remote.hint` | Runs on {host}. Start its agents and answer its pipeline's questions there. | Виконується на {host}. Запускайте її агентів і відповідайте на питання її пайплайна там. |
-| `pipelineBlock.remote.decision` | Waiting for a decision on {stage} · answer it on {host} | Чекає рішення на етапі {stage} · відповісти можна на {host} |
-| `pipelineBlock.remote.review` | Review rounds used up on {stage} · decide on {host} | Раунди рев'ю на етапі {stage} вичерпано · вирішити можна на {host} |
-| `pipelineBlock.remote.paused` | Paused on {stage} · resume it on {host} | Призупинено на етапі {stage} · відновити можна на {host} |
+| `pipelineBlock.remote.decisionHead` / `…Tail` | Waiting for a decision on {stage} / answer it on {host} | Чекає рішення на етапі {stage} / відповісти можна на {host} |
+| `pipelineBlock.remote.reviewHead` / `…Tail` | Review rounds used up on {stage} / decide on {host} | Раунди рев'ю на етапі {stage} вичерпано / вирішити можна на {host} |
+| `pipelineBlock.remote.pausedHead` / `…Tail` | Paused on {stage} / resume it on {host} | Призупинено на етапі {stage} / відновити можна на {host} |
 | `pipelineBlock.remote.asOf` | as of {time} | станом на {time} |
 
-The findings count reuses `pipelineVerdict.findings`.
+The head and the tail are joined with " · ", the findings count
+(`pipelineVerdict.findings`) between them; the phone card's reason line is the
+head and the count alone.
 
 ### 5.4 Which controls go
 

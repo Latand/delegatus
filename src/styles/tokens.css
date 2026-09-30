@@ -112,6 +112,11 @@
   --color-danger-soft: #fdeeee;
   --color-info: #0d9488; /* link / handoff teal */
   --color-info-soft: #e5f5f3;
+  /* The pinstripe of a task another machine runs (docs/design/synced-task-card.md
+     §5.2). It resolves through --color-info, which the dark blocks below
+     override, so it serves both schemes. 6% is the ceiling: muted text stays
+     at 4.5:1 over its darkest pixel. */
+  --remote-stripe: color-mix(in srgb, var(--color-info) 6%, transparent);
 
   /* Engine identity tints (kept; model-family shifts live in utils.ts). */
   --color-codex: #2f6fd0;
