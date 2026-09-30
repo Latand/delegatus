@@ -16,6 +16,9 @@ export interface VoiceKey {
   id: string;
   model: string;
   voice: string;
+  language?: string;
+  encoding?: string;
+  sampleRate?: number;
 }
 
 /** One synthesis as it came back: the audio, its alignment, and — when the
@@ -68,12 +71,12 @@ export function subscribeTtsCache(listener: () => void): () => void {
   return () => { cacheListeners.delete(listener); };
 }
 
-function announceCacheChange(): void {
+export function announceCacheChange(): void {
   for (const listener of [...cacheListeners]) listener();
 }
 
 export function voiceKey(voice: VoiceKey, text: string): string {
-  return `${voice.id}\0${voice.model}\0${voice.voice}\0${text}`;
+  return `${voice.id}\0${voice.model}\0${voice.voice}\0${voice.language ?? ""}\0${voice.encoding ?? "mp3"}\0${voice.sampleRate ?? ""}\0${text}`;
 }
 
 /**
@@ -183,13 +186,13 @@ async function providerError(response: Response): Promise<string | null> {
 
 /** The voice the route says it billed, when it says so — see `billedBy` in
     `/api/tts`. Absent on a response from a viewer that predates it. */
-function billedVoice(response: Response): VoiceKey | null {
+export function billedVoice(response: Response): VoiceKey | null {
   const id = response.headers.get("x-tts-backend");
   const model = response.headers.get("x-tts-model");
   const voice = response.headers.get("x-tts-voice");
   if (!id || !model || !voice) return null;
   try {
-    return { id, model: decodeURIComponent(model), voice: decodeURIComponent(voice) };
+    return { id, model: decodeURIComponent(model), voice: decodeURIComponent(voice), language: decodeURIComponent(response.headers.get("x-tts-language") ?? ""), encoding: response.headers.get("x-tts-encoding") ?? "mp3", sampleRate: Number(response.headers.get("x-tts-sample-rate")) || undefined };
   } catch {
     return null;
   }

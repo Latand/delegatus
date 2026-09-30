@@ -5199,6 +5199,23 @@ browserTest("narrow card: a finished lane on the task screen stands its stages o
   expect(failures).toEqual([]);
 }, 300_000);
 
+describe("fast TTS header", () => {
+  browserTest("phone header renders idle, loading and playing and shares row Stop", async () => {
+    const { captureFastTtsHeaders } = await import("@/components/kanban/issue1695BrowserHarness");
+    const browser = await launchChromium();
+    try { await captureFastTtsHeaders(browser, true); } finally { await browser.close(); }
+  }, 120_000);
+});
+
+describe("fast TTS live latency", () => {
+  const liveTest = process.env.LLV_SWIPE_BROWSER_TEST === "1" && process.env.LLV_TTS_LIVE_LATENCY === "1" ? test : test.skip;
+  liveTest("interleaves ten cold baseline and candidate tap-to-speech measurements", async () => {
+    const { measureFastTtsLatency } = await import("@/components/kanban/issue1695BrowserHarness");
+    const browser = await launchChromium();
+    try { await measureFastTtsLatency(browser); } finally { await browser.close(); }
+  }, 500_000);
+});
+
 /*
  * Composer context mode (docs/design/composer-context-mode.md §9.2): the Codex
  * composer's Context toggle, its auto switching with the turn, and the context

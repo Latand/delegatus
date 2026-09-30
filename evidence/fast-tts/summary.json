@@ -1,0 +1,25 @@
+{
+  "base": {
+    "attempts": 10,
+    "signals": 8,
+    "medianSuccessfulMs": 18089.25,
+    "p95SuccessfulNearestRankMs": 19181.30000001192,
+    "failures": 2
+  },
+  "candidate": {
+    "attempts": 10,
+    "signals": 10,
+    "medianSuccessfulMs": 497.2999999821186,
+    "p95SuccessfulNearestRankMs": 713.8999999761581,
+    "failures": 0
+  },
+  "cachedReplay": {
+    "latencyMs": 65.39999997615814,
+    "newRequests": 0
+  },
+  "fullRead": {
+    "scheduledBlocks": 219,
+    "maximumAddedGapSeconds": 0.0,
+    "maximumOverlapSeconds": -0.0
+  }
+}

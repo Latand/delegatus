@@ -13759,6 +13759,14 @@ describe("narrow card: the pipeline stages read as one vertical chain", () => {
   }, 180_000);
 });
 
+describe("fast TTS header", () => {
+  browserTest("desktop header renders idle, loading and playing and shares row Stop", async () => {
+    const { captureFastTtsHeaders } = await import("./issue1695BrowserHarness");
+    const browser = await chromium.launch(LAUNCH);
+    try { await captureFastTtsHeaders(browser, false); } finally { await browser.close(); }
+  }, 120_000);
+});
+
 describe("Codex service tier rendered evidence", () => {
   browserTest("ultrafast appears on desktop and in the phone speed sheet in both locales", async () => {
     const out = path.resolve(".artifacts/codex-service-tier");

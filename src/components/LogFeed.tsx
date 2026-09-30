@@ -62,7 +62,8 @@ import { ResponseDuration } from "./feed/ResponseDuration";
 import { SuggestedReplies } from "./feed/SuggestedReplies";
 import { BoundedLru } from "./feed/scrollMemory";
 import { ConversationAttention } from "./runtime/ConversationAttention";
-import { createSpeakableAnswerResolver } from "./feed/speakableAnswer";
+import { conversationSpeech, ownConversationFeed, SpeechScope } from "./feed/conversationSpeech";
+import { answerFragmentOffset, createSpeakableAnswerResolver, visibleSpeakableAnswer } from "./feed/speakableAnswer";
 import { isSubagent } from "./projectModel";
 import { restingDelta, tailPlan } from "./feedTopEdge";
 import { TaskHeader } from "./TaskHeader";
@@ -86,7 +87,7 @@ type ConversationRow =
       canonical: CanonicalMessage | null;
       responseDurationMs?: number;
     }
-  | { kind: "item"; key: string; anchorKey?: string | null; item: FeedSnapshot["items"][number]["item"]; speakText?: string; responseDurationMs?: number; resumes?: SeatResume }
+  | { kind: "item"; key: string; anchorKey?: string | null; item: FeedSnapshot["items"][number]["item"]; speakText?: string; speechIndex?: number; speakOffset?: number; speechId?: string; responseDurationMs?: number; resumes?: SeatResume }
   | { kind: "launch"; key: "launch" }
   | { kind: "delta"; key: "delta"; resumes?: SeatResume }
   /* A seat deputy's block (docs/design/ghost-seat.md §6.1): pinned at its
@@ -707,6 +708,46 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const visibleItems = hiddenLocal ? feed.items.slice(-visibleCount) : feed.items;
   const visibleStartIndex = feed.items.length - visibleItems.length;
   const answerFor = useMemo(() => createSpeakableAnswerResolver(feed.items), [feed.items, memoryKey, tailPath]);
+  const speechScope = file?.path;
+  useEffect(() => speechScope ? ownConversationFeed(speechScope) : undefined, [speechScope]);
+  useEffect(() => {
+    const viewport = scroller.current;
+    if (!viewport || !speechScope) return;
+    const speech = conversationSpeech(speechScope);
+    const viewportOwner = Symbol("speech-viewport");
+    speech.setRoots(viewportOwner, (id) => Array.from(viewport.querySelectorAll<HTMLElement>("[data-tts-answer-id]")).filter((node) => node.getAttribute("data-tts-answer-id") === id).flatMap((node) => Array.from(node.querySelectorAll<HTMLElement>("[data-tts-body]"))));
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const box = viewport.getBoundingClientRect();
+      const clip = { left: Math.max(0, box.left), top: Math.max(0, box.top), right: Math.min(window.innerWidth, box.right), bottom: Math.min(window.innerHeight, box.bottom) };
+      if (clip.right <= clip.left || clip.bottom <= clip.top) { speech.selectFor(viewportOwner, null); return; }
+      const visible = Array.from(viewport.querySelectorAll<HTMLElement>("[data-tts-answer-index]")).map((row) => {
+        const body = row.querySelector("[data-tts-body]");
+        if (!body) return { index: -1, area: 0 };
+        const walker = document.createTreeWalker(body, 4 /* SHOW_TEXT */);
+        let area = 0;
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (node.parentElement?.closest("pre, code, table, [hidden], [aria-hidden='true']")) continue;
+          const range = document.createRange(); range.selectNodeContents(node);
+          const rects = typeof range.getClientRects === "function" ? Array.from(range.getClientRects()) : [];
+          area += rects.reduce((sum, rect) => sum + Math.max(0, Math.min(rect.right, clip.right) - Math.max(rect.left, clip.left)) * Math.max(0, Math.min(rect.bottom, clip.bottom) - Math.max(rect.top, clip.top)), 0);
+        }
+        return { index: Number(row.dataset.ttsAnswerIndex), area };
+      });
+      const answer = visibleSpeakableAnswer(feed.items, visible, answerFor);
+      speech.selectFor(viewportOwner, answer ? { id: answer.id, text: answer.text, area: visible.filter((fragment) => fragment.index >= answer.firstIndex && fragment.index <= answer.lastIndex).reduce((sum, fragment) => sum + fragment.area, 0), order: answer.firstIndex, roots: () => speech.rootsFor(answer.id) } : null);
+    };
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(measure); };
+    viewport.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+    window.addEventListener("scroll", schedule, true);
+    const resize = new ResizeObserver(schedule); resize.observe(viewport);
+    const observer = new window.MutationObserver(schedule); observer.observe(viewport, { childList: true, subtree: true });
+    schedule();
+    return () => { cancelAnimationFrame(frame); observer.disconnect(); resize.disconnect(); speech.releaseViewport(viewportOwner); viewport.removeEventListener("scroll", schedule); window.removeEventListener("resize", schedule); window.removeEventListener("scroll", schedule, true); };
+  }, [feed.items, speechScope, answerFor]);
+
   /* The image viewer steps through this conversation's pictures, all of them
      and in feed order, read from the records when it opens (#2144). */
   const gallery = useConversationGallery(feed.items, provenanceLookup);
@@ -1160,6 +1201,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         && withheldNativeRecords.has(item.deliveredMessage.engineMessageId)) return [];
       const answer = answerFor(visibleStartIndex + visibleIndex);
       const speakText = answer?.firstIndex === visibleStartIndex + visibleIndex ? answer.text : undefined;
+      const speechIndex = item.kind === "prose" ? visibleStartIndex + visibleIndex : undefined;
+      const speechId = answer && item.kind === "prose" ? `${item.engine}:${item.ts}:${feed.items[answer.firstIndex]!.key}` : undefined;
+      const speakOffset = answer && speechIndex !== undefined ? answerFragmentOffset(feed.items, speechIndex, answer) : undefined;
       const echoSourceId = anchorKey ?? `key:${key}`;
       const rowKey = item.kind === "user" ? messageRowKey(echoSourceId, key) : key;
       /* A record that carries no bubble of its own — a send that was nothing
@@ -1223,7 +1267,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
             entry: boundEntry,
             canonical: { text: canonicalText },
           } as ConversationRow,
-          { kind: "item", key: rowKey, anchorKey, item, speakText,
+          { kind: "item", key: rowKey, anchorKey, item, speakText, speechIndex, speakOffset, speechId,
             ...(responseDurationMs !== undefined ? { responseDurationMs } : {}) } as ConversationRow,
         ];
       }
@@ -1261,7 +1305,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
           ...(responseDurationMs !== undefined ? { responseDurationMs } : {}),
         } as ConversationRow];
       }
-      return [{ kind: "item", key: rowKey, anchorKey, item, speakText, ...(responseDurationMs !== undefined ? { responseDurationMs } : {}) } as ConversationRow];
+      return [{ kind: "item", key: rowKey, anchorKey, item, speakText, speechIndex, speakOffset, speechId, ...(responseDurationMs !== undefined ? { responseDurationMs } : {}) } as ConversationRow];
     });
     /* The seat's deputies: each block pinned after the last row dated at or
        before its start (docs/design/ghost-seat.md §6.1), then the tail as
@@ -1619,7 +1663,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                   </div>
                 );
               }
-              const { anchorKey, item, responseDurationMs, speakText, resumes } = row;
+              const { anchorKey, item, responseDurationMs, speakText, speechIndex, speakOffset, speechId, resumes } = row;
               /* On the phone a prose row names its speaker in its own header,
                  so the continuation joins that header rather than stacking a
                  second name over it (ghost-seat.md §6.1). */
@@ -1632,6 +1676,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                   key={row.key}
                   data-feed-key={anchorKey ?? undefined}
                   data-feed-kind={item.kind}
+                  data-tts-answer-index={speechIndex}
+                  data-tts-answer-id={speechId}
+                  data-tts-offset={speakOffset}
                   data-feed-tool-sources={item.kind === "cmd-group" ? item.calls.map((call) => call.srcCall).join(" ")
                     : item.kind === "tool" ? String(item.srcCall) : undefined}
                   data-feed-source-id={"sourceId" in item ? item.sourceId : undefined}
@@ -1639,7 +1686,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                 >
                   {resumes && !foldResumes ? <SeatSpeakerLine resumes={resumes} engine={file.engine} /> : null}
                   <GalleryOwnerProvider value={item}>
-                    <FeedItem item={item} speakText={speakText} resumesAsk={foldResumes ? resumes.ask : undefined} />
+                    <SpeechScope.Provider value={file.path}><FeedItem item={item} speakText={speakText} speakId={speechId} resumesAsk={foldResumes ? resumes.ask : undefined} /></SpeechScope.Provider>
                   </GalleryOwnerProvider>
                   {responseDurationMs !== undefined ? <ResponseDuration durationMs={responseDurationMs} /> : null}
                 </div>

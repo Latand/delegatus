@@ -44,3 +44,39 @@ export function createSpeakableAnswerResolver(entries: FeedEntry[]): (index: num
     return result;
   };
 }
+
+/** Largest visible prose area wins; ties favor the later loaded answer. */
+export function visibleSpeakableAnswer(entries: FeedEntry[], visible: readonly { index: number; area: number }[], resolve = createSpeakableAnswerResolver(entries)): (NonNullable<ReturnType<typeof speakableAnswer>> & { id: string }) | null {
+  const candidates = new Map<number, { answer: NonNullable<ReturnType<typeof speakableAnswer>>; area: number }>();
+  for (const fragment of visible) {
+    if (!(fragment.area > 0)) continue;
+    const answer = resolve(fragment.index);
+    if (!answer) continue;
+    const previous = candidates.get(answer.firstIndex);
+    candidates.set(answer.firstIndex, { answer, area: (previous?.area ?? 0) + fragment.area });
+  }
+  const selected = [...candidates.values()].sort((a, b) => b.area - a.area || b.answer.firstIndex - a.answer.firstIndex)[0];
+  if (!selected) return null;
+  const item = entries[selected.answer.firstIndex]!.item;
+  return item.kind === "prose" ? { ...selected.answer, id: `${item.engine}:${item.ts}:${entries[selected.answer.firstIndex]!.key}` } : null;
+}
+
+const fragmentOffsets = new WeakMap<object, Map<number, number>>();
+/** Offsets come from the frozen sanitized answer, including earlier fragments
+ * outside the rendered window. Unmatched markup fragments remain unmapped. */
+export function answerFragmentOffset(entries: FeedEntry[], index: number, answer: NonNullable<ReturnType<typeof speakableAnswer>>): number | undefined {
+  let offsets = fragmentOffsets.get(answer);
+  if (!offsets) {
+    offsets = new Map(); let cursor = 0;
+    for (let at = answer.firstIndex; at <= answer.lastIndex; at++) {
+      const item = entries[at]!.item;
+      const fragment = item.kind === "prose" ? spokenAnswerText(item.text) : "";
+      if (!fragment) continue;
+      const start = answer.text.indexOf(fragment, cursor);
+      if (start < 0) continue;
+      offsets.set(at, start); cursor = start + fragment.length;
+    }
+    fragmentOffsets.set(answer, offsets);
+  }
+  return offsets.get(index);
+}

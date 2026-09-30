@@ -6,6 +6,8 @@ import { createPortal } from "react-dom";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
+import { conversationSpeech } from "@/components/feed/conversationSpeech";
+import { SpeakButton } from "@/components/feed/SpeakButton";
 import { BranchPane } from "@/components/BranchPane";
 import { mobileRowState, nowFragment } from "@/components/mobile/mobileBoardModel";
 import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
@@ -331,6 +333,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
                 <RoleFrameMark role={frameRole} />
                 {identity}
                 <span className="spacer" />
+                <SpeakButton scope={file.path} header />
                 {dismissLaunch}
                 {menuButton}
               </div>
@@ -368,6 +371,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
               : title}
           </span>
           <span className="spacer" />
+          <SpeakButton scope={file.path} header />
           <button
             type="button"
             className="icon-btn sm"
@@ -387,7 +391,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
               aria-pressed={full}
               aria-label={t(full ? "kanban.readerLeaveFull" : "kanban.readerFull")}
               title={t(full ? "kanban.readerLeaveFull" : "kanban.readerFull")}
-              onClick={() => onFull(readerKey)}
+              onClick={() => { conversationSpeech(file.path).beginTransfer(); onFull(readerKey); }}
             >
               {full ? <MinimizeGlyph /> : <MaximizeGlyph />}
             </button>

@@ -503,7 +503,7 @@ describe("synthesizeChunk (#1022)", () => {
       },
     })) as unknown as typeof fetch;
     const result = await synthesizeChunk("Hi", new AbortController().signal);
-    expect(result.voice).toEqual({ id: "elevenlabs", model: "eleven_multilingual_v2", voice: "Расмус · deep" });
+    expect(result.voice).toMatchObject({ id: "elevenlabs", model: "eleven_multilingual_v2", voice: "Расмус · deep" });
   });
 
   test("waits out the route's busy answer, then surfaces a real failure verbatim", async () => {
@@ -521,4 +521,89 @@ describe("synthesizeChunk (#1022)", () => {
     expect(failure).toBeInstanceOf(TtsRequestError);
     expect((failure as TtsRequestError).provider).toBe("openai TTS failed (HTTP 401)");
   });
+});
+
+describe("Soniox PCM production client and route", () => {
+  test("signed PCM decoding handles odd fetch packets and rejects odd EOF", async () => {
+    const { PcmDecoder } = await import("./ttsPcmSession");
+    const decoder = new PcmDecoder();
+    expect([...decoder.decode(new Uint8Array([0]))]).toEqual([]);
+    expect([...decoder.decode(new Uint8Array([128, 255, 127, 1]))]).toEqual([-1, 32767 / 32768]);
+    expect([...decoder.decode(new Uint8Array([0]))]).toEqual([1 / 32768]);
+    decoder.finish(); decoder.decode(new Uint8Array([1])); expect(() => decoder.finish()).toThrow();
+  });
+  test("first audio precedes EOF, prefetch stays bounded, joins are contiguous and stop cancels", async () => {
+    const { PcmSession, clearPcmCache, pcmChunksCached, pcmVoice } = await import("./ttsPcmSession");
+    const { POST } = await import("@/app/api/tts/route");
+    const { NextRequest } = await import("next/server");
+    clearPcmCache();
+    const envNames = ["LLV_TTS_BACKEND", "SONIOX_API_KEY"];
+    const prior = envNames.map((name) => process.env[name]);
+    process.env[envNames[0]!] = "soniox"; process.env[envNames[1]!] = "fixture-key";
+    const oldRaf = globalThis.requestAnimationFrame, oldCancel = globalThis.cancelAnimationFrame;
+    let callback: FrameRequestCallback | null = null;
+    globalThis.requestAnimationFrame = (cb) => { callback = cb; return 1; };
+    globalThis.cancelAnimationFrame = () => { callback = null; };
+    const nodes: { startTime: number; buffer: { length: number; duration: number } | null; stopped: boolean; start: (time: number) => void; stop: () => void; connect: () => void; disconnect: () => void }[] = [];
+    const audio = {
+      currentTime: 0, state: "running", destination: {},
+      createBuffer: (_channels: number, length: number, rate: number) => ({ length, duration: length / rate, copyToChannel: () => undefined }),
+      createBufferSource: () => {
+        const node = { startTime: 0, buffer: null as { length: number; duration: number } | null, stopped: false, start(time: number) { this.startTime = time; }, stop() { this.stopped = true; }, connect() {}, disconnect() {} };
+        nodes.push(node); return node;
+      },
+      close: async () => undefined,
+    };
+    const tick = (time: number) => { audio.currentTime = time; callback?.(time * 1000); };
+    let firstEof!: () => void;
+    let secondEof!: () => void;
+    const requests: string[] = []; const canceled = mock(() => undefined);
+    globalThis.fetch = (async (url, init) => {
+      if (String(url) === "/api/tts") return POST(new NextRequest("http://127.0.0.1/api/tts", { ...init, signal: init?.signal ?? undefined, headers: { "content-type": "application/json", host: "127.0.0.1" } }));
+      const text = JSON.parse(String(init?.body)).text; requests.push(text);
+      const bytes = new Uint8Array(24000 * 2 * 2); bytes.fill(20);
+      return new Response(new ReadableStream({ start(c) { c.enqueue(bytes.subarray(0, 1)); c.enqueue(bytes.subarray(1)); if (requests.length === 1) firstEof = () => c.close(); else if (requests.length === 2) secondEof = () => c.close(); else c.close(); }, cancel: canceled }), { headers: { "content-type": "audio/pcm" } });
+    }) as typeof fetch;
+    const phases: string[] = []; const errors: unknown[] = [];
+    const chunks = chunkSpeech("First. Second. Third. Fourth. Fifth. Sixth. Seventh. Eighth. Ninth. Tenth. Eleventh. Twelfth.", { backend: "soniox" });
+    const session = new PcmSession({ chunks, voice: { id: "soniox", model: "tts-rt-v2", voice: "Adrian", language: "en" }, context: audio as unknown as AudioContext, onPhase: (p) => phases.push(p), onPosition: () => undefined, onVoice: () => undefined, onError: (e) => errors.push(e), onEnd: () => undefined });
+    try {
+      session.start(); await new Promise((r) => setTimeout(r, 20));
+      expect(nodes.length).toBeGreaterThan(0); expect(requests).toEqual([chunks[0]!.text]); expect(phases).toEqual(["loading"]);
+      tick(0.03); expect(phases.at(-1)).toBe("playing");
+      await new Promise((r) => setTimeout(r, 1050)); expect(requests.length).toBe(2);
+      firstEof(); await new Promise((r) => setTimeout(r, 1050)); expect(requests.length).toBe(3);
+      expect(nodes.length).toBe(40); // chunk 2 arrived out of order and waits for chunk 1 EOF
+      secondEof(); await new Promise((r) => setTimeout(r, 20)); expect(nodes.length).toBe(60);
+      // The cursor still plays chunk zero. Completion cannot synthesize chunk 3.
+      await new Promise((r) => setTimeout(r, 1100)); expect(requests.length).toBe(3);
+      for (let i = 1; i < nodes.length; i++) expect(nodes[i]!.startTime).toBeCloseTo(nodes[i - 1]!.startTime + nodes[i - 1]!.buffer!.duration, 8);
+      const retained = chunks.slice(0, 3).map((chunk) => voiceKey(pcmVoice({ id: "soniox", model: "tts-rt-v2", voice: "Adrian", language: "en" }), chunk.text));
+      expect(pcmChunksCached(retained)).toBe(true);
+      session.seekToChar(chunks[1]!.start); session.seekToChar(chunks[2]!.start);
+      expect(nodes.slice(0, 60).every((node) => node.stopped)).toBe(true);
+      clearPcmCache(); expect(pcmChunksCached(retained)).toBe(false);
+      session.stop(); expect(nodes.every((node) => node.stopped)).toBe(true); expect(callback).toBeNull(); expect(errors).toEqual([]);
+    } finally {
+      session.stop(); globalThis.requestAnimationFrame = oldRaf; globalThis.cancelAnimationFrame = oldCancel;
+      envNames.forEach((name, i) => { if (prior[i] === undefined) delete process.env[name]; else process.env[name] = prior[i]; });
+      clearPcmCache();
+    }
+  });
+  test("language and output geometry participate in cache identity", () => {
+    const voice = { id: "soniox", model: "tts-rt-v2", voice: "Adrian", language: "en" };
+    expect(voiceKey(voice, "Hello")).not.toBe(voiceKey({ ...voice, language: "uk" }, "Hello"));
+    expect(voiceKey(voice, "Hello")).not.toBe(voiceKey({ ...voice, encoding: "pcm_s16le", sampleRate: 24000 }, "Hello"));
+  });
+});
+
+test("PCM busy backoff is abortable and permanent refusals do not retry", async () => {
+  const { requestPcm } = await import("./ttsPcmSession");
+  let calls = 0;
+  globalThis.fetch = mock(async () => { calls++; return new Response(null, { status: 429, headers: { "retry-after": "2" } }); }) as unknown as typeof fetch;
+  const abort = new AbortController(); const pending = requestPcm("Hello", abort.signal);
+  setTimeout(() => abort.abort(), 10); await expect(pending).rejects.toThrow("aborted"); expect(calls).toBe(1);
+  calls = 0;
+  globalThis.fetch = mock(async () => { calls++; return Response.json({ error: "speech authentication refused" }, { status: 401 }); }) as unknown as typeof fetch;
+  await expect(requestPcm("Hello", new AbortController().signal)).rejects.toBeInstanceOf(TtsRequestError); expect(calls).toBe(1);
 });

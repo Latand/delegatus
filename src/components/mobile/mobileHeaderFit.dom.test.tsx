@@ -388,3 +388,9 @@ test("the wake-lock row never becomes a sixth 44px target on the header row (#71
   expect(header(host).querySelector('[role="switch"]')).toBeNull();
   expect(scene.requests).toBe(0);
 });
+
+test("speech and reports are included in the title width budget", async () => {
+  const { titleCellWidth, TITLE_MIN_PX } = await import("./MobileShell");
+  expect(titleCellWidth(390, { back: true, attention: false, search: false, menu: true, actions: 2 })).toBe(198);
+  expect(titleCellWidth(390, { back: true, attention: true, search: false, menu: true, actions: 1 })).toBeGreaterThanOrEqual(TITLE_MIN_PX);
+});
