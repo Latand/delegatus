@@ -14003,7 +14003,8 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
       launchedAt: stamp(94), endedAt: null, failure: null, log: { changes: [], omittedChanges: 0, logGaps: 0, attention: [], leftAlone: [], verdict: null },
       counts: { writes: 0, tasks: 0, status: 0, closed: 0, created: 0, text: 0, details: 0, looks: 0 }, changedTaskIds: [], supersededTaskIds: [],
     } as unknown as MaintenanceRun;
-    const failed = { ...base, state: "failed" as const, endedAt: stamp(60), failure: { kind: "no-account" as const, detail: "no account" } } as MaintenanceRun;
+    /* The maintainer runs on Claude here, so the failure and its remedy name Claude. */
+    const failed = { ...base, state: "failed" as const, endedAt: stamp(60), failure: { kind: "no-account" as const, detail: "no account", engine: "claude" as const } } as MaintenanceRun;
     const live = { ...base, state: "running" as const, claimedAt: stamp(6), launchedAt: stamp(5) } as MaintenanceRun;
     const until = new Date(Date.now() + 2 * 3_600_000).toISOString();
     const notice = seatTickSettingsCardText({
@@ -14024,14 +14025,17 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     maintenance: {
       enabled: true, intervalHours: 3, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168, updatedAt: null, setBy: null, live: null,
       lastRun: { runId: "run-evidence", taskId: "t-tick-failed", conversationId: null, state: "failed", claimedAt: stamp(95), launchedAt: stamp(94), endedAt: stamp(60),
-        failure: { kind: "no-account", detail: "" }, counts: { writes: 0, tasks: 0, status: 0, closed: 0, created: 0, text: 0, details: 0, looks: 0 }, attentionCount: 0 },
+        failure: { kind: "no-account", detail: "", engine: "claude" }, counts: { writes: 0, tasks: 0, status: 0, closed: 0, created: 0, text: 0, details: 0, looks: 0 }, attentionCount: 0 },
       nextEligibleAt: null, nextRunAt: stamp(-120), waitingOn: "interval", pauseReason: null, runsError: null,
     },
   });
   const rolesAnswer = {
     revision: "fixture", health: "ok",
-    launchChoices: [{ engine: "codex", models: [{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol", shortLabel: "6.1-Sol", use: "review", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] }] }],
-    roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "codex", model: "gpt-6.1-sol", effort: "medium" } }],
+    launchChoices: [
+      { engine: "codex", models: [{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol", shortLabel: "6.1-Sol", use: "review", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] }] },
+      { engine: "claude", models: [{ id: "opus", label: "Opus", shortLabel: "Opus", use: "build", efforts: ["low", "medium", "high", "xhigh", "max"] }] },
+    ],
+    roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "claude", model: "opus", effort: "high" } }],
   };
 
   browserTest("the notice card is titled after the setting and opens the panel; the run cards keep their time visible; en and uk, light and dark, 1440 and 390", async () => {
@@ -14085,16 +14089,19 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
                   noticeButton: text('[data-open-seat-tick]'),
                 };
               });
-              /* The button asks the seat's chip for the panel, and the panel
-                 opens. The seat is unfolded first: the chip lives in its header. */
-              if (await fold.count()) await fold.first().click();
-              await page.waitForSelector("[data-seat-tick-chip]", { timeout: 10_000 });
+              /* The seat is folded, so its header and the chip in it are not
+                 drawn. The notice's button still asks for the panel: the seat
+                 unfolds and the chip opens it. */
+              const seat = page.locator("[data-kanban-seat]").first();
+              const foldedBefore = (await seat.getAttribute("data-collapsed")) === "1" && (await page.locator("[data-seat-tick-chip]").count()) === 0;
               await page.locator("[data-open-seat-tick]").scrollIntoViewIfNeeded();
+              await page.screenshot({ path: path.join(SHOTS, `${label}-notice-seat-folded.png`) });
               await page.locator("[data-open-seat-tick]").click();
               await page.waitForSelector("[data-seat-tick-popover]", { timeout: 10_000 });
               await page.waitForTimeout(500);
+              const unfoldedAfter = (await seat.getAttribute("data-collapsed")) === "0";
               await page.screenshot({ path: path.join(SHOTS, `${label}-notice-opens-panel.png`) });
-              readings.push({ label, ...read, popoverOpened: true, pageErrors });
+              readings.push({ label, ...read, foldedBefore, unfoldedAfter, popoverOpened: true, pageErrors });
               expect(pageErrors, `${label} page errors`).toEqual([]);
             } finally { await context.close(); }
           }
@@ -14110,7 +14117,21 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
                 await page.waitForTimeout(500);
                 await page.screenshot({ path: path.join(SHOTS, `${label}-${tab}.png`) });
               }
-              readings.push({ label, phone: true, pageErrors });
+              /* The notice opens the task screen; its 44 px control opens the
+                 tick sheet over it, through the nav the seat sheet's row uses. */
+              await page.locator('[data-phone-kanban-tab="inbox"]').click();
+              await page.waitForTimeout(400);
+              await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
+              const control = page.locator("[data-phone-task-tick-open]");
+              await control.waitFor({ timeout: 10_000 });
+              await page.waitForTimeout(500);
+              const controlHeight = Math.round((await control.boundingBox())?.height ?? 0);
+              await page.screenshot({ path: path.join(SHOTS, `${label}-notice-task-screen.png`) });
+              await control.click();
+              await page.waitForSelector('[data-testid="mobile-seat-tick-sheet"]', { timeout: 10_000 });
+              await page.waitForTimeout(700);
+              await page.screenshot({ path: path.join(SHOTS, `${label}-notice-opens-tick-sheet.png`) });
+              readings.push({ label, phone: true, controlHeight, tickSheetOpened: true, pageErrors });
               expect(pageErrors, `${label} page errors`).toEqual([]);
             } finally { await context.close(); }
           }
@@ -14118,7 +14139,11 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
       }
     } finally { await browser.close(); server.stop(); }
     fs.writeFileSync(path.join(SHOTS, "board-cards-readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
-    const desk = readings.filter((entry) => !entry.phone) as Array<{ label: string; notice: { text: string }; failed: { text: string; timeShown: boolean | null }; live: { text: string; timeShown: boolean | null }; failedBody: string; noticeButton: string }>;
+    for (const entry of readings.filter((reading) => reading.phone) as Array<{ label: string; controlHeight: number; tickSheetOpened: boolean }>) {
+      expect(entry.controlHeight, `${entry.label} the tick control is a 44 px target`).toBeGreaterThanOrEqual(44);
+      expect(entry.tickSheetOpened, `${entry.label} the tick sheet opened`).toBe(true);
+    }
+    const desk = readings.filter((entry) => !entry.phone) as Array<{ label: string; notice: { text: string }; failed: { text: string; timeShown: boolean | null }; live: { text: string; timeShown: boolean | null }; failedBody: string; noticeButton: string; foldedBefore: boolean; unfoldedAfter: boolean }>;
     for (const entry of desk) {
       const en = entry.label.endsWith("-en");
       /* The notice is titled after the setting, in the card's own language. */
@@ -14130,7 +14155,10 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
         expect(run.text, `${entry.label} run title`).toMatch(en ? /^\d{2}\.\d{2} \d{2}:\d{2} · Board maintenance$/ : /^\d{2}\.\d{2} \d{2}:\d{2} · Обслуговування дошки$/);
         expect(run.timeShown, `${entry.label} the run's time is drawn inside its title`).toBe(true);
       }
-      expect(entry.failedBody, `${entry.label} failed card text`).toContain(en ? "Failed: no Codex account is available for this project." : "Не вдалося: немає доступного акаунта Codex");
+      expect(entry.failedBody, `${entry.label} failed card text`).toContain(en ? "Failed: no Claude account is available for this project." : "Не вдалося: немає доступного акаунта Claude");
+      /* The button answers on a folded seat: it unfolds and the panel opens. */
+      expect(entry.foldedBefore, `${entry.label} the seat was folded and drew no chip`).toBe(true);
+      expect(entry.unfoldedAfter, `${entry.label} the request unfolded the seat`).toBe(true);
     }
   }, 600_000);
 });

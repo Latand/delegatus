@@ -4,8 +4,9 @@ import { loadTasks } from "@/lib/tasks/store";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { defaultSeatTickSources, type SeatTickSources } from "@/lib/monitor/seatTickSources";
 import { productionBoardMaintenanceController, type BoardMaintenancePorts, type MaintenanceObservation } from "./run";
+import { saveRoleMapping } from "@/lib/roles/store";
 import { claim, sandbox, input, PROJECT, NOW } from "./testFixture";
-import { readMaintenanceProject, readMaintenanceRun, recordMaintenanceChange } from "./store";
+import { maintenanceRuns, readMaintenanceProject, readMaintenanceRun, recordMaintenanceChange } from "./store";
 let held: ReturnType<typeof sandbox>;
 afterEach(() => held?.restore());
 const tasks = () => loadTasks(statePath("tasks.json"));
@@ -60,6 +61,17 @@ test("no account leaves one blocked visible card, success summarizes, hides and 
   const done = tasks().find(t => t.id === run.taskId)!; expect(done).toMatchObject({ status: "done", board: "hidden" }); expect(done.text).toContain("змінено 1 задач"); expect(done.text).toContain("Choose"); expect(h.archived).toEqual([run.runId]); expect(tasks().find(t => t.id === blocked.id)?.status).toBe("done");
   const ended = readMaintenanceRun(run.runId)!; expect(ended.log.leftAlone).toHaveLength(1);
   const snapshot = JSON.stringify(tasks()); await h.controller.reconcile(PROJECT); expect(JSON.stringify(tasks())).toBe(snapshot);
+});
+test("a launch refused for lack of an account records the engine the maintainer row runs on", async () => {
+  const h = harness(); h.respond({ status: 409, body: { code: "ENGINE_NOT_CONNECTED", error: "fixture engine not connected" } });
+  await h.controller.launchIfDue(input());
+  expect(maintenanceRuns(PROJECT)).toHaveLength(1); expect(maintenanceRuns(PROJECT)[0]!.failure).toMatchObject({ kind: "no-account", engine: "codex" });
+  expect(tasks()[0]!.text).toContain("немає доступного акаунта Codex");
+  saveRoleMapping({ maintainer: { config: { engine: "claude", model: "opus", effort: "medium" } } });
+  h.now(NOW + 3 * 3600000); await h.controller.launchIfDue(input());
+  const claude = maintenanceRuns(PROJECT)[1]!;
+  expect(claude.failure).toMatchObject({ kind: "no-account", engine: "claude" });
+  expect(tasks().find(t => t.id === claude.taskId)!.text).toContain("немає доступного акаунта Claude");
 });
 test("reconcile resumes claimed card and spawn under same key", async () => {
   const h = harness(); const run = claim(); await h.controller.reconcile(PROJECT);

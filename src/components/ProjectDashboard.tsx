@@ -2291,6 +2291,7 @@ function ProjectDashboardView({
             taskId={mobileTop.id}
             layout={pipelineLayout}
             project={project}
+            projectName={projectName}
             groups={layoutGroups}
             manual={layoutManual}
             files={files}

@@ -25,11 +25,13 @@ export function maintenanceCardText(locale: "uk" | "en", run: MaintenanceRun, ti
      title from the right. */
   const title = `${time(run.claimedAt)} · ${locale === "uk" ? "Обслуговування дошки" : "Board maintenance"}`;
   if (run.state === "failed") {
+    /* The runtime the refused launch ran on; a record from before it was kept is a Codex one. */
+    const engineName = run.failure?.engine === "claude" ? "Claude" : "Codex";
     const reasons: Record<MaintenanceFailureKind, string> = {
-      "no-account": "немає доступного акаунта Codex для цього проєкту", "no-repository": "не знайдено теку репозиторію проєкту", "launch-refused": "Delegatus відмовив у запуску", "launch-failed": "агент не запустився", "host-died": "процес агента зупинився посеред роботи", "turn-error": "агент завершився з помилкою", "agent-fail": "агент не зміг завершити перевірку", "needs-decision": "потрібне рішення оператора", "timed-out": "агент не завершив роботу за 90 хвилин",
+      "no-account": `немає доступного акаунта ${engineName} для цього проєкту`, "no-repository": "не знайдено теку репозиторію проєкту", "launch-refused": "Delegatus відмовив у запуску", "launch-failed": "агент не запустився", "host-died": "процес агента зупинився посеред роботи", "turn-error": "агент завершився з помилкою", "agent-fail": "агент не зміг завершити перевірку", "needs-decision": "потрібне рішення оператора", "timed-out": "агент не завершив роботу за 90 хвилин",
     };
     const reasonsEn: Record<MaintenanceFailureKind, string> = {
-      "no-account": "no Codex account is available for this project", "no-repository": "the project's repository folder was not found", "launch-refused": "Delegatus refused the launch", "launch-failed": "the agent did not start", "host-died": "the agent's process stopped mid-run", "turn-error": "the agent ended with an error", "agent-fail": "the agent could not finish the review", "needs-decision": "a decision from the operator is needed", "timed-out": "the agent did not finish within 90 minutes",
+      "no-account": `no ${engineName} account is available for this project`, "no-repository": "the project's repository folder was not found", "launch-refused": "Delegatus refused the launch", "launch-failed": "the agent did not start", "host-died": "the agent's process stopped mid-run", "turn-error": "the agent ended with an error", "agent-fail": "the agent could not finish the review", "needs-decision": "a decision from the operator is needed", "timed-out": "the agent did not finish within 90 minutes",
     };
     const next = time(new Date(Date.parse(run.launchedAt ?? run.claimedAt) + run.intervalHours * 3_600_000).toISOString());
     const decision = run.failure!.kind === "needs-decision" ? `\n${run.failure!.detail}` : "";

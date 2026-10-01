@@ -4424,7 +4424,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "seatTick.maintenance.next.waitingNoSeat": "очікує: у проєкту немає оркестратора",
   "seatTick.maintenance.next.checksOff": "невідомо: перевірки тікера вимкнено",
   "seatTick.maintenance.runsUnreadable": "Запис запусків не вдалося прочитати, тож останній запуск недоступний. Саме налаштування працює.",
-  "seatTick.maintenance.failure.noAccount": "для цього проєкту немає доступного акаунта Codex",
+  "seatTick.maintenance.failure.noAccount": "для цього проєкту немає доступного акаунта {engine}",
   "seatTick.maintenance.failure.noRepository": "не знайдено теку репозиторію проєкту",
   "seatTick.maintenance.failure.launchRefused": "Delegatus відмовив у запуску",
   "seatTick.maintenance.failure.launchFailed": "агент не запустився",

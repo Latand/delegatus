@@ -141,6 +141,7 @@ function mount(ports: TaskMutationPorts, pipelinePorts: PipelinePorts, subject: 
         taskId={subject.id}
         layout={layout(files)}
         project="fixture"
+        projectName="Fixture"
         groups={[]}
         manual={[]}
         files={files}
@@ -477,4 +478,32 @@ test("priority is set from the task sheet: the menu's Priority row opens three l
   flushSync(() => nav.openSheet("menu"));
   click(q(body, '[data-phone-task-menu="priority"]'));
   expect(q(body, '[data-phone-task-priority][aria-checked="true"]')!.getAttribute("data-phone-task-priority")).toBe("high");
+});
+
+test("the tick notice offers a 44 px control that opens the project's seat tick sheet, and its close returns to the task", () => {
+  const notice = {
+    ...theTask,
+    id: "t-tick-notice",
+    text: "Тікер: кожні 30 хв до 18:00\nЧастота пробуджень цього проєкту змінена.\nmonitor-ref: seat-tick-settings",
+  } as unknown as BoardTask;
+  const { host, nav } = mount(taskPorts([]), noPipelinePorts, notice);
+  const open = q(host, "[data-phone-task-tick-open]")!;
+  expect(open.getAttribute("data-phone-task-tick-open")).toBe("fixture");
+  expect(open.textContent).toContain(en("kanban.tickNotice.open"));
+  /* A phone control is at least 44 px: the row's own minimum, not a link. */
+  expect(open.className).toContain("min-h-12");
+  expect(nav.getState().sheet).toBeNull();
+  click(open);
+  expect(nav.getState().sheet).toBe("tick");
+  const sheet = q(dom.document.body as unknown as HTMLElement, "[data-testid='mobile-seat-tick-sheet']");
+  expect(sheet).not.toBeNull();
+  expect(q(dom.document.body as unknown as HTMLElement, "[data-mobile2-sheet='tick']")?.textContent ?? "").toContain("Fixture");
+  flushSync(() => nav.closeSheet());
+  expect(nav.getState().sheet).toBeNull();
+  expect(nav.getState().stack.at(-1)).toEqual({ kind: "task", id: "t-tick-notice" });
+});
+
+test("an ordinary task has no tick control", () => {
+  const { host } = mount(taskPorts([]), noPipelinePorts);
+  expect(q(host, "[data-phone-task-tick-open]")).toBeNull();
 });

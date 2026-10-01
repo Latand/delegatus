@@ -380,11 +380,11 @@ test("maintenance: a failed run is a warning with its reason by kind, never the 
   expect(r.status.headline).toMatch(/^Maintenance every 3 h · failed \d{2}:\d{2}$/);
   expect(r.status.segments).toEqual([
     { kind: "text", text: "no Codex account is available for this project" },
-    { kind: "accounts", text: "Accounts" },
+    { kind: "accounts", text: "Accounts", engine: "codex" },
     { kind: "text", text: expect.stringMatching(/^retry ≈ \d{2}:\d{2}$/) },
   ]);
   expect(r.last.text).toMatch(/^Failed \d{2}:\d{2} · no Codex account is available for this project$/);
-  expect(r.last.links).toEqual([{ kind: "accounts", text: "Accounts" }]);
+  expect(r.last.links).toEqual([{ kind: "accounts", text: "Accounts", engine: "codex" }]);
   expect(JSON.stringify(r)).not.toContain("/srv/engine");
   /* Only a missing account has the Accounts remedy. */
   const other = reading(maintenance({ enabled: true, lastRun: run({ state: "failed", failure: { kind: "host-died", detail: "" } }) }));
@@ -392,6 +392,20 @@ test("maintenance: a failed run is a warning with its reason by kind, never the 
   /* A kind this build does not know still reads as a failure, not as blank. */
   const odd = reading(maintenance({ enabled: true, lastRun: run({ state: "failed", failure: { kind: "from-the-future" as never, detail: "" } }) }));
   expect(odd.last.text).toContain("the run failed for a reason this panel does not know");
+});
+
+test("maintenance: a no-account run names the engine it launched on, and its Accounts link opens that engine", () => {
+  const claude = reading(maintenance({ enabled: true, lastRun: run({ state: "failed", failure: { kind: "no-account", detail: "", engine: "claude" } }) }));
+  expect(claude.status.segments).toContainEqual({ kind: "text", text: "no Claude account is available for this project" });
+  expect(claude.status.segments).toContainEqual({ kind: "accounts", text: "Accounts", engine: "claude" });
+  expect(claude.last.text).toMatch(/ · no Claude account is available for this project$/);
+  expect(claude.last.links).toEqual([{ kind: "accounts", text: "Accounts", engine: "claude" }]);
+  const uk = reading(maintenance({ enabled: true, lastRun: run({ state: "failed", failure: { kind: "no-account", detail: "", engine: "claude" } }) }), "uk");
+  expect(uk.last.text).toContain("немає доступного акаунта Claude");
+  /* A record from before the engine was kept reads as the maintainer row's current engine. */
+  const legacy = (engine: "claude" | "codex") => maintenanceReading(maintenance({ enabled: true, lastRun: run({ state: "failed", failure: { kind: "no-account", detail: "" } }) }), NOW, "en", t, engine);
+  expect(legacy("claude")!.last.links).toEqual([{ kind: "accounts", text: "Accounts", engine: "claude" }]);
+  expect(legacy("codex")!.last.links).toEqual([{ kind: "accounts", text: "Accounts", engine: "codex" }]);
 });
 
 test("maintenance: a hold says why the next run waits", () => {
@@ -431,6 +445,6 @@ test("maintenance: both locales carry every failure kind and the status words", 
   expect(reading(maintenance({ enabled: true, lastRun: run({ attentionCount: 1 }) }), "uk").status.segments[1]).toMatchObject({ text: "1 чекає на вас" });
   expect(uk.last.text).toMatch(/^Готово \d{2}:\d{2} · змінено 9$/);
   const failed = reading(maintenance({ enabled: true, lastRun: run({ state: "failed", failure: { kind: "no-account", detail: "" } }) }), "uk");
-  expect(failed.status.segments).toContainEqual({ kind: "accounts", text: "Акаунти" });
+  expect(failed.status.segments).toContainEqual({ kind: "accounts", text: "Акаунти", engine: "codex" });
   expect(failed.last.text).toMatch(/^Не вдалося \d{2}:\d{2} · /);
 });

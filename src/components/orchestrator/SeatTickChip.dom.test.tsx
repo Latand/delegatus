@@ -785,6 +785,26 @@ test("maintenance: a failed run is a warning with its reason by kind, no engine 
   expect(body().querySelector("[data-seat-tick-status-link=\"accounts\"]")).toBeNull();
 });
 
+test("maintenance: a no-account run on Claude names Claude and its Accounts link opens the Claude accounts", async () => {
+  getAnswer = withMaintenance({
+    enabled: true, waitingOn: "interval", nextRunAt: new Date(Date.now() + 3_600_000).toISOString(),
+    lastRun: endedRun({ state: "failed", failure: { kind: "no-account", detail: "", engine: "claude" } }),
+  });
+  const { root } = await mount();
+  await open(root);
+  expect(mRows().last).toMatch(/^Failed \d{2}:\d{2} · no Claude account is available for this project$/);
+  expect(popover()!.textContent).not.toContain("no Codex account");
+  const asked: Array<{ engine?: string; accountId?: string }> = [];
+  const listener = (event: Event) => asked.push((event as CustomEvent).detail);
+  dom.window.addEventListener("llv:open-accounts", listener as never);
+  try {
+    press(body().querySelector("[data-seat-tick-status-link=\"accounts\"]") as HTMLButtonElement);
+  } finally {
+    dom.window.removeEventListener("llv:open-accounts", listener as never);
+  }
+  expect(asked).toEqual([{ engine: "claude", accountId: "" }]);
+});
+
 test("maintenance: wakes off pauses it, and the panel says so in the status and the next-run row", async () => {
   getAnswer = withMaintenance({
     enabled: true, waitingOn: "wakes-off", pauseReason: "paused while wakes are off", lastRun: endedRun(), nextRunAt: null,
@@ -962,6 +982,20 @@ test("the board's tick notice opens this project's panel and no other", async ()
   flushSync(() => requestSeatTickPanel(PROJECT));
   await settle(root, 2);
   expect(popover()).not.toBeNull();
+});
+
+test("a request that arrived before the chip mounted opens it on mount, and only once", async () => {
+  /* A folded seat has no chip: the seat unfolds on the request and the chip
+     mounts with its header. */
+  const { requestSeatTickPanel, resetPendingSeatTickPanel } = await import("./openSeatTick");
+  resetPendingSeatTickPanel();
+  requestSeatTickPanel(PROJECT);
+  const { root } = await mount();
+  await settle(root, 2);
+  expect(popover()).not.toBeNull();
+  /* The request was spent: a chip mounting later does not reopen it. */
+  const { takePendingSeatTickPanel } = await import("./openSeatTick");
+  expect(takePendingSeatTickPanel(PROJECT)).toBe(false);
 });
 
 test("maintenance: an answer from a server with no timer block renders no group at all", async () => {

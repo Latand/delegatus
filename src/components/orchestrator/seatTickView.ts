@@ -420,7 +420,7 @@ export type MaintenanceStateKind = "off" | "on" | "running";
 export type StatusSegment =
   | { kind: "text"; text: string }
   | { kind: "card"; text: string; taskId: string }
-  | { kind: "accounts"; text: string };
+  | { kind: "accounts"; text: string; engine: "claude" | "codex" };
 
 export interface MaintenanceReading {
   state: MaintenanceStateKind;
@@ -495,6 +495,7 @@ export function maintenanceReading(
   now: number,
   locale: string,
   t: TFunction,
+  fallbackEngine: "claude" | "codex" = "codex",
 ): MaintenanceReading | null {
   if (!m) return null;
   const last = m.lastRun;
@@ -504,12 +505,17 @@ export function maintenanceReading(
   const paused = m.waitingOn === "wakes-off";
   const since = seatTickLocalTime(m.live?.launchedAt ?? m.live?.claimedAt ?? null, now, locale);
   const endedAt = last ? seatTickLocalTime(last.endedAt ?? last.claimedAt, now, locale) ?? t("seatTick.unknown") : null;
-  const reason = last?.failure ? t(MAINTENANCE_FAILURES[last.failure.kind] ?? "seatTick.maintenance.failure.unknown") : t("seatTick.maintenance.failure.unknown");
+  /* The runtime the refused launch ran on, as the run recorded it; a record
+     from before it was kept reads as the maintainer row's current engine. */
+  const failedEngine = last?.failure?.engine ?? fallbackEngine;
+  const reason = last?.failure
+    ? t(MAINTENANCE_FAILURES[last.failure.kind] ?? "seatTick.maintenance.failure.unknown", { engine: failedEngine === "claude" ? "Claude" : "Codex" })
+    : t("seatTick.maintenance.failure.unknown");
   const noAccount = failed && last?.failure?.kind === "no-account";
   const attention = !failed && last && last.attentionCount > 0 && last.taskId
     ? ({ kind: "card", text: t("seatTick.maintenance.needYou", { count: last.attentionCount }), taskId: last.taskId } satisfies StatusSegment)
     : null;
-  const accounts = noAccount ? ({ kind: "accounts", text: t("seatTick.maintenance.accounts") } satisfies StatusSegment) : null;
+  const accounts = noAccount ? ({ kind: "accounts", text: t("seatTick.maintenance.accounts"), engine: failedEngine } satisfies StatusSegment) : null;
 
   /* The status line. */
   const segments: StatusSegment[] = [];

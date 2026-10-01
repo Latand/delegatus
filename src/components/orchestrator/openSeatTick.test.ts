@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import { seatTickSettingsCardText } from "@/lib/monitor/cards";
 
-import { isSeatTickNotice } from "./openSeatTick";
+import { isSeatTickNotice, requestSeatTickPanel, resetPendingSeatTickPanel, takePendingSeatTickPanel } from "./openSeatTick";
 
 const input = {
   project: "atlas",
@@ -25,4 +25,25 @@ test("other text is not the notice", () => {
   expect(isSeatTickNotice("monitor-ref: seat-tick-stuck-interval")).toBe(false);
   expect(isSeatTickNotice(null)).toBe(false);
   expect(isSeatTickNotice(undefined)).toBe(false);
+});
+
+test("a request is held for the chip that mounts after it, once, and only for its own project", () => {
+  resetPendingSeatTickPanel();
+  requestSeatTickPanel("atlas");
+  expect(takePendingSeatTickPanel("another-project")).toBe(false);
+  expect(takePendingSeatTickPanel("atlas")).toBe(true);
+  expect(takePendingSeatTickPanel("atlas")).toBe(false);
+});
+
+test("a request nobody answered goes stale", () => {
+  resetPendingSeatTickPanel();
+  const now = Date.now;
+  try {
+    Date.now = () => 1_000_000;
+    requestSeatTickPanel("atlas");
+    Date.now = () => 1_000_000 + 5_001;
+    expect(takePendingSeatTickPanel("atlas")).toBe(false);
+  } finally {
+    Date.now = now;
+  }
 });

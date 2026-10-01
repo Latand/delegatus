@@ -376,7 +376,7 @@ function Segments({ segments, phone, onOpened }: { segments: readonly StatusSegm
               data-seat-tick-status-link={segment.kind}
               onClick={() => {
                 if (segment.kind === "card") openMaintenanceCard(segment.taskId);
-                else requestAccountPanel("codex", "");
+                else requestAccountPanel(segment.engine, "");
                 onOpened?.();
               }}
               className={`${LINK} ${phone ? "min-h-11 -my-3.5" : ""}`}
@@ -411,7 +411,7 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
   const record = read.record;
   const { draft, setDraft } = state;
   const maintenance = record?.maintenance;
-  const maintenanceView = maintenanceReading(maintenance, now, locale, t);
+  const maintenanceView = maintenanceReading(maintenance, now, locale, t, state.maintainer.config?.engine === "claude" ? "claude" : "codex");
 
   const phone = surface === "mobile";
   const storedUntil = record?.settings.until ?? null;
@@ -674,7 +674,7 @@ function SeatTickMaintenance({ maintenance, view, state, control, row, phone, on
                   data-seat-tick-maintenance-link={link.kind}
                   onClick={() => {
                     if (link.kind === "card") openMaintenanceCard(link.taskId);
-                    else if (link.kind === "accounts") requestAccountPanel("codex", "");
+                    else if (link.kind === "accounts") requestAccountPanel(link.engine, "");
                     onOpenedCard?.();
                   }}
                   className={`${LINK} text-ui ${phone ? "min-h-11" : "h-7"}`}

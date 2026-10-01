@@ -25,6 +25,9 @@ test("card texts for both locales and states, item label bounded", () => {
   const failed = { ...run, state: "failed" as const, failure: { kind: "no-account" as const, detail: "fixture" } };
   expect(maintenanceCardText("uk", failed)).toContain("немає доступного акаунта"); expect(maintenanceCardText("en", failed)).toContain("Failed: no Codex account is available for this project.");
   expect(maintenanceCardText("en", failed)).not.toContain("no-account");
+  const onClaude = { ...failed, failure: { ...failed.failure, engine: "claude" as const } };
+  expect(maintenanceCardText("en", onClaude)).toContain("Failed: no Claude account is available for this project.");
+  expect(maintenanceCardText("uk", onClaude)).toContain("немає доступного акаунта Claude");
   const decision = { ...run, state: "failed" as const, failure: { kind: "needs-decision" as const, detail: "Cannot read the forge without operator access." } };
   expect(maintenanceCardText("uk", decision)).toContain("Cannot read the forge without operator access.");
   expect(maintenanceCardText("en", decision)).toContain("Cannot read the forge without operator access.");

@@ -4513,7 +4513,7 @@ export const en = {
   "seatTick.maintenance.next.waitingNoSeat": "held: the project has no seat",
   "seatTick.maintenance.next.checksOff": "unknown: tick checks are off",
   "seatTick.maintenance.runsUnreadable": "The run record could not be read, so the last run is unavailable. The setting still works.",
-  "seatTick.maintenance.failure.noAccount": "no Codex account is available for this project",
+  "seatTick.maintenance.failure.noAccount": "no {engine} account is available for this project",
   "seatTick.maintenance.failure.noRepository": "the project's repository folder was not found",
   "seatTick.maintenance.failure.launchRefused": "Delegatus refused the launch",
   "seatTick.maintenance.failure.launchFailed": "the agent did not start",
