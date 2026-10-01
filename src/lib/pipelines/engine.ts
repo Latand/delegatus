@@ -94,7 +94,7 @@ import { graphDigest, isStageDigest, stageDigest } from "./stageDigest";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
-import { pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, unclaimedPipelinePublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForProjection, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
+import { pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, unclaimedPipelinePublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForProjection, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { mergeOnReviewEnabled } from "@/lib/projects/settings";
@@ -4597,7 +4597,7 @@ export const PIPELINE_BASE_UNRESOLVED_DETAIL = "resolving the pipeline base and 
 interface PipelineProvisionOutcome {
   id: string;
   /** The identity the work was performed against. */
-  fence: { repoDir: string; worktreeDir: string; branch: string; baseBranch: string; baseRef: string; createdAt: string; lastPassedCommit: string; owner: string };
+  fence: { repoDir: string; worktreeDir: string; branch: string; baseBranch: string; baseRef: string; baseRefPinned: boolean; createdAt: string; lastPassedCommit: string; owner: string };
   /** The commit the fetch resolved, recorded even when the worktree then
       failed: a retry of a parked provisioning provisions the SAME commit the
       lane was parked on rather than whatever the base has moved to since. */
@@ -4606,6 +4606,7 @@ interface PipelineProvisionOutcome {
   head: string | null;
   /** What stopped the lane, or null when it is provisioned. */
   error: string | null;
+  preservedLocalRef?: import("./git").PreservedProvisionRef;
 }
 
 function provisionFence(pipeline: Pipeline): PipelineProvisionOutcome["fence"] {
@@ -4618,6 +4619,7 @@ function provisionFence(pipeline: Pipeline): PipelineProvisionOutcome["fence"] {
     branch: pipeline.branch,
     baseBranch: pipeline.baseBranch,
     baseRef: pipeline.baseRef,
+    baseRefPinned: pipeline.baseRefPinned === true,
   };
 }
 
@@ -4633,7 +4635,8 @@ async function provisionPipelineOutsideLease(pipeline: Pipeline, exec: Provision
     base = { baseBranch: resolved.baseBranch, baseRef: resolved.baseRef };
   }
   const provisioned = await provisionPipelineWorktreeAsync({ ...pipeline, ...base }, exec, signal);
-  return { id: pipeline.id, fence, base, head: provisioned.ok ? provisioned.sha : null, error: provisioned.ok ? null : provisioned.error };
+  return { id: pipeline.id, fence, base, head: provisioned.ok ? provisioned.sha : null, error: provisioned.ok ? null : provisioned.error,
+    ...(provisioned.preservedLocalRef ? { preservedLocalRef: provisioned.preservedLocalRef } : {}) };
 }
 
 /**
@@ -4735,6 +4738,14 @@ function applyProvisionOutcome(pipeline: Pipeline, outcome: PipelineProvisionOut
     pipeline.baseRef = outcome.base.baseRef;
     pipeline.lastPassedCommit = outcome.base.baseRef;
   }
+  const preserved = outcome.preservedLocalRef;
+  const preservationDetail = preserved
+    ? `${preserved.unpublishedCommits} unpublished commit(s) preserved at ${preserved.ref}; checkout excludes this local tip`
+    : null;
+  if (preservationDetail && pipeline.delivery
+    && !pipeline.delivery.journal.some((entry) => entry.reason === preservationDetail)) {
+    deliveryJournal(pipeline, "recovery", preservationDetail);
+  }
   if (outcome.error) {
     deferOrParkProvisioning(pipeline, outcome.error, ports);
     return true;
@@ -4742,7 +4753,7 @@ function applyProvisionOutcome(pipeline: Pipeline, outcome: PipelineProvisionOut
   delete pipeline.provisioningWait;
   if (outcome.head) pipeline.lastPassedCommit = outcome.head;
   pipeline.state = "running";
-  pipeline.stateDetail = null;
+  pipeline.stateDetail = preservationDetail;
   return true;
 }
 
@@ -6769,6 +6780,7 @@ export async function createPipelineFromRequest(
   if (base?.ok) {
     pipeline.baseBranch = base.baseBranch;
     pipeline.baseRef = base.baseRef;
+    pipeline.baseRefPinned = true;
     pipeline.lastPassedCommit = base.baseRef;
   } else if (pipeline.state === "provisioning") {
     /* The branch the controller must fetch travels on the record: without it
@@ -7975,6 +7987,7 @@ export async function patchPipeline(
       if (repoChanged) {
         pipeline.baseBranch = "";
         pipeline.baseRef = "";
+        delete pipeline.baseRefPinned;
         pipeline.lastPassedCommit = "";
       }
     } else if (req.action === "set-position") {

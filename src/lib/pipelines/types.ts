@@ -775,6 +775,8 @@ export type Pipeline = {
   branch: string;
   baseBranch: string;
   baseRef: string;
+  /** The caller explicitly pinned baseRef; automatically fetched bases are not pins. */
+  baseRefPinned?: boolean;
   lastPassedCommit: string;
   /** Absent reads as `internal`. See {@link PipelinePublication}. */
   publication?: PipelinePublication;

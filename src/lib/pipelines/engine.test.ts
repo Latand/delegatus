@@ -1105,6 +1105,61 @@ test("a new owner reviews the commit published after the producer turn ends", as
   }
 });
 
+for (const pinned of [false, true]) {
+  test(`successor provisioning records its backup and respects the caller's base pin (${pinned})`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provision-published-"));
+    const repo = path.join(root, "repo");
+    const origin = path.join(root, "origin.git");
+    const { realExec } = await import("@/lib/workflows/provision");
+    const { realProvisionExec } = await import("./git");
+    const git = (cwd: string, ...args: string[]) => {
+      const result = realExec("git", args, cwd);
+      if (result.code !== 0) throw new Error(result.stderr || result.stdout);
+      return result.stdout.trim();
+    };
+    try {
+      fs.mkdirSync(repo);
+      git(repo, "init", "--initial-branch=main");
+      git(repo, "config", "user.name", "Fixture");
+      git(repo, "config", "user.email", "noreply");
+      git(repo, "config", "commit.gpgSign", "false");
+      git(repo, "commit", "--allow-empty", "-m", "pinned base");
+      const base = git(repo, "rev-parse", "HEAD");
+      git(root, "init", "--bare", "--initial-branch=main", origin);
+      git(repo, "remote", "add", "origin", origin);
+      git(repo, "push", "origin", "main");
+      git(repo, "checkout", "-b", "feature/provision");
+      git(repo, "commit", "--allow-empty", "-m", "published head");
+      git(repo, "push", "origin", "feature/provision");
+      const published = git(repo, "rev-parse", "HEAD");
+      git(repo, "commit", "--allow-empty", "-m", "unpublished leftover");
+      const leftover = git(repo, "rev-parse", "HEAD");
+      const h = harness();
+      h.ports.exec = realExec;
+      h.ports.provisionExec = realProvisionExec;
+      const created = await createPipelineFromRequest({
+        task: "Published successor", repoDir: repo, ...(pinned ? { baseRef: base } : {}),
+        delivery: { branch: "refs/heads/feature/provision" },
+        stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: null }],
+      }, h.ports);
+      if (!created.pipeline) throw new Error(created.error);
+      await tickPipelines([], h.ports);
+      const lane = loadPipelines().find((item) => item.id === created.pipeline!.id)!;
+      expect(lane.state).toBe("running");
+      expect(git(lane.worktreeDir, "rev-parse", "HEAD")).toBe(pinned ? base : published);
+      expect(git(repo, "rev-parse", "HEAD")).toBe(leftover);
+      const backup = git(repo, "for-each-ref", "--format=%(refname)", "refs/heads/backup/provision-unpublished");
+      expect(git(repo, "rev-parse", backup)).toBe(leftover);
+      expect(lane.stateDetail).toContain(backup);
+      expect(lane.delivery!.journal.some((entry) => entry.reason.includes(backup) && entry.reason.includes("1 unpublished commit"))).toBe(true);
+      expect(loadPipelines().find((item) => item.id === lane.id)!.baseRefPinned ?? false).toBe(pinned);
+    } finally {
+      savePipelines([]);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
 test("delivery creation clamps the second target lane and replays its original key before provisioning", async () => {
   const h = harness();
   const request = { task: "Delivery owner", repoDir: "/repo", stages: RUN_STAGES as never, autoStart: false,
