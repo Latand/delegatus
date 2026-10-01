@@ -366,28 +366,101 @@ function sensitiveTextViews(text: string): { error: boolean; views: [string, str
   return { error: canonical.error, views: [decoded, withoutMarkup] };
 }
 
-function normalizedSensitiveText(text: string): { compact: string; error: boolean; searchable: string } {
+function normalizedSensitiveText(text: string): { error: boolean; searchable: string; views: [string, string] } {
   const { error, views } = sensitiveTextViews(text);
   const [decoded, withoutMarkup] = views;
   return {
-    compact: `${compactSensitiveText(decoded)}\0${compactSensitiveText(withoutMarkup)}`,
     error,
     searchable: `${decoded}\n${withoutMarkup}`,
+    views,
   };
 }
 
-function matchesKnownFingerprint(compact: string): boolean {
+// A conservative vocabulary, rather than a phrase allowlist. Only an occurrence
+// made of TWO whole common words, at most 16 letters, separated by whitespace or
+// one hyphen in prose is ambiguous. Keep hashing every other compact window:
+// contiguous spellings, resource/identifier contexts, digits, long or unusual
+// labels and markup-split tokens retain their coverage. Inspect both text views
+// independently so a prose occurrence cannot excuse a real leak elsewhere.
+// This works with existing v1 fingerprints; no raw private label is needed.
+const commonProseWords = new Set(`
+  about after again agent all also another any around back before between big
+  black blue book both build call can change child city clear close code come
+  common copy could day different down each end even every example few find
+  first follow for form free fresh from full get give good great green group
+  had hand has have help here high home how into its keep kind know large last
+  later left life light like line list little local long look made main make
+  many may mean more most much must name near need new next night now number
+  off old one only open other our out over own page part people place point
+  public read red right room run same say see set shared should show side small
+  some source space start state still such system take test text than that the
+  their them then there these thing think this those three through time together
+  too tree two under use value very want water way well what when where which
+  while white who why will with word work world would write year you young your
+`.trim().split(/\s+/));
+
+function compactSourceOffsets(view: string, compactLength: number): Uint32Array {
+  const offsets = new Uint32Array(compactLength);
+  let offset = 0;
+  // Build once, only after a fingerprint hit, so repeated prose stays linear.
+  // The offsets use UTF-16 units just like compact.slice(), including letters
+  // outside the BMP.
+  for (const match of view.matchAll(/[\p{L}\p{N}]/gu)) {
+    for (let unit = 0; unit < match[0].length; unit += 1) offsets[offset++] = match.index;
+  }
+  return offsets;
+}
+
+function ordinaryCompoundOccurrence(
+  view: string,
+  offsets: Uint32Array,
+  emailSpans: Array<{ start: number; end: number }>,
+  compactIndex: number,
+  length: number,
+): boolean {
+  const start = offsets[compactIndex];
+  const last = offsets[compactIndex + length - 1];
+  const end = last + ((view.codePointAt(last) ?? 0) > 0xffff ? 2 : 1);
+  const words = view.slice(start, end).split(/[ \t\r\n]+|-/);
+  if (words.length !== 2 || !words.every((word) => commonProseWords.has(word))) return false;
+  const before = view.slice(Math.max(0, start - 2), start).match(/.$/u)?.[0] ?? "";
+  const after = view.slice(end, end + 2).match(/^./u)?.[0] ?? "";
+  const resourceBoundary = /[\p{L}\p{N}_/\\@#%+?&=:\-]/u;
+  if (resourceBoundary.test(before) || resourceBoundary.test(after)) return false;
+  if (before === "." && /[\p{L}\p{N}]/u.test(view[start - 2] ?? "")) return false;
+  if (after === "." && /[\p{L}\p{N}]/u.test(view[end + 1] ?? "")) return false;
+  // Quoted local parts can contain prose separators too.
+  for (const email of emailSpans) {
+    if (email.start <= start && email.end >= end) return false;
+  }
+  return true;
+}
+
+function matchesKnownFingerprint(views: [string, string]): boolean {
   const fingerprintsByLength = new Map<number, Set<string>>();
   for (const fingerprint of knownValues.fingerprints) {
     const hashes = fingerprintsByLength.get(fingerprint.length) ?? new Set<string>();
     hashes.add(fingerprint.sha256);
     fingerprintsByLength.set(fingerprint.length, hashes);
   }
-  for (const [length, hashes] of fingerprintsByLength) {
-    if (length > compact.length) continue;
-    for (let index = 0; index <= compact.length - length; index += 1) {
-      const digest = createHash("sha256").update(compact.slice(index, index + length)).digest("hex");
-      if (hashes.has(digest)) return true;
+  for (const source of views) {
+    const view = source.normalize("NFKC").toLocaleLowerCase("en-US");
+    const compact = compactSensitiveText(view);
+    let sourceOffsets: Uint32Array | undefined;
+    let emailSpans: Array<{ start: number; end: number }> | undefined;
+    for (const [length, hashes] of fingerprintsByLength) {
+      if (length > compact.length) continue;
+      for (let index = 0; index <= compact.length - length; index += 1) {
+        const digest = createHash("sha256").update(compact.slice(index, index + length)).digest("hex");
+        if (!hashes.has(digest)) continue;
+        if (length > 16) return true;
+        sourceOffsets ??= compactSourceOffsets(view, compact.length);
+        // Include reserved fixture domains too: a mailbox is a resource context
+        // even when the generic email class exempts its non-personal domain.
+        emailSpans ??= [...view.matchAll(new RegExp(emailAddressSource, "gi"))]
+          .map((match) => ({ start: match.index, end: match.index + match[0].length }));
+        if (!ordinaryCompoundOccurrence(view, sourceOffsets, emailSpans, index, length)) return true;
+      }
     }
   }
   return false;
@@ -598,10 +671,10 @@ function hasEmailAddress(text: string): boolean {
 
 export function sensitiveClasses(text: string): Set<FindingClass> {
   const findings = new Set<FindingClass>();
-  const { compact, error, searchable: searchableText } = normalizedSensitiveText(text);
+  const { error, searchable: searchableText, views } = normalizedSensitiveText(text);
   if (error) findings.add("inspection_error");
   const normalizedText = searchableText.toLocaleLowerCase("en-US");
-  if (knownValues.values.some((value) => normalizedText.includes(value.toLocaleLowerCase("en-US"))) || matchesKnownFingerprint(compact)) {
+  if (knownValues.values.some((value) => normalizedText.includes(value.toLocaleLowerCase("en-US"))) || matchesKnownFingerprint(views)) {
     findings.add("known_value");
   }
   const unixHomePattern = /(?:^|[\s"'(=:/])\/(?:home|Users)\/([A-Za-z0-9._-]+)(?:\/|$)/gm;

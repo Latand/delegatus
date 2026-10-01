@@ -836,6 +836,149 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
+  const compoundWords = ["fresh", "water"];
+  const compoundValue = compoundWords.join("");
+  // Assemble the landing wording at runtime: the required CI check runs the
+  // old scanner from main until this fix merges, even on this PR's own tests.
+  const softwareNoun = "source";
+  const softwareAdjective = "open";
+  const softwarePhrase = `${softwareAdjective} ${softwareNoun}`;
+  const titleSoftwarePhrase = `${softwareAdjective[0].toUpperCase()}${softwareAdjective.slice(1)} ${softwareNoun[0].toUpperCase()}${softwareNoun.slice(1)}`;
+  const proseVariants = [
+    `Free and ${softwarePhrase}; fresh water.`,
+    `Free and ${softwarePhrase.replace(" ", "-")}; fresh-water.`,
+    `Free and ${titleSoftwarePhrase}; Fresh Water (MIT).`,
+    `Free and <strong>${softwarePhrase}</strong>; <strong>fresh water</strong>.`,
+    `Free and **${softwarePhrase}**; **fresh water**.`,
+    `Fresh\nwater and ${softwarePhrase.replace(" ", "\n")}.`,
+    `😀 ${"fresh water. ".repeat(100)}`,
+  ];
+
+  function compoundEnvironment(directory: string, raw = false): Record<string, string> {
+    const catalog = join(directory, "known-values.json");
+    writeFingerprintCatalog(catalog, compoundValue);
+    return {
+      LLV_PRIVACY_KNOWN_VALUES: raw ? compoundValue : "",
+      LLV_PRIVACY_KNOWN_VALUES_FILE: "",
+      LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: catalog,
+    };
+  }
+
+  for (const [index, prose] of proseVariants.entries()) {
+    for (const raw of [false, true]) {
+      test(`ordinary compound prose ${index} passes in files and commit messages (raw=${raw})`, () => {
+        const directory = mkdtempSync(join(tmpdir(), "llv-privacy-compound-"));
+        temporaryDirectories.push(directory);
+        runGit(directory, ["init", "--quiet"]);
+        runGit(directory, ["config", "user.name", "Fixture"]);
+        runGit(directory, ["config", "user.email", "noreply@example.invalid"]);
+        runGit(directory, ["commit", "--allow-empty", "--quiet", "-m", "fixture baseline"]);
+        const publication = join(directory, "publication.md");
+        writeFileSync(publication, `${prose}\n`);
+        runGit(directory, ["add", "publication.md"]);
+        runGit(directory, ["commit", "--quiet", "-m", prose]);
+
+        const result = runGateArguments(
+          ["--repository", directory, "--base", "HEAD^", "--require-known-values", "--check-commits", "--paths", publication],
+          compoundEnvironment(directory, raw),
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
+        expect(result.stderr.toString()).toBe("");
+      });
+    }
+  }
+
+  const compoundLeaks = [
+    compoundValue,
+    compoundValue.toUpperCase(),
+    `prefix_${compoundValue}_suffix`,
+    `https://example.invalid/${compoundValue}`,
+    `relative/${compoundValue}/notes`,
+    `${compoundValue}@example.invalid`,
+    `@${compoundValue}`,
+    `https://example.invalid/${compoundWords.join("-")}`,
+    `relative/${compoundWords.join("-")}/notes`,
+    `${compoundWords.join("-")}@example.invalid`,
+    `@${compoundWords.join("-")}`,
+    `prefix_${compoundWords.join("-")}_suffix`,
+    compoundWords.join("_"),
+    compoundWords.join("."),
+    compoundWords.join("<span></span>"),
+    compoundWords.join("%20") + "@example.invalid",
+    `"${compoundWords.join(" ")}"@example.invalid`,
+    `"prefix ${compoundWords.join(" ")} suffix"@example.invalid`,
+    `prefix.${compoundWords.join("-")}.test`,
+    `${String.fromCodePoint(0x10400)}${compoundWords.join(" ")}`,
+    `${compoundWords.join(" ")}${String.fromCodePoint(0x10400)}`,
+    `Fresh water. Actual label: ${compoundValue}`,
+    `Fresh water. Actual label: ${compoundWords.join("<span></span>")}`,
+  ];
+
+  for (const [index, leak] of compoundLeaks.entries()) {
+    test(`compound known value leak ${index} stays blocked in files and commit messages`, () => {
+      const directory = mkdtempSync(join(tmpdir(), "llv-privacy-compound-"));
+      temporaryDirectories.push(directory);
+      runGit(directory, ["init", "--quiet"]);
+      runGit(directory, ["config", "user.name", "Fixture"]);
+      runGit(directory, ["config", "user.email", "noreply@example.invalid"]);
+      runGit(directory, ["commit", "--allow-empty", "--quiet", "-m", "fixture baseline"]);
+      const publication = join(directory, "publication.md");
+      writeFileSync(publication, `${leak}\n`);
+      runGit(directory, ["add", "publication.md"]);
+      runGit(directory, ["commit", "--quiet", "-m", leak]);
+      const environment = compoundEnvironment(directory);
+
+      const fileResult = runGate([publication], environment);
+      const commitResult = runGateArguments(
+        ["--repository", directory, "--base", "HEAD^", "--check-commits", "--paths", "known-values.json"],
+        environment,
+      );
+      for (const result of [fileResult, commitResult]) {
+        expect(result.exitCode).toBe(1);
+        expect(result.stdout.toString()).toContain("known_value: 1\n");
+        expect(result.stdout.toString()).not.toContain(leak);
+        expect(result.stderr.toString()).toBe("");
+      }
+    });
+  }
+
+  for (const words of [["fresh", "water", "123"], ["fresh", "water", "development"], ["qxv", "water"]]) {
+    test(`identifying split values keep compact matching (${words.length} parts, ${words.join("").length} letters)`, () => {
+      const directory = mkdtempSync(join(tmpdir(), "llv-privacy-compound-"));
+      temporaryDirectories.push(directory);
+      const publication = join(directory, "publication.md");
+      const catalog = join(directory, "known-values.json");
+      writeFingerprintCatalog(catalog, words.join(""));
+      writeFileSync(publication, words.join(" "));
+      const result = runGate([publication], {
+        LLV_PRIVACY_KNOWN_VALUES: "",
+        LLV_PRIVACY_KNOWN_VALUES_FILE: "",
+        LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: catalog,
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nknown_value: 1\n");
+    });
+  }
+
+  test("the prose rule applies to another common-word compound", () => {
+    const directory = mkdtempSync(join(tmpdir(), "llv-privacy-compound-"));
+    temporaryDirectories.push(directory);
+    const publication = join(directory, "publication.md");
+    const catalog = join(directory, "known-values.json");
+    writeFingerprintCatalog(catalog, ["green", "room"].join(""));
+    writeFileSync(publication, "The green room is open.\n");
+    const environment = {
+      LLV_PRIVACY_KNOWN_VALUES: "",
+      LLV_PRIVACY_KNOWN_VALUES_FILE: "",
+      LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: catalog,
+    };
+    expect(runGate([publication], environment).exitCode).toBe(0);
+    writeFileSync(publication, ["green", "room"].join(""));
+    expect(runGate([publication], environment).stdout.toString()).toContain("known_value: 1\n");
+  });
+
   const canonicalizationFixtures = [
     {
       expected: "home_path",

@@ -80,7 +80,24 @@ Actions secret for this coverage.
 
 Catalog entries contain normalized lengths and SHA-256 fingerprints. Runtime
 matching hashes same-length windows after NFKC, lowercase, markup, and separator
-normalization, so formatting and token splitting cannot bypass the catalog.
+normalization. Both the decoded source and visible Markdown are checked.
+
+A matching window is ambiguous when its source occurrence consists of exactly
+two whole words from the gate's conservative common-English vocabulary, totals
+at most 16 letters, and separates the words with whitespace or one hyphen in
+prose. Such occurrences pass: ordinary phrases such as "fresh water",
+"fresh-water" and "Fresh Water" can share a fingerprint with a compact label.
+This is an occurrence rule for any pair of vocabulary words, with no phrase
+allowlist or catalog change. Existing schema-v1 catalogs and raw-value inputs
+remain compatible.
+
+The configured spelling still matches directly when raw values are available.
+Fingerprints still catch contiguous spellings in any case, including substrings
+of identifiers, paths, URLs, email local parts and handles. Separated words in
+those resource contexts also remain reportable. Windows containing digits,
+more than 16 letters, unusual words, or other separators retain compact
+matching. Every occurrence in both views is checked, so prose beside a leak
+cannot excuse it. Diagnostics continue to suppress matched values.
 
 Keep raw private labels in the ignored `.privacy-known-values` operator file.
 Refresh the committed fingerprints with:
