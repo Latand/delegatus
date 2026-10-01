@@ -217,7 +217,7 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
-  let body: { orchestratorRelayProject?: unknown; pid?: unknown; path?: unknown; conversationId?: unknown; clientMessageId?: unknown; operationId?: unknown; text?: unknown; policy?: unknown; image?: unknown; images?: unknown; action?: unknown; key?: unknown; label?: unknown; question?: unknown; decision?: unknown; requestId?: unknown; target?: unknown; model?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown };
+  let body: { orchestratorRelayProject?: unknown; pid?: unknown; path?: unknown; conversationId?: unknown; clientMessageId?: unknown; operationId?: unknown; text?: unknown; policy?: unknown; image?: unknown; images?: unknown; files?: unknown; action?: unknown; key?: unknown; label?: unknown; question?: unknown; decision?: unknown; requestId?: unknown; target?: unknown; model?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown };
   try {
     body = (await req.json()) as {
       pid?: unknown;
@@ -248,6 +248,13 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
   if (body.orchestratorRelayProject !== undefined) {
     if (typeof body.orchestratorRelayProject !== "string" || !body.orchestratorRelayProject.trim() || body.action !== undefined) {
       return NextResponse.json({ error: "an orchestrator relay requires a project and is a message only" }, { status: 400 });
+    }
+    // Relay recovery binds the words and authenticated author. Keep every
+    // mount on the same text-only contract before materializing attachments.
+    if (body.image != null
+      || (body.images != null && (!Array.isArray(body.images) || body.images.length > 0))
+      || (body.files != null && (!Array.isArray(body.files) || body.files.length > 0))) {
+      return NextResponse.json({ error: "orchestrator relays accept text only; attachments are not supported" }, { status: 400 });
     }
     const admitted = admitOrchestratorRelay(req, body.orchestratorRelayProject,
       typeof body.conversationId === "string" ? body.conversationId : "",

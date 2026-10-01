@@ -314,6 +314,28 @@ for (const [index, post] of [POST, legacyPOST, orchestratorPOST].entries()) {
   });
 }
 
+for (const [index, post] of [POST, legacyPOST].entries()) {
+  test(`generic relay mount ${index} refuses attachments before text-only reservation`, async () => {
+    realAdmission();
+    const sender = actor("project-a");
+    const recipient = actor("project-b");
+    const gateway = actor(undefined, "root");
+    setDeputyRootResolverForTests(() => gateway.id);
+    for (const capability of [sender.capability, gateway.capability]) {
+      for (const attachment of [
+        { files: [{ name: "note.txt", base64: "aGk=" }] },
+        { images: [{ name: "image.png", base64: "aGk=" }] },
+        { image: { name: "image.png", base64: "aGk=" } },
+      ]) {
+        const body = { ...relayBody(recipient.id), ...attachment };
+        expect((await post(request(capability, body))).status).toBe(400);
+        expect((await post(request(capability, body))).status).toBe(400);
+      }
+    }
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(0);
+  });
+}
+
 test("project-only HTTP retries recover the original recipient after rotation", async () => {
   realAdmission();
   const sender = actor("project-a");
