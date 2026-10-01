@@ -1681,13 +1681,14 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
     for (const assignment of task?.assignments ?? []) {
       checkedAssignments.add(assignmentKey(assignment));
       const id = assignment.conversationId;
-      if (!id) {
-        if (assignment.state === "spawning" || assignment.state === "handoff") liveAgent = assignment.launchId ?? "pending launch";
+      const transcriptPath = assignment.path;
+      if (!id && !transcriptPath) {
+        liveAgent = assignment.launchId ?? "an assignment without a resolvable identity";
         continue;
       }
-      const snapshot = await agentLivenessSnapshot({ conversationId: id, limit: 1 }, dependencies.livenessSources());
+      const snapshot = await agentLivenessSnapshot({ ...(id ? { conversationId: id } : { transcriptPath: transcriptPath! }), limit: 1 }, dependencies.livenessSources());
       const record = snapshot.conversations[0];
-      if (!record || record.lifecycle === "starting" || record.host.state === "unknown" || record.host.state === "alive" && record.turnState !== "idle") liveAgent = id;
+      if (!record || record.lifecycle === "starting" || record.host.state === "unknown" || record.host.state === "alive" && record.turnState !== "idle") liveAgent = id ?? transcriptPath ?? "an unconfirmed assignment";
     }
   }
   const result = mutateTasks((tasks) => {

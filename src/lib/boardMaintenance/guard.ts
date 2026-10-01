@@ -42,12 +42,12 @@ export function maintainerTaskWriteRefusal(input: { caller: MaintainerCaller; ar
   }
   const deleting = ["removeLine", "detachLinks", "assignments", "groupHidden", "origin", "sources", "workLinks"].find(field => args[field] !== undefined)
     ?? (!input.create && ["placement", "beforeTaskId", "afterTaskId"].find(field => args[field] !== undefined))
-    ?? (args.board === "hidden" && !input.create ? "board" : args.hide === true ? "hide" : args.details === null || args.details === "" ? "details" : undefined);
+    ?? (args.board === "hidden" && !input.create ? "board" : args.hide === true ? "hide" : args.details === null || typeof args.details === "string" && args.details.trim() === "" ? "details" : undefined);
   if (deleting) return refuse("maintainer_delete_refused", `A maintenance run deletes nothing and takes nothing off the board; ${deleting} was refused. Use appendLine or replaceLine, or put it on your attention list.`, deleting);
   const created = caller.run?.log.changes.some(c => c.tool === "create_task" && c.taskId === task?.id);
   if (!input.create && typeof args.details === "string" && !created) return refuse("maintainer_details_overwrite_refused", "details as a whole field would replace what the task holds. Send appendLine or replaceLine.", "details");
   if (args.status === "done" && (input.openPipeline || input.liveAgent)) return refuse("maintainer_done_refused", `Task ${task?.id} has ${input.openPipeline ? `an open pipeline ${input.openPipeline}` : `a live agent ${input.liveAgent}`}. A maintenance run never marks such a task done; correct only a plainly wrong status, or put it on your attention list.`, "status");
-  if (args.replaceLine && !(args.replaceLine as { text?: unknown }).text) return refuse("maintainer_delete_refused", "An empty replacement deletes a details line. Use a nonempty replacement.", "replaceLine");
+  if (args.replaceLine && (typeof (args.replaceLine as { text?: unknown }).text !== "string" || !(args.replaceLine as { text: string }).text.trim())) return refuse("maintainer_delete_refused", "An empty replacement deletes a details line. Use a nonempty replacement.", "replaceLine");
   return null;
 }
 export function maintenanceChange(tool: MaintenanceChange["tool"], before: BoardTask | undefined, after: BoardTask, fields: string[]): MaintenanceChange {

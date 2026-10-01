@@ -31,6 +31,9 @@ test("durable maintainer role fences writes on the service wire, independent of 
   const task = loadTasks()[0];
   expect(await call("update_task", { taskId: task.id, board: "hidden" })).toMatchObject({ ok: false, code: "maintainer_delete_refused" });
   expect(await call("update_task", { taskId: task.id, removeLine: { index: 0 } })).toMatchObject({ ok: false, code: "maintainer_delete_refused" });
+  expect(await call("update_task", { taskId: task.id, replaceLine: { index: 0, text: "   " } })).toMatchObject({ ok: false, code: "maintainer_delete_refused" });
+  expect(await call("update_task", { taskId: task.id, details: "   " })).toMatchObject({ ok: false, code: "maintainer_delete_refused" });
+  expect(loadTasks().find(t => t.id === task.id)?.details).toBe("fixture new task");
   expect(await call("update_task", { taskId: task.id, project: "another-project" })).toMatchObject({ ok: false, code: "maintainer_project_refused" });
   const updated = await call("update_task", { taskId: task.id, text: "Оновлена перевірка дошки", appendLine: "Maintenance: fixture evidence" }); expect(updated.ok).toBe(true);
   const log = readMaintenanceRun(result.run.runId)!.log; expect(log.changes).toHaveLength(2); expect(log.changes[1].textBefore).toBe(task.text);
@@ -74,5 +77,26 @@ test("done refusal re-reads open pipelines and uses live-agent evidence on the s
     expect(await tools.callTool("update_task", { clientRequestId: "manual-live-done", taskId: task.id, status: "done" })).toMatchObject({ ok: false, code: "maintainer_done_refused" });
     expect(spy).toHaveBeenCalledTimes(1);
     expect(await tools.callTool("update_task", { clientRequestId: "manual-overwrite", taskId: task.id, details: "whole replacement" })).toMatchObject({ ok: false, code: "maintainer_details_overwrite_refused" });
+  } finally { spy.mockRestore(); }
+});
+
+test("done checks delivered path-only assignments and permits only a confirmed settled transcript", async () => {
+  const id = ["conversation", "fixture-path-only-maintainer"].join("_");
+  snapshot.conversations[id as `conversation_${string}`] = { id, agentRole: "maintainer", projectOwnership: { project }, generations: [], continuityPaths: [], abandonedContinuityPaths: [], migration: null } as never;
+  const task = loadTasks()[0];
+  const transcriptPath = path.join(root, "worker-transcript.jsonl");
+  const { mutateTasks } = await import("@/lib/tasks/store");
+  mutateTasks(tasks => ({ tasks: tasks.map(t => t.id === task.id ? { ...t, assignments: [{ path: transcriptPath, panePid: null, state: "delivered" as const, at: new Date().toISOString(), error: null }] } : t), result: undefined }));
+  const liveness = await import("@/lib/lifecycle/liveness");
+  const spy = spyOn(liveness, "agentLivenessSnapshot");
+  const manual = { ...domain, registrySnapshot: () => snapshot, callerAttribution: () => ({ kind: "agent", conversationId: id, role: "builder" }), listPipelineRecords: () => [], livenessSources: () => ({}) };
+  const tools = createMcpToolService(viewerMcpBindings(undefined, undefined, manual as never), new MemoryMcpReceiptStore(), viewerMcpToolPolicy(manual as never));
+  try {
+    spy.mockResolvedValueOnce({ conversations: [{ conversationId: "path-only-worker", transcriptPath, lifecycle: "running", host: { state: "alive" }, turnState: "busy" }] } as never);
+    expect(await tools.callTool("update_task", { clientRequestId: "path-only-busy-done", taskId: task.id, status: "done" })).toMatchObject({ ok: false, code: "maintainer_done_refused" });
+    expect(spy).toHaveBeenCalledWith({ transcriptPath, limit: 1 }, {});
+    spy.mockResolvedValueOnce({ conversations: [{ conversationId: "path-only-worker", transcriptPath, lifecycle: "completed", host: { state: "dead" }, turnState: "idle" }] } as never);
+    expect(await tools.callTool("update_task", { clientRequestId: "path-only-settled-done", taskId: task.id, status: "done" })).toMatchObject({ ok: true });
+    expect(spy).toHaveBeenCalledTimes(2);
   } finally { spy.mockRestore(); }
 });

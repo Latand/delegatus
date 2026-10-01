@@ -12,7 +12,7 @@ test("each task refusal has a clear code, with hidden create allowed", () => {
   const refuse = (args: Record<string, unknown>, more = {}) => maintainerTaskWriteRefusal({ caller, task, args, ...more });
   expect(refuse({ status: "done" }, { openPipeline: "lane" })?.code).toBe("maintainer_done_refused");
   expect(refuse({ status: "done" }, { liveAgent: "worker" })?.code).toBe("maintainer_done_refused");
-  for (const args of [{ details: null }, { details: "" }, { removeLine: { index: 0 } }, { detachLinks: [] }, { board: "hidden" }, { hide: true }, { assignments: [] }, { replaceLine: { index: 0, text: "" } }]) expect(refuse(args)?.code).toBe("maintainer_delete_refused");
+  for (const args of [{ details: null }, { details: "" }, { details: "   \n\t" }, { removeLine: { index: 0 } }, { detachLinks: [] }, { board: "hidden" }, { hide: true }, { assignments: [] }, { replaceLine: { index: 0, text: "" } }, { replaceLine: { index: 0, text: "   \n" } }]) expect(refuse(args)?.code).toBe("maintainer_delete_refused");
   expect(refuse({ details: "whole field" })?.code).toBe("maintainer_details_overwrite_refused");
   expect(refuse({ project: "another" })?.code).toBe("maintainer_project_refused");
   expect(refuse({ text: "new title" }, { caller: { ...caller, run: { ...run, state: "succeeded" } } })?.code).toBe("maintainer_run_ended");
