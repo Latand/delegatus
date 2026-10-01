@@ -14249,6 +14249,7 @@ describe("task motion and waiting reasons", () => {
           expect(stepBounds.right).toBeLessThanOrEqual(width + 1);
           expect(stepBounds.bottom).toBeLessThanOrEqual(844);
           expect(stepBounds.scrollWidth).toBeLessThanOrEqual(stepBounds.clientWidth + 1);
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-checklist.png`) });
           const prHold = page.locator(`${selector("motion-pr")} [data-motion] a`);
           const issueHold = page.locator(`${selector("motion-issue")} [data-motion] a`);
           if (phone) {
