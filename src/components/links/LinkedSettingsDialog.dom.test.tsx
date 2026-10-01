@@ -402,3 +402,31 @@ test("failed link metadata reads keep an honest error beside the settings", asyn
   await mount();
   expect(document.querySelector('[data-linked-state="unavailable"]')!.textContent).toBe(en("links.state.unavailable"));
 });
+
+test("cached successful sync ages to stale while metadata reads fail", async () => {
+  const realNow = Date.now;
+  const realInterval = globalThis.setInterval;
+  const realWindowInterval = window.setInterval;
+  const ticks: Array<() => void> = [];
+  let now = realNow();
+  Date.now = () => now;
+  globalThis.setInterval = ((callback: () => void, ms: number) => { ticks.push(callback); return realInterval(callback, ms); }) as typeof setInterval;
+  window.setInterval = ((callback: () => void, ms: number) => { ticks.push(callback); return realWindowInterval.call(window, callback, ms); }) as typeof window.setInterval;
+  try {
+    serve({ status: 200, body: {} }, { peers: [peer({ lastCall: now - 60_000 })], grants: [grant({ lastCall: now - 60_000 })] });
+    await mount();
+    expect(document.querySelectorAll('[data-linked-sync="synced"]')).toHaveLength(2);
+    globalThis.fetch = (async () => Response.json({ error: "unavailable" }, { status: 503 })) as typeof fetch;
+    now += 20 * 60_000;
+    await act(async () => { for (const tick of ticks) tick(); });
+    await settle();
+    expect(document.querySelector('[data-linked-state="unavailable"]')).not.toBeNull();
+    expect(document.querySelectorAll('[data-linked-sync="stale"]')).toHaveLength(2);
+    expect(document.querySelectorAll('[data-linked-sync="synced"]')).toHaveLength(0);
+  } finally {
+    act(() => root?.unmount()); root = null;
+    Date.now = realNow;
+    globalThis.setInterval = realInterval;
+    window.setInterval = realWindowInterval;
+  }
+});

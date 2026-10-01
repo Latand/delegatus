@@ -13917,6 +13917,81 @@ describe("linked board sync health", () => {
       fs.writeFileSync("evidence/linked-board-sync-health/rendered.json", JSON.stringify(evidence, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
+
+  browserTest("board host chips distinguish fresh, stale and failing sync on desktop and phone", async () => {
+    const out = path.resolve(".artifacts/linked-board-sync-health");
+    fs.mkdirSync(out, { recursive: true });
+    const self = ["11111111", "1111", "4111", "8111", "111111111111"].join("-");
+    const stage = ["22222222", "2222", "4222", "8222", "222222222222"].join("-");
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const [width, locale] of [[1440, "en"], [1440, "uk"], [390, "en"], [390, "uk"]] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=synced-task`, { width, height: 900 }, "light", locale, "reduce", width === 390);
+        let phase = "synced";
+        let lastCall: number | null = Date.now() - 60_000;
+        try {
+          await page.route("**/api/links/agents**", (route) => route.fulfill({ json: {
+            agents: [], lanes: [], self, hosts: { [stage]: { label: "Stage", linked: phase !== "offline", state: phase === "failing" ? "failing" : "active",
+              lastCall } },
+          } }));
+          await page.evaluate(() => localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { [`repo-${"a".repeat(32)}`]: true }, placement: "top", width: null })));
+          const readings: Record<string, { text: string; colour: string; clipped: boolean }> = {};
+          for (const next of ["synced", "stale", "failing", "waiting", "offline"]) {
+            phase = next;
+            lastCall = next === "waiting" ? null : Date.now() - (next === "stale" ? 1_200_000 : next === "failing" ? 7_200_000 : 60_000);
+            await page.reload();
+            if (width === 390) await page.locator('[data-phone-kanban-tab="assigned"]').click();
+            const chip = page.locator(width === 390 ? '[data-phone-card-host]' : '.host-chip').first();
+            await chip.waitFor();
+            await chip.scrollIntoViewIfNeeded();
+            if (next === "offline") {
+              expect(await chip.textContent()).toBe(translate(locale, "kanban.remote.notLinked", { host: "Stage" }));
+            } else {
+              const cue = chip.locator(`span[data-remote-sync="${next}"]`);
+              await cue.waitFor();
+              readings[next] = await cue.evaluate((node) => ({ text: node.textContent ?? "", colour: getComputedStyle(node).color,
+                clipped: node.parentElement!.scrollWidth > node.parentElement!.clientWidth + 1 }));
+              const expectedTone = next === "synced" ? "success" : next === "stale" ? "warning" : next === "failing" ? "danger" : "muted";
+              const toneColour = await page.evaluate((tone) => {
+                const probe = document.createElement("span");
+                probe.style.color = `var(--color-${tone})`;
+                document.body.append(probe);
+                const colour = getComputedStyle(probe).color;
+                probe.remove();
+                return colour;
+              }, expectedTone);
+              expect(readings[next].colour).toBe(toneColour);
+              expect(readings[next].text).toContain("Stage");
+              expect(readings[next].clipped).toBe(false);
+              if (locale === "uk") expect(readings[next].text).toMatch(/[А-Яа-яІіЇїЄє]/);
+            }
+            expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+            await page.screenshot({ path: path.join(out, `board-${width}-${locale}-${next}.png`) });
+          }
+          // A cached success ages even if subsequent local feed reads fail.
+          phase = "synced";
+          lastCall = Date.now() - 60_000;
+          await page.reload();
+          if (width === 390) await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          await page.locator('span[data-remote-sync="synced"]').first().waitFor();
+          await page.route("**/api/links/agents**", (route) => route.fulfill({ status: 503, json: { error: "unavailable" } }));
+          await page.clock.install();
+          await page.clock.fastForward(900_000);
+          await page.locator('span[data-remote-sync="stale"]').first().waitFor();
+          expect(await page.locator('span[data-remote-sync="synced"]').count()).toBe(0);
+          expect(new Set(["synced", "stale", "failing"].map((state) => readings[state].text)).size).toBe(3);
+          expect(new Set(["synced", "stale", "failing"].map((state) => readings[state].colour)).size).toBe(3);
+          expect(pageErrors).toEqual([]);
+          cases.push({ width, locale, readings, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/linked-board-sync-health", { recursive: true });
+      fs.writeFileSync("evidence/linked-board-sync-health/board.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+
 });
 /*
  * A task another machine runs (docs/design/synced-task-card.md §5-§7): the

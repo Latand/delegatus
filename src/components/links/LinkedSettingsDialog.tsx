@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 
+import { useNowSeconds } from "@/hooks/useNowSeconds";
 import { useLocale } from "@/lib/i18n";
 import { Z } from "@/components/layers";
 import { relativeTime } from "@/components/team/ui";
@@ -81,8 +82,8 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
   const [role, setRole] = useState<Role | null>(null);
   const grantsAtMint = useRef<Set<string>>(new Set());
   const [now, setNow] = useState(() => Date.now());
-  // The instant the link lists were last read: the age of each sync is counted from it.
-  const [readAt, setReadAt] = useState(() => Date.now());
+  // Cached successes continue to age even when link metadata cannot be read.
+  const syncNow = useNowSeconds() * 1000;
   const codeFinished = code !== null && (codeStatus?.used === true || now >= code.expiresAt);
   useEffect(() => {
     if (!code || codeFinished) return;
@@ -115,7 +116,6 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
     setShared(await s.json() as SharedState);
     setPeers(await p.json() as PeerState);
     setGrants(await g.json() as GrantState);
-    setReadAt(Date.now());
   };
   useEffect(() => {
     let active = true;
@@ -233,11 +233,11 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
       {peers?.peers.map((peer) => <div key={peer.id} className="rounded-[8px] border border-border p-3 text-ui" data-linked-peer={peer.state}>
         <p className="font-semibold text-primary">{t("links.peerRow", { name: peer.label })}</p>
         <p className="text-muted">{peer.state === "revoked" ? t("links.revoked") : peer.url}</p>
-        <SyncLine lastCall={peer.lastCall} failing={peer.state !== "active"} now={readAt} />
+        <SyncLine lastCall={peer.lastCall} failing={peer.state !== "active"} now={syncNow} />
         {peer.error ? <p className="mt-1 text-danger" data-linked-peer-error={peer.error}>{peerErrorMessage(t, peer.error, peer.label)}</p> : null}
         <div className="mt-2 flex gap-2"><button type="button" disabled={busy} onClick={() => void linkedAction(`/api/links/peers/${encodeURIComponent(peer.id)}`, "POST")} className="min-h-11 rounded-[8px] border border-border px-3 text-primary disabled:opacity-50">{t("links.syncNow")}</button><button type="button" disabled={busy} onClick={() => void linkedAction(`/api/links/peers/${encodeURIComponent(peer.id)}`, "DELETE")} className="min-h-11 rounded-[8px] border border-border px-3 text-primary">{t("links.remove")}</button></div>
       </div>)}
-      {grants?.grants.map((grant) => <div key={grant.id} data-linked-grant="" className="flex items-center justify-between gap-2 rounded-[8px] border border-border p-3 text-ui"><div><p>{t("links.grantRow", { name: grant.label })} · {t("links.counts", { today: grant.today, seven: grant.sevenDays })}</p><SyncLine lastCall={grant.lastCall ?? null} failing={Boolean(grant.error)} now={readAt} />{grant.error ? <p className="mt-1 text-danger" data-linked-grant-error={grant.error}>{peerErrorMessage(t, grant.error, grant.label)}</p> : null}</div><button type="button" disabled={busy} onClick={() => void linkedAction(`/api/links/grants?id=${encodeURIComponent(grant.id)}`, "DELETE")} className="min-h-11 rounded-[8px] border border-border px-3">{t("links.revoke")}</button></div>)}
+      {grants?.grants.map((grant) => <div key={grant.id} data-linked-grant="" className="flex items-center justify-between gap-2 rounded-[8px] border border-border p-3 text-ui"><div><p>{t("links.grantRow", { name: grant.label })} · {t("links.counts", { today: grant.today, seven: grant.sevenDays })}</p><SyncLine lastCall={grant.lastCall ?? null} failing={Boolean(grant.error)} now={syncNow} />{grant.error ? <p className="mt-1 text-danger" data-linked-grant-error={grant.error}>{peerErrorMessage(t, grant.error, grant.label)}</p> : null}</div><button type="button" disabled={busy} onClick={() => void linkedAction(`/api/links/grants?id=${encodeURIComponent(grant.id)}`, "DELETE")} className="min-h-11 rounded-[8px] border border-border px-3">{t("links.revoke")}</button></div>)}
     </section>
   );
   return (
