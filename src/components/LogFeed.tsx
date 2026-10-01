@@ -17,7 +17,7 @@ import type { FileEntry } from "@/lib/types";
 import { isAwaitingUser } from "@/hooks/useSwitchboardData";
 
 import { LaunchChips } from "./conversation/LaunchChips";
-import { MandateCard } from "./feed/cards/MandateCard";
+import { MandateCard, MandateLaunchContext } from "./feed/cards/MandateCard";
 import { FeedSkeleton } from "./skeletons";
 import { LiveTurnRows } from "./conversation/LiveTurnRows";
 import { FeedMessageRow, useOutboxRowActions, type CanonicalMessage } from "./conversation/OutboxBubbles";
@@ -1460,6 +1460,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     <RawLineProvider value={getRawLine}>
     <MessageProvenanceProvider value={provenanceLookup}>
     <ImageGalleryProvider value={gallery}>
+    <MandateLaunchContext.Provider value={launch?.launchId ?? null}>
     <div className="flex min-h-0 flex-1 flex-col">
     {/* The live-tail pill anchors to the scroller wrapper — NOT the pane
         column — so the pinned status bar below is structurally outside its
@@ -1835,6 +1836,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       <TurnStatusBar file={file} workingLabel={working.label} workingIcon={working.icon} compact={compact} />
     ) : null}
     </div>
+    </MandateLaunchContext.Provider>
     </ImageGalleryProvider>
     </MessageProvenanceProvider>
     </RawLineProvider>

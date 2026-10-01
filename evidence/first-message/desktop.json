@@ -12,6 +12,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "pending",
           "sameNode": true,
           "rect": {
@@ -37,6 +39,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -62,6 +66,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -87,6 +93,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -128,6 +136,8 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 0,
+          "mandateHeight": 72,
           "rowState": null,
           "sameNode": true,
           "rect": {
@@ -151,13 +161,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": true,
           "rect": {
             "top": 150,
             "left": 373,
             "width": 618,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -174,13 +186,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": false,
           "rect": {
             "top": 150,
             "left": 373,
             "width": 618,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -197,13 +211,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": false,
           "rect": {
             "top": 150,
             "left": 373,
             "width": 618,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -241,6 +257,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "failed",
           "sameNode": true,
           "rect": {
@@ -287,6 +305,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "pending",
           "sameNode": true,
           "rect": {
@@ -312,6 +332,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -337,6 +359,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -362,6 +386,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -403,6 +429,8 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 0,
+          "mandateHeight": 72,
           "rowState": null,
           "sameNode": true,
           "rect": {
@@ -426,13 +454,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": true,
           "rect": {
             "top": 150,
             "left": 313,
             "width": 578,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -449,13 +479,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": false,
           "rect": {
             "top": 150,
             "left": 313,
             "width": 578,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -472,13 +504,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": false,
           "rect": {
             "top": 150,
             "left": 313,
             "width": 578,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -516,6 +550,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "failed",
           "sameNode": true,
           "rect": {
@@ -562,6 +598,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "pending",
           "sameNode": true,
           "rect": {
@@ -587,6 +625,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -612,6 +652,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -637,6 +679,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -678,6 +722,8 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 0,
+          "mandateHeight": 72,
           "rowState": null,
           "sameNode": true,
           "rect": {
@@ -701,13 +747,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": true,
           "rect": {
             "top": 150,
             "left": 373,
             "width": 618,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -724,13 +772,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": false,
           "rect": {
             "top": 150,
             "left": 373,
             "width": 618,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -747,13 +797,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": false,
           "rect": {
             "top": 150,
             "left": 373,
             "width": 618,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -791,6 +843,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "failed",
           "sameNode": true,
           "rect": {
@@ -837,6 +891,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "pending",
           "sameNode": true,
           "rect": {
@@ -862,6 +918,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -887,6 +945,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -912,6 +972,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -953,6 +1015,8 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 0,
+          "mandateHeight": 72,
           "rowState": null,
           "sameNode": true,
           "rect": {
@@ -976,13 +1040,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": true,
           "rect": {
             "top": 150,
             "left": 313,
             "width": 578,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -999,13 +1065,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": false,
           "rect": {
             "top": 150,
             "left": 313,
             "width": 578,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -1022,13 +1090,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": false,
           "rect": {
             "top": 150,
             "left": 313,
             "width": 578,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -1066,6 +1136,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "failed",
           "sameNode": true,
           "rect": {
@@ -1112,6 +1184,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "pending",
           "sameNode": true,
           "rect": {
@@ -1137,6 +1211,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -1162,6 +1238,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -1187,6 +1265,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -1228,6 +1308,8 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 0,
+          "mandateHeight": 72,
           "rowState": null,
           "sameNode": true,
           "rect": {
@@ -1251,13 +1333,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": true,
           "rect": {
             "top": 150,
             "left": 373,
             "width": 618,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -1274,13 +1358,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": false,
           "rect": {
             "top": 150,
             "left": 373,
             "width": 618,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -1297,13 +1383,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": false,
           "rect": {
             "top": 150,
             "left": 373,
             "width": 618,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -1341,6 +1429,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "failed",
           "sameNode": true,
           "rect": {
@@ -1387,6 +1477,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "pending",
           "sameNode": true,
           "rect": {
@@ -1412,6 +1504,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -1437,6 +1531,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -1462,6 +1558,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -1503,6 +1601,8 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 0,
+          "mandateHeight": 72,
           "rowState": null,
           "sameNode": true,
           "rect": {
@@ -1526,13 +1626,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": true,
           "rect": {
             "top": 150,
             "left": 313,
             "width": 578,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -1549,13 +1651,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": false,
           "rect": {
             "top": 150,
             "left": 313,
             "width": 578,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -1572,13 +1676,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": false,
           "rect": {
             "top": 150,
             "left": 313,
             "width": 578,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -1616,6 +1722,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "failed",
           "sameNode": true,
           "rect": {
@@ -1662,6 +1770,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "pending",
           "sameNode": true,
           "rect": {
@@ -1687,6 +1797,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -1712,6 +1824,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -1737,6 +1851,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -1778,6 +1894,8 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 0,
+          "mandateHeight": 72,
           "rowState": null,
           "sameNode": true,
           "rect": {
@@ -1801,13 +1919,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": true,
           "rect": {
             "top": 150,
             "left": 373,
             "width": 618,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -1824,13 +1944,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": false,
           "rect": {
             "top": 150,
             "left": 373,
             "width": 618,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -1847,13 +1969,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": false,
           "rect": {
             "top": 150,
             "left": 373,
             "width": 618,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -1891,6 +2015,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "failed",
           "sameNode": true,
           "rect": {
@@ -1937,6 +2063,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "pending",
           "sameNode": true,
           "rect": {
@@ -1962,6 +2090,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -1987,6 +2117,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -2012,6 +2144,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "confirmed",
           "sameNode": true,
           "rect": {
@@ -2053,6 +2187,8 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 0,
+          "mandateHeight": 72,
           "rowState": null,
           "sameNode": true,
           "rect": {
@@ -2076,13 +2212,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": true,
           "rect": {
             "top": 150,
             "left": 313,
             "width": 578,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -2099,13 +2237,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": false,
           "rect": {
             "top": 150,
             "left": 313,
             "width": 578,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -2122,13 +2262,15 @@
           "outboxEntries": 0,
           "userBubbles": [],
           "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
           "rowState": null,
           "sameNode": false,
           "rect": {
             "top": 150,
             "left": 313,
             "width": 578,
-            "height": 72
+            "height": 121
           },
           "failureLines": 0,
           "failureText": null,
@@ -2166,6 +2308,8 @@
             "row: Fix the failing export test. The pinned "
           ],
           "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
           "rowState": "failed",
           "sameNode": true,
           "rect": {

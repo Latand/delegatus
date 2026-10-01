@@ -1,15 +1,19 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 
 import { DelegatusMark } from "../../brand/BrandMark";
 import { ChevronRight, RotateCw } from "../../icons";
 import { hhmm } from "../../utils";
+import { mandateSectionOpen, setMandateSectionOpen, type MandateSection } from "../../conversation/heldMandate";
 import { MESSAGE_ACTION } from "../actionStyles";
 import { CopyButton } from "../CopyButton";
 import { mandateMessage } from "../mandateMessage";
 import { mdBlocks, mdImages } from "../markdown";
 import { tr, type MandateItem } from "../parse";
+
+/** The launch a feed's mandate card belongs to, so the card keeps its opened sections across the hand-over from the held card to the transcript's. */
+export const MandateLaunchContext = createContext<string | null>(null);
 
 /**
  * The orchestrator seat's mandate, as the feed's own card (#1166).
@@ -52,9 +56,10 @@ export function MandateCard({ item }: { item: MandateItem }) {
         </span>
       </div>
       <div className="px-3.5 pb-2.5 pt-1">
-        <Section label={tr("mandateCard.readMandate")} text={message.mandate} />
+        <Section section="mandate" label={tr("mandateCard.readMandate")} text={message.mandate} />
         {message.handoff ? (
           <Section
+            section="handoff"
             label={tr("mandateCard.handoff")}
             text={message.handoff}
             first={mdImages(message.mandate).length}
@@ -68,12 +73,14 @@ export function MandateCard({ item }: { item: MandateItem }) {
 }
 
 function Section({
+  section,
   label,
   text,
   first = 0,
   icon,
   className = "",
 }: {
+  section: MandateSection;
   label: string;
   text: string;
   /** The pictures the card drew before this section's. */
@@ -81,12 +88,18 @@ function Section({
   icon?: ReactNode;
   className?: string;
 }) {
-  const [mounted, setMounted] = useState(false);
+  const launchId = useContext(MandateLaunchContext);
+  const [open, setOpen] = useState(() => mandateSectionOpen(launchId, section));
+  const [mounted, setMounted] = useState(open);
   return (
     <details
+      open={open}
       className={`group/section text-[13px] ${className}`}
       onToggle={(event) => {
-        if (event.currentTarget.open) setMounted(true);
+        const nowOpen = event.currentTarget.open;
+        setOpen(nowOpen);
+        setMandateSectionOpen(launchId, section, nowOpen);
+        if (nowOpen) setMounted(true);
       }}
     >
       <summary className="flex cursor-pointer list-none items-center gap-1 rounded-control py-0.5 text-[12.5px] font-semibold text-secondary hover:text-accent [@media(pointer:coarse)]:min-h-11 [&::-webkit-details-marker]:hidden">

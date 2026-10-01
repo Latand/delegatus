@@ -13759,6 +13759,8 @@ describe("a new conversation's first message is a normal row", () => {
       outboxEntries: root.querySelectorAll("[data-outbox-entry]").length,
       userBubbles: [...root.querySelectorAll<HTMLElement>("[data-user-bubble]")].map((el) => `${el.parentElement?.closest("[data-message-row]") ? "row" : "bare"}: ${(el.textContent ?? "").slice(0, 40)}`),
       mandateCards: root.querySelectorAll("[data-mandate-card]").length,
+      mandateOpenSections: root.querySelectorAll("[data-mandate-card] details[open]").length,
+      mandateHeight: card ? Math.round(card.getBoundingClientRect().height) : null,
       rowState: rows[0]?.getAttribute("data-message-row") ?? null,
       sameNode: first ? first.hasAttribute("data-fm-mark") : null,
       rect: rect ? { top: Math.round(rect.top), left: Math.round(rect.left), width: Math.round(rect.width), height: Math.round(rect.height) } : null,
@@ -13799,6 +13801,8 @@ describe("a new conversation's first message is a normal row", () => {
           const steps = kind === "f" ? ["failed"] : ["pending", "delivered", "transcript", "answered"];
           const readings: Array<Record<string, unknown>> = [];
           let pendingRect: { left: number; width: number; top: number } | null = null;
+          /* The seat's mandate opened at Pending (a real click on "Read the mandate") and its height there. */
+          let openedHeight: number | null = null;
           for (const [index, step] of steps.entries()) {
             if (index > 0) {
               await page.evaluate(() => (window as unknown as { evidence: Evidence }).evidence.advanceFirstMessage());
@@ -13809,6 +13813,16 @@ describe("a new conversation's first message is a normal row", () => {
             await page.screenshot({ path: path.join(OUT, `${label}-${step}.png`) });
             readings.push({ step, ...read });
             const at = `${label} ${step}`;
+            if (kind === "s" && index === 0) {
+              await page.locator(`${SEAT} [data-mandate-card] summary`).first().click();
+              await page.waitForTimeout(300);
+              openedHeight = (await readPane(page, line, false)).mandateHeight;
+              await page.screenshot({ path: path.join(OUT, `${label}-${step}-open.png`) });
+            } else if (kind === "s") {
+              if (read.mandateOpenSections !== 1) failures.push(`${at}: the mandate opened at pending is closed (${read.mandateOpenSections} open sections)`);
+              if (openedHeight !== null && read.mandateHeight !== null && Math.abs(read.mandateHeight - openedHeight) > 2) failures.push(`${at}: the opened mandate is ${read.mandateHeight}px high, ${openedHeight}px at pending`);
+              await page.screenshot({ path: path.join(OUT, `${label}-${step}-open.png`) });
+            }
             if (read.envelope) failures.push(`${at}: the pane prints the recovery envelope`);
             if (read.danger) failures.push(`${at}: ${read.danger} red elements outside the failure line`);
             if (read.overflowX > 1) failures.push(`${at}: overflows by ${read.overflowX}px`);

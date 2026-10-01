@@ -34,6 +34,34 @@ export function heldMandateFor(launchId: string | null | undefined): HeldMandate
   return launchId ? held.get(launchId) ?? null : null;
 }
 
+/**
+ * Which sections of the card the reader has opened, kept per launch for the
+ * same reason: the held card and the transcript's own card are two mounts of
+ * one thing, and a card opened before the hand-over stays open after it.
+ */
+export type MandateSection = "mandate" | "handoff";
+
+const opened = new Map<string, Set<MandateSection>>();
+
+export function mandateSectionOpen(launchId: string | null | undefined, section: MandateSection): boolean {
+  return launchId ? opened.get(launchId)?.has(section) ?? false : false;
+}
+
+export function setMandateSectionOpen(launchId: string | null | undefined, section: MandateSection, open: boolean): void {
+  if (!launchId) return;
+  const sections = opened.get(launchId) ?? new Set<MandateSection>();
+  if (open) sections.add(section);
+  else sections.delete(section);
+  opened.delete(launchId);
+  if (sections.size === 0) return;
+  opened.set(launchId, sections);
+  for (const oldest of opened.keys()) {
+    if (opened.size <= KEEP) break;
+    opened.delete(oldest);
+  }
+}
+
 export function resetHeldMandatesForTests(): void {
   held.clear();
+  opened.clear();
 }

@@ -850,6 +850,54 @@ test("seat confirm, Claude SDK record: one mandate card and no mandate text outs
   }
 });
 
+test("seat confirm: a mandate opened before the hand-over is still open on the transcript's own card", async () => {
+  const conversationId = "conversation_first_seat_open";
+  const launchId = "launch_first_seat_open";
+  const engineId = "engine_message_seat_open";
+  const sdkRecords = [
+    JSON.stringify({
+      type: "user",
+      uuid: engineId,
+      promptSource: "sdk",
+      timestamp: new Date(RECORD_AT).toISOString(),
+      message: { role: "user", content: MANDATE },
+    }),
+  ];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ messages: { [engineId]: { origin: "agent", mandate: { kind: "version", version: 1 } } }, occurrences: [] }),
+  }) as Response) as unknown as typeof fetch;
+  try {
+    resetMessageProvenanceCacheForTests();
+    const { host, root } = render({
+      ...placeholder(conversationId, launchId),
+      engine: "claude",
+      fmt: "claude",
+      spawn: launchFacts(conversationId, launchId, { mandate: { kind: "version", version: 1 }, prompt: MANDATE, promptEcho: MANDATE }),
+    } as FileEntry);
+    const heldDetails = host.querySelector("[data-mandate-card] details") as HTMLDetailsElement;
+    flushSync(() => {
+      heldDetails.open = true;
+      heldDetails.dispatchEvent(new Event("toggle"));
+    });
+    expect(host.querySelector("[data-mandate-card] details")!.hasAttribute("open")).toBe(true);
+    expect(host.querySelector("[data-mandate-card]")!.textContent).toContain("Pinned mandate");
+
+    tailLines = sdkRecords;
+    now = RECORD_AT + 1_000;
+    rerender(root, { ...adopted(conversationId, launchId), engine: "claude", fmt: "claude", root: "claude-projects" } as FileEntry);
+    for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    const handedOver = host.querySelector('[data-feed-kind="sysmsg"] [data-mandate-card]');
+    expect(handedOver).not.toBeNull();
+    expect(handedOver!.querySelector("details")!.hasAttribute("open")).toBe(true);
+    expect(handedOver!.textContent).toContain("Pinned mandate");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test("seat confirm without a version names the card unqualified until the poll says more", () => {
   const provisional = seatProvisionalFile({
     clientRequestId: "request_first_seat_custom",
