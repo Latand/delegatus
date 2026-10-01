@@ -14236,6 +14236,7 @@ describe("task motion and waiting reasons", () => {
           expect(await page.locator(selector("motion-hidden")).count()).toBe(0);
           const stepLine = page.locator(`${selector("motion-checklist")} [data-task-steps]`);
           await stepLine.waitFor();
+          await stepLine.scrollIntoViewIfNeeded();
           const stepText = (await stepLine.textContent()) ?? "";
           expect(stepText).toContain(locale === "en" ? "5 of 8 done" : "Виконано 5 з 8");
           expect(stepText).toContain(locale === "en" ? "3 queued: After another task finishes" : "3 у черзі: Коли завершиться інша задача");
@@ -14290,10 +14291,16 @@ describe("task motion and waiting reasons", () => {
             expect(Number(await stoppedSummary.getAttribute('data-column-stopped'))).toBeGreaterThan(0);
             expect(Number(await bareSummary.getAttribute('data-column-no-reason'))).toBeGreaterThan(0);
           }
-          const lines = await page.locator(phone ? '[data-phone-kanban-column="blocked"] [data-motion]' : '[data-kanban-board] .card[data-id^="task:"] [data-motion]').evaluateAll(elements => elements.map(el => {
-            const rect = el.getBoundingClientRect();
-            return { motion: el.getAttribute("data-motion"), text: el.textContent, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth };
-          }));
+          const motionLines = page.locator(phone ? '[data-phone-kanban-column="blocked"] [data-motion]' : '[data-kanban-board] .card[data-id^="task:"] [data-motion]');
+          const lines: Array<{ motion: string | null; text: string | null; left: number; right: number; top: number; bottom: number; width: number; height: number; scrollWidth: number; clientWidth: number }> = [];
+          for (let index = 0; index < await motionLines.count(); index += 1) {
+            const line = motionLines.nth(index);
+            await line.scrollIntoViewIfNeeded();
+            lines.push(await line.evaluate(el => {
+              const rect = el.getBoundingClientRect();
+              return { motion: el.getAttribute("data-motion"), text: el.textContent, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth };
+            }));
+          }
           expect(lines.length).toBeGreaterThan(0);
           for (const line of lines) { expect(line.left).toBeGreaterThanOrEqual(0); expect(line.right).toBeLessThanOrEqual(width + 1); expect(line.top).toBeGreaterThanOrEqual(0); expect(line.bottom).toBeLessThanOrEqual(844); expect(line.scrollWidth).toBeLessThanOrEqual(line.clientWidth + 1); expect(line.height).toBeGreaterThan(0); }
           await page.screenshot({ path: path.join(out, `${width}-${locale}-waiting.png`) });
