@@ -92,8 +92,8 @@ function makeIdentityIsolatedRepo() {
     if (/^GIT_(?:AUTHOR_|COMMITTER_|CONFIG_)/.test(key)) delete env[key];
   }
   Object.assign(env, { HOME: home, XDG_CONFIG_HOME: xdg, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(home, ".gitconfig") });
-  const exec: ExecPort = (command, args, cwd) => {
-    const result = spawnSync(command, args, { cwd, env, encoding: "utf8" });
+  const exec: ExecPort = (command, args, cwd, overrides) => {
+    const result = spawnSync(command, args, { cwd, env: { ...env, ...overrides }, encoding: "utf8" });
     return { code: result.status, stdout: result.stdout ?? "", stderr: result.stderr || result.error?.message || "" };
   };
   const run = (...args: string[]) => {
@@ -111,7 +111,7 @@ function makeIdentityIsolatedRepo() {
   run("add", "feature.txt");
   run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "feature");
   run("switch", "main");
-  return { repo, exec, run, wf };
+  return { repo, env, exec, run, wf };
 }
 
 test("provisionWorktree composes worktree add and captures base branch/ref", () => {
@@ -264,16 +264,25 @@ test("finishMerge supplies a controller identity when Git has none", () => {
   expect(box.exec("git", ["config", "--local", "--get", "user.email"], box.repo).code).not.toBe(0);
 });
 
-test("finishMerge keeps the identity configured for its repository", () => {
+test("finishMerge uses the controller identity despite configured and inherited identities", () => {
   const box = makeIdentityIsolatedRepo();
   const email = ["configured", "example.invalid"].join("@");
   box.run("config", "--local", "user.name", "Configured Test");
   box.run("config", "--local", "user.email", email);
+  Object.assign(box.env, {
+    GIT_AUTHOR_NAME: "Environment Author", GIT_AUTHOR_EMAIL: ["author", "example.invalid"].join("@"),
+    GIT_COMMITTER_NAME: "Environment Committer", GIT_COMMITTER_EMAIL: ["committer", "example.invalid"].join("@"),
+  });
+  const agentHead = box.run("rev-parse", box.wf.branch);
 
   expect(finishMerge(box.wf, box.exec).ok).toBe(true);
+  const controllerEmail = ["noreply", "delegatus.invalid"].join("@");
   expect(box.run("log", "-1", "--format=%an%n%ae%n%cn%n%ce")).toBe(
-    ["Configured Test", email, "Configured Test", email].join("\n"),
+    ["Delegatus", controllerEmail, "Delegatus", controllerEmail].join("\n"),
   );
+  expect(box.run("rev-parse", "HEAD^2")).toBe(agentHead);
+  expect(box.run("config", "--local", "--get", "user.email")).toBe(email);
+  expect(box.run("config", "--local", "--get", "user.name")).toBe("Configured Test");
 });
 
 test("integration: provision + commit + local merge against a throwaway repo", async () => {
@@ -308,6 +317,10 @@ test("integration: provision + commit + local merge against a throwaway repo", a
   const merged = runFinish(wf, "body", realExec);
   if (!merged.ok) throw new Error(merged.error);
   expect(fs.existsSync(path.join(repoDir, "greeting.txt"))).toBe(true);
+  const controllerEmail = ["noreply", "delegatus.invalid"].join("@");
+  expect(realExec("git", ["log", "-1", "--format=%an%n%ae%n%cn%n%ce"], repoDir).stdout.trim()).toBe(
+    ["Delegatus", controllerEmail, "Delegatus", controllerEmail].join("\n"),
+  );
 });
 
 test("integration: a failing setup reports the exit code and stderr tail", async () => {
