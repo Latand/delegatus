@@ -3,7 +3,9 @@ import { expect, test } from "bun:test";
 import { translate, type MessageKey } from "@/lib/i18n";
 import type { SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 
-import { SEAT_TICK_REASON_KEYS, seatTickIntervalWord, seatTickReading } from "./seatTickView";
+import type { BoardMaintenanceAnswer, BoardMaintenanceRunSummary } from "@/lib/boardMaintenance/answer";
+
+import { MAINTENANCE_FAILURES, SEAT_TICK_REASON_KEYS, maintenanceReading, seatTickIntervalWord, seatTickReading } from "./seatTickView";
 
 /*
  * What the control says, as a pure function of the settings answer (#1681).
@@ -276,4 +278,107 @@ test("both locales carry every wake reason", () => {
     expect(translate("en", key), `en ${key}`).not.toBe(key);
     expect(translate("uk", key), `uk ${key}`).not.toBe(key);
   }
+});
+
+/*
+ * The board maintenance timer's reading (#2162): the states the UI brief names,
+ * each as the words, the tone and the card it would show.
+ */
+
+const TIME = /\d{2}:\d{2}/;
+
+function maintenance(overrides: Partial<BoardMaintenanceAnswer> = {}): BoardMaintenanceAnswer {
+  return { ...answer().maintenance, ...overrides };
+}
+
+function run(overrides: Partial<BoardMaintenanceRunSummary> = {}): BoardMaintenanceRunSummary {
+  return {
+    runId: "run-1", taskId: "task-1", conversationId: "conv-1", state: "succeeded",
+    claimedAt: "2026-09-18T09:00:00.000Z", launchedAt: "2026-09-18T09:00:05.000Z", endedAt: "2026-09-18T09:14:00.000Z",
+    failure: null, counts: { writes: 14, tasks: 9, status: 4, closed: 2, created: 1, text: 5, details: 0, looks: 2 }, attentionCount: 3,
+    ...overrides,
+  };
+}
+
+const reading = (value: BoardMaintenanceAnswer | null | undefined, locale = "en") =>
+  maintenanceReading(value, NOW, locale, ((key: MessageKey, params?: Record<string, string | number>) => translate(locale as "en" | "uk", key, params)) as never)!;
+
+test("maintenance: an answer with no timer block shows no group", () => {
+  expect(maintenanceReading(undefined, NOW, "en", t)).toBeNull();
+  expect(maintenanceReading(null, NOW, "en", t)).toBeNull();
+});
+
+test("maintenance: off and never run says so, with no result row and no card", () => {
+  const r = reading(maintenance());
+  expect(r.state).toBe("off");
+  expect(r.tone).toBe("muted");
+  expect(r.summary).toBe("Off");
+  expect(r.rows.map((row) => [row.key, row.value])).toEqual([["last", "never"], ["next", "none while maintenance is off"]]);
+  expect(r.cardTaskId).toBeNull();
+  expect(r.warning).toBeNull();
+});
+
+test("maintenance: on and never run names the first run at the next check", () => {
+  const r = reading(maintenance({ enabled: true, intervalHours: 6, waitingOn: null, nextRunAt: "2026-09-18T12:05:00.000Z" }));
+  expect(r.state).toBe("on");
+  expect(r.tone).toBe("ok");
+  expect(r.summary).toBe("On · every 6 h");
+  expect(r.rows.find((row) => row.key === "next")?.value).toMatch(/^first run at the next check, about \d{2}:\d{2}$/);
+});
+
+test("maintenance: a live run reads as running, links its card and defers the next run", () => {
+  const r = reading(maintenance({ enabled: true, waitingOn: "live-run", live: run({ state: "running", endedAt: null, taskId: "live-card" }), lastRun: run() }));
+  expect(r.state).toBe("running");
+  expect(r.summary).toMatch(/^Running since \d{2}:\d{2}$/);
+  expect(r.cardTaskId).toBe("live-card");
+  expect(r.rows.find((row) => row.key === "next")?.value).toBe("after the current run ends");
+});
+
+test("maintenance: a succeeded run shows time, counts, the attention count and its card", () => {
+  const r = reading(maintenance({ enabled: true, waitingOn: "interval", lastRun: run(), nextRunAt: "2026-09-18T12:10:00.000Z" }));
+  expect(r.tone).toBe("ok");
+  expect(r.rows.find((row) => row.key === "last")?.value).toMatch(/^Done · \d{2}:\d{2}$/);
+  expect(r.rows.find((row) => row.key === "result")?.value).toBe("Tasks changed: 9 · for you: 3");
+  expect(r.rows.find((row) => row.key === "next")?.value).toMatch(/^about \d{2}:\d{2}$/);
+  expect(r.cardTaskId).toBe("task-1");
+});
+
+test("maintenance: a failed run is a warning with its reason by kind, never the engine's detail", () => {
+  const r = reading(maintenance({
+    enabled: true,
+    lastRun: run({ state: "failed", failure: { kind: "no-account", detail: "/srv/engine/state.json refused" } }),
+    nextRunAt: "2026-09-18T12:10:00.000Z",
+  }));
+  expect(r.tone).toBe("warn");
+  expect(r.rows.find((row) => row.key === "last")?.value).toMatch(/^Failed · \d{2}:\d{2}$/);
+  expect(r.rows.find((row) => row.key === "result")?.value).toBe("no Codex account is available for this project");
+  expect(JSON.stringify(r)).not.toContain("/srv/engine");
+  /* A kind this build does not know still reads as a failure, not as blank. */
+  const odd = reading(maintenance({ enabled: true, lastRun: run({ state: "failed", failure: { kind: "from-the-future" as never, detail: "" } }) }));
+  expect(odd.rows.find((row) => row.key === "result")?.value).toBe("the run failed for a reason this panel does not know");
+});
+
+test("maintenance: a hold says why the next run waits", () => {
+  expect(reading(maintenance({ enabled: true, waitingOn: "deployment", nextRunAt: "2026-09-18T12:05:00.000Z" })).rows.find((row) => row.key === "next")?.value).toBe("held while a deployment runs");
+  expect(reading(maintenance({ enabled: true, waitingOn: "no-seat" })).rows.find((row) => row.key === "next")?.value).toBe("held: the project has no seat");
+  /* No instant and nothing holding it: the checks themselves are off. */
+  expect(reading(maintenance({ enabled: true, waitingOn: null, nextRunAt: null })).rows.find((row) => row.key === "next")?.value).toBe("unknown: tick checks are off");
+});
+
+test("maintenance: an unreadable run store warns and the setting still reads", () => {
+  const r = reading(maintenance({ enabled: true, runsError: "store unreadable" }));
+  expect(r.tone).toBe("warn");
+  expect(r.warning).toContain("The setting still works");
+  expect(r.summary).toBe("On · every 3 h");
+});
+
+test("maintenance: both locales carry every failure kind and the group's words", () => {
+  for (const key of Object.values(MAINTENANCE_FAILURES)) {
+    expect(translate("en", key), `en ${key}`).not.toBe(key);
+    expect(translate("uk", key), `uk ${key}`).not.toBe(key);
+  }
+  const uk = reading(maintenance({ enabled: true, lastRun: run() }), "uk");
+  expect(uk.summary).toBe("Увімкнено · кожні 3 год");
+  expect(uk.rows.find((row) => row.key === "result")?.value).toBe("Змінено задач: 9 · для вас: 3");
+  expect(uk.rows.find((row) => row.key === "last")?.value).toMatch(TIME);
 });

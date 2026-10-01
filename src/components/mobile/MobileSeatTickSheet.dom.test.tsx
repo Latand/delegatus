@@ -330,3 +330,84 @@ test("a refused save on the phone rolls the display back and shows the module's 
   /* The field being corrected keeps what was typed into it. */
   expect(interval().value).toBe("30");
 });
+
+/*
+ * The board maintenance timer on the phone (#2162): the same group in the same
+ * place, with 44 px targets, its own Save inside the body (the footer's Save
+ * belongs to the tick), and a card link that hands the task to the board.
+ */
+
+const mGroup = () => body().querySelector("[data-seat-tick-maintenance]") as HTMLElement | null;
+const mSwitch = () => body().querySelector("[data-seat-tick-maintenance-enabled]") as HTMLButtonElement;
+const mInterval = () => body().querySelector("[data-seat-tick-maintenance-interval]") as HTMLInputElement;
+const mSave = () => body().querySelector("[data-seat-tick-maintenance-save]") as HTMLButtonElement;
+
+test("the tick sheet carries the maintenance group with phone-sized targets and its own Save in the body", async () => {
+  const root = await mount();
+  await openTick(root);
+  const sheet = tickSheet()!;
+  expect(sheet.querySelector("[data-mobile2-sheet-body] [data-seat-tick-maintenance]")).not.toBeNull();
+  expect(sheet.querySelector("[data-mobile2-sheet-body] [data-seat-tick-maintenance-save]")).not.toBeNull();
+  /* The footer's Save is still the tick's alone. */
+  expect(sheet.querySelector("[data-mobile2-sheet-body] [data-seat-tick-save]")).toBeNull();
+  expect(mInterval().className).toContain("h-11");
+  expect(mSave().className).toContain("min-h-11");
+  expect(mSwitch().className).toContain("h-7 w-12");
+  expect(mInterval().value).toBe("3");
+  expect(mGroup()!.getAttribute("data-seat-tick-maintenance")).toBe("off");
+});
+
+test("a maintenance save on the phone sends only the maintenance change and leaves the footer Save idle", async () => {
+  const root = await mount();
+  await openTick(root);
+  flushSync(() => mSwitch().click());
+  type(mInterval(), "2");
+  expect(save().disabled).toBe(true);
+  const stored = record({ changed: true });
+  stored.maintenance = { ...stored.maintenance, enabled: true, intervalHours: 2, updatedAt: new Date().toISOString(), waitingOn: null, nextRunAt: new Date(Date.now() + 300_000).toISOString() };
+  putAnswers = [{ status: 200, body: stored }];
+  flushSync(() => mSave().click());
+  await settle(root);
+
+  expect(puts()).toHaveLength(1);
+  expect(puts()[0]!.body).toEqual({ project: PROJECT, maintenance: { enabled: true, intervalHours: 2 } });
+  expect(mGroup()!.getAttribute("data-seat-tick-maintenance")).toBe("on");
+  expect(body().querySelector("[data-seat-tick-maintenance-summary]")?.textContent).toBe("On · every 2 h");
+  expect(mSave().disabled).toBe(true);
+});
+
+test("a refused maintenance save on the phone shows the module's words inside the group", async () => {
+  const root = await mount();
+  await openTick(root);
+  type(mInterval(), "9");
+  putAnswers = [{ status: 400, body: { error: "maintenance must be an object" } }];
+  flushSync(() => mSave().click());
+  await settle(root);
+  expect(mGroup()!.querySelector("[data-seat-tick-maintenance-error]")?.textContent).toBe("maintenance must be an object");
+  expect(body().querySelector("[data-seat-tick-error]")).toBeNull();
+  expect(mInterval().value).toBe("9");
+});
+
+test("the last run's card opens through the board's own task-open event", async () => {
+  getAnswer = record();
+  getAnswer.maintenance = {
+    ...getAnswer.maintenance, enabled: true, waitingOn: "interval", nextRunAt: new Date(Date.now() + 3_600_000).toISOString(),
+    lastRun: {
+      runId: "run-1", taskId: "hidden-done-card", conversationId: null, state: "succeeded",
+      claimedAt: ago(120), launchedAt: ago(119), endedAt: ago(105), failure: null,
+      counts: { writes: 3, tasks: 2, status: 1, closed: 1, created: 0, text: 1, details: 0, looks: 0 }, attentionCount: 0,
+    },
+  };
+  const root = await mount();
+  await openTick(root);
+  expect(mGroup()!.textContent).toContain("Tasks changed: 2 · for you: 0");
+  const navigated: Array<{ kind?: string; id?: string }> = [];
+  const listener = (event: Event) => navigated.push((event as CustomEvent).detail);
+  dom.window.addEventListener("llv:mcp-navigate", listener as never);
+  try {
+    flushSync(() => (mGroup()!.querySelector("[data-seat-tick-maintenance-card]") as HTMLButtonElement).click());
+  } finally {
+    dom.window.removeEventListener("llv:mcp-navigate", listener as never);
+  }
+  expect(navigated).toEqual([{ kind: "task", id: "hidden-done-card" }]);
+});

@@ -1,3 +1,5 @@
+import type { BoardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
+import type { MaintenanceFailureKind } from "@/lib/boardMaintenance/types";
 import type { MessageKey, TFunction } from "@/lib/i18n";
 import type { SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 import type { SeatTickWakeReasonKind } from "@/lib/monitor/types";
@@ -381,5 +383,107 @@ export function seatTickReading(
     rows: rowsOf(answer, blocker, now, t),
     blocker,
     offDefault: !effective.isDefault,
+  };
+}
+
+/*
+ * The board maintenance timer's reading (#2162), as a pure function of the
+ * `maintenance` block the settings answer carries. Like the tick's reading it
+ * holds the words and the tone and nothing else: every rule about when a run
+ * is due lives on the server, which sends `nextRunAt` and `waitingOn` already
+ * decided, so no arithmetic about intervals is repeated here.
+ */
+
+export type MaintenanceStateKind = "off" | "on" | "running";
+
+export interface MaintenanceReading {
+  state: MaintenanceStateKind;
+  /** The dot: a failed last run or an unreadable run store is a warning, a
+      switched-off timer is muted, anything else is quiet green. */
+  tone: SeatTickTone;
+  /** The one-line status: «On · every 3 h», «Running since 21:00», «Off». */
+  summary: string;
+  /** Last run, its result, and the next run, in that order. The result row is
+      absent until a run has ended. */
+  rows: Array<SeatTickRow & { key: "last" | "result" | "next" }>;
+  /** The card the live run, or else the last ended run, is on. Null when there
+      is none or the run never got a card. */
+  cardTaskId: string | null;
+  /** The run store could not be read; the setting still answers. */
+  warning: string | null;
+}
+
+/** Every failure kind has a row: the record type makes a new kind a compile
+    error here rather than a blank result line. */
+export const MAINTENANCE_FAILURES: Record<MaintenanceFailureKind, MessageKey> = {
+  "no-account": "seatTick.maintenance.failure.noAccount",
+  "no-repository": "seatTick.maintenance.failure.noRepository",
+  "launch-refused": "seatTick.maintenance.failure.launchRefused",
+  "launch-failed": "seatTick.maintenance.failure.launchFailed",
+  "host-died": "seatTick.maintenance.failure.hostDied",
+  "turn-error": "seatTick.maintenance.failure.turnError",
+  "agent-fail": "seatTick.maintenance.failure.agentFail",
+  "needs-decision": "seatTick.maintenance.failure.needsDecision",
+  "timed-out": "seatTick.maintenance.failure.timedOut",
+};
+
+function maintenanceNext(m: BoardMaintenanceAnswer, now: number, locale: string, t: TFunction): string {
+  if (!m.enabled) return t("seatTick.maintenance.next.off");
+  if (m.live) return t("seatTick.maintenance.next.afterRun");
+  if (m.waitingOn === "deployment") return t("seatTick.maintenance.next.waitingDeployment");
+  if (m.waitingOn === "no-seat") return t("seatTick.maintenance.next.waitingNoSeat");
+  const at = seatTickLocalTime(m.nextRunAt, now, locale);
+  /* No instant means the tick's checks are off in this Viewer: nothing will
+     start a run, and an invented time would say otherwise. */
+  if (!at) return t("seatTick.maintenance.next.checksOff");
+  return m.lastRun ? t("seatTick.maintenance.next.at", { time: at }) : t("seatTick.maintenance.next.firstRun", { time: at });
+}
+
+export function maintenanceReading(
+  m: BoardMaintenanceAnswer | null | undefined,
+  now: number,
+  locale: string,
+  t: TFunction,
+): MaintenanceReading | null {
+  if (!m) return null;
+  const last = m.lastRun;
+  const failed = last?.state === "failed";
+  const warning = m.runsError ? t("seatTick.maintenance.runsUnreadable") : null;
+  const state: MaintenanceStateKind = m.live ? "running" : m.enabled ? "on" : "off";
+  const since = seatTickLocalTime(m.live?.launchedAt ?? m.live?.claimedAt ?? null, now, locale);
+  const summary = state === "running"
+    ? (since ? t("seatTick.maintenance.summary.running", { time: since }) : t("seatTick.maintenance.summary.runningNoTime"))
+    : state === "on"
+      ? t("seatTick.maintenance.summary.on", { n: m.intervalHours })
+      : t("seatTick.maintenance.summary.off");
+
+  const rows: MaintenanceReading["rows"] = [];
+  const endedAt = last ? seatTickLocalTime(last.endedAt ?? last.claimedAt, now, locale) ?? t("seatTick.unknown") : null;
+  rows.push({
+    key: "last",
+    label: t("seatTick.maintenance.row.last"),
+    value: last && endedAt
+      ? t(failed ? "seatTick.maintenance.lastFailed" : "seatTick.maintenance.lastSucceeded", { time: endedAt })
+      : t("seatTick.never"),
+  });
+  if (last) {
+    const reason = last.failure ? MAINTENANCE_FAILURES[last.failure.kind] : undefined;
+    rows.push({
+      key: "result",
+      label: t("seatTick.maintenance.row.result"),
+      value: failed
+        ? t(reason ?? "seatTick.maintenance.failure.unknown")
+        : t("seatTick.maintenance.counts", { tasks: last.counts.tasks, attention: last.attentionCount }),
+    });
+  }
+  rows.push({ key: "next", label: t("seatTick.maintenance.row.next"), value: maintenanceNext(m, now, locale, t) });
+
+  return {
+    state,
+    tone: failed || warning ? "warn" : state === "off" ? "muted" : "ok",
+    summary,
+    rows,
+    cardTaskId: m.live?.taskId ?? last?.taskId ?? null,
+    warning,
   };
 }

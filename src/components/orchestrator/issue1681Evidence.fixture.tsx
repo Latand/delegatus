@@ -58,17 +58,50 @@ const FACE_MINUTES: Record<ChipFace, number> = { default: 60, configured: 30, lo
 const face: ChipFace = params.get("face") === "default" ? "default" : params.get("face") === "longest" ? "longest" : "configured";
 const faceMinutes = FACE_MINUTES[face];
 
+/**
+ * The board maintenance timer (#2162), as the settings answer carries it.
+ * `?maint=` picks the reading: `off` (the default), `ok` (on, last run done,
+ * next run set), `failed` (last run failed, no account), `running` (a run is
+ * live) and `held` (due, but a deployment is running).
+ */
+type MaintenanceCase = "off" | "ok" | "failed" | "running" | "held";
+const maintenanceCase: MaintenanceCase = (["ok", "failed", "running", "held"] as const).find((value) => value === params.get("maint")) ?? "off";
+
+function maintenance(): SeatTickSettingsAnswer["maintenance"] {
+  const base: SeatTickSettingsAnswer["maintenance"] = {
+    enabled: false, intervalHours: 3, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168,
+    updatedAt: null, setBy: null, live: null, lastRun: null,
+    nextEligibleAt: null, nextRunAt: null, waitingOn: "off", runsError: null,
+  };
+  const ended = (state: "succeeded" | "failed") => ({
+    runId: "run-evidence", taskId: "task-evidence", conversationId: null, state,
+    claimedAt: ago(116), launchedAt: ago(115), endedAt: ago(100),
+    failure: state === "failed" ? { kind: "no-account" as const, detail: "no Codex account" } : null,
+    counts: { writes: 14, tasks: 9, status: 4, closed: 2, created: 1, text: 5, details: 0, looks: 2 },
+    attentionCount: state === "failed" ? 0 : 3,
+  });
+  const on = { ...base, enabled: true, intervalHours: 3, updatedAt: ago(600), setBy: { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null } };
+  switch (maintenanceCase) {
+    case "ok":
+      return { ...on, lastRun: ended("succeeded"), waitingOn: "interval", nextEligibleAt: ago(-65), nextRunAt: ago(-70) };
+    case "failed":
+      return { ...on, lastRun: ended("failed"), waitingOn: "interval", nextEligibleAt: ago(-65), nextRunAt: ago(-70) };
+    case "running":
+      return { ...on, waitingOn: "live-run", live: { ...ended("succeeded"), state: "running", endedAt: null, taskId: "task-live", attentionCount: 0 }, lastRun: ended("succeeded") };
+    case "held":
+      return { ...on, lastRun: ended("succeeded"), waitingOn: "deployment", nextEligibleAt: ago(10), nextRunAt: ago(-5) };
+    default:
+      return base;
+  }
+}
+
 /** Stale, so the chip carries a warning dot and the popover shows every
     section at once, on the schedule `?face=` asks for. */
 function answer(): SeatTickSettingsAnswer {
   const onDefault = face === "default";
   const reason = onDefault ? null : "a release afternoon, so the seat is woken on a schedule of its own";
   return {
-    maintenance: {
-      enabled: false, intervalHours: 3, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168,
-      updatedAt: null, setBy: null, live: null, lastRun: null,
-      nextEligibleAt: null, nextRunAt: null, waitingOn: "off", runsError: null,
-    },
+    maintenance: maintenance(),
     project: PROJECT,
     changed: false,
     at: new Date().toISOString(),

@@ -877,3 +877,174 @@ browserTest("#1681 rendered: the chip at 1280 and at the narrowest desktop, and 
   expect(read.saveAboveKeyboard, "Save stays above the keyboard").toBe(true);
   expect(read.closeReturnsToSeatSheet, "the × returns to the seat sheet").toBe(true);
 }, 300_000);
+
+/*
+ * #2162: the board maintenance timer inside the tick's popover (1440 px) and
+ * the tick's sheet (390 px), in light and dark, in Ukrainian and English. The
+ * images land in docs/design/board-maintainer-ui/ for a person to look at; the
+ * assertions are the geometry that does not need a person: nothing overflows
+ * sideways, the phone's targets are 44 px, the group's rows are not clipped,
+ * and the popover stays inside the viewport.
+ *
+ *   LLV_SEAT_TICK_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable bun test src/components/orchestrator/issue1681Evidence.browser.test.tsx -t 2162
+ */
+const MAINTENANCE_SHOTS = path.resolve("docs/design/board-maintainer-ui");
+
+type Theme = "light" | "dark";
+type MaintenanceState = "off" | "ok" | "failed" | "running" | "held";
+
+async function maintenanceDesktop(browser: Browser, base: string, theme: Theme, locale: "en" | "uk", maint: MaintenanceState) {
+  const viewport = { width: 1440, height: 1100 };
+  const context = await browser.newContext({ viewport, colorScheme: theme });
+  await context.addInitScript((value) => window.localStorage.setItem("llv_lang", value), locale);
+  const page = await context.newPage();
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${base}/?surface=desktop&dock=440&maint=${maint}`);
+  await page.waitForSelector("[data-seat-tick-chip]");
+  await page.click("[data-seat-tick-chip]");
+  await page.waitForSelector("[data-seat-tick-maintenance]");
+  await page.waitForTimeout(300);
+  /* The popover caps at 70 vh and scrolls, and the group sits below the tick's
+     own two. It is shown the way the operator reaches it: scrolled to the end. */
+  await page.evaluate(() => {
+    const popover = document.querySelector("[data-seat-tick-popover]") as HTMLElement;
+    popover.scrollTop = popover.scrollHeight;
+  });
+  await page.waitForTimeout(150);
+  const measured = await page.evaluate(() => {
+    const popover = document.querySelector("[data-seat-tick-popover]") as HTMLElement;
+    const group = document.querySelector("[data-seat-tick-maintenance]") as HTMLElement;
+    const box = popover.getBoundingClientRect();
+    const clipped = [...group.querySelectorAll("[data-seat-tick-maintenance-row] span, [data-seat-tick-maintenance-summary] span, button")]
+      .filter((element) => (element as HTMLElement).scrollWidth > (element as HTMLElement).clientWidth + 1 && getComputedStyle(element).textOverflow === "ellipsis")
+      .map((element) => element.textContent);
+    return {
+      state: group.dataset.seatTickMaintenance ?? "",
+      popover: { x: box.x, y: box.y, width: box.width, height: box.height },
+      popoverScrolls: popover.scrollHeight > popover.clientHeight,
+      groupInsidePopover: group.getBoundingClientRect().bottom <= box.bottom + 1 && group.getBoundingClientRect().top >= box.top - 1,
+      pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
+      clipped,
+      text: group.textContent ?? "",
+    };
+  });
+  await page.screenshot({ path: path.join(MAINTENANCE_SHOTS, `desktop-1440-${theme}-${locale}-${maint}.png`) });
+  await context.close();
+  return { theme, locale, maint, viewport, ...measured, errors };
+}
+
+async function maintenancePhone(browser: Browser, base: string, theme: Theme, locale: "en" | "uk", maint: MaintenanceState) {
+  const viewport = { width: 390, height: 844 };
+  const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: theme });
+  await context.addInitScript((value) => window.localStorage.setItem("llv_lang", value), locale);
+  const page = await context.newPage();
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${base}/?surface=phone&maint=${maint}`);
+  await page.waitForSelector("[data-seat-tick-row]");
+  await page.locator("[data-seat-tick-row]").click();
+  await page.waitForSelector('[data-mobile2-sheet="tick"]');
+  await page.waitForSelector("[data-seat-tick-maintenance]");
+  await page.waitForTimeout(400);
+  /* The group sits below Configured and Actual, so the sheet is shown as the
+     operator meets it: scrolled until the group's heading is at the top. */
+  await page.evaluate(() => {
+    const body = document.querySelector("[data-mobile2-sheet-body]") as HTMLElement;
+    const group = document.querySelector("[data-seat-tick-maintenance]") as HTMLElement;
+    body.scrollTop += group.getBoundingClientRect().top - body.getBoundingClientRect().top - 8;
+  });
+  await page.waitForTimeout(150);
+  const measured = await page.evaluate(() => {
+    const group = document.querySelector("[data-seat-tick-maintenance]") as HTMLElement;
+    const height = (selector: string) => Math.round((document.querySelector(selector) as HTMLElement).getBoundingClientRect().height);
+    const clipped = [...group.querySelectorAll("[data-seat-tick-maintenance-row] span, [data-seat-tick-maintenance-summary] span")]
+      .filter((element) => (element as HTMLElement).scrollWidth > (element as HTMLElement).clientWidth + 1)
+      .map((element) => element.textContent);
+    const right = Math.max(...[...group.querySelectorAll("*")].map((element) => element.getBoundingClientRect().right));
+    return {
+      state: group.dataset.seatTickMaintenance ?? "",
+      switchHeight: height("[data-seat-tick-maintenance-enabled]"),
+      intervalHeight: height("[data-seat-tick-maintenance-interval]"),
+      saveHeight: height("[data-seat-tick-maintenance-save]"),
+      cardHeight: document.querySelector("[data-seat-tick-maintenance-card]") ? height("[data-seat-tick-maintenance-card]") : null,
+      contentRight: Math.round(right),
+      pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
+      clipped,
+    };
+  });
+  await page.screenshot({ path: path.join(MAINTENANCE_SHOTS, `phone-390-${theme}-${locale}-${maint}.png`) });
+  await context.close();
+  return { theme, locale, maint, viewport, ...measured, errors };
+}
+
+browserTest("#2162 rendered: the board maintenance timer at 1440 and at 390, light and dark", async () => {
+  fs.mkdirSync(OUT, { recursive: true });
+  fs.mkdirSync(MAINTENANCE_SHOTS, { recursive: true });
+  const build = await Bun.build({
+    entrypoints: [path.resolve("src/components/orchestrator/issue1681Evidence.fixture.tsx")],
+    target: "browser",
+    outdir: path.join(OUT, "bundle-2162"),
+    define: { "process.env.NODE_ENV": '"production"', "process.env": "{}" },
+  });
+  if (!build.success) throw new Error(build.logs.join("\n"));
+  const entry = build.outputs.find((output) => output.kind === "entry-point")!.path;
+  const css = await postcss([tailwind()]).process(fs.readFileSync("src/app/globals.css", "utf8"), { from: path.resolve("src/app/globals.css") });
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const pathname = new URL(request.url).pathname;
+      if (pathname === "/app.js") return new Response(Bun.file(entry), { headers: { "content-type": "text/javascript" } });
+      if (pathname === "/style.css") return new Response(css.css, { headers: { "content-type": "text/css" } });
+      return new Response(
+        '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"></head>'
+        + '<body><div id="root" style="height:100dvh;display:flex;flex-direction:column"></div><script type="module" src="/app.js"></script></body></html>',
+        { headers: { "content-type": "text/html" } },
+      );
+    },
+  });
+  const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+  const base = `http://127.0.0.1:${server.port}`;
+  const desktops: Awaited<ReturnType<typeof maintenanceDesktop>>[] = [];
+  const phones: Awaited<ReturnType<typeof maintenancePhone>>[] = [];
+  try {
+    for (const theme of ["light", "dark"] as const) {
+      for (const maint of ["off", "ok", "failed", "running", "held"] as const) {
+        desktops.push(await maintenanceDesktop(browser, base, theme, "en", maint));
+        phones.push(await maintenancePhone(browser, base, theme, "en", maint));
+      }
+      /* The longest strings the group carries are Ukrainian. */
+      for (const maint of ["ok", "failed"] as const) {
+        desktops.push(await maintenanceDesktop(browser, base, theme, "uk", maint));
+        phones.push(await maintenancePhone(browser, base, theme, "uk", maint));
+      }
+    }
+  } finally {
+    await browser.close();
+    server.stop(true);
+  }
+
+  for (const read of desktops) {
+    const key = `desktop ${read.theme} ${read.locale} ${read.maint}`;
+    expect(read.errors, `${key} page errors`).toEqual([]);
+    expect(read.state, `${key} state`).toBe({ off: "off", ok: "on", failed: "on", running: "running", held: "on" }[read.maint]);
+    expect(read.pageOverflow, `${key} sideways overflow`).toBe(false);
+    expect(read.clipped, `${key} clipped text`).toEqual([]);
+    expect(read.groupInsidePopover, `${key} group inside the popover`).toBe(true);
+    expect(read.popover.x >= 0 && read.popover.x + read.popover.width <= read.viewport.width, `${key} popover inside the viewport`).toBe(true);
+    expect(read.popover.y >= 0 && read.popover.y + read.popover.height <= read.viewport.height, `${key} popover inside the viewport height`).toBe(true);
+  }
+  for (const read of phones) {
+    const key = `phone ${read.theme} ${read.locale} ${read.maint}`;
+    expect(read.errors, `${key} page errors`).toEqual([]);
+    expect(read.state, `${key} state`).toBe({ off: "off", ok: "on", failed: "on", running: "running", held: "on" }[read.maint]);
+    expect(read.pageOverflow, `${key} sideways overflow`).toBe(false);
+    expect(read.contentRight, `${key} content inside the phone`).toBeLessThanOrEqual(read.viewport.width);
+    expect(read.clipped, `${key} clipped text`).toEqual([]);
+    expect(read.intervalHeight, `${key} interval target`).toBeGreaterThanOrEqual(44);
+    expect(read.saveHeight, `${key} save target`).toBeGreaterThanOrEqual(44);
+    expect(read.switchHeight, `${key} switch target`).toBeGreaterThanOrEqual(28);
+    if (read.cardHeight !== null) expect(read.cardHeight, `${key} card link target`).toBeGreaterThanOrEqual(44);
+  }
+}, 300_000);

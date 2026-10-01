@@ -487,3 +487,183 @@ test("nothing outside Details carries an id, a key or a path", async () => {
   expect(outside.textContent).not.toContain("/api/monitor/seat-tick");
   expect(chip().getAttribute("title")).not.toContain("conversation_worker_sentinel");
 });
+
+/*
+ * The board maintenance timer inside the popover (#2162): its own switch,
+ * interval and Save over the `maintenance` block of the same settings answer.
+ */
+
+const mSwitch = () => body().querySelector("[data-seat-tick-maintenance-enabled]") as HTMLButtonElement;
+const mInterval = () => body().querySelector("[data-seat-tick-maintenance-interval]") as HTMLInputElement;
+const mSave = () => body().querySelector("[data-seat-tick-maintenance-save]") as HTMLButtonElement;
+const mGroup = () => body().querySelector("[data-seat-tick-maintenance]") as HTMLElement | null;
+const mRows = () => Object.fromEntries([...body().querySelectorAll("[data-seat-tick-maintenance-row]")].map((entry) => [
+  entry.getAttribute("data-seat-tick-maintenance-row"),
+  entry.children[1]?.textContent ?? "",
+]));
+
+type MaintenanceBlock = SeatTickSettingsAnswer["maintenance"];
+function withMaintenance(overrides: Partial<MaintenanceBlock>, base: SeatTickSettingsAnswer = record()): SeatTickSettingsAnswer {
+  return { ...base, maintenance: { ...base.maintenance, ...overrides } };
+}
+const endedRun = (overrides: Partial<NonNullable<MaintenanceBlock["lastRun"]>> = {}): NonNullable<MaintenanceBlock["lastRun"]> => ({
+  runId: "run-1", taskId: "card-from-the-last-run", conversationId: "conv-1", state: "succeeded",
+  claimedAt: ago(200), launchedAt: ago(199), endedAt: ago(185), failure: null,
+  counts: { writes: 14, tasks: 9, status: 4, closed: 2, created: 1, text: 5, details: 0, looks: 2 }, attentionCount: 3,
+  ...overrides,
+});
+
+test("maintenance: off by default, the group sits between Actual and Details with the interval at 3 h", async () => {
+  const { root } = await mount();
+  await open(root);
+  const group = mGroup()!;
+  expect(group.getAttribute("data-seat-tick-maintenance")).toBe("off");
+  const text = (node: Element) => node.textContent ?? "";
+  expect(text(group)).toContain("Board maintenance");
+  expect(body().querySelector("[data-seat-tick-maintenance-summary]")?.textContent).toBe("Off");
+  expect(mSwitch().getAttribute("aria-checked")).toBe("false");
+  expect(mInterval().value).toBe("3");
+  expect(mSave().disabled).toBe(true);
+  expect(mRows()).toEqual({ last: "never", next: "none while maintenance is off" });
+  /* Order: the tick's Actual rows, then this group, then Details. */
+  const order = [...body().querySelectorAll("[data-seat-tick-sentence], [data-seat-tick-maintenance], [data-seat-tick-details]")].map((node) => node.tagName + node.getAttribute("data-seat-tick-maintenance"));
+  expect(order).toEqual(["P" + null, "DIV" + "off", "DETAILS" + null]);
+  /* The tick's own rows are untouched by the group's rows. */
+  expect(rows()).toHaveLength(5);
+});
+
+test("maintenance: turning it on and setting the hours sends only the maintenance change, and the tick's Save stays idle", async () => {
+  const { root } = await mount();
+  await open(root);
+  flushSync(() => mSwitch().click());
+  type(mInterval(), "6");
+  expect(mSave().disabled).toBe(false);
+  expect(save().disabled).toBe(true);
+  putAnswers = [{
+    status: 200,
+    body: withMaintenance({ enabled: true, intervalHours: 6, updatedAt: ago(0), waitingOn: null, nextRunAt: new Date(Date.now() + 5 * 60_000).toISOString() }, record({ changed: true })),
+  }];
+  flushSync(() => mSave().click());
+  await settle(root);
+
+  expect(puts()).toHaveLength(1);
+  expect(puts()[0]!.body).toEqual({ project: PROJECT, maintenance: { enabled: true, intervalHours: 6 } });
+  /* The form shows what the route read back, and the group moved to «on». */
+  expect(mGroup()!.getAttribute("data-seat-tick-maintenance")).toBe("on");
+  expect(body().querySelector("[data-seat-tick-maintenance-summary]")?.textContent).toBe("On · every 6 h");
+  expect(mInterval().value).toBe("6");
+  expect(mSave().disabled).toBe(true);
+  expect(mRows().next).toMatch(/^first run at the next check, about \d{2}:\d{2}$/);
+});
+
+test("maintenance: an empty interval is sent as null, the default, and a non-finite one goes as typed", async () => {
+  getAnswer = withMaintenance({ enabled: true, intervalHours: 12, waitingOn: "interval" });
+  const { root } = await mount();
+  await open(root);
+  expect(mInterval().value).toBe("12");
+  type(mInterval(), "");
+  putAnswers = [{ status: 200, body: withMaintenance({ enabled: true, intervalHours: 3 }) }];
+  flushSync(() => mSave().click());
+  await settle(root);
+  expect(puts()[0]!.body).toEqual({ project: PROJECT, maintenance: { intervalHours: null } });
+
+  type(mInterval(), "1e400");
+  putAnswers = [{ status: 200, body: withMaintenance({ enabled: true, intervalHours: 3 }) }];
+  flushSync(() => mSave().click());
+  await settle(root);
+  expect(puts()[1]!.body).toEqual({ project: PROJECT, maintenance: { intervalHours: "1e400" } });
+});
+
+test("maintenance: a refusal shows beside the timer's fields, not in the tick's form, and keeps what was typed", async () => {
+  const { root } = await mount();
+  await open(root);
+  type(mInterval(), "5");
+  putAnswers = [{ status: 400, body: { error: "maintenance.enabled must be a boolean" } }];
+  flushSync(() => mSave().click());
+  await settle(root);
+
+  expect(puts()).toHaveLength(1);
+  const inGroup = mGroup()!.querySelector("[data-seat-tick-maintenance-error]");
+  expect(inGroup?.getAttribute("role")).toBe("alert");
+  expect(inGroup?.textContent).toBe("maintenance.enabled must be a boolean");
+  expect(body().querySelector("[data-seat-tick-error]")).toBeNull();
+  expect(mInterval().value).toBe("5");
+  /* A refused tick save, by contrast, stays in the tick's own form. */
+  type(field<HTMLInputElement>("[data-seat-tick-interval]"), "600000");
+  putAnswers = [{ status: 400, body: { error: "wakeIntervalMinutes must be at most 525600" } }];
+  flushSync(() => save().click());
+  await settle(root);
+  expect(body().querySelector("[data-seat-tick-error]")?.textContent).toBe("wakeIntervalMinutes must be at most 525600");
+  expect(mGroup()!.querySelector("[data-seat-tick-maintenance-error]")).toBeNull();
+});
+
+test("maintenance: a run in progress is named with its start and its card", async () => {
+  getAnswer = withMaintenance({
+    enabled: true, waitingOn: "live-run",
+    live: { ...endedRun({ state: "running", endedAt: null, taskId: "live-card" }), counts: endedRun().counts },
+  });
+  const { root } = await mount();
+  await open(root);
+  expect(mGroup()!.getAttribute("data-seat-tick-maintenance")).toBe("running");
+  expect(body().querySelector("[data-seat-tick-maintenance-summary]")?.textContent).toMatch(/^Running since \d{2}:\d{2}$/);
+  expect(mRows().next).toBe("after the current run ends");
+  expect(mGroup()!.querySelector("[data-seat-tick-maintenance-card]")).not.toBeNull();
+});
+
+test("maintenance: a succeeded run shows its time, counts and card, and the card link uses the board's open path and closes the popover", async () => {
+  getAnswer = withMaintenance({ enabled: true, waitingOn: "interval", lastRun: endedRun(), nextRunAt: new Date(Date.now() + 3 * 3_600_000).toISOString() });
+  const { root } = await mount();
+  await open(root);
+  const rowsNow = mRows();
+  expect(rowsNow.last).toMatch(/^Done · \d{2}:\d{2}$/);
+  expect(rowsNow.result).toBe("Tasks changed: 9 · for you: 3");
+  expect(rowsNow.next).toMatch(/^about \d{2}:\d{2}$/);
+  /* No id in the primary view. */
+  expect(popover()!.textContent).not.toContain("card-from-the-last-run");
+
+  const navigated: Array<{ kind?: string; id?: string }> = [];
+  const listener = (event: Event) => navigated.push((event as CustomEvent).detail);
+  dom.window.addEventListener("llv:mcp-navigate", listener as never);
+  try {
+    flushSync(() => (mGroup()!.querySelector("[data-seat-tick-maintenance-card]") as HTMLButtonElement).click());
+  } finally {
+    dom.window.removeEventListener("llv:mcp-navigate", listener as never);
+  }
+  expect(navigated).toEqual([{ kind: "task", id: "card-from-the-last-run" }]);
+  await settle(root, 2);
+  expect(popover()).toBeNull();
+});
+
+test("maintenance: a failed run is a warning with its reason by kind and no engine detail", async () => {
+  getAnswer = withMaintenance({
+    enabled: true, waitingOn: "interval", nextRunAt: new Date(Date.now() + 3_600_000).toISOString(),
+    lastRun: endedRun({ state: "failed", failure: { kind: "no-account", detail: "ENGINE_NOT_CONNECTED at /srv/engine/state.json" } }),
+  });
+  const { root } = await mount();
+  await open(root);
+  expect(mRows().last).toMatch(/^Failed · \d{2}:\d{2}$/);
+  expect(mRows().result).toBe("no Codex account is available for this project");
+  expect(body().querySelector("[data-seat-tick-maintenance-summary] [data-seat-tick-dot]")?.getAttribute("data-seat-tick-dot")).toBe("warn");
+  expect(popover()!.textContent).not.toContain("/srv/engine");
+  expect(mGroup()!.querySelector("[data-seat-tick-maintenance-card]")).not.toBeNull();
+});
+
+test("maintenance: a held launch says why, and an unreadable run store warns while the setting stays editable", async () => {
+  getAnswer = withMaintenance({ enabled: true, waitingOn: "deployment", nextRunAt: new Date(Date.now() + 300_000).toISOString(), runsError: "store unreadable" });
+  const { root } = await mount();
+  await open(root);
+  expect(mRows().next).toBe("held while a deployment runs");
+  expect(body().querySelector("[data-seat-tick-maintenance-unreadable]")?.textContent).toContain("The setting still works");
+  expect(mSwitch().disabled).toBe(false);
+  expect(mInterval().disabled).toBe(false);
+});
+
+test("maintenance: an answer from a server with no timer block renders no group at all", async () => {
+  const old = record() as Partial<SeatTickSettingsAnswer>;
+  delete old.maintenance;
+  getAnswer = old as SeatTickSettingsAnswer;
+  const { root } = await mount();
+  await open(root);
+  expect(mGroup()).toBeNull();
+  expect(body().querySelector("[data-seat-tick-details]")).not.toBeNull();
+});
