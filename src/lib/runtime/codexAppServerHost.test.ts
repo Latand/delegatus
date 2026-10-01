@@ -1,3 +1,4 @@
+import { fakeAgentMemory } from "./fixtures/agentMemory";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -5508,4 +5509,42 @@ describe("Codex launch service tier", () => {
       expect(server.requests.some(request => request.method === "thread/start")).toBeFalse();
     }
   });
+});
+
+test("Codex host records injected OOM SIGKILL on its terminal row", async () => {
+  const memory = fakeAgentMemory();
+  const child = new FakeAppServer("memory-thread");
+  const captured: { args?: string[] } = {};
+  const host = await CodexAppServerHost.start({ cwd: "/repo", mcpServers: [], eventStore: new MemoryEventStore(), ...ownedFakeProcess,
+    memoryCell: memory.cell, spawnProcess: fakeSpawn(child, captured) });
+  try {
+    expect(captured.args).toContain("MemorySwapMax=0");
+    memory.kill();
+    child.emit("exit", null, "SIGKILL");
+    expect((await host.health()).status).toBe("dead");
+    expect((await host.health()).memory?.lastKill?.fatal).toBe(true);
+    child.emit("close", null, "SIGKILL");
+    expect((await host.health()).status).toBe("dead");
+    expect((await host.health()).memory?.lastKill?.fatal).toBe(true);
+  } finally { await host.release(); memory.dispose(); }
+});
+
+
+test("auto scope admission failure is explicit and forced scope keeps the runner diagnostic", async () => {
+  const { AgentMemoryCell, GIB } = await import("./agentMemory");
+  for (const mode of ["auto", "scope"] as const) {
+    const server = new FakeAppServer("scope-failure", "scope-failure", false, [], undefined, null, ["initialize"]);
+    const cell = new AgentMemoryCell({ mechanism: "scope", mode, platform: "linux", limitBytes: GIB, budgetBytes: 2 * GIB, reserveBytes: GIB, totalBytes: 3 * GIB,
+      score: 500, unit: "delegatus-agent-rejected.scope", slice: "delegatus-agents-test.slice", viewerUnit: null, systemdVersion: 255 }, { cgroupForPid: () => null });
+    const start = CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), memoryCell: cell, ...ownedFakeProcess,
+      spawnProcess: (...args) => {
+        const child = fakeSpawn(server)(...args);
+        setTimeout(() => { server.stderr.write("Failed to create bus connection: Connection refused"); server.emit("exit", 1, null); server.emit("close", 1, null); }, 1);
+        return child;
+      } });
+    try {
+      await expect(start).rejects.toThrow(mode === "auto" ? "agent memory scope launch failed before exec; retry shortly" : "Connection refused");
+      expect(server.requests.some(request => request.method === "turn/start")).toBeFalse();
+    } finally { cell.close(); }
+  }
 });

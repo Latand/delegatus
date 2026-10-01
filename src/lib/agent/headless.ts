@@ -1,3 +1,5 @@
+import { AgentMemoryCell, planAgentMemory, wrapAgentCommand } from "@/lib/runtime/agentMemory";
+import { agentRegistry } from "./registry";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { spawn, type ChildProcess } from "node:child_process";
 import crypto from "node:crypto";
@@ -380,12 +382,18 @@ export function launchDetached(input: {
   const stderrFd = fs.openSync(input.stderrPath, "w");
   let child: ChildProcess;
   try {
-    child = spawn(input.runtime?.command ?? input.built.command, input.built.args, {
+    const plan = planAgentMemory({ engine: "headless", sessionKey: input.key, liveAgents: Object.values(agentRegistry().readOnlySnapshot().entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1 });
+    const wrapped = wrapAgentCommand(plan, input.runtime?.command ?? input.built.command, input.built.args);
+    const memoryCell = plan ? new AgentMemoryCell(plan) : null;
+    child = spawn(wrapped.command, wrapped.args, {
       cwd: input.cwd,
       env: input.built.env,
       detached: true,
       stdio: [input.built.stdin === null ? "ignore" : "pipe", stdoutFd, stderrFd],
     });
+    if (child.pid) memoryCell?.attach(child.pid);
+    child.once("close", () => memoryCell?.close());
+    child.once("error", () => memoryCell?.close());
     if (input.built.stdin !== null && child.stdin) {
       child.stdin.on("error", () => {});
       child.stdin.end(input.built.stdin, "utf8");

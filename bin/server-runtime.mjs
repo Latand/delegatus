@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import net from "node:net";
-import { homedir, networkInterfaces } from "node:os";
+import { constants, homedir, networkInterfaces } from "node:os";
 import { join, posix, resolve, win32 } from "node:path";
 
 import { appDirIn } from "./appDir.mjs";
@@ -353,4 +353,11 @@ export function newlyBoundNonLoopbackAddress(before, after) {
     return address;
   }
   return null;
+}
+
+/** Preserve clean operator stops and propagate crash signals to the service manager. */
+export function viewerExitStatus(code, signal) {
+  if (["SIGINT", "SIGTERM", "SIGHUP"].includes(signal)) return 0;
+  if (signal) return 128 + (constants.signals[signal] ?? 1);
+  return code ?? 1;
 }

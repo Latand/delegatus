@@ -1,3 +1,4 @@
+import { fakeAgentMemory } from "./fixtures/agentMemory";
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
@@ -590,4 +591,37 @@ describe("CopilotAcpHost", () => {
     expect(await host.sessionMaterializationEvidence("spawn_message_x")).toEqual({ state: "materialized" });
     await host.release();
   });
+});
+
+test("Copilot host records injected OOM SIGKILL on its terminal row", async () => {
+  const memory = fakeAgentMemory();
+  const child = new FakeCopilot();
+  const config = options(child);
+  const host = await CopilotAcpHost.start({ ...config, memoryCell: memory.cell, spawnProcess: config.spawnProcess });
+  try {
+    expect(config.captured.args).toContain("OOMPolicy=continue");
+    memory.kill();
+    child.emit("exit", null, "SIGKILL");
+    expect((await host.health()).status).toBe("dead");
+    expect((await host.health()).memory?.lastKill?.fatal).toBe(true);
+    child.emit("close", null, "SIGKILL");
+    expect((await host.health()).status).toBe("dead");
+    expect((await host.health()).memory?.lastKill?.fatal).toBe(true);
+  } finally { await host.release(); memory.dispose(); }
+});
+
+
+test("forced scope preserves Copilot admission diagnostics before initialize", async () => {
+  const memory = fakeAgentMemory({ mode: "scope", admissionFailure: true });
+  const child = new FakeCopilot();
+  child.stdin.removeAllListeners("data");
+  const config = options(child, { memoryCell: memory.cell });
+  const base = config.spawnProcess!;
+  config.spawnProcess = (...args) => {
+    const process = base(...args);
+    setTimeout(() => { child.stderr.write("Failed to create bus connection: Connection refused"); child.emit("exit", 1, null); child.emit("close", 1, null); }, 1);
+    return process;
+  };
+  try { await expect(CopilotAcpHost.start(config)).rejects.toThrow("Failed to create bus connection: Connection refused"); }
+  finally { memory.dispose(); }
 });

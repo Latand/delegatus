@@ -1,3 +1,4 @@
+import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -113,6 +114,7 @@ export interface TmuxHostEvidence {
 }
 
 export interface StructuredHostColumns {
+  memory?: HostMemoryState;
   kind: "codex-app-server" | "claude-broker" | "copilot-acp";
   endpoint: string;
   process: ProcessIdentity | null;
@@ -2026,6 +2028,7 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
     ...(Array.isArray(host.pendingPermissions) && host.pendingPermissions.length > 0
       ? { pendingPermissions: normalizePendingPermissions(host.pendingPermissions) }
       : {}),
+    ...(normalizeHostMemory(host.memory) ? { memory: normalizeHostMemory(host.memory)! } : {}),
     ...(normalizeProviderRetry(host.providerRetry) ? { providerRetry: normalizeProviderRetry(host.providerRetry) } : {}),
     ...(Number.isSafeInteger(host.releaseHandoffClaimEpoch) && (host.releaseHandoffClaimEpoch ?? -1) >= 0
       ? { releaseHandoffClaimEpoch: host.releaseHandoffClaimEpoch }

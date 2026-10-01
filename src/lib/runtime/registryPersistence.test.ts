@@ -289,3 +289,32 @@ test("production-sized ten-lane persistence coalesces cursors and orders materia
     lane.stop();
   }
 }, 30_000);
+
+for (const [engine, bind] of binders) test(`${engine} persists memory kills immediately and keeps fatal evidence on death`, async () => {
+  const registry = new RecordingRegistry();
+  const host = new RecordingHost();
+  const stop = await bind(registry as unknown as AgentRegistry, host, { cursorDebounceMs: 30_000 });
+  const memory: NonNullable<HostState["memory"]> = { mechanism: "scope", unit: "delegatus-agent-test-row.scope", limitBytes: 15 * 2 ** 30, kills: 1,
+    lastKill: { at: new Date().toISOString(), limitBytes: 15 * 2 ** 30, limit: "agent", fatal: false, process: null } };
+  host.emit({ memory });
+  expect(registry.writes.at(-1)?.columns.memory?.kills).toBe(1);
+  host.emit({ status: "dead", memory: { ...memory, lastKill: { ...memory.lastKill!, fatal: true } } });
+  expect(registry.writes.at(-1)?.columns.memory?.lastKill?.fatal).toBe(true);
+  stop();
+});
+
+test("memory evidence round-trips through the durable registry and malformed shapes are dropped", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-memory-registry-"));
+  const filename = path.join(dir, "registry.json");
+  const registry = new AgentRegistry(filename);
+  try {
+    registry.upsert({ key: KEY, artifactPath: "/sessions/memory.jsonl", cwd: "/repo", accountId: null, status: "dead", host: null, claimOwner: null, claimEpoch: 0, pendingAction: null });
+    const memory: NonNullable<HostState["memory"]> = { mechanism: "scope", unit: "delegatus-agent-test-row.scope", limitBytes: 15 * 2 ** 30, kills: 1,
+      lastKill: { at: new Date().toISOString(), limitBytes: 15 * 2 ** 30, limit: "agent", fatal: true, process: null } };
+    const columns = { kind: "codex-app-server" as const, endpoint: "stdio:memory", process: null, eventCursor: 0, protocolVersion: "1", writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [], memory };
+    registry.setStructuredHost(KEY, columns, "dead");
+    expect(new AgentRegistry(filename).readOnlySnapshot().entries[`${KEY.engine}:${KEY.sessionId}`]!.structuredHost?.memory).toEqual(memory);
+    registry.setStructuredHost(KEY, { ...columns, memory: { ...memory, kills: -1 } }, "dead");
+    expect(registry.readOnlySnapshot().entries[`${KEY.engine}:${KEY.sessionId}`]!.structuredHost?.memory).toBeUndefined();
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

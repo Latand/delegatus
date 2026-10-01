@@ -624,6 +624,9 @@ Of the variables ending in `_API_KEY`, only `ANTHROPIC_API_KEY`,
 
 | Variable | Effect |
 | --- | --- |
+| `DELEGATUS_AGENT_MEMORY` | `auto` (default), `scope`, `watchdog`, or `off`. Auto uses systemd user scopes on supported Linux installs and an RSS watchdog in Docker and on macOS. |
+| `DELEGATUS_AGENT_MEMORY_MAX` | Per-agent ceiling, e.g. `24G`, capped at the shared agent budget. GB means GiB. |
+| `DELEGATUS_AGENT_MEMORY_RESERVE` | RAM reserved for the OS and Delegatus, e.g. `24G`; default is 15% rounded up to GiB, at least 4 GiB. |
 | `DELEGATUS_LANG` | `en` or `uk`: the language of CLI messages. |
 | `DELEGATUS_DEBUG` | `1` prints startup diagnostics in the terminal. |
 | `DELEGATUS_TRANSCRIBE_BACKEND` | `local` (default), `chatgpt`, `elevenlabs` or `soniox`: fixes the dictation backend and locks the microphone menu. |
@@ -634,6 +637,49 @@ Of the variables ending in `_API_KEY`, only `ANTHROPIC_API_KEY`,
 | `DELEGATUS_TEMP_SWEEP_MAX_AGE_HOURS` | Age in hours at which the hourly sweep removes an unused Delegatus temp directory (`llv-*`) (default `24`; `0` turns the sweep off). It looks in `/tmp`, `/var/tmp` and the state's `scratch` directory, and never touches a pipeline worktree. The last sweep is in `state/temp-sweep-report.json`. |
 | `DELEGATUS_REAPER_ENABLED` | `1` lets the agent reaper stop leaked agent processes it has verified. Unset, it only lists them at `GET /api/lifecycle/reaper`. |
 | `VIEWER_PROC_BACKEND` | `linux`, `portable` or `windows`: forces the process-discovery backend. |
+
+### Agent memory
+
+Each agent gets a ceiling computed at launch from RAM and the number of live
+hosts. Delegatus reserves at least 4 GiB (15% of RAM) for the core and OS;
+`delegatus-agents.slice` caps the combined agent budget. Supported systemd user
+installs run agents in separate transient scopes with `MemoryMax`, no swap and
+`OOMPolicy=continue`, bound to the Viewer service. Agent descendants inherit a
+higher OOM score than the Viewer. No address-space limit is applied.
+
+An existing user-service install needs this drop-in to survive a kill of a
+process that still shares the service (workers, builds or watchdog-mode agents):
+
+```sh
+mkdir -p "$HOME/.config/systemd/user/delegatus.service.d"
+cat > "$HOME/.config/systemd/user/delegatus.service.d/oom.conf" <<'EOF'
+[Service]
+OOMPolicy=continue
+OOMScoreAdjust=100
+EOF
+systemctl --user daemon-reload
+# Run only at a quiet moment, after hosted agents finish:
+systemctl --user restart delegatus.service
+systemctl --user show delegatus.service -p OOMPolicy -p OOMScoreAdjust
+```
+
+Use your service's name if it differs. Expected results are `OOMPolicy=continue`
+and `OOMScoreAdjust=100`. The launcher prints a notice when the service still
+uses `stop` or `kill`; it never edits the unit. Update the application before
+applying the drop-in: the new launcher exits nonzero on Viewer SIGKILL or crash,
+so `Restart=on-failure` recovers the Viewer.
+
+Docker and macOS use an RSS watchdog with a shared two-second sampling interval.
+It kills the largest process in an over-budget agent tree, with a process-identity
+check. It can overshoot by one interval, misses descendants that double-fork out
+of the tree, does not cap swap, and cannot attribute a kernel OOM kill. Native
+Windows leaves memory isolation off. `DELEGATUS_AGENT_MEMORY=off` is the escape
+hatch; forced `scope` fails the launch when the user manager cannot admit it.
+
+A recorded OOM raises a **Needs you** item naming its stage and limit for 24
+hours. A fatal stage OOM retries once after memory recovers, retaining its
+worktree. A second consecutive OOM, or a 30-minute wait without recovery, stops
+for a decision. See [the design](docs/design/agent-memory-isolation.md).
 
 ## Platform support
 
