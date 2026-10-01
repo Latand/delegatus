@@ -78,21 +78,56 @@ catalog and passes `--require-known-values`. A missing, empty, or malformed
 catalog produces `configuration_error`. The workflow has no dependency on an
 Actions secret for this coverage.
 
-Catalog entries contain normalized lengths and SHA-256 fingerprints. Runtime
-matching hashes same-length windows after NFKC, lowercase, markup, and separator
-normalization, so formatting and token splitting cannot bypass the catalog.
+Catalog entries contain normalized lengths and SHA-256 fingerprints. Entries
+without `exactOnly: true` retain compact matching after NFKC, lowercase, markup,
+and separator normalization. Catalog schema version 1 and existing entries
+remain supported.
+
+A per-value `exactOnly: true` entry hashes the NFKC, case-folded value with
+separators preserved. It matches same-length contiguous windows of decoded
+source text after the gate's existing percent/entity decoding and Unicode
+normalization. It applies across every inspected context, including resource
+strings, HTML attributes, commit messages, metadata and OCR output. Spaces,
+hyphens and other separators interrupt the match; the flag never exempts a
+context containing the contiguous value. Markdown projection cannot join split
+spellings for this policy. Generic credential, address and resource checks
+continue to run independently.
 
 Keep raw private labels in the ignored `.privacy-known-values` operator file.
-Refresh the committed fingerprints with:
+Legacy lines contain one value each. A value requiring exact matching uses a
+JSON line with `value` and `exactOnly: true`; unflagged JSON entries also work.
+For an invented compound, the line shape is:
+
+```json
+{"value":"freshwater","exactOnly":true}
+```
+
+Opt into JSON lines with the generator's `--json-lines` option and, for the
+gate's raw file/environment input, `LLV_PRIVACY_KNOWN_VALUES_FORMAT=jsonl`.
+The default `plain` mode preserves every legacy line, including JSON-looking
+labels. JSON-lines mode also accepts legacy lines alongside policy entries.
+Invalid formats and policy types fail closed. If the same value is configured with
+both policies, compact coverage remains active. Refresh the committed
+fingerprints after updating the private input:
 
 ```sh
 bun run privacy:fingerprints -- \
-  --input .privacy-known-values \
+  --json-lines --input .privacy-known-values \
   --output scripts/privacy-known-value-fingerprints.json
 ```
 
 The generator emits a status and count. Raw labels stay out of its diagnostics
-and the generated catalog.
+and the generated catalog. Preserve per-value policy in the private input so
+regeneration retains it.
+
+The committed catalog is the source of truth for the `exactOnly` policy added
+in #2391. Its entry was selected by fingerprint because the original raw input
+was generated elsewhere and is unavailable locally. Before the next regeneration
+from a raw file, add `exactOnly: true` to that value's JSON line and use
+`--json-lines`, as shown above. Never copy the raw value into public evidence.
+Regenerating from an unmarked line removes the flag and restores compact
+matching. Review the generated catalog diff before committing: retain each
+existing `exactOnly: true` entry unless its policy change was explicitly approved.
 
 ## Authenticated GitHub publication audit
 
