@@ -479,6 +479,21 @@ const LONG_TITLE = [
 ].join(" ");
 const kanbanPipelines: Pipeline[] = [];
 const kanbanTasks: unknown[] = [];
+/* `?cards=N` (the whole-card drag's smoothness gate): N more tasks in Assigned, each with a long
+   title, a lane with a stage at work and a working conversation, so the phone board has the
+   weight of a busy afternoon. */
+const MANY_CARDS = Number(new URLSearchParams(location.search).get("cards") ?? "0");
+if (KANBAN && MANY_CARDS > 0) {
+  for (let index = 0; index < MANY_CARDS; index += 1) {
+    const id = `t-bulk-${index}`;
+    const title = `Investigate why the nightly export of the partner ledger drops rows when the upstream feed arrives after the cut-off window, case ${index + 1}`;
+    const worker = kanbanConversation(`${title.slice(0, 60)} · build`, index % 2 === 0 ? "working" : "settled", 300 + index * 20);
+    kanbanPipelines.push(kanbanLane(`lane-bulk-${index}`, title, [id], "running", [
+      { id: "implement", state: "passed", ago: 1_800 }, { id: "review", state: "running", ago: 240 + index, role: "reviewer" }, { id: "verify" },
+    ]));
+    kanbanTasks.push(kanbanTask(id, "assigned", title, { assignments: [kanbanAssign(worker)], updatedAt: iso(600 + index * 60) }));
+  }
+}
 if (KANBAN) {
   /* Assigned */
   kanbanPipelines.push(kanbanLane("lane-decision", "Mobile data: stop repeated full-board downloads", ["t-data"], "needs_decision", [

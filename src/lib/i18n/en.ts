@@ -3291,6 +3291,8 @@ export const en = {
   "mobile2.kanban.tellOrchestrator": "Tell the orchestrator",
   "mobile2.kanban.openTask": "Open task «{title}»",
   "mobile2.kanban.openRow": "Open «{title}»",
+  "mobile2.kanban.dockHint": "Release over a column",
+  "mobile2.kanban.dockHere": "here",
   "mobile2.kanban.moveTo": "Move to {column}",
   "mobile2.kanban.moved": "Moved to {column}",
   "mobile2.kanban.openFirstAgent": "Open first agent",

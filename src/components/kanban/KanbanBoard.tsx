@@ -23,6 +23,7 @@ import { TaskIcon } from "@/components/tasks/TaskIcon";
 import { TaskIconPicker } from "@/components/tasks/TaskIconPicker";
 import { sendDismissal } from "@/components/attention/dismissalOverlay";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
+import { isCardHandle, startCardGesture } from "./cardDrag";
 import { kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBeside, OPEN_RAIL_WIDTH, openRailTier, type KanbanLayoutMode, type OpenRailTier } from "./kanbanLayout";
 import { KanbanColumnsSkeleton } from "@/components/skeletons";
 import { reachLineText, useServerReach } from "@/hooks/serverReach";
@@ -305,7 +306,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const remoteFeed = useRemoteFeed(props.overview ? null : project);
   const remoteAgents = !props.overview && remoteFeed ? remoteFeed.agents.filter((row) => row.p === project) : [];
   const remoteCards = useMemo(() => remoteCardsFor(allTasks, remoteFeed), [allTasks, remoteFeed]);
-  const [dragHint, setDragHint] = useState(false);
   const menu = useOverlay<
     { kind: "status" | "card" | "colour" | "icon"; cardId: string } | { kind: "column"; status: TaskStatus } | { kind: "tray" } | { kind: "create" } | { kind: "reader"; key: string; stop: ReaderStop } | { kind: "link"; key: string } | { kind: "stop"; key: string }
     | { kind: "pipeline"; cardId: string; pipelineId: string } | { kind: "stage"; cardId: string; pipelineId: string; stageId: string; from: "sheet" | "panel" }
@@ -1642,74 +1642,25 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, [mode, openCardMenu, openStatusMenu, shift, startEdit, hideCard, menu]);
 
   /* ── Pointer drag to a column ────────────────────────────────────────── */
+  /* The whole card is the handle (cardDrag.ts): a press anywhere but a text
+     field or a reader starts a drag after 8 px, and a click without movement
+     does what it always did. The ghost and the hint are drawn by hand, so a
+     drag renders nothing in React. */
+  const draggingCard = useRef(false);
+  const dragHintText = t("kanban.dragHint");
   const onCardPointerDown = useCallback((card: KanbanCardModel, event: React.PointerEvent<HTMLElement>) => {
-    if (event.button !== 0 || event.pointerType === "touch" || !card.task) return;
-    if ((event.target as HTMLElement).closest("button, input, textarea, a, summary, details, .tile, .pblock, .reader-slot, .stage-detail")) return;
-    const element = event.currentTarget;
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const pointerId = event.pointerId;
-    let started = false;
-    let ghost: HTMLElement | null = null;
-    let over: TaskStatus | null = null;
-    let overColumn: HTMLElement | null = null;
-    const moveHandler = (moveEvent: PointerEvent) => {
-      const dx = moveEvent.clientX - startX;
-      const dy = moveEvent.clientY - startY;
-      if (!started) {
-        if (Math.hypot(dx, dy) < 6) return;
-        started = true;
-        try { element.setPointerCapture(pointerId); } catch { /* capture is best-effort */ }
-        element.classList.add("dragging");
-        ghost = element.cloneNode(true) as HTMLElement;
-        ghost.querySelectorAll(".reader-slot").forEach((slot) => slot.replaceChildren());
-        ghost.classList.add("ghost");
-        ghost.classList.remove("dragging");
-        ghost.style.setProperty("--w", `${element.offsetWidth}px`);
-        ghost.setAttribute("aria-hidden", "true");
-        ghost.removeAttribute("data-id");
-        rootRef.current?.appendChild(ghost);
-        setDragHint(true);
-      }
-      const rect = element.getBoundingClientRect();
-      ghost!.style.left = `${rect.left + dx}px`;
-      ghost!.style.top = `${rect.top + dy}px`;
-      ghost!.style.display = "none";
-      const under = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY);
-      ghost!.style.display = "";
-      /* The drop target is marked on the column element itself: a board
-         re-render per pointer move would cost every card a frame. */
-      const column = under?.closest<HTMLElement>(".column[data-status]") ?? null;
-      if (overColumn && overColumn !== column) overColumn.classList.remove("drop");
-      overColumn = column;
-      over = column ? column.dataset.status as TaskStatus : null;
-      if (column) column.classList.toggle("drop", over !== card.status);
-    };
-    const finish = (cancel: boolean) => {
-      element.removeEventListener("pointermove", moveHandler);
-      element.removeEventListener("pointerup", up);
-      element.removeEventListener("pointercancel", cancelled);
-      document.removeEventListener("keydown", escape, true);
-      if (!started) return;
-      element.classList.remove("dragging");
-      ghost?.remove();
-      overColumn?.classList.remove("drop");
-      setDragHint(false);
-      if (!cancel && over && over !== card.status) move(card, over);
-    };
-    const up = () => finish(false);
-    const cancelled = () => finish(true);
-    const escape = (keyEvent: KeyboardEvent) => {
-      if (keyEvent.key === "Escape" && started) {
-        keyEvent.stopPropagation();
-        finish(true);
-      }
-    };
-    element.addEventListener("pointermove", moveHandler);
-    element.addEventListener("pointerup", up);
-    element.addEventListener("pointercancel", cancelled);
-    document.addEventListener("keydown", escape, true);
-  }, [move]);
+    if (event.button !== 0 || event.pointerType === "touch" || !card.task || !rootRef.current) return;
+    if (!isCardHandle({ target: event.target, offsetX: event.nativeEvent.offsetX })) return;
+    startCardGesture({
+      element: event.currentTarget,
+      root: rootRef.current,
+      status: card.status,
+      event,
+      hint: dragHintText,
+      onDrop: (to) => move(card, to),
+      onActive: (active) => { draggingCard.current = active; },
+    });
+  }, [move, dragHintText]);
 
   /* ── Keys: undo and redo, find ───────────────────────────────────────── */
   /* The Stages sheet stands over the board: while it is open, no key the
@@ -2410,7 +2361,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   useColumnDwell(rootRef, {
     enabled: widthControls,
     canWiden: (status) => !wideColumns.pinned && !stripStatuses.has(status) && (wideShelf ? wideShelf !== status : status !== "assigned"),
-    busy: () => menuOpenRef.current || sheetOpen.current || dragHint,
+    busy: () => menuOpenRef.current || sheetOpen.current || draggingCard.current,
     widen: wideColumns.widenIfNarrow,
   });
 
@@ -2839,7 +2790,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
           />
         </KanbanPopover>
       ) : null}
-      {dragHint ? <div className="drag-hint">{t("kanban.dragHint")}</div> : null}
       {accountOpen && accountOpen.value.kind === "account" ? accountOverlay(accountOpen.value.target, accountOpen.anchor) : null}
     </div>
     </KanbanDraftContext.Provider>

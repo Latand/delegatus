@@ -12,6 +12,7 @@ import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { FileEntry } from "@/lib/types";
 import { serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { playPath, recordDrag } from "@/components/kanban/dragFrameMeter";
 import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
 import { translate } from "@/lib/i18n";
 import { FAKE_SAFETY_COMMAND, FAKE_SAFETY_REASON } from "@/lib/runtime/fixtures/fakeClaudePermissionCli";
@@ -5704,4 +5705,208 @@ describe("tool call context tokens", () => {
     fs.writeFileSync("evidence/tool-call-tokens/rows.json", `${JSON.stringify({ readings }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 120_000);
+});
+
+/*
+ * Whole-card drag on the phone (operator, 2026-10-02): hold 0.35 s and the card
+ * lifts with a dock of the four columns at the bottom; a release over a column
+ * moves it, a release in place opens today's menu, and scrolling and swiping
+ * between columns keep working. The board is the kanban scene with 44 more tasks
+ * (`&cards=44`), measured under CPU throttling x4 from a recorded trace
+ * (`kanban/dragFrameMeter.ts`). `LLV_DRAG_LABEL` names the record written to
+ * `evidence/whole-card-drag/<label>-phone.json`.
+ */
+describe("whole-card drag on the phone", () => {
+  const LABEL = process.env.LLV_DRAG_LABEL ?? "run";
+  const DRAG_OUT = path.resolve(".artifacts/whole-card-drag");
+  const open = async (browser: Awaited<ReturnType<typeof launchChromium>>, base: string, record?: { dir: string }) => {
+    const context = await browser.newContext({
+      viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2,
+      ...(record ? { recordVideo: { dir: record.dir, size: { width: 390, height: 844 } } } : {}),
+    });
+    await context.addInitScript(() => localStorage.setItem("llv_lang", "uk"));
+    const page = await context.newPage();
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`${base}/?kanban=1&cards=44#p=atlas`);
+    await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+    await pause(page, 800);
+    return { context, page, pageErrors, cdp: await context.newCDPSession(page) };
+  };
+  /** The first task card on screen in Assigned, and a point on it clear of its controls. */
+  const grabPoint = async (page: Page, key?: string): Promise<Point> => {
+    const card = key ? page.locator(`[data-phone-kanban-column="assigned"] [data-phone-card="${key}"]`) : page.locator('[data-phone-kanban-column="assigned"] [data-phone-card^="task:t-bulk-"]').first();
+    await card.scrollIntoViewIfNeeded();
+    await pause(page, 300);
+    const box = (await card.boundingBox())!;
+    return [box.x + box.width / 2, box.y + 18];
+  };
+
+  browserTest("a 3 s drag under 4x CPU throttling holds the display rate on a 48-card board", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    try {
+      const { context, page, pageErrors, cdp } = await open(browser, base);
+      try {
+        await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+        /* LLV_DRAG_ANIMATIONS=running keeps the board's glyph animations going while a card is held:
+           the ablation that shows what they cost a drag. */
+        if (process.env.LLV_DRAG_ANIMATIONS === "running") await page.addStyleTag({ content: "html [data-card-drag] .mglyph[data-live=\"1\"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase), html [data-card-drag] .mglyph[data-live=\"1\"]::before, html [data-card-drag] .animate-pulse, html [data-card-drag] .motion-safe\\:animate-pulse { animation-play-state: running !important; }" });
+        const from = await grabPoint(page);
+        /* The lift (the hold's end: the ghost, the dock, the board standing still) and the drag are read apart:
+           the first is one frame's work the operator feels as the card coming up, the second is the 3 s that follow. */
+        let tile!: Rect;
+        const lift = await recordDrag(page, cdp, DRAG_OUT, `${LABEL}-phone-lift`, async () => {
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from[0], y: from[1] }] });
+          await pause(page, 700);
+          tile = (await rectOf(page, '[data-phone-dock-tile="blocked"]'))!;
+          expect(tile, "the dock is drawn after the hold").not.toBeNull();
+          return 0;
+        });
+        const reading = await recordDrag(page, cdp, DRAG_OUT, `${LABEL}-phone`, () =>
+          playPath(cdp, [from, [from[0] + 60, from[1] - 140], [from[0] - 40, from[1] - 260], [tile.x + tile.width / 2, tile.y + tile.height / 2]], 3000, 16, true));
+        expect(await page.locator("[data-phone-lift-ghost]").count(), "the card is lifted").toBe(1);
+        expect(await page.locator('[data-phone-dock-tile="blocked"][data-over]').count(), "the finger is over Blocked").toBe(1);
+        await page.screenshot({ path: path.join(DRAG_OUT, `${LABEL}-phone-mid-drag.png`) });
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await pause(page, 600);
+        expect(await page.locator("[data-phone-dock]").count(), "the dock goes with the finger").toBe(0);
+        fs.mkdirSync("evidence/whole-card-drag", { recursive: true });
+        fs.writeFileSync(`evidence/whole-card-drag/${LABEL}-phone.json`, `${JSON.stringify({ board: "phone kanban scene plus 44 tasks with long titles and lanes", viewport: "390x844 touch", cpuThrottling: 4, path: "hold 0.35 s, then 3 s with one move per 16 ms", lift: { ...lift, trace: undefined }, drag: { ...reading, trace: undefined } }, null, 2)}\n`);
+        console.log(JSON.stringify({ lift, drag: reading }));
+        expect(pageErrors).toEqual([]);
+        if (process.env.LLV_DRAG_ANIMATIONS !== "running") {
+          expect(reading.frameMs.p95, "p95 frame time at x4").toBeLessThanOrEqual(16.7 + 0.5);
+          expect(reading.longTasks.count, "tasks over 50 ms at x4").toBe(0);
+        }
+      } finally { await context.close(); }
+    } finally { await browser.close(); stop(); }
+  }, 180_000);
+
+  /* LLV_DRAG_VIDEO=<dir> records the hold, the lift, the drag and the drop as a video, with a dot where the finger is. */
+  const VIDEO = process.env.LLV_DRAG_VIDEO;
+  (VIDEO ? browserTest : test.skip)("records a phone drag to a video", async () => {
+    fs.mkdirSync(VIDEO!, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    try {
+      const context = await browser.newContext({
+        viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2,
+        recordVideo: { dir: VIDEO!, size: { width: 390, height: 844 } },
+      });
+      await context.addInitScript(() => localStorage.setItem("llv_lang", "en"));
+      await context.addInitScript(() => {
+        const dot = document.createElement("div");
+        dot.style.cssText = "position:fixed;left:0;top:0;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;background:rgba(220,60,40,.55);border:2px solid #fff;z-index:99999;pointer-events:none;display:none";
+        const place = (event: PointerEvent) => { dot.style.display = "block"; dot.style.transform = `translate(${event.clientX}px, ${event.clientY}px)`; };
+        addEventListener("pointermove", place, true); addEventListener("pointerdown", place, true);
+        addEventListener("pointerup", () => { dot.style.display = "none"; }, true);
+        document.addEventListener("DOMContentLoaded", () => document.body.appendChild(dot));
+      });
+      const page = await context.newPage();
+      await page.goto(`${base}/?kanban=1&cards=44#p=atlas`);
+      await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+      await pause(page, 1000);
+      const cdp = await context.newCDPSession(page);
+      const from = await grabPoint(page);
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from[0], y: from[1] }] });
+      await pause(page, 900);
+      const tile = (await rectOf(page, '[data-phone-dock-tile="blocked"]'))!;
+      const target: Point = [tile.x + tile.width / 2, tile.y + tile.height / 2];
+      for (const [x, y] of [...along(from, [from[0] + 30, from[1] - 120], 20), ...along([from[0] + 30, from[1] - 120], [from[0] - 20, from[1] - 220], 20), ...along([from[0] - 20, from[1] - 220], target, 30)]) {
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y }] });
+        await pause(page, 24);
+      }
+      await pause(page, 600);
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await pause(page, 1500);
+      const video = page.video()!;
+      await context.close();
+      await video.saveAs(path.join(VIDEO!, "phone-drag.webm"));
+      await video.delete();
+    } finally { await browser.close(); stop(); }
+  }, 120_000);
+
+  browserTest("a release over a column moves the task, in place opens the menu, elsewhere does nothing; scrolling and the pager still work", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    try {
+      const { context, page, pageErrors, cdp } = await open(browser, base);
+      try {
+        const card = '[data-phone-kanban-column="assigned"] [data-phone-card^="task:t-bulk-"]';
+        const where = (selector: string) => page.evaluate((sel) => document.querySelector(sel)?.closest("[data-phone-kanban-column]")?.getAttribute("data-phone-kanban-column") ?? null, selector);
+        const first = await page.locator(card).first().getAttribute("data-phone-card");
+        const id = `[data-phone-card="${first}"]`;
+        const from = await grabPoint(page);
+
+        /* Held and released where it was: today's menu, nothing moved. */
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from[0], y: from[1] }] });
+        await pause(page, 520);
+        expect(await page.locator("[data-phone-dock]").count()).toBe(1);
+        expect(await page.locator("[data-mobile2-sheet]").count(), "the menu waits for the release").toBe(0);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await pause(page, 500);
+        expect(await page.locator('[data-mobile2-sheet="card"]').count()).toBe(1);
+        expect(await where(id)).toBe("assigned");
+        await touch(cdp, [[195, 40]]);
+        await pause(page, 500);
+        expect(await page.locator("[data-mobile2-sheet]").count(), "a tap outside closes the menu").toBe(0);
+
+        /* Lifted and let go over nothing: back where it was. */
+        const at = await grabPoint(page, first!);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at[0], y: at[1] }] });
+        await pause(page, 520);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: at[0] + 10, y: at[1] - 200 }] });
+        await pause(page, 100);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await pause(page, 400);
+        expect(await where(id)).toBe("assigned");
+        expect(await page.locator("[data-mobile2-sheet]").count()).toBe(0);
+
+        /* Lifted and let go over Blocked: it moves, with the usual receipt. */
+        const again = await grabPoint(page, first!);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: again[0], y: again[1] }] });
+        await pause(page, 520);
+        const tile = (await rectOf(page, '[data-phone-dock-tile="blocked"]'))!;
+        const target: Point = [tile.x + tile.width / 2, tile.y + tile.height / 2];
+        for (const [x, y] of along(again, target, 10)) { await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y }] }); await pause(page, 16); }
+        await pause(page, 100);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await pause(page, 500);
+        expect(await where(id)).toBe("blocked");
+        expect(await page.locator("[data-mobile2-receipt]").count()).toBe(1);
+        expect(await page.locator("[data-mobile2-sheet]").count(), "a drop opens no menu").toBe(0);
+        const patches = await page.evaluate(() => (window as unknown as { evidence: { taskPatches: Array<{ id: string; body: { status?: string } }> } }).evidence.taskPatches);
+        expect(patches.map((patch) => [patch.id, patch.body.status])).toEqual([[first!.replace("task:", ""), "blocked"]]);
+
+        /* The column scrolls under a finger that moves at once, and no dock appears. */
+        const scroller = '[data-phone-kanban-column="assigned"]';
+        const before = await page.evaluate((sel) => document.querySelector(sel)!.scrollTop, scroller);
+        await touch(cdp, along([195, 600], [198, 300], 14), 16);
+        await pause(page, 500);
+        expect(await page.evaluate((sel) => document.querySelector(sel)!.scrollTop, scroller), "a vertical drag scrolls the column").toBeGreaterThan(before + 40);
+        expect(await page.locator("[data-phone-dock]").count()).toBe(0);
+
+        /* The pager swipes between columns. */
+        await page.locator('[data-phone-kanban-tab="assigned"]').click();
+        await pause(page, 500);
+        await touch(cdp, along([330, 500], [60, 506], 14), 16);
+        await pause(page, 700);
+        expect(await page.evaluate(() => document.querySelector("[data-phone-kanban]")!.getAttribute("data-phone-kanban-active")), "a swipe left changes the column").toBe("blocked");
+
+        /* A finger held on a card and then moved scrolls nothing: the card is the thing in hand. */
+        await page.locator('[data-phone-kanban-tab="assigned"]').click();
+        await pause(page, 500);
+        const held = await grabPoint(page);
+        const top = await page.evaluate((sel) => document.querySelector(sel)!.scrollTop, scroller);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: held[0], y: held[1] }] });
+        await pause(page, 520);
+        for (const [x, y] of along(held, [held[0], held[1] - 220], 10)) { await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y }] }); await pause(page, 16); }
+        expect(await page.evaluate((sel) => document.querySelector(sel)!.scrollTop, scroller), "a lifted card does not scroll the column").toBe(top);
+        expect(await page.locator("[data-phone-lift-ghost]").count()).toBe(1);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); stop(); }
+  }, 180_000);
 });

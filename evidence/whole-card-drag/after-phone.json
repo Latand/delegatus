@@ -1,0 +1,78 @@
+{
+  "board": "phone kanban scene plus 44 tasks with long titles and lanes",
+  "viewport": "390x844 touch",
+  "cpuThrottling": 4,
+  "path": "hold 0.35 s, then 3 s with one move per 16 ms",
+  "lift": {
+    "moves": 0,
+    "frames": 45,
+    "frameMs": {
+      "p50": 16.7,
+      "p95": 33.4,
+      "max": 66.6
+    },
+    "longTasks": {
+      "count": 1,
+      "longestMs": 64.75
+    },
+    "moveCost": {
+      "events": 0,
+      "totalMs": 0,
+      "maxMs": 0
+    },
+    "layouts": {
+      "count": 22,
+      "totalMs": 93.22
+    },
+    "recalcs": {
+      "count": 23,
+      "totalMs": 91.8
+    },
+    "inputLagMs": {
+      "p95": 0,
+      "max": 0
+    },
+    "mutations": 5,
+    "mutationKinds": {
+      "childList: on body.": 2,
+      "attributes:style on div.select-none": 1,
+      "attributes:data-lifted on div.select-none": 1,
+      "attributes:data-card-drag on body.": 1
+    }
+  },
+  "drag": {
+    "moves": 188,
+    "frames": 201,
+    "frameMs": {
+      "p50": 16.7,
+      "p95": 16.8,
+      "max": 16.8
+    },
+    "longTasks": {
+      "count": 0,
+      "longestMs": 9.55
+    },
+    "moveCost": {
+      "events": 117,
+      "totalMs": 40.71,
+      "maxMs": 1.15
+    },
+    "layouts": {
+      "count": 0,
+      "totalMs": 0
+    },
+    "recalcs": {
+      "count": 109,
+      "totalMs": 36.68
+    },
+    "inputLagMs": {
+      "p95": 41.2,
+      "max": 50.2
+    },
+    "mutations": 110,
+    "mutationKinds": {
+      "attributes:style on div.select-none": 109,
+      "attributes:data-over on div.flex": 1
+    }
+  }
+}

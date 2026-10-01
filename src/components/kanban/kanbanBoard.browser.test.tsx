@@ -11,6 +11,7 @@ import { DEFAULT_ROLE_FRAME, ROLE_FRAME_VARIANTS } from "@/lib/roleFrames";
 
 import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, REPORT_LOG_SPLIT_WIDTH } from "@/components/orchestrator/OrchestratorPanel";
 
+import { playPath, pointerPath, recordDrag } from "./dragFrameMeter";
 import { openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { clipTitle } from "./taskText";
@@ -14201,4 +14202,156 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
       expect(entry.unfoldedAfter, `${entry.label} the request unfolded the seat`).toBe(true);
     }
   }, 600_000);
+});
+
+/*
+ * Whole-card drag (operator, 2026-10-02): a card is dragged by any part of it,
+ * and the dragged card follows the pointer at the display rate. The board is the
+ * `drag-board` scene: 48 tasks with long titles, descriptions, conversations and
+ * pipelines. The reading is taken from a recorded Chromium trace
+ * (`dragFrameMeter.ts`) over a 3 s scripted pointer path to another column.
+ * `LLV_DRAG_LABEL=before|after` names the record written to
+ * `evidence/whole-card-drag/<label>-desktop.json`; the trace stays under
+ * `.artifacts/whole-card-drag/`.
+ */
+describe("whole-card drag rendered evidence", () => {
+  const OUT = path.resolve(".artifacts/whole-card-drag");
+  /* The orchestrator's panel fills the screen above the columns; `O` folds it, as an operator working the board does. */
+  const foldSeat = async (page: Page) => {
+    await page.locator(".kb").first().click({ position: { x: 4, y: 4 }, force: true }).catch(() => {});
+    await page.keyboard.press("o");
+    await page.waitForTimeout(500);
+  };
+  const deskCard = (id: string) => `.kb .column .card[data-id="task:${id}"]`;
+
+  browserTest("any part of a card drags it: title, description, conversation tile, pipeline block; no text is selected and the click after is swallowed", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=drag-board`, { width: 1440, height: 900 }, "light", "en");
+      try {
+        const cases: Array<[string, string, string]> = [
+          ["title", "", "[data-rename]"], ["description", "", "[data-describe]"],
+          ["conversation tile", ":has(.tile)", ".tile"], ["pipeline block", ":has(.pblock)", ".pblock"],
+        ];
+        for (const [name, has, selector] of cases) {
+          const card = page.locator(`.kb .column[data-status="inbox"] .card[data-id^="task:t-drag-"]${has}, .kb .column[data-status="assigned"] .card[data-id^="task:t-drag-"]${has}`).first();
+          await card.waitFor();
+          await card.scrollIntoViewIfNeeded();
+          await page.waitForTimeout(150);
+          const id = (await card.getAttribute("data-id"))!;
+          const box = await card.locator(selector).first().boundingBox();
+          expect(box, `${name} is on screen`).not.toBeNull();
+          const at: [number, number] = [box!.x + Math.min(box!.width / 2, 60), box!.y + Math.min(box!.height / 2, 10)];
+          await page.mouse.move(...at);
+          await page.mouse.down();
+          await page.mouse.move(at[0] + 5, at[1], { steps: 2 });
+          expect(await page.locator(".kb .card.ghost").count(), `${name}: 5 px is a click in waiting`).toBe(0);
+          await page.mouse.move(at[0] + 90, at[1] + 40, { steps: 6 });
+          await page.waitForTimeout(60);
+          expect(await page.locator(".kb .card.ghost").count(), `${name}: dragging`).toBe(1);
+          expect(await page.evaluate(() => String(getSelection())), `${name}: nothing selected`).toBe("");
+          await page.mouse.move(1430, 880, { steps: 4 });
+          await page.mouse.up();
+          await page.waitForTimeout(80);
+          expect(await page.locator(".kb .card.ghost").count(), `${name}: dropped`).toBe(0);
+          expect(await page.locator(`.kb .card[data-id="${id}"] textarea, .kb .card[data-id="${id}"] input[type="text"]`).count(), `${name}: the click after a drag is swallowed`).toBe(0);
+          expect(await page.locator(".reader-slot *").count(), `${name}: opened nothing`).toBe(0);
+        }
+        const card = page.locator('.kb .column[data-status="inbox"] .card[data-id^="task:t-drag-"]').first();
+        const id = (await card.getAttribute("data-id"))!;
+        /* The same press without movement is the click it always was. */
+        await card.locator("[data-rename]").first().click();
+        expect(await page.locator(`.kb .card[data-id="${id}"] textarea, .kb .card[data-id="${id}"] input[type="text"]`).count(), "a click renames").toBeGreaterThan(0);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+
+  /* LLV_DRAG_VIDEO=<dir> records the drag as a video (Playwright recordVideo), with a dot where the pointer is. */
+  const VIDEO = process.env.LLV_DRAG_VIDEO;
+  (VIDEO ? browserTest : test.skip)("records a desktop drag to a video", async () => {
+    fs.mkdirSync(VIDEO!, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, recordVideo: { dir: VIDEO!, size: { width: 1440, height: 900 } } });
+      await context.addInitScript(() => localStorage.setItem("llv_lang", "en"));
+      await context.addInitScript(() => {
+          const dot = document.createElement("div");
+          dot.style.cssText = "position:fixed;left:0;top:0;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;background:rgba(220,60,40,.55);border:2px solid #fff;z-index:99999;pointer-events:none;display:none";
+          const place = (event: PointerEvent) => { dot.style.display = "block"; dot.style.transform = `translate(${event.clientX}px, ${event.clientY}px)`; };
+          addEventListener("pointermove", place, true); addEventListener("pointerdown", place, true);
+          addEventListener("pointerup", () => { dot.style.display = "none"; }, true);
+          document.addEventListener("DOMContentLoaded", () => document.body.appendChild(dot));
+        });
+      const page = await context.newPage();
+      await page.goto(`${server.base}?scenario=drag-board`);
+      const source = page.locator('.kb .column[data-status="inbox"] .card[data-id^="task:t-drag-"]').first();
+      await source.waitFor();
+      await foldSeat(page);
+      await page.waitForTimeout(800);
+      const box = (await source.boundingBox())!;
+      const blocked = (await page.locator('.column[data-status="blocked"] .col-body').boundingBox())!;
+      /* Taken by the title, which is a button and could not be before. */
+      const title = (await source.locator("[data-rename]").boundingBox())!;
+      const from: [number, number] = [title.x + 40, title.y + title.height / 2];
+      await page.mouse.move(...from);
+      await page.mouse.down();
+      const route: Array<[number, number]> = [[from[0] + 60, from[1] + 90], [box.x + 300, from[1] + 220], [blocked.x + blocked.width / 2, from[1] + 120], [blocked.x + blocked.width / 2 - 40, from[1] + 260]];
+      for (const [x, y] of pointerPath([from, ...route], 3000, 16)) { await page.mouse.move(x, y); await page.waitForTimeout(12); }
+      await page.waitForTimeout(600);
+      await page.mouse.up();
+      await page.waitForTimeout(1200);
+      const video = page.video()!;
+      await context.close();
+      await video.saveAs(path.join(VIDEO!, "desktop-drag.webm"));
+      await video.delete();
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+
+  browserTest("a 3 s drag over a 48-card board holds the display rate", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=drag-board`, { width: 1440, height: 900 }, "light", "en");
+      try {
+        /* The board's top card of the first column: on screen without scrolling, so the path starts on it. */
+        const source = page.locator('.kb .column[data-status="inbox"] .card[data-id^="task:t-drag-"]').first();
+        await source.waitFor();
+        await foldSeat(page);
+        /* LLV_DRAG_ANIMATIONS=running keeps the board's glyph animations going while a card is held:
+           the ablation that shows what they cost a drag. */
+        if (process.env.LLV_DRAG_ANIMATIONS === "running") await page.addStyleTag({ content: "html [data-card-drag] .mglyph[data-live=\"1\"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase), html [data-card-drag] .mglyph[data-live=\"1\"]::before, html [data-card-drag] .animate-pulse, html [data-card-drag] .motion-safe\\:animate-pulse { animation-play-state: running !important; }" });
+        await source.scrollIntoViewIfNeeded();
+        await page.waitForTimeout(100);
+        /* The card's own padding: no control sits there, so today's drag takes it as well. */
+        const box = await source.boundingBox();
+        expect(box).not.toBeNull();
+        const blocked = await page.locator('.column[data-status="blocked"] .col-body').boundingBox();
+        expect(blocked).not.toBeNull();
+        const from: [number, number] = [box!.x + 8, box!.y + 8];
+        const cdp = await context.newCDPSession(page);
+        /* LLV_DRAG_CPU=4 reads the same drag on a CPU four times slower, which is what a laptop on battery is. */
+        const cpu = Number(process.env.LLV_DRAG_CPU ?? "1");
+        if (cpu > 1) await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpu });
+        await page.mouse.move(...from);
+        await page.mouse.down();
+        const reading = await recordDrag(page, cdp, OUT, `${process.env.LLV_DRAG_LABEL ?? "run"}-desktop${cpu > 1 ? `-x${cpu}` : ""}`, () => playPath(cdp, [from, [from[0] + 120, from[1] + 160], [blocked!.x + blocked!.width / 2, from[1] + 40], [blocked!.x + blocked!.width / 2 - 200, from[1] + 320]], 3000, 8));
+        expect(await page.locator(".kb .card.ghost").count(), "the card is being dragged").toBe(1);
+        await page.screenshot({ path: path.join(OUT, `${process.env.LLV_DRAG_LABEL ?? "run"}-desktop-mid-drag.png`) });
+        await page.mouse.up();
+        fs.mkdirSync("evidence/whole-card-drag", { recursive: true });
+        fs.writeFileSync(`evidence/whole-card-drag/${process.env.LLV_DRAG_LABEL ?? "run"}-desktop${cpu > 1 ? `-x${cpu}` : ""}.json`, `${JSON.stringify({ board: "48 tasks, long titles, pipelines", viewport: "1440x900", cpuThrottling: cpu, path: "3 s, one move per 8 ms", ...reading, trace: undefined }, null, 2)}\n`);
+        console.log(JSON.stringify(reading));
+        expect(pageErrors).toEqual([]);
+        if (process.env.LLV_DRAG_LABEL === "after" && cpu === 1) {
+          expect(reading.frameMs.p95, "p95 frame time").toBeLessThanOrEqual(16.7 + 0.5);
+          expect(reading.longTasks.count, "tasks over 50 ms").toBe(0);
+        }
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
 });
