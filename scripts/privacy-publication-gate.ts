@@ -8,6 +8,16 @@ import { inflateSync } from "node:zlib";
 
 import { decodeHTMLStrict } from "entities";
 
+import {
+  compactSensitiveText,
+  fingerprintKey,
+  knownValueFingerprint,
+  parseKnownValues,
+  type KnownValue,
+  type KnownValueFingerprint,
+} from "./generate-privacy-known-value-fingerprints";
+
+export { compactSensitiveText } from "./generate-privacy-known-value-fingerprints";
 
 export type FindingClass =
   | "configuration_error"
@@ -70,11 +80,6 @@ const credentialInputPattern = new RegExp([
   String.raw`(?=[^>]*value\s*=\s*(?:["'][^"']{4,}["']|[^\s"'=<>]{4,}))[^>]*>`,
 ].join(""), "i");
 
-type KnownValueFingerprint = {
-  length: number;
-  sha256: string;
-};
-
 type SafePathResult = {
   metadata?: ReturnType<typeof lstatSync>;
   status: "missing" | "safe" | "symlink";
@@ -112,27 +117,19 @@ function readSafeRegularFile(path: string): Buffer {
   return readFileSync(resolve(path));
 }
 
-function compactSensitiveText(text: string): string {
-  return text.normalize("NFKC").toLocaleLowerCase("en-US").replaceAll(/[^\p{L}\p{N}]/gu, "");
-}
-
-function loadKnownValues(): { error: boolean; fingerprints: KnownValueFingerprint[]; values: string[] } {
-  const values = (process.env.LLV_PRIVACY_KNOWN_VALUES ?? "").split(/\r?\n/);
-  const file = process.env.LLV_PRIVACY_KNOWN_VALUES_FILE;
-  if (file) {
-    try {
-      values.push(...readSafeRegularFile(file).toString("utf8").split(/\r?\n/));
-    } catch {
-      return { error: true, fingerprints: [], values: [] };
-    }
+function loadKnownValues(): { error: boolean; fingerprints: KnownValueFingerprint[]; values: KnownValue[] } {
+  let values: KnownValue[];
+  try {
+    values = parseKnownValues(process.env.LLV_PRIVACY_KNOWN_VALUES ?? "");
+    const file = process.env.LLV_PRIVACY_KNOWN_VALUES_FILE;
+    if (file) values.push(...parseKnownValues(readSafeRegularFile(file).toString("utf8")));
+  } catch {
+    return { error: true, fingerprints: [], values: [] };
   }
-  const normalizedValues = [...new Set(values.map((value) => value.trim()).filter((value) => value.length >= 4))];
   const fingerprints = new Map<string, KnownValueFingerprint>();
-  for (const value of normalizedValues) {
-    const compact = compactSensitiveText(value);
-    if (compact.length < 4) continue;
-    const sha256 = createHash("sha256").update(compact).digest("hex");
-    fingerprints.set(`${compact.length}:${sha256}`, { length: compact.length, sha256 });
+  for (const value of values) {
+    const fingerprint = knownValueFingerprint(value);
+    if (fingerprint) fingerprints.set(fingerprintKey(fingerprint), fingerprint);
   }
   const fingerprintFile = process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE;
   if (fingerprintFile) {
@@ -154,8 +151,11 @@ function loadKnownValues(): { error: boolean; fingerprints: KnownValueFingerprin
         if (typeof fingerprint.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(fingerprint.sha256)) {
           return { error: true, fingerprints: [], values: [] };
         }
+        if (fingerprint.exactOnly !== undefined && typeof fingerprint.exactOnly !== "boolean") {
+          return { error: true, fingerprints: [], values: [] };
+        }
         const valid = fingerprint as KnownValueFingerprint;
-        fingerprints.set(`${valid.length}:${valid.sha256}`, valid);
+        fingerprints.set(fingerprintKey(valid), valid);
       }
     } catch {
       return { error: true, fingerprints: [], values: [] };
@@ -164,7 +164,7 @@ function loadKnownValues(): { error: boolean; fingerprints: KnownValueFingerprin
   return {
     error: false,
     fingerprints: [...fingerprints.values()],
-    values: normalizedValues,
+    values,
   };
 }
 
@@ -366,27 +366,31 @@ function sensitiveTextViews(text: string): { error: boolean; views: [string, str
   return { error: canonical.error, views: [decoded, withoutMarkup] };
 }
 
-function normalizedSensitiveText(text: string): { compact: string; error: boolean; searchable: string } {
+function normalizedSensitiveText(text: string): { compact: string; error: boolean; exactSearchable: string; searchable: string } {
   const { error, views } = sensitiveTextViews(text);
   const [decoded, withoutMarkup] = views;
   return {
     compact: `${compactSensitiveText(decoded)}\0${compactSensitiveText(withoutMarkup)}`,
     error,
     searchable: `${decoded}\n${withoutMarkup}`,
+    // Preserve separators and attributes; rendered markup projection can join
+    // characters that were split in the publication source.
+    exactSearchable: decoded.normalize("NFKC").toLocaleLowerCase("en-US"),
   };
 }
 
-function matchesKnownFingerprint(compact: string): boolean {
+function matchesKnownFingerprint(text: string, exactOnly = false): boolean {
   const fingerprintsByLength = new Map<number, Set<string>>();
   for (const fingerprint of knownValues.fingerprints) {
+    if ((fingerprint.exactOnly === true) !== exactOnly) continue;
     const hashes = fingerprintsByLength.get(fingerprint.length) ?? new Set<string>();
     hashes.add(fingerprint.sha256);
     fingerprintsByLength.set(fingerprint.length, hashes);
   }
   for (const [length, hashes] of fingerprintsByLength) {
-    if (length > compact.length) continue;
-    for (let index = 0; index <= compact.length - length; index += 1) {
-      const digest = createHash("sha256").update(compact.slice(index, index + length)).digest("hex");
+    if (length > text.length) continue;
+    for (let index = 0; index <= text.length - length; index += 1) {
+      const digest = createHash("sha256").update(text.slice(index, index + length)).digest("hex");
       if (hashes.has(digest)) return true;
     }
   }
@@ -598,10 +602,13 @@ function hasEmailAddress(text: string): boolean {
 
 export function sensitiveClasses(text: string): Set<FindingClass> {
   const findings = new Set<FindingClass>();
-  const { compact, error, searchable: searchableText } = normalizedSensitiveText(text);
+  const { compact, error, exactSearchable, searchable: searchableText } = normalizedSensitiveText(text);
   if (error) findings.add("inspection_error");
   const normalizedText = searchableText.toLocaleLowerCase("en-US");
-  if (knownValues.values.some((value) => normalizedText.includes(value.toLocaleLowerCase("en-US"))) || matchesKnownFingerprint(compact)) {
+  if (knownValues.values.some((entry) => entry.exactOnly
+    ? exactSearchable.includes(entry.value.normalize("NFKC").toLocaleLowerCase("en-US"))
+    : normalizedText.includes(entry.value.toLocaleLowerCase("en-US")))
+    || matchesKnownFingerprint(compact) || matchesKnownFingerprint(exactSearchable, true)) {
     findings.add("known_value");
   }
   const unixHomePattern = /(?:^|[\s"'(=:/])\/(?:home|Users)\/([A-Za-z0-9._-]+)(?:\/|$)/gm;

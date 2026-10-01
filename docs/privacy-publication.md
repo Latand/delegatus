@@ -78,12 +78,34 @@ catalog and passes `--require-known-values`. A missing, empty, or malformed
 catalog produces `configuration_error`. The workflow has no dependency on an
 Actions secret for this coverage.
 
-Catalog entries contain normalized lengths and SHA-256 fingerprints. Runtime
-matching hashes same-length windows after NFKC, lowercase, markup, and separator
-normalization, so formatting and token splitting cannot bypass the catalog.
+Catalog entries contain normalized lengths and SHA-256 fingerprints. Entries
+without `exactOnly: true` retain compact matching after NFKC, lowercase, markup,
+and separator normalization. Catalog schema version 1 and existing entries
+remain supported.
+
+A per-value `exactOnly: true` entry hashes the NFKC, case-folded value with
+separators preserved. It matches same-length contiguous windows of decoded
+source text after the gate's existing percent/entity decoding and Unicode
+normalization. It applies across every inspected context, including resource
+strings, HTML attributes, commit messages, metadata and OCR output. Spaces,
+hyphens and other separators interrupt the match; the flag never exempts a
+context containing the contiguous value. Markdown projection cannot join split
+spellings for this policy. Generic credential, address and resource checks
+continue to run independently.
 
 Keep raw private labels in the ignored `.privacy-known-values` operator file.
-Refresh the committed fingerprints with:
+Legacy lines contain one value each. A value requiring exact matching uses a
+JSON line with `value` and `exactOnly: true`; unflagged JSON entries also work.
+For an invented compound, the line shape is:
+
+```json
+{"value":"freshwater","exactOnly":true}
+```
+
+Both the generator and the gate's raw-value file/environment input read this
+format. Invalid policy types fail closed. If the same value is configured with
+both policies, compact coverage remains active. Refresh the committed
+fingerprints after updating the private input:
 
 ```sh
 bun run privacy:fingerprints -- \
@@ -92,7 +114,8 @@ bun run privacy:fingerprints -- \
 ```
 
 The generator emits a status and count. Raw labels stay out of its diagnostics
-and the generated catalog.
+and the generated catalog. Preserve per-value policy in the private input so
+regeneration retains it.
 
 ## Authenticated GitHub publication audit
 

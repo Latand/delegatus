@@ -1122,6 +1122,165 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
+  describe("exactOnly known values", () => {
+    const words = ["fresh", "water"];
+    const value = words.join("");
+    const fullWidth = (text: string) => [...text].map((character) =>
+      String.fromCharCode(character.charCodeAt(0) + 0xfee0)).join("");
+    const spellings = [
+      { name: "space", text: words.join(" "), contiguous: false },
+      { name: "hyphen", text: words.join("-"), contiguous: false },
+      { name: "underscore", text: words.join("_"), contiguous: false },
+      { name: "decoded space", text: words.join("%20"), contiguous: false },
+      { name: "entity space", text: words.join("&Tab;"), contiguous: false },
+      { name: "plain text", text: value, contiguous: true },
+      { name: "URL", text: `https://example.invalid/${value}`, contiguous: true },
+      { name: "path", text: `/workspace/${value}/file`, contiguous: true },
+      { name: "mailbox", text: `${value}@example.invalid`, contiguous: true },
+      { name: "handle", text: `@${value}`, contiguous: true },
+      { name: "identifier", text: `prefix${value}suffix`, contiguous: true },
+      { name: "HTML attribute", text: `<a href="https://example.invalid/${value}">label</a>`, contiguous: true },
+      { name: "mixed case", text: words.map((word) => word[0].toUpperCase() + word.slice(1)).join(""), contiguous: true },
+      { name: "NFKC", text: fullWidth(value), contiguous: true },
+      { name: "percent decoded", text: [...value].map((c) => `%${c.charCodeAt(0).toString(16)}`).join(""), contiguous: true },
+      { name: "entity decoded", text: [...value].map((c) => `&#${c.charCodeAt(0)};`).join(""), contiguous: true },
+    ];
+    for (const source of ["fingerprint", "raw file", "environment"] as const) {
+      for (const exactOnly of [true, false]) {
+        for (const spelling of spellings) {
+          test(`${source} exactOnly=${exactOnly} ${spelling.name}`, () => {
+            const directory = mkdtempSync(join(tmpdir(), "llv-privacy-exact-"));
+            temporaryDirectories.push(directory);
+            const publication = join(directory, "publication.md");
+            const configuration = join(directory, "known.json");
+            writeFileSync(publication, spelling.text);
+            const entry = { value, ...(exactOnly ? { exactOnly: true } : {}) };
+            const environment: Record<string, string> = {
+              LLV_PRIVACY_KNOWN_VALUES: "",
+              LLV_PRIVACY_KNOWN_VALUES_FILE: "",
+              LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: "",
+            };
+            if (source === "fingerprint") {
+              writeFileSync(configuration, JSON.stringify({
+                schemaVersion: 1, normalization: "nfkc-lower-alnum-v1",
+                fingerprints: [{ length: value.length, sha256: createHash("sha256").update(value).digest("hex"),
+                  ...(exactOnly ? { exactOnly: true } : {}) }],
+              }));
+              environment.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE = configuration;
+            } else {
+              const input = exactOnly ? JSON.stringify(entry) : value;
+              if (source === "raw file") {
+                writeFileSync(configuration, input);
+                environment.LLV_PRIVACY_KNOWN_VALUES_FILE = configuration;
+              } else environment.LLV_PRIVACY_KNOWN_VALUES = input;
+            }
+            const result = runGate([publication], environment);
+            expect(result.exitCode).toBe(!exactOnly || spelling.contiguous ? 1 : 0);
+            expect(result.stdout.toString().includes("known_value:")).toBe(!exactOnly || spelling.contiguous);
+            expect(result.stdout.toString()).not.toContain(value);
+            expect(result.stderr.toString()).toBe("");
+          });
+        }
+      }
+    }
+
+    for (const exactOnly of [true, false]) {
+      for (const contiguous of [true, false]) {
+        test(`commit exactOnly=${exactOnly} contiguous=${contiguous}`, () => {
+          const directory = mkdtempSync(join(tmpdir(), "llv-privacy-exact-"));
+          temporaryDirectories.push(directory);
+          runGit(directory, ["init", "--quiet"]);
+          runGit(directory, ["config", "user.name", "Fixture Tool"]);
+          runGit(directory, ["config", "user.email", "noreply@example.invalid"]);
+          runGit(directory, ["commit", "--allow-empty", "-m", "base"]);
+          runGit(directory, ["commit", "--allow-empty", "-m", contiguous ? value : words.join(" ")]);
+          const configuration = join(directory, ".git", "known.json");
+          writeFileSync(configuration, JSON.stringify({ schemaVersion: 1, normalization: "nfkc-lower-alnum-v1",
+            fingerprints: [{ length: value.length, sha256: createHash("sha256").update(value).digest("hex"),
+              ...(exactOnly ? { exactOnly: true } : {}) }] }));
+          const result = runGateArguments(["--base", "HEAD~1", "--check-commits"], {
+            LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: configuration,
+          }, directory);
+          expect(result.exitCode).toBe(!exactOnly || contiguous ? 1 : 0);
+          expect(result.stdout.toString().includes("known_value:")).toBe(!exactOnly || contiguous);
+          expect(result.stderr.toString()).toBe("");
+        });
+      }
+    }
+
+    for (const exactOnly of [true, false]) {
+      for (const contiguous of [true, false]) {
+        test(`OCR exactOnly=${exactOnly} contiguous=${contiguous}`, () => {
+          const directory = mkdtempSync(join(tmpdir(), "llv-privacy-exact-"));
+          temporaryDirectories.push(directory);
+          const generation = generatePrivacyPlaceholders(directory);
+          expect(generation.exitCode).toBe(0);
+          const image = join(directory, "docs", "acceptance", "issue-290", "readiness-kanban.png");
+          const configuration = join(directory, "known.json");
+          writeFileSync(configuration, JSON.stringify({ schemaVersion: 1, normalization: "nfkc-lower-alnum-v1",
+            fingerprints: [{ length: value.length, sha256: createHash("sha256").update(value).digest("hex"),
+              ...(exactOnly ? { exactOnly: true } : {}) }] }));
+          const result = runGateArguments(["--repository", directory, "--paths", image], {
+            ...installTool(directory, "tesseract", 'printf "%s" "$OCR_TEXT"'),
+            LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: configuration,
+            OCR_TEXT: contiguous ? fullWidth(value) : words.join("-"),
+          });
+          expect(result.exitCode).toBe(!exactOnly || contiguous ? 1 : 0);
+          expect(result.stdout.toString()).toBe(!exactOnly || contiguous
+            ? "PRIVACY GATE: FAIL\nknown_value: 1\n" : "PRIVACY GATE: PASS\n");
+          expect(result.stderr.toString()).toBe("");
+        });
+      }
+    }
+
+    for (const policy of ["true", null, 1]) {
+      test(`rejects malformed exactOnly policy ${JSON.stringify(policy)}`, () => {
+        const directory = mkdtempSync(join(tmpdir(), "llv-privacy-exact-"));
+        temporaryDirectories.push(directory);
+        const configuration = join(directory, "known.json");
+        const publication = join(directory, "publication.md");
+        writeFileSync(publication, "Synthetic safe text");
+        writeFileSync(configuration, JSON.stringify({ schemaVersion: 1, normalization: "nfkc-lower-alnum-v1",
+          fingerprints: [{ length: value.length, sha256: createHash("sha256").update(value).digest("hex"), exactOnly: policy }] }));
+        const result = runGate([publication], { LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: configuration });
+        expect(result.exitCode).toBe(1);
+        expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nconfiguration_error: 1\n");
+      });
+    }
+
+    test("compact policy survives a duplicate exactOnly fingerprint", () => {
+      const directory = mkdtempSync(join(tmpdir(), "llv-privacy-exact-"));
+      temporaryDirectories.push(directory);
+      const configuration = join(directory, "known.json");
+      const publication = join(directory, "publication.md");
+      writeFileSync(publication, words.join(" "));
+      const fingerprint = { length: value.length, sha256: createHash("sha256").update(value).digest("hex") };
+      writeFileSync(configuration, JSON.stringify({ schemaVersion: 1, normalization: "nfkc-lower-alnum-v1",
+        fingerprints: [fingerprint, { ...fingerprint, exactOnly: true }] }));
+      const result = runGate([publication], { LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: configuration });
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nknown_value: 1\n");
+    });
+
+    test("generator preserves exactOnly and legacy entries", () => {
+      const directory = mkdtempSync(join(tmpdir(), "llv-privacy-exact-"));
+      temporaryDirectories.push(directory);
+      const input = join(directory, "known.txt");
+      const output = join(directory, "catalog.json");
+      writeFileSync(input, `${JSON.stringify({ value, exactOnly: true })}\n${["fixture", "legacy"].join("-")}\n`);
+      const result = Bun.spawnSync({ cmd: [process.execPath,
+        join(import.meta.dir, "generate-privacy-known-value-fingerprints.ts"), "--input", input, "--output", output],
+        stdout: "pipe", stderr: "pipe" });
+      expect(result.exitCode).toBe(0);
+      const catalog = JSON.parse(readFileSync(output, "utf8"));
+      expect(catalog.fingerprints).toContainEqual({ length: value.length,
+        sha256: createHash("sha256").update(value).digest("hex"), exactOnly: true });
+      expect(catalog.fingerprints).toContainEqual({ length: 13,
+        sha256: createHash("sha256").update(["fixture", "legacy"].join("")).digest("hex") });
+      expect(readFileSync(output, "utf8")).not.toContain(value);
+    });
+  });
+
   test("generates a value-free fingerprint catalog from an operator file", () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
