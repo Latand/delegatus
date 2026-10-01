@@ -8,13 +8,89 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+## [1.9.0] — 2026-10-01
+
 ### Added
-- Anonymous install ping, enabled by default and disclosed on first start.
-  Once per UTC day the production Viewer sends only a separate random id,
-  version, OS, architecture and install kind to delegatus.org. Disable it in
-  Settings, with `DELEGATUS_TELEMETRY=0` or `DO_NOT_TRACK=1`. Tests, builds,
-  development servers and CI send nothing. The landing Worker validates the
-  payload and stores it with Cloudflare country in the `installs` dataset.
+- **Board maintenance on the seat tick.** The seat tick panel (the popover
+  on a desktop, the sheet on a phone) has a **Board maintenance** group with
+  a switch and an interval in hours, from 1 to 168. It is off by default and
+  runs every 3 hours once switched on. Each run starts one maintainer agent
+  for the project, on its own task card, that reads the previous run's
+  summary and log, checks transcripts, branches and stage attempts, and then
+  updates statuses and blocked reasons on the board. It never edits files in
+  a repository, never deletes or hides your task details, and cannot mark
+  done a task that has an open pipeline or a live agent. A run that
+  succeeds summarizes its card, marks it done and hides it, and archives its
+  conversation. A failed run leaves a blocked card. The group shows the last
+  run, its result, the next run and a link to the run's card, and a run
+  waits while a deployment is running. The same settings are available to
+  agents through `seat_tick_settings`, which now also returns the last and
+  live run, the next-run estimate and the run history ([#2384]).
+- **Each tool call shows the context tokens it added.** Next to a call's
+  duration the feed now prints how many context tokens the call's result
+  added, such as `352ms · 12.4k`, for Claude and Codex, on tool lines, rows
+  inside a group, the phone's run rows, the group header and the MCP call
+  card. The number is the growth in the provider's prompt size, or an
+  estimate marked `~` when no measurement is possible, and a call that is
+  still running shows nothing. Four bands set the colour: under 1 000 is
+  quiet, 1 000 to 9 999 amber, 10 000 to 19 999 orange and 20 000 and above
+  semibold red. The hover text says whether the value was measured, shared
+  between parallel calls or estimated ([#2383]).
+- **A linked task shows its pipeline and where it is managed.** A task that
+  runs on a linked install now shows its pipeline on the card here: the
+  stages in the owner's order, each stage's state, the loop counters and the
+  current stage. The card has a tinted border and a "Managed on" chip with
+  the machine's name where **+ Agent** was. Only identifiers and states
+  cross the link, never prompts, findings, paths or conversation ids, and an
+  install on an earlier release keeps syncing and shows the card without a
+  pipeline ([#2377]).
+- **A clear message when no agent CLI is installed.** The start output now
+  says how to install Claude Code and Codex when neither is found, and the
+  setup guide's account connection finds the Codex CLI inside the macOS
+  Codex app bundle, as agent launches do. The landing prompts check and
+  install the chosen CLI and register the MCP server with absolute paths,
+  and the Delegatus package entrypoints run on Bun alone, without `node` on
+  `PATH`. `docs/macos-newcomer.md` holds the manual checklist ([#2376]).
+- **Anonymous install ping, on by default.** Once per UTC day the production
+  Viewer sends delegatus.org a random id made for this purpose, the
+  version, the OS, the architecture and the install kind (`packaged`,
+  `checkout` or `docker`). It sends no path, host or user name, project,
+  account, engine or usage figure, and the landing Worker stores the five
+  values with the country Cloudflare reports, and no IP address. The first
+  start shows a notice in the product and in the start output. Turn it off
+  in **Settings → Anonymous install ping**, with `DELEGATUS_TELEMETRY=0`
+  or with `DO_NOT_TRACK=1`; the two variables win over the setting. Tests,
+  builds, development servers and CI send nothing ([#2382]).
+
+### Fixed
+- **Scrolling a fully expanded conversation on the board is smooth.** After
+  **show earlier** had loaded the whole history of a long conversation, each
+  scroll frame measured every answer in the feed to decide which one the
+  speak button reads, and the board frame resized itself in container units
+  on every frame. The measure now looks only at answers on screen, the board
+  frame no longer re-resolves its size on scroll, and the reading anchor
+  uses a bisection. In a trace of one 451-row conversation, 43% of the
+  frames moved the scroll before and 99% do now. History and what **show
+  earlier** loads are unchanged ([#2388]).
+- **Reports from a project without a name no longer fail.** A report filed
+  with `bridge_report` from a project known only by its key failed while the
+  report header was built on the server. The header now reads "Unnamed
+  project" or "Проєкт без назви". Named projects are unchanged ([#2387]).
+- **Landing demos on a phone stay inside a phone frame.** An expanded phone
+  demo used to switch to an unscaled, edge-to-edge viewport. It now keeps its
+  390 px viewport and scales the whole frame to the available width and
+  height, with a rounded border, in portrait and landscape, and it refits
+  when the visible area shrinks ([#2385]).
+
+### Maintainer notes
+- The privacy inspection jobs cache their media tools (apt indexes and
+  `.deb` archives) per runner image, install them offline and bound retries,
+  so a slow package mirror no longer fails the privacy checks ([#2380]).
+- A new workflow, `macos-newcomer`, installs Bun and the packed package on a
+  clean macOS runner, starts the real package and checks the launcher message
+  and the setup API with no CLI, with each engine's stub and with a Codex
+  app-bundle stub. It runs manually, on relevant pull requests and on release
+  tags ([#2376]).
 
 ## [1.8.0] — 2026-09-30
 
@@ -1639,7 +1715,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/delegatus/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/Latand/delegatus/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/Latand/delegatus/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/Latand/delegatus/compare/v1.7.1...v1.8.0
 [1.7.1]: https://github.com/Latand/delegatus/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/Latand/delegatus/compare/v1.6.0...v1.7.0
@@ -1815,3 +1892,12 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2366]: https://github.com/Latand/delegatus/pull/2366
 [#2368]: https://github.com/Latand/delegatus/pull/2368
 [#2370]: https://github.com/Latand/delegatus/pull/2370
+[#2376]: https://github.com/Latand/delegatus/pull/2376
+[#2377]: https://github.com/Latand/delegatus/pull/2377
+[#2380]: https://github.com/Latand/delegatus/pull/2380
+[#2382]: https://github.com/Latand/delegatus/pull/2382
+[#2383]: https://github.com/Latand/delegatus/pull/2383
+[#2384]: https://github.com/Latand/delegatus/pull/2384
+[#2385]: https://github.com/Latand/delegatus/pull/2385
+[#2387]: https://github.com/Latand/delegatus/pull/2387
+[#2388]: https://github.com/Latand/delegatus/pull/2388
