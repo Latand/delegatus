@@ -2610,11 +2610,12 @@ function inspectDeliveryReservation(
     resolveConversationAlias(file, item.conversationId) === canonicalId
     && item.clientMessageId === clientMessageId) : undefined;
   const requestedCommand = canonicalHeldDeliveryCommand(commandInput, existing?.id ?? "pending-delivery");
-  // A seat relay owns its receipt as that authenticated sender. Ordinary
+  // An identified relay owns its receipt as that authenticated sender. Ordinary
   // historical sends retain their stamp-upgrade compatibility, but neither an
-  // operator nor another seat can acquire a relay's reservation (or vice versa).
+  // operator nor another sender can acquire a relay's reservation (or vice versa).
   const boundRelay = (command: HeldDeliveryCommand): boolean => command.origin?.kind === "agent"
-    && command.origin.role === "orchestrator" && Boolean(command.origin.conversationId);
+    && (command.origin.role === "orchestrator" || command.origin.role === "gateway")
+    && Boolean(command.origin.conversationId);
   const sameRelayOwner = (command: HeldDeliveryCommand): boolean =>
     (!boundRelay(command) && !boundRelay(requestedCommand))
     || sameMessageOrigin(command.origin, requestedCommand.origin);

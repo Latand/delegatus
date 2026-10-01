@@ -14,6 +14,8 @@ delete process.env.LLV_ROOT_CONVERSATION_ID;
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { VIEWER_SPAWN_CAPABILITY_HEADER } = await import("@/lib/agent/capabilityHeader");
 const { requireOperatorAuthority } = await import("@/lib/agent/operatorAuthority");
+const { setDeputyRootResolverForTests } = await import("./deputyAsker");
+const { persistProjectAliases } = await import("@/lib/projects/aliases");
 const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("./seats");
 const { POST } = await import("@/app/api/conversation-host/route");
 const { POST: legacyPOST } = await import("@/app/api/tmux/route");
@@ -30,6 +32,7 @@ let registry: InstanceType<typeof AgentRegistry>;
 let delivered: Record<string, unknown>[];
 let sequence = 0;
 beforeEach(() => {
+  setDeputyRootResolverForTests(null);
   registry?.close();
   process.env.LLV_STATE_DIR = path.join(root, `state-${++sequence}`);
   registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR, "registry.json"));
@@ -48,6 +51,7 @@ beforeEach(() => {
   });
 });
 afterAll(() => {
+  setDeputyRootResolverForTests(null);
   registry.close();
   setAgentRegistryForTests(null);
   setConversationHostDependenciesForTests(null);
@@ -272,6 +276,121 @@ test("HTTP relay reservations bind the authenticated seat and separate browser a
   }
   expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(6);
 });
+
+for (const [index, post] of [POST, legacyPOST, orchestratorPOST].entries()) {
+  test(`gateway HTTP receipts bind their authenticated author on mount ${index}`, async () => {
+    realAdmission();
+    const gateway = actor(undefined, "root");
+    setDeputyRootResolverForTests(() => gateway.id);
+    const recipient = actor("project-b");
+    const body = { ...relayBody(recipient.id, "same words"), project: "project-b" };
+    const browserHeaders = { "sec-fetch-site": "same-origin" };
+    const operator = await post(request(undefined, body, browserHeaders));
+    expect(operator.status).toBe(200);
+    const operatorReceipt = await operator.json();
+    const gatewayConflict = await post(request(gateway.capability, body));
+    expect(gatewayConflict.status).toBe(409);
+    expect(await gatewayConflict.json()).not.toHaveProperty("operationId");
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(1);
+
+    const gatewayBody = { ...body, clientMessageId: "gateway-first" };
+    const first = await post(request(gateway.capability, gatewayBody));
+    expect(first.status).toBe(200);
+    const receipt = await first.json();
+    expect(await (await post(request(gateway.capability, gatewayBody))).json()).toMatchObject({ operationId: receipt.operationId });
+    const browserConflict = await post(request(undefined, gatewayBody, browserHeaders));
+    expect(browserConflict.status).toBe(409);
+    expect(await browserConflict.json()).not.toHaveProperty("operationId");
+    const successor = actor(undefined, "root");
+    setDeputyRootResolverForTests(() => successor.id);
+    const successorConflict = await post(request(successor.capability, gatewayBody));
+    expect(successorConflict.status).toBe(409);
+    expect(await successorConflict.json()).not.toHaveProperty("operationId");
+    const reservations = Object.values(registry.readOnlySnapshot().heldDeliveries);
+    expect(reservations).toHaveLength(2);
+    expect(reservations.find(row => row.command.operationId === operatorReceipt.operationId)?.command.origin).toEqual({ kind: "operator" });
+    expect(reservations.find(row => row.command.operationId === receipt.operationId)?.command.origin).toEqual({ kind: "agent", role: "gateway", conversationId: gateway.id });
+  });
+}
+
+test("project-only HTTP retries recover the original recipient after rotation", async () => {
+  realAdmission();
+  const sender = actor("project-a");
+  const recipient = actor("project-b");
+  const body = { project: "project-b", text: "hello", clientMessageId: "project-only-retry" };
+  const first = await orchestratorPOST(request(sender.capability, body));
+  expect(first.status).toBe(200);
+  const receipt = await first.json();
+  const successor = actor("project-b");
+  const retry = await orchestratorPOST(request(sender.capability, body));
+  expect(retry.status).toBe(200);
+  expect(await retry.json()).toMatchObject({ operationId: receipt.operationId, receipt: { conversationId: recipient.id } });
+  expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(1);
+  const changed = await orchestratorPOST(request(sender.capability, { ...body, text: "changed" }));
+  expect(changed.status).toBe(409);
+  expect(await changed.json()).not.toHaveProperty("operationId");
+  expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(1);
+  const fresh = await orchestratorPOST(request(sender.capability, { ...body, clientMessageId: "fresh-project-only" }));
+  expect(fresh.status).toBe(200);
+  expect(await fresh.json()).toMatchObject({ receipt: { conversationId: successor.id } });
+  const other = actor("project-c");
+  const otherSend = await orchestratorPOST(request(other.capability, body));
+  expect(otherSend.status).toBe(200);
+  const otherReceipt = await otherSend.json();
+  expect(otherReceipt.operationId).not.toBe(receipt.operationId);
+  expect(otherReceipt.receipt.conversationId).toBe(successor.id);
+  expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(3);
+  expect((await orchestratorPOST(request(sender.capability, { ...body, conversationId: recipient.id, clientMessageId: "fresh-former" }))).status).toBe(409);
+});
+
+test("HTTP retries retain durable sender attribution after its project display name changes", async () => {
+  realAdmission();
+  const sender = actor("project-a");
+  const recipient = actor("project-b");
+  const body = { project: "project-b", text: "hello", clientMessageId: "renamed-sender-retry" };
+  const first = await orchestratorPOST(request(sender.capability, body));
+  expect(first.status).toBe(200);
+  const receipt = await first.json();
+  actor("project-b");
+  persistProjectAliases([{ source: "legacy-fixture-project", target: "project-a", displayName: "Renamed sender project" }]);
+  for (const retryBody of [body, { ...body, conversationId: recipient.id }]) {
+    const retry = await orchestratorPOST(request(sender.capability, retryBody));
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toMatchObject({ operationId: receipt.operationId, receipt: { conversationId: recipient.id, origin: receipt.receipt.origin, text: receipt.receipt.text } });
+  }
+  expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(1);
+  expect((await orchestratorPOST(request(sender.capability, { ...body, text: "changed" }))).status).toBe(409);
+  const fresh = await orchestratorPOST(request(sender.capability, { ...body, clientMessageId: "renamed-fresh" }));
+  expect(fresh.status).toBe(200);
+  expect((await fresh.json()).receipt.origin.project).toBe("Renamed sender project");
+});
+
+for (const author of ["operator", "gateway"] as const) {
+  test(`project-only ${author} retries keep their recipient after rotation and registry reopen`, async () => {
+    realAdmission();
+    const gateway = author === "gateway" ? actor(undefined, "root") : null;
+    if (gateway) setDeputyRootResolverForTests(() => gateway.id);
+    const recipient = actor("project-b");
+    const body = { project: "project-b", text: " hello ", clientMessageId: ` ${author}-retry ` };
+    const headers = { "sec-fetch-site": "same-origin" };
+    const first = await orchestratorPOST(request(gateway?.capability, body, headers));
+    expect(first.status).toBe(200);
+    const receipt = await first.json();
+    const successor = actor("project-b");
+    registry.close();
+    registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "registry.json"));
+    setAgentRegistryForTests(registry);
+    const retry = await orchestratorPOST(request(gateway?.capability, body, headers));
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toMatchObject({ operationId: receipt.operationId, receipt: { conversationId: recipient.id } });
+    expect((await orchestratorPOST(request(gateway?.capability, { ...body, text: "changed" }, headers))).status).toBe(409);
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(1);
+    const fresh = await orchestratorPOST(request(gateway?.capability, { ...body, clientMessageId: `${author}-fresh` }, headers));
+    expect(fresh.status).toBe(200);
+    expect(await fresh.json()).toMatchObject({ receipt: { conversationId: successor.id } });
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(2);
+  });
+}
 
 test("former recipients require the original sender, key and payload; fresh sends resolve the current seat", async () => {
   realAdmission();
