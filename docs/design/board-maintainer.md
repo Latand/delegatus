@@ -433,7 +433,8 @@ const runId = `maint_${sha256(`${project}:${slotKey}`).slice(0, 24)}`;   // 30 c
 3. If `r:<runId>` already exists, answer `{ claimed: false, reason: "slot-taken" }`.
 4. Put the run row (`state: "claimed"`) and the project row
    (`lastClaimAt: now`, `lastSlotKey`, `currentRunId: runId`, `runIds` with
-   the new id; ids past the retention bound are deleted with their `c:` rows).
+   the new id; run rows past the retention bound are pruned, while their
+   conversation-to-run `c:` fence rows are retained).
 
 Why this holds:
 
@@ -857,10 +858,12 @@ spawn's task binding adds the run's conversation as an assignment, and adding
 an assignment moves an inbox task to `assigned` (`tasks/membership.ts:150`),
 so running work reads as assigned without a second write.
 
-When it answers `TASK_BOARD_FULL`, the same create is repeated with
-`board: "hidden"`; the run goes on and the UI and the seat still reach the
-card. The task id is written to the run (`taskId`) before the spawn. A
-store-busy failure leaves the run `claimed` for the next check, up to
+The maintenance run's own service card has a narrow system-owned admission
+exception: it remains visible even when the board already has its 300 task
+bands. This may create one overflow band without changing any operator task.
+Ordinary tasks created by the maintainer still follow the regular board cap.
+The task id is written to the run (`taskId`) before the spawn. A store-busy
+failure leaves the run `claimed` for the next check, up to
 `MAINTENANCE_LAUNCH_GRACE_MS`.
 
 Text, by `operatorLocale()` (`uk` or `en`), time in `operatorTimeZone()`
@@ -987,17 +990,20 @@ A turn that ended is judged from `spawnNoticeFinalMessage(conversationId)`
 (`spawnNotice/production.ts:104`), which returns the last assistant message
 and any engine error from one bounded tail read:
 
-- an engine `error` and no text: fail `turn-error`;
+- any engine `error`: fail `turn-error`, even when the turn emitted assistant
+  commentary before aborting;
 - `detectedVerdict(text)` (`spawnNotice/sweep.ts:90`) is `fail`: fail
   `agent-fail`, detail = the last 300 characters before the verdict line;
-- otherwise (`pass`, `needs_decision`, or no verdict line): succeed. A missing
-  verdict line is noted in the card's result line.
+- `needs_decision`: leave the run blocked and visible with the decision text as
+  its reason, so the seat can bring it to the operator;
+- `pass` or no verdict line: succeed. A missing verdict line is noted in the
+  card's result line.
 
 The attention and left-alone lines are parsed from the same text (§8.2).
 
-A run that failed or timed out stays in the `c:` index, and the guard refuses
-its further writes (§7.4). So a zombie run cannot keep writing next to the
-next slot's run. Its idle host is reclaimed by the structured-host retirement
+A scheduled caller's `c:` index stays after run history is pruned, and the
+guard refuses its further writes (§7.4). So a zombie run cannot keep writing
+next to the next slot's run. Its idle host is reclaimed by the structured-host
 sweep (#747); this feature stops no process.
 
 ### 6.5 Settling
@@ -1213,7 +1219,9 @@ interface MaintenanceCounts {
 
 `MAINTENANCE_LOG_ENTRY_LIMIT` bounds the stored log. A write past it succeeds
 and is counted in `omittedChanges`; the log never refuses a write. Run rows
-past the newest 10 per project are deleted at the next claim.
+past the newest 10 per project are deleted at the next claim. Compact
+conversation-to-run index rows outlive run history so a scheduled caller stays
+recognizable and write-fenced after its detailed record is pruned.
 
 What the log holds comes from two sources, and neither is the agent's claim
 about its own writes: the changes are recorded by the server as they happen
@@ -1434,7 +1442,7 @@ New:
   - a live run refuses a claim even past the interval; a settled one does not;
   - the key is deterministic per project, interval and slot, and a replayed
     claim of an existing run answers `slot-taken`;
-  - retention deletes the eleventh-oldest run and its `c:` row;
+  - retention deletes the eleventh-oldest run but retains its `c:` fence;
   - `recordMaintenanceChange` past the log bound counts `omittedChanges` and
     accepts the write.
 - `src/lib/boardMaintenance/run.test.ts` (ports faked; tasks through a temp
@@ -1449,7 +1457,8 @@ New:
     the repository `cwd` and the project; through the real spawn route's
     binding (the harness `route.binding.test.ts` uses), the card holds the
     run's conversation as its assignment and reads `assigned`;
-  - `TASK_BOARD_FULL` retries the card with `board: "hidden"`;
+  - the service-owned maintenance card may occupy a visible overflow band on a
+    full board; ordinary task writes retain the 300-band limit;
   - 409 `project_account_refused` fails the run with `no-account`, the card
     `blocked`, board shown, reason in its text;
   - a crash after the claim (run left `claimed`): the next reconcile creates

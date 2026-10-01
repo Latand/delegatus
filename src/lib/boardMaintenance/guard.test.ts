@@ -16,6 +16,7 @@ test("each task refusal has a clear code, with hidden create allowed", () => {
   expect(refuse({ details: "whole field" })?.code).toBe("maintainer_details_overwrite_refused");
   expect(refuse({ project: "another" })?.code).toBe("maintainer_project_refused");
   expect(refuse({ text: "new title" }, { caller: { ...caller, run: { ...run, state: "succeeded" } } })?.code).toBe("maintainer_run_ended");
+  expect(refuse({ text: "new title" }, { caller: { ...caller, run: null, endedScheduledRun: true } })?.code).toBe("maintainer_run_ended");
   expect(refuse({ project: PROJECT, board: "hidden", details: "new details" }, { create: true })).toBeNull();
   expect(refuse({ status: "inbox", appendLine: "Maintenance: corrected by evidence" })).toBeNull();
 });

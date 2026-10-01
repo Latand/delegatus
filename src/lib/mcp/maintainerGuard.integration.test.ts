@@ -38,6 +38,14 @@ test("durable maintainer role fences writes on the service wire, independent of 
   patchMaintenanceRun(result.run.runId, { state: "succeeded" });
   expect(await call("update_task", { taskId: task.id, text: "Пізня зміна" })).toMatchObject({ ok: false, code: "maintainer_run_ended" });
   expect(readMaintenanceRun(result.run.runId)!.counts.writes).toBe(count);
+  for (let i = 1; i <= 10; i++) {
+    const next = claimMaintenanceRun({ project, now: Date.now() + i * 3 * 3600000, intervalHours: 3, seat: { conversationId: "fixture-seat", seatEpoch: 1 }, repoDir: "/fixtures/repository" });
+    if (!next.claimed) throw new Error(`claim ${i} expected`);
+    patchMaintenanceRun(next.run.runId, { state: "succeeded" });
+  }
+  expect(readMaintenanceRun(result.run.runId)).toBeNull();
+  expect(await call("update_task", { taskId: task.id, text: "Після retention" })).toMatchObject({ ok: false, code: "maintainer_run_ended" });
+  expect(await call("create_task", { project, text: "Після retention" })).toMatchObject({ ok: false, code: "maintainer_run_ended" });
 });
 test("builder retains normal task writes", async () => {
   const id = ["conversation", "fixture-builder"].join("_");

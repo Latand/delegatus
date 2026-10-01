@@ -3,34 +3,38 @@ import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/age
 import type { BoardTask } from "@/lib/tasks/types";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
-import { maintenanceRunForConversation, readMaintenanceRun, bindMaintenanceConversation } from "./store";
+import { maintenanceRunForConversation, maintenanceRunIdForConversation, readMaintenanceRun, bindMaintenanceConversation } from "./store";
 import { maintenanceRunIsLive, type MaintenanceRun, type MaintenanceChange } from "./types";
 
 type RegistrySnapshot = ReturnType<ReturnType<typeof agentRegistry>["readOnlySnapshot"]>;
 
-export interface MaintainerCaller { conversationId: string; project: string | null; run: MaintenanceRun | null }
+export interface MaintainerCaller { conversationId: string; project: string | null; run: MaintenanceRun | null; endedScheduledRun?: boolean }
 export function maintainerCallerOf(conversationId: string | null, snapshot: RegistrySnapshot): MaintainerCaller | null {
   if (!conversationId) return null;
   const id = readOnlyConversationLookupFromSnapshot(snapshot).canonicalConversationId(conversationId as `conversation_${string}`);
   const role = conversationAgentRole(snapshot, id);
   if (role && role !== "maintainer") return null;
+  const indexedRunId = maintenanceRunIdForConversation(id);
   let run = maintenanceRunForConversation(id);
+  let identifiedScheduledRun = Boolean(indexedRunId);
   if (!run) {
     const receipt = Object.values(snapshot.receipts).find(r => r.conversationId === id && r.agentRole === "maintainer" && r.clientAttemptId?.startsWith("maint_"));
     if (receipt?.clientAttemptId) {
+      identifiedScheduledRun = true;
       run = readMaintenanceRun(receipt.clientAttemptId);
       if (run && maintenanceRunIsLive(run)) run = bindMaintenanceConversation(run.runId, { conversationId: id, launchId: receipt.launchId, transcriptPath: receipt.artifactPath });
     }
   }
-  if (!run && role !== "maintainer") return null;
-  return { conversationId: id, run, project: run?.project ?? snapshot.conversations[id]?.projectOwnership?.project ?? (snapshot.conversations[id]?.generations.at(-1)?.launchProfile.cwd ? projectForCwd(snapshot.conversations[id].generations.at(-1)!.launchProfile.cwd!) : null) };
+  const endedScheduledRun = identifiedScheduledRun && !run;
+  if (!run && role !== "maintainer" && !endedScheduledRun) return null;
+  return { conversationId: id, run, endedScheduledRun, project: run?.project ?? snapshot.conversations[id]?.projectOwnership?.project ?? (snapshot.conversations[id]?.generations.at(-1)?.launchProfile.cwd ? projectForCwd(snapshot.conversations[id].generations.at(-1)!.launchProfile.cwd!) : null) };
 }
 export interface MaintenanceRefusal { code: string; error: string; field?: string }
 /** Input contains fresh work evidence, re-read at the task mutation boundary. */
 export function maintainerTaskWriteRefusal(input: { caller: MaintainerCaller; args: Record<string, unknown>; task?: BoardTask; create?: boolean; openPipeline?: string; liveAgent?: string }): MaintenanceRefusal | null {
   const { caller, args, task } = input;
   const refuse = (code: string, error: string, field?: string) => ({ code, error, field });
-  if (caller.run && !maintenanceRunIsLive(caller.run)) return refuse("maintainer_run_ended", "This maintenance run has ended; Delegatus accepts no more board writes from it.");
+  if (caller.endedScheduledRun || caller.run && !maintenanceRunIsLive(caller.run)) return refuse("maintainer_run_ended", "This maintenance run has ended; Delegatus accepts no more board writes from it.");
   if (task?.details?.startsWith("Delegatus board maintenance run")) return refuse("maintainer_delete_refused", "Delegatus manages maintenance cards. Leave this card alone.");
   const project = input.create ? args.project : task?.project;
   if (!caller.project || typeof project !== "string" || canonicalOrchestratorProject(project) !== canonicalOrchestratorProject(caller.project) || args.project !== undefined && canonicalOrchestratorProject(String(args.project)) !== canonicalOrchestratorProject(caller.project)) {

@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { claim, sandbox, NOW, PROJECT, SEAT } from "./testFixture";
-import { claimMaintenanceRun, patchMaintenanceRun, readMaintenanceRun, previousMaintenanceRun, recordMaintenanceChange, maintenanceRunForConversation, maintenanceRuns } from "./store";
+import { claimMaintenanceRun, patchMaintenanceRun, readMaintenanceRun, previousMaintenanceRun, recordMaintenanceChange, maintenanceRunForConversation, maintenanceRunIdForConversation, maintenanceRuns } from "./store";
 import { MAINTENANCE_LOG_ENTRY_LIMIT } from "./types";
 let held: ReturnType<typeof sandbox>;
 afterEach(() => held?.restore());
@@ -40,8 +40,10 @@ test("log storage bound never caps writes, and ended runs reject changes", () =>
   patchMaintenanceRun(run.runId, { state: "failed" }); recordMaintenanceChange(run.runId, { at: run.claimedAt, taskId: "later", tool: "create_task", fields: [] });
   expect(readMaintenanceRun(run.runId)!.counts).toEqual(stored.counts);
 });
-test("retention deletes oldest run and its conversation index", () => {
+test("retention prunes run history but keeps the terminal conversation fence", () => {
   held = sandbox(); const first = claim(); patchMaintenanceRun(first.runId, { conversationId: "fixture-worker", state: "succeeded" });
   for (let i = 1; i <= 10; i++) { const run = claim(NOW + i * 3 * 3600000); patchMaintenanceRun(run.runId, { state: "succeeded" }); }
-  expect(readMaintenanceRun(first.runId)).toBeNull(); expect(maintenanceRunForConversation("fixture-worker")).toBeNull(); expect(maintenanceRuns(PROJECT)).toHaveLength(10);
+  expect(readMaintenanceRun(first.runId)).toBeNull(); expect(maintenanceRunForConversation("fixture-worker")).toBeNull();
+  expect(maintenanceRunIdForConversation("fixture-worker")).toBe(first.runId);
+  expect(maintenanceRuns(PROJECT)).toHaveLength(10);
 });

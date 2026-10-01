@@ -50,7 +50,7 @@ test("reconcile resumes claimed card and spawn under same key", async () => {
 for (const [name, observation] of [
   ["launch-failed", { state: "failed", failure: { kind: "launch-failed", detail: "receipt failed" } }],
   ["host-died", { state: "failed", failure: { kind: "host-died", detail: "host gone over open turn" } }],
-  ["turn-error", { state: "ended", turnError: "engine error", finalText: null }],
+  ["turn-error", { state: "ended", turnError: "engine error", finalText: "Starting the inventory" }],
   ["agent-fail", { state: "ended", finalText: "forge unavailable\nVerdict: fail" }],
   ["timed-out", { state: "running" }],
 ] as const) test(`${name} settles blocked and visible`, async () => {
@@ -78,7 +78,7 @@ test("restart replays the stored spawn payload and does not repeat settlement de
 });
 
 
-test("a full board still creates one bound hidden card and records a failed launch", async () => {
+test("a full board still creates one bound visible card and records a failed launch", async () => {
   const h = harness();
   const { saveTasks } = await import("@/lib/tasks/store");
   const { BOARD_TASKS_PER_PROJECT_LIMIT } = await import("@/lib/tasks/commands");
@@ -88,8 +88,35 @@ test("a full board still creates one bound hidden card and records a failed laun
   await h.controller.launchIfDue(input());
   const runs = await import("./store");
   const failed = runs.maintenanceRuns(PROJECT)[0];
-  expect(failed.state).toBe("failed"); expect(tasks().find(t => t.id === failed.taskId)).toMatchObject({ status: "blocked", board: "hidden" });
+  expect(failed.state).toBe("failed"); expect(tasks().find(t => t.id === failed.taskId)).toMatchObject({ status: "blocked", board: "shown" });
   expect(h.bodies[0].taskId).toBe(failed.taskId);
+  h.now(NOW + 3 * 3600000);
+  await h.controller.launchIfDue(input());
+  const retry = runs.maintenanceRuns(PROJECT).at(-1)!;
+  h.observe({ state: "failed", failure: { kind: "host-died", detail: "host exited over an open turn" } });
+  await h.controller.reconcile(PROJECT);
+  expect(tasks().find(t => t.id === retry.taskId)).toMatchObject({ status: "blocked", board: "shown" });
+  expect(tasks().find(t => t.id === failed.taskId)).toMatchObject({ status: "done", board: "hidden" });
+});
+
+test("needs_decision remains blocked and visible with its operator reason", async () => {
+  const h = harness(); await h.controller.launchIfDue(input()); const run = h.run();
+  h.observe({ state: "ended", finalText: "Cannot read the forge without operator access.\nVerdict: needs_decision" });
+  await h.controller.reconcile(PROJECT);
+  const ended = readMaintenanceRun(run.runId)!;
+  expect(ended).toMatchObject({ state: "failed", failure: { kind: "needs-decision" }, log: { verdict: "needs_decision" } });
+  expect(ended.failure?.detail).toContain("operator access");
+  expect(tasks().find(t => t.id === run.taskId)).toMatchObject({ status: "blocked", board: "shown" });
+  expect(h.archived).toHaveLength(0);
+});
+
+test("a later successful turn is not failed by an earlier recovered turn", async () => {
+  const h = harness(); await h.controller.launchIfDue(input()); const run = h.run();
+  h.observe({ state: "ended", finalText: "Inventory and reconciliation completed.\nVerdict: pass", turnError: null });
+  await h.controller.reconcile(PROJECT);
+  expect(readMaintenanceRun(run.runId)).toMatchObject({ state: "succeeded", failure: null, log: { verdict: "pass" } });
+  expect(tasks().find(t => t.id === run.taskId)).toMatchObject({ status: "done", board: "hidden" });
+  expect(h.archived).toEqual([run.runId]);
 });
 
 

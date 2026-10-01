@@ -46,6 +46,11 @@ export function maintenanceRunForConversation(conversationId: string): Maintenan
   const row = collection()?.get(`c:${conversationId}`);
   return row?.kind === "conversation" ? readMaintenanceRun(row.runId) : null;
 }
+/** Retained independently of run history so a pruned scheduled caller stays fenced. */
+export function maintenanceRunIdForConversation(conversationId: string): string | null {
+  const row = collection()?.get(`c:${conversationId}`);
+  return row?.kind === "conversation" ? row.runId : null;
+}
 export function claimMaintenanceRun(input: { project: string; now: number; intervalHours: number; seat: MaintenanceRun["seat"]; repoDir: string | null }): { claimed: true; run: MaintenanceRun } | { claimed: false; reason: "live" | "interval" | "slot-taken" } {
   const intervalMs = input.intervalHours * 3_600_000;
   const slot = Math.floor(input.now / intervalMs);
@@ -65,7 +70,6 @@ export function claimMaintenanceRun(input: { project: string; now: number; inter
     const ids = [...(held?.runIds ?? []), runId];
     for (const id of ids.slice(0, -MAINTENANCE_RUN_RETENTION)) {
       const old = tx.get(`r:${id}`) as MaintenanceRun | null;
-      if (old?.conversationId) tx.delete(`c:${old.conversationId}`);
       tx.delete(`r:${id}`);
     }
     tx.put(run);

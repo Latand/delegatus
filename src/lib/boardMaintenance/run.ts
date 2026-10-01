@@ -100,8 +100,7 @@ export async function observeMaintenanceRun(run: MaintenanceRun, sources: SeatTi
 function createCard(run: MaintenanceRun, ports: BoardMaintenancePorts): string {
   const input = { project: run.project, text: maintenanceCardText((ports.locale ?? (() => operatorLocale() ?? "uk"))(), run, ports.timeZone?.() ?? operatorTimeZone() ?? undefined), details: maintenanceCardDetails(run), icon: "brush-cleaning", color: "slate", placement: "unplaced", clientRequestId: `board-maintenance:${run.runId}` };
   const outcome = mutateTasksFile(state => {
-    let result = createTask(state.tasks, input, state.recentCreates);
-    if (!result.ok && result.code === "TASK_BOARD_FULL") result = createTask(state.tasks, { ...input, board: "hidden" }, state.recentCreates);
+    const result = createTask(state.tasks, input, state.recentCreates, { allowBoardOverflow: true });
     return { state: result.ok && !result.replay ? { tasks: result.tasks, recentCreates: result.recentCreates } : undefined, result };
   }, statePath("tasks.json"));
   if (!outcome.ok) throw new Error(outcome.error);
@@ -112,12 +111,7 @@ function patchCard(id: string, patch: Record<string, unknown>): void {
     const task = tasks.find(t => t.id === id);
     const safePatch = { ...patch };
     if (typeof safePatch.appendLine === "string" && task?.details?.split("\n").includes(safePatch.appendLine)) delete safePatch.appendLine;
-    let outcome = patchTask(tasks, id, safePatch);
-    if (!outcome.ok && outcome.code === "TASK_BOARD_FULL" && safePatch.status === "blocked") {
-      // A full board's fallback card remains reachable via the timer and wake.
-      delete safePatch.board;
-      outcome = patchTask(tasks, id, safePatch);
-    }
+    const outcome = patchTask(tasks, id, safePatch, undefined, { allowBoardOverflow: true });
     if (!outcome.ok) throw new Error(outcome.error);
     return { tasks: outcome.tasks, result: undefined };
   }, statePath("tasks.json"));
@@ -192,10 +186,11 @@ export async function reconcileBoardMaintenance(project: string, ports: BoardMai
   if (observed.conversationId) run = patchMaintenanceRun(run.runId, { conversationId: observed.conversationId, launchId: observed.launchId ?? run.launchId, transcriptPath: observed.path ?? run.transcriptPath })!;
   if (observed.state === "failed") settle(run, { state: "failed", failure: observed.failure ?? { kind: "launch-failed", detail: "launch failed" } }, ports);
   else if (observed.state === "ended") {
-    if (observed.turnError && !observed.finalText) settle(run, { state: "failed", failure: { kind: "turn-error", detail: observed.turnError } }, ports);
+    if (observed.turnError) settle(run, { state: "failed", failure: { kind: "turn-error", detail: observed.turnError } }, ports);
     else {
       const parsed = parseMaintenanceReport(observed.finalText ?? "");
-      settle(run, { state: parsed.verdict === "fail" ? "failed" : "succeeded", log: { ...run.log, ...parsed }, failure: parsed.verdict === "fail" ? { kind: "agent-fail", detail: (observed.finalText ?? "").slice(-300) } : null }, ports);
+      const failureKind = parsed.verdict === "fail" ? "agent-fail" : parsed.verdict === "needs_decision" ? "needs-decision" : null;
+      settle(run, { state: failureKind ? "failed" : "succeeded", log: { ...run.log, ...parsed }, failure: failureKind ? { kind: failureKind, detail: (observed.finalText ?? "").slice(-300) || "The run cannot continue without an operator decision." } : null }, ports);
     }
   } else if (ports.sources.now() - Date.parse(run.launchedAt ?? run.claimedAt) > MAINTENANCE_RUN_TIMEOUT_MS) settle(run, { state: "failed", failure: { kind: "timed-out", detail: "maintenance turn exceeded 90 minutes" } }, ports);
   else if (run.state === "launching" && !observed.conversationId && !run.conversationId) return launchRun(run, ports);

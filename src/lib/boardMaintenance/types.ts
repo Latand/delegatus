@@ -6,7 +6,7 @@ export const MAINTENANCE_LAUNCH_TIMEOUT_MS = 30_000;
 export const MAINTENANCE_LAUNCH_GRACE_MS = 15 * 60_000;
 export const MAINTENANCE_RUN_TIMEOUT_MS = 90 * 60_000;
 export type MaintenanceRunState = "claimed" | "launching" | "running" | "succeeded" | "failed";
-export type MaintenanceFailureKind = "no-account" | "no-repository" | "launch-refused" | "launch-failed" | "host-died" | "turn-error" | "agent-fail" | "timed-out";
+export type MaintenanceFailureKind = "no-account" | "no-repository" | "launch-refused" | "launch-failed" | "host-died" | "turn-error" | "agent-fail" | "needs-decision" | "timed-out";
 export interface MaintenanceChange {
   at: string;
   taskId: string;
