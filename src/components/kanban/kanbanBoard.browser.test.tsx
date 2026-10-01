@@ -14234,6 +14234,35 @@ describe("task motion and waiting reasons", () => {
           expect(await waiting.textContent()).toContain(translate(locale, "kanban.hold.worker"));
           expect(await page.locator(`${selector("motion-operator")} [data-motion="needs-you"]`).textContent()).toContain(translate(locale, "kanban.hold.operator", { note: locale === "en" ? "Choose a release to publish" : "Оберіть реліз для публікації" }));
           expect(await page.locator(selector("motion-hidden")).count()).toBe(0);
+          const stepLine = page.locator(`${selector("motion-checklist")} [data-task-steps]`);
+          await stepLine.waitFor();
+          const stepText = (await stepLine.textContent()) ?? "";
+          expect(stepText).toContain(locale === "en" ? "5 of 8 done" : "Виконано 5 з 8");
+          expect(stepText).toContain(locale === "en" ? "3 queued: After another task finishes" : "3 у черзі: Коли завершиться інша задача");
+          expect(await page.locator("[data-task-steps]").count()).toBe(1);
+          const stepBounds = await stepLine.evaluate((el) => {
+            const rect = el.getBoundingClientRect();
+            return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth };
+          });
+          expect(stepBounds.left).toBeGreaterThanOrEqual(0);
+          expect(stepBounds.right).toBeLessThanOrEqual(width + 1);
+          expect(stepBounds.bottom).toBeLessThanOrEqual(844);
+          expect(stepBounds.scrollWidth).toBeLessThanOrEqual(stepBounds.clientWidth + 1);
+          if (!phone) {
+            const queuedFilter = page.locator('[data-reason-filter="queued"]');
+            await queuedFilter.waitFor();
+            expect(await page.locator('[data-reason-filter="no-reason"]').count()).toBe(1);
+            const beforeCount = await page.locator('[data-column-no-reason]').getAttribute('data-column-no-reason');
+            await queuedFilter.click();
+            expect(await page.locator('[data-id^="task:"]').count()).toBeGreaterThan(0);
+            expect(await page.locator('[data-id^="task:"]').evaluateAll(cards => cards.every(el => el.querySelector('[data-motion="waiting"]') !== null))).toBe(true);
+            expect(await page.locator('[data-column-no-reason]').getAttribute('data-column-no-reason')).toBe(beforeCount);
+            await queuedFilter.click();
+            const stoppedSummary = page.locator('[data-status="assigned"] [data-column-stopped]');
+            const bareSummary = page.locator('[data-status="blocked"] [data-column-no-reason]');
+            expect(Number(await stoppedSummary.getAttribute('data-column-stopped'))).toBeGreaterThan(0);
+            expect(Number(await bareSummary.getAttribute('data-column-no-reason'))).toBeGreaterThan(0);
+          }
           const lines = await page.locator(phone ? '[data-phone-kanban-column="blocked"] [data-motion]' : '[data-kanban-board] .card[data-id^="task:"] [data-motion]').evaluateAll(elements => elements.map(el => {
             const rect = el.getBoundingClientRect();
             return { motion: el.getAttribute("data-motion"), text: el.textContent, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth };

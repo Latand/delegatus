@@ -41,7 +41,7 @@ import { KanbanCard, resurfaceText, statusLabel, TASK_COLOR_HEX } from "./Kanban
 import { RemoteAgents, type RemoteAgentView } from "./RemoteAgents";
 import { remoteCardsFor, useRemoteFeed, type RemoteCard } from "./remoteFeed";
 import { MoreGlyph } from "./kanbanGlyphs";
-import { buildKanbanModel, KANBAN_STATUSES, type KanbanCard as KanbanCardModel, type KanbanModel } from "./kanbanModel";
+import { buildKanbanModel, KANBAN_STATUSES, taskReasonFiltersOfCard, type KanbanCard as KanbanCardModel, type KanbanModel, type TaskReasonFilter } from "./kanbanModel";
 import { KanbanMenu, KanbanPopover, useOverlay, type KanbanMenuItem } from "./kanbanMenus";
 import { WorkLinksPanel } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
@@ -298,6 +298,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const [barWrap, setBarWrap] = useState(false);
   const [tab, setTab] = useState<TaskStatus>("assigned");
   const [query, setQuery] = useState("");
+  const [reasonFilter, setReasonFilter] = useState<TaskReasonFilter | undefined>();
   const [linkQuery, setLinkQuery] = useState("");
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(EMPTY_SET);
   /* The other machines' agents and lanes. On the Overview the feed
@@ -383,8 +384,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
      waits, and a per-second clock would rebuild every card each tick. */
   const modelNow = Math.floor(props.now / 15) * 15;
   const model: KanbanModel = useMemo(
-    () => buildKanbanModel({ bands, tasks: effectiveTasks, pipelines, projection, files, flows: props.flows, statusOverrides: statuses, cardFilter: props.overview?.keep, seat: seatRefs, query, now: modelNow }),
-    [bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, props.overview?.keep, seatRefs, query, modelNow],
+    () => buildKanbanModel({ bands, tasks: effectiveTasks, pipelines, projection, files, flows: props.flows, statusOverrides: statuses, cardFilter: props.overview?.keep, reasonFilter, seat: seatRefs, query, now: modelNow }),
+    [bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, props.overview?.keep, reasonFilter, seatRefs, query, modelNow],
   );
   const cardsById = useMemo(() => {
     const map = new Map<string, KanbanCardModel>();
@@ -2336,7 +2337,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* The Overview narrows permanently, so its columns read «3 of 41» and an
      empty one says so, exactly as they do under a search. */
   const searching = query.trim().length > 0;
-  const filtering = searching || Boolean(props.overview);
+  const filtering = searching || Boolean(props.overview) || Boolean(reasonFilter);
   /* What an empty column says depends on WHICH narrowing emptied it: a search
      the operator typed is advice about the search, the Overview's permanent
      filter is not (#696 — a filtered-out board and a fruitless search must not
@@ -2567,6 +2568,23 @@ export function KanbanBoard(props: KanbanBoardProps) {
       />
     </label>
   );
+  const representedReasons = [...new Set(KANBAN_STATUSES.flatMap((status) => model.columns[status].cards.flatMap(taskReasonFiltersOfCard)))];
+  const reasonFilterControls = () => representedReasons.length ? (
+    <div className="reason-filters" role="group" aria-label={t("kanban.filterReasons")} data-reason-filters="">
+      {representedReasons.map((reason) => (
+        <button key={reason} type="button" className="reason-filter" data-reason-filter={reason} aria-pressed={reasonFilter === reason}
+          onClick={() => setReasonFilter((current) => current === reason ? undefined : reason)}>
+          {t(`kanban.filterReason.${reason}`)}
+        </button>
+      ))}
+    </div>
+  ) : null;
+  const searchTools = (group?: string) => (
+    <div className="bar-find" data-bar-group={group}>
+      {searchField()}
+      {reasonFilterControls()}
+    </div>
+  );
   /* Narrow, the project's pill is icon and count, the shape Tasks has (#1801), and its name moves to the tooltip. */
   const hiddenPill = (labelled: boolean) => (
     <button
@@ -2611,7 +2629,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
           {reachStatus}
           <span className="grow" />
           <div className="bar-tools">
-            {searchField()}
+            {searchTools()}
             {hiddenPill(true)}
             {viewSwitch ? <span className="view-switch">{viewSwitch}</span> : null}
           </div>
@@ -2636,7 +2654,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
             )}
           </span>
           <span className="grow" />
-          {searchField("find")}
+          {searchTools("find")}
           <div className="bar-group" data-bar-group="view">
             {hiddenPill(barWide)}
             {viewSwitch ? <span className="bar-slot view-switch">{viewSwitch}</span> : null}
@@ -2968,6 +2986,8 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
         <span className="n num">{filtering ? t("kanban.columnCount", { shown: shown.length, total: column.cards.length }) : column.cards.length}</span>
         {column.working ? <span className="live num" data-count={column.working} title={t("kanban.columnWorking", { count: column.working })}><span className="ct">{t("kanban.columnWorking", { count: column.working })}</span></span> : null}
         {column.needsYou ? <span className="needs num" data-count={column.needsYou} title={t("kanban.columnNeeds", { count: column.needsYou })}><span className="ct">{t("kanban.columnNeeds", { count: column.needsYou })}</span></span> : null}
+        {status === "assigned" && column.stopped ? <span className="stopped num" data-column-stopped={column.stopped} title={t("kanban.columnStopped", { count: column.stopped })}>{t("kanban.columnStopped", { count: column.stopped })}</span> : null}
+        {status === "blocked" && column.noReason ? <span className="no-reason num" data-column-no-reason={column.noReason} title={t("kanban.columnNoReason", { count: column.noReason })}>{t("kanban.columnNoReason", { count: column.noReason })}</span> : null}
         <span className="spacer" />
         {widths && widths.wide === status ? (
           <button

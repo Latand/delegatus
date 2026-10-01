@@ -10,6 +10,7 @@ import { admissionSnapshot } from "./groupHide";
 import { readTaskColorInput } from "./colorRule";
 import { readTaskIconInput } from "./taskIcon";
 import { readTaskPriorityInput } from "./priority";
+import { readTaskSteps } from "./steps";
 import { assignmentAdmissionOrigin, assignmentIdentity, ensureTaskMembership, identityHeldBy, type MembershipIdentity } from "./membership";
 import { applyLineEdits, LINE_EDIT_KEYS, type LineEdits } from "@/lib/lineEdits";
 import { editStoredWorkLinks, normalizeWorkLinkInput, workLinkInputs, type NormalizedWorkLink, type StoredWorkLink, type WorkLinkKind, type WorkLinkVia } from "@/lib/forge/workLinks";
@@ -62,6 +63,7 @@ export interface CreateTaskInput {
   /** Agent-facing context, kept out of the human description (#1834). An
       absent or blank value creates a task with no details at all. */
   details?: unknown;
+  steps?: unknown;
   placement?: unknown;
   pos?: unknown;
   dueAt?: unknown;
@@ -95,6 +97,7 @@ export interface PatchTaskInput {
       empty string clears it. Omitted leaves it exactly as stored, so an update
       carrying only `details` never touches `text` and the reverse. */
   details?: unknown;
+  steps?: unknown;
   /** One-line edits to the stored `details` (#1845), applied in the order
       replaceLine, removeLine, appendLine against the value this write reads
       under the task store's lock, so a one-line change never resends the
@@ -378,6 +381,8 @@ export function createTask(
   const board = Object.hasOwn(input, "board") ? normalizeBoardVisibility(input.board) : undefined;
   if (board === null) return { ok: false, error: "invalid board visibility", status: 400, code: "TASK_INVALID_FIELD", field: "board" };
   const now = deps.now?.() ?? isoNow();
+  const steps = readTaskSteps(input.steps, now, deps.actor ?? "operator", deps.conversationId);
+  if (!steps.ok) return steps;
   /* The bound is on bands, so only a task that will occupy one is counted
      against it: a task created off the board joins the history, which has no
      cap, and no durable identity is ever refused to keep a display small.
@@ -395,6 +400,7 @@ export function createTask(
     ...(hold ? { hold } : {}),
     text,
     ...(details.details ? { details: details.details } : {}),
+    ...(steps.steps ? { steps: steps.steps } : {}),
     placement,
     ...(placement === "pinned" && pos ? { pos } : {}),
     ...(due.dueAt ? { dueAt: due.dueAt, dueTz: due.dueTz } : {}),
@@ -528,6 +534,11 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   } else if (patch.status === "blocked" && !task.hold && !Object.hasOwn(input, "restoreHold")) {
     patch.hold = readTaskHold({ kind: "unstated" }, now, options.actor ?? "operator", undefined, options.conversationId);
   }
+  if (Object.hasOwn(input, "steps")) {
+    const steps = readTaskSteps(input.steps, now, options.actor ?? "operator", options.conversationId, task.steps);
+    if (!steps.ok) return steps;
+    patch.steps = steps.steps;
+  }
   // A move away from Waiting clears the old reason.
   if (patch.status && patch.status !== "blocked") patch.hold = undefined;
   if (Object.hasOwn(input, "pos")) {
@@ -644,6 +655,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   if (updated.placement === "unplaced") delete updated.pos;
   if (Object.hasOwn(patch, "hold") && patch.hold === undefined) delete updated.hold;
   if (Object.hasOwn(patch, "details") && patch.details === undefined) delete updated.details;
+  if (Object.hasOwn(patch, "steps") && patch.steps === undefined) delete updated.steps;
   if (Object.hasOwn(patch, "color") && patch.color === undefined) delete updated.color;
   if (Object.hasOwn(patch, "icon") && patch.icon === undefined) delete updated.icon;
   if (Object.hasOwn(patch, "priority") && patch.priority === undefined) delete updated.priority;

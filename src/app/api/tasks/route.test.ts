@@ -90,3 +90,23 @@ test("REST creates, patches, lists and undoes a hold without changing another hi
   expect(rows.find(row => row.id === hidden.id)?.hold).toBeUndefined();
   expect(rows.find(row => row.id === hidden.id)?.groupHidden).toEqual(hidden.groupHidden);
 });
+
+test("REST round-trips the 5-of-8 checklist through create, patch and list", async () => {
+  const { PATCH } = await import("./[id]/route");
+  const steps = [
+    ...Array.from({ length: 5 }, (_, index) => ({ id: `fixed-${index + 1}`, text: `Fixed cause ${index + 1}`, state: "done" })),
+    ...Array.from({ length: 3 }, (_, index) => ({ id: `open-${index + 1}`, text: `Remaining cause ${index + 1}`, state: "open", hold: { kind: "worker", note: "When capacity is free" } })),
+  ];
+  const createdResponse = await route.POST(new NextRequest("http://localhost/api/tasks", { method: "POST", headers: { "content-type": "application/json", host: "localhost" }, body: JSON.stringify({ project: "motion-fixture", text: "Resolve the audit", placement: "unplaced", steps }) }));
+  expect(createdResponse.status).toBe(200);
+  const created = (await createdResponse.json()).task as BoardTask & { revision: string };
+  expect(created.steps).toHaveLength(8);
+  const patchedResponse = await PATCH(new NextRequest("http://localhost/api/tasks", { method: "PATCH", headers: { "content-type": "application/json", host: "localhost" }, body: JSON.stringify({ steps, expectedProject: created.project, expectedRevision: created.revision }) }), { params: Promise.resolve({ id: created.id }) });
+  expect(patchedResponse.status).toBe(200);
+  const patched = (await patchedResponse.json()).task as BoardTask;
+  expect(patched.steps).toHaveLength(8);
+  expect(patched.steps?.[0]).toMatchObject({ id: "fixed-1", state: "done" });
+  expect(patched.steps?.[5]).toMatchObject({ id: "open-1", state: "open", hold: { kind: "worker", note: "When capacity is free", by: "operator" } });
+  const listed = await route.GET(new NextRequest("http://localhost/api/tasks"));
+  expect(((await listed.json()).tasks as BoardTask[]).find(row => row.id === created.id)?.steps).toEqual(patched.steps);
+});

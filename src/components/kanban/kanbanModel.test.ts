@@ -8,7 +8,7 @@ import { buildSchemeLayout, type SchemeLayout } from "@/components/scheme/layout
 import { buildTaskBands } from "@/components/scheme/taskBands";
 import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
 
-import { buildKanbanModel, cardHasLiveWork, KANBAN_STATUSES, summarizePipeline, workingStageConversations } from "./kanbanModel";
+import { buildKanbanModel, cardHasLiveWork, KANBAN_STATUSES, summarizePipeline, taskReasonFiltersOfCard, workingStageConversations } from "./kanbanModel";
 import { pipelineProgress } from "./PipelineSection";
 import { translate, type TFunction } from "@/lib/i18n";
 
@@ -75,11 +75,11 @@ function layout(files: readonly FileEntry[]): SchemeLayout {
   } as unknown as SchemeLayout;
 }
 
-function model(tasks: readonly BoardTask[], files: readonly FileEntry[], options: { pipelines?: Pipeline[]; query?: string; overrides?: Map<string, TaskStatus> } = {}) {
+function model(tasks: readonly BoardTask[], files: readonly FileEntry[], options: { pipelines?: Pipeline[]; query?: string; overrides?: Map<string, TaskStatus>; reasonFilter?: "needs-you" | "queued" | "waiting" | "postponed" | "no-reason" } = {}) {
   const pipelines = options.pipelines ?? [];
   const projection = projectTaskWorkflows([...tasks], pipelines, [], [...files]);
   const bands = buildTaskBands(layout(files), { tasks, projection, untitled: "Untitled task", deferDoneVisibility: true });
-  return buildKanbanModel({ bands, tasks, pipelines, projection, files, query: options.query, statusOverrides: options.overrides, now: NOW });
+  return buildKanbanModel({ bands, tasks, pipelines, projection, files, query: options.query, reasonFilter: options.reasonFilter, statusOverrides: options.overrides, now: NOW });
 }
 
 test("every stored task is a card in exactly one column or counted off the board, at a thousand tasks", () => {
@@ -1102,4 +1102,41 @@ test("holds and provisioning use one motion in cards, headers and the Overview f
   const live = [...board.columns.assigned.cards, ...board.columns.blocked.cards].filter(cardHasLiveWork);
   expect(live.map(card => card.task!.id).sort()).toEqual(["t901", "t902"]);
   expect(board.columns.blocked.cards.find(card => card.task!.id === "t903")?.motion.key).toBe("waiting");
+});
+
+test("reason filters expose represented categories and narrow cards without changing counts", () => {
+  const since = "2026-10-02T09:00:00.000Z";
+  const cards = [
+    task("queued-reason", "blocked", [], { hold: { kind: "worker", note: "After capacity frees", since, by: "operator" } }),
+    task("waiting-reason", "blocked", [], { hold: { kind: "pr", ref: "123", note: "After merge", since, by: "operator" } }),
+    task("postponed-reason", "blocked", [], { hold: { kind: "postponed", note: "After checks", since, until: "2026-10-04T09:00:00.000Z", by: "operator" } }),
+    task("bare-reason", "blocked"),
+    task("operator-reason", "blocked", [], { hold: { kind: "operator", note: "Choose a plan", since, by: "operator" } }),
+  ];
+  const all = model(cards, []);
+  expect(new Set(all.columns.blocked.cards.flatMap(card => taskReasonFiltersOfCard(card))).size).toBe(5);
+  expect(all.columns.blocked.noReason).toBe(1);
+  const narrowed = model(cards, [], { reasonFilter: "queued" });
+  expect(narrowed.columns.blocked.shown.map(card => card.task?.id)).toEqual(["queued-reason"]);
+  expect(narrowed.columns.blocked.cards).toHaveLength(5);
+  expect(narrowed.columns.blocked.noReason).toBe(all.columns.blocked.noReason);
+});
+
+test("step pipeline references derive motion and group the remaining reasons", () => {
+  const held = { kind: "worker" as const, note: "When capacity is free", since: "2026-10-02T09:00:00.000Z", by: "agent" as const };
+  const t = task("step-task", "assigned", [], { steps: [
+    { id: "done", text: "Fixed cause", state: "done" },
+    { id: "live", text: "Ship fix", state: "open", ref: "step-lane" },
+    { id: "queued", text: "Remaining cause", state: "open", hold: held },
+  ] });
+  const lane = buildingLane("step-lane", t.id, { startedAt: "2026-10-02T09:00:00.000Z" });
+  const card = model([t], [], { pipelines: [lane] }).columns.assigned.cards[0]!;
+  expect(card.motion.key).toBe("working");
+  expect(card.stepSummary).toMatchObject({ done: 1, total: 3, open: 2, reasons: [{ kind: "queued", note: "When capacity is free", count: 1 }, { kind: "stopped", count: 1 }] });
+  const pausedTask = task("paused-step-task", "assigned", [], { steps: [{ id: "pause", text: "Wait for review", state: "open", ref: "paused-step-lane" }] });
+  const paused = buildingLane("paused-step-lane", pausedTask.id);
+  paused.state = "paused";
+  paused.pausedAt = "2026-10-02T09:30:00.000Z";
+  const pausedCard = model([pausedTask], [], { pipelines: [paused] }).columns.assigned.cards[0]!;
+  expect(pausedCard.motion).toMatchObject({ key: "waiting", reason: "paused", since: paused.pausedAt });
 });

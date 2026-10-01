@@ -10,7 +10,7 @@ import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { GroupResurfaceReason } from "@/lib/tasks/groupHide";
 import type { TaskColor, TaskStatus, TaskHold } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
-import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
+import { workLinkUrl, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { EngineMark } from "@/components/EngineMark";
 import { cleanTitle, fmtAge } from "@/components/utils";
 import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
@@ -26,6 +26,7 @@ import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLi
 
 import { TaskHoldEditor } from "./TaskHoldEditor";
 import { TaskMotionLine } from "./TaskMotionLine";
+import { TaskStepsLine } from "./TaskStepsLine";
 import { isSeatTickNotice, requestSeatTickPanel } from "@/components/orchestrator/openSeatTick";
 import { useSeatSignal } from "./kanbanSeatStore";
 import { CardInlineText, withinEdit, type CardEditField } from "./CardInlineText";
@@ -633,8 +634,12 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       <TaskMotionLine motion={card.motion} working={card.working} nowMs={nowMs}
         taskTitle={card.holdTarget ? `${card.holdTarget.title}${card.holdTarget.done ? ` (${statusLabel(t, "done")})` : ""}` : undefined}
         onOpenTask={card.holdTarget && card.task?.hold?.ref ? () => props.onFocusCard(`task:${card.task!.hold!.ref}`) : undefined}
-        referenceUrl={card.task?.hold && ["pr", "issue"].includes(card.task.hold.kind) ? taskLinks?.links.find(link => String(link.number) === card.task!.hold!.ref && link.kind === card.task!.hold!.kind)?.url : null}
+        referenceUrl={card.task?.hold && ["pr", "issue"].includes(card.task.hold.kind)
+          ? taskLinks?.links.find(link => String(link.number) === card.task!.hold!.ref && link.kind === card.task!.hold!.kind)?.url
+            ?? (taskLinks?.repository && /^\d+$/.test(card.task.hold.ref ?? "") ? workLinkUrl(taskLinks.repository, Number(card.task.hold.ref), card.task.hold.kind as "pr" | "issue") : null)
+          : null}
       />
+      <TaskStepsLine summary={card.stepSummary} />
       {props.holdEditing && props.onSaveHold && props.onCancelHold ? <TaskHoldEditor hold={card.task?.hold} onSave={hold => props.onSaveHold?.(card, hold)} onCancel={props.onCancelHold} /> : null}
       {/* Slot reserved for the needs-you question from the sibling card lane. */}
       {card.titlePending && editing?.field !== "title" ? <p className="pending-line">{t("kanban.namePending")}</p> : null}

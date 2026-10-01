@@ -159,7 +159,7 @@ function liveReasons(card: KanbanCard, closing: ReadonlySet<string>): NeedReason
 
 /** Whether the card needs the operator, as the ⚠ queue reads it. */
 function cardNeeds(card: KanbanCard, closing: ReadonlySet<string>): boolean {
-  return card.task?.hold?.kind === "operator" || liveReasons(card, closing).length > 0;
+  return (typeof card.motion.reason === "object" && card.motion.reason?.kind === "operator") || liveReasons(card, closing).length > 0;
 }
 
 /** Where a reason stands in the attention queue, or Infinity when the queue

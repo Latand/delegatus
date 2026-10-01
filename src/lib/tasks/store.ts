@@ -25,6 +25,7 @@ import { tombstoneCollection, tombstoneRowKey, type TombstoneRow } from "@/lib/l
 
 import { snapshotTasks, stampTaskRevisions, taskFingerprint, taskRevision } from "./revision";
 import { storedTaskHold } from "./hold";
+import { storedTaskSteps } from "./steps";
 import { isTaskAttachment } from "./attachments";
 import { withTaskCompletion } from "./completion";
 import type { RecentCreate } from "./commands";
@@ -187,6 +188,7 @@ function coerceTask(value: unknown): BoardTask | null {
   if (!structural) return null;
 
   const hasPos = isFinitePos(raw.pos);
+  const steps = storedTaskSteps(raw.steps);
   const placement: TaskPlacement = isPlacement(raw.placement) ? raw.placement : hasPos ? "pinned" : "unplaced";
   const pinned = placement === "pinned" && hasPos;
   const task: BoardTask = {
@@ -195,6 +197,7 @@ function coerceTask(value: unknown): BoardTask | null {
     project: canonicalProject(raw.project!),
     status: raw.status!,
     hold: storedTaskHold(raw.hold),
+    ...(steps ? { steps } : {}),
     text: raw.text!,
     ...(raw.details !== undefined ? { details: raw.details } : {}),
     placement: placement === "pinned" && !hasPos ? "unplaced" : placement,

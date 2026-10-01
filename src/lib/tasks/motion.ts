@@ -16,6 +16,7 @@ export interface TaskMotionFacts {
   working: number;
   inFlight: boolean;
   pipelines: readonly { state: string; pausedAt?: string | null }[];
+  steps?: readonly { motion: "needs-you" | "working" | "waiting" | "stopped" | "done"; open: boolean; hold?: TaskHold; since?: string }[];
 }
 
 /** First live evidence, then declared intent. All surfaces use this projection;
@@ -26,9 +27,17 @@ export function taskMotion(facts: TaskMotionFacts, nowMs: number): TaskMotion {
     key, reason, since: typeof reason === "object" ? reason?.since ?? null : null,
     holdStillSet: key === "working" && Boolean(hold), due,
   });
-  if (facts.needsYou || hold?.kind === "operator") return result("needs-you", hold?.kind === "operator" ? hold : null);
-  if (facts.working > 0 || facts.inFlight || facts.pipelines.some(p => p.state === "provisioning")) return result("working");
+  if (facts.needsYou || hold?.kind === "operator" || facts.steps?.some(step => step.motion === "needs-you")) return result("needs-you", hold?.kind === "operator" ? hold : null);
+  if (facts.working > 0 || facts.inFlight || facts.pipelines.some(p => p.state === "provisioning") || facts.steps?.some(step => step.motion === "working")) return result("working");
   if (facts.status === "done") return result("done");
+  const openStep = facts.steps?.find(step => step.open && step.hold);
+  if (openStep?.hold) {
+    const due = openStep.hold.kind === "postponed" && Boolean(openStep.hold.until) && Date.parse(openStep.hold.until!) <= nowMs;
+    return result(openStep.hold.kind === "unstated" || due ? "stopped" : "waiting", openStep.hold, due);
+  }
+  const pausedStep = facts.steps?.find(step => step.open && !step.hold && step.motion === "waiting");
+  if (pausedStep) return { ...result("waiting", "paused"), since: pausedStep.since ?? null };
+  if (facts.steps?.some(step => step.open)) return result("stopped");
   if (hold) {
     const due = hold.kind === "postponed" && Boolean(hold.until) && Date.parse(hold.until!) <= nowMs;
     return result(hold.kind === "unstated" || due ? "stopped" : "waiting", hold, due);

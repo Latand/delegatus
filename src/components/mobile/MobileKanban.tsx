@@ -13,6 +13,7 @@ import { ChevronRight } from "@/components/icons";
 import { KANBAN_STATUSES, type KanbanCard as KanbanCardModel } from "@/components/kanban/kanbanModel";
 import { subjectOf } from "@/components/kanban/cardDismissal";
 import { TaskMotionLine } from "@/components/kanban/TaskMotionLine";
+import { TaskStepsLine } from "@/components/kanban/TaskStepsLine";
 import { statusLabel, TASK_COLOR_HEX } from "@/components/kanban/KanbanCard";
 import { RemoteAgents, type RemoteAgentView } from "@/components/kanban/RemoteAgents";
 import { useManagedOnText } from "@/components/kanban/RemoteLanes";
@@ -460,6 +461,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
         <NeedBadge item={item} />
       </span>
       <TaskMotionLine motion={card.motion} working={card.working} nowMs={nowMs} plain taskTitle={card.holdTarget?.title} />
+      <TaskStepsLine summary={card.stepSummary} />
       {/* The needs-you question has its own slot below motion. */}
       {item.shown && !loose ? (
         <PipelineBlock summary={item.shown} density="card" nowMs={nowMs} taskTitle={item.kind === "task" ? title : null} aside={othersText(t, item)} />

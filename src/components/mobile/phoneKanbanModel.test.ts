@@ -92,11 +92,11 @@ function layout(files: readonly FileEntry[]): SchemeLayout {
   } as unknown as SchemeLayout;
 }
 
-function desktop(tasks: readonly BoardTask[], files: readonly FileEntry[], options: { pipelines?: Pipeline[]; seat?: SeatRefs | null; cardFilter?: typeof cardHasLiveWork } = {}) {
+function desktop(tasks: readonly BoardTask[], files: readonly FileEntry[], options: { pipelines?: Pipeline[]; seat?: SeatRefs | null; cardFilter?: typeof cardHasLiveWork; overrides?: ReadonlyMap<string, TaskStatus> } = {}) {
   const pipelines = options.pipelines ?? [];
   const projection = projectTaskWorkflows([...tasks], pipelines, [], [...files], "fixture");
   const bands = buildTaskBands(layout(files), { tasks, projection, untitled: "Untitled task" });
-  return buildKanbanModel({ bands, tasks, pipelines, projection, files, seat: options.seat ?? null, cardFilter: options.cardFilter, now: NOW });
+  return buildKanbanModel({ bands, tasks, pipelines, projection, files, seat: options.seat ?? null, cardFilter: options.cardFilter, statusOverrides: options.overrides, now: NOW });
 }
 
 const keys = (items: readonly PhoneCard[]) => items.map((item) => item.card.task?.id ?? item.key);
@@ -425,4 +425,13 @@ test("an operator hold is pinned and counted like the desktop needs-you motion",
   expect(phone.columns.blocked.needsYou).toBe(1);
   expect(phone.columns.blocked.pinned[0]?.card.motion.key).toBe("needs-you");
   expect(phone.columns.blocked.pinned[0]?.edge).toBe("warning");
+});
+
+test("a pending move away from an operator hold uses the shared stopped motion", () => {
+  const held = task("optimistic-hold", "blocked", [], { hold: { kind: "operator", note: "Choose the release", since: "2026-10-02T09:00:00.000Z", by: "operator" } });
+  const model = desktop([held], [], { overrides: new Map([[held.id, "assigned"]]) });
+  const phone = buildPhoneKanban({ model, now: NOW });
+  expect(model.columns.assigned.cards[0]?.motion.key).toBe("stopped");
+  expect(phone.columns.assigned.needsYou).toBe(0);
+  expect(phone.columns.assigned.cards[0]?.card.motion.key).toBe("stopped");
 });

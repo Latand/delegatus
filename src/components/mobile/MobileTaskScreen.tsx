@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { EngineMark } from "@/components/EngineMark";
 import { ChevronRight } from "@/components/icons";
 import { TaskMotionLine } from "@/components/kanban/TaskMotionLine";
+import { TaskStepsLine } from "@/components/kanban/TaskStepsLine";
 import { TaskHoldEditor } from "@/components/kanban/TaskHoldEditor";
 import { TASK_COLOR_HEX } from "@/components/kanban/KanbanCard";
 import { dismissUnstartedLaunch, dismissUnstartedLaunches } from "@/components/kanban/kanbanAssignments";
@@ -28,7 +29,7 @@ import { fileModelLabel } from "@/components/utils";
 import { WorkLinkRow, WorkLinksPanel } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
 import { formatConversationHash } from "@/lib/accounts/identity";
-import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
+import { workLinkUrl, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { TASK_COLORS, TASK_PRIORITIES, taskPriority, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus, type TaskHold } from "@/lib/tasks/types";
@@ -1029,7 +1030,16 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                   {title}
                 </button></h1>
               )}
-              {card ? <TaskMotionLine motion={card.motion} working={card.working} nowMs={now * 1000} taskTitle={card.holdTarget?.title} /> : null}
+              {card ? <>
+                <TaskMotionLine motion={card.motion} working={card.working} nowMs={now * 1000} taskTitle={card.holdTarget?.title}
+                  onOpenTask={task?.hold?.kind === "task" && task.hold.ref ? () => nav.push({ kind: "task", id: task.hold!.ref! }) : undefined}
+                  referenceUrl={task?.hold && ["pr", "issue"].includes(task.hold.kind)
+                    ? taskLinks?.links.find(link => String(link.number) === task.hold!.ref && link.kind === task.hold!.kind)?.url
+                      ?? (taskLinks?.repository && /^\d+$/.test(task.hold.ref ?? "") ? workLinkUrl(taskLinks.repository, Number(task.hold.ref), task.hold.kind as "pr" | "issue") : null)
+                    : null}
+                />
+                <TaskStepsLine summary={card.stepSummary} />
+              </> : null}
               {/* Slot for the needs-you question below the motion line. */}
               {finishWaits ? (
                 /* #2187 §5.3: the move to Done waits on other open pipelines. */

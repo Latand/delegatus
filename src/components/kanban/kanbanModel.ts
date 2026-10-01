@@ -5,6 +5,7 @@ import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { groupHideState, isSeatConversation, seatAssignment, seatOnlyTask, type GroupHideState, type GroupResurfaceReason, type SeatRefs } from "@/lib/tasks/groupHide";
 import { LAUNCH_NOT_STARTED_ERROR, TASK_COLORS, taskPriority, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus } from "@/lib/tasks/types";
 import { taskMotion, type TaskMotion } from "@/lib/tasks/motion";
+import { deriveTaskSteps, type TaskStepsSummary } from "@/lib/tasks/steps";
 import { priorityRank } from "@/lib/tasks/priority";
 import type { FileEntry } from "@/lib/types";
 import { byNeedAge, conversationNeed, laneNeed, type ClearedNeed, type NeedReason } from "@/components/attention/needReason";
@@ -109,6 +110,7 @@ export interface KanbanCard {
   pipelines: KanbanPipeline[];
   holdTarget?: { title: string; done: boolean };
   motion: TaskMotion;
+  stepSummary: TaskStepsSummary | null;
   working: number;
   /** Something on the card needs the operator: `reasons` is not empty. */
   needsYou: boolean;
@@ -193,6 +195,32 @@ export interface KanbanColumn {
   shown: KanbanCard[];
   working: number;
   needsYou: number;
+  stopped: number;
+  noReason: number;
+}
+
+export type TaskReasonFilter = "needs-you" | "queued" | "waiting" | "postponed" | "no-reason";
+
+export function taskReasonFiltersOfCard(card: KanbanCard): TaskReasonFilter[] {
+  const reason = typeof card.motion.reason === "object" ? card.motion.reason : null;
+  const filters = new Set<TaskReasonFilter>();
+  if (card.motion.key === "needs-you") filters.add("needs-you");
+  if (reason?.kind === "worker" || reason?.kind === "resource" || reason?.kind === "limit") filters.add("queued");
+  if (reason?.kind === "postponed") filters.add("postponed");
+  if (card.motion.key === "waiting" && reason?.kind !== "postponed" && !["worker", "resource", "limit"].includes(reason?.kind ?? "")) filters.add("waiting");
+  if (card.motion.key === "stopped") filters.add("no-reason");
+  for (const stepReason of card.stepSummary?.reasons ?? []) {
+    if (stepReason.kind === "queued") filters.add("queued");
+    else if (stepReason.kind === "waiting") filters.add("waiting");
+    else if (stepReason.kind === "postponed") filters.add("postponed");
+    else filters.add("no-reason");
+  }
+  return [...filters];
+}
+
+function matchesReasonFilter(card: KanbanCard, filter: TaskReasonFilter | undefined): boolean {
+  if (!filter) return true;
+  return taskReasonFiltersOfCard(card).includes(filter);
 }
 
 export interface KanbanModel {
@@ -236,6 +264,7 @@ export interface KanbanModelInput {
       count is still taken over the whole inventory, exactly as with search.
       The Overview passes `cardHasLiveWork` (#1820). */
   cardFilter?: (card: KanbanCard) => boolean;
+  reasonFilter?: TaskReasonFilter;
   /** The project's orchestrator seat as the board last read it; null or absent
       while it is unknown. With its `previous` seats, every conversation the
       seat record names leaves the bands (#1841). */
@@ -358,7 +387,7 @@ export function cardHasLiveWork(card: KanbanCard): boolean {
 }
 
 export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
-  const { bands, tasks, pipelines, projection, statusOverrides, cardFilter, now } = input;
+  const { bands, tasks, pipelines, projection, statusOverrides, cardFilter, reasonFilter, now } = input;
   const knownConversations = new Set<string>();
   const workByIdentity = new Map<string, number>();
   for (const file of input.files ?? []) {
@@ -611,6 +640,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       members: members.map((member) => member.file), pipelines,
     })) return [];
     const holdTarget = task?.hold?.kind === "task" ? tasksById.get(task.hold.ref ?? "") : undefined;
+    const stepProjection = deriveTaskSteps(task?.steps, summaries.map(summary => summary.pipeline), now * 1000);
     const color = task?.color && (TASK_COLORS as readonly string[]).includes(task.color) ? task.color : null;
     /* A placeholder no agent will name any more borrows its conversation's
        title rather than staying «Untitled task» for good. */
@@ -663,9 +693,11 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       otherSurfaces,
       drafts,
       pipelines: summaries,
+      stepSummary: stepProjection.summary,
       ...(holdTarget ? { holdTarget: { title: holdTarget.text.split("\n")[0]!, done: holdTarget.status === "done" } } : {}),
       motion: taskMotion({ status, hold: overridden && overridden !== "blocked" ? undefined : task?.hold, needsYou, working,
-        inFlight: inFlight.length > 0, pipelines: summaries.map(summary => summary.pipeline) }, now * 1000),
+        inFlight: inFlight.length > 0, pipelines: summaries.map(summary => summary.pipeline),
+        steps: stepProjection.steps.map(step => ({ motion: step.motion, open: step.effectiveState === "open", hold: step.hold, since: step.since })) }, now * 1000),
       working,
       needsYou,
       reasons,
@@ -679,7 +711,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
         ...[...identities].map(id => workByIdentity.get(id) ?? 0),
         ...summaries.map(summary => pipelineWorkAt(summary.pipeline))),
       workingSinceMs,
-      searchText: [title, description, task?.hold?.note ?? "", task?.hold?.ref ?? "", ...members.map((member) => member.file.title ?? ""), ...summaries.map((summary) => summary.pipeline.task)]
+      searchText: [title, description, task?.hold?.note ?? "", task?.hold?.ref ?? "", ...(task?.steps ?? []).flatMap(step => [step.text, step.hold?.note ?? "", step.ref ?? ""]), ...members.map((member) => member.file.title ?? ""), ...summaries.map((summary) => summary.pipeline.task)]
         .join("\n")
         .toLowerCase(),
       color,
@@ -694,7 +726,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
   /* Search and the Overview's predicate narrow the same way and in the same
      place: what they reject leaves `shown`, and every count above is already
      taken over the whole inventory. */
-  const keeps = (card: KanbanCard) => cardMatches(card, query) && (!cardFilter || cardFilter(card));
+  const keeps = (card: KanbanCard) => cardMatches(card, query) && matchesReasonFilter(card, reasonFilter) && (!cardFilter || cardFilter(card));
   const hiddenGroups = cards
     .filter((card) => card.task && card.hide.hidden)
     .sort((a, b) => (b.hide.hidden ? Date.parse(b.hide.since) || 0 : 0) - (a.hide.hidden ? Date.parse(a.hide.since) || 0 : 0));
@@ -709,6 +741,8 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       shown: inColumn.filter((card) => keeps(card)),
       working: inColumn.filter(card => card.motion.key === "working").length,
       needsYou: inColumn.filter((card) => card.motion.key === "needs-you").length,
+      stopped: inColumn.filter((card) => card.motion.key === "stopped").length,
+      noReason: inColumn.filter((card) => card.motion.key === "stopped" && (!card.motion.reason || (typeof card.motion.reason === "object" && card.motion.reason.kind === "unstated"))).length,
     } satisfies KanbanColumn];
   })) as Record<TaskStatus, KanbanColumn>;
 
