@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { statePath } from "@/lib/configDir";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
 import { renderStagePrompt } from "./prompts";
@@ -15,6 +14,7 @@ export function composeStageInput(
   stage: PipelineStage,
   role: EffectivePipelineRole,
   previousOutput: string,
+  worktreeDir: string = pipeline.worktreeDir,
 ): string {
   const inline = renderStagePrompt(pipeline, stage, role, previousOutput);
   if (Buffer.byteLength(inline, "utf8") <= MAX_STRUCTURED_TEXT_BYTES) return inline;
@@ -23,7 +23,7 @@ export function composeStageInput(
   const artifacts: Array<{ label: string; file: string; text: string }> = [];
   const artifact = (label: string, text: string) => {
     const digest = crypto.createHash("sha256").update(text).digest("hex");
-    const file = path.resolve(statePath("pipeline-stage-inputs", `${label.replaceAll(" ", "-")}-${digest}.md`));
+    const file = path.resolve(worktreeDir, ".artifacts", "pipeline-stage-inputs", `${label.replaceAll(" ", "-")}-${digest}.md`);
     const part = { label, file, text };
     artifacts.push(part);
     return part;
@@ -75,4 +75,3 @@ function artifactReference(part: { label: string; file: string; text: string }, 
   while (end > 0 && end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end -= 1;
   return `Full ${part.label} file: ${part.file}\nRead the full file before working. Head excerpt:\n${bytes.subarray(0, end).toString("utf8")}\n[Excerpt ends; the file contains the full text.]`;
 }
-

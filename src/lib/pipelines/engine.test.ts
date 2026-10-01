@@ -1176,7 +1176,16 @@ async function create(ports: PipelinePorts, stages = RUN_STAGES as never, reques
   return lane;
 }
 
-test.each(["Build from {{prev.output}}", "Build the approved design"])("a 45 KB stage output launches its successor with a readable file (%s)", async (prompt) => {
+test.each([
+  { prompt: "Build from {{prev.output}}", access: "read-write", sandbox: "full" },
+  { prompt: "Build from {{prev.output}}", access: "read-write", sandbox: "restricted" },
+  { prompt: "Build from {{prev.output}}", access: "read-only", sandbox: "full" },
+  { prompt: "Build from {{prev.output}}", access: "read-only", sandbox: "restricted" },
+  { prompt: "Build the approved design", access: "read-write", sandbox: "full" },
+  { prompt: "Build the approved design", access: "read-write", sandbox: "restricted" },
+  { prompt: "Build the approved design", access: "read-only", sandbox: "full" },
+  { prompt: "Build the approved design", access: "read-only", sandbox: "restricted" },
+] as const)("a 45 KB output launches with an in-lane file for $access/$sandbox (%s)", async ({ prompt, access, sandbox }) => {
   const h = harness();
   const { assertStructuredTextEnvelope } = await import("@/lib/runtime/structuredContent");
   const spawnAgent = h.ports.spawnAgent;
@@ -1184,7 +1193,7 @@ test.each(["Build from {{prev.output}}", "Build the approved design"])("a 45 KB 
     assertStructuredTextEnvelope(input.prompt);
     return spawnAgent(input, reserved);
   };
-  await create(h.ports, [RUN_STAGES[0], { ...RUN_STAGES[1], prompt }] as never);
+  await create(h.ports, [RUN_STAGES[0], { ...RUN_STAGES[1], prompt, access, sandbox }] as never);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   const design = "Design head\n" + "d".repeat(45_000);
@@ -1196,6 +1205,7 @@ test.each(["Build from {{prev.output}}", "Build the approved design"])("a 45 KB 
   expect(loadPipelines()[0]!.state).toBe("running");
   expect(loadPipelines()[0]!.cursor?.state).toBe("running");
   expect(h.spawnInputs).toHaveLength(2);
+  expect(h.spawnInputs[1]!.runtimeProfile).toMatchObject({ access, sandbox });
   const delivered = h.spawnInputs[1]!.prompt;
   expect(Buffer.byteLength(delivered)).toBeLessThanOrEqual(32_000);
   expect(delivered).toContain("Design head");
@@ -1203,7 +1213,8 @@ test.each(["Build from {{prev.output}}", "Build the approved design"])("a 45 KB 
   expect(artifact).toBeDefined();
   expect(path.isAbsolute(artifact!)).toBe(true);
   expect(fs.readFileSync(artifact!, "utf8")).toBe(design);
-  expect(artifact!.startsWith(process.env.LLV_STATE_DIR! + path.sep)).toBe(true);
+  expect(artifact!.startsWith(path.join(h.spawnInputs[1]!.cwd, ".artifacts", "pipeline-stage-inputs") + path.sep)).toBe(true);
+  expect(artifact!.startsWith(path.join(process.env.LLV_STATE_DIR!, "pipeline-stage-inputs") + path.sep)).toBe(false);
 });
 
 test("an oversized expanded stage prompt parks before spawn with every part's byte size", async () => {

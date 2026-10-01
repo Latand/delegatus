@@ -9,6 +9,8 @@ import { buildPipeline } from "./store";
 import type { PipelineStage } from "./types";
 
 const artifactState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-inputs-"));
+const laneRoot = path.join(artifactState, "worktree");
+fs.mkdirSync(laneRoot);
 let priorState: string | undefined;
 beforeEach(() => {
   priorState = process.env.LLV_STATE_DIR;
@@ -25,6 +27,7 @@ function handoffFixture(prompt = "Build {{task}} from {{prev.output}}", spec = "
     effectiveRole: { roleId: "builder", engine: "codex", model: null, effort: "high", access: "read-write", promptScaffold: "Follow {{task}} and {{prev.output}}." } };
   const pipeline = buildPipeline({ id: "handoff", task: "the task", spec, project: "viewer", repoDir: "/repo",
     stages: [stage], srcPath: null, srcConversationId: null, now: "now" });
+  pipeline.worktreeDir = laneRoot;
   return { pipeline, stage };
 }
 
@@ -43,6 +46,11 @@ test("a large multibyte specification is file-backed after the previous output",
   expect(prompt).toContain("Specification head");
   expect(prompt).toContain("Previous head");
   expect(prompt).not.toContain("�");
+  for (const label of ["previous-output", "specification"]) {
+    const file = prompt.match(new RegExp(`Full ${label === "previous-output" ? "previous output" : label} file: (.+)\\n`))?.[1];
+    expect(file?.startsWith(path.join(laneRoot, ".artifacts", "pipeline-stage-inputs") + path.sep)).toBe(true);
+    expect(file?.startsWith(path.join(artifactState, "pipeline-stage-inputs") + path.sep)).toBe(false);
+  }
   expect(composeStageInput(pipeline, stage, stage.effectiveRole, previous)).toBe(prompt);
 });
 
@@ -87,4 +95,3 @@ test("a tight prompt shrinks the output excerpt before externalizing a small spe
   expect(rendered).toContain("AC: preserve the handoff");
   expect(rendered).not.toContain("Full specification file:");
 });
-

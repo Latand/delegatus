@@ -3870,6 +3870,7 @@ async function tickRunStage(
         bound,
         attempt.effectiveRole,
         attempt.activatedBy ? attempt.input ?? "" : attempt.input ?? normalizedOutput(pipeline),
+        pipeline.worktreeDir,
       );
       /* The retried attempt supersedes its predecessor's round (issue #383):
          the prior attempt of the SAME stage that carries a conversation. */
