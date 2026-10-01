@@ -4597,11 +4597,11 @@ export const PIPELINE_BASE_UNRESOLVED_DETAIL = "resolving the pipeline base and 
 interface PipelineProvisionOutcome {
   id: string;
   /** The identity the work was performed against. */
-  fence: { repoDir: string; worktreeDir: string; branch: string; baseBranch: string; baseRef: string; baseRefPinned: boolean; createdAt: string; lastPassedCommit: string; owner: string };
+  fence: { repoDir: string; worktreeDir: string; branch: string; baseBranch: string; baseRef: string; baseRefPinned: boolean | null; createdAt: string; lastPassedCommit: string; owner: string };
   /** The commit the fetch resolved, recorded even when the worktree then
       failed: a retry of a parked provisioning provisions the SAME commit the
       lane was parked on rather than whatever the base has moved to since. */
-  base: { baseBranch: string; baseRef: string } | null;
+  base: { baseBranch: string; baseRef: string; baseRefPinned: boolean } | null;
   /** The checked-out head can already contain commits on an existing delivery branch. */
   head: string | null;
   /** What stopped the lane, or null when it is provisioned. */
@@ -4619,20 +4619,27 @@ function provisionFence(pipeline: Pipeline): PipelineProvisionOutcome["fence"] {
     branch: pipeline.branch,
     baseBranch: pipeline.baseBranch,
     baseRef: pipeline.baseRef,
-    baseRefPinned: pipeline.baseRefPinned === true,
+    baseRefPinned: pipeline.baseRefPinned ?? null,
   };
 }
 
 async function provisionPipelineOutsideLease(pipeline: Pipeline, exec: ProvisionExecPort, signal: AbortSignal): Promise<PipelineProvisionOutcome> {
   const fence = provisionFence(pipeline);
-  let base = { baseBranch: pipeline.baseBranch, baseRef: pipeline.baseRef };
+  // Older initial provisioning records resolved only caller-supplied bases.
+  // Automatically resolved retries carry the failed checkout's status detail.
+  // The projection's publication overlay is not persisted status evidence.
+  const legacy = pipeline.baseRefPinned === undefined && pipeline.baseRef ? findPipelineRecord(pipeline.id) : null;
+  const baseRefPinned = pipeline.baseRefPinned ?? Boolean(legacy?.state === "provisioning"
+    && legacy.baseRef === pipeline.baseRef && legacy.stateDetail === null
+    && !legacy.provisioningWait && legacy.runs.every((run) => run.attempts.length === 0));
+  let base = { baseBranch: pipeline.baseBranch, baseRef: pipeline.baseRef, baseRefPinned };
   if (!base.baseBranch || !base.baseRef || !pipeline.lastPassedCommit) {
     /* The lane's OWN base branch, never a hardcoded default: the create path
        records what the caller asked for and resolves nothing, so this is the
        only place that reads it (#1799). */
     const resolved = await resolvePipelineBaseAsync(pipeline.repoDir, { baseBranch: pipeline.baseBranch }, exec, signal);
     if (!resolved.ok) return { id: pipeline.id, fence, base: null, head: null, error: resolved.error };
-    base = { baseBranch: resolved.baseBranch, baseRef: resolved.baseRef };
+    base = { baseBranch: resolved.baseBranch, baseRef: resolved.baseRef, baseRefPinned };
   }
   const provisioned = await provisionPipelineWorktreeAsync({ ...pipeline, ...base }, exec, signal);
   return { id: pipeline.id, fence, base, head: provisioned.ok ? provisioned.sha : null, error: provisioned.ok ? null : provisioned.error,
@@ -4736,6 +4743,7 @@ function applyProvisionOutcome(pipeline: Pipeline, outcome: PipelineProvisionOut
   if (outcome.base) {
     pipeline.baseBranch = outcome.base.baseBranch;
     pipeline.baseRef = outcome.base.baseRef;
+    pipeline.baseRefPinned = outcome.base.baseRefPinned;
     pipeline.lastPassedCommit = outcome.base.baseRef;
   }
   const preserved = outcome.preservedLocalRef;

@@ -229,7 +229,7 @@ for (const held of [false, true]) {
       expect(result).toMatchObject({ ok: true, sha: published,
         preservedLocalRef: { sha: unpublished, unpublishedCommits: 1 } });
       if (!result.ok || !result.preservedLocalRef) throw new Error("expected preservation evidence");
-      expect(result.preservedLocalRef.ref).toStartWith("refs/heads/backup/provision-unpublished/");
+      expect(result.preservedLocalRef.ref).toStartWith("refs/backup/provision-unpublished/");
       expect(git(repo, "rev-parse", result.preservedLocalRef.ref)).toBe(unpublished);
       expect(git(repo, "rev-parse", deliveryBranch)).toBe(unpublished);
       if (held) expect(git(closedDir, "rev-parse", "HEAD")).toBe(unpublished);
@@ -270,7 +270,7 @@ test("the same owner and epoch resumes its in-flight local publication after los
     savePipelines([subject]);
     expect(await provisionPipelineWorktreeAsync(subject, realProvisionExec)).toEqual({ ok: true, sha: local, baseBranch: "main" });
     expect(git(subject.worktreeDir, "rev-parse", "HEAD")).toBe(local);
-    expect(git(repo, "for-each-ref", "--format=%(refname)", "refs/heads/backup/provision-unpublished")).toBe("");
+    expect(git(repo, "for-each-ref", "--format=%(refname)", "refs/backup/provision-unpublished")).toBe("");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -310,6 +310,8 @@ test("a pin equal to the local delivery tip stays pinned when the remote has adv
     savePipelines([pinned]);
     expect(await provisionPipelineWorktreeAsync(pinned, realProvisionExec)).toEqual({ ok: true, sha: subject.baseRef, baseBranch: "main" });
     expect(git(subject.worktreeDir, "rev-parse", "HEAD")).toBe(subject.baseRef);
+    expect(await provisionPipelineWorktreeAsync(pinned, realProvisionExec)).toEqual({ ok: true, sha: subject.baseRef, baseBranch: "main" });
+    expect(git(subject.worktreeDir, "rev-parse", "HEAD")).toBe(subject.baseRef);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -321,6 +323,18 @@ test("the same owner's in-flight publication resumes on its lane ref after check
     savePipelines([subject]);
     expect(await provisionPipelineWorktreeAsync(subject, realProvisionExec)).toEqual({ ok: true, sha: local, baseBranch: "main" });
     expect(git(subject.worktreeDir, "branch", "--show-current")).toBe(subject.branch);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("an explicit pin from a separate history remains the provisioning base on retry", async () => {
+  const { root, repo, subject } = deliveryProvisionFixture();
+  try {
+    const baseRef = git(repo, "commit-tree", `${subject.baseRef}^{tree}`, "-m", "independent pinned base");
+    const pinned = { ...subject, baseRef, baseRefPinned: true };
+    savePipelines([pinned]);
+    expect(await provisionPipelineWorktreeAsync(pinned, realProvisionExec)).toMatchObject({ ok: true, sha: baseRef });
+    expect(await provisionPipelineWorktreeAsync(pinned, realProvisionExec)).toMatchObject({ ok: true, sha: baseRef });
+    expect(git(subject.worktreeDir, "rev-parse", "HEAD")).toBe(baseRef);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

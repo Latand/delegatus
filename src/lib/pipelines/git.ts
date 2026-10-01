@@ -225,6 +225,22 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
     }
   }
   const resumesLocal = (ownsCheckout && sameOwner) || resumesPublication;
+  const holdsInitialPin = pipeline.baseRefPinned && localSha === pipeline.baseRef;
+  const backupPrefix = `refs/backup/provision-unpublished/${pipeline.branch}/`;
+  if (legacy.code === 0 && resumesLocal) {
+    // A crash can leave a complete checkout before its outcome is persisted.
+    // The ref itself carries the lane and count needed to replay its evidence.
+    const backups = await exec("git", ["for-each-ref", "--format=%(refname) %(objectname)", backupPrefix], pipeline.repoDir, signal);
+    if (backups.code !== 0) return failure("recovering provisioning backup evidence", backups);
+    for (const record of backups.stdout.trim().split("\n")) {
+      const [ref, sha] = record.split(" ");
+      const match = ref?.startsWith(backupPrefix) ? ref.slice(backupPrefix.length).match(/^([1-9][0-9]*)-([0-9a-f]{40})$/) : null;
+      if (match && sha === match[2] && Number.isSafeInteger(Number(match[1]))) {
+        preservation.value = { ref, sha, unpublishedCommits: Number(match[1]) };
+        break;
+      }
+    }
+  }
   let remoteSha: string | null = null;
   if (deliveryBranch !== pipeline.branch && pipeline.delivery?.target.remote) {
     const remote = pipeline.delivery.target.remote;
@@ -241,7 +257,7 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
       if (localSha) {
         const localContainsRemote = await exec("git", ["merge-base", "--is-ancestor", remoteSha, localSha], pipeline.repoDir, signal);
         const remoteContainsLocal = await exec("git", ["merge-base", "--is-ancestor", localSha, remoteSha], pipeline.repoDir, signal);
-        if (resumesLocal && localContainsRemote.code !== 0 && remoteContainsLocal.code !== 0) {
+        if (resumesLocal && !holdsInitialPin && localContainsRemote.code !== 0 && remoteContainsLocal.code !== 0) {
           return { ok: false, error: `delivery branch ${branch} has divergent local and remote commits; merge or choose the preserved tip before starting the lane` };
         }
       }
@@ -258,7 +274,7 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
     if (unpublishedCommits > 0) {
       // Content-addressed and create-only: retries retain the same backup,
       // and no provisioning attempt can overwrite an earlier preserved tip.
-      const ref = `refs/heads/backup/provision-unpublished/${deliveryBranch}/${localSha}`;
+      const ref = `${backupPrefix}${unpublishedCommits}-${localSha}`;
       const backup = await exec("git", ["update-ref", ref, localSha, "0".repeat(40)], pipeline.repoDir, signal);
       if (backup.code !== 0) {
         const existing = await exec("git", ["rev-parse", "--verify", ref], pipeline.repoDir, signal);
@@ -321,7 +337,8 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
     if (tracked.code !== 0) return failure("checking pipeline worktree tracked files", tracked);
   }
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
-  if (resumesLocal && localSha && remoteSha && localSha !== remoteSha) {
+  if (resumesLocal && localSha && remoteSha && localSha !== remoteSha
+    && !holdsInitialPin) {
     const remoteContainsLocal = await exec("git", ["merge-base", "--is-ancestor", localSha, remoteSha], pipeline.worktreeDir, signal);
     if (remoteContainsLocal.code === 0) {
       const merged = await exec("git", ["merge", "--ff-only", "--no-overwrite-ignore", remoteSha], pipeline.worktreeDir, signal);

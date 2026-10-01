@@ -1467,6 +1467,7 @@ export function buildPipeline(input: {
     ...identity,
     baseBranch: "",
     baseRef: "",
+    baseRefPinned: false,
     lastPassedCommit: "",
     ...(input.publication ? { publication: input.publication } : {}),
     publishedCommit: null,

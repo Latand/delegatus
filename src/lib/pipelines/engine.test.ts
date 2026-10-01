@@ -1105,8 +1105,8 @@ test("a new owner reviews the commit published after the producer turn ends", as
   }
 });
 
-for (const pin of ["automatic", "explicit", "legacy-draft"] as const) {
-  const pinned = pin !== "automatic";
+for (const pin of ["automatic", "explicit", "legacy-draft", "legacy-provisioning", "legacy-auto-retry", "crash-before-apply"] as const) {
+  const pinned = pin === "explicit" || pin === "legacy-draft" || pin === "legacy-provisioning";
   test(`successor provisioning records its backup and respects the caller's base pin (${pin})`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provision-published-"));
     const repo = path.join(root, "repo");
@@ -1151,12 +1151,29 @@ for (const pin of ["automatic", "explicit", "legacy-draft"] as const) {
         savePipelines([legacy]);
         expect(await patchPipeline(legacy.id, { action: "start" }, h.ports)).toMatchObject({ pipeline: { state: "provisioning" } });
       }
+      if (pin === "legacy-provisioning" || pin === "legacy-auto-retry") {
+        const legacy = loadPipelines().find((item) => item.id === created.pipeline!.id)!;
+        delete legacy.baseRefPinned;
+        if (pin === "legacy-auto-retry") {
+          legacy.baseBranch = "main";
+          legacy.baseRef = base;
+          legacy.lastPassedCommit = base;
+          legacy.stateDetail = "retrying after a failed automatic checkout";
+        }
+        savePipelines([legacy]);
+      }
+      if (pin === "crash-before-apply") {
+        const { provisionPipelineWorktreeAsync } = await import("./git");
+        const interrupted = await provisionPipelineWorktreeAsync({ ...created.pipeline, baseBranch: "main", baseRef: base }, realProvisionExec);
+        expect(interrupted).toMatchObject({ ok: true, sha: published, preservedLocalRef: { sha: leftover } });
+        // The checkout exists, but the controller did not persist its outcome.
+      }
       await tickPipelines([], h.ports);
       const lane = loadPipelines().find((item) => item.id === created.pipeline!.id)!;
       expect(lane.state).toBe("running");
       expect(git(lane.worktreeDir, "rev-parse", "HEAD")).toBe(pinned ? base : published);
       expect(git(repo, "rev-parse", "HEAD")).toBe(leftover);
-      const backup = git(repo, "for-each-ref", "--format=%(refname)", "refs/heads/backup/provision-unpublished");
+      const backup = git(repo, "for-each-ref", "--format=%(refname)", "refs/backup/provision-unpublished");
       expect(git(repo, "rev-parse", backup)).toBe(leftover);
       expect(lane.stateDetail).toContain(backup);
       expect(lane.delivery!.journal.some((entry) => entry.reason.includes(backup) && entry.reason.includes("1 unpublished commit"))).toBe(true);
