@@ -99,6 +99,12 @@ more than 16 letters, unusual words, or other separators retain compact
 matching. Every occurrence in both views is checked, so prose beside a leak
 cannot excuse it. Diagnostics continue to suppress matched values.
 
+Resource context includes the enclosing URL or path token, so decoded quotes,
+parentheses and brackets inside a path do not grant a prose exemption. Mailbox
+spans include quoted local parts with Unicode or ASCII IDN domains, regardless
+of the generic email class's reserved-domain exemptions. Dotted identifier
+boundaries read complete Unicode code points and attached combining marks.
+
 Keep raw private labels in the ignored `.privacy-known-values` operator file.
 Refresh the committed fingerprints with:
 

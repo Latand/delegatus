@@ -297,7 +297,7 @@ export function canonicalSensitiveText(text: string): { error: boolean; text: st
   return { error: true, text: decoded };
 }
 
-function visibleMarkdownText(text: string): string {
+function visibleMarkdownText(text: string, destinations?: Array<{ start: number; end: number }>): string {
   let visible = "";
   let cursor = 0;
   while (cursor < text.length) {
@@ -346,6 +346,7 @@ function visibleMarkdownText(text: string): string {
       cursor += 1;
       continue;
     }
+    destinations?.push({ start: labelEnd + 1, end: destinationEnd + 1 });
     visible += text.slice(labelStart + 1, labelEnd);
     cursor = destinationEnd + 1;
   }
@@ -411,10 +412,61 @@ function compactSourceOffsets(view: string, compactLength: number): Uint32Array 
   return offsets;
 }
 
+function codePointBefore(text: string, index: number): string {
+  if (index <= 0) return "";
+  const last = text.charCodeAt(index - 1);
+  const previous = text.charCodeAt(index - 2);
+  const width = last >= 0xdc00 && last <= 0xdfff && previous >= 0xd800 && previous <= 0xdbff ? 2 : 1;
+  return text.slice(index - width, index);
+}
+
+function codePointAfter(text: string, index: number): string {
+  const point = text.codePointAt(index);
+  return point === undefined ? "" : String.fromCodePoint(point);
+}
+
+function identifierBefore(text: string, index: number): boolean {
+  let point = codePointBefore(text, index);
+  while (/\p{M}/u.test(point)) {
+    index -= point.length;
+    point = codePointBefore(text, index);
+  }
+  return /[\p{L}\p{N}]/u.test(point);
+}
+
+function compoundResourceSpans(view: string): Array<{ start: number; end: number }> {
+  // Reuse the Markdown parser: link labels are prose, while destinations are
+  // resources. Mask destinations without moving offsets before finding paths.
+  const spans: Array<{ start: number; end: number }> = [];
+  visibleMarkdownText(view, spans);
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const destination of spans) {
+    parts.push(view.slice(cursor, destination.start), " ".repeat(destination.end - destination.start));
+    cursor = destination.end;
+  }
+  parts.push(view.slice(cursor));
+  // Punctuation inside a URL/path token cannot turn its contents into prose.
+  // Angle brackets delimit HTML tags; closing tags cannot make prose a path.
+  for (const match of parts.join("").matchAll(/[^\s<>]+/gu)) {
+    if (/[\/\\]/.test(match[0])) {
+      spans.push({ start: match.index, end: match.index + match[0].length });
+    }
+  }
+  // Resource context is independent of the generic email finding class and
+  // its reserved-domain exemptions. Accept U-labels and ASCII IDN labels here.
+  const domain = /[\p{L}\p{N}\p{M}.-]+\.[\p{L}\p{N}\p{M}-]+/u;
+  const mailboxes = new RegExp(`(${quotedLocalPart.source}|${dotAtomLocalPart.source})@${domain.source}`, "giu");
+  for (const match of view.matchAll(mailboxes)) {
+    spans.push({ start: match.index, end: match.index + match[0].length });
+  }
+  return spans;
+}
+
 function ordinaryCompoundOccurrence(
   view: string,
   offsets: Uint32Array,
-  emailSpans: Array<{ start: number; end: number }>,
+  resourceSpans: Array<{ start: number; end: number }>,
   compactIndex: number,
   length: number,
 ): boolean {
@@ -423,15 +475,14 @@ function ordinaryCompoundOccurrence(
   const end = last + ((view.codePointAt(last) ?? 0) > 0xffff ? 2 : 1);
   const words = view.slice(start, end).split(/[ \t\r\n]+|-/);
   if (words.length !== 2 || !words.every((word) => commonProseWords.has(word))) return false;
-  const before = view.slice(Math.max(0, start - 2), start).match(/.$/u)?.[0] ?? "";
-  const after = view.slice(end, end + 2).match(/^./u)?.[0] ?? "";
-  const resourceBoundary = /[\p{L}\p{N}_/\\@#%+?&=:\-]/u;
+  const before = codePointBefore(view, start);
+  const after = codePointAfter(view, end);
+  const resourceBoundary = /[\p{L}\p{N}\p{M}_/\\@#%+?&=:\-]/u;
   if (resourceBoundary.test(before) || resourceBoundary.test(after)) return false;
-  if (before === "." && /[\p{L}\p{N}]/u.test(view[start - 2] ?? "")) return false;
-  if (after === "." && /[\p{L}\p{N}]/u.test(view[end + 1] ?? "")) return false;
-  // Quoted local parts can contain prose separators too.
-  for (const email of emailSpans) {
-    if (email.start <= start && email.end >= end) return false;
+  if (before === "." && identifierBefore(view, start - 1)) return false;
+  if (after === "." && /[\p{L}\p{N}\p{M}]/u.test(codePointAfter(view, end + 1))) return false;
+  for (const resource of resourceSpans) {
+    if (resource.start <= start && resource.end >= end) return false;
   }
   return true;
 }
@@ -447,7 +498,7 @@ function matchesKnownFingerprint(views: [string, string]): boolean {
     const view = source.normalize("NFKC").toLocaleLowerCase("en-US");
     const compact = compactSensitiveText(view);
     let sourceOffsets: Uint32Array | undefined;
-    let emailSpans: Array<{ start: number; end: number }> | undefined;
+    let resourceSpans: Array<{ start: number; end: number }> | undefined;
     for (const [length, hashes] of fingerprintsByLength) {
       if (length > compact.length) continue;
       for (let index = 0; index <= compact.length - length; index += 1) {
@@ -455,11 +506,8 @@ function matchesKnownFingerprint(views: [string, string]): boolean {
         if (!hashes.has(digest)) continue;
         if (length > 16) return true;
         sourceOffsets ??= compactSourceOffsets(view, compact.length);
-        // Include reserved fixture domains too: a mailbox is a resource context
-        // even when the generic email class exempts its non-personal domain.
-        emailSpans ??= [...view.matchAll(new RegExp(emailAddressSource, "gi"))]
-          .map((match) => ({ start: match.index, end: match.index + match[0].length }));
-        if (!ordinaryCompoundOccurrence(view, sourceOffsets, emailSpans, index, length)) return true;
+        resourceSpans ??= compoundResourceSpans(view);
+        if (!ordinaryCompoundOccurrence(view, sourceOffsets, resourceSpans, index, length)) return true;
       }
     }
   }

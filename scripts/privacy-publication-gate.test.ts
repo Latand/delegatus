@@ -916,6 +916,98 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     `Fresh water. Actual label: ${compoundWords.join("<span></span>")}`,
   ];
 
+  const wrappedResources = [
+    `https://example.invalid/%22${compoundWords.join("-")}%22`,
+    `https://example.invalid/%28${compoundWords.join("-")}%29`,
+    `relative/"${compoundWords.join("-")}"/notes`,
+    `relative/(${compoundWords.join("-")})/notes`,
+    `relative/[${compoundWords.join("-")}]/notes`,
+    `relative\\"${compoundWords.join("-")}"\\notes`,
+  ];
+  const mailboxResources = ["пример.invalid", "xn--e1afmkfd.invalid"].flatMap((domain) => [
+    `"${compoundWords.join(" ")}"@${domain}`,
+    `"prefix ${compoundWords.join(" ")} suffix"@${domain}`,
+  ]);
+  const dottedResources = [
+    String.fromCodePoint(0x10400),
+    `${String.fromCodePoint(0x10400)}\u0301`,
+    "q\u0301",
+  ].flatMap((letter) => [
+    `${letter}.${compoundWords.join("-")}`,
+    `${compoundWords.join("-")}.${letter}`,
+  ]);
+
+  for (const [index, leak] of [...wrappedResources, ...mailboxResources, ...dottedResources].entries()) {
+    test(`compound resource context regression ${index} blocks files and commit messages`, () => {
+      const directory = mkdtempSync(join(tmpdir(), "llv-privacy-compound-"));
+      temporaryDirectories.push(directory);
+      runGit(directory, ["init", "--quiet"]);
+      runGit(directory, ["config", "user.name", "Fixture"]);
+      runGit(directory, ["config", "user.email", "noreply@example.invalid"]);
+      runGit(directory, ["commit", "--allow-empty", "--quiet", "-m", "fixture baseline"]);
+      const publication = join(directory, "publication.md");
+      writeFileSync(publication, `${leak}\n`);
+      runGit(directory, ["add", "publication.md"]);
+      runGit(directory, ["commit", "--quiet", "-m", leak]);
+      const environment = compoundEnvironment(directory);
+      const results = [
+        runGate([publication], environment),
+        runGateArguments(
+          ["--repository", directory, "--base", "HEAD^", "--check-commits", "--paths", "known-values.json"],
+          environment,
+        ),
+      ];
+      for (const result of results) {
+        expect(result.exitCode).toBe(1);
+        expect(result.stdout.toString()).toContain("known_value: 1\n");
+        expect(result.stdout.toString()).not.toContain(leak);
+        expect(result.stderr.toString()).toBe("");
+      }
+    });
+  }
+
+  for (const [index, leak] of wrappedResources.entries()) {
+    test(`compound resource context regression ${index} blocks controlled OCR stdout`, () => {
+      const directory = mkdtempSync(join(tmpdir(), "llv-privacy-compound-"));
+      temporaryDirectories.push(directory);
+      const image = join(directory, "capture.png");
+      const contents = redactedPlaceholderPng();
+      writeFileSync(image, contents);
+      writeValidProvenance(directory, "capture.png", contents);
+      const stdout = join(directory, "ocr-output.txt");
+      writeFileSync(stdout, `${leak}\n`);
+      const result = runGate([image], {
+        ...compoundEnvironment(directory),
+        ...installTool(directory, "tesseract", `cat '${stdout.replaceAll("'", "'\\''")}'`),
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout.toString()).toContain("known_value: 1\n");
+      expect(result.stdout.toString()).not.toContain(leak);
+      expect(result.stderr.toString()).toBe("");
+    });
+  }
+
+  for (const prose of [
+    'The "fresh-water" is clear.',
+    "The (fresh-water) is clear.",
+    "Fresh-water. More prose.",
+    "Fresh water. See https://example.invalid/notes.",
+    "See relative/notes for fresh water.",
+    "The <strong>fresh-water</strong> is clear.",
+    "Read [fresh-water](https://example.invalid/notes).",
+  ]) {
+    test(`compound resource checks preserve prose: ${prose}`, () => {
+      const directory = mkdtempSync(join(tmpdir(), "llv-privacy-compound-"));
+      temporaryDirectories.push(directory);
+      const publication = join(directory, "publication.md");
+      writeFileSync(publication, `${prose}\n`);
+      const result = runGate([publication], compoundEnvironment(directory));
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
+      expect(result.stderr.toString()).toBe("");
+    });
+  }
+
   for (const [index, leak] of compoundLeaks.entries()) {
     test(`compound known value leak ${index} stays blocked in files and commit messages`, () => {
       const directory = mkdtempSync(join(tmpdir(), "llv-privacy-compound-"));
