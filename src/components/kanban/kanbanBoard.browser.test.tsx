@@ -14706,3 +14706,99 @@ describe("launch layout shift rendered evidence", () => {
     }
   }, 240_000);
 });
+
+describe("task chip: the card's Ask button puts a task in the orchestrator's composer", () => {
+  /*
+   * Rendered evidence for the card's one «Ask» button. With the seat folded, a press on a card in the Assigned
+   * column attaches the task as a chip above the seat's composer (never as text in the input), unfolds the seat,
+   * and leaves the card where it was on the screen. A second card adds a second chip, × takes one back out, and
+   * the longer Ukrainian label holds in the narrowest card foot.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "task chip"
+   *
+   * Measurements go to `evidence/task-chip-to-orchestrator/geometry.json`; frames to `.artifacts/task-chip/`.
+   */
+  const OUT = path.resolve(".artifacts/task-chip");
+  const EVIDENCE = path.resolve("evidence/task-chip-to-orchestrator");
+  const FOLDED = JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null, topWidths: {}, sideWidths: {} });
+
+  browserTest("task chip: pressing Ask on a card adds a chip to the seat's composer, unfolds the seat and keeps the card in place", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const passes: Record<string, unknown>[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const tr = (key: Parameters<typeof translate>[1], vars?: Record<string, string>) => translate(lang, key, vars);
+        const record: Record<string, unknown> = { lang };
+        passes.push(record);
+        const opened = await openFixture(browser, `${server.base}?scenario=seat-noise`, VIEWPORT, "light", lang);
+        const { page } = opened;
+        try {
+          await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+          await page.evaluate((folded) => localStorage.setItem("llv:kanban-seat:v2", folded), FOLDED);
+          await page.reload();
+          await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+          const ids = await page.$$eval('.card[data-id^="task:"] [data-ask-orchestrator]', (nodes) => nodes.map((node) => node.getAttribute("data-ask-orchestrator")!));
+          record.askButtons = ids.length;
+          if (ids.length < 2) { failures.push(`${lang}: expected an Ask button on every task card, found ${ids.length}`); continue; }
+          const [first, second] = ids as [string, string];
+          const top = (id: string) => page.$eval(`.card[data-id="${id}"]`, (node) => Math.round(node.getBoundingClientRect().top * 10) / 10);
+          const seatState = () => page.$eval("[data-kanban-seat]", (node) => node.getAttribute("data-collapsed"));
+          const foldedBefore = await seatState() === "1";
+          await page.$eval(`.card[data-id="${first}"]`, (node) => node.scrollIntoView({ block: "center" }));
+          const topBefore = await top(first);
+          await page.click(`[data-ask-orchestrator="${first}"]`);
+          await page.waitForSelector("[data-orchestrator-conversation] [data-task-chip]", { timeout: 10_000 });
+          await page.waitForTimeout(600);
+          const topAfter = await top(first);
+          const seatAfter = await seatState();
+          const pressed = await page.$eval(`[data-ask-orchestrator="${first}"]`, (node) => node.getAttribute("aria-pressed"));
+          await page.$eval("[data-kanban-seat]", (node) => node.scrollIntoView({ block: "start" }));
+          const chip = await page.$eval("[data-orchestrator-conversation] [data-task-chip]", (node) => ({
+            text: node.textContent?.replace(/\s+/g, " ").trim() ?? "",
+            width: Math.round(node.getBoundingClientRect().width),
+            inView: node.getBoundingClientRect().top >= 0 && node.getBoundingClientRect().bottom <= innerHeight,
+            cut: [node, ...node.querySelectorAll<HTMLElement>("*")].some((child) => child.scrollWidth > child.clientWidth + 1 && getComputedStyle(child).overflow !== "visible" && !child.classList.contains("truncate")),
+          }));
+          const draft = await page.$eval("[data-orchestrator-conversation] textarea", (node) => (node as HTMLTextAreaElement).value);
+          await page.locator("[data-kanban-seat]").screenshot({ path: path.join(OUT, `chip-${lang}.png`) });
+          await page.$eval(`.card[data-id="${second}"]`, (node) => node.scrollIntoView({ block: "center" }));
+          await page.click(`[data-ask-orchestrator="${second}"]`);
+          await page.waitForFunction(() => document.querySelectorAll("[data-orchestrator-conversation] [data-task-chip]").length === 2);
+          await page.$eval("[data-kanban-seat]", (node) => node.scrollIntoView({ block: "start" }));
+          await page.locator("[data-kanban-seat]").screenshot({ path: path.join(OUT, `chips-two-${lang}.png`) });
+          await page.screenshot({ path: path.join(OUT, `board-${lang}.png`) });
+          const removed = await page.evaluate(async () => {
+            const before = document.querySelectorAll("[data-orchestrator-conversation] [data-task-chip]").length;
+            document.querySelector<HTMLElement>("[data-orchestrator-conversation] [data-task-chip-remove]")!.click();
+            await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+            return { before, after: document.querySelectorAll("[data-orchestrator-conversation] [data-task-chip]").length };
+          });
+          const footFit = await page.$$eval('.card[data-id^="task:"] .foot', (foots) => foots.filter((foot) => foot.scrollWidth > foot.clientWidth + 1).length);
+          const ask = await page.$eval(`[data-ask-orchestrator="${second}"]`, (node) => ({ label: node.getAttribute("aria-label"), text: node.textContent?.trim(), height: Math.round(node.getBoundingClientRect().height) }));
+          Object.assign(record, { foldedBefore, seatAfter, pressed, topBefore, topAfter, chip, draft, removed, footOverflow: footFit, ask });
+          if (!foldedBefore) failures.push(`${lang}: the seat was not folded before the press`);
+          if (Math.abs(topAfter - topBefore) > 2) failures.push(`${lang}: the card moved ${topAfter - topBefore} px when the seat unfolded`);
+          if (seatAfter !== "0") failures.push(`${lang}: the seat is still folded after the press`);
+          if (pressed !== "true") failures.push(`${lang}: the card's button does not read as pressed`);
+          if (draft !== "") failures.push(`${lang}: the input holds "${draft}" after the press`);
+          if (!chip.inView || chip.cut) failures.push(`${lang}: the chip ${JSON.stringify(chip)}`);
+          if (removed.before !== 2 || removed.after !== 1) failures.push(`${lang}: × ${JSON.stringify(removed)}`);
+          if (footFit > 0) failures.push(`${lang}: ${footFit} card foot(s) overflow sideways`);
+          if (ask.text !== tr("taskChip.ask")) failures.push(`${lang}: the button says "${ask.text}"`);
+          if (opened.pageErrors.length) failures.push(`${lang}: page errors ${opened.pageErrors.join(" | ")}`);
+        } finally {
+          await opened.context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "geometry.json"), `${JSON.stringify(passes, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 300_000);
+});

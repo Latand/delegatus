@@ -1,0 +1,54 @@
+[
+  {
+    "lang": "en",
+    "askButtons": 16,
+    "foldedBefore": true,
+    "seatAfter": "0",
+    "pressed": "true",
+    "topBefore": 207,
+    "topAfter": 840,
+    "chip": {
+      "text": "About the task:Worker waiting for a seat",
+      "width": 654,
+      "inView": true,
+      "cut": false
+    },
+    "draft": "",
+    "removed": {
+      "before": 2,
+      "after": 1
+    },
+    "footOverflow": 0,
+    "ask": {
+      "label": "Ask the orchestrator about «You are the reviewer in an implement-review loop. Working directory is the lane worktree. Read the diff against the merge base, run the touched tests by path, and answer with one verdict block; do not change product source in this stage.»",
+      "text": "Ask",
+      "height": 28
+    }
+  },
+  {
+    "lang": "uk",
+    "askButtons": 16,
+    "foldedBefore": true,
+    "seatAfter": "0",
+    "pressed": "true",
+    "topBefore": 207,
+    "topAfter": 840,
+    "chip": {
+      "text": "Про задачу:Worker waiting for a seat",
+      "width": 654,
+      "inView": true,
+      "cut": false
+    },
+    "draft": "",
+    "removed": {
+      "before": 2,
+      "after": 1
+    },
+    "footOverflow": 0,
+    "ask": {
+      "label": "Спитати оркестратора про «You are the reviewer in an implement-review loop. Working directory is the lane worktree. Read the diff against the merge base, run the touched tests by path, and answer with one verdict block; do not change product source in this stage.»",
+      "text": "Спитати",
+      "height": 28
+    }
+  }
+]

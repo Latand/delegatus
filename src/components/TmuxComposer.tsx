@@ -16,7 +16,7 @@ import { useComposer } from "@/hooks/useComposer";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useCodexRealtime } from "@/hooks/useCodexRealtime";
 import { interruptRuntime, useRuntimeBusState, type RuntimeSessionView } from "@/hooks/useRuntime";
-import { parseSelectedContextRef, type SelectedContextRef } from "@/lib/selection/selectedContext";
+import { parseSelectedContextRef, taskReferencePrelude, withSelectedTasks, type SelectedContextRef } from "@/lib/selection/selectedContext";
 import { useViewerSelectedContext, viewerSelectedContext } from "@/lib/selection/viewerSelectedContext";
 import { useComposerBox } from "@/hooks/useComposerBox";
 import { useHostTarget } from "@/hooks/useHostTarget";
@@ -49,6 +49,8 @@ import { DormantView } from "./conversation/DormantView";
 import { ComposerBar, composerSlotKind, type ComposerSlotKind } from "./ComposerBar";
 import { chatState } from "./mobile/mobileChatState";
 import { SelectedContextBadge } from "./SelectedContextBadge";
+import { TaskChipRow } from "./orchestrator/TaskChipRow";
+import { addTaskChip, clearTaskChips, readTaskChips, taskChipRefs, useSeatChipProject } from "./orchestrator/taskChips";
 import { OutboxDispatcher } from "./conversation/OutboxDispatcher";
 import {
   adoptOutbox,
@@ -1516,6 +1518,12 @@ export interface TmuxComposerProps {
       Without it the two surfaces would be ordinary competing places and a board
       remount could take the form out from under the operator. */
   primaryPlace?: boolean;
+  /** The project whose orchestrator this composer is, set by the surfaces that
+      know it (the dock, the kanban seat). The task chips the board's cards
+      attach to that project show above the input and travel with the next
+      send. Absent, the composer still resolves a seat conversation by itself,
+      and a worker's composer never carries chips. */
+  taskChipsFor?: string;
 }
 
 function ComposerContextBadge() {
@@ -1590,6 +1598,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   placeholder,
   dockNode,
   viewActive = true,
+  taskChipsFor,
 }: TmuxComposerProps & {
   /** Absent: render the form inline (the card owns the composer, as ever).
       A node: portal the form there. Null: keep the form mounted but hidden. */
@@ -1603,6 +1612,10 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      path under the target account, and the draft/held receipts must ride along
      (falls back to path pre-migration). */
   const cardId = conversationIdentity(file);
+  /* The project whose task chips this composer carries: the surface that knows
+     it is the seat says so, and any other composer is asked once there are
+     chips to place whether its conversation holds the project's seat. */
+  const chipProject = useSeatChipProject(cardId, file.project, taskChipsFor);
   // The structured session Stop/Send route through — the conversation's own
   // structured host, or the ROOT's for a structured-root subagent (finding 1),
   // so a claude-broker root's child sends via /api/runtime/send, never /api/tmux.
@@ -2679,7 +2692,10 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
        composer showed before the send, and goes on showing it unchanged when
        the transcript's own record of the message arrives. Display only — the
        reference the wire carries is captured by `send` at dispatch. */
-    const submittedContext = viewerSelectedContext();
+    /* The task chips attached to this seat's composer, frozen with the rest of
+       the reference: chips added after Send belong to the next message. */
+    const chipsAtSubmit = chipProject && !preserveDraft ? readTaskChips(chipProject) : [];
+    const submittedContext = withSelectedTasks(viewerSelectedContext(), taskChipRefs(chipsAtSubmit));
     /**
      * The row, at the instant the operator pressed Send.
      *
@@ -2710,12 +2726,13 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
            replay after a reload asks for the same thing rather than falling back
            to the default interrupt. */
         ...(options?.policy ? { policy: options.policy } : {}),
-        ...(submittedContext.state === "selected" ? {
+        ...(submittedContext.state === "selected" || submittedContext.tasks ? {
           selectedContext: {
-            state: "selected" as const,
-            conversationId: submittedContext.conversationId,
+            state: submittedContext.state,
+            ...(submittedContext.state === "selected" ? { conversationId: submittedContext.conversationId } : {}),
             ...(submittedContext.project ? { project: submittedContext.project } : {}),
-            ...(submittedContext.label ? { label: submittedContext.label } : {}),
+            ...(submittedContext.state === "selected" && submittedContext.label ? { label: submittedContext.label } : {}),
+            ...(submittedContext.tasks ? { tasks: submittedContext.tasks } : {}),
           },
         } : {}),
         ...(preparing ? { preparing: true as const } : {}),
@@ -2748,6 +2765,9 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       if (!preserveDraft) {
         if (composer.draftRevision.current === draftRevision) setText("");
         attachments.settleDelivered(requestedImages, requestedFiles);
+        /* The chips went with the message; one attached while it was being
+           prepared stays for the next. */
+        if (chipProject && chipsAtSubmit.length) clearTaskChips(chipProject, chipsAtSubmit.map((chip) => chip.id));
       }
       setStatus(null);
       inputRef.current?.focus();
@@ -2776,7 +2796,8 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           isDesignatedManagerConversation(cardId, submittedFile.project), admissionTiming.admissionDeadlineMs,
         ).catch(() => false)
           ? viewerContextPrelude({ path: submittedFile.path, project: submittedFile.project }) : "";
-        const composed = prelude ? `${prelude}\n${requestedText}` : requestedText;
+        const taskLines = taskReferencePrelude(selectedContext.tasks);
+        const composed = [taskLines, prelude, requestedText].filter(Boolean).join("\n");
         const wireText = bridge?.text ? `${bridge.text}\n\n${composed}` : composed;
         const content = {
           text: deliveryRoute ? wireText.trim() : wireText,
@@ -2959,6 +2980,8 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       outboxFiles.current.delete(outboxId);
       outboxKeys.current.delete(outboxId);
       persistPendingDeliveries(pendingDeliveries.current.filter((pending) => pending.key !== outboxId));
+      /* The task chips the refused message carried come back with its words. */
+      if (chipProject) for (const task of entry.selectedContext?.tasks ?? []) addTaskChip(chipProject, task);
       setText(requestedText);
       if (requestedImages.length || requestedFiles.length) attachments.replace(requestedImages, requestedFiles);
       inputRef.current?.focus();
@@ -2996,7 +3019,8 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
        now, so the operator moving the board a moment later cannot rewrite the
        admitted turn. A replay reuses the generation's original reference for
        the same reason it replays the original bytes. */
-    const selectedContext = durable ? durable.submission.selectedContext as SelectedContextRef : replayGeneration ? replayGeneration.selectedContext : viewerSelectedContext();
+    const queuedTasks = outboxId ? readOutbox(cardId).find((entry) => entry.id === outboxId)?.selectedContext?.tasks : undefined;
+    const selectedContext = durable ? durable.submission.selectedContext as SelectedContextRef : replayGeneration ? replayGeneration.selectedContext : withSelectedTasks(viewerSelectedContext(), queuedTasks);
     /* #691 §4, the no-call path: a turn is opening, so whatever the manager
        reported while nothing was live rides in with it. Never on a replay — a
        retained generation replays its original bytes under its original key, and
@@ -3022,7 +3046,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     ).catch(() => false))
       ? ""
       : viewerContextPrelude({ path: file.path, project: file.project });
-    const composedText = viewerPrelude ? `${viewerPrelude}\n${requestedText}` : requestedText;
+    const composedText = [taskReferencePrelude(selectedContext?.tasks), viewerPrelude, requestedText].filter(Boolean).join("\n");
     const payloadText = durable?.envelope?.body.text as string | undefined ?? replayGeneration?.text
       ?? (bridgeTurn?.text ? `${bridgeTurn.text}\n\n${composedText}` : composedText);
     const sentImages: PendingImage[] = replayGeneration
@@ -4952,6 +4976,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           noise. The transcript row renders the same badge from the same
           component afterwards, so the before and after can be compared. */}
       <ComposerContextBadge />
+      {chipProject ? <TaskChipRow project={chipProject} /> : null}
       {/* Proactive hold hint: while the card is switching accounts, the next
           send is queued for the successor rather than delivered live. Shown
           identically under the desktop and mobile composers. */}

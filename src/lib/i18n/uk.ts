@@ -1578,6 +1578,18 @@ export const uk: Record<keyof typeof en, Message> = {
   "feed.voiceTurn": "Голос",
   "selectedContext.stale": "застаріле",
   "selectedContext.ariaSelected": "Вибрана картка: {name} (проєкт {project})",
+  /* Чіпи задач: кнопка на картці додає задачу до наступного повідомлення
+     оркестратору; композер малює чіп, а надісланий рядок його зберігає. */
+  "taskChip.ask": "Спитати",
+  "taskChip.askAria": "Спитати оркестратора про «{title}»",
+  "taskChip.askHint": "Додати цю задачу до наступного повідомлення оркестратору",
+  "taskChip.askOnHint": "Прикріплено до наступного повідомлення оркестратору; натисніть, щоб зняти",
+  "taskChip.label": "Про задачу:",
+  "taskChip.list": "Задачі, прикріплені до повідомлення",
+  "taskChip.aria": "Задача: {title}",
+  "taskChip.open": "Відкрити «{title}» на дошці",
+  "taskChip.remove": "Прибрати «{title}» з повідомлення",
+  "taskChip.added": "«{title}» прикріплено до повідомлення оркестратору",
   /* #1166 — доставлений мандат оркестратора. */
   "mandateCard.title": "Мандат",
   "mandateCard.version": "v{version}",

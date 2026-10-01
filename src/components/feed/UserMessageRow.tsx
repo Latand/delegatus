@@ -8,7 +8,9 @@ import type { MessageSender } from "@/lib/team/contract";
 import { SenderLine } from "@/components/team/SenderLine";
 
 import { ChevronUp, Layers } from "../icons";
+import { stripTaskReferencePrelude } from "@/lib/selection/selectedContext";
 import { SelectedContextBadge } from "../SelectedContextBadge";
+import { TaskChipBadges } from "../orchestrator/TaskChipRow";
 import { CopyButton } from "./CopyButton";
 import { MESSAGE_ACTION } from "./actionStyles";
 import { mdBlocks } from "./markdown";
@@ -40,7 +42,7 @@ import { tr } from "./parse";
 const LONG_MESSAGE = 500;
 
 export function UserMessageRow({
-  text,
+  text: rawText,
   copyText,
   selectedContext,
   bubbleFooter,
@@ -68,6 +70,10 @@ export function UserMessageRow({
   tone?: "context";
 }) {
   const isMobile = useIsMobile();
+  /* The seat's plain reference lines are what its record already says as chips:
+     the row shows the operator's words and the chips, not both. */
+  const tasks = selectedContext?.tasks;
+  const text = tasks?.length ? stripTaskReferencePrelude(rawText, tasks).replace(/^\n+/, "") : rawText;
   const long = text.length > LONG_MESSAGE;
   const gutter = action ?? <CopyButton text={copyText ?? text} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />;
   return (
@@ -96,6 +102,8 @@ export function UserMessageRow({
               the record itself — the same badge the composer showed before the
               operator sent it, so the two can be compared at a glance. */}
           {selectedContext ? <SelectedContextBadge reference={selectedContext} className="mb-1.5" /> : null}
+          {/* The tasks the operator attached as chips: what the message was about. */}
+          {tasks?.length ? <TaskChipBadges tasks={tasks} project={selectedContext?.project} className="mb-1.5" /> : null}
           {long ? (
             <details className="group/usr">
               <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">

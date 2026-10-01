@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, ArrowUp, Flag } from "lucide-react";
+import { ArrowDown, ArrowUp, Bot, Flag } from "lucide-react";
 import { memo, useState } from "react";
 
 import { conversationIdentity } from "@/lib/accounts/identity";
@@ -8,7 +8,7 @@ import { useLocale, type TFunction } from "@/lib/i18n";
 import { taskFinishWaitCount } from "@/lib/pipelines/taskFinish";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { GroupResurfaceReason } from "@/lib/tasks/groupHide";
-import type { TaskColor, TaskStatus } from "@/lib/tasks/types";
+import type { TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { EngineMark } from "@/components/EngineMark";
@@ -21,11 +21,14 @@ import type { NeedReason } from "@/components/attention/needReason";
 
 import { CardAlbumButton } from "@/components/taskAlbum/AlbumButton";
 import { TaskIcon } from "@/components/tasks/TaskIcon";
+import { TASK_COLOR_HEX } from "@/components/tasks/taskColorHex";
 import { WorkLinkRow } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
 
 import { isSeatTickNotice, requestSeatTickPanel } from "@/components/orchestrator/openSeatTick";
 import { useSeatSignal } from "./kanbanSeatStore";
+import { useTaskChipAttached } from "@/components/orchestrator/taskChips";
+import { askOrchestratorAboutTask } from "./askOrchestrator";
 import { CardInlineText, withinEdit, type CardEditField } from "./CardInlineText";
 import { CardDrafts } from "./KanbanDrafts";
 import { engineWord } from "./identityMarks";
@@ -79,17 +82,7 @@ function pipelineEndedAtMs(pipeline: Pipeline): number {
 
 const LockGlyph = () => <svg {...svgProps}><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>;
 
-/** The hue each colour name is drawn with; the name is what the board says. */
-export const TASK_COLOR_HEX: Record<TaskColor, string> = {
-  coral: "#e07a5f",
-  amber: "#d9a400",
-  lime: "#7cb342",
-  teal: "#1a9e8f",
-  sky: "#3d7fd6",
-  violet: "#8a63d2",
-  pink: "#d64f8a",
-  slate: "#7b8a99",
-};
+export { TASK_COLOR_HEX };
 
 export function resurfaceText(t: TFunction, reason: GroupResurfaceReason): string {
   return t(`kanban.resurfaced.${reason.kind}`);
@@ -863,6 +856,10 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
             pipelines={card.pipelines.map((summary) => summary.pipeline)}
             files={card.members.map((member) => member.file)}
           />
+          {/* The orchestrator's composer takes a reference to this task as a chip
+              (never text in the input). Not on the Overview, where cards of
+              several projects stand and no seat is on screen to take it. */}
+          {!props.projectNames ? <AskOrchestratorButton cardId={card.id} project={card.project} taskId={card.task.id} title={title} color={card.color} icon={card.icon} /> : null}
           {remote ? <HostChip remote={remote} /> : props.onAddAgent ? (
             <button type="button" className="add" data-add-agent={card.id} aria-label={t("kanban.addAgentAria", { title })} onClick={() => props.onAddAgent!(card)}>
               <span className="plus" aria-hidden="true">+</span> {t("kanban.addAgent")}
@@ -879,6 +876,34 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
     </article>
   );
 });
+
+/** The card's one «Ask» button. It stays pressed while the task is attached to
+    the orchestrator's composer, so the card itself says it took, even when the
+    seat is scrolled out of sight above the column. */
+function AskOrchestratorButton({ cardId, project, taskId, title, color, icon }: {
+  cardId: string;
+  project: string;
+  taskId: string;
+  title: string;
+  color: KanbanCardModel["color"];
+  icon: string | null;
+}) {
+  const { t } = useLocale();
+  const attached = useTaskChipAttached(project, taskId);
+  return (
+    <button
+      type="button"
+      className={`add ask${attached ? " on" : ""}`}
+      data-ask-orchestrator={cardId}
+      aria-pressed={attached}
+      aria-label={t("taskChip.askAria", { title })}
+      title={t(attached ? "taskChip.askOnHint" : "taskChip.askHint")}
+      onClick={(event) => askOrchestratorAboutTask(event.currentTarget.closest<HTMLElement>(".card"), project, { id: taskId, title: cleanTitle(title, 80), color, icon }, attached)}
+    >
+      <Bot aria-hidden /> {t("taskChip.ask")}
+    </button>
+  );
+}
 
 /** #2187 §5.3: the task's move to Done waits on other open pipelines, said
     once, muted, under the description. */

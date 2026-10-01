@@ -38,11 +38,24 @@ export const SELECTED_CONTEXT_VERSION = 1 as const;
 export const MAX_SELECTED_LABEL_CHARS = 80;
 export const MAX_SELECTED_PROJECT_CHARS = 200;
 export const MAX_SELECTED_PATH_CHARS = 1_024;
+/** Tasks one turn can name. The composer's chips are few by hand; the cap keeps a
+    hostile body from filling the durable record. */
+export const MAX_SELECTED_TASKS = 8;
+export const MAX_TASK_TITLE_CHARS = 80;
+/** Board task identity: the server mints UUIDs, and nothing wider is accepted. */
+const TASK_ID = /^[A-Za-z0-9_-]{1,64}$/;
 /** Canonical Viewer conversation identity, the same grammar the registry mints. */
 const CONVERSATION_ID = /^conversation_[A-Za-z0-9_-]{1,180}$/;
 /** Opaque view/device tokens: no whitespace, no separators, and bounded, so a
     hostile body cannot smuggle a payload into the journal through an id. */
 const OPAQUE_ID = /^[A-Za-z0-9_.:-]{1,200}$/;
+
+/** One board task a turn points at: the identity the seat reads with `get_task`
+    and the title the operator saw, never the task's text. */
+export interface SelectedTaskRef {
+  id: string;
+  title: string;
+}
 
 /** Evidence every variant carries, each part present only when it validated. */
 interface SelectedContextEvidence {
@@ -55,6 +68,10 @@ interface SelectedContextEvidence {
   deviceId?: string;
   /** The view's input/selection revision at capture; monotonic per view session. */
   revision?: number;
+  /** Board tasks the operator attached as chips, beside whatever conversation
+      is selected. Absent when none were: a reference without tasks is exactly
+      the record written before tasks existed. */
+  tasks?: SelectedTaskRef[];
 }
 
 export type SelectedContextRef =
@@ -108,6 +125,7 @@ export interface SelectedContextPreview {
   conversationId?: string;
   project?: string;
   label?: string;
+  tasks?: SelectedTaskRef[];
 }
 
 /**
@@ -231,6 +249,58 @@ function revisionOf(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
+/** The valid, de-duplicated, bounded tasks of an untrusted list, or null when
+    none survive: a malformed field costs the tasks and never the reference. */
+function tasksOf(value: unknown): SelectedTaskRef[] | null {
+  if (!Array.isArray(value)) return null;
+  const seen = new Set<string>();
+  const tasks: SelectedTaskRef[] = [];
+  for (const entry of value) {
+    if (tasks.length >= MAX_SELECTED_TASKS) break;
+    if (!entry || typeof entry !== "object") continue;
+    const { id, title } = entry as Record<string, unknown>;
+    if (typeof id !== "string" || !TASK_ID.test(id) || seen.has(id)) continue;
+    const clean = boundedText(title, MAX_TASK_TITLE_CHARS);
+    if (!clean) continue;
+    seen.add(id);
+    tasks.push({ id, title: clean });
+  }
+  return tasks.length ? tasks : null;
+}
+
+/** The reference with the operator's task chips attached. Without any, the
+    reference comes back as it was. */
+export function withSelectedTasks(ref: SelectedContextRef, tasks: readonly SelectedTaskRef[] | undefined): SelectedContextRef {
+  const clean = tasksOf(tasks);
+  return clean ? { ...ref, tasks: clean } : ref;
+}
+
+/* ------------------------------------------------------------------ *
+ * The seat's plain-text half                                          *
+ * ------------------------------------------------------------------ */
+
+/** One line the seat reads in its own turn for a task chip. The durable record
+    behind the turn's marker names the same task; this line is what the agent can
+    act on without decoding anything. */
+function taskReferenceLine(task: SelectedTaskRef): string {
+  return `[task reference — id ${task.id}, title ${JSON.stringify(task.title)}; read it with get_task]`;
+}
+
+/** One line per task, or "" when there are none. */
+export function taskReferencePrelude(tasks: readonly SelectedTaskRef[] | undefined): string {
+  return (tasksOf(tasks) ?? []).map(taskReferenceLine).join("\n");
+}
+
+/** The text without the reference lines its own record accounts for, so the
+    history row shows the operator's words and the chips, not both. Only a line
+    that equals a task's reference exactly is removed. */
+export function stripTaskReferencePrelude(text: string, tasks: readonly SelectedTaskRef[] | undefined): string {
+  const clean = tasksOf(tasks);
+  if (!clean) return text;
+  const lines = new Set(clean.map(taskReferenceLine));
+  return text.split("\n").filter((line) => !lines.has(line)).join("\n");
+}
+
 function capturedAtOf(value: unknown): string | null {
   if (typeof value !== "string" || value.length > 40) return null;
   const at = Date.parse(value);
@@ -254,6 +324,7 @@ export function parseSelectedContextRef(value: unknown): SelectedContextRef | nu
     ...optional("viewSessionId", opaqueId(body.viewSessionId)),
     ...optional("deviceId", opaqueId(body.deviceId)),
     ...optional("revision", revisionOf(body.revision)),
+    ...optional("tasks", tasksOf(body.tasks)),
   };
   if (body.state === "none") return { version: SELECTED_CONTEXT_VERSION, state: "none", ...evidence };
   if (body.state !== "selected") return null;
