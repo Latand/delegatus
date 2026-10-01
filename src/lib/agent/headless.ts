@@ -391,7 +391,7 @@ export function launchDetached(input: {
       detached: true,
       stdio: [input.built.stdin === null ? "ignore" : "pipe", stdoutFd, stderrFd],
     });
-    if (child.pid) memoryCell?.attach(child.pid);
+    if (child.pid) memoryCell?.attach(child.pid, child);
     child.once("close", () => memoryCell?.close());
     child.once("error", () => memoryCell?.close());
     if (input.built.stdin !== null && child.stdin) {

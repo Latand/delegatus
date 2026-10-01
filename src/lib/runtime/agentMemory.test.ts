@@ -10,6 +10,9 @@ test("reserves the core budget and bounds each agent at launch", () => {
 });
 
 import fs from "node:fs";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { AgentMemoryCell, agentOomScore, parseMemorySize, probeAgentScopes, tickAgentMemoryWatchdogs, viewerUnitFromCgroup, wrapAgentCommand, normalizeHostMemory, planAgentMemory, invalidateAgentScopeProbe, type AgentMemoryPlan } from "./agentMemory";
@@ -207,4 +210,74 @@ test("provider Failed-to stderr is not exposed as a scope admission failure", as
     child.emit("close", 1, null);
     expect(cell.launchFailure()).toBeNull();
   } finally { cell.close(); }
+});
+
+function watchdogChild() {
+  return Object.assign(new EventEmitter(), { pid: 123, exitCode: null as number | null, signalCode: null as NodeJS.Signals | null,
+    stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
+}
+for (const launch of ["wrapSpawn", "attach"] as const) for (const limit of ["agent", "shared"] as const) test(`watchdog ${launch} acquires an initially unavailable owned identity and enforces the ${limit} limit`, () => {
+  const child = watchdogChild();
+  const killed: number[] = [];
+  let identity: string | null = null;
+  const cell = new AgentMemoryCell({ ...basePlan, mechanism: "watchdog", unit: null,
+    limitBytes: limit === "agent" ? 100 : 200, budgetBytes: 100 }, {
+    identity: () => identity, sample: () => [{ pid: 123, identity: "123:owned", rss: 101, name: "agent" }],
+    kill: (pid) => { killed.push(pid); },
+  });
+  try {
+    if (launch === "wrapSpawn") cell.wrapSpawn(() => child as unknown as ChildProcessWithoutNullStreams)("agent", [], {});
+    else cell.attach(child.pid, child as unknown as ChildProcessWithoutNullStreams);
+    tickAgentMemoryWatchdogs([cell]);
+    expect(killed).toEqual([]);
+    identity = "123:owned";
+    tickAgentMemoryWatchdogs([cell]);
+    expect(killed).toEqual([123]);
+    expect(cell.snapshot().lastKill).toMatchObject({ limit, fatal: true });
+    identity = "123:reused";
+    tickAgentMemoryWatchdogs([cell]);
+    expect(killed).toEqual([123]);
+  } finally { cell.close(); }
+});
+for (const exit of ["exit", "exitCode", "signalCode", "during-lookup"] as const) test(`watchdog never adopts a reused initial PID after child ${exit}`, () => {
+  const child = watchdogChild();
+  let identity: string | null = null;
+  const killed: number[] = [];
+  let sampled = 0;
+  const cell = new AgentMemoryCell({ ...basePlan, mechanism: "watchdog", unit: null, limitBytes: 100 }, {
+    identity: () => { if (identity && exit === "during-lookup") child.emit("exit", 0, null); return identity; },
+    sample: () => { sampled++; return [{ pid: 123, identity: "123:reused", rss: 101, name: "unrelated" }]; },
+    kill: (pid) => { killed.push(pid); },
+  });
+  try {
+    cell.wrapSpawn(() => child as unknown as ChildProcessWithoutNullStreams)("agent", [], {});
+    if (exit === "exit") child.emit("exit", 0, null);
+    if (exit === "exitCode") child.exitCode = 0;
+    if (exit === "signalCode") child.signalCode = "SIGKILL";
+    identity = "123:reused";
+    tickAgentMemoryWatchdogs([cell]);
+    expect(sampled).toBe(0);
+    expect(killed).toEqual([]);
+    expect(cell.snapshot().kills).toBe(0);
+  } finally { cell.close(); }
+});
+test("watchdog cannot acquire an unknown PID without a spawned child handle", () => {
+  let identity: string | null = null;
+  const killed: number[] = [];
+  const cell = new AgentMemoryCell({ ...basePlan, mechanism: "watchdog", unit: null, limitBytes: 100 }, {
+    identity: () => identity, sample: () => [{ pid: 123, identity: "123:reused", rss: 101, name: "unrelated" }], kill: (pid) => { killed.push(pid); },
+  });
+  try {
+    cell.attach(123);
+    identity = "123:reused";
+    tickAgentMemoryWatchdogs([cell]);
+    expect(killed).toEqual([]);
+  } finally { cell.close(); }
+});
+for (const unit of ["delegatus@review.service", "delegatus@review\\x2dcase.service", "delegatus\\x20viewer.service"]) test(`user service ${unit} retains scope lifetime binding`, () => {
+  const viewerUnit = viewerUnitFromCgroup(`0::/user.slice/user-1000.slice/user@1000.service/app.slice/${unit}`);
+  expect(viewerUnit).toBe(unit);
+  const wrapped = wrapAgentCommand({ ...basePlan, viewerUnit }, "agent", []);
+  expect(wrapped.args).toContain(`BindsTo=${unit}`);
+  expect(wrapped.args).toContain(`After=${unit}`);
 });

@@ -318,3 +318,26 @@ test("memory evidence round-trips through the durable registry and malformed sha
     expect(registry.readOnlySnapshot().entries[`${KEY.engine}:${KEY.sessionId}`]!.structuredHost?.memory).toBeUndefined();
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("durable registry hydration drops malformed memory timestamps and preserves sibling rows", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-memory-timestamps-"));
+  const registry = new AgentRegistry(path.join(dir, "seed.json"));
+  try {
+    registry.upsert({ key: KEY, artifactPath: "/sessions/memory.jsonl", cwd: "/repo", accountId: null, status: "dead", host: null, claimOwner: null, claimEpoch: 0, pendingAction: null });
+    const sibling = { engine: "codex" as const, sessionId: "healthy-memory-row" };
+    registry.upsert({ key: sibling, artifactPath: "/sessions/healthy.jsonl", cwd: "/repo", accountId: null, status: "idle", host: null, claimOwner: null, claimEpoch: 0, pendingAction: null });
+    const memory: NonNullable<HostState["memory"]> = { mechanism: "watchdog", unit: null, limitBytes: 1024, kills: 1,
+      lastKill: { at: new Date().toISOString(), limitBytes: 1024, limit: "agent", fatal: true, process: null } };
+    registry.setStructuredHost(KEY, { kind: "codex-app-server", endpoint: "stdio:memory", process: null, eventCursor: 0,
+      protocolVersion: "1", writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [], memory }, "dead");
+    for (const [index, timestamp] of [{ toString: null }, {}, [], 0, true, null, "invalid"].entries()) {
+      const persisted = registry.snapshot();
+      persisted.entries[`${KEY.engine}:${KEY.sessionId}`]!.structuredHost!.memory!.lastKill!.at = timestamp as unknown as string;
+      const filename = path.join(dir, `malformed-${index}.json`);
+      fs.writeFileSync(filename, JSON.stringify(persisted));
+      const hydrated = new AgentRegistry(filename).readOnlySnapshot();
+      expect(hydrated.entries[`${KEY.engine}:${KEY.sessionId}`]!.structuredHost?.memory).toBeUndefined();
+      expect(hydrated.entries[`${sibling.engine}:${sibling.sessionId}`]!.status).toBe("idle");
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync, spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { procBackend } from "@/lib/proc";
 import { descendantPids, parsePsMemory } from "@/lib/proc/memory";
@@ -34,7 +34,7 @@ export function viewerUnitFromCgroup(text: string): string | null {
   const entry = text.split("\n").find((line) => line.startsWith("0::"));
   if (!entry || !/\/user@\d+\.service\//.test(entry)) return null;
   const unit = entry.slice(3).split("/").pop()!;
-  return /^[a-zA-Z0-9_:.-]+\.service$/.test(unit) ? unit : null;
+  return /^(?:[a-zA-Z0-9_:@.-]|\\x[0-9a-fA-F]{2})+\.service$/.test(unit) ? unit : null;
 }
 export function agentOomScore(viewerScore: number): number { return Math.min(1000, Math.max(500, viewerScore + 300)); }
 export interface AgentMemoryPlan {
@@ -205,6 +205,7 @@ export class AgentMemoryCell {
   private scopeAdmissionError: string | null = null;
   private lastSample: MemorySample[] = [];
   private rootIdentity: string | null = null;
+  private child: ChildProcess | null = null;
   private closed = false;
   private attachTimer: ReturnType<typeof setInterval> | null = null;
   pid: number | null = null;
@@ -236,7 +237,7 @@ export class AgentMemoryCell {
       });
       if (child.pid) {
         const pid = child.pid;
-        this.attach(pid);
+        this.attach(pid, child);
         if (this.pid === null) {
           const deadline = Date.now() + 10_000;
           this.attachTimer = setInterval(() => {
@@ -253,8 +254,12 @@ export class AgentMemoryCell {
       return child;
     };
   }
-  attach(pid: number): void {
+  attach(pid: number, child?: ChildProcess): void {
     if (this.closed || this.pid !== null) return;
+    if (child) {
+      this.child = child;
+      child.once("exit", () => { this.child = null; });
+    }
     this.rootIdentity = (this.ports.identity ?? procBackend.processIdentity)(pid);
     if (this.plan.mechanism === "watchdog") {
       this.pid = pid;
@@ -303,7 +308,14 @@ export class AgentMemoryCell {
     this.notify();
   }
   sample(samples: Map<number, MemorySample[]>): MemorySample[] {
-    if (this.pid === null || this.closed || !this.rootIdentity || (this.ports.identity ?? procBackend.processIdentity)(this.pid) !== this.rootIdentity) return [];
+    if (this.pid === null || this.closed) return [];
+    // Only the unreaped child handle can establish ownership after a missed initial lookup.
+    const ownedChild = () => this.child?.pid === this.pid && this.child.exitCode === null && this.child.signalCode === null;
+    if (!this.rootIdentity && !ownedChild()) return [];
+    const identity = (this.ports.identity ?? procBackend.processIdentity)(this.pid);
+    if (!identity) return [];
+    if (!this.rootIdentity && ownedChild()) this.rootIdentity = identity;
+    if (identity !== this.rootIdentity) return [];
     this.lastSample = this.ports.sample?.(this.pid) ?? samples.get(this.pid) ?? [];
     return this.lastSample;
   }
@@ -338,6 +350,7 @@ export class AgentMemoryCell {
   }
   close(): void {
     this.closed = true;
+    this.child = null;
     if (this.attachTimer) clearInterval(this.attachTimer); this.attachTimer = null;
     this.watcher?.close(); this.watcher = null;
     if (this.eventsFd !== null) { fs.closeSync(this.eventsFd); this.eventsFd = null; }

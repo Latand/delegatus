@@ -8,7 +8,7 @@ export function normalizeHostMemory(value: unknown): HostMemoryState | null {
   if ((state.mechanism !== "scope" && state.mechanism !== "watchdog") || !Number.isSafeInteger(state.limitBytes) || state.limitBytes <= 0
     || !Number.isSafeInteger(state.kills) || state.kills < 0 || (state.unit !== null && (typeof state.unit !== "string" || !/^delegatus-agent-[\w.-]+\.scope$/.test(state.unit)))) return null;
   const kill = state.lastKill;
-  if (kill !== null && (!kill || !Number.isFinite(Date.parse(kill.at)) || !Number.isSafeInteger(kill.limitBytes) || kill.limitBytes <= 0
+  if (kill !== null && (!kill || typeof kill.at !== "string" || !Number.isFinite(Date.parse(kill.at)) || !Number.isSafeInteger(kill.limitBytes) || kill.limitBytes <= 0
     || !["agent", "shared", "system"].includes(kill.limit) || typeof kill.fatal !== "boolean" || (kill.process !== null && typeof kill.process !== "string"))) return null;
   return { mechanism: state.mechanism, limitBytes: state.limitBytes, unit: state.unit, kills: state.kills,
     lastKill: kill ? { at: kill.at, limitBytes: kill.limitBytes, limit: kill.limit, fatal: kill.fatal, process: kill.process } : null };
