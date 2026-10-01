@@ -1734,6 +1734,7 @@ describe("MCP tool service", () => {
         "link_task_to_pipeline",
         "list_conversations",
         "search_transcripts",
+        "search_memory",
         "get_conversation",
         "conversation_deliverability",
         "conversation_messages",

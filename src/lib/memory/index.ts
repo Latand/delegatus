@@ -171,7 +171,34 @@ export class MemoryIndex {
     const at = new Date().toISOString();
     const ledgerKey = crypto.createHash("sha256").update(`${conversationId ?? ""}\0${requestId}`).digest("hex");
     db.query("INSERT OR IGNORE INTO memory_offers VALUES (?, ?, ?, ?, 'search', NULL, 'opened', ?)").run(id, ledgerKey, conversationId, at, at);
-    return { ...item, sourcePath: displayPath(item.sourcePath), flags: JSON.parse(item.flags) as string[] };
+    const opened = { ...item, sourcePath: displayPath(item.sourcePath), flags: JSON.parse(item.flags) as string[] };
+    if (Buffer.byteLength(JSON.stringify({ item: opened })) <= MEMORY_RESPONSE_BYTES) return opened;
+
+    // Raw UTF-8 caps do not bound JSON: control characters expand to six bytes
+    // when serialized. Keep the source pointer intact and trim the least
+    // essential text first until the complete route response fits its budget.
+    const truncated = { ...opened, truncated: true };
+    for (const field of ["body", "summary", "title"] as const) {
+      const original = truncated[field];
+      let low = 0;
+      let high = Buffer.byteLength(original);
+      let best = "";
+      truncated[field] = best;
+      while (low <= high) {
+        const middle = Math.floor((low + high) / 2);
+        const candidate = byteBound(original, middle);
+        truncated[field] = candidate;
+        if (Buffer.byteLength(JSON.stringify({ item: truncated })) <= MEMORY_RESPONSE_BYTES) {
+          best = candidate;
+          low = middle + 1;
+        } else {
+          high = middle - 1;
+        }
+      }
+      truncated[field] = best;
+      if (Buffer.byteLength(JSON.stringify({ item: truncated })) <= MEMORY_RESPONSE_BYTES) return truncated;
+    }
+    return truncated;
   }
 
   offers(id: string) {

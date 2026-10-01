@@ -4,10 +4,11 @@ import os from "node:os";
 import path from "node:path";
 
 import { viewerMcpBindings } from "@/lib/mcp/bindings";
+import { MEMORY_RESPONSE_BYTES } from "@/lib/memory/index";
 import { memoryIndex } from "@/lib/memory/service";
 import { GET, POST } from "./route";
 
-test("the real MCP binding searches both engines via the Viewer route, filters scope, opens and records a hit", async () => {
+test("the real MCP binding searches both engines via the Viewer route, filters scope, opens bounded hits and records outcomes", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-route-"));
   const previousState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -41,6 +42,20 @@ test("the real MCP binding searches both engines via the Viewer route, filters s
     const sameProject = await bindings.search_memory({ clientRequestId: "routed-summary-scope", query: "synthetic", project: routedHit.project! });
     expect(sameProject.items).toHaveLength(3);
     expect((await bindings.search_memory({ clientRequestId: "routed-other-scope", query: "synthetic", project: "project-b" })).items).toHaveLength(1);
+
+    const sourceDirectory = path.join(root, ...Array.from({ length: 5 }, () => "d".repeat(200)));
+    fs.mkdirSync(sourceDirectory, { recursive: true });
+    const sourcePath = path.join(sourceDirectory, "topic.md");
+    const escaped = "\u0001";
+    fs.writeFileSync(sourcePath, `---\nname: Widget${escaped.repeat(154)}\ndescription: Widget${escaped.repeat(394)}\ntype: feedback\n---\nWidget${escaped.repeat(2042)}\n`);
+    await index.refresh([{ path: sourcePath, engine: "claude", sourceKind: "claude_memory", project: "project-a" }]);
+    const escapedHits = (await bindings.search_memory({ clientRequestId: "escaped-open-search", query: "widget" })).items as Array<{ id: string; sourcePath: string }>;
+    const escapedHit = escapedHits.find(hit => hit.sourcePath.endsWith("topic.md"))!;
+    const opened = await bindings.search_memory({ clientRequestId: "escaped-open-hit", id: escapedHit.id });
+    expect(Buffer.byteLength(JSON.stringify({ item: opened.item }))).toBeLessThanOrEqual(MEMORY_RESPONSE_BYTES);
+    expect((opened.item as { sourcePath: string }).sourcePath).toContain("topic.md");
+    expect((opened.item as { body: string }).body.length).toBeGreaterThan(0);
+    expect((opened.item as { truncated: boolean }).truncated).toBe(true);
   } finally {
     index.close();
     if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
