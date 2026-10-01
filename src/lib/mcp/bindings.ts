@@ -6064,9 +6064,10 @@ function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   const message = requiredMessageText(args);
   const caller = recoveryCaller(dependencies);
   const attribution = attributionOf(dependencies);
-  const seat = attribution.kind === "gateway" ? null :
-    (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
-      .find((candidate) => candidate.conversationId === attribution.conversationId);
+  // Match HTTP admission: a designated seat takes precedence even when the
+  // root caller's general attribution also identifies it as the voice gateway.
+  const seat = (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
+    .find((candidate) => candidate.conversationId === attribution.conversationId);
   if (!seat && (attribution.kind !== "gateway" || !attribution.conversationId)) {
     throw new McpToolRefusal("the relay sender could not be bound to an authenticated conversation", {
       code: "orchestrator_relay_refused", retryable: false,

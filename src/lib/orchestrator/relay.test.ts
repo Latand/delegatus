@@ -23,7 +23,7 @@ const { POST: legacyPOST } = await import("@/app/api/tmux/route");
 const { POST: orchestratorPOST } = await import("@/app/api/orchestrator/message/route");
 const { POST: seatPOST } = await import("@/app/api/orchestrator/seat/route");
 const { setConversationHostDependenciesForTests } = await import("@/app/api/conversation-host/dependencies");
-const { viewerMcpBindings, viewerMcpRecoverableTools } = await import("@/lib/mcp/bindings");
+const { callerAttributionFrom, viewerMcpBindings, viewerMcpRecoverableTools } = await import("@/lib/mcp/bindings");
 const { createMcpToolService, MemoryMcpReceiptStore, SqliteMcpReceiptStore, McpDispatchUncertainError } = await import("@/lib/mcp/server");
 const { enqueueStructuredMessage } = await import("@/lib/runtime/structuredMessageDelivery");
 import type { RuntimeHostClient } from "@/lib/runtime/client";
@@ -416,12 +416,14 @@ test("former recipients require the original sender, key and payload; fresh send
   expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(2);
 });
 
-function durableRelayTools(sender: ReturnType<typeof actor>, store: InstanceType<typeof SqliteMcpReceiptStore>, loseResponse = false) {
+function durableRelayTools(sender: ReturnType<typeof actor>, store: InstanceType<typeof SqliteMcpReceiptStore>, loseResponse = false, rootCaller = false) {
   process.env.LLV_SPAWN_CAPABILITY = sender.capability;
   const domain = {
     registrySnapshot: () => registry.readOnlySnapshot(),
-    attentionAuthority: () => ({ kind: "worker", conversationId: sender.id, role: null }),
-    callerAttribution: () => ({ kind: "agent", conversationId: sender.id, role: "orchestrator" }),
+    attentionAuthority: () => ({ kind: rootCaller ? "root" : "worker", conversationId: sender.id, role: null }),
+    callerAttribution: () => rootCaller
+      ? callerAttributionFrom({ kind: "root", conversationId: sender.id }, () => false)
+      : ({ kind: "agent", conversationId: sender.id, role: "orchestrator" }),
     // Omit recoveryPredecessors: exercise the production seat lineage resolver.
     sendSettlementPorts: () => ({ registry, client: null }),
   } as unknown as ViewerMcpDomainDependencies;
@@ -439,6 +441,29 @@ function durableRelayTools(sender: ReturnType<typeof actor>, store: InstanceType
   return { dispatches, service: createMcpToolService(viewerMcpBindings(undefined, control, domain), store, undefined,
     { recovery: viewerMcpRecoverableTools(domain) }) };
 }
+
+test("a root adopted as a seat binds the same orchestrator payload that HTTP admits", async () => {
+  realAdmission();
+  const sender = actor("project-a", "root");
+  const recipient = actor("project-b");
+  const file = path.join(process.env.LLV_STATE_DIR!, "root-seat-recovery.sqlite");
+  let store = new SqliteMcpReceiptStore(file);
+  const args = { project: "project-b", text: "report", clientRequestId: "root-seat-response-loss" };
+  try {
+    const initial = durableRelayTools(sender, store, true, true);
+    const result = await initial.service.callTool("send_message_to_orchestrator", args);
+    expect(result).toMatchObject({ ok: true, state: "in-flight" });
+    const reservation = Object.values(registry.readOnlySnapshot().heldDeliveries)[0]!;
+    expect(result).toMatchObject({ operationId: reservation.command.operationId });
+    expect(reservation.command.origin).toMatchObject({ kind: "agent", role: "orchestrator", project: "project-a", conversationId: sender.id });
+    store.close(); store = new SqliteMcpReceiptStore(file);
+    const recovery = durableRelayTools(sender, store, false, true);
+    expect(await recovery.service.callTool("send_message_to_orchestrator", { ...args, recoveryOnly: true }))
+      .toMatchObject({ ok: true, state: "in-flight", operationId: reservation.command.operationId, conversationId: recipient.id });
+    expect(recovery.dispatches).toEqual([]);
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(1);
+  } finally { store.close(); }
+});
 
 test("gateway MCP recovery never inherits an operator receipt after a lost HTTP conflict", async () => {
   realAdmission();
