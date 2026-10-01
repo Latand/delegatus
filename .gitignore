@@ -60,6 +60,10 @@ prod.log
 docs/screenshots/issue-499/*.png
 docs/screenshots/issue-499/captures.list
 docs/screenshots/issue-499/geometry.list
+# Board maintenance timer renders (#2162): written by the issue1681 driver's
+# #2162 case. The publication gate admits a raster only when a trusted in-repo
+# generator reproduces it byte for byte, which a browser capture cannot do.
+docs/design/board-maintainer-ui/*.png
 
 # The conversation-window visual evidence: the objective geometry manifest
 # (geometry.json — overflow/proportions/control-placement measurements) is

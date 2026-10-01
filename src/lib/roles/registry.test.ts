@@ -7,7 +7,18 @@ import { ORCHESTRATOR_TASK_OWNERSHIP_HEADING } from "@/lib/orchestrator/prompt";
 
 import { APPLY_FIXES_GUIDANCE, listRoles, resolveRole, resolveSpawnRole, roleFenceBlock, roleScaffoldBody, roleSpawnPrompt, SPAWN_COMPLETION } from "./registry";
 
-test("role registry exposes the frozen eight role ids and campaign-ready orchestrator config", () => {
+test("maintainer preserves review and release ownership and treats retired seats as history", () => {
+  const resolved = resolveRole("maintainer");
+  if (!resolved.ok) throw new Error(resolved.error);
+  expect(resolved.value.prompt).toContain("A task with an open pull request stays assigned");
+  expect(resolved.value.prompt).toContain("A release or deployment the orchestrator seat is carrying stays assigned");
+  expect(resolved.value.prompt).toContain('status: "done", hide: true, board: "hidden"');
+  expect(resolved.value.prompt).toContain("neither the current nor pending seat");
+  expect(resolved.value.prompt).toContain("Never move a retired seat card to inbox");
+  expect(resolved.value.prompt).toContain("Hide only a confirmed retired orchestrator seat card");
+});
+
+test("role registry exposes the nine role ids and campaign-ready orchestrator config", () => {
   const roles = listRoles();
 
   expect(roles.map((role) => role.id)).toEqual([
@@ -19,6 +30,7 @@ test("role registry exposes the frozen eight role ids and campaign-ready orchest
     "cleaner",
     "prod-auditor",
     "deployer",
+    "maintainer",
   ]);
   expect(Object.fromEntries(roles.map((role) => [role.id, role.config]))).toEqual({
     orchestrator: { engine: "claude", model: "opus", effort: "high" },
@@ -28,6 +40,7 @@ test("role registry exposes the frozen eight role ids and campaign-ready orchest
     architect: { engine: "claude", model: "opus", effort: "high" },
     cleaner: { engine: "codex", model: "gpt-5.6-terra", effort: "low" },
     "prod-auditor": { engine: "codex", model: "gpt-6-astra", effort: "high" },
+    maintainer: { engine: "codex", model: "gpt-6.1-sol", effort: "medium" },
     deployer: { engine: "codex", model: "gpt-5.6-terra", effort: "medium" },
   });
 
@@ -97,7 +110,7 @@ test("role registry rejects unknown and missing required parameters with bounded
   });
   expect(resolveRole("no-such-role", {})).toEqual({
     ok: false,
-    error: "unknown role: no-such-role (allowed: orchestrator, reviewer, verifier, builder, architect, cleaner, prod-auditor, deployer)",
+    error: "unknown role: no-such-role (allowed: orchestrator, reviewer, verifier, builder, architect, cleaner, prod-auditor, deployer, maintainer)",
   });
 });
 
@@ -133,7 +146,7 @@ test("builder, reviewer and architect scaffolds send the seat to search prior co
    only if every registry role renders it, so assert the whole registry. */
 test("every registry role scaffold carries the process-cleanup rule", () => {
   const roles = listRoles();
-  expect(roles.length).toBe(8);
+  expect(roles.length).toBe(9);
   for (const definition of roles) {
     /* The renderer both the spawn path and the pipeline stage lookup call, so
        a role whose required params are unset (a stage resolves them to registry

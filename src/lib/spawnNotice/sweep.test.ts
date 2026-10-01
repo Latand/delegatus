@@ -358,6 +358,17 @@ test("the engine's error text is read from the transcript tail", () => {
   expect(transcriptErrorFromRecords([{ type: "assistant", message: { content: [{ type: "text", text: "fine" }] } }], "claude")).toBeNull();
 });
 
+test("Codex transcript tail error belongs to the most recent completed turn", () => {
+  const records = [
+    { type: "event_msg", payload: { type: "task_started", turn_id: "first" } },
+    { type: "event_msg", payload: { type: "turn_aborted", turn_id: "first", reason: "provider interruption" } },
+    { type: "event_msg", payload: { type: "task_started", turn_id: "second" } },
+    { type: "event_msg", payload: { type: "task_complete", turn_id: "second", last_agent_message: "Inventory complete. Verdict: pass" } },
+  ];
+  expect(transcriptErrorFromRecords(records, "codex")).toBeNull();
+  expect(transcriptErrorFromRecords(records.slice(0, 2), "codex")).toBe("provider interruption");
+});
+
 test("a turn that ends while hot-state writes are fenced is deferred past the quarantine budget and lands once the fence lifts (§2)", async () => {
   const { RuntimeJournal } = await import("@/runtime-host/journal");
   const { RuntimeHost } = await import("@/runtime-host/host");

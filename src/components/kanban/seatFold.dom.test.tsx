@@ -46,6 +46,9 @@ Object.assign(globalThis, {
   localStorage: dom.localStorage,
   ResizeObserver: TestResizeObserver,
   IntersectionObserver: undefined,
+  /* The feed inside the seat schedules its measuring on a frame. */
+  requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(0), 0) as unknown as number,
+  cancelAnimationFrame: (handle: number) => clearTimeout(handle),
 });
 (dom as unknown as { matchMedia: (q: string) => unknown }).matchMedia = (query: string) => ({
   matches: false, media: query, addEventListener() {}, removeEventListener() {},
@@ -556,4 +559,37 @@ test("phone: the sheet row reads Seat notes with the live seat alone, and the li
   /* And a retired seat with no notes draws no button on the phone either. */
   const quietPrevious = mountNode(<MobilePreviousSeatsScreen status={status(withPrevious([{ ...PREVIOUS[0], hasNotes: false }]))} onBack={() => {}} />);
   expect(quietPrevious.querySelector('[data-seat-row="conversation_prev_new"] [data-seat-notes-toggle]')).toBeNull();
+});
+
+test("a request for the tick panel unfolds a folded seat, and the chip that mounts with its header opens it", async () => {
+  /* The tick notice on the board asks for this project's panel. The chip lives
+     in the seat's header, which a folded seat does not draw, so the seat
+     unfolds first and the chip answers the request it finds waiting. */
+  const { requestSeatTickPanel, resetPendingSeatTickPanel } = await import("@/components/orchestrator/openSeatTick");
+  resetPendingSeatTickPanel();
+  dom.localStorage.setItem(SEAT_STORAGE_KEY, JSON.stringify({ collapsed: { [PROJECT]: true } }));
+  const host = mountSeat();
+  await settle();
+  expect(section(host).getAttribute("data-collapsed")).toBe("1");
+  expect(host.querySelector("[data-seat-tick-chip]")).toBeNull();
+
+  flushSync(() => requestSeatTickPanel(PROJECT));
+  await settle();
+  expect(section(host).getAttribute("data-collapsed")).toBe("0");
+  expect(host.querySelector("[data-seat-tick-chip]")).not.toBeNull();
+  expect(dom.document.querySelector("[data-seat-tick-popover]")).not.toBeNull();
+  /* The fold is the operator's stored choice and the request changed it. */
+  expect(JSON.parse(dom.localStorage.getItem(SEAT_STORAGE_KEY) ?? "{}").collapsed).toEqual({ [PROJECT]: false });
+});
+
+test("a request for another project's tick panel leaves this seat folded", async () => {
+  const { requestSeatTickPanel, resetPendingSeatTickPanel } = await import("@/components/orchestrator/openSeatTick");
+  resetPendingSeatTickPanel();
+  dom.localStorage.setItem(SEAT_STORAGE_KEY, JSON.stringify({ collapsed: { [PROJECT]: true } }));
+  const host = mountSeat();
+  await settle();
+  flushSync(() => requestSeatTickPanel("another-project"));
+  await settle();
+  expect(section(host).getAttribute("data-collapsed")).toBe("1");
+  expect(dom.document.querySelector("[data-seat-tick-popover]")).toBeNull();
 });

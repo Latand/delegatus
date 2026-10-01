@@ -294,7 +294,9 @@
   // tells a frame which language, step and view to show; the hero's frame
   // runs the scripted walkthrough and reports its step back.
 
-  const phoneQuery = matchMedia("(max-width: 639px)");
+  // A touch screen this short is a phone turned sideways; a tablet keeps the
+  // desktop frames.
+  const phoneQuery = matchMedia("(max-width: 639px), (hover: none) and (pointer: coarse) and (max-height: 639px)");
   // Where the hero's frame turns at each step of the script. On the desktop
   // the board has the orchestrator docked beside it; on the phone the chat
   // holds the request until it is sent, the board shows the new card, and
@@ -363,19 +365,33 @@
   function layout(live) {
     const phone = live.fixed || phoneQuery.matches;
     const d = live.el.dataset;
-    // Full screen runs the product at the size of the space it has, unscaled,
-    // so its own responsive layout decides what the visitor sees.
+    // A phone demo keeps the product's canonical viewport in every mode.
+    // Fit the whole device into the available space rather than stretching
+    // the chat to the browser's viewport (including short landscape screens).
     const full = fsLive === live;
+    const visibleHeight = window.visualViewport?.height ?? window.innerHeight;
+    if (live.root) live.root.style.maxHeight = full && phone ? `${visibleHeight}px` : "";
     const width = (full ? live.host.clientWidth : live.el.clientWidth) || 1;
-    const lw = full ? width : phone ? Number(d.pw) : Math.max(Number(d.lw), width);
-    const lh = full ? live.host.clientHeight || 1 : phone ? Number(d.ph) : Number(d.lh);
-    const scale = full ? 1 : width / lw;
-    live.el.style.height = full ? "" : `${Math.round(lh * scale)}px`;
+    const lw = phone ? Number(d.pw) : full ? width : Math.max(Number(d.lw), width);
+    const lh = phone ? Number(d.ph) : full ? live.host.clientHeight || 1 : Number(d.lh);
+    // Embedded frames size against the layout viewport, which holds still
+    // while the browser's toolbar collapses or the keyboard opens, so the
+    // page under the visitor's finger does not reflow.
+    const availableHeight = full
+      ? Math.min(live.host.clientHeight || 1, visibleHeight) - 24
+      : document.documentElement.clientHeight * 0.78;
+    const scale = phone
+      ? Math.max(0.01, Math.min(1, (width - 24) / lw, availableHeight / lh))
+      : full ? 1 : width / lw;
+    live.el.style.height = full ? "" : `${Math.ceil(lh * scale) + (phone ? 24 : 0)}px`;
     live.el.dataset.mode = phone ? "phone" : "desktop";
     if (live.iframe) {
       live.iframe.style.width = `${lw}px`;
       live.iframe.style.height = `${lh}px`;
-      live.iframe.style.transform = scale === 1 ? "" : `scale(${scale})`;
+      live.iframe.style.left = phone ? "50%" : "0";
+      live.iframe.style.top = phone ? "50%" : "0";
+      live.iframe.style.transformOrigin = phone ? "center" : "0 0";
+      live.iframe.style.transform = phone ? `translate(-50%, -50%) scale(${scale})` : scale === 1 ? "" : `scale(${scale})`;
     }
     if (phone !== live.phone) {
       live.phone = phone;
@@ -698,6 +714,7 @@
     fsWatch?.disconnect();
     fsWatch = null;
     live.root.removeAttribute("data-fs");
+    live.root.style.maxHeight = "";
     root.classList.remove("fs-lock");
     labelFullscreen();
     lives.forEach(layout);
@@ -729,6 +746,7 @@
   const relayout = () => lives.forEach(layout);
   new ResizeObserver(relayout).observe(document.body);
   phoneQuery.addEventListener("change", relayout);
+  window.visualViewport?.addEventListener("resize", relayout);
 
   onLanguage = () => {
     renderSteps();

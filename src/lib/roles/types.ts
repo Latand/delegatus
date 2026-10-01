@@ -7,6 +7,7 @@ export const ROLE_IDS = [
   "cleaner",
   "prod-auditor",
   "deployer",
+  "maintainer",
 ] as const;
 
 export type RoleId = typeof ROLE_IDS[number];

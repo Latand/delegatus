@@ -58,12 +58,55 @@ const FACE_MINUTES: Record<ChipFace, number> = { default: 60, configured: 30, lo
 const face: ChipFace = params.get("face") === "default" ? "default" : params.get("face") === "longest" ? "longest" : "configured";
 const faceMinutes = FACE_MINUTES[face];
 
+/**
+ * The board maintenance timer (#2162), as the settings answer carries it.
+ * `?maint=` picks the reading: `off` (the default), `never` (on, never run),
+ * `ok` (on, last run done with 3 for the operator, next run set), `failed`
+ * (last run failed, no account), `running` (a run is live), `held` (due, but a
+ * deployment is running) and `paused` (on, but wakes are off).
+ */
+type MaintenanceCase = "off" | "never" | "ok" | "failed" | "running" | "held" | "paused";
+const maintenanceCase: MaintenanceCase = (["never", "ok", "failed", "running", "held", "paused"] as const).find((value) => value === params.get("maint")) ?? "off";
+
+function maintenance(): SeatTickSettingsAnswer["maintenance"] {
+  const base: SeatTickSettingsAnswer["maintenance"] = {
+    enabled: false, intervalHours: 3, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168,
+    updatedAt: null, setBy: null, live: null, lastRun: null,
+    nextEligibleAt: null, nextRunAt: null, waitingOn: "off", pauseReason: null, runsError: null,
+  };
+  const ended = (state: "succeeded" | "failed") => ({
+    runId: "run-evidence", taskId: "task-evidence", conversationId: null, state,
+    claimedAt: ago(116), launchedAt: ago(115), endedAt: ago(100),
+    failure: state === "failed" ? { kind: "no-account" as const, detail: "no Codex account" } : null,
+    counts: { writes: 14, tasks: 9, status: 4, closed: 2, created: 1, text: 5, details: 0, looks: 2 },
+    attentionCount: state === "failed" ? 0 : 3,
+  });
+  const on = { ...base, enabled: true, intervalHours: 3, updatedAt: ago(600), setBy: { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null } };
+  switch (maintenanceCase) {
+    case "never":
+      return { ...on, waitingOn: null, nextEligibleAt: ago(0), nextRunAt: ago(-3) };
+    case "paused":
+      return { ...on, lastRun: ended("succeeded"), waitingOn: "wakes-off", pauseReason: "paused while wakes are off" };
+    case "ok":
+      return { ...on, lastRun: ended("succeeded"), waitingOn: "interval", nextEligibleAt: ago(-65), nextRunAt: ago(-70) };
+    case "failed":
+      return { ...on, lastRun: ended("failed"), waitingOn: "interval", nextEligibleAt: ago(-65), nextRunAt: ago(-70) };
+    case "running":
+      return { ...on, waitingOn: "live-run", live: { ...ended("succeeded"), state: "running", endedAt: null, taskId: "task-live", attentionCount: 0 }, lastRun: ended("succeeded") };
+    case "held":
+      return { ...on, lastRun: ended("succeeded"), waitingOn: "deployment", nextEligibleAt: ago(10), nextRunAt: ago(-5) };
+    default:
+      return base;
+  }
+}
+
 /** Stale, so the chip carries a warning dot and the popover shows every
     section at once, on the schedule `?face=` asks for. */
-function answer(): SeatTickSettingsAnswer {
+function baseAnswer(): SeatTickSettingsAnswer {
   const onDefault = face === "default";
   const reason = onDefault ? null : "a release afternoon, so the seat is woken on a schedule of its own";
   return {
+    maintenance: maintenance(),
     project: PROJECT,
     changed: false,
     at: new Date().toISOString(),
@@ -94,7 +137,7 @@ function answer(): SeatTickSettingsAnswer {
     monitorPromptLength: 0,
     cardText: onDefault
       ? null
-      : `This project's seat tick is not on its default settings\n\nwakes for this project are set to one every ${faceMinutes} minute(s).`,
+      : `Tick: every ${faceMinutes} min until later today\n\nWakes for this project are set to one every ${faceMinutes} minute(s).\n\nmonitor-ref: seat-tick-settings`,
     policy: { checkIntervalMinutes: 5, staleAfterMinutes: 15, retryGuardWakes: 2 },
     state: {
       lastCheckAt: ago(23),
@@ -111,6 +154,21 @@ function answer(): SeatTickSettingsAnswer {
     journalError: null,
   };
 }
+
+/** Wakes off for two hours, with the reason the operator gave. */
+function offAnswer(): SeatTickSettingsAnswer {
+  const reason = "no releases until Monday, so nothing needs waking";
+  const base = baseAnswer();
+  return {
+    ...base,
+    settings: { ...base.settings, enabled: false, reason, until: ago(-1380), updatedAt: ago(120), setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } },
+    effective: { ...base.effective, enabled: false, reason, until: ago(-1380), isDefault: false, configured: true, updatedAt: ago(120) },
+    cardText: "Tick: off until tomorrow\n\nTicking is off for this project.\n\nmonitor-ref: seat-tick-settings",
+    state: { ...base.state!, lastCheckAt: ago(3), lastWakeAt: ago(190) },
+  };
+}
+
+const answer = (): SeatTickSettingsAnswer => (params.get("tick") === "off" ? offAnswer() : baseAnswer());
 
 /** Blocked by an unresolved wake — the longest trailing clause the phone's row
     ever carries, and the case the critique measured clipped at 390 px. */
@@ -160,6 +218,25 @@ const designated: OrchestratorIncumbent = {
 };
 const incumbent = params.get("incumbent") === "board" ? null : designated;
 
+/** The agent mapping the maintainer picker reads: the `maintainer` row on its
+    shipped runtime, with the launch catalogue the server offers. */
+const rolesCatalogue = {
+  revision: "fixture",
+  health: "ok",
+  launchChoices: [
+    { engine: "claude", models: [
+      { id: "opus", label: "Opus 5.5", shortLabel: "Opus 5.5", use: "review", efforts: ["low", "medium", "high", "xhigh", "max"] },
+      { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", shortLabel: "Sonnet 5.5", use: "implement", efforts: ["low", "medium", "high", "xhigh", "max"] },
+    ] },
+    { engine: "codex", models: [
+      { id: "gpt-6-astra", label: "GPT-6-Astra", shortLabel: "6-Astra", use: "review", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+      { id: "gpt-6.1-sol", label: "GPT-6.1-Sol", shortLabel: "6.1-Sol", use: "review", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+      { id: "gpt-6-luna", label: "GPT-6-Luna", shortLabel: "6-Luna", use: "general", efforts: ["low", "medium", "high", "xhigh", "max"] },
+    ] },
+  ],
+  roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "codex", model: "gpt-6.1-sol", effort: "medium" } }],
+};
+
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input);
@@ -168,6 +245,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const body = params.get("tick") === "blocked" ? blockedAnswer() : answer();
     return json({ ...body, changed: init?.method === "PUT" });
   }
+  if (url.startsWith("/api/roles")) return json(rolesCatalogue);
   if (url.startsWith("/api/accounts")) return json(accounts);
   if (url.startsWith("/api")) return json({});
   return realFetch(input, init);

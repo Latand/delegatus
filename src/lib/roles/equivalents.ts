@@ -71,6 +71,7 @@ const ROW_TARGETS: Record<RoleEngine, Readonly<Record<string, RoleConfig>>> = {
     "reviewer:trivial": SONNET_MEDIUM,
     architect: OPUS_HIGH,
     cleaner: SONNET_HIGH,
+    maintainer: { engine: "claude", model: "opus", effort: "medium" },
     "prod-auditor": OPUS_HIGH,
     deployer: OPUS_HIGH,
   },

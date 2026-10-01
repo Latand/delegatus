@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, ArrowLeftRight, ArrowRight, ArrowUp, ArrowUpDown, Ban, Boxes, Check, ChevronDown, CircleCheck, CircleX, Eye, EyeOff, Flag, Inbox, Link2, Minus, Palette, Pause, Pencil, Play, Plus, ScrollText, UserRoundCheck } from "lucide-react";
+import { ArrowDown, ArrowLeftRight, ArrowRight, ArrowUp, ArrowUpDown, Ban, Boxes, Check, ChevronDown, CircleCheck, CircleX, Eye, EyeOff, Flag, Inbox, Link2, Minus, Palette, Pause, Pencil, Play, Plus, ScrollText, Timer, UserRoundCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { EngineMark } from "@/components/EngineMark";
@@ -14,6 +14,7 @@ import { RemoteLane, useManagedOnText } from "@/components/kanban/RemoteLanes";
 import { remoteCardFor, useRemoteFeed, type RemoteCard } from "@/components/kanban/remoteFeed";
 import { textField, withField } from "@/components/kanban/taskText";
 import { useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
+import { isSeatTickNotice } from "@/components/orchestrator/openSeatTick";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
 import { PhoneAlbumRow } from "@/components/taskAlbum/AlbumButton";
 import { finishesTaskOffer, toggleFinishesTask } from "@/components/pipelines/finishesTask";
@@ -39,6 +40,7 @@ import { mobilePipelineActions, pendingPipelineActs, usePhonePipelineActs, useSc
 import { showReceipt } from "./MobileReceipt";
 import type { MobileRowActionTarget } from "./MobileRowActions";
 import { MobileSheet, MobileSheetDivider, MobileSheetRow } from "./MobileSheet";
+import { MobileSeatTickSheet } from "./MobileSeatTickSheet";
 import { MobileShell, type MobileShellHost, type SheetRenderer } from "./MobileShell";
 import { MobileSwipeRow, type MobileRowAction } from "./MobileSwipeRow";
 import { useMobileNav, useMobileNavStore, useMobileScreenState, useMobileScrollMemory, useSheetSelection } from "./mobileNav";
@@ -112,6 +114,8 @@ export interface MobileTaskScreenProps extends PhoneBoardInput {
   mutationPorts?: TaskMutationPorts;
   host?: MobileShellHost | null;
   renderSheet?: SheetRenderer;
+  /** The project's display name, for the seat tick sheet the tick notice opens. */
+  projectName?: string;
   /** What an agent row offers on a swipe: the board rows' own actions. */
   rowActions?: (target: MobileRowActionTarget) => readonly MobileRowAction[];
   /** Lanes whose close is on their way: gone from the screen on the tap. */
@@ -528,6 +532,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
   const title = task ? (card?.titlePending ? t("kanban.untitled") : (card?.title || textField(task.text, "title")) || t("kanban.untitled")) : "";
   const pendingTitle = card ? card.titlePending : Boolean(task && !textField(task.text, "title"));
   const description = task ? textField(task.text, "description") : "";
+  const tickNotice = task ? isSeatTickNotice(task.text) : false;
   const details = task?.details ?? "";
   const receiptTitle = cleanTitle(title, 48);
 
@@ -845,6 +850,11 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
         </MobileSheet>
       );
     }
+    /* The tick notice's own sheet: the project's seat tick panel, over this
+       screen, through the same sheet the seat card opens from its seat sheet. */
+    if (name === "tick" && tickNotice) {
+      return <MobileSeatTickSheet project={props.project} projectName={props.projectName ?? props.project} onClose={close} />;
+    }
     if (name === "links" && linksFor) {
       return (
         <MobileSheet name="links" title={t("workLinks.listTitle")} onClose={close}>
@@ -1083,6 +1093,20 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                     <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
                   </button>
                 )}
+
+                {/* The standing tick notice opens the panel that holds the setting it describes. */}
+                {tickNotice ? (
+                  <button
+                    type="button"
+                    data-phone-task-tick-open={props.project}
+                    className={`${ROW} shrink-0 min-h-12`}
+                    onClick={() => nav.openSheet("tick")}
+                  >
+                    <Timer className="h-4 w-4 shrink-0 text-muted" aria-hidden />
+                    <span className="min-w-0 flex-1 truncate text-body font-semibold text-primary">{t("kanban.tickNotice.open")}</span>
+                    <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
+                  </button>
+                ) : null}
 
                 {/* The task's album: every picture its agents made or looked at. */}
                 <PhoneAlbumRow taskId={taskId} title={title} pipelines={lanes.map((summary) => summary.pipeline)} files={files} rowClass={`${ROW} shrink-0 min-h-12`} />

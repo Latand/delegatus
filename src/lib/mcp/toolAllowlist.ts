@@ -25,6 +25,9 @@ import type { McpToolArgs, McpToolName } from "./server";
  *    for the operator root and a durably designated orchestrator seat. The
  *    action retains conversation_action's existing cross-project reach.
  *
+ *  - MAINTENANCE WRITES. A durably recorded maintainer writes task metadata
+ *    only. Its boundary refuses other mutations; ordinary sessions retain B+.
+ *
  * The exact-SHA deploy contract, idempotency keys, typed-target validation,
  * receipts and redaction are all enforced in their own layers and are
  * untouched by this policy.
@@ -68,7 +71,7 @@ export type McpCallerIdentity =
 
 export type McpToolVerdict =
   | { allowed: true }
-  | { allowed: false; code: "tool_not_permitted"; error: string };
+  | { allowed: false; code: "tool_not_permitted" | "maintainer_tool_refused"; error: string };
 
 const ALLOWED: McpToolVerdict = { allowed: true };
 
@@ -301,4 +304,18 @@ export function mcpToolPolicy(identity: () => McpCallerIdentity): McpToolPolicy 
   return {
     permit: (toolName, args) => permitMcpTool(identity(), toolName, args),
   };
+}
+
+/** Maintenance changes only task metadata. New mutating tools fail closed. */
+export function permitMaintainerTool(tool: McpToolName, args: McpToolArgs): McpToolVerdict {
+  const reads: Partial<Record<McpToolName, readonly string[]>> = {
+    seat_tick_settings: ["enabled", "wakeIntervalMinutes", "untilMinutes", "reason", "monitorPrompt", "replaceLine", "removeLine", "appendLine", "maintenance"],
+    account_project_binding: ["action", "accountId", "allowedAccountIds", "bindings", "mode"],
+    role_presets: ["overrides"], auto_updates: ["enabled"],
+  };
+  if (["create_task", "update_task", "agent_activity", "lifecycle_events"].includes(tool)) return ALLOWED;
+  if (tool === "account_project_binding" && (args.action === undefined || args.action === "list")) return ALLOWED;
+  const fields = reads[tool];
+  if (fields && !fields.some(field => args[field] !== undefined)) return ALLOWED;
+  return { allowed: false, code: "maintainer_tool_refused", error: `A board maintenance run writes the board only through create_task and update_task; ${tool} would start, stop, send or change something else, so Delegatus refused it. Put what you wanted done on your attention list.` };
 }

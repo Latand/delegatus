@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
+import { Profiler } from "react";
 
 import { MAX_TTS_MESSAGE_LENGTH } from "@/lib/tts";
 import { chunkSpeech, MAX_CHUNK_CHARS } from "@/lib/ttsChunks";
@@ -908,4 +909,47 @@ test("feed lifetime stops navigation and preserves an explicit full-window trans
   await Promise.resolve(); expect(stops).toBe(1);
   const releaseWindow = ownConversationFeed("transfer-test");
   releaseWindow(); await Promise.resolve(); expect(stops).toBe(2);
+});
+
+/* While the feed scrolls the visible answer changes about six times a second.
+   Every row's button used to subscribe to the whole snapshot, so each change
+   re-rendered every prose row of the expanded history. */
+test("a change of the visible answer re-renders the header only, never a row's button", async () => {
+  globalThis.fetch = mock(async () => Response.json(backendInfo)) as unknown as typeof fetch;
+  const { conversationSpeech } = await import("./conversationSpeech");
+  const scope = "row-fanout-test";
+  const speech = conversationSpeech(scope);
+  const renders = { header: 0, first: 0, second: 0 };
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  flushSync(() => root.render(<>
+    <Profiler id="header" onRender={() => { renders.header += 1; }}><SpeakButton scope={scope} header /></Profiler>
+    <Profiler id="first" onRender={() => { renders.first += 1; }}><SpeakButton scope={scope} text="First answer." answerId="a" /></Profiler>
+    <Profiler id="second" onRender={() => { renders.second += 1; }}><SpeakButton scope={scope} text="Second answer." answerId="b" /></Profiler>
+  </>));
+  await drainUpdates();
+  const before = { ...renders };
+  const header = host.querySelector<HTMLButtonElement>("[data-tts-header]")!;
+  const [first, second] = Array.from(host.querySelectorAll<HTMLButtonElement>("[data-tts-trigger]:not([data-tts-header])"));
+
+  for (const [id, text] of [["a", "First answer."], ["b", "Second answer."], ["a", "First answer."]] as const) {
+    flushSync(() => speech.select({ id, text, roots: () => [] }));
+    await drainUpdates();
+  }
+  expect(renders.first).toBe(before.first);
+  expect(renders.second).toBe(before.second);
+  expect(renders.header).toBeGreaterThan(before.header);
+  expect(header.getAttribute("title")).toContain("First answer.");
+
+  /* A row still follows its own playback: it, and only it, re-renders when it
+     becomes the active answer, and the header shares its phase. */
+  flushSync(() => speech.update({ phase: "playing", activeId: "b", activeText: "Second answer." }));
+  await drainUpdates();
+  expect(second!.dataset.ttsPhase).toBe("playing");
+  expect(first!.dataset.ttsPhase).toBe("idle");
+  expect(renders.first).toBe(before.first);
+  expect(renders.second).toBeGreaterThan(before.second);
+  flushSync(() => speech.update({ phase: "idle", activeId: null, activeText: null }));
+  await drainUpdates();
+  expect(second!.dataset.ttsPhase).toBe("idle");
+  root.unmount();
 });

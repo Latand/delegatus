@@ -16,7 +16,7 @@
  * The page and its demo pin dark, so this shows they hold under either.
  *
  * `--check-fullscreen` puts each demo frame full screen through its control, in
- * both languages and widths, once with the browser's Fullscreen API and once
+ * both languages, portrait and landscape phone sizes and a touch tablet, once with the browser's Fullscreen API and once
  * as the overlay iPhone Safari gets. It asserts the frame's layout and scale, that the
  * control clears the product's own controls, that Esc and the control leave,
  * and that the page's scroll position comes back; PNGs go to
@@ -407,11 +407,19 @@ async function checkFullscreen() {
   for (const mode of ["native", "overlay"] as const) {
     if (modeOnly && modeOnly !== mode) continue;
     for (const lang of ["en", "uk"] as Locale[]) {
-      for (const viewport of VIEWPORTS) {
+      for (const viewport of [
+        ...VIEWPORTS,
+        { name: "844-landscape", width: 844, height: 390, phone: true },
+        { name: "390-short", width: 390, height: 480, phone: true },
+        { name: "1024-tablet", width: 1024, height: 768, phone: false, tablet: true },
+      ]) {
+        const touch = viewport.phone || "tablet" in viewport;
         if (only && only !== `${lang}-${viewport.name}`) continue;
+        /* iPad Safari has element fullscreen, so a tablet never gets the overlay. */
+        if ("tablet" in viewport && mode === "overlay") continue;
         const context = await browser.newContext({
           viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, colorScheme,
-          ...(viewport.phone ? { hasTouch: true, isMobile: true } : {}),
+          ...(touch ? { hasTouch: true, isMobile: true } : {}),
         });
         /* iPhone Safari has no element fullscreen: the page must run without the API. */
         if (mode === "overlay") await context.addInitScript(() => {
@@ -453,6 +461,10 @@ async function checkFullscreen() {
             }).map((el) => el.getAttribute("aria-label") ?? el.textContent?.trim().slice(0, 20) ?? el.tagName);
             return {
               scrollY, src: iframe.src, layout: `${iframe.offsetWidth}x${iframe.offsetHeight}`, transform: getComputedStyle(iframe).transform,
+              phone: live.dataset.mode === "phone", fixed: live.hasAttribute("data-fixed"), expectedPhone: `${live.dataset.pw}x${live.dataset.ph}`,
+              bounds: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height },
+              hostBounds: (() => { const r = host.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }; })(),
+              radius: getComputedStyle(iframe).borderRadius,
               viewport: `${innerWidth}x${innerHeight}`, host: `${host.clientWidth}x${host.clientHeight}`,
               label: btn.getAttribute("aria-label"), button: { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height) },
               covers: hits, native: Boolean(document.fullscreenElement), full: live.closest("[data-fs]") !== null,
@@ -473,9 +485,20 @@ async function checkFullscreen() {
           if (!inside.full) fail("root did not enter full screen");
           if (mode === "native" && !inside.native) fail("native fullscreen did not start");
           if (mode === "overlay" && inside.native) fail("overlay run went native");
-          if (lw !== vw || lh !== hh || hw !== vw) fail(`iframe ${inside.layout}, frame area ${inside.host}, viewport ${inside.viewport}`);
+          const checkPhone = (value: typeof inside) => {
+            if (value.layout !== value.expectedPhone) fail(`phone viewport changed to ${value.layout}`);
+            if (value.bounds.width > lw + 1 || value.bounds.height > lh + 1) fail("phone enlarged above its canonical size");
+            if (value.bounds.left < value.hostBounds.left + 11 || value.bounds.right > value.hostBounds.right - 11
+              || value.bounds.top < value.hostBounds.top + 11 || value.bounds.bottom > value.hostBounds.bottom - 11) fail("phone escaped its frame");
+            if (parseFloat(value.radius) < 1) fail("phone frame lost its rounded corners");
+          };
+          if (before.phone) checkPhone(before);
+          if (viewport.phone && !inside.phone) fail("touch phone switched to desktop layout");
+          if ("tablet" in viewport && !inside.fixed && (before.phone || inside.phone)) fail("touch tablet switched to phone layout");
+          if (inside.phone) checkPhone(inside);
+          else if (lw !== vw || lh !== hh || hw !== vw) fail(`iframe ${inside.layout}, frame area ${inside.host}, viewport ${inside.viewport}`);
           if (inside.chrome !== vh - hh || inside.rootBox !== `0,0 ${vw}x${vh}`) fail(`root ${inside.rootBox}, chrome ${inside.chrome}`);
-          if (inside.transform !== "none") fail(`scale is ${inside.transform}`);
+          if (!inside.phone && inside.transform !== "none") fail(`scale is ${inside.transform}`);
           if (inside.src !== before.src || (await page.locator(`${selector} iframe`).last().elementHandle().then((h) => h && handle && h.evaluate((a, b) => a === b, handle)).catch(() => false)) !== true) fail("iframe reloaded");
           if (inside.covers.length) fail(`exit control covers ${inside.covers.join(", ")}`);
           if (inside.label !== LABELS[lang].exit || before.label !== LABELS[lang].enter) fail(`labels "${before.label}" / "${inside.label}"`);
@@ -492,7 +515,8 @@ async function checkFullscreen() {
             const [rw] = resized.viewport.split("x").map(Number);
             const [w2, h2] = resized.layout.split("x").map(Number);
             const [, hh2] = resized.host.split("x").map(Number);
-            if (w2 !== rw || h2 !== hh2 || resized.transform !== "none") fail(`after resize iframe ${resized.layout} in ${resized.viewport}`);
+            if (resized.phone) checkPhone(resized);
+            else if (w2 !== rw || h2 !== hh2 || resized.transform !== "none") fail(`after resize iframe ${resized.layout} in ${resized.viewport}`);
             await page.setViewportSize({ width: viewport.width, height: viewport.height });
             await settle(page, 500);
           }
@@ -503,6 +527,7 @@ async function checkFullscreen() {
           } else await page.locator(`${selector} > .fs-btn, .stage-wrap:has(> ${selector}) > .fs-btn`).click();
           await settle(page, 700);
           const after = await measure(selector);
+          if (after.phone) checkPhone(after);
           if (after.full || after.native) fail("still full screen after leaving");
           if (Math.abs(after.scrollY - before.scrollY) > 1) fail(`scroll ${before.scrollY} -> ${after.scrollY}`);
           if (after.layout !== before.layout || after.transform !== before.transform) fail(`size ${before.layout} ${before.transform} -> ${after.layout} ${after.transform}`);

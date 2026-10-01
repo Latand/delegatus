@@ -23,7 +23,7 @@ import {
   type VoiceKey,
 } from "./ttsSession";
 
-import { conversationSpeech, SpeechScope } from "./conversationSpeech";
+import { conversationSpeech, SpeechScope, type SpeechSnapshot } from "./conversationSpeech";
 import { PcmSession, pcmVoice, pcmChunksCached } from "./ttsPcmSession";
 
 let activeStop: (() => void) | null = null;
@@ -36,6 +36,15 @@ const SILENT_AUDIO = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEAQB8A
    copy chips and disclosure triangles of its own. */
 const noSubscribe = () => () => undefined;
 const emptySnapshot = () => null;
+
+/* A row's own button reads three primitives of the conversation's speech
+   state instead of the snapshot: whether it is the one speaking, the phase,
+   and the notice. The visible answer (`target`) changes about six times a
+   second while the feed scrolls, and a button subscribed to the whole snapshot
+   re-rendered every row of the expanded history on each change. */
+const notMine = () => false;
+const idlePhase = (): "idle" | "loading" | "playing" => "idle";
+const noNotice = () => null;
 const INTERACTIVE = "a, button, input, textarea, select, summary, [role='button'], [contenteditable]";
 
 function loadBackendInfo(force = false): Promise<BackendInfo> {
@@ -103,7 +112,15 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
   const inheritedScope = useContext(SpeechScope);
   const scope = explicitScope ?? inheritedScope;
   const speech = useMemo(() => scope ? conversationSpeech(scope) : null, [scope]);
-  const snapshot = useSyncExternalStore(speech?.subscribe ?? noSubscribe, speech?.getSnapshot ?? emptySnapshot, emptySnapshot);
+  /* The header shows the visible answer and so reads the whole snapshot; a row
+     reads the three row selectors and is not re-rendered by a change of `target`. */
+  const snapshot = useSyncExternalStore(header && speech ? speech.subscribe : noSubscribe, header && speech ? speech.getSnapshot : emptySnapshot, emptySnapshot);
+  const subscribeRow = !header && speech ? speech.subscribe : noSubscribe;
+  const rowOwns = (now: SpeechSnapshot) => answerId ? now.activeId === answerId : now.activeText === suppliedText;
+  const rowMine = useSyncExternalStore(subscribeRow, !header && speech ? () => rowOwns(speech.getSnapshot()) : notMine, notMine);
+  const rowPhase = useSyncExternalStore(subscribeRow, !header && speech ? () => { const now = speech.getSnapshot(); return rowOwns(now) ? now.phase : "idle"; } : idlePhase, idlePhase);
+  const rowError = useSyncExternalStore(subscribeRow, !header && speech ? () => speech.getSnapshot().error : noNotice, noNotice);
+  const speechError = header ? snapshot?.error ?? null : rowError;
   const text = header ? snapshot?.target?.text ?? "" : suppliedText;
   const { locale, t } = useLocale();
   const isMobile = useIsMobile();
@@ -117,7 +134,7 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
      cache module, so a completed message keeps its replay control across
      mounts — and loses it when its chunks are evicted. */
   const [, setSpokenTick] = useState(0);
-  const phase = speech && (header || (answerId ? snapshot?.activeId === answerId : snapshot?.activeText === text)) ? snapshot!.phase : localPhase;
+  const phase = speech && (header || rowMine) ? (header ? snapshot!.phase : rowPhase) : localPhase;
   const setPhase = (phase: "idle" | "loading" | "playing") => {
     if (mounted.current) setLocalPhase(phase);
     speech?.update({ phase, activeText: phase === "idle" ? null : frozenText.current, activeId: phase === "idle" ? null : frozenId.current });
@@ -194,7 +211,8 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
     frozenText.current = text;
     const currentGeneration = speech ? speech.nextGeneration() : ++generation.current;
     const alive = () => speech ? speech.isGeneration(currentGeneration) : mounted.current && generation.current === currentGeneration;
-    const answerTarget = snapshot?.target?.text === text && (header || !answerId || snapshot.target.id === answerId) ? snapshot.target : null;
+    const target = (speech ? speech.getSnapshot() : snapshot)?.target;
+    const answerTarget = target?.text === text && (header || !answerId || target.id === answerId) ? target : null;
     const feed = triggerRef.current?.closest("[data-log-feed-scroller]");
     const rowId = answerId ?? triggerRef.current?.closest("[data-tts-message]")?.getAttribute("data-tts-message");
     frozenId.current = header ? answerTarget?.id ?? null : rowId ?? answerTarget?.id ?? null;
@@ -335,7 +353,7 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
    */
   const toggle = () => {
     closeMenu(false);
-    if (speech?.stop && (header || (answerId ? snapshot?.activeId === answerId : snapshot?.activeText === text))) {
+    if (speech?.stop && (header || rowMine)) {
       speech.stop();
       return;
     }
@@ -439,7 +457,7 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
           info={info}
           option={option}
           chars={text.length}
-          notice={error ?? snapshot?.error ?? null}
+          notice={error ?? speechError}
           freeReplay={freeReplay}
           active={active}
           tooLong={tooLong}
@@ -447,7 +465,7 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
           onClose={closeMenu}
         />
       ) : null}
-      {(error ?? snapshot?.error) && !menuOpen ? <SpeakAlert anchorRef={triggerRef} onDismiss={() => { dismissError(); speech?.update({ error: null }); }}>{error ?? snapshot?.error}</SpeakAlert> : null}
+      {(error ?? speechError) && !menuOpen ? <SpeakAlert anchorRef={triggerRef} onDismiss={() => { dismissError(); speech?.update({ error: null }); }}>{error ?? speechError}</SpeakAlert> : null}
     </span>
   );
 }

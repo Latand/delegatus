@@ -40,10 +40,11 @@ These steps take you from nothing to an orchestrator working on your project.
    `curl -fsSL https://bun.com/install | bash`
 2. Install Claude Code or Codex. The orchestrator runs on one of them.
    - Claude Code: `curl -fsSL https://claude.ai/install.sh | bash`
-   - Codex: `bun add -g @openai/codex`
+   - Codex: `curl -fsSL https://chatgpt.com/codex/install.sh | sh`
 
    You can add GitHub Copilot as well: `bun add -g @github/copilot`
-3. Start Delegatus: `bunx delegatus-cli`
+3. Start Delegatus: `bunx delegatus-cli`. If neither CLI is found, the start
+   output says how to install each.
 4. Open `http://127.0.0.1:8898/` if your browser did not open it for you.
 5. Follow the setup guide. It signs you in to your agent CLIs, asks for a
    project folder and creates the project's orchestrator.
@@ -144,7 +145,9 @@ Each time an orchestrator takes its seat, including after a rotation, it
 first gets a report on its board: what waits on you, stuck agents, tasks
 nothing works on, cards that look safe to close and, for a GitHub project,
 open issues ranked by their recorded priority.
-[docs/orchestrator.md](docs/orchestrator.md) covers the rest.
+In the seat tick panel, **Board maintenance** can also start one maintainer
+agent per project on a timer, every 3 hours by default and off until you
+switch it on. [docs/orchestrator.md](docs/orchestrator.md) covers the rest.
 
 The **Reports** log beside its chat lists what it reported, newest first: a
 stage that passed or failed, a review verdict, a blocked pipeline, a
@@ -299,7 +302,9 @@ background shell tasks, and Copilot sessions.
 Each tool call is a card. An edit shows as a diff, a command shows with its
 output, and an image the agent looked at shows as a thumbnail you can open
 full size. A summary line groups the calls ("wrote 1 file · patched 1 file ·
-ran 1 command"); expand it to see each one. New output streams in live, and
+ran 1 command"); expand it to see each one. Next to a call's duration, such as
+`352ms · 12.4k`, a number shows how many context tokens its result added, in
+four colour bands from quiet under 1 000 to red from 20 000. New output streams in live, and
 every conversation has its own link. Press `/` to search your messages
 across every project, engine and account, or switch the search to
 everything the agents wrote too.
@@ -457,6 +462,8 @@ menu (the board's ⋯ menu on a phone).
 - **See the other machine's agents.** Its agents on a shared project show as
   one collapsed, read-only row, such as "On server: 3 agents · 1 working",
   on their task's card or in the Inbox. Only a title and a state cross over.
+  A linked task's card also shows its pipeline (stages, states and the
+  current stage) and a "Managed on" chip with the machine's name.
 - **Revoke** or **Remove** a link at any time from the same dialog.
 
 The design is in [docs/design/linked-installs.md](docs/design/linked-installs.md).

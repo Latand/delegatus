@@ -14,6 +14,9 @@ import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, 
 import { openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { clipTitle } from "./taskText";
+import { maintenanceCardText } from "@/lib/boardMaintenance/text";
+import type { MaintenanceRun } from "@/lib/boardMaintenance/types";
+import { seatTickSettingsCardText } from "@/lib/monitor/cards";
 import { measureStageChain, stageChainFailures, type StageChainLane as Lane } from "@/components/pipelines/stageChainMeasure";
 
 /*
@@ -13976,4 +13979,186 @@ describe("synced task card", () => {
       } finally { await context.close(); }
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
+});
+
+describe("#2396 the seat tick's board cards: the notice names the setting and opens the panel, the run cards keep their time", () => {
+  /* The `seat-tick-cards` scenario: the standing tick notice in the Inbox, a
+     live maintenance run in Assigned and a failed one in Blocked, each written
+     by the production card builders (`seatTickSettingsCardText`,
+     `maintenanceCardText`) in en and uk. On the desktop at 1440×900 the three
+     cards and the panel the notice's button opens; on the phone at 390×844 the
+     board. Frames go to LLV_SEAT_TICK_SHOTS_DIR (default
+     `.artifacts/seat-tick-shots`), never committed.
+
+       CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 LLV_SEAT_TICK_SHOTS_DIR=… \
+         bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "seat tick's board cards" */
+  const SHOTS = path.resolve(process.env.LLV_SEAT_TICK_SHOTS_DIR ?? ".artifacts/seat-tick-shots");
+  const stamp = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000).toISOString();
+
+  /** The cards' text, written in `locale` by the same functions the server uses. */
+  function cardTexts(locale: "en" | "uk") {
+    const base = {
+      kind: "run", runId: "run-evidence", project: "atlas", slot: 1, intervalHours: 3, claimedAt: stamp(95), seat: { seatEpoch: 1, conversationId: "seat" },
+      repoDir: null, taskId: "t-tick-failed", clientAttemptId: "attempt", launchId: null, conversationId: null, transcriptPath: null,
+      launchedAt: stamp(94), endedAt: null, failure: null, log: { changes: [], omittedChanges: 0, logGaps: 0, attention: [], leftAlone: [], verdict: null },
+      counts: { writes: 0, tasks: 0, status: 0, closed: 0, created: 0, text: 0, details: 0, looks: 0 }, changedTaskIds: [], supersededTaskIds: [],
+    } as unknown as MaintenanceRun;
+    /* The maintainer runs on Claude here, so the failure and its remedy name Claude. */
+    const failed = { ...base, state: "failed" as const, endedAt: stamp(60), failure: { kind: "no-account" as const, detail: "no account", engine: "claude" as const } } as MaintenanceRun;
+    const live = { ...base, state: "running" as const, claimedAt: stamp(6), launchedAt: stamp(5) } as MaintenanceRun;
+    const until = new Date(Date.now() + 2 * 3_600_000).toISOString();
+    const notice = seatTickSettingsCardText({
+      project: "atlas", detail: "wakes for this project are set to one every 30 minute(s)", reason: "a release afternoon, so the seat is woken on a schedule of its own", until,
+      setBy: { kind: "gateway", conversationId: null, project: null }, updatedAt: stamp(45), schedule: { enabled: true, wakeIntervalMinutes: 30 }, locale, timeZone: "UTC",
+    });
+    return { notice, failed: maintenanceCardText(locale, failed, "UTC"), live: maintenanceCardText(locale, live, "UTC") };
+  }
+
+  const tickAnswer = () => ({
+    project: "atlas", changed: false, at: new Date().toISOString(), actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null },
+    settings: { project: "atlas", enabled: true, wakeIntervalMinutes: 30, reason: "a release afternoon", monitorPrompt: null, until: stamp(-120), updatedAt: stamp(45), setBy: null },
+    effective: { enabled: true, wakeIntervalMinutes: 30, reason: "a release afternoon", monitorPrompt: null, until: stamp(-120), isDefault: false, configured: true, lapsed: false, updatedAt: stamp(45) },
+    defaults: {}, defaultWakeIntervalMinutes: 60, monitorPromptLength: 0, cardText: null,
+    policy: { checkIntervalMinutes: 5, staleAfterMinutes: 15, retryGuardWakes: 2 },
+    state: { lastCheckAt: stamp(2), lastWakeAt: stamp(20), lastWakeReasons: ["interval"], outstandingWake: null, retryGuard: [], sourceGap: null, accountingGap: null },
+    stateError: null, lastRun: null, lastDelivery: null, journalError: null,
+    maintenance: {
+      enabled: true, intervalHours: 3, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168, updatedAt: null, setBy: null, live: null,
+      lastRun: { runId: "run-evidence", taskId: "t-tick-failed", conversationId: null, state: "failed", claimedAt: stamp(95), launchedAt: stamp(94), endedAt: stamp(60),
+        failure: { kind: "no-account", detail: "", engine: "claude" }, counts: { writes: 0, tasks: 0, status: 0, closed: 0, created: 0, text: 0, details: 0, looks: 0 }, attentionCount: 0 },
+      nextEligibleAt: null, nextRunAt: stamp(-120), waitingOn: "interval", pauseReason: null, runsError: null,
+    },
+  });
+  const rolesAnswer = {
+    revision: "fixture", health: "ok",
+    launchChoices: [
+      { engine: "codex", models: [{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol", shortLabel: "6.1-Sol", use: "review", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] }] },
+      { engine: "claude", models: [{ id: "opus", label: "Opus", shortLabel: "Opus", use: "build", efforts: ["low", "medium", "high", "xhigh", "max"] }] },
+    ],
+    roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "claude", model: "opus", effort: "high" } }],
+  };
+
+  browserTest("the notice card is titled after the setting and opens the panel; the run cards keep their time visible; en and uk, light and dark, 1440 and 390", async () => {
+    fs.mkdirSync(SHOTS, { recursive: true });
+    const out = path.resolve(".artifacts/seat-tick-cards-bundle");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/monitor/seat-tick/settings": () => Response.json(tickAnswer()),
+      "/api/roles": rolesAnswer,
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const texts = cardTexts(lang);
+        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
+        for (const scheme of ["light", "dark"] as const) {
+          {
+            const label = `board-desktop-1440-${scheme}-${lang}`;
+            const { context, page, pageErrors } = await openFixture(browser, url, VIEWPORT, scheme, lang);
+            try {
+              await page.waitForSelector(card("t-tick-notice"), { timeout: 30_000 });
+              const fold = page.locator("[data-seat-collapse]");
+              if (await fold.count()) await fold.first().click();
+              await page.mouse.move(0, 0);
+              await page.waitForTimeout(800);
+              await page.screenshot({ path: path.join(SHOTS, `${label}-board.png`) });
+              for (const [name, id] of [["tick-notice", "t-tick-notice"], ["maintenance-failed", "t-tick-failed"], ["maintenance-live", "t-tick-live"]] as const) {
+                await page.locator(card(id)).screenshot({ path: path.join(SHOTS, `${label}-card-${name}.png`) });
+              }
+              const read = await page.evaluate(() => {
+                const text = (selector: string) => document.querySelector(selector)?.textContent?.trim() ?? "";
+                const clamp = (id: string) => {
+                  const title = document.querySelector(`[data-kanban-board] .card[data-id="task:${id}"] h3.title .clamp`) as HTMLElement | null;
+                  /* Whether the leading «DD.MM HH:mm» is drawn inside the title's
+                     own box: the part of a run's title that tells runs apart. */
+                  let timeShown: boolean | null = null;
+                  if (title?.firstChild) {
+                    const range = document.createRange();
+                    range.setStart(title.firstChild, 0);
+                    range.setEnd(title.firstChild, Math.min(11, title.firstChild.textContent?.length ?? 0));
+                    const box = title.getBoundingClientRect();
+                    const at = range.getBoundingClientRect();
+                    timeShown = at.width > 0 && at.right <= box.right + 1 && at.bottom <= box.bottom + 1;
+                  }
+                  return { text: title?.textContent ?? "", timeShown, width: Math.round(title?.getBoundingClientRect().width ?? 0) };
+                };
+                return {
+                  notice: clamp("t-tick-notice"), failed: clamp("t-tick-failed"), live: clamp("t-tick-live"),
+                  failedBody: text('[data-kanban-board] .card[data-id="task:t-tick-failed"] .desc'),
+                  noticeButton: text('[data-open-seat-tick]'),
+                };
+              });
+              /* The seat is folded, so its header and the chip in it are not
+                 drawn. The notice's button still asks for the panel: the seat
+                 unfolds and the chip opens it. */
+              const seat = page.locator("[data-kanban-seat]").first();
+              const foldedBefore = (await seat.getAttribute("data-collapsed")) === "1" && (await page.locator("[data-seat-tick-chip]").count()) === 0;
+              await page.locator("[data-open-seat-tick]").scrollIntoViewIfNeeded();
+              await page.screenshot({ path: path.join(SHOTS, `${label}-notice-seat-folded.png`) });
+              await page.locator("[data-open-seat-tick]").click();
+              await page.waitForSelector("[data-seat-tick-popover]", { timeout: 10_000 });
+              await page.waitForTimeout(500);
+              const unfoldedAfter = (await seat.getAttribute("data-collapsed")) === "0";
+              await page.screenshot({ path: path.join(SHOTS, `${label}-notice-opens-panel.png`) });
+              readings.push({ label, ...read, foldedBefore, unfoldedAfter, popoverOpened: true, pageErrors });
+              expect(pageErrors, `${label} page errors`).toEqual([]);
+            } finally { await context.close(); }
+          }
+          {
+            const label = `board-phone-390-${scheme}-${lang}`;
+            const { context, page, pageErrors } = await openFixture(browser, url, { width: 390, height: 844 }, scheme, lang, "no-preference", true, 2);
+            try {
+              await page.waitForTimeout(2500);
+              /* The three tabs that hold the cards: the notice in Inbox, the
+                 live run in Assigned, the failed run in Blocked. */
+              for (const tab of ["inbox", "assigned", "blocked"] as const) {
+                await page.locator(`[data-phone-kanban-tab="${tab}"]`).click();
+                await page.waitForTimeout(500);
+                await page.screenshot({ path: path.join(SHOTS, `${label}-${tab}.png`) });
+              }
+              /* The notice opens the task screen; its 44 px control opens the
+                 tick sheet over it, through the nav the seat sheet's row uses. */
+              await page.locator('[data-phone-kanban-tab="inbox"]').click();
+              await page.waitForTimeout(400);
+              await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
+              const control = page.locator("[data-phone-task-tick-open]");
+              await control.waitFor({ timeout: 10_000 });
+              await page.waitForTimeout(500);
+              const controlHeight = Math.round((await control.boundingBox())?.height ?? 0);
+              await page.screenshot({ path: path.join(SHOTS, `${label}-notice-task-screen.png`) });
+              await control.click();
+              await page.waitForSelector('[data-testid="mobile-seat-tick-sheet"]', { timeout: 10_000 });
+              await page.waitForTimeout(700);
+              await page.screenshot({ path: path.join(SHOTS, `${label}-notice-opens-tick-sheet.png`) });
+              readings.push({ label, phone: true, controlHeight, tickSheetOpened: true, pageErrors });
+              expect(pageErrors, `${label} page errors`).toEqual([]);
+            } finally { await context.close(); }
+          }
+        }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.writeFileSync(path.join(SHOTS, "board-cards-readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
+    for (const entry of readings.filter((reading) => reading.phone) as Array<{ label: string; controlHeight: number; tickSheetOpened: boolean }>) {
+      expect(entry.controlHeight, `${entry.label} the tick control is a 44 px target`).toBeGreaterThanOrEqual(44);
+      expect(entry.tickSheetOpened, `${entry.label} the tick sheet opened`).toBe(true);
+    }
+    const desk = readings.filter((entry) => !entry.phone) as Array<{ label: string; notice: { text: string }; failed: { text: string; timeShown: boolean | null }; live: { text: string; timeShown: boolean | null }; failedBody: string; noticeButton: string; foldedBefore: boolean; unfoldedAfter: boolean }>;
+    for (const entry of desk) {
+      const en = entry.label.endsWith("-en");
+      /* The notice is titled after the setting, in the card's own language. */
+      expect(entry.notice.text, `${entry.label} notice title`).toMatch(en ? /^Tick: every 30 min until \d{2}:\d{2}$/ : /^Тікер: кожні 30 хв до \d{2}:\d{2}$/);
+      expect(entry.noticeButton, `${entry.label} notice button`).toBe(translate(en ? "en" : "uk", "kanban.tickNotice.open"));
+      /* The run cards lead with their time, and the time is on screen even where
+         the column is too narrow for the whole title. */
+      for (const run of [entry.failed, entry.live]) {
+        expect(run.text, `${entry.label} run title`).toMatch(en ? /^\d{2}\.\d{2} \d{2}:\d{2} · Board maintenance$/ : /^\d{2}\.\d{2} \d{2}:\d{2} · Обслуговування дошки$/);
+        expect(run.timeShown, `${entry.label} the run's time is drawn inside its title`).toBe(true);
+      }
+      expect(entry.failedBody, `${entry.label} failed card text`).toContain(en ? "Failed: no Claude account is available for this project." : "Не вдалося: немає доступного акаунта Claude");
+      /* The button answers on a folded seat: it unfolds and the panel opens. */
+      expect(entry.foldedBefore, `${entry.label} the seat was folded and drew no chip`).toBe(true);
+      expect(entry.unfoldedAfter, `${entry.label} the request unfolded the seat`).toBe(true);
+    }
+  }, 600_000);
 });

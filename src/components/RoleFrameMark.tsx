@@ -1,6 +1,6 @@
 "use client";
 
-import { BadgeCheck, Bot, Brush, DraftingCompass, Hammer, Radar, Rocket, ScanEye, Waypoints, type LucideIcon } from "lucide-react";
+import { BadgeCheck, Bot, Brush, BrushCleaning, DraftingCompass, Hammer, Radar, Rocket, ScanEye, Waypoints, type LucideIcon } from "lucide-react";
 
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { FrameRole } from "@/lib/roleFrames";
@@ -14,6 +14,7 @@ const EMBLEM: Record<FrameRole, LucideIcon> = {
   reviewer: ScanEye,
   verifier: BadgeCheck,
   cleaner: Brush,
+  maintainer: BrushCleaning,
   "prod-auditor": Radar,
   deployer: Rocket,
   neutral: Bot,
