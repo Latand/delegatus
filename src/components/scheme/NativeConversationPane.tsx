@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { BranchPane } from "@/components/BranchPane";
 import { TmuxComposer } from "@/components/TmuxComposer";
 import { DormantView } from "@/components/conversation/DormantView";
+import { firstRowPastTop } from "@/components/feed/scrollMemory";
 
 type Props = ComponentProps<typeof BranchPane> & {
   active: boolean;
@@ -55,7 +56,7 @@ export function captureReader(container: HTMLElement) {
   const range = selection?.rangeCount && container.contains(selection.anchorNode) ? selection.getRangeAt(0).cloneRange() : null;
   const scrolls = [...container.querySelectorAll<HTMLElement>("[data-log-feed-scroller]")].map(element => {
     const frame = element.getBoundingClientRect(), scale = frame.height / element.clientHeight || 1;
-    const row = [...element.querySelectorAll<HTMLElement>("[data-feed-key]")].find(row => row.getBoundingClientRect().bottom > frame.top);
+    const row = firstRowPastTop([...element.querySelectorAll<HTMLElement>("[data-feed-key]")], frame.top);
     return {
       element, top: element.scrollTop, row, offset: row ? (row.getBoundingClientRect().top - frame.top) / scale : 0,
       followed: element.scrollHeight - element.scrollTop - element.clientHeight < 2

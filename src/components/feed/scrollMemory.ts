@@ -36,3 +36,18 @@ export class BoundedLru<Value> {
     this.values.clear();
   }
 }
+
+/** The first row whose bottom edge is below `top`, the row at the top of a
+ * scrolled viewport. Rows stack in document order, so their bottoms never
+ * decrease down the feed and the answer is found by bisection: a handful of
+ * rect reads instead of one per row above the viewport, which grew with every
+ * page of history the reader expanded. */
+export function firstRowPastTop<Row extends { getBoundingClientRect(): { bottom: number } }>(rows: readonly Row[], top: number): Row | undefined {
+  let low = 0;
+  let high = rows.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (rows[middle]!.getBoundingClientRect().bottom > top) high = middle; else low = middle + 1;
+  }
+  return rows[low];
+}
