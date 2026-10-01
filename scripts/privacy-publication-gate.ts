@@ -584,11 +584,13 @@ const emailAddressSource =
 /* RFC 6761 reserves `.test` for exactly this and guarantees it can never
    resolve to anyone — the same reason `.invalid` is already skipped here.
    Flagging it made fixture addresses in test files indistinguishable from a
-   real one, which teaches everybody to wave the gate through. */
+   real one, which teaches everybody to wave the gate through. Systemd unit
+   type suffixes are not delegated TLDs, so template units name no mailbox. */
 function domainNamesNobody(domain: string): boolean {
   const lowered = domain.toLowerCase();
   return lowered === "example.com" || lowered === "example.net" || lowered === "example.org"
-    || lowered.endsWith(".invalid") || lowered.endsWith(".test");
+    || lowered.endsWith(".invalid") || lowered.endsWith(".test")
+    || /\.(?:service|socket|scope|slice|timer|target|mount|automount|path|device|swap)$/.test(lowered);
 }
 
 /** Every mailbox in the text that reaches a person, in the order they appear. */

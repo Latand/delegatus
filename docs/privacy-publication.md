@@ -30,6 +30,14 @@ prefixes. Text-like files remain inspectable with NUL bytes or UTF-16 encoding.
 Unsupported binary inputs fail closed. Publication inputs and supporting files
 with symlinks in any path component are rejected before their targets are read.
 
+Email detection skips domains ending in the systemd unit types `.service`,
+`.socket`, `.scope`, `.slice`, `.timer`, `.target`, `.mount`, `.automount`,
+`.path`, `.device`, and `.swap`. These suffixes are not delegated TLDs; template
+unit names and cgroup paths therefore name no mailbox. This rule also applies
+to commit messages and merge-boundary identities. The suffix must be the final
+domain component: `.services` and unit-looking domains ending in a real TLD
+remain reportable.
+
 Media dispatch recognizes PNG, JPEG, GIF, BMP, TIFF, WebP, ISO-BMFF, AVI, and
 Matroska signatures before applying the declared-extension fallback. Renamed
 media therefore receives the same OCR, container, and provenance checks.

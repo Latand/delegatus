@@ -30,6 +30,24 @@ import {
 
 const gate = join(import.meta.dir, "privacy-publication-gate.ts");
 const temporaryDirectories: string[] = [];
+const systemdUnitSamples = [
+  ["user", "1000.service"].join("@"),
+  ["delegatus", "review.service"].join("@"),
+  `0::/user.slice/user-1000.slice/${["user", "1000.service"].join("@")}/app.slice/delegatus.service`,
+  ["delegatus", String.raw`review\x2dworker.service`].join("@"),
+  [String.raw`delegatus\x2dworker`, "review.service"].join("@"),
+  ...["service", "socket", "scope", "slice", "timer", "target", "mount", "automount", "path", "device", "swap"]
+    .map((type) => ["delegatus", `review.${type}`].join("@")),
+  ["delegatus", "review.SERVICE"].join("@"),
+];
+const unitLookingRealAddresses = [
+  ["someone", "company.services"].join("@"),
+  ["a", "b.com"].join("@"),
+  ["delegatus", "review.service.com"].join("@"),
+  ["delegatus", "review.service.dev"].join("@"),
+  ["delegatus", "review.services"].join("@"),
+  ["delegatus", "review.serviceevil"].join("@"),
+];
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
@@ -549,6 +567,32 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.exitCode).toBe(1);
     expect(output).toBe("PRIVACY GATE: FAIL\nemail_address: 1\n");
     expect(output).not.toContain(quotedAddress);
+    expect(result.stderr.toString()).toBe("");
+  });
+
+  test("systemd unit names pass text publication inspection", () => {
+    const directory = mkdtempSync(join(tmpdir(), "llv-privacy-systemd-"));
+    temporaryDirectories.push(directory);
+    const text = join(directory, "units.md");
+    writeFileSync(text, systemdUnitSamples.join("\n"));
+
+    const result = runGate([text]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
+    expect(result.stderr.toString()).toBe("");
+  });
+
+  test.each(unitLookingRealAddresses)("systemd suffix rule keeps real-TLD text blocked (%#)", (address) => {
+    const directory = mkdtempSync(join(tmpdir(), "llv-privacy-systemd-address-"));
+    temporaryDirectories.push(directory);
+    const text = join(directory, "units.md");
+    writeFileSync(text, address);
+
+    const result = runGate([text]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nemail_address: 1\n");
     expect(result.stderr.toString()).toBe("");
   });
 
@@ -3495,6 +3539,31 @@ describe("mergeBoundaryReview", () => {
     });
     return result.stdout.toString().trim();
   }
+
+  test.each(systemdUnitSamples)("systemd unit names pass commit messages and identities (%#)", (unit) => {
+    const repo = gitRepo();
+    commit(repo, `chore: inspect ${unit}`, { email: unit, name: "Fixture Tool" });
+
+    expect(commitMessageFindings(repo, "main").size).toBe(0);
+    expect(mergeBoundaryReview(repo, "main").findings.size).toBe(0);
+    const result = runGateArguments(["--base", "main", "--check-commits"], {}, repo);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
+    expect(result.stderr.toString()).toBe("");
+  });
+
+  test.each(unitLookingRealAddresses)("systemd suffix rule keeps real-TLD commits and identities blocked (%#)", (address) => {
+    const repo = gitRepo();
+    commit(repo, `chore: inspect ${address}`, { email: address, name: "Fixture Person" });
+
+    expect(commitMessageFindings(repo, "main").get("email_address")).toBe(1);
+    expect(mergeBoundaryReview(repo, "main").findings.get("email_address")).toBe(1);
+    const result = runGateArguments(["--base", "main", "--check-commits"], {}, repo);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.toString()).toContain("PRIVACY GATE: FAIL\nemail_address: 2\n");
+    expect(result.stdout.toString()).not.toContain(address);
+    expect(result.stderr.toString()).toBe("");
+  });
 
   /* What the forge records as COMMITTER on a commit it composes itself: its
      own web-flow mailbox, whose local part is exactly `noreply`. It names the
