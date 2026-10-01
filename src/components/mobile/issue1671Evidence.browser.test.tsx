@@ -5705,3 +5705,67 @@ describe("tool call context tokens", () => {
     if (failures.length) throw new Error(failures.join("\n"));
   }, 120_000);
 });
+
+/*
+ * Launching an agent from the phone's draft screen: the screen is the new
+ * agent's conversation from the first frame and stays so while the scan swaps
+ * the launch window for the transcript, and one Back leaves it. The running
+ * conversation in the fixture is live and outranks the new agent, so a
+ * fallback in the focus view would paint it.
+ */
+describe("launching an agent on the phone", () => {
+  browserTest("the new agent holds the screen from send to transcript, and one Back reaches the board", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const out = path.resolve(".artifacts/phone-launch-focus");
+    fs.mkdirSync(out, { recursive: true });
+    try {
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+      try {
+        await context.addInitScript(() => localStorage.setItem("llv_lang", "en"));
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        await page.goto(`${base}/?launch=1#p=atlas`);
+        await page.locator("[data-mobile2-open=\"menu\"]").waitFor({ timeout: 15_000 });
+        await page.locator("[data-mobile2-open=\"menu\"]").tap();
+        await page.getByText("New agent", { exact: true }).tap();
+        const prompt = page.locator("textarea").first();
+        await prompt.waitFor({ timeout: 10_000 });
+        await prompt.fill("Ship the fix");
+        await page.evaluate(() => {
+          const sampled: string[] = [];
+          (window as unknown as { titles: string[] }).titles = sampled;
+          const tick = () => {
+            const title = document.querySelector("[data-mobile2-title-text]")?.textContent ?? "";
+            if (sampled.at(-1) !== title) sampled.push(title);
+            requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+        });
+        await page.locator("form").first().evaluate((form) => (form as HTMLFormElement).requestSubmit());
+        await page.waitForFunction(() => (window as unknown as { evidence: { spawns: unknown[] } }).evidence.spawns.length === 1, null, { timeout: 10_000 });
+        await pause(page, 1_000);
+        await page.screenshot({ path: path.join(out, "launched-window.png") });
+        await page.evaluate(() => {
+          (window as unknown as { evidence: { materializeLaunch(): void } }).evidence.materializeLaunch();
+          document.dispatchEvent(new Event("visibilitychange"));
+        });
+        await page.waitForFunction(() => (window as unknown as { titles: string[] }).titles.includes("Launched agent"), null, { timeout: 15_000 }).catch(async (error) => {
+          await page.screenshot({ path: path.join(out, "stuck.png") });
+          throw new Error(`${error.message}; page errors ${JSON.stringify(pageErrors)}; titles ${JSON.stringify(await page.evaluate(() => (window as unknown as { titles: string[] }).titles))}`);
+        });
+        await pause(page, 1_000);
+        await page.screenshot({ path: path.join(out, "transcript.png") });
+        const titles = await page.evaluate(() => (window as unknown as { titles: string[] }).titles);
+        expect(titles.filter((title) => title.includes("Rebuild the board status projection"))).toEqual([]);
+        expect(titles.at(-1)).toBe("Launched agent");
+        await page.locator("[data-mobile2-back]").tap();
+        await page.locator('[data-mobile2-screen="board"]').waitFor({ timeout: 5_000 });
+        expect(await page.locator('[data-mobile2-screen="chat"]').count()).toBe(0);
+        fs.mkdirSync("evidence/phone-launch-focus", { recursive: true });
+        fs.writeFileSync("evidence/phone-launch-focus/titles.json", `${JSON.stringify({ viewport: "390x844", titles }, null, 2)}\n`);
+      } finally { await context.close(); }
+    } finally { await browser.close(); stop(); }
+  }, 90_000);
+});
