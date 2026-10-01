@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowUpRight, LoaderCircle, RotateCcw } from "lucide-react";
-import { useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { useLayoutEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 
 import { Select } from "@/components/ui/Select";
 import { requestAccountPanel } from "@/lib/accounts/openPanel";
@@ -414,6 +414,17 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
   const maintenanceView = maintenanceReading(maintenance, now, locale, t, state.maintainer.config?.engine === "claude" ? "claude" : "codex");
 
   const phone = surface === "mobile";
+  const reasonRef = useRef<HTMLTextAreaElement>(null);
+
+  /* The field can contain a standing instruction. Grow it on every draft
+     change, and when a saved value is loaded, so reopening the panel shows
+     the whole note without making a long instruction take over the panel. */
+  useLayoutEffect(() => {
+    const field = reasonRef.current;
+    if (!field) return;
+    field.style.height = "auto";
+    field.style.height = `${Math.min(320, field.scrollHeight + 2)}px`;
+  }, [draft.reason]);
   const storedUntil = record?.settings.until ?? null;
   const row = phone ? "min-h-11" : "min-h-7";
   const control = phone
@@ -537,13 +548,14 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
         <label className="flex min-w-0 flex-col gap-1">
           <span className="text-ui text-primary">{t("seatTick.reasonLabel")}</span>
           <textarea
+            ref={reasonRef}
             aria-describedby={`seat-tick-instructions-${surface}`}
             rows={2}
             data-seat-tick-reason
             value={draft.reason}
             disabled={state.saving}
             onChange={(event) => setDraft((previous) => ({ ...previous, reason: event.target.value }))}
-            className={`min-h-0 w-full resize-y rounded-control border border-border bg-card px-2 py-1.5 ${phone ? "text-body" : "text-ui"} text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50`}
+            className={`min-h-0 max-h-80 w-full resize-y overflow-y-auto rounded-control border border-border bg-card px-2 py-1.5 ${phone ? "text-body" : "text-ui"} text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50`}
           />
           <span id={`seat-tick-instructions-${surface}`} data-seat-tick-instructions-hint className="text-caption leading-4 text-muted">{t("seatTick.reasonHint")}</span>
         </label>

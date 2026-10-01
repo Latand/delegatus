@@ -14054,10 +14054,10 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     return { notice, failed: maintenanceCardText(locale, failed, "UTC"), live: maintenanceCardText(locale, live, "UTC") };
   }
 
-  const tickAnswer = () => ({
+  const tickAnswer = (reason = "a release afternoon") => ({
     project: "atlas", changed: false, at: new Date().toISOString(), actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null },
-    settings: { project: "atlas", enabled: true, wakeIntervalMinutes: 30, reason: "a release afternoon", monitorPrompt: null, until: stamp(-120), updatedAt: stamp(45), setBy: null },
-    effective: { enabled: true, wakeIntervalMinutes: 30, reason: "a release afternoon", monitorPrompt: null, until: stamp(-120), isDefault: false, configured: true, lapsed: false, updatedAt: stamp(45) },
+    settings: { project: "atlas", enabled: true, wakeIntervalMinutes: 30, reason, monitorPrompt: null, until: stamp(-120), updatedAt: stamp(45), setBy: null },
+    effective: { enabled: true, wakeIntervalMinutes: 30, reason, monitorPrompt: null, until: stamp(-120), isDefault: false, configured: true, lapsed: false, updatedAt: stamp(45) },
     defaults: {}, defaultWakeIntervalMinutes: 60, monitorPromptLength: 0, cardText: null,
     policy: { checkIntervalMinutes: 5, staleAfterMinutes: 15, retryGuardWakes: 2 },
     state: { lastCheckAt: stamp(2), lastWakeAt: stamp(20), lastWakeReasons: ["interval"], outstandingWake: null, retryGuard: [], sourceGap: null, accountingGap: null },
@@ -14077,6 +14077,93 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     ],
     roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "claude", model: "opus", effort: "high" } }],
   };
+
+  browserTest("standing instructions fit the panel while edited, saved and reopened on desktop and phone", async () => {
+    fs.mkdirSync(SHOTS, { recursive: true });
+    const out = path.resolve(".artifacts/seat-tick-instructions");
+    fs.mkdirSync(out, { recursive: true });
+    let storedReason = "a release afternoon";
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/monitor/seat-tick/settings": async (request: Request) => {
+        if (request.method === "PUT") {
+          const body = await request.json() as { reason?: string };
+          if (typeof body.reason === "string") storedReason = body.reason;
+        }
+        return Response.json(tickAnswer(storedReason));
+      },
+      "/api/roles": rolesAnswer,
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    const english = "Read the incoming chat and answer questions, correcting anything inaccurate. Sort incoming tasks by priority and start them properly.";
+    const ukrainian = "Дивись що пишуть в чат і відповідай на питання, поправляй якщо щось неправильно. Розбирай задачі з вхідних по пріорітетам і правильно запускай.";
+
+    async function openPanel(page: Page, phone: boolean) {
+      if (phone) {
+        await page.locator('[data-phone-kanban-tab="inbox"]').click();
+        await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
+        const control = page.locator("[data-phone-task-tick-open]");
+        await control.waitFor();
+        await control.click();
+        await page.waitForSelector('[data-testid="mobile-seat-tick-sheet"]', { timeout: 10_000 });
+      } else {
+        const fold = page.locator("[data-seat-collapse]");
+        if (await fold.count()) await fold.first().click();
+        await page.locator("[data-open-seat-tick]").click();
+        await page.waitForSelector("[data-seat-tick-popover]", { timeout: 10_000 });
+      }
+    }
+
+    async function assertVisible(page: Page, expected: string, label: string, state: string) {
+      const field = page.locator("[data-seat-tick-reason]");
+      expect(await field.inputValue()).toBe(expected);
+      const geometry = await field.evaluate((node) => ({ scrollHeight: node.scrollHeight, clientHeight: node.clientHeight }));
+      expect(geometry.scrollHeight, `${label} ${state} text is fully visible`).toBeLessThanOrEqual(geometry.clientHeight + 1);
+      await field.screenshot({ path: path.join(SHOTS, `${label}-${state}.png`) });
+      return geometry;
+    }
+
+    try {
+      for (const lang of ["en", "uk"] as const) for (const phone of [false, true]) {
+        const width = phone ? 390 : 1440;
+        const label = `${phone ? "phone-390" : "desktop-1440"}-${lang}`;
+        const text = lang === "en" ? english : ukrainian;
+        storedReason = "a release afternoon";
+        const texts = cardTexts(lang);
+        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
+        {
+          const { context, page, pageErrors } = await openFixture(browser, url, { width, height: phone ? 844 : 900 }, "light", lang, "reduce", phone);
+          try {
+            if (phone) await page.locator('[data-phone-kanban-tab="inbox"]').waitFor();
+            else await page.waitForSelector(card("t-tick-notice"), { timeout: 30_000 });
+            await openPanel(page, phone);
+            const field = page.locator("[data-seat-tick-reason]");
+            await field.fill(text);
+            const edited = await assertVisible(page, text, label, "edited");
+            await page.locator("[data-seat-tick-save]").click();
+            await page.locator("[data-seat-tick-save]").waitFor({ state: "detached" });
+            const saved = await assertVisible(page, text, label, "saved");
+            await page.screenshot({ path: path.join(SHOTS, `${label}-saved-panel.png`) });
+            expect(pageErrors, `${label} errors while saving`).toEqual([]);
+            cases.push({ label, edited, saved });
+          } finally { await context.close(); }
+        }
+        {
+          const { context, page, pageErrors } = await openFixture(browser, url, { width, height: phone ? 844 : 900 }, "light", lang, "reduce", phone);
+          try {
+            if (phone) await page.locator('[data-phone-kanban-tab="inbox"]').waitFor();
+            else await page.waitForSelector(card("t-tick-notice"), { timeout: 30_000 });
+            await openPanel(page, phone);
+            const reopened = await assertVisible(page, text, label, "reopened");
+            await page.screenshot({ path: path.join(SHOTS, `${label}-reopened-panel.png`) });
+            expect(pageErrors, `${label} errors after reopening`).toEqual([]);
+            cases.push({ label, reopened });
+          } finally { await context.close(); }
+        }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.writeFileSync(path.join(SHOTS, "instructions-readings.json"), `${JSON.stringify(cases, null, 2)}\n`);
+  }, 180_000);
 
   async function instructionReading(page: Page, lang: "en" | "uk") {
     const field = page.locator("[data-seat-tick-reason]");
