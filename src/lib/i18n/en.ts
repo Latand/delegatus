@@ -979,7 +979,7 @@ export const en = {
   "dirPicker.noMatch": "nothing matches that filter — type a path to use one anyway",
   "dirPicker.noneKnown": "no directories known yet — type a path",
   "dirPicker.count": "{shown} of {total} directories",
-  "draft.reasoning": "reasoning",
+  "draft.reasoning": "model",
   "draft.role": "role",
   "draft.roleAria": "Agent role preset",
   "draft.noRole": "No role",

@@ -958,7 +958,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "dirPicker.noMatch": "нічого не збігається — впиши шлях, щоб узяти власний",
   "dirPicker.noneKnown": "відомих директорій ще немає — впиши шлях",
   "dirPicker.count": "{shown} з {total} директорій",
-  "draft.reasoning": "міркування",
+  "draft.reasoning": "модель",
   "draft.role": "роль",
   "draft.roleAria": "Рольовий пресет агента",
   "draft.noRole": "Без ролі",
