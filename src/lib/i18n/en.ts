@@ -1098,7 +1098,7 @@ export const en = {
   "roleCopy.verifier.param.claims.label": "Claims",
   "roleCopy.verifier.param.claims.description": "Hypotheses to confirm or refute.",
   "roleCopy.builder.name": "Builder",
-  "roleCopy.builder.description": "Writes product code for a scoped directive. Frontend xhigh only per lane, for the hardest UI; never raise GPT-6 Sol to xhigh by hand. Default Sol high vs Astra medium: decided at 30 Sol first reviews.",
+  "roleCopy.builder.description": "Writes product code for a scoped brief.",
   "roleCopy.builder.param.mode.label": "Mode",
   "roleCopy.builder.param.mode.description": "Implementation discipline.",
   "roleCopy.builder.param.mode.option.plain": "Plain",

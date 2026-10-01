@@ -34,14 +34,14 @@ test("role registry exposes the nine role ids and campaign-ready orchestrator co
   ]);
   expect(Object.fromEntries(roles.map((role) => [role.id, role.config]))).toEqual({
     orchestrator: { engine: "claude", model: "opus", effort: "high" },
-    reviewer: { engine: "codex", model: "gpt-6-astra", effort: "xhigh" },
-    verifier: { engine: "codex", model: "gpt-6-astra", effort: "high" },
-    builder: { engine: "codex", model: "gpt-6-astra", effort: "medium" },
-    architect: { engine: "claude", model: "opus", effort: "high" },
-    cleaner: { engine: "codex", model: "gpt-5.6-terra", effort: "low" },
-    "prod-auditor": { engine: "codex", model: "gpt-6-astra", effort: "high" },
+    reviewer: { engine: "codex", model: "gpt-6.1-sol", effort: "xhigh" },
+    verifier: { engine: "codex", model: "gpt-6.1-sol", effort: "high" },
+    builder: { engine: "codex", model: "gpt-6.1-sol", effort: "high" },
+    architect: { engine: "claude", model: "opus", effort: "xhigh" },
+    cleaner: { engine: "codex", model: "gpt-6-luna", effort: "medium" },
+    "prod-auditor": { engine: "codex", model: "gpt-6.1-sol", effort: "xhigh" },
     maintainer: { engine: "codex", model: "gpt-6.1-sol", effort: "medium" },
-    deployer: { engine: "codex", model: "gpt-5.6-terra", effort: "medium" },
+    deployer: { engine: "codex", model: "gpt-6.1-sol", effort: "medium" },
   });
 
   const orchestrator = resolveRole("orchestrator", {
@@ -77,14 +77,14 @@ test("role registry exposes the nine role ids and campaign-ready orchestrator co
 
   expect(resolveRole("builder", { mode: "plain", domain: "general" })).toMatchObject({
     ok: true,
-    value: { config: { engine: "codex", model: "gpt-6-astra", effort: "medium" } },
+    value: { config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } },
   });
   expect(resolveRole("verifier", { claims: "the regression is fixed" })).toMatchObject({
     ok: true,
-    value: { config: { engine: "codex", model: "gpt-6-astra", effort: "high" } },
+    value: { config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } },
   });
-  expect(resolveRole("cleaner")).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-5.6-terra", effort: "low" } } });
-  expect(resolveRole("deployer", { sha: "abc123" })).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-5.6-terra", effort: "medium" } } });
+  expect(resolveRole("cleaner")).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6-luna", effort: "medium" } } });
+  expect(resolveRole("deployer", { sha: "abc123" })).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6.1-sol", effort: "medium" } } });
 });
 
 test("builder parameters select the cheap fixer and the frontend implementation profile", () => {
@@ -256,7 +256,7 @@ test("the small-change and docs variants ship their runtime, and only builder an
   expect(resolveRole("builder", { domain: "frontend", mode: "apply-fixes" })).toMatchObject({ ok: true, value: { config: { engine: "claude", model: "claude-sonnet-5-5", effort: "high" } } });
   expect(resolveRole("builder", { mode: "apply-fixes" })).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6-luna", effort: "high" } } });
   expect(resolveRole("reviewer", { diffSource: "#1", size: "trivial" })).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6-luna", effort: "high" } } });
-  expect(resolveRole("builder", { size: "normal" })).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6-astra", effort: "medium" } } });
+  expect(resolveRole("builder", { size: "normal" })).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } } });
   /* A trivial UI tweak keeps the frontend scaffold guidance, which is keyed on domain. */
   const trivialFrontend = resolveRole("builder", { size: "trivial", domain: "frontend" });
   expect(trivialFrontend.ok && trivialFrontend.value.prompt).toContain("UI/frontend implementation guidance");

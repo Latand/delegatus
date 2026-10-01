@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -307,6 +307,30 @@ function cleanupPorts(over: Partial<Parameters<typeof cleanupHealthRun>[1]> = {}
     },
   };
 }
+
+test("health-check scratch commit uses the controller identity despite inherited personal identities", () => {
+  const repo = path.join(sandbox, "identity-repo");
+  const email = ["configured", "example.invalid"].join("@");
+  const home = fs.mkdtempSync(path.join(sandbox, "identity-home-"));
+  const globalConfig = path.join(home, ".gitconfig");
+  fs.writeFileSync(globalConfig, `[user]\n\tname = Configured Test\n\temail = ${email}\n`);
+  const env = {
+    ...process.env,
+    HOME: home, XDG_CONFIG_HOME: path.join(home, "config"),
+    GIT_CONFIG_GLOBAL: globalConfig, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_COUNT: "0",
+    GIT_AUTHOR_NAME: "Environment Author", GIT_AUTHOR_EMAIL: email,
+    GIT_COMMITTER_NAME: "Environment Committer", GIT_COMMITTER_EMAIL: email,
+    HEALTH_IDENTITY_REPO: repo,
+  };
+  const prepare = spawnSync(process.execPath, ["-e",
+    `import { prepareHealthRepo } from ${JSON.stringify(path.resolve("src/lib/onboarding/healthCheck.ts"))}; prepareHealthRepo(process.env.HEALTH_IDENTITY_REPO);`,
+  ], { env, encoding: "utf8" });
+  expect(prepare.status).toBe(0);
+  const identity = spawnSync("git", ["log", "-1", "--format=%an%n%ae%n%cn%n%ce"], { cwd: repo, encoding: "utf8" });
+  const controllerEmail = ["noreply", "delegatus.invalid"].join("@");
+  expect(identity.stdout.trim()).toBe(["Delegatus", controllerEmail, "Delegatus", controllerEmail].join("\n"));
+  expect(fs.readFileSync(globalConfig, "utf8")).toContain(email);
+});
 
 test("cleanup removes the stage worktree and its branch from the scratch repository", async () => {
   const repo = path.join(sandbox, "viewer-health-check");

@@ -145,7 +145,7 @@ import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { changeRoleMapping, loadRoleRegistrySnapshotOrDefaults, parseRoleMappingPatch, RoleStoreError, type RoleMappingChange } from "@/lib/roles/store";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import type { RoleDefinition, RoleParameter } from "@/lib/roles/types";
-import { readSpawnAdmissionFence, type SpawnAdmissionFence } from "@/lib/agent/spawnAdmission";
+import { readSpawnAdmissionFence, spawnTaskProjectError, type SpawnAdmissionFence } from "@/lib/agent/spawnAdmission";
 import type { RuntimeHostRequestHealth } from "@/lib/runtime/client";
 import type { ViewerDeploymentStatus, ViewerDeploymentSummary } from "@/lib/runtime/contracts";
 import { messageOriginRole, type MessageOrigin } from "@/lib/runtime/messageOrigin";
@@ -6142,9 +6142,13 @@ function spawnTargetProject(args: McpToolArgs, cwd: string): string | null {
 
 function bindSpawn(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpRequestBindingInput {
   const cwd = spawnCwd(args);
+  const caller = recoveryCaller(dependencies);
+  const project = spawnTargetProject(args, cwd);
+  const taskError = spawnTaskProjectError(args.taskId, cwd, dependencies.loadTasks);
+  if (taskError) throw new McpToolRefusal(taskError, { code: "invalid_request", status: 400 });
   return {
-    caller: recoveryCaller(dependencies),
-    target: { project: spawnTargetProject(args, cwd), identity: cwd },
+    caller,
+    target: { project, identity: cwd },
     downstreamKey: `mcp_spawn_${crypto.createHash("sha256").update(requestId(args)).digest("hex")}`,
   };
 }

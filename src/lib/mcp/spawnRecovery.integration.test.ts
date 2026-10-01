@@ -14,6 +14,12 @@ import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { executeSpawnRequest, type SpawnCommandDependencies } from "@/lib/agent/spawnCommand";
 import { resolveSpawnLineage } from "@/lib/agent/spawnParent";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
+import { projectForCwd } from "@/lib/scanner/describe";
+import type { BoardTask } from "@/lib/tasks/types";
+import { loadTasks, saveTasks } from "@/lib/tasks/store";
+import { directoryProjectId } from "@/lib/projects/identity";
+import { canonicalProject } from "@/lib/projects/aliases";
+import { projectSuccessionFor, recordProjectSuccessions } from "@/lib/projects/succession";
 
 import {
   productionDomainDependencies,
@@ -174,6 +180,108 @@ function spawnArgs(clientRequestId: string, cwd: string): Record<string, unknown
     title: "Rejected deployer integration",
   };
 }
+
+test("a foreign task refuses before the MCP claim and dispatch, and a corrected task can reuse the request id", async () => {
+  const cwd = path.join(sandbox, "task-project-target");
+  fs.mkdirSync(cwd, { recursive: true });
+  const project = projectForCwd(cwd)!;
+  const foreignProject = "dir-" + "f".repeat(32);
+  const tasks = [
+    { id: "foreign-task", project: foreignProject, assignments: [] },
+    { id: "target-task", project, assignments: [] },
+  ] as unknown as BoardTask[];
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const store = new MemoryMcpReceiptStore();
+  let dispatches = 0;
+  const control: ViewerControlDependencies = {
+    post: async () => {
+      dispatches += 1;
+      return { launchId: "launch_target_task", conversationId: "conversation_target_task", state: "starting", initialMessage: "pending" };
+    },
+  };
+  const domain = { ...domainDependencies(registry), loadTasks: () => tasks };
+  const live = service(registry, store, control, domain);
+  const args = { clientRequestId: "task-project-retry", cwd, title: "Build target task", prompt: "Build target task", taskId: "foreign-task" };
+  const refused = await live.callTool("spawn_agent", args);
+  expect(refused).toMatchObject({ ok: false, code: "invalid_request", replayed: false });
+  expect(refused.error).toContain(foreignProject);
+  expect(refused.error).toContain(project);
+  expect(refused.error).toContain("target project's board");
+  expect(refused.error).toContain("omit taskId");
+  expect(await store.lookup(`spawn_agent:${args.clientRequestId}`)).toBeNull();
+  expect(dispatches).toBe(0);
+  expect(registry.readOnlySnapshot().receipts).toEqual({});
+  expect(readSpawnAdmissionFence("mcp_spawn_" + crypto.createHash("sha256").update(args.clientRequestId).digest("hex"))).toBeNull();
+  expect(tasks.map(task => task.assignments)).toEqual([[], []]);
+
+  expect(await live.callTool("spawn_agent", { ...args, taskId: "target-task" })).toMatchObject({ ok: true, replayed: false });
+  expect(dispatches).toBe(1);
+});
+
+test("HTTP spawn and validation refuse a foreign task without a receipt or fence", async () => {
+  const cwd = path.join(sandbox, "http-task-project-target");
+  fs.mkdirSync(cwd, { recursive: true });
+  const project = "dir-" + "e".repeat(32);
+  const now = new Date().toISOString();
+  saveTasks([...loadTasks(), { id: "http-foreign-task", project, text: "Foreign task", status: "inbox", placement: "unplaced", assignments: [], createdAt: now, updatedAt: now }]);
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const body = { cwd, taskId: "http-foreign-task", engine: "codex", title: "Build target project", prompt: "Build target project", clientAttemptId: "http_task_project_retry" };
+  const validation = await executeSpawnAdmissionValidation(routeRequest("/api/spawn/validate", body), { registry: () => registry });
+  expect(await validation.json()).toMatchObject({ admissible: false, fenced: false, status: 400 });
+  const response = await executeSpawnRequest(routeRequest("/api/spawn", body), spawnDependencies(registry, cwd));
+  expect(response.status).toBe(400);
+  expect((await response.json()).error).toContain(project);
+  expect(registry.readOnlySnapshot().receipts).toEqual({});
+  expect(readSpawnAdmissionFence(body.clientAttemptId)).toBeNull();
+  expect(loadTasks().find(task => task.id === body.taskId)?.assignments).toEqual([]);
+
+  saveTasks([...loadTasks(), { id: "http-target-task", project: projectForCwd(cwd)!, text: "Target task", status: "inbox", placement: "unplaced", assignments: [], createdAt: now, updatedAt: now }]);
+  const corrected = { ...body, taskId: "http-target-task" };
+  expect(await (await executeSpawnAdmissionValidation(routeRequest("/api/spawn/validate", corrected), { registry: () => registry })).json()).toMatchObject({ admissible: true, fenced: false });
+  const admitted = await executeSpawnRequest(routeRequest("/api/spawn", corrected), spawnDependencies(registry, cwd));
+  expect(admitted.status).toBe(202);
+  expect(registry.spawnReceiptForClientAttempt(body.clientAttemptId)?.conversationId).toBeTruthy();
+  expect(loadTasks().find(task => task.id === corrected.taskId)?.assignments).toHaveLength(1);
+});
+
+test("spawn admits a task under the folder's old directory key after repository succession, and omitting taskId reads no tasks", async () => {
+  const cwd = path.join(sandbox, "task-project-succession");
+  fs.mkdirSync(cwd, { recursive: true });
+  const oldProject = directoryProjectId(cwd);
+  expect(Bun.spawnSync(["git", "init", "--quiet", cwd]).exitCode).toBe(0);
+  recordProjectSuccessions([projectSuccessionFor(oldProject, cwd)]);
+  const project = projectForCwd(cwd)!;
+  expect(project).toStartWith("repo-");
+  expect(canonicalProject(oldProject)).toBe(project);
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const store = new MemoryMcpReceiptStore();
+  let taskReads = 0;
+  let dispatches = 0;
+  const domain = { ...domainDependencies(registry), loadTasks: () => {
+    taskReads += 1;
+    return [{ id: "old-folder-task", project: oldProject, assignments: [] }] as unknown as BoardTask[];
+  } };
+  const live = service(registry, store, { post: async () => {
+    dispatches += 1;
+    return { launchId: `launch_${dispatches}`, conversationId: `conversation_${dispatches}`, state: "starting", initialMessage: "pending" };
+  } }, domain);
+  const args = { clientRequestId: "old-folder-task-request", cwd, title: "Build folder task", prompt: "Build folder task", taskId: "old-folder-task" };
+  expect(await live.callTool("spawn_agent", args)).toMatchObject({ ok: true, replayed: false });
+  expect(taskReads).toBe(1);
+  expect(await live.callTool("spawn_agent", { ...args, clientRequestId: "no-task-project-request", taskId: undefined })).toMatchObject({ ok: true, replayed: false });
+  expect(taskReads).toBe(1);
+  expect(dispatches).toBe(2);
+});
+
+test("task validation resolves a home-relative cwd the same way as spawn admission", async () => {
+  const cwd = os.homedir();
+  fs.mkdirSync(cwd, { recursive: true });
+  const now = new Date().toISOString();
+  saveTasks([...loadTasks(), { id: "home-task", project: projectForCwd(cwd)!, text: "Home task", status: "inbox", placement: "unplaced", assignments: [], createdAt: now, updatedAt: now }]);
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const response = await executeSpawnAdmissionValidation(routeRequest("/api/spawn/validate", { cwd: "~", taskId: "home-task" }), { registry: () => registry });
+  expect(await response.json()).toMatchObject({ admissible: true, fenced: false });
+});
 
 test("a real post-wire HTTP 400 is fenced once and an existing stranded claim recovers without redispatch", async () => {
   const cwd = path.join(sandbox, "launch-dir");

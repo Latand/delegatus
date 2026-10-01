@@ -1,10 +1,12 @@
-import type { ExecPort } from "@/lib/workflows/provision";
-
-/** Keep Git's resolved identity; supply the controller's identity for this command only when needed. */
-export function controllerCommitIdentityArgs(exec: ExecPort, cwd: string): string[] {
-  const author = exec("git", ["var", "GIT_AUTHOR_IDENT"], cwd);
-  const committer = exec("git", ["var", "GIT_COMMITTER_IDENT"], cwd);
-  return author.code === 0 && committer.code === 0
-    ? []
-    : ["-c", "user.name=Delegatus", "-c", `user.email=${["noreply", "delegatus.invalid"].join("@")}`];
+/** Apply only to controller-authored commits. Git's identity environment
+    overrides user.*, author.* and committer.* config without changing the
+    repository or the environment inherited by subsequent agent commands. */
+export function controllerCommitIdentityEnv(): Partial<NodeJS.ProcessEnv> {
+  const email = ["noreply", "delegatus.invalid"].join("@");
+  return {
+    GIT_AUTHOR_NAME: "Delegatus",
+    GIT_AUTHOR_EMAIL: email,
+    GIT_COMMITTER_NAME: "Delegatus",
+    GIT_COMMITTER_EMAIL: email,
+  };
 }

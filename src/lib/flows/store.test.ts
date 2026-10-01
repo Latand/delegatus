@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { AgentRegistry } from "@/lib/agent/registry";
-import { CODEX_ASTRA_MODEL, CODEX_TERRA_MODEL } from "@/lib/agent/models";
+import { CODEX_GPT61_SOL_MODEL, CODEX_TERRA_MODEL } from "@/lib/agent/models";
 
 import { configuredReviewerFallback, loadPresets, savePresets, loadFlows, mergeSeededPresets, patchFlowRows, reconcileFlowConversationOwnership, reconcileFlowConversationOwnershipCooperatively, saveFlows, seededPresetsFromRoles } from "./store";
 import type { Flow, FlowPreset } from "./types";
@@ -35,13 +35,13 @@ const LEGACY_DEFAULT: FlowPreset = {
   reviewer: { engine: "claude", model: "fable", effort: null },
 };
 
-test("fresh seeds use Astra and preserve a saved legacy preset", () => {
+test("fresh seeds use Sol and preserve a saved legacy preset", () => {
   const presets = mergeSeededPresets([LEGACY_DEFAULT]);
   expect(presets.some((preset) => preset.name === LEGACY_DEFAULT.name)).toBe(true);
   expect(presets[0]).toMatchObject({
-    name: "Astra medium → Astra xhigh",
-    implementer: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "medium" },
-    reviewer: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "xhigh" },
+    name: "Builder → Reviewer",
+    implementer: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
+    reviewer: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "xhigh" },
   });
 });
 
@@ -52,18 +52,18 @@ test("seed migration preserves a customized preset", () => {
 
 test("flow preset seeds derive their canonical roles from the role registry", () => {
   const presets = seededPresetsFromRoles();
-  expect(presets.find((preset) => preset.name === "Astra medium → Astra xhigh")).toMatchObject({
-    name: "Astra medium → Astra xhigh",
-    implementer: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "medium" },
-    reviewer: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "xhigh" },
+  expect(presets.find((preset) => preset.name === "Builder → Reviewer")).toMatchObject({
+    name: "Builder → Reviewer",
+    implementer: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
+    reviewer: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "xhigh" },
   });
 });
 
 test("saved flow seeds and unmarked same-name edits retain their selections", () => {
   const first = seededPresetsFromRoles();
   const refreshed = structuredClone(first);
-  refreshed[0]!.implementer.effort = "high";
-  expect(mergeSeededPresets(first, refreshed)[0]!.implementer.effort).toBe("medium");
+  refreshed[0]!.implementer.effort = "medium";
+  expect(mergeSeededPresets(first, refreshed)[0]!.implementer.effort).toBe("high");
 
   const custom = { ...structuredClone(first[0]!), managed: undefined, implementer: { ...first[0]!.implementer, effort: "low" } };
   expect(mergeSeededPresets([custom], refreshed)).toContainEqual(custom);
@@ -83,10 +83,10 @@ test("flow preset seeds fall back to the role default when a saved builder overr
       "utf8",
     );
     expect(() => seededPresetsFromRoles()).not.toThrow();
-    expect(seededPresetsFromRoles().find((preset) => preset.name === "Astra medium → Astra xhigh")?.implementer).toEqual({
+    expect(seededPresetsFromRoles().find((preset) => preset.name === "Builder → Reviewer")?.implementer).toEqual({
       engine: "codex",
-      model: CODEX_ASTRA_MODEL,
-      effort: "medium",
+      model: CODEX_GPT61_SOL_MODEL,
+      effort: "high",
     });
   } finally {
     if (previousState === undefined) delete process.env.LLV_STATE_DIR;
@@ -95,17 +95,17 @@ test("flow preset seeds fall back to the role default when a saved builder overr
   }
 });
 
-test("new Astra seeds coexist with a saved pre-registry flow preset", () => {
+test("new role seeds coexist with a saved pre-registry flow preset", () => {
   const previous = {
     name: "Terra high → Fable",
     implementer: { engine: "codex" as const, model: CODEX_TERRA_MODEL, effort: "high" },
     reviewer: { engine: "claude" as const, model: "fable", effort: null },
   };
   expect(mergeSeededPresets([previous])).toContainEqual(previous);
-  expect(mergeSeededPresets([previous]).find((preset) => preset.name === "Astra medium → Opus 5")?.reviewer).toEqual({
+  expect(mergeSeededPresets([previous]).find((preset) => preset.name === "Builder → Architect")?.reviewer).toEqual({
     engine: "claude",
     model: "opus",
-    effort: "high",
+    effort: "xhigh",
   });
 });
 
@@ -543,8 +543,8 @@ test("seed presets survive an unreadable role overrides file", () => {
   process.env.LLV_STATE_DIR = sandbox;
   try {
     fs.writeFileSync(path.join(sandbox, "role-presets.json"), "{", "utf8");
-    expect(seededPresetsFromRoles().find((preset) => preset.name === "Astra medium → Astra xhigh")).toMatchObject({
-      implementer: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "medium" },
+    expect(seededPresetsFromRoles().find((preset) => preset.name === "Builder → Reviewer")).toMatchObject({
+      implementer: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
     });
   } finally {
     if (previous === undefined) delete process.env.LLV_STATE_DIR;

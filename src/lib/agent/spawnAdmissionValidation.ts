@@ -14,6 +14,7 @@ import {
 import { resolveSpawnRole } from "@/lib/roles/registry";
 import { spawnSizingRefusal, type Briefer } from "@/lib/roles/sizing";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
+import { spawnTaskProjectError } from "@/lib/agent/spawnAdmission";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 
 type SpawnValidationDependencies = Pick<SpawnCommandDependencies, "registry">;
@@ -100,6 +101,9 @@ export async function executeSpawnAdmissionValidation(
     const sizing = spawnSizingRefusal({ role: role.value, engine: body.engine, model: body.model, briefer });
     if (sizing) return refusal(body, sizing, dependencies);
   }
+
+  const taskError = spawnTaskProjectError(body.taskId, typeof body.cwd === "string" ? body.cwd.trim() : "");
+  if (taskError) return NextResponse.json({ admissible: false, fenced: false, reason: taskError, status: 400 });
 
   return NextResponse.json({ admissible: true, fenced: false });
 }

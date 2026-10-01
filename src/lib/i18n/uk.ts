@@ -1077,7 +1077,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "roleCopy.verifier.param.claims.label": "Твердження",
   "roleCopy.verifier.param.claims.description": "Гіпотези, які треба підтвердити або спростувати.",
   "roleCopy.builder.name": "Білдер",
-  "roleCopy.builder.description": "Пише продуктовий код за окресленою задачею. Frontend на xhigh лише на окремий лейн, для найскладнішого UI; не піднімайте GPT-6 Sol до xhigh вручну. Типовий Sol high чи Astra medium: вирішують 30 перших рев'ю лейнів на Sol.",
+  "roleCopy.builder.description": "Пише продуктовий код за окресленою задачею.",
   "roleCopy.builder.param.mode.label": "Режим",
   "roleCopy.builder.param.mode.description": "Дисципліна імплементації.",
   "roleCopy.builder.param.mode.option.plain": "звичайний",
