@@ -1134,7 +1134,7 @@ test("step pipeline references derive motion and group the remaining reasons", (
   expect(card.motion.key).toBe("working");
   expect(card.stepSummary).toMatchObject({ done: 1, total: 3, open: 2, reasons: [{ kind: "queued", note: "When capacity is free", count: 1 }, { kind: "stopped", count: 1 }] });
   const pausedTask = task("paused-step-task", "assigned", [], { steps: [{ id: "pause", text: "Wait for review", state: "open", ref: "paused-step-lane" }] });
-  const paused = buildingLane("paused-step-lane", pausedTask.id);
+  const paused = buildingLane("paused-step-lane", pausedTask.id, { startedAt: "2026-10-02T09:00:00.000Z" });
   paused.state = "paused";
   paused.pausedAt = "2026-10-02T09:30:00.000Z";
   const pausedCard = model([pausedTask], [], { pipelines: [paused] }).columns.assigned.cards[0]!;
