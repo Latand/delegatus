@@ -18,6 +18,7 @@ import { withTaskCompletion } from "@/lib/tasks/completion";
 import { admissionSnapshot } from "@/lib/tasks/groupHide";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
+import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
@@ -2211,8 +2212,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         flows: OVERVIEW_QUIET ? [] : flows,
         pipelines: OVERVIEW_QUIET ? [] : pipelines,
         tasks,
-        /* The Telegram step is chosen per project, so the guide needs one with a folder. */
-        ...(TELEGRAM_STEP ? { projectCwds: { [PROJECT]: "/repo/atlas" } } : {}),
+        /* The Telegram step is chosen per project, so the guide needs one with a folder; the seat's first message keeps the
+           folder it had before Confirm, since a seat read keyed on another folder answers from its own older cache. */
+        ...(TELEGRAM_STEP || FM_SEAT ? { projectCwds: { [PROJECT]: "/repo/atlas" } } : {}),
       };
     const body = JSON.stringify({ ...scoped, workflows: [], systemHealth: { tmux: { status: "healthy" } }, ...(workLinks ? { workLinks } : {}) });
     if (evidence.filesDelayMs) await new Promise((resolve) => setTimeout(resolve, evidence.filesDelayMs));
@@ -2580,6 +2582,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       if (FIRST_MESSAGE && req.offset > 0 && req.offset < size) return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: size, size }];
       return [req.id, { data: req.offset >= size ? "" : data, start: 0, offset: size, size }];
     })) });
+  }
+  /* The seat's mandate is Delegatus's own delivery, so the server's provenance names it as such and the transcript's
+     record of it renders as the mandate card, never as the operator's bubble. */
+  if (url.pathname === "/api/log/provenance" && FIRST_MESSAGE && FM_SEAT) {
+    return json({ messages: {}, occurrences: [{ textDigest: messageTextDigest(fmText()), deliveredAt: iso(61), origin: "agent", mandate: { kind: "version", version: 1 } }] });
   }
   if (url.pathname === "/api/log") return json({ data: "", start: 0, offset: 0, size: 0 });
   if (url.pathname === "/api/conversations") return json({ items: files, total: files.length, nextCursor: null });

@@ -109,6 +109,7 @@
         "outboxMax": 0,
         "userBubbleMax": 1,
         "mandateMax": 0,
+        "lapses": [],
         "timeline": [
           "outbox 0, bubbles 1, rows 0, cards 0, chips 0"
         ]
@@ -183,13 +184,16 @@
           "danger": 0,
           "rows": 0,
           "outboxEntries": 0,
-          "userBubbles": [
-            "bare: Keep the project moving. Read the board "
-          ],
-          "mandateCards": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
           "rowState": null,
-          "sameNode": null,
-          "rect": null,
+          "sameNode": false,
+          "rect": {
+            "top": 81,
+            "left": 49,
+            "width": 328,
+            "height": 140
+          },
           "failureLines": 0,
           "failureText": null,
           "errorChips": [],
@@ -204,13 +208,16 @@
           "danger": 0,
           "rows": 0,
           "outboxEntries": 0,
-          "userBubbles": [
-            "bare: Keep the project moving. Read the board "
-          ],
-          "mandateCards": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
           "rowState": null,
-          "sameNode": null,
-          "rect": null,
+          "sameNode": false,
+          "rect": {
+            "top": 81,
+            "left": 49,
+            "width": 328,
+            "height": 140
+          },
           "failureLines": 0,
           "failureText": null,
           "errorChips": [],
@@ -224,14 +231,13 @@
         "envelope": false,
         "danger": [],
         "outboxMax": 0,
-        "userBubbleMax": 1,
+        "userBubbleMax": 0,
         "mandateMax": 1,
+        "lapses": [],
         "timeline": [
           "outbox 0, bubbles 0, rows 0, cards 0, chips 0",
           "outbox 0, bubbles 0, rows 0, cards 1, chips 1",
-          "outbox 0, bubbles 0, rows 0, cards 0, chips 1",
-          "outbox 0, bubbles 1, rows 0, cards 0, chips 1",
-          "outbox 0, bubbles 1, rows 0, cards 0, chips 0"
+          "outbox 0, bubbles 0, rows 0, cards 1, chips 0"
         ]
       },
       "timelines": [],
@@ -283,6 +289,7 @@
         "outboxMax": 1,
         "userBubbleMax": 1,
         "mandateMax": 0,
+        "lapses": [],
         "timeline": [
           "outbox 1, bubbles 1, rows 1, cards 0, chips 1"
         ]
@@ -399,6 +406,7 @@
         "outboxMax": 0,
         "userBubbleMax": 1,
         "mandateMax": 0,
+        "lapses": [],
         "timeline": [
           "outbox 0, bubbles 1, rows 0, cards 0, chips 0"
         ]
@@ -473,13 +481,16 @@
           "danger": 0,
           "rows": 0,
           "outboxEntries": 0,
-          "userBubbles": [
-            "bare: Keep the project moving. Read the board "
-          ],
-          "mandateCards": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
           "rowState": null,
-          "sameNode": null,
-          "rect": null,
+          "sameNode": false,
+          "rect": {
+            "top": 81,
+            "left": 49,
+            "width": 328,
+            "height": 140
+          },
           "failureLines": 0,
           "failureText": null,
           "errorChips": [],
@@ -494,13 +505,16 @@
           "danger": 0,
           "rows": 0,
           "outboxEntries": 0,
-          "userBubbles": [
-            "bare: Keep the project moving. Read the board "
-          ],
-          "mandateCards": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
           "rowState": null,
-          "sameNode": null,
-          "rect": null,
+          "sameNode": false,
+          "rect": {
+            "top": 81,
+            "left": 49,
+            "width": 328,
+            "height": 140
+          },
           "failureLines": 0,
           "failureText": null,
           "errorChips": [],
@@ -514,14 +528,13 @@
         "envelope": false,
         "danger": [],
         "outboxMax": 0,
-        "userBubbleMax": 1,
+        "userBubbleMax": 0,
         "mandateMax": 1,
+        "lapses": [],
         "timeline": [
           "outbox 0, bubbles 0, rows 0, cards 0, chips 0",
           "outbox 0, bubbles 0, rows 0, cards 1, chips 1",
-          "outbox 0, bubbles 0, rows 0, cards 0, chips 1",
-          "outbox 0, bubbles 1, rows 0, cards 0, chips 1",
-          "outbox 0, bubbles 1, rows 0, cards 0, chips 0"
+          "outbox 0, bubbles 0, rows 0, cards 1, chips 0"
         ]
       },
       "timelines": [],
@@ -573,6 +586,7 @@
         "outboxMax": 1,
         "userBubbleMax": 1,
         "mandateMax": 0,
+        "lapses": [],
         "timeline": [
           "outbox 1, bubbles 1, rows 1, cards 0, chips 1"
         ]
@@ -689,6 +703,7 @@
         "outboxMax": 0,
         "userBubbleMax": 1,
         "mandateMax": 0,
+        "lapses": [],
         "timeline": [
           "outbox 0, bubbles 1, rows 0, cards 0, chips 0"
         ]
@@ -763,13 +778,16 @@
           "danger": 0,
           "rows": 0,
           "outboxEntries": 0,
-          "userBubbles": [
-            "bare: Keep the project moving. Read the board "
-          ],
-          "mandateCards": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
           "rowState": null,
-          "sameNode": null,
-          "rect": null,
+          "sameNode": false,
+          "rect": {
+            "top": 81,
+            "left": 49,
+            "width": 328,
+            "height": 159
+          },
           "failureLines": 0,
           "failureText": null,
           "errorChips": [],
@@ -784,13 +802,16 @@
           "danger": 0,
           "rows": 0,
           "outboxEntries": 0,
-          "userBubbles": [
-            "bare: Keep the project moving. Read the board "
-          ],
-          "mandateCards": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
           "rowState": null,
-          "sameNode": null,
-          "rect": null,
+          "sameNode": false,
+          "rect": {
+            "top": 81,
+            "left": 49,
+            "width": 328,
+            "height": 159
+          },
           "failureLines": 0,
           "failureText": null,
           "errorChips": [],
@@ -804,14 +825,13 @@
         "envelope": false,
         "danger": [],
         "outboxMax": 0,
-        "userBubbleMax": 1,
+        "userBubbleMax": 0,
         "mandateMax": 1,
+        "lapses": [],
         "timeline": [
           "outbox 0, bubbles 0, rows 0, cards 0, chips 0",
           "outbox 0, bubbles 0, rows 0, cards 1, chips 1",
-          "outbox 0, bubbles 0, rows 0, cards 0, chips 1",
-          "outbox 0, bubbles 1, rows 0, cards 0, chips 1",
-          "outbox 0, bubbles 1, rows 0, cards 0, chips 0"
+          "outbox 0, bubbles 0, rows 0, cards 1, chips 0"
         ]
       },
       "timelines": [],
@@ -863,6 +883,7 @@
         "outboxMax": 1,
         "userBubbleMax": 1,
         "mandateMax": 0,
+        "lapses": [],
         "timeline": [
           "outbox 1, bubbles 1, rows 1, cards 0, chips 1"
         ]
@@ -979,6 +1000,7 @@
         "outboxMax": 0,
         "userBubbleMax": 1,
         "mandateMax": 0,
+        "lapses": [],
         "timeline": [
           "outbox 0, bubbles 1, rows 0, cards 0, chips 0"
         ]
@@ -1053,13 +1075,16 @@
           "danger": 0,
           "rows": 0,
           "outboxEntries": 0,
-          "userBubbles": [
-            "bare: Keep the project moving. Read the board "
-          ],
-          "mandateCards": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
           "rowState": null,
-          "sameNode": null,
-          "rect": null,
+          "sameNode": false,
+          "rect": {
+            "top": 81,
+            "left": 49,
+            "width": 328,
+            "height": 159
+          },
           "failureLines": 0,
           "failureText": null,
           "errorChips": [],
@@ -1074,13 +1099,16 @@
           "danger": 0,
           "rows": 0,
           "outboxEntries": 0,
-          "userBubbles": [
-            "bare: Keep the project moving. Read the board "
-          ],
-          "mandateCards": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
           "rowState": null,
-          "sameNode": null,
-          "rect": null,
+          "sameNode": false,
+          "rect": {
+            "top": 81,
+            "left": 49,
+            "width": 328,
+            "height": 159
+          },
           "failureLines": 0,
           "failureText": null,
           "errorChips": [],
@@ -1094,14 +1122,13 @@
         "envelope": false,
         "danger": [],
         "outboxMax": 0,
-        "userBubbleMax": 1,
+        "userBubbleMax": 0,
         "mandateMax": 1,
+        "lapses": [],
         "timeline": [
           "outbox 0, bubbles 0, rows 0, cards 0, chips 0",
           "outbox 0, bubbles 0, rows 0, cards 1, chips 1",
-          "outbox 0, bubbles 0, rows 0, cards 0, chips 1",
-          "outbox 0, bubbles 1, rows 0, cards 0, chips 1",
-          "outbox 0, bubbles 1, rows 0, cards 0, chips 0"
+          "outbox 0, bubbles 0, rows 0, cards 1, chips 0"
         ]
       },
       "timelines": [],
@@ -1153,6 +1180,7 @@
         "outboxMax": 1,
         "userBubbleMax": 1,
         "mandateMax": 0,
+        "lapses": [],
         "timeline": [
           "outbox 1, bubbles 1, rows 1, cards 0, chips 1"
         ]

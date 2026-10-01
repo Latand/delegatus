@@ -16,6 +16,7 @@ import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations
 import type { Pipeline } from "@/lib/pipelines/types";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
+import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 
@@ -1133,6 +1134,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (SYNCED && url.pathname === "/api/links/agents") return serverFetch(url.pathname + url.search);
   if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/log/provenance" && AGENT_LABEL) return json((await deliveredAgentEvidence()).provenance);
+  /* The seat's mandate is Delegatus's own delivery, so the server's provenance names it as such and the transcript's
+     record of it renders as the mandate card, never as the operator's bubble. */
+  if (url.pathname === "/api/log/provenance" && FM_SEAT) {
+    return json({ messages: {}, occurrences: [{ textDigest: messageTextDigest(fmText()), deliveredAt: iso(61), origin: "agent", mandate: { kind: "version", version: 1 } }] });
+  }
   if (url.pathname === "/api/conversation-host" && method === "POST") {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     if (body.action === "permission") {

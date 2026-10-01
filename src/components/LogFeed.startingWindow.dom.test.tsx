@@ -106,6 +106,9 @@ const { CardStatusBadge } = await import("./CardStatusBadge");
 const { resetOutboxForTests, seedLaunchOutbox } = await import("./conversation/outbox");
 const { createSpawnAttempt, provisionalSpawnFile } = await import("./draftSpawn");
 const { seatMandateDelivery, seatProvisionalFile } = await import("./orchestrator/useSeatConfirm");
+const { resetHeldMandatesForTests } = await import("./conversation/heldMandate");
+const { resetMessageProvenanceCacheForTests } = await import("./feed/messageProvenance");
+const { messageTextDigest } = await import("@/lib/runtime/messageTextDigest");
 
 /* The launch was admitted at T0; the host journals the first record eight
    seconds later. A timer anchored on that record would read eight seconds
@@ -176,6 +179,7 @@ beforeEach(() => {
   tailLines = [];
   dom.sessionStorage.clear();
   resetOutboxForTests();
+  resetHeldMandatesForTests();
 });
 afterEach(() => {
   for (const root of roots) flushSync(() => root.unmount());
@@ -456,11 +460,27 @@ test("a seat's mandate in the launch window is Delegatus's collapsed card, never
   expect(host.querySelectorAll("[data-outbox-entry]")).toHaveLength(0);
   expect(host.querySelector("[data-launch-chips]")).not.toBeNull();
 
-  /* Adopted with the display fields retired: the launch contributes chips only,
-     and the transcript's own mandate row is the card from here on. */
+  /* Adopted with the display fields retired but the tail not yet read: the
+     held card is still the one first message. */
   rerender(root, adopted(conversationId, launchId));
   expect(host.querySelectorAll("[data-outbox-entry]")).toHaveLength(0);
+  expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(1);
+
+  /* The tail's first row, before any delivery evidence names it a mandate: the
+     held card stays the one first message and the row is not painted as the
+     operator's bubble meanwhile. */
+  tailLines = operatorRecords;
+  rerender(root, adopted(conversationId, launchId));
+  expect(host.querySelectorAll("[data-outbox-entry]")).toHaveLength(0);
+  expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(1);
+  expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(0);
+
+  /* Evidence that never names a mandate cannot hide the row for good: the
+     agent's first prose releases it. */
+  tailLines = operatorAnswered;
+  rerender(root, answered(conversationId, launchId));
   expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(0);
+  expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(1);
 });
 
 test("an ordinary operator launch keeps its own bubble and shows no mandate card", () => {
@@ -686,10 +706,83 @@ test("seat confirm: the mandate is one card from the first paint and never the o
   expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(1);
   expect(host.querySelectorAll("[data-outbox-entry]")).toHaveLength(0);
 
+  /* Adoption strips prompt and mandate from the launch facts a poll before the
+     window has read the transcript's tail: the card stays the one first
+     message in that gap. */
+  tailLines = [];
+  now = RECORD_AT + 500;
+  rerender(root, adopted(conversationId, launchId));
+  assertCleanFirstMessage(host);
+  expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(1);
+  expect(host.querySelectorAll("[data-outbox-entry]")).toHaveLength(0);
+
+  /* The tail's first row lands before the delivery evidence has answered: the
+     card stays and the row is not painted as the operator's bubble. */
+  tailLines = operatorRecords;
   now = RECORD_AT + 1_000;
   rerender(root, adopted(conversationId, launchId));
   assertCleanFirstMessage(host);
+  expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(1);
+  expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(0);
   expect(host.querySelectorAll("[data-outbox-entry]")).toHaveLength(0);
+});
+
+test("seat confirm: a window mounted after adoption still shows the card the first mount rendered", () => {
+  const conversationId = "conversation_first_seat_remount";
+  const launchId = "launch_first_seat_remount";
+  const first = render({
+    ...placeholder(conversationId, launchId),
+    spawn: launchFacts(conversationId, launchId, { mandate: { kind: "version", version: 1 }, prompt: MANDATE, promptEcho: MANDATE }),
+  } as FileEntry);
+  expect(first.host.querySelectorAll("[data-mandate-card]")).toHaveLength(1);
+  flushSync(() => first.root.unmount());
+  roots.delete(first.root);
+
+  /* The phone's focus view re-resolves the conversation when its path flips: a
+     new feed whose launch facts have already lost the prompt and the mandate. */
+  tailLines = [];
+  now = RECORD_AT + 500;
+  const { host } = render(adopted(conversationId, launchId));
+  expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(1);
+  expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(0);
+});
+
+test("seat confirm: the transcript's record takes over as the card once the delivery evidence names it", async () => {
+  const conversationId = "conversation_first_seat_evidence";
+  const launchId = "launch_first_seat_evidence";
+  const realFetch = globalThis.fetch;
+  let answerEvidence: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => { answerEvidence = resolve; });
+  globalThis.fetch = (async () => {
+    await gate;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ messages: {}, occurrences: [{ textDigest: messageTextDigest(OPERATOR_PROMPT), deliveredAt: new Date(RECORD_AT).toISOString(), origin: "agent", mandate: { kind: "version", version: 1 } }] }),
+    } as Response;
+  }) as unknown as typeof fetch;
+  try {
+    resetMessageProvenanceCacheForTests();
+    const { host, root } = render({
+      ...placeholder(conversationId, launchId),
+      spawn: launchFacts(conversationId, launchId, { mandate: { kind: "version", version: 1 }, prompt: OPERATOR_PROMPT, promptEcho: OPERATOR_PROMPT }),
+    } as FileEntry);
+    expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(1);
+
+    tailLines = operatorRecords;
+    now = RECORD_AT + 1_000;
+    rerender(root, adopted(conversationId, launchId));
+    expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(1);
+    expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(0);
+
+    answerEvidence();
+    for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(1);
+    expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(0);
+    expect(host.textContent).not.toContain("Fix the failing export test");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });
 
 test("seat confirm without a version names the card unqualified until the poll says more", () => {

@@ -13717,7 +13717,7 @@ describe("a new conversation's first message is a normal row", () => {
   const RED = "(root) => [...root.querySelectorAll('[data-log-feed-scroller] [class*=\"danger\"]')].filter((el) => [...el.classList].some((token) => /^(text|bg|border|ring|outline|fill|stroke)-danger/.test(token)))";
   const watch = (page: Page) => page.evaluate(([seat, red]) => {
     const reds = (0, eval)(red as string) as (root: Element) => Element[];
-    const sink = { envelope: false, danger: [] as string[], outboxMax: 0, userBubbleMax: 0, mandateMax: 0, timeline: [] as string[] };
+    const sink = { envelope: false, danger: [] as string[], outboxMax: 0, userBubbleMax: 0, mandateMax: 0, lapses: [] as string[], timeline: [] as string[] };
     (window as unknown as { __fm: typeof sink }).__fm = sink;
     const scan = () => {
       const root = document.querySelector(`${seat} [data-orchestrator-panel]`);
@@ -13732,8 +13732,10 @@ describe("a new conversation's first message is a normal row", () => {
       sink.userBubbleMax = Math.max(sink.userBubbleMax, root.querySelectorAll("[data-user-bubble]").length);
       sink.mandateMax = Math.max(sink.mandateMax, root.querySelectorAll("[data-mandate-card]").length);
       /* The committed states in order, consecutive repeats folded: what the operator could have seen between two reads. */
-      const state = `outbox ${root.querySelectorAll("[data-outbox-entry]").length}, bubbles ${root.querySelectorAll("[data-user-bubble]").length}, rows ${root.querySelectorAll("[data-message-row]").length}, cards ${root.querySelectorAll("[data-mandate-card]").length}, chips ${root.querySelectorAll("[data-launch-chips]").length}, feed ${root.querySelector("[data-feed-state]")?.getAttribute("data-feed-state") ?? "none"}, draft ${root.querySelector("[data-orchestrator-draft]") ? "yes" : "no"}`;
+      const state = `panel ${root.getAttribute("data-orchestrator-state")}, outbox ${root.querySelectorAll("[data-outbox-entry]").length}, bubbles ${root.querySelectorAll("[data-user-bubble]").length}, rows ${root.querySelectorAll("[data-message-row]").length}, cards ${root.querySelectorAll("[data-mandate-card]").length}, chips ${root.querySelectorAll("[data-launch-chips]").length}, feed ${root.querySelector("[data-feed-state]")?.getAttribute("data-feed-state") ?? "none"}, draft ${root.querySelector("[data-orchestrator-draft]") ? "yes" : "no"}`;
       if (sink.timeline[sink.timeline.length - 1] !== state) sink.timeline.push(state);
+      /* After the first card: a state with no card (the first message gone) or with the create draft back (the Confirm flashed). */
+      if (sink.mandateMax >= 1 && (!root.querySelector("[data-mandate-card]") || root.querySelector("[data-orchestrator-draft]")) && !sink.lapses.includes(state)) sink.lapses.push(state);
     };
     new MutationObserver(scan).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
     scan();
@@ -13824,16 +13826,18 @@ describe("a new conversation's first message is a normal row", () => {
               if (index === 0 && read.rowState !== "pending") failures.push(`${at}: the pending row reads ${read.rowState}`);
               if (index === 0 && read.rect) pendingRect = read.rect;
               if (pendingRect && read.rect && (Math.abs(read.rect.left - pendingRect.left) > 1 || Math.abs(read.rect.width - pendingRect.width) > 1 || (index < 3 && Math.abs(read.rect.top - pendingRect.top) > 1))) failures.push(`${at}: the row moved from ${JSON.stringify(pendingRect)} to ${JSON.stringify(read.rect)}`);
-            } else if (index < 2) {
-              if (read.mandateCards !== 1 || read.outboxEntries !== 0) failures.push(`${at}: ${read.mandateCards} mandate cards and ${read.outboxEntries} operator bubbles`);
-            } else if (read.outboxEntries !== 0 || read.rows + read.mandateCards > 1) failures.push(`${at}: ${read.rows} rows and ${read.mandateCards} cards beside ${read.outboxEntries} bubbles`);
+            } else if (read.mandateCards !== 1 || read.outboxEntries !== 0 || read.userBubbles.length) {
+              failures.push(`${at}: ${read.mandateCards} mandate cards, ${read.outboxEntries} launch bubbles and ${read.userBubbles.length} operator bubbles ${JSON.stringify(read.userBubbles)}`);
+            }
           }
-          const seen = await page.evaluate(() => (window as unknown as { __fm: unknown }).__fm) as { envelope: boolean; danger: string[]; outboxMax: number; userBubbleMax: number; mandateMax: number; timeline: string[] };
+          const seen = await page.evaluate(() => (window as unknown as { __fm: unknown }).__fm) as { envelope: boolean; danger: string[]; outboxMax: number; userBubbleMax: number; mandateMax: number; lapses: string[]; timeline: string[] };
           if (seen.envelope) failures.push(`${label}: the envelope showed between steps`);
           if (kind !== "f" && seen.danger.length) failures.push(`${label}: a red element showed between steps ${JSON.stringify(seen.danger)}`);
           if (kind === "p" && seen.outboxMax > 1) failures.push(`${label}: ${seen.outboxMax} launch bubbles showed at once`);
           if (kind === "s" && seen.outboxMax > 0) failures.push(`${label}: the mandate was seeded as the operator's bubble (${seen.outboxMax})`);
           if (kind === "s" && seen.mandateMax > 1) failures.push(`${label}: ${seen.mandateMax} mandate cards showed at once`);
+          if (kind === "s" && seen.userBubbleMax > 0) failures.push(`${label}: the mandate showed as an operator bubble (${seen.userBubbleMax})`);
+          if (kind === "s" && seen.lapses.length) failures.push(`${label}: after the first card the window held no card or the create draft: ${JSON.stringify(seen.lapses)}`);
           frames[label] = { readings, seen, pageErrors };
           if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
         } finally {

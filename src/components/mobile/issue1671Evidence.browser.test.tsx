@@ -5229,7 +5229,7 @@ describe("a new conversation's first message is a normal row on the phone", () =
 
   const watch = (page: Page) => page.evaluate(([red, rootOf]) => {
     const reds = (0, eval)(red as string) as (root: Element) => Element[];
-    const sink = { envelope: false, danger: [] as string[], outboxMax: 0, userBubbleMax: 0, mandateMax: 0, timeline: [] as string[] };
+    const sink = { envelope: false, danger: [] as string[], outboxMax: 0, userBubbleMax: 0, mandateMax: 0, lapses: [] as string[], timeline: [] as string[] };
     (window as unknown as { __fm: typeof sink }).__fm = sink;
     const scan = () => {
       const root = (0, eval)(rootOf as string) as HTMLElement;
@@ -5244,7 +5244,8 @@ describe("a new conversation's first message is a normal row on the phone", () =
       sink.mandateMax = Math.max(sink.mandateMax, root.querySelectorAll("[data-mandate-card]").length);
       /* The committed states in order, consecutive repeats folded: what the operator could have seen between two reads. */
       const state = `outbox ${root.querySelectorAll("[data-outbox-entry]").length}, bubbles ${root.querySelectorAll("[data-user-bubble]").length}, rows ${root.querySelectorAll("[data-message-row]").length}, cards ${root.querySelectorAll("[data-mandate-card]").length}, chips ${root.querySelectorAll("[data-launch-chips]").length}`;
-      if (sink.timeline[sink.timeline.length - 1] !== state) sink.timeline.push(state);
+      if (sink.timeline[sink.timeline.length - 1] !== state) sink.timeline.push(state);      /* After the first card: a state with no card means the first message is gone. */
+      if (sink.mandateMax >= 1 && !root.querySelector("[data-mandate-card]") && !sink.lapses.includes(state)) sink.lapses.push(state);
     };
     new MutationObserver(scan).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
     scan();
@@ -5365,16 +5366,18 @@ describe("a new conversation's first message is a normal row on the phone", () =
             if (kind === "p") {
               if (read.userBubbles.length !== 1) failures.push(`${at}: ${read.userBubbles.length} bubbles carry the prompt`);
               if (index === 0 && read.rowState !== "pending") failures.push(`${at}: the pending row reads ${read.rowState}`);
-            } else if (index < 2) {
-              if (read.mandateCards !== 1 || read.outboxEntries !== 0) failures.push(`${at}: ${read.mandateCards} mandate cards and ${read.outboxEntries} operator bubbles`);
-            } else if (read.outboxEntries !== 0 || read.rows + read.mandateCards > 1) failures.push(`${at}: ${read.rows} rows and ${read.mandateCards} cards beside ${read.outboxEntries} bubbles`);
+            } else if (read.mandateCards !== 1 || read.outboxEntries !== 0 || read.userBubbles.length) {
+              failures.push(`${at}: ${read.mandateCards} mandate cards, ${read.outboxEntries} launch bubbles and ${read.userBubbles.length} operator bubbles ${JSON.stringify(read.userBubbles)}`);
+            }
           }
-          const seen = await page.evaluate(() => (window as unknown as { __fm: unknown }).__fm) as { envelope: boolean; danger: string[]; outboxMax: number; userBubbleMax: number; mandateMax: number; timeline: string[] };
+          const seen = await page.evaluate(() => (window as unknown as { __fm: unknown }).__fm) as { envelope: boolean; danger: string[]; outboxMax: number; userBubbleMax: number; mandateMax: number; lapses: string[]; timeline: string[] };
           if (seen.envelope) failures.push(`${label}: the envelope showed between steps`);
           if (kind !== "f" && seen.danger.length) failures.push(`${label}: a red element showed between steps ${JSON.stringify(seen.danger)}`);
           if (kind === "p" && seen.outboxMax > 1) failures.push(`${label}: ${seen.outboxMax} launch bubbles showed at once`);
           if (kind === "s" && seen.outboxMax > 0) failures.push(`${label}: the mandate was seeded as the operator's bubble (${seen.outboxMax})`);
           if (kind === "s" && seen.mandateMax > 1) failures.push(`${label}: ${seen.mandateMax} mandate cards showed at once`);
+          if (kind === "s" && seen.userBubbleMax > 0) failures.push(`${label}: the mandate showed as an operator bubble (${seen.userBubbleMax})`);
+          if (kind === "s" && seen.lapses.length) failures.push(`${label}: after the first card the window held no card: ${JSON.stringify(seen.lapses)}`);
           frames[label] = { readings, seen, timelines, pageErrors };
           if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
         } catch (error) {

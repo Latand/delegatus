@@ -158,6 +158,7 @@ export function useSeatConfirm(options: {
     setSubmitting(true);
     setFailure(null);
     const at = Date.now();
+    let accepted = false;
     try {
       const response = await fetch(url, {
         method: "POST",
@@ -191,6 +192,7 @@ export function useSeatConfirm(options: {
           if (provisional) applySpawnedConversationSnapshot(provisional);
         }
         requestFilesRefresh();
+        accepted = true;
       } else {
         const classified = classifySeatFailure(response.status, body, clientRequestId);
         /* A terminal refusal is durably recorded server-side; the next attempt
@@ -204,8 +206,16 @@ export function useSeatConfirm(options: {
       setFailure({ kind: "ambiguous", error: t("orchPanel.transportLost"), clientRequestId });
     } finally {
       inFlight.current = false;
-      setSubmitting(false);
-      await refresh();
+      /* After an accepted POST the panel stays on «creating» until the durable
+         read has answered: `status` is still the pre-Confirm read until then
+         (no seat, no pending intent), and clearing `submitting` first would
+         paint the create draft over the seat's first paint. */
+      if (!accepted) setSubmitting(false);
+      try {
+        await refresh();
+      } finally {
+        if (accepted) setSubmitting(false);
+      }
     }
   }, [url, project, storage, field, refresh, t]);
 

@@ -53,7 +53,8 @@ import {
 import { localSubmissionJoin, submissionNamesItsDelivery } from "./conversation/submissionJoin";
 import { createFeedSession, type FeedSession, type FeedSnapshot } from "./feed/parse";
 import { claimFeedSession, releaseFeedSession, takeFeedSession } from "./feed/sessionPool";
-import { FeedItem } from "./feed/FeedItem";
+import { FeedItem, resolveDeliveredItem } from "./feed/FeedItem";
+import { heldMandateFor, holdMandate } from "./conversation/heldMandate";
 import { useConversationGallery } from "./feed/imageGallery";
 import { GalleryOwnerProvider, ImageGalleryProvider } from "./feed/Lightbox";
 import { MessageProvenanceProvider, useDeliveredMessageProvenance } from "./feed/messageProvenance";
@@ -1034,6 +1035,28 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      published a poll before its tail is read, and a bubble retired in that gap
      leaves the window with no first message at all until the tail lands. */
   const transcriptAttached = feed.items.length > 0;
+  /* The seat's mandate card outlives the launch facts that carried it: the
+     last pair a feed rendered is kept per launch (`heldMandate.ts`). */
+  useLayoutEffect(() => {
+    if (launch?.launchId && launch.mandate && launch.prompt) {
+      holdMandate({ launchId: launch.launchId, text: launch.prompt, ts: launch.promptAt, mandate: launch.mandate });
+    }
+  }, [launch?.launchId, launch?.prompt, launch?.promptAt, launch?.mandate]);
+  const heldMandate = heldMandateFor(launch?.launchId);
+  /* The held card stands in for the transcript's record of the mandate until
+     that record renders as the card itself: the first user row names its
+     mandate only once the delivery evidence answers, and painted before that
+     it would be the operator's bubble. The agent's first prose ends the wait,
+     so evidence that never names a mandate cannot hide the row for good. */
+  const firstUserItem = useMemo(() => feed.items.find(({ item }) => item.kind === "user")?.item ?? null, [feed.items]);
+  const holdsMandate = Boolean(
+    heldMandate !== null
+      && !(firstUserItem && resolveDeliveredItem(firstUserItem, provenanceLookup).kind === "mandate")
+      && !feed.items.some(({ item }) => item.kind === "prose"),
+  );
+  const mandateCard = launch?.mandate && launch.prompt
+    ? { text: launch.prompt, ts: launch.promptAt, mandate: launch.mandate }
+    : holdsMandate ? heldMandate : null;
   useEffect(() => {
     if (!memoryKey || !file?.launch || !launchOwnsThisPane || !launchOwner || !transcriptAttached) return;
     retireLaunchOutboxOnAdoption(memoryKey, {
@@ -1199,6 +1222,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     });
     const rows: ConversationRow[] = visibleItems.flatMap(({ anchorKey, key, item, responseDurationMs, submissionDedup }, visibleIndex) => {
       if (submissionDedup && withheldRecords.has(submissionDedup)) return [];
+      if (holdsMandate && item === firstUserItem) return [];
       if (item.kind === "sysmsg" && item.deliveredMessage?.engineMessageId
         && withheldNativeRecords.has(item.deliveredMessage.engineMessageId)) return [];
       const answer = answerFor(visibleStartIndex + visibleIndex);
@@ -1632,8 +1656,8 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
               if (row.kind === "launch") {
                 return (
                   <div key="launch">
-                    {launch!.mandate && launch!.prompt ? (
-                      <MandateCard item={{ kind: "mandate", ts: launch!.promptAt, text: launch!.prompt, mandate: launch!.mandate }} />
+                    {mandateCard ? (
+                      <MandateCard item={{ kind: "mandate", ts: mandateCard.ts, text: mandateCard.text, mandate: mandateCard.mandate }} />
                     ) : null}
                     <LaunchChips launch={launch!} onRetry={onLaunchRetry} />
                   </div>
