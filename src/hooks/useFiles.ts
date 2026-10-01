@@ -17,7 +17,6 @@ import type { Flow } from "@/lib/flows/types";
 import { EMPTY_FILES_WORK_LINKS, type FilesWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
-import type { TmuxEndpointHealth } from "@/lib/tmux";
 import type { FileEntry, FilesResponse, ProjectCatalogEntry } from "@/lib/types";
 import type { Workflow } from "@/lib/workflows/types";
 
@@ -57,7 +56,7 @@ export interface FilesData {
   tasks: BoardTask[];
   /** Set when the server's pipelines store failed closed for this poll. */
   pipelinesError?: string;
-  systemHealth: { tmux: TmuxEndpointHealth };
+  systemHealth: FilesResponse["systemHealth"];
   conversationAliases: Record<string, string>;
   /** `spawn:<launchId>` → canonical conversation id (issue #569). */
   launchRoutes: Record<string, string>;
@@ -292,6 +291,18 @@ export function createFilesClientCache(
   hooks: { accessDenied?: () => void } = {},
 ): FilesClientCache {
   let snapshot = EMPTY;
+  // Write health describes the machine now, independently of a scope's row stamp.
+  let currentStateWrites: NonNullable<NonNullable<FilesData["systemHealth"]>["storage"]>["writes"];
+  const writeHealthViews = new WeakMap<FilesData, FilesData>();
+  const withStateWrites = (data: FilesData): FilesData => {
+    if (!currentStateWrites || data.systemHealth?.storage?.writes === currentStateWrites) return data;
+    const held = writeHealthViews.get(data);
+    if (held?.systemHealth?.storage?.writes === currentStateWrites) return held;
+    const view = { ...data, systemHealth: { ...data.systemHealth,
+      storage: { ...data.systemHealth?.storage, incidents: data.systemHealth?.storage?.incidents ?? [], writes: currentStateWrites } } };
+    writeHealthViews.set(data, view);
+    return view;
+  };
   let disposed = false;
   const representations = new Map<string, Representation>();
   const listeners = new Map<
@@ -474,7 +485,7 @@ export function createFilesClientCache(
   };
 
   const exactScopeRepresentation = (requestScope: string): FilesData =>
-    withCatalogFailures(withPipelineOverlays(withSpawnedOverlays(scopeRows(requestScope))));
+    withStateWrites(withCatalogFailures(withPipelineOverlays(withSpawnedOverlays(scopeRows(requestScope)))));
 
   const exactScopeSnapshot = (pinnedPath?: string | null): FilesData =>
     exactScopeRepresentation(filesApiUrl(undefined, pinnedPath));
@@ -567,12 +578,13 @@ export function createFilesClientCache(
      next conditional request names — and shows the newest rows with its own
      pin rows; its listeners hear only if that changed what they see. */
   const refuseOlder = (url: string, data: FilesData, etag: string | undefined, raw: RawFilesResponse | undefined, built: FilesBuilt | undefined): FilesData => {
-    const before = scopeRows(url);
+    const before = exactScopeRepresentation(url);
+    currentStateWrites = data.systemHealth?.storage?.writes ?? currentStateWrites;
     const previous = representations.get(url);
     rememberRepresentation(url, data, etag, raw, built);
     /* A 304 confirming the same old rows keeps the view it already had. */
     if (previous?.data === data && previous.forward) representations.get(url)!.forward = previous.forward;
-    const after = scopeRows(url);
+    const after = exactScopeRepresentation(url);
     if (after !== before && !disposed) {
       for (const [listener, scope] of listeners) {
         if (scope === url) listener(exactScopeRepresentation(url), "background");
@@ -738,6 +750,7 @@ export function createFilesClientCache(
       scheduleOrCancelCompletionRetry(generationIncomplete, completionTargetGeneration, url, pinnedPath, revision, logicalGeneration ?? generation, completionRetryAttempt, completionRetry);
       return refused;
     }
+    currentStateWrites = incoming.systemHealth?.storage?.writes ?? currentStateWrites;
     retireConfirmedSpawnOverlays(incoming);
     /* A restarted server can acknowledge a pinned target generation with its
        global-only stale snapshot before the pin hydration resumes. Keep the
@@ -1013,7 +1026,7 @@ export function createFilesClientCache(
     listeners.clear();
   };
 
-  return { read: () => withCatalogFailures(withSpawnedOverlays(snapshot)), readScope: exactScopeSnapshot, revalidate, subscribe, applyPipeline, revertPipeline, applyTask, applySpawnedConversation, hydrate, certifiedGlobal, pauseCompletionRetries, resumeCompletionRetries, dispose };
+  return { read: () => withStateWrites(withCatalogFailures(withSpawnedOverlays(snapshot))), readScope: exactScopeSnapshot, revalidate, subscribe, applyPipeline, revertPipeline, applyTask, applySpawnedConversation, hydrate, certifiedGlobal, pauseCompletionRetries, resumeCompletionRetries, dispose };
 }
 
 const defaultFilesFetcher: FilesFetcher = (input, init) => fetch(input, init);

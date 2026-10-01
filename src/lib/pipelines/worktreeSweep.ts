@@ -142,6 +142,8 @@ export type WorktreeSweepReport = {
   /** In a dry run, what the sweep would have removed. */
   removed: WorktreeRemoval[];
   removedBytes: number;
+  trimmed: { path: string; bytes: number; pipelineId: string }[];
+  trimmedBytes: number;
   kept: WorktreeKept[];
   keptCounts: Partial<Record<WorktreeKeptReason, number>>;
   errors: string[];
@@ -381,6 +383,8 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
     repositories: [],
     removed: [],
     removedBytes: 0,
+    trimmed: [],
+    trimmedBytes: 0,
     kept: [],
     keptCounts: {},
     errors: [],
@@ -391,6 +395,9 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
   };
   const resolve = (entry: string) => path.resolve(entry);
   const currentPipelines = ports.currentPipelines ?? (() => ports.pipelines);
+  // The live list omits archived lanes. Preserve their settled ownership,
+  // letting fresh live entries override the initial snapshot by id.
+  const ownershipPipelines = () => [...new Map([...ports.pipelines, ...currentPipelines()].map((pipeline) => [pipeline.id, pipeline])).values()];
   /** What a live pipeline, process or conversation holds right now. An open
       pipeline needs its own checkout and the repository it runs git in. */
   const readGuards = () => ({
@@ -581,6 +588,42 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         if (deleted.code !== 0) report.errors.push(`${root}: git branch -D ${branch}: ${(deleted.stderr || deleted.stdout).trim()}`);
       }
     }
+
+    // Retained, settled pipeline checkouts keep their source and private files.
+    // Only their own rebuildable .next directory is eligible for this pass.
+    for (const entry of ordered) {
+      const worktree = resolve(entry.path);
+      if (!remaining.has(worktree) || entry.locked || entry.prunable
+        || worktree === mainPath || roots.has(worktree)
+        || projectRoots.some((project) => inside(project, worktree))) continue;
+      const owners = ownershipPipelines().filter((pipeline) => pipeline.worktreeDir && resolve(pipeline.worktreeDir) === worktree);
+      const owner = owners.find((pipeline) => {
+        const source = resolve(pipeline.repoDir);
+        return worktree === path.join(path.dirname(source), `${path.basename(source)}-pipeline-${pipeline.id}`);
+      });
+      if (!owner || owners.some(pipelineHoldsCheckout) || heldBy(readGuards(), worktree)) continue;
+      const next = path.join(worktree, ".next");
+      const safeDirectory = () => {
+        try {
+          if (!fs.lstatSync(worktree).isDirectory() || !fs.lstatSync(next).isDirectory()) return false;
+          const realWorktree = fs.realpathSync(worktree);
+          const realNext = fs.realpathSync(next);
+          return realNext === path.join(realWorktree, ".next")
+            && !listed.some((other) => inside(resolve(other.path), next));
+        } catch { return false; }
+      };
+      if (!safeDirectory()) continue;
+      const bytes = await measure(next);
+      // Measurement yields: refresh both activity and directory guards last.
+      const nowOwners = ownershipPipelines().filter((pipeline) => pipeline.worktreeDir && resolve(pipeline.worktreeDir) === worktree);
+      if (!nowOwners.some((pipeline) => pipeline.id === owner.id) || nowOwners.some(pipelineHoldsCheckout)
+        || heldBy(readGuards(), worktree) || !safeDirectory()) continue;
+      try {
+        if (!dryRun) await fs.promises.rm(next, { recursive: true });
+        report.trimmed.push({ path: next, bytes, pipelineId: owner.id });
+        report.trimmedBytes += bytes;
+      } catch (error) { report.errors.push(`${next}: build cache trim failed: ${String(error)}`); }
+    }
   }
   return report;
 }
@@ -595,7 +638,7 @@ export function summarizeWorktreeSweep(report: WorktreeSweepReport): string {
   const verb = report.mode === "dry-run" ? "would remove" : "removed";
   const kept = Object.entries(report.keptCounts).map(([reason, count]) => `${count} ${reason}`).join(", ");
   return `[worktree sweep] ${verb} ${report.removed.length} worktree(s) (${gigabytes(report.removedBytes)}) across ${report.repositories.length} repositor${report.repositories.length === 1 ? "y" : "ies"};`
-    + ` kept ${report.kept.length}${kept ? ` (${kept})` : ""}; ${report.errors.length} error(s)`;
+    + ` ${report.mode === "dry-run" ? "would trim" : "trimmed"} ${report.trimmed?.length ?? 0} build cache(s) (${gigabytes(report.trimmedBytes ?? 0)}); kept ${report.kept.length}${kept ? ` (${kept})` : ""}; ${report.errors.length} error(s)`;
 }
 
 /* ── Production ports ───────────────────────────────────────────────────── */

@@ -10,6 +10,28 @@ test("filesApiUrl keeps project switches on the bounded scheme feed", () => {
   expect(filesApiUrl("space project", "/sessions/quiet.jsonl")).toBe("/api/files?view=summary&path=%2Fsessions%2Fquiet.jsonl");
 });
 
+test("an older cached scope updates write health while keeping the newest rows", async () => {
+  const pin = "/archive/health-pin.jsonl";
+  let call = 0;
+  const cache = createFilesClientCache(async () => {
+    const index = call++;
+    return new Response(JSON.stringify({
+      files: [file(index === 1 ? "/new" : "/old", index === 1 ? "New" : "Old")],
+      systemHealth: { storage: { writes: { state: index === 2 ? "disk-full" : "ok", freeBytes: 1024 ** 3, since: index === 2 ? "2026-10-01T00:00:00.000Z" : null } } },
+    }), { headers: { ETag: `"health-${index}"`, "x-llv-files-built": index === 1 ? "e1.14.2" : "e1.12.1" } });
+  });
+  try {
+    await cache.revalidate();
+    await cache.revalidate(pin);
+    await cache.revalidate();
+    expect(cache.readScope(null).files.map((entry) => entry.path)).toEqual(["/new"]);
+    expect(cache.readScope(null).systemHealth?.storage?.writes?.state).toBe("disk-full");
+    await cache.revalidate();
+    expect(cache.readScope(null).systemHealth?.storage?.writes?.state).toBe("ok");
+    expect(cache.readScope(null).files.map((entry) => entry.path)).toEqual(["/new"]);
+  } finally { cache.dispose(); }
+});
+
 test("global client cache serves stale rows while revalidation patches changed files", async () => {
   const bodies = [
     { files: [file("/a", "A"), file("/b", "B")], flows: [], pipelines: [], workflows: [], tasks: [], systemHealth: { tmux: { status: "healthy" as const } } },

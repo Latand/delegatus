@@ -67,6 +67,7 @@ import { GlobalSearch, transcriptFocusHash } from "./search/GlobalSearch";
 import { ProjectDashboard, queueColumnOpen } from "./ProjectDashboard";
 import { buildProjectSummaries, isChildConversation, OVERVIEW, projectKey, railProjectOrder } from "./projectModel";
 import { ProjectRail, RAIL_HIDDEN_STORAGE_KEY } from "./ProjectRail";
+import { StateWritesAlert } from "./StateWritesAlert";
 import { DeploymentStatusPill } from "./runtime/DeploymentStatusPill";
 import { StagingBadge } from "./StagingBadge";
 import { activityDot, cleanTitle } from "./utils";
@@ -216,7 +217,7 @@ function ViewerApp() {
     return initial.filePath || initial.conversationId ? initial : null;
   });
   const [catalogPin, dispatchCatalogPin] = useReducer(reduceCatalogPin, null);
-  const { files: polledFiles, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines: polledPipelines, pipelinesError, workflows, tasks, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(null, filesRequestPin(pendingHash, catalogPin?.path ?? null));
+  const { systemHealth, files: polledFiles, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines: polledPipelines, pipelinesError, workflows, tasks, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(null, filesRequestPin(pendingHash, catalogPin?.path ?? null));
   /* A dismissal is drawn the moment a card's Dismiss is clicked: layered over
      the polled rows here, the one place they are read, so the cards, the
      phone's ⚠ count and the queue stop flagging it in the same frame
@@ -1722,6 +1723,7 @@ function ViewerApp() {
         )}
         </BarIslandProvider>
         </BoardPaneProvider>
+        <StateWritesAlert storage={systemHealth.storage} />
       </main>
       {panelDocked ? panel("docked") : null}
       {/* Runtime connection pill — mounts the tab-wide bus and shows live /
