@@ -11,6 +11,7 @@ import { sessionKeyId } from "@/lib/agent/sessionKey";
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
 import { admittedMessageTextForms } from "./admittedMessageText";
+import { sameMessageOrigin, type MessageOrigin } from "./messageOrigin";
 import { structuredContentDigest } from "./structuredContent";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
 import {
@@ -726,6 +727,8 @@ export interface OriginalSendBinding {
       forms admission stores (see {@link admittedMessageTextForms}), so a route
       that trimmed on the way in is not mistaken for a changed payload. */
   text?: string;
+  /** Server-authenticated relay author captured with the original payload. */
+  origin?: MessageOrigin;
 }
 
 export type OriginalSendLookup =
@@ -763,6 +766,9 @@ export function lookupOriginalSend(file: RegistryFile, binding: OriginalSendBind
   const [[operationId, deliveryId]] = [...operations.entries()];
   const reservation = deliveryId ? file.heldDeliveries[deliveryId] : undefined;
   const owner = file.deliveryOperationOwners[operationId];
+  if (binding.origin && ((!reservation && !owner)
+    || (reservation && !sameMessageOrigin(reservation.command.origin, binding.origin))
+    || (owner && !sameMessageOrigin(owner.command.origin, binding.origin)))) return { kind: "contradictory" };
   if ((owner && (!matches(owner.conversationId) || owner.clientMessageId !== binding.clientMessageId
       || owner.deliveryId !== deliveryId || owner.retryOfOperationId))
     || (reservation && (!matches(reservation.conversationId) || reservation.clientMessageId !== binding.clientMessageId
