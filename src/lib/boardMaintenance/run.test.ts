@@ -9,15 +9,15 @@ import { readMaintenanceProject, readMaintenanceRun, recordMaintenanceChange } f
 let held: ReturnType<typeof sandbox>;
 afterEach(() => held?.restore());
 const tasks = () => loadTasks(statePath("tasks.json"));
-function harness() {
+function harness(archiveOverride = true) {
   held = sandbox(); let now = NOW;
   const registry = new AgentRegistry(statePath("fixture-registry.json"));
   const bodies: Record<string, unknown>[] = [], archived: string[] = [];
   let observation: MaintenanceObservation = { state: "running" };
   let response = { status: 202, body: { state: "starting", conversationId: ["conversation", "fixture-worker"].join("_"), launchId: "fixture-launch", path: "/fixtures/worker.jsonl" } as Record<string, unknown> };
   const sources: SeatTickSources = { ...defaultSeatTickSources(), now: () => now, tasks, pipelines: () => [{ repoDir: "/fixtures/repository", project: PROJECT, createdAt: new Date(NOW).toISOString() } as never], registry: () => registry, latestDeployment: () => ({ state: "ok", value: null }) };
-  const ports: BoardMaintenancePorts = { sources, evidence: async () => [], archive: run => { archived.push(run.runId); }, locale: () => "uk", timeZone: () => "UTC", launch: async body => { bodies.push(body); return response; }, observe: async () => observation };
-  return { controller: productionBoardMaintenanceController(sources, ports), sources, bodies, archived, run: () => readMaintenanceRun(readMaintenanceProject(PROJECT)!.currentRunId!)!, observe: (value: MaintenanceObservation) => { observation = value; }, respond: (value: typeof response) => { response = value; }, now: (value: number) => { now = value; } };
+  const ports: BoardMaintenancePorts = { sources, evidence: async () => [], ...(archiveOverride ? { archive: run => { archived.push(run.runId); } } : {}), locale: () => "uk", timeZone: () => "UTC", launch: async body => { bodies.push(body); return response; }, observe: async () => observation };
+  return { controller: productionBoardMaintenanceController(sources, ports), sources, registry, bodies, archived, run: () => readMaintenanceRun(readMaintenanceProject(PROJECT)!.currentRunId!)!, observe: (value: MaintenanceObservation) => { observation = value; }, respond: (value: typeof response) => { response = value; }, now: (value: number) => { now = value; } };
 }
 test("off, no seat, live run and deploy defer without spending the slot", async () => {
   const h = harness(); await h.controller.launchIfDue(input(false)); expect(h.bodies).toHaveLength(0);
@@ -46,6 +46,17 @@ test("no account leaves one blocked visible card, success summarizes, hides and 
 test("reconcile resumes claimed card and spawn under same key", async () => {
   const h = harness(); const run = claim(); await h.controller.reconcile(PROJECT);
   expect(h.bodies[0].clientAttemptId).toBe(run.runId); expect(tasks()).toHaveLength(1);
+});
+
+test("cooldown starts at durable dispatch time after a restart during claim grace", async () => {
+  const h = harness(); claim(); h.now(NOW + 14 * 60000);
+  await h.controller.reconcile(PROJECT);
+  const run = h.run(); expect(run.launchedAt).toBe(new Date(NOW + 14 * 60000).toISOString());
+  h.observe({ state: "ended", finalText: "Verdict: pass" }); await h.controller.reconcile(PROJECT);
+  h.now(NOW + 3 * 3600000); await h.controller.launchIfDue(input());
+  expect(h.bodies).toHaveLength(1);
+  h.now(NOW + 3 * 3600000 + 14 * 60000); await h.controller.launchIfDue(input());
+  expect(h.bodies).toHaveLength(2);
 });
 for (const [name, observation] of [
   ["launch-failed", { state: "failed", failure: { kind: "launch-failed", detail: "receipt failed" } }],
@@ -117,6 +128,45 @@ test("a later successful turn is not failed by an earlier recovered turn", async
   expect(readMaintenanceRun(run.runId)).toMatchObject({ state: "succeeded", failure: null, log: { verdict: "pass" } });
   expect(tasks().find(t => t.id === run.taskId)).toMatchObject({ status: "done", board: "hidden" });
   expect(h.archived).toEqual([run.runId]);
+});
+
+test("production observation uses the latest turn extracted from the transcript tail", async () => {
+  const h = harness(); const run = { ...claim(), launchedAt: new Date(NOW).toISOString() };
+  const { observeMaintenanceRun } = await import("./run");
+  const { transcriptErrorFromRecords } = await import("@/lib/spawnNotice/production");
+  const records = [
+    { type: "event_msg", payload: { type: "task_started", turn_id: "first" } },
+    { type: "event_msg", payload: { type: "turn_aborted", turn_id: "first", reason: "provider interruption" } },
+    { type: "event_msg", payload: { type: "task_started", turn_id: "second" } },
+    { type: "event_msg", payload: { type: "task_complete", turn_id: "second", last_agent_message: "Inventory complete. Verdict: pass" } },
+  ];
+  const sources = { ...h.sources, registry: () => ({ spawnReceiptForClientAttempt: () => ({ state: "completed", conversationId: "conversation_fixture-worker", launchId: "fixture-launch", artifactPath: "/fixtures/worker.jsonl" }) }) as never,
+    liveness: async () => [{ conversationId: "conversation_fixture-worker", reason: "host_alive_turn_idle", lifecycle: "idle", lastRecordAt: new Date(NOW + 1000).toISOString() }] as never };
+  const observed = await observeMaintenanceRun(run, sources, () => ({ text: "Inventory complete. Verdict: pass", error: transcriptErrorFromRecords(records, "codex") }));
+  expect(observed).toMatchObject({ state: "ended", finalText: "Inventory complete. Verdict: pass", turnError: null });
+});
+
+test("superseding a failed run archives its linked worker and removes its hidden band", async () => {
+  const h = harness(false); await h.controller.launchIfDue(input()); const old = h.run();
+  const oldTaskId = old.taskId!;
+  const { patchMaintenanceRun } = await import("./store");
+  const { boardFor } = await import("@/lib/board/store");
+  const { boardConversationKeys, taskHasBoardMembers, taskShowsOnBoard } = await import("@/lib/tasks/boardVisibility");
+  const { saveTasks } = await import("@/lib/tasks/store");
+  const transcriptPath = "/fixtures/worker.jsonl";
+  const conversation = h.registry.ensureConversation("codex", transcriptPath, null);
+  patchMaintenanceRun(old.runId, { conversationId: conversation.id, launchId: "fixture-launch", transcriptPath });
+  saveTasks(tasks().map(task => task.id === oldTaskId ? { ...task, assignments: [...task.assignments, { path: transcriptPath, conversationId: conversation.id, panePid: null, state: "delivered" as const, error: null, at: new Date(NOW).toISOString() }] } : task), statePath("tasks.json"));
+  h.observe({ state: "failed", failure: { kind: "host-died", detail: "host exited over an open turn" } }); await h.controller.reconcile(PROJECT);
+  const cardBefore = tasks().find(t => t.id === oldTaskId)!;
+  expect(taskShowsOnBoard(cardBefore, taskHasBoardMembers(cardBefore, boardConversationKeys([{ path: transcriptPath, conversationId: conversation.id }])))).toBe(true);
+  h.now(NOW + 3 * 3600000); await h.controller.launchIfDue(input()); const latest = h.run();
+  h.observe({ state: "failed", failure: { kind: "host-died", detail: "host exited over an open turn" } }); await h.controller.reconcile(PROJECT);
+  expect(readMaintenanceRun(latest.runId)!.supersededTaskIds).toContain(oldTaskId);
+  expect(boardFor(PROJECT).prefs.hidden).toContain(transcriptPath);
+  const cardAfter = tasks().find(t => t.id === oldTaskId)!;
+  expect(taskShowsOnBoard(cardAfter, taskHasBoardMembers(cardAfter, boardConversationKeys([])))).toBe(false);
+  expect(tasks().find(t => t.id === latest.taskId)).toMatchObject({ status: "blocked", board: "shown" });
 });
 
 

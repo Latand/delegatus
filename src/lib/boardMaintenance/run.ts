@@ -82,7 +82,7 @@ export async function maintenanceWorkEvidence(project: string, now: number, sour
     return taskWorkEvidence(task, workers, lanes.map(p => ({ pipelineId: p.id, state: p.state, closedAt: p.closedAt, hiddenAt: p.hiddenAt, branch: p.branch, movedAt: newestWorkAt(pipelineSummary(p).activityAt ?? []), branchCommitAt: commits.get(p.branch) ?? null })), now);
   }).filter(e => e.verdict !== "idle");
 }
-export async function observeMaintenanceRun(run: MaintenanceRun, sources: SeatTickSources): Promise<MaintenanceObservation> {
+export async function observeMaintenanceRun(run: MaintenanceRun, sources: SeatTickSources, finalMessage: typeof spawnNoticeFinalMessage = spawnNoticeFinalMessage): Promise<MaintenanceObservation> {
   const registry = sources.registry();
   const receipt = registry.spawnReceiptForClientAttempt(run.clientAttemptId);
   const bound = receipt ? { conversationId: receipt.conversationId, launchId: receipt.launchId, path: receipt.artifactPath } : {};
@@ -92,7 +92,7 @@ export async function observeMaintenanceRun(run: MaintenanceRun, sources: SeatTi
   if (record?.reason === "host_gone_turn_open") return { ...bound, state: "failed", failure: { kind: "host-died", detail: "host exited over an open turn" } };
   if (record?.reason === "launch_unproven_expired" || (!record || record.reason === "launch_unproven") && sources.now() - Date.parse(run.claimedAt) > MAINTENANCE_LAUNCH_GRACE_MS) return { ...bound, state: "failed", failure: { kind: "launch-failed", detail: "no host proved the launch" } };
   if (receipt?.state === "completed" && record && ["host_alive_turn_idle", "host_gone_turn_settled"].includes(record.reason) && record.lastRecordAt && Date.parse(record.lastRecordAt) >= Date.parse(run.launchedAt ?? run.claimedAt)) {
-    const final = spawnNoticeFinalMessage(id!);
+    const final = finalMessage(id!);
     return { ...bound, state: "ended", finalText: final.text, turnError: final.error };
   }
   return { ...bound, state: "running" };
@@ -135,6 +135,7 @@ function settle(run: MaintenanceRun, patch: Partial<MaintenanceRun>, ports: Boar
   const tasks = loadTasks(statePath("tasks.json"));
   for (const old of maintenanceRuns(run.project)) {
     if (old.runId === run.runId || !old.taskId || tasks.find(t => t.id === old.taskId)?.status !== "blocked") continue;
+    if (old.conversationId || old.transcriptPath) (ports.archive ?? (r => archiveRun(r, ports.sources)))(old);
     patchCard(old.taskId, { status: "done", board: "hidden", appendLine: `Superseded by maintenance run ${run.runId} (card ${run.taskId}).` });
     superseded.push(old.taskId);
   }

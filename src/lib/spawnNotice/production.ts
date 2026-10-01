@@ -76,14 +76,30 @@ export function spawnNoticeRecipient(
 
 /** The engine's own error text in a transcript tail, newest first. */
 export function transcriptErrorFromRecords(records: readonly Record<string, unknown>[], engine: string): string | null {
-  for (const record of [...records].reverse()) {
-    if (engine === "codex") {
+  const ordered = [...records];
+  if (engine === "codex") {
+    let terminalIndex = -1;
+    for (let index = 0; index < ordered.length; index += 1) {
+      const record = ordered[index]!;
+      const type = stringValue(recordValue(record.payload)?.type);
+      if (type === "task_complete" || type === "turn_aborted") terminalIndex = index;
+    }
+    // A later completed turn supersedes errors retained from an earlier turn.
+    if (terminalIndex >= 0 && stringValue(recordValue(ordered[terminalIndex]?.payload)?.type) === "task_complete") return null;
+    let startIndex = -1;
+    for (let index = 0; index <= (terminalIndex >= 0 ? terminalIndex : ordered.length - 1); index += 1) {
+      if (stringValue(recordValue(ordered[index]?.payload)?.type) === "task_started") startIndex = index;
+    }
+    const from = startIndex >= 0 ? startIndex : terminalIndex >= 0 ? terminalIndex : 0;
+    for (const record of [...ordered.slice(from, terminalIndex >= 0 ? terminalIndex + 1 : undefined)].reverse()) {
       const payload = recordValue(record.payload) ?? {};
       const type = stringValue(payload.type);
       if (type === "error") return stringValue(payload.message) ?? null;
       if (type === "turn_aborted") return stringValue(payload.reason) ?? null;
-      continue;
     }
+    return null;
+  }
+  for (const record of [...ordered].reverse()) {
     if (record.type === "assistant" && record.isApiErrorMessage === true) {
       const text = recordsValue(recordValue(record.message)?.content)
         .map((part) => stringValue(part.text) ?? "")

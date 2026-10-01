@@ -26,7 +26,7 @@ export function maintenanceCardText(locale: "uk" | "en", run: MaintenanceRun, ti
     const reasons: Record<MaintenanceFailureKind, string> = {
       "no-account": "немає доступного акаунта Codex для цього проєкту", "no-repository": "не знайдено теку репозиторію проєкту", "launch-refused": "Delegatus відмовив у запуску", "launch-failed": "агент не запустився", "host-died": "процес агента зупинився посеред роботи", "turn-error": "агент завершився з помилкою", "agent-fail": "агент не зміг завершити перевірку", "needs-decision": "потрібне рішення оператора", "timed-out": "агент не завершив роботу за 90 хвилин",
     };
-    const next = time(new Date(Date.parse(run.claimedAt) + run.intervalHours * 3_600_000).toISOString());
+    const next = time(new Date(Date.parse(run.launchedAt ?? run.claimedAt) + run.intervalHours * 3_600_000).toISOString());
     const decision = run.failure!.kind === "needs-decision" ? `\n${run.failure!.detail}` : "";
     return locale === "uk" ? `${title}\nНе вдалося: ${reasons[run.failure!.kind]}.${decision}\nВстиг змінити ${run.counts.tasks} задач. Наступна спроба — не раніше ${next}.`
       : `${title}\nFailed: ${run.failure!.kind}.${decision}\nChanged ${run.counts.tasks} tasks. Next attempt no earlier than ${next}.`;
@@ -59,9 +59,14 @@ export function maintenanceBrief(input: { run: MaintenanceRun; previous: Mainten
   ].join("\n") : "No earlier run for this project.";
   return `Board maintenance run ${run.runId} for project ${run.project}.\nRepository: ${run.repoDir}\nYour run's card: ${run.taskId}. Delegatus manages it.\nThe orchestrator seat's card: ${input.seatTaskIds.join(", ") || "none found; confirm with get_orchestrator"}.\nProduction: ${input.productionLine}\nThis run started ${run.claimedAt}. The previous run started ${previous?.claimedAt ?? "never"}; use it as updatedSince for the done-task check.\n\n${section}\nThe record is history. Confirm every decision from current state.\nWork evidence Delegatus measured at ${new Date(input.now).toISOString()}, for ${input.evidence.length} of ${input.openCount} open tasks. Confirm before you act:\n${workEvidenceLines(input.evidence, input.now).map(l => `- ${l}`).join("\n")}`;
 }
-export function maintenanceItemLabel(run: Pick<MaintenanceRun, "state" | "endedAt" | "failure" | "counts" | "log" | "claimedAt" | "intervalHours">): string {
-  if (run.state === "failed") return `board maintenance failed ${run.endedAt}: ${run.failure?.kind}: ${run.failure?.detail}. The card stays blocked; next run after ${new Date(Date.parse(run.claimedAt) + run.intervalHours * 3_600_000).toISOString()}.`.slice(0, 1200);
+export function maintenanceItemLabel(run: Pick<MaintenanceRun, "state" | "endedAt" | "failure" | "counts" | "log" | "claimedAt" | "launchedAt" | "intervalHours">): string {
   const c = run.counts;
+  if (run.state === "failed") {
+    const prefix = `board maintenance failed ${run.endedAt}: ${run.failure?.kind}: ${run.failure?.detail}. ${c.tasks} task(s) changed in ${c.writes} write(s) (status ${c.status}, closed ${c.closed}, created ${c.created}, text ${c.text}, details ${c.details}, looks ${c.looks}); for the operator (${run.log.attention.length}): `;
+    const attention = run.log.attention.slice(0, 5).map(a => `${a.taskId}: ${a.text}${a.options.length ? ` [${a.options.join(" / ")}]` : ""}`).join("; ");
+    const tail = ` The card stays blocked; next run after ${new Date(Date.parse(run.launchedAt ?? run.claimedAt) + run.intervalHours * 3_600_000).toISOString()}. Full list: seat_tick_settings verbose.`;
+    return (prefix + attention + tail).slice(0, 1200);
+  }
   const prefix = `board maintenance finished ${run.endedAt}; ${c.tasks} task(s) changed in ${c.writes} write(s) (status ${c.status}, closed ${c.closed}, created ${c.created}, text ${c.text}, details ${c.details}, looks ${c.looks}); for the operator (${run.log.attention.length}): `;
   const tail = " Bring these to the operator with suggest_replies; seat_tick_settings verbose holds the full list.";
   return prefix + run.log.attention.slice(0, 5).map(a => `${a.taskId}: ${a.text}${a.options.length ? ` [${a.options.join(" / ")}]` : ""}`).join("; ").slice(0, Math.max(0, 1200 - prefix.length - tail.length)) + tail;

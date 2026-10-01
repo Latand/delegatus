@@ -70,6 +70,9 @@ export interface MaintenanceProject {
   kind: "project";
   project: string;
   lastClaimAt: string | null;
+  /** Time the durable spawn dispatch was first recorded, used for cooldown. */
+  lastLaunchAt?: string | null;
+  lastLaunchRunId?: string | null;
   lastSlotKey: string | null;
   currentRunId: string | null;
   runIds: string[];

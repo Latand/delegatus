@@ -8,13 +8,13 @@ const attempt = (now: number) => claimMaintenanceRun({ project: PROJECT, now, in
 test("once per interval, including a live run beyond the interval", () => {
   held = sandbox(); const run = claim();
   expect(attempt(NOW + 4 * 3600000)).toEqual({ claimed: false, reason: "live" });
-  patchMaintenanceRun(run.runId, { state: "succeeded", endedAt: new Date(NOW).toISOString() });
+  patchMaintenanceRun(run.runId, { launchedAt: new Date(NOW).toISOString(), state: "succeeded", endedAt: new Date(NOW).toISOString() });
   for (const delta of [0, 60000, 2 * 3600000 + 59 * 60000]) expect(attempt(NOW + delta)).toEqual({ claimed: false, reason: "interval" });
   const next = attempt(NOW + 3 * 3600000); expect(next.claimed).toBe(true);
   if (next.claimed) expect(next.run.runId).not.toBe(run.runId);
 });
 test("fresh process reopens durable claim after restart", async () => {
-  held = sandbox(); const run = claim(); patchMaintenanceRun(run.runId, { state: "succeeded" });
+  held = sandbox(); const run = claim(); patchMaintenanceRun(run.runId, { launchedAt: new Date(NOW).toISOString(), state: "succeeded" });
   const child = Bun.spawn([process.execPath, "src/lib/boardMaintenance/store.sqliteChild.ts", String(NOW)], { env: { ...process.env, LLV_STATE_DIR: held.dir }, stdout: "pipe", stderr: "pipe" });
   expect(await child.exited).toBe(0); expect(JSON.parse(await new Response(child.stdout).text())).toMatchObject({ claimed: false, reason: "interval" });
 });

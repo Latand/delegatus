@@ -60,7 +60,16 @@ export function claimMaintenanceRun(input: { project: string; now: number; inter
     const held = tx.get(`p:${input.project}`) as MaintenanceProject | null;
     const current = held?.currentRunId ? tx.get(`r:${held.currentRunId}`) as MaintenanceRun | null : null;
     if (current && maintenanceRunIsLive(current)) return { claimed: false as const, reason: "live" as const };
-    if (held?.lastClaimAt && input.now - Date.parse(held.lastClaimAt) < intervalMs) return { claimed: false as const, reason: "interval" as const };
+    let recordedLaunchAt = held?.lastLaunchAt ?? null;
+    let recordedLaunchRunId = held?.lastLaunchRunId ?? null;
+    if (!recordedLaunchAt && held) {
+      for (const id of [...held.runIds].reverse()) {
+        const prior = tx.get(`r:${id}`) as MaintenanceRun | null;
+        if (prior?.launchedAt) { recordedLaunchAt = prior.launchedAt; recordedLaunchRunId = prior.runId; break; }
+      }
+    }
+    const cooldownStart = recordedLaunchAt;
+    if (cooldownStart && input.now - Date.parse(cooldownStart) < intervalMs) return { claimed: false as const, reason: "interval" as const };
     if (tx.get(`r:${runId}`)) return { claimed: false as const, reason: "slot-taken" as const };
     const run: MaintenanceRun = {
       kind: "run", runId, project: input.project, slot, intervalHours: input.intervalHours, claimedAt: new Date(input.now).toISOString(), seat: input.seat, repoDir: input.repoDir,
@@ -73,7 +82,7 @@ export function claimMaintenanceRun(input: { project: string; now: number; inter
       tx.delete(`r:${id}`);
     }
     tx.put(run);
-    tx.put({ kind: "project", project: input.project, lastClaimAt: run.claimedAt, lastSlotKey: slotKey, currentRunId: runId, runIds: ids.slice(-MAINTENANCE_RUN_RETENTION) });
+    tx.put({ kind: "project", project: input.project, lastClaimAt: run.claimedAt, lastLaunchAt: recordedLaunchAt, lastLaunchRunId: recordedLaunchRunId, lastSlotKey: slotKey, currentRunId: runId, runIds: ids.slice(-MAINTENANCE_RUN_RETENTION) });
     return { claimed: true as const, run };
   });
 }
@@ -84,6 +93,10 @@ export function patchMaintenanceRun(runId: string, patch: Partial<MaintenanceRun
     if (!held || !maintenanceRunIsLive(held)) return held;
     const next = { ...held, ...patch, ...(held.launchBody ? { launchBody: held.launchBody } : {}), kind: "run" as const, runId, project: held.project };
     tx.put(next);
+    if (patch.launchedAt && !held.launchedAt) {
+      const project = tx.get(`p:${held.project}`) as MaintenanceProject | null;
+      if (project && project.currentRunId === runId && project.lastLaunchRunId !== runId) tx.put({ ...project, lastLaunchAt: patch.launchedAt, lastLaunchRunId: runId });
+    }
     if (next.conversationId) tx.put({ kind: "conversation", conversationId: next.conversationId, runId });
     if (!maintenanceRunIsLive(next)) {
       const project = tx.get(`p:${held.project}`) as MaintenanceProject | null;

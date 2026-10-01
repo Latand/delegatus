@@ -48,12 +48,14 @@ const summary = (r: MaintenanceRun): BoardMaintenanceRunSummary => ({ runId: r.r
 export function boardMaintenanceAnswer(project: string, settings: EffectiveSeatTickSettings, ports: AnswerPorts = {}): BoardMaintenanceAnswer {
   const now = ports.now ?? Date.now();
   const m = settings.maintenance;
-  let runs: MaintenanceRun[] = [], lastClaim: string | null = null, runsError: string | null = null;
-  try { runs = (ports.runs ?? maintenanceRuns)(project); lastClaim = (ports.project ?? readMaintenanceProject)(project)?.lastClaimAt ?? null; }
+  let runs: MaintenanceRun[] = [], lastLaunch: string | null = null, runsError: string | null = null;
+  try { runs = (ports.runs ?? maintenanceRuns)(project); lastLaunch = (ports.project ?? readMaintenanceProject)(project)?.lastLaunchAt ?? null; }
   catch (error) { runsError = redactMonitorText(error instanceof Error ? error.message : "maintenance run store unreadable").slice(0, 300); }
   const live = runs.find(maintenanceRunIsLive) ?? null;
   const last = [...runs].reverse().find(r => !maintenanceRunIsLive(r)) ?? null;
-  const eligible = m.enabled && !live ? (lastClaim ? Date.parse(lastClaim) + m.intervalMs : now) : null;
+  const legacyLaunch = [...runs].reverse().find(run => run.launchedAt)?.launchedAt ?? null;
+  const cooldownAnchor = lastLaunch ?? legacyLaunch;
+  const eligible = m.enabled && !live ? (cooldownAnchor ? Date.parse(cooldownAnchor) + m.intervalMs : now) : null;
   let waitingOn: BoardMaintenanceAnswer["waitingOn"] = !m.enabled ? "off" : live ? "live-run" : eligible !== null && eligible > now ? "interval" : null;
   if (!waitingOn) {
     if (!(ports.seat ?? (key => !!orchestratorSeatFor(key).active))(project)) waitingOn = "no-seat";

@@ -11,9 +11,9 @@ test("off by default, enabled first run and estimated next check", () => {
 });
 test("live, ended, interval, deployment and missing seat states", () => {
   held = sandbox(); const run = claim(); expect(boardMaintenanceAnswer(PROJECT, input().settings, ports).waitingOn).toBe("live-run");
-  patchMaintenanceRun(run.runId, { state: "succeeded", endedAt: new Date(NOW).toISOString() });
+  patchMaintenanceRun(run.runId, { state: "succeeded", launchedAt: new Date(NOW + 14 * 60000).toISOString(), endedAt: new Date(NOW).toISOString() });
   const answer = boardMaintenanceAnswer(PROJECT, input().settings, { ...ports, verbose: true });
-  expect(answer.waitingOn).toBe("interval"); expect(answer.lastRun?.runId).toBe(run.runId); expect(answer.lastRunLog).toBeDefined(); expect(answer.nextEligibleAt).toBe(new Date(NOW + 3 * 3600000).toISOString());
+  expect(answer.waitingOn).toBe("interval"); expect(answer.lastRun?.runId).toBe(run.runId); expect(answer.lastRunLog).toBeDefined(); expect(answer.nextEligibleAt).toBe(new Date(NOW + 3 * 3600000 + 14 * 60000).toISOString());
   const later = { ...ports, now: NOW + 4 * 3600000 };
   expect(boardMaintenanceAnswer(PROJECT, input().settings, { ...later, deploying: () => true }).waitingOn).toBe("deployment");
   expect(boardMaintenanceAnswer(PROJECT, input().settings, { ...later, seat: () => false }).waitingOn).toBe("no-seat");
