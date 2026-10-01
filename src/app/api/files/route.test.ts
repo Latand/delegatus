@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 
-import { noteStateCommit, setStateFreeBytesProbeForTests } from "@/lib/state/diskFull";
+import { StateDiskFullError, noteStateDiskFull, noteStateCommit, setStateFreeBytesProbeForTests, stateWriteHealth } from "@/lib/state/diskFull";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { withoutArchivedPredecessors } from "@/lib/accounts/identity";
 import { agentRegistry, AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
@@ -3832,20 +3832,36 @@ readline.createInterface({input:process.stdin}).on('line', line => {const {id}=J
   } finally { setFilesResponseWorkerRuntimeForTests(null); await shutdownFilesResponseWorker(); }
 });
 
-test("transported worker ENOSPC surfaces even with ample filesystem bytes", async () => {
+const classifiedWorkerFull = new StateDiskFullError("state transaction", Object.assign(new Error("full"), { code: "SQLITE_FULL" })).message;
+test.each([
+  ["ENOSPC: no space left on device", false], ["ENOSPC: no space left on device", true],
+  [classifiedWorkerFull, false], [classifiedWorkerFull, true],
+] as const)("transported worker %s serves cached health with ample bytes (conditional=%s)", async (workerError, conditional) => {
   scannedFiles = [];
   let warm = await GET(new Request("http://127.0.0.1/api/files"));
   for (let i = 0; i < 5 && warm.headers.get("x-llv-files-projection-cache") !== "hit"; i++) warm = await GET(new Request("http://127.0.0.1/api/files"));
   const script = path.join(stateDir, "full-worker.mjs");
   fs.writeFileSync(script, `import readline from 'node:readline';
-readline.createInterface({input:process.stdin}).on('line', line => {const {id}=JSON.parse(line);process.stdout.write(JSON.stringify({id,ok:false,error:'ENOSPC: no space left on device',rssBytes:1})+'\\n');});`);
+readline.createInterface({input:process.stdin}).on('line', line => {const {id}=JSON.parse(line);process.stdout.write(JSON.stringify({id,ok:false,error:${JSON.stringify(workerError)},rssBytes:1})+'\\n');});`);
   setFilesResponseWorkerRuntimeForTests({ launch: { executable: process.execPath, workerPath: script }, timeoutMs: 2000 });
   // This moves a cache input, without pretending statfs can see quota/inode exhaustion.
-  fs.writeFileSync(path.join(stateDir, "storage-incidents.json"), JSON.stringify({ version: 1, incidents: [] }));
+  fs.writeFileSync(path.join(stateDir, "storage-incidents.json"), JSON.stringify({ version: 1, incidents: [], fixtureRevision: "worker-failure" }));
   try {
-    const response = await GET(new Request("http://127.0.0.1/api/files"));
+    const headers: Record<string, string> = conditional ? { "if-none-match": warm.headers.get("etag")! } : {};
+    let response = await GET(new Request("http://127.0.0.1/api/files", { headers }));
+    if (response.status === 304) {
+      // Conditional reads serve the old body immediately while a worker runs.
+      // Retry once its failure is observed, as the real completion chain does.
+      expect(response.headers.get("x-llv-files-projection-cache")).toBe("stale");
+      for (let i = 0; i < 100 && stateWriteHealth(stateDir).state !== "disk-full"; i++) await Bun.sleep(10);
+      expect(stateWriteHealth(stateDir).state).toBe("disk-full");
+      response = await GET(new Request("http://127.0.0.1/api/files", { headers }));
+    }
     expect(response.status).toBe(200);
     expect((await response.json()).systemHealth.storage.writes.state).toBe("disk-full");
+    expect(response.headers.get("etag")).not.toBe(warm.headers.get("etag"));
+    const unchanged = await GET(new Request("http://127.0.0.1/api/files", { headers: { "if-none-match": response.headers.get("etag")! } }));
+    expect(unchanged.status).toBe(304);
   } finally { setFilesResponseWorkerRuntimeForTests(null); await shutdownFilesResponseWorker(); }
 });
 test("a cached board resumes after worker ENOSPC and a cross-process data commit", async () => {
@@ -3922,4 +3938,21 @@ test("disk-full alert overlays a persisted representation from before write heal
   const response = await GET(new Request("http://127.0.0.1/api/files", { headers: { "if-none-match": `"${digest}"` } }));
   expect(response.status).toBe(200);
   expect((await response.json()).systemHealth.storage.writes.state).toBe("disk-full");
+});
+
+test("storage health reads failure and recovery without scanning, projecting or writing", async () => {
+  const database = path.join(stateDir, "state.sqlite");
+  const before = fs.existsSync(database) ? fs.readFileSync(database) : null;
+  const url = "http://127.0.0.1/api/files?view=storage-health";
+  noteStateDiskFull("state transaction");
+  const failed = await GET(new Request(url));
+  expect(failed.status).toBe(200);
+  expect((await failed.json()).state).toBe("disk-full");
+  noteStateCommit();
+  const recovered = await GET(new Request(url));
+  expect((await recovered.json()).state).toBe("ok");
+  expect(recovered.headers.get("cache-control")).toBe("no-store");
+  expect(scans).toBe(0);
+  expect(fs.existsSync(path.join(stateDir, "files-response-results"))).toBe(false);
+  expect(fs.existsSync(database) ? fs.readFileSync(database) : null).toEqual(before);
 });

@@ -779,3 +779,31 @@ test("a healthy live stream disables the recurring files poll; every other state
   expect(filesPollCadence("degraded")).toBe("poll");
   expect(filesPollCadence("offline")).toBe("poll");
 });
+
+test("write-free health updates every scope without changing rows or conditional representations", async () => {
+  let state: "ok" | "disk-full" = "ok";
+  const cache = createFilesClientCache(async (url, init) => {
+    if (url.includes("view=storage-health")) return Response.json({ state, freeBytes: 1024 ** 3, since: state === "disk-full" ? "2026-10-01T00:00:00Z" : null });
+    if (new Headers(init?.headers).has("if-none-match")) return new Response(null, { status: 304 });
+    return Response.json({ files: [file(url.includes("path=") ? "/pin" : "/global", "Cached")],
+      systemHealth: { storage: { incidents: [], writes: { state: "ok", freeBytes: 1024 ** 3, since: null } } } }, { headers: { etag: '"stable"' } });
+  });
+  try {
+    await cache.revalidate();
+    await cache.revalidate("/pin");
+    const globalRows = cache.readScope().files;
+    const pinnedRows = cache.readScope("/pin").files;
+    state = "disk-full";
+    await cache.revalidateWriteHealth();
+    expect(cache.readScope().systemHealth.storage?.writes?.state).toBe("disk-full");
+    expect(cache.readScope("/pin").systemHealth.storage?.writes?.state).toBe("disk-full");
+    expect(cache.readScope().files).toBe(globalRows);
+    expect(cache.readScope("/pin").files).toBe(pinnedRows);
+    await cache.revalidate(); // The old healthy body remains authoritative for rows.
+    expect(cache.readScope().systemHealth.storage?.writes?.state).toBe("disk-full");
+    expect(cache.readScope().files).toEqual(globalRows);
+    state = "ok";
+    await cache.revalidateWriteHealth();
+    expect(cache.readScope("/pin").systemHealth.storage?.writes?.state).toBe("ok");
+  } finally { cache.dispose(); }
+});

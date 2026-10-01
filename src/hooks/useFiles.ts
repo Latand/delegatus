@@ -17,6 +17,7 @@ import type { Flow } from "@/lib/flows/types";
 import { EMPTY_FILES_WORK_LINKS, type FilesWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
+import type { StateWriteHealth } from "@/lib/state/diskFull";
 import type { FileEntry, FilesResponse, ProjectCatalogEntry } from "@/lib/types";
 import type { Workflow } from "@/lib/workflows/types";
 
@@ -137,6 +138,8 @@ export interface FilesClientCache {
   /** Return only the representation previously certified for this request URL. */
   readScope(pinnedPath?: string | null): FilesData;
   revalidate(pinnedPath?: string | null, revision?: number, signal?: AbortSignal): Promise<FilesData>;
+  /** Read machine write health without scanning or building a representation. */
+  revalidateWriteHealth(signal?: AbortSignal): Promise<void>;
   subscribe(
     listener: (data: FilesData, priority?: "background" | "urgent") => void,
     pinnedPath?: string | null,
@@ -1019,6 +1022,25 @@ export function createFilesClientCache(
     };
   };
 
+  const revalidateWriteHealth = (signal?: AbortSignal): Promise<void> => {
+    // Serialize with catalog reads so an older answer cannot replace newer health.
+    const result = requestQueue.then(async () => {
+      if (disposed || signal?.aborted) return;
+      const response = await fetcher("/api/files?view=storage-health", { signal, cache: "no-store" });
+      if (response.status === 401 || response.status === 403) hooks.accessDenied?.();
+      if (!response.ok) throw new Error(`storage health request failed: ${response.status}`);
+      const writes = await response.json() as StateWriteHealth;
+      if ((writes.state !== "ok" && writes.state !== "disk-full")
+        || (writes.freeBytes !== null && (typeof writes.freeBytes !== "number" || !Number.isFinite(writes.freeBytes)))
+        || (writes.since !== null && typeof writes.since !== "string")) throw new Error("invalid storage write health");
+      if (disposed || signal?.aborted || equalValue(currentStateWrites, writes)) return;
+      currentStateWrites = writes;
+      publish(undefined, "urgent");
+    });
+    requestQueue = result.then(() => undefined, () => undefined);
+    return result;
+  };
+
   const dispose = () => {
     if (disposed) return;
     disposed = true;
@@ -1026,7 +1048,7 @@ export function createFilesClientCache(
     listeners.clear();
   };
 
-  return { read: () => withStateWrites(withCatalogFailures(withSpawnedOverlays(snapshot))), readScope: exactScopeSnapshot, revalidate, subscribe, applyPipeline, revertPipeline, applyTask, applySpawnedConversation, hydrate, certifiedGlobal, pauseCompletionRetries, resumeCompletionRetries, dispose };
+  return { read: () => withStateWrites(withCatalogFailures(withSpawnedOverlays(snapshot))), readScope: exactScopeSnapshot, revalidate, revalidateWriteHealth, subscribe, applyPipeline, revertPipeline, applyTask, applySpawnedConversation, hydrate, certifiedGlobal, pauseCompletionRetries, resumeCompletionRetries, dispose };
 }
 
 const defaultFilesFetcher: FilesFetcher = (input, init) => fetch(input, init);
@@ -1303,17 +1325,25 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
     };
     void hydrateInitial();
 
-    /*
-     * Recurring poll cadence. With the runtime bus off (the default,
-     * landing-disabled slice) this stays a flat 10s poll — identical to before.
-     * With the bus healthy the recurring timer is removed entirely: freshness
-     * rides `files.revision` events (a debounced pure GET), satisfying "healthy
-     * SSE disables the recurring /api/files timer". When the bus degrades, the
-     * 10s fallback poll is restored.
-     */
+    /* Live catalog freshness rides files.revision. Write failures cannot emit
+       durable events, so live views separately read write-free health every 10s.
+       Degraded connections keep the existing full-catalog fallback poll. */
     let timer: ReturnType<typeof setInterval> | null = null;
     let mode: "poll" | "live" | null = null;
     let lastPollAt = 0;
+    let healthController: AbortController | null = null;
+    const healthTick = async () => {
+      if (!alive || mode !== "live" || documentHidden() || healthController) return;
+      const controller = new AbortController();
+      healthController = controller;
+      const timeout = setTimeout(() => controller.abort(), POLL_MS);
+      try { await cache.revalidateWriteHealth(controller.signal); }
+      catch { /* Retain known health; the next bounded read retries. */ }
+      finally {
+        clearTimeout(timeout);
+        if (healthController === controller) healthController = null;
+      }
+    };
     const pollTick = () => {
       const now = Date.now();
       if (documentHidden() && now - lastPollAt < HIDDEN_POLL_MS) return;
@@ -1324,7 +1354,8 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
       if (next === mode) return;
       mode = next;
       if (timer) clearInterval(timer);
-      timer = next === "poll" ? setInterval(pollTick, POLL_MS) : null;
+      healthController?.abort();
+      timer = setInterval(next === "poll" ? pollTick : () => { void healthTick(); }, POLL_MS);
     };
 
     /* Flow, workflow and task mutations refresh out of band: strips and
@@ -1393,6 +1424,7 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
 
     const onVisibility = () => {
       if (documentHidden()) {
+        healthController?.abort();
         /* A desktop keeps its (slower) feed while hidden. */
         if (!hiddenTrafficSuspended()) return;
         inflight.abort();
@@ -1401,6 +1433,7 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
         return;
       }
       cache.resumeCompletionRetries();
+      void healthTick();
       if (hydrateOnVisible) {
         hydrateOnVisible = false;
         owedWhileHidden = false;
@@ -1424,6 +1457,7 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
       alive = false;
       document.removeEventListener("visibilitychange", onVisibility);
       inflight.abort();
+      healthController?.abort();
       if (timer) clearInterval(timer);
       if (initialRetryTimer) clearTimeout(initialRetryTimer);
       if (revisionTimer) clearTimeout(revisionTimer);

@@ -64,6 +64,8 @@ beforeEach(() => {
   requests = [];
   serve = async () => new Response(body("current"), { headers: { ETag: "\"current\"" } });
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    // These assertions count catalog traffic; health has its own delivery suite.
+    if (String(input).includes("view=storage-health")) return Response.json({ state: "ok", freeBytes: 1024 ** 3, since: null });
     const headers = Object.fromEntries(new Headers(init?.headers).entries());
     requests.push({ url: String(input), headers, signal: init?.signal ?? undefined });
     if (init?.signal?.aborted) throw new DOMException("aborted", "AbortError");

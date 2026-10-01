@@ -535,6 +535,11 @@ export async function GET(request: Request): Promise<Response> {
   const requiredRevision = generationHeader(request, "x-llv-files-revision");
   const requiredGeneration = generationHeader(request, "x-llv-files-generation");
   const url = new URL(request.url);
+  // This live health poll must work while writes and durable events are refused.
+  // Return before presence, scans, migrations and projection-worker transport.
+  if (url.searchParams.get("view") === "storage-health") {
+    return Response.json(currentWriteHealth(), { headers: { "Cache-Control": "no-store" } });
+  }
   const selectedProject = url.searchParams.get("project")?.trim() || undefined;
   markBoardViewed(selectedProject);
   const pinnedPath = url.searchParams.get("path")?.trim() || undefined;

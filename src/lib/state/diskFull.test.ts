@@ -1,5 +1,5 @@
 import { afterEach, expect, test, setSystemTime } from "bun:test";
-import { isDiskFullError, noteStateCommit, noteStateDiskFull, setStateFreeBytesProbeForTests, stateWriteHealth, STATE_DISK_FULL_FLOOR_BYTES } from "./diskFull";
+import { StateDiskFullError, isDiskFullError, noteStateCommit, noteStateDiskFull, setStateFreeBytesProbeForTests, stateWriteHealth, STATE_DISK_FULL_FLOOR_BYTES } from "./diskFull";
 afterEach(() => { setStateFreeBytesProbeForTests(null); noteStateCommit(); });
 test("disk-full classification accepts Bun, filesystem and message shapes", () => {
   for (const error of [Object.assign(new Error("full"), { code: "SQLITE_FULL", errno: 13 }),
@@ -41,4 +41,11 @@ test("a successful commit clears a cached failure in the same millisecond", () =
     noteStateCommit();
     expect(stateWriteHealth("unused", observed).state).toBe("ok");
   } finally { setSystemTime(); }
+});
+
+// The projection worker transports only error.message; the parent restores Error.
+test("classified disk-full errors survive the worker message protocol", () => {
+  const classified = new StateDiskFullError("state transaction", Object.assign(new Error("full"), { code: "SQLITE_FULL" }));
+  expect(isDiskFullError(new Error(classified.message))).toBe(true);
+  expect(isDiskFullError(classified.message)).toBe(true);
 });

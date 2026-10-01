@@ -16,7 +16,7 @@ export function isDiskFullError(error: unknown): boolean {
   if (error instanceof StateDiskFullError) return true;
   const value = error as { code?: unknown; message?: unknown } | null;
   return value?.code === "SQLITE_FULL" || value?.code === "ENOSPC"
-    || /database or disk is full|ENOSPC|no space left on device/i.test(String(value?.message ?? error));
+    || /database or disk is full|ENOSPC|no space left on device|^disk full, state writes failing \(/i.test(String(value?.message ?? error));
 }
 export function noteStateDiskFull(detail: string): void {
   void detail;
