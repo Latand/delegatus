@@ -10142,6 +10142,41 @@ test("add-stage preserves the supplied graph and every existing edge (#2247)", a
   expect(loop.pipeline!.stages.find((stage) => stage.id === "fix")!.next).toBe("review");
 });
 
+test.each([
+  { next: "missing" },
+  { next: "extra" },
+  { next: null, onFail: { to: "missing", maxRounds: 1 } },
+])("add-stage refuses invalid edges without clearing them in draft or started graphs (#2247): %j", async (edges) => {
+  for (const started of [false, true]) {
+    const h = harness();
+    savePipelines([]);
+    const created = await createPipelineFromRequest({ task: "Invalid insertion", repoDir: "/repo", autoStart: false, stages: RUN_STAGES as never }, h.ports);
+    if (started) await patchPipeline(created.pipeline!.id, { action: "start" }, h.ports);
+    const before = loadPipelines()[0]!;
+    const added = await patchPipeline(before.id, { action: "add-stage", stage: { ...RUN_STAGES[1], id: "extra", ...edges } } as never, h.ports);
+    expect(added.status).toBe(400);
+    expect(loadPipelines()[0]).toEqual(before);
+  }
+});
+
+test("add-stage refuses replacing the draft entry by display insertion (#2247)", async () => {
+  const h = movingHeadHarness();
+  savePipelines([]);
+  const created = await createPipelineFromRequest({ task: "Display order", repoDir: "/repo", autoStart: false, publication: "internal", stages: BUILD_ONLY as never }, h.ports);
+  const added = await patchPipeline(created.pipeline!.id, { action: "add-stage", index: 0, stage: { ...BUILD_ONLY[0], id: "disconnected", next: null } } as never, h.ports);
+  expect(added.status).toBe(409);
+  expect(added.error).toContain("draft entry build");
+  expect(loadPipelines()[0]).toEqual(created.pipeline!);
+  const appended = await patchPipeline(created.pipeline!.id, { action: "add-stage", stage: { ...BUILD_ONLY[0], id: "disconnected", next: null } } as never, h.ports);
+  expect(appended.error).toBeUndefined();
+  expect(appended.pipeline!.cursor?.stageId).toBe("build");
+  await patchPipeline(created.pipeline!.id, { action: "start" }, h.ports);
+  const { pipeline } = await driveWithController(h, new Set());
+  expect(pipeline.state).toBe("completed");
+  expect(pipeline.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(1);
+  expect(pipeline.runs.find((run) => run.stageId === "disconnected")!.attempts).toHaveLength(0);
+});
+
 test("add-stage after selects a pass edge independently of displayed neighbours (#2247)", async () => {
   const h = harness();
   savePipelines([]);

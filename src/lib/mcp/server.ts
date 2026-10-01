@@ -3487,7 +3487,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     stageId: z.string().min(1).optional().describe("The stage a graph edit, a legacy-review conversion or a retry-stage names. retry-stage: the stage the pipeline waits on, retried whatever ended its attempt; without launchId it is sent as expectedStageId with that stage's current attempt as expectedAttempt, so a stage or attempt that moved on is refused with STAGE_CHANGED."),
     stage: pipelineStageSchema.optional().describe("add-stage: the complete stage definition. Keeps next and onFail as supplied unless after explicitly selects a pass edge to insert into."),
     after: z.string().min(1).optional().describe("add-stage only: splice into this stage's pass edge. That stage points to the new stage, which inherits its former next; every other edge stays unchanged. Independent of index."),
-    index: z.number().int().optional().describe("add-stage: insertion position in the displayed stage order."),
+    index: z.number().int().optional().describe("add-stage: insertion position in the displayed stage order. A nonempty draft refuses index 0 because its entry must stay first."),
     stageIds: z.array(z.string()).optional().describe("reorder-stage: stage ids in the new displayed order."),
     toIndex: z.number().int().optional().describe("reorder-stage: destination index."),
     expectedStageDigest: z.string().regex(/^[0-9a-f]{64}$/).optional().describe("Graph edit guard from get_pipeline: the stage digest for override-stage and set-edge, or the graph digest for add-stage, remove-stage and reorder-stage."),

@@ -7998,6 +7998,11 @@ export async function patchPipeline(
       const inputs = draftStageInputs(pipeline.stages);
       const index = req.index === undefined ? inputs.length : req.index;
       if (!Number.isInteger(index) || index < 0 || index > inputs.length) return { error: "stage index is out of range", status: 400 };
+      /* Draft records require their entry at position zero. Adding before it
+         would silently replace the execution entry even with unchanged edges. */
+      if (pipeline.state === "draft" && inputs.length && index === 0) {
+        return { error: `cannot insert before draft entry ${inputs[0]!.id}; use index 1 or later to preserve the execution entry`, status: 409 };
+      }
       /* Array order is presentation. Only an explicit after selects a pass
          edge to splice; otherwise every supplied edge is preserved (#2247). */
       if (req.after !== undefined && (typeof req.after !== "string" || !req.after.trim())) {
@@ -8010,6 +8015,15 @@ export async function patchPipeline(
       }
       const inserted: PipelineStageInput = predecessor ? { ...req.stage, next: predecessor.next ?? null } : { ...req.stage };
       inputs.splice(index, 0, inserted);
+      /* Structural-edit cleanup may prune deleted targets. A newly supplied
+         edge must be admitted as written or refused, never silently cleared. */
+      const ids = new Set(inputs.map((stage) => stage.id));
+      if (inserted.next != null && (inserted.next === inserted.id || !ids.has(inserted.next))) {
+        return { error: `stage ${inserted.id} has an invalid pass target`, status: 400 };
+      }
+      if (inserted.onFail && !ids.has(inserted.onFail.to)) {
+        return { error: `stage ${inserted.id} has an invalid fail target`, status: 400 };
+      }
       const displaced = startedStagePositionRefusal(pipeline, inputs);
       if (displaced) return displaced;
       if (predecessor) predecessor.next = inserted.id;
