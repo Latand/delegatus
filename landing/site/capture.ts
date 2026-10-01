@@ -14,7 +14,7 @@
  * `--only=en-1440` limits the run to one language and width.
  *
  * `--check-fullscreen` puts each demo frame full screen through its control, in
- * both languages, portrait and landscape phone sizes, once with the browser's Fullscreen API and once
+ * both languages, portrait and landscape phone sizes and a touch tablet, once with the browser's Fullscreen API and once
  * as the overlay iPhone Safari gets. It asserts the frame's layout and scale, that the
  * control clears the product's own controls, that Esc and the control leave,
  * and that the page's scroll position comes back; PNGs go to
@@ -408,11 +408,15 @@ async function checkFullscreen() {
         ...VIEWPORTS,
         { name: "844-landscape", width: 844, height: 390, phone: true },
         { name: "390-short", width: 390, height: 480, phone: true },
+        { name: "1024-tablet", width: 1024, height: 768, phone: false, tablet: true },
       ]) {
+        const touch = viewport.phone || "tablet" in viewport;
         if (only && only !== `${lang}-${viewport.name}`) continue;
+        /* iPad Safari has element fullscreen, so a tablet never gets the overlay. */
+        if ("tablet" in viewport && mode === "overlay") continue;
         const context = await browser.newContext({
           viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, colorScheme: "dark",
-          ...(viewport.phone ? { hasTouch: true, isMobile: true } : {}),
+          ...(touch ? { hasTouch: true, isMobile: true } : {}),
         });
         /* iPhone Safari has no element fullscreen: the page must run without the API. */
         if (mode === "overlay") await context.addInitScript(() => {
@@ -454,7 +458,7 @@ async function checkFullscreen() {
             }).map((el) => el.getAttribute("aria-label") ?? el.textContent?.trim().slice(0, 20) ?? el.tagName);
             return {
               scrollY, src: iframe.src, layout: `${iframe.offsetWidth}x${iframe.offsetHeight}`, transform: getComputedStyle(iframe).transform,
-              phone: live.dataset.mode === "phone", expectedPhone: `${live.dataset.pw}x${live.dataset.ph}`,
+              phone: live.dataset.mode === "phone", fixed: live.hasAttribute("data-fixed"), expectedPhone: `${live.dataset.pw}x${live.dataset.ph}`,
               bounds: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height },
               hostBounds: (() => { const r = host.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }; })(),
               radius: getComputedStyle(iframe).borderRadius,
@@ -487,6 +491,7 @@ async function checkFullscreen() {
           };
           if (before.phone) checkPhone(before);
           if (viewport.phone && !inside.phone) fail("touch phone switched to desktop layout");
+          if ("tablet" in viewport && !inside.fixed && (before.phone || inside.phone)) fail("touch tablet switched to phone layout");
           if (inside.phone) checkPhone(inside);
           else if (lw !== vw || lh !== hh || hw !== vw) fail(`iframe ${inside.layout}, frame area ${inside.host}, viewport ${inside.viewport}`);
           if (inside.chrome !== vh - hh || inside.rootBox !== `0,0 ${vw}x${vh}`) fail(`root ${inside.rootBox}, chrome ${inside.chrome}`);

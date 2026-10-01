@@ -294,7 +294,9 @@
   // tells a frame which language, step and view to show; the hero's frame
   // runs the scripted walkthrough and reports its step back.
 
-  const phoneQuery = matchMedia("(max-width: 639px), (hover: none) and (pointer: coarse)");
+  // A touch screen this short is a phone turned sideways; a tablet keeps the
+  // desktop frames.
+  const phoneQuery = matchMedia("(max-width: 639px), (hover: none) and (pointer: coarse) and (max-height: 639px)");
   // Where the hero's frame turns at each step of the script. On the desktop
   // the board has the orchestrator docked beside it; on the phone the chat
   // holds the request until it is sent, the board shows the new card, and
@@ -372,7 +374,12 @@
     const width = (full ? live.host.clientWidth : live.el.clientWidth) || 1;
     const lw = phone ? Number(d.pw) : full ? width : Math.max(Number(d.lw), width);
     const lh = phone ? Number(d.ph) : full ? live.host.clientHeight || 1 : Number(d.lh);
-    const availableHeight = full ? Math.min(live.host.clientHeight || 1, visibleHeight) - 24 : visibleHeight * 0.78;
+    // Embedded frames size against the layout viewport, which holds still
+    // while the browser's toolbar collapses or the keyboard opens, so the
+    // page under the visitor's finger does not reflow.
+    const availableHeight = full
+      ? Math.min(live.host.clientHeight || 1, visibleHeight) - 24
+      : document.documentElement.clientHeight * 0.78;
     const scale = phone
       ? Math.max(0.01, Math.min(1, (width - 24) / lw, availableHeight / lh))
       : full ? 1 : width / lw;
