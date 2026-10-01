@@ -937,7 +937,29 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     `${compoundWords.join("-")}.${letter}`,
   ]);
 
-  for (const [index, leak] of [...wrappedResources, ...mailboxResources, ...dottedResources].entries()) {
+  const encodedSpaceUrl = `https://example.invalid/%22${compoundWords.join("%20")}%22`;
+  const reviewedResources = [
+    encodedSpaceUrl,
+    encodedSpaceUrl.toUpperCase(),
+    [...encodedSpaceUrl].map((letter) => /[a-z]/.test(letter)
+      ? String.fromCharCode(letter.charCodeAt(0) + 0xfee0) : letter).join(""),
+    `relative/(${compoundWords.join(" ")})/notes`,
+    `https://example.invalid/%3C${compoundWords.join("-")}%3E`,
+    `https://example.invalid/prefix%20${compoundWords.join("%20")}%20suffix`,
+    `https%3A%2F%2Fexample.invalid%2F%22${compoundWords.join("%20")}%22`,
+    `relative/(prefix ${compoundWords.join(" ")} suffix)/notes`,
+    `"prefix ${compoundWords.join(" ")} suffix" @example.invalid`,
+    `"prefix ${compoundWords.join(" ")} suffix"(comment)@example.invalid`,
+    `"prefix ${compoundWords.join(" ")} suffix"\r\n\t(comment (nested) with \\) escape) @example.invalid`,
+    `<span id="${compoundWords.join("-")}">label</span>`,
+    `<span class="${compoundWords.join("-")}">label</span>`,
+    `<span class='prefix ${compoundWords.join(" ")} suffix'>label</span>`,
+    `<span id=${compoundWords.join("-")}>label</span>`,
+    `<span title="ordinary > text" id="${compoundWords.join("-")}">label</span>`,
+    `<input name="${compoundWords.join("-")}">`,
+  ];
+
+  for (const [index, leak] of [...wrappedResources, ...mailboxResources, ...dottedResources, ...reviewedResources].entries()) {
     test(`compound resource context regression ${index} blocks files and commit messages`, () => {
       const directory = mkdtempSync(join(tmpdir(), "llv-privacy-compound-"));
       temporaryDirectories.push(directory);
@@ -966,7 +988,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     });
   }
 
-  for (const [index, leak] of wrappedResources.entries()) {
+  for (const [index, leak] of [...wrappedResources, ...reviewedResources].entries()) {
     test(`compound resource context regression ${index} blocks controlled OCR stdout`, () => {
       const directory = mkdtempSync(join(tmpdir(), "llv-privacy-compound-"));
       temporaryDirectories.push(directory);
@@ -995,6 +1017,14 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     "See relative/notes for fresh water.",
     "The <strong>fresh-water</strong> is clear.",
     "Read [fresh-water](https://example.invalid/notes).",
+    'The "fresh water" is clear.',
+    "The (fresh water) is clear.",
+    '<span title="fresh-water">label</span>',
+    '<span class="ordinary-label">fresh water</span>',
+    'The "fresh water" (comment) is clear.',
+    'const docsUrl = "https://example.invalid/notes";\nconst copy = "Fresh water.";',
+    '<a href="https://example.invalid/notes">fresh water</a>',
+    '<span title="an id=\'fresh-water\' example">label</span>',
   ]) {
     test(`compound resource checks preserve prose: ${prose}`, () => {
       const directory = mkdtempSync(join(tmpdir(), "llv-privacy-compound-"));

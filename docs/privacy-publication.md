@@ -99,11 +99,20 @@ more than 16 letters, unusual words, or other separators retain compact
 matching. Every occurrence in both views is checked, so prose beside a leak
 cannot excuse it. Diagnostics continue to suppress matched values.
 
-Resource context includes the enclosing URL or path token, so decoded quotes,
-parentheses and brackets inside a path do not grant a prose exemption. Mailbox
-spans include quoted local parts with Unicode or ASCII IDN domains, regardless
-of the generic email class's reserved-domain exemptions. Dotted identifier
-boundaries read complete Unicode code points and attached combining marks.
+Resource context includes the enclosing URL or path, including whitespace in
+quoted or parenthesized segments. Resources are also collected before each
+decoding pass and scanned independently after decoding, so encoded whitespace
+and angle brackets cannot turn resource contents into prose or erase them as
+markup. HTML tags delimit visible prose; their `id`, `class` and `name`
+attribute values remain identifier contexts.
+
+Mailbox spans include quoted local parts with Unicode or ASCII IDN domains,
+regardless of the generic email class's reserved-domain exemptions. Folding
+whitespace and balanced comments, including nested comments and quoted pairs,
+between the closing quote and `@` retain mailbox context
+([RFC 5322 CFWS](https://www.rfc-editor.org/rfc/rfc5322.html#section-3.2.4)).
+Dotted identifier boundaries read complete Unicode code points and attached
+combining marks.
 
 Keep raw private labels in the ignored `.privacy-known-values` operator file.
 Refresh the committed fingerprints with:

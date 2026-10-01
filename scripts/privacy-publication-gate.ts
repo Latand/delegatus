@@ -285,9 +285,13 @@ function removeDefaultIgnorables(text: string): string {
   return text.replaceAll(/\p{Default_Ignorable_Code_Point}/gu, "");
 }
 
-export function canonicalSensitiveText(text: string): { error: boolean; text: string } {
+export function canonicalSensitiveText(
+  text: string,
+  inspectBeforeDecoding?: (text: string) => void,
+): { error: boolean; text: string } {
   let decoded = removeDefaultIgnorables(text);
   for (let pass = 0; pass < 16; pass += 1) {
+    inspectBeforeDecoding?.(decoded);
     const next = removeDefaultIgnorables(
       decodeCommonMarkEscapes(decodeHtmlEntities(decodePercentEncoding(decoded))),
     );
@@ -434,6 +438,29 @@ function identifierBefore(text: string, index: number): boolean {
   return /[\p{L}\p{N}]/u.test(point);
 }
 
+function mailboxCfwsEnd(view: string, start: number): number {
+  let cursor = start;
+  while (cursor < view.length) {
+    if (/[ \t\r\n]/.test(view[cursor])) {
+      cursor += 1;
+      continue;
+    }
+    if (view[cursor] !== "(") break;
+    let depth = 1;
+    cursor += 1;
+    while (cursor < view.length && depth > 0) {
+      if (view[cursor] === "\\") cursor += 2;
+      else {
+        if (view[cursor] === "(") depth += 1;
+        if (view[cursor] === ")") depth -= 1;
+        cursor += 1;
+      }
+    }
+    if (depth > 0) return start;
+  }
+  return cursor;
+}
+
 function compoundResourceSpans(view: string): Array<{ start: number; end: number }> {
   // Reuse the Markdown parser: link labels are prose, while destinations are
   // resources. Mask destinations without moving offsets before finding paths.
@@ -446,12 +473,64 @@ function compoundResourceSpans(view: string): Array<{ start: number; end: number
     cursor = destination.end;
   }
   parts.push(view.slice(cursor));
-  // Punctuation inside a URL/path token cannot turn its contents into prose.
-  // Angle brackets delimit HTML tags; closing tags cannot make prose a path.
-  for (const match of parts.join("").matchAll(/[^\s<>]+/gu)) {
-    if (/[\/\\]/.test(match[0])) {
-      spans.push({ start: match.index, end: match.index + match[0].length });
+  const text = parts.join("");
+  const tag = /<\/?[a-z][a-z0-9:-]*(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*>/giy;
+  const attribute = /\s([^\s="'<>/]+)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gu;
+  const nextDelimiter = new Map<string, number>();
+  const nextIndex = (delimiter: string, after: number): number => {
+    let index = nextDelimiter.get(delimiter);
+    if (index === undefined || (index !== -1 && index < after)) {
+      index = text.indexOf(delimiter, after);
+      nextDelimiter.set(delimiter, index);
     }
+    return index;
+  };
+  // Tags delimit prose, but identifier attributes retain their source spans.
+  // Quotes, parentheses and angle brackets opened inside a path keep its
+  // whitespace enclosed. A slash in an HTML closing tag never starts a path.
+  for (let start = 0; start < text.length;) {
+    if (/\s/.test(text[start])) {
+      start += 1;
+      continue;
+    }
+    tag.lastIndex = start;
+    const markup = tag.exec(text);
+    if (markup) {
+      for (const match of markup[0].matchAll(attribute)) {
+        if (/^(id|class|name)$/i.test(match[1])) {
+          spans.push({ start: start + match.index, end: start + match.index + match[0].length });
+        }
+      }
+      start += markup[0].length;
+      continue;
+    }
+    let end = start;
+    let path = false;
+    let enclosingQuote: string | undefined;
+    const closers: string[] = [];
+    while (end < text.length) {
+      const character = text[end];
+      const closer = closers.at(-1);
+      if (!closer && /\s/.test(character)) break;
+      if (!path && /["']/.test(character)) {
+        enclosingQuote = enclosingQuote === character ? undefined : character;
+      } else if (!closer && character === enclosingQuote) {
+        end += 1;
+        break;
+      }
+      if (closer === character) closers.pop();
+      else if (path && /[([<"']/.test(character)) {
+        const closing = ({ "(": ")", "[": "]", "<": ">", '"': '"', "'": "'" })[character];
+        // An unmatched trailing quote is a delimiter, not an opening wrapper.
+        const closingIndex = closing ? nextIndex(closing, end + 1) : -1;
+        const lineEnd = nextIndex("\n", end + 1);
+        if (closing && closingIndex !== -1 && (lineEnd === -1 || closingIndex < lineEnd)) closers.push(closing);
+      } else if (!closer && /[<>]/.test(character)) break;
+      if (/[\/\\]/.test(character)) path = true;
+      end += 1;
+    }
+    if (path) spans.push({ start, end });
+    start = Math.max(end, start + 1);
   }
   // Resource context is independent of the generic email finding class and
   // its reserved-domain exemptions. Accept U-labels and ASCII IDN labels here.
@@ -459,6 +538,13 @@ function compoundResourceSpans(view: string): Array<{ start: number; end: number
   const mailboxes = new RegExp(`(${quotedLocalPart.source}|${dotAtomLocalPart.source})@${domain.source}`, "giu");
   for (const match of view.matchAll(mailboxes)) {
     spans.push({ start: match.index, end: match.index + match[0].length });
+  }
+  // RFC 5322 CFWS can separate a quoted local part from @. Read balanced
+  // comments (including quoted pairs) and folding whitespace independently.
+  const domainAfterAt = new RegExp(`@${domain.source}`, "uy");
+  for (const match of view.matchAll(new RegExp(quotedLocalPart.source, "gu"))) {
+    domainAfterAt.lastIndex = mailboxCfwsEnd(view, match.index + match[0].length);
+    if (domainAfterAt.exec(view)) spans.push({ start: match.index, end: domainAfterAt.lastIndex });
   }
   return spans;
 }
@@ -487,13 +573,14 @@ function ordinaryCompoundOccurrence(
   return true;
 }
 
-function matchesKnownFingerprint(views: [string, string]): boolean {
+function matchesKnownFingerprint(views: [string, string], originalText: string): boolean {
   const fingerprintsByLength = new Map<number, Set<string>>();
   for (const fingerprint of knownValues.fingerprints) {
     const hashes = fingerprintsByLength.get(fingerprint.length) ?? new Set<string>();
     hashes.add(fingerprint.sha256);
     fingerprintsByLength.set(fingerprint.length, hashes);
   }
+  let ambiguousOccurrence = false;
   for (const source of views) {
     const view = source.normalize("NFKC").toLocaleLowerCase("en-US");
     const compact = compactSensitiveText(view);
@@ -508,6 +595,27 @@ function matchesKnownFingerprint(views: [string, string]): boolean {
         sourceOffsets ??= compactSourceOffsets(view, compact.length);
         resourceSpans ??= compoundResourceSpans(view);
         if (!ordinaryCompoundOccurrence(view, sourceOffsets, resourceSpans, index, length)) return true;
+        ambiguousOccurrence = true;
+      }
+    }
+  }
+  if (ambiguousOccurrence) {
+    // Preserve resources before each decoding pass: an encoded space or angle
+    // bracket can otherwise become a prose boundary or disappear as markup.
+    // Scan each decoded resource on its own without the prose exception; never
+    // compact separate resources together or treat ordinary HTML text as a path.
+    const resources = new Set<string>();
+    canonicalSensitiveText(originalText, (source) => {
+      const view = source.normalize("NFKC").toLocaleLowerCase("en-US");
+      for (const span of compoundResourceSpans(view)) resources.add(view.slice(span.start, span.end));
+    });
+    for (const resource of resources) {
+      const compact = compactSensitiveText(canonicalSensitiveText(resource).text);
+      for (const [length, hashes] of fingerprintsByLength) {
+        for (let index = 0; index <= compact.length - length; index += 1) {
+          const digest = createHash("sha256").update(compact.slice(index, index + length)).digest("hex");
+          if (hashes.has(digest)) return true;
+        }
       }
     }
   }
@@ -722,7 +830,7 @@ export function sensitiveClasses(text: string): Set<FindingClass> {
   const { error, searchable: searchableText, views } = normalizedSensitiveText(text);
   if (error) findings.add("inspection_error");
   const normalizedText = searchableText.toLocaleLowerCase("en-US");
-  if (knownValues.values.some((value) => normalizedText.includes(value.toLocaleLowerCase("en-US"))) || matchesKnownFingerprint(views)) {
+  if (knownValues.values.some((value) => normalizedText.includes(value.toLocaleLowerCase("en-US"))) || matchesKnownFingerprint(views, text)) {
     findings.add("known_value");
   }
   const unixHomePattern = /(?:^|[\s"'(=:/])\/(?:home|Users)\/([A-Za-z0-9._-]+)(?:\/|$)/gm;
