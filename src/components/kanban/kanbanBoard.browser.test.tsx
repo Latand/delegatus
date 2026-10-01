@@ -14078,6 +14078,33 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "claude", model: "opus", effort: "high" } }],
   };
 
+  async function instructionReading(page: Page, lang: "en" | "uk") {
+    const field = page.locator("[data-seat-tick-reason]");
+    await field.scrollIntoViewIfNeeded();
+    const label = lang === "en" ? "Instructions for every wake" : "Вказівки на кожне пробудження";
+    const helper = lang === "en"
+      ? "The agent receives these instructions on every wake: what to do next and when to stop."
+      : "Агент отримує ці вказівки на кожне пробудження: що робити далі й коли зупинитися.";
+    expect(await field.getAttribute("aria-describedby")).toBeTruthy();
+    expect(await field.locator("..").textContent()).toContain(label);
+    const hint = page.locator("[data-seat-tick-instructions-hint]");
+    expect(await hint.textContent()).toContain(helper);
+    expect(await field.inputValue()).toBe("a release afternoon");
+    const geometry = await hint.evaluate((node) => {
+      const box = node.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const text = range.getBoundingClientRect();
+      return { left: box.left, right: box.right, textLeft: text.left, textRight: text.right, textHeight: text.height, height: box.height, viewport: innerWidth };
+    });
+    expect(geometry.left).toBeGreaterThanOrEqual(0);
+    expect(geometry.right).toBeLessThanOrEqual(geometry.viewport);
+    expect(geometry.textLeft).toBeGreaterThanOrEqual(geometry.left - 1);
+    expect(geometry.textRight).toBeLessThanOrEqual(geometry.right + 1);
+    expect(geometry.textHeight).toBeLessThanOrEqual(geometry.height + 1);
+    return { label, helper: await hint.textContent(), geometry };
+  }
+
   browserTest("the notice card is titled after the setting and opens the panel; the run cards keep their time visible; en and uk, light and dark, 1440 and 390", async () => {
     fs.mkdirSync(SHOTS, { recursive: true });
     const out = path.resolve(".artifacts/seat-tick-cards-bundle");
@@ -14140,8 +14167,9 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
               await page.waitForSelector("[data-seat-tick-popover]", { timeout: 10_000 });
               await page.waitForTimeout(500);
               const unfoldedAfter = (await seat.getAttribute("data-collapsed")) === "0";
+              const instructions = await instructionReading(page, lang);
               await page.screenshot({ path: path.join(SHOTS, `${label}-notice-opens-panel.png`) });
-              readings.push({ label, ...read, foldedBefore, unfoldedAfter, popoverOpened: true, pageErrors });
+              readings.push({ label, ...read, instructions, foldedBefore, unfoldedAfter, popoverOpened: true, pageErrors });
               expect(pageErrors, `${label} page errors`).toEqual([]);
             } finally { await context.close(); }
           }
@@ -14170,8 +14198,9 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
               await control.click();
               await page.waitForSelector('[data-testid="mobile-seat-tick-sheet"]', { timeout: 10_000 });
               await page.waitForTimeout(700);
+              const instructions = await instructionReading(page, lang);
               await page.screenshot({ path: path.join(SHOTS, `${label}-notice-opens-tick-sheet.png`) });
-              readings.push({ label, phone: true, controlHeight, tickSheetOpened: true, pageErrors });
+              readings.push({ label, phone: true, instructions, controlHeight, tickSheetOpened: true, pageErrors });
               expect(pageErrors, `${label} page errors`).toEqual([]);
             } finally { await context.close(); }
           }

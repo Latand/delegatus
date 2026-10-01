@@ -297,10 +297,24 @@ test("an expiry, and restoring the default with no reason, go through the same r
 
   const restored = await (await put({ project: PROJECT, enabled: true, wakeIntervalMinutes: null, untilMinutes: null })).json() as SeatTickSettingsAnswer;
   expect(restored.changed).toBe(true);
-  expect(restored.effective).toMatchObject({ isDefault: true, enabled: true, reason: null, until: null });
+  expect(restored.effective).toMatchObject({ isDefault: true, enabled: true, reason: "a deploy is running", until: null });
   expect(restored.cardText).toBeNull();
-  expect(readSeatTickSettings(PROJECT, settingsFile)).toMatchObject({ enabled: true, wakeIntervalMinutes: null, reason: null, until: null });
+  expect(readSeatTickSettings(PROJECT, settingsFile)).toMatchObject({ enabled: true, wakeIntervalMinutes: null, reason: "a deploy is running", until: null });
   expect(settingsRevision()).toBeGreaterThan(before!);
+});
+
+test("PUT and GET retain default-cadence instructions, and clearing them preserves the seat note", async () => {
+  const reason = "Handle the incoming tasks by priority.";
+  const monitorPrompt = "Track the active lanes.";
+  const saved = await put({ project: PROJECT, reason, monitorPrompt });
+  expect(saved.status).toBe(200);
+  expect((await saved.json()).settings).toMatchObject({ reason, monitorPrompt, wakeIntervalMinutes: null });
+  const read = await GET(new NextRequest(`http://localhost/api/monitor/seat-tick/settings?project=${PROJECT}`));
+  expect((await read.json()).settings).toMatchObject({ reason, monitorPrompt });
+  const cleared = await put({ project: PROJECT, reason: null });
+  expect(cleared.status).toBe(200);
+  expect((await cleared.json()).settings).toMatchObject({ reason: null, monitorPrompt });
+  expect(readSeatTickSettings(PROJECT, settingsFile)).toMatchObject({ reason: null, monitorPrompt });
 });
 
 test("a change with no fields is a read, as the tool's is", async () => {

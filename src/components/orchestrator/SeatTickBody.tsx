@@ -420,9 +420,8 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
     ? "h-11 rounded-control border border-border bg-card px-2.5 text-body text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
     : "h-7 rounded-control border border-border bg-card px-2 text-ui text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
 
-  /* Until and Reason belong to a tick that LEAVES the defaults: on the
-     defaults there is nothing to expire and nothing to explain. The interval
-     belongs to a tick that is on: it does nothing while the switch is off. */
+  /* Until belongs to a tick that leaves the defaults. Instructions stand at
+     every cadence. The interval is shown while wakes are enabled. */
   const leavesDefaults = !draft.enabled || draft.interval.trim() !== "";
   const typedInterval = Number(draft.interval);
   const checkEvery = record?.policy.checkIntervalMinutes ?? null;
@@ -532,21 +531,22 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
                 ))}
               </Select>
             </label>
-
-            <label className="flex min-w-0 flex-col gap-1">
-              <span className="text-ui text-primary">{t("seatTick.reasonLabel")}</span>
-              <textarea
-                rows={2}
-                data-seat-tick-reason
-                value={draft.reason}
-                disabled={state.saving}
-                onChange={(event) => setDraft((previous) => ({ ...previous, reason: event.target.value }))}
-                className={`min-h-0 w-full resize-y rounded-control border border-border bg-card px-2 py-1.5 ${phone ? "text-body" : "text-ui"} text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50`}
-              />
-              <span className="text-caption leading-4 text-muted">{t("seatTick.reasonHint")}</span>
-            </label>
           </>
         ) : null}
+
+        <label className="flex min-w-0 flex-col gap-1">
+          <span className="text-ui text-primary">{t("seatTick.reasonLabel")}</span>
+          <textarea
+            aria-describedby={`seat-tick-instructions-${surface}`}
+            rows={2}
+            data-seat-tick-reason
+            value={draft.reason}
+            disabled={state.saving}
+            onChange={(event) => setDraft((previous) => ({ ...previous, reason: event.target.value }))}
+            className={`min-h-0 w-full resize-y rounded-control border border-border bg-card px-2 py-1.5 ${phone ? "text-body" : "text-ui"} text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50`}
+          />
+          <span id={`seat-tick-instructions-${surface}`} data-seat-tick-instructions-hint className="text-caption leading-4 text-muted">{t("seatTick.reasonHint")}</span>
+        </label>
 
         {reading.offDefault ? (
           <button
@@ -554,8 +554,7 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
             data-seat-tick-restore
             disabled={state.saving}
             onClick={() => {
-              /* Restoring the default needs no reason, exactly as the tool's
-                 restore does: the record it clears already said why. */
+              /* Restore the cadence while keeping the standing instructions. */
               void read.save({ enabled: true, wakeIntervalMinutes: null, untilMinutes: null });
             }}
             className={`inline-flex ${phone ? "min-h-11" : "h-7"} items-center gap-1.5 self-start rounded-control px-1 text-ui font-semibold text-secondary hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50`}
