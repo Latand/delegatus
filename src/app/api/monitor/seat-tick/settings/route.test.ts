@@ -387,3 +387,24 @@ test("the answer agrees with the seat_tick_settings tool over the same record", 
   expect(body.cardText).toContain("one every 240 minute(s)");
   expect(body.cardText).toContain("slow it down over the weekend");
 });
+
+
+test("maintenance-only write needs no reason and exposes the same run records through HTTP and MCP", async () => {
+  const project = "fixture-maintenance-route";
+  const written = await put({ project, maintenance: { enabled: true, intervalHours: "200" } });
+  expect(written.status).toBe(200);
+  const answer = await written.json();
+  expect(answer.maintenance).toMatchObject({ enabled: true, intervalHours: 168, lastRun: null, runsError: null });
+  const { claimMaintenanceRun, patchMaintenanceRun } = await import("@/lib/boardMaintenance/store");
+  const result = claimMaintenanceRun({ project, now: Date.now(), intervalHours: 168, seat: { seatEpoch: 1, conversationId: "fixture-seat" }, repoDir: "/fixtures/repository" });
+  if (!result.claimed) throw new Error(result.reason);
+  patchMaintenanceRun(result.run.runId, { state: "failed", endedAt: new Date().toISOString(), taskId: "fixture-card", failure: { kind: "no-account", detail: "fixture reason" }, log: { ...result.run.log, leftAlone: [{ taskId: "aabbccdd", reason: "open lane" }] } });
+  const http = await (await get(`?project=${project}`)).json();
+  expect(http.maintenance.lastRun).toMatchObject({ taskId: "fixture-card", state: "failed", failure: { kind: "no-account" } });
+  const tool = await viewerMcpBindings(undefined, undefined, {
+    callerAttribution: () => ({ kind: "gateway", conversationId: null }), callerProject: () => project, authorizedSeats: () => [],
+  } as never).seat_tick_settings({ clientRequestId: "fixture-maintenance-read", project, verbose: true });
+  const same = { ...http.maintenance };
+  delete same.nextRunAt;
+  expect(tool.maintenance).toMatchObject({ ...same, lastRunLog: { leftAlone: [{ taskId: "aabbccdd", reason: "open lane" }] } });
+});

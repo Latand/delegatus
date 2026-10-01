@@ -1,3 +1,4 @@
+import { productionBoardMaintenanceController, type BoardMaintenanceController } from "@/lib/boardMaintenance/run";
 import crypto from "node:crypto";
 import path from "node:path";
 
@@ -107,6 +108,7 @@ import type {
  */
 
 export interface SeatTickControllerDependencies {
+  maintenance?: BoardMaintenanceController | null;
   sources?: SeatTickSources;
   /** Records the identity successions seated projects owe (#1874); the sweep
       runs it before it lists the projects to check. */
@@ -1316,6 +1318,9 @@ async function check(
   });
 
   await yieldToRuntime();
+  const maintenanceDetails: string[] = [];
+  try { const detail = await dependencies.maintenance?.reconcile(canonical); if (detail) maintenanceDetails.push(detail); }
+  catch (error) { maintenanceDetails.push(`maintenance reconcile: ${redactMonitorText(error instanceof Error ? error.message : "failed")}`); }
   const gathered = await gatherSeatTickInput(canonical, settled, policy, sources);
   await yieldToRuntime();
   const at = new Date(gathered.now).toISOString();
@@ -1602,6 +1607,8 @@ async function check(
       console.error("[seat tick] card write failed", error instanceof Error ? error.name : "unknown");
     }
   }
+  try { const detail = await dependencies.maintenance?.launchIfDue(input); if (detail) maintenanceDetails.push(detail); }
+  catch (error) { maintenanceDetails.push(`maintenance launch: ${redactMonitorText(error instanceof Error ? error.message : "failed")}`); }
   const record: SeatTickRunRecord = {
     schemaVersion: 1,
     at,
@@ -1613,7 +1620,7 @@ async function check(
     deferred: verdict.kind === "wake" ? verdict.deferred : 0,
     eventsThrough: state.eventsThrough ?? 0,
     delivery,
-    detail: [rollbackDetail, verdictDetail(verdict), fenceDetail, sendDetail].filter((part): part is string => !!part).join("; ") || null,
+    detail: [rollbackDetail, verdictDetail(verdict), fenceDetail, sendDetail, ...maintenanceDetails].filter((part): part is string => !!part).join("; ") || null,
   };
   appendRecord(record);
   return record;
@@ -1828,7 +1835,7 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
     if (!first) await yieldToRuntime();
     first = false;
     try {
-      const record = await runSeatTickCheck(project, { ...dependencies, sources });
+      const record = await runSeatTickCheck(project, { ...dependencies, sources, maintenance: dependencies.maintenance === undefined ? productionBoardMaintenanceController(sources) : dependencies.maintenance });
       if (record) records.push(record);
     } catch (error) {
       /* Only an unwritable journal reaches here; the check itself records its

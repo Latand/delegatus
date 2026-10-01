@@ -28,8 +28,9 @@ beforeEach(() => fs.rmSync(file, { force: true }));
 
 test("roles route returns all merged role definitions with scaffold previews and shipped runtimes", async () => {
   const body = await (await GET()).json() as Catalog;
-  expect(body.schemaVersion).toBe(4);
-  expect(body.roles).toHaveLength(8);
+  expect(body.schemaVersion).toBe(5);
+  expect(body.roles).toHaveLength(9);
+  expect(body.roles.find((role) => role.id === "maintainer")?.config).toEqual({ engine: "codex", model: "gpt-6.1-sol", effort: "medium" });
   expect(body.roles[0]).toMatchObject({ id: "orchestrator" });
   /* The shipped deployer follows the project's own release procedure and assumes no topology. */
   expect(body.roles.find((role) => role.id === "deployer")?.promptPreview).toContain("Follow the project's own release procedure");

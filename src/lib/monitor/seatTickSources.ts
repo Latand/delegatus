@@ -1,3 +1,5 @@
+import { maintenanceRuns } from "@/lib/boardMaintenance/store";
+import { maintenanceRunIsLive, type MaintenanceRun } from "@/lib/boardMaintenance/types";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -419,6 +421,7 @@ export async function withdrawRuntimeWake(
 }
 
 export interface SeatTickSources {
+  maintenanceRuns?: (project: string) => readonly MaintenanceRun[];
   seatFor: typeof orchestratorSeatFor;
   /** Whether an orchestrator ever held the project (#2170). Absent: assumed,
       so a missing seat is reported as it always was. */
@@ -552,6 +555,7 @@ export async function settleRecordFromJournal(
 
 export function defaultSeatTickSources(): SeatTickSources {
   return {
+    maintenanceRuns,
     /* Seats under the project they serve now (#1874): a seat keyed by its
        folder's old identity is the seat of the key its lanes are written to. */
     seatFor: (project) => orchestratorSeatForCurrentProject(project),
@@ -648,7 +652,7 @@ const DEPLOY_SNAPSHOT_WINDOW = 20;
 
 /** The projects the Viewer's own deployments build: its repository under
     every name it is known by, folded through the operator's aliases. */
-function viewerOwnProjectKeys(): string[] {
+export function viewerOwnProjectKeys(): string[] {
   const configured = process.env.LLV_VIEWER_CANONICAL_REMOTE?.trim();
   const remote = configured || viewerPackageManifest.repository.url.trim();
   return [...new Set(viewerRepositoryProjects(remote, process.cwd()).map(canonicalOrchestratorProject))];
@@ -747,7 +751,7 @@ function isFinished(pipeline: Pipeline): boolean {
 
 /** The projection `evidence.ts` correlates on, built in-process rather than
     fetched over HTTP: movement is attempt-level, never `createdAt`. */
-function pipelineSummary(pipeline: Pipeline): PipelineSummary {
+export function pipelineSummary(pipeline: Pipeline): PipelineSummary {
   const activityAt = [
     pipeline.pausedAt,
     pipeline.resumedAt,
@@ -1328,6 +1332,7 @@ function changeFingerprint(
   pullRequestsUnavailable: SeatTickPullRequestGap | null,
   ownLanes: readonly SeatTickOwnLaneInput[],
   settledDeploys: readonly SeatTickDeployInput[] = [],
+  settledMaintenance: readonly MaintenanceRun[] = [],
 ): string {
   /* A child's status and outcome instant decide two wake reasons (#1465), so
      they are in the half the guard reads: a child finishing, or a harvested one
@@ -1346,6 +1351,7 @@ function changeFingerprint(
     /* A settled deploy decides a wake reason of its own (#2063), and a second
        deploy settling behind the first is movement the guard has to see. */
     ...settledDeploys.map((deploy) => `d:${deploy.deploymentId}:${deploy.phase}`),
+    ...settledMaintenance.map(run => `m:${run.runId}:${run.state}`),
   ].sort();
   /* The set of unmerged pull requests, for the same reason the card's movement
      instant is in the half above: it decides a wake reason, so a guard keyed on
@@ -2135,6 +2141,10 @@ export async function gatherSeatTickInput(
   const announcedLanes = retainedLaneAnnouncements(state.announcedLanes ?? [], hotLanes, canonical, seat, now, policy.backlogAfterMs);
   const ownLanes = ownSettledLanes(canonical, seat, announcedLanes, hotLanes);
   const settledDeploys = settledSeatDeploys(seat, state.announcedDeploys ?? [], { now, backlogAfterMs: policy.backlogAfterMs }, sources);
+  let endedMaintenance: readonly MaintenanceRun[] = [];
+  try { endedMaintenance = sources.maintenanceRuns?.(canonical) ?? []; }
+  catch { /* The maintenance controller journals its own store failure; unrelated seat work still wakes. */ }
+  const settledMaintenance = endedMaintenance.filter(run => !maintenanceRunIsLive(run) && run.endedAt && now - Date.parse(run.endedAt) <= policy.backlogAfterMs && !(state.announcedMaintenance ?? []).includes(run.runId)).slice(-3);
 
   /* The open set spans EVERY project, not this one's lanes: an event is history
      because its own lane finished, and reading a lane from another project as
@@ -2186,9 +2196,10 @@ export async function gatherSeatTickInput(
     signals: signals(canonical, seat, sources),
     ownLanes,
     settledDeploys,
+    settledMaintenance,
     children,
     childrenUnavailable,
-    changeFingerprint: changeFingerprint(pipelines, tasks, children, pullRequests, pullRequestsUnavailable, ownLanes, settledDeploys),
+    changeFingerprint: changeFingerprint(pipelines, tasks, children, pullRequests, pullRequestsUnavailable, ownLanes, settledDeploys, settledMaintenance),
     /* The sealed cursor travels on the state the decision carries forward, so a
        check of any verdict — a skip included, which remembers nothing else —
        persists where the journal stood when the tick first saw this project.

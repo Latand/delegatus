@@ -2182,3 +2182,17 @@ test("a child this seat launched with notices on is marked, one launched by some
   expect(JSON.stringify(harvested.verdict)).toContain(tmux);
   expect(JSON.stringify(harvested.verdict)).not.toContain(notified);
 });
+
+
+test("maintenance gather offers only unannounced ended project runs and moves the fingerprint", async () => {
+  const { claimMaintenanceRun, patchMaintenanceRun, maintenanceRuns } = await import("@/lib/boardMaintenance/store");
+  const result = claimMaintenanceRun({ project: PROJECT, now: NOW, intervalHours: 3, seat: { seatEpoch: 7, conversationId: CONVERSATION }, repoDir: "/fixtures/repository" });
+  if (!result.claimed) throw new Error(result.reason);
+  patchMaintenanceRun(result.run.runId, { state: "succeeded", endedAt: new Date(NOW).toISOString() });
+  const feed = { ...sources({ pipelines: [] }), maintenanceRuns };
+  const state = emptySeatTickState();
+  const gathered = await gatherProduction(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, feed);
+  expect(gathered.settledMaintenance?.map(r => r.runId)).toEqual([result.run.runId]);
+  const acknowledged = await gatherProduction(PROJECT, { ...state, announcedMaintenance: [result.run.runId] }, DEFAULT_SEAT_TICK_POLICY, feed);
+  expect(acknowledged.settledMaintenance).toEqual([]); expect(acknowledged.changeFingerprint).not.toBe(gathered.changeFingerprint);
+});

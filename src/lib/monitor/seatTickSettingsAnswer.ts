@@ -1,3 +1,4 @@
+import { boardMaintenanceAnswer, type BoardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
 import { seatTickSettingsCardText } from "./cards";
 import { readSeatTickRecords, SEAT_TICK_RUN_HISTORY } from "./journalStore";
 import { SEAT_TICK_WAKE_INTERVAL_MS, seatTickPolicy, seatTickSettingsCardDetail } from "./seatTick";
@@ -78,6 +79,7 @@ export interface SeatTickLastRun {
 }
 
 export interface SeatTickSettingsAnswer {
+  maintenance: BoardMaintenanceAnswer;
   project: string;
   /** Whether this request wrote the record. A read, and a change with no
       fields, answer false — as the tool's does. */
@@ -242,6 +244,7 @@ export function seatTickSettingsAnswer(
   }
 
   return {
+    maintenance: boardMaintenanceAnswer(project, effective, { now, lastCheckAt: state?.lastCheckAt ?? null, checkIntervalMs: policy?.checkIntervalMs ?? null }),
     project,
     changed,
     at: new Date(now).toISOString(),

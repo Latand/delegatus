@@ -674,8 +674,9 @@ test("the role table keeps the delivered default inside the structured envelope"
      personality; its scaffold gave 200 back. v31 takes 700 more for the
      board maintenance report section, paid for by the open-task list the
      rotation handoff no longer carries (docs/design/board-maintenance-report.md
-     §5.5); handoffDigest.test.ts pins what that leaves a rotation's history. */
-  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 4_100);
+     §5.5); handoffDigest.test.ts pins what that leaves a rotation's history.
+     The scheduled maintainer row uses another 200 bytes of that room. */
+  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 3_900);
 });
 
 /* docs/design/model-sizing-tiers.md §4: the seat sizes every lane, reads each

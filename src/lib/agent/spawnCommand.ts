@@ -847,7 +847,7 @@ export async function executeSpawnRequest(
          before any receipt exists, so there is nothing for a retry to replay
          onto an account this project does not allow. */
       if (error instanceof ProjectAccountRefusedError) {
-        return NextResponse.json({ error: error.message }, { status: 409 });
+        return NextResponse.json({ error: error.message, code: "project_account_refused" }, { status: 409 });
       }
       /* A Copilot launch with no account set up, or naming one that is gone. */
       if (error instanceof NoCopilotAccountError || error instanceof UnknownCopilotAccountError) {

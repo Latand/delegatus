@@ -1,13 +1,15 @@
 "use client";
 
-import { LoaderCircle, RotateCcw } from "lucide-react";
+import { ArrowUpRight, LoaderCircle, RotateCcw } from "lucide-react";
 import { useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 
 import { Select } from "@/components/ui/Select";
 import { useLocale } from "@/lib/i18n";
 import type { SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 
-import { seatTickAge, seatTickLocalTime, seatTickReading, type SeatTickReading } from "./seatTickView";
+import type { BoardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
+
+import { maintenanceReading, seatTickAge, seatTickLocalTime, seatTickReading, type SeatTickReading } from "./seatTickView";
 import type { SeatTickChange, SeatTickSettingsRead } from "./useSeatTickSettings";
 
 /*
@@ -19,7 +21,10 @@ import type { SeatTickChange, SeatTickSettingsRead } from "./useSeatTickSettings
  *   1. the head: the project, and the closed summary with its dot;
  *   2. CONFIGURED, editable, bound to the stored record;
  *   3. ACTUAL, read only, ages and honest unknowns;
- *   4. Details, closed — the board card, who set it, the monitor prompt.
+ *   4. BOARD MAINTENANCE (#2162), its own switch, interval, Save and run
+ *      record — a separate schedule on the same tick, so it has its own draft
+ *      and its Save sits beside its own fields;
+ *   5. Details, closed — the board card, who set it, the monitor prompt.
  *
  * Two things differ by surface and nothing else does. Control sizing: the
  * phone gives every hit target 44 px (mobile v2 §5), which the incumbent row
@@ -65,11 +70,17 @@ function draftOf(record: SeatTickSettingsAnswer | null): SeatTickDraft {
 /** The record the draft was adopted from. A new one means the record moved —
     a save landed, or another caller changed this project's tick — and the
     fields follow it. An optimistic overlay is NOT one of these, so a refused
-    save rolls the display back without emptying the field being corrected. */
+    save rolls the display back without emptying the field being corrected.
+
+    `updatedAt` is left out on purpose: the server moves it on EVERY write to
+    the project's settings, a maintenance-only one included, so keeping it here
+    would snap the tick's unsaved fields back to the stored values whenever
+    «Save maintenance» settles. Every field a tick save can change is already
+    in the signature (an expiry that is set again carries a new `until`). */
 function signatureOf(record: SeatTickSettingsAnswer | null): string {
   const settings = record?.settings;
   if (!settings) return "";
-  return [record?.project, settings.enabled, settings.wakeIntervalMinutes, settings.reason, settings.until, settings.updatedAt].join("");
+  return [record?.project, settings.enabled, settings.wakeIntervalMinutes, settings.reason, settings.until].join("");
 }
 
 /** Only what CHANGED, so a save touches the fields the operator touched and
@@ -187,7 +198,7 @@ export function SeatTickActions({ read, state, offDefault, surface }: {
   );
 }
 
-export function SeatTickBody({ project, projectName, read, state, surface, actions }: {
+export function SeatTickBody({ project, projectName, read, state, surface, actions, onOpenedCard }: {
   project: string;
   projectName: string;
   read: SeatTickSettingsRead;
@@ -196,6 +207,9 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
   /** Where this surface puts Save. Null on the phone, whose sheet footer
       renders the same node at the thumb. */
   actions: ReactNode;
+  /** Called after the maintenance card link opened a task: the popover closes
+      itself so it does not sit over the card it opened. */
+  onOpenedCard?: () => void;
 }) {
   const { t, locale } = useLocale();
   const now = Date.now();
@@ -315,7 +329,7 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
           <span className="text-caption leading-4 text-muted">{t("seatTick.reasonHint")}</span>
         </label>
 
-        {read.error ? (
+        {read.error && read.errorScope === "tick" ? (
           <p role="alert" data-seat-tick-error className="rounded-control border border-danger/40 bg-danger/10 px-2 py-1.5 text-ui leading-4 text-danger">
             {read.error}
           </p>
@@ -349,10 +363,197 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
         ) : null}
       </div>
 
+      {/* BOARD MAINTENANCE — its own schedule, draft and Save. */}
+      {record?.maintenance ? <SeatTickMaintenance record={record} maintenance={record.maintenance} read={read} now={now} locale={locale} phone={phone} onOpenedCard={onOpenedCard} /> : null}
+
       {/* DETAILS — the only place an id, a path or journal text may appear. */}
       {record ? <SeatTickDetails record={record} now={now} locale={locale} phone={phone} /> : null}
     </div>
   );
+}
+
+/** The maintenance timer's fields as the operator has them in hand. The
+    interval is the stored number as typed, so «3» is on screen when nothing was
+    ever set — the default is the value, not a placeholder to read around. */
+export interface MaintenanceDraft {
+  enabled: boolean;
+  hours: string;
+}
+
+function maintenanceDraftOf(maintenance: BoardMaintenanceAnswer | undefined): MaintenanceDraft {
+  return { enabled: maintenance?.enabled ?? false, hours: String(maintenance?.intervalHours ?? 3) };
+}
+
+/** Moves when the stored timer does. `updatedAt` moves on every write, so a
+    save the server clamped to the value already stored still resets the field
+    to what the record holds. */
+function maintenanceSignatureOf(record: SeatTickSettingsAnswer): string {
+  const m = record.maintenance;
+  return m ? [record.project, m.enabled, m.intervalHours, m.updatedAt].join("") : "";
+}
+
+function maintenanceChangeOf(draft: MaintenanceDraft, maintenance: BoardMaintenanceAnswer): NonNullable<SeatTickChange["maintenance"]> {
+  const current = maintenanceDraftOf(maintenance);
+  const change: NonNullable<SeatTickChange["maintenance"]> = {};
+  if (draft.enabled !== current.enabled) change.enabled = draft.enabled;
+  if (draft.hours.trim() !== current.hours) {
+    const raw = draft.hours.trim();
+    const parsed = Number(raw);
+    /* As for the tick's interval: empty is the default (`null`), a number goes
+       as a number, and anything else goes AS TYPED so the server names it
+       rather than a coerced NaN serialising to `null` and quietly restoring
+       the default. The server clamps 1..168 and says so; no copy of that rule
+       is kept here. */
+    change.intervalHours = raw === "" ? null : Number.isFinite(parsed) ? parsed : raw;
+  }
+  return change;
+}
+
+function SeatTickMaintenance({ record, maintenance, read, now, locale, phone, onOpenedCard }: {
+  record: SeatTickSettingsAnswer;
+  maintenance: BoardMaintenanceAnswer;
+  read: SeatTickSettingsRead;
+  now: number;
+  locale: string;
+  phone: boolean;
+  onOpenedCard?: (() => void) | undefined;
+}) {
+  const { t } = useLocale();
+  const [draft, setDraft] = useState<MaintenanceDraft>(() => maintenanceDraftOf(maintenance));
+  const [adopted, setAdopted] = useState(() => maintenanceSignatureOf(record));
+  const signature = maintenanceSignatureOf(record);
+  if (signature !== adopted) {
+    /* Render-phase adoption, as the tick's draft does it: the stored record
+       moved, so the fields follow it before the commit paints. */
+    setAdopted(signature);
+    setDraft(maintenanceDraftOf(maintenance));
+  }
+  const change = maintenanceChangeOf(draft, maintenance);
+  const dirty = Object.keys(change).length > 0;
+  const reading = maintenanceReading(maintenance, now, locale, t);
+  if (!reading) return null;
+
+  const control = phone
+    ? "h-11 rounded-control border border-border bg-card px-2.5 text-body text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+    : "h-7 rounded-control border border-border bg-card px-2 text-ui text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+  const button = phone
+    ? "inline-flex min-h-11 items-center justify-center gap-1.5 rounded-control px-3 text-body font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50"
+    : "inline-flex h-7 items-center justify-center gap-1.5 rounded-control px-3 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50";
+  const taskId = reading.cardTaskId;
+
+  return (
+    <div data-seat-tick-maintenance={reading.state} className="flex min-w-0 flex-col gap-2 border-t border-border pt-2.5">
+      <p className="text-label font-semibold uppercase tracking-wide text-muted">{t("seatTick.maintenance.head")}</p>
+      <p className="flex min-w-0 items-center gap-1.5 text-ui text-primary" data-seat-tick-maintenance-summary>
+        <SeatTickDot tone={reading.tone} />
+        <span className="min-w-0 break-words">{reading.summary}</span>
+      </p>
+
+      <div className={`flex min-w-0 items-center gap-2 ${phone ? "min-h-11" : "min-h-7"}`}>
+        <span className="min-w-0 flex-1 text-ui text-primary">{t("seatTick.maintenance.enabledLabel")}</span>
+        <button
+          type="button"
+          role="switch"
+          data-seat-tick-maintenance-enabled={String(draft.enabled)}
+          aria-checked={draft.enabled}
+          aria-label={t(draft.enabled ? "seatTick.maintenance.disableAria" : "seatTick.maintenance.enableAria")}
+          disabled={read.saving}
+          onClick={() => setDraft((previous) => ({ ...previous, enabled: !previous.enabled }))}
+          className={`relative ${phone ? "h-7 w-12" : "h-5 w-9"} shrink-0 rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 ${
+            draft.enabled ? "border-accent bg-accent" : "border-border bg-sunken"
+          }`}
+        >
+          <span
+            aria-hidden
+            className={`absolute top-0.5 ${phone ? "h-5 w-5" : "h-3.5 w-3.5"} rounded-full bg-card shadow-1 transition-all ${
+              draft.enabled ? (phone ? "left-6" : "left-[18px]") : "left-0.5"
+            }`}
+          />
+        </button>
+      </div>
+
+      {/* One row, label and field, where the tick's own interval stacks them:
+          the popover scrolls, and this group already sits below two others. */}
+      <label className={`flex min-w-0 items-center gap-2 ${phone ? "min-h-11" : "min-h-7"}`}>
+        <span className="min-w-0 flex-1 text-ui text-primary">{t("seatTick.maintenance.intervalLabel")}</span>
+        <input
+          type="number"
+          min={maintenance.minIntervalHours}
+          max={maintenance.maxIntervalHours}
+          step={1}
+          inputMode="numeric"
+          data-seat-tick-maintenance-interval
+          value={draft.hours}
+          disabled={read.saving}
+          placeholder={t("seatTick.maintenance.intervalPlaceholder", { hours: maintenance.defaultIntervalHours })}
+          onChange={(event) => setDraft((previous) => ({ ...previous, hours: event.target.value }))}
+          className={`${control} ${phone ? "w-24" : "w-20"} shrink-0 text-right tabular-nums disabled:opacity-50`}
+        />
+      </label>
+      <p className="-mt-1 text-caption leading-4 text-muted">
+        {t("seatTick.maintenance.intervalHint", { min: maintenance.minIntervalHours, max: maintenance.maxIntervalHours })}
+      </p>
+
+      {read.error && read.errorScope === "maintenance" ? (
+        <p role="alert" data-seat-tick-maintenance-error className="rounded-control border border-danger/40 bg-danger/10 px-2 py-1.5 text-ui leading-4 text-danger">
+          {read.error}
+        </p>
+      ) : null}
+
+      <div className="flex min-w-0">
+        <button
+          type="button"
+          data-seat-tick-maintenance-save
+          disabled={!dirty || read.saving}
+          onClick={() => {
+            if (!dirty || read.saving) return;
+            void read.save({ maintenance: change });
+          }}
+          className={`${button} ${phone ? "w-full" : ""} min-w-0 border border-brand bg-brand text-on-brand shadow-1 active:opacity-90`}
+        >
+          {read.saving ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
+          {/* Named for what it saves: on the phone the sheet's footer carries
+              the tick's own Save, and two bare «Save» buttons would not say
+              which one writes which. */}
+          <span className="truncate">{t(read.saving ? "seatTick.saving" : "seatTick.maintenance.save")}</span>
+        </button>
+      </div>
+
+      <div data-seat-tick-maintenance-rows className="flex min-w-0 flex-col gap-1 border-t border-border pt-2">
+        {reading.rows.map((entry) => (
+          <div key={entry.key} data-seat-tick-maintenance-row={entry.key} className={`flex min-w-0 items-baseline gap-2 ${phone ? "min-h-6" : ""}`}>
+            <span className="shrink-0 text-caption text-muted">{entry.label}</span>
+            <span className="min-w-0 flex-1 break-words text-right text-ui text-primary">{entry.value}</span>
+          </div>
+        ))}
+      </div>
+      {reading.warning ? (
+        <p role="status" data-seat-tick-maintenance-unreadable className="text-caption leading-4 text-warning">{reading.warning}</p>
+      ) : null}
+      {taskId ? (
+        <button
+          type="button"
+          data-seat-tick-maintenance-card
+          onClick={() => {
+            openMaintenanceCard(taskId);
+            onOpenedCard?.();
+          }}
+          className={`inline-flex ${phone ? "min-h-11" : "h-7"} items-center gap-1 self-start text-ui font-semibold text-accent underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}
+        >
+          <span className="truncate">{t("seatTick.maintenance.openCard")}</span>
+          <ArrowUpRight className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/** The board's own task-open path: the event the call cards and the report log
+    already send. It resolves the task by id among the project's tasks, so a
+    done card that is off the board opens like any other. On the phone a screen
+    pushed from a sheet takes the sheet's place. */
+function openMaintenanceCard(taskId: string): void {
+  window.dispatchEvent(new CustomEvent("llv:mcp-navigate", { detail: { kind: "task", id: taskId } }));
 }
 
 const ACTORS = {

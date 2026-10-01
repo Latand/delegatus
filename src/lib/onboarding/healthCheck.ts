@@ -775,6 +775,7 @@ export async function productionHealthCheckPorts(): Promise<HealthCheckPorts> {
       const record = await runSeatTickCheck(seat.project, {
         sources: {
           ...sources,
+          maintenanceRuns: () => [],
           seatFor: (project) => project === seat.project ? { active: scratchSeat, pending: null, history: [] } : { active: null, pending: null, history: [] },
           activeSeats: () => [seat.project],
         },

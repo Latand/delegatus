@@ -1,3 +1,4 @@
+import type { MaintenanceRun } from "@/lib/boardMaintenance/types";
 import type { LifecycleEventType, LifecycleState, LifecycleTurnState } from "@/lib/lifecycle/vocabulary";
 
 import type { EffectiveSeatTickSettings } from "./seatTickSettings";
@@ -200,6 +201,7 @@ export type SeatTickWakeReasonKind =
   /** A deployment the seat itself started with deploy_exact_sha reached a
       terminal phase (#2063). The seat ended its turn so the promotion could
       replace its host, and this is the wake that brings it back, once. */
+  | "maintenance-settled"
   | "deploy-settled"
   /** A lane's stage or a spawned child holds a tool permission request nobody
       has answered (#2215). Unattended ones are denied at once, so one standing
@@ -214,6 +216,7 @@ export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "interval",
   "child-terminal",
   "own-lane-settled",
+  "maintenance-settled",
   "deploy-settled",
   "permission-request",
 ];
@@ -253,7 +256,7 @@ export interface SeatTickItem {
       after the unstarted tasks while the record has not moved. */
   stallToken?: string;
   /** `provisioning` is the outcome of the seat's own create call (#1799). */
-  kind: "pipeline" | "task" | "event" | "signal" | "pull-request" | "child" | "provisioning" | "deploy" | "permission";
+  kind: "pipeline" | "task" | "event" | "signal" | "pull-request" | "child" | "provisioning" | "deploy" | "permission" | "maintenance";
   id: string;
   label: string;
   /** A settled child's readable transcript (#1881): the controller attaches
@@ -264,6 +267,7 @@ export interface SeatTickItem {
   finalMessage?: string;
   /** Only on a `deploy` line (#2063): the settled deployment as the ledger
       records it. `id` is its deployment id. */
+  maintenance?: { runId: string };
   deploy?: { deploymentId: string; phase: string; sha: string; error: string | null };
 }
 
@@ -838,6 +842,7 @@ export interface SeatTickWakeCommit {
   /** The settled deployments this wake announces (#2063), recorded by a
       landing and by nothing else, so a deploy whose wake never arrived is
       offered again. */
+  announcedMaintenance?: string[];
   announcedDeploys?: string[];
   /** The state tokens of every child line this wake carries (#1783 round two),
       recorded by a landing and by nothing else — a wake the layer never
@@ -967,6 +972,7 @@ export const SEAT_TICK_CHILDREN_SHOWN_LIMIT = 64;
 
 /** Settled deployment history has its own bounded announcement window. Lane
     announcements instead live for the lane's entire eligibility window. */
+export const SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT = 64;
 export const SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT = 64;
 
 /** Stall tokens one project's row remembers having reported to its seat. A
@@ -1154,6 +1160,7 @@ export interface SeatTickProjectState {
    * its reason has: announced once, it is never offered again. Absent reads as
    * empty.
    */
+  announcedMaintenance?: string[];
   announcedDeploys?: string[];
   /**
    * The revision of the monitor note the last landed wake carried to THIS
@@ -1259,6 +1266,7 @@ export interface SeatTickCheckInput {
   ownLanes: readonly SeatTickOwnLaneInput[];
   /** Deployments the seat started that settled and were not announced yet
       (#2063). Absent reads as none. */
+  settledMaintenance?: readonly MaintenanceRun[];
   settledDeploys?: readonly SeatTickDeployInput[];
   /** The seat's own standalone children (#1465), bounded and project-scoped,
       with already-harvested terminal ones removed. Empty when the seat spawned
