@@ -48,7 +48,7 @@ test("a recovered claim waits while wakes are off without dispatching or losing 
 test("card exists before spawn, with icon, colour, description and task binding in body", async () => {
   const h = harness(); await h.controller.launchIfDue(input());
   const run = h.run(), card = tasks().find(t => t.id === run.taskId)!;
-  expect(card).toMatchObject({ icon: "brush-cleaning", color: "slate" }); expect(card.text).toContain("Обслуговування дошки — 30.09 12:00"); expect(card.details).toStartWith("Delegatus board maintenance run");
+  expect(card).toMatchObject({ icon: "brush-cleaning", color: "slate" }); expect(card.text).toContain("30.09 12:00 · Обслуговування дошки"); expect(card.details).toStartWith("Delegatus board maintenance run");
   expect(h.bodies[0]).toMatchObject({ role: "maintainer", taskId: card.id, cwd: "/fixtures/repository", project: PROJECT, clientAttemptId: run.runId });
 });
 test("no account leaves one blocked visible card, success summarizes, hides and archives", async () => {

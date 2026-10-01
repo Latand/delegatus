@@ -182,16 +182,33 @@ export function seatTickSourceGapCardText(project: string, detail: string, ref: 
   );
 }
 
+/** A tick interval as the card's title words it: exact hours and days collapse,
+    anything else stays in minutes — the same rule the panel's chip follows. */
+function cardIntervalWord(locale: "en" | "uk", minutes: number): string {
+  const uk = locale === "uk";
+  if (minutes >= 2880 && minutes % 1440 === 0) return uk ? `кожні ${minutes / 1440} д` : `every ${minutes / 1440} d`;
+  if (minutes >= 120 && minutes % 60 === 0) return uk ? `кожні ${minutes / 60} год` : `every ${minutes / 60} h`;
+  return uk ? `кожні ${minutes} хв` : `every ${minutes} min`;
+}
+
 /**
  * The card for a project whose tick settings depart from the default.
  *
- * It has to answer three questions a human reading the board will ask in this
- * order: is this tick off or just slower, why, and who decided. The last one
- * is on the card because a seat may set another project's tick — which is
- * allowed — and the board is where that shows.
+ * Its first line is the setting itself («Tick: every 30 min until 09:24»), so a
+ * narrow column still shows the part that matters. Below it the card answers
+ * three questions a human reading the board will ask in this order: is this
+ * tick off or just slower, why, and who decided. The last one is on the card
+ * because a seat may set another project's tick — which is allowed — and the
+ * board is where that shows.
+ *
+ * Written in the operator's language. `detail` is the English clause the seat
+ * tick's wake and journal carry; the card composes its own words from the
+ * structured `schedule` instead, so the two languages cannot drift apart.
  */
 export function seatTickSettingsCardText(input: {
   project: string;
+  /** The English clause of the setting, quoted by the English body. The
+      Ukrainian body composes its own words from `schedule`. */
   detail: string;
   reason: string | null;
   until: string | null;
@@ -199,26 +216,70 @@ export function seatTickSettingsCardText(input: {
   /** When the setting was recorded. NOT when the check ran: a card stamped
       with the check's clock would be rewritten every five minutes. */
   updatedAt: string | null;
+  schedule: { enabled: boolean; wakeIntervalMinutes: number };
+  locale?: "en" | "uk";
+  timeZone?: string | undefined;
 }): string {
+  const locale = input.locale ?? "en";
+  const uk = locale === "uk";
+  const clock = (at: string, withDate: boolean): string => {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: input.timeZone,
+      ...(withDate ? { day: "2-digit", month: "2-digit" } : {}),
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).format(new Date(at));
+    return withDate ? parts.replace(",", "").replace(/(\d{2})\/(\d{2})/, "$1.$2") : parts;
+  };
+  const sameDay = (a: string, b: string): boolean => {
+    const day = (value: string) => new Intl.DateTimeFormat("en-CA", { timeZone: input.timeZone }).format(new Date(value));
+    return day(a) === day(b);
+  };
+  const validUntil = input.until && !Number.isNaN(Date.parse(input.until)) ? input.until : null;
+  /* The date is left out of the title when the setting lapses on the day it
+     was recorded, which is the case the title is short for. */
+  const titleUntil = validUntil
+    ? clock(validUntil, !(input.updatedAt && !Number.isNaN(Date.parse(input.updatedAt)) && sameDay(validUntil, input.updatedAt)))
+    : null;
+  const schedule = input.schedule.enabled
+    ? cardIntervalWord(locale, input.schedule.wakeIntervalMinutes)
+    : uk ? "вимкнено" : "off";
+  const title = uk
+    ? `Тікер: ${schedule}${titleUntil ? ` до ${titleUntil}` : ""}`
+    : `Tick: ${schedule}${titleUntil ? ` until ${titleUntil}` : ""}`;
+  const actor = (kind: string): string => uk
+    ? kind === "manager" ? "призначений оркестратор" : kind === "gateway" ? "власна сесія оператора" : kind === "agent" ? "сесія агента" : "виклик, якого ніщо не ідентифікувало"
+    : kind === "manager" ? "the designated seat" : kind === "gateway" ? "the operator's own session" : kind === "agent" ? "an agent session" : "a caller nothing identified";
   const foreign = input.setBy?.project && input.setBy.project !== input.project;
   const who = input.setBy
-    ? `Set by ${input.setBy.kind === "manager" ? "the designated seat" : input.setBy.kind === "gateway" ? "the operator's own session" : input.setBy.kind === "agent" ? "an agent session" : "a caller nothing identified"}${input.setBy.conversationId ? ` (${input.setBy.conversationId})` : ""}${foreign ? `, whose own project is ${input.setBy.project}` : ""}.`
-    : "Set by nobody the record names.";
-  return redactBounded(
-    [
-      "This project's seat tick is not on its default settings",
+    ? uk
+      ? `Змінив(ла): ${actor(input.setBy.kind)}${input.setBy.conversationId ? ` (${input.setBy.conversationId})` : ""}${foreign ? `, чий власний проєкт — ${input.setBy.project}` : ""}.`
+      : `Set by ${actor(input.setBy.kind)}${input.setBy.conversationId ? ` (${input.setBy.conversationId})` : ""}${foreign ? `, whose own project is ${input.setBy.project}` : ""}.`
+    : uk ? "Запис не називає, хто це змінив." : "Set by nobody the record names.";
+  const recorded = input.updatedAt && !Number.isNaN(Date.parse(input.updatedAt)) ? clock(input.updatedAt, true) : null;
+  const lines = uk
+    ? [
+      title,
       "",
-      `${input.detail}.`,
-      `Reason given: ${input.reason ?? "none recorded"}.`,
-      input.until
-        ? `It returns to the default at ${input.until.slice(0, 16).replace("T", " ")} UTC.`
-        : "It stands until someone changes it back.",
+      input.schedule.enabled
+        ? `Пробудження цього проєкту йдуть ${schedule}, а не за типовим розкладом.`
+        : "Тікер цього проєкту вимкнено: жодне пробудження не надійде, доки його не ввімкнуть знову.",
+      `Причина: ${input.reason ?? "не записана"}.`,
+      validUntil ? `Повернеться до типових налаштувань ${clock(validUntil, true)}.` : "Діє, доки хтось не поверне типові налаштування.",
       who,
-      `Project ${input.project}. Recorded ${input.updatedAt ? `${input.updatedAt.slice(0, 16).replace("T", " ")} UTC` : "at an unrecorded time"}.`,
-      "Change it with the seat tick settings tool; this card clears itself once the project is back on the defaults.",
+      `Проєкт ${input.project}. Записано ${recorded ?? "в невідомий час"}.`,
+      "Змінити можна в налаштуваннях тікера; ця картка зникне, щойно проєкт повернеться до типових налаштувань.",
+    ]
+    : [
+      title,
       "",
-      `${MONITOR_REF_PREFIX} ${SEAT_TICK_SETTINGS_REF}`,
-    ].join("\n"),
-    CARD_TEXT_LIMIT,
-  );
+      `${input.detail.charAt(0).toUpperCase()}${input.detail.slice(1)}.`,
+      `Reason given: ${input.reason ?? "none recorded"}.`,
+      validUntil ? `It returns to the default at ${clock(validUntil, true)}.` : "It stands until someone changes it back.",
+      who,
+      `Project ${input.project}. Recorded ${recorded ?? "at an unrecorded time"}.`,
+      "Change it in the seat tick settings; this card clears itself once the project is back on the defaults.",
+    ];
+  return redactBounded([...lines, "", `${MONITOR_REF_PREFIX} ${SEAT_TICK_SETTINGS_REF}`].join("\n"), CARD_TEXT_LIMIT);
 }

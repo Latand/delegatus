@@ -99,6 +99,12 @@ test("healthy: the face is the schedule, the dot is the state, and the line carr
   expect(reading.sentence).toBe("Enabled and checking; last check 3m ago.");
   expect(reading.blocker).toBeNull();
   expect(reading.offDefault).toBe(false);
+  /* The status block's wake line: the state once, then the last and the next
+     wake — no title, sentence, last-check row or "Blocker: none". */
+  expect(reading.status).toEqual({
+    headline: "Wakes every 60 min · last check 3m ago",
+    detail: "Last wake never · next at the next check",
+  });
 });
 
 test("a non-default interval changes the face and nothing about the dot", () => {
@@ -129,8 +135,9 @@ test("stale: a row with no check at all is stale rather than unknown, and no age
   const reading = read(answer({ state: state({ lastCheckAt: null }) }));
   expect(reading.state).toBe("stale");
   expect(reading.line).toBe("Tick: every 60 min · stale: no check recorded");
-  expect(reading.rows.find((row) => row.label === "Last check")?.value).toBe("unknown");
-  expect(reading.rows.find((row) => row.label === "Last wake delivered")?.value).toBe("never");
+  expect(reading.status.headline).toBe("Wakes every 60 min · stale: no check recorded");
+  /* Stale is explained once, in the detail line, with the cadence it missed. */
+  expect(reading.status.detail).toBe("Checks run every 5 min, so the tick itself may be down.");
 });
 
 test("blocked: the first thing holding the wake back is named, in the operator's order", () => {
@@ -143,6 +150,10 @@ test("blocked: the first thing holding the wake back is named, in the operator's
   expect(outstanding.state).toBe("blocked");
   expect(outstanding.tone).toBe("warn");
   expect(outstanding.line).toBe("Tick: every 60 min · blocked: unresolved wake since 2h ago (dispatch refused)");
+  /* The blocker is named once: the headline keeps the plain last check and the
+     detail line carries the blocker. */
+  expect(outstanding.status.headline).toBe("Wakes every 60 min · last check 3m ago");
+  expect(outstanding.status.detail).toBe("Next wake held: unresolved wake since 2h ago (dispatch refused)");
 
   const guard = read(answer({ state: state({ retryGuard: [{ kind: "stalled", wakes: 2 }] }) }));
   expect(guard.blocker).toBe("retry guard: stalled lane (2 wakes changed nothing)");
@@ -154,7 +165,7 @@ test("blocked: the first thing holding the wake back is named, in the operator's
   expect(migration.blocker).toContain("accounting import is blocked");
 });
 
-test("paused: the face says off, the dot is muted, and the actual rows still report what the row holds", () => {
+test("paused: the face says off, the dot is muted, and the status says so without a second sentence", () => {
   const reading = read(answer({
     settings: { ...answer().settings, enabled: false, reason: "nothing to do until Monday", updatedAt: "2026-09-18T10:00:00.000Z" },
     effective: { ...answer().effective, enabled: false, reason: "nothing to do until Monday", isDefault: false, configured: true, updatedAt: "2026-09-18T10:00:00.000Z" },
@@ -166,9 +177,9 @@ test("paused: the face says off, the dot is muted, and the actual rows still rep
   expect(reading.chip).toBe("off");
   expect(reading.line).toBe("Tick: off since 2h ago · last check 3m ago");
   expect(reading.sentence).toBe("Off since 2h ago. No wake is sent. Checks still run.");
-  expect(reading.rows.find((row) => row.label === "Last wake delivered")?.value).toBe("3h ago · interval");
-  expect(reading.rows.find((row) => row.label === "Last delivery")?.value).toBe("landed · 3h ago");
-  expect(reading.rows.find((row) => row.label === "Blocker")?.value).toBe("none");
+  expect(reading.status).toEqual({ headline: "Wakes off since 2h ago · last check 3m ago", detail: null });
+  /* The last delivery is a Details fact now. */
+  expect(reading.lastDelivery).toBe("landed · 3h ago");
 });
 
 test("paused and not checked: the pause is stated without claiming checks still run", () => {
@@ -187,6 +198,7 @@ test("paused and not checked: the pause is stated without claiming checks still 
   expect(stopped.sentence).toBe("Off since 2h ago. No wake is sent. The tick is not checking either: the last check was 30m ago, so nothing is refreshing this reading.");
   expect(stopped.sentence).not.toContain("Checks still run");
   expect(stopped.line).toBe("Tick: off since 2h ago · stale: last check 30m ago");
+  expect(stopped.status.detail).toBe("Checks run every 5 min, so the tick itself may be down.");
 
   /* Paused with the checks still running keeps the original reading. */
   const checked = read(answer({ ...off, state: state() }));
@@ -216,7 +228,11 @@ test("unknown: no row is a hollow dot and the word, with no age anywhere", () =>
   expect(reading.chip).toBe("hourly");
   expect(reading.line).toBe("Tick: every 60 min · state unknown");
   expect(reading.sentence).toBe("Actual state unknown: the tick has not recorded this project.");
-  for (const row of reading.rows) expect(row.value).toBe("unknown");
+  expect(reading.status).toEqual({
+    headline: "Wakes every 60 min · state unknown",
+    detail: "Actual state unknown: the tick has not recorded this project.",
+  });
+  expect(reading.lastDelivery).toBe("unknown");
 });
 
 test("unknown: an unreadable row says which store failed, and the settings still read", () => {
@@ -230,7 +246,7 @@ test("a settings read that never answered says so, and claims nothing about the 
   const failed = read(null, true);
   expect(failed.line).toBe("Tick: could not be read");
   expect(failed.tone).toBe("unknown");
-  expect(failed.rows).toEqual([]);
+  expect(failed.status).toEqual({ headline: "Wakes could not be read", detail: null });
   expect(read(null).line).toBe("Tick: reading…");
 });
 
@@ -238,39 +254,38 @@ test("a settings read that never answered says so, and claims nothing about the 
    recently delivering. The last DELIVERED wake beside when the next one is due
    is what makes that visible on the board instead of by asking the seat. */
 test("the next wake is read beside the last delivered one, and never invented (#1771)", () => {
-  const due = read(answer({ state: state({ lastWakeAt: "2026-09-18T11:30:00.000Z", lastWakeReasons: ["interval"] }) }));
-  expect(due.rows.find((row) => row.label === "Last wake delivered")?.value).toBe("30m ago · interval");
+  const detail = (value: SeatTickSettingsAnswer) => read(value).status.detail;
+  const due = answer({ state: state({ lastWakeAt: "2026-09-18T11:30:00.000Z", lastWakeReasons: ["interval"] }) });
   /* An hour after the last landing, on the hour's cadence. */
-  expect(due.rows.find((row) => row.label === "Next wake")?.value).toBe("in 30 min");
+  expect(detail(due)).toBe("Last wake 30m ago · interval · next in 30 min");
 
   /* The interval already spent: the next check is the answer, never an instant
      in the past dressed up as a schedule. */
-  const overdue = read(answer({ state: state({ lastWakeAt: "2026-09-18T09:00:00.000Z" }) }));
-  expect(overdue.rows.find((row) => row.label === "Next wake")?.value).toBe("at the next check");
+  expect(detail(answer({ state: state({ lastWakeAt: "2026-09-18T09:00:00.000Z" }) }))).toBe("Last wake 3h ago · next at the next check");
   /* A row that has never landed a wake is due at the next check too. */
-  expect(read(answer({ state: state() })).rows.find((row) => row.label === "Next wake")?.value).toBe("at the next check");
+  expect(detail(answer({ state: state() }))).toBe("Last wake never · next at the next check");
 
   /* A fence is not a schedule: while something holds the next wake back, the
-     row says so and the Blocker row beside it says what. */
-  const fenced = read(answer({
+     line says so and names what, once. */
+  const fenced = answer({
     state: state({ lastWakeAt: "2026-09-18T11:30:00.000Z", outstandingWake: { preparedAt: "2026-09-18T10:00:00.000Z", dispatch: "refused" } }),
-  }));
-  expect(fenced.rows.find((row) => row.label === "Next wake")?.value).toBe("held back while the blocker stands");
+  });
+  expect(detail(fenced)).toBe("Next wake held: unresolved wake since 2h ago (dispatch refused)");
 
   /* Off means nothing is due, and a project with no row says the word. */
-  const off = read(answer({
+  const off = answer({
     effective: { ...answer().effective, enabled: false },
     state: state({ lastWakeAt: "2026-09-18T11:30:00.000Z" }),
-  }));
-  expect(off.rows.find((row) => row.label === "Next wake")?.value).toBe("none while the tick is off");
-  expect(read(answer()).rows.find((row) => row.label === "Next wake")?.value).toBe("unknown");
+  });
+  expect(detail(off)).toBeNull();
+  expect(detail(answer())).toBe("Actual state unknown: the tick has not recorded this project.");
 
   /* A long cadence collapses into hours rather than counting minutes. */
-  const daily = read(answer({
+  const daily = answer({
     effective: { ...answer().effective, wakeIntervalMinutes: 1440 },
     state: state({ lastWakeAt: "2026-09-18T09:00:00.000Z" }),
-  }));
-  expect(daily.rows.find((row) => row.label === "Next wake")?.value).toBe("in 21 h");
+  });
+  expect(detail(daily)).toBe("Last wake 3h ago · next in 21 h");
 });
 
 test("both locales carry every wake reason", () => {
@@ -284,8 +299,6 @@ test("both locales carry every wake reason", () => {
  * The board maintenance timer's reading (#2162): the states the UI brief names,
  * each as the words, the tone and the card it would show.
  */
-
-const TIME = /\d{2}:\d{2}/;
 
 function maintenance(overrides: Partial<BoardMaintenanceAnswer> = {}): BoardMaintenanceAnswer {
   return { ...answer().maintenance, ...overrides };
@@ -308,12 +321,13 @@ test("maintenance: an answer with no timer block shows no group", () => {
   expect(maintenanceReading(null, NOW, "en", t)).toBeNull();
 });
 
-test("maintenance: off and never run says so, with no result row and no card", () => {
+test("maintenance: off says so on its status line, with no card and no clause about a next run", () => {
   const r = reading(maintenance());
   expect(r.state).toBe("off");
   expect(r.tone).toBe("muted");
-  expect(r.summary).toBe("Off");
-  expect(r.rows.map((row) => [row.key, row.value])).toEqual([["last", "never"], ["next", "none while maintenance is off"]]);
+  expect(r.status).toEqual({ headline: "Maintenance off", segments: [] });
+  expect(r.last).toEqual({ text: "never", links: [] });
+  expect(r.next).toBe("none while maintenance is off");
   expect(r.cardTaskId).toBeNull();
   expect(r.warning).toBeNull();
 });
@@ -322,25 +336,38 @@ test("maintenance: on and never run names the first run at the next check", () =
   const r = reading(maintenance({ enabled: true, intervalHours: 6, waitingOn: null, nextRunAt: "2026-09-18T12:05:00.000Z" }));
   expect(r.state).toBe("on");
   expect(r.tone).toBe("ok");
-  expect(r.summary).toBe("On · every 6 h");
-  expect(r.rows.find((row) => row.key === "next")?.value).toMatch(/^first run at the next check, about \d{2}:\d{2}$/);
+  expect(r.status.headline).toBe("Maintenance every 6 h · never run");
+  expect(r.status.segments).toEqual([{ kind: "text", text: expect.stringMatching(/^first run ≈ \d{2}:\d{2}$/) }]);
+  expect(r.next).toMatch(/^first run at the next check, about \d{2}:\d{2}$/);
 });
 
 test("maintenance: a live run reads as running, links its card and defers the next run", () => {
   const r = reading(maintenance({ enabled: true, waitingOn: "live-run", live: run({ state: "running", endedAt: null, taskId: "live-card" }), lastRun: run() }));
   expect(r.state).toBe("running");
-  expect(r.summary).toMatch(/^Running since \d{2}:\d{2}$/);
+  expect(r.status.headline).toMatch(/^Maintenance running since \d{2}:\d{2}$/);
+  expect(r.status.segments).toEqual([]);
   expect(r.cardTaskId).toBe("live-card");
-  expect(r.rows.find((row) => row.key === "next")?.value).toBe("after the current run ends");
+  expect(r.next).toBe("after the current run ends");
 });
 
-test("maintenance: a succeeded run shows time, counts, the attention count and its card", () => {
+test("maintenance: a succeeded run shows time, count, the need-you link to its card and the next run", () => {
   const r = reading(maintenance({ enabled: true, waitingOn: "interval", lastRun: run(), nextRunAt: "2026-09-18T12:10:00.000Z" }));
   expect(r.tone).toBe("ok");
-  expect(r.rows.find((row) => row.key === "last")?.value).toMatch(/^Done · \d{2}:\d{2}$/);
-  expect(r.rows.find((row) => row.key === "result")?.value).toBe("Tasks changed: 9 · for you: 3");
-  expect(r.rows.find((row) => row.key === "next")?.value).toMatch(/^about \d{2}:\d{2}$/);
+  expect(r.status.headline).toMatch(/^Maintenance every 3 h · done \d{2}:\d{2}$/);
+  expect(r.status.segments).toEqual([
+    { kind: "text", text: "9 changed" },
+    { kind: "card", text: "3 need you", taskId: "task-1" },
+    { kind: "text", text: expect.stringMatching(/^next ≈ \d{2}:\d{2}$/) },
+  ]);
+  expect(r.last.text).toMatch(/^Done \d{2}:\d{2} · 9 changed$/);
+  expect(r.last.links).toEqual([{ kind: "card", text: "3 need you", taskId: "task-1" }]);
+  expect(r.next).toMatch(/^about \d{2}:\d{2}$/);
   expect(r.cardTaskId).toBe("task-1");
+  /* One needs you, none needs you: the count is a plural and the link goes. */
+  expect(reading(maintenance({ enabled: true, lastRun: run({ attentionCount: 1 }) })).status.segments[1]).toMatchObject({ kind: "card", text: "1 needs you" });
+  const quiet = reading(maintenance({ enabled: true, lastRun: run({ attentionCount: 0 }) }));
+  expect(quiet.last.links).toEqual([]);
+  expect(quiet.status.segments).toContainEqual({ kind: "text", text: "nothing needs you" });
 });
 
 test("maintenance: a failed run is a warning with its reason by kind, never the engine's detail", () => {
@@ -350,35 +377,60 @@ test("maintenance: a failed run is a warning with its reason by kind, never the 
     nextRunAt: "2026-09-18T12:10:00.000Z",
   }));
   expect(r.tone).toBe("warn");
-  expect(r.rows.find((row) => row.key === "last")?.value).toMatch(/^Failed · \d{2}:\d{2}$/);
-  expect(r.rows.find((row) => row.key === "result")?.value).toBe("no Codex account is available for this project");
+  expect(r.status.headline).toMatch(/^Maintenance every 3 h · failed \d{2}:\d{2}$/);
+  expect(r.status.segments).toEqual([
+    { kind: "text", text: "no Codex account is available for this project" },
+    { kind: "accounts", text: "Accounts" },
+    { kind: "text", text: expect.stringMatching(/^retry ≈ \d{2}:\d{2}$/) },
+  ]);
+  expect(r.last.text).toMatch(/^Failed \d{2}:\d{2} · no Codex account is available for this project$/);
+  expect(r.last.links).toEqual([{ kind: "accounts", text: "Accounts" }]);
   expect(JSON.stringify(r)).not.toContain("/srv/engine");
+  /* Only a missing account has the Accounts remedy. */
+  const other = reading(maintenance({ enabled: true, lastRun: run({ state: "failed", failure: { kind: "host-died", detail: "" } }) }));
+  expect(other.last.links).toEqual([]);
   /* A kind this build does not know still reads as a failure, not as blank. */
   const odd = reading(maintenance({ enabled: true, lastRun: run({ state: "failed", failure: { kind: "from-the-future" as never, detail: "" } }) }));
-  expect(odd.rows.find((row) => row.key === "result")?.value).toBe("the run failed for a reason this panel does not know");
+  expect(odd.last.text).toContain("the run failed for a reason this panel does not know");
 });
 
 test("maintenance: a hold says why the next run waits", () => {
-  expect(reading(maintenance({ enabled: true, waitingOn: "deployment", nextRunAt: "2026-09-18T12:05:00.000Z" })).rows.find((row) => row.key === "next")?.value).toBe("held while a deployment runs");
-  expect(reading(maintenance({ enabled: true, waitingOn: "no-seat" })).rows.find((row) => row.key === "next")?.value).toBe("held: the project has no seat");
+  expect(reading(maintenance({ enabled: true, waitingOn: "deployment", nextRunAt: "2026-09-18T12:05:00.000Z" })).next).toBe("held while a deployment runs");
+  expect(reading(maintenance({ enabled: true, waitingOn: "no-seat" })).next).toBe("held: the project has no seat");
   /* No instant and nothing holding it: the checks themselves are off. */
-  expect(reading(maintenance({ enabled: true, waitingOn: null, nextRunAt: null })).rows.find((row) => row.key === "next")?.value).toBe("unknown: tick checks are off");
+  expect(reading(maintenance({ enabled: true, waitingOn: null, nextRunAt: null })).next).toBe("unknown: tick checks are off");
+});
+
+test("maintenance: wakes off pauses it, says so on both lines, and keeps the last result", () => {
+  const r = reading(maintenance({ enabled: true, waitingOn: "wakes-off", pauseReason: "paused while wakes are off", lastRun: run(), nextRunAt: null }));
+  expect(r.tone).toBe("muted");
+  expect(r.next).toBe("paused while wakes are off");
+  expect(r.status.segments).toContainEqual({ kind: "text", text: "paused while wakes are off" });
+  expect(r.last.text).toMatch(/^Done \d{2}:\d{2} · 9 changed$/);
+  /* A run that was already live carries the pause beside it. */
+  const live = reading(maintenance({ enabled: true, waitingOn: "live-run", pauseReason: "paused while wakes are off", live: run({ state: "running", endedAt: null }) }));
+  expect(live.status.segments).toEqual([{ kind: "text", text: "paused while wakes are off" }]);
 });
 
 test("maintenance: an unreadable run store warns and the setting still reads", () => {
   const r = reading(maintenance({ enabled: true, runsError: "store unreadable" }));
   expect(r.tone).toBe("warn");
   expect(r.warning).toContain("The setting still works");
-  expect(r.summary).toBe("On · every 3 h");
+  expect(r.status.headline).toBe("Maintenance every 3 h · never run");
 });
 
-test("maintenance: both locales carry every failure kind and the group's words", () => {
+test("maintenance: both locales carry every failure kind and the status words", () => {
   for (const key of Object.values(MAINTENANCE_FAILURES)) {
     expect(translate("en", key), `en ${key}`).not.toBe(key);
     expect(translate("uk", key), `uk ${key}`).not.toBe(key);
   }
   const uk = reading(maintenance({ enabled: true, lastRun: run() }), "uk");
-  expect(uk.summary).toBe("Увімкнено · кожні 3 год");
-  expect(uk.rows.find((row) => row.key === "result")?.value).toBe("Змінено задач: 9 · для вас: 3");
-  expect(uk.rows.find((row) => row.key === "last")?.value).toMatch(TIME);
+  expect(uk.status.headline).toMatch(/^Обслуговування кожні 3 год · готово \d{2}:\d{2}$/);
+  expect(uk.status.segments[0]).toEqual({ kind: "text", text: "змінено 9" });
+  expect(uk.status.segments[1]).toEqual({ kind: "card", text: "3 чекають на вас", taskId: "task-1" });
+  expect(reading(maintenance({ enabled: true, lastRun: run({ attentionCount: 1 }) }), "uk").status.segments[1]).toMatchObject({ text: "1 чекає на вас" });
+  expect(uk.last.text).toMatch(/^Готово \d{2}:\d{2} · змінено 9$/);
+  const failed = reading(maintenance({ enabled: true, lastRun: run({ state: "failed", failure: { kind: "no-account", detail: "" } }) }), "uk");
+  expect(failed.status.segments).toContainEqual({ kind: "accounts", text: "Акаунти" });
+  expect(failed.last.text).toMatch(/^Не вдалося \d{2}:\d{2} · /);
 });

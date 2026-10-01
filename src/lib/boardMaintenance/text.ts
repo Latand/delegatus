@@ -21,15 +21,20 @@ export function maintenanceCardDetails(run: MaintenanceRun): string {
 }
 export function maintenanceCardText(locale: "uk" | "en", run: MaintenanceRun, timeZone?: string): string {
   const time = (at: string) => new Intl.DateTimeFormat("en-GB", { timeZone, day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(at)).replace(",", "").replace(/(\d{2})\/(\d{2})/, "$1.$2");
-  const title = `${locale === "uk" ? "Обслуговування дошки" : "Board maintenance"} — ${time(run.claimedAt)}`;
+  /* The time leads: it is what tells two runs apart, and a narrow column cuts a
+     title from the right. */
+  const title = `${time(run.claimedAt)} · ${locale === "uk" ? "Обслуговування дошки" : "Board maintenance"}`;
   if (run.state === "failed") {
     const reasons: Record<MaintenanceFailureKind, string> = {
       "no-account": "немає доступного акаунта Codex для цього проєкту", "no-repository": "не знайдено теку репозиторію проєкту", "launch-refused": "Delegatus відмовив у запуску", "launch-failed": "агент не запустився", "host-died": "процес агента зупинився посеред роботи", "turn-error": "агент завершився з помилкою", "agent-fail": "агент не зміг завершити перевірку", "needs-decision": "потрібне рішення оператора", "timed-out": "агент не завершив роботу за 90 хвилин",
     };
+    const reasonsEn: Record<MaintenanceFailureKind, string> = {
+      "no-account": "no Codex account is available for this project", "no-repository": "the project's repository folder was not found", "launch-refused": "Delegatus refused the launch", "launch-failed": "the agent did not start", "host-died": "the agent's process stopped mid-run", "turn-error": "the agent ended with an error", "agent-fail": "the agent could not finish the review", "needs-decision": "a decision from the operator is needed", "timed-out": "the agent did not finish within 90 minutes",
+    };
     const next = time(new Date(Date.parse(run.launchedAt ?? run.claimedAt) + run.intervalHours * 3_600_000).toISOString());
     const decision = run.failure!.kind === "needs-decision" ? `\n${run.failure!.detail}` : "";
     return locale === "uk" ? `${title}\nНе вдалося: ${reasons[run.failure!.kind]}.${decision}\nВстиг змінити ${run.counts.tasks} задач. Наступна спроба — не раніше ${next}.`
-      : `${title}\nFailed: ${run.failure!.kind}.${decision}\nChanged ${run.counts.tasks} tasks. Next attempt no earlier than ${next}.`;
+      : `${title}\nFailed: ${reasonsEn[run.failure!.kind]}.${decision}\nChanged ${run.counts.tasks} tasks. Next attempt no earlier than ${next}.`;
   }
   if (run.state === "succeeded") {
     const c = run.counts;

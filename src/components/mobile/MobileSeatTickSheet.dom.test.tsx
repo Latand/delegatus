@@ -45,6 +45,7 @@ Object.assign(globalThis, {
 
 const { MobileOrchestratorSheet } = await import("./MobileOrchestratorSheet");
 const { resetSeatTickSettingsCacheForTests } = await import("../orchestrator/useSeatTickSettings");
+const { resetMaintainerRoleCacheForTests } = await import("../orchestrator/useMaintainerRole");
 import type { OrchestratorPanelState } from "../orchestrator/seatState";
 
 const PROJECT = "atlas";
@@ -132,6 +133,18 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const method = init?.method ?? "GET";
   const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
   requests.push({ url, method, body });
+  if (url.startsWith("/api/roles")) {
+    /* The agent mapping the maintainer picker reads; the phone's tests do not
+       write it, so only the read is answered. */
+    return json({
+      revision: "rev-1",
+      launchChoices: [
+        { engine: "claude", models: [{ id: "opus", label: "Opus 5.5", shortLabel: "Opus 5.5", use: "review", efforts: ["low", "medium", "high", "xhigh", "max"] }] },
+        { engine: "codex", models: [{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol", shortLabel: "6.1-Sol", use: "review", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] }] },
+      ],
+      roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "codex", model: "gpt-6.1-sol", effort: "medium" } }],
+    });
+  }
   if (!url.startsWith("/api/monitor/seat-tick/settings")) return json({});
   if (method === "PUT") {
     const next = putAnswers.length > 1 ? putAnswers.shift()! : putAnswers[0]!;
@@ -169,6 +182,7 @@ function Host() {
 const roots = new Set<Root>();
 beforeEach(() => {
   resetSeatTickSettingsCacheForTests();
+  resetMaintainerRoleCacheForTests();
   requests.length = 0;
   getAnswer = record();
   putAnswers = [{ status: 200, body: record() }];
@@ -205,11 +219,12 @@ const body = () => dom.document.body as unknown as HTMLElement;
 const row = () => body().querySelector("[data-seat-tick-row]") as HTMLButtonElement | null;
 const tickSheet = () => body().querySelector('[data-mobile2-sheet="tick"]') as HTMLElement | null;
 const seatSheet = () => body().querySelector('[data-mobile2-sheet="seat"]') as HTMLElement | null;
-const save = () => body().querySelector("[data-seat-tick-save]") as HTMLButtonElement;
+const save = () => body().querySelector("[data-seat-tick-save]") as HTMLButtonElement | null;
+const press = (button: HTMLButtonElement | null) => flushSync(() => button!.click());
 const interval = () => body().querySelector("[data-seat-tick-interval]") as HTMLInputElement;
 const reason = () => body().querySelector("[data-seat-tick-reason]") as HTMLTextAreaElement;
 const summary = () => body().querySelector("[data-seat-tick-summary]")?.textContent ?? "";
-const puts = () => requests.filter((entry) => entry.method === "PUT");
+const puts = () => requests.filter((entry) => entry.method === "PUT" && entry.url.startsWith("/api/monitor/seat-tick/settings"));
 
 function type(element: HTMLInputElement | HTMLTextAreaElement, value: string): void {
   const key = Object.keys(element).find((name) => name.startsWith("__reactProps$"))!;
@@ -262,7 +277,7 @@ test("an enabled tick with no recent check reads as stale on the row while its f
   expect(row()!.textContent).toContain("every 60 min");
   expect(row()!.textContent).toContain("stale: last check 40m ago");
   await openTick(root);
-  expect(body().querySelector("[data-seat-tick-sentence]")?.textContent).toContain("Enabled, and stale");
+  expect(body().querySelector("[data-seat-tick-status-detail]")?.textContent).toContain("Checks run every 5 min");
   expect(body().querySelector("[data-seat-tick-enabled]")?.getAttribute("aria-checked")).toBe("true");
 });
 
@@ -275,11 +290,18 @@ test("the row opens the tick sheet, whose Save rides the footer, and whose × pu
   const sheet = tickSheet()!;
   expect(sheet.getAttribute("aria-modal")).toBe("true");
   expect(sheet.querySelector("h2")?.textContent).toBe("Seat tick · Atlas");
-  /* Save is in the footer, outside the scrolling body: that is what keeps it
-     above the keyboard when the interval field is focused. */
+  /* Nothing changed, so there is no Save and no footer. */
+  expect(save()).toBeNull();
+  /* The status comes first, then the form bound to the stored record. */
+  expect(sheet.querySelector("[data-mobile2-sheet-body] [data-seat-tick-status]")).not.toBeNull();
+  /* Changing a field brings Save into the footer, outside the scrolling body:
+     that is what keeps it above the keyboard when a field is focused. */
+  type(reason(), "still waiting on Monday");
   expect(sheet.querySelector("[data-mobile2-sheet-body] [data-seat-tick-save]")).toBeNull();
-  expect(save()).not.toBeNull();
-  expect(save().className).toContain("min-h-11");
+  expect(sheet.querySelector("[data-seat-tick-save]")).not.toBeNull();
+  expect(save()!.className).toContain("min-h-11");
+  type(reason(), "nothing to do until Monday");
+  expect(save()).toBeNull();
   /* The form is bound to the stored record. */
   expect(body().querySelector("[data-seat-tick-enabled]")?.getAttribute("aria-checked")).toBe("false");
   expect(reason().value).toBe("nothing to do until Monday");
@@ -300,13 +322,13 @@ test("a save on the phone adopts the record the route read back", async () => {
   stored.settings = { ...stored.settings, wakeIntervalMinutes: 15, reason: "watching a release", updatedAt: new Date().toISOString() };
   stored.effective = { ...stored.effective, wakeIntervalMinutes: 15, reason: "watching a release", isDefault: false, configured: true };
   putAnswers = [{ status: 200, body: stored }];
-  flushSync(() => save().click());
+  press(save());
   await settle(root);
 
   expect(puts()).toHaveLength(1);
   expect(puts()[0]!.body).toEqual({ project: PROJECT, wakeIntervalMinutes: 15, reason: "watching a release" });
   expect(summary()).toContain("every 15 min");
-  expect(save().disabled).toBe(true);
+  expect(save()).toBeNull();
   expect(body().querySelector("[data-seat-tick-error]")).toBeNull();
 });
 
@@ -319,7 +341,7 @@ test("a refused save on the phone rolls the display back and shows the module's 
     status: 400,
     body: { error: "a reason is required when the tick is disabled or its wake interval is changed; a quiet tick with no recorded reason is indistinguishable from a broken one" },
   }];
-  flushSync(() => save().click());
+  press(save());
   await settle(root);
 
   expect(puts()).toHaveLength(1);
@@ -332,80 +354,87 @@ test("a refused save on the phone rolls the display back and shows the module's 
 });
 
 /*
- * The board maintenance timer on the phone (#2162): the same group in the same
- * place, with 44 px targets, its own Save inside the body (the footer's Save
- * belongs to the tick), and a card link that hands the task to the board.
+ * The board maintenance group on the phone (#2162): the same group in the same
+ * place, with 44 px targets. The footer's one Save carries it together with
+ * the tick, and a link on «N need you» hands the card to the board.
  */
 
 const mGroup = () => body().querySelector("[data-seat-tick-maintenance]") as HTMLElement | null;
 const mSwitch = () => body().querySelector("[data-seat-tick-maintenance-enabled]") as HTMLButtonElement;
-const mInterval = () => body().querySelector("[data-seat-tick-maintenance-interval]") as HTMLInputElement;
-const mSave = () => body().querySelector("[data-seat-tick-maintenance-save]") as HTMLButtonElement;
+const mInterval = () => body().querySelector("[data-seat-tick-maintenance-interval]") as HTMLInputElement | null;
 
-test("the tick sheet carries the maintenance group with phone-sized targets and its own Save in the body", async () => {
+test("the tick sheet carries the maintenance group with phone-sized targets and no Save of its own", async () => {
   const root = await mount();
   await openTick(root);
   const sheet = tickSheet()!;
   expect(sheet.querySelector("[data-mobile2-sheet-body] [data-seat-tick-maintenance]")).not.toBeNull();
-  expect(sheet.querySelector("[data-mobile2-sheet-body] [data-seat-tick-maintenance-save]")).not.toBeNull();
-  /* The footer's Save is still the tick's alone. */
-  expect(sheet.querySelector("[data-mobile2-sheet-body] [data-seat-tick-save]")).toBeNull();
-  expect(mInterval().className).toContain("h-11");
-  expect(mSave().className).toContain("min-h-11");
+  /* One Save for the panel: there is no second one in the group. */
+  expect(sheet.querySelector("[data-seat-tick-maintenance-save]")).toBeNull();
   expect(mSwitch().className).toContain("h-7 w-12");
-  expect(mInterval().value).toBe("3");
+  expect(mInterval()).toBeNull();
+  press(mSwitch());
+  expect(mInterval()!.className).toContain("h-11");
+  expect(mInterval()!.value).toBe("3");
   expect(mGroup()!.getAttribute("data-seat-tick-maintenance")).toBe("off");
+  /* The agent picker's controls are phone-sized too. */
+  const model = body().querySelector("[data-seat-tick-agent-model]") as HTMLSelectElement;
+  expect(model.className).toContain("h-11");
+  expect(model.value).toBe("gpt-6.1-sol");
 });
 
-test("a maintenance save on the phone sends only the maintenance change and leaves the footer Save idle", async () => {
+test("a save on the phone carries maintenance in the footer Save, in one request with the tick", async () => {
   const root = await mount();
   await openTick(root);
-  flushSync(() => mSwitch().click());
-  type(mInterval(), "2");
-  expect(save().disabled).toBe(true);
+  press(mSwitch());
+  type(mInterval()!, "2");
+  expect(save()).not.toBeNull();
   const stored = record({ changed: true });
   stored.maintenance = { ...stored.maintenance, enabled: true, intervalHours: 2, updatedAt: new Date().toISOString(), waitingOn: null, nextRunAt: new Date(Date.now() + 300_000).toISOString() };
   putAnswers = [{ status: 200, body: stored }];
-  flushSync(() => mSave().click());
+  press(save());
   await settle(root);
 
   expect(puts()).toHaveLength(1);
   expect(puts()[0]!.body).toEqual({ project: PROJECT, maintenance: { enabled: true, intervalHours: 2 } });
   expect(mGroup()!.getAttribute("data-seat-tick-maintenance")).toBe("on");
-  expect(body().querySelector("[data-seat-tick-maintenance-summary]")?.textContent).toBe("On · every 2 h");
-  expect(mSave().disabled).toBe(true);
+  expect(body().querySelector("[data-seat-tick-maintenance-summary]")?.textContent).toBe("Maintenance every 2 h · never run");
+  expect(save()).toBeNull();
 });
 
-test("a refused maintenance save on the phone shows the module's words inside the group", async () => {
+test("a refused save on the phone shows the module's words beside the Save, in the footer", async () => {
   const root = await mount();
   await openTick(root);
-  type(mInterval(), "9");
+  press(mSwitch());
+  type(mInterval()!, "9");
   putAnswers = [{ status: 400, body: { error: "maintenance must be an object" } }];
-  flushSync(() => mSave().click());
+  press(save());
   await settle(root);
-  expect(mGroup()!.querySelector("[data-seat-tick-maintenance-error]")?.textContent).toBe("maintenance must be an object");
-  expect(body().querySelector("[data-seat-tick-error]")).toBeNull();
-  expect(mInterval().value).toBe("9");
+  expect(tickSheet()!.querySelector("[data-seat-tick-error]")?.textContent).toBe("maintenance must be an object");
+  expect(mInterval()!.value).toBe("9");
+  expect(save()).not.toBeNull();
 });
 
-test("the last run's card opens through the board's own task-open event", async () => {
+test("N need you opens the last run's card through the board's own task-open event, from the status line", async () => {
   getAnswer = record();
   getAnswer.maintenance = {
     ...getAnswer.maintenance, enabled: true, waitingOn: "interval", nextRunAt: new Date(Date.now() + 3_600_000).toISOString(),
     lastRun: {
       runId: "run-1", taskId: "hidden-done-card", conversationId: null, state: "succeeded",
       claimedAt: ago(120), launchedAt: ago(119), endedAt: ago(105), failure: null,
-      counts: { writes: 3, tasks: 2, status: 1, closed: 1, created: 0, text: 1, details: 0, looks: 0 }, attentionCount: 0,
+      counts: { writes: 3, tasks: 2, status: 1, closed: 1, created: 0, text: 1, details: 0, looks: 0 }, attentionCount: 2,
     },
   };
   const root = await mount();
   await openTick(root);
-  expect(mGroup()!.textContent).toContain("Tasks changed: 2 · for you: 0");
+  expect(mGroup()!.textContent).toContain("Done");
+  const link = body().querySelector("[data-seat-tick-status] [data-seat-tick-status-link=\"card\"]") as HTMLButtonElement;
+  expect(link.textContent).toBe("2 need you");
+  expect(link.className).toContain("min-h-11");
   const navigated: Array<{ kind?: string; id?: string }> = [];
   const listener = (event: Event) => navigated.push((event as CustomEvent).detail);
   dom.window.addEventListener("llv:mcp-navigate", listener as never);
   try {
-    flushSync(() => (mGroup()!.querySelector("[data-seat-tick-maintenance-card]") as HTMLButtonElement).click());
+    press(link);
   } finally {
     dom.window.removeEventListener("llv:mcp-navigate", listener as never);
   }

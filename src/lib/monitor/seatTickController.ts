@@ -6,6 +6,7 @@ import { yieldToRuntime } from "@/lib/cooperative";
 import { SeatTickAccounting } from "./seatTickAccounting";
 
 import { statePath } from "@/lib/configDir";
+import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
 import { activeRestartGate } from "@/lib/selfUpdate/restartGate";
 import { deliverConversationMessage, type DeliveryOutcome } from "@/lib/delivery";
 import { canonicalOrchestratorProject, type StillbornSeatRollback } from "@/lib/orchestrator/seats";
@@ -251,6 +252,9 @@ function cardText(project: string, card: SeatTickCard, at: string, existing?: Bo
       until: card.settings?.until ?? null,
       setBy: card.settings?.setBy ?? null,
       updatedAt: card.settings?.updatedAt ?? null,
+      schedule: { enabled: card.settings?.enabled ?? true, wakeIntervalMinutes: Math.round((card.settings?.wakeIntervalMs ?? SEAT_TICK_WAKE_INTERVAL_MS) / 60_000) },
+      locale: operatorLocale() ?? "uk",
+      timeZone: operatorTimeZone() ?? undefined,
     });
   }
   return seatTickRetryGuardCardText(project, card.detail, card.ref, at);

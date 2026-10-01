@@ -105,3 +105,39 @@ in both directions, including the expired historical assignment and a verified
 live idle owner. Additional cases cover path-only assignments, unknown evidence,
 the wake pause, claim recovery, HTTP/MCP parity, seat history hides, and every
 offered maintainer model/effort choice.
+
+## The panel (part B)
+
+The popover and the phone sheet share one body (`SeatTickBody.tsx`), in this
+order: the status block, the wakes group, the maintenance group, one Save, and
+Details.
+
+- **Status first.** One line for the wakes (state, schedule, last check; under
+  it the last and next wake, the one blocker, or the clause that explains a
+  stale reading) and one for maintenance (state, schedule, last result,
+  `N need you ↗` opening the run's card, next run). It is read from
+  `seatTickView.ts`; nothing in the panel repeats a fact the status states.
+- **Fields follow the draft.** The wake interval is shown only while the wake
+  switch is on, and Until and Reason only when the draft leaves the defaults.
+  The maintenance interval is shown only while maintenance is on.
+- **One Save.** It exists only while something differs from what is stored. The
+  tick and maintenance fields go in one `PUT /api/monitor/seat-tick/settings`;
+  a changed maintainer runtime goes in one `PUT /api/roles`. The two stores are
+  two writes: each lands or is refused on its own, a write that lands leaves
+  the draft, and a refusal is shown next to Save (the agent's beside the
+  picker). A stale `expectedRevision` (409) drops the picked runtime and shows
+  the current one. Restore tick defaults saves at once and leaves the other
+  drafts alone.
+- **Maintainer picker.** Engine, model and effort of the `maintainer` row, from
+  `launchChoices`; picking an engine or a model moves the others to a
+  combination that catalogue offers. The summary line carries the current
+  value. Settings → agent mapping edits the same row.
+- **Board cards.** The tick notice is written in the operator's language
+  (`operatorLocale`, Ukrainian when none is recorded), its first line is the
+  setting (`Tick: every 30 min until 09:24`), and its button asks the project's
+  chip for the panel (`openSeatTick.ts`). A maintenance run card leads with its
+  time (`01.10 05:29 · Board maintenance`), and a failed run's English text is
+  a sentence.
+
+The phone's task screen has no button for the notice: on the phone the panel is
+reached from the seat sheet's tick row.

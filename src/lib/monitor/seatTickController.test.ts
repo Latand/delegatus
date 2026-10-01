@@ -494,7 +494,7 @@ test("a project whose tick is off is checked, journaled and never woken (#1275)"
     ref: "seat-tick-settings",
     kind: "tick-settings",
     state: "open",
-    settings: { reason: offSettings().reason, until: null, setBy: offSettings().setBy, updatedAt: "2026-08-28T11:00:00.000Z" },
+    settings: { enabled: false, wakeIntervalMs: 60 * 60_000, reason: offSettings().reason, until: null, setBy: offSettings().setBy, updatedAt: "2026-08-28T11:00:00.000Z" },
     detail: "ticking is off for this project: no wake will be sent until it is turned back on",
   }]);
 });
@@ -541,7 +541,9 @@ test("the board card for a quiet tick is written, kept in step, and closed when 
   await runSeatTickCheck(project, { ...off.deps, ensureCard: undefined });
   const raised = readCards();
   expect(raised).toHaveLength(1);
-  expect(raised[0]!.text).toContain("This project's seat tick is not on its default settings");
+  /* The card's first line is the setting; this sandbox records no operator
+     language, so it is the default Ukrainian. */
+  expect(raised[0]!.text.split("\n")[0]).toBe("Тікер: вимкнено");
   expect(raised[0]!.text).toContain("the only open lane is a draft nothing can discharge");
   expect(raised[0]!.status).not.toBe("done");
 
@@ -623,7 +625,7 @@ test("a card is written to the state dir the tick is pointed at now, not the one
   const { loadTasks } = await import("@/lib/tasks/store");
   const cards = loadTasks(path.join(moved, "tasks.json")).filter((task) => task.project === project);
   expect(cards).toHaveLength(1);
-  expect(cards[0]!.text).toContain("This project's seat tick is not on its default settings");
+  expect(cards[0]!.text.split("\n")[0]).toBe("Тікер: вимкнено");
 });
 
 test("a wake is delivered by durable conversation id, with an idempotent client message id", async () => {

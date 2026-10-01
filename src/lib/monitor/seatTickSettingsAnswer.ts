@@ -1,4 +1,5 @@
 import { boardMaintenanceAnswer, type BoardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
+import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
 import { seatTickSettingsCardText } from "./cards";
 import { readSeatTickRecords, SEAT_TICK_RUN_HISTORY } from "./journalStore";
 import { SEAT_TICK_WAKE_INTERVAL_MS, seatTickPolicy, seatTickSettingsCardDetail } from "./seatTick";
@@ -275,6 +276,9 @@ export function seatTickSettingsAnswer(
         until: effective.until,
         setBy: effective.setBy,
         updatedAt: effective.updatedAt,
+        schedule: { enabled: effective.enabled, wakeIntervalMinutes: Math.round(effective.wakeIntervalMs / 60_000) },
+        locale: operatorLocale() ?? "uk",
+        timeZone: operatorTimeZone() ?? undefined,
       })
       : null,
     policy: {

@@ -255,7 +255,7 @@ test("a seat changing ANOTHER project's tick carries its own project, so the boa
     project: OTHER_PROJECT,
     seatEpoch: null,
   });
-  expect(body.cardText).toContain(`whose own project is ${OTHER_PROJECT}`);
+  expect(body.cardText).toContain(`чий власний проєкт — ${OTHER_PROJECT}`);
 });
 
 test("an identified caller that holds no seat and owns no project names none, rather than inventing one", async () => {
@@ -266,7 +266,7 @@ test("an identified caller that holds no seat and owns no project names none, ra
     { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY },
   )).json() as SeatTickSettingsAnswer;
   expect(body.actor).toEqual({ kind: "agent", conversationId: OTHER_CONVERSATION, project: null, seatEpoch: null });
-  expect(body.cardText).toContain("Set by an agent session");
+  expect(body.cardText).toContain("Змінив(ла): сесія агента");
   expect(body.cardText).not.toContain("whose own project is");
 });
 
@@ -394,8 +394,10 @@ test("the answer agrees with the seat_tick_settings tool over the same record", 
   }
   expect(body.effective.monitorPrompt).toBe(tool.monitorPrompt);
   /* The card the board carries while this stands, in the card's own words. */
-  expect(body.cardText).toContain("This project's seat tick is not on its default settings");
-  expect(body.cardText).toContain("one every 240 minute(s)");
+  /* No operator language is recorded in this sandbox, so the card is in the
+     default Ukrainian, and its first line is the setting itself. */
+  expect(body.cardText?.split("\n")[0]).toBe("Тікер: кожні 4 год");
+  expect(body.cardText).toContain("Пробудження цього проєкту йдуть кожні 4 год");
   expect(body.cardText).toContain("slow it down over the weekend");
 });
 

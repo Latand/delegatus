@@ -24,6 +24,7 @@ import { TaskIcon } from "@/components/tasks/TaskIcon";
 import { WorkLinkRow } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
 
+import { isSeatTickNotice, requestSeatTickPanel } from "@/components/orchestrator/openSeatTick";
 import { CardInlineText, withinEdit, type CardEditField } from "./CardInlineText";
 import { CardDrafts } from "./KanbanDrafts";
 import { engineWord } from "./identityMarks";
@@ -635,6 +636,19 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         </button>
       ) : card.description ? (
         <p className="desc"><span className="clamp">{card.description}</span></p>
+      ) : null}
+      {/* The standing tick notice opens the panel that holds the setting it
+          describes. */}
+      {!collapsed && card.task && isSeatTickNotice(card.task.text) ? (
+        <button
+          type="button"
+          className="btn quiet"
+          data-open-seat-tick={card.project}
+          onClick={() => requestSeatTickPanel(card.project)}
+        >
+          <span>{t("kanban.tickNotice.open")}</span>
+          <ChevronRight />
+        </button>
       ) : null}
       {collapsed ? null : <FinishWaitLine taskId={card.task?.id ?? null} pipelines={card.pipelines} />}
 
