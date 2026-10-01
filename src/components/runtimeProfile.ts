@@ -1,6 +1,6 @@
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { clampEffortToScale, effortScale } from "@/lib/agent/efforts";
-import { ENGINE_MODELS, claudeCatalogModelId } from "@/lib/agent/models";
+import { ENGINE_MODELS, claudeCatalogModelId, defaultModelFor } from "@/lib/agent/models";
 import type { FileEntry } from "@/lib/types";
 
 /** A concrete, fully-resolved runtime selection (model + effort + fast). Used by
@@ -51,13 +51,13 @@ export function observedModelId(file: FileEntry): string | null {
 }
 
 /** Engine defaults for a conversation: the observed model when it is a known
-    catalog entry, else the first catalog model; the observed effort when it is
+    catalog entry, else the shipped launch fallback; the observed effort when it is
     in that model's scale, else the scale's lowest tier. */
 export function defaults(file: FileEntry): RuntimeDraft {
   const engine = file.engine as "claude" | "codex" | "copilot";
   const models = ENGINE_MODELS[engine];
   const observed = observedModelId(file);
-  const model = models.some((item) => item.id === observed) || (engine === "copilot" && !!observed && /^[a-z0-9][a-z0-9.-]{0,127}$/.test(observed)) ? observed! : models[0]!.id;
+  const model = models.some((item) => item.id === observed) || (engine === "copilot" && !!observed && /^[a-z0-9][a-z0-9.-]{0,127}$/.test(observed)) ? observed! : defaultModelFor(engine);
   const efforts = effortScale(engine, model) ?? [];
   return { model, effort: efforts.includes(file.effort ?? "") ? file.effort! : efforts[0]!, fast: file.serviceTier ? !["default", "standard"].includes(file.serviceTier) : file.fast ?? false };
 }

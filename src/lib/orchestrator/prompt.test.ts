@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 
 import { expect, test } from "bun:test";
 
 import { FOCUS_TARGET_KINDS } from "@/lib/attention/targets";
 import { BRIDGE_REPORT_CLASSES } from "@/lib/bridge/types";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
+import { loadRoleDefinitionsOrDefaults, loadRoleRegistrySnapshot, saveRoleMapping } from "@/lib/roles/store";
 import type { RegistryRoleDefinitions, RoleDefinition } from "@/lib/roles/types";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { renderTaskColorRule, TASK_COLOR_RULE } from "@/lib/tasks/colorRule";
@@ -589,6 +591,37 @@ function roleTableLines(mandate: string): string[] {
   return mandate.slice(start).split("\n").filter((line) => line.startsWith("| ") && !line.startsWith("| role ") && !line.startsWith("| ---"));
 }
 
+test("successive mandate renders read saved rows, variants and revision from the current registry", () => {
+  const previous = process.env.LLV_STATE_DIR;
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mandate-roles-"));
+  process.env.LLV_STATE_DIR = state;
+  try {
+    const render = (mandate: string) => orchestratorMandateForDelivery(mandate, loadRoleDefinitionsOrDefaults());
+    const first = render("Bespoke mandate");
+    const firstRevision = loadRoleRegistrySnapshot().revision;
+    saveRoleMapping({
+      builder: { config: { engine: "codex", model: "gpt-6-sol", effort: "medium" }, variants: { frontend: { engine: "claude", model: "opus", effort: "high" } } },
+      reviewer: { variants: { trivial: { engine: "codex", model: "gpt-5.6-luna", effort: "medium" } } },
+    });
+    const nextRevision = loadRoleRegistrySnapshot().revision;
+    const second = render(first);
+    expect(nextRevision).not.toBe(firstRevision);
+    expect(second).toContain("| builder | codex | gpt-6-sol | medium |");
+    expect(second).toContain("domain=frontend: claude/opus/high");
+    expect(second).toContain("size=trivial: codex/gpt-5.6-luna/medium");
+    expect(second).toContain(`Registry revision: ${nextRevision}. Registry health: healthy.`);
+    expect(second).not.toContain(firstRevision);
+    expect(second).not.toContain("| builder | codex | gpt-6.1-sol | high |");
+    expect(second.split(ORCHESTRATOR_ROLE_TABLE_HEADING)).toHaveLength(2);
+    saveRoleMapping({ builder: { config: null, variants: { frontend: null } }, reviewer: { variants: { trivial: null } } });
+    expect(render(second)).toBe(first);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(state, { recursive: true, force: true });
+  }
+});
+
 test("the delivered mandate renders the role table from the registry it is handed", () => {
   const registry: RoleDefinition[] = ROLE_DEFAULTS.map((role) => role.id === "prod-auditor"
     ? { ...role, config: { engine: "claude", model: "sonnet", effort: "low" } }
@@ -598,8 +631,8 @@ test("the delivered mandate renders the role table from the registry it is hande
 
   expect(rows).toHaveLength(ROLE_DEFAULTS.length);
   expect(rows.find((row) => row.startsWith("| prod-auditor |"))).toStartWith("| prod-auditor | claude | sonnet | low | read-only |");
-  expect(rows.find((row) => row.startsWith("| builder |"))).toStartWith("| builder | codex | gpt-6-astra | medium | read-write |");
-  expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toContain("| prod-auditor | codex | gpt-6-astra | high | read-only |");
+  expect(rows.find((row) => row.startsWith("| builder |"))).toStartWith("| builder | codex | gpt-6.1-sol | high | read-write |");
+  expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toContain("| prod-auditor | codex | gpt-6.1-sol | xhigh | read-only |");
 });
 
 test("the role table carries the runtime guidance beside it", () => {
@@ -613,7 +646,7 @@ test("the role table carries the runtime guidance beside it", () => {
   /* The standing model rules (model landscape 2026-09) ride in the role rows;
      the builder's description names no model (agent-prompt-contract.md
      §2.10 B), since runtime advice belongs to the table's notes. */
-  expect(section).toContain("| builder | codex | gpt-6-astra | medium | read-write | Writes product code for a scoped brief.");
+  expect(section).toContain("| builder | codex | gpt-6.1-sol | high | read-write | Writes product code for a scoped brief.");
   expect(section).toContain("High per lane for risky backend diffs.");
   expect(section).toContain("claude/fable/high per lane for the largest cross-cutting designs");
 });

@@ -1,5 +1,6 @@
 import { AgentMappingTable } from "@/components/onboarding/AgentMappingTable";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
+import { ROLE_VARIANT_DEFAULTS } from "@/lib/roles/paramConfig";
 import { RuntimePill } from "@/components/RuntimePill";
 import { createRoot } from "react-dom/client";
 
@@ -2098,6 +2099,10 @@ const serverFetch = window.fetch.bind(window);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
+  if (SCENARIO === "role-defaults" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => {
+    const variants = ROLE_VARIANT_DEFAULTS[role.id as keyof typeof ROLE_VARIANT_DEFAULTS];
+    return { ...role, variants, promptPreview: role.promptScaffold, shipped: { config: role.config, variants } };
+  }) });
   if (SCENARIO === "service-tier" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, config: { ...role.config, ...(role.id === "reviewer" ? { serviceTier: "ultrafast" } : {}) }, shipped: { config: role.config } })) });
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
   /* The tick panel the notice card opens reads these two; the driver answers them. */
@@ -2592,7 +2597,7 @@ else localStorage.setItem("llvProject", PROJECT);
    requested Ukrainian frame back into an English render (#1743). */
 if (!localStorage.getItem("llv_lang")) localStorage.setItem("llv_lang", "en");
 if (!location.hash && !OVERVIEW_VIEW) location.hash = `#p=${PROJECT}`;
-createRoot(document.getElementById("root")!).render(SCENARIO === "service-tier" ? (
+createRoot(document.getElementById("root")!).render(SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>
