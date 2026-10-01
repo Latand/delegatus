@@ -96,7 +96,7 @@ The cursor stores compressed delta-varint file identities, so pruning an
 earlier hit or truncating unrelated messages cannot skip a surviving
 conversation whose score changes. Cursor decoding bounds decompression too.
 
-## Current review-fix measurements
+## Previous review-fix measurements
 
 On the existing 250,000-message invented fixture (five repetitions, hard
 12 GiB cap), all six-conversation pages pass the existing 6 KiB fixture gate.
@@ -135,8 +135,8 @@ The previous reported 2.6% strong-zero result used a one-word retry that
 changed the coverage denominator. It is invalid as evidence for the pinned
 8% acceptance threshold and is withdrawn.
 
-The replacement replay ran on 2026-10-02 against a separate scratch copy of
-the supplied consistent offline snapshot. Recorded calls were read from 479
+The latest phrase-frequency fix replay ran on 2026-10-02 against a separate
+scratch copy of the supplied consistent offline snapshot. Recorded calls were read from 479
 local transcripts, bounded by the snapshot's recorded file sizes; no files
 were unavailable. The seeded sample contains 1,000 of 2,477 distinct queries
 since 2026-08-27. Each query retains the historical time and issuing-transcript
@@ -145,32 +145,34 @@ exclusion fences. No query text or transcript content is published.
 | Result | Count | Rate |
 | --- | ---: | ---: |
 | Baseline zero | 613 | 61.3% |
-| Revised strong | 879 | 87.9% |
-| Revised weak only | 53 | 5.3% |
-| Revised zero | 68 | 6.8% |
-| Revised strong-zero (weak or zero) | 121 | 12.1% |
+| Revised strong | 883 | 88.3% |
+| Revised weak only | 52 | 5.2% |
+| Revised zero | 65 | 6.5% |
+| Revised strong-zero (weak or zero) | 117 | 11.7% |
 
-The unchanged 60% retained-unit coverage criterion gives **12.1% strong-zero,
+The unchanged 60% retained-unit coverage criterion gives **11.7% strong-zero,
 above the pinned 8% acceptance threshold**. This replay does not establish
 that acceptance gate. Among 300 recorded search/open pairs, opened-transcript
-top-6 count improves from 34 to 42 (11.3% to 14.0%), satisfying its baseline
+top-6 count improves from 34 to 43 (11.3% to 14.3%), satisfying its baseline
 comparison. Query lengths are 174 one-word, 211 two-word, 309 three-to-four-word,
 242 five-to-seven-word and 64 longer queries.
 
-Revised latency p50/p95/max is 5.33/16.95/36.26 ms; baseline p50/p95 is
-0.19/0.49 ms. First search takes 7.27 ms and its event-loop timer fires after
-7.34 ms; background readiness is observed after 59.19 ms. Peak RSS is
-177,088 KiB (173 MiB). Extraction, replay and measurement run under the hard
+Revised latency p50/p95/max is 5.60/17.01/38.54 ms; baseline p50/p95 is
+0.20/0.51 ms. On the already migrated private index, the first search takes
+13.38 ms and its event-loop timer fires after 13.45 ms. Peak RSS is
+186,076 KiB (182 MiB). Extraction, replay and measurement run under the hard
 8 GiB scope with swap disabled and the shared heavy-work lock. The cap is
 not reached; the earlier reported 125 GB OOM remains unattributed. The live
 index is never opened. Private scratch inputs are deleted after verification.
 
 ## Review-fix checks
 
-97 tests pass across seven exact-path files plus a separately enabled real
-standalone migration case, with independent private state roots. Eleven
-focused regressions fail against the preceding implementation and pass after
-the fix. Coverage includes denominator honesty, atomic phrases/paths,
+99 tests pass across seven exact-path files, including the enabled real
+standalone migration case against the existing standalone artifact, with
+independent private state roots. The worker and migration code are unchanged
+by the phrase-frequency fix. The earlier fix recorded eleven focused
+regressions against its preceding implementation; the new atomic-frequency
+regression also fails before its fix and passes afterward. Coverage includes denominator honesty, atomic phrases/paths,
 long-token and multibyte HTTP/MCP pages, copy grouping, pruning during paging,
 malformed relevance cursors, activity range-index use, background failure
 retry, Unicode tokenizer folding, legacy timestamp preservation and real
@@ -180,3 +182,46 @@ the merge base with commit checking on the final committed tree.
 
 No deployment is included. The fenced privacy-gate, board-maintenance and
 monitor areas and the repository instruction files remain untouched.
+
+## Atomic-unit frequency fix and remaining recall finding
+
+Relevance now measures an atomic phrase's document frequency with its complete
+FTS MATCH expression. The minimum frequency of its individual tokens was an
+upper bound that incorrectly discarded rare phrases containing common words.
+The same rule covers quoted phrases, hyphenated terms and paths. An absent
+atomic phrase is explicitly ignored as one unit, following the existing
+absent-vocabulary rule; its individual tokens never become retrieval units.
+
+The invented regression has separate common-token filler messages and a rare
+complete phrase. It fails before the fix and passes after it: the complete
+conversation ranks first, the phrase remains matched, the partial hit reports
+it missing, and only the complete conversation is strong. A separate production
+regression keeps both retained units when only future or issuing-transcript
+messages complete a query; the historical partial result remains weak.
+
+The latest five-repetition 250,000-message benchmark under the hard 8 GiB cap
+passes the 300 ms common-pair and 6 KiB fixture page gates. Common-pair library
+and packaged MCP medians are both 137 ms; peak RSS is 510,472 KiB (499 MiB).
+Library, route, HTTP and packaged MCP were exercised; UI was unchanged.
+
+The P1 recall finding remains open. The phrase-frequency fix improves
+strong-zero from 121 to 117 of the same 1,000 seeded queries and opened top-6
+from 42 to 43 of the same 300 pairs. It does not pass the pinned 8% recall gate.
+No coverage threshold, project scope, historical time or issuing-transcript
+fence was relaxed, and ranking cannot change the corpus-wide strong count.
+
+Private aggregate diagnostics found 34 failed queries with no retained units
+(30 have only literal atomic/identifier/short-token candidates), 73 failures
+that become strong when both historical/issuing fences are removed, and nine
+that become strong unscoped. These groups overlap. A four-letter-prefix
+experiment with the current retained interpretation still had 89 strong-zero
+queries. That experiment is exploratory: it does not prove an impossibility
+bound for every permitted word form or change in common-unit filtering.
+Further recall work must establish a retrieval improvement within D1/D3 or
+return to design with these corpus constraints; the current fix does not
+claim the unmet acceptance criterion.
+
+A fresh read-only review of the full diff found no additional source defects;
+it retained the recall acceptance blocker. TypeScript, changed-file ESLint
+(zero errors, three existing warnings across the PR), and the privacy gate
+with commit checking pass. The merge rehearsal against current main is clean.

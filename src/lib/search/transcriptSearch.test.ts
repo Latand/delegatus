@@ -999,8 +999,45 @@ test("quoted phrases, hyphenated terms and paths stay atomic when no strong hit 
     expect(page.total).toBe(0);
     expect(page.strongTotal).toBe(0);
     expect(page.items).toEqual([]);
-    expect(page.interpretedAs?.units).toHaveLength(1);
+    expect(page.interpretedAs?.units).toEqual([]);
+    expect(page.interpretedAs?.ignored).toHaveLength(1);
   }
+});
+
+test("rare atomic phrases retain coverage when their individual tokens are common", async () => {
+  await rankedFixture([
+    ["complete", ["urgent incident diagnosis", "src/search.ts resolution", "zircon resolution"]],
+    ["partial", ["zircon unrelated answer"]],
+    ["separate", Array.from({ length: 200 }, (_, i) => `${i % 2 ? "urgent src ts" : "incident search"} separate topic ${i}`)],
+  ]);
+  for (const [query, label] of [['"urgent incident" zircon', "urgent incident"], ["urgent-incident zircon", "urgent incident"], ["src/search.ts zircon", "src search ts"]]) {
+    const page = searchTranscripts({ query, order: "relevance" });
+    expect(page.interpretedAs?.units).toContain(label);
+    expect(page.interpretedAs?.ignored).not.toContain(label);
+    expect(page.items[0].transcriptPath).toEndWith("complete.jsonl");
+    expect(page.items[0].matched).toContain(label);
+    expect(page.items[0].missing).toEqual([]);
+    expect(page.items[1].missing).toEqual([label]);
+    expect(page.strongTotal).toBe(1);
+  }
+});
+
+test("relevance keeps the denominator when only future or issuing messages complete a query", async () => {
+  const sources = await rankedFixture([
+    ["past", ["zircon earlier answer"]],
+    ["issuer", ["zircon api_id issuing message"]],
+    ["future", [...Array.from({ length: 110 }, (_, i) => `mundane future padding ${i}`), "zircon api_id later answer"]],
+  ]);
+  const options = { query: "zircon api_id", order: "relevance" as const };
+  expect(searchTranscripts(options).strongTotal).toBe(2);
+  const page = searchTranscripts({ ...options, fence: {
+    timestamp: 200, excludeTranscript: sources.find((s) => s.path.endsWith("issuer.jsonl"))!.path,
+  } });
+  expect(page.interpretedAs?.units).toEqual(["zircon*", "api_id"]);
+  expect(page.strongTotal).toBe(0);
+  expect(page.total).toBe(1);
+  expect(page.items[0].transcriptPath).toEndWith("past.jsonl");
+  expect(page.items[0].missing).toEqual(["api_id"]);
 });
 
 test("relevance byte paging bounds long tokens and multibyte snippets without losing jump coordinates", async () => {

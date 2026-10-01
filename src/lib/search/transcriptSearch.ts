@@ -1079,8 +1079,12 @@ function relevanceSearch(
       weights = units.map(() => 1);
       ignored.push(...raw.filter((u) => !units.includes(u)).map((u) => u.label));
     } else {
+      // A phrase's words may each be common while the atomic phrase is rare.
+      const phraseFrequency = db.query<{ n: number }, [string]>(
+        "SELECT COUNT(*) AS n FROM transcript_messages_fts WHERE transcript_messages_fts MATCH ?",
+      );
       const counts = candidates.map((u) => Math.min(stats.messagesIndexed,
-        u.phrase ? Math.min(...u.terms.map((t) => frequency(t.term, false)))
+        u.phrase ? phraseFrequency.get(u.expression)!.n
           : u.terms.reduce((n, t) => n + frequency(t.term, t.prefix), 0)));
       const indexed = candidates.map((_, i) => i).filter((i) => counts[i] > 0);
       let kept = indexed.filter((i) => counts[i] <= stats.messagesIndexed * 0.05);
