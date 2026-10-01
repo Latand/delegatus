@@ -53,6 +53,10 @@ test("only a confirmed retired seat card can be hidden as done history", () => {
   const named = { ...task, text: "Previous orchestrator", origin: { kind: "launch" as const, key: "old-launch", refinement: "titled" as const } };
   expect(retiredSeatTask(named, snapshot, free, revoked)).toBe(true);
   expect(retiredSeatTask({ ...named, origin: { ...named.origin, key: "old-attempt" }, assignments: [{ ...task.assignments[0], clientAttemptId: "old-attempt" }] }, snapshot, free, revoked)).toBe(true);
+  snapshot.conversations.conversation_old_worker = { id: "conversation_old_worker", agentRole: "builder", generations: [], continuityPaths: [], abandonedContinuityPaths: [] } as never;
+  const withWorker = { ...named, assignments: [...named.assignments, { ...named.assignments[0], conversationId: "conversation_old_worker", launchId: "worker-launch" }] };
+  expect(retiredSeatTask(withWorker, snapshot, free, revoked)).toBe(true);
+  expect(retiredSeatTask({ ...withWorker, assignments: [...withWorker.assignments, { ...named.assignments[0], conversationId: "conversation_current-seat" }] }, snapshot, free, revoked)).toBe(false);
   expect(retiredSeatTask({ ...task, text: "Release the application" }, snapshot, free, revoked)).toBe(false);
   snapshot.conversations.conversation_legacy = { ...snapshot.conversations[id], id: "conversation_legacy", supersededBy: id } as never;
   snapshot.conversationAliases.conversation_legacy = id;

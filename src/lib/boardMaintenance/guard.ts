@@ -49,13 +49,16 @@ export function retiredSeatTask(
   const revoked = revokedFor(canonical);
   if (!revoked) return false;
   const placeholder = /^orchestrator\s*·/i.test(task.text.split("\n")[0]);
-  return task.assignments.every(a => {
+  const identities = task.assignments.map(a => {
     const pathId = a.path ? lookup.conversationForPath(a.path)?.id : null;
     const id = a.conversationId ? canonical(a.conversationId) : pathId ? canonical(pathId) : null;
-    if (!id || current.some(s => s.conversationId && canonical(s.conversationId) === id || a.path && s.path === a.path)) return false;
+    return { assignment: a, id };
+  });
+  if (identities.some(({ assignment: a, id }) => !id || current.some(s => s.conversationId && canonical(s.conversationId) === id || a.path && s.path === a.path))) return false;
+  return identities.some(({ assignment: a, id }) => {
     const ownOrigin = task.origin && (task.origin.kind === "launch" || task.origin.kind === "conversation")
       && [a.clientAttemptId, a.launchId, a.conversationId, a.path].includes(task.origin.key);
-    return (placeholder || ownOrigin) && (revoked.has(id) || conversationAgentRole(snapshot, id) === "orchestrator");
+    return !!id && (placeholder || ownOrigin) && (revoked.has(id) || conversationAgentRole(snapshot, id) === "orchestrator");
   });
 }
 /** Input contains fresh work evidence, re-read at the task mutation boundary. */
