@@ -85,7 +85,10 @@ const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT || SYNCED;
    so the pill draws its structured face. */
 const SEAT_NOISE = SCENARIO === "seat-noise";
 const NOISE_CASE = new URLSearchParams(location.search).get("case") ?? "i";
-const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE;
+/* The first-message scenario: a new agent's or seat's first message from the first paint to the transcript. */
+const FIRST_MESSAGE = SCENARIO === "first-message";
+const FM_CASE = new URLSearchParams(location.search).get("case") ?? "p";
+const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE || FIRST_MESSAGE;
 /* Review round 2 of #1712: a conversation no card holds, whose reader takes the window. */
 const LOOSE = SCENARIO === "loose";
 /* #1765: one task carrying five pipelines — two running, three completed — so
@@ -141,7 +144,9 @@ const STAGE_CHAIN = SCENARIO === "stage-chain";
    seat in either. */
 const ORCH_FIRST = SCENARIO === "orchestrator-first";
 const ORCH_FIRST_OVERVIEW = SCENARIO === "orchestrator-first-overview";
-const NO_SEAT = ORCH_FIRST || ORCH_FIRST_OVERVIEW;
+/* The seat case opens as the create draft and leaves it when Confirm is pressed. */
+const FM_SEAT = FIRST_MESSAGE && FM_CASE === "s";
+const NO_SEAT = ORCH_FIRST || ORCH_FIRST_OVERVIEW || FM_SEAT;
 /* #2166 §3.8: the same project a moment after its seat was created, the seat
    live and idle over empty columns, on an install whose onboarding marker has
    never run the interface walk (`&install=existing` marks it an upgrade
@@ -326,7 +331,7 @@ function structuredSnapshot() {
       turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: "default",
       parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: searchVer2.path,
       capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1", pendingReconfigure: null,
-    }, ...(SEAT_NOISE ? [{
+    }, ...(SEAT_NOISE || FIRST_MESSAGE ? [{
       conversationId: orchestrator.conversationId, sessionKey: { engine: orchestrator.engine, sessionId: `${orchestrator.name}-session` }, hostKind: orchestrator.engine === "codex" ? "codex-app-server" : "claude-broker", host: "hosted",
       turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: "default",
       parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: orchestrator.path,
@@ -415,6 +420,38 @@ if (SEAT_NOISE) {
   else if (NOISE_CASE === "iv") seatOn("codex", "gpt-5.6-sol", "low", "iv-old");
   else if (NOISE_CASE === "v") seatOn("codex", "gpt-5.6-sol", "high", "v");
 }
+/* The first-message cases (p: a plain spawn's prompt, s: a seat's mandate with Confirm pressed, f: a failed launch).
+   The raw recovery envelope rides in `error` on every pending step on purpose: the window must not print it. The
+   window is the orchestrator's, whose LogFeed is the one every conversation renders. */
+const FM_PROMPT = "Fix the failing export test. The pinned task is in the card.";
+const FM_LAUNCH_ID = "launch-first-message";
+const FM_CONVERSATION_ID = "conversation_first_message";
+const fmText = () => (FM_SEAT ? SEAT_MANDATE : FM_PROMPT);
+const fm = { step: 0, confirmed: false, posts: [] as Array<Record<string, unknown>> };
+function fmApply() {
+  const launch = (over: Record<string, unknown>) => seatLaunch({
+    launchId: FM_LAUNCH_ID, conversationId: FM_CONVERSATION_ID, error: SEAT_ENVELOPE, prompt: fmText(), promptEcho: fmText(),
+    ...(FM_SEAT ? {} : { mandate: undefined }), ...over,
+  });
+  const window_ = (facts: Record<string, unknown>) => Object.assign(orchestrator, {
+    engine: "claude", fmt: "claude", root: "claude-projects", model: "opus", effort: "high", conversationId: FM_CONVERSATION_ID, generation: 1, spawnOrigin: "viewer", launch: undefined,
+    path: `spawn:${FM_LAUNCH_ID}`, name: `spawn:${FM_LAUNCH_ID}`, size: 0, activityReason: "structured_spawn_reconciling", spawn: facts,
+  });
+  /* The scanned row: the server's live-adoption signal is `launch`, the spawn placeholder is gone. */
+  const adopted = (facts: Record<string, unknown> | undefined) => Object.assign(orchestrator, {
+    path: "/repo/first-message.jsonl", name: "first-message.jsonl", size: 2_048, activityReason: undefined, spawn: undefined, launch: facts,
+  });
+  if (FM_CASE === "f") {
+    window_(launch({ state: "failed", initialMessage: "failed", retrySafe: true, error: "runtime host unavailable" }));
+    return;
+  }
+  const retired = { prompt: undefined, promptAt: undefined, promptImages: undefined, mandate: undefined };
+  if (fm.step === 0) window_(launch({}));
+  else if (fm.step === 1) window_(launch({ state: "recovered", initialMessage: "delivered", deliveredAt: Date.now() }));
+  else if (fm.step === 2) adopted(launch({ state: "recovered", initialMessage: "delivered", deliveredAt: Date.now(), ...retired }));
+  else adopted(undefined);
+}
+if (FIRST_MESSAGE && !FM_SEAT) fmApply();
 /* K4b: the merge task's implementer, and a spike closed on the board. */
 const mergeImpl = EDITING ? add(conversation("merge-impl", "Implementer: merge the queue adapter", { mtime: now - 26 * 60 * MIN })) : null;
 const oldSpike = EDITING ? add(conversation("old-spike", "Spike: a virtualized Done column", { mtime: now - 5 * 24 * 60 * MIN })) : null;
@@ -1690,6 +1727,10 @@ function transcriptOf(pathname: string): string {
     for (let step = 0; step < 24; step += 1) long.push(said((88 - step * 3) * MIN, `Step ${step + 1}: re-ran the rebuild against live traffic and checked the alias swap window.`));
     return `${long.join("\n")}\n`;
   }
+  if (FIRST_MESSAGE && file === orchestrator) {
+    if (String(file.path).startsWith("spawn:")) return "";
+    return `${[asked(60, fmText()), ...(fm.step >= 3 ? [said(20, "Looking at the export test.")] : [])].join("\n")}\n`;
+  }
   if (SEAT_NOISE && file === orchestrator) {
     if (file.spawn) return "";
     if (file.engine === "codex") {
@@ -1803,6 +1844,14 @@ const evidence = {
   storeSeatProfile() { writeProfile(orchestrator, { model: "gpt-5.6", effort: "low" }); },
   /* The runtime stream is silent here, so the rotation asks the bus for the snapshot that carries the new seat's session, as the panel's own refresh does. */
   rotateSeat() { seatOn("claude", "opus", "high", "iv-new"); return getRuntimeBus().refresh(); },
+  /* The first-message cases: move the same window Pending -> Delivered -> Transcript arrived -> Answered. */
+  advanceFirstMessage() {
+    fm.step += 1;
+    fmApply();
+    window.dispatchEvent(new Event("llv:files-changed"));
+    return fm.step;
+  },
+  firstMessagePosts: fm.posts,
   refuseNextTaskPatch: false,
   taskAnswerDelayMs: 400,
   /* When each task write reached the fixture and when it was answered. */
@@ -2151,7 +2200,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ? { files: [], projectCatalog: [], flows: [], pipelines: [], tasks: [] }
       : ORCH_WALK
       ? { files: seatOnly, projectCatalog: [{ project: PROJECT, conversations: 1, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
-      : ORCH_FIRST
+      : ORCH_FIRST || (FM_SEAT && !fm.confirmed)
       ? { files: [], projectCatalog: [{ project: PROJECT, conversations: 0, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
       : {
         files: shown,
@@ -2249,7 +2298,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     return json({ ok: true, ...asksYouFixtureSetting(ASKS_YOU_SETTING.enabled) });
   }
-  if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks: OVERVIEW_EMPTY || ORCH_FIRST || ORCH_WALK ? [] : tasks });
+  if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks: OVERVIEW_EMPTY || ORCH_FIRST || (FM_SEAT && !fm.confirmed) || ORCH_WALK ? [] : tasks });
   if (ORCH_WALK && url.pathname === "/api/onboarding") {
     const existing = params.get("install") === "existing";
     const stored = sessionStorage.getItem("evidence-walk");
@@ -2525,13 +2574,22 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({ chunks: Object.fromEntries(reqs.map((req) => {
       if (req.path === evidence.failLogsFor) return [req.id, { error: "transcript read failed in the evidence fixture" }];
       const data = transcriptOf(req.path);
-      const size = new TextEncoder().encode(data).length;
+      const bytes = new TextEncoder().encode(data);
+      const size = bytes.length;
+      /* The first-message window reads a transcript that grows: the route answers from the caller's offset, as the real one does. */
+      if (FIRST_MESSAGE && req.offset > 0 && req.offset < size) return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: size, size }];
       return [req.id, { data: req.offset >= size ? "" : data, start: 0, offset: size, size }];
     })) });
   }
   if (url.pathname === "/api/log") return json({ data: "", start: 0, offset: 0, size: 0 });
   if (url.pathname === "/api/conversations") return json({ items: files, total: files.length, nextCursor: null });
-  if (url.pathname === "/api/orchestrator/seat" && NO_SEAT) {
+  if (url.pathname === "/api/orchestrator/seat" && method === "POST" && FM_SEAT) {
+    fm.posts.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+    fm.confirmed = true;
+    fmApply();
+    return json({ ok: true, launched: true, transport: "structured", launchId: FM_LAUNCH_ID, conversationId: FM_CONVERSATION_ID, state: "path-pending", initialMessage: "queued", path: null });
+  }
+  if (url.pathname === "/api/orchestrator/seat" && NO_SEAT && !(FM_SEAT && fm.confirmed)) {
     evidence.seatReads += 1;
     const all = { conversationIds: [], paths: [], previous: { conversationIds: [], paths: [] } };
     if (url.searchParams.get("scope") === "all") return json({ all });
@@ -2556,14 +2614,16 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       } : {}),
     });
   }
-  if (SEAT_HEAD && url.pathname === "/api/orchestrator/seat/status") {
+  if ((SEAT_HEAD || (FM_SEAT && fm.confirmed)) && url.pathname === "/api/orchestrator/seat/status") {
     return json({
       project: PROJECT, designated: true, conversationId: orchestrator.conversationId, predecessorConversationId: null,
       engine: "claude", model: "claude-opus-4-5-1m", effort: "high", accountId: "primary", cwd: "/repo/atlas", transcriptPath: orchestrator.path,
       liveness: { lifecycle: "running", hostState: "alive", silentForMs: 1_000 },
       context: { tokens: 520_825, limit: 1_000_000, percent: 52, estimated: false, basis: "" },
       transcriptFacts: null,
-      rotation: { recommended: true, level: "strongly_recommend", reasons: ["context usage has reached the rotation threshold"], thresholdUnknown: false },
+      rotation: FM_SEAT
+        ? { recommended: false, level: "none", reasons: [], thresholdUnknown: false }
+        : { recommended: true, level: "strongly_recommend", reasons: ["context usage has reached the rotation threshold"], thresholdUnknown: false },
     });
   }
   /* The rail's footer, so the frames that fold it away (#1802) have something

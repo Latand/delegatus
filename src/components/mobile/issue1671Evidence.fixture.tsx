@@ -123,7 +123,11 @@ const SEAT_NOISE = new URLSearchParams(location.search).get("seatnoise");
    Codex conversation on a structured host that can inject. `noinject` serves the same session without the
    capability. The driver flips the turn and publishes receipts through `evidence`. */
 const CONTEXT_MODE = new URLSearchParams(location.search).get("context-mode");
-const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE !== null || CONTEXT_MODE !== null;
+/* `?firstmessage=<p|s|f>`: a new conversation's first message from the first paint to the transcript. p is a plain
+   spawn's prompt and f a failed launch (the running conversation, opened in the focus view); s is a seat created from
+   the sheet's draft with Confirm actually pressed (`&kanban=1&seatless=donly`). */
+const FIRST_MESSAGE = new URLSearchParams(location.search).get("firstmessage");
+const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE !== null || CONTEXT_MODE !== null || FIRST_MESSAGE !== null;
 const NEXT_ACCOUNT = new URLSearchParams(location.search).get("next") || "relief";
 
 /* With the deck asked for (#1795 below), the running conversation is the round
@@ -184,6 +188,56 @@ if (SEAT_NOISE !== null) {
   else if (SEAT_NOISE === "iii") { seatOn("claude", "opus", "high", ""); launchWindow({ state: "failed", initialMessage: "failed", retrySafe: true, recoveryStopped: true, error: "the host has not answered yet" }); }
   else if (SEAT_NOISE === "iv") seatOn("codex", "gpt-5.6-sol", "low", "iv-old");
   else if (SEAT_NOISE === "v") seatOn("codex", "gpt-5.6-sol", "high", "v");
+}
+/* The first-message cases. The raw recovery envelope rides in `error` on every pending step on purpose: the window
+   must not print it. */
+const FM_PROMPT = "Fix the failing export test. The pinned task is in the card.";
+const FM_LAUNCH_ID = "launch-first-message";
+const FM_SEAT = FIRST_MESSAGE === "s";
+const FM_CONVERSATION_ID = FM_SEAT ? "conversation_first_message" : "conversation_running";
+const FM_SEAT_PATH = "/repo/first-message.jsonl";
+const fmText = () => (FM_SEAT ? SEAT_MANDATE : FM_PROMPT);
+/* `&step=<n>` opens the page on that state: the phone's focus view re-resolves the conversation when its path
+   flips, so each state of the plain cases is a first paint of its own. */
+const fm = { step: Number(new URLSearchParams(location.search).get("step") ?? 0), confirmed: false, posts: [] as Array<Record<string, unknown>> };
+/** The window the first message lives in: the running conversation, or the seat the Confirm created. */
+let fmTarget: FileEntry | null = FIRST_MESSAGE !== null && !FM_SEAT ? files[0]! : null;
+function fmApply() {
+  const target = fmTarget as unknown as Record<string, unknown>;
+  const launch = (over: Record<string, unknown>) => ({
+    launchId: FM_LAUNCH_ID, clientAttemptId: null, accountId: null, conversationId: FM_CONVERSATION_ID, generation: 1,
+    state: "reconciling", initialMessage: "queued", retrySafe: false, error: SEAT_ENVELOPE,
+    admittedAt: (now - 90) * 1_000, promptAt: (now - 90) * 1_000, promptImages: 0, prompt: fmText(), promptEcho: fmText(),
+    ...(FM_SEAT ? { mandate: { kind: "version", version: 1 } } : {}), ...over,
+  });
+  const window_ = (facts: Record<string, unknown>) => Object.assign(target, {
+    engine: "claude", fmt: "claude", root: "claude-projects", model: "opus", effort: "high", conversationId: FM_CONVERSATION_ID,
+    generation: 1, spawnOrigin: "viewer", launch: undefined,
+    path: `spawn:${FM_LAUNCH_ID}`, name: `spawn:${FM_LAUNCH_ID}`, size: 0, activityReason: "structured_spawn_reconciling", spawn: facts,
+  });
+  /* The scanned row: the server's live-adoption signal is `launch`, the spawn placeholder is gone. */
+  const adopted = (facts: Record<string, unknown> | undefined) => Object.assign(target, {
+    path: FM_SEAT ? FM_SEAT_PATH : RUNNING_PATH, name: FM_SEAT ? "first-message.jsonl" : "running.jsonl", size: 2_048,
+    activityReason: undefined, spawn: undefined, launch: facts,
+  });
+  if (FIRST_MESSAGE === "f") {
+    window_(launch({ state: "failed", initialMessage: "failed", retrySafe: true, error: "runtime host unavailable" }));
+    return;
+  }
+  const retired = { prompt: undefined, promptAt: undefined, promptImages: undefined, mandate: undefined };
+  if (fm.step === 0) window_(launch({}));
+  else if (fm.step === 1) window_(launch({ state: "recovered", initialMessage: "delivered", deliveredAt: Date.now() }));
+  else if (fm.step === 2) adopted(launch({ state: "recovered", initialMessage: "delivered", deliveredAt: Date.now(), ...retired }));
+  else adopted(undefined);
+}
+function fmTranscript(): string {
+  const user = JSON.stringify({ type: "user", timestamp: iso(60), message: { role: "user", content: fmText() }, promptSource: "typed", origin: { kind: "human" } });
+  const answer = JSON.stringify({ type: "assistant", timestamp: iso(20), message: { role: "assistant", content: [{ type: "text", text: "Looking at the export test." }] } });
+  return `${[user, ...(fm.step >= 3 ? [answer] : [])].join("\n")}\n`;
+}
+if (FIRST_MESSAGE !== null && !FM_SEAT) {
+  files[0]!.title = "Builder";
+  fmApply();
 }
 if (CONTEXT_MODE !== null) seatOn("codex", "gpt-5.6-sol", "high", "");
 const SEAT_CODEX_FEED = `${[
@@ -283,6 +337,13 @@ const evidence = {
      The runtime stream is silent here, so the rotation asks the bus for the snapshot that carries the new seat's session. */
   storeSeatProfile() { writeProfile(files[0]!, { model: "gpt-5.6", effort: "low" }); },
   rotateSeat() { seatOn("claude", "opus", "high", "iv-new"); return getRuntimeBus().refresh(); },
+  /* The first-message cases: move the same window Pending -> Delivered -> Transcript arrived -> Answered. */
+  advanceFirstMessage() {
+    fm.step += 1;
+    fmApply();
+    window.dispatchEvent(new Event("llv:files-changed"));
+    return fm.step;
+  },
   refuseNextPipelinePatch: false,
   /* Composer context mode: the turn the runtime reports, every inject and send the composer posted, the receipts the
      driver publishes for injections, and the switch that appends the injected record to the transcript. */
@@ -1170,12 +1231,15 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({
       files: kanbanFiles, projectCatalog: [{ project: PROJECT, conversations: kanbanFiles.length, smt: now - 20 }], flows: [], pipelines: kanbanPipelines,
       workflows: [], tasks: kanbanTasks, workLinks: kanbanLinks, systemHealth: { tmux: { status: "healthy" } },
+      ...(FIRST_MESSAGE !== null ? { launchRoutes: { [`spawn:${FM_LAUNCH_ID}`]: FM_CONVERSATION_ID } } : {}),
     });
   }
   if (url.pathname === "/api/files") {
     return json({
       files, projectCatalog: [{ project: PROJECT, conversations: files.length, smt: now - 20 }], flows, pipelines,
       workflows: [], tasks, systemHealth: { tmux: { status: "healthy" } },
+      /* The durable route of the launch, as the server hands it, so the pane follows the conversation from `spawn:` to its transcript. */
+      ...(FIRST_MESSAGE !== null ? { launchRoutes: { [`spawn:${FM_LAUNCH_ID}`]: FM_CONVERSATION_ID } } : {}),
     });
   }
   /* The fixture has no runtime plane, and says so the way a Viewer without one
@@ -1255,6 +1319,32 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const limit = Number(url.searchParams.get("limit") ?? 20);
     return json({ items: catalog.slice(offset, offset + limit), total: catalog.length ? 4_595 : 0, nextCursor: offset + limit < catalog.length ? String(offset + limit) : null });
   }
+  if (FM_SEAT && url.pathname === "/api/orchestrator/seat" && method === "POST") {
+    fm.posts.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+    fm.confirmed = true;
+    fmTarget = conversation(FM_SEAT_PATH, "Orchestrator", { activity: "live", proc: "running", pid: 4_402, mtime: now - 5, lastTurn: { startedAt: (now - 90) * 1_000, endedAt: null } });
+    kanbanFiles.push(fmTarget);
+    fmApply();
+    return json({ ok: true, launched: true, transport: "structured", launchId: FM_LAUNCH_ID, conversationId: FM_CONVERSATION_ID, state: "path-pending", initialMessage: "queued", path: null });
+  }
+  if (FM_SEAT && fm.confirmed && url.pathname === "/api/orchestrator/seat") {
+    const path = (fmTarget as { path: string }).path;
+    if (url.searchParams.get("scope") === "all") return json({ all: { conversationIds: [FM_CONVERSATION_ID], paths: [path], previous: { conversationIds: [], paths: [] } } });
+    return json({
+      seat: { project: PROJECT, seatEpoch: 1, conversationId: FM_CONVERSATION_ID, path, mandate: "Run the atlas board.", state: "active", designatedAt: iso(30), intent: { clientRequestId: "seat-first-message", mode: "spawn", launchId: null, error: null } },
+      pending: null, exists: true,
+    });
+  }
+  if (FM_SEAT && fm.confirmed && url.pathname === "/api/orchestrator/seat/status") {
+    return json({
+      project: PROJECT, designated: true, conversationId: FM_CONVERSATION_ID, predecessorConversationId: null,
+      engine: "claude", model: "opus", effort: "high", accountId: "primary", cwd: "/repo/atlas", transcriptPath: (fmTarget as { path: string }).path,
+      liveness: { lifecycle: "running", hostState: "alive", silentForMs: 1_000 },
+      context: { tokens: 12_000, limit: 1_000_000, percent: 1, estimated: false, basis: "" },
+      transcriptFacts: null,
+      rotation: { recommended: false, level: "none", reasons: [], thresholdUnknown: false },
+    });
+  }
   if (url.pathname === "/api/orchestrator/seat") {
     // A lost optional read must never strand the composer's local wire fence.
     if (queueRecovery) return new Promise<Response>(() => {});
@@ -1313,7 +1403,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const asked = JSON.parse(String(init?.body ?? "{}")) as { reqs?: Array<{ id: string; path: string; offset: number }> };
     const chunks: Record<string, { offset: number; start: number; size: number; data: string }> = {};
     (asked.reqs ?? []).forEach((request, index) => {
-      const body = FAST_TTS ? FAST_TTS_FEED : SEAT_NOISE !== null ? (request.path === files[0]!.path && !files[0]!.spawn ? (files[0]!.engine === "codex" ? SEAT_CODEX_FEED : SEAT_FEED) : "") : request.path === RUNNING_PATH ? evidenceFeed : "";
+      const body = FAST_TTS ? FAST_TTS_FEED : FIRST_MESSAGE !== null ? (fmTarget && request.path === (fmTarget as { path: string }).path && !request.path.startsWith("spawn:") ? fmTranscript() : "") : SEAT_NOISE !== null ? (request.path === files[0]!.path && !files[0]!.spawn ? (files[0]!.engine === "codex" ? SEAT_CODEX_FEED : SEAT_FEED) : "") : request.path === RUNNING_PATH ? evidenceFeed : "";
       const from = Math.min(Math.max(request.offset, 0), body.length);
       chunks[String(index)] = { offset: body.length, start: from, size: body.length, data: body.slice(from) };
     });

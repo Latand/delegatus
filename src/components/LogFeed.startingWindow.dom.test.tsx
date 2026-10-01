@@ -4,7 +4,8 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
 import type { FileEntry, StructuredSpawnCardState } from "@/lib/types";
-import { setLocale } from "@/lib/i18n";
+import type { SpawnOutcome } from "./draftSpawn";
+import { setLocale, translate } from "@/lib/i18n";
 import { emptyStore } from "@/components/runtime/runtimeModel";
 
 /**
@@ -45,6 +46,8 @@ class TestResizeObserver {
 
 Object.assign(globalThis, {
   ResizeObserver: TestResizeObserver,
+  requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
+  cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
   window: dom,
   document: dom.document,
   navigator: dom.navigator,
@@ -100,7 +103,9 @@ mock.module("@/hooks/useToolActivityCues", () => ({
 
 const { LogFeed } = await import("./LogFeed");
 const { CardStatusBadge } = await import("./CardStatusBadge");
-const { resetOutboxForTests } = await import("./conversation/outbox");
+const { resetOutboxForTests, seedLaunchOutbox } = await import("./conversation/outbox");
+const { createSpawnAttempt, provisionalSpawnFile } = await import("./draftSpawn");
+const { seatMandateDelivery, seatProvisionalFile } = await import("./orchestrator/useSeatConfirm");
 
 /* The launch was admitted at T0; the host journals the first record eight
    seconds later. A timer anchored on that record would read eight seconds
@@ -462,4 +467,252 @@ test("an ordinary operator launch keeps its own bubble and shows no mandate card
   const { host } = render(placeholder("conversation_operator_launch", "launch_operator_launch"));
   expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(0);
   expect(host.querySelectorAll("[data-outbox-entry]")).toHaveLength(1);
+});
+
+/* The first message of a new agent or seat (#2006): from the first paint to the
+   transcript hand-over it is one normal row. The launch-recovery envelope the
+   runtime parks in `receipt.error` during healthy setup is fed to the render
+   layer on purpose, so the projection's own gate is not what these prove. */
+const ENVELOPE = "structured launch recovery: " + JSON.stringify({
+  phase: "uncertain",
+  startedAt: 1,
+  checks: 2,
+  nextTryAt: 2,
+  reason: "first-message acknowledgement pending",
+});
+const OPERATOR_PROMPT = "Fix the failing export test.\n\nThe pinned task is in the card.";
+const MANDATE = "You are the orchestrator for this project.\n\nPinned mandate: keep the board moving.";
+
+const operatorRecords = [
+  JSON.stringify({
+    timestamp: new Date(RECORD_AT).toISOString(),
+    type: "response_item",
+    payload: { type: "message", id: "item_user_first_message", role: "user", content: [{ type: "input_text", text: OPERATOR_PROMPT }] },
+  }),
+];
+const operatorAnswered = [
+  ...operatorRecords,
+  JSON.stringify({
+    timestamp: new Date(ANSWER_AT).toISOString(),
+    type: "response_item",
+    payload: { type: "message", id: "item_assistant_first_message", role: "assistant", phase: "commentary", content: [{ type: "output_text", text: "Looking at the export test." }] },
+  }),
+];
+
+function launchedOutcome(conversationId: string, launchId: string): Extract<SpawnOutcome, { kind: "launched" }> {
+  return {
+    kind: "launched",
+    durable: "confirming",
+    target: "",
+    path: null,
+    conversationId,
+    launchId,
+    structured: true,
+    state: "path-pending",
+    initialMessage: "queued",
+  };
+}
+
+/** Everything the first-message invariant forbids: the envelope's text, any
+    JSON object, and any red element. The failed state alone may be red: the
+    bubble's failure line and the launch chips that say the launch failed. */
+function assertCleanFirstMessage(host: HTMLElement, { failed = false }: { failed?: boolean } = {}): void {
+  const text = host.textContent ?? "";
+  expect(text).not.toContain("structured launch recovery");
+  expect(text).not.toContain('"phase"');
+  expect(text).not.toContain('"startedAt"');
+  expect(text).not.toContain('{"');
+  const red = [...host.querySelectorAll('[class*="danger"]')].filter((element) => (
+    !failed || !element.closest("[data-outbox-failure], [data-launch-chip]")
+  ));
+  expect(red.map((element) => element.outerHTML)).toEqual([]);
+}
+
+function firstMessageRows(host: HTMLElement, firstLine: string): Element[] {
+  return [...host.querySelectorAll("[data-message-row]")].filter((row) => (row.textContent ?? "").includes(firstLine));
+}
+
+const OPERATOR_FIRST_LINE = "Fix the failing export test.";
+
+/** One row carries the prompt and it is the very node seen at the first paint.
+    Compared as booleans: a failing `toEqual` on DOM nodes prints the whole tree. */
+function expectSameRow(host: HTMLElement, firstNode: Element): void {
+  const rows = firstMessageRows(host, OPERATOR_FIRST_LINE);
+  expect(rows.length).toBe(1);
+  expect(rows[0] === firstNode).toBe(true);
+}
+
+test("plain spawn: the first message is the prompt bubble from the first paint to the transcript", () => {
+  const conversationId = "conversation_first_plain";
+  const launchId = "launch_first_plain";
+  const facts = (overrides: Partial<StructuredSpawnCardState> = {}) => launchFacts(conversationId, launchId, {
+    ["prompt"]: OPERATOR_PROMPT,
+    promptEcho: OPERATOR_PROMPT,
+    ...overrides,
+  });
+  const card = (spawn: StructuredSpawnCardState) => ({ ...placeholder(conversationId, launchId), spawn }) as FileEntry;
+
+  now = T0 + 2_000;
+  const { host, root } = render(card(facts({ error: ENVELOPE })));
+  assertCleanFirstMessage(host);
+  const rows = firstMessageRows(host, OPERATOR_FIRST_LINE);
+  expect(rows).toHaveLength(1);
+  expect(rows[0]!.getAttribute("data-message-row")).toBe("pending");
+  expect(host.querySelector('[data-launch-chip="error"]')).toBeNull();
+  const firstNode = rows[0]!;
+
+  now = T0 + 4_000;
+  rerender(root, card(facts({ state: "recovered", initialMessage: "delivered", deliveredAt: T0 + 3_000, error: ENVELOPE })));
+  assertCleanFirstMessage(host);
+  expectSameRow(host, firstNode);
+
+  /* The board publishes the scanned row a poll before the window has read its
+     tail: the launch bubble is still the one first message in that gap. */
+  tailLines = [];
+  now = RECORD_AT + 500;
+  const adoptedRow = {
+    ...adopted(conversationId, launchId),
+    launch: facts({ state: "recovered", initialMessage: "delivered", deliveredAt: RECORD_AT, error: ENVELOPE, promptImages: undefined, prompt: undefined, promptAt: undefined }),
+  } as FileEntry;
+  rerender(root, adoptedRow);
+  assertCleanFirstMessage(host);
+  expectSameRow(host, firstNode);
+
+  tailLines = operatorRecords;
+  now = RECORD_AT + 1_000;
+  rerender(root, adoptedRow);
+  assertCleanFirstMessage(host);
+  expectSameRow(host, firstNode);
+
+  tailLines = operatorAnswered;
+  now = ANSWER_AT + 1_000;
+  rerender(root, answered(conversationId, launchId));
+  assertCleanFirstMessage(host);
+  expectSameRow(host, firstNode);
+  expect(host.textContent).toContain("Looking at the export test.");
+});
+
+test("plain spawn, browser-only first paint: the draft pane's own seed and card give one clean bubble", () => {
+  const conversationId = "conversation_first_browser";
+  const launchId = "launch_first_browser";
+  const attempt = createSpawnAttempt("attempt_first_browser", T0, {
+    title: "Builder",
+    engine: "codex",
+    model: "",
+    cwd: "/work/project",
+    effort: "",
+    fast: null,
+    accountId: "",
+    ["prompt"]: OPERATOR_PROMPT,
+    images: [],
+    src: "",
+  });
+  const outcome = launchedOutcome(conversationId, launchId);
+  /* The two writes DraftAgentPane makes on a launched answer, in its order. */
+  seedLaunchOutbox(conversationId, { id: launchId, text: attempt.prompt, images: 0, at: attempt.at });
+  const provisional = provisionalSpawnFile(attempt, outcome, "project")!;
+  expect(provisional.spawn?.error).toBeNull();
+
+  const { host } = render(provisional);
+  assertCleanFirstMessage(host);
+  expect(firstMessageRows(host, OPERATOR_FIRST_LINE)).toHaveLength(1);
+  expect(host.querySelectorAll("[data-outbox-entry]")).toHaveLength(1);
+  expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(0);
+});
+
+test("failed launch: the only red is the failure sentence", () => {
+  const conversationId = "conversation_first_failed";
+  const launchId = "launch_first_failed";
+  const failed = (overrides: Partial<StructuredSpawnCardState> = {}) => ({
+    ...placeholder(conversationId, launchId),
+    spawn: launchFacts(conversationId, launchId, {
+      ["prompt"]: OPERATOR_PROMPT,
+      promptEcho: OPERATOR_PROMPT,
+      state: "failed",
+      initialMessage: "failed",
+      retrySafe: true,
+      error: "runtime host unavailable",
+      ...overrides,
+    }),
+  }) as FileEntry;
+
+  const { host, root } = render(failed());
+  assertCleanFirstMessage(host, { failed: true });
+  expect(firstMessageRows(host, OPERATOR_FIRST_LINE)).toHaveLength(1);
+  expect(host.querySelectorAll("[data-outbox-failure]")).toHaveLength(1);
+  expect(host.querySelector("[data-outbox-status]")?.textContent).not.toContain("runtime host unavailable");
+  const chip = host.querySelector('[data-launch-chip="error"]')!;
+  expect(host.querySelectorAll('[data-launch-chip="error"]')).toHaveLength(1);
+  expect(chip.textContent).toBe(translate("en", "spawnCard.failedDetail"));
+  expect(chip.getAttribute("title")).toContain("runtime host unavailable");
+
+  /* Recovery stopped: the stopped-recovery variant reads the same way. */
+  rerender(root, failed({ state: "reconciling", initialMessage: "queued", retrySafe: false, recoveryStopped: true, error: "recovery gave up after 12 checks" }));
+  assertCleanFirstMessage(host, { failed: true });
+  expect(host.querySelectorAll('[data-launch-chip="error"]')).toHaveLength(1);
+});
+
+test("seat confirm: the mandate is one card from the first paint and never the operator's bubble", () => {
+  const conversationId = "conversation_first_seat";
+  const launchId = "launch_first_seat";
+  const provisional = seatProvisionalFile({
+    clientRequestId: "request_first_seat",
+    at: T0,
+    project: "project",
+    body: { project: "project", mandate: MANDATE, promptVersion: 1 },
+    launch: {
+      draft: { engine: "codex", model: "", effort: "", speed: "", launchAccountId: null } as never,
+      cwd: "/work/project",
+      firstMessage: MANDATE,
+    },
+    outcome: launchedOutcome(conversationId, launchId),
+  })!;
+  expect(provisional.spawn?.mandate).toEqual({ kind: "version", version: 1 });
+
+  const { host, root } = render(provisional);
+  assertCleanFirstMessage(host);
+  expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(1);
+  expect(host.querySelectorAll("[data-outbox-entry]")).toHaveLength(0);
+  expect(host.textContent).not.toContain("Pinned mandate");
+
+  /* The files poll brings the server's card: same launch, the envelope still
+     parked in its error field, the mandate now named by the projection. */
+  now = T0 + 3_000;
+  rerender(root, {
+    ...placeholder(conversationId, launchId),
+    spawn: launchFacts(conversationId, launchId, { mandate: { kind: "version", version: 1 }, error: ENVELOPE, prompt: MANDATE, promptEcho: MANDATE }),
+  } as FileEntry);
+  assertCleanFirstMessage(host);
+  expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(1);
+  expect(host.querySelectorAll("[data-outbox-entry]")).toHaveLength(0);
+
+  now = RECORD_AT + 1_000;
+  rerender(root, adopted(conversationId, launchId));
+  assertCleanFirstMessage(host);
+  expect(host.querySelectorAll("[data-outbox-entry]")).toHaveLength(0);
+});
+
+test("seat confirm without a version names the card unqualified until the poll says more", () => {
+  const provisional = seatProvisionalFile({
+    clientRequestId: "request_first_seat_custom",
+    at: T0,
+    project: "project",
+    body: { project: "project", mandate: MANDATE },
+    launch: {
+      draft: { engine: "claude", model: "", effort: "", speed: "", launchAccountId: null } as never,
+      cwd: "/work/project",
+      firstMessage: MANDATE,
+    },
+    outcome: launchedOutcome("conversation_first_seat_custom", "launch_first_seat_custom"),
+  })!;
+  expect(provisional.spawn?.mandate).toEqual({ kind: "unqualified" });
+  const { host } = render(provisional);
+  expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(1);
+  expect(host.querySelectorAll("[data-outbox-entry]")).toHaveLength(0);
+});
+
+test("a seat confirm names its mandate by the approved version, or leaves it unqualified when edited", () => {
+  expect(seatMandateDelivery(3)).toEqual({ kind: "version", version: 3 });
+  expect(seatMandateDelivery(undefined)).toEqual({ kind: "unqualified" });
+  expect(seatMandateDelivery("3")).toEqual({ kind: "unqualified" });
 });

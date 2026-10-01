@@ -328,17 +328,6 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       && paneLaunchOwner.conversationId === launchOwner.conversationId
       && paneLaunchOwner.generation === launchOwner.generation,
   );
-  /* A materialized `file.launch` is the server's live-adoption signal. Retire
-     the starting-window bubble at that hand-off even when an image-only launch
-     has no text echo and its delivery receipt still reads queued/delivering. */
-  useEffect(() => {
-    if (!memoryKey || !file?.launch || !launchOwnsThisPane || !launchOwner) return;
-    retireLaunchOutboxOnAdoption(memoryKey, {
-      id: file.launch.launchId,
-      adoptedAt: nowMs(),
-      owner: launchOwner,
-    });
-  }, [memoryKey, file?.launch?.launchId, launchOwner, launchOwnsThisPane]);
   /* The transcript the launch CREATED is an adoption signal of its own (issue
      #1793). The server's launch facts are the bubble's only carrier of the
      delivery receipt, and they retire on the row's first assistant turn — a
@@ -1038,6 +1027,21 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     }
     return newest;
   }, [feed.items]);
+  /* A materialized `file.launch` is the server's live-adoption signal. Retire
+     the starting-window bubble at that hand-off even when an image-only launch
+     has no text echo and its delivery receipt still reads queued/delivering.
+     The hand-off waits for the transcript's first row: the scanned row is
+     published a poll before its tail is read, and a bubble retired in that gap
+     leaves the window with no first message at all until the tail lands. */
+  const transcriptAttached = feed.items.length > 0;
+  useEffect(() => {
+    if (!memoryKey || !file?.launch || !launchOwnsThisPane || !launchOwner || !transcriptAttached) return;
+    retireLaunchOutboxOnAdoption(memoryKey, {
+      id: file.launch.launchId,
+      adoptedAt: nowMs(),
+      owner: launchOwner,
+    });
+  }, [memoryKey, file?.launch?.launchId, launchOwner, launchOwnsThisPane, transcriptAttached]);
   /* ── One message, one row (send-latency slice 3) ──────────────────────────
      Which submitted message each transcript echo belongs to. The operator's
      row is keyed on the SUBMISSION — its idempotency key — from the instant
@@ -1328,17 +1332,24 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       const merged = interleaveDeputyBlocks<ConversationRow, ConversationRow>(rows, placements, (id) => ({ kind: "deputy", key: `deputy:${id}`, deputy: byId.get(id)! }));
       rows.splice(0, rows.length, ...merged);
     }
+    /* The launch's own prompt is the conversation's first message, and the
+       launch chips are the status line under it: the bubble sits above them
+       from the first paint, which is where the transcript's record of it puts
+       the row once it lands, so the hand-off moves nothing. */
+    const launchPrompt = (entry: OutboxEntry) => Boolean(launch && entry.launchOwned);
+    const tailMessage = (entry: OutboxEntry): ConversationRow[] => (
+      adopted.has(entry.id) || hoisted.has(entry.id) ? [] : [{ kind: "message", key: `msg:${entry.id}`, entry, canonical: null }]
+    );
     for (const section of orderedConversationTail({
       launch: Boolean(launch),
       outbox: Boolean(memoryKey && pendingOutbox.length),
       delta: visibleLiveTurnItems.length > 0,
     })) {
-      if (section === "launch") rows.push({ kind: "launch", key: "launch" });
-      else if (section === "delta") rows.push({ kind: "delta", key: "delta" });
-      else for (const entry of pendingOutbox) {
-        if (adopted.has(entry.id) || hoisted.has(entry.id)) continue;
-        rows.push({ kind: "message", key: `msg:${entry.id}`, entry, canonical: null });
-      }
+      if (section === "launch") {
+        if (memoryKey) rows.push(...pendingOutbox.filter(launchPrompt).flatMap(tailMessage));
+        rows.push({ kind: "launch", key: "launch" });
+      } else if (section === "delta") rows.push({ kind: "delta", key: "delta" });
+      else rows.push(...pendingOutbox.filter((entry) => !launchPrompt(entry)).flatMap(tailMessage));
     }
     /* A block splits the seat's own answer, so the first seat row after one
        names the seat head it continues (docs/design/ghost-seat.md §6.1). */
