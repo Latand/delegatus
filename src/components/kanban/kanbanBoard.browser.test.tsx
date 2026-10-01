@@ -12989,9 +12989,9 @@ describe("model glyphs in place of the stage dot", () => {
   const WORD_HOSTS = new Set(["pnode", "pane-head"]);
   /* The model words a host's accessible text must carry: the catalogue's short
      label, which the identity sentence and the identity line both print. */
-  const MODEL_WORD: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku", sol: "6-Sol", astra: "6-Astra", terra: "5.6-Terra", luna: "6-Luna" };
+  const MODEL_WORD: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku 4.5", sol: "6-Sol", astra: "6-Astra", terra: "5.6-Terra", luna: "6-Luna" };
   /* The pane head's glyph names itself with the catalogue's full label. */
-  const MODEL_NAME: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku", sol: "GPT-6-Sol", astra: "GPT-6-Astra", terra: "GPT-5.6-Terra", luna: "GPT-6-Luna" };
+  const MODEL_NAME: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku 4.5", sol: "GPT-6-Sol", astra: "GPT-6-Astra", terra: "GPT-5.6-Terra", luna: "GPT-6-Luna" };
   /* The stage state a glyph reading stands for in this fixture, for the words its name must end on. */
   const STATE_OF_READING: Record<string, string> = { running: "running", waiting: "pending", passed: "passed", failed: "failed", needs: "needs_decision" };
   /* The legend: every word on the three cards hidden, so only the drawings
@@ -14396,4 +14396,91 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
       expect(entry.unfoldedAfter, `${entry.label} the request unfolded the seat`).toBe(true);
     }
   }, 600_000);
+});
+
+/*
+ * Launch layout shifts (docs/design/launch-render-polish.md). A launch is read
+ * the way the operator watches it: the draft is opened, the first prompt sent
+ * and the page left alone until the turn ends, while a PerformanceObserver
+ * records every layout shift the page makes. The page is the real Viewer over
+ * the fixture's `launch-cls` scenario, which answers the spawn, the files poll
+ * and the transcript on a clock (receipt, `spawn:` projection, adoption, tool
+ * rows, prose, the turn's end). The sum of the shifts no input explains, from
+ * the send to the turn's end, is the launch's cumulative layout shift.
+ *
+ *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+ *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "launch layout shift"
+ *
+ * LLV_LAUNCH_CLS_LABEL names the record (`before` or `after`); the readings go
+ * to `evidence/launch-render-polish/cls-<label>.json`.
+ */
+describe("launch layout shift rendered evidence", () => {
+  const LAUNCH_CLS_LIMIT = 0.1;
+  const label = process.env.LLV_LAUNCH_CLS_LABEL?.trim() || "after";
+  const viewports = [
+    { name: "desktop-1440", width: 1440, height: 900, touch: false },
+    { name: "phone-390", width: 390, height: 844, touch: true },
+  ] as const;
+  type Shift = { at: number; value: number; sources: string[] };
+
+  browserTest("sending a first prompt shifts the page by less than 0.1 at 1440 and 390", async () => {
+    const out = path.resolve(".artifacts/launch-render-polish");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const viewport of viewports) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=launch-cls`, { width: viewport.width, height: viewport.height }, "light", "en", "no-preference", viewport.touch);
+        try {
+          await page.waitForSelector("[data-kanban-board] .card[data-id], [data-phone-card]", { state: "attached", timeout: 20_000 });
+          await page.evaluate(() => {
+            const w = window as unknown as { __shifts: Array<{ at: number; value: number; recent: boolean; sources: string[] }> };
+            w.__shifts = [];
+            const describeNode = (node: Node | null) => node instanceof Element ? `${node.tagName}.${String(node.getAttribute("class") ?? "").split(/\s+/).slice(0, 2).join(".")}${node.getAttribute("data-status") ? `[${node.getAttribute("data-status")}]` : ""}` : "?";
+            new PerformanceObserver((list) => {
+              for (const entry of list.getEntries() as unknown as Array<{ startTime: number; value: number; hadRecentInput: boolean; sources?: Array<{ node: Node | null }> }>) {
+                w.__shifts.push({ at: entry.startTime, value: entry.value, recent: entry.hadRecentInput, sources: (entry.sources ?? []).slice(0, 3).map((source) => describeNode(source.node)) });
+              }
+            }).observe({ type: "layout-shift", buffered: true });
+          });
+          if (viewport.touch) {
+            await page.click('[data-mobile2-open="menu"]');
+            await page.click('[data-mobile2-menu-row="new-agent"]');
+          } else {
+            /* A project the operator is launching its first agents in has no seat open over the board. */
+            const seat = page.locator('[data-orchestrator-toggle][aria-pressed="true"]');
+            if (await seat.count()) await seat.click();
+            await page.waitForTimeout(600);
+            await page.click('[data-bar-control][aria-label="Create"]');
+            await page.getByRole("menuitem", { name: "New conversation with an agent" }).click();
+          }
+          const prompt = page.locator('textarea[aria-label="First prompt text"]').first();
+          await prompt.waitFor({ timeout: 10_000 });
+          /* The runtime the operator chose is Haiku at low effort, on Claude. */
+          await page.selectOption('select[aria-label="Agent model"]', "haiku");
+          await page.selectOption('select[aria-label="Reasoning effort level"]', "low");
+          await prompt.fill("Read the README and tell me what this project does");
+          await page.waitForTimeout(800);
+          const sentAt = await page.evaluate(() => performance.now());
+          await page.getByRole("button", { name: "Launch the agent" }).first().click();
+          /* The fixture's turn ends 10.8 s after the receipt is asked for; the page is left alone until then. */
+          await page.waitForTimeout(14_000);
+          const shifts = await page.evaluate((from) => (window as unknown as { __shifts: Array<{ at: number; value: number; recent: boolean; sources: string[] }> }).__shifts
+            .filter((entry) => entry.at >= from && !entry.recent)
+            .map((entry): Shift => ({ at: Math.round(entry.at - from), value: Number(entry.value.toFixed(4)), sources: entry.sources })), sentAt);
+          const cls = Number(shifts.reduce((sum, entry) => sum + entry.value, 0).toFixed(4));
+          const largest = [...shifts].sort((a, b) => b.value - a.value).slice(0, 8);
+          await page.screenshot({ path: path.join(out, `${label}-${viewport.name}.png`) });
+          readings.push({ viewport: viewport.name, cls, shifts: shifts.length, largest, pageErrors });
+          expect(pageErrors, `${viewport.name} page errors`).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.mkdirSync("evidence/launch-render-polish", { recursive: true });
+    fs.writeFileSync(`evidence/launch-render-polish/cls-${label}.json`, `${JSON.stringify({ label, limit: LAUNCH_CLS_LIMIT, readings }, null, 2)}\n`);
+    for (const reading of readings as Array<{ viewport: string; cls: number }>) {
+      if (label === "after") expect(reading.cls, `${reading.viewport} cumulative layout shift of one launch`).toBeLessThan(LAUNCH_CLS_LIMIT);
+    }
+  }, 240_000);
 });

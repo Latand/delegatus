@@ -252,6 +252,11 @@ const PRIORITY = SCENARIO === "task-priority";
     (`seatTickSettingsCardText`, `maintenanceCardText`) and handed over in the
     query, so the board draws what the server would have written. */
 const TICK_CARDS = SCENARIO === "seat-tick-cards";
+/* Launch layout shifts: the board of `atlas`, a draft opened from the bar, and a launch the page drives end
+   to end on a clock — the receipt, the `spawn:` projection, the scanned transcript, tool rows and prose
+   arriving while the turn runs, the turn's end. The driver reads every layout shift from the first click to
+   the end of the turn. */
+const LAUNCH_CLS = SCENARIO === "launch-cls";
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -1683,6 +1688,8 @@ const tool = (secondsAgo: number, id: string, name: string, input: Record<string
 function transcriptOf(pathname: string): string {
   const file = files.find((entry) => entry.path === pathname);
   if (!file || file === pendingWorker) return "";
+  /* A launch the transcript has not appeared for reads nothing. */
+  if (LAUNCH_CLS && file.path.startsWith("spawn:")) return "";
   if (SCENARIO === "fast-tts") return `${said(10, "The first sentence should start speaking immediately. The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately. Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken.")}\n`;
   /* The running verifier has a long transcript: its reader scrolls. */
   if (file === searchVer2) {
@@ -2094,6 +2101,73 @@ function fixtureWorkLinks(): FilesWorkLinks {
 }
 const workLinks = WORK_LINKS ? fixtureWorkLinks() : null;
 
+/* The launch the page runs on a clock (`?scenario=launch-cls`). POST /api/spawn answers the receipt after the
+   latency a real launch has; /api/files then shows the `spawn:` projection, and from the adoption on the
+   scanned transcript, whose rows arrive on the timeline below. */
+const launchRun = {
+  launchId: "launch-cls", conversationId: "conversation_launch-cls", path: "/repo/launch-cls.jsonl",
+  startedAt: 0, prompt: "", title: "Claude", engine: "claude", model: "haiku", effort: "low", clientAttemptId: null as string | null,
+};
+const LAUNCH_RECEIPT_MS = 700;
+const LAUNCH_ADOPT_MS = 2_400;
+const LAUNCH_END_MS = 10_800;
+const launchTimeline: Array<{ at: number; lines: (stamp: (ms: number) => number) => string[] }> = [
+  { at: 3_000, lines: (at) => tool(at(3_000), "toolu_launch_ls", "Bash", { command: "ls", description: "List the project" }).slice(0, 1) },
+  { at: 3_400, lines: (at) => tool(at(3_000), "toolu_launch_ls", "Bash", { command: "ls", description: "List the project" }).slice(1) },
+  { at: 4_300, lines: (at) => [said(at(4_300), "Looking at the project files first.")] },
+  { at: 5_200, lines: (at) => tool(at(5_200), "toolu_launch_read", "Read", { file_path: "README.md" }).slice(0, 1) },
+  { at: 5_700, lines: (at) => tool(at(5_200), "toolu_launch_read", "Read", { file_path: "README.md" }).slice(1) },
+  { at: 7_000, lines: (at) => [said(at(7_000), "The project has three parts:\n\n- the server, which owns the state\n- the web board, which reads it\n- the scripts that drive both\n\nNothing needs changing yet.")] },
+  { at: 9_400, lines: (at) => [said(at(9_400), "Summary: the README describes the layout above and points at the scripts directory for the rest.")] },
+];
+function launchTranscript(): string {
+  if (!launchRun.startedAt) return "";
+  const elapsed = Date.now() - launchRun.startedAt;
+  if (elapsed < LAUNCH_ADOPT_MS) return "";
+  /* A row's stamp is its own time on the clock, so the feed's times read as a turn that ran. */
+  const stamp = (ms: number) => (Date.now() - (launchRun.startedAt + ms)) / 1_000;
+  const rows = [asked(stamp(LAUNCH_RECEIPT_MS), launchRun.prompt)];
+  for (const entry of launchTimeline) if (elapsed >= entry.at) rows.push(...entry.lines(stamp));
+  return `${rows.join("\n")}\n`;
+}
+/* The files and tasks the board holds at this moment of the launch. */
+function launchAdvance() {
+  if (!LAUNCH_CLS || !launchRun.startedAt) return;
+  const elapsed = Date.now() - launchRun.startedAt;
+  const nowSeconds = Date.now() / 1_000;
+  for (let index = files.length - 1; index >= 0; index -= 1) if (files[index]!.conversationId === launchRun.conversationId) files.splice(index, 1);
+  const adopted = elapsed >= LAUNCH_ADOPT_MS;
+  const ended = elapsed >= LAUNCH_END_MS;
+  const common = { model: launchRun.model, launchModel: launchRun.model, effort: launchRun.effort, fast: null, mtime: nowSeconds };
+  files.push(adopted
+    ? conversation("launch-cls", launchRun.prompt.split("\n")[0] ?? "", {
+      ...common, path: launchRun.path, size: new TextEncoder().encode(launchTranscript()).length,
+      ...(ended
+        ? { activity: "recent", authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: new Date().toISOString() }, lastTurn: { startedAt: launchRun.startedAt, endedAt: Date.now() } }
+        : working({ mtime: nowSeconds, lastTurn: { startedAt: launchRun.startedAt, endedAt: null } })),
+    })
+    : conversation("launch-cls", launchRun.title, {
+      ...common, path: `spawn:${launchRun.launchId}`, size: 0, activity: "live", activityReason: "structured_spawn_starting", generation: 1,
+      spawn: {
+        launchId: launchRun.launchId, clientAttemptId: launchRun.clientAttemptId, accountId: null, conversationId: launchRun.conversationId, generation: 1,
+        state: "starting", initialMessage: "queued", retrySafe: false, error: null, prompt: launchRun.prompt, promptAt: launchRun.startedAt,
+      },
+    }));
+  const index = tasks.findIndex((entry) => entry.id === "t-launch");
+  const placeholder = {
+    id: "t-launch", project: PROJECT, text: launchRun.prompt.split("\n")[0] ?? "", status: "assigned", placement: "unplaced",
+    origin: { kind: "launch", key: launchRun.clientAttemptId ?? launchRun.launchId, refinement: "pending" },
+    assignments: [{
+      launchId: launchRun.launchId, clientAttemptId: launchRun.clientAttemptId, conversationId: launchRun.conversationId, path: adopted ? launchRun.path : null,
+      panePid: null, state: "delivered", error: null, at: new Date(launchRun.startedAt).toISOString(),
+    }],
+    createdAt: new Date(launchRun.startedAt).toISOString(), updatedAt: new Date().toISOString(), revision: REV(900 + Math.floor(elapsed / 1_000)),
+  } as unknown as BoardTask;
+  if (index >= 0) tasks[index] = placeholder;
+  else tasks.push(placeholder);
+}
+Object.assign(window, { launchRun });
+
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
 const serverFetch = window.fetch.bind(window);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -2124,7 +2198,18 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     return json(albumPage(taskId));
   }
+  if (LAUNCH_CLS && url.pathname === "/api/spawn" && method === "POST") {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    Object.assign(launchRun, {
+      startedAt: Date.now(), prompt: String(body.prompt ?? ""), title: String(body.title ?? "Claude"), engine: String(body.engine ?? "claude"),
+      model: String(body.model ?? "") || "haiku", effort: String(body.effort ?? "") || "low", clientAttemptId: typeof body.clientAttemptId === "string" ? body.clientAttemptId : null,
+    });
+    await new Promise((resolve) => setTimeout(resolve, LAUNCH_RECEIPT_MS));
+    launchAdvance();
+    return json({ ok: true, launched: true, transport: "structured", state: "path-pending", target: "", launchId: launchRun.launchId, conversationId: launchRun.conversationId, initialMessage: "queued" });
+  }
   if (url.pathname === "/api/files") {
+    launchAdvance();
     /* #1820's first run: an installation with nothing in it at all. */
     /* Nothing is working in the quiet installation: every conversation has
        an idle process and a turn that closed, nothing waits on the operator,
@@ -2249,6 +2334,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     return json({ ok: true, ...asksYouFixtureSetting(ASKS_YOU_SETTING.enabled) });
   }
+  if (url.pathname === "/api/tasks" && method === "GET") launchAdvance();
   if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks: OVERVIEW_EMPTY || ORCH_FIRST || ORCH_WALK ? [] : tasks });
   if (ORCH_WALK && url.pathname === "/api/onboarding") {
     const existing = params.get("install") === "existing";
@@ -2524,6 +2610,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const { reqs } = JSON.parse(String(init?.body)) as { reqs: Array<{ id: string; path: string; offset: number }> };
     return json({ chunks: Object.fromEntries(reqs.map((req) => {
       if (req.path === evidence.failLogsFor) return [req.id, { error: "transcript read failed in the evidence fixture" }];
+      if (LAUNCH_CLS && req.path === launchRun.path) {
+        /* The transcript grows by whole lines: a read answers what lies past the offset it was given. */
+        const bytes = new TextEncoder().encode(launchTranscript());
+        return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: bytes.length, size: bytes.length }];
+      }
       const data = transcriptOf(req.path);
       const size = new TextEncoder().encode(data).length;
       return [req.id, { data: req.offset >= size ? "" : data, start: 0, offset: size, size }];
