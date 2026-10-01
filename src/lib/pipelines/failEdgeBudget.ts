@@ -74,18 +74,19 @@ export function advanceFailEdgeBudgetSpent(pipeline: Pipeline, stage: PipelineSt
   let activation = attempt.activatedBy;
   const visited = new Set<string>();
   while (activation) {
-    const key = `${activation.stageId}:${activation.attempt}`;
+    const current = activation;
+    const key = `${current.stageId}:${current.attempt}`;
     if (visited.has(key)) break;
     visited.add(key);
-    if (activation.edge === "fail" && activation.stageId !== stage.id) {
+    if (current.edge === "fail" && current.stageId !== stage.id) {
       const spent = pipeline.runs.find((run) => run.stageId === stage.id)?.attempts
         .some((source) => !source.historical && source.n >= firstAttempt && source.budgetSpent) ?? false;
       return spent;
     }
-    const source = pipeline.runs.find((run) => run.stageId === activation.stageId)?.attempts
-      .find((candidate) => candidate.n === activation!.attempt && !candidate.historical);
+    const source = pipeline.runs.find((run) => run.stageId === current.stageId)?.attempts
+      .find((candidate) => candidate.n === current.attempt && !candidate.historical);
     if (!source) break;
-    if (activation.stageId === stage.id) firstAttempt = Math.min(firstAttempt, source.n);
+    if (current.stageId === stage.id) firstAttempt = Math.min(firstAttempt, source.n);
     activation = source.activatedBy;
   }
   return failEdgeBudgetSpent(pipeline, stage);
