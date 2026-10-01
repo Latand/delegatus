@@ -27,7 +27,9 @@ It takes 1440×900 and 390×844 in English and Ukrainian: the full page, the
 first screen, each section, the hero's script step by step (it presses the
 product's own send control, as a visitor does), every tab of every frame, and
 the legacy install. `report.json` beside the PNGs lists page errors, requests
-the demo left unanswered, and sideways overflow.
+the demo left unanswered, and sideways overflow. `--scheme=light` renders with
+the browser asking for a light colour scheme; the page and the demo pin dark,
+so the PNGs should match the default run.
 
 ```
 bun landing/site/capture.ts --check-request=10
