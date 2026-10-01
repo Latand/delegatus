@@ -164,8 +164,6 @@ interface Props {
       card only has to exist; arming the glide channel too would race that move
       with a second one. Same one-shot nonce discipline as `focusRequest`. */
   placeRequest?: { path: string; nonce: number } | null;
-  /** «Show only needs me»: non-null dims every scheme node not in the set. */
-  attentionPaths?: ReadonlySet<string> | null;
   /** The project is shelved: hidden from the rail and the overview. */
   archived: boolean;
   catalogKnown: boolean;
@@ -407,7 +405,6 @@ function ProjectDashboardView({
   openNonce,
   focusRequest,
   placeRequest,
-  attentionPaths,
   archived,
   catalogKnown,
   catalogConversationCount,

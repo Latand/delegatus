@@ -156,7 +156,6 @@ function mountLayer(next: SchemeLayout, pipelines: Pipeline[] = [], options: { l
         multi={new Set()}
         session={false}
         focus={null}
-        attentionPaths={null}
         flowsByImpl={new Map()}
         flows={[]}
         pipelineStrips={new Map()}

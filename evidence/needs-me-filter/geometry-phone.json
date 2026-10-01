@@ -1,0 +1,762 @@
+[
+  {
+    "label": "board-phone-390-light-en",
+    "token": 0.6,
+    "labelOff": "Show only those waiting on you",
+    "labelOn": "Show all cards",
+    "pressed": "true",
+    "funnelHeight": 44,
+    "funnelWidth": 44,
+    "funnelWidthOn": 44,
+    "header": {
+      "sheetLeft": 0,
+      "sheetRight": 390,
+      "parts": [
+        {
+          "left": 16,
+          "right": 203.171875
+        },
+        {
+          "left": 207.171875,
+          "right": 251.171875
+        },
+        {
+          "left": 255.171875,
+          "right": 338
+        },
+        {
+          "left": 342,
+          "right": 386
+        }
+      ],
+      "overflow": 0
+    },
+    "before": [
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 175,
+        "width": 366,
+        "height": 63.5,
+        "text": "Choose the export presetsa questionopus·"
+      },
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 246.5,
+        "width": 366,
+        "height": 99,
+        "text": "Reconcile the ledger exportneeds a decis"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 353.5,
+        "width": 366,
+        "height": 58.75,
+        "text": "Write the migration notes1 working·1 age"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 420.25,
+        "width": 366,
+        "height": 105.25,
+        "text": "Rotate the search aliasImplement→ReviewI"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 533.5,
+        "width": 366,
+        "height": 58.75,
+        "text": "List every export toggle1 agent·2h"
+      }
+    ],
+    "after": [
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 175,
+        "width": 366,
+        "height": 63.5,
+        "text": "Choose the export presetsa questionopus·"
+      },
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 246.5,
+        "width": 366,
+        "height": 99,
+        "text": "Reconcile the ledger exportneeds a decis"
+      },
+      {
+        "waits": false,
+        "opacity": 0.6,
+        "filter": "saturate(0.35)",
+        "left": 12,
+        "top": 353.5,
+        "width": 366,
+        "height": 58.75,
+        "text": "Write the migration notes1 working·1 age"
+      },
+      {
+        "waits": false,
+        "opacity": 0.6,
+        "filter": "saturate(0.35)",
+        "left": 12,
+        "top": 420.25,
+        "width": 366,
+        "height": 105.25,
+        "text": "Rotate the search aliasImplement→ReviewI"
+      },
+      {
+        "waits": false,
+        "opacity": 0.6,
+        "filter": "saturate(0.35)",
+        "left": 12,
+        "top": 533.5,
+        "width": 366,
+        "height": 58.75,
+        "text": "List every export toggle1 agent·2h"
+      }
+    ],
+    "off": [
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 175,
+        "width": 366,
+        "height": 63.5,
+        "text": "Choose the export presetsa questionopus·"
+      },
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 246.5,
+        "width": 366,
+        "height": 99,
+        "text": "Reconcile the ledger exportneeds a decis"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 353.5,
+        "width": 366,
+        "height": 58.75,
+        "text": "Write the migration notes1 working·1 age"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 420.25,
+        "width": 366,
+        "height": 105.25,
+        "text": "Rotate the search aliasImplement→ReviewI"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 533.5,
+        "width": 366,
+        "height": 58.75,
+        "text": "List every export toggle1 agent·2h"
+      }
+    ],
+    "pageErrors": []
+  },
+  {
+    "label": "board-phone-390-dark-en",
+    "token": 0.55,
+    "labelOff": "Show only those waiting on you",
+    "labelOn": "Show all cards",
+    "pressed": "true",
+    "funnelHeight": 44,
+    "funnelWidth": 44,
+    "funnelWidthOn": 44,
+    "header": {
+      "sheetLeft": 0,
+      "sheetRight": 390,
+      "parts": [
+        {
+          "left": 16,
+          "right": 203.171875
+        },
+        {
+          "left": 207.171875,
+          "right": 251.171875
+        },
+        {
+          "left": 255.171875,
+          "right": 338
+        },
+        {
+          "left": 342,
+          "right": 386
+        }
+      ],
+      "overflow": 0
+    },
+    "before": [
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 175,
+        "width": 366,
+        "height": 63.5,
+        "text": "Choose the export presetsa questionopus·"
+      },
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 246.5,
+        "width": 366,
+        "height": 99,
+        "text": "Reconcile the ledger exportneeds a decis"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 353.5,
+        "width": 366,
+        "height": 58.75,
+        "text": "Write the migration notes1 working·1 age"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 420.25,
+        "width": 366,
+        "height": 105.25,
+        "text": "Rotate the search aliasImplement→ReviewI"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 533.5,
+        "width": 366,
+        "height": 58.75,
+        "text": "List every export toggle1 agent·2h"
+      }
+    ],
+    "after": [
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 175,
+        "width": 366,
+        "height": 63.5,
+        "text": "Choose the export presetsa questionopus·"
+      },
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 246.5,
+        "width": 366,
+        "height": 99,
+        "text": "Reconcile the ledger exportneeds a decis"
+      },
+      {
+        "waits": false,
+        "opacity": 0.55,
+        "filter": "saturate(0.35)",
+        "left": 12,
+        "top": 353.5,
+        "width": 366,
+        "height": 58.75,
+        "text": "Write the migration notes1 working·1 age"
+      },
+      {
+        "waits": false,
+        "opacity": 0.55,
+        "filter": "saturate(0.35)",
+        "left": 12,
+        "top": 420.25,
+        "width": 366,
+        "height": 105.25,
+        "text": "Rotate the search aliasImplement→ReviewI"
+      },
+      {
+        "waits": false,
+        "opacity": 0.55,
+        "filter": "saturate(0.35)",
+        "left": 12,
+        "top": 533.5,
+        "width": 366,
+        "height": 58.75,
+        "text": "List every export toggle1 agent·2h"
+      }
+    ],
+    "off": [
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 175,
+        "width": 366,
+        "height": 63.5,
+        "text": "Choose the export presetsa questionopus·"
+      },
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 246.5,
+        "width": 366,
+        "height": 99,
+        "text": "Reconcile the ledger exportneeds a decis"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 353.5,
+        "width": 366,
+        "height": 58.75,
+        "text": "Write the migration notes1 working·1 age"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 420.25,
+        "width": 366,
+        "height": 105.25,
+        "text": "Rotate the search aliasImplement→ReviewI"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 533.5,
+        "width": 366,
+        "height": 58.75,
+        "text": "List every export toggle1 agent·2h"
+      }
+    ],
+    "pageErrors": []
+  },
+  {
+    "label": "board-phone-390-light-uk",
+    "token": 0.6,
+    "labelOff": "Показати лише тих, хто чекає на тебе",
+    "labelOn": "Показати всі картки",
+    "pressed": "true",
+    "funnelHeight": 44,
+    "funnelWidth": 44,
+    "funnelWidthOn": 44,
+    "header": {
+      "sheetLeft": 0,
+      "sheetRight": 390,
+      "parts": [
+        {
+          "left": 16,
+          "right": 208.859375
+        },
+        {
+          "left": 212.859375,
+          "right": 256.859375
+        },
+        {
+          "left": 260.859375,
+          "right": 338
+        },
+        {
+          "left": 342,
+          "right": 386
+        }
+      ],
+      "overflow": 0
+    },
+    "before": [
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 175,
+        "width": 366,
+        "height": 63.5,
+        "text": "Обрати набір пресетів експортупитанняopu"
+      },
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 246.5,
+        "width": 366,
+        "height": 85.5,
+        "text": "Звірити експорт книгипотрібне рішення · "
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 340,
+        "width": 366,
+        "height": 58.75,
+        "text": "Написати нотатки про міграцію1 працює·1 "
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 406.75,
+        "width": 366,
+        "height": 105.25,
+        "text": "Перемкнути псевдонім пошукуImplement→Rev"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 520,
+        "width": 366,
+        "height": 58.75,
+        "text": "Перелічити всі перемикачі експорту1 аген"
+      }
+    ],
+    "after": [
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 175,
+        "width": 366,
+        "height": 63.5,
+        "text": "Обрати набір пресетів експортупитанняopu"
+      },
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 246.5,
+        "width": 366,
+        "height": 85.5,
+        "text": "Звірити експорт книгипотрібне рішення · "
+      },
+      {
+        "waits": false,
+        "opacity": 0.6,
+        "filter": "saturate(0.35)",
+        "left": 12,
+        "top": 340,
+        "width": 366,
+        "height": 58.75,
+        "text": "Написати нотатки про міграцію1 працює·1 "
+      },
+      {
+        "waits": false,
+        "opacity": 0.6,
+        "filter": "saturate(0.35)",
+        "left": 12,
+        "top": 406.75,
+        "width": 366,
+        "height": 105.25,
+        "text": "Перемкнути псевдонім пошукуImplement→Rev"
+      },
+      {
+        "waits": false,
+        "opacity": 0.6,
+        "filter": "saturate(0.35)",
+        "left": 12,
+        "top": 520,
+        "width": 366,
+        "height": 58.75,
+        "text": "Перелічити всі перемикачі експорту1 аген"
+      }
+    ],
+    "off": [
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 175,
+        "width": 366,
+        "height": 63.5,
+        "text": "Обрати набір пресетів експортупитанняopu"
+      },
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 246.5,
+        "width": 366,
+        "height": 85.5,
+        "text": "Звірити експорт книгипотрібне рішення · "
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 340,
+        "width": 366,
+        "height": 58.75,
+        "text": "Написати нотатки про міграцію1 працює·1 "
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 406.75,
+        "width": 366,
+        "height": 105.25,
+        "text": "Перемкнути псевдонім пошукуImplement→Rev"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 520,
+        "width": 366,
+        "height": 58.75,
+        "text": "Перелічити всі перемикачі експорту1 аген"
+      }
+    ],
+    "pageErrors": []
+  },
+  {
+    "label": "board-phone-390-dark-uk",
+    "token": 0.55,
+    "labelOff": "Показати лише тих, хто чекає на тебе",
+    "labelOn": "Показати всі картки",
+    "pressed": "true",
+    "funnelHeight": 44,
+    "funnelWidth": 44,
+    "funnelWidthOn": 44,
+    "header": {
+      "sheetLeft": 0,
+      "sheetRight": 390,
+      "parts": [
+        {
+          "left": 16,
+          "right": 208.859375
+        },
+        {
+          "left": 212.859375,
+          "right": 256.859375
+        },
+        {
+          "left": 260.859375,
+          "right": 338
+        },
+        {
+          "left": 342,
+          "right": 386
+        }
+      ],
+      "overflow": 0
+    },
+    "before": [
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 175,
+        "width": 366,
+        "height": 63.5,
+        "text": "Обрати набір пресетів експортупитанняopu"
+      },
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 246.5,
+        "width": 366,
+        "height": 85.5,
+        "text": "Звірити експорт книгипотрібне рішення · "
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 340,
+        "width": 366,
+        "height": 58.75,
+        "text": "Написати нотатки про міграцію1 працює·1 "
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 406.75,
+        "width": 366,
+        "height": 105.25,
+        "text": "Перемкнути псевдонім пошукуImplement→Rev"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 520,
+        "width": 366,
+        "height": 58.75,
+        "text": "Перелічити всі перемикачі експорту1 аген"
+      }
+    ],
+    "after": [
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 175,
+        "width": 366,
+        "height": 63.5,
+        "text": "Обрати набір пресетів експортупитанняopu"
+      },
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 246.5,
+        "width": 366,
+        "height": 85.5,
+        "text": "Звірити експорт книгипотрібне рішення · "
+      },
+      {
+        "waits": false,
+        "opacity": 0.55,
+        "filter": "saturate(0.35)",
+        "left": 12,
+        "top": 340,
+        "width": 366,
+        "height": 58.75,
+        "text": "Написати нотатки про міграцію1 працює·1 "
+      },
+      {
+        "waits": false,
+        "opacity": 0.55,
+        "filter": "saturate(0.35)",
+        "left": 12,
+        "top": 406.75,
+        "width": 366,
+        "height": 105.25,
+        "text": "Перемкнути псевдонім пошукуImplement→Rev"
+      },
+      {
+        "waits": false,
+        "opacity": 0.55,
+        "filter": "saturate(0.35)",
+        "left": 12,
+        "top": 520,
+        "width": 366,
+        "height": 58.75,
+        "text": "Перелічити всі перемикачі експорту1 аген"
+      }
+    ],
+    "off": [
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 175,
+        "width": 366,
+        "height": 63.5,
+        "text": "Обрати набір пресетів експортупитанняopu"
+      },
+      {
+        "waits": true,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 246.5,
+        "width": 366,
+        "height": 85.5,
+        "text": "Звірити експорт книгипотрібне рішення · "
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 340,
+        "width": 366,
+        "height": 58.75,
+        "text": "Написати нотатки про міграцію1 працює·1 "
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 406.75,
+        "width": 366,
+        "height": 105.25,
+        "text": "Перемкнути псевдонім пошукуImplement→Rev"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 12,
+        "top": 520,
+        "width": 366,
+        "height": 58.75,
+        "text": "Перелічити всі перемикачі експорту1 аген"
+      }
+    ],
+    "pageErrors": []
+  }
+]

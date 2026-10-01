@@ -241,7 +241,6 @@ function renderNodesLayer(root: Root, nodes: SchemeNode[], dormant = true): void
       multi={new Set()}
       session={false}
       focus={null}
-      attentionPaths={null}
       flowsByImpl={new Map()}
       flows={[]}
       pipelineStrips={new Map()}
