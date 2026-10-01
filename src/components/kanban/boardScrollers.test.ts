@@ -30,3 +30,17 @@ test("every board scroller scrolls on the compositor", () => {
     expect({ selector, willChange: declared.get("will-change") ?? null }).toEqual({ selector, willChange: "scroll-position" });
   }
 });
+
+/* The board frame was `height: max(440px, 100cqh)` against a size container,
+   and its style was re-resolved on every scroll frame of the page, which laid
+   the whole board out again: about 11 ms per frame on a busy board, and the
+   reason a conversation scrolled inside a card dropped frames. Nothing the
+   page scrolls may be sized in container-query height units. */
+test("the board frame is not sized against a size container", () => {
+  const frame = declarationsFor(".kb .board-frame");
+  expect(frame.get("height")).toBe("max(440px, 100%)");
+  expect(declarationsFor(".kb .kb-page").get("container-type")).toBe("inline-size");
+  const css = readFileSync(join(import.meta.dir, "kanbanBoard.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  expect(css).not.toMatch(/\d(cqh|cqb)\b/);
+  expect(css).not.toMatch(/container-type:\s*size\b/);
+});

@@ -698,8 +698,15 @@
 .kb .kb-body { display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; }
 .kb .kb-aside { display: flex; min-height: 0; flex-shrink: 0; }
 .kb .kb-pane { position: relative; display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; min-height: 0; }
-.kb .kb-page { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; container-type: size; }
-.kb .board-frame { flex: 0 0 auto; height: max(440px, 100cqh); min-height: 0; display: flex; flex-direction: column; outline: none; }
+.kb .kb-page { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; container-type: inline-size; }
+/* The frame is the page's own height, 440px at the least. It was sized in
+   `cqh` against a size container, and every scroll frame of the page then
+   re-resolved its style and laid the whole board out again (about 11 ms on a
+   busy board). `container-type: size` also made the page's height independent
+   of its content, which a percentage does not need: the page is a flexed item
+   of a definite column, so 100% resolves against it. Width queries still
+   resolve against the page (`inline-size`). */
+.kb .board-frame { flex: 0 0 auto; height: max(440px, 100%); min-height: 0; display: flex; flex-direction: column; outline: none; }
 /* The board's scrollers scroll on the compositor. At a device pixel ratio
    under 1.5 Chromium keeps a scroller whose background is not opaque on the
    main thread, to keep LCD text in it, and none of these has one of its own:
