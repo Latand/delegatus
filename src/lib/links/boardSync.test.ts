@@ -311,6 +311,41 @@ test.each([false, true])("a new decision after done expiry resumes exports both 
     !(JSON.parse(page.request).push?.rows?.length) && !(JSON.parse(page.response).tasks?.rows?.length))).toBe(true);
 }, 30_000);
 
+test.each(["seat", "pipeline"] as const)("a changed %s resumes omitted Done tasks without owner edits in both directions", async (kind) => {
+  const names = [`done-${kind}-A`, `done-${kind}-B`];
+  const installs = [await install(names[0]!), await install(names[1]!)];
+  const peerId = await link(installs[0]!, installs[1]!, undefined, installs[1]!, false);
+  const originals: BoardTask[] = [];
+  for (const [index, owner] of installs.entries()) {
+    const task = await createOn(owner, `Expired ${kind} task ${index}`);
+    expect((await patchOn(owner, task.id, { status: "done" })).status).toBe(200);
+    const done = (await taskOn(owner, task.id))!;
+    done.doneAt = new Date(Date.now() - DONE_TASK_BOARD_RETENTION_MS - 60_000).toISOString();
+    done.assignments = [{ conversationId: `seat-${index}`, path: null, panePid: null, state: "linked", error: null, at: done.doneAt }];
+    done.doneAdmissions = [`seat-${index}`];
+    expect((await request(owner, "/test/import-tasks", "POST", { tasks: [done] })).status).toBe(200);
+    originals.push((await taskOn(owner, done.id))!);
+  }
+  await sync(installs[0]!, peerId);
+  await sync(installs[0]!, peerId);
+  for (const [index, task] of originals.entries()) expect(await taskOn(installs[1 - index]!, task.id)).toBeUndefined();
+  for (const [index, owner] of installs.entries()) {
+    if (kind === "pipeline") {
+      expect((await laneOn(owner, { id: "a1b2c3d4", taskIds: [originals[index]!.id], state: "needs_decision", current: "review", stages: threeStages("review") })).status).toBe(200);
+    } else {
+      fs.writeFileSync(path.join(root, names[index]!, "orchestrator-seats.json"), JSON.stringify({ schemaVersion: 1, nextSeatEpoch: 2,
+        seats: { [key]: { project: key, seatEpoch: 1, conversationId: `seat-${index}`, path: null, mandate: "Fixture seat", state: "active",
+          promptVersion: null, predecessorConversationId: null, designatedAt: originals[index]!.doneAt, activatedAt: originals[index]!.doneAt,
+          intent: { clientRequestId: `seat-${index}`, mode: "existing", launchId: null, error: null } } }, pending: {}, revocations: [] }));
+    }
+  }
+  await sync(installs[0]!, peerId);
+  for (const [index, task] of originals.entries()) {
+    expect((await taskOn(installs[1 - index]!, task.id))?.text).toBe(task.text);
+    expect(await taskOn(installs[index]!, task.id)).toEqual(task);
+  }
+}, 30_000);
+
 test("remote agents travel both ways as prompt-free summaries and stay in their linked project", async () => {
   const secondRemote = "code.example.test/acme/other";
   const thirdRemote = "code.example.test/acme/local-only";
@@ -966,6 +1001,51 @@ type Figures = { rowReads: number; writes: number; revisions: Record<string, num
 const figures = async (base: string, reset = false) => (await request(base, `/test/store${reset ? "?reset=1" : ""}`)).body as unknown as Figures;
 const otherRemote = "code.example.test/acme/unlinked";
 const otherKey = projectIdentityFromRemote(`https://${otherRemote}`, "/")!.project;
+
+test("2 000 expired Done omissions per install keep unchanged idle syncs within the zero-read and 2 ms CPU budgets", async () => {
+  const installs = [await install("expired-idle-A"), await install("expired-idle-B")];
+  const doneAt = new Date(Date.now() - DONE_TASK_BOARD_RETENTION_MS - 60_000).toISOString();
+  for (const side of installs) {
+    await request(side, "/test/capture?on=0");
+    await request(side, "/test/bulk", "POST", { project: key, count: 2_000 });
+    const completed = (await tasksOf(side)).map((task) => ({ ...task, status: "done" }));
+    expect((await request(side, "/test/import-tasks", "POST", { tasks: completed })).status).toBe(200);
+    // The transition stamps completion; backdate the already-Done fixture.
+    const expired = (await tasksOf(side)).map((task) => ({ ...task, doneAt, doneAdmissions: [] }));
+    expect((await request(side, "/test/import-tasks", "POST", { tasks: expired })).status).toBe(200);
+    expect((await tasksOf(side)).every((task) => task.doneAt === doneAt)).toBe(true);
+  }
+  const peerId = await link(installs[0]!, installs[1]!);
+  for (let i = 0; i < 100; i++) await sync(installs[0]!, peerId);
+  const before = await Promise.all(installs.map((side) => figures(side, true)));
+  const cpu = () => Promise.all(installs.map(async (side) => (await request(side, "/test/cpu")).body.ms as number));
+  const cpuBefore = await cpu();
+  for (let i = 0; i < 100; i++) await sync(installs[0]!, peerId);
+  const cpuAfter = await cpu();
+  const idle = await Promise.all(installs.map((side) => figures(side)));
+  for (const side of [0, 1]) {
+    expect({ side, rowReads: idle[side]!.rowReads, writes: idle[side]!.writes }).toEqual({ side, rowReads: 0, writes: 0 });
+    expect(idle[side]!.revisions).toEqual(before[side]!.revisions);
+    expect(cpuAfter[side]! - cpuBefore[side]!).toBeLessThanOrEqual(200);
+    expect(await tasksOf(installs[side]!)).toHaveLength(2_000);
+  }
+  // A changed scanner snapshot starts bounded work even when no task row
+  // changed. Four calls cover all 2 000 omissions, then idle reads stop again.
+  for (const side of installs) await request(side, "/test/scan");
+  for (let i = 0; i < 4; i++) {
+    await Promise.all(installs.map((side) => figures(side, true)));
+    await sync(installs[0]!, peerId);
+    for (const side of installs) {
+      const work = await figures(side);
+      expect(work.rowReads).toBeGreaterThan(0);
+      expect(work.rowReads).toBeLessThanOrEqual(513);
+      expect(work.writes).toBe(0);
+    }
+  }
+  await Promise.all(installs.map((side) => figures(side, true)));
+  await sync(installs[0]!, peerId);
+  for (const side of installs) expect((await figures(side)).rowReads).toBe(0);
+}, 60_000);
 
 test("idle calls read no task row and write nothing on either side; 100 calls while an unlinked project takes writes cost at most one board_links write", async () => {
   const a = await install("work-A", { [otherKey]: otherRemote });

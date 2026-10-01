@@ -6,12 +6,14 @@
  * A page stops at 200 rows or 512 KB of encoded rows.
  */
 import { taskFeedSource, TASKS_FILE } from "@/lib/tasks/store";
+import fs from "node:fs";
+import { statePath } from "@/lib/configDir";
 import type { BoardTask } from "@/lib/tasks/types";
 import { taskShowsOnBoard } from "@/lib/tasks/boardVisibility";
 import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
 import { lastScannedFiles } from "@/lib/scanner/scanCache";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
-import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, readStateCollectionRevision, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
 
 import { encodeTask, type WireRow } from "./taskWire";
 import { isTombstone, tombstoneCollection, tombstoneKey, tombstoneRowKey } from "./tombstones";
@@ -69,6 +71,25 @@ const omittedSeed = {
   key: (row: OmittedTask) => row.id, loadRecords: (): OmittedTask[] => [],
 };
 const omittedCollections = new Map<string, SqliteStateCollection<OmittedTask>>();
+type EligibilitySweep = {
+  taskRevision: number;
+  omissionRevision: number;
+  files: ReturnType<typeof lastScannedFiles>;
+  pipelineRevision: number | null;
+  seats: string;
+  after: string | null;
+};
+const eligibilitySweeps = new Map<string, Map<string, EligibilitySweep>>();
+
+function seatSignature(): string {
+  try {
+    const stat = fs.statSync(statePath("orchestrator-seats.json"), { bigint: true });
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "absent";
+    throw error;
+  }
+}
 function omittedTasks(database: string, create = false): SqliteStateCollection<OmittedTask> | null {
   const held = omittedCollections.get(database);
   if (held) return held;
@@ -93,22 +114,42 @@ function omittedTasks(database: string, create = false): SqliteStateCollection<O
 function resumeOmittedTasks(source: NonNullable<ReturnType<typeof taskFeedSource>>, filter: FeedFilter, eligible: (task: BoardTask) => boolean): void {
   const omissions = omittedTasks(source.database);
   if (!omissions) return;
+  const context = {
+    taskRevision: source.revision(), omissionRevision: omissions.revision(),
+    files: lastScannedFiles(), pipelineRevision: readStateCollectionRevision(statePath("state.sqlite"), "pipelines"), seats: seatSignature(),
+  };
+  let sweeps = eligibilitySweeps.get(source.database);
+  if (!sweeps) eligibilitySweeps.set(source.database, sweeps = new Map());
+  const scope = JSON.stringify([filter.self.id, [...filter.projects].sort()]);
+  let sweep = sweeps.get(scope);
+  // Snapshot identities and store revisions are constant-time idle checks.
+  // Finish a started sweep before observing newer context, so frequent scans
+  // cannot keep restarting at the first omission and starve the later keys.
+  if (!sweep || sweep.after === null) {
+    if (sweep && sweep.taskRevision === context.taskRevision && sweep.omissionRevision === context.omissionRevision
+      && sweep.files === context.files && sweep.pipelineRevision === context.pipelineRevision && sweep.seats === context.seats) return;
+    sweep = { ...context, after: "" };
+    sweeps.set(scope, sweep);
+  }
+  const batch = omissions.keyRange(sweep.after!, "\uffff", SCAN_BATCH);
   const resumed: string[] = [];
   const removed: string[] = [];
-  for (const row of omissions.loadReadonly()) {
+  for (const row of batch) {
     if (!filter.projects.has(row.project)) continue;
     const task = source.get(row.id);
     if (!task) removed.push(row.id);
     else if (eligible(task)) resumed.push(row.id);
   }
-  for (let start = 0; start < resumed.length; start += SCAN_BATCH) source.requeue(resumed.slice(start, start + SCAN_BATCH));
-  if (resumed.length || removed.length) omissions.patchSync(() => ({ records: [], deleteKeys: [...resumed, ...removed] }));
+  if (resumed.length) source.requeue(resumed);
+  const deleted = [...resumed, ...removed];
+  if (deleted.length) omissions.boundedPatch(deleted.length, (tx) => { for (const id of deleted) tx.delete(id); });
+  sweep.after = batch.length < SCAN_BATCH ? null : batch.at(-1)!.id;
 }
 
 function trackOmission(task: BoardTask, database: string, eligible: (task: BoardTask) => boolean): boolean {
   if (eligible(task)) return true;
   const omissions = omittedTasks(database, true)!;
-  if (omissions.get(task.id)?.project !== task.project) omissions.patchSync(() => ({ records: [{ id: task.id, project: task.project }] }));
+  if (omissions.get(task.id)?.project !== task.project) omissions.boundedPatch(1, (tx) => tx.put({ id: task.id, project: task.project }));
   return false;
 }
 
@@ -142,7 +183,7 @@ export function readLogPage(after: Position, filter: FeedFilter): LogPage {
   const exportable = exportableTasks(filter);
   resumeOmittedTasks(source, filter, exportable);
   const [revision, key = ""] = after;
-  // With no pending omissions, idle feeds need no task row reads.
+  // Unchanged eligibility context leaves omissions off the idle read path.
   const current = source.revision();
   if (revision > current) return { kind: "resync" };
   if (revision === current && !key) return { kind: "page", rows: [], cursor: after, more: false, withheld: [] };
