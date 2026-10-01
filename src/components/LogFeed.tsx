@@ -60,7 +60,7 @@ import { MessageProvenanceProvider, useDeliveredMessageProvenance } from "./feed
 import { RawLineProvider, type RawLineLookup } from "./feed/rawLine";
 import { ResponseDuration } from "./feed/ResponseDuration";
 import { SuggestedReplies } from "./feed/SuggestedReplies";
-import { BoundedLru, firstRowPastTop } from "./feed/scrollMemory";
+import { BoundedLru, firstRowPastTop, readingRows } from "./feed/scrollMemory";
 import { ConversationAttention } from "./runtime/ConversationAttention";
 import { conversationSpeech, ownConversationFeed, SpeechScope } from "./feed/conversationSpeech";
 import { answerFragmentOffset, createSpeakableAnswerResolver, visibleSpeakableAnswer } from "./feed/speakableAnswer";
@@ -179,7 +179,7 @@ function feedRows(scroller: HTMLElement): HTMLElement[] {
 
 function viewportAnchor(scroller: HTMLElement, path: string): ViewportAnchor | null {
   const viewportTop = scroller.getBoundingClientRect().top;
-  const row = firstRowPastTop(feedRows(scroller), viewportTop);
+  const row = firstRowPastTop(readingRows(scroller), viewportTop);
   const key = row?.dataset.feedKey;
   return row && key ? { path, key, offset: row.getBoundingClientRect().top - viewportTop } : null;
 }

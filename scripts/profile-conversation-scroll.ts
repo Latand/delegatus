@@ -12,7 +12,7 @@
  *
  *   bun scripts/profile-conversation-scroll.ts run --url <proxy or Viewer origin> \
  *     --project <project key> --card task:<task id> --tile <n> --conversation <conversation id> \
- *     --out <dir> [--runs 3] [--speed 2000] [--seconds 5] [--count] [--invalidation] [--ablate speech,frameh,cv,composite]
+ *     --out <dir> [--runs 3] [--speed 2000] [--seconds 5] [--count] [--invalidation] [--anchors] [--ablate speech,frameh,cv,composite]
  *
  *   bun scripts/profile-conversation-scroll.ts analyze <trace.json>
  *
@@ -270,6 +270,39 @@ async function expandFeed(page: Page, feed: string): Promise<number> {
   return clicks;
 }
 
+/* The reading anchor `firstRowPastTop(readingRows(...))` picks (scrollMemory.ts)
+   against the linear scan it replaced, at every sampled scroll position of the
+   expanded feed. Mirrors that code in the page; run it on the real DOM, where
+   empty reasoning leaves anchors with no box. */
+async function anchorAgreement(page: Page, feed: string) {
+  return page.evaluate((s) => {
+    const scroller = document.querySelector<HTMLElement>(s)!;
+    const all = [...scroller.querySelectorAll<HTMLElement>("[data-feed-key]")];
+    const rows = all.filter((anchor) => !anchor.parentElement?.closest("[data-feed-key], [data-empty-reasoning]"));
+    const bisect = (top: number) => {
+      let low = 0, high = rows.length;
+      while (low < high) { const middle = (low + high) >>> 1; if (rows[middle]!.getBoundingClientRect().bottom > top) high = middle; else low = middle + 1; }
+      return rows[low];
+    };
+    const step = Math.max(1, Math.floor((scroller.scrollHeight - scroller.clientHeight) / 140));
+    let positions = 0, differ = 0, farthest = 0;
+    for (let at = 0; at <= scroller.scrollHeight - scroller.clientHeight; at += step) {
+      scroller.scrollTop = at;
+      const top = scroller.getBoundingClientRect().top;
+      const linear = all.find((row) => row.getBoundingClientRect().bottom > top);
+      const picked = bisect(top);
+      positions += 1;
+      if (linear !== picked) { differ += 1; farthest = Math.max(farthest, Math.abs((picked?.getBoundingClientRect().top ?? 0) - (linear?.getBoundingClientRect().top ?? 0))); }
+    }
+    scroller.scrollTop = 0;
+    return {
+      anchors: all.length, readingRows: rows.length,
+      withoutBox: all.filter((row) => { const r = row.getBoundingClientRect(); return r.width === 0 && r.height === 0; }).length,
+      positions, differ, farthest,
+    };
+  }, feed);
+}
+
 async function run(): Promise<void> {
   const base = args.get("url") ?? "http://127.0.0.1:8898";
   const project = args.get("project")!;
@@ -328,6 +361,7 @@ async function run(): Promise<void> {
         };
       }, feed);
       await page.waitForTimeout(1500);
+      if (args.has("anchors")) console.error(`anchors ${JSON.stringify(await anchorAgreement(page, feed))}`);
       const box = await page.evaluate((s) => {
         const b = document.querySelector<HTMLElement>(s)!.getBoundingClientRect();
         const top = Math.max(0, b.top), bottom = Math.min(innerHeight, b.bottom), left = Math.max(0, b.left), right = Math.min(innerWidth, b.right);
