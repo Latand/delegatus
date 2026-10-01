@@ -105,7 +105,7 @@
       "reach.tab2": "Decision",
       "reach.tab3": "Reports",
       "reach.phoneAlt": "Delegatus on a phone with invented data: the harbor-api board, with the task that needs a decision first.",
-      "foot.does": "Give the prompt to your own Claude Code or Codex. It installs Delegatus on this machine, connects it to your agent, starts it and ends with a link to open. There you pick a project and create its orchestrator.",
+      "foot.does": "Give the prompt to your own Claude Code or Codex. It installs and starts Delegatus on this machine, connects itself to it and ends with a link to open. There you pick a project and create its orchestrator.",
       "foot.analytics": "This site counts visits with Cloudflare Web Analytics (no cookies), clicks on its copy buttons, demo starts and full-screen opens.",
       "foot.needs": "macOS or Linux (Windows through WSL 2) · Bun 1.4+ · Claude Code, Codex or both",
       "meta.title": "Delegatus: delegate everything",
@@ -137,7 +137,7 @@
       "open.c3": "Several Claude and Codex accounts, limits in view.",
       "reach.title": "It finds you when it needs you.",
       "reach.c1": "Your board on your phone, inside your tailnet.",
-      "foot.line": "Free and open source. Runs on your machine with your own Claude Code and Codex.",
+      "foot.line": "Free and open source. Runs on your machine with your own Claude Code or Codex.",
       "foot.version": "version",
     },
     uk: {
@@ -184,7 +184,7 @@
       "reach.tab2": "Рішення",
       "reach.tab3": "Звіти",
       "reach.phoneAlt": "Delegatus на телефоні з вигаданими даними: дошка harbor-api, задача, що чекає рішення, перша.",
-      "foot.does": "Віддай промпт своєму Claude Code або Codex. Він встановить Delegatus на цю машину, підключить до твого агента, запустить і наприкінці дасть посилання. Там ти обираєш проєкт і створюєш його оркестратора.",
+      "foot.does": "Віддай промпт своєму Claude Code або Codex. Він встановить і запустить Delegatus на цій машині, підключиться до нього й наприкінці дасть посилання. Там ти обираєш проєкт і створюєш його оркестратора.",
       "foot.needs": "macOS або Linux (Windows через WSL 2) · Bun 1.4+ · Claude Code, Codex або обидва",
       "meta.title": "Delegatus: делегуй усе",
       "meta.description":
@@ -216,7 +216,7 @@
       "open.c3": "Кілька акаунтів Claude і Codex, ліміти на виду.",
       "reach.title": "Він знайде тебе, коли ти потрібен.",
       "reach.c1": "Твоя дошка на телефоні, у твоїй мережі Tailscale.",
-      "foot.line": "Безкоштовний, з відкритим кодом. Працює на твоїй машині з твоїми Claude Code і Codex.",
+      "foot.line": "Безкоштовний, з відкритим кодом. Працює на твоїй машині з твоїм Claude Code або Codex.",
       "foot.version": "версія",
     },
   };
