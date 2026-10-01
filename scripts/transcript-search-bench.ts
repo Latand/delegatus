@@ -4,7 +4,7 @@
  * corpus `transcript-search-fixture.ts` writes: the same three queries on every
  * surface the operator reaches it through.
  *
- *   LLV_STATE_DIR=<scratch> bun scripts/transcript-search-bench.ts <fixtureDir> [--repeat 5] [--json <file>] [--skip-mcp] [--skip-ui]
+ *   systemd-run --user --scope -p MemoryMax=12G -p MemorySwapMax=0 -- flock /var/tmp/llv-heavy-gate.lock env LLV_STATE_DIR=<scratch> bun scripts/transcript-search-bench.ts <fixtureDir> [--repeat 5] [--json <file>] [--skip-mcp] [--skip-ui]
  *
  * Refuses to run without an explicit LLV_STATE_DIR so the index build can never
  * touch the operator's live `transcript-search.sqlite`, and the MCP host it

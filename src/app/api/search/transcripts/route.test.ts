@@ -320,3 +320,33 @@ test("route stays newest by default and passes ranked conversation fields for an
   expect(relevance.projectScope.resolved).toBeNull();
   expect((await GET(new Request(url + "&order=other"))).status).toBe(400);
 });
+
+
+test("HTTP and MCP relevance pages bound long tokens and multibyte fragments", async () => {
+  const transcript = path.join(sandbox, "long-token.jsonl");
+  fs.writeFileSync(transcript, ["cobalt " + "z".repeat(120000), "quartz " + "界😀".repeat(30000), ...Array.from({ length: 100 }, (_, i) => `filler record ${i}`)].map((content) =>
+    JSON.stringify({ type: "user", message: { content } })).join("\n") + "\n");
+  const stat = fs.statSync(transcript);
+  await indexTranscriptSources([{ path: transcript, engine: "claude", project: "long-token", size: stat.size, mtimeMs: stat.mtimeMs }]);
+  const get = async (pathname: string) => {
+    const response = await GET(new Request(`http://127.0.0.1${pathname}`));
+    expect(response.status).toBe(200);
+    const serialized = await response.text();
+    expect(Buffer.byteLength(serialized)).toBeLessThanOrEqual(16 * 1024);
+    return JSON.parse(serialized);
+  };
+  const page = await get("/api/search/transcripts?q=cobalt+quartz&order=relevance");
+  const bindings = viewerMcpBindings(undefined, { get, post: async () => ({}) });
+  const mcp = await bindings.search_transcripts({ query: "cobalt quartz" });
+  expect(Buffer.byteLength(JSON.stringify(mcp))).toBeLessThanOrEqual(16 * 1024);
+  for (const result of [page, mcp]) {
+    expect(result.items[0].transcriptPath).toBe(transcript);
+    const fragments = [result.items[0], ...result.items[0].fragments];
+    expect(fragments.map((f) => f.lineNumber).sort()).toEqual([1, 2]);
+    for (const fragment of fragments) {
+      const record = JSON.parse(fs.readFileSync(transcript).subarray(fragment.byteOffset).toString().split("\n")[0]);
+      expect(record.message.content).toMatch(/^(cobalt|quartz) /u);
+      expect(fragment.snippet).toEndWith("…");
+    }
+  }
+});

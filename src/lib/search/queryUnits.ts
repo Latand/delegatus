@@ -33,7 +33,10 @@ export function queryUnits(query: string, frequency?: (term: string, prefix: boo
   const units: QueryUnit[] = [];
   for (const match of query.matchAll(/"([^"]*)"|([^\s"]+)/gu)) {
     const raw = match[1] ?? match[2];
-    const tokens = raw.toLowerCase().match(/[\p{L}\p{N}\p{M}\p{Co}_#]+/gu) ?? [];
+    // unicode61 retains dotted capital I with diacritic removal disabled.
+    // Avoid JavaScript's expanding lowercase mapping to i + combining dot.
+    const lowered = raw.includes("İ") ? Array.from(raw, (char) => char === "İ" ? char : char.toLowerCase()).join("") : raw.toLowerCase();
+    const tokens = lowered.match(/[\p{L}\p{N}\p{M}\p{Co}_#]+/gu) ?? [];
     if (!tokens.length) continue;
     if (match[1] !== undefined || tokens.length > 1) {
       const label = tokens.join(" ");

@@ -25,8 +25,8 @@ outside the repository.
   The covering index avoids reading bodies for those hits. The first unchanged indexing pass
   that created it took 3.4 seconds on 250,000 messages; it preserves message
   IDs, hashes and the FTS index. The vocabulary table remains persistent.
-- Relevance cursors also preserve interpreted units, weights, scoring time
-  and folded-snippet signatures. Counts for length damping are fenced by
+- Relevance cursors preserve interpreted units, weights, scoring time
+  and compressed identities of visited conversation files. Counts for length damping are fenced by
   the saved message ID. These preserve ordering when indexing adds rows,
   including when a frequency crosses the common-word threshold.
 - Project resolution runs in the library so every caller uses the same
@@ -34,8 +34,11 @@ outside the repository.
   a shared repository basename, and reports unknown or ambiguous scopes.
 - Word forms use the design prototype's en/ru/uk suffix rules, including
   final-e Latin forms. Digit, underscore and hashtag tokens stay exact.
-- Newest avoids vocabulary lookups and never drops units. Prefix expansion
-  therefore retains every unquoted old match while preserving its time order.
+- Newest never drops units. Small exact dictionary unions accelerate prefix
+  matching. A bounded expression cache is fenced by file identity, schema and
+  the indexed message high-water ID, so new word forms invalidate it. Ready
+  indexes use stored timestamps without per-hit compatibility joins; activity
+  date reads retain their covering range index too.
 - The recorded prototype also excludes vocabulary units with zero document
   frequency. D3's prose omitted that rule. Relevance follows the measured
   prototype and reports these units in `interpretedAs.ignored`; a query whose
@@ -62,61 +65,91 @@ excludes its issuing transcript. Only aggregate metrics are emitted.
 The baseline preserves v4's exact AND and newest body collapse. Its recall
 counts distinct conversations in first-occurrence order, as the design did.
 
-Run heavy checks under `flock /var/tmp/llv-heavy-gate.lock`.
+Run every benchmark, replay and large-fixture test under a hard memory cap:
+`systemd-run --user --scope -p MemoryMax=12G -p MemorySwapMax=0 -- flock /var/tmp/llv-heavy-gate.lock <command>`.
+Use a private `LLV_STATE_DIR` and a temporary root outside operator state.
+Measure a small slice's peak RSS before expanding a workload.
 
-## Measured results
+## Response budget and paging
 
-Fresh read-only backup reduced to the v4 schema before replay, 10,338
-transcripts available for recorded-call extraction, 12,633 distinct
-query/project pairs. The 1,000-query sample uses seed 20260926 and the design
-lane's first-discovery ordering, updating the earliest call in place. Word
-counts: 156 single-word, 220 two-word, 278 three/four-word, 261 five/seven-word
-and 85 eight-or-more-word queries. Opened-transcript sampling uses seed 7 and
-300 distinct query/opened-transcript pairs.
+Relevance snippets retain at most 512 serialized UTF-8 bytes each, including
+JSON escapes. Truncation preserves Unicode scalar values and complete match
+markers. Each library page, including metadata and cursor, fits 12 KiB with
+space reserved for route titles; HTTP and decoded MCP pages fit 16 KiB.
+Conversation count and bytes both drive pagination. Required jump coordinates
+remain intact. A single item or interpretation whose metadata cannot fit is
+rejected with a bounded HTTP 400 asking for a narrower query or project.
 
-| Metric | v4 baseline | Relevance |
-| --- | ---: | ---: |
-| Zero-result rate, strong | 53.4% | 2.6% |
-| Zero-result rate, any | 53.4% | 2.6% |
-| Opened transcript in top 6 | 166 / 300 (55.3%) | 181 / 300 (60.3%) |
-| Query p50 | 4.9 ms | 70.6 ms |
-| Query p95 | 35.9 ms | 262.1 ms |
-| Query maximum | — | 500.1 ms |
+Relevance has no one-word strong retry. Every result keeps the originally
+retained units as its coverage denominator and reports its missing units;
+quoted phrases, hyphenated terms and paths stay atomic. During migration a
+bounded subset can be retrieved while the full denominator remains unchanged.
 
-The strong-zero acceptance threshold is 8%; recall must be at least the
-baseline. Both hold. The ranked p95 stays below the design's 350 ms band. The
-replay includes interpretation, project resolution, ranking, folding and
-snippet generation. If no conversation meets the coverage bar, retrieval
-retries the rarest original term and reports the omitted terms. On the first
-recorded query against this v4-shaped copy,
-the search took 64.7 ms and the zero-delay event-loop timer fired after 64.9 ms.
-The migration and vocabulary/index build finished in the background in 4.1 s;
-steady query timings were collected after the covering index became available.
-The route regression also sends a real HTTP request against a 10,000-message
-v4 fixture; it returns in under 350 ms while a zero-delay timer runs, then
-waits for the background vocabulary and index build to finish.
+Copies with identical 16-token lead snippets fold even when their remaining
+body text differs. Complete-body copies share one signature calculation;
+other lead signatures are computed in one batched FTS scan before pagination.
+This extends the design's candidate-only snippet pass to preserve complete
+copy counts across pages. Only returned fragments have jump metadata hydrated.
+The cursor stores compressed delta-varint file identities, so pruning an
+earlier hit or truncating unrelated messages cannot skip a surviving
+conversation whose score changes. Cursor decoding bounds decompression too.
 
-On the 250,000-message invented fixture (five repetitions), relevance's
-common-pair library median is 122 ms for both speakers and 82 ms for user
-messages. The packaged MCP median for the common pair is 122 ms. Every
-six-conversation fixture page passes the driver's 6 KB check.
+## Current review-fix measurements
 
-Newest common-pair library medians are 6,418 → 56 ms (user) and 74 → 77 ms
-(both); the very-common-word cells are 2,252 → 114 ms (user) and 248 → 222 ms
-(both). The baseline uses the unchanged main library on a separate copy of
-the same synthetic index with the added covering index removed. A paired
-rare-word run (100 repetitions after warm-up) measures 1.784 → 1.928 ms,
-+8.1%, within the 10% allowance. All newest library cells satisfy that
-allowance; rare user-scoped queries improve from 729 ms to about 3 ms.
+On the existing 250,000-message invented fixture (five repetitions, hard
+12 GiB cap), all six-conversation pages pass the existing 6 KiB fixture gate.
+The common-pair library median is 130.5 ms for both speakers and 86.7 ms
+for user messages; the packaged MCP median is 135.2 ms. The final
+benchmark peak RSS was 496 MiB. It includes library, route, HTTP and packaged
+MCP; the unchanged UI driver was skipped in this backend fix round.
+
+Paired newest measurements use the byte-identical current main library on a
+separate copy of the same index, without the PR's covering hit index. Five
+warm-ups precede each cell and execution order alternates. Rare cells have
+200 repetitions; common cells have 15.
+
+| Query cell | Speaker | Main ms | Revised ms | Change |
+| --- | --- | ---: | ---: | ---: |
+| rare | user | 0.640 | 0.652 | +1.8% |
+| rare | all | 0.674 | 0.688 | +2.1% |
+| common pair | user | 27.774 | 27.295 | -1.7% |
+| common pair | all | 38.032 | 37.337 | -1.8% |
+| very common | user | 71.775 | 69.765 | -2.8% |
+| very common | all | 119.146 | 118.112 | -0.9% |
+
+All cells satisfy the 10% allowance. This paired run peaked at 411 MiB RSS.
+A 20-pair rare-query slice peaked at 44 MiB; 2,000 pairs plateaued at 64 MiB.
+The preceding attempt's reported 125 GB OOM has not been reproduced or
+causally attributed. Subsequent measurements all ran under a hard cap.
+
+The real standalone build contains a bundled worker and its runtime chunks.
+Its production worker migrates a private v4 fixture to v5, preserves message
+IDs, hashes and FTS rows, creates vocabulary/indexes, and restores complete
+ranked coverage. Failed worker exits are reported and later searches retry.
+
+## Replay status
+
+The previous reported 2.6% strong-zero result used a one-word retry that
+changed the coverage denominator. It is invalid as evidence for the pinned
+8% acceptance threshold and is withdrawn. Current strong-zero and opened-hit
+recall require a new seeded 1,000-query replay with the unchanged coverage
+criterion on a private offline copy of the recorded corpus and calls.
+That input is unavailable in this checkout; live index/transcript access is
+excluded from this fix round. Invented-call smoke replay and replay unit
+checks cannot substitute for the real-corpus acceptance measurement.
 
 ## Review-fix checks
 
-- `bun test src/lib/search/transcriptSearch.test.ts`: 33 passed, including
-  v4 migration responsiveness and duplicate groups across pages.
-- `bun test src/app/api/search/transcripts/route.test.ts`: 10 passed, including
-  an HTTP request during background migration.
-- `bun test scripts/transcript-search-replay.test.ts`: 4 passed.
-- `bun node_modules/typescript/bin/tsc --noEmit`.
+97 tests pass across seven exact-path files plus a separately enabled real
+standalone migration case, with independent private state roots. Eleven
+focused regressions fail against the preceding implementation and pass after
+the fix. Coverage includes denominator honesty, atomic phrases/paths,
+long-token and multibyte HTTP/MCP pages, copy grouping, pruning during paging,
+malformed relevance cursors, activity range-index use, background failure
+retry, Unicode tokenizer folding, legacy timestamp preservation and real
+standalone migration. TypeScript and changed-file ESLint pass (zero errors,
+three existing warnings across the full PR). The privacy gate passes against
+the merge base with commit checking on the final committed tree.
 
 No deployment is included. The fenced privacy-gate, board-maintenance and
 monitor areas and the repository instruction files remain untouched.

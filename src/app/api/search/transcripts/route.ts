@@ -1,6 +1,7 @@
 import { conversationCatalogSnapshot } from "@/lib/scanner/conversationCatalog";
 import {
   InvalidTranscriptSearchCursorError,
+  TranscriptSearchPageTooLargeError,
   searchTranscripts,
   type TranscriptSearchItem,
   type TranscriptSpeaker,
@@ -67,7 +68,7 @@ export async function GET(request: Request): Promise<Response> {
       limit: pageLimit(url.searchParams.get("limit")),
     });
   } catch (error) {
-    if (error instanceof InvalidTranscriptSearchCursorError) {
+    if (error instanceof InvalidTranscriptSearchCursorError || error instanceof TranscriptSearchPageTooLargeError) {
       return Response.json({ error: error.message }, { status: 400 });
     }
     throw error;

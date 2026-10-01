@@ -13,7 +13,10 @@ import { scheduleTranscriptIndex, waitForTranscriptIndexIdleForTests } from "./t
 import {
   indexTranscriptSources,
   InvalidTranscriptSearchCursorError,
+  readTranscriptActivity,
   searchTranscripts,
+  TRANSCRIPT_RELEVANCE_PAGE_BYTES,
+  transcriptSearchWorkerPath,
   type TranscriptIndexSource,
   type TranscriptSearchItem,
 } from "./transcriptSearch";
@@ -31,12 +34,13 @@ function source(pathname: string, engine: "claude" | "codex" | "copilot", projec
   return { path: pathname, engine, project, size: stat.size, mtimeMs: stat.mtimeMs };
 }
 
+let stateSequence = 0;
 beforeEach(() => {
   process.env.HOME = path.join(sandbox, "home");
   process.env.XDG_CONFIG_HOME = path.join(sandbox, "config");
-  process.env.LLV_STATE_DIR = path.join(sandbox, "state");
+  // A previous test's background worker must never open the next test's index.
+  process.env.LLV_STATE_DIR = path.join(sandbox, `state-${++stateSequence}`);
   process.env.TMPDIR = path.join(sandbox, "tmp");
-  fs.rmSync(process.env.LLV_STATE_DIR, { recursive: true, force: true });
   fs.mkdirSync(process.env.TMPDIR, { recursive: true });
 });
 
@@ -969,17 +973,62 @@ test("relevance covers a conversation across messages and selects complementary 
   expect(searchTranscripts({ query: "cobalt quartz", order: "newest" }).total).toBe(0);
 });
 
-test("relevance retries the rarest original term when coverage would otherwise be empty", async () => {
-  await rankedFixture([[
-    "cobalt-only", ["cobalt result"],
-  ], [
-    "quartz-only", ["quartz result"],
-  ]]);
-  const page = searchTranscripts({ query: "cobalt quartz", order: "relevance" });
-  expect(page.total).toBe(1);
-  expect(page.strongTotal).toBe(1);
-  expect(page.interpretedAs?.units).toHaveLength(1);
-  expect(page.interpretedAs?.ignored).toHaveLength(1);
+test("disjoint rare words remain weak with the full query denominator on every page", async () => {
+  const words = "cobalt quartz zircon opal beryl topaz garnet".split(" ");
+  await rankedFixture(words.map((word) => [word, [`${word} unrelated answer`]]));
+  let cursor: string | null = null;
+  const paths = new Set<string>();
+  do {
+    const page = searchTranscripts({ query: words.join(" "), order: "relevance", limit: 1, cursor });
+    expect(page.total).toBe(7);
+    expect(page.strongTotal).toBe(0);
+    expect(page.interpretedAs?.units).toHaveLength(7);
+    expect(page.interpretedAs?.ignored).toEqual([]);
+    expect(page.items[0].matched).toHaveLength(1);
+    expect(page.items[0].missing).toHaveLength(6);
+    paths.add(page.items[0].transcriptPath);
+    cursor = page.nextCursor;
+  } while (cursor);
+  expect(paths.size).toBe(7);
+});
+
+test("quoted phrases, hyphenated terms and paths stay atomic when no strong hit exists", async () => {
+  await rankedFixture([["split", ["cobalt unrelated answer", "quartz different task", "sign unrelated", "in different", "src unrelated", "search different", "ts elsewhere"]]]);
+  for (const query of ['"cobalt quartz"', "sign-in", "src/search.ts"]) {
+    const page = searchTranscripts({ query, order: "relevance" });
+    expect(page.total).toBe(0);
+    expect(page.strongTotal).toBe(0);
+    expect(page.items).toEqual([]);
+    expect(page.interpretedAs?.units).toHaveLength(1);
+  }
+});
+
+test("relevance byte paging bounds long tokens and multibyte snippets without losing jump coordinates", async () => {
+  const rows: Array<[string, string[]]> = Array.from({ length: 20 }, (_, i) => [
+    `long-${i}-${"p".repeat(120)}`, [`cobalt ${i} ${"z".repeat(120000)}`, `quartz ${i} ${"界😀".repeat(30000)}`],
+  ]);
+  const sources = await rankedFixture(rows);
+  let cursor: string | null = null;
+  const seen = new Set<string>();
+  do {
+    const page = searchTranscripts({ query: "cobalt quartz", order: "relevance", limit: 100, cursor });
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(TRANSCRIPT_RELEVANCE_PAGE_BYTES);
+    for (const item of page.items) {
+      expect(seen.has(item.transcriptPath)).toBe(false);
+      seen.add(item.transcriptPath);
+      expect(sources.some((s) => s.path === item.transcriptPath)).toBe(true);
+      for (const fragment of [item, ...item.fragments!]) {
+        expect(Buffer.byteLength(JSON.stringify(fragment.snippet))).toBeLessThanOrEqual(512);
+        expect(fragment.snippet).not.toContain("\uFFFD");
+        expect(fragment.snippet).toEndWith("…");
+        expect(fragment.lineNumber).toBeGreaterThan(0);
+        const record = JSON.parse(fs.readFileSync(item.transcriptPath).subarray(fragment.byteOffset).toString().split("\n")[0]);
+        expect(record.message.content).toContain(fragment.snippet.replaceAll(SNIPPET_MATCH_OPEN, "").replaceAll(SNIPPET_MATCH_CLOSE, "").slice(0, -1));
+      }
+    }
+    cursor = page.nextCursor;
+  } while (cursor);
+  expect(seen.size).toBe(20);
 });
 
 test("copies fold by lead snippet, common units are reported, and pages stay compact", async () => {
@@ -1057,6 +1106,109 @@ test("relevance cursors freeze ranking and folding across appends and reject the
   expect(() => searchTranscripts({ query: "quartz", order: "relevance", cursor: first.nextCursor })).toThrow(InvalidTranscriptSearchCursorError);
 });
 
+test("relevance paging retains surviving conversations when the preceding hit is pruned", async () => {
+  const sources = await rankedFixture([["first", ["cobalt first"]], ["second", ["cobalt second"]], ["third", ["cobalt third"]]]);
+  const expected = searchTranscripts({ query: "cobalt", order: "relevance" }).items.map((i) => i.transcriptPath);
+  const first = searchTranscripts({ query: "cobalt", order: "relevance", limit: 1 });
+  await indexTranscriptSources(sources.filter((s) => s.path !== first.items[0].transcriptPath), { complete: true });
+  const remaining: string[] = [];
+  let cursor = first.nextCursor;
+  while (cursor) {
+    const page = searchTranscripts({ query: "cobalt", order: "relevance", limit: 1, cursor });
+    remaining.push(...page.items.map((i) => i.transcriptPath));
+    cursor = page.nextCursor;
+  }
+  expect(remaining).toEqual(expected.slice(1));
+});
+
+test("relevance paging keeps a surviving hit when tail truncation changes its score", async () => {
+  const sources = await rankedFixture([
+    ["one", ["cobalt A", ...Array.from({ length: 9 }, () => "unrelated detail")]],
+    ["two", ["cobalt B", ...Array.from({ length: 19 }, () => "unrelated detail")]],
+  ]);
+  const first = searchTranscripts({ query: "cobalt", order: "relevance", limit: 1 });
+  expect(first.items[0].transcriptPath).toBe(sources[0].path);
+  fs.writeFileSync(sources[1].path, fs.readFileSync(sources[1].path, "utf8").split("\n")[0] + "\n");
+  await indexTranscriptSources([source(sources[1].path, "claude", "ranked-fixture")]);
+  const next = searchTranscripts({ query: "cobalt", order: "relevance", cursor: first.nextCursor });
+  expect(next.items.map((item) => item.transcriptPath)).toEqual([sources[1].path]);
+  expect(next.nextCursor).toBeNull();
+});
+
+test("newest preserves unicode61 dotted-I matches", async () => {
+  await rankedFixture([["unicode", ["İstanbul itinerary"]]]);
+  expect(searchTranscripts({ query: "İstanbul", order: "newest" }).total).toBe(1);
+  expect(searchTranscripts({ query: "İstanbul", order: "relevance" }).total).toBe(1);
+});
+
+test("relevance vocabulary lookup follows unicode61 final-sigma and long-s folding", async () => {
+  await rankedFixture([["unicode-folds", ["κόσμος itinerary", "ſample answer"]]]);
+  for (const query of ["κόσμος", "ſample"]) {
+    expect(searchTranscripts({ query, order: "newest" }).total).toBe(1);
+    const ranked = searchTranscripts({ query, order: "relevance" });
+    expect(ranked.total).toBe(1);
+    expect(ranked.interpretedAs?.ignored).toEqual([]);
+  }
+});
+
+test("legacy migration captures undated message time before indexing a grown source", async () => {
+  const pathname = path.join(sandbox, "legacy-undated.jsonl");
+  fs.writeFileSync(pathname, JSON.stringify({ type: "user", message: { content: "cobalt original" } }) + "\n");
+  const original = { ...source(pathname, "claude", "legacy"), mtimeMs: 10000 };
+  await indexTranscriptSources([original]);
+  const db = new Database(statePath("transcript-search.sqlite"));
+  db.exec(`DROP INDEX transcript_messages_search_hit;
+    DROP INDEX transcript_messages_time;
+    ALTER TABLE transcript_messages DROP COLUMN sort_timestamp;
+    PRAGMA user_version = 2;`);
+  db.close();
+  fs.appendFileSync(pathname, JSON.stringify({ type: "user", message: { content: "quartz appended" } }) + "\n");
+  await indexTranscriptSources([{ ...source(pathname, "claude", "legacy"), mtimeMs: 20000 }]);
+  expect(searchTranscripts({ query: "cobalt", order: "newest" }).items[0].timestamp).toBe(10);
+  expect(searchTranscripts({ query: "quartz", order: "newest" }).items[0].timestamp).toBe(20);
+});
+
+test("different lead bodies with the same sixteen-token snippet fold across page boundaries", async () => {
+  const shared = "cobalt shared specification " + "details ".repeat(60);
+  await rankedFixture([["first-copy", [shared + "stage alpha"]], ["second-copy", [shared + "stage beta"]], ["unique", ["cobalt independent answer"]]]);
+  const first = searchTranscripts({ query: "cobalt", order: "relevance", limit: 1 });
+  expect(first.items[0].duplicateCount).toBe(2);
+  expect(first.items[0].alsoIn?.count).toBe(1);
+  const next = searchTranscripts({ query: "cobalt", order: "relevance", limit: 1, cursor: first.nextCursor });
+  expect(next.items[0].snippet).toContain("independent");
+  expect(next.nextCursor).toBeNull();
+});
+
+test("migrated activity date reads use the covering range index", async () => {
+  await rankedFixture([["dated", ["cobalt dated answer"]]]);
+  const original = Database.prototype.query;
+  let activitySql = "";
+  Database.prototype.query = function (this: Database, sql: string) {
+    if (sql.includes("SELECT m.id, m.speaker, m.transcript_path, m.timestamp")) activitySql = sql;
+    return original.call(this, sql);
+  } as typeof original;
+  try {
+    const activity = readTranscriptActivity(0, 500);
+    expect(activity.rows).toHaveLength(101);
+  } finally { Database.prototype.query = original; }
+  const db = new Database(statePath("transcript-search.sqlite"), { readonly: true });
+  try {
+    const plan = db.query<{ detail: string }, [number, number]>(`EXPLAIN QUERY PLAN ${activitySql}`).all(0, 500);
+    expect(plan.map((row) => row.detail).join(" ")).toContain("USING COVERING INDEX transcript_messages_time (sort_timestamp>? AND sort_timestamp<?)");
+  } finally { db.close(); }
+});
+
+test("malformed relevance cursor expressions cannot reach the FTS parser", async () => {
+  await rankedFixture([["first", ["cobalt first"]], ["second", ["cobalt second"]]]);
+  const first = searchTranscripts({ query: "cobalt", order: "relevance", limit: 1 });
+  const parsed = JSON.parse(Buffer.from(first.nextCursor!, "base64url").toString());
+  for (const change of [{ expression: ":" }, { terms: null }, { terms: [{ term: "cobalt OR quartz", prefix: true }] }]) {
+    const payload = { ...parsed, units: [{ ...parsed.units[0], ...change }] };
+    const cursor = Buffer.from(JSON.stringify(payload)).toString("base64url");
+    expect(() => searchTranscripts({ query: "cobalt", order: "relevance", cursor })).toThrow(InvalidTranscriptSearchCursorError);
+  }
+});
+
 test("v4 to v5 creates vocab without rewriting messages or the FTS index", async () => {
   await rankedFixture([["one", ["cobalt resolution"]]]);
   const db = new Database(statePath("transcript-search.sqlite"));
@@ -1122,4 +1274,82 @@ test("newest word forms include all old unquoted matches and order added inflect
   const page = searchTranscripts({ query: "logins", order: "newest" });
   expect(page.items.map((i) => i.timestamp)).toEqual([101, 100]);
   for (const query of ["сохраненные", "картка", "1533"]) expect(searchTranscripts({ query }).total).toBeGreaterThan(0);
+});
+
+
+test("failed background workers report failure and a subsequent search retries migration", async () => {
+  process.env.LLV_STATE_DIR = path.join(sandbox, "failed-worker-state");
+  await rankedFixture([["worker-failure", ["cobalt quartz answer"]]]);
+  const db = new Database(statePath("transcript-search.sqlite"));
+  db.exec("DROP TABLE transcript_messages_vocab; DROP INDEX transcript_messages_search_hit;");
+  db.close();
+  const cwd = process.cwd();
+  const isolatedCwd = path.join(sandbox, "broken-worker");
+  fs.mkdirSync(path.join(isolatedCwd, "src/lib"), { recursive: true });
+  fs.writeFileSync(path.join(isolatedCwd, "src/lib/transcriptSearchIndex.worker.ts"), "process.exit(17);\n");
+  const error = console.error;
+  const failures: string[] = [];
+  console.error = (message) => failures.push(String(message));
+  try {
+    process.chdir(isolatedCwd);
+    const partial = searchTranscripts({ query: "cobalt quartz", order: "relevance" });
+    expect(partial.interpretedAs?.units).toHaveLength(2);
+    expect(partial.items[0].missing).toHaveLength(1);
+    expect(partial.strongTotal).toBe(0);
+    const deadline = performance.now() + 5000;
+    while (!failures.length && performance.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(failures[0]).toContain("status 17");
+    process.chdir(cwd);
+    searchTranscripts({ query: "cobalt quartz", order: "relevance" });
+    while (performance.now() < deadline) {
+      const probe = new Database(statePath("transcript-search.sqlite"), { readonly: true });
+      const ready = probe.query("SELECT 1 FROM sqlite_master WHERE name='transcript_messages_search_hit'").get();
+      probe.close();
+      if (ready) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(searchTranscripts({ query: "cobalt quartz", order: "relevance" }).items[0].missing).toEqual([]);
+  } finally {
+    process.chdir(cwd);
+    console.error = error;
+  }
+});
+
+test.skipIf(!process.env.LLV_TRANSCRIPT_STANDALONE_DIR)("the real standalone worker migrates v4 and preserves IDs, hashes, FTS and ranked coverage", async () => {
+  await rankedFixture([["standalone", ["cobalt plan", "quartz solution"]]]);
+  const db = new Database(statePath("transcript-search.sqlite"));
+  const before = db.query("SELECT id, body_hash FROM transcript_messages ORDER BY id").values();
+  const fts = db.query("SELECT rowid, body FROM transcript_messages_fts ORDER BY rowid").values();
+  db.exec(`DROP TABLE transcript_messages_vocab;
+    DROP INDEX transcript_messages_search_hit;
+    DROP INDEX transcript_messages_time;
+    ALTER TABLE transcript_messages DROP COLUMN sort_timestamp;
+    PRAGMA user_version = 4;`);
+  db.close();
+  const cwd = process.cwd();
+  try {
+    process.chdir(process.env.LLV_TRANSCRIPT_STANDALONE_DIR!);
+    expect(transcriptSearchWorkerPath()).toEndWith(".next/server/transcript-search-index-worker.js");
+    searchTranscripts({ query: "cobalt quartz", order: "relevance" });
+    const deadline = performance.now() + 10000;
+    let ready = false;
+    while (!ready && performance.now() < deadline) {
+      const probe = new Database(statePath("transcript-search.sqlite"), { readonly: true });
+      probe.exec("PRAGMA busy_timeout = 5000");
+      ready = Boolean(probe.query("SELECT 1 FROM sqlite_master WHERE name='transcript_messages_body_hash'").get());
+      if (ready) {
+        expect(probe.query("PRAGMA user_version").get()).toEqual({ user_version: 5 });
+        expect(probe.query("SELECT id, body_hash FROM transcript_messages ORDER BY id").values()).toEqual(before);
+        expect(probe.query("SELECT rowid, body FROM transcript_messages_fts ORDER BY rowid").values()).toEqual(fts);
+        expect(probe.query("SELECT COUNT(*) AS n FROM transcript_messages_vocab").get()).toMatchObject({ n: expect.any(Number) });
+      }
+      probe.close();
+      if (!ready) await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(ready).toBe(true);
+    const page = searchTranscripts({ query: "cobalt quartz", order: "relevance" });
+    expect(page.strongTotal).toBe(1);
+    expect(page.items[0].missing).toEqual([]);
+    expect(page.items[0].fragments).toHaveLength(1);
+  } finally { process.chdir(cwd); }
 });
