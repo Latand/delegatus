@@ -26,6 +26,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     || typeof body.text !== "string" || !body.text.trim() || body.action !== undefined) {
     return NextResponse.json({ error: "project and message text are required; this endpoint sends messages only" }, { status: 400 });
   }
+  if (body.image != null
+    || (body.images != null && (!Array.isArray(body.images) || body.images.length > 0))
+    || (body.files != null && (!Array.isArray(body.files) || body.files.length > 0))) {
+    return NextResponse.json({ error: "orchestrator relays accept text only; attachments are not supported" }, { status: 400 });
+  }
   const project = canonicalOrchestratorProject(body.project);
   const admitted = admitOrchestratorRelay(req, project,
     typeof body.conversationId === "string" ? body.conversationId : undefined,

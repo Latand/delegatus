@@ -26,6 +26,7 @@ const { setConversationHostDependenciesForTests } = await import("@/app/api/conv
 const { callerAttributionFrom, viewerMcpBindings, viewerMcpRecoverableTools } = await import("@/lib/mcp/bindings");
 const { createMcpToolService, MemoryMcpReceiptStore, SqliteMcpReceiptStore, McpDispatchUncertainError } = await import("@/lib/mcp/server");
 const { enqueueStructuredMessage } = await import("@/lib/runtime/structuredMessageDelivery");
+const { deliverConversationMessage } = await import("@/lib/delivery");
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { ViewerControlDependencies, ViewerMcpDomainDependencies } from "@/lib/mcp/bindings";
 
@@ -242,10 +243,13 @@ function realAdmission() {
         artifactPath: generation.path, cwd: root, activeTurnId: "fixture-turn", attentionIds: [], recentReceipts: [],
         capabilities: { steer: true, structuredAttention: true } };
     },
-    command: async (command: { operationId: string; idempotencyKey: string; conversationId: string }) => ({
-      operationId: command.operationId, replayed: false, receipt: { ...command, kind: "send", status: "queued",
-        at: new Date().toISOString(), revision: 1 },
-    }),
+    command: async (command: { operationId: string; idempotencyKey: string; conversationId: string }) => {
+      delivered.push({ ...command });
+      return {
+        operationId: command.operationId, replayed: false, receipt: { ...command, kind: "send", status: "queued",
+          at: new Date().toISOString(), revision: 1 },
+      };
+    },
   } as unknown as RuntimeHostClient;
   setConversationHostDependenciesForTests({
     collectImagePayloads: () => ({ images: [], error: null }),
@@ -256,6 +260,197 @@ function realAdmission() {
     recordOperatorRequest: () => null,
   });
 }
+
+for (const [mount, post] of [POST, legacyPOST, orchestratorPOST].entries()) {
+  for (const compaction of ["count", "age"] as const) {
+    for (const rotate of [false, true]) {
+      test(`compacted legacy relay retry does not actuate: mount ${mount}, ${compaction}, rotation ${rotate}`, async () => {
+        const sender = actor("project-a");
+        const recipient = actor("project-b");
+        const recipientPath = registry.conversation(recipient.id as `conversation_${string}`)!.generations.at(-1)!.path;
+        fs.writeFileSync(recipientPath, "");
+        const typed: string[] = [];
+        setConversationHostDependenciesForTests({
+          collectImagePayloads: () => ({ images: [], error: null }),
+          enqueueStructuredMessage: async () => null,
+          deliverConversationMessage: (message) => deliverConversationMessage(message, {
+            recover: async () => null,
+            pathAllowed: () => true,
+            listFiles: async () => [{ root: "codex-sessions", path: recipientPath, project: "project-b", mtime: 0, size: 0 } as never],
+            resumeSpecFor: () => ({ command: "codex", args: [], cwd: root, env: {} }) as never,
+            deliver: async ({ payload }) => { typed.push(payload); return { ok: true, outcome: "delivered-to-live", target: "%7" }; },
+          }),
+          recordOperatorRequest: () => null,
+        });
+        const body = { ...relayBody(recipient.id, "report"), project: "project-b", clientMessageId: "legacy-compacted" };
+        expect((await post(request(sender.capability, body))).status).toBe(200);
+        expect(typed).toHaveLength(1);
+        const original = Object.values(registry.readOnlySnapshot().heldDeliveries)[0]!;
+        expect(original.state).toBe("delivered");
+        if (compaction === "count") {
+          await Bun.sleep(2);
+          const generation = registry.conversation(recipient.id as `conversation_${string}`)!.generations.at(-1)!.id;
+          for (let index = 0; index < 100; index++) {
+            const later = registry.holdDelivery(recipient.id as `conversation_${string}`, `later ${index}`, `legacy-later-${index}`);
+            registry.beginDeliveryAttempt(later.id, generation);
+            registry.recordDeliveryOutcome(later.id, "delivered", null, "delivered");
+          }
+        }
+        if (rotate) actor("project-b");
+        const filename = registry.filename;
+        registry.close();
+        registry = new AgentRegistry(filename, undefined, undefined, compaction === "age" ? { now: () => Date.now() + 8 * 86_400_000 } : {});
+        setAgentRegistryForTests(registry);
+        const before = registry.readOnlySnapshot();
+        expect(before.heldDeliveries[original.id]).toBeUndefined();
+        expect(before.deliveryOperationOwners[original.command.operationId]).toMatchObject({ terminalState: "delivered" });
+        const retryBody = mount === 2 ? { ...body, conversationId: undefined } : body;
+        const retry = await post(request(sender.capability, retryBody));
+        expect(retry.status).toBe(200);
+        expect(typed).toHaveLength(1);
+        expect(await retry.json()).toMatchObject({ operationId: original.command.operationId, outcome: "delivered",
+          receipt: { operationId: original.command.operationId, status: "delivered", conversationId: recipient.id } });
+        const other = actor("project-c");
+        expect((await post(request(other.capability, body))).status).toBe(409);
+        expect(typed).toHaveLength(1);
+        expect(registry.readOnlySnapshot().heldDeliveries).toEqual(before.heldDeliveries);
+      });
+    }
+  }
+}
+
+for (const [name, attachment] of [
+  ["files", { files: [{ name: "note.txt", base64: "aGk=" }] }],
+  ["images", { images: [{ name: "image.png", base64: "aGk=" }] }],
+  ["image", { image: { name: "image.png", base64: "aGk=" } }],
+] as const) {
+  for (const author of ["seat", "gateway"] as const) {
+    test(`dedicated relay refuses ${name} from ${author} without consuming the text-only key`, async () => {
+      realAdmission();
+      const sender = author === "seat" ? actor("project-a") : actor(undefined, "root");
+      if (author === "gateway") setDeputyRootResolverForTests(() => sender.id);
+      actor("project-b");
+      const body = { project: "project-b", text: "Please read this attachment.", clientMessageId: "dedicated-attachment" };
+      expect((await orchestratorPOST(request(sender.capability, { ...body, ...attachment }))).status).toBe(400);
+      expect(delivered).toEqual([]);
+      expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(0);
+      expect((await orchestratorPOST(request(sender.capability, body))).status).toBe(200);
+      expect(delivered).toHaveLength(1);
+      expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(1);
+    });
+  }
+}
+
+for (const [mount, post] of [POST, legacyPOST, orchestratorPOST].entries()) {
+  for (const compaction of ["count", "age"] as const) {
+    for (const rotate of [false, true]) {
+      for (const author of ["seat", "gateway", "operator"] as const) {
+        test(`compacted HTTP relay retry preserves its terminal operation: mount ${mount}, ${compaction}, rotation ${rotate}, conflicting ${author}`, async () => {
+          realAdmission();
+          const sender = actor("project-a");
+          const recipient = actor("project-b");
+          const body = { ...relayBody(recipient.id, "report"), project: "project-b", clientMessageId: "compacted-relay" };
+          const first = await post(request(sender.capability, body));
+          expect(first.status).toBe(200);
+          const receipt = await first.json();
+          const original = Object.values(registry.readOnlySnapshot().heldDeliveries)[0]!;
+          const generation = registry.conversation(recipient.id as `conversation_${string}`)!.generations.at(-1)!.id;
+          registry.beginDeliveryAttempt(original.id, generation);
+          registry.recordDeliveryOutcome(original.id, "delivered", null, "delivered");
+          if (compaction === "count") {
+            await Bun.sleep(2);
+            for (let index = 0; index < 100; index++) {
+              const later = registry.holdDelivery(recipient.id as `conversation_${string}`, `later ${index}`, `later-${index}`);
+              registry.beginDeliveryAttempt(later.id, generation);
+              registry.recordDeliveryOutcome(later.id, "delivered", null, "delivered");
+            }
+          }
+          if (rotate) actor("project-b");
+          const filename = registry.filename;
+          registry.close();
+          const clock = compaction === "age" ? {
+            now: () => Date.now() + 8 * 86_400_000,
+          } : {};
+          registry = new AgentRegistry(filename, undefined, undefined, clock);
+          setAgentRegistryForTests(registry);
+          const before = registry.readOnlySnapshot();
+          expect(before.heldDeliveries[original.id]).toBeUndefined();
+          expect(before.deliveryOperationOwners[receipt.operationId]).toMatchObject({ terminalState: "delivered" });
+          const sendCount = delivered.length;
+          // The dedicated endpoint also owes recovery for project-only bodies.
+          const retryBody = mount === 2 ? { ...body, conversationId: undefined } : body;
+          const retry = await post(request(sender.capability, { ...retryBody, operationId: "caller-forged-operation" }));
+          expect(retry.status).toBe(200);
+          expect(await retry.json()).toMatchObject({ operationId: receipt.operationId, outcome: "delivered",
+            receipt: { operationId: receipt.operationId, status: "delivered", conversationId: recipient.id } });
+          expect(delivered).toHaveLength(sendCount);
+          expect(registry.readOnlySnapshot().heldDeliveries).toEqual(before.heldDeliveries);
+          expect((await post(request(sender.capability, { ...retryBody, text: "changed" }))).status).toBe(409);
+          const boundRecipient = { ...retryBody, conversationId: recipient.id };
+          const otherSender = author === "seat" ? actor("project-c") : author === "gateway" ? actor(undefined, "root") : null;
+          if (author === "gateway") setDeputyRootResolverForTests(() => otherSender!.id);
+          const conflict = await post(request(otherSender?.capability,
+            { ...boundRecipient, text: author === "seat" ? body.text : original.text },
+            { "sec-fetch-site": "same-origin" }));
+          expect(conflict.status).toBe(409);
+          expect(await conflict.json()).not.toHaveProperty("operationId");
+          const originalRetry = await post(request(sender.capability, retryBody));
+          expect(originalRetry.status).toBe(200);
+          expect(await originalRetry.json()).toMatchObject({ operationId: receipt.operationId, outcome: "delivered" });
+          expect(delivered).toHaveLength(sendCount);
+          expect(registry.readOnlySnapshot().heldDeliveries).toEqual(before.heldDeliveries);
+          if (rotate) expect((await post(request(sender.capability, { ...body, clientMessageId: "fresh-former-seat" }))).status).toBe(409);
+        });
+      }
+    }
+  }
+}
+
+for (const [mount, post] of [POST, legacyPOST, orchestratorPOST].entries()) {
+  test(`long source project attribution survives HTTP persistence and retry on mount ${mount}`, async () => {
+    realAdmission();
+    const sender = actor("project-a");
+    const recipient = actor("project-b");
+    persistProjectAliases([{ source: "legacy-long-source", target: "project-a", displayName: "A".repeat(121) }]);
+    const body = { ...relayBody(recipient.id, "report"), project: "project-b", clientMessageId: "long-source" };
+    const first = await post(request(sender.capability, body));
+    expect(first.status).toBe(200);
+    const receipt = await first.json();
+    const reservation = Object.values(registry.readOnlySnapshot().heldDeliveries)[0]!;
+    expect(reservation.command.origin).toMatchObject({ project: "A".repeat(120), conversationId: sender.id });
+    expect(reservation.text).toContain(`project ${reservation.command.origin!.project}.`);
+    const filename = registry.filename;
+    registry.close(); registry = new AgentRegistry(filename); setAgentRegistryForTests(registry);
+    const retry = await post(request(sender.capability, body));
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toMatchObject({ operationId: receipt.operationId });
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(1);
+  });
+}
+
+test("long source project MCP response-loss recovery resolves the admitted operation after receipt reopen", async () => {
+  realAdmission();
+  const sender = actor("project-a");
+  const recipient = actor("project-b");
+  persistProjectAliases([{ source: "legacy-long-mcp-source", target: "project-a", displayName: "A".repeat(121) }]);
+  const file = path.join(process.env.LLV_STATE_DIR!, "long-source-receipts.sqlite");
+  let store = new SqliteMcpReceiptStore(file);
+  const args = { project: "project-b", text: "report", clientRequestId: "long-source-response-loss" };
+  try {
+    const initial = durableRelayTools(sender, store, true);
+    const result = await initial.service.callTool("send_message_to_orchestrator", args);
+    expect(result).toMatchObject({ ok: true, state: "in-flight" });
+    const reservation = Object.values(registry.readOnlySnapshot().heldDeliveries)[0]!;
+    expect(reservation.command.origin).toMatchObject({ project: "A".repeat(120), conversationId: sender.id });
+    store.close(); store = new SqliteMcpReceiptStore(file);
+    const recovery = durableRelayTools(sender, store);
+    expect(await recovery.service.callTool("send_message_to_orchestrator", { ...args, recoveryOnly: true }))
+      .toMatchObject({ ok: true, state: "in-flight", operationId: reservation.command.operationId, conversationId: recipient.id });
+    expect(recovery.dispatches).toEqual([]);
+    expect(delivered).toHaveLength(1);
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(1);
+  } finally { store.close(); }
+});
 
 test("HTTP relay reservations bind the authenticated seat and separate browser authors on every mount", async () => {
   realAdmission();

@@ -39,6 +39,7 @@ import { agentRegistry } from "@/lib/agent/registry";
 import { internalServiceClaim } from "@/lib/agent/callerClaims";
 import { deputyDeliveryRefusal } from "@/lib/orchestrator/deputies";
 import { admitOrchestratorRelay } from "@/lib/orchestrator/relay";
+import { runtimeReceiptForSend } from "@/lib/runtime/sendSettlement";
 import { materializeStructuredTerminal } from "@/lib/runtime/structuredTerminal";
 import { attachmentsAreOrphaned, structuredAttachmentOutcome, type AttachmentDeliveryOutcome } from "@/lib/attachmentRetention";
 import type { InboxFileAdmissionResult } from "@/lib/inboxFiles";
@@ -264,6 +265,18 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
       return NextResponse.json({ error: admitted.error, code: admitted.code, admission: "refused" }, { status: admitted.status });
     }
     relay = admitted;
+    // Terminal evidence answers before either transport can recover a host or
+    // reserve again, including the adopted legacy recipient's fallback path.
+    if (relay.terminalReceipt) {
+      const receipt = relay.terminalReceipt;
+      const response = {
+        target: relay.recipient,
+        operationId: receipt.operationId, receipt: runtimeReceiptForSend(receipt),
+      };
+      return receipt.state === "delivered"
+        ? NextResponse.json({ ...response, ok: true as const, outcome: "delivered" as const })
+        : NextResponse.json({ ...response, ok: false, outcome: receipt.state, error: receipt.reason ?? "delivery failed", resend: receipt.resend }, { status: 409 });
+    }
   }
 
   /* Resource-panel cleanup: kills an agent session's pane. Only targets from
@@ -538,6 +551,9 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
       path: filePath,
       ...(conversationId ? { conversationId } : {}),
       ...(typeof body.clientMessageId === "string" ? { clientMessageId: body.clientMessageId.slice(0, 128) } : {}),
+      // Only admission's authenticated durable send can choose a relay replay
+      // operation; caller-supplied operation IDs grant no such authority.
+      ...(relay?.operationId ? { operationId: relay.operationId } : {}),
       text: payloadText.trim(),
       ...(policy ? { policy } : {}),
       images,

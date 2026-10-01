@@ -5,8 +5,8 @@ import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
-import { sameMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
-import { lookupOriginalSend } from "@/lib/runtime/sendSettlement";
+import { messageOriginProject, sameMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
+import { lookupOriginalSend, type SendReceipt } from "@/lib/runtime/sendSettlement";
 
 import { authorizedManagerSeats, type AuthorizedManagerSeat } from "./authority";
 import { deputyAskerOf } from "./deputyAsker";
@@ -14,7 +14,7 @@ import { productionManagerAuthoritySources } from "./managerAuthoritySources";
 import { canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor } from "./seats";
 
 type RelayAdmission =
-  | { ok: true; text: string; origin: MessageOrigin; recipient: string }
+  | { ok: true; text: string; origin: MessageOrigin; recipient: string; operationId?: string; terminalReceipt?: SendReceipt }
   | { ok: false; status: number; code: string; error: string };
 
 function relayMessageText(text: string, project: string): string {
@@ -24,7 +24,11 @@ function relayMessageText(text: string, project: string): string {
 /** Shared server-derived payload for admission and durable MCP recovery. */
 export function orchestratorRelayPayload(text: string, seat: AuthorizedManagerSeat): { text: string; origin: MessageOrigin } {
   const source = delegatusMessageOrigin("orchestrator", seat.project);
-  const sourceProject = source.project ?? seat.project!;
+  // Bound presentation before constructing either copy of the payload. The
+  // registry must retain exactly the label MCP bound before HTTP dispatch.
+  const sourceProject = messageOriginProject(source.project?.slice(0, 120).trim())
+    ?? messageOriginProject(seat.project?.slice(0, 120).trim())
+    ?? "Unnamed project";
   return {
     text: relayMessageText(text, sourceProject),
     origin: { kind: "agent", role: "orchestrator", project: sourceProject, conversationId: seat.conversationId },
@@ -64,6 +68,8 @@ export function admitOrchestratorRelay(
   const targetProject = canonicalOrchestratorProject(project);
   const target = orchestratorSeatFor(targetProject);
   const key = clientMessageId?.slice(0, 128).trim();
+  let operationId: string | undefined;
+  let terminalReceipt: SendReceipt | undefined;
   // Authenticate first, then recover the original destination before choosing
   // today's seat. The durable author and key bind retries across rotation.
   if (key) {
@@ -97,6 +103,8 @@ export function admitOrchestratorRelay(
         payload = { text: seat ? relayMessageText(text, origin.project!) : text, origin };
         const original = lookupOriginalSend(snapshot, { conversationId: originalRecipient, clientMessageId: key, ...payload });
         if (original.kind !== "found") return refused("idempotency_conflict", "the relay key does not match its original send", 409);
+        operationId = original.operationId;
+        if (original.receipt.state !== "in-flight") terminalReceipt = original.receipt;
         recipient = originalRecipient;
       }
     } catch {
@@ -119,5 +127,6 @@ export function admitOrchestratorRelay(
     }
     if (!original) return refused("orchestrator_not_designated", "the recipient is not currently designated and no matching original send authorizes recovery", 409);
   }
-  return { ok: true, ...payload, recipient };
+  return { ok: true, ...payload, recipient, ...(operationId ? { operationId } : {}),
+    ...(terminalReceipt ? { terminalReceipt } : {}) };
 }
