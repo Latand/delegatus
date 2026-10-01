@@ -823,7 +823,8 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
       LLV_BUN_EXECUTABLE: process.execPath, LLV_TEST_CRASH_FLAG: crashFlag },
     stdio: ["pipe", "pipe", "pipe"],
   });
-  const pendingResponses = new Map<number, (message: any) => void>();
+  type Response = { result: Record<string, unknown> };
+  const pendingResponses = new Map<number, (message: Response) => void>();
   let output = "";
   session.stdout.setEncoding("utf8");
   session.stdout.on("data", (chunk: string) => {
@@ -837,7 +838,7 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
       }
     }
   });
-  const call = (id: number, method: string) => new Promise<any>((resolve, reject) => {
+  const call = (id: number, method: string) => new Promise<Response>((resolve, reject) => {
     const timeout = setTimeout(() => { pendingResponses.delete(id); reject(new Error(`MCP response ${id} timed out`)); }, 5_000);
     pendingResponses.set(id, (message) => { clearTimeout(timeout); resolve(message); });
     session.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params: { name: "check", arguments: {} } }) + "\n");
@@ -855,7 +856,7 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
   const designatedAt = new Date(Date.now() - 20 * MINUTE).toISOString();
   const deps = { ...rig.deps, mcpHealth: () => seatMcpHealth(receipt, designatedAt, stateDir, Date.now()) };
   try {
-    expect((await call(1, "initialize")).result.serverInfo.name).toBe("viewer");
+    expect((await call(1, "initialize")).result).toMatchObject({ serverInfo: { name: "viewer" } });
     for (let id = 2; id <= 4; id++) {
       await readyHeartbeat();
       expect((await call(id, "tools/call")).result.isError).toBe(true);
@@ -867,7 +868,7 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
     expect(rig.sent).toHaveLength(0);
     expect(rig.cards.at(-1)?.card).toMatchObject({ kind: "mcp-unavailable", state: "open" });
     fs.unlinkSync(crashFlag);
-    expect((await call(5, "tools/call")).result.content[0].text).toBe("recovered");
+    expect((await call(5, "tools/call")).result).toMatchObject({ content: [{ text: "recovered" }] });
     expect(JSON.parse(fs.readFileSync(heartbeatFile, "utf8")).failedCalls).toBe(0);
     await runSeatTickCheck(PROJECT, deps);
     expect(rig.cards.at(-1)?.card).toMatchObject({ kind: "mcp-unavailable", state: "resolved" });
