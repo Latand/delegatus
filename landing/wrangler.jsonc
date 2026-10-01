@@ -6,7 +6,11 @@
     "directory": "./site/dist",
     "binding": "ASSETS",
     "not_found_handling": "404-page",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": ["/api/*", "/stats", "/stats/"]
+  },
+  "vars": {
+    "STATS_ACCESS_TEAM_DOMAIN": "broad-mode-e974.cloudflareaccess.com",
+    "STATS_ACCESS_AUD": "ce8974c131a01a375dc143cca486f02e9394c66e86195bce0eca6770bfd7a657"
   },
   "analytics_engine_datasets": [
     { "binding": "SITE_EVENTS", "dataset": "site_events" },
