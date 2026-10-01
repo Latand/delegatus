@@ -8,7 +8,8 @@ import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "./types";
 import type { LauncherRecord } from "./launcher";
 import { headOf } from "./release";
 import { watchRestartRequests } from "../../../bin/self-update-supervisor.mjs";
-import { activeRestartGate, restartGateFile } from "./restartGate";
+import { activeRestartGate, endRestartGate, restartGateFile } from "./restartGate";
+import { activeDrain, DRAIN_AFTER_MS, DRAIN_MAX_MS } from "./drain";
 import { GreenReader } from "./green";
 import { proxy } from "../../proxy";
 import { POST as postPresence } from "../../app/api/view/presence/route";
@@ -21,6 +22,61 @@ const root = mkdtempSync("/var/tmp/self-update-auto-");
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 const TARGET = "a".repeat(40);
 const OLD = "b".repeat(40);
+
+test("checkout drain holds through web and host restarts and releases only when both serve", async () => {
+  const h = scenario();
+  let ticks = 0;
+  h.deps.requestPipelineTick = () => { ticks++; };
+  h.setTurn(true);
+  let service = h.service();
+  await service.autoTick();
+  h.advance(DRAIN_AFTER_MS);
+  await service.autoTick();
+  const lease = () => activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+  expect(lease()?.target).toBe(TARGET);
+  expect(h.pending()).toBeNull();
+  h.setTurn(false);
+  await service.autoTick();
+  h.advance(60_000);
+  await service.autoTick();
+  const web = h.pending()!;
+  expect(web.role).toBe("web");
+  endRestartGate(restartGateFile(h.record.requestFile), JSON.parse(readFileSync(h.record.requestFile, "utf8")).autoGateId);
+  rmSync(h.record.requestFile);
+  h.record.web = { ...h.record.web, revision: TARGET.slice(0, 7), requestId: web.requestId };
+  service.stop();
+  service = h.service();
+  await service.autoTick();
+  expect(lease()).not.toBeNull();
+  await service.autoTick();
+  h.advance(60_000);
+  await service.autoTick();
+  const host = h.pending()!;
+  expect(host.role).toBe("runtime-host");
+  endRestartGate(restartGateFile(h.record.requestFile), JSON.parse(readFileSync(h.record.requestFile, "utf8")).autoGateId);
+  rmSync(h.record.requestFile);
+  h.record.runtimeHost = { ...h.record.runtimeHost, revision: TARGET.slice(0, 7), requestId: host.requestId };
+  await service.autoTick();
+  await service.autoTick();
+  expect(lease()).toBeNull();
+  expect(ticks).toBe(1);
+  service.stop();
+});
+
+test("the overrun cap cannot release launches between checkout restart roles", async () => {
+  const h = scenario();
+  h.setTurn(true);
+  const service = h.service();
+  await service.autoTick();
+  h.advance(DRAIN_AFTER_MS);
+  await service.autoTick();
+  h.record.web.revision = TARGET.slice(0, 7);
+  h.advance(DRAIN_MAX_MS);
+  await service.autoTick();
+  expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+  expect(readAuto(join(h.dir, "auto.json")).drain?.overranAt).toBeNull();
+  service.stop();
+});
 
 function scenario() {
   const dir = mkdtempSync(join(root, "run-"));
@@ -330,16 +386,16 @@ test("a web fallback restores the pointer and turns the switch off", async () =>
   service.stop();
 });
 
-test("a 24-hour wait records one notice while still allowing future quiet probes", async () => {
+test("a long wait starts one drain while still allowing future quiet probes", async () => {
   const h = scenario();
   const file = join(h.dir, "auto.json");
   writeAuto(file, { ...readAuto(file), waitingSince: new Date(Date.parse("2025-12-30T23:00:00Z")).toISOString() });
   const service = h.service();
   await service.autoTick();
-  const notice = readAuto(file).noticeAt;
-  expect(notice).not.toBeNull();
+  const drain = readAuto(file).drain;
+  expect(drain).not.toBeNull();
   await service.autoTick();
-  expect(readAuto(file).noticeAt).toBe(notice);
+  expect(readAuto(file).drain?.id).toBe(drain?.id);
   expect(readAuto(file).enabled).toBe(true);
   service.stop();
 });
@@ -410,4 +466,25 @@ test("release cleanup only removes a registered old worktree under the release r
   };
   await pruneReleaseWorktrees(h.record, JSON.stringify({ sha: shas[1], dir: dirs[1] }), run);
   expect(commands).toEqual([["worktree", "list", "--porcelain"], ["worktree", "remove", "--force", dirs[2]!], ["worktree", "prune"]]);
+});
+
+test("a disabled drain releases after a crash between switch persistence and lease cleanup", async () => {
+  const h = scenario();
+  h.setTurn(true);
+  let service = h.service();
+  await service.autoTick();
+  h.advance(DRAIN_AFTER_MS);
+  await service.autoTick();
+  const file = join(h.dir, "auto.json");
+  expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+  service.stop();
+  writeAuto(file, { ...readAuto(file), enabled: false });
+  let wakes = 0;
+  h.deps.requestPipelineTick = () => { wakes++; };
+  service = h.service();
+  await service.autoTick();
+  expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
+  expect(readAuto(file).drain).toBeNull();
+  expect(wakes).toBe(1);
+  service.stop();
 });

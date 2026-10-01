@@ -11,6 +11,12 @@ import type { CreateFlowRequest, Flow } from "@/lib/flows/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { laneMovedAt } from "@/lib/pipelines/laneMovement";
+import { activeDrain, DRAIN_AFTER_MS } from "@/lib/selfUpdate/drain";
+import { initialAuto, writeAuto } from "@/lib/selfUpdate/auto";
+import { initialCheck } from "@/lib/selfUpdate/checkState";
+import { SelfUpdateService, type ServiceDeps } from "@/lib/selfUpdate/service";
+import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "@/lib/selfUpdate/types";
+import type { LauncherRecord } from "@/lib/selfUpdate/launcher";
 import type { AgentRegistry as AgentRegistryType } from "@/lib/agent/registry";
 import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 import { accountManager } from "@/lib/accounts/manager";
@@ -1175,6 +1181,148 @@ async function create(ports: PipelinePorts, stages = RUN_STAGES as never, reques
   savePipelines([lane]);
   return lane;
 }
+
+test("automatic-update hold keeps a pending attempt and releases exactly one launch", async () => {
+  const h = harness();
+  let held = true;
+  h.ports.drainHold = () => held ? { id: "hold", target: "a".repeat(40), since: "2026-01-01T00:00:00Z", until: Number.MAX_SAFE_INTEGER } : null;
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const waiting = loadPipelines()[0]!;
+  expect(waiting.cursor?.state).toBe("pending");
+  const attempt = waiting.runs[0]!.attempts[0]!;
+  expect(attempt.state).toBe("pending");
+  expect(attempt.spawnCalls ?? 0).toBe(0);
+  const detail = waiting.stateDetail;
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toBe(detail);
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(0);
+  held = false;
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.n).toBe(attempt.n);
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
+});
+
+test("automatic drain holds a new embedded legacy review stage and releases once", async () => {
+  const h = harness();
+  let held = false;
+  h.ports.drainHold = () => held ? { id: "hold", target: "a".repeat(40), since: "2026-01-01T00:00:00Z", until: Number.MAX_SAFE_INTEGER } : null;
+  await create(h.ports, [
+    { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
+    { id: "review", kind: "review-loop", reviewer: { engine: "codex", model: "gpt-5.6-sol", effort: "high" }, prompt: "Review", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  h.setConversationActive(false);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  held = true;
+  for (let i = 0; i < 3; i++) await tickPipelines([], h.ports);
+  expect(h.flowRequests).toHaveLength(0);
+  expect(loadPipelines()[0]!.cursor).toMatchObject({ stageId: "review", state: "pending" });
+  held = false;
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.flowRequests).toHaveLength(1);
+});
+
+test.each([false, true])("automatic drain holds reserved custody with dead owner=%s and resumes its identity", async (deadOwner) => {
+  const oldDrain = process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+  process.env.LLV_PIPELINE_ACTIVATION_DRAIN = "1";
+  const h = harness();
+  let held = false;
+  let reserveOnly = true;
+  h.ports.drainHold = () => held || (reserveOnly && !!loadPipelines()[0]?.runs[0]?.attempts[0]?.activation) ? { id: "hold", target: "a".repeat(40), since: "2026-01-01T00:00:00Z", until: Number.MAX_SAFE_INTEGER } : null;
+  try {
+    await create(h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    const before = loadPipelines()[0]!;
+    const reserved = before.runs[0]!.attempts[0]!.activation!;
+    expect(reserved.phase).toBe("reserved");
+    if (deadOwner) {
+      reserved.owner = { pid: 2_147_483_647, startIdentity: "gone", bootEpoch: "gone" };
+      savePipelines([before]);
+    }
+    held = true;
+    await engineModule.drainStageActivations(h.ports);
+    const after = loadPipelines()[0]!.runs[0]!.attempts[0]!.activation!;
+    expect(after.id).toBe(reserved.id);
+    expect(after.owner).toBeUndefined();
+    expect(h.spawnInputs).toHaveLength(0);
+    const { probeQuiet } = await import("@/lib/selfUpdate/quiet");
+    expect((await probeQuiet({ busy: null, processes: { web: { state: "healthy" }, runtimeHost: { state: "healthy" } } } as Snapshot,
+      { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: loadPipelines, presence: () => [] }, Date.now(), true)).quiet).toBe(true);
+    held = false;
+    reserveOnly = false;
+    await engineModule.drainStageActivations(h.ports);
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.activation).toBeUndefined();
+  } finally {
+    if (oldDrain === undefined) delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+    else process.env.LLV_PIPELINE_ACTIVATION_DRAIN = oldDrain;
+  }
+});
+
+test("a stage finishes across the automatic drain and its successor waits for both roles", async () => {
+  const h = harness();
+  const dir = fs.mkdtempSync("/var/tmp/drain-pipeline-");
+  const target = "a".repeat(40);
+  const old = "b".repeat(40);
+  let now = Date.parse("2026-01-01T00:00:00Z");
+  const rev = (sha: string) => ({ sha, short: sha.slice(0, 7), version: "1", date: "" });
+  const record = { version: 1, checkout: process.cwd(), launcher: { pid: 100, startIdentity: "test", autoAdmission: 1 },
+    releasePointer: path.join(dir, "release.json"), requestFile: path.join(dir, "request.json"), releasesDir: path.join(dir, "releases"),
+    web: { state: "healthy", revision: old.slice(0, 7), error: null }, runtimeHost: { state: "healthy", revision: old.slice(0, 7), error: null } } as LauncherRecord;
+  writeAuto(path.join(dir, "auto.json"), { ...initialAuto(), enabled: true, green: { [target]: { state: "green" } }, rollbackCaptured: true });
+  fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify({ slice: initialCheck(), update: null, autoRollbackCaptured: true }));
+  const snapshot = (): Snapshot => ({ mode: "checkout", unsupportedReason: null, installed: rev(target), available: null, check: idleCheck(), update: idleUpdate(), busy: null,
+    serving: { web: rev(record.web.revision === target.slice(0, 7) ? target : old), runtimeHost: rev(record.runtimeHost.revision === target.slice(0, 7) ? target : old) },
+    processes: { web: { ...stoppedProcess(), state: "healthy", tail: [] }, runtimeHost: { ...stoppedProcess(), state: "healthy", tail: [] } },
+    meta: { branch: "main", remote: "https://github.com/example/project", checkout: null, pollMinutes: 15, serverTime: new Date(now).toISOString() } });
+  const deps = { dir, now: () => now, env: {}, remote: "https://github.com/example/project", branch: "main", mode: async () => ({ mode: "checkout", record }),
+    green: { read: async () => ({ state: "green" }) }, quiet: { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: loadPipelines, presence: () => [] },
+    prune: async () => {}, findDeploymentByIdempotencyKey: async () => null } as unknown as ServiceDeps;
+  const service = new SelfUpdateService(deps);
+  service.snapshot = async () => snapshot();
+  h.ports.drainHold = () => activeDrain(path.join(dir, "auto-drain.json"), now);
+  try {
+    await create(h.ports, [
+      { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "verify" },
+      { id: "verify", kind: "run", role: { roleId: "reviewer" }, prompt: "Verify", next: null },
+    ] as never);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(1);
+    await service.autoTick();
+    now += DRAIN_AFTER_MS;
+    await service.autoTick();
+    expect(h.ports.drainHold()).not.toBeNull();
+    expect(fs.existsSync(record.requestFile)).toBe(false);
+    h.setConversationActive(false);
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "built safely")], h.ports);
+    for (let i = 0; i < 3; i++) await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("passed");
+    expect(loadPipelines()[0]!.cursor).toMatchObject({ stageId: "verify", state: "pending" });
+    const identity = loadPipelines()[0]!.runs[1]!.attempts[0]!.n;
+    expect(h.spawnInputs).toHaveLength(1);
+    await service.autoTick();
+    now += 60_000;
+    await service.autoTick();
+    expect(JSON.parse(fs.readFileSync(record.requestFile, "utf8")).role).toBe("web");
+    const pending = JSON.parse(fs.readFileSync(path.join(dir, "state.json"), "utf8")).autoPending;
+    record.web = { ...record.web, requestId: pending.requestId, revision: target.slice(0, 7) };
+    fs.rmSync(record.requestFile);
+    await service.autoTick();
+    await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(1);
+    record.runtimeHost.revision = target.slice(0, 7);
+    await service.autoTick();
+    await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(2);
+    expect(loadPipelines()[0]!.runs[1]!.attempts[0]!.n).toBe(identity);
+  } finally { service.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
 
 test.each([
   { access: "read-write", sandbox: "full" },

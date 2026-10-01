@@ -2076,6 +2076,24 @@ test("the off switch keeps the clock unstarted and says so", () => {
   expect(refused[0]).toContain("LLV_SEAT_TICK_CHECK_MINUTES=0");
 });
 
+test("automatic drain holds seat sweeps and release resumes the next sweep", async () => {
+  stopSeatTick();
+  let held = true;
+  let fire = () => {};
+  let sweeps = 0;
+  startSeatTick({ drainHeld: () => held, handoffHeld: () => false,
+    scheduleInterval: (callback) => { fire = callback; return { unref() {} } as never; },
+    sweep: async () => { sweeps++; }, policy: DEFAULT_SEAT_TICK_POLICY, log: () => {},
+  });
+  fire();
+  expect(sweeps).toBe(0);
+  held = false;
+  fire();
+  await Bun.sleep(0);
+  expect(sweeps).toBe(1);
+  stopSeatTick();
+});
+
 test("a check that outran its interval drops the next tick rather than queueing it", async () => {
   let fire = () => {};
   let sweeps = 0;

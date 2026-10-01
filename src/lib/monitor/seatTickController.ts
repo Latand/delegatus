@@ -7,6 +7,7 @@ import { SeatTickAccounting } from "./seatTickAccounting";
 
 import { statePath } from "@/lib/configDir";
 import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
+import { activeDrain } from "@/lib/selfUpdate/drain";
 import { activeRestartGate } from "@/lib/selfUpdate/restartGate";
 import { deliverConversationMessage, type DeliveryOutcome } from "@/lib/delivery";
 import { canonicalOrchestratorProject, type StillbornSeatRollback } from "@/lib/orchestrator/seats";
@@ -1875,6 +1876,7 @@ const tickHost = globalThis as typeof globalThis & {
  */
 export function startSeatTick(ports: {
   handoffHeld?: () => boolean;
+  drainHeld?: () => boolean;
   recordSuccessions?: () => unknown[];
   scheduleInterval?: (callback: () => void, delayMs: number) => ReturnType<typeof setInterval>;
   sweep?: () => Promise<unknown>;
@@ -1917,11 +1919,12 @@ export function startSeatTick(ports: {
   const schedule = ports.scheduleInterval ?? ((callback, delayMs) => setInterval(callback, delayMs));
   const sweep = ports.sweep ?? (() => reconcileSeatTick());
   const handoffHeld = ports.handoffHeld ?? (() => !!activeRestartGate(statePath("self-update", "auto-admission.json")));
+  const drainHeld = ports.drainHeld ?? (() => !!activeDrain());
   const timer = schedule(() => {
     /* A check that outran its interval drops the next one rather than stacking
        it. A tick that would land behind the one before it is stale by
        construction, and staleness is the whole reason nothing is queued. */
-    if (tickHost.__llvSeatTickRunning || handoffHeld()) return;
+    if (tickHost.__llvSeatTickRunning || handoffHeld() || drainHeld()) return;
     tickHost.__llvSeatTickRunning = true;
     void Promise.resolve(sweep())
       .catch((error) => console.error("[seat tick] sweep failed", error instanceof Error ? error.name : "unknown"))

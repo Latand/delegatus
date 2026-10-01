@@ -5641,7 +5641,14 @@ async function selfUpdateAutoMain(): Promise<void> {
   const states: Record<string, Snapshot> = {
     off: { ...base, auto: { ...auto, enabled: false, phase: "idle", blockers: null } },
     waiting: { ...base, auto, history: [{ at: "2026-01-01T12:00:00Z", by: "auto", kind: "build", target: next, from: old, outcome: "done" }] },
-    longWait: { ...base, auto: { ...auto, longWait: true } },
+    scheduled: { ...base, auto: { ...auto, drain: { state: "scheduled", at: "2026-01-02T04:00:00Z" }, blockers: { ...auto.blockers,
+      busy: true, busyReason: "pipeline-controller", turnList: [{ conversationId: "conversation_helper", engine: "codex", project: "Example", seat: false, stage: null }],
+      stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Complete the feature and publish checks", cursor: "running", conversationId: "conversation_builder" }] } } },
+    draining: { ...base, auto: { ...auto, longWait: true, drain: { state: "draining", at: "2026-01-02T00:00:00Z" }, blockers: { ...auto.blockers,
+      turnList: [{ conversationId: "conversation_helper", engine: "codex", project: "Example", seat: false, stage: null }],
+      stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Complete the feature and publish checks", cursor: "running", conversationId: "conversation_builder" }] } } },
+    overran: { ...base, auto: { ...auto, longWait: true, drain: { state: "overran", at: "2026-01-02T02:00:00Z", nextAt: "2026-01-02T06:00:00Z" }, blockers: { ...auto.blockers,
+      stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Complete the long running feature", cursor: "running", conversationId: "conversation_builder" }] } } },
     fallback: { ...base, auto: { ...auto, enabled: false, phase: "idle", off: { at: "2026-01-02T00:00:00Z", target: next, stage: "restart-web", reason: "health probe failed" }, blockers: null } },
     managed: { ...base, mode: "managed", auto: { ...auto, enabled: false, phase: "idle", blockers: null } },
   };

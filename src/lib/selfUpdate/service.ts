@@ -14,6 +14,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 
 import { cancelUntakenRequest, DIALOG_WRITER, readAuto, requestAutoRestart, restorePointer, writeAuto, pruneReleaseWorktrees, type AutoState, type AutoView, type AutoWriter } from "./auto";
+import { DRAIN_AFTER_MS, DRAIN_MAX_MS, DRAIN_LEASE_MS, releaseDrain, writeDrain } from "./drain";
 import { GreenReader, type GreenVerdict } from "./green";
 import { appendHistory, findAutoSwitchRequest, readHistory, storeAutoSwitchResponse } from "./history";
 import { probeQuiet, type QuietBlockers, type QuietPorts } from "./quiet";
@@ -96,6 +97,7 @@ export interface ServiceDeps {
   web: { pid: number; port: number | null; startedAt: string };
   green?: GreenReader;
   quiet?: QuietPorts;
+  requestPipelineTick?(): void;
   prune?(record: LauncherRecord, rollbackPointer: string | null): Promise<void>;
 }
 
@@ -273,6 +275,7 @@ export class SelfUpdateService {
       try { restoreFile(this.historyFile, previousHistoryFile); } catch { /* keep the original write failure */ }
       return refuse(500, "auto-persistence-failed", "Automatic update setting could not be recorded", error instanceof Error ? error.message : undefined);
     }
+    if (!enabled) this.endDrain();
     this.changes.emit();
     if (this.pollTimer) clearTimeout(this.pollTimer);
     this.pollTimer = null;
@@ -301,7 +304,7 @@ export class SelfUpdateService {
   private autoView(decision: ModeDecision, snapshot: Snapshot, auto: AutoState = this.auto): AutoView {
     const built = snapshot.installed.sha;
     const target = auto.off ? (this.described.get(auto.off.target) ?? { ...UNKNOWN_REVISION, sha: auto.off.target, short: shortSha(auto.off.target) })
-      : auto.managedPending?.target ?? this.slice.available ?? (built && (snapshot.serving.web?.sha !== built || snapshot.serving.runtimeHost?.sha !== built) ? snapshot.installed : null);
+      : auto.drain && !auto.drain.overranAt ? auto.drain.target : auto.managedPending?.target ?? this.slice.available ?? (built && (snapshot.serving.web?.sha !== built || snapshot.serving.runtimeHost?.sha !== built) ? snapshot.installed : null);
     const sha = target?.sha ?? null;
     const pending = auto.pending;
     const managedPending = auto.managedPending;
@@ -314,7 +317,11 @@ export class SelfUpdateService {
       : sha && !auto.green[sha] ? "checks" : "idle";
     return { availability: this.autoAvailability(decision), enabled: auto.enabled, off: auto.off, phase, target, green: sha ? auto.green[sha] ?? null : null,
       blockers: phase === "waiting" ? this.autoBlockers ?? auto.lastBlockers : null,
-      waitingSince: auto.waitingSince, longWait: phase === "waiting" && !!auto.waitingSince && this.deps.now() - Date.parse(auto.waitingSince) >= 24 * 60 * 60_000,
+      waitingSince: auto.waitingSince, longWait: phase === "waiting" && !!auto.waitingSince && this.deps.now() - Date.parse(auto.waitingSince) >= DRAIN_AFTER_MS,
+      drain: auto.enabled && auto.waitingSince ? auto.drain
+        ? auto.drain.overranAt ? { state: "overran", at: auto.drain.overranAt, nextAt: new Date(Date.parse(auto.drain.overranAt) + DRAIN_AFTER_MS).toISOString() }
+          : { state: "draining", at: auto.drain.since }
+        : { state: "scheduled", at: new Date(Date.parse(auto.waitingSince) + DRAIN_AFTER_MS).toISOString() } : null,
       changedAt: auto.changedAt, changedBy: auto.changedBy };
   }
 
@@ -329,12 +336,41 @@ export class SelfUpdateService {
   }
 
   private async runAutoTick(): Promise<void> {
+    // Recover a switch-off persisted before its lease cleanup during a crash.
+    if (!this.auto.enabled) this.endDrain();
     if (!this.auto.enabled && !this.auto.pending && !this.auto.managedPending) return;
     // The previous web process may have saved the terminal host status just
     // before it exited. Settle that durable result even if the host is away.
     if (this.auto.managedPending && this.managed && !managedActive(this.managed)) this.finishManagedAuto();
     if (!this.auto.enabled && !this.auto.pending && !this.auto.managedPending) return;
     const decision = await this.decide();
+    if (!this.auto.enabled || this.autoAvailability(decision) !== "available") this.endDrain();
+    else if (this.auto.drain && !this.auto.drain.overranAt) {
+      const now = this.deps.now();
+      if (now - Date.parse(this.auto.drain.since) >= DRAIN_MAX_MS && !this.auto.pending && !this.auto.managedPending && !managedActive(this.managed)) {
+        const snapshot = await this.snapshot();
+        const target = this.auto.drain?.target.short;
+        const webServes = snapshot.serving.web?.short === target;
+        const hostServes = snapshot.serving.runtimeHost?.short === target;
+        // A cap may release a drain before succession. Once one checkout role
+        // moved, retain admission until its peer follows or rollback completes.
+        if (snapshot.mode === "checkout" && (webServes || hostServes)) {
+          this.refreshDrain();
+        } else {
+          const probe = this.deps.quiet ? await probeQuiet(snapshot, this.deps.quiet, now, true) : null;
+          const drain = this.auto.drain;
+          if (drain && !drain.overranAt) {
+            this.autoBlockers = probe?.blockers ?? this.auto.lastBlockers;
+            this.auto = { ...this.auto, drain: { ...drain, overranAt: new Date(now).toISOString(), blockers: probe?.blockers ?? this.auto.lastBlockers },
+              lastBlockers: probe?.blockers ?? this.auto.lastBlockers, quietSince: null };
+            this.saveAuto();
+            releaseDrain(this.drainFile, drain.id);
+            this.deps.requestPipelineTick?.();
+            return;
+          }
+        }
+      } else this.refreshDrain();
+    }
     if (decision.mode === "managed") { await this.runManagedAutoTick(decision); return; }
     if (decision.mode !== "checkout" || !decision.record) return;
     const record = decision.record;
@@ -382,11 +418,12 @@ export class SelfUpdateService {
     }
     if (!this.auto.enabled || this.autoAvailability(decision) !== "available") return;
     const staleBuilt = snapshot.installed.sha && (snapshot.serving.web?.short !== snapshot.installed.short || snapshot.serving.runtimeHost?.short !== snapshot.installed.short);
-    const target = this.slice.available ?? ((staleBuilt || this.auto.waitingSince) ? snapshot.installed : null);
+    const target = this.auto.drain && !this.auto.drain.overranAt ? this.auto.drain.target : this.slice.available ?? ((staleBuilt || this.auto.waitingSince) ? snapshot.installed : null);
     if (!target?.sha) return;
     let green = await this.autoGreen(target.sha, record.checkout!, now);
     if (green.state !== "green") return;
     if (snapshot.installed.sha !== target.sha) {
+      if (this.auto.drain && !this.auto.drain.overranAt) return;
       if (snapshot.busy || this.checking || snapshot.check.state === "checking" || memAvailableMb() < 4_096) return;
       green = await this.refreshGreen(target.sha, record.checkout!, green);
       if (green.state !== "green") return;
@@ -403,6 +440,7 @@ export class SelfUpdateService {
     const serves = (revision: Revision | null) => revision?.sha === target.sha || revision?.short === target.short;
     if (serves(snapshot.serving.web) && serves(snapshot.serving.runtimeHost)) {
       if (this.auto.waitingSince) {
+        this.endDrain();
         const rollback = this.auto.rollbackPointer;
         this.auto = { ...this.auto, waitingSince: null, waitingTarget: null, lastBlockers: null, quietSince: null, noticeAt: null, rollbackPointer: null, rollbackCaptured: false };
         this.saveAuto();
@@ -425,7 +463,7 @@ export class SelfUpdateService {
         return;
       }
       const finalSnapshot = await this.snapshot();
-      const finalProbe = await probeQuiet(finalSnapshot, quiet, this.deps.now());
+      const finalProbe = await probeQuiet(finalSnapshot, quiet, this.deps.now(), this.draining());
       this.autoBlockers = finalProbe.blockers;
       if (!finalProbe.quiet || finalSnapshot.installed.sha !== target.sha || existsSync(record.requestFile)) {
         this.auto = { ...this.auto, quietSince: null, lastBlockers: finalProbe.blockers };
@@ -469,26 +507,32 @@ export class SelfUpdateService {
     return green;
   }
 
-  private async waitForAutoQuiet(snapshot: Snapshot, target: string, now: number, resetOnTargetChange = false): Promise<boolean> {
+  private async waitForAutoQuiet(snapshot: Snapshot, target: string, now: number): Promise<boolean> {
+    if (!this.auto.enabled) return false;
     const at = new Date(now).toISOString();
     if (!this.auto.waitingSince) {
       this.auto = { ...this.auto, waitingSince: at, waitingTarget: target };
       this.saveAuto();
     } else if (this.auto.waitingTarget && this.auto.waitingTarget !== target) {
-      this.auto = resetOnTargetChange
-        ? { ...this.auto, waitingSince: at, waitingTarget: target, quietSince: null, noticeAt: null }
-        : { ...this.auto, waitingTarget: target, quietSince: null };
+      this.auto = { ...this.auto, waitingTarget: target, quietSince: null };
       this.saveAuto();
     } else if (!this.auto.waitingTarget) {
       this.auto = { ...this.auto, waitingTarget: target };
       this.saveAuto();
     }
-    if (this.auto.waitingSince && now - Date.parse(this.auto.waitingSince) >= 24 * 60 * 60_000 && !this.auto.noticeAt) {
-      this.auto = { ...this.auto, noticeAt: at };
-      this.saveAuto();
+    const due = this.auto.drain?.overranAt ?? this.auto.waitingSince;
+    if (!this.draining() && due && now - Date.parse(due) >= DRAIN_AFTER_MS) {
+      const revision = snapshot.mode === "checkout" ? snapshot.installed : snapshot.available;
+      if (revision?.sha === target) {
+        const drain = { id: randomUUID(), target: revision, since: at, overranAt: null, blockers: null };
+        // Publish the hold before the next asynchronous observation can launch work.
+        writeDrain(this.drainFile, { id: drain.id, target, since: at, until: now + DRAIN_LEASE_MS });
+        this.auto = { ...this.auto, drain, quietSince: null };
+        this.saveAuto();
+      }
     }
     if (!this.deps.quiet) return false;
-    const probe = await probeQuiet(snapshot, this.deps.quiet, now);
+    const probe = await probeQuiet(snapshot, this.deps.quiet, now, this.draining());
     this.autoBlockers = probe.blockers;
     if (JSON.stringify(this.auto.lastBlockers) !== JSON.stringify(probe.blockers)) {
       this.auto = { ...this.auto, lastBlockers: probe.blockers };
@@ -513,6 +557,7 @@ export class SelfUpdateService {
     if (!pending || !record || managedActive(record)
       || record.idempotencyKey !== managedIdempotencyKey(pending.target.sha, pending.clientKey)) return;
     const failed = record.phase !== "succeeded";
+    this.endDrain();
     this.auto = {
       ...this.auto, managedPending: null, waitingSince: null, waitingTarget: null,
       lastBlockers: null, quietSince: null, noticeAt: null,
@@ -523,6 +568,7 @@ export class SelfUpdateService {
   }
 
   private finishManagedAutoRefusal(target: Revision, reason: string): void {
+    this.endDrain();
     this.auto = {
       ...this.auto, enabled: false, managedPending: null, waitingSince: null, waitingTarget: null,
       quietSince: null, lastBlockers: null,
@@ -559,33 +605,33 @@ export class SelfUpdateService {
       // If the switch is off, retain the uncertain identity for observation
       // and do not admit a request. Re-enabling will re-check current policy.
       if (!this.auto.enabled) return;
-      if ((this.slice.check.state === "update-available" || this.slice.check.state === "up-to-date")
+      if (!this.draining() && (this.slice.check.state === "update-available" || this.slice.check.state === "up-to-date")
         && this.slice.available?.sha !== pending.target.sha) {
         // The host does not know this key and a successful check moved past
-        // its target. Let the current revision start a new admission window.
-        this.auto = { ...this.auto, managedPending: null, waitingSince: null, waitingTarget: null,
-          quietSince: null, lastBlockers: null, noticeAt: null };
+        // its target. Recheck admission without resetting the cumulative wait.
+        this.auto = { ...this.auto, managedPending: null, waitingTarget: null,
+          quietSince: null, lastBlockers: null };
         this.saveAuto();
         pending = null;
       }
     }
     if (!this.auto.enabled || this.autoAvailability(decision) !== "available" || managedActive(this.managed)
       || this.checking || snapshot.check.state === "checking") return;
-    const target = pending?.target ?? this.slice.available;
-    if (this.slice.check.state !== "update-available" || !target?.sha || this.slice.available?.sha !== target.sha
+    const target = this.draining() ? this.auto.drain!.target : pending?.target ?? this.slice.available;
+    if (this.slice.check.state !== "update-available" || !target?.sha || (!this.draining() && this.slice.available?.sha !== target.sha)
       || snapshot.installed.sha === target.sha
       || this.managed?.phase === "succeeded" && this.managed.target === target.sha) return;
     const now = this.deps.now();
     const repo = await this.deps.prepareCheckRepo();
     let green = await this.autoGreen(target.sha, repo, now);
     if (green.state !== "green") return;
-    if (!await this.waitForAutoQuiet(snapshot, target.sha, now, true)) return;
+    if (!await this.waitForAutoQuiet(snapshot, target.sha, now)) return;
     green = await this.refreshGreen(target.sha, repo, green);
     if (green.state !== "green") { this.auto = { ...this.auto, quietSince: null }; this.saveAuto(); return; }
     const finalSnapshot = await this.snapshot();
-    const finalProbe = this.deps.quiet ? await probeQuiet(finalSnapshot, this.deps.quiet, this.deps.now()) : null;
+    const finalProbe = this.deps.quiet ? await probeQuiet(finalSnapshot, this.deps.quiet, this.deps.now(), this.draining()) : null;
     this.autoBlockers = finalProbe?.blockers ?? null;
-    if (!finalProbe?.quiet || finalSnapshot.available?.sha !== target.sha || finalSnapshot.installed.sha === target.sha
+    if (!finalProbe?.quiet || (!this.draining() && finalSnapshot.available?.sha !== target.sha) || finalSnapshot.installed.sha === target.sha
       || this.checking || finalSnapshot.check.state === "checking" || !this.auto.enabled) {
       this.auto = { ...this.auto, quietSince: null, lastBlockers: finalProbe?.blockers ?? this.auto.lastBlockers };
       this.saveAuto();
@@ -601,14 +647,14 @@ export class SelfUpdateService {
       const current = await this.decide();
       if (current.mode !== "managed" || this.autoAvailability(current) !== "available" || !this.auto.enabled
         || managedActive(this.managed) || this.checking || this.slice.check.state !== "update-available"
-        || this.slice.available?.sha !== target.sha) return;
+        || (!this.draining() && this.slice.available?.sha !== target.sha)) return;
       green = await this.refreshGreen(target.sha, repo, green);
       const admissionSnapshot = await this.snapshot();
-      const admissionProbe = this.deps.quiet ? await probeQuiet(admissionSnapshot, this.deps.quiet, this.deps.now()) : null;
+      const admissionProbe = this.deps.quiet ? await probeQuiet(admissionSnapshot, this.deps.quiet, this.deps.now(), this.draining()) : null;
       this.autoBlockers = admissionProbe?.blockers ?? null;
       if (activeRestartGate(gateFile, this.deps.now()) !== gateId || green.state !== "green" || !admissionProbe?.quiet || !this.auto.enabled || this.checking
         || admissionSnapshot.check.state === "checking" || admissionSnapshot.installed.sha === target.sha
-        || admissionSnapshot.available?.sha !== target.sha || this.slice.available?.sha !== target.sha) {
+        || (!this.draining() && (admissionSnapshot.available?.sha !== target.sha || this.slice.available?.sha !== target.sha))) {
         this.auto = { ...this.auto, quietSince: null, lastBlockers: admissionProbe?.blockers ?? this.auto.lastBlockers };
         this.saveAuto();
         return;
@@ -642,7 +688,7 @@ export class SelfUpdateService {
       || activeRestartGate(restartGateFile(record.requestFile)) !== gateId) return false;
     const green = await this.refreshGreen(pending.target, record.checkout!, this.auto.green[pending.target] ?? { state: "unknown" });
     const snapshot = await this.snapshot();
-    const quiet = this.deps.quiet ? await probeQuiet(snapshot, this.deps.quiet, this.deps.now()) : null;
+    const quiet = this.deps.quiet ? await probeQuiet(snapshot, this.deps.quiet, this.deps.now(), this.draining()) : null;
     if (this.auto.enabled && green.state === "green" && quiet?.quiet && snapshot.installed.sha === pending.target
       && record.launcher.pid === pending.launcherPid && this.autoAvailability(decision) === "available") return true;
     this.autoBlockers = quiet?.blockers ?? null;
@@ -665,6 +711,24 @@ export class SelfUpdateService {
     return `${JSON.stringify({ sha: serving, dir, checkoutHead, publishedAt: new Date(this.deps.now()).toISOString() })}\n`;
   }
 
+  private get drainFile(): string { return join(this.deps.dir, "auto-drain.json"); }
+
+  private draining(): boolean { return !!this.auto.drain && !this.auto.drain.overranAt; }
+
+  private refreshDrain(): void {
+    const drain = this.auto.drain;
+    if (drain && !drain.overranAt) writeDrain(this.drainFile, { id: drain.id, target: drain.target.sha, since: drain.since, until: this.deps.now() + DRAIN_LEASE_MS });
+  }
+
+  private endDrain(): void {
+    const drain = this.auto.drain;
+    if (!drain) return;
+    releaseDrain(this.drainFile, drain.id);
+    this.auto = { ...this.auto, drain: null };
+    this.saveAuto();
+    this.deps.requestPipelineTick?.();
+  }
+
   private finishAutoRestart(pending: NonNullable<AutoState["pending"]>, outcome: "done" | "failed" | "fell-back", detail: string | undefined, record: LauncherRecord): void {
     appendHistory(this.historyFile, { at: new Date(this.deps.now()).toISOString(), by: "auto", kind: pending.role === "web" ? "restart-web" : "restart-host", target: pending.target, from: pending.from, outcome, detail });
     if (outcome === "done") {
@@ -674,6 +738,7 @@ export class SelfUpdateService {
       restorePointer(record.releasePointer, pending.rollbackPointer);
       this.auto = { ...this.auto, enabled: false, pending: null, quietSince: null,
         off: { at: new Date(this.deps.now()).toISOString(), target: pending.target, stage: pending.role === "web" ? "restart-web" : "restart-host", reason: detail ?? outcome } };
+      this.endDrain();
     }
     this.saveAuto();
   }

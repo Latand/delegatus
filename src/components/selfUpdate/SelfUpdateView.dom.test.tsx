@@ -160,6 +160,26 @@ const section = (el: HTMLElement, name: string) => el.querySelector<HTMLElement>
 const button = (el: HTMLElement, action: string) => el.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
 
 describe("automatic updates", () => {
+  test.each(["en", "uk"] as const)("named scheduled, draining and overrun states in %s", (locale) => {
+    setLocale(locale);
+    const s = snapshot();
+    s.auto = { availability: "available", enabled: true, off: null, phase: "waiting", target: null, green: { state: "green" },
+      blockers: { turns: 1, stages: 1, operatorActiveAt: null, busy: true, busyReason: "seat-tick", memoryMb: null, unreadable: null,
+        turnList: [{ conversationId: "conversation_worker", engine: "codex", project: "Example", seat: false, stage: null }],
+        stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Finish the feature", cursor: "running", conversationId: "conversation_builder" }] },
+      waitingSince: AT, longWait: true, drain: { state: "scheduled", at: AT } };
+    for (const [state, phrase] of [["scheduled", locale === "en" ? "From" : "Від"], ["draining", locale === "en" ? "Draining since" : "Очікуємо завершення від"],
+      ["overran", locale === "en" ? "Held launches for 2 h" : "Запуски стримувалися 2 год"]] as const) {
+      s.auto.drain = { state, at: AT, nextAt: AT };
+      const copy = text(section(render(s), "auto"));
+      expect(copy).toContain(phrase);
+      expect(copy).toContain("build · Finish the feature");
+      expect(copy).toContain("codex · worker");
+      expect(copy).toContain(locale === "en" ? "Orchestrator wake in progress" : "Триває пробудження оркестратора");
+      flushSync(() => root!.unmount());
+      host?.remove();
+    }
+  });
   test("the switch, blockers, serving revisions and history are visible", () => {
     const s = snapshot();
     s.auto = { availability: "available", enabled: true, off: null, phase: "waiting", target: { sha: "a".repeat(40), short: "aaaaaaa", version: "1", date: "" }, green: { state: "green" },

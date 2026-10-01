@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { activeDrain, type DrainLease } from "@/lib/selfUpdate/drain";
 import { tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { accountManager, resolveProjectSpawnAfterLiveRead } from "@/lib/accounts/manager";
@@ -224,6 +225,7 @@ export interface PipelinePorts {
   recoverStagedLaunch?(launchId: string, eligible: () => boolean): Promise<void>;
   failStageLaunch?(launchId: string, conversationId: string, reason: string): boolean;
   claimSpawnRetry(launchId: string, claimId: string): "claimed" | "settled" | "conflict";
+  drainHold?(): DrainLease | null;
   /** Whether the ticking process can publish a structured host: `ready` now,
       `rebinding` between publications, `unbound` never at all (#1191). */
   structuredDeliveryPublication?(): "ready" | "rebinding" | "unbound";
@@ -1169,6 +1171,7 @@ export function defaultPipelinePorts(
        binds one, so a spawn issued there can only ever fail (#1191). With
        structured hosting switched off there is no publication to wait for and
        the spawn must fail in the open, as it always did. */
+    drainHold: () => activeDrain(),
     structuredDeliveryPublication: () => structuredHostsEnabled()
       ? structuredDeliveryPublicationState()
       : "ready",
@@ -3457,6 +3460,20 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
     for (const run of snapshot.runs) for (const original of run.attempts) {
       const reservation = original.activation;
       if (!reservation || activeActivations.has(reservation.id)) continue;
+      // A reserved activation has admitted no host yet; keep its launch identity.
+      if (reservation.phase === "reserved" && ports.drainHold?.()) {
+        if (reservation.owner && processIdentityStatus(reservation.owner) === "dead") {
+          await withPipelineMutation((pipelines, persist) => {
+            const live = pipelines.find((item) => item.id === snapshot.id);
+            const attempt = live && runFor(live, run.stageId)?.attempts.find((item) => item.n === original.n);
+            if (attempt?.activation && JSON.stringify(attempt.activation) === JSON.stringify(reservation)) {
+              delete attempt.activation.owner;
+              persist([live!]);
+            }
+          });
+        }
+        continue;
+      }
       const sameProcess = owner.startIdentity !== null && !!owner.bootEpoch && reservation.owner?.pid === owner.pid
         && reservation.owner?.startIdentity === owner.startIdentity && reservation.owner?.bootEpoch === owner.bootEpoch;
       if (reservation.owner && !sameProcess && processIdentityStatus(reservation.owner) !== "dead") continue;
@@ -3741,6 +3758,17 @@ async function spawnRunStage(
   }
 }
 
+function holdStageLaunch(pipeline: Pipeline, ports: PipelinePorts, persist: () => void): boolean {
+  const hold = ports.drainHold?.();
+  if (hold) {
+    const detail = `held for the automatic update to ${hold.target.slice(0, 7)} since ${hold.since}`;
+    if (pipeline.stateDetail !== detail) { pipeline.stateDetail = detail; persist(); }
+    return true;
+  }
+  if (pipeline.stateDetail?.startsWith("held for the automatic update to ")) { pipeline.stateDetail = null; persist(); }
+  return false;
+}
+
 async function tickRunStage(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -3781,6 +3809,7 @@ async function tickRunStage(
        controller (requestPipelineTick), and it activates the same attempt. */
     const publication = ports.structuredDeliveryPublication?.() ?? "ready";
     if (publication === "unbound") return;
+    if (holdStageLaunch(pipeline, ports, persist)) return;
     const activationNow = ports.now();
     /* A wait booked by an earlier tick is not due yet. */
     if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(activationNow)) return;
@@ -4352,6 +4381,7 @@ async function tickReviewStage(
     if (approvedReviewHeadHolds(pipeline, attempt, ports)) commitPassedStage(pipeline, stage, attempt, ports);
     return;
   }
+  if (attempt.state === "pending" && holdStageLaunch(pipeline, ports, persist)) return;
   const implementer = latestAcceptedRun(pipeline, stage.id);
   if (!implementer?.agentPath) {
     park(pipeline, "review-loop stage requires an accepted run session", attempt);

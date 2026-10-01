@@ -9,6 +9,7 @@ import { initialCheck } from "./checkState";
 import { readManagedRecord, writeManagedRecord, type ManagedRecord } from "./managed";
 import { SelfUpdateService, type ServiceDeps } from "./service";
 import { idleCheck, type Revision } from "./types";
+import { activeDrain, DRAIN_AFTER_MS, DRAIN_MAX_MS } from "./drain";
 
 const root = mkdtempSync("/var/tmp/self-update-managed-auto-");
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -101,6 +102,95 @@ test("managed availability permits deployment and explains missing prerequisites
   expect((await withoutGithub.snapshot()).auto?.availability).toBe("not-github");
   expect(await withoutGithub.setAuto(true)).toMatchObject({ ok: false, code: "auto-unavailable" });
   withoutGithub.stop();
+});
+
+test("a busy managed install drains at four hours and keeps the clock across targets", async () => {
+  const h = scenario();
+  h.setTurns(1);
+  let service = h.service();
+  await service.autoTick();
+  const since = (await service.snapshot()).auto!.waitingSince;
+  h.advance(DRAIN_AFTER_MS - 60_000);
+  await service.autoTick();
+  expect((await service.snapshot()).auto).toMatchObject({ longWait: false, drain: { state: "scheduled" } });
+  const next = "c".repeat(40);
+  h.deps.check = async () => ({ ok: true, installed: revision(OLD), available: revision(next), relation: "behind", ahead: 0, behind: 2, delta: null });
+  await service.check();
+  await Bun.sleep(0);
+  h.advance(60_000);
+  await service.autoTick();
+  expect((await service.snapshot()).auto).toMatchObject({ waitingSince: since, longWait: true, drain: { state: "draining" }, target: { sha: next } });
+  expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.target).toBe(next);
+  service.saveNow();
+  service.stop();
+  service = h.service();
+  h.advance(60_000);
+  await service.autoTick();
+  expect((await service.snapshot()).auto?.drain?.state).toBe("draining");
+  h.advance(DRAIN_MAX_MS);
+  await service.autoTick();
+  expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
+  expect((await service.snapshot()).auto).toMatchObject({ longWait: true, drain: { state: "overran", nextAt: new Date(h.deps.now() + DRAIN_AFTER_MS).toISOString() } });
+  service.stop();
+});
+
+test("disabling during the green read cannot publish a new launch hold", async () => {
+  const h = scenario();
+  const file = join(h.dir, "auto.json");
+  writeAuto(file, { ...readAuto(file), waitingSince: new Date(h.deps.now() - DRAIN_AFTER_MS).toISOString(), waitingTarget: TARGET });
+  let release = () => {};
+  let reading = false;
+  h.deps.green = { read: () => { reading = true; return new Promise((resolve) => { release = () => resolve({ state: "green" }); }); } } as unknown as ServiceDeps["green"];
+  const service = h.service();
+  const tick = service.autoTick();
+  for (let i = 0; i < 100 && !reading; i++) await Bun.sleep(1);
+  expect(reading).toBe(true);
+  await service.setAuto(false);
+  release();
+  await tick;
+  expect(readAuto(file)).toMatchObject({ enabled: false, drain: null });
+  expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
+  service.stop();
+});
+
+test.each(["succeeded", "rolled-back", "failed"] as const)("the frozen drain target survives newer merges and releases after %s", async (phase) => {
+  const h = scenario();
+  h.setTurns(1);
+  const service = h.service();
+  await service.autoTick();
+  h.advance(DRAIN_AFTER_MS);
+  await service.autoTick();
+  const next = "c".repeat(40);
+  h.deps.check = async () => ({ ok: true, installed: revision(OLD), available: revision(next), relation: "behind", ahead: 0, behind: 2, delta: null });
+  await service.check();
+  await Bun.sleep(0);
+  expect((await service.snapshot()).auto?.target?.sha).toBe(TARGET);
+  h.setTurns(0);
+  await service.autoTick();
+  h.advance(60_000);
+  await service.autoTick();
+  expect(h.requests).toHaveLength(1);
+  expect(h.requests[0]?.revision).toBe(TARGET);
+  h.advance(DRAIN_MAX_MS);
+  await service.autoTick();
+  expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+  h.finish(phase, phase === "succeeded" ? null : "candidate failed");
+  await service.snapshot();
+  expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
+  service.stop();
+});
+
+test.each(["switch-off", "unavailable"])("a busy drain releases on %s", async (reason) => {
+  const h = scenario();
+  h.setTurns(1);
+  const service = h.service();
+  await service.autoTick();
+  h.advance(DRAIN_AFTER_MS);
+  await service.autoTick();
+  if (reason === "switch-off") await service.setAuto(false);
+  else { h.setRelease(null); await service.autoTick(); }
+  expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
+  service.stop();
 });
 
 test("managed green merge waits for a quiet minute and requests the manual deployment path once", async () => {
