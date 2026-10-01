@@ -164,3 +164,19 @@ The pipeline tick runs in the same durable scanner-controller pass as the flow t
 ## Deferred composition
 
 Branching, conditional verdict edges, fan-out, parallel stages, voting panels, DAGs, rich visual editing, and runtime-event ownership remain later slices.
+
+## Out-of-memory recovery
+
+A fatal host memory kill fails its attempt immediately with
+`killed: out of memory (limit N GB)`, rather than missing-verdict recovery.
+System-wide exhaustion names total RAM instead. Durable stage verdicts and
+release-continuation obligations retain precedence.
+
+The controller starts one fresh attempt in the same worktree after headroom
+recovers. Its persisted input explains the prior kill and asks for smaller,
+serial memory-heavy commands. Headroom is checked after 60 seconds with bounded
+backoff up to five minutes, for at most 30 minutes. A second consecutive OOM or
+an exhausted recovery wait parks the pipeline for an operator decision. Read-only
+stages follow the same rule without spending their host-loss rerun budget.
+A memory Needs-you item names the stage and limit and can be dismissed; a new
+kill raises a new item.

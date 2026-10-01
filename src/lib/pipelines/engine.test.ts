@@ -15480,3 +15480,104 @@ test("an omitted pipeline review budget runs three reviews before the last fix c
   expect(pipeline.runs.find((run) => run.stageId === "critique")!.attempts).toHaveLength(3);
   expect(pipeline.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(4);
 });
+
+test("an OOM death retries once after headroom recovers in the same worktree, then parks", async () => {
+  const h = harness();
+  await runningStructuredStage(h);
+  h.setConversationActive(false);
+  let killAt = h.ports.now();
+  h.ports.conversationHostUnavailableSince = async () => killAt;
+  h.ports.conversationOutOfMemory = async () => ({ at: killAt, limitBytes: 15 * 2 ** 30, limit: "agent", fatal: true, process: null });
+  let available = 1 * 2 ** 30;
+  h.ports.memoryHeadroom = () => ({ availableBytes: available, requiredBytes: 15 * 2 ** 30 });
+  const worktree = loadPipelines()[0]!.worktreeDir;
+  const callsBefore = h.calls.filter((call) => call.startsWith("spawn:")).length;
+  await tickPipelines([], h.ports);
+  let pipeline = loadPipelines()[0]!;
+  expect(pipeline.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: "killed: out of memory (limit 15 GB)", outOfMemory: { limit: "agent" } });
+  expect(pipeline.runs[0]!.attempts[1]!.input).toContain("changes are still in this worktree");
+  h.advanceWallClock(60_001);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toContain("waiting for memory");
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(callsBefore);
+  available = 20 * 2 ** 30;
+  h.advanceWallClock(5 * 60_000);
+  h.setConversationActive(true);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  pipeline = loadPipelines()[0]!;
+  expect(pipeline.worktreeDir).toEqual(worktree);
+  expect(pipeline.runs[0]!.attempts[1]!.state).toBe("running");
+  h.setConversationActive(false);
+  structuredLatest(0);
+  killAt = h.ports.now();
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.stateDetail).toContain("automatic retry was killed the same way");
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+});
+
+test("an OOM recovery wait that never gets headroom parks after its bounded budget", async () => {
+  const h = harness();
+  await runningStructuredStage(h);
+  h.setConversationActive(false);
+  const at = h.ports.now();
+  h.ports.conversationOutOfMemory = async () => ({ at, limitBytes: 15 * 2 ** 30, limit: "agent", fatal: true, process: null });
+  h.ports.memoryHeadroom = () => ({ availableBytes: 0, requiredBytes: 15 * 2 ** 30 });
+  await tickPipelines([], h.ports);
+  h.advanceWallClock(30 * 60_000 + 1);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.stateDetail).toContain("memory did not recover within 30 minutes");
+});
+test("a read-only OOM uses memory retry, and positive verdict evidence still wins", async () => {
+  const h = harness();
+  await create(h.ports, [{ id: "review", kind: "run", role: { roleId: "reviewer" }, engine: "codex", access: "read-only", prompt: "Review {{task}}", next: null }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  structuredLatest(0);
+  h.setConversationActive(false);
+  const at = h.ports.now();
+  h.ports.conversationOutOfMemory = async () => ({ at, limitBytes: 15 * 2 ** 30, limit: "agent", fatal: true, process: null });
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.error).toBe("killed: out of memory (limit 15 GB)");
+  expect(loadPipelines()[0]!.runs[0]!.attempts[1]!.memoryWait).toBeDefined();
+  const verdict = harness();
+  await runningStructuredStage(verdict);
+  verdict.setConversationActive(false);
+  verdict.ports.conversationOutOfMemory = h.ports.conversationOutOfMemory;
+  const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  verdict.durableTurns.set(attempt.agentPath!, { turn: "terminal", message: { text: '```json\n{"status":"pass","findings":[]}\n```', ts: Date.parse(verdict.ports.now()) + 1 } } as StageTurnEvidence);
+  await tickPipelines([], verdict.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.outOfMemory).toBeUndefined();
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("passed");
+});
+
+
+test("an auto scope admission failure retries with a fresh launch before delivery", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const baseSpawn = h.ports.spawnAgent;
+  let spawnCalls = 0;
+  const clientAttemptIds: string[] = [];
+  Object.assign(h.ports, { sleep: async () => {} });
+  h.ports.spawnAgent = async (input, onReserved) => {
+    spawnCalls += 1;
+    clientAttemptIds.push(input.clientAttemptId);
+    if (spawnCalls < 3) throw new Error("agent memory scope launch failed before exec; retry shortly");
+    return baseSpawn(input, onReserved);
+  };
+
+  await tickPipelines([], h.ports);
+
+  expect(spawnCalls).toBe(3);
+  expect(new Set(clientAttemptIds).size).toBe(3);
+  const current = loadPipelines()[0]!;
+  expect(current).toMatchObject({
+    state: "running",
+    stateDetail: null,
+    cursor: { stageId: "plan", state: "running" },
+  });
+  expect(current.runs[0]!.attempts[0]!.state).toBe("running");
+});

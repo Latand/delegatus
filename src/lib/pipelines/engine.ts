@@ -1,3 +1,4 @@
+import { agentMemoryHeadroom, memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemory";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -84,7 +85,7 @@ import {
 import * as legacyReview from "./legacyReviewDefinition";
 import { laneMovedSince } from "./laneMovement";
 import { pipelineRepoPreflightError, pipelineRepoPreflightStatus, preflightPipelineRepo } from "./preflight";
-import { pipelineDeliveryGuidance, renderDecisionInput, renderStagePrompt } from "./prompts";
+import { pipelineDeliveryGuidance, renderDecisionInput, renderOutOfMemoryRetryInput, renderStagePrompt } from "./prompts";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntimeIsExplicit, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
@@ -259,6 +260,10 @@ export interface PipelinePorts {
       sizing rules judge the agent that briefed a launch by it
       (docs/design/model-sizing-tiers.md §2). */
   conversationRuntime?(conversationId: string): LaunchRuntime | null;
+  /** Fatal memory evidence from the latest terminal host generation. */
+  conversationOutOfMemory?(conversationId: string): Promise<AgentMemoryKill | null>;
+  /** Null means the memory mechanism cannot measure headroom. */
+  memoryHeadroom?(priorLimitBytes: number): { availableBytes: number; requiredBytes: number } | null;
   /** Null means hosted, a timestamp means dead/absent since then, and undefined
       means the registry cannot provide authoritative host evidence. */
   conversationHostUnavailableSince?(conversationId: string): Promise<string | null | undefined>;
@@ -1261,6 +1266,16 @@ export function defaultPipelinePorts(
     conversationRegistered: (conversationId) => conversationId.startsWith("conversation_")
       && Boolean(snapshot().conversations[conversationId as ViewerConversationId]),
     conversationRuntime: (conversationId) => conversationRuntime(snapshot(), conversationId),
+    memoryHeadroom: (priorLimitBytes) => agentMemoryHeadroom(Object.values(snapshot().entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1, priorLimitBytes),
+    conversationOutOfMemory: async (conversationId) => {
+      const current = snapshot();
+      const conversation = current.conversations[conversationId as ViewerConversationId];
+      const generation = conversation?.generations.at(-1);
+      const key = generation && conversation ? sessionKeyFromTranscript(conversation.engine, generation.path) : null;
+      const entry = key ? current.entries[sessionKeyId(key)] : null;
+      const kill = entry?.structuredHost?.memory?.lastKill;
+      return entry && (entry.status === "dead" || entry.status === "unhosted") && kill?.fatal ? kill : null;
+    },
     conversationHostUnavailableSince: async (conversationId) => {
       if (!conversationId.startsWith("conversation_")) return undefined;
       const current = snapshot();
@@ -3121,6 +3136,46 @@ function deployCutHoldsAttempt(cut: StageInterruption | null, ports: PipelinePor
     && unixMs(ports.now()) - unixMs(cut.recordedAt) < DEPLOY_CUT_HOLD_MS;
 }
 
+const MEMORY_WAIT_BUDGET = { budgetMs: 30 * 60_000, retryBaseMs: 60_000, retryMaxMs: 5 * 60_000 };
+function retryOutOfMemoryStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, kill: AgentMemoryKill, ports: PipelinePorts): void {
+  const attempts = runFor(pipeline, stage.id)!.attempts;
+  const previous = attempts[attempts.indexOf(attempt) - 1];
+  const error = memoryKillText(kill);
+  attempt.state = "failed";
+  attempt.completedAt = ports.now();
+  attempt.error = error;
+  attempt.outOfMemory = { at: kill.at, limitBytes: kill.limitBytes, limit: kill.limit };
+  if (previous?.outOfMemory) {
+    park(pipeline, `${error}; the automatic retry was killed the same way`, attempt);
+    return;
+  }
+  pipeline.state = "running";
+  pipeline.stateDetail = `${error}; retrying once memory recovers`;
+  setCursorState(pipeline, stage.id, "pending");
+  const retry = newAttempt(pipeline, stage);
+  if (!retry) return;
+  retry.input = renderOutOfMemoryRetryInput(attempt.input, attempt.n, kill);
+  retry.memoryWait = { startedAt: ports.now(), rounds: 0, retryAfter: new Date(unixMs(ports.now()) + 60_000).toISOString(), budgetMs: MEMORY_WAIT_BUDGET.budgetMs, retryMaxMs: MEMORY_WAIT_BUDGET.retryMaxMs };
+  ports.scheduleTick?.(60_000);
+}
+function waitForMemory(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts): boolean {
+  const wait = attempt.memoryWait;
+  if (!wait) return false;
+  const now = ports.now();
+  if (unixMs(wait.retryAfter) > unixMs(now)) return true;
+  const attempts = runFor(pipeline, stage.id)!.attempts;
+  const kill = attempts[attempts.indexOf(attempt) - 1]?.outOfMemory;
+  if (!kill) { delete attempt.memoryWait; return false; }
+  const headroom = ports.memoryHeadroom?.(kill.limitBytes);
+  if (!headroom || headroom.availableBytes >= headroom.requiredBytes) { delete attempt.memoryWait; pipeline.stateDetail = null; return false; }
+  const next = nextBoundedWait(wait, wait.startedAt, now, MEMORY_WAIT_BUDGET);
+  if (!next) { park(pipeline, `${memoryKillText(kill)}; memory did not recover within 30 minutes`, attempt); return true; }
+  attempt.memoryWait = next.wait;
+  pipeline.stateDetail = `${memoryKillText(kill)}; waiting for memory: ${(headroom.availableBytes / 2 ** 30).toFixed(1)} of ${(headroom.requiredBytes / 2 ** 30).toFixed(1)} GB free`;
+  ports.scheduleTick?.(next.delayMs);
+  return true;
+}
+
 /**
  * Re-runs a read-only stage whose host was lost before it reported (#1835).
  *
@@ -3781,6 +3836,7 @@ async function tickRunStage(
        controller (requestPipelineTick), and it activates the same attempt. */
     const publication = ports.structuredDeliveryPublication?.() ?? "ready";
     if (publication === "unbound") return;
+    if (waitForMemory(pipeline, stage, attempt, ports)) return;
     const activationNow = ports.now();
     /* A wait booked by an earlier tick is not due yet. */
     if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(activationNow)) return;
@@ -4002,7 +4058,9 @@ async function tickRunStage(
      every reading this function trusts says "working" and returns. The epoch
      witness is the one reading that does not, and it costs a memoized snapshot
      field until a succession actually moves it. */
-  if (await reconcileSeveredStageTurn(pipeline, stage, attempt, ports, persist) === "handled") return;
+  const memoryDeath = attempt.conversationId ? await ports.conversationOutOfMemory?.(attempt.conversationId) : null;
+  const oomDeath = memoryDeath?.fatal && unixMs(memoryDeath.at) >= unixMs(attempt.startedAt) ? memoryDeath : null;
+  if (!oomDeath && await reconcileSeveredStageTurn(pipeline, stage, attempt, ports, persist) === "handled") return;
   const unavailableSince = !attempt.paneId && attempt.conversationId
     ? await ports.conversationHostUnavailableSince?.(attempt.conversationId)
     : null;
@@ -4020,8 +4078,8 @@ async function tickRunStage(
     ? Math.max(reportedUnavailableAt, unixMs(deployCut.resolvedAt))
     : reportedUnavailableAt;
   const hostUnavailablePastGrace = !heldForDeployCut
-    && unavailableAt > 0
-    && unixMs(ports.now()) - unavailableAt >= DEAD_RUNNING_ATTEMPT_GRACE_MS;
+    && (Boolean(oomDeath) || (unavailableAt > 0
+    && unixMs(ports.now()) - unavailableAt >= DEAD_RUNNING_ATTEMPT_GRACE_MS));
   if (heldForDeployCut && pipeline.stateDetail !== DEPLOY_CUT_HOLD_DETAIL) {
     pipeline.stateDetail = DEPLOY_CUT_HOLD_DETAIL;
     persist();
@@ -4049,7 +4107,7 @@ async function tickRunStage(
       paneId: attempt.paneId,
       ...(attempt.historical && !attempt.legacyReview ? { adopted: true as const } : {}),
     }, ports, durable);
-  if (unregisteredHostDeath && !heldForDeployCut && canSpendRecoveryCheck()) {
+  if (!oomDeath && unregisteredHostDeath && !heldForDeployCut && canSpendRecoveryCheck()) {
     recordVerdictRecoveryMiss(pipeline, attempt, ports, unregisteredHostDeath, null);
     return;
   }
@@ -4126,6 +4184,7 @@ async function tickRunStage(
       return;
     }
     pipeline.stateDetail = null;
+    if (oomDeath) { retryOutOfMemoryStage(pipeline, stage, attempt, oomDeath, ports); return; }
     if (rerunHostLostReadOnlyStage(pipeline, stage, attempt, ports)) return;
     attempt.state = "failed";
     attempt.completedAt = ports.now();
@@ -5449,7 +5508,8 @@ function isTransientStructuredSpawnFailure(failure: string): boolean {
     || isRuntimeHostUnavailableSpawnFailure(failure)
     || isUnverifiedDeliverySpawnFailure(failure)
     || failure.includes("structured initial message")
-    || failure.includes("runtime host request timed out");
+    || failure.includes("runtime host request timed out")
+    || failure.includes("agent memory scope launch failed before exec; retry shortly");
 }
 
 /**
@@ -5561,8 +5621,8 @@ function controllerWaitParkDetail(attempt: PipelineStageAttempt, now: string, fa
 function stageActivationIsWaiting(pipeline: Pipeline, nowMs: number): boolean {
   const stageId = pipeline.cursor?.stageId;
   if (!stageId) return false;
-  const retryAfter = currentAttempt(pipeline, stageId)?.controllerWait?.retryAfter;
-  return retryAfter !== undefined && unixMs(retryAfter) > nowMs;
+  const attempt = currentAttempt(pipeline, stageId);
+  return [attempt?.controllerWait?.retryAfter, attempt?.memoryWait?.retryAfter].some((retryAfter) => retryAfter !== undefined && unixMs(retryAfter) > nowMs);
 }
 
 /**
