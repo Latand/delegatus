@@ -152,8 +152,26 @@ export async function runReplay(args: string[]): Promise<void> {
     const beforeMs: number[] = [], afterMs: number[] = [];
     const after = (q: ReplayQuery) => searchTranscripts({ query: q.query, project: q.project, order: "relevance", limit: 6,
       fence: { timestamp: q.timestamp, excludeTranscript: q.source } });
-    // Create vocab on the copy before timing; migration is tested separately.
-    searchTranscripts({ query: "synthetic_initialisation_probe", order: "relevance" });
+    // Measure the first request's event-loop delay separately, then let the
+    // background covering-index build finish before measuring steady queries.
+    const initializationStarted = performance.now();
+    let initializationTimerAt = 0;
+    setTimeout(() => { initializationTimerAt = performance.now(); }, 0);
+    const firstQuery = sample[0]!;
+    const firstPage = after(firstQuery);
+    const firstSearchMs = performance.now() - initializationStarted;
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const initializationEventLoopDelayMs = Math.max(0, initializationTimerAt - initializationStarted);
+    const indexDeadline = performance.now() + 120_000;
+    const indexDb = new Database(filename, { readonly: true });
+    try {
+      indexDb.exec("PRAGMA busy_timeout = 5000");
+      while (!indexDb.query("SELECT 1 FROM sqlite_master WHERE type='index' AND name='transcript_messages_search_hit'").get()) {
+        if (performance.now() >= indexDeadline) throw new Error("Background transcript search index did not finish");
+        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      }
+    } finally { indexDb.close(); }
+    const backgroundIndexMs = performance.now() - initializationStarted;
     for (const [i, q] of sample.entries()) {
       let start = performance.now();
       const before = baselinePage(db, q);
@@ -191,6 +209,8 @@ export async function runReplay(args: string[]): Promise<void> {
       openedTop6Before: recallBefore, openedTop6After: recallAfter,
       beforeP50Ms: percentile(beforeMs, 0.5), beforeP95Ms: percentile(beforeMs, 0.95),
       afterP50Ms: percentile(afterMs, 0.5), afterP95Ms: percentile(afterMs, 0.95), afterMaxMs: Math.max(...afterMs),
+      firstSearchMs, initializationEventLoopDelayMs, backgroundIndexMs,
+      firstSearchResults: firstPage.total, firstSearchStrong: firstPage.strongTotal,
     }, null, 2));
   } finally { db.close(); }
 }

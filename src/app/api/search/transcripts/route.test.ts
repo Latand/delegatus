@@ -84,6 +84,59 @@ test("dialog scopes and the MCP search binding preserve newest-first pages durin
   }
 });
 
+test("the first v4 search request stays responsive while migration runs in the background", async () => {
+  const transcript = path.join(sandbox, "v4-http.jsonl");
+  fs.writeFileSync(transcript, Array.from({ length: 10_000 }, (_, i) => JSON.stringify({
+    type: "user", timestamp: new Date((1_700_000_000 + i) * 1_000).toISOString(),
+    message: { content: `cobalt http migration ${i}` },
+  })).join("\n") + "\n");
+  const stat = fs.statSync(transcript);
+  await indexTranscriptSources([{
+    path: transcript, project: "v4-http", engine: "claude", size: stat.size, mtimeMs: stat.mtimeMs,
+  }], { complete: true });
+  const filename = path.join(process.env.LLV_STATE_DIR!, "transcript-search.sqlite");
+  const db = new (await import("bun:sqlite")).Database(filename);
+  db.exec(`
+    DROP TABLE transcript_messages_vocab;
+    DROP INDEX IF EXISTS transcript_messages_search_hit;
+    DROP INDEX IF EXISTS transcript_messages_time;
+    DROP INDEX IF EXISTS transcript_messages_body_hash;
+    DROP TABLE transcript_search_sequence;
+    ALTER TABLE transcript_messages DROP COLUMN sort_timestamp;
+    PRAGMA user_version = 4;
+  `);
+  db.close();
+
+  const server = Bun.serve({ port: 0, fetch: GET });
+  try {
+    let timerFiredAt = 0;
+    const started = performance.now();
+    const timer = setTimeout(() => { timerFiredAt = performance.now(); }, 0);
+    const response = await fetch(`http://127.0.0.1:${server.port}/api/search/transcripts?q=cobalt&order=relevance`);
+    const elapsed = performance.now() - started;
+    expect(response.status).toBe(200);
+    expect((await response.json() as Page).total).toBe(1);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    clearTimeout(timer);
+    expect(timerFiredAt).toBeGreaterThan(0);
+    expect(elapsed).toBeLessThan(350);
+    const { Database } = await import("bun:sqlite");
+    const ready = new Database(filename, { readonly: true });
+    ready.exec("PRAGMA busy_timeout = 5000");
+    const deadline = performance.now() + 5_000;
+    let indexesReady = false;
+    while (!indexesReady && performance.now() < deadline) {
+      indexesReady = Boolean(ready.query("SELECT 1 FROM sqlite_master WHERE type='index' AND name='transcript_messages_search_hit'").get())
+        && Boolean(ready.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='transcript_messages_vocab'").get());
+      if (!indexesReady) await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    }
+    ready.close();
+    expect(indexesReady).toBe(true);
+  } finally {
+    server.stop(true);
+  }
+});
+
 test("returns indexed snippets without reopening the transcript", async () => {
   const transcript = path.join(sandbox, "route-session.jsonl");
   fs.writeFileSync(transcript, JSON.stringify({

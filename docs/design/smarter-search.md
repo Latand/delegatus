@@ -476,6 +476,10 @@ Tests, run by path:
    that names a client, account or path.
 4. For any unquoted query, the dialog still returns every row today's search
    returns, newest first, with the inflected matches placed by their time.
+5. A first request against a v4 index returns while migration and large index
+   construction run in the background. Measure event-loop delay on the first
+   search; preserve message IDs, hashes and FTS contents, and keep fresh-index
+   creation working.
 
 ## Validation against the requirement
 

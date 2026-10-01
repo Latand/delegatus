@@ -969,6 +969,19 @@ test("relevance covers a conversation across messages and selects complementary 
   expect(searchTranscripts({ query: "cobalt quartz", order: "newest" }).total).toBe(0);
 });
 
+test("relevance retries the rarest original term when coverage would otherwise be empty", async () => {
+  await rankedFixture([[
+    "cobalt-only", ["cobalt result"],
+  ], [
+    "quartz-only", ["quartz result"],
+  ]]);
+  const page = searchTranscripts({ query: "cobalt quartz", order: "relevance" });
+  expect(page.total).toBe(1);
+  expect(page.strongTotal).toBe(1);
+  expect(page.interpretedAs?.units).toHaveLength(1);
+  expect(page.interpretedAs?.ignored).toHaveLength(1);
+});
+
 test("copies fold by lead snippet, common units are reported, and pages stay compact", async () => {
   await rankedFixture([["one", ["cobalt resolution"]], ["copy", ["cobalt resolution"]], ["other", ["cobalt different resolution"]]]);
   const page = searchTranscripts({ query: "the mundane cobalt", order: "relevance" });
@@ -977,6 +990,43 @@ test("copies fold by lead snippet, common units are reported, and pages stay com
   expect(page.items).toHaveLength(2);
   expect(page.items.find((i) => i.duplicateCount === 2)?.alsoIn).toMatchObject({ count: 1 });
   expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(6144);
+});
+
+test("relevance groups copies across page boundaries before returning bounded links", async () => {
+  const rows: Array<[string, number, string]> = [
+    ["new-copy", 300, "cobalt repeated answer"],
+    ["old-copy", 100, "cobalt repeated answer"],
+    ["unique", 200, "cobalt unique answer"],
+    ...Array.from({ length: 100 }, (_, i) => [`filler-${i}`, 400 + i, `filler material ${i}`] as [string, number, string]),
+  ];
+  const sources = rows.map(([name, timestamp, body]) => {
+    const pathname = path.join(sandbox, `${name}.jsonl`);
+    fs.writeFileSync(pathname, JSON.stringify({
+      type: "user", timestamp: new Date(timestamp * 1_000).toISOString(), message: { content: body },
+    }) + "\n");
+    return { ...source(pathname, "claude", "ranked-fixture"), mtimeMs: timestamp * 1_000 };
+  });
+  await indexTranscriptSources(sources, { complete: true });
+
+  const first = searchTranscripts({ query: "cobalt", order: "relevance", limit: 1 });
+  expect(first.items[0]).toMatchObject({ duplicateCount: 2, alsoIn: { count: 1 } });
+  expect(first.items[0]!.alsoIn!.transcriptPaths).toContain(sources[1]!.path);
+  expect(first.items[0]!.transcriptPath).toBe(sources[0]!.path);
+  const second = searchTranscripts({ query: "cobalt", order: "relevance", limit: 1, cursor: first.nextCursor });
+  expect(second.items.map((item) => item.transcriptPath)).toContain(sources[2]!.path);
+
+  const many = Array.from({ length: 40 }, (_, i) => [`copy-${i}`, 1_000 + i, "cobalt repeated answer"] as [string, number, string]);
+  const manySources = many.map(([name, timestamp, body]) => {
+    const pathname = path.join(sandbox, `${name}.jsonl`);
+    fs.writeFileSync(pathname, JSON.stringify({
+      type: "user", timestamp: new Date(timestamp * 1_000).toISOString(), message: { content: body },
+    }) + "\n");
+    return { ...source(pathname, "claude", "many-copies"), mtimeMs: timestamp * 1_000 };
+  });
+  await indexTranscriptSources(manySources, { complete: true });
+  const crowded = searchTranscripts({ query: "cobalt", order: "relevance", project: "many-copies", limit: 6 });
+  expect(crowded.items[0]).toMatchObject({ duplicateCount: 40, alsoIn: { count: 39 } });
+  expect(crowded.items[0]!.alsoIn!.transcriptPaths).toHaveLength(3);
 });
 
 test("the measured prototype ignores absent vocabulary units explicitly without widening newest", async () => {
@@ -1015,8 +1065,56 @@ test("v4 to v5 creates vocab without rewriting messages or the FTS index", async
   expect(searchTranscripts({ query: "cobalt", order: "relevance" }).total).toBe(1);
   const upgraded = new Database(statePath("transcript-search.sqlite"), { readonly: true });
   expect(upgraded.query("SELECT id, body_hash FROM transcript_messages ORDER BY id").all()).toEqual(before);
-  expect(upgraded.query("SELECT term FROM transcript_messages_vocab WHERE term = 'cobalt'").get()).toEqual({ term: "cobalt" });
+  const deadline = performance.now() + 5_000;
+  let vocabulary: unknown = null;
+  while (!vocabulary && performance.now() < deadline) {
+    const exists = upgraded.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='transcript_messages_vocab'").get();
+    if (exists) vocabulary = upgraded.query("SELECT term FROM transcript_messages_vocab WHERE term = 'cobalt'").get();
+    if (vocabulary) break;
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+  }
+  expect(vocabulary).toEqual({ term: "cobalt" });
   upgraded.close();
+});
+
+test("first search stays responsive while a v4 copy builds its covering indexes", async () => {
+  const pathname = path.join(sandbox, "large-v4.jsonl");
+  fs.writeFileSync(pathname, Array.from({ length: 20_000 }, (_, i) => JSON.stringify({
+    type: "user", timestamp: new Date((1_700_000_000 + i) * 1_000).toISOString(),
+    message: { content: `cobalt migration fixture ${i}` },
+  })).join("\n") + "\n");
+  await indexTranscriptSources([source(pathname, "claude", "migration-fixture")], { complete: true });
+  const db = new Database(statePath("transcript-search.sqlite"));
+  db.exec(`
+    DROP TABLE transcript_messages_vocab;
+    DROP INDEX IF EXISTS transcript_messages_search_hit;
+    DROP INDEX IF EXISTS transcript_messages_time;
+    ALTER TABLE transcript_messages DROP COLUMN sort_timestamp;
+    PRAGMA user_version = 4;
+  `);
+  db.close();
+
+  let timerFiredAt = 0;
+  const started = performance.now();
+  const timer = setTimeout(() => { timerFiredAt = performance.now(); }, 0);
+  expect(searchTranscripts({ query: "cobalt", order: "relevance", limit: 1 }).total).toBe(1);
+  const firstSearchMs = performance.now() - started;
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  clearTimeout(timer);
+  expect(timerFiredAt).toBeGreaterThan(0);
+  expect(firstSearchMs).toBeLessThan(350);
+
+  const deadline = performance.now() + 5_000;
+  let built = false;
+  while (!built && performance.now() < deadline) {
+    const check = new Database(statePath("transcript-search.sqlite"), { readonly: true });
+    check.exec("PRAGMA busy_timeout = 5000");
+    built = Boolean(check.query("SELECT 1 FROM sqlite_master WHERE type='index' AND name='transcript_messages_search_hit'").get())
+      && Boolean(check.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='transcript_messages_vocab'").get());
+    check.close();
+    if (!built) await new Promise<void>((resolve) => setTimeout(resolve, 25));
+  }
+  expect(built).toBe(true);
 });
 
 test("newest word forms include all old unquoted matches and order added inflections by time", async () => {

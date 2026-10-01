@@ -66,26 +66,35 @@ Run heavy checks under `flock /var/tmp/llv-heavy-gate.lock`.
 
 ## Measured results
 
-Fresh index backup, 10,309 transcripts available for recorded-call extraction,
-12,472 distinct query/project pairs. The 1,000-query sample uses seed 20260926
-and the design lane's first-discovery ordering, updating the earliest call
-in place. Word counts: 151 single-word, 231 two-word, 254 three/four-word,
-257 five/seven-word and 107 eight-or-more-word queries. Opened-transcript
-sampling uses seed 7 and 300 distinct query/opened-transcript pairs.
+Fresh read-only backup reduced to the v4 schema before replay, 10,338
+transcripts available for recorded-call extraction, 12,633 distinct
+query/project pairs. The 1,000-query sample uses seed 20260926 and the design
+lane's first-discovery ordering, updating the earliest call in place. Word
+counts: 156 single-word, 220 two-word, 278 three/four-word, 261 five/seven-word
+and 85 eight-or-more-word queries. Opened-transcript sampling uses seed 7 and
+300 distinct query/opened-transcript pairs.
 
 | Metric | v4 baseline | Relevance |
 | --- | ---: | ---: |
-| Zero-result rate, strong | 52.9% | 7.7% |
-| Zero-result rate, any | 52.9% | 3.7% |
-| Opened transcript in top 6 | 166 / 300 (55.3%) | 192 / 300 (64.0%) |
-| Query p50 | 4.8 ms | 61.6 ms |
-| Query p95 | 27.8 ms | 198.8 ms |
-| Query maximum | — | 379.6 ms |
+| Zero-result rate, strong | 53.4% | 2.6% |
+| Zero-result rate, any | 53.4% | 2.6% |
+| Opened transcript in top 6 | 166 / 300 (55.3%) | 181 / 300 (60.3%) |
+| Query p50 | 4.9 ms | 70.6 ms |
+| Query p95 | 35.9 ms | 262.1 ms |
+| Query maximum | — | 500.1 ms |
 
 The strong-zero acceptance threshold is 8%; recall must be at least the
-baseline. Both hold. The ranked p95 stays below the design's 350 ms band.
-The replay includes interpretation, project resolution, ranking, folding and
-snippet generation. Initialization/migration is outside query timings.
+baseline. Both hold. The ranked p95 stays below the design's 350 ms band. The
+replay includes interpretation, project resolution, ranking, folding and
+snippet generation. If no conversation meets the coverage bar, retrieval
+retries the rarest original term and reports the omitted terms. On the first
+recorded query against this v4-shaped copy,
+the search took 64.7 ms and the zero-delay event-loop timer fired after 64.9 ms.
+The migration and vocabulary/index build finished in the background in 4.1 s;
+steady query timings were collected after the covering index became available.
+The route regression also sends a real HTTP request against a 10,000-message
+v4 fixture; it returns in under 350 ms while a zero-delay timer runs, then
+waits for the background vocabulary and index build to finish.
 
 On the 250,000-message invented fixture (five repetitions), relevance's
 common-pair library median is 122 ms for both speakers and 82 ms for user
@@ -100,18 +109,14 @@ rare-word run (100 repetitions after warm-up) measures 1.784 → 1.928 ms,
 +8.1%, within the 10% allowance. All newest library cells satisfy that
 allowance; rare user-scoped queries improve from 729 ms to about 3 ms.
 
-## Checks
+## Review-fix checks
 
-- Focused search/parser/scope/replay/route/MCP/schema tests: 80 cases.
-- Neighbouring dialog interaction, project identity/alias, snippet, index-feed,
-  MCP presentation and fixture tests: 56 cases.
+- `bun test src/lib/search/transcriptSearch.test.ts`: 33 passed, including
+  v4 migration responsiveness and duplicate groups across pages.
+- `bun test src/app/api/search/transcripts/route.test.ts`: 10 passed, including
+  an HTTP request during background migration.
+- `bun test scripts/transcript-search-replay.test.ts`: 4 passed.
 - `bun node_modules/typescript/bin/tsc --noEmit`.
-- `bun run build` (Next production build and packaged MCP bundle), with an
-  explicit isolated state directory.
-- ESLint on touched files: no errors; three pre-existing warnings in the
-  existing binding/parser code.
-- Local privacy publication gate with commit checking and required known-value
-  fingerprints; hosted privacy checks are recorded on the pull request.
 
 No deployment is included. The fenced privacy-gate, board-maintenance and
 monitor areas and the repository instruction files remain untouched.
