@@ -4,12 +4,16 @@ import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 
 import { FLOWS_CHANGED_EVENT } from "@/components/flows/flowModel";
+import type { EventSourceLike, RuntimeBus } from "./runtimeBus";
+
+const createTestRuntimeBus = (await import("./runtimeBus")).createRuntimeBus;
+let testRuntimeBus: RuntimeBus | null = null;
 
 let revisionListener: ((revision: number) => void) | null = null;
 
 mock.module("./runtimeBus", () => ({
   isRuntimeUiEnabled: () => true,
-  getRuntimeBus: () => ({
+  getRuntimeBus: () => testRuntimeBus ?? ({
     getState: () => ({ connection: "live" }),
     subscribe: () => () => {},
     subscribeFilesRevision: (listener: (revision: number) => void) => {
@@ -21,6 +25,7 @@ mock.module("./runtimeBus", () => ({
 
 const {
   applyPipelineSnapshot,
+  filesApiUrl,
   resetFilesClientCacheForTests,
   revertPipelineSnapshot,
   useFiles,
@@ -42,6 +47,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  testRuntimeBus?.stop();
+  testRuntimeBus = null;
   globalThis.fetch = originalFetch;
   revisionListener = null;
   document.body.replaceChildren();
@@ -51,6 +58,58 @@ function Probe() {
   const data = useFiles();
   return <div data-loaded={String(data.loaded)}>{data.files[0]?.path ?? "empty"}</div>;
 }
+
+test("an already open live board renders a new agent after SSE snapshot recovery", async () => {
+  let filesRevision = 1;
+  const sources: Array<{ source: EventSourceLike; reset: () => void }> = [];
+  testRuntimeBus = createTestRuntimeBus({
+    fetch: async () => new Response(JSON.stringify({
+      schemaVersion: 1, snapshotSeq: filesRevision === 1 ? 100 : 200,
+      retentionFloorSeq: 0, runtime: { hostEpoch: 1, health: "ready" }, filesRevision,
+      sessions: [], attentions: [], recentOperations: [], edges: [], flows: [], workflows: [], tasks: [],
+    })),
+    createEventSource: () => {
+      let reset = () => {};
+      const source: EventSourceLike = {
+        onopen: null, onmessage: null, onerror: null, close: () => {},
+        addEventListener: (name, listener) => {
+          if (name === "reset") reset = () => listener({ data: "{}" });
+        },
+      };
+      sources.push({ source, reset: () => reset() });
+      return source;
+    },
+    now: Date.now, setTimeout, clearTimeout, setInterval, clearInterval,
+  });
+  testRuntimeBus.start();
+  await Bun.sleep(20);
+  sources[0]!.source.onopen?.(null);
+  let fileReads = 0;
+  globalThis.fetch = mock(async () => {
+    fileReads += 1;
+    return new Response(JSON.stringify({ files: [{ path: filesRevision === 1 ? "/sessions/seat.jsonl" : "/sessions/new-agent.jsonl" }] }));
+  }) as unknown as typeof fetch;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => { root.render(<Probe />); });
+    await Bun.sleep(30);
+    expect(host.textContent).toBe("/sessions/seat.jsonl");
+    expect(fileReads).toBe(1);
+    filesRevision = 7;
+    sources[0]!.reset();
+    await Bun.sleep(20);
+    sources.at(-1)!.source.onopen?.(null);
+    await Bun.sleep(500);
+    expect(testRuntimeBus.getState().connection).toBe("live");
+    expect(host.textContent).toBe("/sessions/new-agent.jsonl");
+    expect(fileReads).toBe(2);
+  } finally {
+    flushSync(() => { root.unmount(); });
+    host.remove();
+  }
+});
 
 function ScopedProbe({ pinnedPath }: { pinnedPath?: string }) {
   const data = useFiles(undefined, pinnedPath);
@@ -73,7 +132,7 @@ test("concurrent pinned and global hooks keep their scopes through local pipelin
   globalThis.fetch = mock(async (input: string | URL | Request) => {
     fetches += 1;
     const url = String(input);
-    const pinned = url !== "/api/files";
+    const pinned = new URL(url, "http://localhost").searchParams.has("path");
     return new Response(JSON.stringify({
       files: pinned ? [{ path: "/global" }, { path: pinnedPath }] : [{ path: "/global" }],
       pinOverlayPaths: pinned ? [pinnedPath] : [],
@@ -98,14 +157,14 @@ test("concurrent pinned and global hooks keep their scopes through local pipelin
   expect(host.children[0]?.textContent).toBe(JSON.stringify({
     files: ["/global", pinnedPath],
     pins: [pinnedPath],
-    scope: `/api/files?path=${encodeURIComponent(pinnedPath)}`,
+    scope: filesApiUrl(undefined, pinnedPath),
     certified: true,
     task: "patched",
   }));
   expect(host.children[1]?.textContent).toBe(JSON.stringify({
     files: ["/global"],
     pins: [],
-    scope: "/api/files",
+    scope: filesApiUrl(),
     certified: true,
     task: "patched",
   }));
@@ -118,7 +177,7 @@ test("concurrent pinned and global hooks keep their scopes through local pipelin
   expect(host.children[1]?.textContent).toBe(JSON.stringify({
     files: ["/global"],
     pins: [],
-    scope: "/api/files",
+    scope: filesApiUrl(),
     certified: true,
     task: "server",
   }));

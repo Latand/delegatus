@@ -55,8 +55,8 @@ function isolatedIdentityRepo() {
     if (/^GIT_(?:AUTHOR_|COMMITTER_|CONFIG_)/.test(key)) delete env[key];
   }
   Object.assign(env, { HOME: home, XDG_CONFIG_HOME: xdg, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(home, ".gitconfig") });
-  const exec: ExecPort = (command, args, cwd) => {
-    const result = spawnSync(command, args, { cwd, env, encoding: "utf8" });
+  const exec: ExecPort = (command, args, cwd, overrides) => {
+    const result = spawnSync(command, args, { cwd, env: { ...env, ...overrides }, encoding: "utf8" });
     return { code: result.status, stdout: result.stdout ?? "", stderr: result.stderr || result.error?.message || "" };
   };
   const run = (...args: string[]) => {
@@ -808,26 +808,45 @@ test("read-only declared output commits with no host Git identity and leaves con
   }
 });
 
-test("stage commit keeps the identity configured for its worktree", () => {
+test.each([false, true])("read-only output uses the controller identity despite personal Git config (role-specific: %s) and passes publication", (roleSpecific) => {
   const box = isolatedIdentityRepo();
   try {
     const email = ["configured", "example.invalid"].join("@");
     box.run("config", "--local", "user.name", "Configured Test");
     box.run("config", "--local", "user.email", email);
-    fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 2;\n");
+    if (roleSpecific) {
+      for (const role of ["author", "committer"]) {
+        box.run("config", "--local", `${role}.name`, `Configured ${role}`);
+        box.run("config", "--local", `${role}.email`, [role, "example.invalid"].join("@"));
+      }
+    }
+    const configBefore = box.run("config", "--local", "--list");
     const subject = pipeline();
     subject.worktreeDir = box.repo;
+    subject.lastPassedCommit = box.run("rev-parse", "HEAD");
+    fs.mkdirSync(path.join(box.repo, "reports"));
+    fs.writeFileSync(path.join(box.repo, "reports", "audit.md"), "audited\n");
 
-    expect(commitPipelineStage(subject, "build", true, box.exec).ok).toBe(true);
+    expect(commitPipelineStage(subject, "audit", false, box.exec, ["reports/audit.md"]).ok).toBe(true);
+    const controllerEmail = ["noreply", "delegatus.invalid"].join("@");
     expect(box.run("log", "-1", "--format=%an%n%ae%n%cn%n%ce")).toBe(
-      ["Configured Test", email, "Configured Test", email].join("\n"),
+      ["Delegatus", controllerEmail, "Delegatus", controllerEmail].join("\n"),
     );
+    expect(box.run("config", "--local", "--get", "user.email")).toBe(email);
+    expect(box.run("config", "--local", "--get", "user.name")).toBe("Configured Test");
+    expect(box.run("config", "--local", "--list")).toBe(configBefore);
+    const publication = box.exec(process.execPath, [
+      path.resolve("scripts/privacy-publication-gate.ts"), "--repository", box.repo,
+      "--base", subject.lastPassedCommit, "--check-commits",
+    ], box.repo);
+    expect(publication.stdout + publication.stderr).toContain("PRIVACY GATE: PASS");
+    expect(publication.code).toBe(0);
   } finally {
     fs.rmSync(box.root, { recursive: true, force: true });
   }
 });
 
-test("stage commit keeps Git author and committer environment identities", () => {
+test("controller stage commit overrides inherited identities and leaves agent commits untouched", () => {
   const box = isolatedIdentityRepo();
   try {
     const authorEmail = ["author", "example.invalid"].join("@");
@@ -841,6 +860,11 @@ test("stage commit keeps Git author and committer environment identities", () =>
     subject.worktreeDir = box.repo;
 
     expect(commitPipelineStage(subject, "build", true, box.exec).ok).toBe(true);
+    const controllerEmail = ["noreply", "delegatus.invalid"].join("@");
+    expect(box.run("log", "-1", "--format=%an%n%ae%n%cn%n%ce")).toBe(
+      ["Delegatus", controllerEmail, "Delegatus", controllerEmail].join("\n"),
+    );
+    box.run("commit", "--allow-empty", "-m", "agent work");
     expect(box.run("log", "-1", "--format=%an%n%ae%n%cn%n%ce")).toBe(
       ["Environment Author", authorEmail, "Environment Committer", committerEmail].join("\n"),
     );
