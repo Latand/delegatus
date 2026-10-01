@@ -21,7 +21,9 @@ const { POST: orchestratorPOST } = await import("@/app/api/orchestrator/message/
 const { POST: seatPOST } = await import("@/app/api/orchestrator/seat/route");
 const { setConversationHostDependenciesForTests } = await import("@/app/api/conversation-host/dependencies");
 const { viewerMcpBindings, viewerMcpRecoverableTools } = await import("@/lib/mcp/bindings");
-const { createMcpToolService, MemoryMcpReceiptStore } = await import("@/lib/mcp/server");
+const { createMcpToolService, MemoryMcpReceiptStore, SqliteMcpReceiptStore, McpDispatchUncertainError } = await import("@/lib/mcp/server");
+const { enqueueStructuredMessage } = await import("@/lib/runtime/structuredMessageDelivery");
+import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { ViewerControlDependencies, ViewerMcpDomainDependencies } from "@/lib/mcp/bindings";
 
 let registry: InstanceType<typeof AgentRegistry>;
@@ -55,7 +57,10 @@ afterAll(() => {
 });
 
 function actor(project?: string, role = "builder") {
-  const receipt = registry.beginSpawn("codex", root, { cwd: root, title: "Relay fixture conversation", role: role === "root" ? "root" : "worker" });
+  const spawn = registry.beginSpawnRequest({ engine: "codex", cwd: root, explicitProject: project,
+    launchProfile: { cwd: root, title: "Relay fixture conversation", role: role === "root" ? "root" : "worker" } });
+  if (spawn.kind !== "created") throw new Error("fixture spawn was not created");
+  const receipt = spawn.receipt;
   registry.completeSpawn(receipt.launchId, {
     key: { engine: "codex", sessionId: receipt.conversationId.slice("conversation_".length) },
     artifactPath: path.join(root, `${receipt.conversationId}.jsonl`), cwd: root, accountId: null,
@@ -96,7 +101,7 @@ function toolsFor(sender: ReturnType<typeof actor> | null, control?: ViewerContr
   const transport: ViewerControlDependencies = control ?? {
     post: async (pathname, body, headers) => {
       posts.push(pathname);
-      const response = await orchestratorPOST(request(undefined, body, headers));
+      const response = await (pathname === "/api/orchestrator/message" ? orchestratorPOST : POST)(request(undefined, body, headers));
       const result = await response.json();
       if (!response.ok) throw new Error(result.error);
       return result;
@@ -214,12 +219,158 @@ test("a seat cannot auto-create a missing recipient through the unchanged operat
   expect(delivered).toEqual([]);
 });
 
-test("the operator browser still sends its own words and a frozen recipient survives target rotation", async () => {
-  const sender = actor("project-a");
+test("the operator browser still sends its own words", async () => {
   const recipient = actor("project-b");
   expect((await POST(request(undefined, relayBody(recipient.id), { "sec-fetch-site": "same-origin" }))).status).toBe(200);
   expect(delivered[0]).toMatchObject({ text: "Please investigate this issue.", origin: { kind: "operator" } });
-  actor("project-b");
-  expect((await POST(request(sender.capability, relayBody(recipient.id)))).status).toBe(200);
-  expect(delivered[1]).toMatchObject({ conversationId: recipient.id, origin: { kind: "agent", project: "project-a" } });
+});
+
+/** Keep the HTTP handler and durable reservation real; only the runtime peer
+ * is private. A busy peer leaves the admitted command on the delivery queue. */
+function realAdmission() {
+  const client = {
+    readSession: async ({ conversationId }: { conversationId: string }) => {
+      const conversation = registry.conversation(conversationId as `conversation_${string}`)!;
+      const generation = conversation.generations.at(-1)!;
+      return { conversationId, sessionKey: { engine: "codex", sessionId: generation.id },
+        hostKind: "codex-app-server", host: "hosted", turn: "busy", provenance: "structured", revision: 1,
+        artifactPath: generation.path, cwd: root, activeTurnId: "fixture-turn", attentionIds: [], recentReceipts: [],
+        capabilities: { steer: true, structuredAttention: true } };
+    },
+    command: async (command: { operationId: string; idempotencyKey: string; conversationId: string }) => ({
+      operationId: command.operationId, replayed: false, receipt: { ...command, kind: "send", status: "queued",
+        at: new Date().toISOString(), revision: 1 },
+    }),
+  } as unknown as RuntimeHostClient;
+  setConversationHostDependenciesForTests({
+    collectImagePayloads: () => ({ images: [], error: null }),
+    enqueueStructuredMessage: (message) => enqueueStructuredMessage(message, {
+      enabled: () => true, registry: () => registry, client: () => client, kick: () => {},
+      requestMigrationTick: () => {}, startupRecovered: () => {},
+    }),
+    recordOperatorRequest: () => null,
+  });
+}
+
+test("HTTP relay reservations bind the authenticated seat and separate browser authors on every mount", async () => {
+  realAdmission();
+  let sender = actor("project-a");
+  const recipient = actor("project-b");
+  for (const [index, post] of [POST, legacyPOST, orchestratorPOST].entries()) {
+    const body = { ...relayBody(recipient.id), project: "project-b", clientMessageId: `owner-${index}` };
+    const first = await post(request(sender.capability, body));
+    expect(first.status).toBe(200);
+    const receipt = await first.json();
+    expect(await (await post(request(sender.capability, body))).json()).toMatchObject({ operationId: receipt.operationId });
+    sender = actor("project-a");
+    expect((await post(request(sender.capability, body))).status).toBe(409);
+    const reserved = Object.values(registry.readOnlySnapshot().heldDeliveries).find(row => row.command.operationId === receipt.operationId)!;
+    expect((await post(request(undefined, { ...body, text: reserved.text }, { "sec-fetch-site": "same-origin" }))).status).toBe(409);
+    const browserKey = { ...body, clientMessageId: `browser-${index}`, text: reserved.text };
+    expect((await post(request(undefined, browserKey, { "sec-fetch-site": "same-origin" }))).status).toBe(200);
+    expect((await post(request(sender.capability, { ...body, clientMessageId: browserKey.clientMessageId }))).status).toBe(409);
+  }
+  expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(6);
+});
+
+test("former recipients require the original sender, key and payload; fresh sends resolve the current seat", async () => {
+  realAdmission();
+  const sender = actor("project-a");
+  const recipient = actor("project-b");
+  const body = { project: "project-b", conversationId: recipient.id, text: "report", clientMessageId: "original-recipient" };
+  const first = await orchestratorPOST(request(sender.capability, body));
+  expect(first.status).toBe(200);
+  const receipt = await first.json();
+  const successor = actor("project-b");
+  const retry = await orchestratorPOST(request(sender.capability, body));
+  expect(retry.status).toBe(200);
+  expect(await retry.json()).toMatchObject({ operationId: receipt.operationId });
+  for (const post of [POST, legacyPOST, orchestratorPOST]) {
+    const relay = { ...body, orchestratorRelayProject: "project-b" };
+    expect((await post(request(sender.capability, { ...relay, clientMessageId: "fresh-revoked" }))).status).toBe(409);
+    expect((await post(request(sender.capability, { ...relay, text: "changed" }))).status).toBe(409);
+  }
+  const fresh = await orchestratorPOST(request(sender.capability, { project: "project-b", text: "fresh", clientMessageId: "current-recipient" }));
+  expect(fresh.status).toBe(200);
+  expect(await fresh.json()).toMatchObject({ receipt: { conversationId: successor.id } });
+  expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(2);
+});
+
+function durableRelayTools(sender: ReturnType<typeof actor>, store: InstanceType<typeof SqliteMcpReceiptStore>, loseResponse = false) {
+  process.env.LLV_SPAWN_CAPABILITY = sender.capability;
+  const domain = {
+    registrySnapshot: () => registry.readOnlySnapshot(),
+    attentionAuthority: () => ({ kind: "worker", conversationId: sender.id, role: null }),
+    callerAttribution: () => ({ kind: "agent", conversationId: sender.id, role: "orchestrator" }),
+    // Omit recoveryPredecessors: exercise the production seat lineage resolver.
+    sendSettlementPorts: () => ({ registry, client: null }),
+  } as unknown as ViewerMcpDomainDependencies;
+  const dispatches: string[] = [];
+  const control: ViewerControlDependencies = { post: async () => { throw new Error("unexpected post"); },
+    dispatch: async (pathname, body, headers, context) => {
+      dispatches.push(pathname);
+      context!.dispatch!.attempted = true;
+      const response = await (pathname === "/api/orchestrator/message" ? orchestratorPOST : POST)(request(undefined, body, headers));
+      expect(response.status).toBe(200);
+      const result = await response.json();
+      if (loseResponse) throw new McpDispatchUncertainError("response lost after admission");
+      return result;
+    } };
+  return { dispatches, service: createMcpToolService(viewerMcpBindings(undefined, control, domain), store, undefined,
+    { recovery: viewerMcpRecoverableTools(domain) }) };
+}
+
+test("MCP relay receipts refuse a successor sender while unrelated sends retain predecessor recovery", async () => {
+  realAdmission();
+  const sender = actor("project-a");
+  const recipient = actor("project-b");
+  const store = new SqliteMcpReceiptStore(path.join(process.env.LLV_STATE_DIR!, "relay-receipts.sqlite"));
+  // Project ownership must match the seat so the production predecessor resolver runs.
+  const args = { clientRequestId: "exact-sender", project: "project-b", text: "report" };
+  try {
+    const a = durableRelayTools(sender, store);
+    const first = await a.service.callTool("send_message_to_orchestrator", args);
+    expect(first).toMatchObject({ ok: true });
+    if (!first.ok) throw new Error(first.error);
+    expect(await a.service.callTool("send_message_to_orchestrator", args)).toMatchObject({ ok: true, operationId: first.operationId });
+    const direct = { ...args, clientRequestId: "direct-predecessor", conversationId: recipient.id };
+    const original = await a.service.callTool("send_message", direct);
+    expect(original).toMatchObject({ ok: true });
+    if (!original.ok) throw new Error(original.error);
+    const successor = actor("project-a");
+    const b = durableRelayTools(successor, store);
+    expect(await b.service.callTool("send_message_to_orchestrator", args)).toMatchObject({ ok: false, code: "recovery_not_permitted" });
+    expect(await b.service.callTool("send_message", direct)).toMatchObject({ ok: true, operationId: original.operationId });
+    expect(b.dispatches).toEqual([]);
+    expect(a.dispatches).toHaveLength(2);
+  } finally { store.close(); }
+});
+
+test("MCP recovers admitted relay payload after response loss, target rotation and receipt reopen", async () => {
+  realAdmission();
+  const sender = actor("project-a");
+  const recipient = actor("project-b");
+  const file = path.join(process.env.LLV_STATE_DIR!, "lost-relay-receipts.sqlite");
+  let store = new SqliteMcpReceiptStore(file);
+  const args = { clientRequestId: "lost-relay", project: "project-b", text: "report\n" };
+  try {
+    const initial = durableRelayTools(sender, store, true);
+    await initial.service.callTool("send_message_to_orchestrator", args);
+    expect(initial.dispatches).toHaveLength(1);
+    const reservation = Object.values(registry.readOnlySnapshot().heldDeliveries)[0]!;
+    actor("project-b");
+    store.close(); store = new SqliteMcpReceiptStore(file);
+    const recovery = durableRelayTools(sender, store);
+    expect(await recovery.service.callTool("send_message_to_orchestrator", { ...args, recoveryOnly: true })).toMatchObject({
+      ok: true, state: "in-flight", operationId: reservation.command.operationId, conversationId: recipient.id,
+    });
+    registry.beginDeliveryAttempt(reservation.id, registry.conversation(recipient.id as `conversation_${string}`)!.generations.at(-1)!.id);
+    registry.recordDeliveryOutcome(reservation.id, "delivered", null, "delivered");
+    expect(await recovery.service.callTool("send_message_to_orchestrator", { ...args, recoveryOnly: true })).toMatchObject({
+      ok: true, state: "delivered", operationId: reservation.command.operationId,
+    });
+    expect(await recovery.service.callTool("send_message_to_orchestrator", { ...args, text: "changed", recoveryOnly: true })).toMatchObject({ ok: false, code: "idempotency_conflict" });
+    expect(recovery.dispatches).toEqual([]);
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(1);
+  } finally { store.close(); }
 });

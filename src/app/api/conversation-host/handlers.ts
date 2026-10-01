@@ -251,7 +251,8 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
     }
     const admitted = admitOrchestratorRelay(req, body.orchestratorRelayProject,
       typeof body.conversationId === "string" ? body.conversationId : "",
-      typeof body.text === "string" ? body.text : "");
+      typeof body.text === "string" ? body.text : "",
+      typeof body.clientMessageId === "string" ? body.clientMessageId : undefined);
     if (!admitted.ok) {
       return NextResponse.json({ error: admitted.error, code: admitted.code, admission: "refused" }, { status: admitted.status });
     }

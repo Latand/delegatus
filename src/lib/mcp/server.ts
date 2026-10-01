@@ -29,6 +29,7 @@ import {
 } from "@/lib/pipelines/limits";
 import { PIPELINE_ACTIONS, PIPELINE_DISALLOWED_ROLE_IDS, PIPELINE_FAIL_EDGE_EXHAUSTIONS, STAGE_FINDING_SEVERITIES } from "@/lib/pipelines/types";
 import { procBackend } from "@/lib/proc";
+import { parseMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
 import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/resolve";
 import { renderTaskColorRule } from "@/lib/tasks/colorRule";
@@ -561,6 +562,9 @@ export interface McpRequestBindingInput {
       spawn, clientMessageId for a send). Persisted so recovery reads the same
       key the dispatch used, never a recomputed one. */
   downstreamKey: string;
+  /** Relay admission's server-derived text and author, captured before dispatch
+      so recovery verifies the actual durable payload after rotation/restart. */
+  sendPayload?: { text: string; origin: MessageOrigin };
 }
 
 /** The identity persisted with a recoverable mutation's claim, before its
@@ -850,6 +854,8 @@ export function validRequestBinding(value: unknown, toolName?: McpToolName, requ
   if (toolName !== undefined && value.toolName !== toolName) return false;
   if (typeof value.clientRequestId !== "string" || (requestId !== undefined && value.clientRequestId !== requestId)) return false;
   if (typeof value.downstreamKey !== "string" || !value.downstreamKey) return false;
+  if (value.sendPayload !== undefined && (!isRecord(value.sendPayload)
+    || typeof value.sendPayload.text !== "string" || !parseMessageOrigin(value.sendPayload.origin))) return false;
   if (typeof value.claimedAt !== "string") return false;
   const { caller, target, owner } = value;
   if (!isRecord(caller) || !["root", "worker", "unidentified"].includes(String(caller.kind))
@@ -2265,11 +2271,12 @@ export class McpDispatchVerdictError extends McpToolRefusal {
   }
 }
 
-function sameCaller(recorded: McpRequestCaller, current: McpRequestCaller): boolean {
+function sameCaller(recorded: McpRequestCaller, current: McpRequestCaller, toolName: McpToolName): boolean {
   return recorded.kind === current.kind
     && recorded.project === current.project
     && (recorded.conversationId === current.conversationId
-      || (recorded.conversationId !== null && (current.predecessors ?? []).includes(recorded.conversationId)));
+      || (toolName !== "send_message_to_orchestrator" && recorded.conversationId !== null
+        && (current.predecessors ?? []).includes(recorded.conversationId)));
 }
 
 function identifiedCaller(caller: McpRequestCaller): boolean {
@@ -2519,7 +2526,7 @@ export function createMcpToolService(
         const readableStoredResult = async (): Promise<McpToolResult | null> => {
           const current = await store.lookup(key);
           if (!current?.result || current.digest !== digest || !current.binding
-            || !sameCaller(current.binding.caller, binding.caller)) return null;
+            || !sameCaller(current.binding.caller, binding.caller, typedTool)) return null;
           return current.recoveryResult ?? current.result;
         };
         /* Terminal downstream evidence becomes the row's answer, written
@@ -2541,7 +2548,7 @@ export function createMcpToolService(
           } catch (cause) {
             return unreadableReceipt(cause, replayed);
           }
-          if (current?.binding && !sameCaller(current.binding.caller, binding.caller)) return notPermitted();
+          if (current?.binding && !sameCaller(current.binding.caller, binding.caller, typedTool)) return notPermitted();
           if (current && current.digest !== digest) return notPermitted();
           // Contradictory ownership never licenses disclosure of cached IDs.
           if (evidence.ownership === "unknown") return recoveryAnswer(typedTool, requestId, evidence, replayed);
@@ -2607,7 +2614,7 @@ export function createMcpToolService(
             outcome = evidence.outcome === "unknown" ? "failure" : "replay";
             return recoveryAnswer(typedTool, requestId, evidence, true, record.result);
           }
-          if (!sameCaller(recorded.caller, binding.caller)) return notPermitted();
+          if (!sameCaller(recorded.caller, binding.caller, typedTool)) return notPermitted();
           if (record.digest !== digest) {
             outcome = "conflict";
             return failure(typedTool, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
