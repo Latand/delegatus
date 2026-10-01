@@ -94,24 +94,173 @@ const approvedPublicValuePattern = new RegExp(
   "g",
 );
 
+function approvedPublicBoundaryView(text: string, marker: string): { error: boolean; text: string } {
+  const enclosingTag = new RegExp(`<\\s*(["'\\x60]?)(${marker}\\d+${marker})\\1\\s*>`, "g");
+  const enclosingParenthesis = new RegExp(`\\(\\s*(${marker}\\d+${marker})\\s*\\)`, "g");
+  let projected = text.normalize("NFKC");
+  // These projections only remove syntax. Repeating them handles nested
+  // wrappers, while the bound fails closed for pathological nesting.
+  for (let pass = 0; pass < 16; pass += 1) {
+    const next = projected
+      .replaceAll(/\\(?:\r\n|[\n\r\u2028\u2029])/g, "")
+      .replaceAll(/\$\{(?:[\s(]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029])*["'`]([^"'`]*?)["'`](?:[\s)]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029])*\}/g, "$1")
+      .replaceAll(/["'`](?:[\s)]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029])*\+(?:[\s(]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029])*["'`]/g, "")
+      .replaceAll(enclosingTag, "$2")
+      .replaceAll(enclosingParenthesis, (match: string, value: string, offset: number, source: string) =>
+        source[offset - 1] === "]" ? match : value);
+    if (next === projected) return { error: false, text: projected };
+    projected = next;
+  }
+  return { error: true, text: projected };
+}
+
 function maskApprovedPublicValues(text: string): string {
   // Mask before any decoding, case folding or markup projection. Delimiters
   // exclude host continuations, userinfo, ports, paths, query/fragment tails,
   // encodings and non-ASCII characters. Obfuscated spellings stay inspectable.
   // An unambiguous marker preserves each candidate's location through whole
   // source projections. Collisions conservatively withhold all exemptions.
-  const marker = "\uE000";
+  const marker = String.fromCharCode(0xe000);
   if (text.includes(marker)) return text;
-  const candidates: Array<{ start: number; end: number; allowed: boolean }> = [];
+  type OperandGroup = { attached: boolean; parent?: OperandGroup };
+  const candidates: Array<{ start: number; end: number; allowed: boolean; group?: OperandGroup }> = [];
+  // Delimiters such as '=' or '(' inside a string do not end its URI.
+  const literals = text.matchAll(/\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*|#[^\r\n]*|--[^\r\n]*|"(?:\\[\s\S]|[^"\\\r\n\0])*"|(?<![\p{L}\p{N}_])(?:[uUrRbBfF]{1,2})?'(?:\\[\s\S]|[^'\\\r\n\0])*'|`(?:\\[\s\S]|[^`\\\0])*`/gu);
+  let literal = literals.next().value;
+  let previousLiteralEnd = 0;
+  let syntaxCursor = 0;
+  let previousSyntax = "";
+  let precedingSyntax = "";
+  const operandGroups: OperandGroup[] = [];
+  const closedGroups: OperandGroup[] = [];
+  // Retain enclosing operand context without rereading completed literals.
+  // Comma/conditional operands are deliberately not evaluated for exemptions.
+  function advanceSyntax(end: number): void {
+    while (syntaxCursor < end) {
+      const character = text[syntaxCursor++];
+      if (/\s/.test(character)) continue;
+      if (/[)\]}]/.test(character)) {
+        const group = operandGroups.pop();
+        if (group) closedGroups.push(group);
+      } else {
+        if (/[+%.*&^~|<]/.test(character)) {
+          for (const group of closedGroups) group.attached = true;
+        }
+        closedGroups.length = 0;
+        if (character === "\0") operandGroups.length = 0;
+        else if (/[([{]/.test(character)) {
+          const parent = operandGroups.at(-1);
+          operandGroups.push({ attached: parent?.attached === true || /[+%.*&^~|<]/.test(previousSyntax)
+            || (previousSyntax === ">" && precedingSyntax === "<")
+            || operandGroups.length >= 16, parent });
+        }
+      }
+      precedingSyntax = previousSyntax;
+      previousSyntax = character;
+    }
+  }
+  function completeLiteral(): void {
+    if (!literal) return;
+    advanceSyntax(literal.index);
+    syntaxCursor = literal.index + literal[0].length;
+    if (!/^(?:\/[/*]|#|--)/.test(literal[0])) {
+      previousLiteralEnd = syntaxCursor;
+      previousSyntax = "'";
+      precedingSyntax = "";
+      closedGroups.length = 0;
+    }
+    literal = literals.next().value;
+  }
+  let previousCommentStart = -1;
+  let previousCommentCandidateEnd = 0;
   const marked = text.replace(approvedPublicValuePattern, (match: string, delimiter: string, offset: number) => {
     const index = candidates.length;
-    candidates.push({ start: offset + delimiter.length, end: offset + match.length, allowed: true });
+    const end = offset + match.length;
+    // A quoted value must occupy its entire literal. URI punctuation inside
+    // that literal is a continuation, even when it also delimits source code.
+    const quoted = /^["'`]$/.test(delimiter);
+    const start = offset + delimiter.length;
+    while (literal && literal.index + literal[0].length <= start) {
+      completeLiteral();
+    }
+    advanceSyntax(literal ? Math.min(literal.index, start) : start);
+    const inComment = literal !== undefined && /^(?:\/[/*]|#|--)/.test(literal[0])
+      && literal.index <= start && literal.index + literal[0].length >= end;
+    const commentLiteral = inComment && quoted && text[end] === delimiter;
+    if (inComment && literal !== undefined && previousCommentStart !== literal.index) {
+      previousCommentStart = literal.index;
+      previousCommentCandidateEnd = literal.index;
+    }
+    const insideLiteral = literal !== undefined && !inComment && literal.index < start && literal.index + literal[0].length >= end;
+    const wholeLiteral = literal !== undefined && insideLiteral && literal.index + literal[0].search(/["'`]/) === start - 1 && literal.index + literal[0].length === end + 1;
+    const expressionOffset = quoted && !wholeLiteral && insideLiteral && literal?.[0][0] === "`"
+      ? text.slice(literal.index, offset).lastIndexOf("${") : -1;
+    const expressionStart = literal !== undefined && expressionOffset >= 0 ? literal.index + expressionOffset : -1;
+    const interpolatedLiteral = literal !== undefined && insideLiteral && literal[0][0] === "`" && expressionStart > literal.index
+      && /^(?:[\s(]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029])*$/.test(text.slice(expressionStart + 2, offset))
+      && /^["'`](?:[\s)]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029])*\}/.test(text.slice(end));
+    // Unsupported expressions must not grant an exemption to a fragment.
+    // A neighbouring '+' also covers typed operands that the projection
+    // intentionally does not attempt to parse as a TypeScript expression.
+    // Previous completed literals fence local syntax: their contents cannot
+    // form a token next to this literal. Each inter-literal span is read once.
+    const inspectLiteral = quoted && (wholeLiteral || interpolatedLiteral || commentLiteral);
+    const prefixStart = interpolatedLiteral ? expressionStart + 2
+      : commentLiteral ? Math.max(previousCommentStart, previousCommentCandidateEnd - 1)
+        : Math.max(0, previousLiteralEnd - 1);
+    const prefix = inspectLiteral ? text.slice(prefixStart, start) : "";
+    if (commentLiteral) previousCommentCandidateEnd = end + 1;
+    const literalPrefix = prefix.slice(0, -1).replace(/(?:\\(?:\r\n|[\n\r\u2028\u2029]))+$/, "");
+    const stringPrefix = /(?:^|[\s=(:,\[{])[uUrRbBfF]{1,2}$/.test(literalPrefix);
+    const literalTail = inspectLiteral ? text.slice(end + 1).replace(/^(?:\\(?:\r\n|[\n\r\u2028\u2029]))+/, "") : "";
+    const assertion = /^(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*[\r\n])*(?:as|satisfies)\s+(?:const|string)\b(?=(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*[\r\n])*(?:[;,\])}:+.!%]|$))/.exec(literalTail);
+    const expressionTail = literalTail.slice(assertion?.[0].length ?? 0);
+    const tailStart = (expressionTail[0] ?? "").normalize("NFKC");
+    const propertyKey = tailStart === ":" && /[,{]\s*["']$/.test(prefix);
+    const expressionFragment = inspectLiteral && (
+      operandGroups.at(-1)?.attached === true
+      || (!stringPrefix && /[\p{L}\p{N}_./@$\\)\]}-]/u.test((literalPrefix.at(-1) ?? "").normalize("NFKC")))
+      || /(?<!=)>(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029])*["'`]$/.test(prefix)
+      || /["'`](?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*[\r\n]|#[^\r\n]*[\r\n]|--[^\r\n]*[\r\n])*(?:[uUrRbBfF]{1,2})?["'`]$/.test(prefix)
+      || /^(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*[\r\n]|#[^\r\n]*[\r\n]|--[^\r\n]*[\r\n])*(?:[uUrRbBfF]{1,2})?["'`]/.test(expressionTail)
+      || /^[\p{L}\p{N}_./@"'`%&#?$=\\\[{-]/u.test(tailStart)
+      || (!propertyKey && tailStart === ":")
+      || /(?:[+%*&^~]|\.{1,2}|\|{2}|<<|<>)(?:[\s(]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029]|#[^\r\n]*[\r\n]|--[^\r\n]*[\r\n])*(?:[uUrRbBfF]{1,2})?["'`]$/.test(prefix)
+      || /^(?:[\s)]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029]|#[^\r\n]*[\r\n]|--[^\r\n]*[\r\n])*(?:[+!.%*&^~]|\|{2}|<<|<>|(?:as|satisfies)\b)/.test(expressionTail));
+    // A bare URL can also contain source-shaped delimiters. Its scheme or
+    // email prefix still belongs to the same whitespace-delimited token.
+    let tokenStart = offset;
+    while (tokenStart > 0 && !/[\s"'`\0]/.test(text[tokenStart - 1])) tokenStart -= 1;
+    const uriPrefix = !/[\s\0]/.test(delimiter)
+      && /[a-z][a-z0-9+.-]*:\/\/|@|\.$/i.test(text.slice(tokenStart, offset));
+    // URI punctuation is not a source separator unless a matching opener
+    // establishes a closing parenthesis (for example a Markdown destination).
+    const matchingClose = (delimiter === "(" && text[end] === ")")
+      || (delimiter === "[" && text[end] === "]") || (delimiter === "<" && text[end] === ">");
+    const wrapperTail = matchingClose && !(delimiter === "[" && text[end + 1] === "(")
+      && !/^(?:[)\]}>;,]*(?:$|\s))/.test(text.slice(end + 1));
+    const continued = wrapperTail || (/^[;,"'`\]}>)]$/.test(text[end] ?? "") && !matchingClose)
+      || (/^[\]}>]$/.test(text[end] ?? "") && /^[\p{L}\p{N}_]/u.test(text[end + 1] ?? ""));
+    candidates.push({ start, end, group: inspectLiteral ? operandGroups.at(-1) : undefined,
+      allowed: quoted
+        ? text[end] === delimiter && !uriPrefix && !expressionFragment && (wholeLiteral || interpolatedLiteral || commentLiteral)
+        : !continued && !insideLiteral && !uriPrefix });
     return `${delimiter}${marker}${index}${marker}`;
   });
   if (candidates.length === 0) return text;
+  while (literal) completeLiteral();
+  advanceSyntax(text.length);
+  for (const candidate of candidates) {
+    for (let group = candidate.group; group; group = group.parent) {
+      if (group.attached) {
+        candidate.allowed = false;
+        break;
+      }
+    }
+  }
   const original = sensitiveTextViews(text);
   if (original.error || original.views.some((view) => view.includes(marker))) return text;
-  const { error, views } = sensitiveTextViews(marked);
+  const { error, views } = sensitiveTextViews(marked.replaceAll("\0", " "), marker);
   if (error) return text;
   // Process complete views once: splitting them at a candidate breaks link
   // parsing and repeated prefix/suffix projections have quadratic cost.
@@ -119,11 +268,31 @@ function maskApprovedPublicValues(text: string): string {
   const rightBoundary = /^[\t\n\r "'\x60)\]}>;,]$/;
   for (const view of views) {
     const normalized = view.normalize("NFKC");
-    for (const occurrence of normalized.matchAll(/\uE000(\d+)\uE000/g)) {
+    for (const occurrence of normalized.matchAll(new RegExp(`${marker}(\\d+)${marker}`, "g"))) {
       const start = occurrence.index;
       const end = start + occurrence[0].length;
+      // Whitespace can split an email/host/URI across lines. It is a valid
+      // standalone delimiter only when it does not conceal a continuation.
+      let before = start - 1;
+      let after = end;
+      while (before >= 0 && /\s/.test(normalized[before])) before -= 1;
+      while (after < normalized.length && /\s/.test(normalized[after])) after += 1;
+      const splitBefore = /[\r\n]/.test(normalized.slice(before + 1, start));
+      let previousToken = before;
+      if (splitBefore && /[=:?#&;,]/.test(normalized[before] ?? "")) {
+        while (previousToken >= 0 && !/\s/.test(normalized[previousToken])) previousToken -= 1;
+      }
+      const splitUriPrefix = previousToken < before
+        && /[a-z][a-z0-9+.-]*:\/\//i.test(normalized.slice(previousToken + 1, before + 1));
       if ((start > 0 && !leftBoundary.test(normalized[start - 1]))
-        || (end < normalized.length && !rightBoundary.test(normalized[end]))) {
+        || (end < normalized.length && !rightBoundary.test(normalized[end]))
+        || (before >= 0 && (/[.@/]/.test(normalized[before])
+          || (/[-_]/.test(normalized[before]) && /[\p{L}\p{N}_]/u.test(normalized[before - 1] ?? ""))
+          || (splitUriPrefix && /[=:?#&;,]/.test(normalized[before])))
+          && splitBefore)
+        || (after < normalized.length && (/[.@/:?#;,!$&*+=%()\\]/.test(normalized[after])
+          || (/[-_]/.test(normalized[after]) && /[\p{L}\p{N}_]/u.test(normalized[after + 1] ?? "")))
+          && /[\r\n]/.test(normalized.slice(end, after)))) {
         candidates[Number(occurrence[1])].allowed = false;
       }
     }
@@ -347,11 +516,19 @@ function removeDefaultIgnorables(text: string): string {
   return text.replaceAll(/\p{Default_Ignorable_Code_Point}/gu, "");
 }
 
-export function canonicalSensitiveText(text: string): { error: boolean; text: string } {
+function decodeJsonStringEscapes(text: string): string {
+  const escapes: Record<string, string> = {
+    '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t",
+  };
+  return text.replaceAll(/\\(?:u([0-9a-fA-F]{4})|(["\\/bfnrt]))/g, (_match, hex: string | undefined, escape: string) =>
+    hex === undefined ? escapes[escape] : String.fromCharCode(parseInt(hex, 16)));
+}
+
+export function canonicalSensitiveText(text: string, jsonEscapes = false): { error: boolean; text: string } {
   let decoded = removeDefaultIgnorables(text);
   for (let pass = 0; pass < 16; pass += 1) {
     const next = removeDefaultIgnorables(
-      decodeCommonMarkEscapes(decodeHtmlEntities(decodePercentEncoding(decoded))),
+      decodeCommonMarkEscapes(decodeHtmlEntities(decodePercentEncoding(jsonEscapes ? decodeJsonStringEscapes(decoded) : decoded))),
     );
     if (next === decoded) return { error: false, text: decoded };
     decoded = next;
@@ -415,28 +592,38 @@ function visibleMarkdownText(text: string): string {
 }
 
 /**
- * The views of a text the gate reads: the decoded source, and the same text
- * with the markdown that can hide a character from a reader taken out. Both
- * are scanned whole for generic privacy rules. Known-value matching alone
+ * The views of a text the gate reads: decoded source with and without JSON
+ * escapes interpreted, each also projected without concealing Markdown.
+ * Every view is scanned whole for generic privacy rules. Known-value matching alone
  * receives a separate source with approved public values masked before decoding.
  */
-function sensitiveTextViews(text: string): { error: boolean; views: [string, string] } {
+function sensitiveTextViews(text: string, publicMarker?: string): { error: boolean; views: string[]; sourceViews: string[] } {
+  // Keep the original view: interpreting JSON escapes in arbitrary source can
+  // change literal backslashes in paths or regular expressions. The additional
+  // decoded view catches escaped strings without dropping that original input.
   const canonical = canonicalSensitiveText(text);
-  const decoded = canonical.text.replaceAll("\0", "\n");
-  const withoutMarkup = visibleMarkdownText(decoded).replaceAll(/<[^>]*>/g, "").replaceAll(/[\[\]*_`~]/g, "");
-  return { error: canonical.error, views: [decoded, withoutMarkup] };
+  const json = canonicalSensitiveText(text, true);
+  const sourceViews = [...new Set([canonical.text, json.text])].map((view) => view.replaceAll("\0", "\n"));
+  let boundaryError = false;
+  const views = sourceViews.flatMap((decoded) => {
+    // Preserve candidate context before HTML stripping can erase a marker.
+    const boundary = publicMarker ? approvedPublicBoundaryView(decoded, publicMarker) : { error: false, text: decoded };
+    boundaryError ||= boundary.error;
+    return [boundary.text,
+      visibleMarkdownText(boundary.text).replaceAll(/<[^>]*>/g, "").replaceAll(/[\[\]*_`~]/g, "")];
+  });
+  return { error: canonical.error || json.error || boundaryError, views, sourceViews };
 }
 
 function normalizedSensitiveText(text: string): { compact: string; error: boolean; exactSearchable: string; searchable: string } {
-  const { error, views } = sensitiveTextViews(text);
-  const [decoded, withoutMarkup] = views;
+  const { error, views, sourceViews } = sensitiveTextViews(text);
   return {
-    compact: `${compactSensitiveText(decoded)}\0${compactSensitiveText(withoutMarkup)}`,
+    compact: views.map(compactSensitiveText).join("\0"),
     error,
-    searchable: `${decoded}\n${withoutMarkup}`,
+    searchable: views.join("\n"),
     // Preserve separators and attributes; rendered markup projection can join
     // characters that were split in the publication source.
-    exactSearchable: decoded.normalize("NFKC").toLocaleLowerCase("en-US"),
+    exactSearchable: sourceViews.map((view) => view.normalize("NFKC").toLocaleLowerCase("en-US")).join("\0"),
   };
 }
 

@@ -146,8 +146,8 @@ The operator approved publishing the Celestia relay on 2026-10-01 at 20:00:
 - `https://chatmoderator.botfather.dev/.well-known/delegatus-relay.json`
 
 The gate masks these case-sensitive ASCII source strings only for known-value
-matching, before percent/entity decoding, NFKC normalization, case folding,
-or Markdown projection. The allowlist uses token boundaries: start/end of text,
+matching, before percent/entity/JSON escape decoding, NFKC normalization,
+case folding, or Markdown projection. The allowlist uses token boundaries: start/end of text,
 literal NUL (the metadata field separator), ASCII tab/newline/carriage
 return/space, or the quoted-code, JSON, HTML and
 Markdown delimiters declared in the gate. A dot, letter, digit, hyphen,
@@ -157,7 +157,15 @@ other paths, query strings, fragments, longer hosts and alternate spellings
 receive no exemption. Percent/entity/NFKC-obfuscated spellings remain blocked.
 The surrounding text must also retain boundaries after decoding, NFKC and
 Markdown projection; wrapping a host fragment in backticks or a link label
-cannot hide its attachment to another host or URI.
+cannot hide its attachment to another host or URI. A newline or string-literal
+concatenation or repetition (including enclosing comma/conditional operands),
+or literal template interpolation cannot exempt a fragment attached to an email, host or
+URI, including fragments wrapped in autolink brackets.
+JSON Unicode and string escapes are decoded in an additional inspection view;
+only exact ASCII source spellings receive exemptions. Quoted values must occupy
+the entire literal; URI punctuation tails such as semicolons and commas prevent
+an exemption. The original view remains inspected for literal paths and other
+private data.
 
 The same masking runs for all inspected text, including code, tests, JSON,
 commit messages, metadata and OCR. Both the committed fingerprint catalog and

@@ -1129,8 +1129,11 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     const discovery = `${origin}/.well-known/delegatus-relay.json`;
     const domain = host.split(".").slice(1).join(".");
     const percent = (text: string) => [...text].map((c) => `%${c.charCodeAt(0).toString(16)}`).join("");
+    const unicode = (text: string) => [...text].map((c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
     const entities = (text: string) => [...text].map((c) => `&#${c.charCodeAt(0)};`).join("");
     const fullWidth = (text: string) => [...text].map((c) => String.fromCharCode(c.charCodeAt(0) + 0xfee0)).join("");
+    const tick = String.fromCharCode(96);
+    const interpolation = (value: string) => "${" + JSON.stringify(value) + "}";
     const cases = [
       { name: "host", text: host, pass: true },
       { name: "origin", text: origin, pass: true },
@@ -1145,6 +1148,217 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       { name: "Markdown origin label", text: `[${origin}](https://example.invalid)`, pass: true },
       { name: "Markdown discovery label", text: `[${discovery}](https://example.invalid)`, pass: true },
       { name: "HTML attribute", text: `<a href="${origin}">Relay</a>`, pass: true },
+      ...[host, origin, discovery].flatMap((value, index) => [";private", ",private", ")private"].map((suffix) => ({
+        name: `review JSON URI punctuation ${index} ${suffix[0]}`,
+        text: JSON.stringify({ relay: value + suffix }), pass: false,
+      }))),
+      ...[origin, discovery].flatMap((value, index) => [";?private=1", ";.example.invalid", ",:443", ";%70rivate", ";&#112;rivate"].map((suffix) => ({
+        name: `review URI continuation ${index} ${suffix}`, text: value + suffix, pass: false,
+      }))),
+      ...["https://prefix=", "https://example.invalid/path=", "https://example.invalid/path(", "https://example.invalid/?target="].flatMap((prefix, index) => [
+        { name: `review enclosing URI literal ${index}`, text: `const relay = "${prefix}${host}";`, pass: false },
+        { name: `review bare URI prefix ${index}`, text: `${prefix}${host}`, pass: false },
+      ]),
+      { name: "review discovery apostrophe tail", text: `${discovery}'/private`, pass: false },
+      { name: "review Markdown apostrophe tail", text: `[Relay](${discovery}'/private)`, pass: false },
+      { name: "review discovery unmatched close", text: `${discovery}}/private`, pass: false },
+      { name: "review Markdown unmatched close", text: `[Relay](${discovery}}/private)`, pass: false },
+      { name: "review opposite quote URI", text: `const relay = "https://example.invalid/'${host}'";`, pass: false },
+      { name: "review opposite quote prefix", text: `const relay = "other.'${host}'";`, pass: false },
+      { name: "review opposite quote suffix", text: `const relay = "'${origin}'/private";`, pass: false },
+      { name: "review bare quoted URI", text: `https://example.invalid/'${host}'`, pass: false },
+      ...["HTTPS", "ftp", "wss"].map((scheme) => ({
+        name: `review URI scheme ${scheme}`, text: `${scheme}://example.invalid/path=${host}`, pass: false,
+      })),
+      ...[
+        ["extra closing delimiter", `(${origin}))private`],
+        ["parenthesis semicolon", `(${origin});private`],
+        ["angle semicolon", `<${origin}>;private`],
+        ["angle entity semicolon", `<${origin}>&#59;private`],
+        ["parenthesis NFKC semicolon", `(${origin})；private`],
+      ].map(([name, text]) => ({ name: `review wrapper tail ${name}`, text, pass: false })),
+      { name: "review standalone parenthesis punctuation", text: `(${origin});`, pass: true },
+      { name: "review standalone angle punctuation", text: `<${origin}>;`, pass: true },
+      { name: "review parenthesis URI suffix", text: `(${origin})/private`, pass: false },
+      { name: "review parenthesis host suffix", text: `(${host}).example.invalid`, pass: false },
+      { name: "review parenthesis host prefix", text: `other.(${host})`, pass: false },
+      ...["}private", "]private", ">private"].map((suffix) => ({
+        name: `review closing delimiter tail ${suffix[0]}`, text: origin + suffix, pass: false,
+      })),
+      { name: "review enclosing origin literal", text: JSON.stringify({ relay: `https://example.invalid/?target=${origin}` }), pass: false },
+      { name: "review quoted angle prefix", text: `other.<${tick}${host}${tick}>`, pass: false },
+      { name: "review quoted angle suffix", text: `<${tick}${origin}${tick}>/private`, pass: false },
+      { name: "review interpolated angle prefix", text: `const relay = ${tick}other.<${interpolation(host)}>${tick};`, pass: false },
+      { name: "review nested angle prefix", text: `other.<${tick}<${host}>${tick}>`, pass: false },
+      { name: "review angle prefix", text: `other.<${host}>`, pass: false },
+      { name: "review angle suffix", text: `<${host}>.example.invalid`, pass: false },
+      { name: "review angle origin suffix", text: `<${origin}>/private`, pass: false },
+      { name: "review angle scheme prefix", text: `https://<${host}>`, pass: false },
+      { name: "review template prefix", text: `const relay = ${tick}other.${interpolation(host)}${tick};`, pass: false },
+      { name: "review template suffix", text: `const relay = ${tick}${interpolation(origin)}:443${tick};`, pass: false },
+      { name: "review template email", text: `const relay = ${tick}fixture@${interpolation(host)}${tick};`, pass: false },
+      ...[10, 13, 0x2028, 0x2029].flatMap((code) => {
+        const line = String.fromCharCode(code);
+        const commented = "${" + JSON.stringify(host) + " // comment" + line + "}";
+        const leading = "${// comment" + line + JSON.stringify(host) + "}";
+        return [
+          { name: `review interpolation line-comment prefix ${code}`, text: `const relay = ${tick}other.${commented}${tick};`, pass: false },
+          { name: `review interpolation line-comment suffix ${code}`, text: `const relay = ${tick}${commented}.example.invalid${tick};`, pass: false },
+          { name: `review interpolation leading line-comment ${code}`, text: `const relay = ${tick}fixture@${leading}${tick};`, pass: false },
+          { name: `review standalone commented interpolation ${code}`, text: `const relay = ${tick}${commented}${tick};`, pass: true },
+        ];
+      }),
+      { name: "review shell bare prefix", text: `relay=other"${host}"`, pass: false },
+      { name: "review shell continued bare prefix", text: `relay=other${String.fromCharCode(92)}
+"${host}"`, pass: false },
+      { name: "review shell escaped opening quote", text: `relay=${String.fromCharCode(92)}"${host}"`, pass: false },
+      { name: "review quoted comment cast prefix", text: `const relay = "other." + (<string> /* "fake" */ "${host}");`, pass: false },
+      { name: "review single quoted comment cast prefix", text: `const relay = "other." + (<string> /* 'fake' */ "${host}");`, pass: false },
+      { name: "review quoted approved comment cast prefix", text: `const relay = "other." + (<string> /* "${host}" */ "${host}");`, pass: false },
+      { name: "review PHP quoted comment prefix", text: `$relay = "other." . /* "fake" */ "${host}";`, pass: false },
+      { name: "review standalone quoted comment", text: `// Public relay: "${origin}"`, pass: true },
+      { name: "review standalone unbalanced comment", text: `const relay = /* " */ "${origin}";`, pass: true },
+      { name: "review commented prefix type assertion", text: `const relay = "other." + (<string> /* comment */ "${host}");`, pass: false },
+      { name: "review spaced prefix type assertion", text: `const relay = "other." + (<string> "${host}");`, pass: false },
+      { name: "review Lua commented operator prefix", text: `local relay = "other." .. -- comment
+ "${host}"`, pass: false },
+      { name: "review Lua commented operator suffix", text: `local relay = "${host}" -- comment
+ .. ".example.invalid"`, pass: false },
+      { name: "review SQL commented operator prefix", text: `SELECT 'other.' || -- comment
+ '${host}'`, pass: false },
+      { name: "review Python commented operator prefix", text: `relay = ("other." + # comment
+ "${host}")`, pass: false },
+      { name: "review Python commented operator suffix", text: `relay = ("${host}" # comment
+ + ".example.invalid")`, pass: false },
+      { name: "review Python Unicode concat", text: `relay = "other." + u"${host}"`, pass: false },
+      { name: "review shell brace expansion suffix", text: `relay="${origin}"{,/private}`, pass: false },
+      { name: "review prefix type assertion", text: `const relay = "other." + (<string>"${host}");`, pass: false },
+      ...[["PHP", ".", "$relay = ", '"'], ["Lua", "..", "local relay = ", '"'], ["SQL", "||", "SELECT ", "'"]].flatMap(([language, operator, prefix, quote]) => [
+        { name: `review ${language} operator prefix`, text: `${prefix}${quote}other.${quote} ${operator} ${quote}${host}${quote}`, pass: false },
+        { name: `review ${language} operator suffix`, text: `${prefix}${quote}${origin}${quote} ${operator} ${quote}/private${quote}`, pass: false },
+      ]),
+      { name: "review Python percent interpolation prefix", text: `relay = "other.%s" % "${host}"`, pass: false },
+      { name: "review Python percent interpolation suffix", text: `relay = "%s/private" % "${origin}"`, pass: false },
+      { name: "review union assertion host suffix", text: `const relay = ("${host}" as string | null) + ".example.invalid";`, pass: false },
+      { name: "review union assertion origin suffix", text: `const relay = ("${origin}" as string | null) + "/private";`, pass: false },
+      { name: "review intersection assertion suffix", text: `const relay = ("${host}" as string & {}) + ".example.invalid";`, pass: false },
+      { name: "review standalone const assertion", text: `const relay = "${origin}" as const;`, pass: true },
+      { name: "review standalone satisfies", text: `const relay = "${host}" satisfies string;`, pass: true },
+      { name: "review standalone string assertion", text: `const relay = ("${host}" as string);`, pass: true },
+      { name: "review Python f-string port", text: `relay = f'{"${origin}"}:443'`, pass: false },
+      { name: "review Python f-string prefix", text: `relay = f'other.{"${host}"}'`, pass: false },
+      { name: "review Python f-string suffix", text: `relay = f'{"${host}"}.example.invalid'`, pass: false },
+      { name: "review Python raw f-string email", text: `relay = rf'fixture@{"${host}"}'`, pass: false },
+      { name: "review Python single quoted Unicode", text: `relay = u'${host}'`, pass: true },
+      { name: "review Python single quoted raw", text: `relay = r'${host}'`, pass: true },
+      { name: "review Python single quoted f-string literal", text: `relay = f'${host}'`, pass: true },
+      { name: "review Python Unicode prefix adjacency", text: `relay = "other." u"${host}"`, pass: false },
+      { name: "review Python raw suffix adjacency", text: `relay = "${origin}" r"/private"`, pass: false },
+      { name: "review Python Unicode standalone", text: `relay = u"${host}"`, pass: true },
+      { name: "review Python raw standalone", text: `relay = r"${host}"`, pass: true },
+      { name: "review shell escaped punctuation", text: `relay="${origin}"${String.fromCharCode(92)};private`, pass: false },
+      { name: "review shell ANSI literal suffix", text: `relay="${origin}"$'/private'`, pass: false },
+      { name: "review Python commented adjacency", text: `relay = ("other." # comment
+ "${host}")`, pass: false },
+      { name: "review C commented adjacency", text: `const char* relay = "other." /* comment */ "${host}";`, pass: false },
+      { name: "review JSON approved property key", text: JSON.stringify({ [host]: "public" }), pass: true },
+      { name: "review shell port suffix", text: `relay="${origin}":443`, pass: false },
+      { name: "review shell NFKC suffix", text: `relay="${host}"．example.invalid`, pass: false },
+      { name: "review shell line continuation suffix", text: `relay="${origin}"${String.fromCharCode(92)}
+:443`, pass: false },
+      { name: "review Python adjacent prefix", text: `relay = "other." "${host}"`, pass: false },
+      { name: "review Python adjacent suffix", text: `relay = "${origin}" "/private"`, pass: false },
+      { name: "review Python multiline adjacency", text: `relay = ("other."
+ "${host}")`, pass: false },
+      { name: "review Python standalone literal", text: `relay = "${host}"`, pass: true },
+      { name: "review shell adjacent prefix", text: `relay="other.""${host}"`, pass: false },
+      { name: "review shell adjacent suffix", text: `relay="${origin}""/private"`, pass: false },
+      { name: "review shell bare suffix", text: `relay="${origin}"/private`, pass: false },
+      { name: "review shell bare host suffix", text: `relay="${host}".example.invalid`, pass: false },
+      { name: "review shell email prefix", text: `relay="fixture@"'${host}'`, pass: false },
+      { name: "review shell standalone literal", text: `relay="${origin}"`, pass: true },
+      { name: "review non-null concat suffix", text: `const relay = "${host}"! + ".example.invalid";`, pass: false },
+      { name: "review parenthesized non-null concat", text: `const relay = ("${host}"!) + ".example.invalid";`, pass: false },
+      { name: "review non-null interpolation", text: `const relay = ${tick}other.\${"${host}"!}${tick};`, pass: false },
+      { name: "review asserted concat prefix", text: `const relay = ("other." as string) + "${host}";`, pass: false },
+      { name: "review asserted concat suffix", text: `const relay = ("${host}" as string) + ".example.invalid";`, pass: false },
+      { name: "review satisfies concat prefix", text: `const relay = ("fixture@" satisfies string) + "${host}";`, pass: false },
+      { name: "review asserted interpolation prefix", text: `const relay = ${tick}other.\${"${host}" as string}${tick};`, pass: false },
+      { name: "review asserted interpolation suffix", text: `const relay = ${tick}\${"${host}" as string}.example.invalid${tick};`, pass: false },
+      { name: "review satisfies interpolation", text: `const relay = ${tick}fixture@\${"${host}" satisfies string}${tick};`, pass: false },
+      { name: "review template literal", text: `const relay = ${tick}${origin}${tick};`, pass: true },
+      { name: "review standalone interpolation", text: `const relay = ${tick}${interpolation(host)}${tick};`, pass: true },
+      { name: "review bare URI punctuation", text: `${discovery};private`, pass: false },
+      { name: "review prose apostrophes", text: `It's "${host}" and it's live.`, pass: true },
+      { name: "review prose apostrophes single quote", text: `It's '${host}' and it's live.`, pass: true },
+      { name: "review prose boundary", text: `Ready. ${host}`, pass: true },
+      { name: "review metadata boundary", text: `Ready.\0${host}\0`, pass: true },
+      { name: "review shell attached brace prefix", text: `relay={other.,}"${host}"`, pass: false },
+      { name: "review shell quoted brace prefix", text: `relay={"other.",}"${host}"`, pass: false },
+      { name: "review shell standalone brace argument", text: `printf %s {other.,} "${host}"`, pass: true },
+      { name: "review newline URI subdelimiter suffix", text: `${origin}\n!private`, pass: false },
+      { name: "review newline encoded URI suffix", text: `${origin}\n%21private`, pass: false },
+      { name: "review standalone arrow callback container", text: `const relays = values.map(() => ({relay: "${host}"}));`, pass: true },
+      { name: "review standalone arrow literal", text: `const relay = () => "${host}";`, pass: true },
+      { name: "review Python repetition prefix", text: `relay = 2 * "${host}"`, pass: false },
+      { name: "review Python repetition suffix", text: `relay = "${host}" * 2`, pass: false },
+      { name: "review Python parenthesized repetition", text: `relay = ("${host}") * 2`, pass: false },
+      { name: "review Python conditional repetition", text: `relay = ("${host}" if True else "unused") * 2`, pass: false },
+      ...["&", "~", "^", "<>"].flatMap((operator) => [
+        { name: `review literal operator prefix ${operator}`, text: `relay = "other." ${operator} "${host}"`, pass: false },
+        { name: `review literal operator suffix ${operator}`, text: `relay = "${host}" ${operator} ".example.invalid"`, pass: false },
+      ]),
+      { name: "review Ruby literal prefix", text: `relay = "other." << "${host}"`, pass: false },
+      { name: "review Ruby literal suffix", text: `relay = "${host}" << ".example.invalid"`, pass: false },
+      { name: "review Ruby nested operand", text: `relay = "other." << ("unused"; "${host}")`, pass: false },
+      { name: "review enclosing first conditional suffix", text: `const relay = (true ? "${host}" : "unused") + ".example.invalid";`, pass: false },
+      { name: "review enclosing conditional URI suffix", text: `const relay = (true ? "${origin}" : "unused") + "/private";`, pass: false },
+      { name: "review enclosing first comma suffix", text: `const relay = ("${host}", "unused") + ".example.invalid";`, pass: false },
+      { name: "review enclosing nested conditional suffix", text: `const relay = ((true ? "${host}" : "unused")) + ".example.invalid";`, pass: false },
+      { name: "review newline hyphen suffix", text: `${host}\n-private`, pass: false },
+      { name: "review newline underscore suffix", text: `${host}\n_private`, pass: false },
+      { name: "review newline underscore prefix", text: `other_\n${host}`, pass: false },
+      { name: "review following Markdown list", text: `${host}\n- List item`, pass: true },
+      { name: "review enclosing comma operand", text: `const relay = "other." + ("unused", "${host}");`, pass: false },
+      { name: "review enclosing ternary operand", text: `const relay = "other." + (true ? "unused" : "${host}");`, pass: false },
+      { name: "review enclosing nested operand", text: `const relay = "other." + (("unused", ("${host}")));`, pass: false },
+      { name: "review standalone comma operand", text: `const relay = ("unused", "${host}");`, pass: true },
+      { name: "review newline URI query prefix", text: `https://example.invalid/?target=\n${host}`, pass: false },
+      { name: "review newline URI punctuation suffix", text: `${origin}\n;private`, pass: false },
+      { name: "review newline host label prefix", text: `other-\n${host}`, pass: false },
+      { name: "review standalone Markdown list", text: `-\n${host}`, pass: true },
+      { name: "review newline prefix", text: `other.\n${host}`, pass: false },
+      { name: "review newline suffix", text: `${host}\n.example.invalid`, pass: false },
+      { name: "review newline email", text: `fixture@\n${host}`, pass: false },
+      { name: "review concatenated prefix", text: `const relay = "other." + "${host}";`, pass: false },
+      { name: "review concatenated suffix", text: `const relay = '${host}' + '.example.invalid';`, pass: false },
+      { name: "review concatenated email", text: `const relay = "fixture@" +\n "${host}";`, pass: false },
+      { name: "review concatenated origin", text: `const relay = "${origin}" + ":443";`, pass: false },
+      ...[["FF", 12], ["VT", 11], ["LS", 0x2028], ["PS", 0x2029]].flatMap(([name, code]) => [
+        { name: `review concat whitespace prefix ${name}`, text: `const relay = "other." +${String.fromCharCode(Number(code))}"${host}";`, pass: false },
+        { name: `review concat whitespace suffix ${name}`, text: `const relay = "${host}"${String.fromCharCode(Number(code))}+ ".example.invalid";`, pass: false },
+      ]),
+      ...[0x2028, 0x2029].map((code) => ({
+        name: `review line comment terminator ${code}`,
+        text: `const relay = "other." // comment${String.fromCharCode(code)}+ "${host}";`, pass: false,
+      })),
+      { name: "review string line continuation", text: `const relay = "other.${String.fromCharCode(92)}\n" + "${host}";`, pass: false },
+      { name: "review commented prefix", text: `const relay = "other." /* comment */ + "${host}";`, pass: false },
+      { name: "review parenthesized prefix", text: `const relay = ("other.") + ("${host}");`, pass: false },
+      { name: "review commented suffix", text: `const relay = "${host}" + /* comment */ ".example.invalid";`, pass: false },
+      { name: "review parenthesized suffix", text: `const relay = ("${host}") + (".example.invalid");`, pass: false },
+      { name: "review line-commented email", text: `const relay = "fixture@" // comment\n + "${host}";`, pass: false },
+      { name: "review JSON unicode email", text: `{"relay":"${unicode(["fixture", domain].join("@"))}"}`, pass: false },
+      { name: "review JSON unicode subdomain", text: `{"relay":"${unicode(`other.${domain}`)}"}`, pass: false },
+      { name: "review JSON escaped dot", text: JSON.stringify({ relay: domain }).replace(".", "\\u002e"), pass: false },
+      { name: "review JSON escaped letter", text: JSON.stringify({ relay: domain }).replace(domain[0], unicode(domain[0])), pass: false },
+      { name: "review JSON escaped email", text: JSON.stringify({ relay: unicode(["fixture", domain].join("@")) }), pass: false },
+      { name: "review JSON escaped subdomain", text: JSON.stringify({ relay: unicode(`other.${domain}`) }), pass: false },
+      { name: "review JSON escaped host", text: `{"relay":"${unicode(host)}"}`, pass: false },
+      { name: "review JSON escaped origin", text: `{"relay":"${unicode(origin)}"}`, pass: false },
+      { name: "review JSON escaped discovery", text: `{"relay":"${unicode(discovery)}"}`, pass: false },
+      { name: "review JSON escaped prefix", text: `{"relay":"other\\u002e${host}"}`, pass: false },
+      { name: "review JSON escaped suffix", text: `{"relay":"${host}\\u002eexample.invalid"}`, pass: false },
       { name: "bare domain", text: domain, pass: false },
       { name: "base-domain email", text: ["fixture", domain].join("@"), pass: false },
       { name: "approved-host email", text: ["fixture", host].join("@"), pass: false },
@@ -1177,11 +1391,11 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       { name: "Markdown label boundary", text: `other.[${host}](https://example.invalid)`, pass: false },
       { name: "mixed-case host", text: host.toUpperCase(), pass: false },
       { name: "approved and private together", text: `${origin}\n${domain}`, pass: false },
-      { name: "marker collision", text: `\uE000\n${origin}`, pass: false },
+      { name: "marker collision", text: `${String.fromCharCode(0xe000)}\n${origin}`, pass: false },
       { name: "encoded marker collision", text: `${["EE", "80", "80"].map((byte) => `%${byte}`).join("")}\n${origin}`, pass: false },
       { name: "entity marker collision", text: `${["&#", "57344", ";"].join("")}\n${origin}`, pass: false },
     ];
-    const sources = ["committed catalog", "compact fingerprint", "exact fingerprint", "compact env", "exact env", "compact file", "exact file"];
+    const sources = ["committed catalog", "compact fingerprint", "exact fingerprint", "compact env", "exact env", "compact file", "exact file", "plain env", "plain file"];
     function configuration(directory: string, source: string): Record<string, string> {
       const environment: Record<string, string> = {
         LLV_PRIVACY_KNOWN_VALUES: "", LLV_PRIVACY_KNOWN_VALUES_FILE: "",
@@ -1197,16 +1411,40 @@ exec "$LLV_TEST_REAL_GIT" "$@"
             fingerprints: [knownValueFingerprint(entry)] }));
           environment.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE = path;
         } else {
-          environment.LLV_PRIVACY_KNOWN_VALUES_FORMAT = "jsonl";
+          const serialized = source.startsWith("plain") ? domain : JSON.stringify(entry);
+          environment.LLV_PRIVACY_KNOWN_VALUES_FORMAT = source.startsWith("plain") ? "plain" : "jsonl";
           if (source.endsWith("file")) {
-            writeFileSync(path, JSON.stringify(entry));
+            writeFileSync(path, serialized);
             environment.LLV_PRIVACY_KNOWN_VALUES_FILE = path;
-          } else environment.LLV_PRIVACY_KNOWN_VALUES = JSON.stringify(entry);
+          } else environment.LLV_PRIVACY_KNOWN_VALUES = serialized;
         }
       }
       return environment;
     }
     for (const source of sources) {
+      test(`${source}: large quoted JSON stays bounded`, () => {
+        const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
+        temporaryDirectories.push(directory);
+        mkdirSync(join(directory, ".git"));
+        const publication = join(directory, "repeated.json");
+        writeFileSync(publication, JSON.stringify(Array(10_000).fill(host)));
+        const environment = configuration(directory, source);
+        const started = performance.now();
+        const result = runGateArguments(["--require-known-values", "--paths", publication], environment);
+        expect(performance.now() - started).toBeLessThan(3000);
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
+        expect(result.stderr.toString()).toBe("");
+      }, 15_000);
+      test(`${source}: inspects gate and test source without marker collisions`, () => {
+        const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
+        temporaryDirectories.push(directory);
+        mkdirSync(join(directory, ".git"));
+        const result = runGateArguments(["--require-known-values", "--paths", gate, import.meta.path], configuration(directory, source));
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
+        expect(result.stderr.toString()).toBe("");
+      });
       for (const channel of ["metadata", "OCR"]) {
         for (const specimen of cases.filter((c) => ["host", "origin", "discovery", "other subdomain", "percent host"].includes(c.name))) {
           test(`${source}: ${channel} ${specimen.name}`, () => {
@@ -1234,7 +1472,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
         mkdirSync(join(directory, ".git"));
         const publication = join(directory, "publication.ts");
         writeFileSync(publication, `password="${origin}"`);
-        const result = runGate([publication], configuration(directory, source));
+        const result = runGateArguments(["--require-known-values", "--paths", publication], configuration(directory, source));
         expect(result.exitCode).toBe(1);
         expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\ncredential: 1\n");
         expect(result.stderr.toString()).toBe("");
@@ -1244,17 +1482,17 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
           temporaryDirectories.push(directory);
           mkdirSync(join(directory, ".git"));
-          const extension = specimen.name === "JSON" ? ".json" : specimen.name === "test code" ? ".test.ts" : ".ts";
+          const extension = specimen.name.includes("JSON") ? ".json" : specimen.name.includes("shell") ? ".sh" : specimen.name.includes("Python") ? ".py" : specimen.name === "test code" ? ".test.ts" : ".ts";
           const publication = join(directory, `publication${extension}`);
           writeFileSync(publication, specimen.text);
-          const result = runGate([publication], configuration(directory, source));
+          const result = runGateArguments(["--require-known-values", "--paths", publication], configuration(directory, source));
           expect(result.exitCode).toBe(specimen.pass ? 0 : 1);
           expect(result.stdout.toString().includes("known_value:")).toBe(!specimen.pass);
           expect(result.stdout.toString()).not.toContain(domain);
           expect(result.stderr.toString()).toBe("");
         });
       }
-      for (const specimen of cases.filter((c) => ["host", "origin", "discovery", "bare domain", "base-domain email", "percent host"].includes(c.name))) {
+      for (const specimen of cases.filter((c) => ["host", "origin", "discovery", "bare domain", "base-domain email", "percent host", "quoted code", "test code", "JSON"].includes(c.name) || (c.name.startsWith("review ") && c.name !== "review metadata boundary"))) {
         test(`${source}: commit ${specimen.name}`, () => {
           const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
           temporaryDirectories.push(directory);
@@ -1263,7 +1501,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           runGit(directory, ["config", "user.email", "noreply@example.invalid"]);
           runGit(directory, ["commit", "--allow-empty", "-m", "base"]);
           runGit(directory, ["commit", "--allow-empty", "-m", specimen.text]);
-          const result = runGateArguments(["--base", "HEAD~1", "--check-commits"], configuration(directory, source), directory);
+          const result = runGateArguments(["--base", "HEAD~1", "--require-known-values", "--check-commits"], configuration(directory, source), directory);
           expect(result.exitCode).toBe(specimen.pass ? 0 : 1);
           expect(result.stdout.toString().includes("known_value:")).toBe(!specimen.pass);
           expect(result.stdout.toString()).not.toContain(domain);
