@@ -95,8 +95,10 @@ test("done checks delivered path-only assignments and permits only a confirmed s
     spy.mockResolvedValueOnce({ conversations: [{ conversationId: "path-only-worker", transcriptPath, lifecycle: "running", host: { state: "alive" }, turnState: "busy" }] } as never);
     expect(await tools.callTool("update_task", { clientRequestId: "path-only-busy-done", taskId: task.id, status: "done" })).toMatchObject({ ok: false, code: "maintainer_done_refused" });
     expect(spy).toHaveBeenCalledWith({ transcriptPath, limit: 1 }, {});
+    spy.mockResolvedValueOnce({ conversations: [{ conversationId: "path-only-worker", transcriptPath, lifecycle: "gone", host: { state: "gone" }, turnState: "unknown" }] } as never);
+    expect(await tools.callTool("update_task", { clientRequestId: "path-only-unknown-done", taskId: task.id, status: "done" })).toMatchObject({ ok: false, code: "maintainer_done_refused" });
     spy.mockResolvedValueOnce({ conversations: [{ conversationId: "path-only-worker", transcriptPath, lifecycle: "completed", host: { state: "dead" }, turnState: "idle" }] } as never);
     expect(await tools.callTool("update_task", { clientRequestId: "path-only-settled-done", taskId: task.id, status: "done" })).toMatchObject({ ok: true });
-    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy).toHaveBeenCalledTimes(3);
   } finally { spy.mockRestore(); }
 });
