@@ -1,18 +1,78 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeAll, expect, test } from "bun:test";
 
 import {
   addTaskChip,
   clearTaskChips,
   onOrchestratorFocusRequest,
+  MAX_TASK_CHIPS,
   onTaskChipOpen,
   openTaskChip,
   readTaskChips,
+  reloadTaskChipsForTests,
   removeTaskChip,
   resetTaskChipsForTests,
+  taskChipsStorageKey,
   taskChipRefs,
 } from "./taskChips";
 
+/* The tab's session storage, as a reload keeps it. */
+beforeAll(() => {
+  if (typeof sessionStorage !== "undefined") return;
+  const map = new Map<string, string>();
+  Object.assign(globalThis, {
+    sessionStorage: {
+      getItem: (key: string) => map.get(key) ?? null,
+      setItem: (key: string, value: string) => { map.set(key, value); },
+      removeItem: (key: string) => { map.delete(key); },
+    },
+  });
+});
+
 afterEach(() => resetTaskChipsForTests());
+
+test("chips survive a page reload beside the draft they belong to", () => {
+  addTaskChip("atlas", { id: "t1", title: "First", color: "teal", icon: "rocket" });
+  addTaskChip("atlas", { id: "t2", title: "Second" });
+  addTaskChip("borealis", { id: "t9", title: "Elsewhere" });
+  reloadTaskChipsForTests();
+  expect(readTaskChips("atlas")).toEqual([
+    { id: "t1", title: "First", color: "teal", icon: "rocket" },
+    { id: "t2", title: "Second" },
+  ]);
+  expect(readTaskChips("borealis").map((chip) => chip.id)).toEqual(["t9"]);
+});
+
+test("a removed or sent chip does not come back after a reload", () => {
+  addTaskChip("atlas", { id: "t1", title: "First" });
+  addTaskChip("atlas", { id: "t2", title: "Second" });
+  removeTaskChip("atlas", "t1");
+  reloadTaskChipsForTests();
+  expect(readTaskChips("atlas").map((chip) => chip.id)).toEqual(["t2"]);
+  clearTaskChips("atlas");
+  reloadTaskChipsForTests();
+  expect(readTaskChips("atlas")).toEqual([]);
+  expect(sessionStorage.getItem(taskChipsStorageKey("atlas"))).toBeNull();
+});
+
+test("a stored list that is damaged restores what is valid and never throws", () => {
+  sessionStorage.setItem(taskChipsStorageKey("atlas"), JSON.stringify([{ id: "t1", title: "Kept" }, { id: 5 }, null, { id: "t1", title: "Dup" }]));
+  expect(readTaskChips("atlas")).toEqual([{ id: "t1", title: "Kept" }]);
+  reloadTaskChipsForTests();
+  sessionStorage.setItem(taskChipsStorageKey("atlas"), "{not json");
+  expect(readTaskChips("atlas")).toEqual([]);
+});
+
+test("a task past the cap is refused, and every attached chip is one the wire can carry", () => {
+  for (let n = 0; n < MAX_TASK_CHIPS; n += 1) expect(addTaskChip("atlas", { id: `t${n}`, title: `Task ${n}` })).toBe(true);
+  expect(addTaskChip("atlas", { id: "extra", title: "Ninth" })).toBe(false);
+  expect(readTaskChips("atlas")).toHaveLength(MAX_TASK_CHIPS);
+  expect(readTaskChips("atlas").some((chip) => chip.id === "extra")).toBe(false);
+  expect(taskChipRefs(readTaskChips("atlas"))).toHaveLength(MAX_TASK_CHIPS);
+  /* A task already attached still refreshes, and room made by × admits a new one. */
+  expect(addTaskChip("atlas", { id: "t0", title: "Renamed" })).toBe(true);
+  removeTaskChip("atlas", "t1");
+  expect(addTaskChip("atlas", { id: "extra", title: "Ninth" })).toBe(true);
+});
 
 test("a chip is added to its project's orchestrator and keeps the order it was added in", () => {
   addTaskChip("atlas", { id: "t1", title: "First" });

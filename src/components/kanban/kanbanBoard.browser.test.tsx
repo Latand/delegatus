@@ -14294,7 +14294,9 @@ describe("task chip: the card's Ask button puts a task in the orchestrator's com
       await browser.close();
       server.stop();
     }
-    fs.writeFileSync(path.join(EVIDENCE, "geometry.json"), `${JSON.stringify(passes, null, 2)}\n`);
+    /* The record is written only by a run that held: a failing run must not leave
+       its numbers where a reviewer reads them as the outcome. */
     expect(failures).toEqual([]);
+    fs.writeFileSync(path.join(EVIDENCE, "geometry.json"), `${JSON.stringify(passes, null, 2)}\n`);
   }, 300_000);
 });

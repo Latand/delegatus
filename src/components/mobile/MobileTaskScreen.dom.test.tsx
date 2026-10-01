@@ -563,3 +563,21 @@ test("«Ask» with no live seat to open still attaches the chip and says so", as
     resetManagerIdentityForTest();
   }
 });
+
+test("«Ask» on a full composer attaches nothing, says so, and does not leave the task", async () => {
+  const { addTaskChip, MAX_TASK_CHIPS, readTaskChips, resetTaskChipsForTests } = await import("@/components/orchestrator/taskChips");
+  resetTaskChipsForTests();
+  for (let n = 0; n < MAX_TASK_CHIPS; n += 1) addTaskChip("fixture", { id: `other-${n}`, title: `Other ${n}` });
+  try {
+    const opened: string[] = [];
+    const { host } = mount(taskPorts([]), noPipelinePorts, theTask, { onOpen: (entry) => opened.push(entry.path) });
+    click(q(host, "[data-phone-task-ask-orchestrator]"));
+    await sleep(10);
+    expect(readTaskChips("fixture")).toHaveLength(MAX_TASK_CHIPS);
+    expect(readTaskChips("fixture").some((chip) => chip.id === "t-many")).toBe(false);
+    expect(opened).toEqual([]);
+    expect(q(host, "[data-test-receipt]")).not.toBeNull();
+  } finally {
+    resetTaskChipsForTests();
+  }
+});

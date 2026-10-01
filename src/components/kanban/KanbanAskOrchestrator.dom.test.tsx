@@ -26,6 +26,7 @@ Object.assign(globalThis, {
   KeyboardEvent: dom.KeyboardEvent,
   FocusEvent: dom.FocusEvent,
   PointerEvent: dom.PointerEvent ?? dom.MouseEvent,
+  sessionStorage: dom.sessionStorage,
   requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(0), 0) as unknown as number,
   cancelAnimationFrame: (id: number) => clearTimeout(id),
 });
@@ -33,7 +34,7 @@ Object.assign(globalThis, {
 const { flushSync } = await import("react-dom");
 const { createRoot } = await import("react-dom/client");
 const { KanbanBoard } = await import("./KanbanBoard");
-const { readTaskChips, removeTaskChip, resetTaskChipsForTests, onOrchestratorFocusRequest } = await import("@/components/orchestrator/taskChips");
+const { addTaskChip, MAX_TASK_CHIPS, readTaskChips, reloadTaskChipsForTests, removeTaskChip, resetTaskChipsForTests, onOrchestratorFocusRequest } = await import("@/components/orchestrator/taskChips");
 
 const roots: Root[] = [];
 beforeEach(() => resetTaskChipsForTests());
@@ -154,6 +155,29 @@ test("the press asks the shell to open the orchestrator and does not move focus 
   off();
   expect(asked).toEqual(["fixture"]);
   expect(document.activeElement).toBe(button);
+});
+
+test("after a page reload the chip is back and the card's button is pressed again", () => {
+  const host = mount([task("a", "assigned", "First"), task("b", "inbox", "Second")]);
+  flushSyncClick(askButton(host, "a"));
+  flushSync(() => reloadTaskChipsForTests());
+  expect(readTaskChips("fixture").map((chip) => chip.id)).toEqual(["a"]);
+  expect(askButton(host, "a")!.getAttribute("aria-pressed")).toBe("true");
+  expect(askButton(host, "b")!.getAttribute("aria-pressed")).toBe("false");
+});
+
+test("with the cap reached, a card not yet attached cannot add; an attached one can still be taken off", () => {
+  const tasks = Array.from({ length: MAX_TASK_CHIPS + 1 }, (_, n) => task(`c${n}`, "assigned", `Task ${n}`));
+  const host = mount(tasks);
+  for (let n = 0; n < MAX_TASK_CHIPS; n += 1) flushSync(() => { addTaskChip("fixture", { id: `c${n}`, title: `Task ${n}` }); });
+  const extra = askButton(host, `c${MAX_TASK_CHIPS}`) as HTMLButtonElement;
+  expect(extra.disabled).toBe(true);
+  flushSyncClick(extra);
+  expect(readTaskChips("fixture")).toHaveLength(MAX_TASK_CHIPS);
+  expect(readTaskChips("fixture").some((chip) => chip.id === `c${MAX_TASK_CHIPS}`)).toBe(false);
+  expect((askButton(host, "c0") as HTMLButtonElement).disabled).toBe(false);
+  flushSyncClick(askButton(host, "c0"));
+  expect(extra.disabled).toBe(false);
 });
 
 function flushSyncClick(element: Element | null) {
