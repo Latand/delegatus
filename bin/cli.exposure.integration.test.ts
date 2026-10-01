@@ -173,6 +173,7 @@ async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableA
   ]);
   await Promise.all([
     copyFile(path.resolve("bin/cli.mjs"), path.join(bin, "cli.mjs")),
+    copyFile(path.resolve("bin/telemetry-notice.mjs"), path.join(bin, "telemetry-notice.mjs")),
     copyFile(path.resolve("bin/agent-binaries.mjs"), path.join(bin, "agent-binaries.mjs")),
     options.unevaluableAddress === undefined
       ? copyFile(path.resolve("bin/server-runtime.mjs"), path.join(bin, "server-runtime.mjs"))
@@ -464,6 +465,8 @@ test("a start prints the banner first, hides Next's startup lines and still prin
 
   await output.waitFor("fixture failure that must reach the terminal", 10_000);
   const text = output.text();
+  expect(text).toContain("DELEGATUS_TELEMETRY=0");
+  expect(text).toContain("DO_NOT_TRACK=1");
   expect(text.indexOf("Delegatus v")).toBeGreaterThanOrEqual(0);
   expect(text.indexOf("Delegatus v")).toBeLessThan(text.indexOf("Error: fixture failure"));
   expect(text).toContain(`  Open http://127.0.0.1:${port}/ in your browser.`);

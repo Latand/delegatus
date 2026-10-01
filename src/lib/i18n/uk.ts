@@ -1,9 +1,16 @@
-import type { Message } from ".";
+import type { Message } from "./core";
 import type { en } from "./en";
 
 /* Ukrainian mirror of en.ts. The `Record<keyof typeof en, …>` annotation fails
    the build if a key is missing or extra, keeping both locales in lockstep. */
 export const uk: Record<keyof typeof en, Message> = {
+  "telemetry.settings": "Налаштування",
+  "telemetry.label": "Анонімний пінг встановлення",
+  "telemetry.locked": "Вимкнено змінною середовища.",
+  "telemetry.dismiss": "Зрозуміло",
+  "telemetry.close": "Закрити",
+  "telemetry.error": "Не вдалося прочитати або зберегти налаштування. Спробуйте ще раз.",
+
   "common.serverUnavailable": "сервер недоступний",
   "common.loading": "завантаження…",
   "common.loadingCap": "Завантаження…",
@@ -1794,6 +1801,36 @@ export const uk: Record<keyof typeof en, Message> = {
   "tools.durationSec": "{n} с",
   "tools.durationMin": "{m} хв {s} с",
   "tools.durationMs": "{n} мс",
+  "tools.contextTokens.measured": {
+    one: "Цей виклик додав до контексту {n} токен",
+    few: "Цей виклик додав до контексту {n} токени",
+    many: "Цей виклик додав до контексту {n} токенів",
+    other: "Цей виклик додав до контексту {n} токена",
+  },
+  "tools.contextTokens.shared": {
+    one: "Цей виклик додав до контексту приблизно {n} токен: його частка за розміром результату з {total}, виміряних для паралельних викликів ({calls})",
+    few: "Цей виклик додав до контексту приблизно {n} токени: його частка за розміром результату з {total}, виміряних для паралельних викликів ({calls})",
+    many: "Цей виклик додав до контексту приблизно {n} токенів: його частка за розміром результату з {total}, виміряних для паралельних викликів ({calls})",
+    other: "Цей виклик додав до контексту приблизно {n} токена: його частка за розміром результату з {total}, виміряних для паралельних викликів ({calls})",
+  },
+  "tools.contextTokens.estimate": {
+    one: "Цей виклик додав до контексту приблизно {n} токен, оцінка за розміром результату",
+    few: "Цей виклик додав до контексту приблизно {n} токени, оцінка за розміром результату",
+    many: "Цей виклик додав до контексту приблизно {n} токенів, оцінка за розміром результату",
+    other: "Цей виклик додав до контексту приблизно {n} токена, оцінка за розміром результату",
+  },
+  "tools.contextTokens.groupMeasured": {
+    one: "Ці виклики додали до контексту {n} токен",
+    few: "Ці виклики додали до контексту {n} токени",
+    many: "Ці виклики додали до контексту {n} токенів",
+    other: "Ці виклики додали до контексту {n} токена",
+  },
+  "tools.contextTokens.groupEstimate": {
+    one: "Ці виклики додали до контексту приблизно {n} токен",
+    few: "Ці виклики додали до контексту приблизно {n} токени",
+    many: "Ці виклики додали до контексту приблизно {n} токенів",
+    other: "Ці виклики додали до контексту приблизно {n} токена",
+  },
   "tools.ranAt": "{start}–{end}",
   "tools.nestedWaits": { one: "{count} додатковий", few: "{count} додаткові", many: "{count} додаткових", other: "{count} додаткових" },
 

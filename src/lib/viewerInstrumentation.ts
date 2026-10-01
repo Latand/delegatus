@@ -923,6 +923,10 @@ export async function registerViewerRuntime(): Promise<void> {
       },
     });
     durability.start(isCurrent);
+    const { startInstallPing } = await import("@/lib/telemetry/sender");
+    const { productionModePorts } = await import("@/lib/selfUpdate/mode");
+    const { runtimeHostClient } = await import("@/lib/runtime/client");
+    startInstallPing(productionModePorts(runtimeHostClient()));
   }, isCurrent, {
     fenceRequest: () => {
       const revision = releaseRevision();

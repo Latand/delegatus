@@ -2,17 +2,10 @@
 
 import { useCallback, useSyncExternalStore } from "react";
 
-import { en } from "./en";
-import { uk } from "./uk";
+import { translate, type Locale, type TFunction } from "./core";
 
-export type Locale = "en" | "uk";
-
-export type PluralForms = Partial<Record<Intl.LDMLPluralRule, string>>;
-export type Message = string | PluralForms;
-export type Dictionary = Record<string, Message>;
-export type MessageKey = keyof typeof en;
-
-const DICTS: Record<Locale, Dictionary> = { en, uk };
+export { translate } from "./core";
+export type { Locale, PluralForms, Message, Dictionary, MessageKey, TFunction } from "./core";
 const STORAGE_KEY = "llv_lang";
 
 /** The language this browser keeps, or null when it keeps none. */
@@ -160,33 +153,6 @@ function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
-
-function interpolate(text: string, params?: Record<string, string | number>): string {
-  if (!params) return text;
-  return text.replace(/\{(\w+)\}/g, (whole, name: string) =>
-    name in params ? String(params[name]) : whole,
-  );
-}
-
-/** Pure lookup: pick locale message, resolve plural form, interpolate params. */
-export function translate(
-  locale: Locale,
-  key: MessageKey,
-  params?: Record<string, string | number>,
-): string {
-  const entry = (DICTS[locale][key] ?? DICTS.en[key] ?? key) as Message;
-  let text: string;
-  if (typeof entry === "string") {
-    text = entry;
-  } else {
-    const count = typeof params?.count === "number" ? params.count : 0;
-    const form = new Intl.PluralRules(locale === "uk" ? "uk-UA" : "en-US").select(count);
-    text = entry[form] ?? entry.other ?? entry.one ?? "";
-  }
-  return interpolate(text, params);
-}
-
-export type TFunction = (key: MessageKey, params?: Record<string, string | number>) => string;
 
 /** Reactive locale + translator. Components re-render when the locale flips. */
 export function useLocale(): { locale: Locale; t: TFunction; setLocale: (l: Locale) => void; chooseLocale: (l: Locale) => void } {

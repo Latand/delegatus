@@ -10,7 +10,7 @@ import { DiffCard } from "./DiffCard";
 import { OutputPreview } from "./OutputPreview";
 import { RecordCard } from "./RecordCard";
 import { SysMsgCard } from "./SysMsgCard";
-import { ToolCard } from "./ToolCard";
+import { MobileRunRow, PollRow, ToolBlockRow, ToolCard } from "./ToolCard";
 
 const en = (key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]) => translate("en", key, params);
 
@@ -276,4 +276,86 @@ test("seat panel b3: a shell row with an absolute path stays one truncated line 
   /* The row is not a wrapping container: no flex-wrap, and the expanded body is still lazy. */
   expect(html.match(/<summary[^>]*class="([^"]*)"/)![1]).not.toContain("flex-wrap");
   expect(html).not.toContain("whitespace-pre-wrap");
+});
+
+/* Context tokens per tool call (docs/design/tool-call-tokens.md §9): every row
+   that prints a duration prints the number right after it. */
+const tokenHtml = (html: string) => html.match(/<span data-context-tokens[^>]*>.*?<\/span><\/span>/)?.[0] ?? "";
+const timed = { endTs: "2026-07-10T10:00:00.352Z" };
+
+test("a tool line prints the context tokens right after the duration, before the clock time", () => {
+  const html = renderToStaticMarkup(<ToolCard event={toolEvent({ ...timed, contextTokens: { n: 12_449, basis: "measured" } })} />);
+  expect(html).toContain("352ms");
+  expect(html.indexOf("352ms")).toBeLessThan(html.indexOf("data-context-tokens"));
+  expect(html.indexOf("data-context-tokens")).toBeLessThan(html.indexOf("12:00") === -1 ? Infinity : html.indexOf("12:00"));
+  const caption = tokenHtml(html);
+  expect(caption).toContain(">12.4k<");
+  expect(caption).toContain('data-context-band="2"');
+  expect(caption).toContain('data-context-basis="measured"');
+  expect(caption).toContain("text-caution");
+  expect(caption).toContain("whitespace-nowrap");
+  expect(caption).toContain('title="12,449 tokens added to the context by this call"');
+});
+
+test("the four bands get four classes, each more prominent than the last", () => {
+  const classes = [352, 1_000, 10_000, 20_000].map((n) => {
+    const caption = tokenHtml(renderToStaticMarkup(<ToolCard event={toolEvent({ ...timed, contextTokens: { n, basis: "measured" } })} />));
+    return [caption.match(/data-context-band="(\d)"/)?.[1], caption.match(/class="(text-[a-z]+(?: font-[a-z]+)?)"/)?.[1]];
+  });
+  expect(classes).toEqual([["0", "text-muted"], ["1", "text-warning"], ["2", "text-caution font-medium"], ["3", "text-danger font-semibold"]]);
+});
+
+test("an estimate and a shared value wear a ~ and say approximately", () => {
+  const estimate = tokenHtml(renderToStaticMarkup(<ToolCard event={toolEvent({ ...timed, contextTokens: { n: 352, basis: "estimate" } })} />));
+  expect(estimate).toContain(">~352<");
+  expect(estimate).toContain("Approximately 352 tokens added to the context by this call, estimated from the size of its result");
+  const shared = tokenHtml(renderToStaticMarkup(<ToolCard event={toolEvent({ ...timed, contextTokens: { n: 2_911, basis: "shared", round: { total: 21_902, calls: 3 } } })} />));
+  expect(shared).toContain(">~2.9k<");
+  expect(shared).toContain("of 21,902 measured for 3 parallel calls");
+});
+
+test("a row without the field, or a running one, prints no number and no stray dot", () => {
+  expect(renderToStaticMarkup(<ToolCard event={toolEvent(timed)} />)).not.toContain("data-context-tokens");
+  expect(renderToStaticMarkup(<ToolCard event={toolEvent({ status: "run", statusLabel: "executing" })} />)).not.toContain("data-context-tokens");
+});
+
+test("without a duration the number stands alone, with no leading dot", () => {
+  const html = renderToStaticMarkup(<ToolCard event={toolEvent({ contextTokens: { n: 352, basis: "measured" } })} />);
+  expect(tokenHtml(html)).not.toContain("aria-hidden");
+});
+
+test("a block row inside an open group prints it after the duration", () => {
+  const html = renderToStaticMarkup(<ToolBlockRow event={toolEvent({ ...timed, contextTokens: { n: 25_000, basis: "measured" } })} index={1} />);
+  expect(html.indexOf("352ms")).toBeLessThan(html.indexOf("data-context-tokens"));
+  expect(tokenHtml(html)).toContain('data-context-band="3"');
+});
+
+test("a phone run row ends its meta with the number, dot and value in their own spans", () => {
+  const html = renderToStaticMarkup(<MobileRunRow event={toolEvent({ ...timed, contextTokens: { n: 1_500, basis: "measured" } })} />);
+  expect(html).toMatch(/352ms<span data-context-tokens[^>]*><span class="mx-1 text-muted" aria-hidden="true">·<\/span><span class="text-warning">1\.5k<\/span>/);
+});
+
+test("a coalesced poll row carries the sum of its polls, worded for several calls", () => {
+  const poll = (n: number) => toolEvent({ tool: "wait", poll: true, contextTokens: { n, basis: "estimate" } });
+  const html = renderToStaticMarkup(<PollRow events={[poll(10), poll(15)]} contextTokens={{ n: 25, basis: "estimate" }} />);
+  expect(tokenHtml(html)).toContain(">~25<");
+  expect(tokenHtml(html)).toContain("Approximately 25 tokens added to the context by these calls");
+});
+
+test("a folded desktop group prints the sum after its duration and before the time range", () => {
+  const calls = [
+    toolEvent({ id: "g1", ts: "2026-07-10T10:00:00Z", endTs: "2026-07-10T10:00:01Z" }),
+    toolEvent({ id: "g2", ts: "2026-07-10T10:00:01Z", endTs: "2026-07-10T10:00:03Z" }),
+  ];
+  const item: CmdGroupItem = {
+    kind: "cmd-group", ids: ["g1", "g2"], calls, t0: calls[0].ts, t1: "2026-07-10T10:00:03Z", byTool: { Bash: 2 },
+    okCount: 2, errCount: 0, hasErr: false, active: false, contextTokens: { n: 21_000, basis: "measured" },
+  };
+  const html = renderToStaticMarkup(<CmdGroupCard item={item} />);
+  const caption = tokenHtml(html);
+  expect(caption).toContain('data-context-band="3"');
+  expect(caption).toContain('title="21,000 tokens added to the context by these calls"');
+  expect(html.indexOf("3s")).toBeLessThan(html.indexOf("data-context-tokens"));
+  const { contextTokens: _omitted, ...without } = item;
+  expect(renderToStaticMarkup(<CmdGroupCard item={without} />)).not.toContain("data-context-tokens");
 });
