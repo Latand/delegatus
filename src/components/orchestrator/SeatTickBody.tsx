@@ -276,6 +276,13 @@ export function SeatTickActions({ read, state, surface }: {
   const { t } = useLocale();
   const phone = surface === "mobile";
   if (!state.dirty && !read.error) return null;
+  const overLimit = read.error?.match(/^instructions \(reason\) are (\d+) characters; the limit is 500\. Nothing was stored — shorten the instructions and send them again$/);
+  const instructionsRequired = read.error === "instructions (reason) are required when the tick is disabled or its wake interval changes. Write what the seat should do and when it should stop; a quiet tick without instructions is indistinguishable from a broken one";
+  const error = overLimit
+    ? t("seatTick.instructionsOverLimitError", { count: Number(overLimit[1]) })
+    : instructionsRequired
+      ? t("seatTick.instructionsRequiredError")
+      : read.error;
   /* Written out rather than interpolated: a Tailwind class assembled from a
      variable is a class Tailwind never sees and never emits. */
   const button = phone
@@ -285,7 +292,7 @@ export function SeatTickActions({ read, state, surface }: {
     <div className="flex min-w-0 flex-1 flex-col gap-2">
       {read.error ? (
         <p role="alert" data-seat-tick-error className="rounded-control border border-danger/40 bg-danger/10 px-2 py-1.5 text-ui leading-4 text-danger">
-          {read.error}
+          {error}
         </p>
       ) : null}
       {state.dirty ? (
@@ -406,6 +413,7 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
   onOpenedCard?: () => void;
 }) {
   const { t, locale } = useLocale();
+  // eslint-disable-next-line react-hooks/purity -- this snapshot only formats the current status reading.
   const now = Date.now();
   const reading = seatTickReading(read, now, t);
   const record = read.record;
@@ -423,7 +431,7 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
     const field = reasonRef.current;
     if (!field) return;
     field.style.height = "auto";
-    field.style.height = `${Math.min(320, field.scrollHeight + 2)}px`;
+    field.style.height = `${field.scrollHeight + 2}px`;
   }, [draft.reason]);
   const storedUntil = record?.settings.until ?? null;
   const row = phone ? "min-h-11" : "min-h-7";
@@ -546,7 +554,21 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
         ) : null}
 
         <label className="flex min-w-0 flex-col gap-1">
-          <span className="text-ui text-primary">{t("seatTick.reasonLabel")}</span>
+          <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
+            <span className="text-ui text-primary">{t("seatTick.reasonLabel")}</span>
+            {draft.reason.length >= 450 ? (
+              <span
+                data-seat-tick-character-count={draft.reason.length}
+                aria-live="polite"
+                className={`text-caption leading-4 ${draft.reason.length > 500 ? "text-danger" : "text-muted"}`}
+              >
+                {t("seatTick.instructionsCharacterCount", { count: draft.reason.length })}
+                {draft.reason.length > 500 ? (
+                  <span data-seat-tick-over-limit> · {t("seatTick.instructionsOverLimit", { over: draft.reason.length - 500 })}</span>
+                ) : null}
+              </span>
+            ) : null}
+          </div>
           <textarea
             ref={reasonRef}
             aria-describedby={`seat-tick-instructions-${surface}`}
@@ -555,7 +577,7 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
             value={draft.reason}
             disabled={!record || state.saving}
             onChange={(event) => setDraft((previous) => ({ ...previous, reason: event.target.value }))}
-            className={`min-h-0 max-h-80 w-full resize-y overflow-y-auto rounded-control border border-border bg-card px-2 py-1.5 ${phone ? "text-body" : "text-ui"} text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50`}
+            className={`min-h-0 w-full resize-none overflow-hidden rounded-control border border-border bg-card px-2 py-1.5 ${phone ? "text-body" : "text-ui"} text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50`}
           />
           <span id={`seat-tick-instructions-${surface}`} data-seat-tick-instructions-hint className="text-caption leading-4 text-muted">{t("seatTick.reasonHint")}</span>
         </label>

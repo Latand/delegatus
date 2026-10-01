@@ -14083,6 +14083,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     const out = path.resolve(".artifacts/seat-tick-instructions");
     fs.mkdirSync(out, { recursive: true });
     let storedReason = "a release afternoon";
+    let putRequests = 0;
     let releaseSettingsRead = () => {};
     let markSettingsReadStarted = () => {};
     let settingsReadStarted = new Promise<void>((resolve) => { markSettingsReadStarted = resolve; });
@@ -14090,7 +14091,14 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     const server = await serveEvidenceFixture(out, undefined, {
       "/api/monitor/seat-tick/settings": async (request: Request) => {
         if (request.method === "PUT") {
-          const body = await request.json() as { reason?: string };
+          putRequests += 1;
+          const body = await request.json() as { reason?: string; enabled?: boolean };
+          if ((body.reason?.length ?? 0) > 500) {
+            return Response.json({ error: `instructions (reason) are ${body.reason!.length} characters; the limit is 500. Nothing was stored — shorten the instructions and send them again` }, { status: 400 });
+          }
+          if (body.enabled === false && !body.reason?.trim()) {
+            return Response.json({ error: "instructions (reason) are required when the tick is disabled or its wake interval changes. Write what the seat should do and when it should stop; a quiet tick without instructions is indistinguishable from a broken one" }, { status: 400 });
+          }
           if (typeof body.reason === "string") storedReason = body.reason;
         } else {
           markSettingsReadStarted();
@@ -14123,7 +14131,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
 
     async function assertVisible(page: Page, expected: string, label: string, state: string) {
       const field = page.locator("[data-seat-tick-reason]");
-      expect(await field.inputValue()).toBe(expected);
+      expect(await field.inputValue(), `${label} ${state} keeps the complete instruction`).toBe(expected);
       const geometry = await field.evaluate((node) => ({ scrollHeight: node.scrollHeight, clientHeight: node.clientHeight }));
       expect(geometry.scrollHeight, `${label} ${state} text is fully visible`).toBeLessThanOrEqual(geometry.clientHeight + 1);
       await field.screenshot({ path: path.join(SHOTS, `${label}-${state}.png`) });
@@ -14134,7 +14142,10 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
       for (const lang of ["en", "uk"] as const) for (const phone of [false, true]) {
         const width = phone ? 390 : 1440;
         const label = `${phone ? "phone-390" : "desktop-1440"}-${lang}`;
-        const text = lang === "en" ? english : ukrainian;
+        const shortText = lang === "en" ? english : ukrainian;
+        const repeatedText = Array.from({ length: 4 }, () => shortText).join("\n");
+        const prefix = repeatedText.slice(0, 499).trimEnd();
+        const text = `${prefix}${"x".repeat(500 - prefix.length)}`;
         storedReason = "a release afternoon";
         settingsReadStarted = new Promise<void>((resolve) => { markSettingsReadStarted = resolve; });
         settingsReadGate = new Promise<void>((resolve) => { releaseSettingsRead = resolve; });
@@ -14156,12 +14167,35 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
             });
             await field.fill(text);
             const edited = await assertVisible(page, text, label, "edited");
+            expect(text.length, `${label} boundary instruction length`).toBe(500);
             await page.locator("[data-seat-tick-save]").click();
             await page.locator("[data-seat-tick-save]").waitFor({ state: "detached" });
+            expect(storedReason.length, `${label} server fixture stores the full instruction`).toBe(500);
             const saved = await assertVisible(page, text, label, "saved");
             await page.screenshot({ path: path.join(SHOTS, `${label}-saved-panel.png`) });
+            const requestsBeforeOverage = putRequests;
+            await field.fill(`${text}x`);
+            expect(await page.locator("[data-seat-tick-character-count]").getAttribute("data-seat-tick-character-count")).toBe("501");
+            expect(await page.locator("[data-seat-tick-character-count]").textContent()).toContain(lang === "en" ? "501 / 500 characters" : "501 / 500 символів");
+            expect(await page.locator("[data-seat-tick-over-limit]").textContent()).toContain(lang === "en" ? "Over limit by 1" : "Ліміт перевищено на 1");
+            const viewportWidth = await page.evaluate(() => ({ viewport: innerWidth, page: document.documentElement.scrollWidth }));
+            expect(viewportWidth.page, `${label} over-limit page has no horizontal overflow`).toBeLessThanOrEqual(viewportWidth.viewport);
+            expect(putRequests, `${label} counter appears before a request`).toBe(requestsBeforeOverage);
+            await page.screenshot({ path: path.join(SHOTS, `${label}-over-limit.png`) });
+            await page.locator("[data-seat-tick-save]").click();
+            const overLimitMessage = page.locator("[data-seat-tick-error]");
+            await overLimitMessage.waitFor();
+            expect(await overLimitMessage.textContent()).toContain(lang === "en" ? "Instructions (reason) are 501 characters" : "Вказівки (reason) перевищують ліміт 500 символів: 501");
+            await page.screenshot({ path: path.join(SHOTS, `${label}-over-limit-refusal.png`) });
+            await field.fill("");
+            await page.locator("[data-seat-tick-enabled]").click();
+            await page.locator("[data-seat-tick-save]").click();
+            const requiredMessage = page.locator("[data-seat-tick-error]");
+            await requiredMessage.waitFor();
+            expect(await requiredMessage.textContent()).toContain(lang === "en" ? "Instructions (reason) are required" : "Вказівки (reason) потрібні");
+            await page.screenshot({ path: path.join(SHOTS, `${label}-missing-instructions-refusal.png`) });
             expect(pageErrors, `${label} errors while saving`).toEqual([]);
-            cases.push({ label, edited, saved });
+            cases.push({ label, edited, saved, overLimit: await page.locator("[data-seat-tick-character-count]").textContent(), putRequests });
           } finally { await context.close(); }
         }
         {
@@ -14264,6 +14298,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
                 };
                 return {
                   notice: clamp("t-tick-notice"), failed: clamp("t-tick-failed"), live: clamp("t-tick-live"),
+                  noticeBody: text('[data-kanban-board] .card[data-id="task:t-tick-notice"] .desc'),
                   failedBody: text('[data-kanban-board] .card[data-id="task:t-tick-failed"] .desc'),
                   noticeButton: text('[data-open-seat-tick]'),
                 };
@@ -14324,11 +14359,12 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
       expect(entry.controlHeight, `${entry.label} the tick control is a 44 px target`).toBeGreaterThanOrEqual(44);
       expect(entry.tickSheetOpened, `${entry.label} the tick sheet opened`).toBe(true);
     }
-    const desk = readings.filter((entry) => !entry.phone) as Array<{ label: string; notice: { text: string }; failed: { text: string; timeShown: boolean | null }; live: { text: string; timeShown: boolean | null }; failedBody: string; noticeButton: string; foldedBefore: boolean; unfoldedAfter: boolean }>;
+    const desk = readings.filter((entry) => !entry.phone) as Array<{ label: string; notice: { text: string }; noticeBody: string; failed: { text: string; timeShown: boolean | null }; live: { text: string; timeShown: boolean | null }; failedBody: string; noticeButton: string; foldedBefore: boolean; unfoldedAfter: boolean }>;
     for (const entry of desk) {
       const en = entry.label.endsWith("-en");
       /* The notice is titled after the setting, in the card's own language. */
       expect(entry.notice.text, `${entry.label} notice title`).toMatch(en ? /^Tick: every 30 min until \d{2}:\d{2}$/ : /^Тікер: кожні 30 хв до \d{2}:\d{2}$/);
+      expect(entry.noticeBody, `${entry.label} instructions card label`).toContain(en ? "Instructions for every wake:" : "Вказівки на кожне пробудження:");
       expect(entry.noticeButton, `${entry.label} notice button`).toBe(translate(en ? "en" : "uk", "kanban.tickNotice.open"));
       /* The run cards lead with their time, and the time is on screen even where
          the column is too narrow for the whole title. */

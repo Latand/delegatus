@@ -132,14 +132,14 @@ test("operator instructions survive default cadence, schedule restore and expiry
 test("operator instructions over the storage limit are refused without dropping their tail", () => {
   const current = { ...defaultSeatTickSettings(PROJECT), reason: "Keep these instructions." };
   const result = change(current, { reason: "x".repeat(501) });
-  expect(result).toEqual({ ok: false, error: "reason is 501 characters; the limit is 500. Nothing was stored — shorten the instructions and send them again" });
+  expect(result).toEqual({ ok: false, error: "instructions (reason) are 501 characters; the limit is 500. Nothing was stored — shorten the instructions and send them again" });
   expect(current.reason).toBe("Keep these instructions.");
 });
 
 test("a change that leaves the default without a reason is refused; restoring it needs none", () => {
   expect(change(defaultSeatTickSettings(PROJECT), { enabled: false })).toEqual({
     ok: false,
-    error: "a reason is required when the tick is disabled or its wake interval is changed; a quiet tick with no recorded reason is indistinguishable from a broken one",
+    error: "instructions (reason) are required when the tick is disabled or its wake interval changes. Write what the seat should do and when it should stop; a quiet tick without instructions is indistinguishable from a broken one",
   });
   const off = (change(defaultSeatTickSettings(PROJECT), { enabled: false, reason: "nothing here for me" }) as { settings: SeatTickSettings }).settings;
   const back = change(off, { enabled: true });

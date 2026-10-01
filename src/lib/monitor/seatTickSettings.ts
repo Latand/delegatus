@@ -460,7 +460,7 @@ export function applySeatTickSettingsChange(
     else {
       const redacted = redactMonitorText(raw).trim();
       if (raw.length > REASON_LIMIT || redacted.length > REASON_LIMIT) {
-        return { ok: false, error: `reason is ${raw.length} characters; the limit is ${REASON_LIMIT}. Nothing was stored — shorten the instructions and send them again` };
+        return { ok: false, error: `instructions (reason) are ${raw.length} characters; the limit is ${REASON_LIMIT}. Nothing was stored — shorten the instructions and send them again` };
       }
       reason = redacted || null;
     }
@@ -517,7 +517,7 @@ export function applySeatTickSettingsChange(
     setBy: context.actor,
   };
   if (!seatTickSettingsAreDefault(next) && !next.reason) {
-    return { ok: false, error: "a reason is required when the tick is disabled or its wake interval is changed; a quiet tick with no recorded reason is indistinguishable from a broken one" };
+    return { ok: false, error: "instructions (reason) are required when the tick is disabled or its wake interval changes. Write what the seat should do and when it should stop; a quiet tick without instructions is indistinguishable from a broken one" };
   }
   /* Restoring a schedule clears its interval and expiry. The panel's
      instructions and the seat's own note stand until explicitly cleared;
