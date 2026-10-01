@@ -1498,6 +1498,9 @@ if (SCENARIO === "task-motion") {
     task("motion-working", "assigned", L("Finish the running work", "Завершити поточну роботу"), "", 5 * MIN, [exportImpl]),
     task("motion-stopped", "assigned", L("Finish the remaining work", "Завершити решту роботи"), "", 10 * MIN, [exportExplore]),
     task("motion-worker", "blocked", L("Wait for a free worker", "Дочекатися вільного агента"), "", 60 * MIN, [], { hold: { kind: "worker", note: L("After another task finishes", "Коли завершиться інша задача"), since: iso(60 * MIN), by: "agent" } }),
+    task("motion-pr", "blocked", L("Wait for the release PR", "Дочекатися PR релізу"), "", 45 * MIN, [], { hold: { kind: "pr", ref: "2190", note: L("After merge", "Після злиття"), since: iso(45 * MIN), by: "agent" } }),
+    task("motion-issue", "blocked", L("Wait for the issue", "Дочекатися issue"), "", 40 * MIN, [], { hold: { kind: "issue", ref: "2044", note: L("After closure", "Після закриття"), since: iso(40 * MIN), by: "agent" } }),
+    task("motion-taskref", "blocked", L("Wait for the linked task", "Дочекатися повʼязаної задачі"), "", 35 * MIN, [], { hold: { kind: "task", ref: "motion-bare", note: L("After the audit review", "Після перевірки аудиту"), since: iso(35 * MIN), by: "agent" } }),
     task("motion-checklist", "blocked", L("Complete the audit causes", "Усунути причини аудиту"), "", 70 * MIN, [], { steps: [
       ...Array.from({ length: 5 }, (_, index) => ({ id: `fixed-${index + 1}`, text: L(`Fixed cause ${index + 1}`, `Усунена причина ${index + 1}`), state: "done" as const })),
       ...Array.from({ length: 3 }, (_, index) => ({ id: `open-${index + 1}`, text: L(`Remaining cause ${index + 1}`, `Невирішена причина ${index + 1}`), state: "open" as const, hold: { kind: "worker" as const, note: L("After another task finishes", "Коли завершиться інша задача"), since: iso(70 * MIN), by: "agent" as const } })),
@@ -2092,7 +2095,7 @@ function fixtureWorkLinks(): FilesWorkLinks {
     completeSince: iso(24 * 60 * MIN),
     pr: (number) => prs.find((entry) => entry.number === number),
     byHead: (head) => prs.filter((entry) => entry.headRefName === head),
-    isIssue: () => false,
+    isIssue: (number) => number === 2044,
   };
   const cache: ForgeCacheView = { repository: (name) => (name === repository ? view : null) };
   const delivered = (lane: Pipeline) => ({
@@ -2108,12 +2111,13 @@ function fixtureWorkLinks(): FilesWorkLinks {
   }
   for (const entry of tasks) {
     const own = entry.id === "t-longtitle" ? { workLinks: [{ repository, number: 2210, kind: "pr" as const, addedAt: iso(MIN), addedBy: "operator" as const }] } : {};
-    const resolved = resolveTaskLinks(own, byTask.get(entry.id) ?? [], cache);
-    if (resolved.links.length) out.tasks[entry.id] = resolved;
+    const numberedHold = (entry.hold?.kind === "pr" || entry.hold?.kind === "issue") && /^\d+$/.test(entry.hold.ref ?? "");
+    const resolved = resolveTaskLinks(own, byTask.get(entry.id) ?? [], cache, numberedHold ? repository : null);
+    if (resolved.links.length || (numberedHold && resolved.repository)) out.tasks[entry.id] = resolved;
   }
   return out;
 }
-const workLinks = WORK_LINKS ? fixtureWorkLinks() : null;
+const workLinks = WORK_LINKS || SCENARIO === "task-motion" ? fixtureWorkLinks() : null;
 
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
 const serverFetch = window.fetch.bind(window);

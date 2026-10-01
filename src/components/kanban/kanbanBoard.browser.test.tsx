@@ -14248,6 +14248,33 @@ describe("task motion and waiting reasons", () => {
           expect(stepBounds.right).toBeLessThanOrEqual(width + 1);
           expect(stepBounds.bottom).toBeLessThanOrEqual(844);
           expect(stepBounds.scrollWidth).toBeLessThanOrEqual(stepBounds.clientWidth + 1);
+          const prHold = page.locator(`${selector("motion-pr")} [data-motion] a`);
+          const issueHold = page.locator(`${selector("motion-issue")} [data-motion] a`);
+          if (phone) {
+            expect(await prHold.count()).toBe(0);
+            await page.locator(selector("motion-pr")).click();
+            await page.locator("[data-phone-task-title]").waitFor();
+            expect(await page.locator('[data-motion] a').getAttribute("href")).toBe("https://github.com/acme/atlas/pull/2190");
+            await page.locator("[data-mobile2-back]").click();
+            await page.locator('[data-phone-card="task:motion-issue"]').waitFor();
+            await page.locator(selector("motion-issue")).click();
+            await page.locator("[data-phone-task-title]").waitFor();
+            expect(await page.locator('[data-motion] a').getAttribute("href")).toBe("https://github.com/acme/atlas/issues/2044");
+            await page.locator("[data-mobile2-back]").click();
+            await page.locator('[data-phone-card="task:motion-taskref"]').waitFor();
+            await page.locator(selector("motion-taskref")).click();
+            await page.locator('[data-phone-task-title]').waitFor();
+            await page.locator('[data-motion] button').click();
+            await page.waitForFunction(() => document.querySelector('[data-phone-task-title]')?.textContent?.includes("Review older work"));
+            await page.locator("[data-mobile2-back]").click();
+            await page.locator("[data-mobile2-back]").click();
+            await page.locator('[data-phone-card="task:motion-worker"]').waitFor();
+          } else {
+            expect(await prHold.getAttribute("href")).toBe("https://github.com/acme/atlas/pull/2190");
+            expect(await issueHold.getAttribute("href")).toBe("https://github.com/acme/atlas/issues/2044");
+            await page.locator(`${selector("motion-taskref")} [data-motion] button`).click();
+            await page.waitForFunction(() => document.activeElement?.getAttribute("data-id") === "task:motion-bare");
+          }
           if (!phone) {
             const queuedFilter = page.locator('[data-reason-filter="queued"]');
             await queuedFilter.waitFor();
