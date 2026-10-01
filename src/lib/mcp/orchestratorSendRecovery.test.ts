@@ -58,7 +58,7 @@ function fixture(label: string) {
   const domain = {
     registrySnapshot: () => registry.readOnlySnapshot(),
     attentionAuthority: () => ({ kind: "worker", conversationId: callerId }),
-    callerAttribution: () => ({ kind: "worker", conversationId: callerId }),
+    callerAttribution: () => ({ kind: "gateway", conversationId: callerId }),
     recoveryPredecessors: () => [],
     sendSettlementPorts: () => ({ registry, client: null }),
   } as unknown as ViewerMcpDomainDependencies;
@@ -155,7 +155,7 @@ test("missing-seat creation pins its recipient before the message and recovers a
     f.seat(f.successor);
     f.reopen();
     expect(await f.service(control).callTool("send_message_to_orchestrator", args)).toMatchObject({ ok: true, operationId: "created-operation", conversationId: f.first.id });
-    expect(posts).toEqual(["/api/orchestrator/seat", "/api/tmux"]);
+    expect(posts).toEqual(["/api/orchestrator/seat", "/api/orchestrator/message"]);
   } finally { f.close(); }
 });
 

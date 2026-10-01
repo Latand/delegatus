@@ -38,6 +38,7 @@ import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { agentRegistry } from "@/lib/agent/registry";
 import { internalServiceClaim } from "@/lib/agent/callerClaims";
 import { deputyDeliveryRefusal } from "@/lib/orchestrator/deputies";
+import { admitOrchestratorRelay } from "@/lib/orchestrator/relay";
 import { materializeStructuredTerminal } from "@/lib/runtime/structuredTerminal";
 import { attachmentsAreOrphaned, structuredAttachmentOutcome, type AttachmentDeliveryOutcome } from "@/lib/attachmentRetention";
 import type { InboxFileAdmissionResult } from "@/lib/inboxFiles";
@@ -216,7 +217,7 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
-  let body: { pid?: unknown; path?: unknown; conversationId?: unknown; clientMessageId?: unknown; operationId?: unknown; text?: unknown; policy?: unknown; image?: unknown; images?: unknown; action?: unknown; key?: unknown; label?: unknown; question?: unknown; decision?: unknown; requestId?: unknown; target?: unknown; model?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown };
+  let body: { orchestratorRelayProject?: unknown; pid?: unknown; path?: unknown; conversationId?: unknown; clientMessageId?: unknown; operationId?: unknown; text?: unknown; policy?: unknown; image?: unknown; images?: unknown; action?: unknown; key?: unknown; label?: unknown; question?: unknown; decision?: unknown; requestId?: unknown; target?: unknown; model?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown };
   try {
     body = (await req.json()) as {
       pid?: unknown;
@@ -241,6 +242,20 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
     };
   } catch {
     return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
+  }
+
+  let relay: Extract<ReturnType<typeof admitOrchestratorRelay>, { ok: true }> | null = null;
+  if (body.orchestratorRelayProject !== undefined) {
+    if (typeof body.orchestratorRelayProject !== "string" || !body.orchestratorRelayProject.trim() || body.action !== undefined) {
+      return NextResponse.json({ error: "an orchestrator relay requires a project and is a message only" }, { status: 400 });
+    }
+    const admitted = admitOrchestratorRelay(req, body.orchestratorRelayProject,
+      typeof body.conversationId === "string" ? body.conversationId : "",
+      typeof body.text === "string" ? body.text : "");
+    if (!admitted.ok) {
+      return NextResponse.json({ error: admitted.error, code: admitted.code, admission: "refused" }, { status: admitted.status });
+    }
+    relay = admitted;
   }
 
   /* Resource-panel cleanup: kills an agent session's pane. Only targets from
@@ -389,7 +404,7 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
   if (policy !== undefined && policy !== "steer-or-queue") {
     return NextResponse.json({ error: "policy is invalid" }, { status: 400 });
   }
-  const text = typeof body.text === "string" ? body.text : "";
+  const text = relay?.text ?? (typeof body.text === "string" ? body.text : "");
   const { images, error: imageError } = dependencies.collectImagePayloads(body);
   if (imageError) {
     return NextResponse.json({ error: imageError.error }, { status: imageError.status });
@@ -426,7 +441,7 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
   const service = internalServiceClaim(req);
   /* Only the server's caller capability can name an agent. An ordinary client
      cannot turn its own message into another seat's by supplying `origin`. */
-  const origin = sender.kind === "agent"
+  const origin = relay?.origin ?? (sender.kind === "agent"
     ? (() => {
       try { return agentMessageOrigin(agentRegistry().readOnlySnapshot(), sender.conversationId,
         service.claim === "valid" && service.service === "mcp" ? requestedOrigin?.role : null); }
@@ -435,7 +450,7 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
     : sender.kind === "service" ? service.claim === "valid"
       ? requestedOrigin ?? { kind: "agent" as const, role: service.service }
       : API_CLIENT_ORIGIN
-    : { kind: "operator" as const };
+    : { kind: "operator" as const });
   const operatorTarget = { pid, hasPid, filePath, conversationId };
   /* Stamped before the message is accepted, so the compare-and-clear below
      retires the set that was standing when the operator pressed send and

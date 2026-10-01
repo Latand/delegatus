@@ -1482,6 +1482,7 @@ async function sendMessage(
     Partial<Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority">>,
   context?: McpToolCallContext,
   downstreamKey = sendDownstreamKey(requestId(args)),
+  orchestratorRelayProject?: string,
 ): Promise<McpToolPayload> {
   const conversationId = text(args.conversationId);
   const transcriptPath = text(args.transcriptPath) || text(args.path);
@@ -1489,7 +1490,7 @@ async function sendMessage(
   const message = requiredMessageText(args);
   let outcome: Record<string, unknown>;
   try {
-    outcome = await dispatchControl(control)("/api/tmux", {
+    outcome = await dispatchControl(control)(orchestratorRelayProject ? "/api/orchestrator/message" : "/api/tmux", {
       pid: null,
       path: transcriptPath,
       ...(conversationId ? { conversationId } : {}),
@@ -1500,6 +1501,7 @@ async function sendMessage(
       /* #1117: an MCP send is inter-agent traffic by definition; the sender role
          is the server's own caller attribution, so the feed can say WHO relayed. */
       origin: mcpSenderOrigin(dependencies),
+      ...(orchestratorRelayProject ? { project: orchestratorRelayProject } : {}),
     }, callerCapabilityHeaders());
   } catch (error) {
     /* #2020: the Viewer's own answer that it refused before reserving
@@ -4274,6 +4276,7 @@ async function sendMessageToOrchestrator(
   dependencies: ViewerMcpDomainDependencies,
   context?: McpToolCallContext,
 ): Promise<McpToolPayload> {
+  requireOrchestratorRelayCaller(dependencies);
   const project = canonicalOrchestratorProject(required(args, "project"));
   requiredMessageText(args);
   const key = requestId(args);
@@ -4310,7 +4313,7 @@ async function sendMessageToOrchestrator(
       conversationId: recipient,
       transcriptPath: seat?.conversationId === recipient ? seat.path : undefined,
       path: undefined,
-    }, control, dependencies, context, orchestratorSendDownstreamKey(key));
+    }, control, dependencies, context, orchestratorSendDownstreamKey(key), project);
     return redactPayload({
       ...outcome, project, created,
       // Seat metadata describes only the recipient this dispatch actually used.
@@ -6055,6 +6058,7 @@ function orchestratorSendDownstreamKey(key: string): string {
 }
 
 function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpRequestBindingInput {
+  requireOrchestratorRelayCaller(dependencies);
   const project = canonicalOrchestratorProject(required(args, "project"));
   requiredMessageText(args);
   return {
@@ -6064,6 +6068,20 @@ function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     // different logical instructions, even when their message text is equal.
     downstreamKey: orchestratorSendDownstreamKey(requestId(args)),
   };
+}
+
+/** The gateway keeps its existing relay path. A seat gets messaging only:
+    auto-creation still goes through the unchanged operator-only seat route. */
+function requireOrchestratorRelayCaller(dependencies: ViewerMcpDomainDependencies): void {
+  const caller = attributionOf(dependencies);
+  if (caller.kind === "gateway") return;
+  if (caller.conversationId && !caller.via) {
+    const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+    if (seats.some((seat) => seat.conversationId === caller.conversationId)) return;
+  }
+  throw new McpToolRefusal("only a designated orchestrator seat or the voice gateway may relay to an orchestrator", {
+    code: "orchestrator_relay_refused", retryable: false,
+  });
 }
 
 function bindSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpRequestBindingInput {
