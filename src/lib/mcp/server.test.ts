@@ -1875,6 +1875,24 @@ test("#774 tool schemas publish the closed sets their servers enforce", () => {
   }).success).toBe(false);
 });
 
+test("seat_tick_settings publishes the panel instruction contract through tools/list", async () => {
+  const bindings = Object.fromEntries(MCP_TOOL_NAMES.map((name) => [name, async () => ({})])) as unknown as McpToolBindings;
+  const server = createViewerMcpServer(createMcpToolService(bindings, new MemoryMcpReceiptStore()));
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "tick-contract-test", version: "1.0.0" });
+  try {
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const tool = (await client.listTools()).tools.find((entry) => entry.name === "seat_tick_settings")!;
+    expect(tool.description).toContain("operator instructions on every scheduler-fired wake");
+    expect(tool.inputSchema.properties!.reason).toMatchObject({
+      description: TOOL_INPUT_SCHEMAS.seat_tick_settings.shape.reason.description,
+    });
+    expect(JSON.stringify(tool.inputSchema.properties!.reason)).toContain("every wake");
+    expect(TOOL_INPUT_SCHEMAS.seat_tick_settings.safeParse({ clientRequestId: "instruction-contract", reason: "Prioritize incoming tasks." }).success).toBe(true);
+    expect(TOOL_INPUT_SCHEMAS.seat_tick_settings.safeParse({ clientRequestId: "instruction-clear", reason: null }).success).toBe(true);
+  } finally { await client.close(); await server.close(); }
+});
+
 /* ── ORIGINAL-KEY RECOVERY (#1490) ─────────────────────────────────────── */
 
 import {

@@ -89,6 +89,7 @@ import { deployTaskChanges, projectSnapshots } from "@/lib/bridge/taskChanges";
 import { renderTelegram, type PullRequestLookup } from "@/lib/bridge/telegramReport";
 import { projectDisplayName } from "@/lib/displayNames";
 import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
+import { orchestratorRelayPayload } from "@/lib/orchestrator/relay";
 import { agentRecordAuthors, type AgentRecordAuthor } from "@/lib/runtime/agentRecordAuthors";
 import { forgeCacheView } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
@@ -1482,6 +1483,7 @@ async function sendMessage(
     Partial<Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority">>,
   context?: McpToolCallContext,
   downstreamKey = sendDownstreamKey(requestId(args)),
+  orchestratorRelayProject?: string,
 ): Promise<McpToolPayload> {
   const conversationId = text(args.conversationId);
   const transcriptPath = text(args.transcriptPath) || text(args.path);
@@ -1489,7 +1491,7 @@ async function sendMessage(
   const message = requiredMessageText(args);
   let outcome: Record<string, unknown>;
   try {
-    outcome = await dispatchControl(control)("/api/tmux", {
+    outcome = await dispatchControl(control)(orchestratorRelayProject ? "/api/orchestrator/message" : "/api/tmux", {
       pid: null,
       path: transcriptPath,
       ...(conversationId ? { conversationId } : {}),
@@ -1500,6 +1502,7 @@ async function sendMessage(
       /* #1117: an MCP send is inter-agent traffic by definition; the sender role
          is the server's own caller attribution, so the feed can say WHO relayed. */
       origin: mcpSenderOrigin(dependencies),
+      ...(orchestratorRelayProject ? { project: orchestratorRelayProject } : {}),
     }, callerCapabilityHeaders());
   } catch (error) {
     /* #2020: the Viewer's own answer that it refused before reserving
@@ -4274,6 +4277,7 @@ async function sendMessageToOrchestrator(
   dependencies: ViewerMcpDomainDependencies,
   context?: McpToolCallContext,
 ): Promise<McpToolPayload> {
+  requireOrchestratorRelayCaller(dependencies);
   const project = canonicalOrchestratorProject(required(args, "project"));
   requiredMessageText(args);
   const key = requestId(args);
@@ -4310,7 +4314,7 @@ async function sendMessageToOrchestrator(
       conversationId: recipient,
       transcriptPath: seat?.conversationId === recipient ? seat.path : undefined,
       path: undefined,
-    }, control, dependencies, context, orchestratorSendDownstreamKey(key));
+    }, control, dependencies, context, orchestratorSendDownstreamKey(key), project);
     return redactPayload({
       ...outcome, project, created,
       // Seat metadata describes only the recipient this dispatch actually used.
@@ -6055,15 +6059,45 @@ function orchestratorSendDownstreamKey(key: string): string {
 }
 
 function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpRequestBindingInput {
+  requireOrchestratorRelayCaller(dependencies);
   const project = canonicalOrchestratorProject(required(args, "project"));
-  requiredMessageText(args);
+  const message = requiredMessageText(args);
+  const caller = recoveryCaller(dependencies);
+  const attribution = attributionOf(dependencies);
+  // Match HTTP admission: a designated seat takes precedence even when the
+  // root caller's general attribution also identifies it as the voice gateway.
+  const seat = (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
+    .find((candidate) => candidate.conversationId === attribution.conversationId);
+  if (!seat && (attribution.kind !== "gateway" || !attribution.conversationId)) {
+    throw new McpToolRefusal("the relay sender could not be bound to an authenticated conversation", {
+      code: "orchestrator_relay_refused", retryable: false,
+    });
+  }
   return {
-    caller: recoveryCaller(dependencies),
+    // Relay receipts belong to the exact sender, never its successor seat.
+    caller: { kind: caller.kind, conversationId: caller.conversationId, project: caller.project },
     target: { project, identity: orchestratorSeatFor(project).active?.conversationId ?? null },
+    sendPayload: seat ? orchestratorRelayPayload(message, seat) : {
+      text: message, origin: { kind: "agent", role: "gateway", conversationId: attribution.conversationId! },
+    },
     // Separate from direct send: equal client keys on different tools are
     // different logical instructions, even when their message text is equal.
     downstreamKey: orchestratorSendDownstreamKey(requestId(args)),
   };
+}
+
+/** The gateway keeps its existing relay path. A seat gets messaging only:
+    auto-creation still goes through the unchanged operator-only seat route. */
+function requireOrchestratorRelayCaller(dependencies: ViewerMcpDomainDependencies): void {
+  const caller = attributionOf(dependencies);
+  if (caller.kind === "gateway") return;
+  if (caller.conversationId && !caller.via) {
+    const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+    if (seats.some((seat) => seat.conversationId === caller.conversationId)) return;
+  }
+  throw new McpToolRefusal("only a designated orchestrator seat or the voice gateway may relay to an orchestrator", {
+    code: "orchestrator_relay_refused", retryable: false,
+  });
 }
 
 function bindSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpRequestBindingInput {
@@ -6132,11 +6166,15 @@ async function recoverSend(
   if (legacy) {
     return { outcome: "unknown", evidence: "legacy-receipt-unbound", reason: "no durable evidence establishes the owner of this send", ids: {}, ownership: "unknown" };
   }
+  if (binding.toolName === "send_message_to_orchestrator" && !binding.sendPayload) {
+    return { outcome: "unknown", evidence: "delivery-record", reason: "the relay binding has no authenticated send payload", ids: {}, ownership: "unknown" };
+  }
   if (!binding.target.identity) {
     return { outcome: "unknown", evidence: "none", reason: "the bound target names no conversation", ids: {} };
   }
   const ports: SendSettlementPorts = dependencies.sendSettlementPorts?.() ?? {};
-  const found = await resolveOriginalSend({ conversationId: binding.target.identity, clientMessageId: binding.downstreamKey, ...(typeof args?.text === "string" ? { text: args.text } : {}) }, ports);
+  const found = await resolveOriginalSend({ conversationId: binding.target.identity, clientMessageId: binding.downstreamKey,
+    ...(binding.sendPayload ?? (typeof args?.text === "string" ? { text: args.text } : {})) }, ports);
   if (found.kind === "unreadable") {
     return { outcome: "unknown", evidence: "delivery-record", reason: `the delivery record could not be read: ${found.reason}`, ids: {} };
   }

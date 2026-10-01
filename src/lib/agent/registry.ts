@@ -91,7 +91,7 @@ import {
 import { identityMaterializationFence } from "./identityMaterialization";
 import type { ResumePaneRecord } from "@/lib/resumePanesFile";
 import type { RuntimeDeliveryMode } from "@/lib/runtime/contracts";
-import { parseMessageOrigin } from "@/lib/runtime/messageOrigin";
+import { parseMessageOrigin, sameMessageOrigin } from "@/lib/runtime/messageOrigin";
 import { normalizePendingPermissions, type PendingPermissionRequest } from "@/lib/runtime/permissionRequests";
 import type { ProviderRetryEvidence } from "@/lib/runtime/engineHost";
 import { assertStructuredTextEnvelope, parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "@/lib/runtime/structuredContent";
@@ -2610,6 +2610,23 @@ function inspectDeliveryReservation(
     resolveConversationAlias(file, item.conversationId) === canonicalId
     && item.clientMessageId === clientMessageId) : undefined;
   const requestedCommand = canonicalHeldDeliveryCommand(commandInput, existing?.id ?? "pending-delivery");
+  // An identified relay owns its receipt as that authenticated sender. Ordinary
+  // historical sends retain their stamp-upgrade compatibility, but neither an
+  // operator nor another sender can acquire a relay's reservation (or vice versa).
+  const boundRelay = (command: HeldDeliveryCommand): boolean => command.origin?.kind === "agent"
+    && (command.origin.role === "orchestrator" || command.origin.role === "gateway")
+    && Boolean(command.origin.conversationId);
+  const sameRelayOwner = (command: HeldDeliveryCommand): boolean =>
+    (!boundRelay(command) && !boundRelay(requestedCommand))
+    || sameMessageOrigin(command.origin, requestedCommand.origin);
+  if (existing && !sameRelayOwner(existing.command)) throw new DeliveryReservationConflictError();
+  // Reservation retention must not release an authenticated author's key.
+  // Check the longer-lived owner even when a new caller has no operation ID,
+  // before the runtime journal can replay another author's receipt under it.
+  if (clientMessageId && conversationRows(file, "deliveryOperationOwners", canonicalId)
+    .some(owner => owner.clientMessageId === clientMessageId && !sameRelayOwner(owner.command))) {
+    throw new DeliveryReservationConflictError();
+  }
   const requestDigest = heldDeliveryRequestDigest(canonicalId, text, requestedCommand);
   const requestedDigests = heldDeliveryRequestDigests(file, canonicalId, text, requestedCommand);
   const payloadChanged = Boolean(
@@ -2648,6 +2665,7 @@ function inspectDeliveryReservation(
     const matchingOwner = operationOwner
       && resolveConversationAlias(file, operationOwner.conversationId) === canonicalId
       && operationOwner.clientMessageId === clientMessageId
+      && sameRelayOwner(operationOwner.command)
       && requestedDigests.has(operationOwner.requestDigest)
       && (!operationOwner.contentDigest || !contentDigest || operationOwner.contentDigest === contentDigest);
     if (operationOwner && !matchingOwner) {
