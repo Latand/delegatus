@@ -6,7 +6,7 @@
     "seatAfter": "0",
     "pressed": "true",
     "topBefore": 207,
-    "topAfter": 840,
+    "topAfter": 207,
     "chip": {
       "text": "About the task:Worker waiting for a seat",
       "width": 654,
@@ -32,7 +32,7 @@
     "seatAfter": "0",
     "pressed": "true",
     "topBefore": 207,
-    "topAfter": 840,
+    "topAfter": 207,
     "chip": {
       "text": "Про задачу:Worker waiting for a seat",
       "width": 654,

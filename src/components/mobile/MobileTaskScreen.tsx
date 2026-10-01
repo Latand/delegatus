@@ -649,7 +649,10 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
      screen is pushed over the board, so ‹ from the seat comes back here. */
   const askOrchestrator = () => {
     if (!task) return;
-    addTaskChip(props.project, { id: task.id, title: receiptTitle, color: task.color ?? null, icon: task.icon ?? null });
+    if (!addTaskChip(props.project, { id: task.id, title: receiptTitle, color: task.color ?? null, icon: task.icon ?? null })) {
+      showReceipt(t("taskChip.full"), null, { error: true });
+      return;
+    }
     void designatedManagerConversationId(props.project).then((seatId) => {
       const seat = seatId ? files.find((entry) => entry.conversationId === seatId) : undefined;
       if (seat) props.onOpenConversation(seat);

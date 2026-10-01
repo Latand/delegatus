@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useSyncExternalStore } from "react";
 
-import type { SelectedTaskRef } from "@/lib/selection/selectedContext";
+import { MAX_SELECTED_TASKS, type SelectedTaskRef } from "@/lib/selection/selectedContext";
 import { designatedManagerConversationId } from "@/components/voice/managerIdentity";
 import type { TaskColor } from "@/lib/tasks/types";
 
@@ -13,8 +13,9 @@ import type { TaskColor } from "@/lib/tasks/types";
  * A card's «Ask the orchestrator» button adds a chip here; the composer of that
  * project's seat draws the list above its input and carries it with the next
  * send as `selectedContext.tasks`. The chips are references the operator has
- * not sent yet, so they live in memory beside the draft and are gone with the
- * tab, exactly as an unsent draft's attachments are.
+ * not sent yet, so they live beside the draft: in memory, written through to
+ * this tab's session storage, which is where the composer keeps the draft they
+ * belong to. A reload brings both back; closing the tab drops both.
  *
  * One module-level store rather than props: the button sits on a board card and
  * the composer sits in the seat, two subtrees with no parent between them that
@@ -32,8 +33,13 @@ export interface TaskChip {
   icon?: string | null;
 }
 
+/** Chips one message can carry: what the wire accepts, so none is dropped unsent. */
+export const MAX_TASK_CHIPS = MAX_SELECTED_TASKS;
+
 const NONE: readonly TaskChip[] = Object.freeze([]);
 const byProject = new Map<string, readonly TaskChip[]>();
+/** Projects whose stored list has been read into `byProject` (or cleared). */
+const loaded = new Set<string>();
 const listeners = new Set<() => void>();
 const focusListeners = new Set<(project: string) => void>();
 const openListeners = new Set<(request: TaskChipOpenRequest) => void>();
@@ -42,27 +48,72 @@ function emit(): void {
   for (const listener of [...listeners]) listener();
 }
 
+export const taskChipsStorageKey = (project: string): string => `llv:task-chips:v1:${project}`;
+
+function storage(): Storage | null {
+  try { return typeof sessionStorage === "undefined" ? null : sessionStorage; }
+  catch { return null; }
+}
+
+function stored(project: string): readonly TaskChip[] {
+  try {
+    const value: unknown = JSON.parse(storage()?.getItem(taskChipsStorageKey(project)) ?? "[]");
+    if (!Array.isArray(value)) return NONE;
+    const seen = new Set<string>();
+    const chips: TaskChip[] = [];
+    for (const entry of value) {
+      if (chips.length >= MAX_TASK_CHIPS) break;
+      if (!entry || typeof entry !== "object") continue;
+      const { id, title, color, icon } = entry as Record<string, unknown>;
+      if (typeof id !== "string" || !id || typeof title !== "string" || seen.has(id)) continue;
+      seen.add(id);
+      chips.push({ id, title, ...(typeof color === "string" && color ? { color: color as TaskColor } : {}), ...(typeof icon === "string" && icon ? { icon } : {}) });
+    }
+    return chips.length ? chips : NONE;
+  } catch {
+    return NONE;
+  }
+}
+
+function persist(project: string, next: readonly TaskChip[]): void {
+  try {
+    if (next.length) storage()?.setItem(taskChipsStorageKey(project), JSON.stringify(next));
+    else storage()?.removeItem(taskChipsStorageKey(project));
+  } catch { /* a full or blocked storage costs the reload, never the chip */ }
+}
+
 function set(project: string, next: readonly TaskChip[]): void {
+  loaded.add(project);
   if (next.length) byProject.set(project, next);
   else byProject.delete(project);
+  persist(project, next);
   emit();
 }
 
 /** This project's chips, in the order they were added. The same array until a
     chip is added or removed, so a subscribed render can skip. */
 export function readTaskChips(project: string): readonly TaskChip[] {
+  if (!loaded.has(project)) {
+    loaded.add(project);
+    const restored = stored(project);
+    if (restored.length) byProject.set(project, restored);
+  }
   return byProject.get(project) ?? NONE;
 }
 
 /** Attach a task to the project's orchestrator composer and ask the shell to
     show that composer. Adding a task already attached refreshes its title and
-    keeps its place. */
-export function addTaskChip(project: string, chip: TaskChip): void {
+    keeps its place. A list already at `MAX_TASK_CHIPS` refuses a new task and
+    answers false: the wire carries that many, and a chip the send would leave
+    behind unsent must never be taken for one that went. */
+export function addTaskChip(project: string, chip: TaskChip): boolean {
   const current = readTaskChips(project);
   const at = current.findIndex((entry) => entry.id === chip.id);
+  if (at < 0 && current.length >= MAX_TASK_CHIPS) return false;
   const clean: TaskChip = { id: chip.id, title: chip.title, ...(chip.color ? { color: chip.color } : {}), ...(chip.icon ? { icon: chip.icon } : {}) };
   set(project, at < 0 ? [...current, clean] : current.map((entry, index) => (index === at ? clean : entry)));
   for (const listener of [...focusListeners]) listener(project);
+  return true;
 }
 
 export function removeTaskChip(project: string, id: string): void {
@@ -87,6 +138,11 @@ export function taskChipRefs(chips: readonly TaskChip[]): SelectedTaskRef[] {
 /** Whether this task is attached to the project's orchestrator composer now. */
 export function useTaskChipAttached(project: string, id: string): boolean {
   return useTaskChips(project).some((chip) => chip.id === id);
+}
+
+/** Whether the project's list is at the cap, so a task not yet attached cannot join. */
+export function useTaskChipsFull(project: string): boolean {
+  return useTaskChips(project).length >= MAX_TASK_CHIPS;
 }
 
 export function subscribeTaskChips(listener: () => void): () => void {
@@ -152,8 +208,19 @@ export function onTaskChipOpen(listener: (request: TaskChipOpenRequest) => void)
   return () => { openListeners.delete(listener); };
 }
 
-/** Tests only. */
+/** Tests only: a clean store, memory and storage both. */
 export function resetTaskChipsForTests(): void {
+  for (const project of new Set([...byProject.keys(), ...loaded])) {
+    try { storage()?.removeItem(taskChipsStorageKey(project)); } catch { /* none */ }
+  }
   byProject.clear();
+  loaded.clear();
+  emit();
+}
+
+/** Tests only: what a page reload does to the module, memory gone and the tab's storage kept. */
+export function reloadTaskChipsForTests(): void {
+  byProject.clear();
+  loaded.clear();
   emit();
 }

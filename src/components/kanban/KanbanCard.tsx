@@ -27,7 +27,7 @@ import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLi
 
 import { isSeatTickNotice, requestSeatTickPanel } from "@/components/orchestrator/openSeatTick";
 import { useSeatSignal } from "./kanbanSeatStore";
-import { useTaskChipAttached } from "@/components/orchestrator/taskChips";
+import { useTaskChipAttached, useTaskChipsFull } from "@/components/orchestrator/taskChips";
 import { askOrchestratorAboutTask } from "./askOrchestrator";
 import { CardInlineText, withinEdit, type CardEditField } from "./CardInlineText";
 import { CardDrafts } from "./KanbanDrafts";
@@ -890,6 +890,8 @@ function AskOrchestratorButton({ cardId, project, taskId, title, color, icon }: 
 }) {
   const { t } = useLocale();
   const attached = useTaskChipAttached(project, taskId);
+  /* The wire carries a bounded list: a card not yet attached cannot join a full one. */
+  const full = useTaskChipsFull(project) && !attached;
   return (
     <button
       type="button"
@@ -897,7 +899,8 @@ function AskOrchestratorButton({ cardId, project, taskId, title, color, icon }: 
       data-ask-orchestrator={cardId}
       aria-pressed={attached}
       aria-label={t("taskChip.askAria", { title })}
-      title={t(attached ? "taskChip.askOnHint" : "taskChip.askHint")}
+      title={t(attached ? "taskChip.askOnHint" : full ? "taskChip.full" : "taskChip.askHint")}
+      disabled={full}
       onClick={(event) => askOrchestratorAboutTask(event.currentTarget.closest<HTMLElement>(".card"), project, { id: taskId, title: cleanTitle(title, 80), color, icon }, attached)}
     >
       <Bot aria-hidden /> {t("taskChip.ask")}
