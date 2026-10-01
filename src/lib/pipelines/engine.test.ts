@@ -1105,8 +1105,9 @@ test("a new owner reviews the commit published after the producer turn ends", as
   }
 });
 
-for (const pinned of [false, true]) {
-  test(`successor provisioning records its backup and respects the caller's base pin (${pinned})`, async () => {
+for (const pin of ["automatic", "explicit", "legacy-draft"] as const) {
+  const pinned = pin !== "automatic";
+  test(`successor provisioning records its backup and respects the caller's base pin (${pin})`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provision-published-"));
     const repo = path.join(root, "repo");
     const origin = path.join(root, "origin.git");
@@ -1139,10 +1140,17 @@ for (const pinned of [false, true]) {
       h.ports.provisionExec = realProvisionExec;
       const created = await createPipelineFromRequest({
         task: "Published successor", repoDir: repo, ...(pinned ? { baseRef: base } : {}),
+        ...(pin === "legacy-draft" ? { autoStart: false } : {}),
         delivery: { branch: "refs/heads/feature/provision" },
         stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: null }],
       }, h.ports);
       if (!created.pipeline) throw new Error(created.error);
+      if (pin === "legacy-draft") {
+        const legacy = loadPipelines().find((item) => item.id === created.pipeline!.id)!;
+        delete legacy.baseRefPinned;
+        savePipelines([legacy]);
+        expect(await patchPipeline(legacy.id, { action: "start" }, h.ports)).toMatchObject({ pipeline: { state: "provisioning" } });
+      }
       await tickPipelines([], h.ports);
       const lane = loadPipelines().find((item) => item.id === created.pipeline!.id)!;
       expect(lane.state).toBe("running");

@@ -7941,6 +7941,8 @@ export async function patchPipeline(
          every other writer waits on. The controller resolves it instead, the
          same way it does for a lane created without `baseRef`. */
       const unresolved = !pipeline.baseBranch || !pipeline.baseRef || !pipeline.lastPassedCommit;
+      // Before the pin marker existed, only an explicit base resolved a draft.
+      if (!unresolved && pipeline.baseRefPinned === undefined) pipeline.baseRefPinned = true;
       pipeline.state = "provisioning";
       pipeline.stateDetail = unresolved ? PIPELINE_BASE_UNRESOLVED_DETAIL : null;
     } else if (req.action === "update-draft") {
