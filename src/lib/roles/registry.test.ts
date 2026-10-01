@@ -7,6 +7,17 @@ import { ORCHESTRATOR_TASK_OWNERSHIP_HEADING } from "@/lib/orchestrator/prompt";
 
 import { APPLY_FIXES_GUIDANCE, listRoles, resolveRole, resolveSpawnRole, roleFenceBlock, roleScaffoldBody, roleSpawnPrompt, SPAWN_COMPLETION } from "./registry";
 
+test("maintainer preserves review and release ownership and treats retired seats as history", () => {
+  const resolved = resolveRole("maintainer");
+  if (!resolved.ok) throw new Error(resolved.error);
+  expect(resolved.value.prompt).toContain("A task with an open pull request stays assigned");
+  expect(resolved.value.prompt).toContain("A release or deployment the orchestrator seat is carrying stays assigned");
+  expect(resolved.value.prompt).toContain('status: "done", hide: true, board: "hidden"');
+  expect(resolved.value.prompt).toContain("neither the current nor pending seat");
+  expect(resolved.value.prompt).toContain("Never move a retired seat card to inbox");
+  expect(resolved.value.prompt).toContain("Hide only a confirmed retired orchestrator seat card");
+});
+
 test("role registry exposes the nine role ids and campaign-ready orchestrator config", () => {
   const roles = listRoles();
 

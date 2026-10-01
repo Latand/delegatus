@@ -27,6 +27,24 @@ test("off, no seat, live run and deploy defer without spending the slot", async 
   h.sources.latestDeployment = () => ({ state: "ok", value: null });
   await h.controller.launchIfDue(input()); await h.controller.launchIfDue(input()); expect(h.bodies).toHaveLength(1);
 });
+test("wakes off spends no maintenance slot, and resuming wakes launches once", async () => {
+  const h = harness();
+  const paused = input(); paused.settings.enabled = false;
+  expect(await h.controller.launchIfDue(paused)).toContain("wakes are off");
+  expect(readMaintenanceProject(PROJECT)).toBeNull(); expect(tasks()).toHaveLength(0);
+  await h.controller.launchIfDue(input()); await h.controller.launchIfDue(input());
+  expect(h.bodies).toHaveLength(1);
+});
+test("a recovered claim waits while wakes are off without dispatching or losing its key", async () => {
+  const h = harness(); const run = claim();
+  const originalSettings = h.sources.settings;
+  h.sources.settings = project => ({ ...originalSettings(project), enabled: false });
+  expect(await h.controller.reconcile(PROJECT)).toContain("wakes are off");
+  expect(h.bodies).toHaveLength(0); expect(tasks()).toHaveLength(0);
+  h.sources.settings = originalSettings;
+  await h.controller.reconcile(PROJECT);
+  expect(h.bodies[0].clientAttemptId).toBe(run.runId);
+});
 test("card exists before spawn, with icon, colour, description and task binding in body", async () => {
   const h = harness(); await h.controller.launchIfDue(input());
   const run = h.run(), card = tasks().find(t => t.id === run.taskId)!;

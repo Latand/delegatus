@@ -71,7 +71,7 @@ function maintenance(): SeatTickSettingsAnswer["maintenance"] {
   const base: SeatTickSettingsAnswer["maintenance"] = {
     enabled: false, intervalHours: 3, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168,
     updatedAt: null, setBy: null, live: null, lastRun: null,
-    nextEligibleAt: null, nextRunAt: null, waitingOn: "off", runsError: null,
+    nextEligibleAt: null, nextRunAt: null, waitingOn: "off", pauseReason: null, runsError: null,
   };
   const ended = (state: "succeeded" | "failed") => ({
     runId: "run-evidence", taskId: "task-evidence", conversationId: null, state,

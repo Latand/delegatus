@@ -24,7 +24,7 @@ function answer(overrides: Partial<SeatTickSettingsAnswer> = {}): SeatTickSettin
     maintenance: {
       enabled: false, intervalHours: 3, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168,
       updatedAt: null, setBy: null, live: null, lastRun: null,
-      nextEligibleAt: null, nextRunAt: null, waitingOn: "off", runsError: null,
+      nextEligibleAt: null, nextRunAt: null, waitingOn: "off", pauseReason: null, runsError: null,
     },
     project: "viewer",
     changed: false,
