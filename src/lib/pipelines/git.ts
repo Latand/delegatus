@@ -109,6 +109,14 @@ export function provisionPipelineWorktree(pipeline: Pipeline, exec: ExecPort): P
   return { ok: true, sha: pipeline.baseRef, baseBranch: pipeline.baseBranch };
 }
 
+/** Git canonicalizes a worktree's parent path in its registration. */
+function worktreePathMatches(registeredPath: string | undefined, lanePath: string): boolean {
+  if (!registeredPath) return false;
+  if (registeredPath === lanePath) return true;
+  try { return fs.realpathSync(registeredPath) === fs.realpathSync(lanePath); }
+  catch { return false; } // A missing path cannot prove this is the lane's checkout.
+}
+
 /** Provisioning alone uses this asynchronous port; stage Git keeps ExecPort. */
 export type ProvisionExecPort = (command: string, args: string[], cwd: string, signal?: AbortSignal) => Promise<ExecResult>;
 
@@ -178,14 +186,14 @@ export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: P
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   const deliveryBranch = pipeline.delivery?.disposition === "owner"
     ? pipeline.delivery.target.branch.replace(/^refs\/heads\//, "") : pipeline.branch;
-  // A pre-existing pipeline ref identifies an older checkout. New owners use
-  // the delivery ref directly, so no second branch can become a review fence.
-  const branch = legacy.code === 0 ? pipeline.branch : deliveryBranch;
+  // Preserve older lane refs. A delivery ref held by another worktree uses a
+  // lane ref too; publication still fences and writes the delivery target.
+  let branch = legacy.code === 0 ? pipeline.branch : deliveryBranch;
   if (!validPipelineBranch(branch)) return { ok: false, error: "the pipeline branch is invalid" };
   const localRef = await exec("git", ["rev-parse", "--verify", `refs/heads/${branch}^{commit}`], pipeline.repoDir, signal);
   const localSha = localRef.code === 0 ? localRef.stdout.trim() : null;
   let remoteSha: string | null = null;
-  if (branch !== pipeline.branch && pipeline.delivery?.target.remote) {
+  if (deliveryBranch !== pipeline.branch && pipeline.delivery?.target.remote) {
     const remote = pipeline.delivery.target.remote;
     const ref = pipeline.delivery.target.branch;
     const probe = await exec("git", ["ls-remote", "--heads", remote, ref], pipeline.repoDir, signal);
@@ -212,7 +220,25 @@ export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: P
   const addArgs = localSha
     ? ["worktree", "add", pipeline.worktreeDir, branch]
     : ["worktree", "add", "-b", branch, pipeline.worktreeDir, start];
-  const add = await exec("git", addArgs, pipeline.repoDir, signal);
+  let add = await exec("git", addArgs, pipeline.repoDir, signal);
+  if (!signal?.aborted && add.code !== 0 && !add.signal && add.code !== null && !killedAtBound(add)) {
+    const listing = await exec("git", ["worktree", "list", "--porcelain", "-z"], pipeline.repoDir, signal);
+    if (listing.code !== 0) return failure("checking which worktree holds the pipeline branch", listing);
+    const holder = listing.stdout.split("\0\0").map((record) => record.split("\0"))
+      .find((fields) => fields.includes(`branch refs/heads/${branch}`)
+        && !worktreePathMatches(fields.find((field) => field.startsWith("worktree "))?.slice("worktree ".length), pipeline.worktreeDir));
+    if (holder) {
+      const holdingPath = holder.find((field) => field.startsWith("worktree "))?.slice("worktree ".length);
+      if (branch === pipeline.branch) {
+        return { ok: false, error: `pipeline branch ${branch} is held by worktree ${holdingPath}; choose a new pipeline branch/worktree or resume its owning lane; the holding worktree was left untouched` };
+      }
+      branch = pipeline.branch;
+      if (!validPipelineBranch(branch)) return { ok: false, error: "the pipeline branch is invalid" };
+      add = await exec("git", ["worktree", "add", "-b", branch, pipeline.worktreeDir, start], pipeline.repoDir, signal);
+      if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+      if (add.code !== 0) return { ok: false, error: `delivery branch ${deliveryBranch} is held by worktree ${holdingPath}; creating lane branch ${branch} failed; resolve the lane branch/path conflict and retry provisioning: ${(add.stderr || add.stdout).trim()}` };
+    }
+  }
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   if (killedAtBound(add)) return { ok: false, error: "git worktree add: checkout interrupted or timed out after 60s" };
   if (add.signal || add.code === null) return failure("git worktree add interrupted", add);
@@ -252,7 +278,7 @@ export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: P
   const base = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir, signal);
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   if (base.code !== 0 || !base.stdout.trim()) return failure("resolving the pipeline base ref", base);
-  if (branch === pipeline.branch && base.stdout.trim() !== pipeline.baseRef) {
+  if (deliveryBranch === pipeline.branch && base.stdout.trim() !== pipeline.baseRef) {
     return { ok: false, error: "the pipeline worktree does not match its persisted base" };
   }
   if (base.stdout.trim() !== expectedHead) {
