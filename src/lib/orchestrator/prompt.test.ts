@@ -77,8 +77,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 32, and a v31 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(32);
+test("the default mandate is at version 33, and a v32 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(33);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -108,7 +108,8 @@ test("the default mandate is at version 32, and a v31 seat reads as stale", () =
      risk-based review budgets and the default of three rounds. */
   expect(orchestratorMandateStale(30)).toBe(true);
   expect(orchestratorMandateStale(31)).toBe(true);
-  expect(orchestratorMandateStale(32)).toBe(false);
+  expect(orchestratorMandateStale(32)).toBe(true);
+  expect(orchestratorMandateStale(33)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -147,6 +148,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   30: "9743e8688175e3e08fd07d54df961ff363b8798b049d50ff11973e7bf2624e69",
   31: "e1583b032cf61e67f50b486172f974ae2a2ae03649cc666b0738b010247c106d",
   32: "032c79825baef89c4f62fca96d0eeb5ac9f3f5a68aea62f316ce19d408d42e74",
+  33: "651f90a57a1921b41e14a536a4178a7e47b45028ca9224dbfbd9f8fd9ec0d821",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -460,12 +462,9 @@ test("no retired task-binding claim survives in the ownership directive", () => 
   /* A reviewer spawn that names a parent joins the parent's card beside the
      reviewed work's (membership.test.ts), so reviewer spawns pass taskId too. */
   expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE).not.toContain("A review flow or a reviewer spawn inherits");
-  /* A spawn's explicit target carries its own project and a single foreign id
-     is admitted (pinned in membership.test.ts), so the mandate must not promise
-     a refusal there — a manager acting on that promise binds an agent to
-     another project's card and is told nothing. */
   expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE)
-    .not.toContain("or a task in another project, refuses the launch before any agent starts");
+    .toContain("create_pipeline and spawn_agent both refuse a task belonging to another project");
+  expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE).not.toContain("takes the id as given");
   /* No invented id shape: the mandate must never teach a format the board does
      not mint. */
   expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE).not.toContain('"task_');
