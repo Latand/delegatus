@@ -416,7 +416,7 @@ test("cached successful sync ages to stale while metadata reads fail", async () 
     serve({ status: 200, body: {} }, { peers: [peer({ lastCall: now - 60_000 })], grants: [grant({ lastCall: now - 60_000 })] });
     await mount();
     expect(document.querySelectorAll('[data-linked-sync="synced"]')).toHaveLength(2);
-    globalThis.fetch = (async () => Response.json({ error: "unavailable" }, { status: 503 })) as typeof fetch;
+    globalThis.fetch = (async () => Response.json({ error: "unavailable" }, { status: 503 })) as unknown as typeof fetch;
     now += 20 * 60_000;
     await act(async () => { for (const tick of ticks) tick(); });
     await settle();
