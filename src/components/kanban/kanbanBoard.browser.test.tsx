@@ -14083,6 +14083,14 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     const out = path.resolve(".artifacts/seat-tick-instructions");
     fs.mkdirSync(out, { recursive: true });
     let storedReason = "a release afternoon";
+    /* Read once per case. The board stamps `until` and `updatedAt` from the clock, and a record whose stamps move
+       between two reads looks changed to the panel, which then discards the draft a refusal is meant to keep. */
+    let frozenAnswer = tickAnswer(storedReason);
+    const answerWith = (reason: string) => ({
+      ...frozenAnswer,
+      settings: { ...frozenAnswer.settings, reason },
+      effective: { ...frozenAnswer.effective, reason },
+    });
     let putRequests = 0;
     let releaseSettingsRead = () => {};
     let markSettingsReadStarted = () => {};
@@ -14104,7 +14112,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
           markSettingsReadStarted();
           await settingsReadGate;
         }
-        return Response.json(tickAnswer(storedReason));
+        return Response.json(answerWith(storedReason));
       },
       "/api/roles": rolesAnswer,
     });
@@ -14147,6 +14155,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
         const prefix = repeatedText.slice(0, 499).trimEnd();
         const text = `${prefix}${"x".repeat(500 - prefix.length)}`;
         storedReason = "a release afternoon";
+        frozenAnswer = tickAnswer(storedReason);
         settingsReadStarted = new Promise<void>((resolve) => { markSettingsReadStarted = resolve; });
         settingsReadGate = new Promise<void>((resolve) => { releaseSettingsRead = resolve; });
         const texts = cardTexts(lang);
@@ -14185,17 +14194,26 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
             await page.locator("[data-seat-tick-save]").click();
             const overLimitMessage = page.locator("[data-seat-tick-error]");
             await overLimitMessage.waitFor();
-            expect(await overLimitMessage.textContent()).toContain(lang === "en" ? "Instructions (reason) are 501 characters" : "Вказівки (reason) перевищують ліміт 500 символів: 501");
+            const overLimitError = await overLimitMessage.textContent();
+            expect(overLimitError).toContain(lang === "en" ? "«Instructions for every wake» is 501 characters" : "«Вказівки на кожне пробудження» перевищують ліміт 500 символів: 501");
+            expect(overLimitError, `${label} refusal names the field the panel shows`).not.toContain("(reason)");
+            expect(await field.inputValue(), `${label} the refused draft stays in the field`).toBe(`${text}x`);
+            expect(await page.locator("[data-seat-tick-character-count]").textContent(), `${label} the counter survives the refusal`).toContain(lang === "en" ? "501 / 500 characters" : "501 / 500 символів");
+            const overLimitReading = await page.locator("[data-seat-tick-character-count]").textContent();
             await page.screenshot({ path: path.join(SHOTS, `${label}-over-limit-refusal.png`) });
             await field.fill("");
             await page.locator("[data-seat-tick-enabled]").click();
             await page.locator("[data-seat-tick-save]").click();
             const requiredMessage = page.locator("[data-seat-tick-error]");
             await requiredMessage.waitFor();
-            expect(await requiredMessage.textContent()).toContain(lang === "en" ? "Instructions (reason) are required" : "Вказівки (reason) потрібні");
+            const requiredError = await requiredMessage.textContent();
+            expect(requiredError).toContain(lang === "en" ? "«Instructions for every wake» is required" : "«Вказівки на кожне пробудження» потрібні");
+            expect(requiredError, `${label} refusal names the field the panel shows`).not.toContain("(reason)");
+            if (lang === "en") expect(requiredError).not.toContain("the seat");
+            expect(await field.inputValue(), `${label} the emptied field stays empty after the refusal`).toBe("");
             await page.screenshot({ path: path.join(SHOTS, `${label}-missing-instructions-refusal.png`) });
             expect(pageErrors, `${label} errors while saving`).toEqual([]);
-            cases.push({ label, edited, saved, overLimit: await page.locator("[data-seat-tick-character-count]").textContent(), putRequests });
+            cases.push({ label, edited, saved, overLimit: overLimitReading, putRequests });
           } finally { await context.close(); }
         }
         {

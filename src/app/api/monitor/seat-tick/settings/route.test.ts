@@ -272,7 +272,7 @@ test("an identified caller that holds no seat and owns no project names none, ra
 
 test("the module's rules hold verbatim, and a refusal stores nothing", async () => {
   const refusals = [
-    [{ project: PROJECT, enabled: false }, "a reason is required when the tick is disabled or its wake interval is changed"],
+    [{ project: PROJECT, enabled: false }, "instructions (reason) are required when the tick is disabled or its wake interval changes"],
     [{ project: PROJECT, wakeIntervalMinutes: -5, reason: "why" }, "wakeIntervalMinutes must be a positive number of minutes, or null for the default"],
     [{ project: PROJECT, wakeIntervalMinutes: SEAT_TICK_MAX_WAKE_INTERVAL_MINUTES + 1, reason: "far too long" }, `must be at most ${SEAT_TICK_MAX_WAKE_INTERVAL_MINUTES}`],
     [{ project: PROJECT, monitorPrompt: "x".repeat(SEAT_TICK_PROMPT_LIMIT + 1) }, `the limit is ${SEAT_TICK_PROMPT_LIMIT}`],
