@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { realExec, type ExecPort, type ExecResult } from "@/lib/workflows/provision";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
@@ -582,6 +583,145 @@ export function pipelineWorktreeChanges(
     .map((line) => line.slice(3).split(" -> ").at(-1)!.trim())
     .filter((entry) => entry.length > 0);
   return { ok: true, paths: paths.slice(0, limit), truncated: paths.length > limit };
+}
+
+/** A repository's merge drivers are delivery policy, not evidence that content
+    survived. Shadow all merge attributes in a private bare repository that can
+    read the lane's objects but writes only its own temporary proof objects. */
+function compareStageTrees(pipeline: Pipeline, head: string, accepted: string, exec: ExecPort, policy: "text" | "union" = "text"): ExecResult {
+  const objects = exec("git", ["rev-parse", "--git-path", "objects"], pipeline.worktreeDir);
+  if (objects.code !== 0) return objects;
+  let proof: string | undefined;
+  try {
+    proof = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-tree-proof-"));
+    fs.mkdirSync(path.join(proof, "objects", "info"), { recursive: true });
+    fs.mkdirSync(path.join(proof, "refs"));
+    fs.mkdirSync(path.join(proof, "info"));
+    fs.writeFileSync(path.join(proof, "HEAD"), "ref: refs/heads/proof\n");
+    fs.writeFileSync(path.join(proof, "config"), "[core]\n\tbare = true\n");
+    fs.writeFileSync(path.join(proof, "objects", "info", "alternates"), `${JSON.stringify(path.resolve(pipeline.worktreeDir, objects.stdout.trim()))}\n`);
+    fs.writeFileSync(path.join(proof, "info", "attributes"), `* merge=${policy}\n`);
+    return exec("git", [`--git-dir=${proof}`, "merge-tree", "--write-tree", "--name-only", "-z", "--no-messages", head, accepted], pipeline.worktreeDir, {
+      GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_COUNT: "0", GIT_ATTR_NOSYSTEM: "1",
+      GIT_CONFIG_PARAMETERS: undefined,
+      GIT_COMMON_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined,
+      GIT_OBJECT_DIRECTORY: undefined, GIT_ALTERNATE_OBJECT_DIRECTORIES: undefined,
+    });
+  } catch (error) {
+    return { code: 128, stdout: "", stderr: `isolating the accepted content comparison: ${String(error)}` };
+  } finally {
+    if (proof) fs.rmSync(proof, { recursive: true, force: true });
+  }
+}
+
+/** Union proves additions fit; separately prove it did not restore accepted
+    deletions. Count every line removed in accepted history against the final
+    accepted snapshot, including deletions inside files first added by a lane. */
+function acceptedDeletionsPreserved(pipeline: Pipeline, base: string, head: string, accepted: string, files: string[], exec: ExecPort):
+  { ok: true; preserved: boolean } | { ok: false; error: string } {
+  const counts = (text: string) => {
+    const result = new Map<string, number>();
+    for (const line of text.split("\n")) result.set(line, (result.get(line) ?? 0) + 1);
+    return result;
+  };
+  for (const file of files) {
+    const contents: string[] = [];
+    for (const revision of [accepted, head]) {
+      const entry = exec("git", ["--literal-pathspecs", "ls-tree", "-z", revision, "--", file], pipeline.worktreeDir);
+      if (entry.code !== 0) return failure("checking accepted content type", entry);
+      if (!/^100(?:644|755) blob [0-9a-f]{40}\t/.test(entry.stdout)) return { ok: true, preserved: false };
+      const blob = exec("git", ["cat-file", "blob", `${revision}:${file}`], pipeline.worktreeDir);
+      if (blob.code !== 0) return failure("reading accepted content", blob);
+      // ExecPort decodes UTF-8. Fail closed when that cannot faithfully prove
+      // binary or undecodable content, rather than compare replacement bytes.
+      if (blob.stdout.includes("\0") || blob.stdout.includes("\uFFFD")) return { ok: true, preserved: false };
+      contents.push(blob.stdout);
+    }
+    const history = exec("git", ["--literal-pathspecs", "log", "--full-history", "-m", "--format=", "--patch", "--unified=0",
+      "--text", "--output-indicator-old=-", "--output-indicator-new=+", "--output-indicator-context= ",
+      "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", `${base}..${accepted}`, "--", file], pipeline.worktreeDir);
+    if (history.code !== 0) return failure("checking accepted deletion history", history);
+    const removed = new Set<string>();
+    let inHunk = false;
+    for (const line of history.stdout.split("\n")) {
+      if (line.startsWith("diff --git ")) inHunk = false;
+      else if (line.startsWith("@@ ")) inHunk = true;
+      else if (inHunk && line.startsWith("-")) removed.add(line.slice(1));
+    }
+    const acceptedCounts = counts(contents[0]);
+    const headCounts = counts(contents[1]);
+    if ([...removed].some((line) => (headCounts.get(line) ?? 0) > (acceptedCounts.get(line) ?? 0))) {
+      return { ok: true, preserved: false };
+    }
+  }
+  return { ok: true, preserved: true };
+}
+
+/** Preserve accepted content across a history rewrite. A three-way merge must
+    add nothing to the builder's tree: patch equivalence alone would also accept
+    a cherry-pick followed by a revert. Record the same tree and two parents as
+    an `ours` merge, with a compare-and-swap ref update so a concurrent commit
+    cannot be overwritten. The existing delivery publisher still owns pushing. */
+export function reconcilePipelineStageHead(pipeline: Pipeline, head: string, exec: ExecPort): PipelineGitResult {
+  const accepted = pipeline.lastPassedCommit;
+  if (!/^[0-9a-f]{40}$/i.test(head) || !/^[0-9a-f]{40}$/i.test(accepted)) {
+    return { ok: false, error: "reconciling stage history requires exact commit SHAs" };
+  }
+  const local = currentPipelineBranchHead(pipeline, exec);
+  if (!local.ok) return local;
+  if (local.sha !== head) return { ok: false, error: "the stage head moved before history reconciliation" };
+  const branch = exec("git", ["symbolic-ref", "HEAD"], pipeline.worktreeDir);
+  if (branch.code !== 0) return failure("pinning the reconciliation branch", branch);
+  const ref = branch.stdout.trim();
+  const tree = exec("git", ["rev-parse", `${head}^{tree}`], pipeline.worktreeDir);
+  if (tree.code !== 0) return failure("reading the stage tree", tree);
+  let merged = compareStageTrees(pipeline, head, accepted, exec);
+  if (merged.code !== 0 && merged.code !== 1) return failure("comparing accepted stage content", merged);
+  if (merged.code === 1) {
+    const conflicts = merged.stdout.split("\0").slice(1).filter(Boolean);
+    const bases = exec("git", ["merge-base", "--all", head, accepted], pipeline.worktreeDir);
+    if (bases.code !== 0) return failure("finding the accepted stage merge base", bases);
+    const base = bases.stdout.trim();
+    if (conflicts.length > 0 && /^[0-9a-f]{40}$/i.test(base)) {
+      // Shared accepted additions can conflict with a builder's extension.
+      // Union must reproduce HEAD exactly, and accepted removals must remain.
+      const union = compareStageTrees(pipeline, head, accepted, exec, "union");
+      if (union.code !== 0 && union.code !== 1) return failure("comparing accepted file additions", union);
+      if (union.code === 0 && union.stdout.split("\0")[0].trim() === tree.stdout.trim()) {
+        const deletions = acceptedDeletionsPreserved(pipeline, base, head, accepted, conflicts, exec);
+        if (!deletions.ok) return deletions;
+        if (deletions.preserved) merged = union;
+      }
+    }
+  }
+  if (merged.code !== 0 || merged.stdout.split("\0")[0].trim() !== tree.stdout.trim()) {
+    const cherry = exec("git", ["cherry", head, accepted], pipeline.worktreeDir);
+    if (cherry.code !== 0) return failure("identifying dropped accepted commits", cherry);
+    let dropped = cherry.stdout.split("\n").filter((line) => line.startsWith("+ ")).map((line) => line.slice(2).trim());
+    // Equivalent patches can have been reverted later, and merge commits have
+    // no cherry patch-id. Name the accepted-only history when cherry cannot.
+    if (dropped.length === 0) {
+      const commits = exec("git", ["rev-list", "--reverse", `${head}..${accepted}`], pipeline.worktreeDir);
+      if (commits.code !== 0) return failure("identifying changed accepted commits", commits);
+      dropped = commits.stdout.trim().split("\n").filter(Boolean);
+    }
+    return { ok: false, error: `stage head ${head} does not preserve accepted head ${accepted}; dropped accepted commits: ${dropped.join(", ")}; accepted content is missing or conflicts with the stage tree` };
+  }
+  const commit = exec("git", ["commit-tree", tree.stdout.trim(), "-p", head, "-p", accepted,
+    "-m", `pipeline(${pipeline.id}): reconcile rebased stage`], pipeline.worktreeDir, controllerCommitIdentityEnv());
+  if (commit.code !== 0) return failure("recording the stage reconciliation merge", commit);
+  const sha = commit.stdout.trim();
+  if (!/^[0-9a-f]{40}$/i.test(sha)) return { ok: false, error: "reconciliation did not produce an exact commit SHA" };
+  const current = currentPipelineBranchHead(pipeline, exec);
+  if (!current.ok) return current;
+  if (current.sha !== head) return { ok: false, error: "the stage head moved during history reconciliation" };
+  const currentBranch = exec("git", ["symbolic-ref", "HEAD"], pipeline.worktreeDir);
+  if (currentBranch.code !== 0 || currentBranch.stdout.trim() !== ref) {
+    return { ok: false, error: "the stage branch moved during history reconciliation" };
+  }
+  const update = exec("git", ["update-ref", "-m", "pipeline: reconcile rebased stage", ref, sha, head], pipeline.worktreeDir);
+  if (update.code !== 0) return failure("fencing the stage reconciliation merge", update);
+  return { ok: true, sha };
 }
 
 export function resetPipelineStage(pipeline: Pipeline, exec: ExecPort): PipelineGitResult {
