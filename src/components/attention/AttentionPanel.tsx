@@ -300,7 +300,7 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
             {since !== null ? <span data-attention-age className="shrink-0 text-[10.5px] text-muted">· {fmtAge(since)}</span> : null}
           </span>
           <span className="line-clamp-2 w-full text-[12px] font-semibold text-primary [overflow-wrap:anywhere]" data-needs-you-title-line="">{title}</span>
-          <span data-attention-decision className="line-clamp-2 w-full text-[11px] text-muted [overflow-wrap:anywhere]">{line}</span>
+          <span data-attention-decision className={entry.kind === "conversation" && entry.item.reason.kind === "memory" ? "w-full text-[11px] text-muted [overflow-wrap:anywhere]" : "line-clamp-2 w-full text-[11px] text-muted [overflow-wrap:anywhere]"}>{line}</span>
         </button>
         <button
           type="button"

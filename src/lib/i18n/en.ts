@@ -2897,11 +2897,16 @@ export const en = {
   "attention.permissionDeny": "Deny",
   "attention.permissionFailed": "Not answered: {error}",
   "attention.decisionDelivery": "message delivery",
+  "attention.memoryKilled": "Killed: out of memory",
+  "attention.memoryProcess": "A process was killed: out of memory",
+  "attention.memoryLimit": "limit {limit} GB",
+  "attention.memorySystem": "system memory exhausted, {limit} GB RAM",
   "attention.decisionLaunch": "launch failed",
   "attention.decisionLaunchReason": "launch failed: {reason}",
   /* Why a card needs the operator, and its Dismiss (docs/design/needs-attention.md
      §4, §5). Lower-case like the badges they sit beside. */
   "needs.delivery": "message not delivered",
+  "needs.memory": "Out of memory",
   "needs.launch": "launch failed",
   "needs.ask": "asks you",
   "attention.decisionAskNamed": "asks you: {ask}",

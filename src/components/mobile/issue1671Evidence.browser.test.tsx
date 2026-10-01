@@ -5705,3 +5705,38 @@ describe("tool call context tokens", () => {
     if (failures.length) throw new Error(failures.join("\n"));
   }, 120_000);
 });
+
+describe("agent memory isolation", () => {
+  browserTest("memory Needs-you row names the stage and limit in en and uk", async () => {
+    const out = path.resolve(".artifacts/agent-memory-phone");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/attention/needsYouPanel.fixture.tsx");
+    const browser = await launchChromium();
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) {
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: "light", reducedMotion: "reduce" });
+        try {
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          await page.goto(`${server.base}?lang=${locale}&memory=1&open=1`);
+          await page.locator('[data-mobile2-open="attention"]').click();
+          const row = page.locator("[data-needs-you-row]").filter({ hasText: locale === "en" ? "Killed: out of memory" : "Зупинено: нестача пам’яті" });
+          await row.waitFor({ timeout: 15000 });
+          expect(await row.innerText()).toContain(locale === "en" ? "build · limit 15 GB" : "build · ліміт 15 ГБ");
+          await row.scrollIntoViewIfNeeded();
+          const geometry = await row.evaluate((element) => ({ width: element.getBoundingClientRect().width, right: element.getBoundingClientRect().right, overflow: document.documentElement.scrollWidth > innerWidth }));
+          expect(geometry.right).toBeLessThanOrEqual(390);
+          expect(geometry.overflow).toBeFalse();
+          expect(errors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}.png`) });
+          cases.push({ locale, ...geometry, errors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/agent-memory", { recursive: true });
+      fs.writeFileSync("evidence/agent-memory/phone.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 90000);
+});
