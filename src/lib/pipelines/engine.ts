@@ -84,7 +84,8 @@ import {
 import * as legacyReview from "./legacyReviewDefinition";
 import { laneMovedSince } from "./laneMovement";
 import { pipelineRepoPreflightError, pipelineRepoPreflightStatus, preflightPipelineRepo } from "./preflight";
-import { pipelineDeliveryGuidance, renderDecisionInput, renderStagePrompt } from "./prompts";
+import { pipelineDeliveryGuidance, renderDecisionInput } from "./prompts";
+import { composeStageInput } from "./stageInput";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntimeIsExplicit, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
@@ -3864,7 +3865,7 @@ async function tickRunStage(
          so the spawn digest is stable across restarts; a migrated pre-v3
          attempt (input === null with no recorded activation) keeps the legacy
          positional scan byte-identically. */
-      const prompt = renderStagePrompt(
+      const prompt = composeStageInput(
         pipeline,
         bound,
         attempt.effectiveRole,

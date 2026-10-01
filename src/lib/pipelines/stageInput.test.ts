@@ -1,0 +1,90 @@
+import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { composeStageInput } from "./stageInput";
+import { buildPipeline } from "./store";
+import type { PipelineStage } from "./types";
+
+const artifactState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-inputs-"));
+let priorState: string | undefined;
+beforeEach(() => {
+  priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = artifactState;
+});
+afterEach(() => {
+  if (priorState === undefined) delete process.env.LLV_STATE_DIR;
+  else process.env.LLV_STATE_DIR = priorState;
+});
+afterAll(() => fs.rmSync(artifactState, { recursive: true, force: true }));
+
+function handoffFixture(prompt = "Build {{task}} from {{prev.output}}", spec = "AC: preserve the handoff") {
+  const stage: PipelineStage = { id: "build", kind: "run", prompt, next: null,
+    effectiveRole: { roleId: "builder", engine: "codex", model: null, effort: "high", access: "read-write", promptScaffold: "Follow {{task}} and {{prev.output}}." } };
+  const pipeline = buildPipeline({ id: "handoff", task: "the task", spec, project: "viewer", repoDir: "/repo",
+    stages: [stage], srcPath: null, srcConversationId: null, now: "now" });
+  return { pipeline, stage };
+}
+
+test("a large multibyte specification is file-backed after the previous output", () => {
+  const spec = "Specification head\n" + "界".repeat(14_000);
+  const { pipeline, stage } = handoffFixture(undefined, spec);
+  const previous = "Previous head\n" + "🙂".repeat(12_000);
+  const prompt = composeStageInput(pipeline, stage, stage.effectiveRole, previous);
+  expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(32_000);
+  for (const [label, full] of [["previous output", previous], ["specification", spec]]) {
+    const file = prompt.match(new RegExp(`Full ${label} file: (.+)\\n`))?.[1];
+    expect(file).toBeDefined();
+    expect(path.isAbsolute(file!)).toBe(true);
+    expect(fs.readFileSync(file!, "utf8")).toBe(full);
+  }
+  expect(prompt).toContain("Specification head");
+  expect(prompt).toContain("Previous head");
+  expect(prompt).not.toContain("�");
+  expect(composeStageInput(pipeline, stage, stage.effectiveRole, previous)).toBe(prompt);
+});
+
+test.each([
+  { prompt: "Build {{task}} from {{prev.output}}", scaffold: "Follow {{task}} and {{prev.output}}.", previous: "Small output\nsecond line", hash: "467949fdef55331e85de5d0f0a471b121e85a28b952316024cee4ecce7c021af" },
+  { prompt: "Build the task", scaffold: "Follow the task.", previous: "Small output\nsecond line", hash: "92c67166857ef9b34d61022729a6d04a99fdeed1fd973046ddca429baa30dfa3" },
+  { prompt: "Build {{task}} from {{prev.output}}", scaffold: "Follow {{task}} and {{prev.output}}.", previous: "", hash: "05936aab04419797171b5821e30512dc035ae00a365a816c3ad1778568e59275" },
+])("small stage inputs preserve the original renderer's bytes ($hash)", ({ prompt, scaffold, previous, hash }) => {
+  const { pipeline, stage } = handoffFixture(prompt);
+  stage.effectiveRole.promptScaffold = scaffold;
+  const rendered = composeStageInput(pipeline, stage, stage.effectiveRole, previous);
+  // SHA-256 snapshots captured from the base renderer, including all framing.
+  expect(crypto.createHash("sha256").update(rendered).digest("hex")).toBe(hash);
+});
+
+test("the exact UTF-8 boundary stays inline and one byte over becomes a file reference", () => {
+  const { pipeline, stage } = handoffFixture("Build the design");
+  stage.effectiveRole.promptScaffold = null;
+  const framing = Buffer.byteLength(composeStageInput(pipeline, stage, stage.effectiveRole, "x")) - 1;
+  const atBound = "x".repeat(32_000 - framing);
+  const inline = composeStageInput(pipeline, stage, stage.effectiveRole, atBound);
+  expect(Buffer.byteLength(inline)).toBe(32_000);
+  expect(inline).not.toContain("Full previous output file:");
+  const over = composeStageInput(pipeline, stage, stage.effectiveRole, atBound + "x");
+  expect(Buffer.byteLength(over)).toBeLessThanOrEqual(32_000);
+  expect(over).toContain("Full previous output file:");
+});
+
+test("an entry stage can externalize just its specification", () => {
+  const { pipeline, stage } = handoffFixture("Build the task", "Spec head\n" + "界".repeat(14_000));
+  const rendered = composeStageInput(pipeline, stage, stage.effectiveRole, "");
+  expect(Buffer.byteLength(rendered)).toBeLessThanOrEqual(32_000);
+  expect(rendered).not.toContain("Full previous output file:");
+  expect(rendered).toContain("Full specification file:");
+});
+
+test("a tight prompt shrinks the output excerpt before externalizing a small specification", () => {
+  const { pipeline, stage } = handoffFixture("x".repeat(29_500));
+  const rendered = composeStageInput(pipeline, stage, stage.effectiveRole, "Previous head\n" + "界".repeat(15_000));
+  expect(Buffer.byteLength(rendered)).toBeLessThanOrEqual(32_000);
+  expect(rendered).toContain("Previous head");
+  expect(rendered).toContain("AC: preserve the handoff");
+  expect(rendered).not.toContain("Full specification file:");
+});
+

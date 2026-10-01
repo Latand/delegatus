@@ -1176,6 +1176,88 @@ async function create(ports: PipelinePorts, stages = RUN_STAGES as never, reques
   return lane;
 }
 
+test.each(["Build from {{prev.output}}", "Build the approved design"])("a 45 KB stage output launches its successor with a readable file (%s)", async (prompt) => {
+  const h = harness();
+  const { assertStructuredTextEnvelope } = await import("@/lib/runtime/structuredContent");
+  const spawnAgent = h.ports.spawnAgent;
+  h.ports.spawnAgent = (input, reserved) => {
+    assertStructuredTextEnvelope(input.prompt);
+    return spawnAgent(input, reserved);
+  };
+  await create(h.ports, [RUN_STAGES[0], { ...RUN_STAGES[1], prompt }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const design = "Design head\n" + "d".repeat(45_000);
+  expect(await engineModule.reportStageCompletion({ verdict: "pass" },
+    { kind: "agent", role: "architect", conversationId: "conversation_stage_1" }, h.ports)).toMatchObject({ report: { verdict: { status: "pass" } } });
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", design)], h.ports);
+  await tickPipelines([], h.ports);
+
+  expect(loadPipelines()[0]!.state).toBe("running");
+  expect(loadPipelines()[0]!.cursor?.state).toBe("running");
+  expect(h.spawnInputs).toHaveLength(2);
+  const delivered = h.spawnInputs[1]!.prompt;
+  expect(Buffer.byteLength(delivered)).toBeLessThanOrEqual(32_000);
+  expect(delivered).toContain("Design head");
+  const artifact = delivered.match(/Full previous output file: (.+)\n/)?.[1];
+  expect(artifact).toBeDefined();
+  expect(path.isAbsolute(artifact!)).toBe(true);
+  expect(fs.readFileSync(artifact!, "utf8")).toBe(design);
+  expect(artifact!.startsWith(process.env.LLV_STATE_DIR! + path.sep)).toBe(true);
+});
+
+test("an oversized expanded stage prompt parks before spawn with every part's byte size", async () => {
+  const h = harness();
+  savePipelines([]);
+  const created = await createPipelineFromRequest({
+    task: "t".repeat(500), spec: "AC", repoDir: "/repo", publication: "internal",
+    stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "{{task}}".repeat(100), next: null }],
+  }, h.ports);
+  expect(created.error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  expect(lane.state).toBe("needs_decision");
+  expect(h.spawnInputs).toHaveLength(0);
+  expect(lane.stateDetail).toContain("stage build input cannot fit the 32000-byte bound");
+  expect(lane.stateDetail).toContain("prompt=50000 bytes");
+  expect(lane.stateDetail).toContain("role scaffold=16 bytes");
+  expect(lane.stateDetail).toContain("previous output=0 bytes");
+  expect(lane.stateDetail).toContain("specification=2 bytes");
+  expect(lane.stateDetail).toMatch(/framing=\d+ bytes/);
+  expect(lane.stateDetail).not.toContain("structured message text exceeds");
+});
+
+test.each(["reviewer", "builder"])("large fail-edge findings launch the %s stage through the same file handoff", async (roleId) => {
+  const h = harness();
+  const { assertStructuredTextEnvelope } = await import("@/lib/runtime/structuredContent");
+  const spawnAgent = h.ports.spawnAgent;
+  h.ports.spawnAgent = (input, reserved) => {
+    assertStructuredTextEnvelope(input.prompt);
+    return spawnAgent(input, reserved);
+  };
+  await create(h.ports, [
+    { id: "audit", kind: "run", role: { roleId: "reviewer" }, prompt: "Audit", next: null, onFail: { to: "fix", maxRounds: 1 } },
+    { id: "fix", kind: "run", role: { roleId }, prompt: "Resolve {{prev.output}}", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const findings = Array.from({ length: 25 }, (_, n) => ({ severity: "P1" as const, text: `src/module.ts:${n + 1} ` + "f".repeat(1_800) }));
+  expect(await engineModule.reportStageCompletion({ verdict: "fail", findings, summary: "Resolve every finding" },
+    { kind: "agent", role: "reviewer", conversationId: "conversation_stage_1" }, h.ports)).toMatchObject({ report: { verdict: { status: "fail" } } });
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "fail", "Review result")], h.ports);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  expect(h.spawnInputs).toHaveLength(2);
+  const prompt = h.spawnInputs[1]!.prompt;
+  expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(32_000);
+  const file = prompt.match(/Full previous output file: (.+)\n/)?.[1];
+  expect(file).toBeDefined();
+  const full = fs.readFileSync(file!, "utf8");
+  expect(full).toContain("Resolve every finding");
+  for (const finding of findings) expect(full).toContain(`P1 — ${finding.text}`);
+});
+
 test.each([
   { access: "read-write", sandbox: "full" },
   { access: "read-write", sandbox: "restricted" },
