@@ -556,6 +556,35 @@ test("maintenance: turning it on and setting the hours sends only the maintenanc
   expect(mRows().next).toMatch(/^first run at the next check, about \d{2}:\d{2}$/);
 });
 
+test("maintenance: saving the timer keeps the tick's unsaved fields when the server moves settings.updatedAt, as it does on every write", async () => {
+  const { root } = await mount();
+  await open(root);
+  type(field<HTMLInputElement>("[data-seat-tick-interval]"), "45");
+  type(field<HTMLTextAreaElement>("[data-seat-tick-reason]"), "a release afternoon");
+  expect(save().disabled).toBe(false);
+  flushSync(() => mSwitch().click());
+  const stored = record({ changed: true });
+  const stamp = ago(0);
+  putAnswers = [{
+    status: 200,
+    body: {
+      ...withMaintenance({ enabled: true, updatedAt: stamp }, stored),
+      settings: { ...stored.settings, updatedAt: stamp, setBy: stored.actor },
+      effective: { ...stored.effective, updatedAt: stamp },
+    },
+  }];
+  flushSync(() => mSave().click());
+  await settle(root);
+
+  expect(puts()).toHaveLength(1);
+  expect(puts()[0]!.body).toEqual({ project: PROJECT, maintenance: { enabled: true } });
+  expect(mGroup()!.getAttribute("data-seat-tick-maintenance")).toBe("on");
+  /* The tick's own edit is still in its fields and still waiting on its Save. */
+  expect(field<HTMLInputElement>("[data-seat-tick-interval]").value).toBe("45");
+  expect(field<HTMLTextAreaElement>("[data-seat-tick-reason]").value).toBe("a release afternoon");
+  expect(save().disabled).toBe(false);
+});
+
 test("maintenance: an empty interval is sent as null, the default, and a non-finite one goes as typed", async () => {
   getAnswer = withMaintenance({ enabled: true, intervalHours: 12, waitingOn: "interval" });
   const { root } = await mount();

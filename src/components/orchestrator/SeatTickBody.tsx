@@ -70,11 +70,17 @@ function draftOf(record: SeatTickSettingsAnswer | null): SeatTickDraft {
 /** The record the draft was adopted from. A new one means the record moved —
     a save landed, or another caller changed this project's tick — and the
     fields follow it. An optimistic overlay is NOT one of these, so a refused
-    save rolls the display back without emptying the field being corrected. */
+    save rolls the display back without emptying the field being corrected.
+
+    `updatedAt` is left out on purpose: the server moves it on EVERY write to
+    the project's settings, a maintenance-only one included, so keeping it here
+    would snap the tick's unsaved fields back to the stored values whenever
+    «Save maintenance» settles. Every field a tick save can change is already
+    in the signature (an expiry that is set again carries a new `until`). */
 function signatureOf(record: SeatTickSettingsAnswer | null): string {
   const settings = record?.settings;
   if (!settings) return "";
-  return [record?.project, settings.enabled, settings.wakeIntervalMinutes, settings.reason, settings.until, settings.updatedAt].join("");
+  return [record?.project, settings.enabled, settings.wakeIntervalMinutes, settings.reason, settings.until].join("");
 }
 
 /** Only what CHANGED, so a save touches the fields the operator touched and
