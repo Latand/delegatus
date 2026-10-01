@@ -120,7 +120,9 @@ async function signingKeys(issuer: string): Promise<AccessKey[]> {
   if (accessKeys?.issuer === issuer && accessKeys.expires > Date.now()) return accessKeys.keys;
   if (keysPending?.issuer === issuer) return keysPending.promise;
   const promise = (async () => {
-    const response = await fetch(`${issuer}/cdn-cgi/access/certs`, { signal: AbortSignal.timeout(5000), redirect: "error" });
+    // workerd rejects redirect: "error" before sending the request. Manual
+    // redirects stay unfollowed and fail the HTTP success check below.
+    const response = await fetch(`${issuer}/cdn-cgi/access/certs`, { signal: AbortSignal.timeout(5000), redirect: "manual" });
     if (!response.ok) throw new Error("Access keys unavailable");
     const body = await response.json() as { keys?: AccessKey[] };
     if (!Array.isArray(body.keys) || body.keys.length > 20) throw new Error("Invalid key set");
@@ -170,7 +172,8 @@ async function statsQuery(env: Env, sql: string): Promise<QueryResult> {
     if (!env.STATS_ACCOUNT_ID || !/^[a-f0-9]{32}$/.test(env.STATS_ACCOUNT_ID) || !env.STATS_AE_TOKEN) throw new Error("Stats not configured");
     const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${env.STATS_ACCOUNT_ID}/analytics_engine/sql`, {
       method: "POST", headers: { Authorization: `Bearer ${env.STATS_AE_TOKEN}`, "Content-Type": "text/plain" },
-      body: `${sql} FORMAT JSON`, signal: AbortSignal.timeout(10_000), redirect: "error",
+      // Never forward the server credential to a redirect destination.
+      body: `${sql} FORMAT JSON`, signal: AbortSignal.timeout(10_000), redirect: "manual",
     });
     if (!response.ok) throw new Error("Query unavailable");
     const body = await response.json() as { data?: Row[]; rows?: number };

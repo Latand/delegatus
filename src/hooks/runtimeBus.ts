@@ -310,12 +310,18 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
     try {
       const snapshot = await fetchSnapshot();
       if (myGen !== generation) return; // superseded while awaiting
+      const previousFiles = state.store.filesRevision;
       hasSnapshot = true;
       setState({
         store: installSnapshot(snapshot),
         lastEventAt: deps.now(),
         structuredHostsEnabled: snapshot.structuredHostsEnabled === true,
       });
+      // The resumed stream starts AFTER this snapshot. Its files revisions
+      // will not replay, so deliver their invalidation to the open board now.
+      if (snapshot.filesRevision > previousFiles) {
+        for (const listener of filesListeners) listener(snapshot.filesRevision);
+      }
       if (afterCursorReset) noteResynced();
       openStream(snapshot.snapshotSeq);
     } catch (error) {
@@ -592,6 +598,7 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
         // never regress the cursor. The refresh itself succeeded — fresher
         // state than the response is already live — so still report success.
         if (snapshot.snapshotSeq < state.store.cursor) return true;
+        const previousFiles = state.store.filesRevision;
         hasSnapshot = true;
         // Refresh the structured-hosts rollback gate alongside the store — every
         // other snapshot-install path (join/resume/fallback) does, so a manual
@@ -602,6 +609,9 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
           lastEventAt: deps.now(),
           structuredHostsEnabled: snapshot.structuredHostsEnabled === true,
         });
+        if (snapshot.filesRevision > previousFiles) {
+          for (const listener of filesListeners) listener(snapshot.filesRevision);
+        }
         return true;
       } catch (error) {
         if (error instanceof RuntimePlaneAbsentError) markPlaneAbsent();

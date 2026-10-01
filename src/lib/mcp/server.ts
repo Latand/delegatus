@@ -29,6 +29,7 @@ import {
 } from "@/lib/pipelines/limits";
 import { PIPELINE_ACTIONS, PIPELINE_DISALLOWED_ROLE_IDS, PIPELINE_FAIL_EDGE_EXHAUSTIONS, STAGE_FINDING_SEVERITIES } from "@/lib/pipelines/types";
 import { procBackend } from "@/lib/proc";
+import { parseMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
 import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/resolve";
 import { renderTaskColorRule } from "@/lib/tasks/colorRule";
@@ -561,6 +562,9 @@ export interface McpRequestBindingInput {
       spawn, clientMessageId for a send). Persisted so recovery reads the same
       key the dispatch used, never a recomputed one. */
   downstreamKey: string;
+  /** Relay admission's server-derived text and author, captured before dispatch
+      so recovery verifies the actual durable payload after rotation/restart. */
+  sendPayload?: { text: string; origin: MessageOrigin };
 }
 
 /** The identity persisted with a recoverable mutation's claim, before its
@@ -850,6 +854,8 @@ export function validRequestBinding(value: unknown, toolName?: McpToolName, requ
   if (toolName !== undefined && value.toolName !== toolName) return false;
   if (typeof value.clientRequestId !== "string" || (requestId !== undefined && value.clientRequestId !== requestId)) return false;
   if (typeof value.downstreamKey !== "string" || !value.downstreamKey) return false;
+  if (value.sendPayload !== undefined && (!isRecord(value.sendPayload)
+    || typeof value.sendPayload.text !== "string" || !parseMessageOrigin(value.sendPayload.origin))) return false;
   if (typeof value.claimedAt !== "string") return false;
   const { caller, target, owner } = value;
   if (!isRecord(caller) || !["root", "worker", "unidentified"].includes(String(caller.kind))
@@ -2265,11 +2271,12 @@ export class McpDispatchVerdictError extends McpToolRefusal {
   }
 }
 
-function sameCaller(recorded: McpRequestCaller, current: McpRequestCaller): boolean {
+function sameCaller(recorded: McpRequestCaller, current: McpRequestCaller, toolName: McpToolName): boolean {
   return recorded.kind === current.kind
     && recorded.project === current.project
     && (recorded.conversationId === current.conversationId
-      || (recorded.conversationId !== null && (current.predecessors ?? []).includes(recorded.conversationId)));
+      || (toolName !== "send_message_to_orchestrator" && recorded.conversationId !== null
+        && (current.predecessors ?? []).includes(recorded.conversationId)));
 }
 
 function identifiedCaller(caller: McpRequestCaller): boolean {
@@ -2519,7 +2526,7 @@ export function createMcpToolService(
         const readableStoredResult = async (): Promise<McpToolResult | null> => {
           const current = await store.lookup(key);
           if (!current?.result || current.digest !== digest || !current.binding
-            || !sameCaller(current.binding.caller, binding.caller)) return null;
+            || !sameCaller(current.binding.caller, binding.caller, typedTool)) return null;
           return current.recoveryResult ?? current.result;
         };
         /* Terminal downstream evidence becomes the row's answer, written
@@ -2541,7 +2548,7 @@ export function createMcpToolService(
           } catch (cause) {
             return unreadableReceipt(cause, replayed);
           }
-          if (current?.binding && !sameCaller(current.binding.caller, binding.caller)) return notPermitted();
+          if (current?.binding && !sameCaller(current.binding.caller, binding.caller, typedTool)) return notPermitted();
           if (current && current.digest !== digest) return notPermitted();
           // Contradictory ownership never licenses disclosure of cached IDs.
           if (evidence.ownership === "unknown") return recoveryAnswer(typedTool, requestId, evidence, replayed);
@@ -2607,11 +2614,14 @@ export function createMcpToolService(
             outcome = evidence.outcome === "unknown" ? "failure" : "replay";
             return recoveryAnswer(typedTool, requestId, evidence, true, record.result);
           }
-          if (!sameCaller(recorded.caller, binding.caller)) return notPermitted();
+          if (!sameCaller(recorded.caller, binding.caller, typedTool)) return notPermitted();
           if (record.digest !== digest) {
             outcome = "conflict";
             return failure(typedTool, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
           }
+          // Older relay bindings omitted gateway authorship. Their cached
+          // results may name another author's send and cannot license replay.
+          if (typedTool === "send_message_to_orchestrator" && !recorded.sendPayload) return notPermitted();
           if (record.recoveryResult && record.stage === "not-executed") {
             outcome = "replay";
             return { ...record.recoveryResult, replayed: true };
@@ -3091,6 +3101,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   get_orchestrator: "Read a project's designated orchestrator: designation, health and activity, model and prompt version, transcript size, message/tool/compaction counts, context usage against its model's configured window (clearly labelled when estimated), predecessor lineage, and a bounded rotation recommendation — STRONGLY_RECOMMEND_ROTATION once usage reaches the configured threshold. Compact by default: the seat record without its mandate and role table, and counts for intentHistory and lineage; full:true returns them whole. Words only: it never rotates, creates, or interrupts anything itself.",
   create_orchestrator: "Create a project's orchestrator or adopt one eligible registered conversation: designate it as the project's selected orchestrator and deliver the approved versioned mandate (editable). Idempotent by clientRequestId.",
   send_message_to_orchestrator: [
+    "A designated orchestrator seat may relay to another project's designated seat. The recipient sees the sending project and agent authorship, never operator authority. Workers, pipeline stages, deputies and unidentified callers are refused. Seat relays must omit Delegatus authority markers and bridge trailers; a seat cannot create a missing recipient. The operator's voice gateway keeps its existing path.",
     "Deliver a message to the project's selected orchestrator, resolved server-side. A dead selected conversation is resumed; with none designated, one is created first. The recipient is frozen before the message dispatch; a later seat rotation never redirects recovery. The answer reports acceptance: ask message_receipt what became of the operationId.",
     RECOVERY_CONTRACT_DESCRIPTION,
   ].join(" "),
@@ -3338,7 +3349,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
        create_pipeline half of this contract is refused by the engine, with its
        own named violation, so that schema leaves the entries to it. */
     taskId: z.string().refine((value) => value.trim().length > 0, { message: "taskId must name a board task; omit the field to launch without one" }).optional()
-      .describe("Board task this agent works on (#1720). The launch joins that task when its receipt is reserved, and an id naming no task refuses the launch before any agent starts — a blank id is refused here, since the launch would otherwise read it as no task at all. An explicit id carries its own project, so an id from ANOTHER project is taken as given and binds the agent to that project's card — pass the id this project's board gave you. Omitting it, the launch joins every task held by the parent this call names (parentConversationId, src or parent — this tool never infers one from the caller) and by the conversation it reviews; when the call names neither, or neither holds a task, it is given a placeholder task of its own, which is a duplicate card. A reviewer that names a parent therefore joins that parent's card beside the reviewed work's, so pass taskId on reviewer spawns too — an explicit id wins over inheritance."),
+      .describe("Board task this agent works on (#1720). The launch joins that task when its receipt is reserved, and an id naming no task refuses the launch before any agent starts — a blank id is refused here, since the launch would otherwise read it as no task at all. The task must belong to the project resolved from cwd after project aliases are resolved; a task from another project is refused before any request is claimed or dispatched. Use a task on the target project's board, or omit taskId. Omitting it, the launch joins every task held by the parent this call names (parentConversationId, src or parent — this tool never infers one from the caller) and by the conversation it reviews; when the call names neither, or neither holds a task, it is given a placeholder task of its own, which is a duplicate card. A reviewer that names a parent therefore joins that parent's card beside the reviewed work's, so pass taskId on reviewer spawns too — an explicit id wins over inheritance."),
     engine: z.enum(["claude", "codex", "copilot"]).optional()
       .describe("Agent CLI. copilot runs the GitHub Copilot CLI over ACP on the structured transport; its account is named or the selected one (no automatic pick), model auto or an id the account offers, effort none…max."),
     model: z.string().optional(),

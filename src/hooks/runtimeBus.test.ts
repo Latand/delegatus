@@ -696,6 +696,47 @@ describe("runtimeBus cursor reset / resync", () => {
     expect(h.bus.getState().store.cursor).toBe(300);
     expect(h.bus.getState().resyncedAt).not.toBeNull();
   });
+
+  test.each(["gap", "reset", "refresh"])("a %s recovery delivers a spawn revision skipped by the resumed stream", async (recovery) => {
+    h.bus.start();
+    await flush();
+    h.sources[0]!.open();
+    const revisions: number[] = [];
+    h.bus.subscribeFilesRevision((revision) => revisions.push(revision));
+    h.setSnapshot(snapshot(200, { filesRevision: 7 }));
+    if (recovery === "gap") h.sources[0]!.message(sessionEvent(150, 9, "running", "t9"));
+    else if (recovery === "reset") h.sources[0]!.named("reset", {});
+    else await h.bus.refresh();
+    await flush();
+    h.sources.at(-1)!.open();
+
+    expect(h.bus.getState().connection).toBe("live");
+    expect(h.bus.getState().store.filesRevision).toBe(7);
+    if (recovery !== "refresh") expect(h.sources.at(-1)!.url).toContain("after=200");
+    expect(revisions).toEqual([7]);
+  });
+
+  test("snapshot recovery with an unchanged files revision does not invalidate the board", async () => {
+    h.bus.start();
+    await flush();
+    const revisions: number[] = [];
+    h.bus.subscribeFilesRevision((revision) => revisions.push(revision));
+    h.setSnapshot(snapshot(200));
+    h.sources[0]!.named("reset", {});
+    await flush();
+    await h.bus.refresh();
+    expect(h.bus.getState().store.cursor).toBe(200);
+    expect(revisions).toEqual([]);
+  });
+
+  test("a board mounted before the initial runtime snapshot receives its files revision", async () => {
+    const revisions: number[] = [];
+    h.bus.subscribeFilesRevision((revision) => revisions.push(revision));
+    h.setSnapshot(snapshot(200, { filesRevision: 7 }));
+    h.bus.start();
+    await flush();
+    expect(revisions).toEqual([7]);
+  });
 });
 
 describe("runtimeBus degraded fallback", () => {

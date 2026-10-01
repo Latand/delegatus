@@ -58,7 +58,7 @@ function fixture(label: string) {
   const domain = {
     registrySnapshot: () => registry.readOnlySnapshot(),
     attentionAuthority: () => ({ kind: "worker", conversationId: callerId }),
-    callerAttribution: () => ({ kind: "worker", conversationId: callerId }),
+    callerAttribution: () => ({ kind: "gateway", conversationId: callerId }),
     recoveryPredecessors: () => [],
     sendSettlementPorts: () => ({ registry, client: null }),
   } as unknown as ViewerMcpDomainDependencies;
@@ -89,6 +89,7 @@ test("uncertain orchestrator send recovers one busy-target operation after late 
     await admit.promise;
     const held = f.registry.holdDelivery(body.conversationId as typeof f.first.id, String(body.text).trim(), String(body.clientMessageId), "text", [], null, {
       operationId: `operation-${requests.length}`, kind: "send", policy: "queue",
+      origin: { kind: "agent", role: "gateway", conversationId: (body.origin as { conversationId: string }).conversationId },
     });
     deliveryId = held.id;
     admitted.resolve();
@@ -146,6 +147,7 @@ test("missing-seat creation pins its recipient before the message and recovers a
       expect(body.policy).toBe("steer-or-queue");
       f.registry.holdDelivery(f.first.id, String(body.text), String(body.clientMessageId), "text", [], null, {
         operationId: "created-operation", kind: "send", policy: "queue",
+        origin: { kind: "agent", role: "gateway", conversationId: (body.origin as { conversationId: string }).conversationId },
       });
       throw new McpDispatchUncertainError("response lost after admission");
     },
@@ -155,7 +157,7 @@ test("missing-seat creation pins its recipient before the message and recovers a
     f.seat(f.successor);
     f.reopen();
     expect(await f.service(control).callTool("send_message_to_orchestrator", args)).toMatchObject({ ok: true, operationId: "created-operation", conversationId: f.first.id });
-    expect(posts).toEqual(["/api/orchestrator/seat", "/api/tmux"]);
+    expect(posts).toEqual(["/api/orchestrator/seat", "/api/orchestrator/message"]);
   } finally { f.close(); }
 });
 
