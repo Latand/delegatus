@@ -7,6 +7,7 @@ import { statePath } from "@/lib/configDir";
 import {
   emptySeatTickState,
   SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
+  SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT,
   SEAT_TICK_REPORTED_STALLS_LIMIT,
   SEAT_TICK_CHILDREN_SHOWN_LIMIT,
   SEAT_TICK_RETIRED_WAKE_LIMIT,
@@ -74,6 +75,7 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
     announcedLanes: conversationIds(raw.announcedLanes),
     /* Same direction for a settled deploy (#2063): a plan from before it
        existed announces none. */
+    announcedMaintenance: conversationIds(raw.announcedMaintenance),
     announcedDeploys: conversationIds(raw.announcedDeploys),
     /* A plan from before #2030 records no note, so the next wake shows it. */
     ...(noteRevision(raw.noteShown) === undefined ? {} : { noteShown: noteRevision(raw.noteShown) }),
@@ -253,6 +255,7 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     announcedLanes: conversationIds(raw.announcedLanes),
     /* Absent on every row from before #2063, and absent reads as empty: a
        settled deploy nobody announced is announced. */
+    announcedMaintenance: conversationIds(raw.announcedMaintenance).slice(-SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT),
     announcedDeploys: conversationIds(raw.announcedDeploys).slice(-SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT),
     /* Absent on every row from before #2030: a seat remembered as having been
        shown no note is shown it. */
@@ -338,6 +341,7 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
     releasedWake: row.releasedWake ?? null,
     pullRequestGap: row.pullRequestGap,
     childrenGap: row.childrenGap,
+    announcedMaintenance: row.announcedMaintenance,
     harvestedChildren: row.harvestedChildren,
     ...(row.reportsOwed ? { reportsOwed: row.reportsOwed } : {}),
     ...(row.reportsOwedDropped ? { reportsOwedDropped: row.reportsOwedDropped } : {}),

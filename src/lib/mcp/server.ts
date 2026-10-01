@@ -104,7 +104,7 @@ export const MCP_TOOL_NAMES = [
 export type McpToolName = typeof MCP_TOOL_NAMES[number];
 type ReceiptRetention = "bounded" | "durable";
 
-const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
+export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
   "spawn_agent",
   "send_message",
   "create_task",
@@ -179,6 +179,9 @@ const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
   "telegram_bot_send_media",
   "telegram_bot_send_document",
 ]);
+
+export const isMutatingMcpTool = (tool: McpToolName): boolean => MUTATING_MCP_TOOL_NAMES.has(tool);
+
 
 /**
  * Calls whose binding is idempotent over its own durable state, so a claim the
@@ -2873,7 +2876,7 @@ export function createMcpToolService(
               : "failure";
           const taskCode = (typedTool === "create_task" || typedTool === "update_task")
             && error instanceof McpToolRefusal && typeof error.details.code === "string"
-            && error.details.code.startsWith("TASK_") ? error.details.code : null;
+            && (error.details.code.startsWith("TASK_") || error.details.code.startsWith("maintainer_")) ? error.details.code : null;
           /* A Telegram bot refusal answers with the bot's own code and its own
              retryable: a generic retryable tool_failed after send_uncertain
              would invite the double post the bot refuses to risk. */
@@ -3093,6 +3096,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   ask_orchestrator_in_parallel: "While the project's orchestrator seat is busy with a turn, start its parallel self for one side ask: a fork of the seat's conversation that answers this one message with the seat's authority (no deploy, no rotation), shows live in the seat's own feed, and queues a note to the seat when it ends. For the voice gateway (the operator's root session) relaying the operator; any other agent is refused with asker_refused and sends to the orchestrator instead. Claude seats only; refused with seat_not_busy when the seat is idle (send to it directly then) and with deputy_limit while another parallel self is running. Idempotent by clientRequestId.",
   seat_tick_settings: [
+    "maintenance reads or changes the board maintenance timer and reads its run records; verbose adds the previous run log.",
     "Read — and change — one project's seat tick: whether Delegatus wakes that project's seat at all, how often, and what your own monitor prompt tells the wake to look at.",
     "Called with no change fields it is a read. `project` defaults to your own, and naming another project's is allowed rather than refused; the answer says which of the two you did, and the record, the board card and the tick's journal all carry who changed whose tick.",
     "`enabled: false` stops every wake for that project until someone turns it back on — indefinitely, if that is the decision. `wakeIntervalMinutes` sets how often a wake may be sent (null restores the default hour); the tick cannot wake more often than it checks, so a value under the check interval simply means every check. `untilMinutes` is an optional expiry after which the setting lapses back to the default — omit it and the setting stands until it is changed.",
@@ -3108,7 +3112,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "`project` defaults to your own on a list, and is required to add or remove.",
   ].join(" "),
   role_presets: [
-    "Read — and change — which engine, model and effort each role runs on (builder, reviewer, verifier, architect, orchestrator, cleaner, prod-auditor, deployer, and the builder and reviewer variants such as `trivial`, `frontend` or `apply-fixes`), the mapping the Settings agent mapping edits and `PUT /api/roles` writes.",
+    "Read — and change — which engine, model and effort each role runs on (builder, reviewer, verifier, architect, orchestrator, cleaner, prod-auditor, deployer, maintainer, and the builder and reviewer variants such as `trivial`, `frontend` or `apply-fixes`), the mapping the Settings agent mapping edits and `PUT /api/roles` writes.",
     "Called without `overrides` it is a read: per role its `config` and its `variants`, plus the registry `revision`, its `health` and any `resets` a retirement made. `detail: true` adds each role's `shipped` values and whether its prompt text is overridden, and `choices`, every valid model per engine with the efforts each accepts.",
     "`overrides` writes, in the shape of the PUT: `{ [roleId]: { config?, variants? } }`, where a full `{ engine, model, effort }` sets a row and `null` resets it to the shipped default; an absent key is left alone, and `promptScaffold: null` restores the shipped prompt text (a scaffold cannot be set from here). Example: `{ builder: { config: { engine: \"claude\", model: \"claude-sonnet-5-5\", effort: \"high\" } }, reviewer: { config: null } }`.",
     "Only the designated orchestrator seat and the operator's own session write; any other caller reads, and its write is refused with `role_presets_write_refused` before anything else is checked.",
@@ -3869,6 +3873,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Project whose allowed set to read or change. Defaults to your own on a list; required to add or remove."),
   }).passthrough(),
   seat_tick_settings: z.object({
+    maintenance: z.object({ enabled: z.boolean().optional(), intervalHours: z.union([z.number(), z.string()]).nullable().optional() }).optional()
+      .describe("Board maintenance (#2162): one built-in agent on the seat tick, off until enabled. intervalHours is the minimum gap (1–168, default 3; null restores 3). Needs no reason."),
     clientRequestId: clientRequestIdSchema,
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
     project: z.string().trim().min(1).optional()

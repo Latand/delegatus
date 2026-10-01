@@ -475,3 +475,32 @@ test("a record the journal REFUSED says so on the answer rather than only in a s
     SqliteStateCollection.prototype.patchSync = original;
   }
 });
+
+
+test("maintainer role launch binds its card through the ordinary spawn reservation", async () => {
+  const cwd = fs.mkdtempSync(path.join(SANDBOX, "maintenance-"));
+  const { createTask } = await import("@/lib/tasks/commands");
+  const { mutateTasksFile, loadTasks } = await import("@/lib/tasks/store");
+  const project = projectForCwd(cwd);
+  const taskId = mutateTasksFile(file => {
+    const result = createTask(file.tasks, { project, placement: "unplaced", text: "Обслуговування дошки", icon: "brush-cleaning", color: "slate", details: "Delegatus board maintenance run fixture.", clientRequestId: "fixture-maintenance-card" }, file.recentCreates);
+    if (!result.ok) throw new Error(result.error);
+    return { state: { tasks: result.tasks, recentCreates: result.recentCreates }, result: result.task.id };
+  });
+  const store = new AgentRegistry(path.join(SANDBOX, "maintenance-registry.json"));
+  setAgentRegistryForTests(store);
+  const context = { engine: "codex" as const, accountId: "fixture-maintenance-account", kind: "managed" as const, home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" as const } };
+  const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+    method: "POST", headers: { origin: "http://127.0.0.1", host: "127.0.0.1", "content-type": "application/json", "sec-fetch-site": "same-origin" },
+    body: JSON.stringify({ role: "maintainer", accountId: context.accountId, cwd, project, taskId, title: "Обслуговування дошки", "prompt": "fixture maintenance", clientAttemptId: "fixture-maintenance-spawn", notifyLauncher: false }),
+  }), {
+    registry: () => store, assertStructuredRuntime: () => {}, resolveSpawnAccount: () => context,
+    resolveHealthySpawnAccount: async () => ({ ...context, requestedAdmission: { kind: "retry-at", retryAt: new Date(Date.now() + 3600000).toISOString() } }),
+    storeImages: () => [], defer: () => {},
+  } as never);
+  const payload = await response.json();
+  if (response.status !== 202) throw new Error(`maintenance reservation: ${payload.error}`);
+  expect(response.status).toBe(202);
+  expect(store.spawnReceiptForClientAttempt("fixture-maintenance-spawn")?.agentRole).toBe("maintainer");
+  expect(loadTasks().find(t => t.id === taskId)).toMatchObject({ status: "assigned", assignments: [expect.objectContaining({ conversationId: payload.conversationId, launchId: payload.launchId })] });
+}, 30_000);

@@ -140,6 +140,7 @@ function SeatTickPopover({ anchorRef, project, projectName, read, onClose }: {
         state={state}
         surface="desktop"
         actions={<SeatTickActions read={read} state={state} offDefault={read.record?.effective.isDefault === false} surface="desktop" />}
+        onOpenedCard={onClose}
       />
     </div>,
     document.body,
