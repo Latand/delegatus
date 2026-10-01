@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeEach, expect, test } from "bun:test";
@@ -438,6 +439,66 @@ function durableRelayTools(sender: ReturnType<typeof actor>, store: InstanceType
   return { dispatches, service: createMcpToolService(viewerMcpBindings(undefined, control, domain), store, undefined,
     { recovery: viewerMcpRecoverableTools(domain) }) };
 }
+
+test("gateway MCP recovery never inherits an operator receipt after a lost HTTP conflict", async () => {
+  realAdmission();
+  const gateway = actor(undefined, "root");
+  setDeputyRootResolverForTests(() => gateway.id);
+  actor("project-b");
+  const args = { clientRequestId: "gateway-lost-conflict", project: "project-b", text: "same words" };
+  const downstreamKey = `mcp_orchestrator_${crypto.createHash("sha256").update(args.clientRequestId).digest("hex")}`;
+  const operator = await orchestratorPOST(request(undefined, { project: args.project, text: args.text, clientMessageId: downstreamKey }, { "sec-fetch-site": "same-origin" }));
+  expect(operator.status).toBe(200);
+  const operatorReceipt = await operator.json();
+  process.env.LLV_SPAWN_CAPABILITY = gateway.capability;
+  const domain = {
+    registrySnapshot: () => registry.readOnlySnapshot(),
+    attentionAuthority: () => ({ kind: "root", conversationId: gateway.id }),
+    callerAttribution: () => ({ kind: "gateway", conversationId: gateway.id }),
+    recoveryPredecessors: () => [],
+    sendSettlementPorts: () => ({ registry, client: null }),
+  } as unknown as ViewerMcpDomainDependencies;
+  const statuses: number[] = [];
+  const control: ViewerControlDependencies = { post: async () => { throw new Error("unexpected post"); },
+    dispatch: async (_pathname, body, headers, context) => {
+      context!.dispatch!.attempted = true;
+      const response = await orchestratorPOST(request(undefined, body, headers));
+      statuses.push(response.status);
+      throw new McpDispatchUncertainError("HTTP response lost");
+    } };
+  const file = path.join(process.env.LLV_STATE_DIR!, "gateway-recovery.sqlite");
+  let store = new SqliteMcpReceiptStore(file);
+  const service = () => createMcpToolService(viewerMcpBindings(undefined, control, domain), store, undefined,
+    { recovery: viewerMcpRecoverableTools(domain) });
+  try {
+    const first = await service().callTool("send_message_to_orchestrator", args);
+    expect(statuses).toEqual([409]);
+    expect(first).toMatchObject({ ok: false, code: "outcome_unknown" });
+    expect(JSON.stringify(first)).not.toContain(operatorReceipt.operationId);
+    store.close(); store = new SqliteMcpReceiptStore(file);
+    const recovered = await service().callTool("send_message_to_orchestrator", { ...args, recoveryOnly: true });
+    expect(recovered).toMatchObject({ ok: false, code: "outcome_unknown" });
+    expect(JSON.stringify(recovered)).not.toContain(operatorReceipt.operationId);
+    const previousBinding = { ...store.lookup(`send_message_to_orchestrator:${args.clientRequestId}`)!.binding! };
+    delete previousBinding.sendPayload;
+    expect(await viewerMcpRecoverableTools(domain).send_message_to_orchestrator!.recover(previousBinding, { legacy: false, args }))
+      .toMatchObject({ outcome: "unknown", ownership: "unknown", ids: {} });
+    const oldStore = new MemoryMcpReceiptStore();
+    const receiptKey = `send_message_to_orchestrator:${args.clientRequestId}`;
+    const stored = store.lookup(receiptKey)!;
+    oldStore.claim(receiptKey, stored.digest, "durable", previousBinding);
+    oldStore.complete(receiptKey, stored.digest, { ok: true, replayed: false, toolName: "send_message_to_orchestrator", clientRequestId: args.clientRequestId, operationId: operatorReceipt.operationId });
+    const oldService = createMcpToolService(viewerMcpBindings(undefined, control, domain), oldStore, undefined, { recovery: viewerMcpRecoverableTools(domain) });
+    const oldReplay = await oldService.callTool("send_message_to_orchestrator", args);
+    expect(oldReplay).toMatchObject({ ok: false, code: "recovery_not_permitted" });
+    expect(JSON.stringify(oldReplay)).not.toContain(operatorReceipt.operationId);
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(1);
+    const fresh = await service().callTool("send_message_to_orchestrator", { ...args, clientRequestId: "gateway-valid-recovery" });
+    expect(fresh).toMatchObject({ ok: true, state: "in-flight" });
+    expect(statuses).toEqual([409, 200]);
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(2);
+  } finally { store.close(); }
+});
 
 test("MCP relay receipts refuse a successor sender while unrelated sends retain predecessor recovery", async () => {
   realAdmission();

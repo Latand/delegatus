@@ -89,6 +89,7 @@ test("uncertain orchestrator send recovers one busy-target operation after late 
     await admit.promise;
     const held = f.registry.holdDelivery(body.conversationId as typeof f.first.id, String(body.text).trim(), String(body.clientMessageId), "text", [], null, {
       operationId: `operation-${requests.length}`, kind: "send", policy: "queue",
+      origin: { kind: "agent", role: "gateway", conversationId: (body.origin as { conversationId: string }).conversationId },
     });
     deliveryId = held.id;
     admitted.resolve();
@@ -146,6 +147,7 @@ test("missing-seat creation pins its recipient before the message and recovers a
       expect(body.policy).toBe("steer-or-queue");
       f.registry.holdDelivery(f.first.id, String(body.text), String(body.clientMessageId), "text", [], null, {
         operationId: "created-operation", kind: "send", policy: "queue",
+        origin: { kind: "agent", role: "gateway", conversationId: (body.origin as { conversationId: string }).conversationId },
       });
       throw new McpDispatchUncertainError("response lost after admission");
     },

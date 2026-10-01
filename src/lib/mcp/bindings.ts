@@ -6067,11 +6067,18 @@ function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   const seat = attribution.kind === "gateway" ? null :
     (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
       .find((candidate) => candidate.conversationId === attribution.conversationId);
+  if (!seat && (attribution.kind !== "gateway" || !attribution.conversationId)) {
+    throw new McpToolRefusal("the relay sender could not be bound to an authenticated conversation", {
+      code: "orchestrator_relay_refused", retryable: false,
+    });
+  }
   return {
     // Relay receipts belong to the exact sender, never its successor seat.
     caller: { kind: caller.kind, conversationId: caller.conversationId, project: caller.project },
     target: { project, identity: orchestratorSeatFor(project).active?.conversationId ?? null },
-    ...(seat ? { sendPayload: orchestratorRelayPayload(message, seat) } : {}),
+    sendPayload: seat ? orchestratorRelayPayload(message, seat) : {
+      text: message, origin: { kind: "agent", role: "gateway", conversationId: attribution.conversationId! },
+    },
     // Separate from direct send: equal client keys on different tools are
     // different logical instructions, even when their message text is equal.
     downstreamKey: orchestratorSendDownstreamKey(requestId(args)),
@@ -6153,6 +6160,9 @@ async function recoverSend(
      before bindings existed has no evidence that establishes its owner. */
   if (legacy) {
     return { outcome: "unknown", evidence: "legacy-receipt-unbound", reason: "no durable evidence establishes the owner of this send", ids: {}, ownership: "unknown" };
+  }
+  if (binding.toolName === "send_message_to_orchestrator" && !binding.sendPayload) {
+    return { outcome: "unknown", evidence: "delivery-record", reason: "the relay binding has no authenticated send payload", ids: {}, ownership: "unknown" };
   }
   if (!binding.target.identity) {
     return { outcome: "unknown", evidence: "none", reason: "the bound target names no conversation", ids: {} };

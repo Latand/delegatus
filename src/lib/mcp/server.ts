@@ -2619,6 +2619,9 @@ export function createMcpToolService(
             outcome = "conflict";
             return failure(typedTool, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
           }
+          // Older relay bindings omitted gateway authorship. Their cached
+          // results may name another author's send and cannot license replay.
+          if (typedTool === "send_message_to_orchestrator" && !recorded.sendPayload) return notPermitted();
           if (record.recoveryResult && record.stage === "not-executed") {
             outcome = "replay";
             return { ...record.recoveryResult, replayed: true };
