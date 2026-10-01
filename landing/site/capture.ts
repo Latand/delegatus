@@ -78,6 +78,7 @@ const server = Bun.serve({
     if (new URL(request.url).pathname.startsWith("/api/")) {
       if (eventsCheck) eventBodies.push(await request.clone().json());
       return worker.fetch(request, {
+        INSTALLS: { writeDataPoint: () => { throw new Error("Install pings do not belong in landing captures"); } },
         SITE_EVENTS: { writeDataPoint: (point) => { eventPoints.push(point); } },
         ASSETS: { fetch: async () => new Response("not found", { status: 404 }) },
       });

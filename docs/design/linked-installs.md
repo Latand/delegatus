@@ -959,11 +959,18 @@ Pairing adds B's label (hostname by default, editable), `installId`,
 version to B. The grant row on B records when it was last used and how many
 requests it made.
 
-### 5.2 No third party
+### 5.2 Direct peers and the separate install ping
 
 Peer requests go directly from A's Viewer to the address the user typed.
-There is no relay, rendezvous, telemetry or lookup service; nothing reaches
-any server run by the Delegatus project. The reverse proxy (or Tailscale)
+Linked-install traffic uses no project-run relay, rendezvous or lookup service.
+Separately, the production Viewer sends a default-on anonymous install ping
+once per UTC day to `https://delegatus.org/api/ping`: a dedicated random UUID,
+version, OS, architecture and install kind. That UUID is independent of the
+linked-install `installId`; no linked-install or project data enters the ping.
+The Worker adds Cloudflare's country and stores no IP. The first-start notice
+and Settings disclose it. Disable it in Settings, with `DELEGATUS_TELEMETRY=0`
+or `DO_NOT_TRACK=1`; environment opt-outs always win. See the README's
+“What leaves your machine” section. The reverse proxy (or Tailscale)
 in front of B is the user's own. The Telegram connector is not a transport
 for links (§11).
 

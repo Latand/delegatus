@@ -31,9 +31,12 @@ import {
   type McpCallLink,
 } from "@/lib/mcp/presentation";
 
+import { ContextTokensCaption } from "../feed/cards/ContextTokensCaption";
 import type { ToolEvent } from "../feed/parse";
 import { formatDuration, toolDurationMs } from "../feed/toolBlocks";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { hhmm } from "../utils";
+import { mobileClock } from "../feed/cards/ToolCard";
 
 const ICONS: Record<McpCallIcon, LucideIcon> = {
   bot: Bot,
@@ -147,6 +150,10 @@ export function McpCallCard({
   const payload = useMemo(() => prettyPayload(mcp?.args ?? {}, result), [mcp?.args, result]);
   const durationMs = toolDurationMs(event);
   const duration = durationMs === undefined ? "" : formatDuration(durationMs);
+  /* The phone's row runs out of width first: like every tool row there, its
+     time is HH:MM, so the token caption never pushes the clock off the edge. */
+  const isMobile = useIsMobile();
+  const time = isMobile ? mobileClock(event.ts) : hhmm(event.ts);
 
   /* Compact contract: one dense row — action meaning first, chrome last.
      The title (which already carries the useful payload, e.g. the message text
@@ -160,7 +167,7 @@ export function McpCallCard({
         <div data-testid="mcp-call-progress" className="absolute inset-x-0 top-0 h-0.5 animate-pulse bg-gradient-to-r from-transparent via-accent to-transparent" />
       ) : null}
       <details className="min-w-0">
-        <summary className="flex min-w-0 cursor-pointer list-none flex-nowrap items-center gap-x-2 overflow-hidden rounded-control py-0.5 text-ui hover:bg-sunken [@media(pointer:coarse)]:min-h-11 [&::-webkit-details-marker]:hidden">
+        <summary className="flex min-w-0 cursor-pointer list-none flex-nowrap items-center gap-x-2 max-[480px]:gap-x-1.5 overflow-hidden rounded-control py-0.5 text-ui hover:bg-sunken [@media(pointer:coarse)]:min-h-11 [&::-webkit-details-marker]:hidden">
           <Icon
             className={`h-3.5 w-3.5 shrink-0 ${
               state === "error" ? "text-danger" : state === "success" ? "text-success" : "text-accent"
@@ -192,7 +199,8 @@ export function McpCallCard({
             {state === "pending" ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden /> : state === "success" ? <CheckCircle2 className="h-3.5 w-3.5" aria-hidden /> : <CircleAlert className="h-3.5 w-3.5" aria-hidden />}
           </span>
           {duration ? <span className="shrink-0 text-caption tabular-nums text-muted">{duration}</span> : null}
-          {hhmm(event.ts) ? <span className="shrink-0 text-caption tabular-nums text-muted">{hhmm(event.ts)}</span> : null}
+          <ContextTokensCaption value={event.contextTokens} lead={Boolean(duration)} />
+          {time ? <span className="shrink-0 text-caption tabular-nums text-muted">{time}</span> : null}
         </summary>
         <div className="ml-5 mt-1 text-[10.5px] text-muted">
           {description.subtitle ? (

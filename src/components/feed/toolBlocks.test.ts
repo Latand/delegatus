@@ -128,3 +128,14 @@ test("formatDuration rounds long calls as seconds", () => {
   expect(formatDuration(coalesced[0].elapsedMs ?? 0)).toBe("120s");
   expect(formatDuration(179_500)).toBe("180s");
 });
+
+test("a coalesced run of polls sums the context tokens of its polls, and stays exact only when every poll is", () => {
+  const poll = (id: string, contextTokens?: { n: number; basis: "measured" | "estimate" }) =>
+    emptyPoll(id, contextTokens ? { contextTokens } : {});
+  const [exact] = coalesceFollowUps([poll("p1", { n: 100, basis: "measured" }), poll("p2", { n: 50, basis: "measured" })]);
+  expect(exact.kind === "polls" && exact.contextTokens).toEqual({ n: 150, basis: "measured" });
+  const [mixed] = coalesceFollowUps([poll("p1", { n: 100, basis: "measured" }), poll("p2", { n: 50, basis: "estimate" })]);
+  expect(mixed.kind === "polls" && mixed.contextTokens).toEqual({ n: 150, basis: "estimate" });
+  const [none] = coalesceFollowUps([poll("p1"), poll("p2")]);
+  expect(none.kind === "polls" && none.contextTokens).toBeUndefined();
+});

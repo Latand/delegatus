@@ -77,10 +77,10 @@ interface ResolvedComposeService {
   volumes: Array<{ source: string; target: string; read_only?: boolean }>;
 }
 
-function resolvedCompose(overrides: Record<string, string> = {}): { services: Record<string, ResolvedComposeService> } {
+function resolvedCompose(overrides: Record<string, string> = {}, envFileContents = ""): { services: Record<string, ResolvedComposeService> } {
   const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-compose-config-"));
   const envFile = overrides.LLV_ENV_FILE ?? path.join(fixtureDir, "service.env");
-  fs.writeFileSync(envFile, "");
+  fs.writeFileSync(envFile, envFileContents);
   /* The Compose file interpolates ${LLV_ALLOW_LEGACY_VIEWER:-0}; a developer or
      CI shell that exports it would leak into `docker compose config` and break
      the default-value assertions. Drop it from the inherited env so the test is
@@ -261,6 +261,22 @@ test("runtime-host propagates every Viewer Compose interpolation input", () => {
   expect(config.services.viewer.group_add).toEqual(["1203"]);
   expect(config.services.viewer.environment.TMUX_TMPDIR).toBe("/run/user/1201/agent-log-viewer");
   expect(config.services.viewer.volumes.map((volume) => volume.source)).toContain("/tmp/tmux-1201");
+});
+
+test("managed candidate launch retains service.env telemetry opt-outs", () => {
+  for (const optOut of ["DELEGATUS_TELEMETRY=0", "DO_NOT_TRACK=1", "LLV_TELEMETRY=0"]) {
+    const config = resolvedCompose({}, `${optOut}\n`);
+    const service = viewerComposeServiceFromConfig(JSON.stringify({ services: { viewer: config.services.viewer } }));
+    const args = viewerCandidateDockerArgs(candidate, service, {
+      runtimeSocket: "/state/runtime-host.sock",
+      legacyTmuxExternal: "0",
+      tmuxTmpdir: "/tmp",
+    });
+    const environment = environmentFromArgs(args);
+    expect(environment[optOut.split("=", 1)[0]!], optOut).toBe(optOut.split("=", 2)[1]);
+    expect(environment.DELEGATUS_TELEMETRY_OVERRIDE, optOut).toBe("");
+    expect(environment.DO_NOT_TRACK_OVERRIDE, optOut).toBe("");
+  }
 });
 
 test("the Viewer reads the host's evidence renders under /var/tmp, and only reads them (#2084)", () => {

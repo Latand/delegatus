@@ -1,9 +1,16 @@
-import type { Dictionary } from ".";
+import type { Dictionary } from "./core";
 
 /* English is the default locale. Keys are grouped by feature namespace.
    Plural entries use Intl.LDMLPluralRule forms; {name} placeholders are
    filled from t()'s params. uk.ts must mirror this key set. */
 export const en = {
+  "telemetry.settings": "Settings",
+  "telemetry.label": "Anonymous install ping",
+  "telemetry.locked": "Disabled by an environment variable.",
+  "telemetry.dismiss": "Got it",
+  "telemetry.close": "Close",
+  "telemetry.error": "Could not load or save the setting. Try again.",
+
   // Common, reused across components
   "common.serverUnavailable": "server unavailable",
   "common.loading": "loading…",
@@ -1852,6 +1859,17 @@ export const en = {
   "tools.durationSec": "{n}s",
   "tools.durationMin": "{m}m {s}s",
   "tools.durationMs": "{n}ms",
+  "tools.contextTokens.measured": { one: "{n} token added to the context by this call", other: "{n} tokens added to the context by this call" },
+  "tools.contextTokens.shared": {
+    one: "Approximately {n} token added to the context by this call: its share, by result size, of {total} measured for {calls} parallel calls",
+    other: "Approximately {n} tokens added to the context by this call: its share, by result size, of {total} measured for {calls} parallel calls",
+  },
+  "tools.contextTokens.estimate": {
+    one: "Approximately {n} token added to the context by this call, estimated from the size of its result",
+    other: "Approximately {n} tokens added to the context by this call, estimated from the size of its result",
+  },
+  "tools.contextTokens.groupMeasured": { one: "{n} token added to the context by these calls", other: "{n} tokens added to the context by these calls" },
+  "tools.contextTokens.groupEstimate": { one: "Approximately {n} token added to the context by these calls", other: "Approximately {n} tokens added to the context by these calls" },
   "tools.ranAt": "{start}–{end}",
   "tools.nestedWaits": { one: "{count} follow-up", other: "{count} follow-ups" },
 

@@ -1,4 +1,5 @@
 import { hasSameSessionOwner, type ToolEvent } from "./parse";
+import { sumContextTokens, type ContextTokens } from "./contextTokens";
 import { elapsedDurationMs, formatDuration } from "./duration";
 
 export { formatDuration } from "./duration";
@@ -70,7 +71,7 @@ export function isCollapsiblePoll(event: ToolEvent): boolean {
     (issue #497). */
 export type ToolChild =
   | { kind: "call"; event: ToolEvent }
-  | { kind: "polls"; events: ToolEvent[]; session?: string; elapsedMs?: number };
+  | { kind: "polls"; events: ToolEvent[]; session?: string; elapsedMs?: number; contextTokens?: ContextTokens };
 
 /**
  * Folds a block's flat follow-up children into render children: consecutive
@@ -95,6 +96,11 @@ export function coalesceFollowUps(children: readonly ToolEvent[]): ToolChild[] {
       continue;
     }
     out.push({ kind: "call", event });
+  }
+  for (const child of out) {
+    if (child.kind !== "polls") continue;
+    const contextTokens = sumContextTokens(child.events);
+    if (contextTokens) child.contextTokens = contextTokens;
   }
   return out;
 }

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "bun:test";
 import worker, { type DataPoint, type Env } from "./worker";
 
@@ -5,6 +6,7 @@ function harness() {
   const points: DataPoint[] = [];
   const assets: Request[] = [];
   const env: Env = {
+    INSTALLS: { writeDataPoint: (point) => { points.push(point); } },
     SITE_EVENTS: { writeDataPoint: (point) => { points.push(point); } },
     ASSETS: { fetch: async (request) => { assets.push(request); return new Response("static asset"); } },
   };
@@ -102,7 +104,7 @@ describe("landing site events", () => {
 
   test("unknown API paths and wrong methods cannot write or fall through to assets", async () => {
     const { env, points, assets } = harness();
-    expect((await worker.fetch(new Request("https://example.com/api/ping", { method: "POST" }), env)).status).toBe(404);
+    expect((await worker.fetch(new Request("https://example.com/api/unknown", { method: "POST" }), env)).status).toBe(404);
     const response = await worker.fetch(new Request("https://example.com/api/event"), env);
     expect(response.status).toBe(405);
     expect(response.headers.get("allow")).toBe("POST");
@@ -114,5 +116,43 @@ describe("landing site events", () => {
     const { env } = harness();
     env.SITE_EVENTS.writeDataPoint = () => { throw new Error("binding unavailable"); };
     await expect(worker.fetch(eventRequest(valid), env)).rejects.toThrow("binding unavailable");
+  });
+});
+
+const ping = { id: randomUUID(), v: "1.8.0", os: "linux", arch: "x64", kind: "checkout" };
+function pingRequest(body: unknown) {
+  const r = new Request("https://example.com/api/ping", { method: "POST", body: JSON.stringify(body), headers: { "CF-Connecting-IP": "192.0.2.1", Cookie: "ignored=yes" } });
+  Object.defineProperty(r, "cf", { value: { country: "UA" } }); return r;
+}
+describe("anonymous install ping", () => {
+  for (const kind of ["checkout", "packaged", "docker"]) test(`strict ${kind} point with country and no IP`, async () => {
+    const { env, points } = harness();
+    expect((await worker.fetch(pingRequest({ ...ping, kind }), env)).status).toBe(204);
+    expect(points).toEqual([{ blobs: [ping.id, ping.v, ping.os, ping.arch, kind, "UA"], doubles: [1], indexes: [ping.id] }]);
+  });
+  const bad = [null, [], {}, ...Object.keys(ping).map(k => Object.fromEntries(Object.entries(ping).filter(([key]) => key !== k))),
+    ...["ip", "country", "host", "project", "account", "engine", "path"].map(k => ({ ...ping, [k]: "extra" })),
+    ...["bad", randomUUID().slice(0, 14) + "0" + randomUUID().slice(15), 123].map(id => ({ ...ping, id })),
+    ...["1.2", "01.2.3", "1.2.3-01", "v1.2.3", 1].map(v => ({ ...ping, v })),
+    { ...ping, os: "hostname" }, { ...ping, arch: "unknown" }, { ...ping, kind: "dev" }];
+  test.each(bad.map((b, i) => [i, b] as const))("invalid ping %i writes nothing", async (_, b) => {
+    const { env, points } = harness(); expect((await worker.fetch(pingRequest(b), env)).status).toBe(400); expect(points).toHaveLength(0);
+  });
+  test("512 byte limit, including streamed bodies", async () => {
+    for (const size of [512, 513]) {
+      const { env, points } = harness();
+      const json = JSON.stringify(ping); const bytes = new TextEncoder().encode(json + " ".repeat(size - json.length));
+      const body = new ReadableStream({ start(c) { c.enqueue(bytes.slice(0, 100)); c.enqueue(bytes.slice(100)); c.close(); } });
+      expect((await worker.fetch(new Request("https://example.com/api/ping", { method: "POST", body }), env)).status).toBe(size === 512 ? 204 : 400);
+      expect(points).toHaveLength(size === 512 ? 1 : 0);
+    }
+  });
+  test.each(["{broken", new Uint8Array([255])])("malformed ping writes nothing", async body => {
+    const { env, points } = harness(); expect((await worker.fetch(new Request("https://example.com/api/ping", { method: "POST", body }), env)).status).toBe(400); expect(points).toHaveLength(0);
+  });
+  test("wrong method and failed binding", async () => {
+    const { env, points } = harness(); expect((await worker.fetch(new Request("https://example.com/api/ping"), env)).status).toBe(405);
+    expect(points).toHaveLength(0); env.INSTALLS.writeDataPoint = () => { throw new Error("unavailable"); };
+    await expect(worker.fetch(pingRequest(ping), env)).rejects.toThrow("unavailable");
   });
 });
