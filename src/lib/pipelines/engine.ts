@@ -4625,13 +4625,9 @@ function provisionFence(pipeline: Pipeline): PipelineProvisionOutcome["fence"] {
 
 async function provisionPipelineOutsideLease(pipeline: Pipeline, exec: ProvisionExecPort, signal: AbortSignal): Promise<PipelineProvisionOutcome> {
   const fence = provisionFence(pipeline);
-  // Older initial provisioning records resolved only caller-supplied bases.
-  // Automatically resolved retries carry the failed checkout's status detail.
-  // The projection's publication overlay is not persisted status evidence.
-  const legacy = pipeline.baseRefPinned === undefined && pipeline.baseRef ? findPipelineRecord(pipeline.id) : null;
-  const baseRefPinned = pipeline.baseRefPinned ?? Boolean(legacy?.state === "provisioning"
-    && legacy.baseRef === pipeline.baseRef && legacy.stateDetail === null
-    && !legacy.provisioningWait && legacy.runs.every((run) => run.attempts.length === 0));
+  // Legacy non-draft records did not retain caller pin provenance. Preserve
+  // their published-head default; new records carry the explicit marker.
+  const baseRefPinned = pipeline.baseRefPinned ?? false;
   let base = { baseBranch: pipeline.baseBranch, baseRef: pipeline.baseRef, baseRefPinned };
   if (!base.baseBranch || !base.baseRef || !pipeline.lastPassedCommit) {
     /* The lane's OWN base branch, never a hardcoded default: the create path

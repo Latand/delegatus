@@ -1105,8 +1105,8 @@ test("a new owner reviews the commit published after the producer turn ends", as
   }
 });
 
-for (const pin of ["automatic", "explicit", "legacy-draft", "legacy-provisioning", "legacy-auto-retry", "crash-before-apply"] as const) {
-  const pinned = pin === "explicit" || pin === "legacy-draft" || pin === "legacy-provisioning";
+for (const pin of ["automatic", "explicit", "legacy-draft", "legacy-unknown", "legacy-auto-retry", "crash-before-apply"] as const) {
+  const pinned = pin === "explicit" || pin === "legacy-draft";
   test(`successor provisioning records its backup and respects the caller's base pin (${pin})`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provision-published-"));
     const repo = path.join(root, "repo");
@@ -1151,16 +1151,18 @@ for (const pin of ["automatic", "explicit", "legacy-draft", "legacy-provisioning
         savePipelines([legacy]);
         expect(await patchPipeline(legacy.id, { action: "start" }, h.ports)).toMatchObject({ pipeline: { state: "provisioning" } });
       }
-      if (pin === "legacy-provisioning" || pin === "legacy-auto-retry") {
+      if (pin === "legacy-unknown" || pin === "legacy-auto-retry") {
         const legacy = loadPipelines().find((item) => item.id === created.pipeline!.id)!;
         delete legacy.baseRefPinned;
-        if (pin === "legacy-auto-retry") {
-          legacy.baseBranch = "main";
-          legacy.baseRef = base;
-          legacy.lastPassedCommit = base;
-          legacy.stateDetail = "retrying after a failed automatic checkout";
-        }
+        legacy.baseBranch = "main";
+        legacy.baseRef = base;
+        legacy.lastPassedCommit = base;
+        legacy.stateDetail = pin === "legacy-auto-retry" ? "failed automatic checkout" : null;
+        if (pin === "legacy-auto-retry") legacy.state = "needs_decision";
         savePipelines([legacy]);
+        if (pin === "legacy-auto-retry") {
+          expect(await patchPipeline(legacy.id, { action: "retry-stage" }, h.ports)).toMatchObject({ pipeline: { state: "provisioning" } });
+        }
       }
       if (pin === "crash-before-apply") {
         const { provisionPipelineWorktreeAsync } = await import("./git");
