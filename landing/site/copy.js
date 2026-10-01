@@ -63,7 +63,7 @@
   const strings = {
     en: {
       "nav.skip": "Skip to content",
-      "hero.promise": "Free and open source (MIT). It drives the official Claude Code and Codex CLIs on your machine, with your own logins.",
+      "hero.promise": "Free and open source. Runs the official CLIs on your machine, with your own logins.",
       "demo.views": "Views",
       "demo.board": "Board",
       "demo.orchestrator": "Orchestrator",
@@ -110,13 +110,13 @@
       "foot.needs": "macOS or Linux (Windows through WSL 2) · Bun 1.4+ · Claude Code, Codex or both",
       "meta.title": "Delegatus: delegate everything",
       "meta.description":
-        "Tell one agent what you want shipped. It runs your tasks on a board with Claude Code and Codex agents that build, review and report back. Free and open source, on your machine.",
+        "Tell one agent what you want shipped. It runs Claude Code and Codex on a board to build and review it. Free and open source, on your machine.",
       "nav.docs": "Docs",
       "nav.docsShort": "Docs",
       "nav.lang": "Language",
       "hero.title": "Delegate everything.",
       "hero.sub":
-        "Tell one agent what you want shipped. It runs every task on a board, where Claude Code and Codex build, review and message each other. You see every agent and can step in at any moment.",
+        "One agent runs every task on a board. Claude Code and Codex build, review and message each other. You steer.",
       "hero.replay": "Replay",
       "install.tabs": "Install through your agent",
       "install.copy": "Copy prompt",
@@ -142,7 +142,7 @@
     },
     uk: {
       "nav.skip": "Перейти до змісту",
-      "hero.promise": "Безкоштовний, з відкритим кодом (MIT). Запускає офіційні Claude Code і Codex CLI на твоїй машині, під твоїми власними акаунтами.",
+      "hero.promise": "Безкоштовний, з відкритим кодом. Запускає офіційні CLI локально, під твоїми акаунтами.",
       "demo.views": "Вигляд",
       "demo.board": "Дошка",
       "demo.orchestrator": "Оркестратор",
@@ -188,14 +188,14 @@
       "foot.needs": "macOS або Linux (Windows через WSL 2) · Bun 1.4+ · Claude Code, Codex або обидва",
       "meta.title": "Delegatus: делегуй усе",
       "meta.description":
-        "Скажи одному агенту, що треба зробити. Він веде задачі на дошці з агентами Claude Code і Codex, які пишуть код, перевіряють і звітують. Безкоштовно, з відкритим кодом, на твоїй машині.",
+        "Скажи одному агенту, що треба зробити. Claude Code і Codex пишуть і перевіряють це на дошці. Безкоштовно, з відкритим кодом, на твоїй машині.",
       "nav.docs": "Документація",
       "nav.docsShort": "Довідка",
       "nav.lang": "Мова",
       "hero.title": "Делегуй усе.",
       "foot.analytics": "Сайт рахує відвідування через Cloudflare Web Analytics (без cookies), натискання кнопок копіювання, запуски демо та відкриття на весь екран.",
       "hero.sub":
-        "Скажи одному агенту, що треба зробити. Він веде кожну задачу на дошці, де Claude Code і Codex пишуть код, перевіряють його й обмінюються повідомленнями. Ти бачиш усіх агентів і можеш втрутитися будь-якої миті.",
+        "Один агент веде задачі на дошці. Claude Code і Codex пишуть, рев’юють і листуються. Ти керуєш.",
       "hero.replay": "Ще раз",
       "install.tabs": "Встановлення через твого агента",
       "install.copy": "Копіювати промпт",

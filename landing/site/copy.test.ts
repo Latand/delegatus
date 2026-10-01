@@ -47,3 +47,16 @@ test("footer offers either CLI and narrates the install in the prompt's order", 
   const html = fs.readFileSync(new URL("./index.html", import.meta.url), "utf8");
   for (const key of ["foot.line", "foot.does"]) expect(html).toContain(`data-i18n="${key}">${en[key]}</p>`);
 });
+
+test("hero runs the official CLIs, the description fits a search snippet, and the page's fallbacks match", () => {
+  const { en, uk } = strings();
+  expect(en["hero.promise"]).toContain("Runs the official CLIs");
+  expect(uk["hero.promise"]).toContain("Запускає офіційні CLI");
+  for (const lang of [en, uk]) {
+    expect(lang["meta.description"].length).toBeLessThanOrEqual(155);
+    expect(lang["meta.description"]).toMatch(/Free and open source|Безкоштовно, з відкритим кодом/);
+  }
+  const html = fs.readFileSync(new URL("./index.html", import.meta.url), "utf8");
+  for (const key of ["hero.sub", "hero.promise"]) expect(html).toContain(`data-i18n="${key}">${en[key]}</p>`);
+  expect(html).toContain(`<meta name="description" content="${en["meta.description"]}">`);
+});
