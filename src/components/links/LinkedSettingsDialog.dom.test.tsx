@@ -347,6 +347,15 @@ test("everything that worked before still calls the same routes", async () => {
 });
 
 
+test.each(["revoked", "failing"])("a %s peer with a recent success has a danger sync line", async (state) => {
+  serve({ status: 200, body: {} }, { peers: [peer({ state, lastCall: Date.now() - 60_000 })] });
+  await mount();
+  const line = document.querySelector("[data-linked-sync]")!;
+  expect(line.getAttribute("data-linked-sync")).toBe("failing");
+  expect(line.classList.contains("text-danger")).toBe(true);
+  expect(line.textContent).toBe(en("links.syncFailing", { ago: "1 minute ago" }));
+});
+
 test("sync state is visible for outgoing and incoming links, including waiting and errors", async () => {
   const minutes = (count: number) => Date.now() - count * 60_000;
   serve({ status: 200, body: {} }, { peers: [peer({ lastCall: minutes(30), state: "failing", error: "unreachable" })], grants: [grant({ lastCall: minutes(2) }), grant({ id: "pending", lastCall: null }), grant({ id: "failed", lastCall: null, error: "malformed" }), grant({ id: "old", lastCall: minutes(40) })] });

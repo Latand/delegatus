@@ -233,7 +233,7 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
       {peers?.peers.map((peer) => <div key={peer.id} className="rounded-[8px] border border-border p-3 text-ui" data-linked-peer={peer.state}>
         <p className="font-semibold text-primary">{t("links.peerRow", { name: peer.label })}</p>
         <p className="text-muted">{peer.state === "revoked" ? t("links.revoked") : peer.url}</p>
-        <SyncLine lastCall={peer.lastCall} failing={peer.state === "failing"} now={readAt} />
+        <SyncLine lastCall={peer.lastCall} failing={peer.state !== "active"} now={readAt} />
         {peer.error ? <p className="mt-1 text-danger" data-linked-peer-error={peer.error}>{peerErrorMessage(t, peer.error, peer.label)}</p> : null}
         <div className="mt-2 flex gap-2"><button type="button" disabled={busy} onClick={() => void linkedAction(`/api/links/peers/${encodeURIComponent(peer.id)}`, "POST")} className="min-h-11 rounded-[8px] border border-border px-3 text-primary disabled:opacity-50">{t("links.syncNow")}</button><button type="button" disabled={busy} onClick={() => void linkedAction(`/api/links/peers/${encodeURIComponent(peer.id)}`, "DELETE")} className="min-h-11 rounded-[8px] border border-border px-3 text-primary">{t("links.remove")}</button></div>
       </div>)}

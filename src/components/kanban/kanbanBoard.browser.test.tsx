@@ -13865,13 +13865,13 @@ describe("linked board sync health", () => {
     const browser = await chromium.launch(LAUNCH);
     const evidence: Record<string, unknown> = {};
     try {
-      for (const [width, locale] of [[1440, "en"], [390, "uk"]] as const) {
+      for (const [width, locale] of [[1440, "en"], [1440, "uk"], [390, "en"], [390, "uk"]] as const) {
         const { context, page, pageErrors } = await openFixture(browser, server.base, { width, height: 900 }, "light", locale, "reduce", width === 390);
         let phase = "waiting";
         try {
           await page.clock.install();
           const status = () => ({ lastCall: phase === "waiting" ? null : Date.now() - (phase === "stale" ? 20 * 60_000 : 10_000), state: phase === "failing" ? "failing" : "active", error: phase === "failing" ? "malformed" : null });
-          await page.route("**/api/links/peers", (route) => route.fulfill({ json: { peers: [{ id: "peer", label: "Machine A", url: "https://peer.example.test", ...status() }] } }));
+          await page.route("**/api/links/peers", (route) => route.fulfill({ json: { peers: [{ id: "peer", label: "Machine A", url: "https://peer.example.test", ...status(), ...(phase === "revoked" ? { state: "revoked", error: "revoked", lastCall: Date.now() - 60_000 } : {}) }] } }));
           await page.route("**/api/links/grants", (route) => route.fulfill({ json: { grants: [{ id: "grant", label: "Machine A", today: 3, sevenDays: 12, ...status() }] } }));
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-linked-settings")));
           await page.locator('[data-linked-sync="waiting"]').first().waitFor();
@@ -13898,7 +13898,18 @@ describe("linked board sync health", () => {
           expect(new Set(Object.values(reading).map((entry) => entry.text)).size).toBe(3);
           await page.locator('[data-linked-grant]').scrollIntoViewIfNeeded();
           await page.screenshot({ path: path.join(out, `${width}-${locale}.png`) });
-          evidence[`${width}-${locale}`] = { reading, firstSyncBottom: firstTop, statuses: await page.locator('[data-linked-sync]').evaluateAll((rows) => rows.map((row) => row.getAttribute("data-linked-sync"))), pageErrors };
+          phase = "revoked";
+          await page.clock.fastForward(5000);
+          const revokedLine = page.locator('[data-linked-peer="revoked"] [data-linked-sync]');
+          await revokedLine.waitFor();
+          expect(await revokedLine.getAttribute("data-linked-sync")).toBe("failing");
+          const revoked = await revokedLine.evaluate((node) => ({ colour: getComputedStyle(node).color, text: node.textContent ?? "" }));
+          expect(revoked.colour).toBe(reading.failing.colour);
+          expect(revoked.colour).not.toBe(reading.synced.colour);
+          expect(revoked.text).toBe(translate(locale, "links.syncFailing", { ago: locale === "uk" ? "1 хвилину тому" : "1 minute ago" }));
+          await revokedLine.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-revoked.png`) });
+          evidence[`${width}-${locale}`] = { reading, revoked, firstSyncBottom: firstTop, statuses: await page.locator('[data-linked-sync]').evaluateAll((rows) => rows.map((row) => row.getAttribute("data-linked-sync"))), pageErrors };
           expect(pageErrors).toEqual([]);
         } finally { await context.close(); }
       }
