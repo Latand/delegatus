@@ -348,13 +348,35 @@ test("everything that worked before still calls the same routes", async () => {
 
 
 test("sync state is visible for outgoing and incoming links, including waiting and errors", async () => {
-  serve({ status: 200, body: {} }, { peers: [peer({ lastCall: 123456, state: "failing", error: "unreachable" })], grants: [grant({ lastCall: 123456 }), grant({ id: "pending", lastCall: null }), grant({ id: "failed", lastCall: 123456, error: "malformed" })] });
+  const minutes = (count: number) => Date.now() - count * 60_000;
+  serve({ status: 200, body: {} }, { peers: [peer({ lastCall: minutes(30), state: "failing", error: "unreachable" })], grants: [grant({ lastCall: minutes(2) }), grant({ id: "pending", lastCall: null }), grant({ id: "failed", lastCall: null, error: "malformed" }), grant({ id: "old", lastCall: minutes(40) })] });
   await mount();
-  expect([...document.querySelectorAll("[data-linked-sync]")].map((node) => node.getAttribute("data-linked-sync"))).toEqual(["failing", "synced", "waiting", "failing"]);
-  expect(document.querySelector('[data-linked-sync="waiting"]')!.textContent).toBe(en("links.syncWaiting"));
+  const lines = [...document.querySelectorAll("[data-linked-sync]")];
+  expect(lines.map((node) => node.getAttribute("data-linked-sync"))).toEqual(["failing", "synced", "waiting", "failing", "stale"]);
+  expect(lines.map((node) => node.textContent)).toEqual([
+    en("links.syncFailing", { ago: "30 minutes ago" }),
+    en("links.syncedAgo", { ago: "2 minutes ago" }),
+    en("links.syncWaiting"),
+    en("links.syncFailingNever"),
+    en("links.syncStale", { ago: "40 minutes ago" }),
+  ]);
+  expect(lines.map((node) => ["text-danger", "text-success", "text-muted", "text-warning"].find((tone) => node.classList.contains(tone)))).toEqual(["text-danger", "text-success", "text-muted", "text-danger", "text-warning"]);
   expect(document.querySelector('[data-linked-grant-error="malformed"]')!.textContent).toBe(en("links.peerError.version", { name: "home-pc" }));
 });
 
+test("the connected machines come before the pairing steps once a link exists, and after them when none does", async () => {
+  const position = () => {
+    const machines = document.querySelector(`section[aria-label="${en("links.connectedMachines")}"]`)!;
+    return machines.compareDocumentPosition(document.querySelector('[role="radiogroup"]')!);
+  };
+  serve({ status: 200, body: {} }, { peers: [peer({ lastCall: Date.now() })] });
+  await mount();
+  expect(position() & 4).toBe(4);
+  act(() => root?.unmount()); root = null; document.body.innerHTML = "";
+  serve({ status: 200, body: {} });
+  await mount();
+  expect(position() & 2).toBe(2);
+});
 
 test("successful link polling cannot hide an initial settings read failure", async () => {
   serve({ status: 200, body: {} });

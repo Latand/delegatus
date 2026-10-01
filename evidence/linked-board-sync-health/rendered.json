@@ -1,5 +1,20 @@
 {
   "1440-en": {
+    "reading": {
+      "synced": {
+        "colour": "rgb(23, 122, 55)",
+        "text": "Synced just now"
+      },
+      "stale": {
+        "colour": "rgb(138, 95, 0)",
+        "text": "Last successful sync 20 minutes ago"
+      },
+      "failing": {
+        "colour": "rgb(198, 40, 40)",
+        "text": "Last sync failed · last success just now"
+      }
+    },
+    "firstSyncBottom": 280.5,
     "statuses": [
       "failing",
       "failing"
@@ -7,6 +22,21 @@
     "pageErrors": []
   },
   "390-uk": {
+    "reading": {
+      "synced": {
+        "colour": "rgb(23, 122, 55)",
+        "text": "Синхронізовано щойно"
+      },
+      "stale": {
+        "colour": "rgb(138, 95, 0)",
+        "text": "Остання успішна синхронізація 20 хвилин тому"
+      },
+      "failing": {
+        "colour": "rgb(198, 40, 40)",
+        "text": "Остання синхронізація невдала · остання успішна щойно"
+      }
+    },
+    "firstSyncBottom": 252.5,
     "statuses": [
       "failing",
       "failing"

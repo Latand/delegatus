@@ -13870,25 +13870,35 @@ describe("linked board sync health", () => {
         let phase = "waiting";
         try {
           await page.clock.install();
-          const status = () => ({ lastCall: phase === "waiting" ? null : Date.now() - 10_000, state: phase === "failing" ? "failing" : "active", error: phase === "failing" ? "malformed" : null });
+          const status = () => ({ lastCall: phase === "waiting" ? null : Date.now() - (phase === "stale" ? 20 * 60_000 : 10_000), state: phase === "failing" ? "failing" : "active", error: phase === "failing" ? "malformed" : null });
           await page.route("**/api/links/peers", (route) => route.fulfill({ json: { peers: [{ id: "peer", label: "Machine A", url: "https://peer.example.test", ...status() }] } }));
           await page.route("**/api/links/grants", (route) => route.fulfill({ json: { grants: [{ id: "grant", label: "Machine A", today: 3, sevenDays: 12, ...status() }] } }));
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-linked-settings")));
           await page.locator('[data-linked-sync="waiting"]').first().waitFor();
           expect(await page.locator('[data-linked-sync="waiting"]').count()).toBe(2);
-          for (const next of ["synced", "failing"]) {
+          // An operator who opens the dialog to check sync sees a sync line without scrolling.
+          const firstTop = await page.locator("[data-linked-sync]").first().evaluate((node) => node.getBoundingClientRect().bottom);
+          expect(firstTop).toBeLessThan(await page.evaluate(() => innerHeight));
+          const reading: Record<string, { colour: string; text: string }> = {};
+          for (const next of ["synced", "stale", "failing"]) {
             phase = next;
             await page.clock.fastForward(5000);
             await page.locator(`[data-linked-sync="${next}"]`).first().waitFor();
             expect(await page.locator(`[data-linked-sync="${next}"]`).count()).toBe(2);
+            reading[next] = await page.locator(`[data-linked-sync="${next}"]`).first().evaluate((node) => ({ colour: getComputedStyle(node).color, text: node.textContent ?? "" }));
+            if (next !== "failing") expect(reading[next].text).not.toMatch(/\d{1,2}[/.]\d{1,2}[/.]\d{4}|\b[AP]M\b/);
+            if (locale === "uk") expect(reading[next].text).toMatch(/[А-Яа-яІіЇїЄє]/);
             if (next === "failing") {
               expect(await page.locator('[data-linked-peer-error="malformed"]').count()).toBe(1);
               expect(await page.locator('[data-linked-grant-error="malformed"]').count()).toBe(1);
             }
           }
+          // Fresh, stale and failing differ in both computed colour and wording.
+          expect(new Set(Object.values(reading).map((entry) => entry.colour)).size).toBe(3);
+          expect(new Set(Object.values(reading).map((entry) => entry.text)).size).toBe(3);
           await page.locator('[data-linked-grant]').scrollIntoViewIfNeeded();
           await page.screenshot({ path: path.join(out, `${width}-${locale}.png`) });
-          evidence[`${width}-${locale}`] = { statuses: await page.locator('[data-linked-sync]').evaluateAll((rows) => rows.map((row) => row.getAttribute("data-linked-sync"))), pageErrors };
+          evidence[`${width}-${locale}`] = { reading, firstSyncBottom: firstTop, statuses: await page.locator('[data-linked-sync]').evaluateAll((rows) => rows.map((row) => row.getAttribute("data-linked-sync"))), pageErrors };
           expect(pageErrors).toEqual([]);
         } finally { await context.close(); }
       }

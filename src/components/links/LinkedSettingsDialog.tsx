@@ -5,6 +5,7 @@ import { X } from "lucide-react";
 
 import { useLocale } from "@/lib/i18n";
 import { Z } from "@/components/layers";
+import { relativeTime } from "@/components/team/ui";
 
 import { OPEN_LINKED_SETTINGS_EVENT } from "./openLinkedSettings";
 import { LinkConnectForm } from "./LinkConnectForm";
@@ -26,12 +27,35 @@ type GrantState = { grants: { id: string; label: string; created: number; reques
 type Role = "accept" | "connect";
 type CodeState = { id: string; expiresAt: number; wrongAttempts: number; used: boolean; burned: boolean };
 
+// The board's own freshness bound (RemoteAgents.tsx): a success older than this
+// reads as stale here too.
+const SYNC_FRESH_MS = 900_000;
+type SyncState = "waiting" | "synced" | "stale" | "failing";
+const SYNC_TONE: Record<SyncState, string> = { waiting: "text-muted", synced: "text-success", stale: "text-warning", failing: "text-danger" };
+
+function syncState(lastCall: number | null, failing: boolean, now: number): SyncState {
+  if (failing) return "failing";
+  if (!lastCall) return "waiting";
+  return now - lastCall > SYNC_FRESH_MS ? "stale" : "synced";
+}
+
 function savedLanHttpAddress(publicUrl: string | null | undefined): boolean {
   if (!publicUrl) return false;
   try {
     const url = new URL(publicUrl);
     return url.protocol === "http:" && url.hostname !== "localhost" && url.hostname !== "[::1]" && !/^127(?:\.\d{1,3}){3}$/.test(url.hostname);
   } catch { return false; }
+}
+
+function SyncLine({ lastCall, failing, now }: { lastCall: number | null; failing: boolean; now: number }) {
+  const { t, locale } = useLocale();
+  const state = syncState(lastCall, failing, now);
+  const ago = lastCall ? relativeTime(new Date(lastCall).toISOString(), locale, now, "long") : "";
+  const text = state === "failing" ? (lastCall ? t("links.syncFailing", { ago }) : t("links.syncFailingNever"))
+    : state === "stale" ? t("links.syncStale", { ago })
+    : state === "synced" ? t("links.syncedAgo", { ago })
+    : t("links.syncWaiting");
+  return <p className={`mt-1 ${SYNC_TONE[state]}`} data-linked-sync={state}>{text}</p>;
 }
 
 export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
@@ -57,6 +81,8 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
   const [role, setRole] = useState<Role | null>(null);
   const grantsAtMint = useRef<Set<string>>(new Set());
   const [now, setNow] = useState(() => Date.now());
+  // The instant the link lists were last read: the age of each sync is counted from it.
+  const [readAt, setReadAt] = useState(() => Date.now());
   const codeFinished = code !== null && (codeStatus?.used === true || now >= code.expiresAt);
   useEffect(() => {
     if (!code || codeFinished) return;
@@ -89,6 +115,7 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
     setShared(await s.json() as SharedState);
     setPeers(await p.json() as PeerState);
     setGrants(await g.json() as GrantState);
+    setReadAt(Date.now());
   };
   useEffect(() => {
     let active = true;
@@ -196,6 +223,23 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
     { id: "connect", title: t("links.role.connect"), hint: t("links.role.connectHint") },
   ];
   const noGrantsOrPeers = peers !== null && grants !== null && !peers.peers.length && !grants.grants.length;
+  const hasLinks = Boolean(peers?.peers.length || grants?.grants.length);
+  const connectedMachines = (
+    <section className={`space-y-3 ${hasLinks ? "border-b pb-5" : "border-t pt-5"} border-border`} aria-label={t("links.connectedMachines")}>
+      <h3 className="text-body font-semibold text-primary">{t("links.connectedMachines")}</h3>
+      {linkError ? <p role="alert" className="rounded-[8px] bg-danger-soft px-3 py-2 text-ui text-danger">{requestErrorMessage(t, linkError)}</p> : null}
+      {notice ? <p role="status" className="rounded-[8px] bg-warning-soft px-3 py-2 text-ui text-warning">{t("links.removeWarning")}</p> : null}
+      {noGrantsOrPeers ? <p className="text-ui text-muted">{t("links.connectedMachinesEmpty")}</p> : null}
+      {peers?.peers.map((peer) => <div key={peer.id} className="rounded-[8px] border border-border p-3 text-ui" data-linked-peer={peer.state}>
+        <p className="font-semibold text-primary">{t("links.peerRow", { name: peer.label })}</p>
+        <p className="text-muted">{peer.state === "revoked" ? t("links.revoked") : peer.url}</p>
+        <SyncLine lastCall={peer.lastCall} failing={peer.state === "failing"} now={readAt} />
+        {peer.error ? <p className="mt-1 text-danger" data-linked-peer-error={peer.error}>{peerErrorMessage(t, peer.error, peer.label)}</p> : null}
+        <div className="mt-2 flex gap-2"><button type="button" disabled={busy} onClick={() => void linkedAction(`/api/links/peers/${encodeURIComponent(peer.id)}`, "POST")} className="min-h-11 rounded-[8px] border border-border px-3 text-primary disabled:opacity-50">{t("links.syncNow")}</button><button type="button" disabled={busy} onClick={() => void linkedAction(`/api/links/peers/${encodeURIComponent(peer.id)}`, "DELETE")} className="min-h-11 rounded-[8px] border border-border px-3 text-primary">{t("links.remove")}</button></div>
+      </div>)}
+      {grants?.grants.map((grant) => <div key={grant.id} data-linked-grant="" className="flex items-center justify-between gap-2 rounded-[8px] border border-border p-3 text-ui"><div><p>{t("links.grantRow", { name: grant.label })} · {t("links.counts", { today: grant.today, seven: grant.sevenDays })}</p><SyncLine lastCall={grant.lastCall ?? null} failing={Boolean(grant.error)} now={readAt} />{grant.error ? <p className="mt-1 text-danger" data-linked-grant-error={grant.error}>{peerErrorMessage(t, grant.error, grant.label)}</p> : null}</div><button type="button" disabled={busy} onClick={() => void linkedAction(`/api/links/grants?id=${encodeURIComponent(grant.id)}`, "DELETE")} className="min-h-11 rounded-[8px] border border-border px-3">{t("links.revoke")}</button></div>)}
+    </section>
+  );
   return (
     <div className={`fixed inset-0 ${Z.modal} flex items-center justify-center bg-black/40 p-0 sm:p-8`} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section role="dialog" aria-modal="true" aria-label={t("links.title")} data-linked-settings="" className="flex h-full w-full max-w-[640px] flex-col overflow-hidden bg-canvas shadow-2 sm:h-auto sm:max-h-[90vh] sm:rounded-[12px] sm:border sm:border-border">
@@ -207,6 +251,7 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
           <p className="text-ui text-muted">{t("links.intro")}</p>
           {loadError || linkReadError ? <p role="alert" data-linked-state="unavailable" data-linked-severity="error" className="rounded-[8px] bg-danger-soft px-3 py-2 text-ui text-danger">{t("links.state.unavailable")}</p> : null}
           {shown === "open-to-internet" ? <p data-linked-banner="" role="note" className="rounded-[8px] bg-danger-soft px-3 py-2 text-ui text-danger">{t("links.state.open-to-internet")}</p> : null}
+          {hasLinks ? connectedMachines : null}
           <div role="radiogroup" aria-label={t("links.role.label")} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {roles.map((option) => (
               <button
@@ -300,20 +345,7 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
               </LinkStep>
             </ol>
           </div>
-          <section className="space-y-3 border-t border-border pt-5" aria-label={t("links.connectedMachines")}>
-            <h3 className="text-body font-semibold text-primary">{t("links.connectedMachines")}</h3>
-            {linkError ? <p role="alert" className="rounded-[8px] bg-danger-soft px-3 py-2 text-ui text-danger">{requestErrorMessage(t, linkError)}</p> : null}
-            {notice ? <p role="status" className="rounded-[8px] bg-warning-soft px-3 py-2 text-ui text-warning">{t("links.removeWarning")}</p> : null}
-            {noGrantsOrPeers ? <p className="text-ui text-muted">{t("links.connectedMachinesEmpty")}</p> : null}
-            {peers?.peers.map((peer) => <div key={peer.id} className="rounded-[8px] border border-border p-3 text-ui" data-linked-peer={peer.state}>
-              <p className="font-semibold text-primary">{t("links.peerRow", { name: peer.label })}</p>
-              <p className="text-muted">{peer.state === "revoked" ? t("links.revoked") : peer.url}</p>
-              <p className="mt-1 text-muted" data-linked-sync={peer.state === "failing" ? "failing" : peer.lastCall ? "synced" : "waiting"}>{peer.lastCall ? t("links.syncedAt", { date: new Date(peer.lastCall).toLocaleString() }) : t("links.syncWaiting")}</p>
-              {peer.error ? <p className="mt-1 text-danger" data-linked-peer-error={peer.error}>{peerErrorMessage(t, peer.error, peer.label)}</p> : null}
-              <div className="mt-2 flex gap-2"><button type="button" disabled={busy} onClick={() => void linkedAction(`/api/links/peers/${encodeURIComponent(peer.id)}`, "POST")} className="min-h-11 rounded-[8px] border border-border px-3 text-primary disabled:opacity-50">{t("links.syncNow")}</button><button type="button" disabled={busy} onClick={() => void linkedAction(`/api/links/peers/${encodeURIComponent(peer.id)}`, "DELETE")} className="min-h-11 rounded-[8px] border border-border px-3 text-primary">{t("links.remove")}</button></div>
-            </div>)}
-            {grants?.grants.map((grant) => <div key={grant.id} data-linked-grant="" className="flex items-center justify-between gap-2 rounded-[8px] border border-border p-3 text-ui"><div><p>{t("links.grantRow", { name: grant.label })} · {t("links.counts", { today: grant.today, seven: grant.sevenDays })}</p><p className="mt-1 text-muted" data-linked-sync={grant.error ? "failing" : grant.lastCall ? "synced" : "waiting"}>{grant.lastCall ? t("links.syncedAt", { date: new Date(grant.lastCall).toLocaleString() }) : t("links.syncWaiting")}</p>{grant.error ? <p className="mt-1 text-danger" data-linked-grant-error={grant.error}>{peerErrorMessage(t, grant.error, grant.label)}</p> : null}</div><button type="button" disabled={busy} onClick={() => void linkedAction(`/api/links/grants?id=${encodeURIComponent(grant.id)}`, "DELETE")} className="min-h-11 rounded-[8px] border border-border px-3">{t("links.revoke")}</button></div>)}
-          </section>
+          {hasLinks ? null : connectedMachines}
           <section className="space-y-3 border-t border-border pt-5" aria-label={t("links.sharedProjects")}>
             <h3 className="text-body font-semibold text-primary">{t("links.sharedProjects")}</h3>
             <p className="text-ui text-muted">{t("links.shareDefault")}</p>
