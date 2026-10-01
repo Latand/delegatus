@@ -785,6 +785,71 @@ test("seat confirm: the transcript's record takes over as the card once the deli
   }
 });
 
+test("seat confirm, Claude SDK record: one mandate card and no mandate text outside it at every step", async () => {
+  const conversationId = "conversation_first_seat_sdk";
+  const launchId = "launch_first_seat_sdk";
+  const engineId = "engine_message_seat_mandate";
+  /* A Claude seat journals its mandate the way the SDK delivers it: a user
+     record with `promptSource: "sdk"` and a uuid, which parses as a delivered
+     system row until the delivery evidence names it by that engine id. */
+  const sdkRecords = [
+    JSON.stringify({
+      type: "user",
+      uuid: engineId,
+      promptSource: "sdk",
+      timestamp: new Date(RECORD_AT).toISOString(),
+      message: { role: "user", content: MANDATE },
+    }),
+  ];
+  const claudeAdopted = (): FileEntry => ({ ...adopted(conversationId, launchId), engine: "claude", fmt: "claude", root: "claude-projects" }) as FileEntry;
+  /* The mandate's own words outside the card: the card collapses to a header. */
+  const mandateTextOutsideCard = (host: HTMLElement): boolean => {
+    const clone = host.cloneNode(true) as HTMLElement;
+    for (const card of clone.querySelectorAll("[data-mandate-card]")) card.remove();
+    return (clone.textContent ?? "").includes("Pinned mandate");
+  };
+  const realFetch = globalThis.fetch;
+  let answerEvidence: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => { answerEvidence = resolve; });
+  globalThis.fetch = (async () => {
+    await gate;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ messages: { [engineId]: { origin: "agent", mandate: { kind: "version", version: 1 } } }, occurrences: [] }),
+    } as Response;
+  }) as unknown as typeof fetch;
+  try {
+    resetMessageProvenanceCacheForTests();
+    const { host, root } = render({
+      ...placeholder(conversationId, launchId),
+      engine: "claude",
+      fmt: "claude",
+      spawn: launchFacts(conversationId, launchId, { mandate: { kind: "version", version: 1 }, prompt: MANDATE, promptEcho: MANDATE }),
+    } as FileEntry);
+    expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(1);
+
+    /* The tail's record lands before the evidence answers: the system row that
+       carries the mandate is not painted beside the held card. */
+    tailLines = sdkRecords;
+    now = RECORD_AT + 1_000;
+    rerender(root, claudeAdopted());
+    expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(1);
+    expect(host.querySelectorAll('[data-feed-kind="sysmsg"]')).toHaveLength(0);
+    expect(mandateTextOutsideCard(host)).toBe(false);
+
+    answerEvidence();
+    for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    /* The record is now the card itself, and the held one has stepped aside. */
+    expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(1);
+    expect(host.querySelectorAll('[data-feed-kind="sysmsg"] [data-mandate-card]')).toHaveLength(1);
+    expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(0);
+    expect(mandateTextOutsideCard(host)).toBe(false);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test("seat confirm without a version names the card unqualified until the poll says more", () => {
   const provisional = seatProvisionalFile({
     clientRequestId: "request_first_seat_custom",

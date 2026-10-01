@@ -16,7 +16,6 @@ import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations
 import type { Pipeline } from "@/lib/pipelines/types";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
-import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 
@@ -231,8 +230,12 @@ function fmApply() {
   else if (fm.step === 2) adopted(launch({ state: "recovered", initialMessage: "delivered", deliveredAt: Date.now(), ...retired }));
   else adopted(undefined);
 }
+/* A Claude seat's mandate is journaled the way the SDK delivers it: `promptSource: "sdk"` with an engine uuid. */
+const FM_SEAT_UUID = "engine_message_seat_mandate";
 function fmTranscript(): string {
-  const user = JSON.stringify({ type: "user", timestamp: iso(60), message: { role: "user", content: fmText() }, promptSource: "typed", origin: { kind: "human" } });
+  const user = JSON.stringify(FM_SEAT
+    ? { type: "user", uuid: FM_SEAT_UUID, timestamp: iso(60), message: { role: "user", content: fmText() }, promptSource: "sdk" }
+    : { type: "user", timestamp: iso(60), message: { role: "user", content: fmText() }, promptSource: "typed", origin: { kind: "human" } });
   const answer = JSON.stringify({ type: "assistant", timestamp: iso(20), message: { role: "assistant", content: [{ type: "text", text: "Looking at the export test." }] } });
   return `${[user, ...(fm.step >= 3 ? [answer] : [])].join("\n")}\n`;
 }
@@ -1137,7 +1140,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   /* The seat's mandate is Delegatus's own delivery, so the server's provenance names it as such and the transcript's
      record of it renders as the mandate card, never as the operator's bubble. */
   if (url.pathname === "/api/log/provenance" && FM_SEAT) {
-    return json({ messages: {}, occurrences: [{ textDigest: messageTextDigest(fmText()), deliveredAt: iso(61), origin: "agent", mandate: { kind: "version", version: 1 } }] });
+    return json({ messages: { [FM_SEAT_UUID]: { origin: "agent", mandate: { kind: "version", version: 1 } } }, occurrences: [] });
   }
   if (url.pathname === "/api/conversation-host" && method === "POST") {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;

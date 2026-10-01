@@ -1047,11 +1047,17 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      that record renders as the card itself: the first user row names its
      mandate only once the delivery evidence answers, and painted before that
      it would be the operator's bubble. The agent's first prose ends the wait,
-     so evidence that never names a mandate cannot hide the row for good. */
-  const firstUserItem = useMemo(() => feed.items.find(({ item }) => item.kind === "user")?.item ?? null, [feed.items]);
+     so evidence that never names a mandate cannot hide the row for good.
+     Every record `resolveDeliveredItem` can turn into the card counts as the
+     mandate's record: a typed user row, an internal relay row, and the
+     delivered system row a Claude seat's SDK-sourced mandate parses as. */
+  const firstMandateRecord = useMemo(() => feed.items.find(({ item }) =>
+    item.kind === "user"
+    || (item.kind === "tmsg" && item.internal)
+    || (item.kind === "sysmsg" && item.deliveredMessage))?.item ?? null, [feed.items]);
   const holdsMandate = Boolean(
     heldMandate !== null
-      && !(firstUserItem && resolveDeliveredItem(firstUserItem, provenanceLookup).kind === "mandate")
+      && !(firstMandateRecord && resolveDeliveredItem(firstMandateRecord, provenanceLookup).kind === "mandate")
       && !feed.items.some(({ item }) => item.kind === "prose"),
   );
   const mandateCard = launch?.mandate && launch.prompt
@@ -1222,7 +1228,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     });
     const rows: ConversationRow[] = visibleItems.flatMap(({ anchorKey, key, item, responseDurationMs, submissionDedup }, visibleIndex) => {
       if (submissionDedup && withheldRecords.has(submissionDedup)) return [];
-      if (holdsMandate && item === firstUserItem) return [];
+      if (holdsMandate && item === firstMandateRecord) return [];
       if (item.kind === "sysmsg" && item.deliveredMessage?.engineMessageId
         && withheldNativeRecords.has(item.deliveredMessage.engineMessageId)) return [];
       const answer = answerFor(visibleStartIndex + visibleIndex);

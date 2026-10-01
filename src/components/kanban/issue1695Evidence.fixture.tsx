@@ -18,7 +18,6 @@ import { withTaskCompletion } from "@/lib/tasks/completion";
 import { admissionSnapshot } from "@/lib/tasks/groupHide";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
-import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
@@ -1714,6 +1713,9 @@ if (EDITING) {
 const line = (secondsAgo: number, body: Record<string, unknown>) => JSON.stringify({ timestamp: iso(secondsAgo), ...body });
 const said = (secondsAgo: number, text: string) => line(secondsAgo, { type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } });
 const asked = (secondsAgo: number, text: string) => line(secondsAgo, { type: "user", message: { role: "user", content: text }, promptSource: "typed", origin: { kind: "human" } });
+/* A Claude seat's mandate is journaled the way the SDK delivers it: `promptSource: "sdk"` with an engine uuid. */
+const FM_SEAT_UUID = "engine_message_seat_mandate";
+const delivered = (secondsAgo: number, text: string) => line(secondsAgo, { type: "user", uuid: FM_SEAT_UUID, message: { role: "user", content: text }, promptSource: "sdk" });
 const tool = (secondsAgo: number, id: string, name: string, input: Record<string, unknown>) => [
   line(secondsAgo, { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name, input }] } }),
   line(secondsAgo - 2, { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } }),
@@ -1730,7 +1732,7 @@ function transcriptOf(pathname: string): string {
   }
   if (FIRST_MESSAGE && file === orchestrator) {
     if (String(file.path).startsWith("spawn:")) return "";
-    return `${[asked(60, fmText()), ...(fm.step >= 3 ? [said(20, "Looking at the export test.")] : [])].join("\n")}\n`;
+    return `${[FM_SEAT ? delivered(60, fmText()) : asked(60, fmText()), ...(fm.step >= 3 ? [said(20, "Looking at the export test.")] : [])].join("\n")}\n`;
   }
   if (SEAT_NOISE && file === orchestrator) {
     if (file.spawn) return "";
@@ -2586,7 +2588,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   /* The seat's mandate is Delegatus's own delivery, so the server's provenance names it as such and the transcript's
      record of it renders as the mandate card, never as the operator's bubble. */
   if (url.pathname === "/api/log/provenance" && FIRST_MESSAGE && FM_SEAT) {
-    return json({ messages: {}, occurrences: [{ textDigest: messageTextDigest(fmText()), deliveredAt: iso(61), origin: "agent", mandate: { kind: "version", version: 1 } }] });
+    return json({ messages: { [FM_SEAT_UUID]: { origin: "agent", mandate: { kind: "version", version: 1 } } }, occurrences: [] });
   }
   if (url.pathname === "/api/log") return json({ data: "", start: 0, offset: 0, size: 0 });
   if (url.pathname === "/api/conversations") return json({ items: files, total: files.length, nextCursor: null });
