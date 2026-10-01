@@ -64,6 +64,7 @@ import { MobileSeatCard } from "./mobile/MobileSeatCard";
 import { activityMobileMenuEntry } from "./activity/menuEntry";
 import { teamMobileMenuEntry } from "./team/menuEntry";
 import { onboardingMobileMenuEntries } from "./onboarding/menuEntries";
+import { openTelemetrySettings } from "./telemetry/TelemetrySettings";
 import { openLinkedSettings } from "./links/openLinkedSettings";
 import { openExternalRelaySettings } from "./externalRelay/openExternalRelaySettings";
 import { selfUpdateMobileMenuEntry } from "./selfUpdate/menuEntry";
@@ -2067,6 +2068,7 @@ function ProjectDashboardView({
       { kind: "custom", key: "awake", node: <div className="px-2.5"><KeepAwakeMenuRow /></div> },
       { kind: "divider", key: "d-setup" },
       ...onboardingMobileMenuEntries(t, () => mobileNav.closeSheet()),
+      { kind: "row", key: "settings", icon: null, label: t("telemetry.settings"), onSelect: () => { mobileNav.closeSheet(); openTelemetrySettings(); } },
       { kind: "row", key: "linked-settings", icon: null, label: t("links.title"), onSelect: () => { mobileNav.closeSheet(); openLinkedSettings(); } },
       { kind: "row", key: "external-relay", icon: null, label: t("externalRelay.title"), onSelect: () => { mobileNav.closeSheet(); openExternalRelaySettings(); } },
       selfUpdateMobileMenuEntry(t, () => mobileNav.closeSheet()),
@@ -2289,6 +2291,7 @@ function ProjectDashboardView({
             taskId={mobileTop.id}
             layout={pipelineLayout}
             project={project}
+            projectName={projectName}
             groups={layoutGroups}
             manual={layoutManual}
             files={files}

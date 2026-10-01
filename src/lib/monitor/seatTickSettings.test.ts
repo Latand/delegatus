@@ -310,3 +310,21 @@ test("a prompt that is neither a string nor null is named rather than stored", (
     error: "monitorPrompt must be a string, or null to clear it",
   });
 });
+
+
+test("maintenance needs no reason, clamps hours and survives tick expiry", () => {
+  const actor = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+  const at = "2026-09-30T12:00:00Z";
+  const current = defaultSeatTickSettings("fixture-maintenance");
+  const result = applySeatTickSettingsChange(current, { maintenance: { enabled: true, intervalHours: "0.5" } }, { at, actor });
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error(result.error);
+  expect(result.settings.maintenance?.intervalHours).toBe(1); expect(result.notes?.length).toBeGreaterThan(0);
+  expect(seatTickSettingsAreDefault(result.settings)).toBe(true);
+  const expiry = effectiveSeatTickSettings({ ...result.settings, enabled: false, reason: "fixture wait", until: at }, Date.parse(at) + 1, 3600000);
+  expect(expiry.maintenance.enabled).toBe(true);
+  expect(seatTickSettingsAfterLapse("fixture-maintenance", expiry).maintenance?.enabled).toBe(true);
+  const reset = applySeatTickSettingsChange(result.settings, { maintenance: { intervalHours: null } }, { at, actor });
+  if (!reset.ok) throw new Error(reset.error); expect(reset.settings.maintenance?.intervalHours).toBe(3);
+  const invalid = applySeatTickSettingsChange(current, { maintenance: { enabled: "yes" as never } }, { at, actor }); expect(invalid.ok).toBe(false);
+});

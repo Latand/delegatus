@@ -207,7 +207,7 @@ export function incomingSync(grant: Grant, input: unknown): { status: number; bo
   const agentAfter = wire.agents === undefined ? undefined : decodeCursor(wire.agents);
   if (wire.agents !== undefined && agentAfter === undefined) return { status: 400, body: { error: "malformed" } };
   const agentPage = wire.agentPage === undefined ? 0 : wire.agentPage;
-  if (!Number.isInteger(agentPage) || (agentPage as number) < 0 || (agentPage as number) > 200 || (agentPage as number) % 50 !== 0) return { status: 400, body: { error: "malformed" } };
+  if (!Number.isInteger(agentPage) || (agentPage as number) < 0 || (agentPage as number) > 400) return { status: 400, body: { error: "malformed" } };
   const push = wire.push && typeof wire.push === "object" && !Array.isArray(wire.push) ? wire.push as Record<string, unknown> : null;
   const pushAgents = push?.agents;
   const served = serveTasks(grant, { ...wire, ...(push && push.rows === undefined ? { push: undefined } : {}) }, agreed);

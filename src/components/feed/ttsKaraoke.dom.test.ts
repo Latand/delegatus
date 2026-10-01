@@ -192,3 +192,14 @@ describe("karaokeRoots (#1022)", () => {
     expect(karaokeRoots(feed.querySelector("[data-tts-trigger]")!)).toEqual([]);
   });
 });
+
+test("a later visible fragment keeps global offsets and cannot highlight earlier speech", () => {
+  const source = "The first answer fragment.\n\nThe later answer fragment.";
+  const offset = source.indexOf("The later");
+  const root = render(`<div data-tts-offset="${offset}"><div data-tts-body>The later answer fragment.</div></div>`);
+  const body = root.querySelector("[data-tts-body]")!;
+  const map = buildKaraokeMap([body], source)!;
+  expect(map.rangeFor(0, offset)).toBeNull();
+  expect(map.rangeFor(offset, source.length)).not.toBeNull();
+  expect(map.charAtDomPoint(body.firstChild!, 0)).toBe(offset);
+});

@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 
 /* FIRST: fold DELEGATUS_* into LLV_* before anything below reads the
    environment (docs/design/rename-delegatus.md §5). */

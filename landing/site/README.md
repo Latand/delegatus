@@ -27,7 +27,9 @@ It takes 1440×900 and 390×844 in English and Ukrainian: the full page, the
 first screen, each section, the hero's script step by step (it presses the
 product's own send control, as a visitor does), every tab of every frame, and
 the legacy install. `report.json` beside the PNGs lists page errors, requests
-the demo left unanswered, and sideways overflow.
+the demo left unanswered, and sideways overflow. `--scheme=light` renders with
+the browser asking for a light colour scheme; the page and the demo pin dark,
+so the PNGs should match the default run.
 
 ```
 bun landing/site/capture.ts --check-request=10
@@ -36,6 +38,14 @@ bun landing/site/capture.ts --check-request=10
 renders nothing: it plays the hero's script ten times in each language and
 width and fails unless every step shows the visitor's request exactly once in
 the orchestrator's chat, above the orchestrator's answer.
+
+```
+CHROME_BIN=/usr/bin/google-chrome-stable bun landing/site/capture.ts --check-prompt
+```
+
+expands the Claude Code and Codex install prompts in the hero and the footer,
+in both languages and widths, and fails unless the whole prompt can be read to
+its last line, with nothing clipped by the prompt's box or a container around it.
 
 ```
 CHROME_BIN=/usr/bin/google-chrome-stable bun landing/site/capture.ts --check-fullscreen

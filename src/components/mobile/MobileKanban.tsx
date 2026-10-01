@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, ArrowRight, ArrowUp, Ban, Check, CircleCheck, EyeOff, Inbox, MessageSquare, Plus, TriangleAlert, UserRoundCheck } from "lucide-react";
+import { ArrowDown, ArrowLeftRight, ArrowRight, ArrowUp, Ban, Check, CircleCheck, EyeOff, Inbox, MessageSquare, Plus, TriangleAlert, UserRoundCheck } from "lucide-react";
 import {
   useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState,
   type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type TouchEvent as ReactTouchEvent,
@@ -14,6 +14,9 @@ import { KANBAN_STATUSES, type KanbanCard as KanbanCardModel } from "@/component
 import { subjectOf } from "@/components/kanban/cardDismissal";
 import { statusLabel, TASK_COLOR_HEX } from "@/components/kanban/KanbanCard";
 import { RemoteAgents, type RemoteAgentView } from "@/components/kanban/RemoteAgents";
+import { useManagedOnText } from "@/components/kanban/RemoteLanes";
+import { remoteCardsFor, useRemoteFeed, type RemoteCard } from "@/components/kanban/remoteFeed";
+import { remoteLaneNote, remoteLaneSummary } from "@/components/pipelines/remoteLaneSummary";
 import { pipelineTitle } from "@/components/kanban/PipelineSection";
 import { useTaskMutations, type StatusMoveOutcome, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
@@ -317,10 +320,17 @@ function LooseLine({ item, now }: { item: PhoneCard; now: number }) {
 }
 
 /** What agents do that the pipeline line does not already say (§3.4). */
-function AgentsLine({ item, nowMs }: { item: PhoneCard; nowMs: number }) {
+function AgentsLine({ item, nowMs, remote }: { item: PhoneCard; nowMs: number; remote: boolean }) {
   const { t } = useLocale();
   const agents = item.agents;
   if (!agents) return null;
+  /* A synced task has no local agents by design: the peer runs them, and its
+     lane above says so. The word "no agents yet" would contradict that lane,
+     so a remote card keeps the working count and the age and drops the word
+     (the desktop card does the same). */
+  const word = agents.conversations ? t("mobile2.kanban.agents", { count: agents.conversations }) : remote ? null : t("mobile2.kanban.noAgents");
+  const lead = Boolean(agents.working || word);
+  if (!lead && agents.atMs <= 0) return null;
   return (
     <span data-phone-card-agents="" className="flex min-w-0 items-center gap-[5px] text-label tabular-nums text-muted">
       {agents.working ? (
@@ -329,11 +339,11 @@ function AgentsLine({ item, nowMs }: { item: PhoneCard; nowMs: number }) {
             <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-success motion-safe:animate-pulse" />
             {t("mobile2.kanban.working", { count: agents.working })}
           </span>
-          <Sep />
+          {word || agents.atMs > 0 ? <Sep /> : null}
         </>
       ) : null}
-      <span className="shrink-0">{agents.conversations ? t("mobile2.kanban.agents", { count: agents.conversations }) : t("mobile2.kanban.noAgents")}</span>
-      {agents.atMs > 0 ? <><Sep /><span className="shrink-0">{ageText(t, agents.atMs, nowMs)}</span></> : null}
+      {word ? <span className="shrink-0">{word}</span> : null}
+      {agents.atMs > 0 ? <>{word ? <Sep /> : null}<span className="shrink-0">{ageText(t, agents.atMs, nowMs)}</span></> : null}
     </span>
   );
 }
@@ -360,8 +370,35 @@ function ClearedLine({ item, nowMs }: { item: PhoneCard; nowMs: number }) {
   );
 }
 
-function CardView({ item, now, project, remoteAgents, onOpen, onLongPress, onDismiss, onUndo }: {
+/** The one lane of a remote task the board card shows: an open one before an
+    ended one, the newest first (the feed is ordered newest first). */
+function shownRemoteLane(remote: RemoteCard) {
+  return remote.lanes.find((lane) => lane.s !== "completed" && lane.s !== "closed") ?? remote.lanes[0] ?? null;
+}
+
+/** A task that runs on another machine: its lane as the card density draws it,
+    then the passive line naming where it is managed (docs/design/synced-task-card.md §8). */
+function RemoteCardLines({ remote, title, nowMs, withLane }: { remote: RemoteCard; title: string; nowMs: number; withLane: boolean }) {
+  const { t, locale } = useLocale();
+  const { label, hint } = useManagedOnText(remote);
+  const lane = withLane ? shownRemoteLane(remote) : null;
+  const summary = useMemo(() => (lane ? remoteLaneSummary(lane, title) : null), [lane, title]);
+  const managedOn = useMemo(() => (lane ? remoteLaneNote(t, lane, remote.host, lane.stale ? { asOf: lane.asOf, locale } : null) : null), [t, locale, lane, remote.host]);
+  return (
+    <>
+      {summary && managedOn ? <PipelineBlock summary={summary} density="card" nowMs={nowMs} taskTitle={title} managedOn={managedOn} /> : null}
+      <span data-phone-card-host={remote.install} title={hint} className="flex min-w-0 items-center gap-1 text-label font-semibold leading-tight text-secondary">
+        <ArrowLeftRight className="h-3 w-3 shrink-0 text-info" aria-hidden />
+        <span className="min-w-0 truncate">{label}</span>
+      </span>
+    </>
+  );
+}
+
+function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPress, onDismiss, onUndo }: {
   item: PhoneCard;
+  /** The task runs on another linked machine. */
+  remote: RemoteCard | null;
   /** Epoch seconds. */
   now: number;
   /** The card's project, on a board that spans several (#2098). */
@@ -425,13 +462,20 @@ function CardView({ item, now, project, remoteAgents, onOpen, onLongPress, onDis
         <PipelineBlock summary={item.shown} density="card" nowMs={nowMs} taskTitle={item.kind === "task" ? title : null} aside={othersText(t, item)} />
       ) : null}
       {loose ? <LooseLine item={item} now={now} /> : <AskLine item={item} />}
-      <AgentsLine item={item} nowMs={nowMs} />
+      <AgentsLine item={item} nowMs={nowMs} remote={remote !== null} />
       <ClearedLine item={item} nowMs={nowMs} />
+      {remote ? <RemoteCardLines remote={remote} title={title} nowMs={nowMs} withLane={!item.shown} /> : null}
     </>
   );
-  const tone = `${item.kind === "task" && item.finished && !item.need ? QUIET : ""} ${item.edge ? EDGE[item.edge] : ""}`;
+  const quiet = item.kind === "task" && item.finished && !item.need;
+  const tone = `${quiet ? QUIET : ""} ${item.edge ? EDGE[item.edge] : ""}${remote ? " remote-surface" : ""}`;
   const aside = onDismiss || onUndo;
   const className = aside ? BODY : `${CARD} ${tone}`;
+  /* The phone draws no borders, so the remote card's tinted line joins the
+     shadows its colour edge and its lift already write. */
+  const faceStyle = aside ? undefined : remote
+    ? { boxShadow: [colour ? colour.boxShadow : quiet ? null : "var(--shadow-1)", "inset 0 0 0 1px var(--remote-edge)"].filter(Boolean).join(", ") }
+    : colour;
   const data = {
     "data-phone-card": item.key,
     "data-phone-card-kind": item.kind,
@@ -441,9 +485,9 @@ function CardView({ item, now, project, remoteAgents, onOpen, onLongPress, onDis
     "data-phone-card-pipeline": item.shown?.pipeline.id,
   };
   const face = onOpen ? (
-    <button type="button" {...data} aria-label={label} className={className} style={aside ? undefined : colour} onClick={onOpen}>{body}</button>
+    <button type="button" {...data} aria-label={remote ? `${label}, ${t("kanban.remote.hint", { host: remote.host })}` : label} className={className} style={faceStyle} onClick={onOpen}>{body}</button>
   ) : (
-    <div {...data} className={className} style={aside ? undefined : colour}>{body}</div>
+    <div {...data} className={className} style={faceStyle}>{body}</div>
   );
   return (
     <>
@@ -704,25 +748,10 @@ export function MobileKanban(props: MobileKanbanProps) {
   const nav = useMobileNavStore();
   const navState = useMobileNav();
   const ids = useId().replace(/:/g, "");
-  const [remoteAgentFeed, setRemoteAgentFeed] = useState<{ project: string; rows: RemoteAgentView[] } | null>(null);
-  const remoteAgents = remoteAgentFeed?.project === project
-    ? remoteAgentFeed.rows.filter((row) => row.p === project)
-    : [];
-  useEffect(() => {
-    if (!/^repo-[0-9a-f]{32}$/.test(project)) return;
-    let live = true;
-    const refresh = async () => {
-      try {
-        const answer = await fetch(`/api/links/agents?project=${encodeURIComponent(project)}`);
-        if (!answer.ok) return;
-        const payload = await answer.json() as { agents?: RemoteAgentView[] };
-        if (live) setRemoteAgentFeed({ project, rows: Array.isArray(payload.agents) ? payload.agents : [] });
-      } catch { /* Preserve the last rows while the Viewer is unavailable. */ }
-    };
-    void refresh();
-    const timer = window.setInterval(refresh, 15_000);
-    return () => { live = false; window.clearInterval(timer); };
-  }, [project]);
+  /* A board that spans several projects (#2098) reads every linked project's lanes. */
+  const remoteFeed = useRemoteFeed(props.projectLabel ? null : project);
+  const remoteAgents = remoteFeed && !props.projectLabel ? remoteFeed.agents.filter((row) => row.p === project) : [];
+  const remoteCards = useMemo(() => remoteCardsFor(storedTasks, remoteFeed), [storedTasks, remoteFeed]);
 
   /* The desktop's mutations: a move or a hide shows at once, is written with
      the task's revision as its guard, and a refusal puts the card back. The
@@ -999,6 +1028,7 @@ export function MobileKanban(props: MobileKanbanProps) {
       now={now}
       project={projectLabel?.(item.card.project) ?? null}
       remoteAgents={item.card.task ? remoteAgents.filter((row) => row.task === item.card.task!.id) : []}
+      remote={item.card.task ? remoteCards.get(item.card.task.id) ?? null : null}
       onOpen={open(item)}
       onLongPress={() => openSheet(item)}
       onDismiss={item.reasons.length ? () => sendCardDismissal(item, false) : null}

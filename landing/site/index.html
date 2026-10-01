@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Delegatus: delegate everything</title>
-  <meta name="description" content="Tell one agent what you want shipped. It runs Claude Code and Codex builders and reviewers, checks the work and reports back.">
+  <meta name="description" content="Tell one agent what you want shipped. It runs Claude Code and Codex on a board to build and review it. Free and open source, on your machine.">
   <meta name="theme-color" content="#111218">
   <link rel="icon" href="../../public/brand/delegatus-mark.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -55,8 +55,8 @@
       <div class="hero-head">
         <div class="hero-copy">
           <h1 data-i18n="hero.title">Delegate everything.</h1>
-          <p class="sub" data-i18n="hero.sub">Tell one agent what you want shipped. It runs the builders and reviewers, checks the work and reports back.</p>
-          <p class="promise" data-i18n="hero.promise">Runs on your machine. Uses your agent accounts.</p>
+          <p class="sub" data-i18n="hero.sub">One agent runs your board. Claude Code and Codex build and review. You see every agent and can step in.</p>
+          <p class="promise" data-i18n="hero.promise">Free and open source. Runs the official CLIs on your machine, with your own logins.</p>
         </div>
         <div class="install-slot" data-install="hero"></div>
       </div>
@@ -98,7 +98,7 @@
           <li><i class="dot"></i><span data-i18n="run.c1">Each task gets a worktree, a builder and a fresh read-only reviewer.</span></li>
           <li><i class="dot"></i><span data-i18n="run.c2">Claude Code builds, Codex reviews, and they message each other.</span></li>
           <li><i class="dot"></i><span data-i18n="run.c3">A failed review sends the work back to the builder, within a round budget.</span></li>
-          <li><i class="dot dot-amber"></i><span data-i18n="run.c4">Decisions come to you. Merging on a passed review is optional and off by default.</span></li>
+          <li><i class="dot dot-amber"></i><span data-i18n="run.c4">Decisions come to you, and you can pause any pipeline. Merging on a passed review is off by default.</span></li>
         </ul>
       </div>
       <div class="stage-wrap">
@@ -169,9 +169,9 @@
   <footer class="band">
     <div class="band-inner">
       <div class="band-copy">
-        <p class="band-line" data-i18n="foot.line">Source on GitHub. Runs locally with your agent accounts.</p>
-        <p class="band-does" data-i18n="foot.does">The prompt installs Delegatus, connects its MCP server to your agent and starts it on this machine. Then you pick a project and create its orchestrator.</p>
-        <p class="band-needs" data-i18n="foot.needs">macOS or Linux (Windows through WSL 2) · Bun 1.4+ · Claude Code or Codex</p>
+        <p class="band-line" data-i18n="foot.line">Free and open source. Runs on your machine with your own Claude Code or Codex.</p>
+        <p class="band-does" data-i18n="foot.does">Give the prompt to your own Claude Code or Codex. It installs and starts Delegatus on this machine, connects itself to it and ends with a link to open. There you pick a project and create its orchestrator.</p>
+        <p class="band-needs" data-i18n="foot.needs">macOS or Linux (Windows through WSL 2) · Bun 1.4+ · Claude Code, Codex or both</p>
       </div>
       <div class="install-slot" data-install="footer"></div>
     </div>

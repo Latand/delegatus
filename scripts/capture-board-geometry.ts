@@ -5858,8 +5858,73 @@ async function linkingMain(): Promise<void> {
   console.log(`linking geometry: ${path.join(OUT_DIR, "linking.json")}`);
 }
 
+/** Install ping disclosure and real Settings API at both product widths. */
+async function installPingMain(): Promise<void> {
+  seedHome();
+  // Keep the real settings unlocked while CI fencing prevents outbound pings.
+  Object.assign(SERVER_EXTRA_ENV, { CI: "1", DELEGATUS_TELEMETRY: "1", DO_NOT_TRACK: "0" });
+  const { createServer } = await import("node:net");
+  const reserve = createServer();
+  await new Promise<void>(resolve => reserve.listen(0, "127.0.0.1", resolve));
+  const port = (reserve.address() as { port: number }).port;
+  await new Promise<void>(resolve => reserve.close(() => resolve()));
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const evidenceDir = process.env.INSTALL_PING_RENDER_DIR;
+  if (!evidenceDir) throw new Error("Set INSTALL_PING_RENDER_DIR to a persistent render directory");
+  fs.mkdirSync(evidenceDir, { recursive: true });
+  const report: { frames: Record<string, unknown>; failures: string[] } = { frames: {}, failures: [] };
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    browser = await chromium.launch({ executablePath: process.env.CHROME_BIN || undefined, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    for (const width of [390, 1440]) for (const lang of ["en", "uk"] as const) {
+      await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "Content-Type": "application/json", Origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
+      await fetch(`${baseUrl}/api/telemetry`, { method: "PUT", headers: { "Content-Type": "application/json", Origin: baseUrl }, body: JSON.stringify({ enabled: true, noticeDismissed: false }) });
+      const context = await browser.newContext({ viewport: { width, height: 900 }, reducedMotion: "reduce" });
+      await context.addInitScript((language: string) => localStorage.setItem("llv_lang", language), lang);
+      const page = await context.newPage();
+      await page.goto(baseUrl);
+      const notice = page.locator("[data-telemetry-notice]");
+      await notice.waitFor({ state: "visible", timeout: 60_000 });
+      const noticeBackground = await notice.evaluate(node => getComputedStyle(node).backgroundColor);
+      if (noticeBackground === "rgba(0, 0, 0, 0)") report.failures.push(`${lang}-${width}: transparent notice`);
+      await page.screenshot({ path: path.join(evidenceDir, `${lang}-${width}-notice.png`) });
+      await notice.getByRole("button", { name: translate(lang, "telemetry.settings"), exact: true }).click();
+      const dialog = page.locator("[data-telemetry-settings]");
+      await dialog.waitFor({ state: "visible" });
+      const toggle = dialog.getByRole("switch");
+      if (!await toggle.isChecked() || !await toggle.isEnabled()) report.failures.push(`${lang}-${width}: default switch unavailable`);
+      const geometry = await dialog.evaluate(node => {
+        const box = node.getBoundingClientRect();
+        return { background: getComputedStyle(node).backgroundColor, overflow: node.scrollWidth - node.clientWidth, left: box.left, right: box.right, bottom: box.bottom, text: node.textContent };
+      });
+      report.frames[`${lang}-${width}`] = geometry;
+      if (geometry.background === "rgba(0, 0, 0, 0)") report.failures.push(`${lang}-${width}: transparent settings`);
+      if (geometry.overflow > 1 || geometry.left < 0 || geometry.right > width || geometry.bottom > 900) report.failures.push(`${lang}-${width}: clipped settings`);
+      if (!geometry.text?.includes("DO_NOT_TRACK=1") || !geometry.text?.includes(translate(lang, "telemetry.label"))) report.failures.push(`${lang}-${width}: missing localized disclosure`);
+      await page.screenshot({ path: path.join(evidenceDir, `${lang}-${width}-settings.png`) });
+      await toggle.click();
+      await page.waitForFunction(() => !(document.querySelector("[role=switch]") as HTMLInputElement)?.checked);
+      const saved = await (await fetch(`${baseUrl}/api/telemetry`)).json();
+      if (saved.enabled !== false) report.failures.push(`${lang}-${width}: switch did not persist`);
+      await page.reload();
+      await page.waitForSelector("[data-telemetry-notice]");
+      await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
+      await page.locator("[data-telemetry-settings]").waitFor();
+      if (await page.locator("[data-telemetry-settings] [role=switch]").isChecked()) report.failures.push(`${lang}-${width}: reload lost opt-out`);
+      await context.close();
+    }
+  } finally { await browser?.close(); await stop(server); }
+  fs.writeFileSync(path.join(evidenceDir, "product.json"), JSON.stringify(report, null, 2) + "\n");
+  if (report.failures.length) throw new Error(report.failures.join("; "));
+  console.log("Install ping notice, settings and persisted opt-out passed EN/UK at 390 and 1440");
+}
+
 /* BOARD_CAPTURE_CASE=header runs the header bar's case (#1801), account-removal the removal dialog's (#1857), activity the activity dashboard's, instead of the camera probes. */
-if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
+if (process.env.BOARD_CAPTURE_CASE === "install-ping") await installPingMain();
+else if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
 else if (process.env.BOARD_CAPTURE_CASE === "self-update-auto") await selfUpdateAutoMain();
 else if (process.env.BOARD_CAPTURE_CASE === "linking") await linkingMain();
 else if (process.env.BOARD_CAPTURE_CASE === "activity") await activityMain();

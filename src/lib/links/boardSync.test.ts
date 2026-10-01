@@ -261,12 +261,12 @@ test("done expiry stops owner exports both ways without deleting replicas; reope
   }
 }, 30_000);
 
-test("a new decision after done expiry resumes exports both ways; an older decision does not", async () => {
-  const names = ["done-decision-A", "done-decision-B"];
+test.each([false, true])("a new decision after done expiry resumes exports both ways without a task edit (restart=%s); an older decision does not", async (restart) => {
+  const names = [`done-decision-A-${restart}`, `done-decision-B-${restart}`];
   const installs = [await install(names[0]!), await install(names[1]!)];
   const peerId = await link(installs[0]!, installs[1]!, undefined, installs[1]!, false);
   const at = Date.now();
-  const tasks = [];
+  const tasks: BoardTask[] = [];
   for (const [index, owner] of installs.entries()) {
     const name = names[index]!;
     seedTranscript(name, "Fixture decision request");
@@ -285,18 +285,30 @@ test("a new decision after done expiry resumes exports both ways; an older decis
   }
   await sync(installs[0]!, peerId);
   for (const [index, task] of tasks.entries()) expect(await taskOn(installs[1 - index]!, task.id)).toBeUndefined();
+  await sync(installs[0]!, peerId);
+  for (const [index, task] of tasks.entries()) expect(await taskOn(installs[1 - index]!, task.id)).toBeUndefined();
+  const originals = await Promise.all(installs.map((owner, index) => taskOn(owner, tasks[index]!.id)));
+  if (restart) {
+    await Promise.all(installs.map(stopInstall));
+    for (const [index, name] of names.entries()) installs[index] = await install(name);
+  }
   for (const [index, owner] of installs.entries()) {
     await request(owner, `/test/agent-state?state=waiting&since=${at / 1000}`);
     await request(owner, "/test/scan");
-    expect((await patchOn(owner, tasks[index]!.id, { text: `Decision resumed ${index}` })).status).toBe(200);
+    expect(await taskOn(owner, tasks[index]!.id)).toEqual(originals[index]);
   }
   await sync(installs[0]!, peerId);
   for (const [index, task] of tasks.entries()) {
-    expect((await taskOn(installs[1 - index]!, task.id))?.text).toBe(`Decision resumed ${index}`);
+    expect((await taskOn(installs[1 - index]!, task.id))?.text).toBe(task.text);
+    expect(await taskOn(installs[index]!, task.id)).toEqual(originals[index]);
     expect(await tasksOf(installs[index]!)).toHaveLength(2);
     const figures = (await request(installs[index]!, "/test/store")).body;
     expect((figures.bytes as Record<string, { rows: number }>).task_tombstones.rows).toBe(0);
   }
+  await captured(installs[1]!);
+  await sync(installs[0]!, peerId);
+  expect((await captured(installs[1]!)).every((page) =>
+    !(JSON.parse(page.request).push?.rows?.length) && !(JSON.parse(page.response).tasks?.rows?.length))).toBe(true);
 }, 30_000);
 
 test("remote agents travel both ways as prompt-free summaries and stay in their linked project", async () => {
@@ -1682,3 +1694,172 @@ test("historical unchosen-title sender reproduces placeholder arrivals both ways
   await sync(a, peerId);
   expect(await Promise.all([tasksOf(a), tasksOf(b)])).toEqual(before);
 }, 30_000);
+/* Synced task card (docs/design/synced-task-card.md): the owner's lanes ride in the agents part. */
+type LaneSpec = { id: string; taskIds: string[]; state: string; current?: string; sentinel?: string; stages: Array<Record<string, unknown>> };
+const threeStages = (running: "review" | "fix" | "done", extra: Record<string, unknown> = {}) => [
+  { id: "build", role: "builder", next: "review", attempt: { state: "passed" } },
+  { id: "review", role: "reviewer", next: "fix", attempt: { state: running === "review" ? "running" : "passed", ...extra } },
+  { id: "fix", role: "builder", next: null, ...(running === "review" ? {} : { attempt: { state: running === "fix" ? "running" : "passed" } }) },
+];
+const laneOn = (base: string, spec: LaneSpec) => request(base, "/test/pipeline", "POST", { project: key, ...spec });
+type ApiLane = { k: string; tk: string[]; s: string; install: string; peer: string; stale: boolean; g: { id: string; st: string; n?: number; e?: string; m?: string }[] };
+const lanesOn = async (base: string) => (await request(base, `/api/links/agents?project=${key}`)).body as unknown as { agents: unknown[]; lanes: ApiLane[]; self: string | null; hosts: Record<string, { label: string; linked: boolean }> };
+
+test("a remote task's running lane shows its stages on the other install and follows a stage change after the next sync, both ways", async () => {
+  const a = await install("lanes-A");
+  const b = await install("lanes-B");
+  const peerId = await link(a, b);
+  const onB = await createOn(b, "Ship the synced card");
+  await sync(a, peerId);
+  const owner = (await taskOn(a, onB.id))!.machine!;
+  expect(owner).toBe((await taskOn(b, onB.id))!.machine!);
+  expect((await lanesOn(a)).lanes).toEqual([]);
+  expect((await laneOn(b, { id: "5e0a41c2", taskIds: [onB.id], state: "running", current: "review", stages: threeStages("review") })).status).toBe(200);
+  await sync(a, peerId);
+  const first = await lanesOn(a);
+  expect(first.lanes).toHaveLength(1);
+  expect(first.lanes[0]).toMatchObject({ k: "l:5e0a41c2", tk: [onB.id], s: "running", install: owner, stale: false });
+  expect(first.lanes[0]!.g.map((stage) => [stage.id, stage.st])).toEqual([["build", "passed"], ["review", "running"], ["fix", "pending"]]);
+  expect(first.lanes[0]!.g[1]).toMatchObject({ n: 1, e: "codex", m: "gpt-6.1-sol" });
+  expect(first.hosts[owner]).toMatchObject({ linked: true });
+  expect(first.self).toBeTruthy();
+  // B's review fails and its fix runs: A shows the new states after its next call.
+  await laneOn(b, { id: "5e0a41c2", taskIds: [onB.id], state: "running", current: "fix", stages: threeStages("fix", { findings: ["one"] }) });
+  await sync(a, peerId);
+  const moved = (await lanesOn(a)).lanes[0]!;
+  expect(moved.g.map((stage) => [stage.id, stage.st])).toEqual([["build", "passed"], ["review", "passed"], ["fix", "running"]]);
+  // The other direction: a lane A owns reaches B over push.agents.
+  const onA = await createOn(a, "A's own task");
+  await sync(a, peerId);
+  await laneOn(a, { id: "a1b2c3d4", taskIds: [onA.id], state: "needs_decision", current: "review", stages: threeStages("review") });
+  await sync(a, peerId);
+  const seenOnB = await lanesOn(b);
+  expect(seenOnB.lanes.map((lane) => lane.k)).toEqual(["l:a1b2c3d4"]);
+  expect(seenOnB.lanes[0]).toMatchObject({ s: "needs_decision", install: (await taskOn(b, onA.id))!.machine });
+  // A lane ended on the owner leaves the feed as a marker once its task goes.
+  expect((await request(b, `/api/tasks/${onB.id}`, "DELETE")).status).toBe(200);
+  await sync(a, peerId);
+  expect((await lanesOn(a)).lanes).toEqual([]);
+}, 60_000);
+
+test("a peer at c18ab355 keeps syncing tasks and agents in both directions while lane rows cross", async () => {
+  for (const oldClient of [true, false]) {
+    const aName = `lanes-mixed-A-${oldClient}`, bName = `lanes-mixed-B-${oldClient}`;
+    const a = await install(aName, {}, oldClient ? oldSource() : process.cwd());
+    const b = await install(bName, {}, oldClient ? process.cwd() : oldSource());
+    const peerId = await link(a, b);
+    const current = oldClient ? b : a, old = oldClient ? a : b;
+    const owned = await createOn(current, "Owned by the new install");
+    seedTranscript(oldClient ? aName : bName, "PROMPT-CANARY-old-side-agent");
+    seedTranscript(oldClient ? bName : aName, "PROMPT-CANARY-new-side-agent");
+    await request(a, "/test/scan");
+    await request(b, "/test/scan");
+    await sync(a, peerId);
+    expect((await laneOn(current, { id: "5e0a41c2", taskIds: [owned.id], state: "running", current: "review", stages: threeStages("review") })).status).toBe(200);
+    await captured(b);
+    await sync(a, peerId);
+    await sync(a, peerId);
+    const wire = (await captured(b)).flatMap((call) => [call.request, call.response]).join("\n");
+    // B's bodies hold the new side's lane row: its answer to an old client, or what a new client pushed to an old server.
+    expect(wire).toContain('"k":"l:5e0a41c2"');
+    // Tasks and agents keep syncing both ways, whichever side is old.
+    expect((await taskOn(old, owned.id))?.text).toBe(owned.text);
+    expect(((await request(a, `/test/agents?project=${key}`)).body as unknown as unknown[])).toHaveLength(1);
+    expect(((await request(b, `/test/agents?project=${key}`)).body as unknown as unknown[])).toHaveLength(1);
+    const backTask = await createOn(old, "Created on the old side");
+    await sync(a, peerId);
+    expect((await taskOn(current, backTask.id))?.text).toBe(backTask.text);
+    // The new side draws the old peer's agents and no lane of it, without an error.
+    const answer = await lanesOn(current);
+    expect(answer.agents).toHaveLength(1);
+    expect(answer.lanes).toEqual([]);
+  }
+}, 90_000);
+
+test("lane rows add nothing to an idle call, and one stage flip costs its row plus at most 300 bytes", async () => {
+  const a = await install("lane-meter-A");
+  const b = await install("lane-meter-B");
+  const wire = await meter(b);
+  meters.push(wire);
+  const peerId = await link(a, b, { projects: [key] }, wire.url);
+  const onA = await createOn(a, "A task");
+  const onB = await createOn(b, "B task");
+  await sync(a, peerId);
+  await laneOn(a, { id: "a1b2c3d4", taskIds: [onA.id], state: "running", current: "review", stages: threeStages("review") });
+  await laneOn(b, { id: "5e0a41c2", taskIds: [onB.id], state: "running", current: "review", stages: threeStages("review") });
+  await sync(a, peerId);
+  await sync(a, peerId);
+  expect((await lanesOn(a)).lanes).toHaveLength(1);
+  expect((await lanesOn(b)).lanes).toHaveLength(1);
+  await captured(b);
+  const idleUp = wire.up, idleDown = wire.down;
+  await sync(a, peerId);
+  const idleBytes = wire.up - idleUp + wire.down - idleDown;
+  const idle = (await captured(b))[0]!;
+  expect(Buffer.byteLength(idle.request)).toBeLessThanOrEqual(200);
+  expect(Buffer.byteLength(idle.response)).toBeLessThanOrEqual(200);
+  expect(idleBytes).toBeLessThanOrEqual(WIRE_BUDGET);
+  await laneOn(b, { id: "5e0a41c2", taskIds: [onB.id], state: "running", current: "fix", stages: threeStages("fix") });
+  const flipUp = wire.up, flipDown = wire.down;
+  await sync(a, peerId);
+  const flipBytes = wire.up - flipUp + wire.down - flipDown;
+  const calls = await captured(b);
+  const rows = calls.flatMap((call) => (JSON.parse(call.response) as { agents?: { rows?: { k: string }[] } }).agents?.rows ?? []);
+  expect(rows.map((row) => row.k)).toEqual(["l:5e0a41c2"]);
+  const rowBytes = Buffer.byteLength(JSON.stringify(rows[0]));
+  expect(rowBytes).toBeLessThan(700);
+  expect(flipBytes - idleBytes).toBeLessThanOrEqual(rowBytes + 300);
+  expect((await lanesOn(a)).lanes[0]!.g.find((stage) => stage.id === "fix")!.st).toBe("running");
+}, 60_000);
+
+test("no prompt, spec, finding, summary, path or conversation id of a lane crosses, and a lane exchange writes no disk state", async () => {
+  const a = await install("lane-private-A");
+  const b = await install("lane-private-B");
+  const peerId = await link(a, b);
+  const onA = await createOn(a, "A task");
+  const onB = await createOn(b, "B task");
+  await sync(a, peerId);
+  const canary = "LANE-SECRET-SENTINEL";
+  await laneOn(a, { id: "a1b2c3d4", taskIds: [onA.id], state: "needs_decision", current: "review", sentinel: canary, stages: threeStages("review", { findings: ["finding text"] }) });
+  await laneOn(b, { id: "5e0a41c2", taskIds: [onB.id], state: "needs_decision", current: "review", sentinel: canary, stages: threeStages("review", { findings: ["finding text"] }) });
+  const diskA = fileMarks("lane-private-A");
+  const diskB = fileMarks("lane-private-B");
+  await captured(a);
+  await captured(b);
+  await sync(a, peerId);
+  await sync(a, peerId);
+  expect((await lanesOn(a)).lanes).toHaveLength(1);
+  expect((await lanesOn(b)).lanes).toHaveLength(1);
+  const bodies = [...await captured(a), ...await captured(b)].flatMap((call) => [call.request, call.response]).join("\n");
+  expect(bodies).toContain('"k":"l:');
+  expect(bodies).not.toContain(canary);
+  expect(bodies).not.toContain("transcript.jsonl");
+  expect(JSON.stringify([(await lanesOn(a)).lanes, (await lanesOn(b)).lanes])).not.toContain(canary);
+  expect(fileMarks("lane-private-A")).toEqual(diskA);
+  expect(fileMarks("lane-private-B")).toEqual(diskB);
+}, 60_000);
+
+test("120 lanes reset over the real link in pages of at most 50 entries and 80 KB, and both machines agree", async () => {
+  const a = await install("lane-pages-A");
+  const b = await install("lane-pages-B");
+  const peerId = await link(a, b);
+  const { ids } = (await request(b, "/test/bulk", "POST", { project: key, count: 40, explicit: true })).body as unknown as { ids: string[] };
+  await sync(a, peerId);
+  const many = Array.from({ length: 120 }, (_v, n) => ({ project: key, id: n.toString(16).padStart(8, "0"), taskIds: [ids[n % 40]!], state: "running", current: "review", stages: threeStages("review") }));
+  expect((await request(b, "/test/pipeline", "POST", { many })).status).toBe(200);
+  await request(a, `/test/agent-reset?id=${peerId}`);
+  await captured(b);
+  await sync(a, peerId);
+  for (let round = 0; round < 6 && (await lanesOn(a)).lanes.length < 120; round++) await sync(a, peerId);
+  const lanes = (await lanesOn(a)).lanes;
+  expect(lanes).toHaveLength(120);
+  const perTask = new Map<string, number>();
+  for (const lane of lanes) perTask.set(lane.tk[0]!, (perTask.get(lane.tk[0]!) ?? 0) + 1);
+  expect(Math.max(...perTask.values())).toBe(3);
+  const pages = (await captured(b)).map((call) => (JSON.parse(call.response) as { agents?: { rows?: unknown[] } }).agents?.rows ?? []).filter((rows) => rows.length);
+  expect(pages.length).toBeGreaterThanOrEqual(3);
+  for (const rows of pages) {
+    expect(rows.length).toBeLessThanOrEqual(50);
+    expect(Buffer.byteLength(JSON.stringify(rows))).toBeLessThanOrEqual(80_000);
+  }
+}, 90_000);

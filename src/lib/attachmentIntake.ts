@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * The composer attachment-intake contract, in ONE place (issue #1224): what a
  * composer accepts, and — the half that keeps regressing — what the operator is

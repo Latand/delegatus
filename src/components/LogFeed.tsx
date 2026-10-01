@@ -60,9 +60,11 @@ import { MessageProvenanceProvider, useDeliveredMessageProvenance } from "./feed
 import { RawLineProvider, type RawLineLookup } from "./feed/rawLine";
 import { ResponseDuration } from "./feed/ResponseDuration";
 import { SuggestedReplies } from "./feed/SuggestedReplies";
-import { BoundedLru } from "./feed/scrollMemory";
+import { BoundedLru, firstRowPastTop, readingRows } from "./feed/scrollMemory";
 import { ConversationAttention } from "./runtime/ConversationAttention";
-import { createSpeakableAnswerResolver } from "./feed/speakableAnswer";
+import { conversationSpeech, ownConversationFeed, SpeechScope } from "./feed/conversationSpeech";
+import { answerFragmentOffset, createSpeakableAnswerResolver, visibleSpeakableAnswer } from "./feed/speakableAnswer";
+import { measureVisibleAnswerRows, trackVisibleAnswerRows } from "./feed/visibleAnswerRows";
 import { isSubagent } from "./projectModel";
 import { restingDelta, tailPlan } from "./feedTopEdge";
 import { TaskHeader } from "./TaskHeader";
@@ -86,7 +88,7 @@ type ConversationRow =
       canonical: CanonicalMessage | null;
       responseDurationMs?: number;
     }
-  | { kind: "item"; key: string; anchorKey?: string | null; item: FeedSnapshot["items"][number]["item"]; speakText?: string; responseDurationMs?: number; resumes?: SeatResume }
+  | { kind: "item"; key: string; anchorKey?: string | null; item: FeedSnapshot["items"][number]["item"]; speakText?: string; speechIndex?: number; speakOffset?: number; speechId?: string; responseDurationMs?: number; resumes?: SeatResume }
   | { kind: "launch"; key: "launch" }
   | { kind: "delta"; key: "delta"; resumes?: SeatResume }
   /* A seat deputy's block (docs/design/ghost-seat.md §6.1): pinned at its
@@ -177,7 +179,7 @@ function feedRows(scroller: HTMLElement): HTMLElement[] {
 
 function viewportAnchor(scroller: HTMLElement, path: string): ViewportAnchor | null {
   const viewportTop = scroller.getBoundingClientRect().top;
-  const row = feedRows(scroller).find((candidate) => candidate.getBoundingClientRect().bottom > viewportTop);
+  const row = firstRowPastTop(readingRows(scroller), viewportTop);
   const key = row?.dataset.feedKey;
   return row && key ? { path, key, offset: row.getBoundingClientRect().top - viewportTop } : null;
 }
@@ -707,6 +709,43 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const visibleItems = hiddenLocal ? feed.items.slice(-visibleCount) : feed.items;
   const visibleStartIndex = feed.items.length - visibleItems.length;
   const answerFor = useMemo(() => createSpeakableAnswerResolver(feed.items), [feed.items, memoryKey, tailPath]);
+  const speechScope = file?.path;
+  useEffect(() => speechScope ? ownConversationFeed(speechScope) : undefined, [speechScope]);
+  /* The measure reads the feed and its resolver through refs and the effect is
+     keyed on the conversation alone: keyed on `feed.items` it was torn down and
+     rebuilt on every tail update, and each rebuild re-observed every row. */
+  const speechFeedRef = useRef({ items: feed.items, answerFor });
+  useLayoutEffect(() => { speechFeedRef.current = { items: feed.items, answerFor }; });
+  const speechMeasureRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    const viewport = scroller.current;
+    if (!viewport || !speechScope) return;
+    const speech = conversationSpeech(speechScope);
+    const viewportOwner = Symbol("speech-viewport");
+    speech.setRoots(viewportOwner, (id) => Array.from(viewport.querySelectorAll<HTMLElement>("[data-tts-answer-id]")).filter((node) => node.getAttribute("data-tts-answer-id") === id).flatMap((node) => Array.from(node.querySelectorAll<HTMLElement>("[data-tts-body]"))));
+    let frame = 0;
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(measure); };
+    const rows = trackVisibleAnswerRows(viewport, schedule);
+    const measure = () => {
+      frame = 0;
+      const box = viewport.getBoundingClientRect();
+      const clip = { left: Math.max(0, box.left), top: Math.max(0, box.top), right: Math.min(window.innerWidth, box.right), bottom: Math.min(window.innerHeight, box.bottom) };
+      if (clip.right <= clip.left || clip.bottom <= clip.top) { speech.selectFor(viewportOwner, null); return; }
+      const { items, answerFor: resolve } = speechFeedRef.current;
+      const visible = measureVisibleAnswerRows(rows, clip);
+      const answer = visibleSpeakableAnswer(items, visible, resolve);
+      speech.selectFor(viewportOwner, answer ? { id: answer.id, text: answer.text, area: visible.filter((fragment) => fragment.index >= answer.firstIndex && fragment.index <= answer.lastIndex).reduce((sum, fragment) => sum + fragment.area, 0), order: answer.firstIndex, roots: () => speech.rootsFor(answer.id) } : null);
+    };
+    speechMeasureRef.current = schedule;
+    viewport.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+    window.addEventListener("scroll", schedule, true);
+    const resize = new ResizeObserver(schedule); resize.observe(viewport);
+    schedule();
+    return () => { speechMeasureRef.current = null; cancelAnimationFrame(frame); rows.disconnect(); resize.disconnect(); speech.releaseViewport(viewportOwner); viewport.removeEventListener("scroll", schedule); window.removeEventListener("resize", schedule); window.removeEventListener("scroll", schedule, true); };
+  }, [speechScope]);
+  useEffect(() => { speechMeasureRef.current?.(); }, [feed.items, answerFor]);
+
   /* The image viewer steps through this conversation's pictures, all of them
      and in feed order, read from the records when it opens (#2144). */
   const gallery = useConversationGallery(feed.items, provenanceLookup);
@@ -1160,6 +1199,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         && withheldNativeRecords.has(item.deliveredMessage.engineMessageId)) return [];
       const answer = answerFor(visibleStartIndex + visibleIndex);
       const speakText = answer?.firstIndex === visibleStartIndex + visibleIndex ? answer.text : undefined;
+      const speechIndex = item.kind === "prose" ? visibleStartIndex + visibleIndex : undefined;
+      const speechId = answer && item.kind === "prose" ? `${item.engine}:${item.ts}:${feed.items[answer.firstIndex]!.key}` : undefined;
+      const speakOffset = answer && speechIndex !== undefined ? answerFragmentOffset(feed.items, speechIndex, answer) : undefined;
       const echoSourceId = anchorKey ?? `key:${key}`;
       const rowKey = item.kind === "user" ? messageRowKey(echoSourceId, key) : key;
       /* A record that carries no bubble of its own — a send that was nothing
@@ -1223,7 +1265,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
             entry: boundEntry,
             canonical: { text: canonicalText },
           } as ConversationRow,
-          { kind: "item", key: rowKey, anchorKey, item, speakText,
+          { kind: "item", key: rowKey, anchorKey, item, speakText, speechIndex, speakOffset, speechId,
             ...(responseDurationMs !== undefined ? { responseDurationMs } : {}) } as ConversationRow,
         ];
       }
@@ -1261,7 +1303,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
           ...(responseDurationMs !== undefined ? { responseDurationMs } : {}),
         } as ConversationRow];
       }
-      return [{ kind: "item", key: rowKey, anchorKey, item, speakText, ...(responseDurationMs !== undefined ? { responseDurationMs } : {}) } as ConversationRow];
+      return [{ kind: "item", key: rowKey, anchorKey, item, speakText, speechIndex, speakOffset, speechId, ...(responseDurationMs !== undefined ? { responseDurationMs } : {}) } as ConversationRow];
     });
     /* The seat's deputies: each block pinned after the last row dated at or
        before its start (docs/design/ghost-seat.md §6.1), then the tail as
@@ -1619,7 +1661,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                   </div>
                 );
               }
-              const { anchorKey, item, responseDurationMs, speakText, resumes } = row;
+              const { anchorKey, item, responseDurationMs, speakText, speechIndex, speakOffset, speechId, resumes } = row;
               /* On the phone a prose row names its speaker in its own header,
                  so the continuation joins that header rather than stacking a
                  second name over it (ghost-seat.md §6.1). */
@@ -1632,6 +1674,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                   key={row.key}
                   data-feed-key={anchorKey ?? undefined}
                   data-feed-kind={item.kind}
+                  data-tts-answer-index={speechIndex}
+                  data-tts-answer-id={speechId}
+                  data-tts-offset={speakOffset}
                   data-feed-tool-sources={item.kind === "cmd-group" ? item.calls.map((call) => call.srcCall).join(" ")
                     : item.kind === "tool" ? String(item.srcCall) : undefined}
                   data-feed-source-id={"sourceId" in item ? item.sourceId : undefined}
@@ -1639,7 +1684,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                 >
                   {resumes && !foldResumes ? <SeatSpeakerLine resumes={resumes} engine={file.engine} /> : null}
                   <GalleryOwnerProvider value={item}>
-                    <FeedItem item={item} speakText={speakText} resumesAsk={foldResumes ? resumes.ask : undefined} />
+                    <SpeechScope.Provider value={file.path}><FeedItem item={item} speakText={speakText} speakId={speechId} resumesAsk={foldResumes ? resumes.ask : undefined} /></SpeechScope.Provider>
                   </GalleryOwnerProvider>
                   {responseDurationMs !== undefined ? <ResponseDuration durationMs={responseDurationMs} /> : null}
                 </div>

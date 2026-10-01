@@ -126,7 +126,7 @@ async function desktop(browser: Browser, base: string, width: number, height: nu
       portalled: box.parentElement === document.body,
       state: (document.querySelector("[data-seat-tick-body]") as HTMLElement).dataset.seatTickState ?? "",
       summary: document.querySelector("[data-seat-tick-summary]")?.textContent ?? "",
-      sentence: document.querySelector("[data-seat-tick-sentence]")?.textContent ?? "",
+      detail: document.querySelector("[data-seat-tick-status-detail]")?.textContent ?? "",
       detailsOpen: details.open,
       pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
       /* The dock clips its own children; a popover inside it would be cut. */
@@ -548,7 +548,7 @@ async function phone(browser: Browser, base: string, locale: "en" | "uk" = "en",
   await page.waitForSelector('[data-mobile2-sheet="tick"]');
   await page.waitForTimeout(400);
   const sheet = (await rectOf(page, '[data-mobile2-sheet="tick"]'))!;
-  const save = (await rectOf(page, "[data-seat-tick-save]"))!;
+  const saveBeforeChange = await page.locator("[data-seat-tick-save]").count();
   const opened = await page.evaluate(() => {
     const box = document.querySelector('[data-mobile2-sheet="tick"]') as HTMLElement;
     const body = box.querySelector("[data-mobile2-sheet-body]") as HTMLElement;
@@ -564,6 +564,11 @@ async function phone(browser: Browser, base: string, locale: "en" | "uk" = "en",
     };
   });
   await shot(page, `phone-${locale}-${tick}-tick-sheet`);
+
+  /* The panel's one Save appears with the first change, in the footer. */
+  await page.locator("[data-seat-tick-interval]").fill("45");
+  await page.waitForSelector("[data-seat-tick-save]");
+  const save = (await rectOf(page, "[data-seat-tick-save]"))!;
 
   /* The keyboard: focus the interval field and apply the inset the phone's own
      signal produces, then measure what is still reachable above it. */
@@ -595,6 +600,7 @@ async function phone(browser: Browser, base: string, locale: "en" | "uk" = "en",
     rowMeetsTouchTarget: row.height >= 44,
     sheet: { ...sheet, ...opened },
     save,
+    saveBeforeChange,
     saveAboveKeyboard: saveWithKeyboard.y + saveWithKeyboard.height <= viewport.height - keyboard,
     closeReturnsToSeatSheet: returned === 1 && close === null,
     errors,
@@ -871,9 +877,274 @@ browserTest("#1681 rendered: the chip at 1280 and at the narrowest desktop, and 
   expect(read.sheet.seatSheets, "the tick sheet replaces the seat sheet").toBe(0);
   expect(read.sheet.title, "the sheet names the seat and the project").toBe(translate("en", "seatTick.sheetTitle", { project: "Atlas" }));
   expect(read.sheet.bodyScrolls, "the sheet's body scrolls").toBe(true);
+  expect(read.saveBeforeChange, "no Save while nothing changed").toBe(0);
   expect(read.sheet.saveInBody, "Save is in the footer, not the scrolling body").toBe(false);
   expect(read.sheet.sheetShare, "the sheet takes at most 88 % of the height").toBeLessThanOrEqual(0.89);
   expect(read.save.height, "Save is at least 44 px").toBeGreaterThanOrEqual(44);
   expect(read.saveAboveKeyboard, "Save stays above the keyboard").toBe(true);
   expect(read.closeReturnsToSeatSheet, "the × returns to the seat sheet").toBe(true);
 }, 300_000);
+
+
+/*
+ * The seat tick panel after critique items 1–7 and the maintainer picker
+ * (#2396): the panel at 1440 (the popover) and at 390 (the sheet), light and
+ * dark, English and Ukrainian, in the states the critique rendered. The
+ * frames go to LLV_SEAT_TICK_SHOTS_DIR (default `.artifacts/seat-tick-shots`,
+ * never committed) for a person to look at; the assertions are the geometry
+ * and the claims that do not need a person:
+ *
+ *   - the status block is first and fits whole in the first screen, both
+ *     surfaces (the critique's M1 and M2: maintenance was below the fold);
+ *   - nothing overflows sideways and no text is clipped;
+ *   - on the phone every control is at least 44 px (switches keep their 28 px
+ *     track in a 44 px row);
+ *   - one Save at most, absent until something changed;
+ *   - the interval, Until and Reason follow the draft.
+ *
+ *   LLV_SEAT_TICK_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable \
+ *     LLV_SEAT_TICK_SHOTS_DIR=… bun test src/components/orchestrator/issue1681Evidence.browser.test.tsx -t 2396
+ */
+const SHOTS = path.resolve(process.env.LLV_SEAT_TICK_SHOTS_DIR ?? ".artifacts/seat-tick-shots");
+
+type Theme = "light" | "dark";
+type Locale = "en" | "uk";
+
+/** The states the critique rendered, by the fixture's query. `maint` is the
+    maintenance reading; `tick` and `face` the wake reading. */
+const PANEL_STATES = [
+  { key: "default-never", query: "face=default&maint=never", about: "tick on its defaults, maintenance on and never run" },
+  { key: "custom-done", query: "maint=ok", about: "tick every 30 min, maintenance done with 3 that need the operator" },
+  { key: "off-off", query: "tick=off&maint=off", about: "tick off with a reason, maintenance off" },
+  { key: "off-paused", query: "tick=off&maint=paused", about: "tick off, maintenance on and paused while wakes are off" },
+  { key: "custom-failed", query: "maint=failed", about: "maintenance failed for lack of an account" },
+  { key: "custom-running", query: "maint=running", about: "a maintenance run is live" },
+  { key: "custom-held", query: "maint=held", about: "maintenance due, held while a deployment runs" },
+  { key: "blocked-done", query: "tick=blocked&maint=ok", about: "wake blocked by an unresolved wake, named once" },
+] as const;
+type PanelState = typeof PANEL_STATES[number];
+
+/** What a panel's first screen and whole content measure, read inside the page. */
+function readPanel(scroller: HTMLElement) {
+  const status = scroller.querySelector("[data-seat-tick-status]") as HTMLElement;
+  const group = scroller.querySelector("[data-seat-tick-maintenance]") as HTMLElement;
+  const top = scroller.getBoundingClientRect().top;
+  const clipped = [...scroller.querySelectorAll("[data-seat-tick-status] span, [data-seat-tick-maintenance-row] span, [data-seat-tick-maintenance-about], button")]
+    .filter((element) => (element as HTMLElement).scrollWidth > (element as HTMLElement).clientWidth + 1 && getComputedStyle(element).textOverflow === "ellipsis")
+    .map((element) => element.textContent);
+  const right = Math.max(...[...scroller.querySelectorAll("*")].map((element) => element.getBoundingClientRect().right));
+  return {
+    contentHeight: scroller.scrollHeight,
+    visibleHeight: scroller.clientHeight,
+    statusBottom: Math.round(status.getBoundingClientRect().bottom - top + scroller.scrollTop),
+    groupTop: Math.round(group.getBoundingClientRect().top - top + scroller.scrollTop),
+    saveCount: scroller.ownerDocument.querySelectorAll("[data-seat-tick-save]").length,
+    intervalShown: scroller.querySelector("[data-seat-tick-interval]") !== null,
+    untilShown: scroller.querySelector("[data-seat-tick-until]") !== null,
+    reasonShown: scroller.querySelector("[data-seat-tick-reason]") !== null,
+    maintenanceIntervalShown: scroller.querySelector("[data-seat-tick-maintenance-interval]") !== null,
+    agentShown: scroller.querySelector("[data-seat-tick-agent]") !== null,
+    statusText: status.textContent ?? "",
+    contentRight: Math.round(right),
+    pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
+    clipped,
+  };
+}
+
+async function panelDesktop(browser: Browser, base: string, theme: Theme, locale: Locale, state: PanelState) {
+  const viewport = { width: 1440, height: 1600 };
+  const context = await browser.newContext({ viewport, colorScheme: theme });
+  await context.addInitScript((value) => window.localStorage.setItem("llv_lang", value), locale);
+  const page = await context.newPage();
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${base}/?surface=desktop&dock=440&${state.query}`);
+  await page.waitForSelector("[data-seat-tick-chip]");
+  await page.click("[data-seat-tick-chip]");
+  await page.waitForSelector("[data-seat-tick-maintenance]");
+  await page.waitForTimeout(500);
+  const popover = page.locator("[data-seat-tick-popover]");
+  const measured = await popover.evaluate(readPanel);
+  const capped = await popover.evaluate((element) => ({ maxHeight: getComputedStyle(element).maxHeight, height: element.getBoundingClientRect().height }));
+  const tag = `${theme}-${locale}-${state.key}`;
+  await popover.screenshot({ path: path.join(SHOTS, `desktop-1440-${tag}-popover-full.png`) });
+  /* As it opens: the popover's own 70 vh cap, on a 900 px viewport. */
+  if (state.key === "custom-done") {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: path.join(SHOTS, `desktop-1440-${tag}-popover-as-opened.png`) });
+  }
+  await context.close();
+  return { theme, locale, state: state.key, viewport, ...measured, capped, errors };
+}
+
+async function panelPhone(browser: Browser, base: string, theme: Theme, locale: Locale, state: PanelState) {
+  const viewport = { width: 390, height: 2600 };
+  const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: theme });
+  await context.addInitScript((value) => window.localStorage.setItem("llv_lang", value), locale);
+  const page = await context.newPage();
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${base}/?surface=phone&${state.query}`);
+  await page.waitForSelector("[data-seat-tick-row]");
+  await page.locator("[data-seat-tick-row]").click();
+  await page.waitForSelector('[data-mobile2-sheet="tick"]');
+  await page.waitForSelector("[data-seat-tick-maintenance]");
+  await page.waitForTimeout(500);
+  const sheet = page.locator('[data-mobile2-sheet="tick"]');
+  const measured = await page.locator('[data-mobile2-sheet="tick"] [data-mobile2-sheet-body]').evaluate(readPanel);
+  const targets = await page.evaluate(() => [...document.querySelectorAll('[data-mobile2-sheet="tick"] [data-mobile2-sheet-body] button, [data-mobile2-sheet="tick"] [data-mobile2-sheet-body] input, [data-mobile2-sheet="tick"] [data-mobile2-sheet-body] select, [data-mobile2-sheet="tick"] [data-mobile2-sheet-body] textarea, [data-mobile2-sheet="tick"] [data-mobile2-sheet-body] summary')]
+    .filter((element) => !element.hasAttribute("role") || element.getAttribute("role") !== "switch")
+    .map((element) => ({ name: element.getAttribute("aria-label") ?? element.textContent?.trim().slice(0, 30) ?? element.tagName, height: Math.round(element.getBoundingClientRect().height) }))
+    .filter((entry) => entry.height < 44));
+  const tag = `${theme}-${locale}-${state.key}`;
+  await sheet.screenshot({ path: path.join(SHOTS, `phone-390-${tag}-sheet-full.png`) });
+  /* As it opens: the real 844 px phone. */
+  if (state.key === "custom-done") {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: path.join(SHOTS, `phone-390-${tag}-sheet-as-opened.png`) });
+  }
+  await context.close();
+  return { theme, locale, state: state.key, viewport, ...measured, smallTargets: targets, errors };
+}
+
+/** One edit in each group: the Save appears, and the maintainer's agent
+    changes through its three selects. */
+async function panelDirty(browser: Browser, base: string, theme: Theme, locale: Locale, surface: "desktop" | "phone") {
+  const phone = surface === "phone";
+  const viewport = phone ? { width: 390, height: 844 } : { width: 1440, height: 1100 };
+  const context = await browser.newContext({ viewport, colorScheme: theme, ...(phone ? { hasTouch: true, isMobile: true, deviceScaleFactor: 2 } : {}) });
+  await context.addInitScript((value) => window.localStorage.setItem("llv_lang", value), locale);
+  const page = await context.newPage();
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${base}/?surface=${surface}&maint=ok`);
+  if (phone) {
+    await page.waitForSelector("[data-seat-tick-row]");
+    await page.locator("[data-seat-tick-row]").click();
+    await page.waitForSelector('[data-mobile2-sheet="tick"]');
+  } else {
+    await page.waitForSelector("[data-seat-tick-chip]");
+    await page.click("[data-seat-tick-chip]");
+  }
+  await page.waitForSelector("[data-seat-tick-agent]");
+  const before = await page.locator("[data-seat-tick-save]").count();
+  await page.locator("[data-seat-tick-agent-model]").selectOption("gpt-6-luna");
+  await page.locator("[data-seat-tick-agent-effort]").selectOption("high");
+  await page.waitForSelector("[data-seat-tick-save]");
+  const picker = await page.evaluate(() => ({
+    engine: (document.querySelector("[data-seat-tick-agent-engine]") as HTMLSelectElement).value,
+    model: (document.querySelector("[data-seat-tick-agent-model]") as HTMLSelectElement).value,
+    efforts: [...document.querySelectorAll("[data-seat-tick-agent-effort] option")].map((option) => (option as HTMLOptionElement).value),
+    about: document.querySelector("[data-seat-tick-maintenance-about]")?.textContent ?? "",
+    saveCount: document.querySelectorAll("[data-seat-tick-save]").length,
+  }));
+  /* The maintenance group scrolled into view, with the Save beside it. */
+  await page.locator("[data-seat-tick-agent]").scrollIntoViewIfNeeded();
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: path.join(SHOTS, `${phone ? "phone-390" : "desktop-1440"}-${theme}-${locale}-agent-changed-save-shown.png`) });
+  await context.close();
+  return { surface, theme, locale, saveBefore: before, ...picker, errors };
+}
+
+browserTest("#2396 rendered: the seat tick panel at 1440 and 390, light and dark, English and Ukrainian", async () => {
+  fs.mkdirSync(OUT, { recursive: true });
+  fs.mkdirSync(SHOTS, { recursive: true });
+  const build = await Bun.build({
+    entrypoints: [path.resolve("src/components/orchestrator/issue1681Evidence.fixture.tsx")],
+    target: "browser",
+    outdir: path.join(OUT, "bundle-2396"),
+    define: { "process.env.NODE_ENV": '"production"', "process.env": "{}" },
+  });
+  if (!build.success) throw new Error(build.logs.join("\n"));
+  const entry = build.outputs.find((output) => output.kind === "entry-point")!.path;
+  const css = await postcss([tailwind()]).process(fs.readFileSync("src/app/globals.css", "utf8"), { from: path.resolve("src/app/globals.css") });
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const pathname = new URL(request.url).pathname;
+      if (pathname === "/app.js") return new Response(Bun.file(entry), { headers: { "content-type": "text/javascript" } });
+      if (pathname === "/style.css") return new Response(css.css, { headers: { "content-type": "text/css" } });
+      return new Response(
+        '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"></head>'
+        + '<body><div id="root" style="height:100dvh;display:flex;flex-direction:column"></div><script type="module" src="/app.js"></script></body></html>',
+        { headers: { "content-type": "text/html" } },
+      );
+    },
+  });
+  const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+  const base = `http://127.0.0.1:${server.port}`;
+  const desktops: Awaited<ReturnType<typeof panelDesktop>>[] = [];
+  const phones: Awaited<ReturnType<typeof panelPhone>>[] = [];
+  const dirty: Awaited<ReturnType<typeof panelDirty>>[] = [];
+  try {
+    for (const theme of ["light", "dark"] as const) {
+      for (const locale of ["en", "uk"] as const) {
+        for (const state of PANEL_STATES) {
+          desktops.push(await panelDesktop(browser, base, theme, locale, state));
+          phones.push(await panelPhone(browser, base, theme, locale, state));
+        }
+        dirty.push(await panelDirty(browser, base, theme, locale, "desktop"));
+        dirty.push(await panelDirty(browser, base, theme, locale, "phone"));
+      }
+    }
+  } finally {
+    await browser.close();
+    server.stop(true);
+  }
+  fs.writeFileSync(path.join(SHOTS, "geometry.json"), `${JSON.stringify({ desktops, phones, dirty }, null, 2)}\n`);
+
+  const expectedMaintenance: Record<PanelState["key"], string> = {
+    "default-never": "on", "custom-done": "on", "off-off": "off", "off-paused": "on", "custom-failed": "on", "custom-running": "running", "custom-held": "on", "blocked-done": "on",
+  };
+  for (const read of desktops) {
+    const key = `desktop ${read.theme} ${read.locale} ${read.state}`;
+    expect(read.errors, `${key} page errors`).toEqual([]);
+    expect(read.pageOverflow, `${key} sideways overflow`).toBe(false);
+    expect(read.clipped, `${key} clipped text`).toEqual([]);
+    expect(read.contentRight, `${key} content inside the viewport`).toBeLessThanOrEqual(read.viewport.width);
+    /* The popover's own cap is 70 vh of the viewport it opens in; the status
+       block must end inside the first 630 px of a 900 px window, which is the
+       critique's M1. */
+    expect(read.statusBottom, `${key} status block inside the first screen`).toBeLessThanOrEqual(630);
+    expect(read.saveCount, `${key} no Save while nothing changed`).toBe(0);
+    expect(read.statusText, `${key} status names maintenance`).toContain(read.locale === "en" ? "Maintenance" : "Обслуговування");
+  }
+  for (const read of phones) {
+    const key = `phone ${read.theme} ${read.locale} ${read.state}`;
+    expect(read.errors, `${key} page errors`).toEqual([]);
+    expect(read.pageOverflow, `${key} sideways overflow`).toBe(false);
+    expect(read.contentRight, `${key} content inside the phone`).toBeLessThanOrEqual(read.viewport.width);
+    expect(read.clipped, `${key} clipped text`).toEqual([]);
+    /* The critique's M2: the sheet's body is 621 px on a 844 px phone, and
+       the status block has to end inside it. */
+    expect(read.statusBottom, `${key} status block inside the first screen`).toBeLessThanOrEqual(621);
+    expect(read.smallTargets, `${key} controls under 44 px`).toEqual([]);
+    expect(read.saveCount, `${key} no Save while nothing changed`).toBe(0);
+  }
+  /* The fields follow the draft: the defaults show no Until and no Reason, an
+     off tick shows no interval, and maintenance off shows no interval. */
+  const find = <T extends { theme: string; locale: string; state: string }>(rows: T[], theme: Theme, locale: Locale, state: string) =>
+    rows.find((row) => row.theme === theme && row.locale === locale && row.state === state)!;
+  for (const rows of [desktops, phones] as const) {
+    const defaults = find(rows as never[], "light", "en", "default-never") as (typeof desktops)[number];
+    expect([defaults.intervalShown, defaults.untilShown, defaults.reasonShown]).toEqual([true, false, false]);
+    const custom = find(rows as never[], "light", "en", "custom-done") as (typeof desktops)[number];
+    expect([custom.intervalShown, custom.untilShown, custom.reasonShown, custom.maintenanceIntervalShown]).toEqual([true, true, true, true]);
+    const off = find(rows as never[], "light", "en", "off-off") as (typeof desktops)[number];
+    expect([off.intervalShown, off.untilShown, off.reasonShown, off.maintenanceIntervalShown]).toEqual([false, true, true, false]);
+    for (const read of rows as (typeof desktops)[number][]) expect(read.agentShown, `${read.state} the maintainer's agent is offered`).toBe(true);
+  }
+  void expectedMaintenance;
+  for (const read of dirty) {
+    const key = `${read.surface} ${read.theme} ${read.locale} agent change`;
+    expect(read.errors, `${key} page errors`).toEqual([]);
+    expect(read.saveBefore, `${key} no Save before the change`).toBe(0);
+    expect(read.saveCount, `${key} one Save after it`).toBe(1);
+    expect([read.engine, read.model], `${key} the picked runtime`).toEqual(["codex", "gpt-6-luna"]);
+    /* Luna's own ladder: no `ultra`. */
+    expect(read.efforts, `${key} the model's own ladder`).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  }
+}, 900_000);

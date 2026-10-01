@@ -43,6 +43,7 @@ import { ArtifactPreviewHost } from "./preview/ArtifactPreviewHost";
 import { OnboardingHost } from "./onboarding/OnboardingDialog";
 import { OnboardingWalk } from "./onboarding/OnboardingWalk";
 import { SelfUpdateHost } from "./selfUpdate/SelfUpdateDialog";
+import { TelemetrySettingsHost } from "./telemetry/TelemetrySettings";
 import { LinkedSettingsHost } from "./links/LinkedSettingsDialog";
 import { ExternalRelaySettingsHost } from "./externalRelay/ExternalRelaySettingsDialog";
 import { VoiceBridgeRelayHost } from "./voice/VoiceBridgeRelayHost";
@@ -1752,6 +1753,7 @@ function ViewerApp() {
       {/* #2007: the Update surface, opened from the menus' "Update" row. */}
       <SelfUpdateHost />
       <LinkedSettingsHost />
+      <TelemetrySettingsHost />
       <ExternalRelaySettingsHost />
       {/* #691: the ONE voice conversation panel, portalled into the card's dock
           slot or the floating PiP window. Mounted here rather than in the card

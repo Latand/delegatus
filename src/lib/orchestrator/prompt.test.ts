@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 
 import { expect, test } from "bun:test";
 
 import { FOCUS_TARGET_KINDS } from "@/lib/attention/targets";
 import { BRIDGE_REPORT_CLASSES } from "@/lib/bridge/types";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
+import { loadRoleDefinitionsOrDefaults, loadRoleRegistrySnapshot, saveRoleMapping } from "@/lib/roles/store";
 import type { RegistryRoleDefinitions, RoleDefinition } from "@/lib/roles/types";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { renderTaskColorRule, TASK_COLOR_RULE } from "@/lib/tasks/colorRule";
@@ -75,8 +77,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 32, and a v31 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(32);
+test("the default mandate is at version 33, and a v32 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(33);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -106,7 +108,8 @@ test("the default mandate is at version 32, and a v31 seat reads as stale", () =
      risk-based review budgets and the default of three rounds. */
   expect(orchestratorMandateStale(30)).toBe(true);
   expect(orchestratorMandateStale(31)).toBe(true);
-  expect(orchestratorMandateStale(32)).toBe(false);
+  expect(orchestratorMandateStale(32)).toBe(true);
+  expect(orchestratorMandateStale(33)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -145,6 +148,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   30: "9743e8688175e3e08fd07d54df961ff363b8798b049d50ff11973e7bf2624e69",
   31: "e1583b032cf61e67f50b486172f974ae2a2ae03649cc666b0738b010247c106d",
   32: "032c79825baef89c4f62fca96d0eeb5ac9f3f5a68aea62f316ce19d408d42e74",
+  33: "651f90a57a1921b41e14a536a4178a7e47b45028ca9224dbfbd9f8fd9ec0d821",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -458,12 +462,9 @@ test("no retired task-binding claim survives in the ownership directive", () => 
   /* A reviewer spawn that names a parent joins the parent's card beside the
      reviewed work's (membership.test.ts), so reviewer spawns pass taskId too. */
   expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE).not.toContain("A review flow or a reviewer spawn inherits");
-  /* A spawn's explicit target carries its own project and a single foreign id
-     is admitted (pinned in membership.test.ts), so the mandate must not promise
-     a refusal there — a manager acting on that promise binds an agent to
-     another project's card and is told nothing. */
   expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE)
-    .not.toContain("or a task in another project, refuses the launch before any agent starts");
+    .toContain("create_pipeline and spawn_agent both refuse a task belonging to another project");
+  expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE).not.toContain("takes the id as given");
   /* No invented id shape: the mandate must never teach a format the board does
      not mint. */
   expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE).not.toContain('"task_');
@@ -589,6 +590,37 @@ function roleTableLines(mandate: string): string[] {
   return mandate.slice(start).split("\n").filter((line) => line.startsWith("| ") && !line.startsWith("| role ") && !line.startsWith("| ---"));
 }
 
+test("successive mandate renders read saved rows, variants and revision from the current registry", () => {
+  const previous = process.env.LLV_STATE_DIR;
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mandate-roles-"));
+  process.env.LLV_STATE_DIR = state;
+  try {
+    const render = (mandate: string) => orchestratorMandateForDelivery(mandate, loadRoleDefinitionsOrDefaults());
+    const first = render("Bespoke mandate");
+    const firstRevision = loadRoleRegistrySnapshot().revision;
+    saveRoleMapping({
+      builder: { config: { engine: "codex", model: "gpt-6-sol", effort: "medium" }, variants: { frontend: { engine: "claude", model: "opus", effort: "high" } } },
+      reviewer: { variants: { trivial: { engine: "codex", model: "gpt-5.6-luna", effort: "medium" } } },
+    });
+    const nextRevision = loadRoleRegistrySnapshot().revision;
+    const second = render(first);
+    expect(nextRevision).not.toBe(firstRevision);
+    expect(second).toContain("| builder | codex | gpt-6-sol | medium |");
+    expect(second).toContain("domain=frontend: claude/opus/high");
+    expect(second).toContain("size=trivial: codex/gpt-5.6-luna/medium");
+    expect(second).toContain(`Registry revision: ${nextRevision}. Registry health: healthy.`);
+    expect(second).not.toContain(firstRevision);
+    expect(second).not.toContain("| builder | codex | gpt-6.1-sol | high |");
+    expect(second.split(ORCHESTRATOR_ROLE_TABLE_HEADING)).toHaveLength(2);
+    saveRoleMapping({ builder: { config: null, variants: { frontend: null } }, reviewer: { variants: { trivial: null } } });
+    expect(render(second)).toBe(first);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(state, { recursive: true, force: true });
+  }
+});
+
 test("the delivered mandate renders the role table from the registry it is handed", () => {
   const registry: RoleDefinition[] = ROLE_DEFAULTS.map((role) => role.id === "prod-auditor"
     ? { ...role, config: { engine: "claude", model: "sonnet", effort: "low" } }
@@ -598,8 +630,8 @@ test("the delivered mandate renders the role table from the registry it is hande
 
   expect(rows).toHaveLength(ROLE_DEFAULTS.length);
   expect(rows.find((row) => row.startsWith("| prod-auditor |"))).toStartWith("| prod-auditor | claude | sonnet | low | read-only |");
-  expect(rows.find((row) => row.startsWith("| builder |"))).toStartWith("| builder | codex | gpt-6-astra | medium | read-write |");
-  expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toContain("| prod-auditor | codex | gpt-6-astra | high | read-only |");
+  expect(rows.find((row) => row.startsWith("| builder |"))).toStartWith("| builder | codex | gpt-6.1-sol | high | read-write |");
+  expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toContain("| prod-auditor | codex | gpt-6.1-sol | xhigh | read-only |");
 });
 
 test("the role table carries the runtime guidance beside it", () => {
@@ -613,7 +645,7 @@ test("the role table carries the runtime guidance beside it", () => {
   /* The standing model rules (model landscape 2026-09) ride in the role rows;
      the builder's description names no model (agent-prompt-contract.md
      §2.10 B), since runtime advice belongs to the table's notes. */
-  expect(section).toContain("| builder | codex | gpt-6-astra | medium | read-write | Writes product code for a scoped brief.");
+  expect(section).toContain("| builder | codex | gpt-6.1-sol | high | read-write | Writes product code for a scoped brief.");
   expect(section).toContain("High per lane for risky backend diffs.");
   expect(section).toContain("claude/fable/high per lane for the largest cross-cutting designs");
 });
@@ -674,8 +706,9 @@ test("the role table keeps the delivered default inside the structured envelope"
      personality; its scaffold gave 200 back. v31 takes 700 more for the
      board maintenance report section, paid for by the open-task list the
      rotation handoff no longer carries (docs/design/board-maintenance-report.md
-     §5.5); handoffDigest.test.ts pins what that leaves a rotation's history. */
-  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 4_100);
+     §5.5); handoffDigest.test.ts pins what that leaves a rotation's history.
+     The scheduled maintainer row uses another 200 bytes of that room. */
+  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 3_900);
 });
 
 /* docs/design/model-sizing-tiers.md §4: the seat sizes every lane, reads each

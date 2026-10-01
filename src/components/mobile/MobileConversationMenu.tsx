@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRightLeft, Bot, Boxes, ChevronRight, CornerDownRight, Crown, FoldVertical, GitFork, Info, ListTree, PencilLine, RotateCw, Search, Square, SquareTerminal, X } from "lucide-react";
+import { ArrowRightLeft, Bot, Boxes, ChevronRight, CornerDownRight, Crown, FoldVertical, GitFork, Info, ListTree, PencilLine, RotateCw, Search, ScrollText, Square, SquareTerminal, TriangleAlert, Volume2, X } from "lucide-react";
 
 import { useLocale } from "@/lib/i18n";
 import { cleanTitle } from "@/lib/title";
@@ -49,6 +49,10 @@ export function MobileConversationMenu({
   crowned,
   hostTaskCount,
   onOpenSeat,
+  onSpeechSettings,
+  onReports,
+  onAttention,
+  attentionCount = 0,
   onOpenPipeline,
   onRename,
   onToggleCrown,
@@ -77,6 +81,10 @@ export function MobileConversationMenu({
       only place §4.2 puts this row — and, with the pinned row gone from the
       conversation screen, the only route the seat has left here. */
   onOpenSeat?: () => void;
+  onSpeechSettings?: () => void;
+  onReports?: () => void;
+  onAttention?: () => void;
+  attentionCount?: number;
   onOpenPipeline?: () => void;
   onRename: () => void;
   onToggleCrown?: () => void;
@@ -212,6 +220,9 @@ export function MobileConversationMenu({
             </>
           ) : null}
           {onOpenSeat || showPipelineRow || showSubagents ? <MobileSheetDivider /> : null}
+          {onAttention ? <MobileSheetRow icon={<TriangleAlert className="h-[18px] w-[18px]" aria-hidden />} label={t("mobile2.bar.attention", { count: attentionCount })} onSelect={act(onAttention)} attrs={{ "data-mobile2-menu-row": "attention" }} /> : null}
+          {onSpeechSettings ? <MobileSheetRow icon={<Volume2 className="h-[18px] w-[18px]" aria-hidden />} label={t("tts.menuTitle")} onSelect={act(onSpeechSettings)} attrs={{ "data-mobile2-menu-row": "speech" }} /> : null}
+          {onReports ? <MobileSheetRow icon={<ScrollText className="h-[18px] w-[18px]" aria-hidden />} label={t("reportLog.show")} onSelect={act(onReports)} attrs={{ "data-mobile2-menu-row": "reports" }} /> : null}
           <MobileSheetRow
             icon={<PencilLine className="h-[18px] w-[18px]" aria-hidden />}
             label={t("mobile2.chat.menuRename")}

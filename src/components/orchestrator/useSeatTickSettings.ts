@@ -37,6 +37,13 @@ export interface SeatTickChange {
   wakeIntervalMinutes?: number | string | null;
   reason?: string | null;
   untilMinutes?: number | null;
+  /**
+   * The board maintenance timer (#2162). `intervalHours` follows the same
+   * rule as `wakeIntervalMinutes`: a number, `null` for the default, and a
+   * `string` for an entry that is neither, handed over as typed so the server
+   * names it instead of a `null` restoring the default.
+   */
+  maintenance?: { enabled?: boolean; intervalHours?: number | string | null };
 }
 
 export interface SeatTickSettingsRead {
@@ -60,6 +67,9 @@ export interface SeatTickSettingsRead {
   /** The server's refusal, verbatim, or the transport failure that replaced
       it. Cleared by the next save and by `clearError`. */
   error: string | null;
+  /** Which group of the form the refusal in `error` belongs to: the one whose
+      Save was pressed, so it is shown beside the fields to correct. */
+  errorScope: "tick" | "maintenance";
   refresh: () => Promise<void>;
   /** True when the record now holds the change. */
   save: (change: SeatTickChange) => Promise<boolean>;
@@ -138,8 +148,20 @@ function optimistic(answer: SeatTickSettingsAnswer, change: SeatTickChange): Sea
     ...(change.reason !== undefined ? { reason: change.reason } : {}),
   };
   const isDefault = settings.enabled && settings.wakeIntervalMinutes === null;
+  const sentHours = typeof change.maintenance?.intervalHours === "number" ? change.maintenance.intervalHours : undefined;
+  /* Answers from a server older than the timer carry no block; there is
+     nothing to lay the change over then, and the form is not shown either. */
+  const maintenance = answer.maintenance && change.maintenance
+    ? {
+      ...answer.maintenance,
+      ...(change.maintenance.enabled !== undefined ? { enabled: change.maintenance.enabled } : {}),
+      ...(sentHours !== undefined ? { intervalHours: sentHours } : {}),
+      ...(change.maintenance.intervalHours === null ? { intervalHours: answer.maintenance.defaultIntervalHours } : {}),
+    }
+    : answer.maintenance;
   return {
     ...answer,
+    ...(maintenance ? { maintenance } : {}),
     settings,
     effective: {
       ...answer.effective,
@@ -161,6 +183,7 @@ export function useSeatTickSettings(project: string, enabled: boolean): SeatTick
   const [failed, setFailed] = useState(false);
   const [pending, setPending] = useState<{ project: string; answer: SeatTickSettingsAnswer } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [errorScope, setErrorScope] = useState<"tick" | "maintenance">("tick");
   /* One save at a time: two in flight would race to decide which read-back is
      the record, and the loser would put a superseded reading on screen. */
   const inFlight = useRef(false);
@@ -210,6 +233,7 @@ export function useSeatTickSettings(project: string, enabled: boolean): SeatTick
     if (inFlight.current) return false;
     inFlight.current = true;
     setError(null);
+    setErrorScope(Object.keys(change).length > 0 && Object.keys(change).every((key) => key === "maintenance") ? "maintenance" : "tick");
     const before = readings.get(project) ?? null;
     if (before) setPending({ project, answer: optimistic(before, change) });
     try {
@@ -256,6 +280,7 @@ export function useSeatTickSettings(project: string, enabled: boolean): SeatTick
     failed,
     saving: pending !== null && pending.project === project,
     error,
+    errorScope,
     refresh,
     save,
     clearError: useCallback(() => setError(null), []),

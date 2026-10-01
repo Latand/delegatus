@@ -156,6 +156,8 @@ export interface PatchTaskOptions {
   workLinks?: (task: BoardTask) => TaskWorkLinkContext;
   /** See {@link TaskCommandDeps.explicit}: a text written without it is private. */
   explicit?: boolean;
+  /** Internal system cards that must remain visible may occupy an overflow band. */
+  allowBoardOverflow?: boolean;
 }
 
 /** Injected so the pure command can ask the store whether an attachment ref's
@@ -175,6 +177,8 @@ export interface TaskCommandDeps {
       it may cross to a linked board. Every other writer leaves it private
       (docs/design/linked-installs.md M.3). */
   explicit?: boolean;
+  /** Internal system cards that must remain visible may occupy an overflow band. */
+  allowBoardOverflow?: boolean;
 }
 
 /** The refusal both admission paths give when the board is full. */
@@ -370,7 +374,7 @@ export function createTask(
      against it: a task created off the board joins the history, which has no
      cap, and no durable identity is ever refused to keep a display small.
      The getter consults seats only if the shared rule reaches an expired row. */
-  if (board !== "hidden" && countBoardTasks(existing, project, deps.hasBoardMembers ?? (() => false), (task) => ({ now: Date.parse(now), get holdsSeat() { return deps.seatHolding?.(task) === "holds"; } })) >= BOARD_TASKS_PER_PROJECT_LIMIT) {
+  if (!deps.allowBoardOverflow && board !== "hidden" && countBoardTasks(existing, project, deps.hasBoardMembers ?? (() => false), (task) => ({ now: Date.parse(now), get holdsSeat() { return deps.seatHolding?.(task) === "holds"; } })) >= BOARD_TASKS_PER_PROJECT_LIMIT) {
     return boardFullError("project");
   }
 
@@ -524,7 +528,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     const hasMembers = options.hasBoardMembers ?? (() => false);
     const visibility = { now: Date.parse(now), get holdsSeat() { return options.seatHolding?.(task) === "holds"; } };
     const candidate = withTaskCompletion({ ...task, ...patch, board, updatedAt: now }, task);
-    if (board === "shown" && taskShowsOnBoard(candidate, hasMembers(candidate), visibility)
+    if (!options.allowBoardOverflow && board === "shown" && taskShowsOnBoard(candidate, hasMembers(candidate), visibility)
       && !taskShowsOnBoard(task, hasMembers(task), visibility)
       && countBoardTasks(existing, task.project, hasMembers, (row) => ({ now: Date.parse(now), get holdsSeat() { return options.seatHolding?.(row) === "holds"; } })) >= BOARD_TASKS_PER_PROJECT_LIMIT) {
       return boardFullError("board");

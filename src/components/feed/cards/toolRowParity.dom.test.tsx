@@ -117,6 +117,26 @@ for (const engine of ["codex", "claude"] as const) {
       }
     });
 
+    test(`${engine} rows on the ${width}: the context tokens follow the duration and never take the label's width`, () => {
+      narrowViewport = width === "phone";
+      const host = feed(engine);
+      const captions = [...host.querySelectorAll("[data-context-tokens]")];
+      /* The transcripts hold results, so the parser estimated them (no later
+         response carries a prompt size to measure against). */
+      expect(captions.length).toBeGreaterThan(3);
+      for (const caption of captions) {
+        expect(caption.getAttribute("data-context-basis")).toBe("estimate");
+        expect(caption.textContent).toMatch(/~\d/);
+        expect(cls(caption)).toContain("shrink-0");
+        expect(cls(caption)).toContain("whitespace-nowrap");
+        expect(caption.getAttribute("title")).toMatch(/^Approximately [\d,]+ tokens? added to the context/);
+      }
+      /* A row with both keeps the order duration → tokens. */
+      const row = captions.map((caption) => caption.closest("[data-tool-row]")).find((found) => found && /\d(?:ms|s)/.test(found.textContent ?? ""));
+      expect(row).toBeTruthy();
+      expect(row!.textContent).toMatch(/\d(?:ms|s)·?~\d/);
+    });
+
     test(`${engine} rows on the ${width}: a failure is a quiet accent and a single verdict`, () => {
       narrowViewport = width === "phone";
       const host = feed(engine);

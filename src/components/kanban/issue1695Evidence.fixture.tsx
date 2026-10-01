@@ -1,5 +1,6 @@
 import { AgentMappingTable } from "@/components/onboarding/AgentMappingTable";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
+import { ROLE_VARIANT_DEFAULTS } from "@/lib/roles/paramConfig";
 import { RuntimePill } from "@/components/RuntimePill";
 import { createRoot } from "react-dom/client";
 
@@ -45,8 +46,14 @@ import type { BoardProjectStateV1 } from "@/lib/view/types";
  * or a state directory. Driven by the `issue1695*.browser.test.tsx` files.
  */
 
-const PROJECT = new URLSearchParams(location.search).get("scenario") === "linked-agents" ? `repo-${"a".repeat(32)}` : "atlas";
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
+/* A task another machine runs (docs/design/synced-task-card.md): four tasks owned by the linked stage
+   install, one of them with no lane (an older peer), beside the board's own local ones. The page
+   answers nothing about them; the driver serves `/api/links/agents` with this install's id, the host
+   and the lanes it publishes. */
+const SYNCED = SCENARIO === "synced-task";
+const PROJECT = SCENARIO === "linked-agents" || SYNCED ? `repo-${"a".repeat(32)}` : "atlas";
+const STAGE_INSTALL = ["22222222", "2222", "4222", "8222", "222222222222"].join("-");
 const SELF_UPDATE_RELOAD = new URLSearchParams(location.search).has("self-update-reload");
 let presenceAnswers = 0;
 /* #2102: stored icons on some tasks; the others draw the title's suggestion or the quiet default. */
@@ -71,7 +78,7 @@ const STAGES = SCENARIO === "stages" || ACCOUNTS || AGENT_REPORT;
 const FLAT = SCENARIO === "pipeline-block";
 const UK = localStorage.getItem("llv_lang") === "uk";
 const L = (en: string, uk: string) => (UK ? uk : en);
-const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT;
+const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT || SYNCED;
 /* #1846: `&runtime=structured` answers the runtime snapshot with one structured session, for the running
    verify conversation, so its composer's runtime pill and the board's account chip both draw. */
 /* The seat-noise scenario (docs/design/seat-panel-noise.md) seats the orchestrator on a structured host too,
@@ -240,6 +247,11 @@ const BOARD_ORDER = SCENARIO === "board-order";
    one low task with a working agent, and an Assigned column whose priorities
    do not change its order. */
 const PRIORITY = SCENARIO === "task-priority";
+/** The seat tick's board cards: the standing tick notice and the maintenance
+    run cards. Their TEXT is built by the driver with the production builders
+    (`seatTickSettingsCardText`, `maintenanceCardText`) and handed over in the
+    query, so the board draws what the server would have written. */
+const TICK_CARDS = SCENARIO === "seat-tick-cards";
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -1388,6 +1400,12 @@ const tasks: BoardTask[] = [
   task("t-queue", "done", "Preserve native queue recovery through journal compaction", "", 4 * 24 * 60 * MIN),
   task("t-old", "done", "An empty task someone took off the board", "", 9 * 24 * 60 * MIN, [], { board: "hidden" }),
   ...(PIPELINES ? [task("t-rounds", "assigned", "Rework the retry banner until review passes", "", 12 * MIN)] : []),
+  ...(SYNCED ? [
+    task("t-rem-run", "assigned", L("Ship the synced task card", "Випустити картку синхронізованої задачі"), L("Show the other machine's stages on the card and mark it as managed there.", "Показати етапи з іншої машини на картці й позначити, що нею керують там."), 6 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
+    task("t-rem-wait", "assigned", L("Answer the deploy question on the stage box", "Відповісти на питання про розгортання на стенді"), "", 14 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
+    task("t-rem-old", "assigned", L("A task from a peer that predates lane rows", "Задача від вузла, що ще не знає про рядки етапів"), "", 31 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
+    task("t-rem-done", "done", L("Publish the linked boards guide", "Опублікувати посібник зі зв’язаних дошок"), "", 3 * 60 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
+  ] : []),
   ...(MANY ? [task("t-many", "assigned", "Kanban: say what each pipeline of a task does", "Five pipelines on one card: two running, three finished.", 5 * MIN)] : []),
   ...(MARKS ? [task("t-marks", "assigned", "Say who runs each stage, and how often an edge fired", "Two pipelines: one fail edge fired twice of three, one with its budget spent.", 4 * MIN)] : []),
   ...(GLYPHS ? [
@@ -1580,6 +1598,18 @@ if (BOARD_ORDER) {
     task("t-order-notes", "assigned", L("Write the upgrade notes", "Написати нотатки до оновлення"), L("Nobody has worked on it yet.", "Над нею ще ніхто не працював."), 1 * MIN),
   );
 }
+if (TICK_CARDS) {
+  const texts = JSON.parse(decodeURIComponent(escape(atob(new URLSearchParams(location.search).get("texts") ?? "e30=")))) as { notice: string; failed: string; live: string };
+  files.splice(0, files.length, orchestrator);
+  pipelines.splice(0, pipelines.length);
+  tasks.splice(0, tasks.length,
+    task("t-tick-notice", "inbox", texts.notice, "", 14 * MIN, [], { color: "amber", icon: "timer" }),
+    task("t-tick-cleanup", "inbox", L("Remove the unused tmux helpers", "Прибрати невживані помічники tmux"), "", 3 * 60 * MIN, [], { color: "slate", icon: "wrench" }),
+    task("t-tick-live", "assigned", texts.live, "", 6 * MIN, [], { color: "slate", icon: "brush-cleaning" }),
+    task("t-tick-search", "assigned", L("Restore search results after the index rebuild", "Повернути результати пошуку після перебудови індексу"), "", 25 * MIN),
+    task("t-tick-failed", "blocked", texts.failed, "", 40 * MIN, [], { color: "slate", icon: "brush-cleaning" }),
+  );
+}
 if (PRIORITY) {
   const helper = conversation("priority-helper", L("Implementer: remove the unused tmux helpers", "Імплементер: прибрати невживані помічники tmux"), working({ plan: { current: L("Deleting the pane scraper", "Видаляю зчитувач панелей") } }));
   const banner = conversation("priority-banner", L("Builder: the limit banner copy", "Білдер: текст банера про ліміт"), working({ plan: { current: L("Wording the reset time", "Формулюю час скидання") } }));
@@ -1653,6 +1683,7 @@ const tool = (secondsAgo: number, id: string, name: string, input: Record<string
 function transcriptOf(pathname: string): string {
   const file = files.find((entry) => entry.path === pathname);
   if (!file || file === pendingWorker) return "";
+  if (SCENARIO === "fast-tts") return `${said(10, "The first sentence should start speaking immediately. The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately. Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken.")}\n`;
   /* The running verifier has a long transcript: its reader scrolls. */
   if (file === searchVer2) {
     const long = [asked(90 * MIN, `${file.title} — pick it up from the task text.`)];
@@ -2068,8 +2099,15 @@ const serverFetch = window.fetch.bind(window);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
+  if (SCENARIO === "role-defaults" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => {
+    const variants = ROLE_VARIANT_DEFAULTS[role.id as keyof typeof ROLE_VARIANT_DEFAULTS];
+    return { ...role, variants, promptPreview: role.promptScaffold, shipped: { config: role.config, variants } };
+  }) });
   if (SCENARIO === "service-tier" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, config: { ...role.config, ...(role.id === "reviewer" ? { serviceTier: "ultrafast" } : {}) }, shipped: { config: role.config } })) });
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
+  /* The tick panel the notice card opens reads these two; the driver answers them. */
+  if (TICK_CARDS && (url.pathname === "/api/monitor/seat-tick/settings" || url.pathname === "/api/roles")) return serverFetch(url.pathname + url.search, init);
+  if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname.startsWith("/api/links")) return serverFetch(url.pathname + url.search, init);
   if (ALBUM && url.pathname === "/api/task-album") {
     const ids = (url.searchParams.get("ids") ?? "").split(",").filter((id) => albumItems()[id]);
@@ -2559,7 +2597,7 @@ else localStorage.setItem("llvProject", PROJECT);
    requested Ukrainian frame back into an English render (#1743). */
 if (!localStorage.getItem("llv_lang")) localStorage.setItem("llv_lang", "en");
 if (!location.hash && !OVERVIEW_VIEW) location.hash = `#p=${PROJECT}`;
-createRoot(document.getElementById("root")!).render(SCENARIO === "service-tier" ? (
+createRoot(document.getElementById("root")!).render(SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>

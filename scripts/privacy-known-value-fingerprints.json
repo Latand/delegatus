@@ -9,7 +9,8 @@
     },
     {
       "length": 10,
-      "sha256": "b829e805ab160bf10124b48da39c07eecc55bea7b9229820abbcc396ebf35cf1"
+      "sha256": "b829e805ab160bf10124b48da39c07eecc55bea7b9229820abbcc396ebf35cf1",
+      "exactOnly": true
     },
     {
       "length": 12,

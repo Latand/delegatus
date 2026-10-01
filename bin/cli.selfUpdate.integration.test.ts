@@ -80,7 +80,7 @@ function install(options: { oldSupervisor?: boolean; oldServerRuntime?: boolean 
   for (const dir of [path.join(checkout, "bin"), path.join(checkout, "node_modules", ".bin"), path.join(checkout, "dist"), home, state, cache, path.join(root, "tmp")]) {
     mkdirSync(dir, { recursive: true });
   }
-  for (const name of ["cli.mjs", "server-runtime.mjs", "tailscale.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs", "legacySystemd.mjs", "internalService.mjs", "skillLinks.mjs"]) {
+  for (const name of ["cli.mjs", "telemetry-notice.mjs", "agent-binaries.mjs", "server-runtime.mjs", "tailscale.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs", "legacySystemd.mjs", "internalService.mjs", "skillLinks.mjs"]) {
     copyFileSync(path.resolve("bin", name), path.join(checkout, "bin", name));
   }
   if (options.oldSupervisor) {

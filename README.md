@@ -40,10 +40,11 @@ These steps take you from nothing to an orchestrator working on your project.
    `curl -fsSL https://bun.com/install | bash`
 2. Install Claude Code or Codex. The orchestrator runs on one of them.
    - Claude Code: `curl -fsSL https://claude.ai/install.sh | bash`
-   - Codex: `bun add -g @openai/codex`
+   - Codex: `curl -fsSL https://chatgpt.com/codex/install.sh | sh`
 
    You can add GitHub Copilot as well: `bun add -g @github/copilot`
-3. Start Delegatus: `bunx delegatus-cli`
+3. Start Delegatus: `bunx delegatus-cli`. If neither CLI is found, the start
+   output says how to install each.
 4. Open `http://127.0.0.1:8898/` if your browser did not open it for you.
 5. Follow the setup guide. It signs you in to your agent CLIs, asks for a
    project folder and creates the project's orchestrator.
@@ -144,7 +145,9 @@ Each time an orchestrator takes its seat, including after a rotation, it
 first gets a report on its board: what waits on you, stuck agents, tasks
 nothing works on, cards that look safe to close and, for a GitHub project,
 open issues ranked by their recorded priority.
-[docs/orchestrator.md](docs/orchestrator.md) covers the rest.
+In the seat tick panel, **Board maintenance** can also start one maintainer
+agent per project on a timer, every 3 hours by default and off until you
+switch it on. [docs/orchestrator.md](docs/orchestrator.md) covers the rest.
 
 The **Reports** log beside its chat lists what it reported, newest first: a
 stage that passed or failed, a review verdict, a blocked pipeline, a
@@ -241,7 +244,10 @@ You can start agents yourself and choose which account each one uses.
 Start a Claude Code, Codex or GitHub Copilot agent from a task or the Create
 button. Pick the model and reasoning effort, then send messages, images and
 files from the composer. The agent's window has buttons to interrupt,
-resume or stop it. Agents use the bundled [MCP server](#mcp-server-for-agents)
+resume or stop it. In a Codex conversation, the composer's **Context** toggle
+sends the draft into the running turn as context: Auto follows the turn, and a
+press overrides it for that card. A Codex agent can also run on a service tier
+you set per launch, stage or role. Agents use the bundled [MCP server](#mcp-server-for-agents)
 to reach the board, tasks, pipelines and each other's conversations. The
 orchestrator does its work through the same server.
 
@@ -296,7 +302,9 @@ background shell tasks, and Copilot sessions.
 Each tool call is a card. An edit shows as a diff, a command shows with its
 output, and an image the agent looked at shows as a thumbnail you can open
 full size. A summary line groups the calls ("wrote 1 file · patched 1 file ·
-ran 1 command"); expand it to see each one. New output streams in live, and
+ran 1 command"); expand it to see each one. Next to a call's duration, such as
+`352ms · 12.4k`, a number shows how many context tokens its result added, in
+four colour bands from quiet under 1 000 to red from 20 000. New output streams in live, and
 every conversation has its own link. Press `/` to search your messages
 across every project, engine and account, or switch the search to
 everything the agents wrote too.
@@ -362,7 +370,8 @@ Delegatus can take your messages by voice and read answers aloud.
   [docs/transcription.md](docs/transcription.md).
 - **Read aloud.** The speaker button on an answer reads it with OpenAI,
   ElevenLabs or Soniox speech, billed to your own API key. Right-click the
-  button to pick the provider.
+  button to pick the provider. With Soniox the answer in view also starts from
+  the conversation header, and the first sentence plays as soon as it arrives.
 - **Voice conversation.** A Codex agent that Delegatus hosts offers a
   continuous voice conversation from its composer.
 
@@ -453,6 +462,8 @@ menu (the board's ⋯ menu on a phone).
 - **See the other machine's agents.** Its agents on a shared project show as
   one collapsed, read-only row, such as "On server: 3 agents · 1 working",
   on their task's card or in the Inbox. Only a title and a state cross over.
+  A linked task's card also shows its pipeline (stages, states and the
+  current stage) and a "Managed on" chip with the machine's name.
 - **Revoke** or **Remove** a link at any time from the same dialog.
 
 The design is in [docs/design/linked-installs.md](docs/design/linked-installs.md).
@@ -685,3 +696,25 @@ steps.
 ## License
 
 MIT
+
+## What leaves your machine
+
+Delegatus sends an anonymous install ping to `https://delegatus.org/api/ping`
+once per UTC day while the production Viewer runs, starting one minute after
+boot. It is on by default. The JSON body contains exactly `id` (an independently
+created random UUID stored in the state directory), `v` (version), `os`, `arch`
+and `kind` (`packaged`, `checkout` or `docker`). The id is separate from the
+linked-install identity. The Worker adds Cloudflare's country code and stores
+these values in Analytics Engine, with no IP address. The endpoint receives the
+network connection as any HTTPS service does.
+
+Turn it off in **Settings → Anonymous install ping**, or start Delegatus with
+`DELEGATUS_TELEMETRY=0` or `DO_NOT_TRACK=1`. Environment opt-outs always override
+the switch. Tests, CI, builds, development servers and the Docker test profile
+send nothing. Requests time out after five seconds and are attempted at most
+once per UTC day, including after failures and restarts.
+
+The first start shows a notice in the product and start output. The ping carries
+no paths, host or user names, projects, accounts, engines or usage. Linked-install
+traffic still travels directly between the peers you connect; agent providers
+and explicitly configured integrations receive the requests you ask them to run.

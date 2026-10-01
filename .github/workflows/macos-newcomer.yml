@@ -1,0 +1,91 @@
+name: macOS newcomer install
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - ".github/workflows/macos-newcomer.yml"
+      - "scripts/newcomer-install*"
+      - "bin/agent-binaries*"
+      - "bin/cli.mjs"
+      - "bin/mcp-server.mjs"
+      - "src/lib/agent/cli.ts"
+      - "src/lib/accounts/codexAppServer*"
+      - "landing/site/copy*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  newcomer:
+    runs-on: macos-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.0"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install checkout dependencies
+        run: bun install --frozen-lockfile
+      - name: Install the heavy-gate lock utility
+        run: brew install flock
+      - name: Verify prompt and detection regressions
+        run: bun test bin/agent-binaries.test.ts landing/site/copy.test.ts scripts/newcomer-install.test.ts src/lib/accounts/codexAppServer.test.ts
+      - name: Prepare checkout tarball or exact npm release
+        id: package
+        env:
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_NAME: ${{ github.ref_name }}
+          # Next's package build type-checks the full repository. The default
+          # Node heap on an ARM macOS runner is too small for that graph.
+          NODE_OPTIONS: --max-old-space-size=6144
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_REF" == refs/tags/* ]]; then
+            version="$(bun -e 'console.log(require("./package.json").version)')"
+            test "$RELEASE_NAME" = "v$version"
+            # Publishing runs alongside this tag check. Wait up to ten minutes
+            # for this exact version; never silently install an older latest.
+            ready=0
+            for attempt in {1..60}; do
+              if npm view "delegatus-cli@$version" version --fetch-retries=0 --fetch-timeout=5000 >/dev/null 2>&1; then
+                ready=1
+                break
+              fi
+              sleep 10
+            done
+            test "$ready" = 1
+            echo "target=delegatus-cli@$version" >> "$GITHUB_OUTPUT"
+          else
+            mkdir -p "$RUNNER_TEMP/package"
+            flock /var/tmp/llv-heavy-gate.lock npm pack --pack-destination "$RUNNER_TEMP/package"
+            tarball=("$RUNNER_TEMP"/package/delegatus-cli-*.tgz)
+            test "${#tarball[@]}" = 1
+            echo "target=${tarball[0]}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Rehearse clean first start without logins or agent runs
+        env:
+          NEWCOMER_PACKAGE: ${{ steps.package.outputs.target }}
+        # Node supervises the probe; the installed launcher uses its own Bun.
+        run: node scripts/newcomer-install.mjs "$NEWCOMER_PACKAGE" "$RUNNER_TEMP/newcomer-report"
+      - name: Record short report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-newcomer-report
+          path: ${{ runner.temp }}/newcomer-report
+          if-no-files-found: warn
+          retention-days: 14

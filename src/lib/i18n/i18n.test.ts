@@ -239,3 +239,31 @@ describe("copy that renders on a structured host names no transport (#1301)", ()
     expect(en["attach.unavailable"]).not.toContain("endpoint");
   });
 });
+
+describe("tool call context tokens copy", () => {
+  const keys = [
+    "tools.contextTokens.measured",
+    "tools.contextTokens.shared",
+    "tools.contextTokens.estimate",
+    "tools.contextTokens.groupMeasured",
+    "tools.contextTokens.groupEstimate",
+  ] as const;
+
+  test("both dictionaries carry every wording as plural forms, Ukrainian with one, few and many", () => {
+    for (const key of keys) {
+      expect(typeof en[key], `en ${key}`).toBe("object");
+      expect(Object.keys(en[key]).sort(), `en ${key}`).toEqual(["one", "other"]);
+      expect(typeof uk[key], `uk ${key}`).toBe("object");
+      expect(Object.keys(uk[key]).sort(), `uk ${key}`).toEqual(["few", "many", "one", "other"]);
+    }
+  });
+
+  test("the wording that marks an estimate says approximately in both languages", () => {
+    for (const key of ["tools.contextTokens.shared", "tools.contextTokens.estimate", "tools.contextTokens.groupEstimate"] as const) {
+      expect(translate("en", key, { n: 5, count: 5, total: 9, calls: 2 })).toContain("Approximately 5");
+      expect(translate("uk", key, { n: 5, count: 5, total: 9, calls: 2 })).toContain("приблизно 5");
+    }
+    expect(translate("en", "tools.contextTokens.measured", { n: 5, count: 5 })).not.toContain("pproximately");
+    expect(translate("uk", "tools.contextTokens.measured", { n: 5, count: 5 })).not.toContain("приблизно");
+  });
+});

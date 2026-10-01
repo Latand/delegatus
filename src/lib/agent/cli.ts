@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { findAgentBinary } from "../../../bin/agent-binaries.mjs";
 
 import { accountForSpawn, codexHomeOwningSessionPath, isManagedCodexHome } from "@/lib/accounts/codex";
 import { claudeProviderForHome, claudeProviderLauncherPath, claudeSettingsPath, claudeTranscriptOwnership, isManagedClaudeHome, legacyClaudeHome } from "@/lib/accounts/claude";
@@ -72,25 +73,7 @@ export function resolveBinary(name: string): string {
       /* keep looking */
     }
   }
-  /* ~/.bun/bin goes first: on this machine the system-wide /usr/bin/claude is
-     an npm install that crashes under the current Node, while the bun shim is
-     the CLI the user actually runs. */
-  for (const candidate of [
-    path.join(home, ".bun", "bin", name),
-    path.join(home, ".npm-global", "bin", name),
-    path.join(home, ".local", "bin", name),
-    path.join(home, "go", "bin", name),
-    "/usr/local/bin/" + name,
-    "/usr/bin/" + name,
-  ]) {
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK);
-      return candidate;
-    } catch {
-      /* keep looking */
-    }
-  }
-  return name;
+  return findAgentBinary(name, { home }) ?? name;
 }
 
 /** Binary path as the OPERATOR'S OWN terminal resolves it. Inside the runtime
@@ -103,14 +86,10 @@ export function resolveBinary(name: string): string {
     probed too. When nothing matches, the bare name defers to the user's PATH. */
 export function resolveHostBinary(name: string): string {
   const home = os.homedir();
-  const homeCandidates = [
-    path.join(home, ".bun", "bin", name),
-    path.join(home, ".npm-global", "bin", name),
-    path.join(home, ".local", "bin", name),
-    path.join(home, "go", "bin", name),
-  ];
   const containerized = process.env.LLV_DOCKER_NSENTER_SHIMS === "1";
-  const candidates = containerized ? homeCandidates : [...homeCandidates, "/usr/local/bin/" + name, "/usr/bin/" + name];
+  // A container PATH belongs to the container, even for the host terminal.
+  const candidates = containerized ? [".bun", ".npm-global", ".local", "go"].map((dir) => path.join(home, dir, "bin", name)) : [];
+  if (!containerized) return findAgentBinary(name, { home }) ?? name;
   for (const candidate of candidates) {
     try {
       fs.accessSync(candidate, fs.constants.X_OK);

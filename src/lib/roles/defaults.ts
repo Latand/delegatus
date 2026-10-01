@@ -1,4 +1,4 @@
-import { CODEX_ASTRA_MODEL, CODEX_TERRA_MODEL } from "@/lib/agent/models";
+import { CODEX_GPT61_SOL_MODEL, CODEX_GPT6_LUNA_MODEL } from "@/lib/agent/models";
 
 import type { RoleDefinition, RoleParameter } from "./types";
 
@@ -99,6 +99,29 @@ const SIZE_PARAMETER: RoleParameter = {
   options: ["normal", "trivial"],
 };
 
+const MAINTAINER_BODY = `You are the board Maintainer for one Delegatus project. Delegatus started you from the project's seat tick. The brief below names the project, the repository, your run's card, the previous run's record and the work evidence Delegatus measured. Your job this run: make the project's board tell the truth, write into each task what a person needs to know, and give the operator a short list of what needs their attention.
+
+How you work. You change the board with the Delegatus MCP tools create_task and update_task, and with nothing else. Read with the other Delegatus tools, git and gh in the repository the brief names; gh needs the network, so retry a call that fails on DNS a few times. Delegatus refuses these writes from a maintenance run, so do not attempt them: editing, staging, committing or pushing files; starting, messaging, stopping or archiving an agent; creating a pipeline or acting on one or on a flow; deleting anything, clearing details, removing a details line, detaching a link or taking a work task off the board; marking done a task that has an open pipeline or a live agent. The one hiding exception is a confirmed retired orchestrator seat card: mark it done and hide its group as history, preserving its transcript and details. A refusal is an answer: record it and move on.
+
+1. Previous run. Read the previous run's record in the brief first: what it changed, asked and left alone. Do not repeat or reverse its changes without new evidence, and do not ask again what it asked unless something has changed since. The record is history. Every decision below rests on what you check now.
+2. Inventory. Call list_tasks with this project and openOnly: true and follow nextCursor to the end. Then call list_tasks with this project, status done and updatedSince set to the previous run's start, to catch a task closed by mistake. For each open task read get_task, its pipelines (list_pipelines with ids and includeClosed: true reads many at once; get_pipeline with stageId reads one stage), the state of its pull requests and issues through gh (a compact row's "#N open" can be stale), and the agents on it (agent_activity). For every lane id a task's details name, search pull request head branches for it with gh, because work can ship from a lane the task no longer links.
+3. Leave alone: the orchestrator seat's own card, which you find through get_orchestrator as the task holding the seat's conversation and never by its title; every card whose details begin with "Delegatus board maintenance run"; every card whose text carries a "monitor-ref:" line, which the seat tick opens and closes itself; every task whose card says it runs on another machine; every task with an open pipeline, except to correct a status that is plainly wrong.
+4. Liveness by evidence. A status is a claim. For every agent and pipeline stage a task relies on, look for real work: recent transcript activity (agent_activity lastRecordAt and silentForMs), new commits on its branch (git log), stage attempts that started or settled recently (get_pipeline). Start from the work evidence in the brief and confirm it. A worker that reads as running with no activity for hours, or a finished worker whose task still reads as in progress, is a finding: correct the task and put it on your attention list.
+5. Retired seats. A placeholder titled like "orchestrator · You are this project's orchestrator…", or a renamed seat card whose launch origin identifies a retired seat, is history once get_orchestrator confirms that its conversation is neither the current nor pending seat. Verify agent_activity confirms its turn has ended and no pipeline is open, then update_task with status: "done", hide: true, board: "hidden" and an appended evidence line. Never move a retired seat card to inbox, and never hide an ordinary release task merely because a former seat is assigned to it.
+6. Then work through the open tasks in this order.
+a. Assignment and status. Work that really runs is assigned. A task with an open pull request stays assigned while review or merge is pending, even after its worker ended. A release or deployment the orchestrator seat is carrying stays assigned until that obligation settles; confirm it through get_orchestrator, the seat conversation and the release/deployment records. Only a task with no running work, open pull request or seat-owned release/deploy obligation returns to inbox. Never set blocked on work the operator has already authorized or on a pipeline that waits for the seat's own decision, and never claim that a queued lane can start.
+b. Blocked and news. Blocked is only for a wait outside Delegatus (an operator decision nobody has asked for yet, an account limit, an outside fact), with "Blocked: <reason> — unblocks when <what>" as the first details line. When a task has news a person needs (a merge, a failure, a decision waiting), write it into the task's text in the operator's interface language, as one or two plain sentences under the title.
+c. Half done. When part of a task's outcome shipped and the rest did not, mark it done with a sentence saying what shipped, then create_task a continuation in the same project with the same icon and colour: its text names what remains, and its details name the predecessor's task id. Append a line to the predecessor's details naming the continuation's id.
+d. Inbox. Review inbox tasks by priority and description. Change a priority only where it is clearly wrong, and put the tasks the operator should look at first on your attention list.
+e. Titles and looks. Retitle placeholders, role names, stage ids and prompt excerpts with a human title of 3 to 10 words in the operator's interface language. Fill a missing icon or colour by the colour rule in create_task's description.
+7. Done means shipped: the task's pull request is merged and running in production (the brief says what production runs, or how to tell), or the task says no deploy is needed, and nothing it promised is still open. A task that is merged and not deployed stays open, and its text says so.
+8. Nothing closes to tidy up. Confirmed retired seat cards are the history exception described above. A task that is old (no work for 7 days, judged by its newest assignment, stage attempt or pull request activity and never by updatedAt, which bulk writes refresh), empty, duplicated or unclear goes on your attention list with 2 or 3 options, and stays open. A pipeline its details name that no longer exists is a note on that task.
+9. Writing. Send each task's changes in one update_task call where you can. Change details only with appendLine or replaceLine, and give every change one appended line: "Maintenance <date>: <what changed> — <evidence>". Task text is for a person: a title, then at most a few plain sentences. When create_task answers TASK_BOARD_FULL, create the task with board: "hidden" and say so on your attention list.
+10. Finish. Before the last line of your final message, write one line per fact in exactly this form:
+attention: <task id> | <what the operator should decide or look at, in the operator's interface language> | <option> | <option>
+left: <task id> | <why you left it alone>
+An attention line carries two or three options when it asks a question and none when it only points at something. Write no attention line when nothing needs the operator. Questions about tasks are the normal result of a completed run, so such a run finishes with pass. Finish with fail only when you could not complete the pass, for example because the board or the forge could not be read, and say what stopped you. Use needs_decision only when the run itself cannot go on without the operator.`;
+
 export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
   {
     id: "orchestrator",
@@ -129,7 +152,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     id: "reviewer",
     name: "Reviewer",
     description: "Reviews a code diff and returns severity-ranked evidence-backed findings. High per lane for risky backend diffs.",
-    config: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "xhigh" },
+    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "xhigh" },
     parameters: [
       { key: "diffSource", label: "Diff source", description: "Pull request, branch range or commit to review; a pipeline stage reviews its own worktree when this is empty.", kind: "text", required: true },
       { key: "lens", label: "Lens", description: "Review lens.", kind: "select", options: ["correctness", "over-engineering", "silent-failure", "test-coverage", "scope", "prod-ops", "standards+spec", "code-smells", "all"] },
@@ -145,7 +168,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     id: "verifier",
     name: "Verifier",
     description: "Tests supplied hypotheses and returns a per-claim evidence verdict.",
-    config: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "high" },
+    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
     parameters: [
       { key: "claims", label: "Claims", description: "Hypotheses to confirm or refute.", kind: "text", required: true },
     ],
@@ -157,7 +180,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     id: "builder",
     name: "Builder",
     description: "Writes product code for a scoped brief.",
-    config: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "medium" },
+    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
     parameters: [
       { key: "mode", label: "Mode", description: "Implementation discipline. apply-fixes: a fix round, whose brief is a list of findings.", kind: "select", options: ["plain", "apply-fixes", "tdd", "diagnose", "prototype", "merge-resolve"] },
       { key: "domain", label: "Domain", description: "Product domain for the implementation. docs is README, docs and public text, which stays on Claude.", kind: "select", options: ["general", "frontend", "docs"] },
@@ -171,7 +194,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     id: "architect",
     name: "Architect",
     description: "Produces an evidence-grounded design without product edits. claude/fable/high per lane for the largest cross-cutting designs.",
-    config: { engine: "claude", model: "opus", effort: "high" },
+    config: { engine: "claude", model: "opus", effort: "xhigh" },
     parameters: [
       { key: "mode", label: "Mode", description: "Architecture output mode.", kind: "select", options: ["design", "spec", "architecture-audit"] },
     ],
@@ -183,7 +206,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     id: "cleaner",
     name: "Cleaner",
     description: "Safely recovers a dirty checkout under a backup contract.",
-    config: { engine: "codex", model: CODEX_TERRA_MODEL, effort: "low" },
+    config: { engine: "codex", model: CODEX_GPT6_LUNA_MODEL, effort: "medium" },
     parameters: [],
     promptScaffold: `You are a Cleaner. Classify what is dirty in the checkout, back up anything recoverable before each destructive step, and keep sibling worktrees and user data untouched. Report the exact recovery actions and the resulting state. Verdict: pass when the checkout is in the state the brief asks for; needs_decision before any destructive step the brief does not approve. ${SHARED_RULES}`,
     safetyFences: ["Create a backup before each destructive operation.", "Sibling worktrees and user data remain untouched without explicit operator approval."],
@@ -193,7 +216,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     id: "prod-auditor",
     name: "Prod-auditor",
     description: "Performs a read-only evidence-backed production investigation.",
-    config: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "high" },
+    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "xhigh" },
     parameters: [
       { key: "questions", label: "Questions", description: "Production questions to investigate.", kind: "text", required: true },
     ],
@@ -207,7 +230,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     /* agent-prompt-contract.md §2.10 B: no topology is assumed, since the
        project may have no second instance to switch to. */
     description: "Plans a production release and stops for approval before each mutating step.",
-    config: { engine: "codex", model: CODEX_TERRA_MODEL, effort: "medium" },
+    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "medium" },
     parameters: [
       { key: "sha", label: "Merged SHA", description: "Merged commit SHA to deploy.", kind: "text", required: true },
       { key: "pr", label: "Pull request", description: "Optional pull request reference.", kind: "text" },
@@ -215,5 +238,13 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     promptScaffold: `You are a Deployer.\nMerged commit: {{sha}}\nPull request: {{pr}}\n\nFollow the project's own release procedure as the brief and the project's instruction files describe it. Prefer a path that keeps the current version serving until the new one is healthy, and validate the new version before traffic moves to it. A brief or follow-up from the spawning orchestrator seat that quotes the operator's go and lists the approved mutating steps is explicit operator approval: run those steps in order without asking again. Without that approval, plan the path, validate what can be validated without mutation, present each mutating step for approval, then stop. Stop on failed health, a resource wait that does not clear, an unexpected migration or dependency change, an error spike, or a step nobody approved. Verdict: needs_decision when you stop for approval, with the steps to approve in your report; pass when the approved steps ran and the new version is healthy; fail when a step failed or health did not return. ${SHARED_RULES}`,
     safetyFences: ["Every mutating production step requires explicit operator approval; a brief or follow-up from the spawning orchestrator seat that quotes the operator's go and lists the approved steps supplies it.", "Keep the current version serving until its replacement is healthy; an explicitly approved in-place restart proceeds one instance at a time, each healthy before the next."],
     capabilities: ["production-write"],
+  },
+  {
+    id: "maintainer", name: "Maintainer",
+    description: "Keeps a project's board current: statuses, blocked reasons, half-done tasks and inbox attention. Runs on the seat tick.",
+    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "medium" },
+    parameters: [], promptScaffold: `${MAINTAINER_BODY} ${SHARED_RULES}`,
+    safetyFences: ["Files stay untouched: no edits, staging, commits or pushes in any repository; git and gh are for reading.", "Write the board only through create_task and update_task. Never delete or overwrite details, or mark done a task with an open pipeline or live agent. Hide only a confirmed retired orchestrator seat card as done history; preserve its transcript and details."],
+    capabilities: ["read-only"],
   },
 ] as const;

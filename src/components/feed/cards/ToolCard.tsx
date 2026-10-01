@@ -11,7 +11,9 @@ import { GlyphIcon, Loader2 } from "../../icons";
 import { hhmm } from "../../utils";
 import { ACTION_GUTTER, MESSAGE_ACTION } from "../actionStyles";
 import { CopyButton } from "../CopyButton";
+import { ContextTokensCaption } from "./ContextTokensCaption";
 import { hasImageBlock, tr, type ToolEvent, type ToolOutputBlock } from "../parse";
+import type { ContextTokens } from "../contextTokens";
 import type { ArgChip } from "../tools";
 import { formatDuration, isFollowUpCall, toolDurationMs } from "../toolBlocks";
 import { DiffCard } from "./DiffCard";
@@ -278,7 +280,7 @@ export function ToolImages({ event }: { event: ToolEvent }) {
     counted row (issue #497). It keeps the shared
     session identity and the summed elapsed wall-time, so an operator still reads
     "how long the command was polled" without scrolling past every tick. */
-export function PollRow({ events, session, elapsedMs }: { events: ToolEvent[]; session?: string; elapsedMs?: number }) {
+export function PollRow({ events, session, elapsedMs, contextTokens }: { events: ToolEvent[]; session?: string; elapsedMs?: number; contextTokens?: ContextTokens }) {
   const count = events.length;
   const elapsed = typeof elapsedMs === "number" && elapsedMs > 0 ? formatDuration(elapsedMs) : "";
   const detail = [tr("tools.pollRun", { count }), session ? `→ ${session}` : "", elapsed].filter(Boolean).join(" · ");
@@ -287,6 +289,7 @@ export function PollRow({ events, session, elapsedMs }: { events: ToolEvent[]; s
       <span className="shrink-0 select-none text-muted" aria-hidden>↳</span>
       <GlyphIcon name="clock" className="h-3.5 w-3.5 shrink-0" />
       <span className="min-w-0 flex-1 truncate tabular-nums text-caption">{detail}</span>
+      <ContextTokensCaption value={contextTokens} scope="calls" />
     </div>
   );
 }
@@ -321,6 +324,7 @@ export function ToolBlockRow({ event, index, nested = false }: { event: ToolEven
         </span>
         <RowStatusChip event={event} />
         {duration ? <span className="shrink-0 text-caption tabular-nums text-muted">{duration}</span> : null}
+        <ContextTokensCaption value={event.contextTokens} lead={Boolean(duration)} />
       </div>
       <ToolImages event={event} />
       <ToolBody event={event} />
@@ -410,6 +414,7 @@ export function ToolLine({
             off it; the duration is the trailing word. */}
         {isMobile && running ? null : <RowStatusChip event={event} />}
         {duration ? <span className="shrink-0 text-caption tabular-nums text-muted">{duration}</span> : null}
+        <ContextTokensCaption value={event.contextTokens} lead={Boolean(duration)} />
         {showTime && time ? <span className="shrink-0 text-caption tabular-nums text-muted">{time}</span> : null}
       </summary>
       {(collapsed ? manualOpen : isMobile ? phoneOpen : mounted) ? <><ToolBody event={event} />{children}</> : null}
@@ -449,6 +454,7 @@ export function MobileRunRow({ event }: { event: ToolEvent }) {
   const duration = durationMs === undefined ? "" : formatDuration(durationMs);
   const exit = exitLabel(event);
   const meta = [isErr ? exit : "", time, duration].filter(Boolean).join(" · ");
+  const tokens = event.contextTokens;
   return (
     <span
       data-mobile-run-row={running ? "running" : isErr ? "failed" : "done"}
@@ -465,7 +471,12 @@ export function MobileRunRow({ event }: { event: ToolEvent }) {
       <span className="min-w-0 flex-1 truncate" title={event.summary}>
         {running ? tr("mobile2.feed.running", { summary: event.summary }) : event.summary}
       </span>
-      {meta ? <span className={`shrink-0 text-caption tabular-nums ${isErr ? "text-danger" : "text-muted"}`}>{meta}</span> : null}
+      {meta || tokens ? (
+        <span className={`shrink-0 whitespace-nowrap text-caption tabular-nums ${isErr ? "text-danger" : "text-muted"}`}>
+          {meta}
+          <ContextTokensCaption value={tokens} lead={Boolean(meta)} />
+        </span>
+      ) : null}
     </span>
   );
 }

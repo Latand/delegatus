@@ -203,6 +203,28 @@ test("phone: a run with a failure is one sunken block of 36 px items, each one c
   expect(host.textContent).toContain("git status --short");
 });
 
+test("phone: a run row ends its meta with the context tokens, coloured on the value only", () => {
+  narrowViewport = true;
+  const group = activeFailureGroup();
+  group.calls = [
+    { ...group.calls[0]!, contextTokens: { n: 12_449, basis: "shared", round: { total: 30_000, calls: 2 } } },
+    { ...group.calls[1]!, contextTokens: { n: 352, basis: "measured" } },
+  ];
+  const host = mount(<CmdGroupCard item={group} />);
+  const rows = host.querySelectorAll("[data-mobile-run-row]");
+  const heavy = rows[0]!.querySelector("[data-context-tokens]")!;
+  expect(heavy.textContent).toBe("·~12.4k");
+  expect(heavy.getAttribute("data-context-band")).toBe("2");
+  expect(heavy.getAttribute("data-context-basis")).toBe("shared");
+  expect(classOf(heavy.querySelector("span:not([aria-hidden])"))).toContain("text-caution");
+  /* The failed row keeps its danger meta; only the number takes a band colour. */
+  const quiet = rows[1]!.querySelector("[data-context-tokens]")!;
+  expect(quiet.textContent).toBe("·352");
+  expect(classOf(quiet.parentElement)).toContain("text-danger");
+  expect(classOf(quiet.querySelector("span:not([aria-hidden])"))).toContain("text-muted");
+  expect(rows[0]!.lastElementChild!.textContent).toMatch(/·~12\.4k$/);
+});
+
 test("phone: a long failure output stays off the collapsed block and arrives with the tap", () => {
   narrowViewport = true;
   const long = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n");

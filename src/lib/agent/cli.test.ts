@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { resolveAttachCommand } from "./attachCommand";
+import { viewerMcpServerEnv } from "./spawnPolicy";
 import type { FileEntry } from "@/lib/types";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-cli-account-test-"));
@@ -370,7 +371,7 @@ test("fresh tmux Claude uses its exclusive native MCP file", () => {
      server the allowlist names but the bound excludes is not copied (#739). */
   expect(spec.command).toContain(`'--strict-mcp-config' '--mcp-config' '${mcpConfigPath}'`);
   expect(JSON.parse(fs.readFileSync(mcpConfigPath, "utf8"))).toEqual({ mcpServers: {
-    viewer: { type: "stdio", command: "viewer-mcp" },
+    viewer: { type: "stdio", command: "viewer-mcp", env: viewerMcpServerEnv() },
   } });
   expect(spec.launchProfile?.mcpServers).toEqual(["viewer"]);
 });
@@ -398,7 +399,7 @@ test("a resume rebuilds its command from the re-bounded grant, not the stored li
 
   expect(resumed?.launchProfile?.mcpServers).toEqual(["viewer"]);
   expect(JSON.parse(fs.readFileSync(mcpConfigPath, "utf8"))).toEqual({ mcpServers: {
-    viewer: { type: "stdio", command: "viewer-mcp" },
+    viewer: { type: "stdio", command: "viewer-mcp", env: viewerMcpServerEnv() },
   } });
 });
 

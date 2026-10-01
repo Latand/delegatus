@@ -60,7 +60,7 @@ const GROUPS: readonly { id: "build" | "review" | "design" | "coordinate" | "rar
   { id: "review", rows: [{ roleId: "reviewer" }, { roleId: "reviewer", variant: "trivial" }, { roleId: "verifier" }] },
   { id: "design", rows: [{ roleId: "architect" }] },
   { id: "coordinate", rows: [{ roleId: "orchestrator" }] },
-  { id: "rare", rows: [{ roleId: "cleaner" }, { roleId: "prod-auditor" }, { roleId: "deployer" }] },
+  { id: "rare", rows: [{ roleId: "cleaner" }, { roleId: "prod-auditor" }, { roleId: "deployer" }, { roleId: "maintainer" }] },
 ];
 
 const ALL_ROWS = GROUPS.flatMap((group) => group.rows);
@@ -83,6 +83,7 @@ function rowLabel(row: RowKey, t: TFunction): string {
     verifier: "onboarding.agents.role.verifier",
     architect: "onboarding.agents.role.architect",
     orchestrator: "onboarding.agents.role.orchestrator",
+    maintainer: "onboarding.agents.role.maintainer",
     cleaner: "onboarding.agents.role.cleaner",
     "prod-auditor": "onboarding.agents.role.prodAuditor",
     deployer: "onboarding.agents.role.deployer",
@@ -252,7 +253,7 @@ function RowControls({ row, config, shipped, reset, promptCustom, statuses, layo
   const changed = shipped !== null && !same(config, shipped);
   const status = statuses[config.engine];
   const scale = effortScale(config.engine, config.model) ?? [];
-  const nudge = costClass(config) === "very-heavy" && effortRank(config.effort) > effortRank("high") && scale.includes("high");
+  const nudge = !same(config, shipped) && costClass(config) === "very-heavy" && effortRank(config.effort) > effortRank("high") && scale.includes("high");
   const models = modelOptions(row, config.engine);
   const modelSelect = (
     <select

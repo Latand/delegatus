@@ -1,5 +1,7 @@
 "use client";
 
+import { SpeakButton } from "../feed/SpeakButton";
+
 import { CornerDownRight, LoaderCircle, RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -154,6 +156,7 @@ export function IncumbentHeader({
             meter and the stale-mandate chip were drawn over this group and
             Stop host. */}
         <span className="ml-auto flex shrink-0 items-center gap-2" data-orchestrator-controls>
+          {file ? <SpeakButton scope={file.path} header /> : null}
           <SeatReportsChip project={project} projectName={projectName} />
           <SeatTickChip project={project} projectName={projectName} />
           <button

@@ -93,3 +93,39 @@ describe("chunkSpeech (#1022)", () => {
   });
 
 });
+
+describe("Soniox sentence policy", () => {
+  test("short answers emit the first sentence, then at most three sentences", () => {
+    const source = "First sentence. Second sentence. Third sentence. Fourth sentence. Fifth sentence.";
+    const chunks = chunkSpeech(source, { backend: "soniox" });
+    expect(chunks.map((c) => c.text)).toEqual(["First sentence.", "Second sentence. Third sentence. Fourth sentence.", "Fifth sentence."]);
+    expect(chunkSpeech(source)).toHaveLength(1);
+  });
+  test("exact slices preserve every character across codepoint caps and paragraphs", () => {
+    for (const source of ["Я".repeat(1800), "😀".repeat(1100), "word ".repeat(420), "Dr. Smith paid 3.14 dollars. He said ‘Done!’\n\nНаступний абзац. Ще речення.", "Heading\nList item\nAnother list item"]) {
+      const chunks = chunkSpeech(source, { backend: "soniox", language: "uk" });
+      expect(chunks.map((c) => c.text.replace(/\s/g, "")).join("")).toBe(source.replace(/\s/g, ""));
+      for (const [index, chunk] of chunks.entries()) {
+        expect(source.slice(chunk.start, chunk.end)).toBe(chunk.text);
+        expect([...chunk.text].length).toBeLessThanOrEqual(index === 0 ? 160 : 360);
+        expect(new TextEncoder().encode(chunk.text).length).toBeLessThanOrEqual(4800);
+        if (index) expect(chunk.start).toBeGreaterThanOrEqual(chunks[index - 1]!.end);
+        expect(chunk.text).not.toMatch(/[\uD800-\uDBFF]$/);
+      }
+    }
+  });
+  test("fallback preserves abbreviations and punctuation-free tokens", () => {
+    const original = Intl.Segmenter;
+    Object.defineProperty(Intl, "Segmenter", { value: undefined, configurable: true });
+    try {
+      const source = "Dr. Smith paid 3.14. Next sentence! Last one.";
+      expect(chunkSpeech(source, { backend: "soniox" })[0]?.text).toBe("Dr. Smith paid 3.14.");
+      expect(chunkSpeech("ж".repeat(900), { backend: "soniox" }).map((c) => c.text).join("")).toBe("ж".repeat(900));
+    } finally { Object.defineProperty(Intl, "Segmenter", { value: original, configurable: true }); }
+  });
+});
+
+test("native sentence segmentation keeps titles and decimal numbers in the first sentence", () => {
+  const source = "Dr. Smith paid 3.14 dollars. He left. Another sentence.";
+  expect(chunkSpeech(source, { backend: "soniox", language: "en" })[0]!.text).toBe("Dr. Smith paid 3.14 dollars.");
+});

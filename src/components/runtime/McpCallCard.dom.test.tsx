@@ -3,6 +3,7 @@ import { Window } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
+import { setLocale } from "@/lib/i18n";
 import { publishConversationAvailability } from "@/lib/mcp/availability";
 
 import type { ToolEvent } from "../feed/parse";
@@ -163,4 +164,35 @@ test("routes task chips through the viewer entity navigation channel", () => {
   } finally {
     window.removeEventListener("llv:mcp-navigate", listener);
   }
+});
+
+test("shows the context tokens right after the duration, with a hover title in both languages", () => {
+  const event = toolEvent({
+    status: "ok",
+    endTs: "2026-07-19T10:00:00.352Z",
+    contextTokens: { n: 16_451, basis: "shared", round: { total: 21_902, calls: 3 } },
+  });
+  const container = render(event, new Set());
+  const caption = container.querySelector("[data-context-tokens]")!;
+  expect(caption.textContent).toContain("~16.4k");
+  expect(caption.getAttribute("data-context-band")).toBe("2");
+  expect(caption.getAttribute("title")).toBe(
+    "Approximately 16,451 tokens added to the context by this call: its share, by result size, of 21,902 measured for 3 parallel calls",
+  );
+  const summary = container.querySelector("summary")!;
+  const order = [...summary.children].filter((child) => /352ms|~16\.4k/.test(child.textContent ?? "")).map((child) => child.textContent);
+  expect(order[0]).toContain("352ms");
+  expect(order[1]).toContain("~16.4k");
+  setLocale("uk");
+  try {
+    flushSync(() => root!.render(<McpCallCard event={event} availableConversationIds={new Set()} />));
+    expect(container.querySelector("[data-context-tokens]")!.getAttribute("title")).toMatch(/приблизно 16\s451 токен:/);
+  } finally {
+    setLocale("en");
+  }
+});
+
+test("shows no token number while the call runs or when the transcript gave none", () => {
+  expect(render(toolEvent(), new Set()).querySelector("[data-context-tokens]")).toBeNull();
+  expect(render(toolEvent({ status: "ok" }), new Set()).querySelector("[data-context-tokens]")).toBeNull();
 });

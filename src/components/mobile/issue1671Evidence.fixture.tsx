@@ -19,7 +19,12 @@ import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 
-const PROJECT = "atlas";
+/* `?synced=1` (docs/design/synced-task-card.md §8): the kanban scene's project is a linked one
+   (a repository key), and four of its tasks run on the linked stage install. The driver serves
+   `/api/links/agents` with this install's id, the host and the lanes the stage publishes. */
+const SYNCED = new URLSearchParams(location.search).has("synced");
+const PROJECT = SYNCED ? `repo-${"a".repeat(32)}` : "atlas";
+const STAGE_INSTALL = ["22222222", "2222", "4222", "8222", "222222222222"].join("-");
 const SELF_UPDATE_RELOAD = new URLSearchParams(location.search).has("self-update-reload");
 let presenceAnswers = 0;
 const queueRecovery = new URLSearchParams(location.search).has("queue-recovery");
@@ -366,7 +371,9 @@ const TOOL_RUN = [
   record(7, "user", [{ type: "tool_result", tool_use_id: "toolu_evidence_run", content: "src/board/projection.test.ts:\n✓ replays a band from the snapshot [11.20ms]\n✓ keeps the band order after a reload [3.90ms]\n✓ answers a stale revision with the current board [2.40ms]\n\n 3 pass\n 0 fail\nRan 3 tests across 1 file. [141.00ms]" }]),
   record(8, "assistant", [{ type: "text", text: "The projection replays every band from the snapshot, and the three board tests pass." }]),
 ].join("\n");
-const FEED = TOOLCARD ? `${BANDS}${TOOL_RUN}\n` : BANDS;
+const FAST_TTS = new URLSearchParams(location.search).has("fast-tts");
+const FAST_TTS_FEED = JSON.stringify({ type: "assistant", timestamp: iso(10), message: { role: "assistant", content: [{ type: "text", text: "The first sentence should start speaking immediately. The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately. Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken." }] } }) + "\n";
+const FEED = FAST_TTS ? FAST_TTS_FEED : TOOLCARD ? `${BANDS}${TOOL_RUN}\n` : BANDS;
 const tasks = TOOLCARD ? [{
   id: "task-projection", project: PROJECT, status: "assigned", placement: "unplaced", board: "shown",
   text: "Rebuild the board status projection\nReplay every band from the snapshot.",
@@ -576,6 +583,16 @@ if (KANBAN) {
     kanbanTask("t-attention", "inbox", "request_attention: the target blinks, intent open opens the conversation (#1696)", { updatedAt: iso(86_400) }),
     kanbanTask("t-tray", "inbox", "Hide the Hidden tray when it holds nothing", { color: "amber", updatedAt: iso(5 * 3_600) }),
   );
+  if (SYNCED) {
+    const uk = localStorage.getItem("llv_lang") === "uk";
+    const L = (en: string, ua: string) => (uk ? ua : en);
+    kanbanTasks.push(
+      kanbanTask("t-rem-run", "assigned", L("Ship the synced task card\nShow the other machine's stages on the card and mark it as managed there.", "Випустити картку синхронізованої задачі\nПоказати етапи з іншої машини на картці й позначити, що нею керують там."), { machine: STAGE_INSTALL, updatedAt: iso(360) }),
+      kanbanTask("t-rem-wait", "assigned", L("Answer the deploy question on the stage box", "Відповісти на питання про розгортання на стенді"), { machine: STAGE_INSTALL, updatedAt: iso(840) }),
+      kanbanTask("t-rem-old", "assigned", L("A task from a peer that predates lane rows", "Задача від вузла, що ще не знає про рядки етапів"), { machine: STAGE_INSTALL, updatedAt: iso(1_860) }),
+      kanbanTask("t-rem-done", "done", L("Publish the linked boards guide", "Опублікувати посібник зі зв’язаних дошок"), { machine: STAGE_INSTALL, updatedAt: iso(3 * 3_600) }),
+    );
+  }
   if (ASKS_SCENE) {
     const asked = (title: string, role: string, gist: string, minutesAgo: number) => {
       const path = kanbanConversation(title, "settled", minutesAgo * 60);
@@ -1051,6 +1068,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({ error: "not_found" }, 404);
   }
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
+  /* The linked stage install's agents and lanes (`?synced=1`): the driver serves them. */
+  if (SYNCED && url.pathname === "/api/links/agents") return serverFetch(url.pathname + url.search);
+  if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/log/provenance" && AGENT_LABEL) return json((await deliveredAgentEvidence()).provenance);
   if (url.pathname === "/api/conversation-host" && method === "POST") {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
@@ -1238,6 +1258,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/orchestrator/seat") {
     // A lost optional read must never strand the composer's local wire fence.
     if (queueRecovery) return new Promise<Response>(() => {});
+    if (FAST_TTS && SEAT_NOISE) {
+      const file = files[0]!;
+      if (url.searchParams.get("scope") === "all") return json({ all: { conversationIds: [file.conversationId], paths: [file.path], previous: { conversationIds: [], paths: [] } } });
+      return json({ seat: { project: PROJECT, seatEpoch: 1, conversationId: file.conversationId, path: file.path, mandate: "Run the atlas board.", state: "active", designatedAt: iso(86_400), intent: { clientRequestId: "seat-fast-tts", mode: "existing", launchId: null, error: null } }, pending: null, exists: true });
+    }
     if (AGENT_LABEL) return json({ seat: {
       project: PROJECT, seatEpoch: 1, conversationId: "conversation_running", path: RUNNING_PATH,
       mandate: "Run the atlas board.", state: "active", designatedAt: iso(86_400),
@@ -1288,7 +1313,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const asked = JSON.parse(String(init?.body ?? "{}")) as { reqs?: Array<{ id: string; path: string; offset: number }> };
     const chunks: Record<string, { offset: number; start: number; size: number; data: string }> = {};
     (asked.reqs ?? []).forEach((request, index) => {
-      const body = SEAT_NOISE !== null ? (request.path === files[0]!.path && !files[0]!.spawn ? (files[0]!.engine === "codex" ? SEAT_CODEX_FEED : SEAT_FEED) : "") : request.path === RUNNING_PATH ? evidenceFeed : "";
+      const body = FAST_TTS ? FAST_TTS_FEED : SEAT_NOISE !== null ? (request.path === files[0]!.path && !files[0]!.spawn ? (files[0]!.engine === "codex" ? SEAT_CODEX_FEED : SEAT_FEED) : "") : request.path === RUNNING_PATH ? evidenceFeed : "";
       const from = Math.min(Math.max(request.offset, 0), body.length);
       chunks[String(index)] = { offset: body.length, start: from, size: body.length, data: body.slice(from) };
     });

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
+import { Profiler } from "react";
 
 import { MAX_TTS_MESSAGE_LENGTH } from "@/lib/tts";
 import { chunkSpeech, MAX_CHUNK_CHARS } from "@/lib/ttsChunks";
@@ -845,4 +846,110 @@ test("a provider switched under a stale tab is keyed and named by what the route
 
   flushSync(() => { view.root.unmount(); });
   view.host.remove();
+});
+
+test("Soniox header freezes its target, shares Stop with the row, and cancels while loading", async () => {
+  const { conversationSpeech } = await import("./conversationSpeech");
+  const originalContext = globalThis.AudioContext;
+  const priorRaf = globalThis.requestAnimationFrame, priorCancel = globalThis.cancelAnimationFrame;
+  globalThis.requestAnimationFrame = (cb) => setTimeout(() => cb(0), 16) as unknown as number;
+  globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
+  const resumes: (() => void)[] = [];
+  let closed = 0;
+  globalThis.AudioContext = class {
+    state = "running";
+    resume() { return new Promise<void>((resolve) => resumes.push(resolve)); }
+    async close() { closed++; }
+  } as unknown as typeof AudioContext;
+  const info = { backend: "soniox", lockedByEnv: false, options: [{ id: "soniox", available: true, keyPath: "$CONFIG/soniox-api-key", model: "tts-rt-v2", voice: "Adrian", language: "en", cap: 4000 }] };
+  const requests: string[] = [];
+  globalThis.fetch = mock(async (_input, init) => {
+    if (!init?.method) return Response.json(info);
+    requests.push(JSON.parse(String(init.body)).text);
+    return new Promise<Response>(() => undefined);
+  }) as unknown as typeof fetch;
+  const scope = "header-test";
+  const speech = conversationSpeech(scope);
+  speech.select({ id: "old", text: "Frozen answer.", roots: () => [] });
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  flushSync(() => root.render(<><SpeakButton scope={scope} header /><SpeakButton scope={scope} text="Frozen answer." answerId="old" /></>));
+  await drainUpdates();
+  const header = host.querySelector<HTMLButtonElement>("[data-tts-header]")!;
+  header.dispatchEvent(new window.MouseEvent("contextmenu", { bubbles: true })); await drainUpdates(); // fresh authoritative config
+  try {
+    flushSync(() => header.click()); await drainUpdates();
+    expect(header.dataset.ttsPhase).toBe("loading"); expect(header.getAttribute("aria-busy")).toBe("true");
+    expect(host.querySelectorAll('[data-tts-phase="loading"]')).toHaveLength(2);
+    speech.select({ id: "new", text: "Newly visible answer.", roots: () => [] }); await drainUpdates();
+    expect(speech.getSnapshot().activeText).toBe("Frozen answer.");
+    flushSync(() => root.render(<><SpeakButton scope={scope} header /><SpeakButton scope={scope} text="Frozen answer grows." answerId="old" /></>));
+    await drainUpdates();
+    const row = host.querySelector<HTMLButtonElement>("[data-tts-trigger]:not([data-tts-header])")!;
+    expect(row.dataset.ttsPhase).toBe("loading");
+    flushSync(() => row.click()); await drainUpdates();
+    expect(header.dataset.ttsPhase).toBe("idle"); expect(closed).toBe(1);
+    resumes[0]!(); await drainUpdates(); expect(requests).toEqual([]);
+    flushSync(() => header.click()); resumes[1]!(); await drainUpdates();
+    expect(requests).toEqual(["Newly visible answer."]);
+    root.unmount();
+    // A control remount cannot kill the conversation-owned read.
+    expect(speech.getSnapshot().phase).toBe("loading"); speech.stop?.();
+    expect(speech.getSnapshot().phase).toBe("idle");
+  } finally { speech.stop?.(); globalThis.AudioContext = originalContext; globalThis.requestAnimationFrame = priorRaf; globalThis.cancelAnimationFrame = priorCancel; root.unmount(); }
+});
+
+test("feed lifetime stops navigation and preserves an explicit full-window transfer", async () => {
+  const { conversationSpeech, ownConversationFeed } = await import("./conversationSpeech");
+  const speech = conversationSpeech("transfer-test");
+  let stops = 0;
+  const stop = () => { stops++; speech.releaseStop(stop); };
+  const release = ownConversationFeed("transfer-test"); speech.claimStop(stop); release();
+  await Promise.resolve(); expect(stops).toBe(1);
+  const releaseCard = ownConversationFeed("transfer-test"); speech.claimStop(stop); speech.beginTransfer(); releaseCard();
+  await Promise.resolve(); expect(stops).toBe(1);
+  const releaseWindow = ownConversationFeed("transfer-test");
+  releaseWindow(); await Promise.resolve(); expect(stops).toBe(2);
+});
+
+/* While the feed scrolls the visible answer changes about six times a second.
+   Every row's button used to subscribe to the whole snapshot, so each change
+   re-rendered every prose row of the expanded history. */
+test("a change of the visible answer re-renders the header only, never a row's button", async () => {
+  globalThis.fetch = mock(async () => Response.json(backendInfo)) as unknown as typeof fetch;
+  const { conversationSpeech } = await import("./conversationSpeech");
+  const scope = "row-fanout-test";
+  const speech = conversationSpeech(scope);
+  const renders = { header: 0, first: 0, second: 0 };
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  flushSync(() => root.render(<>
+    <Profiler id="header" onRender={() => { renders.header += 1; }}><SpeakButton scope={scope} header /></Profiler>
+    <Profiler id="first" onRender={() => { renders.first += 1; }}><SpeakButton scope={scope} text="First answer." answerId="a" /></Profiler>
+    <Profiler id="second" onRender={() => { renders.second += 1; }}><SpeakButton scope={scope} text="Second answer." answerId="b" /></Profiler>
+  </>));
+  await drainUpdates();
+  const before = { ...renders };
+  const header = host.querySelector<HTMLButtonElement>("[data-tts-header]")!;
+  const [first, second] = Array.from(host.querySelectorAll<HTMLButtonElement>("[data-tts-trigger]:not([data-tts-header])"));
+
+  for (const [id, text] of [["a", "First answer."], ["b", "Second answer."], ["a", "First answer."]] as const) {
+    flushSync(() => speech.select({ id, text, roots: () => [] }));
+    await drainUpdates();
+  }
+  expect(renders.first).toBe(before.first);
+  expect(renders.second).toBe(before.second);
+  expect(renders.header).toBeGreaterThan(before.header);
+  expect(header.getAttribute("title")).toContain("First answer.");
+
+  /* A row still follows its own playback: it, and only it, re-renders when it
+     becomes the active answer, and the header shares its phase. */
+  flushSync(() => speech.update({ phase: "playing", activeId: "b", activeText: "Second answer." }));
+  await drainUpdates();
+  expect(second!.dataset.ttsPhase).toBe("playing");
+  expect(first!.dataset.ttsPhase).toBe("idle");
+  expect(renders.first).toBe(before.first);
+  expect(renders.second).toBeGreaterThan(before.second);
+  flushSync(() => speech.update({ phase: "idle", activeId: null, activeText: null }));
+  await drainUpdates();
+  expect(second!.dataset.ttsPhase).toBe("idle");
+  root.unmount();
 });

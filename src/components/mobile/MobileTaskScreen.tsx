@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, ArrowRight, ArrowUp, ArrowUpDown, Ban, Boxes, Check, ChevronDown, CircleCheck, CircleX, Eye, EyeOff, Flag, Inbox, Link2, Minus, Palette, Pause, Pencil, Play, Plus, ScrollText, UserRoundCheck } from "lucide-react";
+import { ArrowDown, ArrowLeftRight, ArrowRight, ArrowUp, ArrowUpDown, Ban, Boxes, Check, ChevronDown, CircleCheck, CircleX, Eye, EyeOff, Flag, Inbox, Link2, Minus, Palette, Pause, Pencil, Play, Plus, ScrollText, Timer, UserRoundCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { EngineMark } from "@/components/EngineMark";
@@ -10,8 +10,11 @@ import { dismissUnstartedLaunch, dismissUnstartedLaunches } from "@/components/k
 import { KANBAN_STATUSES, summarizePipeline, workingStageConversations, type KanbanPipeline, type KanbanUnstartedLaunch } from "@/components/kanban/kanbanModel";
 import { pastAttemptLabel, pastAttemptState, pastAttemptTone, pipelineTitle } from "@/components/kanban/PipelineSection";
 import { browserPipelinePorts, type PipelinePorts } from "@/components/kanban/pipelinePorts";
+import { RemoteLane, useManagedOnText } from "@/components/kanban/RemoteLanes";
+import { remoteCardFor, useRemoteFeed, type RemoteCard } from "@/components/kanban/remoteFeed";
 import { textField, withField } from "@/components/kanban/taskText";
 import { useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
+import { isSeatTickNotice } from "@/components/orchestrator/openSeatTick";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
 import { PhoneAlbumRow } from "@/components/taskAlbum/AlbumButton";
 import { finishesTaskOffer, toggleFinishesTask } from "@/components/pipelines/finishesTask";
@@ -37,6 +40,7 @@ import { mobilePipelineActions, pendingPipelineActs, usePhonePipelineActs, useSc
 import { showReceipt } from "./MobileReceipt";
 import type { MobileRowActionTarget } from "./MobileRowActions";
 import { MobileSheet, MobileSheetDivider, MobileSheetRow } from "./MobileSheet";
+import { MobileSeatTickSheet } from "./MobileSeatTickSheet";
 import { MobileShell, type MobileShellHost, type SheetRenderer } from "./MobileShell";
 import { MobileSwipeRow, type MobileRowAction } from "./MobileSwipeRow";
 import { useMobileNav, useMobileNavStore, useMobileScreenState, useMobileScrollMemory, useSheetSelection } from "./mobileNav";
@@ -92,6 +96,17 @@ const ROW = "flex min-h-11 w-full items-center gap-2 rounded-[12px] bg-card px-3
 const NEEDS_EDGE = "shadow-[inset_3px_0_0_var(--color-warning),var(--shadow-1)]";
 const Sep = () => <span aria-hidden className="shrink-0 opacity-60">·</span>;
 
+/** Where "+ Agent" would start work here, a passive pill says where it starts. */
+function RemoteHostPill({ remote }: { remote: RemoteCard }) {
+  const { label, hint } = useManagedOnText(remote);
+  return (
+    <span data-phone-task-host={remote.install} title={hint} className="inline-flex min-h-11 min-w-0 items-center gap-1.5 rounded-full border border-border bg-card px-4 text-body font-semibold text-secondary">
+      <ArrowLeftRight className="h-4 w-4 shrink-0 text-info" aria-hidden />
+      <span className="min-w-0 truncate">{label}</span>
+    </span>
+  );
+}
+
 export interface MobileTaskScreenProps extends PhoneBoardInput {
   taskId: string;
   /** The task mutations the phone's screens share; absent, the screen keeps its own. */
@@ -99,6 +114,8 @@ export interface MobileTaskScreenProps extends PhoneBoardInput {
   mutationPorts?: TaskMutationPorts;
   host?: MobileShellHost | null;
   renderSheet?: SheetRenderer;
+  /** The project's display name, for the seat tick sheet the tick notice opens. */
+  projectName?: string;
   /** What an agent row offers on a swipe: the board rows' own actions. */
   rowActions?: (target: MobileRowActionTarget) => readonly MobileRowAction[];
   /** Lanes whose close is on their way: gone from the screen on the tap. */
@@ -443,6 +460,9 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
   const stored = useRef(new Map<string, BoardTask>());
   stored.current = new Map(props.allTasks.map((entry) => [entry.id, entry] as const));
   const task = allTasks.find((entry) => entry.id === taskId) ?? null;
+  /* A task another machine runs draws that machine's lanes and says where it is managed. */
+  const remoteFeed = useRemoteFeed(props.project);
+  const remote = useMemo(() => remoteCardFor(task, remoteFeed), [task, remoteFeed]);
   const card = useMemo(() => cardOfTask(model, taskId), [model, taskId]);
   const status: TaskStatus = card?.status ?? statuses.get(taskId) ?? task?.status ?? "inbox";
   const nowMs = now * 1000;
@@ -512,6 +532,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
   const title = task ? (card?.titlePending ? t("kanban.untitled") : (card?.title || textField(task.text, "title")) || t("kanban.untitled")) : "";
   const pendingTitle = card ? card.titlePending : Boolean(task && !textField(task.text, "title"));
   const description = task ? textField(task.text, "description") : "";
+  const tickNotice = task ? isSeatTickNotice(task.text) : false;
   const details = task?.details ?? "";
   const receiptTitle = cleanTitle(title, 48);
 
@@ -829,6 +850,11 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
         </MobileSheet>
       );
     }
+    /* The tick notice's own sheet: the project's seat tick panel, over this
+       screen, through the same sheet the seat card opens from its seat sheet. */
+    if (name === "tick" && tickNotice) {
+      return <MobileSeatTickSheet project={props.project} projectName={props.projectName ?? props.project} onClose={close} />;
+    }
     if (name === "links" && linksFor) {
       return (
         <MobileSheet name="links" title={t("workLinks.listTitle")} onClose={close}>
@@ -941,7 +967,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
         <span className="min-w-0 truncate">{t(STATUS_LABEL[status])}</span>
         <ChevronDown className="h-4 w-4 shrink-0" aria-hidden />
       </button>
-      {props.onAddAgent ? (
+      {remote ? <RemoteHostPill remote={remote} /> : props.onAddAgent ? (
         <button
           type="button"
           data-phone-task-add-agent=""
@@ -997,6 +1023,23 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                 the stages, what agents ask, the task with its agents, and
                 its history. */}
             <div data-phone-task-groups="" className="flex shrink-0 flex-col gap-6">
+              {/* 2a. A task another machine runs: its lanes in the frame a finished
+                  lane uses, with the remote surface, drawn by the same block with
+                  no control. No sheet opens on them. */}
+              {remote?.lanes.length ? (
+                <section data-phone-task-remote-lanes={remote.lanes.length} className="flex shrink-0 flex-col gap-2">
+                  {remote.lanes.map((remoteLane) => (
+                    <div
+                      key={remoteLane.k}
+                      data-phone-task-lane={remoteLane.k.slice(2)}
+                      className="phone-lane remote-surface shrink-0 rounded-[12px] bg-card px-3 pb-1.5 pt-1"
+                      style={{ boxShadow: "var(--shadow-1), inset 0 0 0 1px var(--remote-edge)" }}
+                    >
+                      <RemoteLane lane={remoteLane} host={remote.host} title={pendingTitle ? "" : title} density="task" nowMs={nowMs} />
+                    </div>
+                  ))}
+                </section>
+              ) : null}
               {/* 2. The pipelines: what needs the operator first; finished ones folded. */}
               {live.length || ended.length ? (
                 <section data-phone-task-lanes={lanes.length} className="flex shrink-0 flex-col gap-2">
@@ -1050,6 +1093,20 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                     <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
                   </button>
                 )}
+
+                {/* The standing tick notice opens the panel that holds the setting it describes. */}
+                {tickNotice ? (
+                  <button
+                    type="button"
+                    data-phone-task-tick-open={props.project}
+                    className={`${ROW} shrink-0 min-h-12`}
+                    onClick={() => nav.openSheet("tick")}
+                  >
+                    <Timer className="h-4 w-4 shrink-0 text-muted" aria-hidden />
+                    <span className="min-w-0 flex-1 truncate text-body font-semibold text-primary">{t("kanban.tickNotice.open")}</span>
+                    <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
+                  </button>
+                ) : null}
 
                 {/* The task's album: every picture its agents made or looked at. */}
                 <PhoneAlbumRow taskId={taskId} title={title} pipelines={lanes.map((summary) => summary.pipeline)} files={files} rowClass={`${ROW} shrink-0 min-h-12`} />
@@ -1115,7 +1172,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                       error, and opens its launch view, where Retry lives. Two or
                       more fold behind one summary row. */}
                   {unstarted.length ? <UnstartedLaunches taskId={taskId} title={title} launches={unstarted} onOpen={props.onOpenConversation} /> : null}
-                  {!agents.length && !notLoadedRefs.length && !unstarted.length && !card?.drafts.length ? (
+                  {!remote && !agents.length && !notLoadedRefs.length && !unstarted.length && !card?.drafts.length ? (
                     <p className="m-0 px-1 text-ui text-muted">{t("mobile2.kanban.noAgents")}</p>
                   ) : null}
                 </section>

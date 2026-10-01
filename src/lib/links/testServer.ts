@@ -19,6 +19,7 @@ import * as shared from "@/app/api/links/shared/route";
 import * as filesRoute from "@/app/api/files/route";
 import { boardOpen } from "./boardPresence";
 import { LinkedBoardSchedule, productionSchedulePorts } from "./schedule";
+import * as agentsRoute from "@/app/api/links/agents/route";
 import * as tasksRoute from "@/app/api/tasks/route";
 import * as taskOne from "@/app/api/tasks/[id]/route";
 import { forgetTaskExchange } from "./taskExchange";
@@ -33,6 +34,8 @@ import { listFiles } from "@/lib/scanner";
 import { currentFileScan, lastScannedFiles, setFileScanRunnerForTests } from "@/lib/scanner/scanCache";
 import { runFileCatalogScan } from "@/lib/scanner/scanCoordinator";
 import { agentCursors, agentFeed, dropAgents, receivedAgentRows, remoteAgents } from "./agentFeed";
+import { buildPipeline, loadPipelinesForList, savePipelines } from "@/lib/pipelines/store";
+import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { admitScannedConversations } from "@/lib/tasks/membership";
 import { admitRecoveredLaunch, admitReservedLaunch } from "@/lib/tasks/launchMembership";
 import { applyTaskCuratorProposals, collectTaskCuratorInputs } from "@/lib/tasks/curator";
@@ -191,6 +194,39 @@ const server = http.createServer(async (request, response) => {
     if (path === "/test/agent-maps") {
       const id = query.get("id") ?? "";
       json(response, { scanned: lastScannedFiles()?.length ?? 0, local: agentFeed(id).sizes(), remote: receivedAgentRows(id).length });
+      return;
+    }
+    if (path === "/test/pipeline") {
+      /* Started lanes for tasks, written as the registry holds them: stages
+         with their roles and models, one attempt per stage that has a state.
+         `sentinel` fills every free-text field a lane row must never carry. */
+      type Spec = { id: string; taskIds: string[]; project: string; state: Pipeline["state"]; sentinel?: string; current?: string;
+        stages: Array<{ id: string; role?: string; kind?: "run" | "review-loop"; engine?: string; model?: string; next?: string | null; onFail?: { to: string; maxRounds: number } | null;
+          attempt?: { state: Pipeline["runs"][number]["attempts"][number]["state"]; findings?: string[]; n?: number } }> };
+      const input = body() as Spec & { many?: Spec[] };
+      const now = new Date(realNow() + clockOffset).toISOString();
+      const built = (input.many ?? [input]).map((spec) => {
+        const sentinel = spec.sentinel ?? "fixture";
+        const stages = spec.stages.map((stage) => ({
+          id: stage.id, kind: stage.kind ?? "run", role: stage.role ? { roleId: stage.role } : undefined, prompt: `${sentinel} prompt`, next: stage.next ?? null, onFail: stage.onFail ?? null,
+          effectiveRole: { roleId: stage.role ?? null, engine: stage.engine ?? "codex", model: stage.model ?? "gpt-6.1-sol", effort: "medium", access: "read-write", promptScaffold: `${sentinel} scaffold` },
+        })) as unknown as PipelineStage[];
+        const pipeline = buildPipeline({ id: spec.id, task: `${sentinel} task`, taskIds: spec.taskIds, project: spec.project, repoDir: "/repo", stages, srcPath: null, srcConversationId: null, now });
+        pipeline.spec = `${sentinel} spec`;
+        pipeline.state = spec.state;
+        pipeline.cursor = spec.current ? { stageId: spec.current, state: "running", input: null, activatedBy: null } : null;
+        pipeline.runs = spec.stages.map((stage) => ({ stageId: stage.id, attempts: stage.attempt ? Array.from({ length: stage.attempt.n ?? 1 }, (_value, index) => ({
+          n: index + 1, state: index + 1 === (stage.attempt!.n ?? 1) ? stage.attempt!.state : "passed" as const,
+          effectiveRole: pipeline.stages.find((item) => item.id === stage.id)!.effectiveRole,
+          launchId: null, conversationId: `${sentinel}-conversation`, sessionId: null, agentPath: `/${sentinel}/transcript.jsonl`, paneId: null, flowId: null,
+          startedAt: now, completedAt: null, input: `${sentinel} input`, activatedBy: null, output: `${sentinel} output`,
+          verdict: stage.attempt!.findings ? { status: "fail" as const, findings: stage.attempt!.findings.map((text) => `${sentinel} ${text}`) } : null, error: null,
+        })) : [] })) as unknown as Pipeline["runs"];
+        return pipeline;
+      });
+      const replaced = new Set(built.map((row) => row.id));
+      savePipelines([...loadPipelinesForList().filter((row) => !replaced.has(row.id)), ...built]);
+      json(response, { ids: built.map((row) => row.id) });
       return;
     }
     if (path === "/test/agent-reset") { const cursor = agentCursors(`peer:${query.get("id") ?? ""}`); cursor.pull = null; cursor.pullOffset = 0; json(response, { ok: true }); return; }
@@ -371,6 +407,7 @@ const server = http.createServer(async (request, response) => {
       const context = { params: Promise.resolve({ id: path.slice("/api/links/peers/".length) }) };
       result = method === "DELETE" ? await peerOne.DELETE(req, context) : await peerOne.POST(req, context);
     } else if (path === "/api/links/grants") result = method === "GET" ? grants.GET(req) : grants.DELETE(req);
+    else if (path === "/api/links/agents") result = agentsRoute.GET(req);
     else if (path === "/api/links/shared") result = method === "GET" ? shared.GET(req) : method === "PATCH" ? await shared.PATCH(req) : await shared.POST(req);
     else if (path === "/api/files") result = method === "HEAD" ? filesRoute.HEAD(req) : await filesRoute.GET(req);
     else if (path === "/api/tasks") result = method === "GET" ? await tasksRoute.GET(req) : await tasksRoute.POST(req);

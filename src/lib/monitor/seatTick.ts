@@ -1,3 +1,4 @@
+import { maintenanceItemLabel } from "@/lib/boardMaintenance/text";
 import { isTerminalHighSignalEvent } from "@/lib/lifecycle/vocabulary";
 
 import { seatTickRetryGuardRef, seatTickSourceGapRef, ORCHESTRATOR_ALERT_REF, SEAT_TICK_SETTINGS_REF } from "./cards";
@@ -5,6 +6,7 @@ import { evidenceStallReason } from "./classify";
 import type { EffectiveSeatTickSettings } from "./seatTickSettings";
 import {
   SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
+  SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT,
   SEAT_TICK_REPORTED_STALLS_LIMIT,
   SEAT_TICK_ASKS_OWED_LIMIT,
   SEAT_TICK_CHILDREN_SHOWN_LIMIT,
@@ -194,6 +196,13 @@ function seatPausedLanes(input: SeatTickCheckInput): SeatTickPipelineInput[] {
  * bound own lanes live under: a deploy that settled days ago while ticking was
  * off is history, and the bound keeps it from waking anyone for ever.
  */
+function seatSettledMaintenance(input: SeatTickCheckInput) {
+  return (input.settledMaintenance ?? []).filter(run => run.project === input.project
+    && (run.state === "succeeded" || run.state === "failed")
+    && run.endedAt && input.now - Date.parse(run.endedAt) <= input.policy.backlogAfterMs
+    && !(input.state.announcedMaintenance ?? []).includes(run.runId));
+}
+
 function seatSettledDeploys(input: SeatTickCheckInput): readonly SeatTickDeployInput[] {
   return (input.settledDeploys ?? []).filter((deploy) => {
     const settledAt = deploy.settledAt ? Date.parse(deploy.settledAt) : Number.NaN;
@@ -283,6 +292,7 @@ function hasOpenWork(input: SeatTickCheckInput): boolean {
     || input.pullRequests.length > 0
     || ownSettledLanes(input).length > 0
     || seatSettledDeploys(input).length > 0
+    || seatSettledMaintenance(input).length > 0
     /* Both child clauses ask the same question of the child as the item list
        does (#1749, #1783): a child no seat can read, or whose own clock is a
        predecessor's board, is not this seat's work whether it is still running
@@ -915,7 +925,7 @@ function guardCount(state: SeatTickProjectState, kind: SeatTickWakeReasonKind, f
 function settingsCards(input: SeatTickCheckInput): SeatTickCard[] {
   const settings = input.settings;
   if (!settings.configured) return [];
-  const context = { reason: settings.reason, until: settings.until, setBy: settings.setBy, updatedAt: settings.updatedAt };
+  const context = { enabled: settings.enabled, wakeIntervalMs: settings.wakeIntervalMs, reason: settings.reason, until: settings.until, setBy: settings.setBy, updatedAt: settings.updatedAt };
   return [{
     ref: SEAT_TICK_SETTINGS_REF,
     kind: "tick-settings",
@@ -1210,7 +1220,8 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
      the seat ended its turn for it, and an hour-long bound turned a five-minute
      deploy into thirty minutes of paused lanes. */
   const settledDeploys = seatSettledDeploys(input);
-  const childrenSettled = harvest.length > 0 || persistedChildStalls.length > 0 || settledDeploys.length > 0;
+  const settledMaintenance = seatSettledMaintenance(input);
+  const childrenSettled = settledMaintenance.length > 0 || harvest.length > 0 || persistedChildStalls.length > 0 || settledDeploys.length > 0;
   const liveChildren = runningChildren.filter((child) => !isStalledActivity(child.activity));
   const childInterval = childrenSettled
     ? SEAT_TICK_SETTLED_CHILD_WAKE_INTERVAL_MS
@@ -1265,6 +1276,10 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
        (#1749): a lane it launched that settled and is standing there is the
        obligation the tick was blind to for the whole of the evidence in that
        issue, while five slots went to children of seats two weeks retired. */
+    if (settledMaintenance.length > 0) {
+      const newest = settledMaintenance.at(-1)!;
+      candidates.push({ kind: "maintenance-settled", detail: newest.state === "failed" ? `board maintenance failed: ${newest.failure?.kind}` : `board maintenance finished: ${newest.counts.tasks} task(s) changed, ${newest.log.attention.length} item(s) for the operator` });
+    }
     if (ownLanes.length > 0) {
       const first = ownLanes[0]!;
       const more = ownLanes.length > 1 ? ` and ${ownLanes.length - 1} more` : "";
@@ -1728,6 +1743,9 @@ function wakeItems(context: {
       deploy: { deploymentId: deploy.deploymentId, phase: deploy.phase, sha: deploy.sha, error: deploy.error },
     });
   }
+  for (const run of seatSettledMaintenance(input)) {
+    items.push({ kind: "maintenance", id: run.taskId ?? run.runId, label: maintenanceItemLabel(run), maintenance: { runId: run.runId } });
+  }
   for (const pipeline of seatPausedLanes(input)) {
     items.push({ kind: "pipeline", id: pipeline.id, label: `${pipeline.title} — paused by you; resume it with pipeline_action resume once what you paused it for is done` });
   }
@@ -1872,7 +1890,7 @@ export function seatTickWakeCommitPlan(
 ): SeatTickWakeCommit | null {
   const { fingerprint, eventsThrough } = context;
   const note = context.noteShown === undefined ? {} : { noteShown: context.noteShown };
-  if (verdict.kind === "proactive") return { proposal: true, reasons: [], fingerprint, eventsThrough, children: [], announcedLanes: [], announcedDeploys: [], shownChildren: [], ...note };
+  if (verdict.kind === "proactive") return { proposal: true, reasons: [], fingerprint, eventsThrough, children: [], announcedLanes: [], announcedDeploys: [], announcedMaintenance: [], shownChildren: [], ...note };
   if (verdict.kind !== "wake") return null;
   const terminal = new Set(context.terminalChildren ?? []);
   /* What each child line SHOWS, for the clause that asks whether anything has
@@ -1898,6 +1916,7 @@ export function seatTickWakeCommitPlan(
   const announcedLanes = verdict.items.flatMap((item) => item.laneAnnouncement ? [item.laneAnnouncement] : []);
   /* The same rule for a settled deploy (#2063): the landing of the wake that
      carried it is what announces it, once. */
+  const announcedMaintenance = verdict.items.filter(item => item.kind === "maintenance").flatMap(item => item.maintenance ? [item.maintenance.runId] : []);
   const announcedDeploys = verdict.items.filter((item) => item.kind === "deploy").map((item) => item.id);
   /* The outcomes the report log is owed once this wake lands (§5.1). */
   const reportsOwed = context.bridgeReports ? seatTickOwedOutcomes(verdict.items) : [];
@@ -1905,7 +1924,7 @@ export function seatTickWakeCommitPlan(
      one the per-wake bound cut was not reported. */
   const reportedStalls = verdict.items.flatMap((item) => item.stallToken ? [item.stallToken] : []);
   return {
-    proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough, children, announcedLanes, announcedDeploys, shownChildren, ...note,
+    proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough, children, announcedLanes, announcedDeploys, announcedMaintenance, shownChildren, ...note,
     ...(reportsOwed.length > 0 ? { reportsOwed } : {}),
     ...(reportedStalls.length > 0 ? { reportedStalls } : {}),
   };
@@ -1988,6 +2007,7 @@ export function seatTickWakeCommit(
     harvestedChildren: harvested(state.harvestedChildren, commit.children),
     childrenShown: childrenShown(state.childrenShown ?? [], commit.shownChildren ?? []),
     announcedLanes: announced(state.announcedLanes ?? [], commit.announcedLanes ?? []),
+    announcedMaintenance: announced(state.announcedMaintenance ?? [], commit.announcedMaintenance ?? [], SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT),
     announcedDeploys: announced(state.announcedDeploys ?? [], commit.announcedDeploys ?? [], SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT),
     ...(commit.reportedStalls?.length || state.reportedStalls
       ? { reportedStalls: announced(state.reportedStalls ?? [], commit.reportedStalls ?? [], SEAT_TICK_REPORTED_STALLS_LIMIT) }

@@ -47,6 +47,7 @@ test("state text roles clear the small-text contrast floor on every surface they
   const successSoft = values("color-success-soft");
   const warning = values("color-warning");
   const warningSoft = values("color-warning-soft");
+  const caution = values("color-caution");
 
   for (const scheme of [0, 1]) {
     const surfaces = [canvas[scheme], card[scheme], sunken[scheme], board[scheme], well[scheme], quiet[scheme]].filter(Boolean);
@@ -55,11 +56,20 @@ test("state text roles clear the small-text contrast floor on every surface they
       expect(contrast(muted[scheme], surface)).toBeGreaterThanOrEqual(AA_SMALL_TEXT);
       expect(contrast(success[scheme], surface)).toBeGreaterThanOrEqual(AA_SMALL_TEXT);
       expect(contrast(warning[scheme], surface)).toBeGreaterThanOrEqual(AA_SMALL_TEXT);
+      expect(contrast(caution[scheme], surface)).toBeGreaterThanOrEqual(AA_SMALL_TEXT);
     }
     /* Both roles are also used as text on their own -soft fill (chips, cards). */
     expect(contrast(success[scheme], successSoft[scheme])).toBeGreaterThanOrEqual(AA_SMALL_TEXT);
     expect(contrast(warning[scheme], warningSoft[scheme])).toBeGreaterThanOrEqual(AA_SMALL_TEXT);
   }
+});
+
+/* The tool-call token caption (docs/design/tool-call-tokens.md) adds one role,
+   `caution`, for the 10 000–19 999 band. Its two dark blocks must agree. */
+test("the caution role exists once per scheme and both dark blocks agree", () => {
+  const caution = values("color-caution");
+  expect(caution.length).toBe(3);
+  expect(caution[1]).toBe(caution[2]);
 });
 
 /* The Delegatus brand fill carries the label of every filled primary action, so
@@ -122,7 +132,7 @@ test("the design system §1.5 table documents the shipped token values", () => {
   expect(section).toContain("#");
 
   /* §1.5 row label → the `--color-*` token it documents. */
-  const documented = { "text-muted": "color-muted", success: "color-success", warning: "color-warning" } as const;
+  const documented = { "text-muted": "color-muted", success: "color-success", warning: "color-warning", caution: "color-caution" } as const;
 
   for (const [label, token] of Object.entries(documented)) {
     const [light, dark] = values(token);
@@ -200,5 +210,35 @@ test("a waiting glyph's drained silhouette still clears the graphical-object flo
         }
       }
     }
+  }
+});
+
+/* A task another machine runs wears a 6% info-hue pinstripe over its card
+   (docs/design/synced-task-card.md §5.2). The stripe is translucent, so the
+   darkest pixel text can land on is the surface with 6% of the info hue mixed
+   in; muted text keeps the small-text floor over it on both card surfaces, in
+   both schemes, and secondary text keeps a wider one. 7% would put dark muted
+   text on the card at exactly 4.50, so 6% is the ceiling. */
+test("the remote-card pinstripe leaves muted and secondary text above their floors on the card and the quiet card", () => {
+  const STRIPE = 0.06;
+  expect(TOKENS).toMatch(/--remote-stripe:\s*color-mix\(in srgb, var\(--color-info\) 6%, transparent\)/);
+  const mix = (surface: string, ink: string): string => `#${[1, 3, 5].map((offset) => {
+    const base = parseInt(surface.slice(offset, offset + 2), 16);
+    const tint = parseInt(ink.slice(offset, offset + 2), 16);
+    return Math.round(base * (1 - STRIPE) + tint * STRIPE).toString(16).padStart(2, "0");
+  }).join("")}`;
+  const info = values("color-info");
+  const muted = values("color-muted");
+  const secondary = values("color-secondary");
+  const card = values("surface-card");
+  const quiet = values("surface-quiet");
+  for (const scheme of [0, 1]) {
+    for (const surface of [card[scheme], quiet[scheme]]) {
+      const darkest = mix(surface, info[scheme]);
+      expect(contrast(muted[scheme], darkest)).toBeGreaterThanOrEqual(AA_SMALL_TEXT);
+      expect(contrast(secondary[scheme], darkest)).toBeGreaterThanOrEqual(6);
+    }
+    /* The mark beside the host label is a graphical object: 3:1 over the chip's card fill. */
+    expect(contrast(info[scheme], card[scheme])).toBeGreaterThanOrEqual(3);
   }
 });

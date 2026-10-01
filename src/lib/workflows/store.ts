@@ -22,7 +22,7 @@ const stateDatabaseFile = () => statePath("state.sqlite");
 const templatesFile = () => statePath("workflow-templates.json");
 const artifactDir = () => statePath("workflows");
 
-/** The hard fixer default (W5): Terra supplies fast hands for applying findings.
+/** Seed roles follow the registry, with shipped defaults as the validation fallback.
     A role override that passes the store's shape check can still fail the
     registry's semantic validation (e.g. a codex model not prefixed `gpt-`).
     Seed derivation must never crash on that — it falls back to the role's
@@ -81,7 +81,7 @@ export function seededTemplatesFromRoles(): WorkflowTemplate[] {
     ],
   },
   {
-    name: "Astra medium → Astra xhigh review",
+    name: "Builder → Reviewer",
     verify: "bun test && bun run build",
     finish: "pr",
     stages: [

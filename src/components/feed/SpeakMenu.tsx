@@ -21,6 +21,7 @@ export interface BackendOption {
   model: string;
   voice: string;
   cap: number;
+  language?: string;
 }
 
 export interface BackendInfo {
@@ -293,11 +294,11 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
       <div className={`px-2 text-[11.5px] font-semibold ${active ? "text-secondary" : freeReplay() ? "text-success" : "text-primary"}`}>
         {active ? t("tts.nextStop") : freeReplay() ? t("tts.nextFree") : t("tts.nextPaid")}
       </div>
-      <div className="px-2 pt-1 text-[10.5px] text-muted">{option.id} · {option.model} · {option.voice}</div>
+      <div className="px-2 pt-1 text-[10.5px] text-muted">{option.id} · {option.model} · {option.voice}{option.language ? ` · ${option.language}` : ""}</div>
       <div className="px-2 text-[10.5px] text-muted">{t("tts.characters", { count: chars.toLocaleString() })}</div>
       <div className="px-2 pt-1 text-[10.5px] text-primary">{t("tts.billing", { provider: option.id })}</div>
       <div className="px-2 text-[10.5px] text-primary">{t("tts.disclosure")}</div>
-      <div className="px-2 pb-1 text-[10.5px] text-muted">{t("tts.seekHint")}</div>
+      <div className="px-2 pb-1 text-[10.5px] text-muted">{t(option.id === "soniox" ? "tts.batchSeekHint" : "tts.seekHint")}</div>
       {tooLong ? (
         <div className="px-2 pb-1 text-[10.5px] font-semibold text-danger">
           {t("tts.tooLong", { count: MAX_TTS_MESSAGE_LENGTH.toLocaleString() })}
