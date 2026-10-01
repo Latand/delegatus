@@ -50,7 +50,9 @@ test("a verify link opens on its own only as https on the relay's origin or a ho
   expect(verifyUrlAllowed(origin, verifyHosts, "http://t.me/celestia_bot")).toBe(false);
   expect(verifyUrlAllowed(origin, verifyHosts, "https://elsewhere.example/pair")).toBe(false);
   expect(verifyUrlAllowed(origin, verifyHosts, "https://t.me.elsewhere.example/pair")).toBe(false);
-  expect(verifyUrlAllowed(origin, verifyHosts, "https://someone@t.me/pair")).toBe(false);
+  const verifyWithUserinfo = new URL("https://t.me/pair");
+  verifyWithUserinfo.username = "someone";
+  expect(verifyUrlAllowed(origin, verifyHosts, verifyWithUserinfo.href)).toBe(false);
   expect(verifyUrlAllowed(origin, verifyHosts, "https://t.me:8443/pair")).toBe(false);
   expect(verifyUrlAllowed(origin, verifyHosts, "javascript:alert(1)")).toBe(false);
   expect(verifyUrlAllowed(origin, verifyHosts, null)).toBe(false);
