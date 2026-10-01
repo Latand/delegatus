@@ -12,6 +12,8 @@
  * are written beside them in report.json.
  *
  * `--only=en-1440` limits the run to one language and width.
+ * `--scheme=light` asks the browser for a light colour scheme (default dark).
+ * The page and its demo pin dark, so this shows they hold under either.
  *
  * `--check-fullscreen` puts each demo frame full screen through its control, in
  * both languages and widths, once with the browser's Fullscreen API and once
@@ -61,6 +63,7 @@ const here = path.dirname(new URL(import.meta.url).pathname);
 const dist = process.env.LANDING_DIST_DIR ?? path.join(here, "dist");
 const out = process.env.LANDING_RENDER_DIR ?? path.join(os.homedir(), "Pictures/delegatus-review/landing/final");
 const only = process.argv.find((arg) => arg.startsWith("--only="))?.slice("--only=".length) ?? null;
+const colorScheme = process.argv.find((arg) => arg.startsWith("--scheme="))?.slice("--scheme=".length) === "light" ? "light" : "dark";
 const checkRuns = Number(process.argv.find((arg) => arg.startsWith("--check-request="))?.slice("--check-request=".length) ?? 0);
 const fullscreenCheck = process.argv.includes("--check-fullscreen");
 const eventsCheck = process.argv.includes("--check-events");
@@ -143,7 +146,7 @@ async function requestBubbles(frame: Frame, lang: Locale) {
 
 async function checkRequest(lang: Locale, viewport: (typeof VIEWPORTS)[number], run: number): Promise<string[]> {
   const context = await browser.newContext({
-    viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, colorScheme: "dark",
+    viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, colorScheme,
     ...(viewport.phone ? { hasTouch: true, isMobile: true } : {}),
   });
   const page = await context.newPage();
@@ -167,7 +170,7 @@ async function checkRequest(lang: Locale, viewport: (typeof VIEWPORTS)[number], 
    anything around it. */
 async function checkPromptExpansion(lang: Locale, viewport: (typeof VIEWPORTS)[number]): Promise<string[]> {
   const context = await browser.newContext({
-    viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, colorScheme: "dark",
+    viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, colorScheme,
     ...(viewport.phone ? { hasTouch: true, isMobile: true } : {}),
   });
   const page = await context.newPage();
@@ -407,7 +410,7 @@ async function checkFullscreen() {
       for (const viewport of VIEWPORTS) {
         if (only && only !== `${lang}-${viewport.name}`) continue;
         const context = await browser.newContext({
-          viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, colorScheme: "dark",
+          viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, colorScheme,
           ...(viewport.phone ? { hasTouch: true, isMobile: true } : {}),
         });
         /* iPhone Safari has no element fullscreen: the page must run without the API. */
@@ -993,7 +996,7 @@ for (const lang of ["en", "uk"] as Locale[]) {
     const key = `${lang}-${viewport.name}`;
     if (only && only !== key) continue;
     const context = await browser.newContext({
-      viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, colorScheme: "dark",
+      viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, colorScheme,
       ...(viewport.phone ? { hasTouch: true, isMobile: true } : {}),
     });
     const page = await context.newPage();
