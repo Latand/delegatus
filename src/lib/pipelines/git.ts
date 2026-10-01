@@ -192,6 +192,19 @@ export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: P
   if (!validPipelineBranch(branch)) return { ok: false, error: "the pipeline branch is invalid" };
   const localRef = await exec("git", ["rev-parse", "--verify", `refs/heads/${branch}^{commit}`], pipeline.repoDir, signal);
   const localSha = localRef.code === 0 ? localRef.stdout.trim() : null;
+  if (legacy.code === 0 && deliveryBranch !== pipeline.branch) {
+    const listing = await exec("git", ["worktree", "list", "--porcelain", "-z"], pipeline.repoDir, signal);
+    if (listing.code !== 0) return failure("checking ownership of the existing pipeline branch", listing);
+    const entries = listing.stdout.split("\0\0").map((record) => record.split("\0"));
+    const laneOwnsBranch = entries.some((fields) => fields.includes(`branch refs/heads/${pipeline.branch}`)
+      && worktreePathMatches(fields.find((field) => field.startsWith("worktree "))?.slice("worktree ".length), pipeline.worktreeDir));
+    if (!laneOwnsBranch) {
+      const holder = entries.find((fields) => fields.includes(`branch refs/heads/${pipeline.branch}`));
+      const holdingPath = holder?.find((field) => field.startsWith("worktree "))?.slice("worktree ".length);
+      const location = holdingPath ? `; it is held by worktree ${holdingPath}` : " and has no registered lane worktree";
+      return { ok: false, error: `pipeline branch ${pipeline.branch} already exists${location}; preserve it and choose a new pipeline branch/worktree or resume its owning lane` };
+    }
+  }
   let remoteSha: string | null = null;
   if (deliveryBranch !== pipeline.branch && pipeline.delivery?.target.remote) {
     const remote = pipeline.delivery.target.remote;

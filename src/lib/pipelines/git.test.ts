@@ -194,6 +194,62 @@ for (const advanceRemote of [false, true]) {
   });
 }
 
+test("an unrelated existing lane ref refuses instead of becoming the PR base", async () => {
+  const box = isolatedIdentityRepo();
+  const { root, repo } = box;
+  const origin = path.join(root, "origin.git");
+  const builder = path.join(root, "builder");
+  const writer = path.join(root, "writer");
+  const deliveryBranch = "feature/held-pr";
+  try {
+    git(repo, "config", "user.name", "Fixture");
+    git(repo, "config", "user.email", "noreply");
+    git(repo, "config", "commit.gpgSign", "false");
+    git(root, "init", "--bare", "--initial-branch=main", origin);
+    git(repo, "remote", "add", "origin", origin);
+    git(repo, "push", "origin", "main");
+    git(repo, "worktree", "add", "-b", deliveryBranch, builder);
+    fs.writeFileSync(path.join(builder, "pr.txt"), "existing PR work\n");
+    git(builder, "add", "pr.txt");
+    git(builder, "commit", "-m", "existing PR work");
+    git(builder, "push", "origin", deliveryBranch);
+    const base = git(builder, "rev-parse", "HEAD");
+    fs.writeFileSync(path.join(builder, "pr.txt"), "uncommitted builder work\n");
+    fs.writeFileSync(path.join(builder, "keep.txt"), "untracked builder work\n");
+    const builderStatus = git(builder, "status", "--porcelain");
+
+    git(root, "clone", origin, writer);
+    git(writer, "config", "user.name", "Fixture");
+    git(writer, "config", "user.email", "noreply");
+    git(writer, "config", "commit.gpgSign", "false");
+    git(writer, "checkout", deliveryBranch);
+    fs.writeFileSync(path.join(writer, "foreign.txt"), "unrelated lane history\n");
+    git(writer, "add", "foreign.txt");
+    git(writer, "commit", "-m", "unrelated lane history");
+    const dormantTip = git(writer, "rev-parse", "HEAD");
+
+    const subject = { ...pipeline(), repoDir: repo, worktreeDir: path.join(root, "lane"),
+      baseBranch: deliveryBranch, baseRef: base };
+    subject.delivery!.target.branch = `refs/heads/${deliveryBranch}`;
+    git(repo, "fetch", writer, `${dormantTip}:refs/heads/${subject.branch}`);
+    expect(git(repo, "show", `${subject.branch}:foreign.txt`)).toBe("unrelated lane history");
+
+    const result = await provisionPipelineWorktreeAsync(subject, realProvisionExec);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected the unowned lane ref to be refused");
+    expect(result.error).toContain(subject.branch);
+    expect(result.error).toContain("no registered lane worktree");
+    expect(git(repo, "rev-parse", subject.branch)).toBe(dormantTip);
+    expect(fs.existsSync(subject.worktreeDir)).toBe(false);
+    expect(git(builder, "branch", "--show-current")).toBe(deliveryBranch);
+    expect(git(builder, "rev-parse", "HEAD")).toBe(base);
+    expect(git(builder, "status", "--porcelain")).toBe(builderStatus);
+    expect(fs.readFileSync(path.join(builder, "pr.txt"), "utf8")).toBe("uncommitted builder work\n");
+    expect(fs.readFileSync(path.join(builder, "keep.txt"), "utf8")).toBe("untracked builder work\n");
+    expect(git(repo, "ls-remote", "--heads", "origin", `refs/heads/${deliveryBranch}`).split(/\s+/)[0]).toBe(base);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test("a pipeline branch held by another worktree refuses with the branch, holder and recovery action", async () => {
   const { root, repo } = isolatedIdentityRepo();
   try {
