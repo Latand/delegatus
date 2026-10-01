@@ -1282,6 +1282,22 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       expect(generated.exitCode).toBe(0);
     });
 
+    test("preserves legacy generator NFKC expansion before length filtering", () => {
+      const directory = mkdtempSync(join(tmpdir(), "llv-privacy-exact-"));
+      temporaryDirectories.push(directory);
+      const input = join(directory, "known.txt");
+      const output = join(directory, "catalog.json");
+      const legacyValue = String.fromCodePoint(0x337f);
+      writeFileSync(input, legacyValue);
+      const generated = Bun.spawnSync({ cmd: [process.execPath,
+        join(import.meta.dir, "generate-privacy-known-value-fingerprints.ts"), "--input", input, "--output", output],
+        stdout: "pipe", stderr: "pipe" });
+      expect(generated.exitCode).toBe(0);
+      expect(JSON.parse(readFileSync(output, "utf8")).fingerprints).toEqual([{
+        length: 4, sha256: createHash("sha256").update(legacyValue.normalize("NFKC")).digest("hex"),
+      }]);
+    });
+
     test("generator preserves exactOnly and legacy entries", () => {
       const directory = mkdtempSync(join(tmpdir(), "llv-privacy-exact-"));
       temporaryDirectories.push(directory);

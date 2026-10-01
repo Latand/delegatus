@@ -27,7 +27,7 @@ export function parseKnownValues(input: string, jsonLines = false): KnownValue[]
       throw new Error("invalid known value");
     }
     return { value: entry.value.trim(), ...("exactOnly" in entry ? { exactOnly: entry.exactOnly as boolean } : {}) };
-  }).filter((entry) => entry.value.length >= 4);
+  });
 }
 
 export function knownValueFingerprint(entry: KnownValue): KnownValueFingerprint | undefined {

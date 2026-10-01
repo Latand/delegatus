@@ -126,6 +126,7 @@ function loadKnownValues(): { error: boolean; fingerprints: KnownValueFingerprin
     values = parseKnownValues(process.env.LLV_PRIVACY_KNOWN_VALUES ?? "", jsonLines);
     const file = process.env.LLV_PRIVACY_KNOWN_VALUES_FILE;
     if (file) values.push(...parseKnownValues(readSafeRegularFile(file).toString("utf8"), jsonLines));
+    values = values.filter((entry) => entry.value.length >= 4);
   } catch {
     return { error: true, fingerprints: [], values: [] };
   }
