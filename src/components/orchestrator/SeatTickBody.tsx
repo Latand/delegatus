@@ -292,7 +292,7 @@ export function SeatTickActions({ read, state, surface }: {
         <button
           type="button"
           data-seat-tick-save
-          disabled={state.saving}
+          disabled={!read.record || state.saving}
           onClick={() => void state.save()}
           className={`${button} min-w-0 border border-brand bg-brand text-on-brand shadow-1 active:opacity-90`}
         >
@@ -553,7 +553,7 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
             rows={2}
             data-seat-tick-reason
             value={draft.reason}
-            disabled={state.saving}
+            disabled={!record || state.saving}
             onChange={(event) => setDraft((previous) => ({ ...previous, reason: event.target.value }))}
             className={`min-h-0 max-h-80 w-full resize-y overflow-y-auto rounded-control border border-border bg-card px-2 py-1.5 ${phone ? "text-body" : "text-ui"} text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50`}
           />

@@ -14083,11 +14083,18 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     const out = path.resolve(".artifacts/seat-tick-instructions");
     fs.mkdirSync(out, { recursive: true });
     let storedReason = "a release afternoon";
+    let releaseSettingsRead = () => {};
+    let markSettingsReadStarted = () => {};
+    let settingsReadStarted = new Promise<void>((resolve) => { markSettingsReadStarted = resolve; });
+    let settingsReadGate = new Promise<void>((resolve) => { releaseSettingsRead = resolve; });
     const server = await serveEvidenceFixture(out, undefined, {
       "/api/monitor/seat-tick/settings": async (request: Request) => {
         if (request.method === "PUT") {
           const body = await request.json() as { reason?: string };
           if (typeof body.reason === "string") storedReason = body.reason;
+        } else {
+          markSettingsReadStarted();
+          await settingsReadGate;
         }
         return Response.json(tickAnswer(storedReason));
       },
@@ -14129,6 +14136,8 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
         const label = `${phone ? "phone-390" : "desktop-1440"}-${lang}`;
         const text = lang === "en" ? english : ukrainian;
         storedReason = "a release afternoon";
+        settingsReadStarted = new Promise<void>((resolve) => { markSettingsReadStarted = resolve; });
+        settingsReadGate = new Promise<void>((resolve) => { releaseSettingsRead = resolve; });
         const texts = cardTexts(lang);
         const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
         {
@@ -14138,6 +14147,13 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
             else await page.waitForSelector(card("t-tick-notice"), { timeout: 30_000 });
             await openPanel(page, phone);
             const field = page.locator("[data-seat-tick-reason]");
+            await settingsReadStarted;
+            expect(await field.isDisabled(), `${label} instructions stay disabled during the initial settings read`).toBe(true);
+            releaseSettingsRead();
+            await page.waitForFunction(() => {
+              const field = document.querySelector<HTMLTextAreaElement>("[data-seat-tick-reason]");
+              return field !== null && !field.disabled;
+            });
             await field.fill(text);
             const edited = await assertVisible(page, text, label, "edited");
             await page.locator("[data-seat-tick-save]").click();
@@ -14149,11 +14165,20 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
           } finally { await context.close(); }
         }
         {
+          settingsReadStarted = new Promise<void>((resolve) => { markSettingsReadStarted = resolve; });
+          settingsReadGate = new Promise<void>((resolve) => { releaseSettingsRead = resolve; });
           const { context, page, pageErrors } = await openFixture(browser, url, { width, height: phone ? 844 : 900 }, "light", lang, "reduce", phone);
           try {
             if (phone) await page.locator('[data-phone-kanban-tab="inbox"]').waitFor();
             else await page.waitForSelector(card("t-tick-notice"), { timeout: 30_000 });
             await openPanel(page, phone);
+            await settingsReadStarted;
+            expect(await page.locator("[data-seat-tick-reason]").isDisabled(), `${label} reopened instructions wait for the settings read`).toBe(true);
+            releaseSettingsRead();
+            await page.waitForFunction((expected) => {
+              const field = document.querySelector<HTMLTextAreaElement>("[data-seat-tick-reason]");
+              return field !== null && field.value === expected;
+            }, text);
             const reopened = await assertVisible(page, text, label, "reopened");
             await page.screenshot({ path: path.join(SHOTS, `${label}-reopened-panel.png`) });
             expect(pageErrors, `${label} errors after reopening`).toEqual([]);
