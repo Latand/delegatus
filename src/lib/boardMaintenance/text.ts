@@ -1,6 +1,6 @@
 import { redactMonitorText } from "@/lib/monitor/redact";
 import { detectedVerdict } from "@/lib/spawnNotice/sweep";
-import type { MaintenanceRun, MaintenanceRunLog, MaintenanceAttention, MaintenanceLeftAlone } from "./types";
+import type { MaintenanceRun, MaintenanceRunLog, MaintenanceAttention, MaintenanceLeftAlone, MaintenanceFailureKind } from "./types";
 import { workEvidenceLines, type TaskWorkEvidence } from "./evidence";
 
 export function parseMaintenanceReport(text: string): Pick<MaintenanceRunLog, "attention" | "leftAlone" | "verdict"> {
@@ -23,12 +23,13 @@ export function maintenanceCardText(locale: "uk" | "en", run: MaintenanceRun, ti
   const time = (at: string) => new Intl.DateTimeFormat("en-GB", { timeZone, day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(at)).replace(",", "").replace(/(\d{2})\/(\d{2})/, "$1.$2");
   const title = `${locale === "uk" ? "Обслуговування дошки" : "Board maintenance"} — ${time(run.claimedAt)}`;
   if (run.state === "failed") {
-    const reasons = {
-      "no-account": "немає доступного акаунта Codex для цього проєкту", "no-repository": "не знайдено теку репозиторію проєкту", "launch-refused": "Delegatus відмовив у запуску", "launch-failed": "агент не запустився", "host-died": "процес агента зупинився посеред роботи", "turn-error": "агент завершився з помилкою", "agent-fail": "агент не зміг завершити перевірку", "timed-out": "агент не завершив роботу за 90 хвилин",
+    const reasons: Record<MaintenanceFailureKind, string> = {
+      "no-account": "немає доступного акаунта Codex для цього проєкту", "no-repository": "не знайдено теку репозиторію проєкту", "launch-refused": "Delegatus відмовив у запуску", "launch-failed": "агент не запустився", "host-died": "процес агента зупинився посеред роботи", "turn-error": "агент завершився з помилкою", "agent-fail": "агент не зміг завершити перевірку", "needs-decision": "потрібне рішення оператора", "timed-out": "агент не завершив роботу за 90 хвилин",
     };
     const next = time(new Date(Date.parse(run.claimedAt) + run.intervalHours * 3_600_000).toISOString());
-    return locale === "uk" ? `${title}\nНе вдалося: ${reasons[run.failure!.kind]}.\nВстиг змінити ${run.counts.tasks} задач. Наступна спроба — не раніше ${next}.`
-      : `${title}\nFailed: ${run.failure!.kind}. Changed ${run.counts.tasks} tasks. Next attempt no earlier than ${next}.`;
+    const decision = run.failure!.kind === "needs-decision" ? `\n${run.failure!.detail}` : "";
+    return locale === "uk" ? `${title}\nНе вдалося: ${reasons[run.failure!.kind]}.${decision}\nВстиг змінити ${run.counts.tasks} задач. Наступна спроба — не раніше ${next}.`
+      : `${title}\nFailed: ${run.failure!.kind}.${decision}\nChanged ${run.counts.tasks} tasks. Next attempt no earlier than ${next}.`;
   }
   if (run.state === "succeeded") {
     const c = run.counts;

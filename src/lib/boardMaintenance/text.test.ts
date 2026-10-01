@@ -24,5 +24,8 @@ test("card texts for both locales and states, item label bounded", () => {
   expect(maintenanceCardText("uk", done)).toContain("Нічого не потребує"); expect(maintenanceCardText("en", done)).toContain("Done");
   const failed = { ...run, state: "failed" as const, failure: { kind: "no-account" as const, detail: "fixture" } };
   expect(maintenanceCardText("uk", failed)).toContain("немає доступного акаунта"); expect(maintenanceCardText("en", failed)).toContain("Failed");
+  const decision = { ...run, state: "failed" as const, failure: { kind: "needs-decision" as const, detail: "Cannot read the forge without operator access." } };
+  expect(maintenanceCardText("uk", decision)).toContain("Cannot read the forge without operator access.");
+  expect(maintenanceCardText("en", decision)).toContain("Cannot read the forge without operator access.");
   done.log.attention = Array.from({ length: 40 }, () => ({ taskId: "aabbccdd", text: "x".repeat(300), options: ["a", "b"] })); expect(maintenanceItemLabel(done).length).toBeLessThanOrEqual(1200);
 });
