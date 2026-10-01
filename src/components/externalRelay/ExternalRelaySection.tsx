@@ -7,6 +7,7 @@ import { accountConnected } from "@/components/onboarding/EnginesStep";
 import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { effortScale } from "@/lib/agent/efforts";
 import { defaultModelFor, ENGINE_MODELS } from "@/lib/agent/models";
+import { KNOWN_RELAYS, type KnownRelayInfo } from "@/lib/externalRelay/knownRelays";
 import { useLocale, type TFunction } from "@/lib/i18n";
 
 /**
@@ -164,15 +165,47 @@ export function useExternalRelay(): { state: RelayState | null; error: string | 
   return { state, error, refresh };
 }
 
+/** The built-in relays at once, then with what each service's descriptor says when it answers. */
+function useKnownRelays(): KnownRelayInfo[] {
+  const [known, setKnown] = useState<KnownRelayInfo[]>(() => KNOWN_RELAYS.map((relay) => ({ ...relay, description: null, iconUrl: null })));
+  useEffect(() => {
+    let active = true;
+    void call<{ known: KnownRelayInfo[] }>("/api/external-relay/known", "GET").then((result) => {
+      if (active && result.ok && Array.isArray(result.value?.known)) setKnown(result.value.known);
+    });
+    return () => { active = false; };
+  }, []);
+  return known;
+}
+
+/**
+ * Opens the service's page while the click that asked for it is still running,
+ * which is the only moment a browser lets a window open unasked. The window
+ * starts blank and loses its link back to this page; it is pointed at the
+ * service's page once the pairing has one. Null when the browser refused.
+ */
+function openPairingWindow(text: string): Window | null {
+  try {
+    const win = window.open("about:blank", "_blank");
+    if (!win) return null;
+    win.opener = null;
+    try { win.document.body.textContent = text; } catch { /* a blank tab is fine */ }
+    return win;
+  } catch { return null; }
+}
+
 /**
  * Pairing (§A.3): the service's address, then its code and link while the
  * owner acts there, then "the relay service says this is <name>. Is this
  * you?" with Confirm and Cancel. A pending pairing the store still holds when
  * the surface opens is picked up where it stopped.
  */
-export function RelayPairing({ resume, disabled = false, onPaired, onChanged }: {
+export function RelayPairing({ resume, disabled = false, known = [], connected = [], onPaired, onChanged }: {
   resume: PendingView | null;
   disabled?: boolean;
+  /** Relays offered with one button; one already connected, by origin, is left out. */
+  known?: KnownRelayInfo[];
+  connected?: string[];
   onPaired: (relay: RelayView) => void | Promise<void>;
   onChanged: () => void;
 }) {
@@ -182,6 +215,9 @@ export function RelayPairing({ resume, disabled = false, onPaired, onChanged }: 
   const [status, setStatus] = useState<PairingStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorFrom, setErrorFrom] = useState<string | null>(null);
+  const [otherOpen, setOtherOpen] = useState(false);
+  const [opened, setOpened] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const pendingId = pending?.id ?? null;
   const finished = status !== null && status.status !== "pending" && status.status !== "awaiting_install";
@@ -198,17 +234,28 @@ export function RelayPairing({ resume, disabled = false, onPaired, onChanged }: 
     const tick = window.setInterval(() => setNow(Date.now()), 1000);
     return () => { active = false; window.clearInterval(poll); window.clearInterval(tick); };
   }, [pendingId, finished, pending?.poll_interval_s]);
-  const start = async () => {
-    setBusy(true); setError(null);
-    const result = await call<{ pairing: PendingView }>("/api/external-relay/pairings", "POST", { url: url.trim() });
+  /** `via` names the control that asked, so its error is shown beside it; `win` is the window opened in that click. */
+  const start = async (address: string, via: string, win: Window | null = null) => {
+    setBusy(true); setError(null); setErrorFrom(via);
+    const result = await call<{ pairing: PendingView }>("/api/external-relay/pairings", "POST", { url: address });
     setBusy(false);
-    if (!result.ok) { setError(result.error); return; }
+    if (!result.ok) { win?.close(); setError(result.error); return; }
+    const verify = safeLink(result.value.pairing.verify_url);
+    let landed = false;
+    if (win && verify) {
+      try { win.location.href = verify; landed = true; } catch { win.close(); }
+    } else win?.close();
+    setOpened(landed);
     setStatus(null);
     setPending(result.value.pairing);
     setNow(Date.now());
     onChanged();
   };
-  const reset = () => { setPending(null); setStatus(null); setError(null); };
+  const startKnown = (relay: KnownRelayInfo) => {
+    if (busy || disabled) return;
+    void start(relay.origin, relay.id, openPairingWindow(t("externalRelay.pairing.opening", { name: relay.name })));
+  };
+  const reset = () => { setPending(null); setStatus(null); setError(null); setOpened(false); };
   const cancel = async () => {
     if (!pending) return;
     setBusy(true); setError(null);
@@ -230,17 +277,41 @@ export function RelayPairing({ resume, disabled = false, onPaired, onChanged }: 
   };
   const expired = pending !== null && now >= Date.parse(pending.expires_at);
   const link = safeLink(pending?.verify_url ?? null);
+  const errorText = (via: string | null) => error && errorFrom === via ? <p role="alert" className="rounded-[8px] bg-danger/10 px-3 py-2 text-ui text-danger">{relayErrorText(t, error)}</p> : null;
   const shownError = error ? <p role="alert" className="rounded-[8px] bg-danger/10 px-3 py-2 text-ui text-danger">{relayErrorText(t, error)}</p> : null;
+  const offered = known.filter((relay) => !connected.includes(relay.origin));
 
   if (!pending) {
     return (
-      <form data-external-relay-connect="" className="space-y-2 rounded-[8px] border border-border p-3" onSubmit={(event) => { event.preventDefault(); if (url.trim() && !busy && !disabled) void start(); }}>
-        <h4 className="text-ui font-semibold text-primary">{t("externalRelay.connect")}</h4>
-        <p className="text-ui text-muted">{t("externalRelay.connectLead")}</p>
-        <input aria-label={t("externalRelay.address")} type="url" value={url} disabled={disabled} onChange={(event) => setUrl(event.target.value)} placeholder="https://relay.example" className={input} />
-        {shownError}
-        <button type="submit" disabled={busy || disabled || !url.trim()} className={primary}>{t("externalRelay.connect")}</button>
-      </form>
+      <div data-external-relay-connect-area="" className="space-y-3">
+        {offered.map((relay) => (
+          <div key={relay.id} data-external-relay-known={relay.id} className="space-y-3 rounded-[8px] border border-border p-3">
+            <div className="flex items-start gap-3">
+              {relay.iconUrl
+                // eslint-disable-next-line @next/next/no-img-element
+                ? <img src={relay.iconUrl} alt="" width={40} height={40} referrerPolicy="no-referrer" className="h-10 w-10 shrink-0 rounded-[8px] bg-sunken object-cover" />
+                : <span aria-hidden data-external-relay-monogram="" className="grid h-10 w-10 shrink-0 place-items-center rounded-[8px] bg-accent-soft text-body font-bold text-accent">{relay.name.slice(0, 1)}</span>}
+              <div className="min-w-0">
+                <p className="break-words font-semibold text-primary">{relay.name}</p>
+                {relay.description ? <p className="mt-0.5 line-clamp-3 break-words text-ui text-muted">{relay.description}</p> : null}
+              </div>
+            </div>
+            <button type="button" data-external-relay-connect-known={relay.id} disabled={busy || disabled} onClick={() => startKnown(relay)} className={`${primary} w-full sm:w-auto`}>{t("externalRelay.connectKnown", { name: relay.name })}</button>
+            <p className="text-ui text-muted">{t("externalRelay.connectKnownLead", { name: relay.name })}</p>
+            {errorText(relay.id)}
+          </div>
+        ))}
+        <button type="button" data-external-relay-other-toggle="" aria-expanded={otherOpen} onClick={() => setOtherOpen((open) => !open)} className="min-h-11 rounded-[8px] text-ui font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{t("externalRelay.otherAddress")}</button>
+        {otherOpen ? (
+          <form data-external-relay-connect="" className="space-y-2 rounded-[8px] border border-border p-3" onSubmit={(event) => { event.preventDefault(); if (url.trim() && !busy && !disabled) void start(url.trim(), "manual"); }}>
+            <h4 className="text-ui font-semibold text-primary">{t("externalRelay.connect")}</h4>
+            <p className="text-ui text-muted">{t("externalRelay.connectLead")}</p>
+            <input aria-label={t("externalRelay.address")} type="url" value={url} disabled={disabled} onChange={(event) => setUrl(event.target.value)} placeholder="https://relay.example" className={input} />
+            {errorText("manual")}
+            <button type="submit" disabled={busy || disabled || !url.trim()} className={primary}>{t("externalRelay.connect")}</button>
+          </form>
+        ) : null}
+      </div>
     );
   }
   const ended = status && finished ? status.status : expired ? "expired" : null;
@@ -267,7 +338,7 @@ export function RelayPairing({ resume, disabled = false, onPaired, onChanged }: 
         <>
           <p>{t("externalRelay.pairing.codePrompt")}</p>
           <code data-external-relay-code="" className="block select-all text-title font-bold tracking-wide text-primary">{pending.code}</code>
-          {link ? <a href={link} target="_blank" rel="noopener noreferrer" className="block break-all text-accent hover:underline">{t("externalRelay.pairing.openLink")}</a> : null}
+          {link ? <a href={link} target="_blank" rel="noopener noreferrer" data-external-relay-link={opened ? "again" : "open"} className="block break-all text-accent hover:underline">{t(opened ? "externalRelay.pairing.openLinkAgain" : "externalRelay.pairing.openLink")}</a> : null}
           <p className="text-muted">{t("externalRelay.pairing.expires", { time: clock(pending.expires_at, locale) })}</p>
           <p role="status" className="text-muted">{t("externalRelay.pairing.waiting")}</p>
           {shownError}
@@ -389,20 +460,29 @@ function RelayCard({ relay, status, signedIn, onChanged }: { relay: RelayView; s
 /**
  * The whole surface. `pairEngine`, from the setup guide, is the engine the
  * operator chose there: a new pairing's unset targets take it, with its
- * default model, so they can be switched to this install at once.
+ * default model, so they can be switched to this install at once. A relay from
+ * the built-in list is the first connection of its kind: with no engine chosen
+ * the signed-in one is used (Claude first), and its targets are answered by
+ * this install from the start.
  */
 export function ExternalRelaySection({ pairEngine = null, pairDisabled = false, onPaired, onRelays }: { pairEngine?: RelayEngine | null; pairDisabled?: boolean; onPaired?: (relay: RelayView) => void; onRelays?: (count: number) => void }) {
   const { t } = useLocale();
   const { state, error, refresh } = useExternalRelay();
+  const known = useKnownRelays();
   const relayCount = state?.relays.length ?? null;
   useEffect(() => { if (relayCount !== null) onRelays?.(relayCount); }, [relayCount, onRelays]);
   const claude = useEngineAccounts("claude");
   const codex = useEngineAccounts("codex");
   const signedIn = { claude: claude.accounts.some(accountConnected), codex: codex.accounts.some(accountConnected) };
   const paired = async (relay: RelayView) => {
-    if (pairEngine)
-      for (const target of relay.targets.filter((item) => item.engine === null))
-        await call(`/api/external-relay/relays/${encodeURIComponent(relay.id)}`, "PATCH", { target: { id: target.id, engine: pairEngine, model: defaultModelFor(pairEngine) } });
+    const builtIn = KNOWN_RELAYS.some((item) => item.origin === relay.origin);
+    const engine = pairEngine ?? (builtIn ? (signedIn.claude ? "claude" : signedIn.codex ? "codex" : null) : null);
+    if (engine)
+      for (const target of relay.targets.filter((item) => item.engine === null)) {
+        const set = await call(`/api/external-relay/relays/${encodeURIComponent(relay.id)}`, "PATCH", { target: { id: target.id, engine, model: defaultModelFor(engine) } });
+        if (set.ok && builtIn && signedIn[engine] && target.answered_by !== "install")
+          await call(`/api/external-relay/relays/${encodeURIComponent(relay.id)}/targets/${encodeURIComponent(target.id)}`, "PATCH", { answered_by: "install" });
+      }
     await refresh();
     onPaired?.(relay);
   };
@@ -411,14 +491,15 @@ export function ExternalRelaySection({ pairEngine = null, pairDisabled = false, 
     <div data-external-relay-section="" className="space-y-3">
       {error && !state ? <p role="alert" className="rounded-[8px] bg-danger/10 px-3 py-2 text-ui text-danger">{relayErrorText(t, error)}</p> : null}
       {!state && !error ? <p className="text-ui text-muted">{t("common.loading")}</p> : null}
-      {state ? (
-        <>
-          {state.relays.map((relay) => (
-            <RelayCard key={relay.id} relay={relay} status={state.status.find((row) => row.id === relay.id) ?? null} signedIn={signedIn} onChanged={refresh} />
-          ))}
-          <RelayPairing resume={resume} disabled={pairDisabled} onPaired={paired} onChanged={() => void refresh()} />
-        </>
-      ) : null}
+      {state ? (() => {
+        const connected = state.relays.map((relay) => relay.origin);
+        const cards = state.relays.map((relay) => (
+          <RelayCard key={relay.id} relay={relay} status={state.status.find((row) => row.id === relay.id) ?? null} signedIn={signedIn} onChanged={refresh} />
+        ));
+        const pairing = <RelayPairing key="pairing" resume={resume} disabled={pairDisabled} known={known} connected={connected} onPaired={paired} onChanged={() => void refresh()} />;
+        // The one-button connection leads while a built-in relay is still to connect.
+        return known.some((relay) => !connected.includes(relay.origin)) ? [pairing, ...cards] : [...cards, pairing];
+      })() : null}
     </div>
   );
 }
