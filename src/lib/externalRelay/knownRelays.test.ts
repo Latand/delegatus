@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
 import { checkApiBase } from "./client";
-import { KNOWN_RELAYS, knownRelay, knownRelayInfo, ownOriginIcon } from "./knownRelays";
+import { KNOWN_RELAYS, knownRelay, knownRelayInfo, ownOriginIcon, verifyUrlAllowed } from "./knownRelays";
 
 const celestia = knownRelay("celestia")!;
 
 test("the built-in list names Celestia by its https origin", () => {
   expect(KNOWN_RELAYS.map((relay) => relay.id)).toEqual(["celestia"]);
-  expect(celestia).toEqual({ id: "celestia", name: "Celestia", origin: "https://chatmoderator.botfather.dev" });
+  expect(celestia).toEqual({ id: "celestia", name: "Celestia", origin: "https://chatmoderator.botfather.dev", verifyHosts: ["t.me"] });
   expect(knownRelay("missing")).toBeNull();
 });
 
@@ -40,4 +40,21 @@ test("an https service that advertises its own host over http is not available s
   expect(() => checkApiBase(origin, "http://other.example/v1")).toThrow(expect.objectContaining({ code: "cross_origin" }));
   expect(() => checkApiBase(origin, "https://chatmoderator.botfather.dev/api/relay")).toThrow(expect.objectContaining({ code: "invalid_api_path" }));
   expect(() => checkApiBase(origin, "https://chatmoderator.botfather.dev/api/relay/v1")).not.toThrow();
+});
+
+test("a verify link opens on its own only as https on the relay's origin or a host its list entry names", () => {
+  const { origin, verifyHosts } = celestia;
+  expect(verifyUrlAllowed(origin, verifyHosts, "https://t.me/celestia_bot?start=pair-ABCD")).toBe(true);
+  expect(verifyUrlAllowed(origin, verifyHosts, `${origin}/pair?c=ABCD`)).toBe(true);
+  expect(verifyUrlAllowed(origin, verifyHosts, "http://chatmoderator.botfather.dev/pair")).toBe(false);
+  expect(verifyUrlAllowed(origin, verifyHosts, "http://t.me/celestia_bot")).toBe(false);
+  expect(verifyUrlAllowed(origin, verifyHosts, "https://elsewhere.example/pair")).toBe(false);
+  expect(verifyUrlAllowed(origin, verifyHosts, "https://t.me.elsewhere.example/pair")).toBe(false);
+  expect(verifyUrlAllowed(origin, verifyHosts, "https://someone@t.me/pair")).toBe(false);
+  expect(verifyUrlAllowed(origin, verifyHosts, "https://t.me:8443/pair")).toBe(false);
+  expect(verifyUrlAllowed(origin, verifyHosts, "javascript:alert(1)")).toBe(false);
+  expect(verifyUrlAllowed(origin, verifyHosts, null)).toBe(false);
+  // A relay that is not listed has only its own origin.
+  expect(verifyUrlAllowed("https://relay.example", undefined, "https://relay.example/pair")).toBe(true);
+  expect(verifyUrlAllowed("https://relay.example", undefined, "https://t.me/celestia_bot")).toBe(false);
 });

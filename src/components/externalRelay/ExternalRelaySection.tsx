@@ -7,7 +7,7 @@ import { accountConnected } from "@/components/onboarding/EnginesStep";
 import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { effortScale } from "@/lib/agent/efforts";
 import { defaultModelFor, ENGINE_MODELS } from "@/lib/agent/models";
-import { KNOWN_RELAYS, type KnownRelayInfo } from "@/lib/externalRelay/knownRelays";
+import { KNOWN_RELAYS, verifyUrlAllowed, type KnownRelayInfo } from "@/lib/externalRelay/knownRelays";
 import { useLocale, type TFunction } from "@/lib/i18n";
 
 /**
@@ -241,8 +241,9 @@ export function RelayPairing({ resume, disabled = false, known = [], connected =
     setBusy(false);
     if (!result.ok) { win?.close(); setError(result.error); return; }
     const verify = safeLink(result.value.pairing.verify_url);
+    const hosts = KNOWN_RELAYS.find((relay) => relay.origin === result.value.pairing.origin)?.verifyHosts;
     let landed = false;
-    if (win && verify) {
+    if (win && verify && verifyUrlAllowed(result.value.pairing.origin, hosts, verify)) {
       try { win.location.href = verify; landed = true; } catch { win.close(); }
     } else win?.close();
     setOpened(landed);

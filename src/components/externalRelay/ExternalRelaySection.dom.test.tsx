@@ -437,6 +437,30 @@ test("a pairing with no usable link closes the window it opened, and a failed st
   expect(host.querySelector("[data-external-relay-code]")?.textContent).toBe("ABCD-EFGH");
 });
 
+test("the window follows only an https verify link on the relay's origin or its verify channel; any other link closes it and stays in the card", async () => {
+  accounts({ claude: [signedIn("main")] });
+  answers.pairing = { status: "pending" };
+  const cases: { verify: string; navigates: boolean }[] = [
+    { verify: "https://t.me/celestia_bot?start=pair-ABCD", navigates: true },
+    { verify: `${CELESTIA}/pair?c=ABCD-EFGH`, navigates: true },
+    { verify: "http://chatmoderator.botfather.dev/pair", navigates: false },
+    { verify: "https://elsewhere.example/pair", navigates: false },
+    { verify: "http://elsewhere.example/pair", navigates: false },
+  ];
+  for (const { verify, navigates } of cases) {
+    answers.relay = { relays: [], pending: [], status: [] };
+    const { win } = windowOpen("opens");
+    route((url, init) => url === "/api/external-relay/pairings" && init?.method === "POST" ? jsonResponse({ pairing: celestiaPending({ verify_url: verify }) }, 201) : undefined);
+    const host = await mount(<ExternalRelaySection />);
+    await click(knownButton(host));
+    expect(win.location.href).toBe(navigates ? verify : "about:blank");
+    expect(win.closed).toBe(!navigates);
+    const link = host.querySelector("[data-external-relay-pairing] a");
+    expect(link?.getAttribute("data-external-relay-link")).toBe(navigates ? "again" : "open");
+    if (!navigates) expect(link?.getAttribute("href")).toBe(verify);
+  }
+});
+
 test("a service that is not available over https yet reads as that, in English and Ukrainian, and closes the window", async () => {
   accounts({ claude: [signedIn("main")] });
   answers.relay = { relays: [], pending: [], status: [] };

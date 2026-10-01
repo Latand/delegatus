@@ -9,11 +9,28 @@ export type KnownRelay = {
   id: string;
   name: string;
   origin: string;
+  /** Hosts, besides the origin itself, where the service's verify channel lives; a pairing page may open there on its own. */
+  verifyHosts?: readonly string[];
 };
 
 export const KNOWN_RELAYS: readonly KnownRelay[] = [
-  { id: "celestia", name: "Celestia", origin: "https://chatmoderator.botfather.dev" },
+  { id: "celestia", name: "Celestia", origin: "https://chatmoderator.botfather.dev", verifyHosts: ["t.me"] },
 ];
+
+/**
+ * Whether a verify link may be opened without a click on it: an `https:` page
+ * on the relay's own origin or on a host the built-in list names for its
+ * verify channel. A relay that is not in the list has only its own origin.
+ */
+export function verifyUrlAllowed(origin: string, verifyHosts: readonly string[] | undefined, value: string | null): boolean {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password) return false;
+    if (url.origin === new URL(origin).origin) return true;
+    return (verifyHosts ?? []).includes(url.hostname) && url.port === "";
+  } catch { return false; }
+}
 
 /** What the settings surface shows for a known relay: the list entry plus whatever its descriptor told. */
 export type KnownRelayInfo = KnownRelay & {
