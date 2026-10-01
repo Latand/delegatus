@@ -2883,7 +2883,9 @@ export const en = {
   "attention.empty": "Nothing is waiting for you.",
   "attention.reportQuestion": "Question",
   "attention.filterOn": "Show only those waiting on you (F)",
-  "attention.filterOff": "Show all nodes (F)",
+  "attention.filterOff": "Show all cards (F)",
+  "attention.filterOnTouch": "Show only those waiting on you",
+  "attention.filterOffTouch": "Show all cards",
   /* The one decision line every attention surface shares (#1167): the toast
      title, the island popover row and the orchestrator dock badge's tooltip.
      Lower-case to sit beside `rateLimit.badgeUntil`, which names the same class

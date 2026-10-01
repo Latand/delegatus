@@ -789,11 +789,6 @@ export function FarLabel({ file }: { file: FileEntry }) {
 
 const liteNoop = () => undefined;
 
-/* «Show only needs me» dimming: opacity only — geometry, edges and hit areas
-   stay exactly where they were, so toggling the filter never reshuffles the
-   board (D6). */
-const dimClass = (dimmed: boolean) => (dimmed ? " opacity-35" : "");
-
 /* The flow strip is the loop's shared header: it spans the whole
    implementer↔reviewer pair. */
 const PAIR_W = NODE_W * 2 + LOOP_GAP;
@@ -803,12 +798,12 @@ const PAIR_W = NODE_W * 2 + LOOP_GAP;
    hold thousands of transcript lines each — multiplied across the project it
    exceeds the mobile tab's memory budget and iOS kills the renderer. The card
    carries what a pick decision needs; the transcript opens after the pick. */
-export function LiteNodeShell({ node, ringed, dimmed, flow }: { node: SchemeNode; ringed: boolean; dimmed: boolean; flow: Flow | null }) {
+export function LiteNodeShell({ node, ringed, flow }: { node: SchemeNode; ringed: boolean; flow: Flow | null }) {
   const { t } = useLocale();
   return (
     <div
       data-scheme-node={node.file.path}
-      className={`scheme-enter absolute${dimClass(dimmed)}`}
+      className="scheme-enter absolute"
       style={{ transform: `translate(${node.x}px, ${node.y}px)`, width: node.w, height: node.h, transition: MOVE_TRANSITION }}
     >
       {flow ? (
@@ -869,12 +864,12 @@ export function LiteNodeShell({ node, ringed, dimmed, flow }: { node: SchemeNode
 }
 
 /** Draft placeholder on the map: a pick jumps back to the focused draft pane. */
-function LiteDraftShell({ draft, ringed, dimmed }: { draft: DraftNode; ringed: boolean; dimmed: boolean }) {
+function LiteDraftShell({ draft, ringed }: { draft: DraftNode; ringed: boolean }) {
   const { t } = useLocale();
   return (
     <div
       data-scheme-node={draft.key}
-      className={`scheme-enter absolute${dimClass(dimmed)}`}
+      className="scheme-enter absolute"
       style={fittedShellStyle(draft)}
     >
       <div
@@ -891,7 +886,7 @@ function LiteDraftShell({ draft, ringed, dimmed }: { draft: DraftNode; ringed: b
 }
 
 /** Review deck on the map: the latest round's state without mounting its feed. */
-function LiteDeckShell({ deck, dimmed }: { deck: DeckNode; dimmed: boolean }) {
+function LiteDeckShell({ deck }: { deck: DeckNode }) {
   const { t } = useLocale();
   const latest = deck.rounds.at(-1) ?? null;
   const round = latest?.round ?? null;
@@ -899,7 +894,7 @@ function LiteDeckShell({ deck, dimmed }: { deck: DeckNode; dimmed: boolean }) {
   return (
     <div
       data-scheme-node={deck.key}
-      className={`scheme-enter absolute${dimClass(dimmed)}`}
+      className="scheme-enter absolute"
       style={fittedShellStyle(deck)}
     >
       <div className="flex h-full flex-col overflow-hidden rounded-[10px] border border-border bg-card shadow-1">
@@ -941,12 +936,12 @@ function LiteDeckShell({ deck, dimmed }: { deck: DeckNode; dimmed: boolean }) {
  * stays readable on the diagram even when nothing in it runs. A click opens
  * the branch as a full node.
  */
-export function MiniStackShell({ stack, dimmed, onSelect }: { stack: MiniStack; dimmed: boolean; onSelect: (file: FileEntry) => void }) {
+export function MiniStackShell({ stack, onSelect }: { stack: MiniStack; onSelect: (file: FileEntry) => void }) {
   const { t } = useLocale();
   return (
     <div
       data-scheme-node={stack.key}
-      className={`scheme-enter absolute${dimClass(dimmed)}`}
+      className="scheme-enter absolute"
       style={fittedShellStyle(stack)}
     >
       <div className="flex h-full flex-col gap-1.5 overflow-y-auto rounded-[10px] border border-dashed border-strong bg-card/60 p-2">
@@ -1060,7 +1055,7 @@ function SelectionCheck({
 
 /* Memoised (#1432): a focus move, a lasso toggle or a poll re-renders
    NodesLayer, and this shell must re-render only when something about ITS
-   card changed — ring, dim, node geometry, flow/pipeline attachment. Every
+   card changed — ring, node geometry, flow/pipeline attachment. Every
    callback and collection it receives is identity-stable across a NodesLayer
    render for that to hold (see the useCallback/EMPTY_* constants there). */
 const NodeChrome = memo(function NodeChrome({
@@ -1070,7 +1065,6 @@ const NodeChrome = memo(function NodeChrome({
   marked,
   session,
   onToggleMember,
-  dimmed,
   dormant,
   flow,
   pipeline,
@@ -1107,8 +1101,6 @@ const NodeChrome = memo(function NodeChrome({
   session: boolean;
   /** Toggles this card in the board's one selection set. Absent on the map. */
   onToggleMember?: (path: string) => void;
-  /** «Show only needs me» attention filter dim. */
-  dimmed: boolean;
   /** Far zoom: pane feeds sleep behind the identity labels. */
   dormant: boolean;
   /** Active review-loop flow attached to this conversation, if any. */
@@ -1183,7 +1175,7 @@ const NodeChrome = memo(function NodeChrome({
       data-pipeline-stage-state={pipelineStage ? stageChipState(pipelineStage.pipeline, pipelineStage.stage) : undefined}
       data-lasso-selected={marked ? "true" : undefined}
       data-select-check-hover={checkHover ? "true" : undefined}
-      className={`scheme-enter absolute ${badgesExpanded ? Z.popover : underOpen || flowOpen ? Z.lifted : ""}${dimClass(dimmed)}`}
+      className={`scheme-enter absolute ${badgesExpanded ? Z.popover : underOpen || flowOpen ? Z.lifted : ""}`}
       style={{ transform: `translate(${node.x}px, ${node.y}px)`, width: node.w, height: node.h, transition: MOVE_TRANSITION }}
     >
       {onToggleMember ? (
@@ -1410,7 +1402,6 @@ function DraftShell({
   project,
   files,
   ringed,
-  dimmed,
   onDraftClose,
   onDraftSpawned,
 }: {
@@ -1418,14 +1409,13 @@ function DraftShell({
   project: string;
   files: FileEntry[];
   ringed: boolean;
-  dimmed: boolean;
   onDraftClose: (id: string) => void;
   onDraftSpawned: (id: string, file: FileEntry) => void;
 }) {
   return (
     <div
       data-scheme-node={draft.key}
-      className={`scheme-enter absolute${dimClass(dimmed)}`}
+      className="scheme-enter absolute"
       style={fittedShellStyle(draft)}
     >
       <div className={`flex h-full ${ringed ? "rounded-[10px] ring-2 ring-accent/60 ring-offset-2 ring-offset-canvas" : ""}`}>
@@ -1485,7 +1475,7 @@ function EscapeToClose({ onClose }: { onClose: () => void }) {
  * wraps. Every add is an optimistic add-stage PATCH on the same draft
  * contract, applied locally first (issue #221 §3).
  */
-function StageSlotShell({ slot, lite, dimmed, files, onSelect, onToggleDetails }: { slot: StageSlot; lite: boolean; dimmed: boolean; files: FileEntry[]; onSelect: (file: FileEntry) => void; onToggleDetails?: (key: string) => void }) {
+function StageSlotShell({ slot, lite, files, onSelect, onToggleDetails }: { slot: StageSlot; lite: boolean; files: FileEntry[]; onSelect: (file: FileEntry) => void; onToggleDetails?: (key: string) => void }) {
   const { t } = useLocale();
   const [busy, setBusy] = useState(false);
   const [rowOpen, setRowOpen] = useState(false);
@@ -1503,7 +1493,7 @@ function StageSlotShell({ slot, lite, dimmed, files, onSelect, onToggleDetails }
     return (
       <div
         data-scheme-node={slot.key}
-        className={`scheme-enter absolute${dimClass(dimmed)} ${rowOpen ? Z.popover : ""}`}
+        className={`scheme-enter absolute ${rowOpen ? Z.popover : ""}`}
         style={fittedShellStyle(slot)}
       >
         {slot.incoming ? (
@@ -1555,7 +1545,7 @@ function StageSlotShell({ slot, lite, dimmed, files, onSelect, onToggleDetails }
     return (
       <div
         data-scheme-node={slot.key}
-        className={`scheme-enter absolute${dimClass(dimmed)}`}
+        className="scheme-enter absolute"
         style={fittedShellStyle(slot)}
       >
         {slot.incoming ? (
@@ -1594,7 +1584,7 @@ function StageSlotShell({ slot, lite, dimmed, files, onSelect, onToggleDetails }
     const target = slot.attempt ? attemptNavTarget(slot.attempt) : null;
     const file = target ? resolveStageNavFile(target, files) : null;
     return <div data-scheme-node={slot.key} data-stage-details-expanded={slot.detailsExpanded}
-      className={`scheme-enter absolute${dimClass(dimmed)}`} style={fittedShellStyle(slot)}>
+      className="scheme-enter absolute" style={fittedShellStyle(slot)}>
       <div style={{ height: BOARD_SURFACE.stage.h }}>
         <StageStatusRow slot={slot} expanded={slot.detailsExpanded} controls={`${slot.key}::details`}
           onToggle={!lite ? () => onToggleDetails?.(slot.key) : undefined} />
@@ -1618,7 +1608,7 @@ function StageSlotShell({ slot, lite, dimmed, files, onSelect, onToggleDetails }
   return (
     <div
       data-scheme-node={slot.key}
-      className={`scheme-enter absolute${dimClass(dimmed)}`}
+      className="scheme-enter absolute"
       style={fittedShellStyle(slot)}
     >
       {slot.incoming ? (
@@ -1672,13 +1662,11 @@ function StageSlotShell({ slot, lite, dimmed, files, onSelect, onToggleDetails }
 function DeckShell({
   deck,
   focus,
-  dimmed,
   dormant,
   groupLabel,
 }: {
   deck: DeckNode;
   focus: DeckFocus | null;
-  dimmed: boolean;
   dormant: boolean;
   /** Names the review group for screen readers (the reviewed conversation). */
   groupLabel?: string;
@@ -1687,7 +1675,7 @@ function DeckShell({
   return (
     <div
       data-scheme-node={deck.key}
-      className={`scheme-enter absolute${dimClass(dimmed)}`}
+      className="scheme-enter absolute"
       style={fittedShellStyle(deck)}
     >
       <RoundDeck flow={deck.flow} rounds={deck.rounds} focusRound={focusRound} dormant={dormant} groupLabel={groupLabel} />
@@ -1712,7 +1700,6 @@ export const NodesLayer = memo(function NodesLayer({
   multi,
   session,
   focus,
-  attentionPaths,
   flowsByImpl,
   flows,
   pipelines = [],
@@ -1755,9 +1742,6 @@ export const NodesLayer = memo(function NodesLayer({
   /** Session active: members carry checkmarks, everything else dims via CSS. */
   session: boolean;
   focus: string | null;
-  /** «Show only needs me»: non-null dims every shell without a queue member.
-      Identity is stable while membership is, so camera frames never see it move. */
-  attentionPaths: ReadonlySet<string> | null;
   flowsByImpl: Map<string, Flow>;
   /** All flows, for a pipeline strip's review-loop round counters + open-review. */
   flows: Flow[];
@@ -1845,28 +1829,20 @@ export const NodesLayer = memo(function NodesLayer({
     if (flow) onFocusRound(flow.id, flow.rounds.at(-1)?.n ?? 1);
   }, [flows, onFocusRound]);
 
-  /* A stack or deck stays lit when any conversation inside it is in the
-     queue — a stalled branch may live in a mini stack, and a blocked
-     reviewer inside a round deck. */
-  const stackDimmed = (stack: MiniStack) =>
-    attentionPaths !== null && !stack.items.some((item) => attentionPaths.has(item.file.path));
-  const deckDimmed = (deck: DeckNode) =>
-    attentionPaths !== null && !deck.rounds.some((round) => round.file && attentionPaths.has(round.file.path));
   return (
     <div
       className={`${interactive ? "" : "pointer-events-none select-none"} ${session ? "scheme-session" : ""}`.trim() || undefined}
     >
       {stacksInDomOrder.map((stack) => (
-        <DormantView key={stack.key} active={visiblePaths?.has(stack.key) ?? true}><MiniStackShell stack={stack} dimmed={stackDimmed(stack)} onSelect={onSelect} /></DormantView>
+        <DormantView key={stack.key} active={visiblePaths?.has(stack.key) ?? true}><MiniStackShell stack={stack} onSelect={onSelect} /></DormantView>
       ))}
       {decksInDomOrder.map((deck) =>
         lite ? (
-          <LiteDeckShell key={deck.key} deck={deck} dimmed={deckDimmed(deck)} />
+          <LiteDeckShell key={deck.key} deck={deck} />
         ) : (
           <DormantView key={deck.key} active={visiblePaths?.has(deck.key) ?? true}><DeckShell
             deck={deck}
             focus={deckFocus}
-            dimmed={deckDimmed(deck)}
             dormant={dormant}
             groupLabel={files.find((entry) => entry.path === deck.flow.implementerPath)?.title}
           /></DormantView>
@@ -1875,7 +1851,7 @@ export const NodesLayer = memo(function NodesLayer({
       {/* Placeholder windows for planned pipeline stages (issue #196): dashed
           chat-window shells the live stage windows replace in place. */}
       {slotsInDomOrder.map((slot) => (
-        <DormantView key={slot.key} active={visiblePaths?.has(slot.key) ?? true}><StageSlotShell onToggleDetails={onToggleStageDetails} slot={slot} lite={lite} dimmed={attentionPaths !== null} files={files} onSelect={onSelect} /></DormantView>
+        <DormantView key={slot.key} active={visiblePaths?.has(slot.key) ?? true}><StageSlotShell onToggleDetails={onToggleStageDetails} slot={slot} lite={lite} files={files} onSelect={onSelect} /></DormantView>
       ))}
       {draftsInDomOrder.map((draft) =>
         lite ? (
@@ -1883,7 +1859,6 @@ export const NodesLayer = memo(function NodesLayer({
             key={draft.key}
             draft={draft}
             ringed={selected === draft.key || focus === draft.key}
-            dimmed={attentionPaths !== null}
           />
         ) : (
           <DraftShell
@@ -1892,7 +1867,6 @@ export const NodesLayer = memo(function NodesLayer({
             project={project}
             files={files}
             ringed={selected === draft.key || focus === draft.key}
-            dimmed={attentionPaths !== null}
             onDraftClose={onDraftClose}
             onDraftSpawned={onDraftSpawned}
           />
@@ -1906,7 +1880,6 @@ export const NodesLayer = memo(function NodesLayer({
             key={node.file.path}
             node={node}
             ringed={selected === node.file.path || focus === node.file.path}
-            dimmed={attentionPaths !== null && !attentionPaths.has(node.file.path)}
             flow={flowsByImpl.get(node.file.path) ?? null}
           />
         ) : (
@@ -1921,7 +1894,6 @@ export const NodesLayer = memo(function NodesLayer({
             marked={session && multi.has(node.file.path)}
             session={session}
             onToggleMember={onToggleMember}
-            dimmed={attentionPaths !== null && !attentionPaths.has(node.file.path)}
             dormant={dormant}
             flow={flowsByImpl.get(node.file.path) ?? null}
             pipeline={pipeline}

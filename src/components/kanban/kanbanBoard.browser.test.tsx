@@ -14162,3 +14162,334 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     }
   }, 600_000);
 });
+
+describe("needs-you filter: the board dims every card that does not wait on the operator", () => {
+  /* The `needs-filter` scenario (docs/design/needs-me-filter.md): five cards on
+     one board — a conversation that asks, a lane parked on a decision, a lane
+     whose decision was dismissed, and two that wait on no one — plus the
+     Overview (`issue1820`, where a conversation asks in another project). At
+     1440×900 the funnel and the F key; at 390×844 the funnel in the ⚠ sheet's
+     header. Every reading is the production stylesheet's computed style, in
+     light and dark, en and uk, with the filter off and on. Frames go to
+     LLV_NEEDS_FILTER_SHOTS_DIR (default `.artifacts/needs-filter-shots`);
+     readings to `evidence/needs-me-filter/geometry.json`.
+
+       CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 LLV_NEEDS_FILTER_SHOTS_DIR=… \
+         bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "needs-you filter" */
+  const SHOTS = path.resolve(process.env.LLV_NEEDS_FILTER_SHOTS_DIR ?? ".artifacts/needs-filter-shots");
+  const EVIDENCE = path.resolve("evidence/needs-me-filter");
+  const LIT = ["t-nf-ask", "t-nf-lane"];
+  const DIM = ["t-nf-cleared", "t-nf-run", "t-nf-idle"];
+  const DIM_OPACITY = { light: 0.6, dark: 0.55 } as const;
+
+  type Box = { left: number; top: number; width: number; height: number };
+  /** One card's computed look and box, read where the stylesheet put it. */
+  const cardReading = (page: Page, selector: string) => page.evaluate((query) => {
+    const el = document.querySelector(query) as HTMLElement | null;
+    if (!el) return null;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return { opacity: Number(style.opacity), filter: style.filter, box: { left: rect.left, top: rect.top, width: rect.width, height: rect.height } as Box };
+  }, selector);
+  /** The arrival toast is closed and the seat folded, so the board's cards are on screen. */
+  const clearStage = async (page: Page) => {
+    const toast = page.locator("[data-attention-toast-dismiss]");
+    for (let tries = 0; tries < 3 && (await toast.count()) > 0; tries++) {
+      await toast.first().click();
+      await page.waitForTimeout(150);
+    }
+    const fold = page.locator("[data-seat-collapse]");
+    if (await fold.count()) await fold.first().click();
+  };
+  /** The filter's own state, as the stylesheet reads it. */
+  const filterAttr = (page: Page) => page.evaluate(() => document.querySelector("main")!.hasAttribute("data-needs-only"));
+  /** F is ignored while a button holds focus, so the key is pressed from the page itself. */
+  const pressF = async (page: Page) => {
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press("f");
+  };
+  const token = (page: Page) => page.evaluate(() => Number(getComputedStyle(document.documentElement).getPropertyValue("--needs-dim-opacity")));
+  const sameBox = (a: Box, b: Box) => (["left", "top", "width", "height"] as const).every((key) => Math.abs(a[key] - b[key]) < 0.01);
+
+  /** The contrast of a card's title over the canvas once the card is dimmed: the
+      text and the card's fill both composite over the canvas at the card's opacity. */
+  const titleContrast = (page: Page, selector: string) => page.evaluate((query) => {
+    const rgba = (value: string) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 1;
+      const context = canvas.getContext("2d")!;
+      context.clearRect(0, 0, 1, 1);
+      context.fillStyle = value;
+      context.fillRect(0, 0, 1, 1);
+      const [r, g, b, a] = context.getImageData(0, 0, 1, 1).data;
+      return [r!, g!, b!, a! / 255] as const;
+    };
+    const el = document.querySelector(query) as HTMLElement;
+    const title = el.querySelector("h3.title .clamp, h3.title") as HTMLElement;
+    const opacity = Number(getComputedStyle(el).opacity);
+    const canvas = rgba(getComputedStyle(document.body).backgroundColor === "rgba(0, 0, 0, 0)" ? getComputedStyle(document.documentElement).getPropertyValue("--surface-canvas") : getComputedStyle(document.body).backgroundColor);
+    const fill = rgba(getComputedStyle(el).backgroundColor);
+    const text = rgba(getComputedStyle(title).color);
+    const over = (top: readonly number[], under: readonly number[], alpha: number) => [0, 1, 2].map((i) => top[i]! * alpha + under[i]! * (1 - alpha));
+    const lum = (c: number[]) => {
+      const lin = c.map((v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; });
+      return 0.2126 * lin[0]! + 0.7152 * lin[1]! + 0.0722 * lin[2]!;
+    };
+    const cardFill = over(fill, canvas, fill[3]);
+    const shownText = over(over(text, cardFill, text[3]), canvas, opacity);
+    const shownFill = over(cardFill, canvas, opacity);
+    const [hi, lo] = [lum(shownText), lum(shownFill)].sort((a, b) => b - a);
+    return Math.round(((hi! + 0.05) / (lo! + 0.05)) * 100) / 100;
+  }, selector);
+
+  browserTest("desktop 1440: the funnel dims the cards that do not wait and nothing moves; en and uk, light and dark", async () => {
+    fs.mkdirSync(SHOTS, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const out = path.resolve(".artifacts/needs-filter-bundle");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const scheme of ["light", "dark"] as const) {
+          const label = `board-desktop-1440-${scheme}-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=needs-filter`, VIEWPORT, scheme, lang);
+          try {
+            await page.waitForSelector(card("t-nf-ask"), { timeout: 30_000 });
+            await page.waitForSelector("[data-attention-filter]", { timeout: 10_000 });
+            await clearStage(page);
+            await page.mouse.move(0, 0);
+            await page.waitForTimeout(600);
+            const ids = [...LIT, ...DIM];
+            const before = Object.fromEntries(await Promise.all(ids.map(async (id) => [id, await cardReading(page, card(id))] as const)));
+            const funnel = page.locator("[data-attention-filter]");
+            const widthOff = (await funnel.boundingBox())!.width;
+            const labelOff = await funnel.getAttribute("aria-label");
+            await page.screenshot({ path: path.join(SHOTS, `${label}-filter-off.png`) });
+
+            await pressF(page);
+            await page.waitForTimeout(700);
+            const onAttr = await filterAttr(page);
+            const after = Object.fromEntries(await Promise.all(ids.map(async (id) => [id, await cardReading(page, card(id))] as const)));
+            const widthOn = (await funnel.boundingBox())!.width;
+            const labelOn = await funnel.getAttribute("aria-label");
+            const pressed = await funnel.getAttribute("aria-pressed");
+            const island = await page.evaluate(() => {
+              const box = document.querySelector("[data-attention-island]")!.getBoundingClientRect();
+              return { right: box.right, left: box.left, viewport: window.innerWidth };
+            });
+            const dimmedContrast = await titleContrast(page, card("t-nf-run"));
+            const dimToken = await token(page);
+            await page.screenshot({ path: path.join(SHOTS, `${label}-filter-on.png`) });
+
+            await funnel.click();
+            await page.mouse.move(0, 0);
+            await page.waitForTimeout(700);
+            const off = Object.fromEntries(await Promise.all(ids.map(async (id) => [id, await cardReading(page, card(id))] as const)));
+            const offAttr = await filterAttr(page);
+
+            /* Pointing at a dimmed card brings it back; the card under the
+               pointer is the one the operator is reading. Last, because
+               hovering scrolls the card into view and moves every box. */
+            await pressF(page);
+            await page.mouse.move(0, 0);
+            await page.waitForTimeout(500);
+            const onAgainAttr = await filterAttr(page);
+            await page.locator(card("t-nf-run")).hover();
+            await page.waitForTimeout(500);
+            const hovered = await cardReading(page, card("t-nf-run"));
+            await page.screenshot({ path: path.join(SHOTS, `${label}-filter-on-hover.png`) });
+            readings.push({ label, token: dimToken, labelOff, labelOn, pressed, widthOff, widthOn, island, dimmedContrast, onAttr, offAttr, onAgainAttr, before, after, hovered, off, pageErrors });
+            expect(pageErrors, `${label} page errors`).toEqual([]);
+          } finally { await context.close(); }
+        }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.writeFileSync(path.join(EVIDENCE, "geometry.json"), `${JSON.stringify(readings, null, 2)}\n`);
+
+    type Card = { opacity: number; filter: string; box: Box };
+    for (const entry of readings as Array<{ label: string; token: number; labelOff: string; labelOn: string; pressed: string; widthOff: number; widthOn: number; island: { right: number; left: number; viewport: number }; dimmedContrast: number; onAttr: boolean; offAttr: boolean; onAgainAttr: boolean; before: Record<string, Card>; after: Record<string, Card>; hovered: Card; off: Record<string, Card> }>) {
+      const scheme = entry.label.includes("-dark-") ? "dark" : "light";
+      const locale = entry.label.endsWith("-uk") ? "uk" : "en";
+      expect(entry.token, `${entry.label} the token the stylesheet carries`).toBe(DIM_OPACITY[scheme]);
+      for (const id of [...LIT, ...DIM]) {
+        expect(entry.before[id]!.opacity, `${entry.label} ${id} full strength before`).toBe(1);
+        expect(entry.off[id]!.opacity, `${entry.label} ${id} restored by Off`).toBe(1);
+        expect(entry.off[id]!.filter, `${entry.label} ${id} unfiltered after Off`).toBe("none");
+        /* Nothing moves when the filter flips, in either direction. */
+        expect(sameBox(entry.before[id]!.box, entry.after[id]!.box), `${entry.label} ${id} keeps its box on`).toBe(true);
+        expect(sameBox(entry.before[id]!.box, entry.off[id]!.box), `${entry.label} ${id} keeps its box off`).toBe(true);
+      }
+      for (const id of LIT) {
+        expect(entry.after[id]!.opacity, `${entry.label} ${id} waits, so stays lit`).toBe(1);
+        expect(entry.after[id]!.filter, `${entry.label} ${id} stays unfiltered`).toBe("none");
+      }
+      for (const id of DIM) {
+        expect(entry.after[id]!.opacity, `${entry.label} ${id} recedes`).toBeCloseTo(DIM_OPACITY[scheme], 2);
+        expect(entry.after[id]!.filter, `${entry.label} ${id} drains its colour`).toContain("saturate(0.35)");
+      }
+      expect(entry.onAttr, `${entry.label} F turns the filter on`).toBe(true);
+      expect(entry.offAttr, `${entry.label} the funnel turns it off`).toBe(false);
+      expect(entry.onAgainAttr, `${entry.label} the filter was on while the card was pointed at`).toBe(true);
+      expect(entry.hovered.opacity, `${entry.label} a pointed-at card is restored`).toBe(1);
+      expect(entry.dimmedContrast, `${entry.label} a dimmed title stays readable`).toBeGreaterThanOrEqual(4.5);
+      expect(entry.pressed, `${entry.label} the funnel shows its on state`).toBe("true");
+      expect(entry.labelOff, `${entry.label} funnel label offers the filter`).toBe(translate(locale, "attention.filterOn"));
+      expect(entry.labelOn, `${entry.label} funnel label offers the way back`).toBe(translate(locale, "attention.filterOff"));
+      expect(entry.widthOn, `${entry.label} pressed and unpressed funnels are as wide`).toBe(entry.widthOff);
+      expect(entry.island.right, `${entry.label} the island stays inside the window`).toBeLessThanOrEqual(entry.island.viewport);
+      expect(entry.island.left, `${entry.label} the island starts inside the window`).toBeGreaterThanOrEqual(0);
+    }
+  }, 600_000);
+
+  browserTest("desktop 1440: where nothing waits no funnel is offered and F dims nothing", async () => {
+    fs.mkdirSync(SHOTS, { recursive: true });
+    const out = path.resolve(".artifacts/needs-filter-bundle");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=needs-filter&nothing=1`, VIEWPORT, "light", "en");
+      try {
+        await page.waitForSelector(card("t-nf-ask"), { timeout: 30_000 });
+        await clearStage(page);
+        await page.waitForTimeout(600);
+        expect(await page.locator("[data-attention-filter]").count(), "no funnel while nothing waits").toBe(0);
+        await pressF(page);
+        await page.waitForTimeout(500);
+        expect(await filterAttr(page), "F arms nothing").toBe(false);
+        for (const id of [...LIT, ...DIM]) expect((await cardReading(page, card(id)))!.opacity, `${id} stays at full strength`).toBe(1);
+        await page.screenshot({ path: path.join(SHOTS, "board-desktop-1440-light-en-nothing-waits.png") });
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 300_000);
+
+  browserTest("Overview 1440: the filter dims the cards of every project that do not wait", async () => {
+    fs.mkdirSync(SHOTS, { recursive: true });
+    const out = path.resolve(".artifacts/needs-filter-bundle");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=issue1820`, VIEWPORT, "light", "en");
+      try {
+        await page.waitForSelector("[data-kanban-board] .card", { timeout: 30_000 });
+        await page.waitForSelector("[data-attention-filter]", { timeout: 10_000 });
+        await clearStage(page);
+        await page.waitForTimeout(600);
+        await page.screenshot({ path: path.join(SHOTS, "overview-desktop-1440-light-en-filter-off.png") });
+        await pressF(page);
+        await page.mouse.move(0, 0);
+        await page.waitForTimeout(700);
+        expect(await filterAttr(page), "F turns the Overview's filter on").toBe(true);
+        const cards = await page.evaluate(() => [...document.querySelectorAll("[data-kanban-board] .card")].map((el) => ({
+          waits: el.hasAttribute("data-attention"), opacity: Number(getComputedStyle(el).opacity),
+        })));
+        await page.screenshot({ path: path.join(SHOTS, "overview-desktop-1440-light-en-filter-on.png") });
+        expect(cards.some((entry) => entry.waits), "a card in some project waits").toBe(true);
+        expect(cards.some((entry) => !entry.waits), "a card in some project does not").toBe(true);
+        for (const entry of cards) expect(entry.opacity, entry.waits ? "a waiting card stays lit" : "a quiet card recedes").toBeCloseTo(entry.waits ? 1 : DIM_OPACITY.light, 2);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 300_000);
+
+  browserTest("phone 390: the ⚠ sheet's funnel dims the cards that do not wait and nothing moves; en and uk, light and dark", async () => {
+    fs.mkdirSync(SHOTS, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const out = path.resolve(".artifacts/needs-filter-bundle");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const scheme of ["light", "dark"] as const) {
+          const label = `board-phone-390-${scheme}-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=needs-filter`, { width: 390, height: 844 }, scheme, lang, "no-preference", true, 2);
+          try {
+            await page.waitForSelector("[data-phone-card-shell]", { timeout: 30_000 });
+            await page.waitForTimeout(800);
+            /* Every shell on the board, in order: the waiting ones carry the mark. */
+            const shells = () => page.evaluate(() => [...document.querySelectorAll("[data-phone-card-shell]")].map((el) => {
+              const style = getComputedStyle(el);
+              const rect = el.getBoundingClientRect();
+              return { waits: el.getAttribute("data-attention") === "needs", opacity: Number(style.opacity), filter: style.filter, left: rect.left, top: rect.top, width: rect.width, height: rect.height, text: (el.textContent ?? "").slice(0, 40) };
+            }));
+            const before = await shells();
+            await page.screenshot({ path: path.join(SHOTS, `${label}-filter-off.png`) });
+
+            await page.locator("[data-mobile2-attention-count]").first().click();
+            await page.waitForSelector("[data-mobile2-sheet='attention'] [data-attention-filter]", { timeout: 10_000 });
+            await page.waitForTimeout(600);
+            const funnel = page.locator("[data-mobile2-sheet='attention'] [data-attention-filter]");
+            const funnelBox = (await funnel.boundingBox())!;
+            const labelOff = await funnel.getAttribute("aria-label");
+            const header = await page.evaluate(() => {
+              const sheet = document.querySelector("[data-mobile2-sheet='attention']")!.getBoundingClientRect();
+              const head = document.querySelector("[data-mobile2-sheet-header]") as HTMLElement;
+              const parts = [...head.children].map((el) => { const box = el.getBoundingClientRect(); return { left: box.left, right: box.right }; });
+              return { sheetLeft: sheet.left, sheetRight: sheet.right, parts, overflow: head.scrollWidth - head.clientWidth };
+            });
+            await page.screenshot({ path: path.join(SHOTS, `${label}-sheet-filter-off.png`) });
+            await funnel.click();
+            await page.waitForTimeout(500);
+            const pressed = await funnel.getAttribute("aria-pressed");
+            const labelOn = await funnel.getAttribute("aria-label");
+            const funnelBoxOn = (await funnel.boundingBox())!;
+            await page.screenshot({ path: path.join(SHOTS, `${label}-sheet-filter-on.png`) });
+            await page.locator("[data-mobile2-close]").first().click();
+            await page.waitForTimeout(900);
+            const after = await shells();
+            await page.screenshot({ path: path.join(SHOTS, `${label}-filter-on.png`) });
+            const dimToken = await token(page);
+
+            await page.locator("[data-mobile2-attention-count]").first().click();
+            await page.waitForSelector("[data-mobile2-sheet='attention'] [data-attention-filter]", { timeout: 10_000 });
+            await page.locator("[data-mobile2-sheet='attention'] [data-attention-filter]").click();
+            await page.locator("[data-mobile2-close]").first().click();
+            await page.waitForTimeout(900);
+            const off = await shells();
+            readings.push({ label, token: dimToken, labelOff, labelOn, pressed, funnelHeight: funnelBox.height, funnelWidth: funnelBox.width, funnelWidthOn: funnelBoxOn.width, header, before, after, off, pageErrors });
+            expect(pageErrors, `${label} page errors`).toEqual([]);
+          } finally { await context.close(); }
+        }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.writeFileSync(path.join(EVIDENCE, "geometry-phone.json"), `${JSON.stringify(readings, null, 2)}\n`);
+
+    type Shell = { waits: boolean; opacity: number; filter: string; left: number; top: number; width: number; height: number };
+    for (const entry of readings as Array<{ label: string; token: number; labelOff: string; labelOn: string; pressed: string; funnelHeight: number; funnelWidth: number; funnelWidthOn: number; header: { sheetLeft: number; sheetRight: number; parts: Array<{ left: number; right: number }>; overflow: number }; before: Shell[]; after: Shell[]; off: Shell[] }>) {
+      const scheme = entry.label.includes("-dark-") ? "dark" : "light";
+      const locale = entry.label.endsWith("-uk") ? "uk" : "en";
+      expect(entry.token, `${entry.label} the token the stylesheet carries`).toBe(DIM_OPACITY[scheme]);
+      expect(entry.funnelHeight, `${entry.label} the funnel is a 44 px target`).toBeGreaterThanOrEqual(44);
+      expect(entry.funnelWidth, `${entry.label} the funnel is a 44 px target wide`).toBeGreaterThanOrEqual(44);
+      expect(entry.funnelWidthOn, `${entry.label} pressed and unpressed funnels are as wide`).toBe(entry.funnelWidth);
+      expect(entry.pressed, `${entry.label} the funnel shows its on state`).toBe("true");
+      expect(entry.labelOff, `${entry.label} funnel label`).toBe(translate(locale, "attention.filterOnTouch"));
+      expect(entry.labelOn, `${entry.label} funnel label when on`).toBe(translate(locale, "attention.filterOffTouch"));
+      expect(entry.header.overflow, `${entry.label} the sheet header does not overflow`).toBeLessThanOrEqual(0);
+      for (const part of entry.header.parts) {
+        expect(part.left, `${entry.label} a header part starts inside the sheet`).toBeGreaterThanOrEqual(entry.header.sheetLeft - 0.5);
+        expect(part.right, `${entry.label} a header part ends inside the sheet`).toBeLessThanOrEqual(entry.header.sheetRight + 0.5);
+      }
+      expect(entry.before.length).toBeGreaterThanOrEqual(5);
+      expect(entry.after.length).toBe(entry.before.length);
+      entry.before.forEach((shell, index) => {
+        expect(shell.opacity, `${entry.label} shell ${index} full strength before`).toBe(1);
+        const was = entry.after[index]!;
+        expect(was.waits, `${entry.label} shell ${index} keeps its mark`).toBe(shell.waits);
+        expect(was.opacity, `${entry.label} shell ${index} ${shell.waits ? "stays lit" : "recedes"}`).toBeCloseTo(shell.waits ? 1 : DIM_OPACITY[scheme], 2);
+        for (const key of ["left", "top", "width", "height"] as const) {
+          expect(Math.abs(was[key] - shell[key]), `${entry.label} shell ${index} ${key} on`).toBeLessThan(0.01);
+          expect(Math.abs(entry.off[index]![key] - shell[key]), `${entry.label} shell ${index} ${key} off`).toBeLessThan(0.01);
+        }
+        expect(entry.off[index]!.opacity, `${entry.label} shell ${index} restored`).toBe(1);
+      });
+      expect(entry.before.filter((shell) => shell.waits).length, `${entry.label} two cards wait`).toBe(2);
+    }
+  }, 600_000);
+});

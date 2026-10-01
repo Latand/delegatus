@@ -384,6 +384,32 @@ body {
   filter: none;
 }
 
+/* «Needs you» filter (docs/design/needs-me-filter.md): the Viewer sets one
+   attribute on <main> and every card that does not wait on the operator
+   recedes. A waiting card carries data-attention (the desktop card's own mark,
+   and the phone shell's), so lit and dim are the same answer the queue gives.
+   Opacity and filter only, so geometry, hit areas and scrolling never move
+   when it toggles. The exclusions keep the drag, ghost and landing animations
+   their own opacity (this selector would out-specify theirs), and hover,
+   focus-within and an open reader bring a card back while the operator points
+   at it, works inside it or reads the conversation it holds. A new-task draft
+   is the operator's own and never dims. */
+[data-needs-only] .kb .card:not([data-attention], .dragging, .ghost, .landing, .has-reader, .new-task, :hover, :focus-within),
+[data-needs-only] .kb .remote-unbound:not(:hover, :focus-within),
+[data-needs-only] [data-phone-card-shell]:not([data-attention]) {
+  opacity: var(--needs-dim-opacity);
+  filter: saturate(var(--needs-dim-saturate));
+}
+[data-phone-card-shell] {
+  transition: opacity var(--motion-base) var(--ease-standard), filter var(--motion-base) var(--ease-standard);
+}
+.kb .remote-unbound {
+  transition: opacity var(--motion-base) var(--ease-standard), filter var(--motion-base) var(--ease-standard);
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-phone-card-shell], .kb .remote-unbound { transition: none; }
+}
+
 /* The hover-revealed selection check (#771): the fade is the whole reveal — the
    control is always mounted at the card's corner, outside its content box, so
    nothing moves and nothing is covered when it appears. */
