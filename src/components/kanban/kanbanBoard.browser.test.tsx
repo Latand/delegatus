@@ -43,6 +43,46 @@ type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
+describe("shipped role defaults rendered evidence", () => {
+  browserTest("default xhigh rows keep their chosen effort without a downgrade nudge in every locale and layout", async () => {
+    const out = path.resolve(".artifacts/role-defaults");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1280, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=role-defaults&mapping=1`, { width, height: 844 }, "light", locale, "reduce", width === 390);
+        try {
+          await page.locator('[data-mapping-row="reviewer"]').waitFor();
+          await page.locator('[data-mapping-group="rare"] > button').click();
+          const rows: Record<string, unknown>[] = [];
+          expect(await page.locator("[data-mapping-nudge]").count()).toBe(0);
+          expect(await page.locator("[data-mapping-reset]").count()).toBe(0);
+          expect(await page.locator("[data-mapping-row]").count()).toBe(16);
+          for (const id of ["reviewer", "architect", "prod-auditor"]) {
+            const row = page.locator(`[data-mapping-row="${id}"]`);
+            await row.scrollIntoViewIfNeeded();
+            const effort = await row.locator("select").nth(1).inputValue();
+            const cost = await row.locator("[data-cost-class]").getAttribute("data-cost-class");
+            expect(effort).toBe("xhigh");
+            expect(cost).toBe("very-heavy");
+            expect(await row.locator("[data-mapping-nudge]").count()).toBe(0);
+            await page.screenshot({ path: path.join(out, `${locale}-${width}-${id}.png`) });
+            rows.push({ id, effort, cost, nudge: false });
+          }
+          const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+          expect(overflow).toBeFalse();
+          expect(pageErrors).toEqual([]);
+          cases.push({ locale, width, rows, overflow, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/role-defaults", { recursive: true });
+      fs.writeFileSync("evidence/role-defaults/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
 describe("linked boards M3 remote agents", () => {
   browserTest("an unbound remote agent remains visible in an empty phone Inbox", async () => {
     const out = path.resolve(".artifacts/linked-boards-m3-empty-inbox");

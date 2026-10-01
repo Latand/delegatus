@@ -17,7 +17,7 @@ export const BUILDER_DOCS_CONFIG: RoleConfig = { engine: "claude", model: "claud
 export const BUILDER_APPLY_FIXES_CONFIG: RoleConfig = { engine: "codex", model: "gpt-6-luna", effort: "high" };
 export const BUILDER_FRONTEND_FIXES_CONFIG: RoleConfig = { engine: "claude", model: "claude-sonnet-5-5", effort: "high" };
 export const BUILDER_DOCS_FIXES_CONFIG: RoleConfig = { engine: "claude", model: "claude-sonnet-5-5", effort: "high" };
-/* Astra does not review trivial diffs; Luna is the Codex reviewer of the light
+/* Luna is the Codex reviewer of the light
    class, and a Claude install's row is Sonnet 5.5 (equivalents.ts). */
 export const REVIEWER_TRIVIAL_CONFIG: RoleConfig = { engine: "codex", model: "gpt-6-luna", effort: "high" };
 

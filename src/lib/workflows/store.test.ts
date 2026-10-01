@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { AgentRegistry } from "@/lib/agent/registry";
-import { CODEX_ASTRA_MODEL } from "@/lib/agent/models";
+import { CODEX_GPT61_SOL_MODEL } from "@/lib/agent/models";
 import { saveRoleOverrides } from "@/lib/roles/store";
 
 /* Keep every workflow-store side effect inside this file's sandbox. */
@@ -115,15 +115,15 @@ test("normalizeTemplate rejects an invalid stage list", () => {
 test("workflow role references resolve to a frozen effective config", () => {
   expect(roleConfigFromReference({ role: "builder", roleParams: { mode: "tdd" } })).toEqual({
     engine: "codex",
-    model: "gpt-6-astra",
-    effort: "medium",
+    model: "gpt-6.1-sol",
+    effort: "high",
   });
   const template = normalizeTemplate({ name: "role template", stages: [
     { kind: "implement", role: "builder", roleParams: { mode: "plain" }, scope: "Backend/API" },
     { kind: "review-loop", role: "reviewer", roleParams: { diffSource: "main...HEAD", lens: "all" } },
   ] });
-  expect(template?.stages[0]).toMatchObject({ agent: { model: "gpt-6-astra", effort: "medium" } });
-  expect(template?.stages[1]).toMatchObject({ reviewer: { model: "gpt-6-astra", effort: "xhigh" } });
+  expect(template?.stages[0]).toMatchObject({ agent: { model: "gpt-6.1-sol", effort: "high" } });
+  expect(template?.stages[1]).toMatchObject({ reviewer: { model: "gpt-6.1-sol", effort: "xhigh" } });
 });
 
 test("templates seed the canonical fullstack pipeline on first load", () => {
@@ -131,12 +131,12 @@ test("templates seed the canonical fullstack pipeline on first load", () => {
   expect(templates.map((template) => template.name)).toContain("fullstack");
   const fullstack = templates.find((template) => template.name === "fullstack")!;
   expect(fullstack.stages.at(-1)?.kind).toBe("review-loop");
-  expect(fullstack.stages[0]?.kind === "implement" && fullstack.stages[0].agent).toMatchObject({ model: "gpt-6-astra", effort: "medium" });
+  expect(fullstack.stages[0]?.kind === "implement" && fullstack.stages[0].agent).toMatchObject({ model: "gpt-6.1-sol", effort: "high" });
   expect(fullstack.stages[1]?.kind === "implement" && fullstack.stages[1].agent).toEqual(roleConfigFromReference({ role: "builder", roleParams: { mode: "plain", domain: "frontend" } })!);
   const review = fullstack.stages.at(-1)!;
   expect(review).toMatchObject({ roundLimit: 3 });
-  expect(review.kind === "review-loop" && review.reviewer.model).toBe("gpt-6-astra");
-  expect(templates.map((template) => template.name)).toContain("Astra medium → Astra xhigh review");
+  expect(review.kind === "review-loop" && review.reviewer.model).toBe("gpt-6.1-sol");
+  expect(templates.map((template) => template.name)).toContain("Builder → Reviewer");
 });
 
 test("saved legacy fullstack definition retains its selected configs", () => {
@@ -188,9 +188,9 @@ test("saved workflow seeds and unmarked same-name edits retain their selections"
   const refreshed = structuredClone(first);
   const refreshedStage = refreshed[0]!.stages[0]!;
   if (refreshedStage.kind !== "implement") throw new Error("expected implement stage");
-  refreshedStage.agent.effort = "high";
+  refreshedStage.agent.effort = "medium";
   const merged = mergeSeededTemplates(first, refreshed);
-  expect(merged[0]!.stages[0]).toMatchObject({ agent: { effort: "medium" } });
+  expect(merged[0]!.stages[0]).toMatchObject({ agent: { effort: "high" } });
 
   const custom = structuredClone(first[0]!);
   delete custom.managed;
@@ -216,8 +216,8 @@ test("template seeds fall back to the role default when a saved builder override
     const fullstack = seededTemplatesFromRoles().find((template) => template.name === "fullstack")!;
     expect(fullstack.stages[0]?.kind === "implement" && fullstack.stages[0].agent).toEqual({
       engine: "codex",
-      model: CODEX_ASTRA_MODEL,
-      effort: "medium",
+      model: CODEX_GPT61_SOL_MODEL,
+      effort: "high",
     });
   } finally {
     if (previousState === undefined) delete process.env.LLV_STATE_DIR;

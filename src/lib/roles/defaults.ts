@@ -1,4 +1,4 @@
-import { CODEX_GPT61_SOL_MODEL, CODEX_ASTRA_MODEL, CODEX_TERRA_MODEL } from "@/lib/agent/models";
+import { CODEX_GPT61_SOL_MODEL, CODEX_GPT6_LUNA_MODEL } from "@/lib/agent/models";
 
 import type { RoleDefinition, RoleParameter } from "./types";
 
@@ -152,7 +152,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     id: "reviewer",
     name: "Reviewer",
     description: "Reviews a code diff and returns severity-ranked evidence-backed findings. High per lane for risky backend diffs.",
-    config: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "xhigh" },
+    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "xhigh" },
     parameters: [
       { key: "diffSource", label: "Diff source", description: "Pull request, branch range or commit to review; a pipeline stage reviews its own worktree when this is empty.", kind: "text", required: true },
       { key: "lens", label: "Lens", description: "Review lens.", kind: "select", options: ["correctness", "over-engineering", "silent-failure", "test-coverage", "scope", "prod-ops", "standards+spec", "code-smells", "all"] },
@@ -168,7 +168,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     id: "verifier",
     name: "Verifier",
     description: "Tests supplied hypotheses and returns a per-claim evidence verdict.",
-    config: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "high" },
+    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
     parameters: [
       { key: "claims", label: "Claims", description: "Hypotheses to confirm or refute.", kind: "text", required: true },
     ],
@@ -180,7 +180,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     id: "builder",
     name: "Builder",
     description: "Writes product code for a scoped brief.",
-    config: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "medium" },
+    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
     parameters: [
       { key: "mode", label: "Mode", description: "Implementation discipline. apply-fixes: a fix round, whose brief is a list of findings.", kind: "select", options: ["plain", "apply-fixes", "tdd", "diagnose", "prototype", "merge-resolve"] },
       { key: "domain", label: "Domain", description: "Product domain for the implementation. docs is README, docs and public text, which stays on Claude.", kind: "select", options: ["general", "frontend", "docs"] },
@@ -194,7 +194,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     id: "architect",
     name: "Architect",
     description: "Produces an evidence-grounded design without product edits. claude/fable/high per lane for the largest cross-cutting designs.",
-    config: { engine: "claude", model: "opus", effort: "high" },
+    config: { engine: "claude", model: "opus", effort: "xhigh" },
     parameters: [
       { key: "mode", label: "Mode", description: "Architecture output mode.", kind: "select", options: ["design", "spec", "architecture-audit"] },
     ],
@@ -206,7 +206,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     id: "cleaner",
     name: "Cleaner",
     description: "Safely recovers a dirty checkout under a backup contract.",
-    config: { engine: "codex", model: CODEX_TERRA_MODEL, effort: "low" },
+    config: { engine: "codex", model: CODEX_GPT6_LUNA_MODEL, effort: "medium" },
     parameters: [],
     promptScaffold: `You are a Cleaner. Classify what is dirty in the checkout, back up anything recoverable before each destructive step, and keep sibling worktrees and user data untouched. Report the exact recovery actions and the resulting state. Verdict: pass when the checkout is in the state the brief asks for; needs_decision before any destructive step the brief does not approve. ${SHARED_RULES}`,
     safetyFences: ["Create a backup before each destructive operation.", "Sibling worktrees and user data remain untouched without explicit operator approval."],
@@ -216,7 +216,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     id: "prod-auditor",
     name: "Prod-auditor",
     description: "Performs a read-only evidence-backed production investigation.",
-    config: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "high" },
+    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "xhigh" },
     parameters: [
       { key: "questions", label: "Questions", description: "Production questions to investigate.", kind: "text", required: true },
     ],
@@ -230,7 +230,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     /* agent-prompt-contract.md §2.10 B: no topology is assumed, since the
        project may have no second instance to switch to. */
     description: "Plans a production release and stops for approval before each mutating step.",
-    config: { engine: "codex", model: CODEX_TERRA_MODEL, effort: "medium" },
+    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "medium" },
     parameters: [
       { key: "sha", label: "Merged SHA", description: "Merged commit SHA to deploy.", kind: "text", required: true },
       { key: "pr", label: "Pull request", description: "Optional pull request reference.", kind: "text" },
