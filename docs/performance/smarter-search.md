@@ -66,9 +66,11 @@ The baseline preserves v4's exact AND and newest body collapse. Its recall
 counts distinct conversations in first-occurrence order, as the design did.
 
 Run every benchmark, replay and large-fixture test under a hard memory cap:
-`systemd-run --user --scope -p MemoryMax=12G -p MemorySwapMax=0 -- flock /var/tmp/llv-heavy-gate.lock <command>`.
+`systemd-run --user --scope -p MemoryMax=8G -p MemorySwapMax=0 -- flock /var/tmp/llv-heavy-gate.lock <command>`.
 Use a private `LLV_STATE_DIR` and a temporary root outside operator state.
 Measure a small slice's peak RSS before expanding a workload.
+For stage checks, set `TMPDIR` to the private scratch root too: an inherited
+temporary directory inside operator state is correctly refused by replay guards.
 
 ## Response budget and paging
 
@@ -127,16 +129,41 @@ Its production worker migrates a private v4 fixture to v5, preserves message
 IDs, hashes and FTS rows, creates vocabulary/indexes, and restores complete
 ranked coverage. Failed worker exits are reported and later searches retry.
 
-## Replay status
+## Real-corpus replay
 
 The previous reported 2.6% strong-zero result used a one-word retry that
 changed the coverage denominator. It is invalid as evidence for the pinned
-8% acceptance threshold and is withdrawn. Current strong-zero and opened-hit
-recall require a new seeded 1,000-query replay with the unchanged coverage
-criterion on a private offline copy of the recorded corpus and calls.
-That input is unavailable in this checkout; live index/transcript access is
-excluded from this fix round. Invented-call smoke replay and replay unit
-checks cannot substitute for the real-corpus acceptance measurement.
+8% acceptance threshold and is withdrawn.
+
+The replacement replay ran on 2026-10-02 against a separate scratch copy of
+the supplied consistent offline snapshot. Recorded calls were read from 479
+local transcripts, bounded by the snapshot's recorded file sizes; no files
+were unavailable. The seeded sample contains 1,000 of 2,477 distinct queries
+since 2026-08-27. Each query retains the historical time and issuing-transcript
+exclusion fences. No query text or transcript content is published.
+
+| Result | Count | Rate |
+| --- | ---: | ---: |
+| Baseline zero | 613 | 61.3% |
+| Revised strong | 879 | 87.9% |
+| Revised weak only | 53 | 5.3% |
+| Revised zero | 68 | 6.8% |
+| Revised strong-zero (weak or zero) | 121 | 12.1% |
+
+The unchanged 60% retained-unit coverage criterion gives **12.1% strong-zero,
+above the pinned 8% acceptance threshold**. This replay does not establish
+that acceptance gate. Among 300 recorded search/open pairs, opened-transcript
+top-6 count improves from 34 to 42 (11.3% to 14.0%), satisfying its baseline
+comparison. Query lengths are 174 one-word, 211 two-word, 309 three-to-four-word,
+242 five-to-seven-word and 64 longer queries.
+
+Revised latency p50/p95/max is 5.33/16.95/36.26 ms; baseline p50/p95 is
+0.19/0.49 ms. First search takes 7.27 ms and its event-loop timer fires after
+7.34 ms; background readiness is observed after 59.19 ms. Peak RSS is
+177,088 KiB (173 MiB). Extraction, replay and measurement run under the hard
+8 GiB scope with swap disabled and the shared heavy-work lock. The cap is
+not reached; the earlier reported 125 GB OOM remains unattributed. The live
+index is never opened. Private scratch inputs are deleted after verification.
 
 ## Review-fix checks
 
