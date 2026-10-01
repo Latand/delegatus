@@ -3,6 +3,7 @@ import path from "node:path";
 import { execFileSync, spawn, type ChildProcess, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { procBackend } from "@/lib/proc";
+import { linuxBackend } from "@/lib/proc/linux";
 import { descendantPids, parsePsMemory } from "@/lib/proc/memory";
 
 import { GIB, type AgentMemoryKill, type HostMemoryState } from "./agentMemoryState";
@@ -122,10 +123,12 @@ interface CellPorts {
   watch?: typeof fs.watch;
   sample?: (pid: number) => MemorySample[];
   identity?: (pid: number) => string | null;
+  readPpid?: (pid: number) => number | null;
   kill?: (pid: number) => void;
 }
 const watchdogCells = new Set<AgentMemoryCell>();
 let watchdogTimer: ReturnType<typeof setInterval> | null = null;
+let portableWatchdogPids = new Set<number>();
 function linuxTree(root: number): number[] {
   const seen = new Set<number>(), stack = [root];
   while (stack.length) {
@@ -142,27 +145,50 @@ function linuxTree(root: number): number[] {
   }
   return [...seen];
 }
-function sampleTrees(roots: number[]): Map<number, MemorySample[]> {
+/** Re-walk ancestry after discovery; every link must still have its captured start identity. */
+function verifiedTreeMember(root: number, pid: number, identities: Map<number, string | null>,
+  identity = procBackend.processIdentity, readPpid = linuxBackend.readPpid): boolean {
+  const rootIdentity = identities.get(root);
+  if (!rootIdentity || identity(root) !== rootIdentity) return false;
+  const seen = new Set<number>();
+  while (pid !== root) {
+    if (seen.has(pid)) return false;
+    seen.add(pid);
+    const expected = identities.get(pid);
+    if (!expected || identity(pid) !== expected) return false;
+    const parent = readPpid(pid);
+    if (parent === null || identity(pid) !== expected) return false;
+    pid = parent;
+  }
+  return identity(root) === rootIdentity;
+}
+function sampleTrees(roots: number[], platform: NodeJS.Platform): Map<number, MemorySample[]> {
   const result = new Map<number, MemorySample[]>();
-  if (process.platform === "linux") {
+  if (platform === "linux") {
     for (const root of roots) {
       const pids = linuxTree(root);
       const identities = new Map(pids.map((pid) => [pid, procBackend.processIdentity(pid)]));
       const memory = procBackend.processMemory(pids);
       result.set(root, pids.flatMap((pid) => {
         const identity = identities.get(pid), rss = memory.get(pid)?.rssBytes;
-        return identity && rss !== undefined && procBackend.processIdentity(pid) === identity ? [{ pid, identity, rss, name: read(`/proc/${pid}/comm`).trim() || null }] : [];
+        return identity && rss !== undefined && verifiedTreeMember(root, pid, identities) ? [{ pid, identity, rss, name: read(`/proc/${pid}/comm`).trim() || null }] : [];
       }));
     }
   } else {
+    // Prior ps candidates let us capture identities before this tick's single ps.
+    // New descendants enroll on the next tick; no cached backend ancestry authorizes them.
+    const identities = new Map([...new Set([...roots, ...portableWatchdogPids])]
+      .map((pid) => [pid, procBackend.processIdentity(pid)]));
     let text: string;
     try { text = run("ps", ["-axo", "pid=,ppid=,rss="]); } catch { return result; }
     const ppids = new Map<number, number>();
     const rows = text.split("\n").flatMap((line) => { const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s*$/.exec(line); if (!m) return []; ppids.set(Number(m[1]), Number(m[2])); return [`${m[1]} ${m[3]}`]; });
     const memory = parsePsMemory(rows.join("\n"));
+    portableWatchdogPids = new Set(roots.flatMap((root) => descendantPids(root, ppids)));
     for (const root of roots) result.set(root, descendantPids(root, ppids).flatMap((pid) => {
-      const identity = procBackend.processIdentity(pid), rss = memory.get(pid);
-      return identity && rss !== undefined ? [{ pid, identity, rss, name: null }] : [];
+      const identity = identities.get(pid), rss = memory.get(pid);
+      return identity && rss !== undefined && verifiedTreeMember(root, pid, identities, procBackend.processIdentity, (pid) => ppids.get(pid) ?? null)
+        ? [{ pid, identity, rss, name: null }] : [];
     }));
   }
   return result;
@@ -170,7 +196,11 @@ function sampleTrees(roots: number[]): Map<number, MemorySample[]> {
 /** One timer samples all trees. The injected samples keep the kill seam testable without touching live PIDs. */
 export function tickAgentMemoryWatchdogs(cells: Iterable<AgentMemoryCell> = watchdogCells): void {
   const list = [...cells];
-  const samples = sampleTrees(list.filter((cell) => !cell.hasInjectedSample).map((cell) => cell.pid).filter((pid): pid is number => pid !== null));
+  const samples = new Map<number, MemorySample[]>();
+  for (const platform of new Set(list.map((cell) => cell.plan.platform))) {
+    const roots = list.filter((cell) => cell.plan.platform === platform && !cell.hasInjectedSample).map((cell) => cell.pid).filter((pid): pid is number => pid !== null);
+    if (roots.length) for (const [root, tree] of sampleTrees(roots, platform)) samples.set(root, tree);
+  }
   const all: { cell: AgentMemoryCell; sample: MemorySample }[] = [];
   for (const cell of list) {
     const tree = cell.sample(samples);
@@ -211,6 +241,7 @@ export class AgentMemoryCell {
   pid: number | null = null;
   readonly killedThisTick = new Set<number>();
   get hasInjectedSample() { return Boolean(this.ports.sample); }
+  get fatalMemoryExit(): boolean { return this.exitSettled && this.state.lastKill?.fatal === true; }
   constructor(readonly plan: AgentMemoryPlan, private readonly ports: CellPorts = {}) {
     this.state = { mechanism: plan.mechanism, limitBytes: plan.limitBytes, unit: plan.unit, kills: 0, lastKill: null };
   }
@@ -302,10 +333,10 @@ export class AgentMemoryCell {
     this.previous = current;
     this.sliceOom = sliceOom;
   }
-  private recordKill(limit: AgentMemoryKill["limit"], fatal: boolean, processName: string | null, count = 1): void {
+  private recordKill(limit: AgentMemoryKill["limit"], fatal: boolean, processName: string | null, count = 1, notify = true): void {
     this.state.kills += count;
     this.state.lastKill = { at: new Date((this.ports.now ?? Date.now)()).toISOString(), limitBytes: limit === "agent" ? this.plan.limitBytes : limit === "shared" ? this.plan.budgetBytes : this.plan.totalBytes, limit, fatal, process: processName };
-    this.notify();
+    if (notify) this.notify();
   }
   sample(samples: Map<number, MemorySample[]>): MemorySample[] {
     if (this.pid === null || this.closed) return [];
@@ -316,14 +347,32 @@ export class AgentMemoryCell {
     if (!identity) return [];
     if (!this.rootIdentity && ownedChild()) this.rootIdentity = identity;
     if (identity !== this.rootIdentity) return [];
-    this.lastSample = this.ports.sample?.(this.pid) ?? samples.get(this.pid) ?? [];
+    const tree = this.ports.sample?.(this.pid) ?? samples.get(this.pid) ?? [];
+    const identities = new Map(tree.map((sample) => [sample.pid, sample.identity]));
+    identities.set(this.pid, this.rootIdentity!);
+    this.lastSample = tree.filter((sample) => this.plan.platform === "linux"
+      ? verifiedTreeMember(this.pid!, sample.pid, identities, this.ports.identity ?? procBackend.processIdentity, this.ports.readPpid ?? linuxBackend.readPpid)
+      : (this.ports.identity ?? procBackend.processIdentity)(sample.pid) === sample.identity);
     return this.lastSample;
+  }
+  private canSignal(victim: MemorySample): boolean {
+    if (this.pid === null || !this.rootIdentity || this.closed) return false;
+    const identity = this.ports.identity ?? procBackend.processIdentity;
+    if (this.plan.platform !== "linux") return victim.pid === this.pid && victim.identity === this.rootIdentity && identity(this.pid) === this.rootIdentity;
+    const identities = new Map(this.lastSample.map((sample) => [sample.pid, sample.identity]));
+    identities.set(this.pid, this.rootIdentity);
+    return identities.get(victim.pid) === victim.identity && verifiedTreeMember(this.pid, victim.pid, identities, identity, this.ports.readPpid ?? linuxBackend.readPpid);
   }
   killSample(victim: MemorySample, limit: AgentMemoryKill["limit"]): void {
     if ((this.ports.identity ?? procBackend.processIdentity)(victim.pid) !== victim.identity) return;
-    this.recordKill(limit, victim.pid === this.pid, victim.name);
-    this.killedThisTick.add(victim.pid);
-    try { (this.ports.kill ?? ((pid) => process.kill(pid, "SIGKILL")))(victim.pid); } catch { /* The sampled process may have already exited. */ }
+    // Cached macOS ancestry supplies evidence, never permission to signal a descendant.
+    const target = this.plan.platform === "linux" ? victim : this.lastSample.find((sample) => sample.pid === this.pid);
+    if (!target || this.killedThisTick.has(target.pid) || !this.canSignal(target)) return;
+    // Do not run listeners between the final ownership check and the signal.
+    this.recordKill(limit, target.pid === this.pid, victim.name, 1, false);
+    this.killedThisTick.add(target.pid);
+    try { (this.ports.kill ?? ((pid) => process.kill(pid, "SIGKILL")))(target.pid); } catch { /* The sampled process may have already exited. */ }
+    this.notify();
   }
   settleExit({ expected }: { expected: boolean }): AgentMemoryKill | null {
     if (this.exitSettled) return this.state.lastKill;
@@ -343,7 +392,7 @@ export class AgentMemoryCell {
     if (this.plan.mechanism === "scope" && this.plan.unit) {
       try { (this.ports.runner ?? run)("systemctl", ["--user", "kill", "--signal=SIGKILL", this.plan.unit]); } catch { /* An empty scope has already been collected. */ }
     } else {
-      for (const sample of this.lastSample) if ((this.ports.identity ?? procBackend.processIdentity)(sample.pid) === sample.identity) {
+      for (const sample of this.lastSample) if (this.canSignal(sample)) {
         try { (this.ports.kill ?? ((pid) => process.kill(pid, "SIGKILL")))(sample.pid); } catch { /* Already gone. */ }
       }
     }
@@ -356,7 +405,11 @@ export class AgentMemoryCell {
     if (this.eventsFd !== null) { fs.closeSync(this.eventsFd); this.eventsFd = null; }
     if (this.poll) clearInterval(this.poll); this.poll = null;
     watchdogCells.delete(this);
-    if (!watchdogCells.size && watchdogTimer) { clearInterval(watchdogTimer); watchdogTimer = null; }
+    if (!watchdogCells.size) {
+      if (watchdogTimer) clearInterval(watchdogTimer);
+      watchdogTimer = null;
+      portableWatchdogPids.clear();
+    }
   }
 }
 export function agentMemoryHeadroom(liveAgents: number, priorLimitBytes: number): { availableBytes: number; requiredBytes: number } | null {

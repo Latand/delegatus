@@ -2951,7 +2951,7 @@ export class CodexAppServerHost implements EngineHost {
       this.terminationTimer = null;
     }
     try {
-      if (this.childProcessOwnership() === "gone") {
+      if (!this.memoryCell?.fatalMemoryExit && this.childProcessOwnership() === "gone") {
         signalProcessGroup(this.child.pid, "SIGKILL", this.signalProcess);
       }
     } finally {
@@ -2961,6 +2961,18 @@ export class CodexAppServerHost implements EngineHost {
   }
 
   private startTermination(): boolean {
+    if (this.memoryCell?.fatalMemoryExit) {
+      if (this.terminationTimer) clearTimeout(this.terminationTimer);
+      this.terminationTimer = null;
+      this.resolveTermination?.();
+      this.resolveTermination = null;
+      this.terminationPromise = Promise.resolve();
+      for (const stream of [this.child.stdin, this.child.stdout, this.child.stderr]) stream.destroy();
+      this.reaped = true;
+      this.resolveReaped();
+      this.terminationStarted = true;
+      return true;
+    }
     if (this.terminationStarted) return true;
     try { this.child.stdin.end(); } catch { /* already closed */ }
     const ownership = this.childProcessOwnership();
@@ -2996,6 +3008,8 @@ export class CodexAppServerHost implements EngineHost {
   }
 
   private signalTermination(signal: NodeJS.Signals): TerminationSignalResult {
+    // Fatal OOM cleanup is owned by the cell, without legacy group signals.
+    if (this.memoryCell?.fatalMemoryExit) return "attempted";
     const ownership = this.childProcessOwnership();
     if (ownership === "gone") {
       signalProcessGroup(this.child.pid, signal, this.signalProcess);

@@ -1,4 +1,4 @@
-import { fakeAgentMemory } from "./fixtures/agentMemory";
+import { fakeAgentMemory, fakeHostMemory } from "./fixtures/agentMemory";
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
@@ -624,4 +624,28 @@ test("forced scope preserves Copilot admission diagnostics before initialize", a
   };
   try { await expect(CopilotAcpHost.start(config)).rejects.toThrow("Failed to create bus connection: Connection refused"); }
   finally { memory.dispose(); }
+});
+
+for (const mechanism of ["scope", "watchdog"] as const) for (const platform of ["linux", "darwin"] as const) for (const reused of [false, true]) test(`Copilot fatal ${mechanism} exit on ${platform} skips group cleanup after root ${reused ? "reuse" : "disappearance"}`, async () => {
+  const child = new FakeCopilot();
+  const memory = fakeHostMemory(child.pid, platform, mechanism);
+  const groupSignals: number[] = [];
+  const host = await CopilotAcpHost.start(options(child, { memoryCell: memory.cell, processIdentity: memory.processIdentity,
+    shutdownGraceMs: 2, signalProcess: (pid) => { groupSignals.push(pid); } }));
+  try {
+    memory.kill();
+    memory.rootExit(reused);
+    child.signalCode = "SIGKILL";
+    child.emit("exit", null, "SIGKILL");
+    expect((await host.health()).memory?.lastKill?.fatal).toBe(true);
+    await host.release();
+    await Bun.sleep(5);
+    child.emit("close", null, "SIGKILL");
+    expect(memory.signals).toEqual(mechanism === "watchdog" ? [child.pid] : []);
+    expect(memory.scopeReaps).toHaveLength(mechanism === "scope" ? 1 : 0);
+    expect(groupSignals).toEqual([]);
+    expect(child.signals).toEqual([]);
+    expect(child.stdout.destroyed).toBe(true);
+    expect(child.stderr.destroyed).toBe(true);
+  } finally { child.emit("close", null, "SIGKILL"); await host.release(); memory.dispose(); }
 });

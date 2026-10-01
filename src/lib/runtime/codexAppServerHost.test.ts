@@ -1,4 +1,4 @@
-import { fakeAgentMemory } from "./fixtures/agentMemory";
+import { fakeAgentMemory, fakeHostMemory } from "./fixtures/agentMemory";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -5547,4 +5547,29 @@ test("auto scope admission failure is explicit and forced scope keeps the runner
       expect(server.requests.some(request => request.method === "turn/start")).toBeFalse();
     } finally { cell.close(); }
   }
+});
+
+for (const mechanism of ["scope", "watchdog"] as const) for (const platform of ["linux", "darwin"] as const) for (const reused of [false, true]) test(`Codex fatal ${mechanism} exit on ${platform} skips group cleanup after root ${reused ? "reuse" : "disappearance"}`, async () => {
+  const child = new FakeAppServer("watchdog-thread");
+  const memory = fakeHostMemory(child.pid, platform, mechanism);
+  const groupSignals: number[] = [];
+  const host = await CodexAppServerHost.start({ cwd: "/repo", mcpServers: [], eventStore: new MemoryEventStore(),
+    memoryCell: memory.cell, spawnProcess: fakeSpawn(child), processIdentity: memory.processIdentity, pidAlive: memory.pidAlive,
+    shutdownGraceMs: 2, signalProcess: (pid) => { groupSignals.push(pid); } });
+  try {
+    memory.kill();
+    memory.rootExit(reused);
+    Object.assign(child, { signalCode: "SIGKILL" });
+    child.emit("exit", null, "SIGKILL");
+    expect((await host.health()).memory?.lastKill?.fatal).toBe(true);
+    await host.release();
+    await Bun.sleep(5);
+    child.emit("close", null, "SIGKILL");
+    expect(memory.signals).toEqual(mechanism === "watchdog" ? [child.pid] : []);
+    expect(memory.scopeReaps).toHaveLength(mechanism === "scope" ? 1 : 0);
+    expect(groupSignals).toEqual([]);
+    expect(child.signals).toEqual([]);
+    expect(child.stdout.destroyed).toBe(true);
+    expect(child.stderr.destroyed).toBe(true);
+  } finally { child.emit("close", null, "SIGKILL"); await host.release(); memory.dispose(); }
 });

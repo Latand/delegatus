@@ -1,4 +1,4 @@
-import { fakeAgentMemory } from "./fixtures/agentMemory";
+import { fakeAgentMemory, fakeHostMemory } from "./fixtures/agentMemory";
 import { EventEmitter } from "node:events";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
@@ -2615,4 +2615,30 @@ test("forced scope retains Claude admission error during initial delivery", asyn
     await expect(delivery).rejects.toThrow("Failed to create bus connection: Connection refused");
     expect((await host.health()).status).toBe("dead");
   } finally { await host.release(); memory.dispose(); }
+});
+
+for (const mechanism of ["scope", "watchdog"] as const) for (const platform of ["linux", "darwin"] as const) for (const reused of [false, true]) test(`Claude fatal ${mechanism} exit on ${platform} skips group cleanup after root ${reused ? "reuse" : "disappearance"}`, async () => {
+  const child = new FakeClaude(new RecordingDeliveryLedger());
+  const memory = fakeHostMemory(child.pid, platform, mechanism);
+  const groupSignals: number[] = [];
+  const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", mcpServers: [], eventStore: new MemoryEventStore(), deliveryLedger: new RecordingDeliveryLedger(),
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    memoryCell: memory.cell, spawnProcess: fakeSpawn(child, {}), processIdentity: memory.processIdentity,
+    shutdownGraceMs: 2, signalProcess: (pid) => { groupSignals.push(pid); } });
+  try {
+    memory.kill();
+    memory.rootExit(reused);
+    Object.assign(child, { signalCode: "SIGKILL" });
+    child.emit("exit", null, "SIGKILL");
+    expect((await host.health()).memory?.lastKill?.fatal).toBe(true);
+    await host.release();
+    await Bun.sleep(5);
+    child.emit("close", null, "SIGKILL");
+    expect(memory.signals).toEqual(mechanism === "watchdog" ? [child.pid] : []);
+    expect(memory.scopeReaps).toHaveLength(mechanism === "scope" ? 1 : 0);
+    expect(groupSignals).toEqual([]);
+    expect(child.signals).toEqual([]);
+    expect(child.stdout.destroyed).toBe(true);
+    expect(child.stderr.destroyed).toBe(true);
+  } finally { child.emit("close", null, "SIGKILL"); await host.release(); memory.dispose(); }
 });

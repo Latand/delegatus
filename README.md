@@ -670,9 +670,14 @@ applying the drop-in: the new launcher exits nonzero on Viewer SIGKILL or crash,
 so `Restart=on-failure` recovers the Viewer.
 
 Docker and macOS use an RSS watchdog with a shared two-second sampling interval.
-It kills the largest process in an over-budget agent tree, with a process-identity
-check. It can overshoot by one interval, misses descendants that double-fork out
-of the tree, does not cap swap, and cannot attribute a kernel OOM kill. Native
+On Linux it kills the largest process in an over-budget agent tree after checking
+its current ancestry and start identity. On macOS it records the over-limit
+descendant as evidence and stops only the identity-verified agent child; surviving
+tools may keep running, because cached ancestry cannot authorize descendant kills.
+New macOS descendants enroll on their second observation, so first enforcement
+can take up to four seconds. Later samples can overshoot by one two-second interval.
+The watchdog misses descendants that double-fork out of the tree, does not cap
+swap, and cannot attribute a kernel OOM kill. Native
 Windows leaves memory isolation off. `DELEGATUS_AGENT_MEMORY=off` is the escape
 hatch; forced `scope` fails the launch when the user manager cannot admit it.
 

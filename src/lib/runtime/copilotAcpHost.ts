@@ -1009,6 +1009,8 @@ export class CopilotAcpHost implements EngineHost {
   }
 
   private signalReleaseGroup(signal: NodeJS.Signals): boolean {
+    // The memory cell owns fatal OOM cleanup through its unit or verified tree.
+    if (this.memoryCell?.fatalMemoryExit) return true;
     const expected = this.releaseFence;
     if (expected) {
       const pid = this.child.pid;
@@ -1021,6 +1023,15 @@ export class CopilotAcpHost implements EngineHost {
   }
 
   private startTermination(): boolean {
+    if (this.memoryCell?.fatalMemoryExit) {
+      if (this.terminationTimer) clearTimeout(this.terminationTimer);
+      this.terminationTimer = null;
+      for (const stream of [this.child.stdin, this.child.stdout, this.child.stderr]) stream.destroy();
+      this.reaped = true;
+      this.resolveReaped();
+      this.terminationStarted = true;
+      return true;
+    }
     if (this.terminationStarted || this.reaped) return true;
     try { this.child.stdin.end(); } catch { /* already closed */ }
     if (!this.signalReleaseGroup("SIGTERM")) return false;
