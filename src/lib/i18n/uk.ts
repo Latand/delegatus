@@ -1,4 +1,4 @@
-import type { Message } from ".";
+import type { Message } from "./core";
 import type { en } from "./en";
 
 /* Ukrainian mirror of en.ts. The `Record<keyof typeof en, …>` annotation fails

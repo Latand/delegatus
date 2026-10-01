@@ -1,4 +1,4 @@
-import type { Dictionary } from ".";
+import type { Dictionary } from "./core";
 
 /* English is the default locale. Keys are grouped by feature namespace.
    Plural entries use Intl.LDMLPluralRule forms; {name} placeholders are
