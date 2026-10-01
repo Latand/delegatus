@@ -120,6 +120,15 @@ The generator emits a status and count. Raw labels stay out of its diagnostics
 and the generated catalog. Preserve per-value policy in the private input so
 regeneration retains it.
 
+The committed catalog is the source of truth for the `exactOnly` policy added
+in #2391. Its entry was selected by fingerprint because the original raw input
+was generated elsewhere and is unavailable locally. Before the next regeneration
+from a raw file, add `exactOnly: true` to that value's JSON line and use
+`--json-lines`, as shown above. Never copy the raw value into public evidence.
+Regenerating from an unmarked line removes the flag and restores compact
+matching. Review the generated catalog diff before committing: retain each
+existing `exactOnly: true` entry unless its policy change was explicitly approved.
+
 ## Authenticated GitHub publication audit
 
 The `privacy-tracker-audit` workflow audits the event's issue or pull request
