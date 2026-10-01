@@ -16,10 +16,10 @@ export type KnownValue = { value: string; exactOnly?: boolean };
 export type KnownValueFingerprint = { length: number; sha256: string; exactOnly?: boolean };
 
 /** Legacy input has one label per line; JSON lines carry per-label policy. */
-export function parseKnownValues(input: string): KnownValue[] {
+export function parseKnownValues(input: string, jsonLines = false): KnownValue[] {
   return input.split(/\r?\n/).map((line) => {
     const value = line.trim();
-    if (!value.startsWith("{")) return { value };
+    if (!jsonLines || !value.startsWith("{")) return { value };
     const entry: unknown = JSON.parse(value);
     if (typeof entry !== "object" || entry === null
       || !("value" in entry) || typeof entry.value !== "string"
@@ -60,7 +60,7 @@ function generateCatalog(): void {
       if (outputMetadata.isSymbolicLink() || !outputMetadata.isFile()) throw new Error("unsafe output");
     }
     const fingerprints = new Map<string, KnownValueFingerprint>();
-    for (const entry of parseKnownValues(readFileSync(input, "utf8"))) {
+    for (const entry of parseKnownValues(readFileSync(input, "utf8"), arguments_.includes("--json-lines"))) {
       const fingerprint = knownValueFingerprint(entry);
       if (fingerprint) fingerprints.set(fingerprintKey(fingerprint), fingerprint);
     }

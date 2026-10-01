@@ -120,9 +120,12 @@ function readSafeRegularFile(path: string): Buffer {
 function loadKnownValues(): { error: boolean; fingerprints: KnownValueFingerprint[]; values: KnownValue[] } {
   let values: KnownValue[];
   try {
-    values = parseKnownValues(process.env.LLV_PRIVACY_KNOWN_VALUES ?? "");
+    const format = process.env.LLV_PRIVACY_KNOWN_VALUES_FORMAT ?? "plain";
+    if (format !== "plain" && format !== "jsonl") throw new Error("invalid known-value format");
+    const jsonLines = format === "jsonl";
+    values = parseKnownValues(process.env.LLV_PRIVACY_KNOWN_VALUES ?? "", jsonLines);
     const file = process.env.LLV_PRIVACY_KNOWN_VALUES_FILE;
-    if (file) values.push(...parseKnownValues(readSafeRegularFile(file).toString("utf8")));
+    if (file) values.push(...parseKnownValues(readSafeRegularFile(file).toString("utf8"), jsonLines));
   } catch {
     return { error: true, fingerprints: [], values: [] };
   }

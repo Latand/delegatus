@@ -102,14 +102,17 @@ For an invented compound, the line shape is:
 {"value":"freshwater","exactOnly":true}
 ```
 
-Both the generator and the gate's raw-value file/environment input read this
-format. Invalid policy types fail closed. If the same value is configured with
+Opt into JSON lines with the generator's `--json-lines` option and, for the
+gate's raw file/environment input, `LLV_PRIVACY_KNOWN_VALUES_FORMAT=jsonl`.
+The default `plain` mode preserves every legacy line, including JSON-looking
+labels. JSON-lines mode also accepts legacy lines alongside policy entries.
+Invalid formats and policy types fail closed. If the same value is configured with
 both policies, compact coverage remains active. Refresh the committed
 fingerprints after updating the private input:
 
 ```sh
 bun run privacy:fingerprints -- \
-  --input .privacy-known-values \
+  --json-lines --input .privacy-known-values \
   --output scripts/privacy-known-value-fingerprints.json
 ```
 

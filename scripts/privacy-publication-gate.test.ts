@@ -1169,6 +1169,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
               environment.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE = configuration;
             } else {
               const input = exactOnly ? JSON.stringify(entry) : value;
+              environment.LLV_PRIVACY_KNOWN_VALUES_FORMAT = exactOnly ? "jsonl" : "plain";
               if (source === "raw file") {
                 writeFileSync(configuration, input);
                 environment.LLV_PRIVACY_KNOWN_VALUES_FILE = configuration;
@@ -1262,6 +1263,25 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nknown_value: 1\n");
     });
 
+    test("preserves JSON-looking legacy values without format opt-in", () => {
+      const directory = mkdtempSync(join(tmpdir(), "llv-privacy-exact-"));
+      temporaryDirectories.push(directory);
+      const input = join(directory, "known.txt");
+      const output = join(directory, "catalog.json");
+      const publication = join(directory, "publication.md");
+      const legacyValue = `{${value}}`;
+      writeFileSync(input, legacyValue);
+      writeFileSync(publication, words.join(" "));
+      const raw = runGate([publication], { LLV_PRIVACY_KNOWN_VALUES: legacyValue,
+        LLV_PRIVACY_KNOWN_VALUES_FILE: "", LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: "",
+        LLV_PRIVACY_KNOWN_VALUES_FORMAT: "plain" });
+      expect(raw.stdout.toString()).toBe("PRIVACY GATE: FAIL\nknown_value: 1\n");
+      const generated = Bun.spawnSync({ cmd: [process.execPath,
+        join(import.meta.dir, "generate-privacy-known-value-fingerprints.ts"), "--input", input, "--output", output],
+        stdout: "pipe", stderr: "pipe" });
+      expect(generated.exitCode).toBe(0);
+    });
+
     test("generator preserves exactOnly and legacy entries", () => {
       const directory = mkdtempSync(join(tmpdir(), "llv-privacy-exact-"));
       temporaryDirectories.push(directory);
@@ -1269,7 +1289,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       const output = join(directory, "catalog.json");
       writeFileSync(input, `${JSON.stringify({ value, exactOnly: true })}\n${["fixture", "legacy"].join("-")}\n`);
       const result = Bun.spawnSync({ cmd: [process.execPath,
-        join(import.meta.dir, "generate-privacy-known-value-fingerprints.ts"), "--input", input, "--output", output],
+        join(import.meta.dir, "generate-privacy-known-value-fingerprints.ts"), "--input", input, "--output", output, "--json-lines"],
         stdout: "pipe", stderr: "pipe" });
       expect(result.exitCode).toBe(0);
       const catalog = JSON.parse(readFileSync(output, "utf8"));
