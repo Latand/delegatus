@@ -60,7 +60,7 @@ test("dialog scopes and the MCP search binding preserve newest-first pages durin
   };
   const bindings = viewerMcpBindings(undefined, { get: http, post: async () => ({}) });
   const read = async (mode: "user" | "everything" | "tool", cursor?: string | null): Promise<Page> => {
-    if (mode === "tool") return await bindings.search_transcripts({ query: "quartz", limit: 1, cursor }) as unknown as Page;
+    if (mode === "tool") return await bindings.search_transcripts({ query: "quartz", order: "newest", limit: 1, cursor }) as unknown as Page;
     const params = new URLSearchParams({ q: "quartz", limit: "1" });
     if (mode === "user") params.set("speaker", "user");
     if (cursor) params.set("cursor", cursor);
@@ -248,4 +248,22 @@ test("a transcript the catalog has no title for still returns a row", async () =
   const page = await (await GET(new Request("http://127.0.0.1/api/search/transcripts?q=amaranth"))).json() as Page;
 
   expect(page.items).toEqual([expect.objectContaining({ transcriptPath: transcript, title: null })]);
+});
+
+
+test("route stays newest by default and passes ranked conversation fields for an explicit order", async () => {
+  const transcript = path.join(sandbox, "ranked-route.jsonl");
+  fs.writeFileSync(transcript, ["cobalt lead", "quartz complement", ...Array(100).fill("mundane filler")].map((content, i) => JSON.stringify({ type: "user", timestamp: new Date((100 + i) * 1000).toISOString(), message: { content } })).join("\n") + "\n");
+  await indexTranscriptSources([{ path: transcript, project: "orion", engine: "claude", size: fs.statSync(transcript).size, mtimeMs: 1000 }]);
+  const url = "http://localhost/api/search/transcripts?q=cobalt+quartz";
+  const newest = await (await GET(new Request(url))).json();
+  expect(newest.order).toBe("newest");
+  expect(newest.items).toHaveLength(0);
+  const relevance = await (await GET(new Request(url + "&order=relevance&project=unknown"))).json();
+  expect(relevance.order).toBe("relevance");
+  expect(relevance.items[0].matched).toHaveLength(2);
+  expect(relevance.items[0].fragments).toHaveLength(1);
+  expect(relevance.items[0]).toHaveProperty("title");
+  expect(relevance.projectScope.resolved).toBeNull();
+  expect((await GET(new Request(url + "&order=other"))).status).toBe(400);
 });

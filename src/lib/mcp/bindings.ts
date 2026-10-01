@@ -2431,11 +2431,13 @@ async function searchTranscripts(
   if (!query) throw new Error("query is required");
   const project = text(args.project).trim();
   const cursor = text(args.cursor).trim();
-  const limit = Math.max(1, Math.min(100, integer(args.limit, 20)));
+  const order = args.order === "newest" ? "newest" : "relevance";
+  const limit = Math.max(1, Math.min(100, integer(args.limit, order === "relevance" ? 6 : 20)));
   const params = new URLSearchParams({ q: query });
   if (project) params.set("project", project);
   if (cursor) params.set("cursor", cursor);
   params.set("limit", String(limit));
+  params.set("order", order);
   const source = await readViewerControl(control, `/api/search/transcripts?${params}`);
   const stats = objectRecord(source.stats) ? source.stats : null;
   if (!Array.isArray(source.items)

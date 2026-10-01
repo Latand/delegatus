@@ -54,10 +54,13 @@ export async function GET(request: Request): Promise<Response> {
   if (!query) return Response.json({ error: "q is required" }, { status: 400 });
   const speaker = parseSpeaker(url.searchParams.get("speaker"));
   if (speaker === null) return Response.json({ error: "speaker must be user or assistant" }, { status: 400 });
+  const order = url.searchParams.get("order") ?? "newest";
+  if (order !== "newest" && order !== "relevance") return Response.json({ error: "order must be relevance or newest" }, { status: 400 });
   let page;
   try {
     page = searchTranscripts({
       query,
+      order,
       project: url.searchParams.get("project")?.trim() || undefined,
       speaker,
       cursor: url.searchParams.get("cursor"),

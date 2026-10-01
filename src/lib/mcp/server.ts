@@ -355,7 +355,7 @@ export const MCP_BOUNDED_NUMERIC_ARGS: Partial<Record<McpToolName, readonly McpB
     { path: ["maxChars"], ...BOT_MESSAGES_MAX_CHARS },
   ],
   search_transcripts: [
-    { path: ["limit"], min: 1, max: 100, fallback: 20 },
+    { path: ["limit"], min: 1, max: 100, fallback: 6 },
   ],
   get_conversation: [
     { path: ["maxRecords"], min: 1, max: 500, fallback: 100 },
@@ -458,7 +458,7 @@ export function normalizeBoundedMcpNumerics(
     if (spec.role !== undefined && args.role !== spec.role) continue;
     const input = valueAtPath(args, spec.path);
     if (input === undefined) continue;
-    const applied = boundedNumericValue(input, spec);
+    const applied = boundedNumericValue(input, toolName === "search_transcripts" && args.order === "newest" ? { ...spec, fallback: 20 } : spec);
     setValueAtPath(normalized, spec.path, applied);
     if (typeof input !== "number" || !Object.is(input, applied)) {
       clamped[spec.path.join(".")] = applied;
@@ -3044,7 +3044,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   link_task_to_pipeline: "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. Attach a board task to a conversation owned by a pipeline. A refusal raised before the link was admitted — the task store lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
   list_conversations: "List scanned Delegatus conversations with durable ids and transcript paths, compact titles by default, within a 12 KB answer budget. project/query filters run server-side. Follow nextCursor as cursor for the next page. compact:false retains full titles; get_conversation reads a full conversation.",
-  search_transcripts: "Search indexed user and assistant message bodies across every scanned transcript store, both engines and all accounts. Ask it \"has this been solved before?\" at the start of a task and whenever a problem appears: several phrasings, project-scoped first, then unscoped. Returns newest messages first, with deterministic ties; duplicate bodies use their newest occurrence and undated messages use their indexed file time. Returns match snippets with speaker, timestamp, transcript path and byte offset. Pass nextCursor unchanged to continue the same ordering while new messages are indexed. Read the surrounding turns by passing a hit's transcriptPath (and its timestamp as since) to conversation_messages; byteOffset and lineNumber pin the exact line. project is optional, and empty pages include corpus statistics. Queries never read transcript files.",
+  search_transcripts: "Search indexed user and assistant message bodies across engines and accounts. Ask it \"has this been solved before?\", using several phrasings, project-scoped then unscoped. Default relevance ranks conversations by query coverage and returns six conversations with up to three linked fragments each. Check matched, missing and interpretedAs. Copies fold into alsoIn. Open a hit with conversation_messages at transcriptPath and timestamp as since. order: newest returns matching messages newest first, requiring every query unit. byteOffset and lineNumber pin the exact line. Pass nextCursor unchanged to continue the snapshot. project accepts a key, repository name or path; an unrecognised value searches everywhere and projectScope says so. Queries read only the index, never transcript files.",
   get_conversation: "Read a conversation summary and its recent messages and tools. With tailLines, conversationId or selectedContext uses the bounded identity path, while transcriptPath uses the validated pinned reader; both return a bounded raw tail without a corpus scan. For normalized, filtered, paged messages use conversation_messages.",
   conversation_deliverability: "Read whether one conversation currently has a deliverable host from the durable registry record. An accepted resume stays synchronizing until the current generation records a claimed process; reclaimed, synchronizing, superseded, and unknown are distinct conditions.",
   conversation_messages: "Read one conversation newest-first as engine-normalized records; Claude and Codex return the same shape, while hook attachments and usage envelopes are omitted. Identity accepts conversationId, transcriptPath, or selectedContext and resolves through the same bounded paths as get_conversation. kinds is a non-empty subset of message | reasoning | tool_call | tool_result | trace (default message). roles is a non-empty subset of user | assistant | system | tool (default all). since is an inclusive ISO timestamp lower bound. limit clamps to 1..200 (default 20); maxChars clamps to 1..16000 (default 4000), and truncated marks cut text after secret redaction. Records are newest-first. Pass the opaque cursor unchanged with a fresh clientRequestId for each next-older page while hasMore is true; cursors are bound to the transcript and filters. A normal empty page returns records: []. File work is bounded by the page, so a 100 MB rollout is never parsed in full.",
@@ -3543,9 +3543,10 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   search_transcripts: z.object({
     clientRequestId: clientRequestIdSchema,
     query: z.string().trim().min(1).describe("Terms to match in indexed user and assistant message bodies."),
-    project: z.string().trim().min(1).optional().describe("Canonical project key. Omit to search every indexed project."),
+    project: z.string().trim().min(1).optional().describe("Project key, repository name, or path. Unknown or ambiguous values search every project and report the fallback."),
+    order: z.enum(["relevance", "newest"]).optional().describe("relevance (default): rank conversations by coverage, with linked fragments. newest: messages newest first, every unit required."),
     cursor: z.string().min(1).optional().describe("Opaque cursor returned by the preceding page for this query and project."),
-    limit: boundedNumericInput("search_transcripts", "limit"),
+    limit: boundedNumericInput("search_transcripts", "limit").describe("Integer 1..100; default 6 conversations for relevance, 20 messages for newest. Numeric strings coerce and out-of-range values clamp."),
   }).passthrough(),
   get_conversation: z.object({
     clientRequestId: clientRequestIdSchema,

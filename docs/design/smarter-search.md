@@ -216,10 +216,10 @@ adds:
 
 ```json
 {
-  "matched": ["telegram*", "login*", "mtproto", "api_id", "qr", "sign in"],
-  "missing": ["delegatu*"],
+  "matched": ["orion*", "login*", "client_id", "qr", "sign in"],
+  "missing": ["console*"],
   "fragments": [
-    { "snippet": "…talks to \u0001Telegram\u0002: the design uses the Bot API…",
+    { "snippet": "…\u0001Orion\u0002 supports QR login through the client interface…",
       "speaker": "assistant", "timestamp": 1790000000, "byteOffset": 81234, "lineNumber": 212 }
   ],
   "alsoIn": { "count": 5, "transcriptPaths": ["<path>", "<path>", "<path>"] }

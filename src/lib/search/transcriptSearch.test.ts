@@ -473,7 +473,7 @@ test("migrates a version-one index in bounded batches without reopening unchange
   }
 
   const migrated = new Database(filename, { readonly: true, strict: true });
-  expect(migrated.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(4);
+  expect(migrated.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(5);
   expect(migrated.query<{ count: number }, []>(
     "SELECT COUNT(*) AS count FROM transcript_messages WHERE body_hash IS NULL OR length(body_hash) != 64",
   ).get()?.count).toBe(0);
@@ -502,7 +502,7 @@ test("upgrades version two with file-time fallbacks and a persistent ID watermar
   expect(searchTranscripts({ query: "beryl" }).items[0].timestamp).toBe(12.345);
   const upgraded = new Database(filename, { readonly: true });
   try {
-    expect(upgraded.query("PRAGMA user_version").get()).toEqual({ user_version: 4 });
+    expect(upgraded.query("PRAGMA user_version").get()).toEqual({ user_version: 5 });
     expect(upgraded.query("SELECT last_id FROM transcript_search_sequence").get()).toEqual({ last_id: 1 });
   } finally { upgraded.close(); }
 });
@@ -575,7 +575,7 @@ test("does not reopen an unchanged transcript on the next index pass", async () 
   expect(first).toMatchObject({ filesRead: 1, filesSkipped: 0 });
   expect(second).toMatchObject({ filesRead: 0, filesSkipped: 1 });
   expect(opens).toBe(1);
-  expect(searchTranscripts({ query: "heliotrope", project: "performance" }).items).toEqual([]);
+  expect(searchTranscripts({ query: "heliotrope", project: "performance" }).projectScope).toMatchObject({ resolved: null });
   expect(searchTranscripts({ query: "heliotrope", project: "performance-renamed" }).items).toHaveLength(1);
 });
 
@@ -611,8 +611,8 @@ test("indexes Codex event messages while collapsing their response-item mirrors"
 
   await indexTranscriptSources([source(transcript, "codex", "events")], { complete: true });
 
-  expect(searchTranscripts({ query: "duplicate" }).items).toHaveLength(1);
-  expect(searchTranscripts({ query: "duplicated" }).items).toHaveLength(1);
+  expect(searchTranscripts({ query: '"duplicate"' }).items).toHaveLength(1);
+  expect(searchTranscripts({ query: '"duplicated"' }).items).toHaveLength(1);
   expect(searchTranscripts({ query: "#тег" }).items)
     .toEqual([expect.objectContaining({ speaker: "assistant", lineNumber: 3 })]);
   expect(searchTranscripts({ query: "body" }).stats.messagesIndexed).toBe(3);
@@ -945,4 +945,83 @@ test("message time precedes file time, with persistent IDs breaking equal-time t
     ["tie-newer.jsonl", 2],
     ["tie-newer.jsonl", 1],
   ]);
+});
+
+async function rankedFixture(rows: Array<[string, string[]]>) {
+  const sources = rows.concat([["filler", Array.from({ length: 100 }, (_, i) => `mundane fixture ${i}`)]]).map(([name, bodies]) => {
+    const pathname = path.join(sandbox, `${name}.jsonl`);
+    fs.writeFileSync(pathname, bodies.map((content, i) => JSON.stringify({ type: "user", timestamp: new Date((100 + i) * 1000).toISOString(), message: { content } })).join("\n") + "\n");
+    return source(pathname, "claude", "ranked-fixture");
+  });
+  await indexTranscriptSources(sources, { complete: true });
+  return sources;
+}
+
+test("relevance covers a conversation across messages and selects complementary fragments", async () => {
+  await rankedFixture([["complete", ["cobalt plan", "quartz solution"]], ["partial", ["cobalt repeat", "cobalt repeated again"]]]);
+  const page = searchTranscripts({ query: "cobalt quartz", order: "relevance" });
+  expect(page.items[0].transcriptPath).toEndWith("complete.jsonl");
+  expect(page.items[0].matched).toEqual(["cobalt*", "quartz*"]);
+  expect(page.items[0].missing).toEqual([]);
+  expect(page.items[0].fragments).toHaveLength(1);
+  expect(page.items[1].missing).toEqual(["quartz*"]);
+  expect(page.strongTotal).toBe(1);
+  expect(searchTranscripts({ query: "cobalt quartz", order: "newest" }).total).toBe(0);
+});
+
+test("copies fold by lead snippet, common units are reported, and pages stay compact", async () => {
+  await rankedFixture([["one", ["cobalt resolution"]], ["copy", ["cobalt resolution"]], ["other", ["cobalt different resolution"]]]);
+  const page = searchTranscripts({ query: "the mundane cobalt", order: "relevance" });
+  expect(page.interpretedAs?.ignored).toEqual(["the", "mundan*"]);
+  expect(page.total).toBe(3);
+  expect(page.items).toHaveLength(2);
+  expect(page.items.find((i) => i.duplicateCount === 2)?.alsoIn).toMatchObject({ count: 1 });
+  expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(6144);
+});
+
+test("the measured prototype ignores absent vocabulary units explicitly without widening newest", async () => {
+  await rankedFixture([["one", ["cobalt resolution"]]]);
+  const page = searchTranscripts({ query: "cobalt never_indexed_token", order: "relevance" });
+  expect(page.interpretedAs).toEqual({ units: ["cobalt*"], ignored: ["never_indexed_token"] });
+  expect(page.strongTotal).toBe(1);
+  expect(searchTranscripts({ query: "cobalt never_indexed_token", order: "newest" }).total).toBe(0);
+  const absent = searchTranscripts({ query: "never_indexed_token the", order: "relevance" });
+  expect(absent.total).toBe(0);
+  expect(absent.strongTotal).toBe(0);
+});
+
+test("relevance cursors freeze ranking and folding across appends and reject the other order", async () => {
+  const sources = await rankedFixture([["one", ["cobalt first"]], ["two", ["cobalt second"]], ["three", ["cobalt third"]]]);
+  const expected = searchTranscripts({ query: "cobalt", order: "relevance" }).items.map((i) => i.transcriptPath);
+  const first = searchTranscripts({ query: "cobalt", order: "relevance", limit: 1 });
+  fs.appendFileSync(sources[0].path, JSON.stringify({ type: "user", timestamp: new Date(500_000).toISOString(), message: { content: "cobalt newest" } }) + "\n");
+  await indexTranscriptSources([source(sources[0].path, "claude", "ranked-fixture")]);
+  const items = [...first.items];
+  let cursor = first.nextCursor;
+  while (cursor) {
+    const next = searchTranscripts({ query: "cobalt", order: "relevance", limit: 1, cursor });
+    items.push(...next.items); cursor = next.nextCursor;
+  }
+  expect(items.map((i) => i.transcriptPath)).toEqual(expected);
+  expect(() => searchTranscripts({ query: "cobalt", order: "newest", cursor: first.nextCursor })).toThrow(InvalidTranscriptSearchCursorError);
+  expect(() => searchTranscripts({ query: "quartz", order: "relevance", cursor: first.nextCursor })).toThrow(InvalidTranscriptSearchCursorError);
+});
+
+test("v4 to v5 creates vocab without rewriting messages or the FTS index", async () => {
+  await rankedFixture([["one", ["cobalt resolution"]]]);
+  const db = new Database(statePath("transcript-search.sqlite"));
+  const before = db.query("SELECT id, body_hash FROM transcript_messages ORDER BY id").all();
+  db.exec("DROP TABLE transcript_messages_vocab; PRAGMA user_version = 4"); db.close();
+  expect(searchTranscripts({ query: "cobalt", order: "relevance" }).total).toBe(1);
+  const upgraded = new Database(statePath("transcript-search.sqlite"), { readonly: true });
+  expect(upgraded.query("SELECT id, body_hash FROM transcript_messages ORDER BY id").all()).toEqual(before);
+  expect(upgraded.query("SELECT term FROM transcript_messages_vocab WHERE term = 'cobalt'").get()).toEqual({ term: "cobalt" });
+  upgraded.close();
+});
+
+test("newest word forms include all old unquoted matches and order added inflections by time", async () => {
+  await rankedFixture([["forms", ["login original", "logins later", "сохранённых record", "картки record", "#1533 record"]]]);
+  const page = searchTranscripts({ query: "logins", order: "newest" });
+  expect(page.items.map((i) => i.timestamp)).toEqual([101, 100]);
+  for (const query of ["сохраненные", "картка", "1533"]) expect(searchTranscripts({ query }).total).toBeGreaterThan(0);
 });
