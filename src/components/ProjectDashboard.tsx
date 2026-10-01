@@ -82,6 +82,7 @@ import { navigateToFragment } from "@/lib/navigation/fragmentNavigation";
 import { KanbanBoard } from "./kanban/KanbanBoard";
 import { KanbanSeat } from "./kanban/KanbanSeat";
 import { useKanbanSeat, useSeatSignal } from "./kanban/kanbanSeatStore";
+import { onTaskChipOpen } from "./orchestrator/taskChips";
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
 import { FeedSkeleton, KanbanSkeleton, PhoneKanbanSkeleton, TitleSkeleton } from "./skeletons";
 import { Switchboard } from "./Switchboard";
@@ -1162,6 +1163,15 @@ function ProjectDashboardView({
     setOpenedConversation(null);
     setTransientView(null);
   }, [project]);
+
+  /* A task chip in the orchestrator's composer or on a sent message was
+     clicked: open or frame that task on this board, the way a task-panel row
+     does. A task of another project is not this board's to open. */
+  const openChipTask = useRef(openTaskOnBoard);
+  useEffect(() => { openChipTask.current = openTaskOnBoard; });
+  useEffect(() => onTaskChipOpen((request) => {
+    if (request.project === project) openChipTask.current(request.id);
+  }), [project]);
 
   /* An attention jump rides the same channel as switchboard opens: the ref is
      set here and the every-render effect below flashes it, whether the node is

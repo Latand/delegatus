@@ -507,3 +507,59 @@ test("an ordinary task has no tick control", () => {
   const { host } = mount(taskPorts([]), noPipelinePorts);
   expect(q(host, "[data-phone-task-tick-open]")).toBeNull();
 });
+
+/* The phone's «Ask» (the task chip button): the opened task's bottom bar puts
+   this task into its project's orchestrator composer as a chip, then takes the
+   operator to the seat's conversation, where ‹ comes back to this task. */
+test("«Ask» attaches the task as a chip and opens the orchestrator's conversation", async () => {
+  const { readTaskChips, resetTaskChipsForTests } = await import("@/components/orchestrator/taskChips");
+  const { resetManagerIdentityForTest } = await import("@/components/voice/managerIdentity");
+  const realFetch = globalThis.fetch;
+  resetTaskChipsForTests();
+  resetManagerIdentityForTest();
+  globalThis.fetch = (async (input: unknown) => {
+    if (String(input) === "/api/orchestrator/seat?project=fixture") {
+      return new Response(JSON.stringify({ exists: true, seat: { conversationId: "conversation_fixture_7" } }), { status: 200 });
+    }
+    return new Response("{}", { status: 200 });
+  }) as unknown as typeof fetch;
+  try {
+    const opened: string[] = [];
+    const seat = file(7, { title: "Orchestrator" });
+    const { host } = mount(taskPorts([]), noPipelinePorts, theTask, { files: [seat], onOpen: (entry) => opened.push(entry.path) });
+    const ask = q(host, "[data-phone-task-ask-orchestrator]");
+    expect(ask).not.toBeNull();
+    expect(ask!.getAttribute("aria-label")).toContain("Kanban: say what each pipeline of a task does");
+    expect(ask!.closest("[data-phone-task-bar]")).not.toBeNull();
+    click(ask);
+    expect(readTaskChips("fixture")).toMatchObject([{ id: "t-many", title: "Kanban: say what each pipeline of a task does" }]);
+    await sleep(10);
+    expect(opened).toEqual([seat.path]);
+  } finally {
+    globalThis.fetch = realFetch;
+    resetTaskChipsForTests();
+    resetManagerIdentityForTest();
+  }
+});
+
+test("«Ask» with no live seat to open still attaches the chip and says so", async () => {
+  const { readTaskChips, resetTaskChipsForTests } = await import("@/components/orchestrator/taskChips");
+  const { resetManagerIdentityForTest } = await import("@/components/voice/managerIdentity");
+  const realFetch = globalThis.fetch;
+  resetTaskChipsForTests();
+  resetManagerIdentityForTest();
+  globalThis.fetch = (async () => new Response(JSON.stringify({ exists: false, seat: null }), { status: 200 })) as unknown as typeof fetch;
+  try {
+    const opened: string[] = [];
+    const { host } = mount(taskPorts([]), noPipelinePorts, theTask, { onOpen: (entry) => opened.push(entry.path) });
+    click(q(host, "[data-phone-task-ask-orchestrator]"));
+    await sleep(10);
+    expect(readTaskChips("fixture").map((chip) => chip.id)).toEqual(["t-many"]);
+    expect(opened).toEqual([]);
+    expect(q(host, "[data-test-receipt]")!.textContent).toContain("Kanban: say what each pipeline of a task does");
+  } finally {
+    globalThis.fetch = realFetch;
+    resetTaskChipsForTests();
+    resetManagerIdentityForTest();
+  }
+});
