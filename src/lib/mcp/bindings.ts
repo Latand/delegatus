@@ -190,6 +190,7 @@ import type { FileEntry } from "@/lib/types";
 import { collectSnapshot } from "@/lib/view/collect";
 import { resolveSiblings } from "@/lib/view/siblings";
 import { hardenedRedact } from "@/lib/view/compactText";
+import { searchMemoryTool } from "@/lib/memory/mcp";
 import { validateSnapshotRequest } from "@/lib/view/validation";
 
 import {
@@ -6397,6 +6398,7 @@ export function viewerMcpBindings(
     link_task_to_pipeline: (args) => unadmittedBeforeMutation(() => linkTaskToPipeline(args, linkTaskDependencies)),
     list_conversations: (args, context) => budgeted("list_conversations", args, 12_000, cursor => listConversations({ ...args, cursor }, viewerControlForCall(controlDependencies, context))),
     search_transcripts: (args, context) => searchTranscripts(args, viewerControlForCall(controlDependencies, context)),
+    search_memory: (args, context) => searchMemoryTool(args, viewerControlForCall(controlDependencies, context), attributionOf(domainDependencies).conversationId ?? null),
     get_conversation: (args, context) => getConversation(args, domainDependencies, context),
     conversation_deliverability: (args) => Promise.resolve(conversationDeliverability(args, domainDependencies)),
     conversation_messages: (args, context) => conversationMessages(args, domainDependencies, context),
