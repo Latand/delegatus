@@ -60,10 +60,11 @@ import { MessageProvenanceProvider, useDeliveredMessageProvenance } from "./feed
 import { RawLineProvider, type RawLineLookup } from "./feed/rawLine";
 import { ResponseDuration } from "./feed/ResponseDuration";
 import { SuggestedReplies } from "./feed/SuggestedReplies";
-import { BoundedLru } from "./feed/scrollMemory";
+import { BoundedLru, firstRowPastTop } from "./feed/scrollMemory";
 import { ConversationAttention } from "./runtime/ConversationAttention";
 import { conversationSpeech, ownConversationFeed, SpeechScope } from "./feed/conversationSpeech";
 import { answerFragmentOffset, createSpeakableAnswerResolver, visibleSpeakableAnswer } from "./feed/speakableAnswer";
+import { measureVisibleAnswerRows, trackVisibleAnswerRows } from "./feed/visibleAnswerRows";
 import { isSubagent } from "./projectModel";
 import { restingDelta, tailPlan } from "./feedTopEdge";
 import { TaskHeader } from "./TaskHeader";
@@ -178,7 +179,7 @@ function feedRows(scroller: HTMLElement): HTMLElement[] {
 
 function viewportAnchor(scroller: HTMLElement, path: string): ViewportAnchor | null {
   const viewportTop = scroller.getBoundingClientRect().top;
-  const row = feedRows(scroller).find((candidate) => candidate.getBoundingClientRect().bottom > viewportTop);
+  const row = firstRowPastTop(feedRows(scroller), viewportTop);
   const key = row?.dataset.feedKey;
   return row && key ? { path, key, offset: row.getBoundingClientRect().top - viewportTop } : null;
 }
@@ -710,6 +711,12 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const answerFor = useMemo(() => createSpeakableAnswerResolver(feed.items), [feed.items, memoryKey, tailPath]);
   const speechScope = file?.path;
   useEffect(() => speechScope ? ownConversationFeed(speechScope) : undefined, [speechScope]);
+  /* The measure reads the feed and its resolver through refs and the effect is
+     keyed on the conversation alone: keyed on `feed.items` it was torn down and
+     rebuilt on every tail update, and each rebuild re-observed every row. */
+  const speechFeedRef = useRef({ items: feed.items, answerFor });
+  useLayoutEffect(() => { speechFeedRef.current = { items: feed.items, answerFor }; });
+  const speechMeasureRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     const viewport = scroller.current;
     if (!viewport || !speechScope) return;
@@ -717,36 +724,27 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     const viewportOwner = Symbol("speech-viewport");
     speech.setRoots(viewportOwner, (id) => Array.from(viewport.querySelectorAll<HTMLElement>("[data-tts-answer-id]")).filter((node) => node.getAttribute("data-tts-answer-id") === id).flatMap((node) => Array.from(node.querySelectorAll<HTMLElement>("[data-tts-body]"))));
     let frame = 0;
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(measure); };
+    const rows = trackVisibleAnswerRows(viewport, schedule);
     const measure = () => {
       frame = 0;
       const box = viewport.getBoundingClientRect();
       const clip = { left: Math.max(0, box.left), top: Math.max(0, box.top), right: Math.min(window.innerWidth, box.right), bottom: Math.min(window.innerHeight, box.bottom) };
       if (clip.right <= clip.left || clip.bottom <= clip.top) { speech.selectFor(viewportOwner, null); return; }
-      const visible = Array.from(viewport.querySelectorAll<HTMLElement>("[data-tts-answer-index]")).map((row) => {
-        const body = row.querySelector("[data-tts-body]");
-        if (!body) return { index: -1, area: 0 };
-        const walker = document.createTreeWalker(body, 4 /* SHOW_TEXT */);
-        let area = 0;
-        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-          if (node.parentElement?.closest("pre, code, table, [hidden], [aria-hidden='true']")) continue;
-          const range = document.createRange(); range.selectNodeContents(node);
-          const rects = typeof range.getClientRects === "function" ? Array.from(range.getClientRects()) : [];
-          area += rects.reduce((sum, rect) => sum + Math.max(0, Math.min(rect.right, clip.right) - Math.max(rect.left, clip.left)) * Math.max(0, Math.min(rect.bottom, clip.bottom) - Math.max(rect.top, clip.top)), 0);
-        }
-        return { index: Number(row.dataset.ttsAnswerIndex), area };
-      });
-      const answer = visibleSpeakableAnswer(feed.items, visible, answerFor);
+      const { items, answerFor: resolve } = speechFeedRef.current;
+      const visible = measureVisibleAnswerRows(rows, clip);
+      const answer = visibleSpeakableAnswer(items, visible, resolve);
       speech.selectFor(viewportOwner, answer ? { id: answer.id, text: answer.text, area: visible.filter((fragment) => fragment.index >= answer.firstIndex && fragment.index <= answer.lastIndex).reduce((sum, fragment) => sum + fragment.area, 0), order: answer.firstIndex, roots: () => speech.rootsFor(answer.id) } : null);
     };
-    const schedule = () => { if (!frame) frame = requestAnimationFrame(measure); };
+    speechMeasureRef.current = schedule;
     viewport.addEventListener("scroll", schedule, { passive: true });
     window.addEventListener("resize", schedule);
     window.addEventListener("scroll", schedule, true);
     const resize = new ResizeObserver(schedule); resize.observe(viewport);
-    const observer = new window.MutationObserver(schedule); observer.observe(viewport, { childList: true, subtree: true });
     schedule();
-    return () => { cancelAnimationFrame(frame); observer.disconnect(); resize.disconnect(); speech.releaseViewport(viewportOwner); viewport.removeEventListener("scroll", schedule); window.removeEventListener("resize", schedule); window.removeEventListener("scroll", schedule, true); };
-  }, [feed.items, speechScope, answerFor]);
+    return () => { speechMeasureRef.current = null; cancelAnimationFrame(frame); rows.disconnect(); resize.disconnect(); speech.releaseViewport(viewportOwner); viewport.removeEventListener("scroll", schedule); window.removeEventListener("resize", schedule); window.removeEventListener("scroll", schedule, true); };
+  }, [speechScope]);
+  useEffect(() => { speechMeasureRef.current?.(); }, [feed.items, answerFor]);
 
   /* The image viewer steps through this conversation's pictures, all of them
      and in feed order, read from the records when it opens (#2144). */
