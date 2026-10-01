@@ -2694,6 +2694,14 @@ function queuePipelinePublication(pipeline: Pipeline, _exec: ExecPort, request: 
   return { ok: true, sha: request.acceptedSha, remote: "unreachable", detail: "Viewer publication reserved for execution outside the mutation lease" };
 }
 
+function passedStagePublicationPark(pipeline: Pipeline, attempt: PipelineStageAttempt | null): boolean {
+  const detail = pipeline.stateDetail;
+  return pipeline.cursor?.state === "committing" && attempt?.verdict?.status === "pass"
+    && (detail?.startsWith("publishing the passed stage:") === true
+      || (attempt.state === "passed" && (detail?.startsWith("the worktree moved to ") === true
+        || detail?.startsWith("the accepted head cannot be verified before completion:") === true)));
+}
+
 function retryTerminalStagePublication(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -2702,9 +2710,12 @@ function retryTerminalStagePublication(
 ): void {
   const current = currentPipelineBranchHead(pipeline, ports.exec);
   if (!current.ok || current.sha !== pipeline.lastPassedCommit) {
-    park(pipeline, current.ok
+    const detail = current.ok
       ? `the worktree moved to ${current.sha} after accepting ${pipeline.lastPassedCommit}; commit and publish the current head before completing this stage`
-      : `the accepted head cannot be verified before completion: ${current.error}`, attempt);
+      : `the accepted head cannot be verified before completion: ${current.error}`;
+    // Head verification can be retried without discarding the accepted pass.
+    attempt.error = detail;
+    park(pipeline, detail);
     return;
   }
   if (!publishesRemoteBranch(pipeline)) {
@@ -5794,15 +5805,23 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         const persistPipeline = () => persist([pipeline]);
         const operation = pipeline.delivery?.operation;
         const passed = pipeline.cursor?.state === "committing" ? currentAttempt(pipeline, pipeline.cursor.stageId) : null;
-        if (pipeline.state === "needs_decision" && passed?.verdict?.status === "pass"
-          && operation?.sha === pipeline.lastPassedCommit
+        const deliveryRefusalCleared = pipeline.delivery
+          && pipeline.stateDetail?.startsWith("publishing the passed stage: Viewer publication denied:")
+          && !deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery.target, active: true }));
+        const publicationSucceeded = operation?.sha === pipeline.lastPassedCommit
+          && operation.state === "settled" && operation.result?.ok && operation.result.remote === "published"
+          && passedStagePublicationPark(pipeline, passed);
+        const interruptedPublicationCleared = operation?.sha === pipeline.lastPassedCommit
           && (pipeline.stateDetail === `publishing the passed stage: publisher ${pipeline.delivery!.ownerId} at epoch ${pipeline.delivery!.epoch} is in flight or uncertain`
-            || (operation.state === "settled" && pipeline.stateDetail?.startsWith(`publishing the passed stage: publication ${operation.id} has no progress for `)))) {
+            || (operation.state === "settled" && pipeline.stateDetail?.startsWith(`publishing the passed stage: publication ${operation.id} has no progress for `)));
+        if (pipeline.state === "needs_decision" && passed?.verdict?.status === "pass"
+          && (deliveryRefusalCleared || publicationSucceeded || interruptedPublicationCleared)) {
           passed.state = "passed";
           passed.error = null;
           pipeline.state = "running";
           pipeline.stateDetail = null;
           persistPipeline();
+          changed = true;
         }
         // A quiescent interrupted writer that did not land can safely reserve
         // publication again. Its passed stage and accepted revision stay put.
@@ -7785,7 +7804,9 @@ export async function patchPipeline(
     const conversationId = actor?.kind === "agent" ? actor.conversationId : null;
     const recoveryError = await reconcilePipelinePublication(req.expectedOwner, req.expectedEpoch!, ports.exec, conversationId);
     if (recoveryError) return { error: recoveryError, status: 409 };
-    return takeoverPipelineDelivery(id, req.expectedOwner, req.expectedEpoch!, req.reason, conversationId);
+    const taken = await takeoverPipelineDelivery(id, req.expectedOwner, req.expectedEpoch!, req.reason, conversationId);
+    if (taken.pipeline) requestPipelineTick();
+    return taken;
   }
   if (req.action === "preview-legacy-review") {
     /* A read: no lease and no write, from either store. An archived draft
@@ -7803,6 +7824,7 @@ export async function patchPipeline(
     }
     const published = await publishPipelineBranch(pipeline, ports.exec, { acceptedSha: req.acceptedSha ?? pipeline.lastPassedCommit });
     if (published.ok && published.remote === "unreachable") return { error: `${published.detail}; reconcile through takeover with expectedOwner ${pipeline.delivery?.ownerId ?? pipeline.id} and expectedEpoch ${pipeline.delivery?.epoch ?? 0}`, status: 409 };
+    if (published.ok) requestPipelineTick();
     return published.ok ? { pipeline: findPipelineRecord(id)! } : { error: published.error, status: 409 };
   }
   let linkRepositories: string[] = [];
@@ -7849,10 +7871,6 @@ export async function patchPipeline(
       if (refused) return refused;
       persist();
       return { pipeline };
-    }
-    if (req.action === "retry-stage" && pipeline.delivery?.operation?.state === "settled") {
-      delete pipeline.delivery.operation;
-      pipeline.publishedCommit = null;
     }
     const guardShape = stageGuardShapeError(req);
     if (guardShape) return guardShape;
@@ -8214,6 +8232,21 @@ export async function patchPipeline(
       if (explicitReceiptRetry && attempt?.launchId !== retryLaunchId) {
         return { error: "the clicked launch is no longer the current failed attempt", status: 409 };
       }
+      // The accepted work is already committed. Retry its publication from
+      // this cursor without claiming a new launch or closing its stage flow.
+      if (stage && attempt && passedStagePublicationPark(pipeline, attempt)) {
+        if (pipeline.delivery?.operation?.state === "settled" && !pipeline.delivery.operation.result?.ok) {
+          delete pipeline.delivery.operation;
+          pipeline.publishedCommit = null;
+        }
+        attempt.state = "passed";
+        pipeline.state = "running";
+        pipeline.pausedState = null;
+        pipeline.stateDetail = null;
+        retryTerminalStagePublication(pipeline, stage, attempt, ports);
+        persist();
+        return { pipeline };
+      }
       const validateRetryReceipt = (settlementWasPending = false): { conflict: { error: string; status: number } | null; claimRequired: boolean } => {
         if (!receiptRetry) return { conflict: null, claimRequired: false };
         const receipt = ports.spawnReceipt(retryLaunchId);
@@ -8282,6 +8315,10 @@ export async function patchPipeline(
       }
       /* An internal review retries on the clean local head it holds; only a
          `remote-branch` pipeline takes a remote repair or republishes. */
+      if (pipeline.delivery?.operation?.state === "settled") {
+        delete pipeline.delivery.operation;
+        pipeline.publishedCommit = null;
+      }
       const retryReviewHead = stage?.kind !== "review-loop"
         ? null
         : publishesRemoteBranch(pipeline)
@@ -8603,6 +8640,7 @@ export async function patchPipeline(
     && patched.pipeline?.delivery?.operation?.state === "pending") {
     const published = await publishPipelineBranch(patched.pipeline, ports.exec, { acceptedSha: patched.pipeline.delivery.operation.sha });
     if (!published.ok) return { error: published.error, status: 409 };
+    requestPipelineTick();
     return { ...patched, pipeline: findPipelineRecord(id)! };
   }
   if (req.action === "close" && patched.close?.status === "pending") ports.scheduleTick?.(0);
