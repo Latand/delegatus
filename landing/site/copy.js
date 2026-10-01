@@ -116,7 +116,7 @@
       "nav.lang": "Language",
       "hero.title": "Delegate everything.",
       "hero.sub":
-        "One agent runs every task on a board. Claude Code and Codex build, review and message each other. You steer.",
+        "One agent runs your board. Claude Code and Codex build and review. You see every agent and can step in.",
       "hero.replay": "Replay",
       "install.tabs": "Install through your agent",
       "install.copy": "Copy prompt",
@@ -142,7 +142,7 @@
     },
     uk: {
       "nav.skip": "Перейти до змісту",
-      "hero.promise": "Безкоштовний, з відкритим кодом. Запускає офіційні CLI локально, під твоїми акаунтами.",
+      "hero.promise": "Безкоштовний, відкритий код. Запускає офіційні CLI локально, під твоїми акаунтами.",
       "demo.views": "Вигляд",
       "demo.board": "Дошка",
       "demo.orchestrator": "Оркестратор",
@@ -195,7 +195,7 @@
       "hero.title": "Делегуй усе.",
       "foot.analytics": "Сайт рахує відвідування через Cloudflare Web Analytics (без cookies), натискання кнопок копіювання, запуски демо та відкриття на весь екран.",
       "hero.sub":
-        "Один агент веде задачі на дошці. Claude Code і Codex пишуть, рев’юють і листуються. Ти керуєш.",
+        "Один агент веде дошку. Claude Code і Codex пишуть і рев’юють. Ти бачиш усіх агентів і можеш втрутитися.",
       "hero.replay": "Ще раз",
       "install.tabs": "Встановлення через твого агента",
       "install.copy": "Копіювати промпт",

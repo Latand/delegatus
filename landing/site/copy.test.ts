@@ -52,6 +52,8 @@ test("hero runs the official CLIs, the description fits a search snippet, and th
   const { en, uk } = strings();
   expect(en["hero.promise"]).toContain("Runs the official CLIs");
   expect(uk["hero.promise"]).toContain("Запускає офіційні CLI");
+  expect(en["hero.sub"]).toContain("You see every agent and can step in.");
+  expect(uk["hero.sub"]).toContain("Ти бачиш усіх агентів і можеш втрутитися.");
   for (const lang of [en, uk]) {
     expect(lang["meta.description"].length).toBeLessThanOrEqual(155);
     expect(lang["meta.description"]).toMatch(/Free and open source|Безкоштовно, з відкритим кодом/);
