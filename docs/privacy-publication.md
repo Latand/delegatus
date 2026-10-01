@@ -129,6 +129,50 @@ Regenerating from an unmarked line removes the flag and restores compact
 matching. Review the generated catalog diff before committing: retain each
 existing `exactOnly: true` entry unless its policy change was explicitly approved.
 
+## Approved public values
+
+The `approvedPublicValues` allowlist in
+[`scripts/privacy-publication-gate.ts`](../scripts/privacy-publication-gate.ts)
+is reviewed public data. Only an explicit operator approval permits an entry;
+the PR adding or changing an entry must quote that approval and explain the
+purpose, exact matching rule, and checks with their results.
+
+The operator approved publishing the Celestia relay on 2026-10-01 at 20:00:
+«селестія - дозволяю». At 20:30 the operator requested completion:
+«це б доробит». The sanctioned spellings are:
+
+- `chatmoderator.botfather.dev`
+- `https://chatmoderator.botfather.dev`
+- `https://chatmoderator.botfather.dev/.well-known/delegatus-relay.json`
+
+The gate masks these case-sensitive ASCII source strings only for known-value
+matching, before percent/entity decoding, NFKC normalization, case folding,
+or Markdown projection. The allowlist uses token boundaries: start/end of text,
+literal NUL (the metadata field separator), ASCII tab/newline/carriage
+return/space, or the quoted-code, JSON, HTML and
+Markdown delimiters declared in the gate. A dot, letter, digit, hyphen,
+underscore, `@`, slash, colon, query/fragment marker, encoding marker or
+non-ASCII continuation cannot bound an approved occurrence. HTTP, ports,
+other paths, query strings, fragments, longer hosts and alternate spellings
+receive no exemption. Percent/entity/NFKC-obfuscated spellings remain blocked.
+The surrounding text must also retain boundaries after decoding, NFKC and
+Markdown projection; wrapping a host fragment in backticks or a link label
+cannot hide its attachment to another host or URI.
+
+The same masking runs for all inspected text, including code, tests, JSON,
+commit messages, metadata and OCR. Both the committed fingerprint catalog and
+private lists supplied through `LLV_PRIVACY_KNOWN_VALUES*` use that masked
+known-value input. The catalog stays intact: the bare base domain, private
+email addresses and other subdomains still match. Other privacy rules inspect
+the complete original text, so an approved occurrence cannot exempt credentials,
+email addresses, identifiers or private paths around it. Diagnostics continue
+to suppress matched values.
+
+Hosted checks execute the trusted gate from the default branch. A PR changing
+the allowlist can therefore still fail the old known-value policy until the
+reviewed change reaches that branch. Local candidate checks establish the new
+behavior; a hosted run using the old gate does not establish candidate behavior.
+
 ## Authenticated GitHub publication audit
 
 The `privacy-tracker-audit` workflow audits the event's issue or pull request

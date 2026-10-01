@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 
 import { auditGithubPublication, shouldFailGithubAudit } from "./privacy-github-audit";
+import { knownValueFingerprint } from "./generate-privacy-known-value-fingerprints";
 import {
   commitMessageAddressReview,
   commitMessageFindings,
@@ -1120,6 +1121,156 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(output).not.toContain(syntheticHome);
     expect(output).not.toContain(directory);
     expect(result.stderr.toString()).toBe("");
+  });
+
+  describe("operator-approved public relay values", () => {
+    const host = "chatmoderator.botfather.dev";
+    const origin = `https://${host}`;
+    const discovery = `${origin}/.well-known/delegatus-relay.json`;
+    const domain = host.split(".").slice(1).join(".");
+    const percent = (text: string) => [...text].map((c) => `%${c.charCodeAt(0).toString(16)}`).join("");
+    const entities = (text: string) => [...text].map((c) => `&#${c.charCodeAt(0)};`).join("");
+    const fullWidth = (text: string) => [...text].map((c) => String.fromCharCode(c.charCodeAt(0) + 0xfee0)).join("");
+    const cases = [
+      { name: "host", text: host, pass: true },
+      { name: "origin", text: origin, pass: true },
+      { name: "discovery", text: discovery, pass: true },
+      { name: "quoted code", text: `export const relay = "${origin}";`, pass: true },
+      { name: "repeated host", text: `${host}\n`.repeat(1000), pass: true },
+      { name: "NUL metadata boundaries", text: `comment\0${host}\0`, pass: true },
+      { name: "test code", text: `expect(relay).toBe('${discovery}');`, pass: true },
+      { name: "JSON", text: JSON.stringify({ relay: host }), pass: true },
+      { name: "Markdown", text: `[Relay](${discovery}) and \`${host}\``, pass: true },
+      { name: "Markdown link label", text: `[${host}](https://example.invalid)`, pass: true },
+      { name: "Markdown origin label", text: `[${origin}](https://example.invalid)`, pass: true },
+      { name: "Markdown discovery label", text: `[${discovery}](https://example.invalid)`, pass: true },
+      { name: "HTML attribute", text: `<a href="${origin}">Relay</a>`, pass: true },
+      { name: "bare domain", text: domain, pass: false },
+      { name: "base-domain email", text: ["fixture", domain].join("@"), pass: false },
+      { name: "approved-host email", text: ["fixture", host].join("@"), pass: false },
+      { name: "other subdomain", text: `other.${domain}`, pass: false },
+      { name: "nested subdomain", text: `other.${host}`, pass: false },
+      { name: "host prefix", text: `other${host}`, pass: false },
+      { name: "host suffix", text: `${host}other`, pass: false },
+      { name: "domain suffix", text: `${origin}.example.invalid`, pass: false },
+      { name: "userinfo", text: `${origin}@example.invalid`, pass: false },
+      { name: "HTTP", text: origin.replace("https:", "http:"), pass: false },
+      { name: "port", text: `${origin}:443`, pass: false },
+      { name: "other path", text: `${origin}/private`, pass: false },
+      { name: "discovery suffix", text: `${discovery}/private`, pass: false },
+      { name: "query", text: `${origin}?private=1`, pass: false },
+      { name: "fragment", text: `${origin}#private`, pass: false },
+      { name: "percent host", text: percent(host), pass: false },
+      { name: "entity host", text: entities(host), pass: false },
+      { name: "NFKC host", text: fullWidth(host), pass: false },
+      { name: "percent domain", text: percent(domain), pass: false },
+      { name: "entity domain", text: entities(domain), pass: false },
+      { name: "NFKC domain", text: fullWidth(domain), pass: false },
+      { name: "encoded email boundary", text: `fixture%40${host}`, pass: false },
+      { name: "entity subdomain boundary", text: `other&#46;${host}`, pass: false },
+      { name: "NFKC suffix boundary", text: `${origin}．example.invalid`, pass: false },
+      { name: "invisible subdomain boundary", text: `other.\u200b${host}`, pass: false },
+      { name: "Markdown-split host", text: host.replace(".", "**.**"), pass: false },
+      { name: "Markdown prefix boundary", text: `other.\`${host}\``, pass: false },
+      { name: "Markdown suffix boundary", text: `\`${host}\`.example.invalid`, pass: false },
+      { name: "Markdown scheme boundary", text: `https://\`${host}\``, pass: false },
+      { name: "Markdown label boundary", text: `other.[${host}](https://example.invalid)`, pass: false },
+      { name: "mixed-case host", text: host.toUpperCase(), pass: false },
+      { name: "approved and private together", text: `${origin}\n${domain}`, pass: false },
+      { name: "marker collision", text: `\uE000\n${origin}`, pass: false },
+      { name: "encoded marker collision", text: `${["EE", "80", "80"].map((byte) => `%${byte}`).join("")}\n${origin}`, pass: false },
+      { name: "entity marker collision", text: `${["&#", "57344", ";"].join("")}\n${origin}`, pass: false },
+    ];
+    const sources = ["committed catalog", "compact fingerprint", "exact fingerprint", "compact env", "exact env", "compact file", "exact file"];
+    function configuration(directory: string, source: string): Record<string, string> {
+      const environment: Record<string, string> = {
+        LLV_PRIVACY_KNOWN_VALUES: "", LLV_PRIVACY_KNOWN_VALUES_FILE: "",
+        LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: "", LLV_PRIVACY_KNOWN_VALUES_FORMAT: "plain",
+      };
+      if (source === "committed catalog") {
+        environment.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE = join(import.meta.dir, "privacy-known-value-fingerprints.json");
+      } else {
+        const entry = { value: domain, exactOnly: source.startsWith("exact") };
+        const path = join(directory, ".git", "known.json");
+        if (source.endsWith("fingerprint")) {
+          writeFileSync(path, JSON.stringify({ schemaVersion: 1, normalization: "nfkc-lower-alnum-v1",
+            fingerprints: [knownValueFingerprint(entry)] }));
+          environment.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE = path;
+        } else {
+          environment.LLV_PRIVACY_KNOWN_VALUES_FORMAT = "jsonl";
+          if (source.endsWith("file")) {
+            writeFileSync(path, JSON.stringify(entry));
+            environment.LLV_PRIVACY_KNOWN_VALUES_FILE = path;
+          } else environment.LLV_PRIVACY_KNOWN_VALUES = JSON.stringify(entry);
+        }
+      }
+      return environment;
+    }
+    for (const source of sources) {
+      for (const channel of ["metadata", "OCR"]) {
+        for (const specimen of cases.filter((c) => ["host", "origin", "discovery", "other subdomain", "percent host"].includes(c.name))) {
+          test(`${source}: ${channel} ${specimen.name}`, () => {
+            const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
+            temporaryDirectories.push(directory);
+            mkdirSync(join(directory, ".git"));
+            const publication = join(directory, "publication.png");
+            writeFileSync(publication, pngWithMetadata(channel === "metadata" ? specimen.text : "Synthetic fixture"));
+            const result = runGate([publication], {
+              ...configuration(directory, source),
+              ...installTool(directory, "tesseract", 'printf "%s" "$OCR_TEXT"'),
+              OCR_TEXT: channel === "OCR" ? specimen.text : "",
+            });
+            expect(result.exitCode).toBe(1); // The fixture intentionally has no provenance.
+            expect(result.stdout.toString().includes("known_value:")).toBe(!specimen.pass);
+            expect(result.stdout.toString()).toContain("provenance_missing:");
+            expect(result.stdout.toString()).not.toContain(domain);
+            expect(result.stderr.toString()).toBe("");
+          });
+        }
+      }
+      test(`${source}: generic credential detection retains approved text`, () => {
+        const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
+        temporaryDirectories.push(directory);
+        mkdirSync(join(directory, ".git"));
+        const publication = join(directory, "publication.ts");
+        writeFileSync(publication, `password="${origin}"`);
+        const result = runGate([publication], configuration(directory, source));
+        expect(result.exitCode).toBe(1);
+        expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\ncredential: 1\n");
+        expect(result.stderr.toString()).toBe("");
+      });
+      for (const specimen of cases) {
+        test(`${source}: ${specimen.name}`, () => {
+          const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
+          temporaryDirectories.push(directory);
+          mkdirSync(join(directory, ".git"));
+          const extension = specimen.name === "JSON" ? ".json" : specimen.name === "test code" ? ".test.ts" : ".ts";
+          const publication = join(directory, `publication${extension}`);
+          writeFileSync(publication, specimen.text);
+          const result = runGate([publication], configuration(directory, source));
+          expect(result.exitCode).toBe(specimen.pass ? 0 : 1);
+          expect(result.stdout.toString().includes("known_value:")).toBe(!specimen.pass);
+          expect(result.stdout.toString()).not.toContain(domain);
+          expect(result.stderr.toString()).toBe("");
+        });
+      }
+      for (const specimen of cases.filter((c) => ["host", "origin", "discovery", "bare domain", "base-domain email", "percent host"].includes(c.name))) {
+        test(`${source}: commit ${specimen.name}`, () => {
+          const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
+          temporaryDirectories.push(directory);
+          runGit(directory, ["init", "--quiet"]);
+          runGit(directory, ["config", "user.name", "Fixture Tool"]);
+          runGit(directory, ["config", "user.email", "noreply@example.invalid"]);
+          runGit(directory, ["commit", "--allow-empty", "-m", "base"]);
+          runGit(directory, ["commit", "--allow-empty", "-m", specimen.text]);
+          const result = runGateArguments(["--base", "HEAD~1", "--check-commits"], configuration(directory, source), directory);
+          expect(result.exitCode).toBe(specimen.pass ? 0 : 1);
+          expect(result.stdout.toString().includes("known_value:")).toBe(!specimen.pass);
+          expect(result.stdout.toString()).not.toContain(domain);
+          expect(result.stderr.toString()).toBe("");
+        });
+      }
+    }
   });
 
   describe("exactOnly known values", () => {

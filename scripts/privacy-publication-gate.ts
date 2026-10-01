@@ -80,6 +80,64 @@ const credentialInputPattern = new RegExp([
   String.raw`(?=[^>]*value\s*=\s*(?:["'][^"']{4,}["']|[^\s"'=<>]{4,}))[^>]*>`,
 ].join(""), "i");
 
+// Reviewed public data. Entries require explicit operator approval quoted in
+// the PR; see docs/privacy-publication.md. Keep exact source spellings here.
+const approvedPublicValues = [
+  "https://chatmoderator.botfather.dev/.well-known/delegatus-relay.json",
+  "https://chatmoderator.botfather.dev",
+  "chatmoderator.botfather.dev",
+] as const;
+const approvedPublicValuePattern = new RegExp(
+  String.raw`(^|[\0\t\n\r "'\x60(\[<{=,])(?:`
+  + approvedPublicValues.map((value) => value.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")
+  + String.raw`)(?=$|[\0\t\n\r "'\x60)\]}>;,])`,
+  "g",
+);
+
+function maskApprovedPublicValues(text: string): string {
+  // Mask before any decoding, case folding or markup projection. Delimiters
+  // exclude host continuations, userinfo, ports, paths, query/fragment tails,
+  // encodings and non-ASCII characters. Obfuscated spellings stay inspectable.
+  // An unambiguous marker preserves each candidate's location through whole
+  // source projections. Collisions conservatively withhold all exemptions.
+  const marker = "\uE000";
+  if (text.includes(marker)) return text;
+  const candidates: Array<{ start: number; end: number; allowed: boolean }> = [];
+  const marked = text.replace(approvedPublicValuePattern, (match: string, delimiter: string, offset: number) => {
+    const index = candidates.length;
+    candidates.push({ start: offset + delimiter.length, end: offset + match.length, allowed: true });
+    return `${delimiter}${marker}${index}${marker}`;
+  });
+  if (candidates.length === 0) return text;
+  const original = sensitiveTextViews(text);
+  if (original.error || original.views.some((view) => view.includes(marker))) return text;
+  const { error, views } = sensitiveTextViews(marked);
+  if (error) return text;
+  // Process complete views once: splitting them at a candidate breaks link
+  // parsing and repeated prefix/suffix projections have quadratic cost.
+  const leftBoundary = /^[\t\n\r "'\x60(\[<{=,]$/;
+  const rightBoundary = /^[\t\n\r "'\x60)\]}>;,]$/;
+  for (const view of views) {
+    const normalized = view.normalize("NFKC");
+    for (const occurrence of normalized.matchAll(/\uE000(\d+)\uE000/g)) {
+      const start = occurrence.index;
+      const end = start + occurrence[0].length;
+      if ((start > 0 && !leftBoundary.test(normalized[start - 1]))
+        || (end < normalized.length && !rightBoundary.test(normalized[end]))) {
+        candidates[Number(occurrence[1])].allowed = false;
+      }
+    }
+  }
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const candidate of candidates) {
+    parts.push(text.slice(cursor, candidate.start), candidate.allowed ? " " : text.slice(candidate.start, candidate.end));
+    cursor = candidate.end;
+  }
+  parts.push(text.slice(cursor));
+  return parts.join("");
+}
+
 type SafePathResult = {
   metadata?: ReturnType<typeof lstatSync>;
   status: "missing" | "safe" | "symlink";
@@ -359,9 +417,8 @@ function visibleMarkdownText(text: string): string {
 /**
  * The views of a text the gate reads: the decoded source, and the same text
  * with the markdown that can hide a character from a reader taken out. Both
- * are scanned whole. Nothing is ever subtracted from them for being
- * uninteresting — a caller that exempts something exempts an occurrence
- * detection already reported, never a span of text before detection runs.
+ * are scanned whole for generic privacy rules. Known-value matching alone
+ * receives a separate source with approved public values masked before decoding.
  */
 function sensitiveTextViews(text: string): { error: boolean; views: [string, string] } {
   const canonical = canonicalSensitiveText(text);
@@ -606,13 +663,14 @@ function hasEmailAddress(text: string): boolean {
 
 export function sensitiveClasses(text: string): Set<FindingClass> {
   const findings = new Set<FindingClass>();
-  const { compact, error, exactSearchable, searchable: searchableText } = normalizedSensitiveText(text);
-  if (error) findings.add("inspection_error");
-  const normalizedText = searchableText.toLocaleLowerCase("en-US");
+  const { error, searchable: searchableText } = normalizedSensitiveText(text);
+  const known = normalizedSensitiveText(maskApprovedPublicValues(text));
+  if (error || known.error) findings.add("inspection_error");
+  const normalizedText = known.searchable.toLocaleLowerCase("en-US");
   if (knownValues.values.some((entry) => entry.exactOnly
-    ? exactSearchable.includes(entry.value.normalize("NFKC").toLocaleLowerCase("en-US"))
+    ? known.exactSearchable.includes(entry.value.normalize("NFKC").toLocaleLowerCase("en-US"))
     : normalizedText.includes(entry.value.toLocaleLowerCase("en-US")))
-    || matchesKnownFingerprint(compact) || matchesKnownFingerprint(exactSearchable, true)) {
+    || matchesKnownFingerprint(known.compact) || matchesKnownFingerprint(known.exactSearchable, true)) {
     findings.add("known_value");
   }
   const unixHomePattern = /(?:^|[\s"'(=:/])\/(?:home|Users)\/([A-Za-z0-9._-]+)(?:\/|$)/gm;
