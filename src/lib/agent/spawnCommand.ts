@@ -36,6 +36,7 @@ import {
   isSpawnDeniedRole,
   readSpawnAdmissionFence,
   recordSpawnAdmissionRejection,
+  spawnTaskProjectError,
   type SpawnAdmissionFenceResult,
 } from "@/lib/agent/spawnAdmission";
 import { spawnRejectionResponse, spawnReplayStatus, spawnResponseForReceipt, type SpawnResponse } from "@/lib/agent/spawnResponse";
@@ -530,6 +531,8 @@ export async function executeSpawnRequest(
   const spawnActor = teamActor(req);
   const anonymousSpawn = refuseAnonymous(spawnActor);
   if (anonymousSpawn) return anonymousSpawn;
+  const taskError = spawnTaskProjectError(body.taskId, cwd);
+  if (taskError) return NextResponse.json({ error: taskError }, { status: 400 });
   const recordsDirectOperatorActivity = directOperatorActivityAuthority(req).ok;
   if (recordsDirectOperatorActivity && !clientAttemptId) {
     return NextResponse.json({ error: "clientAttemptId is required for direct operator spawn" }, { status: 400 });
