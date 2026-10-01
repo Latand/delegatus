@@ -1,0 +1,314 @@
+{
+  "commit": "ee2f3e529045b04c62e2b690186a64aa9ebe4b9b",
+  "frames": {
+    "1440-en-off": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to build and restart.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-waiting": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 222
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa.\n\nHistory"
+    },
+    "1440-en-scheduled": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 276
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\nThe pipeline controller is working.\n\nNo quiet moment yet. From 2 Jan 2026 06:00 new stage launches are held and the update applies when running work finishes.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-draining": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 258
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nDraining since 2 Jan 2026 02:00: new stages and orchestrator wakes are held; nothing running is interrupted. Applies when the listed work finishes.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-overran": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 240
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Complete the long running feature\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nHeld launches for 2 h and released them; the listed work is still running. Next attempt 2 Jan 2026 08:00.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-fallback": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nTurned off after a failed automatic update: health probe failed. Turn it on to retry.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-managed": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1440-uk-off": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час збирання та перезапуску.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-waiting": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 222
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa.\n\nІсторія"
+    },
+    "1440-uk-scheduled": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 276
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\nКонтролер пайплайнів працює.\n\nТихої хвилини ще не було. Від 2 січ. 2026 р. 06:00 запуски нових етапів стримуються; оновлення застосовується після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-draining": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 276
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nОчікуємо завершення від 2 січ. 2026 р. 02:00: нові етапи та пробудження оркестратора стримуються; поточна робота триває без переривань. Оновлення застосовується, коли перелічена робота завершиться.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-overran": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 240
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Complete the long running feature\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nЗапуски стримувалися 2 год і знову дозволені; перелічена робота ще триває. Наступна спроба 2 січ. 2026 р. 08:00.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-fallback": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nАвтооновлення вимкнено після збою: health probe failed. Увімкніть знову, щоб повторити.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-managed": {
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час розгортання."
+    },
+    "390-en-off": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 179.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to build and restart.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-waiting": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 275.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa.\n\nHistory"
+    },
+    "390-en-scheduled": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 365.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\nThe pipeline controller is working.\n\nNo quiet moment yet. From 2 Jan 2026 06:00 new stage launches are held and the update applies when running work finishes.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-draining": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 347.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nDraining since 2 Jan 2026 02:00: new stages and orchestrator wakes are held; nothing running is interrupted. Applies when the listed work finishes.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-overran": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 311.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Complete the long running feature\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nHeld launches for 2 h and released them; the listed work is still running. Next attempt 2 Jan 2026 08:00.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-fallback": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 197.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nTurned off after a failed automatic update: health probe failed. Turn it on to retry.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-managed": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 233,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "390-uk-off": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 273,
+        "width": 358,
+        "height": 179.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час збирання та перезапуску.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-waiting": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 273,
+        "width": 358,
+        "height": 275.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa.\n\nІсторія"
+    },
+    "390-uk-scheduled": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 273,
+        "width": 358,
+        "height": 365.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\nКонтролер пайплайнів працює.\n\nТихої хвилини ще не було. Від 2 січ. 2026 р. 06:00 запуски нових етапів стримуються; оновлення застосовується після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-draining": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 273,
+        "width": 358,
+        "height": 365.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nОчікуємо завершення від 2 січ. 2026 р. 02:00: нові етапи та пробудження оркестратора стримуються; поточна робота триває без переривань. Оновлення застосовується, коли перелічена робота завершиться.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-overran": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 273,
+        "width": 358,
+        "height": 311.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Complete the long running feature\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nЗапуски стримувалися 2 год і знову дозволені; перелічена робота ще триває. Наступна спроба 2 січ. 2026 р. 08:00.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-fallback": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 273,
+        "width": 358,
+        "height": 197.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nАвтооновлення вимкнено після збою: health probe failed. Увімкніть знову, щоб повторити.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-managed": {
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 251,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час розгортання."
+    }
+  },
+  "failures": []
+}
