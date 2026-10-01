@@ -1,5 +1,5 @@
 import { archiveConversationPaths } from "@/lib/board/archivePlacement";
-import { maintainerCallerOf, maintainerTaskWriteRefusal, maintenanceChange, type MaintainerCaller } from "@/lib/boardMaintenance/guard";
+import { maintainerCallerOf, maintainerTaskWriteRefusal, maintenanceChange, retiredSeatTask, type MaintainerCaller } from "@/lib/boardMaintenance/guard";
 import { recordMaintenanceChange, recordMaintenanceLogGap } from "@/lib/boardMaintenance/store";
 import { maintenanceLaneIsOpen } from "@/lib/boardMaintenance/evidence";
 import { boardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
@@ -1592,9 +1592,9 @@ function maintenanceCaller(dependencies: ViewerMcpDomainDependencies): Maintaine
   if (!conversationId || !dependencies.registrySnapshot) return null;
   return maintainerCallerOf(conversationId, dependencies.registrySnapshot());
 }
-function assertMaintenanceWrite(caller: MaintainerCaller | null, args: McpToolArgs, task?: BoardTask, create = false, openPipeline?: string, liveAgent?: string): void {
+function assertMaintenanceWrite(caller: MaintainerCaller | null, args: McpToolArgs, task?: BoardTask, create = false, openPipeline?: string, liveAgent?: string, retiredSeat = false): void {
   if (!caller) return;
-  const refusal = maintainerTaskWriteRefusal({ caller, args, task, create, openPipeline, liveAgent });
+  const refusal = maintainerTaskWriteRefusal({ caller, args, task, create, openPipeline, liveAgent, retiredSeat });
   if (refusal) throw new McpToolRefusal(refusal.error, { code: refusal.code, field: refusal.field, status: 403 });
 }
 function logMaintenanceWrite(caller: MaintainerCaller | null, tool: "create_task" | "update_task", before: BoardTask | undefined, after: BoardTask, fields: string[]): void {
@@ -1676,7 +1676,8 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
   let liveAgent: string | undefined;
   const checkedAssignments = new Set<string>();
   const assignmentKey = (a: BoardTask["assignments"][number]) => JSON.stringify([a.conversationId, a.launchId, a.path, a.state]);
-  if (maintainer && args.status === "done") {
+  const closingOrHiding = args.status === "done" || args.hide === true || args.board === "hidden";
+  if (maintainer && closingOrHiding) {
     const task = loadTasks().find(t => t.id === taskId);
     for (const assignment of task?.assignments ?? []) {
       checkedAssignments.add(assignmentKey(assignment));
@@ -1688,15 +1689,20 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
       }
       const snapshot = await agentLivenessSnapshot({ ...(id ? { conversationId: id } : { transcriptPath: transcriptPath! }), limit: 1 }, dependencies.livenessSources());
       const record = snapshot.conversations[0];
-      if (!record || record.lifecycle === "starting" || record.host.state === "unknown" || record.turnState !== "idle") liveAgent = id ?? transcriptPath ?? "an unconfirmed assignment";
+      // Use agent_activity's lifecycle verdict. An expired unhosted transcript
+      // can be gone with an unknown host; a live idle host is still an agent.
+      // Only a freshly read settled transcript permits closure. Missing or
+      // budget-degraded evidence remains a refusal.
+      if (!record || record.lifecycle !== "gone" || record.turnState !== "idle" || record.evidenceSource !== "transcript") liveAgent = id ?? transcriptPath ?? "an unconfirmed assignment";
     }
   }
   const result = mutateTasks((tasks) => {
     prior = tasks.find(task => task.id === taskId);
     const pipelines = dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [];
     const open = pipelines.find(p => p.taskIds?.includes(taskId) && maintenanceLaneIsOpen(p));
-    if (maintainer && args.status === "done" && prior?.assignments.some(a => !checkedAssignments.has(assignmentKey(a)))) liveAgent = "a new assignment whose liveness has not been checked";
-    assertMaintenanceWrite(maintainer ? maintenanceCaller(dependencies) : null, args, prior, false, open?.id, liveAgent);
+    if (maintainer && closingOrHiding && prior?.assignments.some(a => !checkedAssignments.has(assignmentKey(a)))) liveAgent = "a new assignment whose liveness has not been checked";
+    const retiredSeat = !!maintainer && closingOrHiding && !!prior && !!dependencies.registrySnapshot && retiredSeatTask(prior, dependencies.registrySnapshot());
+    assertMaintenanceWrite(maintainer ? maintenanceCaller(dependencies) : null, args, prior, false, open?.id, liveAgent, retiredSeat);
     const before = fieldValues(prior);
     const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", seatHolding: taskSeatHoldingSnapshot(), explicit: true,
       workLinks: taskWorkLinkContext(() => dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? []) });

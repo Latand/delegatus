@@ -30,7 +30,8 @@ export interface BoardMaintenanceAnswer {
   lastRun: BoardMaintenanceRunSummary | null;
   nextEligibleAt: string | null;
   nextRunAt: string | null;
-  waitingOn: "off" | "live-run" | "interval" | "deployment" | "no-seat" | null;
+  waitingOn: "off" | "wakes-off" | "live-run" | "interval" | "deployment" | "no-seat" | null;
+  pauseReason: "paused while wakes are off" | null;
   lastRunLog?: MaintenanceRunLog;
   runsError: string | null;
 }
@@ -55,8 +56,9 @@ export function boardMaintenanceAnswer(project: string, settings: EffectiveSeatT
   const last = [...runs].reverse().find(r => !maintenanceRunIsLive(r)) ?? null;
   const legacyLaunch = [...runs].reverse().find(run => run.launchedAt)?.launchedAt ?? null;
   const cooldownAnchor = lastLaunch ?? legacyLaunch;
-  const eligible = m.enabled && !live ? (cooldownAnchor ? Date.parse(cooldownAnchor) + m.intervalMs : now) : null;
-  let waitingOn: BoardMaintenanceAnswer["waitingOn"] = !m.enabled ? "off" : live ? "live-run" : eligible !== null && eligible > now ? "interval" : null;
+  const paused = m.enabled && !settings.enabled;
+  const eligible = m.enabled && !paused && !live ? (cooldownAnchor ? Date.parse(cooldownAnchor) + m.intervalMs : now) : null;
+  let waitingOn: BoardMaintenanceAnswer["waitingOn"] = !m.enabled ? "off" : live ? "live-run" : paused ? "wakes-off" : eligible !== null && eligible > now ? "interval" : null;
   if (!waitingOn) {
     if (!(ports.seat ?? (key => !!orchestratorSeatFor(key).active))(project)) waitingOn = "no-seat";
     else { try { if ((ports.deploying ?? (() => { const d = latestLedgerDeployment(); return d.state === "ok" && !!d.value && !d.value.terminal; }))()) waitingOn = "deployment"; } catch { /* standalone installation */ } }
@@ -68,7 +70,7 @@ export function boardMaintenanceAnswer(project: string, settings: EffectiveSeatT
     if (check === undefined) check = peekSeatTickState(project).lastCheckAt;
   } catch { interval = null; }
   const anchor = check ? Date.parse(check) : now;
-  const next = eligible !== null && interval ? anchor + Math.max(1, Math.ceil((Math.max(now, eligible) - anchor) / interval)) * interval : null;
+  const next = !runsError && (waitingOn === null || waitingOn === "interval") && eligible !== null && interval ? anchor + Math.max(1, Math.ceil((Math.max(now, eligible) - anchor) / interval)) * interval : null;
   return { enabled: m.enabled, intervalHours: m.intervalHours, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168, updatedAt: settings.maintenanceSetting?.updatedAt ?? null, setBy: settings.maintenanceSetting?.setBy ?? null,
-    live: live ? summary(live) : null, lastRun: last ? summary(last) : null, nextEligibleAt: eligible === null ? null : new Date(eligible).toISOString(), nextRunAt: next === null ? null : new Date(next).toISOString(), waitingOn, ...(ports.verbose && last ? { lastRunLog: last.log } : {}), runsError };
+    live: live ? summary(live) : null, lastRun: last ? summary(last) : null, nextEligibleAt: eligible === null ? null : new Date(eligible).toISOString(), nextRunAt: next === null ? null : new Date(next).toISOString(), waitingOn, pauseReason: paused ? "paused while wakes are off" : null, ...(ports.verbose && last ? { lastRunLog: last.log } : {}), runsError };
 }

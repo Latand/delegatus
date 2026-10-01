@@ -11,6 +11,9 @@ import { applyBoardCommand } from "@/lib/board/command";
 import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
 import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
 import { repoDirForProject, pipelineSummary, viewerOwnProjectKeys, type SeatTickSources } from "@/lib/monitor/seatTickSources";
+import { resolveRole } from "@/lib/roles/registry";
+import { effectiveSeatTickSettings } from "@/lib/monitor/seatTickSettings";
+import { SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
 import type { SeatTickCheckInput } from "@/lib/monitor/types";
 import { redactMonitorText } from "@/lib/monitor/redact";
 import { spawnNoticeFinalMessage } from "@/lib/spawnNotice/production";
@@ -141,7 +144,18 @@ function settle(run: MaintenanceRun, patch: Partial<MaintenanceRun>, ports: Boar
   }
   patchMaintenanceRun(run.runId, { ...next, supersededTaskIds: superseded });
 }
+/** The engine the maintainer row launches on: what a refused launch ran on. */
+function maintainerEngine(): { engine?: "claude" | "codex" } {
+  try {
+    const resolved = resolveRole("maintainer");
+    const engine = resolved.ok ? resolved.value.config.engine : null;
+    return engine === "claude" || engine === "codex" ? { engine } : {};
+  } catch { return {}; }
+}
 async function launchRun(run: MaintenanceRun, ports: BoardMaintenancePorts): Promise<string> {
+  // Recovered claims and launch replays obey the current switch too.
+  const wakesEnabled = () => effectiveSeatTickSettings(ports.sources.settings(run.project), ports.sources.now(), SEAT_TICK_WAKE_INTERVAL_MS).enabled;
+  if (!wakesEnabled()) return "maintenance: paused while wakes are off";
   if (!run.taskId) {
     run = patchMaintenanceRun(run.runId, { taskId: createCard(run, ports) })!;
   }
@@ -160,6 +174,7 @@ async function launchRun(run: MaintenanceRun, ports: BoardMaintenancePorts): Pro
     run = patchMaintenanceRun(run.runId, { state: "launching", launchBody: body, launchedAt: new Date(ports.sources.now()).toISOString() })!;
   }
   if (!maintenanceRunIsLive(run)) return "maintenance: already settled";
+  if (!wakesEnabled()) return "maintenance: paused while wakes are off";
   let timer: ReturnType<typeof setTimeout> | undefined;
   const response = await Promise.race([
     (ports.launch ?? launchMaintenanceConversation)(run.launchBody!),
@@ -168,7 +183,7 @@ async function launchRun(run: MaintenanceRun, ports: BoardMaintenancePorts): Pro
   if (!response) return "maintenance: launch pending";
   if (response.status < 200 || response.status >= 300) {
     const kind = ["project_account_refused", "ENGINE_NOT_CONNECTED", "service_tier_unavailable"].includes(String(response.body.code)) ? "no-account" : "launch-refused";
-    settle(run, { state: "failed", failure: { kind, detail: String(response.body.error ?? "spawn refused") } }, ports);
+    settle(run, { state: "failed", failure: { kind, detail: String(response.body.error ?? "spawn refused"), ...(kind === "no-account" ? maintainerEngine() : {}) } }, ports);
     return `maintenance: failed, ${kind}`;
   }
   patchMaintenanceRun(run.runId, { state: response.body.state === "starting" ? "launching" : "running", launchId: typeof response.body.launchId === "string" ? response.body.launchId : null, conversationId: typeof response.body.conversationId === "string" ? response.body.conversationId : null, transcriptPath: typeof response.body.path === "string" ? response.body.path : null });
@@ -201,6 +216,7 @@ export async function reconcileBoardMaintenance(project: string, ports: BoardMai
 export async function launchBoardMaintenanceIfDue(input: SeatTickCheckInput, ports: BoardMaintenancePorts): Promise<string | null> {
   const setting = input.settings.maintenance;
   if (!setting.enabled) return null;
+  if (!input.settings.enabled) return "maintenance: paused while wakes are off";
   if (!input.seat) return "maintenance: waits for a seat";
   const held = readMaintenanceProject(input.project)?.currentRunId;
   if (held && maintenanceRunIsLive(readMaintenanceRun(held)!)) return null;

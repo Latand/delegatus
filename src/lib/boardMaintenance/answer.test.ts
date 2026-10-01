@@ -5,6 +5,13 @@ import { patchMaintenanceRun } from "./store";
 let held: ReturnType<typeof sandbox>;
 afterEach(() => held?.restore());
 const ports = { now: NOW, seat: () => true, deploying: () => false, lastCheckAt: new Date(NOW).toISOString(), checkIntervalMs: 300000 };
+test("wakes off pauses maintenance estimates while preserving the last result and settings", () => {
+  held = sandbox(); const run = claim();
+  patchMaintenanceRun(run.runId, { state: "succeeded", launchedAt: run.claimedAt, endedAt: run.claimedAt });
+  const settings = input().settings; settings.enabled = false;
+  expect(boardMaintenanceAnswer(PROJECT, settings, ports)).toMatchObject({ enabled: true, waitingOn: "wakes-off", pauseReason: "paused while wakes are off", nextRunAt: null, nextEligibleAt: null, lastRun: { runId: run.runId } });
+  expect(boardMaintenanceAnswer(PROJECT, input().settings, ports).waitingOn).toBe("interval");
+});
 test("off by default, enabled first run and estimated next check", () => {
   held = sandbox(); const off = boardMaintenanceAnswer(PROJECT, input(false).settings, ports); expect(off).toMatchObject({ enabled: false, intervalHours: 3, nextRunAt: null, waitingOn: "off" });
   const on = boardMaintenanceAnswer(PROJECT, input().settings, ports); expect(on.nextRunAt).toBe(new Date(NOW + 300000).toISOString());

@@ -26,6 +26,38 @@ const put = (body: unknown) => PUT(new NextRequest("http://127.0.0.1/api/roles",
 
 beforeEach(() => fs.rmSync(file, { force: true }));
 
+test("maintainer picker catalogue choices write the shared row and resolve for launches", async () => {
+  const { ENGINE_MODELS } = await import("@/lib/agent/models");
+  const { effortScale } = await import("@/lib/agent/efforts");
+  const { resolveSpawnRole } = await import("@/lib/roles/registry");
+  const catalog = await (await GET()).json() as Catalog & { launchChoices: { engine: "claude" | "codex"; models: { id: string; efforts: string[] }[] }[] };
+  expect(catalog.launchChoices.map(c => c.engine)).toEqual(["claude", "codex"]);
+  for (const choice of catalog.launchChoices) {
+    expect(choice.models.map(m => m.id)).toEqual(ENGINE_MODELS[choice.engine].map(m => m.id));
+    for (const model of choice.models) {
+      expect(model.efforts).toEqual([...effortScale(choice.engine, model.id)!]);
+      for (const effort of model.efforts) {
+        const config = { engine: choice.engine, model: model.id, effort };
+        const response = await put({ overrides: { maintainer: { config } } });
+        expect(response.status).toBe(200);
+        expect((await response.json() as Catalog).roles.find(r => r.id === "maintainer")?.config).toEqual(config);
+        expect(resolveSpawnRole({ role: "maintainer" })).toMatchObject({ ok: true, value: { config } });
+      }
+    }
+  }
+  const before = fs.readFileSync(file, "utf8");
+  for (const config of [
+    { engine: "codex", model: "gpt-unknown", effort: "high" },
+    { engine: "claude", model: "claude-unlisted", effort: "high" },
+    { engine: "claude", model: "opus", effort: "ultra" },
+    { engine: "copilot", model: "auto", effort: "high" },
+    { engine: "unknown", model: "auto", effort: "high" },
+  ]) {
+    expect((await put({ overrides: { maintainer: { config } } })).status).toBe(400);
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+  }
+});
+
 test("roles route returns all merged role definitions with scaffold previews and shipped runtimes", async () => {
   const body = await (await GET()).json() as Catalog;
   expect(body.schemaVersion).toBe(5);
