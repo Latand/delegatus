@@ -1,0 +1,280 @@
+{
+  "cases": [
+    {
+      "width": 1440,
+      "height": 844,
+      "locale": "en",
+      "lines": [
+        {
+          "motion": "working",
+          "text": "Working · 1",
+          "left": 582,
+          "right": 1010,
+          "top": 256,
+          "bottom": 271.9375,
+          "width": 428,
+          "height": 15.9375,
+          "scrollWidth": 428,
+          "clientWidth": 428
+        },
+        {
+          "motion": "stopped",
+          "text": "Stopped, no reason given",
+          "left": 582,
+          "right": 1010,
+          "top": 486.75,
+          "bottom": 502.6875,
+          "width": 428,
+          "height": 15.9375,
+          "scrollWidth": 428,
+          "clientWidth": 428
+        },
+        {
+          "motion": "needs-you",
+          "text": "Waiting for you: Choose a release to publish · 20m ago",
+          "left": 1074,
+          "right": 1302,
+          "top": 264,
+          "bottom": 295.875,
+          "width": 228,
+          "height": 31.875,
+          "scrollWidth": 228,
+          "clientWidth": 228
+        },
+        {
+          "motion": "waiting",
+          "text": "Queued: waiting for a free worker · After another task finishes · 60m ago",
+          "left": 1074,
+          "right": 1302,
+          "top": 407.875,
+          "bottom": 439.75,
+          "width": 228,
+          "height": 31.875,
+          "scrollWidth": 228,
+          "clientWidth": 228
+        },
+        {
+          "motion": "stopped",
+          "text": "Stopped, no reason given",
+          "left": 1074,
+          "right": 1302,
+          "top": 551.75,
+          "bottom": 567.6875,
+          "width": 228,
+          "height": 15.9375,
+          "scrollWidth": 228,
+          "clientWidth": 228
+        },
+        {
+          "motion": "stopped",
+          "text": "Postponed 2 Oct, 00:14: After green checks · now due · 2h ago",
+          "left": 1074,
+          "right": 1302,
+          "top": 679.6875,
+          "bottom": 711.5625,
+          "width": 228,
+          "height": 31.875,
+          "scrollWidth": 228,
+          "clientWidth": 228
+        }
+      ],
+      "editor": "saved",
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "locale": "en",
+      "lines": [
+        {
+          "motion": "needs-you",
+          "text": "Waiting for you: Choose a release to publish · 20m ago",
+          "left": 24,
+          "right": 366,
+          "top": 209,
+          "bottom": 224.125,
+          "width": 342,
+          "height": 15.125,
+          "scrollWidth": 342,
+          "clientWidth": 342
+        },
+        {
+          "motion": "waiting",
+          "text": "Queued: waiting for a free worker · After another task finishes · 60m ago",
+          "left": 24,
+          "right": 366,
+          "top": 296.875,
+          "bottom": 327.125,
+          "width": 342,
+          "height": 30.25,
+          "scrollWidth": 342,
+          "clientWidth": 342
+        },
+        {
+          "motion": "stopped",
+          "text": "Stopped, no reason given",
+          "left": 24,
+          "right": 366,
+          "top": 399.875,
+          "bottom": 415,
+          "width": 342,
+          "height": 15.125,
+          "scrollWidth": 342,
+          "clientWidth": 342
+        },
+        {
+          "motion": "stopped",
+          "text": "Postponed 2 Oct, 00:14: After green checks · now due · 2h ago",
+          "left": 24,
+          "right": 366,
+          "top": 487.75,
+          "bottom": 502.875,
+          "width": 342,
+          "height": 15.125,
+          "scrollWidth": 342,
+          "clientWidth": 342
+        }
+      ],
+      "editor": "saved",
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 844,
+      "locale": "uk",
+      "lines": [
+        {
+          "motion": "working",
+          "text": "Працюють · 1",
+          "left": 582,
+          "right": 1010,
+          "top": 256,
+          "bottom": 271.9375,
+          "width": 428,
+          "height": 15.9375,
+          "scrollWidth": 428,
+          "clientWidth": 428
+        },
+        {
+          "motion": "stopped",
+          "text": "Без руху, причину не вказано",
+          "left": 582,
+          "right": 1010,
+          "top": 486.75,
+          "bottom": 502.6875,
+          "width": 428,
+          "height": 15.9375,
+          "scrollWidth": 428,
+          "clientWidth": 428
+        },
+        {
+          "motion": "needs-you",
+          "text": "Очікує на вас: Оберіть реліз для публікації · 20 хв тому",
+          "left": 1074,
+          "right": 1302,
+          "top": 264,
+          "bottom": 295.875,
+          "width": 228,
+          "height": 31.875,
+          "scrollWidth": 228,
+          "clientWidth": 228
+        },
+        {
+          "motion": "waiting",
+          "text": "У черзі: очікує на вільного агента · Коли завершиться інша задача · 60 хв тому",
+          "left": 1074,
+          "right": 1302,
+          "top": 407.875,
+          "bottom": 439.75,
+          "width": 228,
+          "height": 31.875,
+          "scrollWidth": 228,
+          "clientWidth": 228
+        },
+        {
+          "motion": "stopped",
+          "text": "Без руху, причину не вказано",
+          "left": 1074,
+          "right": 1302,
+          "top": 551.75,
+          "bottom": 567.6875,
+          "width": 228,
+          "height": 15.9375,
+          "scrollWidth": 228,
+          "clientWidth": 228
+        },
+        {
+          "motion": "stopped",
+          "text": "Відкладено 2 жовт., 00:14: Після успішних перевірок · час настав · 2 год тому",
+          "left": 1074,
+          "right": 1302,
+          "top": 679.6875,
+          "bottom": 711.5625,
+          "width": 228,
+          "height": 31.875,
+          "scrollWidth": 228,
+          "clientWidth": 228
+        }
+      ],
+      "editor": "saved",
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "locale": "uk",
+      "lines": [
+        {
+          "motion": "needs-you",
+          "text": "Очікує на вас: Оберіть реліз для публікації · 20 хв тому",
+          "left": 24,
+          "right": 366,
+          "top": 209,
+          "bottom": 224.125,
+          "width": 342,
+          "height": 15.125,
+          "scrollWidth": 342,
+          "clientWidth": 342
+        },
+        {
+          "motion": "waiting",
+          "text": "У черзі: очікує на вільного агента · Коли завершиться інша задача · 60 хв тому",
+          "left": 24,
+          "right": 366,
+          "top": 296.875,
+          "bottom": 327.125,
+          "width": 342,
+          "height": 30.25,
+          "scrollWidth": 342,
+          "clientWidth": 342
+        },
+        {
+          "motion": "stopped",
+          "text": "Без руху, причину не вказано",
+          "left": 24,
+          "right": 366,
+          "top": 399.875,
+          "bottom": 415,
+          "width": 342,
+          "height": 15.125,
+          "scrollWidth": 342,
+          "clientWidth": 342
+        },
+        {
+          "motion": "stopped",
+          "text": "Відкладено 2 жовт., 00:14: Після успішних перевірок · час настав · 2 год тому",
+          "left": 24,
+          "right": 366,
+          "top": 487.75,
+          "bottom": 518,
+          "width": 342,
+          "height": 30.25,
+          "scrollWidth": 342,
+          "clientWidth": 342
+        }
+      ],
+      "editor": "saved",
+      "pageErrors": []
+    }
+  ]
+}

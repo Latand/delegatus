@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 
+import { readTaskHold, storedTaskHold } from "./hold";
 import { isTaskAttachment } from "./attachments";
 import { taskRevision } from "./revision";
 import { isoNow } from "./helpers";
@@ -55,6 +56,7 @@ export type CreateTaskResult =
   | TaskRefusal;
 
 export interface CreateTaskInput {
+  hold?: unknown;
   project?: unknown;
   text?: unknown;
   /** Agent-facing context, kept out of the human description (#1834). An
@@ -83,6 +85,9 @@ export interface CreateTaskInput {
 }
 
 export interface PatchTaskInput {
+  /** Dashboard undo only, accepted with operator authority and both fences. */
+  restoreHold?: unknown;
+  hold?: unknown;
   expectedProject?: unknown;
   expectedRevision?: unknown;
   text?: unknown;
@@ -150,6 +155,7 @@ export interface PatchTaskOptions {
   hasBoardMembers?: (task: BoardTask) => boolean;
   /** Who is writing: the operator's dashboard or an agent's tool call. */
   actor?: TaskGroupHidden["by"];
+  conversationId?: string;
   /** Required for `hide: true`; without it the hide is refused. */
   seatHolding?: (task: BoardTask) => SeatHolding;
   /** For attachLinks/detachLinks; without it a bare number cannot be resolved. */
@@ -163,6 +169,8 @@ export interface PatchTaskOptions {
 /** Injected so the pure command can ask the store whether an attachment ref's
     bytes actually exist; defaults to "trust the ref" for unit tests. */
 export interface TaskCommandDeps {
+  actor?: "operator" | "agent";
+  conversationId?: string;
   now?: () => string;
   id?: () => string;
   attachmentExists?: (att: TaskAttachment) => boolean;
@@ -378,11 +386,13 @@ export function createTask(
     return boardFullError("project");
   }
 
+  const hold = readTaskHold(input.hold, now, deps.actor ?? "operator", undefined, deps.conversationId);
   const id = deps.id?.() ?? crypto.randomUUID();
   const task: BoardTask = {
     id,
     project,
-    status: "inbox",
+    status: hold ? "blocked" : "inbox",
+    ...(hold ? { hold } : {}),
     text,
     ...(details.details ? { details: details.details } : {}),
     placement,
@@ -448,7 +458,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   /* A group hide is fenced on both surfaces: it is decided against the group
      the caller saw, and a group that changed since is the caller's to re-read. */
   const guardRequired = (options.requirePlacementGuards && (Object.hasOwn(input, "pos") || Object.hasOwn(input, "placement")))
-    || Object.hasOwn(input, "hide");
+    || Object.hasOwn(input, "hide") || Object.hasOwn(input, "restoreHold");
   if (guardRequired || Object.hasOwn(input, "expectedProject") || Object.hasOwn(input, "expectedRevision")) {
     for (const field of ["expectedProject", "expectedRevision"] as const) {
       if (typeof input[field] !== "string" || !input[field].trim()) {
@@ -504,6 +514,22 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     if (!status) return { ok: false, error: "invalid task status", status: 400 };
     patch.status = status;
   }
+  if (Object.hasOwn(input, "restoreHold")) {
+    if (options.actor !== "operator" || Object.hasOwn(input, "hold")) return { ok: false, status: 400, error: "restoreHold is reserved for fenced operator undo" };
+    patch.hold = storedTaskHold(input.restoreHold);
+    if (input.restoreHold !== null && !patch.hold) return { ok: false, status: 400, error: "invalid hold snapshot" };
+  }
+  if (Object.hasOwn(input, "hold")) {
+    patch.hold = readTaskHold(input.hold, now, options.actor ?? "operator", task.hold, options.conversationId);
+    if (patch.hold) patch.status = "blocked";
+    else if (!Object.hasOwn(input, "status") && task.status === "blocked") {
+      patch.status = task.assignments.some(a => ["delivered", "spawning", "handoff", "linked"].includes(a.state)) ? "assigned" : "inbox";
+    }
+  } else if (patch.status === "blocked" && !task.hold && !Object.hasOwn(input, "restoreHold")) {
+    patch.hold = readTaskHold({ kind: "unstated" }, now, options.actor ?? "operator", undefined, options.conversationId);
+  }
+  // A move away from Waiting clears the old reason.
+  if (patch.status && patch.status !== "blocked") patch.hold = undefined;
   if (Object.hasOwn(input, "pos")) {
     const pos = normalizePos(input.pos);
     if (!pos) return positionError(input.pos);
@@ -616,6 +642,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     delete updated.dueTz;
   }
   if (updated.placement === "unplaced") delete updated.pos;
+  if (Object.hasOwn(patch, "hold") && patch.hold === undefined) delete updated.hold;
   if (Object.hasOwn(patch, "details") && patch.details === undefined) delete updated.details;
   if (Object.hasOwn(patch, "color") && patch.color === undefined) delete updated.color;
   if (Object.hasOwn(patch, "icon") && patch.icon === undefined) delete updated.icon;

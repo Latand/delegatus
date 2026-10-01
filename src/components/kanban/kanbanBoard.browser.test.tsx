@@ -14202,3 +14202,68 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     }
   }, 600_000);
 });
+
+
+describe("task motion and waiting reasons", () => {
+  browserTest("states and reasons stay readable at 1440 and 390 px in en and uk", async () => {
+    const out = path.resolve(".artifacts/task-states/renders");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    let browser: Browser | null = null;
+    const cases: Record<string, unknown>[] = [];
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=task-motion`, { width, height: 844 }, "light", locale, "reduce", width === 390);
+        try {
+          const phone = width === 390;
+          await page.locator(phone ? '[data-phone-kanban-tab="assigned"]' : '[data-kanban-board]').waitFor();
+          const selector = (id: string) => phone ? `[data-phone-card="task:${id}"]` : card(id);
+          if (phone) await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          else if (await page.locator('[data-seat-collapse][aria-expanded="true"]').count()) {
+            await page.locator(selector("motion-working")).focus();
+            await page.keyboard.press("o");
+            await page.locator('[data-seat-collapse][aria-expanded="false"]').waitFor();
+          }
+          const stopped = page.locator(`${selector("motion-stopped")} [data-motion="stopped"]`);
+          expect(await stopped.textContent()).toContain(translate(locale, "kanban.motion.stopped"));
+          expect(await page.locator(`${selector("motion-working")} [data-motion="working"]`).count()).toBe(1);
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-progress.png`) });
+          if (phone) await page.locator('[data-phone-kanban-tab="blocked"]').click();
+          const waiting = page.locator(`${selector("motion-worker")} [data-motion="waiting"]`);
+          expect(await waiting.textContent()).toContain(translate(locale, "kanban.hold.worker"));
+          expect(await page.locator(`${selector("motion-operator")} [data-motion="needs-you"]`).textContent()).toContain(translate(locale, "kanban.hold.operator", { note: locale === "en" ? "Choose a release to publish" : "Оберіть реліз для публікації" }));
+          expect(await page.locator(selector("motion-hidden")).count()).toBe(0);
+          const lines = await page.locator(phone ? '[data-phone-kanban-column="blocked"] [data-motion]' : '[data-kanban-board] .card[data-id^="task:"] [data-motion]').evaluateAll(elements => elements.map(el => {
+            const rect = el.getBoundingClientRect();
+            return { motion: el.getAttribute("data-motion"), text: el.textContent, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth };
+          }));
+          expect(lines.length).toBeGreaterThan(0);
+          for (const line of lines) { expect(line.left).toBeGreaterThanOrEqual(0); expect(line.right).toBeLessThanOrEqual(width + 1); expect(line.top).toBeGreaterThanOrEqual(0); expect(line.bottom).toBeLessThanOrEqual(844); expect(line.scrollWidth).toBeLessThanOrEqual(line.clientWidth + 1); expect(line.height).toBeGreaterThan(0); }
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-waiting.png`) });
+          // The same editor is reachable from the card's status menu on desktop
+          // and from its task screen's status sheet on the phone.
+          if (phone) {
+            await page.locator(selector("motion-worker")).click();
+            await page.locator('[data-phone-task-status-pill]').click();
+            await page.locator('[data-phone-task-hold]').click();
+          } else {
+            await page.locator(`${selector("motion-worker")} [data-menu]`).click();
+            await page.getByRole("menuitem", { name: translate(locale, "kanban.hold.edit"), exact: true }).click();
+          }
+          const editor = page.locator('[data-hold-editor]');
+          await editor.waitFor();
+          await editor.locator('select').selectOption("resource");
+          await editor.locator('input').fill(locale === "en" ? "After memory is free" : "Коли звільниться памʼять");
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-editor.png`) });
+          await editor.getByRole("button", { name: translate(locale, "kanban.hold.save"), exact: true }).click();
+          await page.waitForFunction(() => !document.querySelector('[data-hold-editor]'));
+          expect(pageErrors).toEqual([]);
+          cases.push({ width, height: 844, locale, lines, editor: "saved", pageErrors });
+        } finally { await context.close(); }
+      }
+    } finally { await browser?.close(); server.stop(); }
+    fs.mkdirSync("evidence/task-states-and-reasons", { recursive: true });
+    fs.writeFileSync("evidence/task-states-and-reasons/renders.json", `${JSON.stringify({ cases }, null, 2)}\n`);
+  }, 180_000);
+});

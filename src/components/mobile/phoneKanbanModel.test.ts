@@ -53,6 +53,7 @@ function task(id: string, status: TaskStatus, paths: readonly string[] = [], ext
     project: "fixture",
     text: `Task ${id}\nWhat ${id} is about`,
     status,
+    ...(status === "done" ? { doneAt: new Date(NOW * 1000).toISOString() } : {}),
     placement: "unplaced",
     assignments: paths.map((path) => ({ path, conversationId: `conversation_fixture_${path.match(/(\d+)/)![1]}`, panePid: null, state: "delivered", error: null, at: "2026-09-14T10:00:00.000Z" })),
     createdAt: "2026-09-14T10:00:00.000Z",
@@ -413,4 +414,15 @@ test("the phone's Inbox tab takes high first and low last, as the desktop Inbox 
   expect(keys(phone.columns.inbox.cards)).toEqual(["high-old", "normal-new", "normal-old", "low-busy", "low-new"]);
   expect(keys(phone.columns.inbox.cards)).toEqual(model.columns.inbox.cards.map((card) => card.task!.id));
   expect(keys(phone.columns.assigned.cards)).toEqual(["assigned-low", "assigned-high"]);
+});
+
+
+test("an operator hold is pinned and counted like the desktop needs-you motion", () => {
+  const held = task("hold", "blocked", [], { hold: { kind: "operator", note: "Choose the release", since: "2026-10-02T09:00:00.000Z", by: "agent" } });
+  const model = desktop([held], []);
+  const phone = buildPhoneKanban({ model, now: NOW });
+  expect(model.columns.blocked.needsYou).toBe(1);
+  expect(phone.columns.blocked.needsYou).toBe(1);
+  expect(phone.columns.blocked.pinned[0]?.card.motion.key).toBe("needs-you");
+  expect(phone.columns.blocked.pinned[0]?.edge).toBe("warning");
 });

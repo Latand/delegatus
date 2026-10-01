@@ -1578,3 +1578,17 @@
 :is(.kb, [data-phone-kanban]) .remote-agent time { grid-column: 3; grid-row: 1; white-space: nowrap; }
 :is(.kb, [data-phone-kanban]) .remote-agent-asof { grid-column: 2 / -1; }
 .kb .remote-unbound { padding: 4px 10px; }
+
+/* Task motion stays visible when card contents fold. */
+.kb .card .motion-line { margin: 2px 0 6px; font-size: var(--text-label); line-height: 1.45; color: var(--color-muted); overflow-wrap: anywhere; }
+.kb .card .motion-line[data-motion="working"] { color: var(--color-success); }
+.kb .card .motion-line[data-motion="needs-you"] { color: var(--color-warning); }
+.kb .card .motion-line a { text-decoration: underline; }
+.kb .card .motion-age { color: var(--color-muted); white-space: nowrap; }
+
+.hold-editor { display: grid; gap: 8px; margin: 8px 0; font-size: var(--text-label); }
+.hold-editor label { display: grid; gap: 3px; min-width: 0; }
+.hold-editor input, .hold-editor select { width: 100%; min-width: 0; padding: 6px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--surface-card); }
+.hold-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.hold-actions button { padding: 6px 8px; border: 1px solid var(--color-border); border-radius: 4px; }
+@media (pointer: coarse) { .hold-editor input, .hold-editor select, .hold-actions button { min-height: 44px; } }

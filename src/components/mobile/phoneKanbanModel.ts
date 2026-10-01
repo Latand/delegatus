@@ -159,7 +159,7 @@ function liveReasons(card: KanbanCard, closing: ReadonlySet<string>): NeedReason
 
 /** Whether the card needs the operator, as the ⚠ queue reads it. */
 function cardNeeds(card: KanbanCard, closing: ReadonlySet<string>): boolean {
-  return liveReasons(card, closing).length > 0;
+  return card.task?.hold?.kind === "operator" || liveReasons(card, closing).length > 0;
 }
 
 /** Where a reason stands in the attention queue, or Infinity when the queue
@@ -200,7 +200,7 @@ function phoneCard(card: KanbanCard, kind: PhoneCardKind, rank: ReadonlyMap<stri
     const member = card.members.find((entry) => entry.file.path === first.file.path);
     if (member) need = { kind: "conversation", member, state: mobileRowState(member.file, now), reason: first };
   }
-  const edge = need?.kind === "conversation" ? need.state.edge ?? "warning" : need ? "warning" : null;
+  const edge = need?.kind === "conversation" ? need.state.edge ?? "warning" : need || card.motion.key === "needs-you" ? "warning" : null;
 
   const shownId = shown?.pipeline.id ?? null;
   const outside = card.members.filter((member) => member.working && member.stage?.pipeline.id !== shownId).length;
@@ -251,7 +251,7 @@ export function buildPhoneKanban({ model, attention = [], doneShown = DONE_WINDO
     const rest = column.shown.filter((card) => !cardNeeds(card, closing));
     const windowed = status === "done" ? rest.slice(0, Math.max(0, doneShown)) : rest;
     const loose = status === "inbox" ? unlinked.filter((entry) => !cardNeeds(entry.card, closing)) : [];
-    const looseWorking = status === "inbox" ? unlinked.reduce((sum, entry) => sum + entry.card.working, 0) : 0;
+    const looseWorking = status === "inbox" ? unlinked.reduce((sum, entry) => sum + (entry.card.motion.key === "working" ? 1 : 0), 0) : 0;
     return [status, {
       status,
       count: column.shown.length,

@@ -65,3 +65,28 @@ test("GET derives pipelineIds including closed history and filters stale task id
   expect((loadTasks()[0] as BoardTask & { pipelineIds?: string[] }).pipelineIds).toBeUndefined();
   expect((loadPipelines()[0] as Pipeline).taskIds).toEqual([task.id, "deleted-task"]);
 });
+
+
+test("REST creates, patches, lists and undoes a hold without changing another hidden card", async () => {
+  const { PATCH } = await import("./[id]/route");
+  const createdResponse = await route.POST(new NextRequest("http://localhost/api/tasks", { method: "POST", headers: { "content-type": "application/json", host: "localhost" }, body: JSON.stringify({ project: "motion-fixture", text: "Wait for capacity", placement: "unplaced", hold: { kind: "worker", note: "After a worker is free" } }) }));
+  expect(createdResponse.status).toBe(200);
+  const created = (await createdResponse.json()).task as BoardTask & { revision: string };
+  expect(created.status).toBe("blocked");
+  expect(created.hold?.kind).toBe("worker");
+  const hidden: BoardTask = { ...created, id: "hidden-hold-fixture", text: "Hidden older work", hold: undefined, groupHidden: { at: created.createdAt, by: "operator", admitted: [] } };
+  saveTasks([...loadTasks(), hidden]);
+  const send = (row: BoardTask & { revision: string }, body: Record<string, unknown>) => PATCH(new NextRequest("http://localhost/api/tasks", { method: "PATCH", headers: { "content-type": "application/json", host: "localhost" }, body: JSON.stringify({ ...body, expectedProject: row.project, expectedRevision: row.revision }) }), { params: Promise.resolve({ id: row.id }) });
+  const movedResponse = await send(created, { status: "assigned" });
+  expect(movedResponse.status).toBe(200);
+  const moved = (await movedResponse.json()).task;
+  expect(moved.hold).toBeUndefined();
+  const restoredResponse = await send(moved, { status: "blocked", restoreHold: created.hold });
+  expect(restoredResponse.status).toBe(200);
+  expect((await restoredResponse.json()).task.hold).toEqual(created.hold);
+  const listed = await route.GET(new NextRequest("http://localhost/api/tasks"));
+  const rows = (await listed.json()).tasks as BoardTask[];
+  expect(rows.find(row => row.id === created.id)?.hold).toEqual(created.hold);
+  expect(rows.find(row => row.id === hidden.id)?.hold).toBeUndefined();
+  expect(rows.find(row => row.id === hidden.id)?.groupHidden).toEqual(hidden.groupHidden);
+});

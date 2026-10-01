@@ -10,7 +10,7 @@ import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { SeatRefs } from "@/lib/tasks/groupHide";
 import { suggestTaskIcon } from "@/lib/tasks/taskIconSuggest";
-import { TASK_PRIORITIES, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus } from "@/lib/tasks/types";
+import { TASK_PRIORITIES, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus, type TaskHold } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { MAX_VISIBLE_PATHS } from "@/lib/view/types";
 import { latestAttempt, stagePromptExtra } from "@/components/pipelines/pipelineModel";
@@ -718,7 +718,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (!raw) return { target, kind: "conflict" as const, error: "" };
       let outcome: StatusMoveOutcome | FieldEditOutcome;
       const fence = { fenced: true, lineage: entry.lineages?.get(target.taskId) };
-      if (entry.kind === "status") outcome = await controller.move(raw, undoing ? entry.from : entry.to, fence);
+      if (entry.kind === "status") outcome = await controller.move(raw, undoing ? entry.from : entry.to, { ...fence, ...(Object.hasOwn(entry, "fromHold") ? { restoreHold: undoing ? entry.fromHold ?? null : entry.toHold ?? null } : {}) });
       else if (entry.kind === "text") outcome = await controller.edit(raw, { field: "text", value: undoing ? entry.before : entry.after }, fence);
       else {
         const write = controller.edit(raw, undoing ? { field: "hide", value: false } : { field: "hide", value: true, replaces: raw.groupHidden?.at ?? null }, { ...fence, after: chain });
@@ -792,21 +792,21 @@ export function KanbanBoard(props: KanbanBoardProps) {
     return true;
   };
 
-  const move = useCallback((card: KanbanCardModel, to: TaskStatus, options: { focus?: boolean } = {}) => {
+  const move = useCallback((card: KanbanCardModel, to: TaskStatus, options: { focus?: boolean; hold?: Partial<TaskHold> | null } = {}) => {
     const task = card.task ? tasksById.current.get(card.task.id) ?? card.task : null;
     if (!task) return;
     const from = card.status;
-    if (from === to) return;
+    if (from === to && !Object.hasOwn(options, "hold")) return;
     const title = card.titlePending ? t("kanban.untitled") : card.title;
     const short = clipTitle(title);
     const written = settles();
-    const entry: HistoryEntry = { kind: "status", taskId: task.id, title: short, from, to, settled: written.promise };
+    const entry: HistoryEntry = { kind: "status", taskId: task.id, title: short, from, to, fromHold: controller.holdFor(task) ?? null, toHold: null, settled: written.promise };
     historyRef.current.record(entry);
     const receiptId = show(t("kanban.moved", { title: short, status: statusLabel(t, to) }), { label: t("kanban.undo"), run: () => void step("undo", entry) });
     entryReceipts.current.set(entry, receiptId);
     if (options.focus) focusMoved(card.id, to);
-    void controller.move(task, to).then((outcome: StatusMoveOutcome) => {
-      if (outcome.kind === "saved") entry.lineages = new Map([[task.id, outcome.lineage]]);
+    void controller.move(task, to, Object.hasOwn(options, "hold") ? { hold: options.hold } : {}).then((outcome: StatusMoveOutcome) => {
+      if (outcome.kind === "saved") { entry.lineages = new Map([[task.id, outcome.lineage]]); entry.toHold = outcome.task.hold ?? null; }
       written.resolve(outcome.kind === "saved");
       /* The server already held the status: nothing of this board's is left to undo. */
       if (outcome.kind === "settled") dismiss(receiptId);
@@ -817,7 +817,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
           label: t("kanban.retry"),
           run: () => {
             const current = cardsByIdRef.current.get(card.id);
-            if (current) move(current, to);
+            if (current) move(current, to, options);
           },
         }, { error: true });
       } else if (outcome.kind === "conflict") {
@@ -827,7 +827,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
           label: t("kanban.moveAnyway"),
           run: () => {
             const current = cardsByIdRef.current.get(card.id);
-            if (current) move(current, to);
+            if (current) move(current, to, options);
           },
         }, { error: true });
       }
@@ -1256,14 +1256,16 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, [model]);
 
   /* ── Menus ───────────────────────────────────────────────────────────── */
-  const statusItems = useCallback((card: KanbanCardModel, hints: boolean): KanbanMenuItem[] => KANBAN_STATUSES.map((status) => ({
-    type: "radio" as const,
-    status,
-    label: statusLabel(t, status),
-    why: hints ? t(`kanban.statusHint.${status}`) : null,
-    checked: card.status === status,
-    onSelect: () => move(card, status, { focus: true }),
-  })), [move, t]);
+  const [holdEditing, setHoldEditing] = useState<string | null>(null);
+  const statusItems = useCallback((card: KanbanCardModel, hints: boolean): KanbanMenuItem[] => [
+    ...KANBAN_STATUSES.map((status): KanbanMenuItem => ({
+      type: "radio", status, label: statusLabel(t, status),
+      why: hints ? t(`kanban.statusHint.${status}`) : null,
+      checked: card.status === status,
+      onSelect: () => move(card, status, { focus: true }),
+    })),
+    { type: "item", label: t("kanban.hold.edit"), keepFocus: true, onSelect: () => setHoldEditing(card.id) },
+  ], [move, t]);
   const menuFor = (): { label: string; items: KanbanMenuItem[] } | null => {
     const open = menu.open;
     if (!open) return null;
@@ -2502,6 +2504,13 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onHide: hideCard,
         onDismiss: dismissCard,
         onUndoDismiss: undoDismissCard,
+        holdEditingId: holdEditing,
+        onSaveHold: (card: KanbanCardModel, hold: Partial<TaskHold> | null) => {
+          setHoldEditing(null);
+          const hasOwner = card.task?.assignments.some(a => ["delivered", "spawning", "handoff", "linked"].includes(a.state));
+          move(card, hold ? "blocked" : hasOwner ? "assigned" : "inbox", { hold, focus: true });
+        },
+        onCancelHold: () => { const id = holdEditing; setHoldEditing(null); if (id) focusCard(id); },
         onIconMenu: openIconMenu,
         graphChoices,
         onToggleGraph: toggleGraph,
@@ -2853,8 +2862,8 @@ type CardHandlers = Pick<
   | "onStartEdit" | "onEditDraft" | "onCommitEdit" | "onCancelEdit" | "onRetryEdit" | "onDiscardEdit" | "onUseTheirs" | "onKeepMine" | "onHide" | "onDismiss" | "onUndoDismiss" | "onIconMenu"
   | "graphChoices" | "onToggleGraph" | "onOpenAttempt" | "onDismissLaunch"
   | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onWorkLinks" | "onAnswer" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent"
-  | "projectNames" | "onOpenProject"
->;
+  | "projectNames" | "onOpenProject" | "onSaveHold" | "onCancelHold"
+> & { holdEditingId?: string | null };
 
 function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, remoteAgents, remoteCards, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, onColumnMenu, cardProps }: {
   status: TaskStatus;
@@ -2913,12 +2922,13 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
       failedEdit={failedEdits.get(card.id) ?? null}
       incomingEdit={incomingEdits.get(card.id) ?? null}
       {...cardProps}
+      holdEditing={cardProps.holdEditingId === card.id}
     />
   );
-  // Keep the existing idle divider only around a trailing idle suffix. It
-  // must never move an older or unknown-work card above newer execution.
+  // Motion ordering keeps stopped work in a trailing suffix, including
+  // tasks whose finished conversations are still attached.
   let split = shown.length;
-  if (status === "assigned") while (split > 0 && shown[split - 1]!.idle) split -= 1;
+  if (status === "assigned") while (split > 0 && shown[split - 1]!.motion.key === "stopped") split -= 1;
   const active = shown.slice(0, split);
   const idle = shown.slice(split);
   const unlinked = status === "inbox" ? model.unlinkedShown : [];
@@ -3009,7 +3019,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
           <>
             <div className="divider">
               <span role="separator" aria-label={t("kanban.idleAria", { count: idle.length })}>{t("kanban.idleDivider", { count: idle.length })}</span>
-              {idle.some((card) => card.task && !card.holdsSeat) ? (
+              {idle.some((card) => card.task && card.idle && !card.holdsSeat) ? (
                 <button type="button" data-hide-idle="" title={t("kanban.hideIdleWhy")} onClick={onHideIdle}>{t("kanban.hideIdleShort")}</button>
               ) : null}
             </div>

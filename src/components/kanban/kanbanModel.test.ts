@@ -305,7 +305,12 @@ test("a stage in flight puts its card among the working ones, and a paused lane'
   const lane = buildingLane("pipeline-staged", "staged", { startedAt: iso(NOW - 600) });
   const order = (pipelines: Pipeline[]) => model(tasks, [quiet], { pipelines }).columns.assigned.cards.map((card) => card.task!.id);
   expect(order([lane])).toEqual(["staged", "quiet"]);
-  expect(order([{ ...lane, state: "paused", pausedState: "running" } as Pipeline])).toEqual(["quiet", "staged"]);
+  const paused = { ...lane, state: "paused", pausedState: "running" } as Pipeline;
+  // Declared waiting comes before work stopped without a reason.
+  expect(order([paused])).toEqual(["staged", "quiet"]);
+  const held = model(tasks, [quiet], { pipelines: [paused] }).columns.assigned.cards[0]!;
+  expect(held.motion.key).toBe("waiting");
+  expect(cardHasLiveWork(held)).toBe(false);
 });
 
 test("a card's agent work counts every attempt of its lanes, including a stage conversation the board draws nowhere", () => {
@@ -1072,4 +1077,29 @@ test("done expiry uses the board clock and preserves the seat, fresh decisions a
   expect(later.offBoard.map((task) => task.id)).toEqual(["expired"]);
   const reopened = buildKanbanModel({ ...input, now: NOW + 2, statusOverrides: new Map([["expired", "assigned" as const]]) });
   expect(reopened.columns.assigned.cards.map((card) => card.task!.id)).toEqual(["expired"]);
+});
+
+// A finished conversation must not hide a task that has stopped.
+test("motion identifies stopped assigned work even with finished conversations", () => {
+  const ended = file(990, { activity: "idle" });
+  const board = model([task("t990", "assigned", [ended.path]), task("t991", "blocked")], [ended]);
+  for (const status of ["assigned", "blocked"] as const) {
+    const card = board.columns[status].cards[0]!;
+    expect(card.motion.key).toBe("stopped");
+    expect(cardHasLiveWork(card)).toBe(false);
+  }
+});
+
+
+test("holds and provisioning use one motion in cards, headers and the Overview filter", () => {
+  const hold = { kind: "operator" as const, note: "Choose what to publish", since: "2026-10-02T09:00:00.000Z", by: "agent" as const };
+  const tasks = [task("t901", "blocked", [], { hold }), task("t902", "assigned"), task("t903", "blocked", [], { hold: { ...hold, kind: "worker" } })];
+  const lane = buildingLane("provisioning-lane", "t902", { startedAt: "2026-10-02T09:00:00.000Z" });
+  lane.state = "provisioning";
+  const board = model(tasks, [], { pipelines: [lane] });
+  expect(board.columns.blocked.needsYou).toBe(1);
+  expect(board.columns.assigned.working).toBe(1);
+  const live = [...board.columns.assigned.cards, ...board.columns.blocked.cards].filter(cardHasLiveWork);
+  expect(live.map(card => card.task!.id).sort()).toEqual(["t901", "t902"]);
+  expect(board.columns.blocked.cards.find(card => card.task!.id === "t903")?.motion.key).toBe("waiting");
 });

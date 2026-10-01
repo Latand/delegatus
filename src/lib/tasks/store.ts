@@ -24,6 +24,7 @@ import { snapshotGroups, stampLinkedRows, type GroupSnapshot, type TaskSyncWrite
 import { tombstoneCollection, tombstoneRowKey, type TombstoneRow } from "@/lib/links/tombstones";
 
 import { snapshotTasks, stampTaskRevisions, taskFingerprint, taskRevision } from "./revision";
+import { storedTaskHold } from "./hold";
 import { isTaskAttachment } from "./attachments";
 import { withTaskCompletion } from "./completion";
 import type { RecentCreate } from "./commands";
@@ -193,6 +194,7 @@ function coerceTask(value: unknown): BoardTask | null {
     id: raw.id!,
     project: canonicalProject(raw.project!),
     status: raw.status!,
+    hold: storedTaskHold(raw.hold),
     text: raw.text!,
     ...(raw.details !== undefined ? { details: raw.details } : {}),
     placement: placement === "pinned" && !hasPos ? "unplaced" : placement,

@@ -57,6 +57,7 @@ function task(id: string, status: TaskStatus, text: string, extra: Partial<Board
     project: "fixture",
     text,
     status,
+    ...(status === "done" ? { doneAt: new Date(NOW * 1000).toISOString() } : {}),
     placement: "unplaced",
     assignments: [],
     createdAt: "2026-09-14T10:00:00.000Z",
@@ -773,4 +774,31 @@ test("priority comes from the card menu: three levels with the current one check
   expect(prioMark(view.host, "b")).toBeNull();
   await tick();
   expect((view.server.patches[1]!.body as { priority: string }).priority).toBe("normal");
+});
+
+test("stopped work and waiting reasons are visible without expanding a card", () => {
+  const held = task("hold-visible", "blocked", "Wait for capacity", { hold: { kind: "worker", note: "After the worker is free", since: "2026-09-14T10:00:00.000Z", by: "agent" } });
+  const stopped = task("stopped-visible", "assigned", "Finish the audit", { assignments: [assignment(1)] });
+  const { host } = mount([held, stopped], { files: [conversation(1)] });
+  expect(host.querySelector('[data-motion="waiting"]')?.textContent).toContain("Queued: waiting for a free worker");
+  expect(host.querySelector('[data-motion="stopped"]')?.textContent).toContain("Stopped, no reason given");
+  expect(host.querySelector('[data-status="assigned"] h2')?.textContent).toBe("In progress");
+  expect(host.querySelector('[data-status="blocked"] h2')?.textContent).toBe("Waiting");
+  expect(host.querySelector('[role="separator"]')?.textContent).toBe("Stopped · 1");
+});
+
+
+test("the status menu opens an inline reason editor and saves a Waiting hold", async () => {
+  const view = mount([task("hold-edit", "assigned", "Wait for a worker")]);
+  click(cardEl(view.host, "hold-edit")?.querySelector("[data-menu]"));
+  click([...view.host.querySelectorAll('[role="menuitem"]')].find(node => node.textContent === "Set waiting reason"));
+  const form = view.host.querySelector("[data-hold-editor]")!;
+  expect(form).toBeTruthy();
+  const select = form.querySelector("select")!;
+  flushSync(() => { select.value = "worker"; select.dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event); });
+  type(form.querySelector("input")!, "After another task finishes");
+  flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
+  await tick();
+  expect(view.server.patches[0]!.body).toMatchObject({ status: "blocked", hold: { kind: "worker", note: "After another task finishes" } });
+  expect(columnOf(view.host, "hold-edit")).toBe("blocked");
 });

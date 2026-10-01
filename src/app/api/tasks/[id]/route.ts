@@ -18,10 +18,10 @@ import type { ApiError } from "@/lib/types";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const TASK_REQUEST_FIELDS = ["text", "details", "status"] as const;
+const TASK_REQUEST_FIELDS = ["text", "details", "status", "hold", "restoreHold"] as const;
 /* What the team audit names as a change to a task (§7.3): its words, where it
    stands, and whether it is on the board. Placement and decoration are not. */
-const TEAM_TASK_FIELDS = ["text", "details", "status", "hide", "board", "priority", "dueAt"] as const;
+const TEAM_TASK_FIELDS = ["text", "details", "status", "hold", "restoreHold", "hide", "board", "priority", "dueAt"] as const;
 
 type TaskRouteContext = {
   params: Promise<{ id: string }>;

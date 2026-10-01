@@ -4,6 +4,7 @@ import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { groupHideState, isSeatConversation, seatAssignment, seatOnlyTask, type GroupHideState, type GroupResurfaceReason, type SeatRefs } from "@/lib/tasks/groupHide";
 import { LAUNCH_NOT_STARTED_ERROR, TASK_COLORS, taskPriority, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus } from "@/lib/tasks/types";
+import { taskMotion, type TaskMotion } from "@/lib/tasks/motion";
 import { priorityRank } from "@/lib/tasks/priority";
 import type { FileEntry } from "@/lib/types";
 import { byNeedAge, conversationNeed, laneNeed, type ClearedNeed, type NeedReason } from "@/components/attention/needReason";
@@ -106,6 +107,8 @@ export interface KanbanCard {
   /** Agent drafts the card holds, in the band's order: its own «+ Agent», a handoff, a retried launch. */
   drafts: string[];
   pipelines: KanbanPipeline[];
+  holdTarget?: { title: string; done: boolean };
+  motion: TaskMotion;
   working: number;
   /** Something on the card needs the operator: `reasons` is not empty. */
   needsYou: boolean;
@@ -312,12 +315,15 @@ function referenceIdentity(reference: { conversationId: string | null; path: str
 /**
  * The order of a column, the Not-on-a-task list and the phone's columns alike.
  *
- * Cards with work in flight come first, the one whose work started last on
- * top. A start moves only when a turn or a stage attempt starts or ends, so
+ * Needs-you cards come first, then working, waiting and stopped cards.
+ * Within a motion, the one whose work started last comes first. A start moves only when a turn or a stage attempt starts or ends, so
  * the working cards keep their places while their agents stream. Then the
  * newest agent work, then the newest edit of the task, then the id.
  */
+const MOTION_ORDER: Record<TaskMotion["key"], number> = { "needs-you": 0, working: 1, waiting: 2, stopped: 3, "not-started": 4, done: 5 };
 export function compareCards(a: KanbanCard, b: KanbanCard): number {
+  const motionOrder = MOTION_ORDER[a.motion.key] - MOTION_ORDER[b.motion.key];
+  if (motionOrder) return motionOrder;
   if ((a.workingSinceMs === null) !== (b.workingSinceMs === null)) return a.workingSinceMs === null ? 1 : -1;
   if (a.workingSinceMs !== null && b.workingSinceMs !== null) return b.workingSinceMs - a.workingSinceMs || a.id.localeCompare(b.id);
   return b.lastAgentWorkAtMs - a.lastAgentWorkAtMs
@@ -345,24 +351,10 @@ export function cardMatches(card: KanbanCard, query: string): boolean {
   return !needle || card.searchText.includes(needle);
 }
 
-/**
- * A card with a worker working right now (#1820).
- *
- * It reads the evidence the board's own counters read and nothing else:
- * `working` is the number the column's «N working» shows (a member
- * conversation whose row state is working or held), `needsYou` is the one its
- * «N need you» shows, and a stage chip in flight is the running stage the
- * graph already draws. There is no second definition of working here, so a
- * finished Claude conversation is as absent from this predicate as it is from
- * those counters.
- *
- * A card waiting on the operator counts: the work is live, it is the operator
- * who is holding it.
- */
+/** The Overview and filters use the board's motion, including provisioning
+    and declared operator holds. Paused historical stage chips are not work. */
 export function cardHasLiveWork(card: KanbanCard): boolean {
-  return card.working > 0
-    || card.needsYou
-    || card.pipelines.some((summary) => summary.chips.some((chip) => IN_FLIGHT_STAGES.has(chip.state)));
+  return card.motion.key === "working" || card.motion.key === "needs-you";
 }
 
 export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
@@ -395,6 +387,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     return latest;
   };
   const query = input.query ?? "";
+  const tasksById = new Map(tasks.map(task => [task.id, task]));
   const pipelineById = new Map(pipelines.map((pipeline) => [pipeline.id, pipeline] as const));
   const flowsById = new Map((input.flows ?? []).map((flow) => [flow.id, flow] as const));
   const flowsByDeck = new Map((input.flows ?? []).map(flow => [deckKey(flow.id), flow]));
@@ -617,6 +610,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       now: now * 1000, holdsSeat, seat: input.seat,
       members: members.map((member) => member.file), pipelines,
     })) return [];
+    const holdTarget = task?.hold?.kind === "task" ? tasksById.get(task.hold.ref ?? "") : undefined;
     const color = task?.color && (TASK_COLORS as readonly string[]).includes(task.color) ? task.color : null;
     /* A placeholder no agent will name any more borrows its conversation's
        title rather than staying «Untitled task» for good. */
@@ -669,6 +663,9 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       otherSurfaces,
       drafts,
       pipelines: summaries,
+      ...(holdTarget ? { holdTarget: { title: holdTarget.text.split("\n")[0]!, done: holdTarget.status === "done" } } : {}),
+      motion: taskMotion({ status, hold: overridden && overridden !== "blocked" ? undefined : task?.hold, needsYou, working,
+        inFlight: inFlight.length > 0, pipelines: summaries.map(summary => summary.pipeline) }, now * 1000),
       working,
       needsYou,
       reasons,
@@ -682,7 +679,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
         ...[...identities].map(id => workByIdentity.get(id) ?? 0),
         ...summaries.map(summary => pipelineWorkAt(summary.pipeline))),
       workingSinceMs,
-      searchText: [title, description, ...members.map((member) => member.file.title ?? ""), ...summaries.map((summary) => summary.pipeline.task)]
+      searchText: [title, description, task?.hold?.note ?? "", task?.hold?.ref ?? "", ...members.map((member) => member.file.title ?? ""), ...summaries.map((summary) => summary.pipeline.task)]
         .join("\n")
         .toLowerCase(),
       color,
@@ -710,8 +707,8 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       status,
       cards: inColumn,
       shown: inColumn.filter((card) => keeps(card)),
-      working: inColumn.reduce((sum, card) => sum + card.working, 0),
-      needsYou: inColumn.filter((card) => card.needsYou).length,
+      working: inColumn.filter(card => card.motion.key === "working").length,
+      needsYou: inColumn.filter((card) => card.motion.key === "needs-you").length,
     } satisfies KanbanColumn];
   })) as Record<TaskStatus, KanbanColumn>;
 
@@ -740,7 +737,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       /* Agents of a hidden group keep working, and the header says so; a
          decision the operator hid is not counted as waiting on them. */
       working: cards.reduce((sum, card) => sum + card.working, 0),
-      needsYou: cards.filter((card) => card.needsYou && !card.hide.hidden).length,
+      needsYou: cards.filter((card) => card.motion.key === "needs-you" && !card.hide.hidden).length,
     },
   };
 }

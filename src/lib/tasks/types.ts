@@ -1,3 +1,16 @@
+export const TASK_HOLD_KINDS = ["operator", "task", "pr", "issue", "worker", "resource", "limit", "postponed", "external", "unstated"] as const;
+export type TaskHoldKind = typeof TASK_HOLD_KINDS[number];
+export interface TaskHold {
+  kind: TaskHoldKind;
+  ref?: string;
+  /** One sentence naming what ends the wait, at most 200 characters. */
+  note: string;
+  since: string;
+  until?: string;
+  by: "operator" | "agent" | "migration";
+  conversationId?: string;
+}
+
 export type TaskStatus = "inbox" | "assigned" | "blocked" | "done";
 
 /** The text of a placeholder task whose admission carried no title at all. */
@@ -147,6 +160,7 @@ export interface BoardTask {
   id: string; // crypto.randomUUID(), server-side
   project: string; // FileEntry.project — the board the card lives on
   status: TaskStatus;
+  hold?: TaskHold;
   /** Entry into done or its latest new admission; cleared on reopen. Legacy
       rows freeze updatedAt on read and persist it on the next store write. */
   doneAt?: string;

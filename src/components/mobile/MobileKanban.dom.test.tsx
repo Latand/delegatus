@@ -91,7 +91,7 @@ const asking = (index: number) => file(index, {
 
 function task(id: string, status: TaskStatus, paths: readonly string[] = [], text = `Task ${id}`): BoardTask {
   return {
-    id, project: "fixture", text, status, placement: "unplaced", revision: `r-${id}-1`,
+    id, project: "fixture", text, status, ...(status === "done" ? { doneAt: new Date(NOW * 1000).toISOString() } : {}), placement: "unplaced", revision: `r-${id}-1`,
     assignments: paths.map((path) => ({ path, conversationId: `conversation_fixture_${path.match(/(\d+)/)![1]}`, panePid: null, state: "delivered", error: null, at: "2026-09-14T10:00:00.000Z" })),
     createdAt: "2026-09-14T10:00:00.000Z", updatedAt: "2026-09-14T10:00:00.000Z",
   } as BoardTask;
@@ -220,7 +220,7 @@ test("four tabs in the desktop's order carry each column's count and its working
   const { host } = mount({ files, tasks, attention: [attentionKey.conversation(files[2]!.path)] });
   const tabs = qa(host, "[role=tab]");
   expect(tabs.map((tab) => tab.getAttribute("data-phone-kanban-tab"))).toEqual(["inbox", "assigned", "blocked", "done"]);
-  expect(tabs.map((tab) => q(tab, "[data-phone-tab-label]")!.textContent)).toEqual(["Inbox", "Assigned", "Blocked", "Done"]);
+  expect(tabs.map((tab) => q(tab, "[data-phone-tab-label]")!.textContent)).toEqual(["Inbox", "In progress", "Waiting", "Done"]);
   const count = (status: string, mark: string) => q(host, `[data-phone-kanban-tab="${status}"] [${mark}]`)?.getAttribute(mark) ?? null;
   expect([count("inbox", "data-phone-tab-count"), count("assigned", "data-phone-tab-count"), count("blocked", "data-phone-tab-count"), count("done", "data-phone-tab-count")]).toEqual(["2", "2", "0", "1"]);
   expect(count("assigned", "data-phone-tab-working")).toBe("1");
@@ -229,7 +229,7 @@ test("four tabs in the desktop's order carry each column's count and its working
   expect(count("inbox", "data-phone-tab-needs")).toBe("1");
   expect(count("assigned", "data-phone-tab-needs")).toBeNull();
   expect(q(host, "[data-phone-kanban-tab=assigned]")!.getAttribute("aria-selected")).toBe("true");
-  expect(q(host, "[data-phone-kanban-tab=assigned]")!.getAttribute("aria-label")).toBe(`Assigned, ${en("mobile2.kanban.tasks", { count: 2 })}, ${en("kanban.columnWorking", { count: 1 })}`);
+  expect(q(host, "[data-phone-kanban-tab=assigned]")!.getAttribute("aria-label")).toBe(`In progress, ${en("mobile2.kanban.tasks", { count: 2 })}, ${en("kanban.columnWorking", { count: 1 })}`);
   /* The needs-you card is first in Inbox, with its badge and its ask. */
   expect(cardsIn(host, "inbox")[0]).toBe("task:i1");
   const first = q(host, '[data-phone-card="task:i1"]')!;
@@ -300,7 +300,7 @@ test("a long-press opens the card's sheet; Move to moves the card at once with U
   expect(nav.getState().sheet).toBeNull();
   expect(cardsIn(host, "blocked")).toEqual(["task:a2"]);
   expect(cardsIn(host, "assigned")).toEqual(["task:a1"]);
-  expect(q(host, "[data-test-receipt]")!.textContent).toContain(en("mobile2.kanban.moved", { column: "Blocked" }));
+  expect(q(host, "[data-test-receipt]")!.textContent).toContain(en("mobile2.kanban.moved", { column: "Waiting" }));
   await sleep(20);
   expect(patches.map((entry) => [entry.id, (entry.body as { status?: string }).status])).toEqual([["a2", "blocked"]]);
 

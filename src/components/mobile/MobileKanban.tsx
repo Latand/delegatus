@@ -12,13 +12,14 @@ import { EngineMark } from "@/components/EngineMark";
 import { ChevronRight } from "@/components/icons";
 import { KANBAN_STATUSES, type KanbanCard as KanbanCardModel } from "@/components/kanban/kanbanModel";
 import { subjectOf } from "@/components/kanban/cardDismissal";
+import { TaskMotionLine } from "@/components/kanban/TaskMotionLine";
 import { statusLabel, TASK_COLOR_HEX } from "@/components/kanban/KanbanCard";
 import { RemoteAgents, type RemoteAgentView } from "@/components/kanban/RemoteAgents";
 import { useManagedOnText } from "@/components/kanban/RemoteLanes";
 import { remoteCardsFor, useRemoteFeed, type RemoteCard } from "@/components/kanban/remoteFeed";
 import { remoteLaneNote, remoteLaneSummary } from "@/components/pipelines/remoteLaneSummary";
 import { pipelineTitle } from "@/components/kanban/PipelineSection";
-import { useTaskMutations, type StatusMoveOutcome, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
+import { useTaskMutations, type StatusMoveOutcome, type StatusMoveOptions, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
 import { TaskIcon } from "@/components/tasks/TaskIcon";
 import { updateTask } from "@/components/tasks/taskApi";
@@ -458,6 +459,8 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
         ) : null}
         <NeedBadge item={item} />
       </span>
+      <TaskMotionLine motion={card.motion} working={card.working} nowMs={nowMs} plain taskTitle={card.holdTarget?.title} />
+      {/* The needs-you question has its own slot below motion. */}
       {item.shown && !loose ? (
         <PipelineBlock summary={item.shown} density="card" nowMs={nowMs} taskTitle={item.kind === "task" ? title : null} aside={othersText(t, item)} />
       ) : null}
@@ -848,13 +851,24 @@ export function MobileKanban(props: MobileKanbanProps) {
   }, [shownKey, onShown]);
 
   /* ── Moves, hides and the card sheet ─────────────────────────────────── */
-  const move = useCallback((item: PhoneCard, to: TaskStatus, receipt = true) => {
+  const move = useCallback((item: PhoneCard, to: TaskStatus, receipt = true, options: StatusMoveOptions = {}) => {
     const task = item.card.task ? tasksById.current.get(item.card.task.id) ?? item.card.task : null;
     const from = item.card.status;
     if (!task || from === to) return;
     const title = shortTitle(t, item);
-    if (receipt) showReceipt(t("mobile2.kanban.moved", { column: t(STATUS_LABEL[to]) }), { kind: "undo", run: () => move({ ...item, card: { ...item.card, status: to } }, from, false) });
-    void controller.move(task, to).then((outcome: StatusMoveOutcome) => {
+    const previousHold = controller.holdFor(task) ?? null;
+    let settled: StatusMoveOutcome | null = null;
+    const operation = controller.move(task, to, options);
+    const undo = (outcome: StatusMoveOutcome) => {
+      if (outcome.kind !== "saved") return;
+      move({ ...item, card: { ...item.card, status: to } }, from, false, { fenced: true, lineage: outcome.lineage, restoreHold: previousHold });
+    };
+    if (receipt) showReceipt(t("mobile2.kanban.moved", { column: t(STATUS_LABEL[to]) }), { kind: "undo", run: () => {
+      if (settled) undo(settled);
+      else void operation.then(undo);
+    } });
+    void operation.then((outcome: StatusMoveOutcome) => {
+      settled = outcome;
       if (outcome.kind === "failed") showReceipt(t("kanban.moveFailed", { title, error: outcome.error }), null, { error: true });
       else if (outcome.kind === "conflict") showReceipt(t("kanban.movedElsewhere", { title, status: t(STATUS_LABEL[outcome.serverStatus]) }), null, { error: true });
     });
