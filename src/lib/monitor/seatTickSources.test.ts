@@ -19,7 +19,7 @@ fs.mkdirSync(process.env.TMPDIR, { recursive: true });
 const SESSIONS = path.join(SANDBOX, "openclaw", "agents", "fixtures", "sessions");
 fs.mkdirSync(SESSIONS, { recursive: true });
 
-const { gatherSeatTickInput: gatherProduction, readRetirementJournalWindow, repoDirForProject, RETIREMENT_STALL_WINDOW_MS, runtimeWakeState, seatTickProjects, selfUpdateSignals, stalledRetirementClause, wakeStateFromRecord, withdrawRuntimeWake } = await import("./seatTickSources");
+const { gatherSeatTickInput: gatherProduction, refreshSeatTickInput, readRetirementJournalWindow, repoDirForProject, RETIREMENT_STALL_WINDOW_MS, runtimeWakeState, seatTickProjects, selfUpdateSignals, stalledRetirementClause, wakeStateFromRecord, withdrawRuntimeWake } = await import("./seatTickSources");
 const { SeatTickAccounting } = await import("./seatTickAccounting");
 const { SEND_UNVERIFIED_REASON } = await import("@/lib/runtime/sendSettlement");
 const { FileRuntimeEventStore } = await import("@/lib/runtime/eventStore");
@@ -106,6 +106,40 @@ function lane(over: Record<string, unknown> = {}): Record<string, unknown> {
     ...over,
   };
 }
+
+test("a restarted attempt on the same stage inherits no earlier attempt's liveness", async () => {
+  let current = lane();
+  const ports = sources({});
+  ports.pipelines = () => [current] as never;
+  const liveness = ports.liveness;
+  ports.liveness = async (request) => {
+    if (!request.project) return liveness(request);
+    current = lane({ runs: [{ stageId: "build", attempts: [{ n: 2, state: "running", conversationId: "replacement-worker", startedAt: new Date(NOW - 60_000).toISOString() }] }] });
+    return [livenessRow({ lifecycle: "gone", reason: "host_gone_turn_settled" })];
+  };
+  const state = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 60_000).toISOString(), stalledSeen: ["pipeline_a1"] };
+  const input = refreshSeatTickInput(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports), ports);
+  expect(input.pipelines[0]!.stageActivity).toBeNull();
+  const decision = seatTickDecision(input);
+  expect(decision.verdict.kind === "wake" && decision.verdict.reasons.some((reason) => reason.kind === "stalled")).toBe(false);
+});
+
+test("lane liveness is selected only from its current stage, attempt and conversation", async () => {
+  const current = lane({ runs: [{ stageId: "build", attempts: [{ n: 2, state: "running", conversationId: "replacement-worker", startedAt: new Date(NOW - 60_000).toISOString() }] }] });
+  const live = livenessRow({ conversationId: "replacement-worker", pipeline: { ...livenessRow().pipeline!, attempt: 2 }, lifecycle: "running", reason: "host_alive_turn_active" });
+  for (const stale of [
+    { ...live, pipeline: { ...live.pipeline!, stageId: "review" } },
+    { ...live, pipeline: { ...live.pipeline!, attempt: 1 } },
+    { ...live, conversationId: STAGE_CONVERSATION },
+  ]) {
+    const ports = sources({ pipelines: [current], laneRows: [{ ...stale, lifecycle: "gone", reason: "host_gone_turn_settled" }, live] });
+    const state = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 60_000).toISOString(), stalledSeen: ["pipeline_a1"] };
+    const input = refreshSeatTickInput(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports), ports);
+    expect(input.pipelines[0]!.stageActivity?.lifecycle).toBe("running");
+    const decision = seatTickDecision(input);
+    expect(decision.verdict.kind === "wake" && decision.verdict.reasons.some((reason) => reason.kind === "stalled")).toBe(false);
+  }
+});
 
 const DAY_MS = 24 * 60 * 60_000;
 

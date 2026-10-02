@@ -1399,6 +1399,7 @@ async function runOrchestratorRotation(
     handoff,
     predecessor: predecessor ? { path: predecessor.path, engine: predecessor.engine } : null,
     roleParams: rawBody.roleParams,
+    autonomousAdmissionHeld: triggeredBy?.kind === "agent" ? () => !!activeDrain() : undefined,
   }, dependencies);
   const composed = composition instanceof Promise ? await composition : composition;
   const rotatedFrom = {
@@ -1513,6 +1514,7 @@ type RotationMandate =
  * creates an intent, so the incumbent keeps its seat and nothing goes pending.
  */
 interface RotationComposition {
+  autonomousAdmissionHeld?: () => boolean;
   project: string;
   clientRequestId: string;
   base: string;
@@ -1544,6 +1546,7 @@ function composeRotationMandate(
       outcome = await dependencies.summarizeHandoffs({
         project: input.project,
         clientRequestId: input.clientRequestId,
+        autonomousAdmissionHeld: input.autonomousAdmissionHeld,
         priorHistory: split.history,
         priorHandoffs: split.handoffs,
         predecessor: input.predecessor,

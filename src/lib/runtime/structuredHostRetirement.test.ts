@@ -1331,7 +1331,7 @@ test("a retired conversation still opens and resumes from its transcript", async
       queuedAt: new Date(NOW - 26 * 3_600_000).toISOString(),
     }],
     recordQueued: () => {},
-    confirmDelivered: (_session, entryId, engineMessageId) => { confirmed.push({ entryId, engineMessageId }); },
+    confirmDelivered: (_session, entryId, engineMessageId) => { confirmed.push({ entryId, engineMessageId }); return "accepted"; },
   };
   const child = new ResumedEngineChild();
   const signalled: [number, NodeJS.Signals][] = [];

@@ -39,6 +39,17 @@ function ports(commit: (input: MembershipInput) => MembershipResult): LaunchMemb
   return { commit, pipelineTaskIds: () => ["gone-task"], projectForCwd: projectFor };
 }
 
+test("unreadable seat ownership refuses a rotation before it can create a placeholder", () => {
+  let committed = false;
+  const failures: string[] = [];
+  expect(() => admitReservedLaunch({ engine: "claude", cwd: "/repo", role: "orchestrator" }, receipt, reason => failures.push(reason), {
+    ...ports(() => { committed = true; throw new Error("unexpected commit"); }),
+    seatIdentity: () => { throw new Error("seat store unavailable"); },
+  })).toThrow(LaunchMembershipError);
+  expect(committed).toBe(false);
+  expect(failures).toEqual(["task membership could not be recorded: seat store unavailable"]);
+});
+
 test("a failed commit retires the receipt and aborts with the refusal's status; a deleted pipeline task falls back to the container task", () => {
   const failures: string[] = [];
   expect(() => admitReservedLaunch({ engine: "claude", cwd: "/repo", clientAttemptId: "a" }, receipt, (reason) => failures.push(reason), ports(() => { throw new Error("task state is busy"); }))).toThrow(LaunchMembershipError);

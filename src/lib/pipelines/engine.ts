@@ -96,6 +96,7 @@ import { launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntim
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { normalizeStageOutputPath } from "./stageAccess";
 import { collectStageProvenance } from "./stageProvenance";
+import { commitAndAdoptStageBranch, observeStageBranchProtection, type StageBranchProtection } from "./stageBranch";
 import { graphDigest, isStageDigest, stageDigest } from "./stageDigest";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
@@ -105,12 +106,14 @@ import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQ
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { mergeOnReviewEnabled } from "@/lib/projects/settings";
 import { ensurePipelineForTask, isTaskSpawnPipelineParams, type TaskPipelineSpawnParams, type TaskSpawnPipelineParams } from "./taskBinding";
+import { assignmentHoldsIdentity } from "@/lib/tasks/membership";
 import { MAX_DECISION_ANSWER_CHARS } from "./types";
 import { nudgeAutoMerge } from "@/lib/forge/autoMerge";
 import { forgeCacheView, nudgeForgeSweep, observeForgePullRequest } from "@/lib/forge/cache";
 import { cachedKindOf, canonicalRepository, pipelineRepository } from "@/lib/forge/resolve";
 import { editStoredWorkLinks, normalizeWorkLinkInput, resolvePipelineLinks, workLinkInputs, type NormalizedWorkLink } from "@/lib/forge/workLinks";
 import { productionDeputyPrincipal } from "@/lib/orchestrator/deputies";
+import { canonicalOrchestratorProject, orchestratorSeatIn, readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
 import type {
   CreatePipelineRequest,
   EffectivePipelineRole,
@@ -197,6 +200,8 @@ export type StageInterruption = Pick<InterruptionObligation, "state" | "recorded
 
 export interface PipelinePorts {
   exec: ExecPort;
+  /** Protection observations collected outside the mutation lease for this tick. */
+  stageBranchProtections?: ReadonlyMap<string, StageBranchProtection>;
   /** Asynchronous Git used only by the provisioning pre-pass. */
   provisionExec?: ProvisionExecPort;
   preflightRepo(repoDir: string): PipelineRepoPreflight;
@@ -2307,16 +2312,24 @@ function tasksForBinding(): readonly BoardTask[] {
 }
 
 /**
- * A pipeline without a recorded task adopts the fallback task its admission
- * minted (#1586, origin `pipeline:<id>`), so the task/pipeline read model and
+ * A pipeline without a recorded task adopts the task its admission inherited
+ * or minted (#1586, origin `pipeline:<id>`), so the task/pipeline read model and
  * `ensurePipelineForTask` see the binding instead of asking for another
  * pipeline. Idempotent: recovery of the same launch reuses the same fallback.
  */
 export function adoptPipelineFallbackTask(pipeline: Pipeline, tasks: readonly BoardTask[]): boolean {
   if (pipeline.taskIds.length) return false;
   const fallback = tasks.find((task) => task.origin?.kind === "pipeline" && task.origin.key === pipeline.id);
-  if (!fallback) return false;
-  pipeline.taskIds = [fallback.id];
+  /* Keep historical fallback cards intact. A new admission may instead have
+     joined the source's work; retain that binding before any later stage runs
+     without a source of its own. */
+  const attempts = pipeline.runs.flatMap(run => run.attempts);
+  const inherited = fallback ? [] : tasks.filter(task => canonicalOrchestratorProject(task.project) === canonicalOrchestratorProject(pipeline.project)
+    && task.assignments.some(assignment => assignment.state !== "failed" && attempts.some(attempt => assignmentHoldsIdentity(assignment, {
+      conversationId: attempt.conversationId, launchId: attempt.launchId, path: attempt.agentPath,
+    }))));
+  if (!fallback && !inherited.length) return false;
+  pipeline.taskIds = fallback ? [fallback.id] : inherited.map(task => task.id);
   return true;
 }
 
@@ -2788,10 +2801,14 @@ function passedStagePublicationPark(pipeline: Pipeline, attempt: PipelineStageAt
   const detail = pipeline.stateDetail;
   // Older engines passed the accepted attempt to park() on HEAD verification
   // failure, so its pass verdict survived with a needs_decision state.
-  return pipeline.cursor?.state === "committing" && attempt?.verdict?.status === "pass"
+  return pipeline.cursor?.state === "committing" && attempt !== null && stageHeadAccepted(attempt)
     && (detail?.startsWith("publishing the passed stage:") === true
       || ((attempt.state === "passed" || attempt.state === "needs_decision") && (detail?.startsWith("the worktree moved to ") === true
         || detail?.startsWith("the accepted head cannot be verified before completion:") === true)));
+}
+
+function stageHeadAccepted(attempt: PipelineStageAttempt | null): boolean {
+  return attempt?.verdict?.status === "pass" || attempt?.acceptedForReview === true;
 }
 
 function retryTerminalStagePublication(
@@ -2927,11 +2944,23 @@ function commitPassedStage(
   stage: PipelineStage,
   attempt: PipelineStageAttempt,
   ports: PipelinePorts,
+  persist: () => void,
 ): void {
   const allowCommit = stage.kind === "run" && attempt.effectiveRole.access === "read-write";
   const protectedHead = stage.kind === "run" && !allowCommit ? pipeline.lastPassedCommit : null;
-  let result = commitPipelineStage(pipeline, stage.id, allowCommit, ports.exec, attemptStage(stage, attempt).outputs, protectedHead);
+  let result = allowCommit
+    ? commitAndAdoptStageBranch(pipeline, stage.id, ports.exec, loadPipelines, attempt.branchAdoption, (intent) => {
+      attempt.branchAdoption = intent;
+      persist();
+    }, ports.stageBranchProtections?.get(pipeline.id))
+    : commitPipelineStage(pipeline, stage.id, false, ports.exec, attemptStage(stage, attempt).outputs, protectedHead);
   if (!result.ok) {
+    if (result.deferred) {
+      // Keep the durable committing cursor. The next tick repeats the forge
+      // observation outside the mutation lease, then retries this settlement.
+      persist();
+      return;
+    }
     park(pipeline, result.error, attempt);
     return;
   }
@@ -3126,6 +3155,19 @@ function settleStageVerdict(
     return;
   }
   attempt.verdict = parsed.verdict;
+  /* A fixer repairs discoveries; its next reviewer owns the verdict. Admit
+     only an already committed, clean head through the normal acceptance and
+     publication path. Blocked work and other roles retain fail routing. */
+  if (fixerSelfFailCanGoToReview(pipeline, stage, attempt, parsed, ports)) {
+    attempt.acceptedForReview = true;
+    attempt.output = [parsed.output, "Fixer notes for the reviewer:", ...(parsed.verdict.findings ?? []).map((finding) => `- ${finding}`)]
+      .filter(Boolean).join("\n\n");
+    attempt.state = "committing";
+    setCursorState(pipeline, stage.id, "committing");
+    persist();
+    commitPassedStage(pipeline, stage, attempt, ports, persist);
+    return;
+  }
   if (parsed.verdict.status !== "pass") {
     attempt.state = parsed.verdict.status === "fail" ? "failed" : "needs_decision";
     attempt.completedAt = ports.now();
@@ -3152,6 +3194,10 @@ function settleStageVerdict(
        and parks under `park`. After that last fix `advance` moves on or
        re-checks a terminal gate before completion (#2247); `stop-after-fix`
        waits in needs_review when the fix wrote a new head (#2187). */
+    if (parsed.verdict.blocked === true) {
+      park(pipeline, parsed.verdict.blockedReason!, attempt);
+      return;
+    }
     const routesAsFail = verdictRoutesAsFail(parsed);
     const decisionRoutedAsFail = routesAsFail && parsed.verdict.status === "needs_decision";
     if (
@@ -3174,7 +3220,24 @@ function settleStageVerdict(
   attempt.state = "committing";
   setCursorState(pipeline, stage.id, "committing");
   persist();
-  commitPassedStage(pipeline, stage, attempt, ports);
+  commitPassedStage(pipeline, stage, attempt, ports, persist);
+}
+
+function fixerSelfFailCanGoToReview(
+  pipeline: Pipeline,
+  stage: PipelineStage,
+  attempt: PipelineStageAttempt,
+  parsed: ParsedStageVerdict,
+  ports: PipelinePorts,
+): boolean {
+  const definition = attemptStage(stage, attempt);
+  const next = pipeline.stages.find((candidate) => candidate.id === stage.next);
+  if (parsed.verdict.status !== "fail" || parsed.verdict.blocked === true
+    || stage.kind !== "run" || attempt.effectiveRole.roleId !== "builder"
+    || attempt.effectiveRole.access !== "read-write" || definition.role?.params?.mode !== "apply-fixes"
+    || !next || !(next.kind === "review-loop" || next.effectiveRole.roleId === "reviewer")) return false;
+  const head = currentPipelineBranchHead(pipeline, ports.exec);
+  return head.ok && head.sha !== pipeline.lastPassedCommit;
 }
 
 function updateAttemptIdentity(pipeline: Pipeline, attempt: PipelineStageAttempt, entries: FileEntry[], ports: PipelinePorts): void {
@@ -3996,7 +4059,7 @@ async function tickRunStage(
   }
 
   if (attempt.state === "committing") {
-    commitPassedStage(pipeline, stage, attempt, ports);
+    commitPassedStage(pipeline, stage, attempt, ports, persist);
     return;
   }
 
@@ -4372,7 +4435,8 @@ async function tickRunStage(
   const durableTerminal = durable?.turn === "terminal" && durable.message !== null && durable.message.ts > unixMs(attempt.startedAt);
   if (durable && durableTerminal) {
     const fenced = parsePipelineStageVerdict(durable.message!.text);
-    const parsed = reportedStageVerdict(attempt, fenced, durable.message!.text, durable.backgroundReportedAt, durable.reportProse) ?? fenced;
+    const parsed = reportedStageVerdict(attempt, fenced, durable.message!.text, durable.backgroundReportedAt, durable.reportProse)
+      ?? fenced;
     if (parsed && (!hostUnavailablePastGrace || "verdict" in parsed)) {
       markVerdictRecoverySucceeded(attempt, ports.now(), durable.message!.ts);
       settleStageVerdict(pipeline, stage, attempt, parsed, ports, persist);
@@ -4485,7 +4549,8 @@ async function tickRunStage(
     return;
   }
   const fenced = parsePipelineStageVerdict(message.text);
-  const parsed = reportedStageVerdict(attempt, fenced, message.text, durable?.backgroundReportedAt, durable?.reportProse) ?? fenced;
+  const parsed = reportedStageVerdict(attempt, fenced, message.text, durable?.backgroundReportedAt, durable?.reportProse)
+    ?? fenced;
   if (!parsed) {
     if (!canSpendRecoveryCheck()) return;
     recordVerdictRecoveryMiss(
@@ -4641,7 +4706,7 @@ async function tickReviewStage(
     return;
   }
   if (attempt.state === "committing") {
-    if (approvedReviewHeadHolds(pipeline, attempt, ports)) commitPassedStage(pipeline, stage, attempt, ports);
+    if (approvedReviewHeadHolds(pipeline, attempt, ports)) commitPassedStage(pipeline, stage, attempt, ports, persist);
     return;
   }
   if (attempt.state === "pending" && holdStageLaunch(pipeline, ports, persist)) return;
@@ -4803,7 +4868,7 @@ async function tickReviewStage(
     attempt.state = "committing";
     setCursorState(pipeline, stage.id, "committing");
     persist();
-    commitPassedStage(pipeline, stage, attempt, ports);
+    commitPassedStage(pipeline, stage, attempt, ports, persist);
   } else {
     const terminalError = terminalReviewFlowError(flow);
     if (terminalError) {
@@ -6034,6 +6099,7 @@ async function admitExistingPipelineDelivery(pipeline: Pipeline, ports: Pipeline
 export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts = defaultPipelinePorts(), publicationPass = 0): Promise<{ pipelines: Pipeline[]; changed: boolean }> {
   if (tickStore.__llvPipelineTick) return { pipelines: [], changed: false };
   tickStore.__llvPipelineTick = true;
+  const previousStageBranchProtections = ports.stageBranchProtections;
   let followUp = false;
   const recoveryAccountingDeadline = ports.monotonicNow() + VERDICT_RECOVERY_ACCOUNTING_BUDGET_MS;
   try {
@@ -6049,6 +6115,30 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     }
     /* Before the lease, never under it (#1799). */
     const provisioned = await provisionPendingPipelines(ports);
+    const stageBranchProtections = new Map<string, StageBranchProtection>();
+    await Promise.all(loadPipelinesForProjection().map(async (pipeline) => {
+      const attempt = pipeline.runs.find((run) => run.stageId === pipeline.cursor?.stageId)?.attempts.at(-1);
+      if (!attempt || attempt.effectiveRole.access !== "read-write" || (pipeline.state !== "running" && pipeline.state !== "needs_decision")) return;
+      const sourceBranch = attempt.branchAdoption?.branch ?? ports.exec("git", ["branch", "--show-current"], pipeline.worktreeDir).stdout.trim();
+      const deliveryBranch = pipeline.delivery?.disposition === "owner" ? pipeline.delivery.target.branch.replace(/^refs\/heads\//, "") : null;
+      if (!sourceBranch || sourceBranch === pipeline.branch || sourceBranch === deliveryBranch) return;
+      const pathname = (attempt.conversationId ? ports.pathForConversation(attempt.conversationId) : null) ?? attempt.agentPath;
+      const durable = attempt.state !== "committing" && pathname && ports.sourcePathAllowed(pathname)
+        ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, pathname, attempt.report?.at ?? attempt.startedAt, attempt.startedAt) : null;
+      const entry = entries.find((item) => item.path === pathname);
+      const parsed = entry ? parseStageVerdict(ports.lastMessage(entry)?.text ?? "") : null;
+      const durableParsed = durable?.turn === "terminal" ? parseStageVerdict(durable.terminalProviderMessage?.text ?? durable.message?.text ?? "") : null;
+      const durablePass = durableParsed && !("failureReason" in durableParsed) && durableParsed.verdict.status === "pass";
+      if (attempt.state !== "committing" && attempt.report?.verdict.status !== "pass" && !durablePass
+        && (!parsed || "failureReason" in parsed || parsed.verdict.status !== "pass")) return;
+      if (durable && liveBackgroundTasks(durable.backgroundTasks ?? [], unixMs(ports.now())).length) return;
+      if (attempt.state !== "committing" && attempt.conversationId && await ports.conversationAgentActive(attempt.conversationId) === true) {
+        if (durable?.turn !== "terminal") return;
+      }
+      const protection = await observeStageBranchProtection(pipeline, ports.exec, ports.provisionExec ?? realProvisionExec);
+      if (protection) stageBranchProtections.set(pipeline.id, protection);
+    }));
+    ports.stageBranchProtections = stageBranchProtections;
     // Reconcile only this owner's reservation, with the existing kernel fence.
     // Remote reads must finish before entering the pipeline mutation lease.
     for (const pipeline of loadPipelinesForProjection()) {
@@ -6093,7 +6183,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         const interruptedPublicationCleared = operation?.sha === pipeline.lastPassedCommit
           && (pipeline.stateDetail === `publishing the passed stage: publisher ${pipeline.delivery!.ownerId} at epoch ${pipeline.delivery!.epoch} is in flight or uncertain`
             || (operation.state === "settled" && pipeline.stateDetail?.startsWith(`publishing the passed stage: publication ${operation.id} has no progress for `)));
-        if (pipeline.state === "needs_decision" && passed?.verdict?.status === "pass"
+        if (pipeline.state === "needs_decision" && passed && stageHeadAccepted(passed)
           && (deliveryRefusalCleared || publicationSucceeded || interruptedPublicationCleared)) {
           passed.state = "passed";
           passed.error = null;
@@ -6206,6 +6296,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     console.error("[pipelines] skipping tick; registry unreadable", error);
     return { pipelines: [], changed: false };
   } finally {
+    ports.stageBranchProtections = previousStageBranchProtections;
     tickStore.__llvPipelineTick = false;
     /* Scheduled after the re-entry guard clears so the microtask tick cannot
        be swallowed by it. */
@@ -7705,12 +7796,38 @@ function editPipelineWorkLinks(pipeline: Pipeline, req: PatchPipelineRequest, ac
   return { changed: true, repositories: [...new Set(links.map((link) => link.repository))] };
 }
 
+/** Decision authority follows a project's designated seat across rotations.
+    Read one server-side seat snapshot for both lineage and current authority;
+    caller-supplied roles confer no authority. Revocation is project-scoped. */
+function mayAnswerPipelineDecision(pipeline: Pipeline, actor: PauseResumeActor | null): actor is PauseResumeActor {
+  if (!actor) return false;
+  if (actor.kind === "operator") return true;
+  if (!actor.conversationId) return false;
+  const file = readOrchestratorSeatFileOrNull();
+  if (!file) return false;
+  const project = canonicalOrchestratorProject(pipeline.project);
+  const creator = pipeline.srcConversationId;
+  const creatorIsSeat = Boolean(creator && (
+    (file.seatLineage ?? []).some((seat) => seat.project === project && seat.conversationId === creator)
+    || file.revocations.some((entry) => entry.project === project && entry.conversationId === creator)
+  ));
+  const seatEpochs = (file.seatLineage ?? []).filter((seat) => seat.project === project && seat.conversationId === actor.conversationId).map((seat) => seat.seatEpoch);
+  const activeSeat = orchestratorSeatIn(file, project).active;
+  if (activeSeat?.conversationId === actor.conversationId) seatEpochs.push(activeSeat.seatEpoch);
+  const actorEpoch = Math.max(0, ...seatEpochs);
+  const revokedInProject = file.revocations.some((entry) =>
+    entry.project === project && entry.conversationId === actor.conversationId && entry.seatEpoch >= actorEpoch);
+  if (actor.conversationId === creator) return !creatorIsSeat || !revokedInProject;
+  if (revokedInProject || !creatorIsSeat) return false;
+  return activeSeat?.conversationId === actor.conversationId;
+}
+
 /** Also checked before MCP receipt access; authorization refusals must never spend an answer's key. */
 export function decisionAnswerActorRefusal(
   pipeline: Pipeline, actor: PauseResumeActor | null, clientRequestId: unknown,
 ): PipelinePatchResult | null {
-  if (!actor || (actor.kind === "agent" && (!actor.conversationId || actor.conversationId !== pipeline.srcConversationId))) {
-    return { error: "only the pipeline creator conversation or a direct user action can answer this decision", status: 403 };
+  if (!mayAnswerPipelineDecision(pipeline, actor)) {
+    return { error: "only the pipeline creator conversation, the current designated seat for a seat-created lane, or a direct user action can answer this decision", status: 403 };
   }
   const prior = pipeline.decisionAnswers?.find((entry) => entry.clientRequestId === clientRequestId);
   if (prior && (prior.actor.kind !== actor.kind || (prior.actor.kind === "agent" && actor.kind === "agent"
@@ -7781,11 +7898,11 @@ function resolveDecision(
   return { pipeline, decisionAnswer: decision, replayed: false };
 }
 
-/** Who may continue a needs_review lane (#1938): the creator conversation or
-    the operator. Also checked before MCP receipt access, as for resolve-decision. */
+/** Who may continue a needs_review lane (#1938): the creator, its project's
+    current seat, or the operator. Also checked before MCP receipt access. */
 export function continueReviewActorRefusal(pipeline: Pipeline, actor: PauseResumeActor | null): PipelinePatchResult | null {
-  if (!actor || (actor.kind === "agent" && (!actor.conversationId || actor.conversationId !== pipeline.srcConversationId))) {
-    return { error: "only the pipeline creator conversation or a direct user action can continue this review", status: 403 };
+  if (!mayAnswerPipelineDecision(pipeline, actor)) {
+    return { error: "only the pipeline creator conversation, the current designated seat for a seat-created lane, or a direct user action can continue this review", status: 403 };
   }
   return null;
 }
@@ -7867,7 +7984,7 @@ function acceptHead(
   pipeline: Pipeline, req: PatchPipelineRequest, actor: PauseResumeActor | null, ports: PipelinePorts,
 ): PipelinePatchResult {
   const refusal = continueReviewActorRefusal(pipeline, actor);
-  if (refusal) return { ...refusal, error: "only the pipeline creator conversation or a direct user action can accept this head" };
+  if (refusal) return { ...refusal, error: "only the pipeline creator conversation, the current designated seat for a seat-created lane, or a direct user action can accept this head" };
   if (!actor) return { error: "accept-head needs an actor", status: 403 };
   if (typeof req.clientRequestId !== "string" || !req.clientRequestId.trim() || req.clientRequestId.length > 200
     || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{64}$/.test(req.expectedRevision)) {

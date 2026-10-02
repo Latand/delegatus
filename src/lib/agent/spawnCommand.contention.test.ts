@@ -311,7 +311,7 @@ test("a catalog generation change cannot admit the previously selected home", as
   expect(agentRegistry().spawnReceiptForClientAttempt(clientAttemptId)).toBeNull();
 });
 
-test.each(["dependency", "forwarded"] as const)("autonomous %s spawn rechecks update admission after account evidence, while manual and receipt replay remain allowed", async (source) => {
+test.each(["dependency", "forwarded", "scheduled"] as const)("autonomous %s spawn rechecks update admission after account evidence, while manual and receipt replay remain allowed", async (source) => {
   const cwd = statePath("autonomous-admission-cwd"); fs.mkdirSync(cwd, { recursive: true });
   process.env.LLV_SPAWN_TRANSPORT = "structured"; process.env.LLV_STRUCTURED_HOSTS = "1";
   process.env.LLV_RUNTIME_EVENTS = "1"; process.env.NEXT_PUBLIC_RUNTIME_UI = "1";
@@ -321,6 +321,7 @@ test.each(["dependency", "forwarded"] as const)("autonomous %s spawn rechecks up
   const gate = new Promise<void>(resolve => { resume = resolve; });
   const dependencies = structuredRouteDependencies(cwd) as SpawnCommandDependencies & { autonomousAdmissionHeld: () => boolean };
   if (source === "dependency") dependencies.autonomousAdmissionHeld = () => held;
+  if (source === "scheduled") Object.assign(dependencies, (await import("@/lib/telegram/reportSpawn")).reportSpawnOverrides(() => true, "scheduled"));
   dependencies.defer = () => {};
   const nativeResolve = dependencies.resolveHealthySpawnAccount;
   dependencies.resolveHealthySpawnAccount = async (...args) => { entered(); await gate; return nativeResolve(...args); };
@@ -343,4 +344,68 @@ test.each(["dependency", "forwarded"] as const)("autonomous %s spawn rechecks up
   const manual = structuredRouteDependencies(cwd); manual.defer = () => {};
   expect((await executeSpawnRequest(request(`attempt_${crypto.randomUUID()}`, false), manual)).status).toBe(202);
   releaseDrain(drainFile(), "forwarded-admission");
+});
+
+
+test.each(["existing", "account-lock"] as const)("scheduled report launch respects %s drain and rechecks downstream admission", async (seam) => {
+  const { launchReportConversation } = await import("@/lib/telegram/reportSpawn");
+  const { productionSpawnCommandDependencies } = await import("./spawnCommand");
+  const { procBackend } = await import("@/lib/proc");
+  const cwd = statePath("report-lock-cwd"); fs.mkdirSync(cwd, { recursive: true });
+  const originalDependencies = { ...productionSpawnCommandDependencies };
+  const oldCodexBinary = process.env.LLV_CODEX_BINARY;
+  const codexBinary = path.join(cwd, "codex-list-stub");
+  fs.writeFileSync(codexBinary, "#!/bin/sh\nprintf '[]'\n", { mode: 0o700 });
+  process.env.LLV_CODEX_BINARY = codexBinary;
+  const fixture = structuredRouteDependencies(cwd);
+  const resolveAccount = fixture.resolveSpawnAccount;
+  fixture.resolveSpawnAccount = (...args) => ({ ...resolveAccount(...args), engine: "codex", accountId: "report-fixture" });
+  fixture.resolveHealthySpawnAccount = async () => fixture.resolveSpawnAccount("codex", "report-fixture");
+  let dispatches = 0;
+  const dispatch = fixture.spawnStructuredConversation;
+  fixture.spawnStructuredConversation = async input => { dispatches++; return dispatch(input); };
+  Object.assign(productionSpawnCommandDependencies, fixture);
+  const attempt = `attempt_${crypto.randomUUID()}`;
+  const input = { trigger: "scheduled" as const, grantActive: () => true, body: { clientAttemptId: attempt, title: "Scheduled report fixture", engine: "codex", cwd, prompt: "inspect", mcpServers: [] } };
+  const lock = statePath("account-selection.lock");
+  const write = fs.writeFileSync;
+  let entered!: () => void;
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  let blocked = false;
+  try {
+    if (seam === "existing") {
+      writeDrain(drainFile(), { id: "report-account-lock", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+      expect(await launchReportConversation(input)).toMatchObject({ status: 503, body: { code: "AUTO_UPDATE_DRAIN" } });
+      expect(agentRegistry().spawnReceiptForClientAttempt(attempt)).toBeNull(); expect(dispatches).toBe(0);
+      releaseDrain(drainFile(), "report-account-lock");
+    }
+    fs.writeFileSync = ((file, data, ...rest) => {
+      write(file, data, ...rest);
+      if (!blocked && typeof file === "string" && file.endsWith(".json") && typeof data === "string" && data.includes('"holder":"spawn admission"')) {
+        blocked = true;
+        write(lock, JSON.stringify({ pid: process.pid, startIdentity: procBackend.processIdentity(process.pid), ns: fs.readlinkSync("/proc/self/ns/pid"), token: "report-lock-fixture", holder: "fixture hold", acquiredAt: Date.now() }));
+        entered();
+      }
+    }) as typeof fs.writeFileSync;
+    const pending = launchReportConversation(input);
+    await Promise.race([waiting, pending.then(() => { throw new Error("launch never waited for account admission"); })]);
+    writeDrain(drainFile(), { id: "report-account-lock", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+    fs.rmSync(lock); fs.writeFileSync = write;
+    expect(await pending).toMatchObject({ status: 503, body: { code: "AUTO_UPDATE_DRAIN" } });
+    expect(agentRegistry().spawnReceiptForClientAttempt(attempt)).toBeNull(); expect(dispatches).toBe(0);
+    releaseDrain(drainFile(), "report-account-lock");
+    expect((await launchReportConversation(input)).status).toBe(202);
+    for (let i = 0; i < 100 && dispatches === 0; i++) await Bun.sleep(10);
+    expect(dispatches).toBe(1);
+    const receipt = agentRegistry().spawnReceiptForClientAttempt(attempt)!;
+    writeDrain(drainFile(), { id: "report-account-lock", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+    expect((await launchReportConversation(input)).status).toBe(202);
+    expect(agentRegistry().spawnReceiptForClientAttempt(attempt)?.launchId).toBe(receipt.launchId);
+    expect((await launchReportConversation({ ...input, trigger: "manual", body: { ...input.body, clientAttemptId: `attempt_${crypto.randomUUID()}` } })).status).toBe(202);
+  } finally {
+    fs.writeFileSync = write;
+    if (oldCodexBinary === undefined) delete process.env.LLV_CODEX_BINARY; else process.env.LLV_CODEX_BINARY = oldCodexBinary;
+    if (blocked && fs.existsSync(lock) && JSON.parse(fs.readFileSync(lock, "utf8")).token === "report-lock-fixture") fs.rmSync(lock);
+    releaseDrain(drainFile(), "report-account-lock"); Object.assign(productionSpawnCommandDependencies, originalDependencies);
+  }
 });

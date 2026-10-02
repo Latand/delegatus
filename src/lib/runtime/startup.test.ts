@@ -53,6 +53,36 @@ function runtimeClient(journal: RuntimeJournal): RuntimeHostClient {
   } as RuntimeHostClient;
 }
 
+test.each(["full", "restricted"] as const)("startup replays durable Codex sandbox=%s and permission mode", async (sandbox) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-access-"));
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(directory, "state");
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const artifactPath = path.join(directory, "access-thread.jsonl");
+  const key = { engine: "codex" as const, sessionId: "access-thread" };
+  registry.upsert({ key, artifactPath, cwd: directory, accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: directory, sandbox, readOnly: false, permissionMode: "on-request" }),
+    status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+  try {
+    await adoptStructuredHostsAtStartup({ registry, client: null,
+      refreshTranscriptState: async () => {}, orchestratorSeats: () => [],
+      resolveCodexOwner: () => null,
+      adopt: async (store, optionsFor) => {
+        const options = optionsFor(store.readOnlySnapshot().entries["codex:access-thread"]!);
+        try {
+          expect(options).toMatchObject({ sandbox: sandbox === "full" ? "danger-full-access" : "workspace-write", approvalPolicy: "on-request" });
+        } finally { options.releaseCleanup?.(); }
+        return [];
+      }, adoptClaude: async () => [],
+    });
+  } finally {
+    await bindStructuredDeliveryQueue([]);
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("startup publishes the structured controller before transcript refresh settles", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-early-controller-"));
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
@@ -1371,6 +1401,36 @@ async function startupAdoptionAttempts(
   }
   return attempts;
 }
+
+test("startup defers hosts belonging to a preserved future pipeline and still admits healthy members", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-future-pipeline-"));
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = directory;
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  try {
+    const unknownId = "aaaaaaaa-1111-0111-0111-aaaaaaaaaaaa";
+    const healthyId = "bbbbbbbb-2222-0222-0222-bbbbbbbbbbbb";
+    const unknown = addStructuredRestartConversation(registry, directory, { sessionId: unknownId, status: "live", turn: "busy" });
+    const healthy = addStructuredRestartConversation(registry, directory, { sessionId: healthyId, status: "live", turn: "busy" });
+    const pipelines = ["future", "healthy"].map((id) => buildPipeline({ id, task: "Startup compatibility", project: "fixture", repoDir: directory,
+      stages: [{ id: "build", kind: "run", prompt: "Build", next: null, effectiveRole: { roleId: null, engine: "codex", model: "gpt-6.1-sol", effort: "high", access: "read-write", promptScaffold: null } }],
+      srcPath: null, srcConversationId: null, now: "2026-10-02T00:00:00.000Z" }));
+    (pipelines[0]!.stages[0] as unknown as { kind: string }).kind = "future-kind";
+    for (const [index, conversation] of [unknown.conversation, healthy.conversation].entries()) {
+      registry.rememberMembership(conversation.id, { kind: "pipeline", containerId: pipelines[index]!.id,
+        role: "builder", slot: "build:1", stageId: "build", stageOrder: 0, round: 1, parentConversationId: null });
+    }
+    const bytes = JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION, pipelines });
+    fs.writeFileSync(path.join(directory, "pipelines.json"), bytes);
+    expect(await startupAdoptionAttempts(registry)).toEqual([`codex:${healthyId}`]);
+    expect(fs.readFileSync(path.join(directory, "pipelines.json"), "utf8")).toBe(bytes);
+  } finally {
+    registry.close();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 function activeSeat(
   project: string,

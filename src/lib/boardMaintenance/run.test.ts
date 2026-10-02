@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
-import { drainFile, writeDrain, releaseDrain } from "@/lib/selfUpdate/drain";
 import fs from "node:fs";
 import path from "node:path";
+import { drainFile, writeDrain, releaseDrain } from "@/lib/selfUpdate/drain";
 import { statePath } from "@/lib/configDir";
 import { loadTasks } from "@/lib/tasks/store";
 import { AgentRegistry } from "@/lib/agent/registry";
@@ -15,7 +15,9 @@ import { composeStructuredFirstMessage } from "@/lib/runtime/structuredFirstMess
 let held: ReturnType<typeof sandbox>;
 afterEach(() => held?.restore());
 const tasks = () => loadTasks(statePath("tasks.json"));
-function harness(archiveOverride = true, evidence: TaskWorkEvidence[] = [], overrides: Partial<BoardMaintenancePorts> = {}) {
+function harness(archiveOverride = true, evidenceOrOverrides: TaskWorkEvidence[] | Partial<BoardMaintenancePorts> = []) {
+  const evidence = Array.isArray(evidenceOrOverrides) ? evidenceOrOverrides : [];
+  const overrides = Array.isArray(evidenceOrOverrides) ? {} : evidenceOrOverrides;
   held = sandbox(); let now = NOW;
   const registry = new AgentRegistry(statePath("fixture-registry.json"));
   const bodies: Record<string, unknown>[] = [], archived: string[] = [];
@@ -290,7 +292,7 @@ test("update admission rechecks after evidence and retains an undispatched claim
   let entered!: () => void, resume!: () => void;
   const collecting = new Promise<void>(resolve => { entered = resolve; });
   const gate = new Promise<void>(resolve => { resume = resolve; });
-  const h = harness(true, [], { evidence: async () => { entered(); await gate; return []; } });
+  const h = harness(true, { evidence: async () => { entered(); await gate; return []; } });
   const launch = h.controller.launchIfDue(input());
   await collecting; holdUpdate(); resume(); await launch;
   const run = h.run();
@@ -328,7 +330,7 @@ test("an undispatched launch payload retains its key and restarts its dispatch c
 });
 test("admission deferred by the production spawn lane retries its payload after release", async () => {
   let refuse = true;
-  const h = harness(true, [], { launch: async body => {
+  const h = harness(true, { launch: async body => {
     if (refuse) { holdUpdate(); return { status: 503, body: { code: "AUTO_UPDATE_DRAIN" } }; }
     h.bodies.push(body); return { status: 202, body: { state: "starting", conversationId: "conversation_fixture_resumed", launchId: "resumed-launch" } };
   } });

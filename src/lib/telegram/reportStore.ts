@@ -49,6 +49,8 @@ const REPORTS_FILE = "reports.json";
 const MAX_REPORT_BYTES = 256 * 1024;
 
 export type ActiveTelegramReportRun = {
+  /** Unsubmitted scheduled admission retains its identity across update holds. */
+  admissionDeferred?: boolean;
   runId: string;
   trigger: TelegramReportRow["trigger"];
   startedAt: string;
@@ -213,6 +215,7 @@ function sanitizeActive(value: unknown): ActiveTelegramReportRun | null {
     conversationId: text(row.conversationId),
     promptVersion: text(row.promptVersion) ?? "unknown",
     ...(row.retry === true ? { retry: true as const } : {}),
+    ...(row.admissionDeferred === true && row.trigger !== "manual" ? { admissionDeferred: true } : {}),
   };
 }
 

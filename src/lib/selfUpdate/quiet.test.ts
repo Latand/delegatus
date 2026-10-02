@@ -1,4 +1,13 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { AgentRegistry } from "@/lib/agent/registry";
+import { captureProcessIdentity } from "@/lib/processIdentity";
+import { conversationTurnLiveness } from "@/lib/runtime/liveness";
+import { bindStructuredDeliveryQueue, structuredDeliveryHostForConversation } from "@/lib/runtime/structuredDeliveryController";
+import type { RuntimeHostClient } from "@/lib/runtime/client";
+import type { RuntimeSession } from "@/lib/runtime/contracts";
 import { probeQuiet, currentHostTurnIdle, type QuietPorts } from "./quiet";
 import type { Snapshot } from "./types";
 
@@ -10,6 +19,7 @@ function ports(turn = "idle", host = "hosted", cursor = "pending", ageMinutes = 
     runtimeSnapshot: async () => ({ sessions: [{ turn, host }] }) as Awaited<ReturnType<QuietPorts["runtimeSnapshot"]>>,
     pipelines: () => [{ state: "running", cursor: { state: cursor } }] as unknown as ReturnType<QuietPorts["pipelines"]>,
     presence: () => [{ lastInteractionAt: NOW - ageMinutes * 60_000 }] as unknown as ReturnType<QuietPorts["presence"]>,
+    registryHealth: () => [],
   };
 }
 
@@ -42,6 +52,14 @@ test("live turns and transitioning hosts block either restart", async () => {
   for (const turn of ["running", "interrupt_requested"]) expect((await probeQuiet(snapshot, ports(turn), NOW)).quiet).toBe(false);
   for (const host of ["registering", "recovering"]) expect((await probeQuiet(snapshot, ports("idle", host), NOW)).quiet).toBe(false);
   for (const host of ["hosted", "unhosted", "dead"]) expect((await probeQuiet(snapshot, ports("unknown", host), NOW)).quiet).toBe(true);
+});
+
+test("isolated record diagnostics remain visible without preventing the quiet update", async () => {
+  const p = ports();
+  p.registryHealth = () => [{ collection: "pipelines", id: "future-lane", reason: "unknown-but-preserved", detail: "unsupported role; preserved without execution" }];
+  expect(await probeQuiet(snapshot, p, NOW)).toMatchObject({ quiet: true, blockers: { unreadable: null, registryIssues: [{ id: "future-lane" }] } });
+  p.registryHealth = () => { throw new Error("corrupt pipelines SQLite row: broken-lane"); };
+  expect(await probeQuiet(snapshot, p, NOW)).toMatchObject({ quiet: false, blockers: { unreadable: "corrupt pipelines SQLite row: broken-lane" } });
 });
 
 test("active pipeline stages and recent operator input block", async () => {
@@ -140,5 +158,70 @@ test("dead host health does not veto proof of death; active replacement health d
     p.turnLiveness = async () => ({ state: "severed", currentTurnIdle: currentHostTurnIdle({ status, activeTurnRef: null }),
       hostEvidence: { present: false, expected: { pid: 100, startIdentity: "gone", bootEpoch: null }, observedIdentity: null } });
     expect((await probeQuiet(snapshot, p, NOW)).blockers.turns).toBe(status === "active" ? 1 : 0);
+  }
+});
+
+
+test.each(["unhosted", "dead", "conflict"])("a %s running journal row needs current liveness before discounting", async (host) => {
+  for (const state of ["working", "unknown", "settled", "severed", null, "throws"] as const) {
+    const p = ports("running", host);
+    let reads = 0;
+    p.turnLiveness = async () => {
+      reads++;
+      if (state === "throws") throw new Error("unavailable");
+      return state ? { state, currentTurnIdle: undefined,
+        hostEvidence: { present: true, observedIdentity: "same", expected: { pid: 100, startIdentity: "same", bootEpoch: null } } } : null;
+    };
+    expect((await probeQuiet(snapshot, p, NOW)).blockers.turns).toBe(1);
+    expect(reads).toBe(1);
+    p.turnLiveness = async () => ({ state: "severed", currentTurnIdle: undefined,
+      hostEvidence: { present: false, observedIdentity: null, expected: { pid: 100, startIdentity: "same", bootEpoch: null } } });
+    expect((await probeQuiet(snapshot, p, NOW)).quiet).toBe(true);
+    p.turnLiveness = async () => ({ state: "settled", currentTurnIdle: true });
+    expect((await probeQuiet(snapshot, p, NOW)).quiet).toBe(true);
+  }
+});
+
+
+test("production fallback projection keeps a live registry process without an attached controller blocking", async () => {
+  const directory = mkdtempSync("/var/tmp/quiet-fallback-");
+  const artifactPath = join(directory, `${randomUUID()}.jsonl`);
+  writeFileSync(artifactPath, ""); // Unreadable turn evidence cannot prove the live process idle.
+  const registry = new AgentRegistry(join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const conversation = registry.ensureConversation("codex", artifactPath, "fixture");
+  const key = { engine: "codex" as const, sessionId: conversation.generations[0]!.id };
+  registry.upsert({ key, artifactPath, cwd: directory, accountId: "fixture", status: "live", host: null,
+    claimEpoch: 0, claimOwner: null, pendingAction: null,
+    structuredHost: { kind: "codex-app-server", endpoint: "stdio:fixture", process: captureProcessIdentity(process.pid),
+      eventCursor: 0, protocolVersion: null, writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
+  const sessions: RuntimeSession[] = [];
+  const client = {
+    snapshot: async () => ({ filesRevision: 0, sessions }),
+    append: async (event: { kind: string; payload: RuntimeSession }) => {
+      if (event.kind === "session-status") sessions.push(event.payload);
+    },
+    effectBatch: async () => [],
+    operationStatus: async () => null,
+  } as unknown as RuntimeHostClient;
+  try {
+    await bindStructuredDeliveryQueue([], { registry, client });
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({ conversationId: conversation.id, host: "unhosted", turn: "running" });
+    let reads = 0;
+    const p = ports();
+    p.runtimeSnapshot = async () => ({ sessions });
+    p.turnLiveness = async (id) => {
+      reads++;
+      const verdict = await conversationTurnLiveness(registry, id);
+      const host = structuredDeliveryHostForConversation(id);
+      expect(host).toBeNull();
+      expect(verdict).toMatchObject({ state: "unknown", hostEvidence: { present: true } });
+      return verdict ? { ...verdict, currentTurnIdle: currentHostTurnIdle(await host?.health()) } : null;
+    };
+    expect(await probeQuiet(snapshot, p, NOW)).toMatchObject({ quiet: false, blockers: { turns: 1, discounted: 0 } });
+    expect(reads).toBe(1);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    rmSync(directory, { recursive: true, force: true });
   }
 });

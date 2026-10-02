@@ -87,6 +87,33 @@ test("only the first journal admission under a known claim supplies first-dispat
   }
 });
 
+test("retry evidence binds to the resolved host generation before delivery starts", async () => {
+  const order: string[] = [];
+  const engine = host(async () => {
+    order.push("host-send");
+    return { outcome: "turn-started", turnId: "turn-successor" };
+  });
+  engine.health = async () => idleState("generation-successor");
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [{ id: "effect:retry-generation", kind: "runtime.send", eventSeq: 1,
+      payload: { kind: "send", operationId: "retry-generation", conversationId: "conversation-one", text: "retry", policy: "queue" } }],
+    status: async () => ({ status: "queued", revision: 1 }),
+    hostClaim: async () => "owner:1",
+    bindDeliveryGeneration: async (operationId, generationId) => {
+      order.push(`bind:${operationId}:${generationId}`);
+      return true;
+    },
+    transition: async (_id, status) => { if (status === "delivering") order.push("delivering"); },
+  }, () => engine);
+
+  await queue.drain();
+  expect(order).toEqual([
+    "bind:retry-generation:generation-successor",
+    "delivering",
+    "host-send",
+  ]);
+});
+
 test("a read retry never reuses first-dispatch evidence", async () => {
   const seen: Array<FirstDispatchEvidence | undefined> = [];
   const queue = new StructuredDeliveryQueue({

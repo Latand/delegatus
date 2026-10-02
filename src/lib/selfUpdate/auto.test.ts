@@ -7,6 +7,7 @@ import { SelfUpdateService, type ServiceDeps } from "./service";
 import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "./types";
 import type { LauncherRecord } from "./launcher";
 import { headOf } from "./release";
+import { targetOnCurrentBranch } from "./git";
 import { watchRestartRequests } from "../../../bin/self-update-supervisor.mjs";
 import { activeRestartGate, endRestartGate, restartGateFile } from "./restartGate";
 import { activeDrain, writeDrain, DRAIN_NOTICE_MS, DRAIN_LEASE_MS } from "./drain";
@@ -25,6 +26,137 @@ const root = mkdtempSync("/var/tmp/self-update-auto-");
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 const TARGET = "a".repeat(40);
 const OLD = "b".repeat(40);
+
+test.each(["before-tick", "mode-wait", "submitted-wait", "ancestor", "taken-web"] as const)("checkout admission fetches real main ancestry at %s", async (seam) => {
+  const h = scenario();
+  const remote = join(h.dir, "remote");
+  const checkout = join(h.dir, "checkout");
+  mkdirSync(remote);
+  const git = (args: string[], cwd = remote) => {
+    const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+    expect(result.status).toBe(0);
+    return result.stdout.trim();
+  };
+  git(["init", "-b", "main"]);
+  const commit = (label: string) => {
+    git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", label]);
+    return git(["rev-parse", "HEAD"]);
+  };
+  const old = commit("old");
+  const target = commit("candidate");
+  const descendant = commit("newer main");
+  git(["checkout", "--detach", old]);
+  const replacement = commit("rewritten main");
+  git(["clone", remote, checkout]);
+  h.record.checkout = checkout;
+  h.record.web.revision = h.record.runtimeHost.revision = old.slice(0, 7);
+  const revision = (sha: string) => ({ sha, short: sha.slice(0, 7), version: "1", date: "" });
+  const since = new Date(h.deps.now()).toISOString();
+  writeAuto(join(h.dir, "auto.json"), { ...readAuto(join(h.dir, "auto.json")), waitingSince: since, waitingTarget: target,
+    drain: { id: "checkout-ancestry", target: revision(target), since, overranAt: null, blockers: null } });
+  let ancestryReads = 0;
+  h.deps.targetOnBranch = async (repo, sha) => { ancestryReads++; return targetOnCurrentBranch(repo, remote, "main", sha); };
+  let modeReads = 0;
+  h.deps.mode = async () => {
+    modeReads++;
+    if (seam === "mode-wait" && modeReads === 3) {
+      await Promise.resolve();
+      git(["branch", "-f", "main", replacement]);
+    }
+    return { mode: "checkout", reason: null, record: h.record };
+  };
+  if (seam === "before-tick") git(["branch", "-f", "main", replacement]);
+  const service = h.service();
+  const snapshot = service.snapshot;
+  service.snapshot = async () => ({ ...await snapshot(), installed: revision(target), available: revision(replacement),
+    serving: { web: revision(h.record.web.revision === target.slice(0, 7) ? target : old), runtimeHost: revision(h.record.runtimeHost.revision === target.slice(0, 7) ? target : old) } });
+  let launches = 0;
+  const watcher = watchRestartRequests(h.record.requestFile, async ({ requestId, role }) => {
+    launches++;
+    const entry = role === "web" ? h.record.web : h.record.runtimeHost;
+    entry.requestId = requestId; entry.revision = target.slice(0, 7);
+  }, { intervalMs: 60_000, admitAuto: ({ requestId, autoGateId }) => service.admitAutoRestart(requestId, autoGateId) });
+  try {
+    await service.autoTick(); h.advance(60_000); await service.autoTick();
+    if (seam === "taken-web") {
+      await watcher.poll();
+      expect(launches).toBe(1);
+      await service.autoTick(); // Observe the already taken web receipt.
+      git(["branch", "-f", "main", replacement]);
+      await service.autoTick(); h.advance(60_000); await service.autoTick();
+      await watcher.poll();
+      expect(launches).toBe(2); // Host finishes the release that web already took.
+      return;
+    }
+    if (seam === "submitted-wait") git(["branch", "-f", "main", replacement]);
+    await watcher.poll();
+    expect(launches).toBe(seam === "ancestor" ? 1 : 0);
+    if (seam !== "ancestor") {
+      expect(ancestryReads).toBeGreaterThan(0);
+      expect(h.pending()).toBeNull();
+      expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.id).toBe("checkout-ancestry");
+      git(["branch", "-f", "main", descendant]);
+      await service.autoTick(); h.advance(60_000); await service.autoTick();
+      await watcher.poll();
+      expect(launches).toBe(1);
+    }
+  } finally { watcher.stop(); service.stop(); }
+});
+
+test.each(["hot", "cold", "rollback-hot", "rollback-cold"] as const)("a successful manual newer checkout settles the frozen cohort after %s recovery", async (recovery) => {
+  const h = scenario();
+  const checkout = join(h.dir, "checkout");
+  mkdirSync(checkout);
+  const git = (...args: string[]) => {
+    const result = spawnSync("git", args, { cwd: checkout, encoding: "utf8" });
+    expect(result.status).toBe(0);
+    return result.stdout.trim();
+  };
+  git("init", "-b", "main");
+  git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "manual release");
+  const newer = git("rev-parse", "HEAD");
+  h.record.checkout = checkout;
+  const since = new Date(h.deps.now()).toISOString();
+  const rollback = recovery.startsWith("rollback-");
+  const drain = { id: "manual-checkout-drain", target: { sha: TARGET, short: TARGET.slice(0, 7), version: "1", date: "" }, since, overranAt: null, blockers: null, admitted: rollback };
+  writeAuto(join(h.dir, "auto.json"), { ...readAuto(join(h.dir, "auto.json")), enabled: !rollback, drain, rollback: rollback ? { target: OLD } : null, waitingSince: since, waitingTarget: TARGET });
+  writeDrain(join(h.dir, "auto-drain.json"), { id: drain.id, target: TARGET, since, until: h.deps.now() + DRAIN_LEASE_MS, persistent: true });
+  const automaticBuilds: string[] = [];
+  let update = idleUpdate();
+  let hostHealthy = false;
+  let ticks = 0;
+  h.deps.requestPipelineTick = () => { ticks++; };
+  h.deps.hostHealth = async () => hostHealthy ? { pid: 102, startIdentity: "host", hostEpoch: 1 } : null;
+  h.deps.createRunner = () => ({ get state() { return update; }, restore: (saved) => { update = saved; },
+    start: async (target) => { automaticBuilds.push(target); update = { ...idleUpdate(), state: "running", trigger: "auto", target }; }, retry: async () => {}, logPath: () => "" });
+  let service = new SelfUpdateService(h.deps); // Real checkout projection reads the pointer, runner and host RPC.
+  try {
+    await service.snapshot();
+    update = { ...idleUpdate(), state: "done", trigger: "operator", target: newer, startedAt: since, finishedAt: since };
+    h.record.web.revision = newer.slice(0, 7);
+    if (recovery.endsWith("cold")) {
+      service.stop();
+      const saved = JSON.parse(readFileSync(join(h.dir, "state.json"), "utf8"));
+      writeFileSync(join(h.dir, "state.json"), JSON.stringify({ ...saved, update }));
+      service = new SelfUpdateService(h.deps);
+    }
+    const held = () => activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+    await service.autoTick();
+    expect(held()?.id).toBe(drain.id);
+    expect(automaticBuilds).toEqual([]);
+    h.record.runtimeHost.revision = newer.slice(0, 7);
+    await service.autoTick();
+    expect(held()?.id).toBe(drain.id);
+    expect(automaticBuilds).toEqual([]);
+    hostHealthy = true;
+    await service.autoTick();
+    expect(held()).toBeNull();
+    expect(readAuto(join(h.dir, "auto.json")).drain).toBeNull();
+    expect(readAuto(join(h.dir, "auto.json")).rollback).toBeNull();
+    expect(automaticBuilds).toEqual([]);
+    expect(ticks).toBe(1);
+  } finally { service.stop(); }
+});
 
 test("checkout drain holds through web and host restarts and releases only when both serve", async () => {
   const h = scenario();
@@ -167,6 +299,53 @@ test("a pending green checkout update holds admission before its candidate build
     await service.autoTick();
     expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.target).toBe(TARGET);
   } finally { service.stop(); finishBuild?.(); }
+});
+
+test("checkout advances an unaccepted red target to a green build under the original drain after restart", async () => {
+  const h = scenario();
+  const revision = (sha: string) => ({ sha, short: sha.slice(0, 7), version: "1", date: "" });
+  const newer = "c".repeat(40);
+  let available = TARGET;
+  const builds: string[] = [];
+  let finishBuild!: () => void;
+  writeAuto(join(h.dir, "auto.json"), { ...initialAuto(), enabled: true });
+  writeFileSync(join(h.dir, "state.json"), JSON.stringify({ slice: {
+    ...initialCheck(), installed: revision(OLD), available: revision(TARGET),
+    check: { ...idleCheck(), state: "update-available", relation: "behind" },
+  }, update: null }));
+  h.deps.check = async () => ({ ok: true, installed: revision(OLD), available: revision(available), relation: "behind", ahead: 0, behind: 2, delta: null });
+  h.deps.green = { read: async (_remote: string, _branch: string, target: string) => ({ state: target === TARGET ? "red" : "green" }) } as unknown as ServiceDeps["green"];
+  h.deps.createRunner = () => ({ state: idleUpdate(), restore: () => {}, retry: async () => {}, logPath: () => "",
+    start: async target => {
+      builds.push(target);
+      await new Promise<void>(resolve => { finishBuild = resolve; });
+    } });
+  const createService = () => {
+    const instance = h.service();
+    const snapshot = instance.snapshot.bind(instance);
+    instance.snapshot = async () => ({ ...await snapshot(), installed: revision(OLD), available: revision(available), busy: builds.length ? "update" : null });
+    return instance;
+  };
+  const held = () => activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+  let service = createService();
+  try {
+    await service.autoTick();
+    const original = held()!;
+    expect(original.target).toBe(TARGET);
+    expect(builds).toHaveLength(0);
+    service.stop();
+    h.advance(DRAIN_LEASE_MS + 1);
+    service = createService();
+    available = newer;
+    await service.check();
+    await Bun.sleep(0);
+    expect(held()).toMatchObject({ id: original.id, target: newer, since: original.since });
+    await service.autoTick();
+    expect(builds).toEqual([newer]);
+    expect(held()).toMatchObject({ id: original.id, target: newer, since: original.since });
+    expect(readAuto(join(h.dir, "auto.json")).waitingSince).toBe(original.since);
+    expect(h.pending()).toBeNull();
+  } finally { finishBuild?.(); service.stop(); }
 });
 
 test("six hours names blockers for an operator decision while admission remains held", async () => {
@@ -459,6 +638,7 @@ function scenario() {
     quiet: { runtimeSnapshot: async () => ({ sessions: turnRunning ? [{ turn: "running", host: "hosted" }] : [] }),
       pipelines: () => stageRunning ? [{ state: "running", cursor: { state: "spawning" } }] : [], presence: () => [], memoryAvailableMb: () => 8_192 },
     green: { read: async () => ({ state: greenState }) },
+    targetOnBranch: async () => true,
     prune: async () => { prunes += 1; },
     findDeploymentByIdempotencyKey: async () => null,
     web: { pid: 101, port: 0, startedAt: "" }, processAlive: () => true,

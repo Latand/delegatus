@@ -4,6 +4,8 @@ import type { HostProcessLivenessEvidence, TurnLiveness } from "@/lib/runtime/li
 import type { HostState } from "@/lib/runtime/engineHost";
 import type { RuntimeSnapshot } from "@/lib/runtime/contracts";
 import type { Pipeline } from "@/lib/pipelines/types";
+import { pipelineRegistryHealth } from "@/lib/pipelines/store";
+import type { RegistryRecordIssue } from "@/lib/state/registryRecords";
 import type { Flow } from "@/lib/flows/types";
 import { flowAwaitingAdmission } from "./drain";
 import type { StoredViewSession } from "@/lib/view/types";
@@ -24,6 +26,7 @@ export interface QuietBlockers {
   busy: boolean;
   unreadable: string | null;
   memoryMb: number | null;
+  registryIssues?: RegistryRecordIssue[];
 }
 export interface QuietPorts {
   runtimeSnapshot(): Promise<Pick<RuntimeSnapshot, "sessions">>;
@@ -32,6 +35,7 @@ export interface QuietPorts {
   presence(now: number): readonly StoredViewSession[];
   memoryAvailableMb?(): number;
   controllerIdle?(): Promise<boolean>;
+  registryHealth?(): RegistryRecordIssue[];
   controllerBusyReason?(): Promise<BusyReason | null>;
   turnLiveness?(conversationId: string): Promise<{ state: TurnLiveness; currentTurnIdle?: boolean; hostEvidence?: Pick<HostProcessLivenessEvidence, "present" | "observedIdentity" | "expected"> } | null>;
   seats?(): readonly { conversationId: string; project: string }[];
@@ -74,6 +78,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     if (mb < 4_096) blockers.memoryMb = mb;
   }
   try {
+    blockers.registryIssues = (ports.registryHealth ?? pipelineRegistryHealth)();
     const pipelines = ports.pipelines();
     const flows = draining ? ports.flows?.() ?? [] : [];
     const stages: BlockingStage[] = [];
@@ -99,7 +104,8 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     const seen = new Set<string>();
     for (const session of runtime.sessions) {
       if (!["running", "interrupt_requested"].includes(session.turn) && !["registering", "recovering"].includes(session.host)) continue;
-      if (!["hosted", "registering", "recovering"].includes(session.host)) { blockers.discounted!++; continue; }
+      // A fallback can publish unhosted/running while the registry still owns
+      // a live process. Host labels alone cannot establish restart admission.
       const verdict = await liveness(session.conversationId);
       if (verdict === "severed" || verdict === "settled") { blockers.discounted!++; continue; }
       if (seen.has(session.conversationId)) continue;

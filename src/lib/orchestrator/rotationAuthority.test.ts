@@ -8,6 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { NextRequest } from "next/server";
 import { statePath } from "@/lib/configDir";
+import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { activeDrain, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
 
 import { POST as rotateRoute } from "@/app/api/orchestrator/rotate/route";
@@ -156,6 +157,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  closeAgentRegistryForTests();
   setCallerConversationResolverForTests(null);
   setSeatCommandDependenciesForTests(null);
   restore("LLV_STATE_DIR", previousStateDir);
@@ -648,4 +650,58 @@ test("agent rotation retains its pending intent when downstream update admission
   const resumed = await routeRotation("seat", request);
   expect(resumed.status).toBe(200); expect(spawns).toHaveLength(1);
   expect(spawns[0].clientAttemptId).toBe(request.clientRequestId);
+});
+
+
+test.each([
+  { seam: "account", actor: "seat" }, { seam: "publication", actor: "seat" },
+  { seam: "account", actor: "operator" }, { seam: "publication", actor: "operator" },
+] as const)("handoff child respects drain after $seam wait for $actor rotation", async ({ seam, actor }) => {
+  const { summarizeHandoffsHeadless, productionDigestRuntime } = await import("./handoffDigest");
+  const { runHeadlessCodexOnce } = await import("@/lib/agent/headless");
+  const { setCodexShellPolicyReaderForTest } = await import("@/lib/git/codexShellPolicy");
+  seatSeeded(); callerIsOperator();
+  const { deps, spawns } = dependencies();
+  expect((await routeRotation("operator", { project: "proj-a", clientRequestId: "first-helper-rotation" })).status).toBe(200);
+  if (actor === "seat") callerIs(SEAT_ID);
+  const marker = path.join(sandbox, "helper-marker");
+  const command = path.join(sandbox, "helper-stub");
+  fs.writeFileSync(command, `#!${process.execPath}
+import fs from "node:fs"; fs.appendFileSync(${JSON.stringify(marker)}, "launched\\n"); const args = process.argv; fs.writeFileSync(args[args.indexOf("--output-last-message") + 1], "Decisions: shipped");
+`, { mode: 0o700 });
+  let entered!: () => void, release!: () => void;
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const restorePolicy = setCodexShellPolicyReaderForTest(async () => {
+    if (seam === "publication") { entered(); await gate; }
+    return {};
+  });
+  deps.summarizeHandoffs = request => summarizeHandoffsHeadless(request, {
+    ...productionDigestRuntime,
+    resolveAccount: async () => {
+      if (seam === "account") { entered(); await gate; }
+      return { kind: "available", account: { engine: "codex", accountId: "helper", kind: "managed", home: sandbox, transcriptRoot: sandbox, env: { NODE_ENV: "test" } } };
+    },
+    run: request => runHeadlessCodexOnce({ ...request, account: null, runtime: { command } }),
+  });
+  const drainPath = statePath("self-update", "auto-drain.json");
+  try {
+    const input = { project: "proj-a", clientRequestId: "delayed-helper-rotation" };
+    const pending = routeRotation(actor, input);
+    await Promise.race([waiting, pending.then(() => { throw new Error("rotation never reached launch wait"); })]);
+    writeDrain(drainPath, { id: "helper-wait", target: "a".repeat(40), since: AT, until: 0, persistent: true });
+    release();
+    const answer = await pending;
+    if (actor === "seat") {
+      expect(answer.status).toBe(409);
+      expect(fs.existsSync(marker)).toBe(false);
+      expect(spawns).toHaveLength(1);
+      releaseDrain(drainPath, "helper-wait");
+      expect((await routeRotation("seat", input)).status).toBe(200);
+    } else {
+      expect(answer.status).toBe(200);
+    }
+    expect(fs.readFileSync(marker, "utf8")).toBe("launched\n");
+    expect(spawns).toHaveLength(2);
+  } finally { release(); restorePolicy(); releaseDrain(drainPath, "helper-wait"); }
 });

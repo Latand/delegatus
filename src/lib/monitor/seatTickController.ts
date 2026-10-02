@@ -41,8 +41,10 @@ import { readSeatTickState, readSeatTickStateFile, seatTickStateForEpoch, writeS
 import {
   defaultSeatTickSources,
   gatherSeatTickInput,
+  refreshSeatTickEvidence,
   repoDirForProject,
   seatTickProjects,
+  SeatTickEvidenceRefreshCanceledError,
   type SeatTickSources,
   type SeatTickWakeEvidence,
   type SeatTickWakeState,
@@ -60,6 +62,7 @@ import {
 import { SEAT_TICK_RETIRED_WAKE_LIMIT, type SeatTickRefusalRun } from "./types";
 import type {
   SeatTickCard,
+  SeatTickCheckInput,
   SeatTickOutstandingWake,
   SeatTickPolicy,
   SeatTickProjectState,
@@ -946,6 +949,8 @@ async function reconcileOutstandingWake(context: {
   /** The transport, for the same-key re-dispatch. Absent means this reconcile
       never re-dispatches — the one that follows a send in the same check. */
   deliver?: typeof deliverConversationMessage;
+  /** Rebuild only after a returned refusal and proven absence. */
+  refreshWake?: (state: SeatTickProjectState, wake: SeatTickOutstandingWake) => Promise<Pick<SeatTickOutstandingWake, "text" | "commit"> | null>;
   /** Recheck the seat's MCP immediately before a same-key dispatch. */
   mayDispatch?: () => boolean;
   /** When the project's tick settings were last written, which a refusal run
@@ -1038,11 +1043,34 @@ async function reconcileOutstandingWake(context: {
   } else if (observed === "absent" && !wake.operationId && wake.text && (!wake.dispatch || wake.dispatch.state === "refused") && context.deliver) {
     /* The same-identity recovery described above: the layer affirms it holds
        nothing under this key and the send never received an operation, so the
-       frozen payload goes out again under the key it was prepared with — if,
+       alarm goes out again under the key it was prepared with — if,
        at this instant, the row still carries this attempt and the seat is
        still the one it was prepared for. A row that moved on belongs to the
        controller that moved it; a seat that moved is the next check's to
        release. */
+    if (context.refreshWake && state.accounting) {
+      const payload = await context.refreshWake(state, wake);
+      const accounting = new SeatTickAccounting(state.accounting.filename, context.project);
+      const fresh = accounting.readState();
+      const current = fresh.outstandingWake;
+      if (!current || current.clientMessageId !== wake.clientMessageId || current.conversationId !== wake.conversationId
+        || current.seatEpoch !== wake.seatEpoch || current.operationId !== wake.operationId
+        || current.dispatch?.state !== wake.dispatch?.state || current.dispatch?.token !== wake.dispatch?.token) return fresh;
+      if (!payload) {
+        if (wake.dispatch?.state === "refused") accounting.settleAbsent(wake);
+        else accounting.cancelUndispatched(wake);
+        return accounting.readState();
+      }
+      // The state revision and dispatch identity fence concurrent refreshes and admissions.
+      accounting.writeState({ ...fresh, outstandingWake: { ...current, ...payload } });
+      state = accounting.readState();
+      wake = state.outstandingWake!;
+    } else if (!wake.dispatch) {
+      /* A durable wake with no admission record may be the exact restart
+         boundary between preparation and dispatch. Without a fresh source
+         reader it cannot safely replay its frozen agenda. */
+      return state;
+    }
     const held = state.accounting ? new SeatTickAccounting(state.accounting.filename, context.project).readState() : state;
     const authority = context.sources.seatFor(context.project).active;
     if (held.outstandingWake?.clientMessageId !== wake.clientMessageId) return held;
@@ -1230,6 +1258,34 @@ export async function runSeatTickCheck(
   try {
     return await check(canonical, policy, dependencies, appendRecord);
   } catch (error) {
+    let detail = `the check failed: ${redactMonitorText(error instanceof Error ? error.message : "unknown error")}`;
+    if (error instanceof SeatTickEvidenceRefreshCanceledError) {
+      const readState = dependencies.readState ?? readSeatTickState;
+      const writeState = dependencies.writeState ?? writeSeatTickState;
+      try {
+        /* Merge only the refreshed source gap into the latest row. Another
+           check may have advanced the rest of this project's state while this
+           alarm was being canceled. Accounting-backed rows use their revision
+           fence and retry a stale read once against the new row. */
+        for (let attempt = 0; ; attempt += 1) {
+          const fresh = readState(canonical);
+          const updated = { ...fresh, pullRequestGap: error.pullRequestGap };
+          if (!fresh.accounting) {
+            writeState(canonical, updated);
+            break;
+          }
+          try {
+            new SeatTickAccounting(fresh.accounting.filename, canonical).writeState(updated);
+            break;
+          } catch (writeError) {
+            if (attempt < 2 && writeError instanceof Error && writeError.message === "stale seat tick state") continue;
+            throw writeError;
+          }
+        }
+      } catch (writeError) {
+        detail += `; refreshed pull-request outage accounting could not be saved: ${redactMonitorText(writeError instanceof Error ? writeError.message : "unknown error")}`;
+      }
+    }
     const record: SeatTickRunRecord = {
       schemaVersion: 1,
       at: new Date().toISOString(),
@@ -1241,11 +1297,62 @@ export async function runSeatTickCheck(
       deferred: 0,
       eventsThrough: 0,
       delivery: null,
-      detail: `the check failed: ${redactMonitorText(error instanceof Error ? error.message : "unknown error")}`,
+      detail,
     };
     appendRecord(record);
     return record;
   }
+}
+
+function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdict, { kind: "wake" | "proactive" }>, issues: readonly ProposalIssue[] = [], snapshotAt = new Date(input.now).toISOString()) {
+  const noteShown = seatTickNoteRevision(input.settings.monitorPrompt);
+  const monitorPromptUnchanged = noteShown !== null && input.state.noteShown === noteShown;
+  const terminalChildren = input.children.filter((child) => child.status === "terminal").map((child) => child.outcomeId ?? child.conversationId);
+  const text = verdict.kind === "wake"
+    ? seatTickWakeMessage({
+      project: input.project,
+      snapshotAt,
+      reasons: verdict.reasons,
+      /* A settled child's final message rides on its line (#1881), read from
+         its transcript's tail now that the wake is going out. */
+      items: withChildFinalMessages(verdict.items),
+      deferred: verdict.deferred,
+      /* Said once, as counts (#1749, #1783): the children this check declined
+         to list because their outcomes are a retired seat's, not this one's,
+         and the ones whose transcript no seat can read. */
+      skippedChildren: verdict.skippedChildren,
+      unreadableChildren: verdict.unreadableChildren,
+      signals: input.signals,
+      /* What the check could not read travels with the wake it could still
+         raise (#1298), so the seat acts on the rest knowing what is missing
+         from it. */
+      gaps: verdict.gaps,
+      operatorInstructions: input.settings.reason,
+      monitorPrompt: input.settings.monitorPrompt,
+      monitorPromptUnchanged,
+      mandateCarriesContract: input.seat?.mandateCarriesTickContract === true,
+      reportLines: verdict.reportLines,
+    })
+    : seatTickProposalMessage({
+      project: input.project,
+      snapshotAt,
+      issues,
+      signals: input.signals,
+      items: input.policy.itemsPerWake,
+      slot: String(Math.floor(input.now / input.policy.proposalIntervalMs)),
+      operatorInstructions: input.settings.reason,
+      monitorPrompt: input.settings.monitorPrompt,
+      monitorPromptUnchanged,
+      mandateCarriesContract: input.seat?.mandateCarriesTickContract === true,
+    });
+  const commit = seatTickWakeCommitPlan(verdict, {
+    fingerprint: input.changeFingerprint,
+    eventsThrough: input.events.at(-1)?.seq ?? input.state.eventsThrough ?? 0,
+    terminalChildren,
+    noteShown,
+    bridgeReports: input.reports?.bridgeReports === true,
+  });
+  return { text, commit: commit! };
 }
 
 async function check(
@@ -1323,6 +1430,18 @@ async function check(
     writeState,
     unresolved,
     deliver,
+    refreshWake: async (state, wake) => {
+      let input = await refreshSeatTickEvidence(await gatherSeatTickInput(canonical, state, policy, sources), sources);
+      let issues: readonly ProposalIssue[] = [];
+      if (seatTickDecision(input).verdict.kind === "proactive") {
+        issues = await (dependencies.proposalIssues ?? defaultProposalIssues)(canonical, sources);
+        input = await refreshSeatTickEvidence(input, sources);
+      }
+      const verdict = seatTickDecision(input).verdict;
+      if (!input.seat || input.seat.seatEpoch !== wake.seatEpoch || input.seat.conversationId !== wake.conversationId
+        || (verdict.kind !== "wake" && verdict.kind !== "proactive")) return null;
+      return alarmPayload(input, verdict, issues, wake.preparedAt);
+    },
     mayDispatch: () => !activeDrain() && (!openingSeat?.conversationId
       || mcpHealthFor({ ...openingSeat, conversationId: openingSeat.conversationId }, sources.now()).status !== "dead"),
     settingsUpdatedAt: settingsUpdatedAtFor(canonical, sources),
@@ -1337,12 +1456,18 @@ async function check(
   catch (error) { maintenanceDetails.push(`maintenance reconcile: ${redactMonitorText(error instanceof Error ? error.message : "failed")}`); }
   const gathered = await gatherSeatTickInput(canonical, settled, policy, sources);
   await yieldToRuntime();
-  const at = new Date(gathered.now).toISOString();
   /* The gather's own row, not the one it was handed: a first check seals the
      event cursor at the journal head while reading it, and re-deriving the row
      from `settled` here would drop the seal and read the whole journal as
      unread again at the next check. */
-  const input = { ...gathered, state: seatTickStateForEpoch(gathered.state, gathered.seat?.seatEpoch ?? null) };
+  let input = await refreshSeatTickEvidence(gathered, sources);
+  input = { ...input, state: seatTickStateForEpoch(input.state, input.seat?.seatEpoch ?? null) };
+  let proposalIssues: readonly ProposalIssue[] = [];
+  if (seatTickDecision(input).verdict.kind === "proactive") {
+    proposalIssues = await (dependencies.proposalIssues ?? defaultProposalIssues)(input.project, sources);
+    input = await refreshSeatTickEvidence(input, sources);
+  }
+  const at = new Date(input.now).toISOString();
   const mcpHealth = input.seat ? mcpHealthFor(input.seat, input.now) : null;
   if (input.seat && (mcpHealth?.status !== "untracked" || mcpHealth.transport === "http")) {
     try {
@@ -1413,14 +1538,11 @@ async function check(
      why. A refusal an operator cannot read is a refusal nobody acts on. */
   let sendDetail: string | null = null;
   const verdict = decision.verdict;
-  const terminalChildren = input.children.filter((child) => child.status === "terminal").map((child) => child.outcomeId ?? child.conversationId);
 
   if ((verdict.kind === "wake" || verdict.kind === "proactive") && input.seat) {
     /* The note is shown in full only when this seat's last landed wake did not
        already carry this exact text (#2030). The row is the epoch-scoped one,
        so a successor's first wake still carries it. */
-    const noteShown = seatTickNoteRevision(input.settings.monitorPrompt);
-    const monitorPromptUnchanged = noteShown !== null && input.state.noteShown === noteShown;
     const clientMessageId = wakeClientMessageId(input.project, input.seat.seatEpoch, verdict, {
       fingerprint: input.changeFingerprint,
       lastWakeAt: input.state.lastWakeAt,
@@ -1431,41 +1553,7 @@ async function check(
       operatorInstructions: input.settings.reason,
       monitorPrompt: input.settings.monitorPrompt,
     });
-    const text = verdict.kind === "wake"
-      ? seatTickWakeMessage({
-        project: input.project,
-        reasons: verdict.reasons,
-        /* A settled child's final message rides on its line (#1881), read from
-           its transcript's tail now that the wake is going out. */
-        items: withChildFinalMessages(verdict.items),
-        deferred: verdict.deferred,
-        /* Said once, as counts (#1749, #1783): the children this check declined
-           to list because their outcomes are a retired seat's, not this one's,
-           and the ones whose transcript no seat can read. */
-        skippedChildren: verdict.skippedChildren,
-        unreadableChildren: verdict.unreadableChildren,
-        signals: input.signals,
-        /* What the check could not read travels with the wake it could still
-           raise (#1298), so the seat acts on the rest knowing what is missing
-           from it. */
-        gaps: verdict.gaps,
-        operatorInstructions: input.settings.reason,
-        monitorPrompt: input.settings.monitorPrompt,
-        monitorPromptUnchanged,
-        mandateCarriesContract: input.seat.mandateCarriesTickContract === true,
-        reportLines: verdict.reportLines,
-      })
-      : seatTickProposalMessage({
-        project: input.project,
-        issues: await (dependencies.proposalIssues ?? defaultProposalIssues)(input.project, sources),
-        signals: input.signals,
-        items: policy.itemsPerWake,
-        slot: String(Math.floor(input.now / policy.proposalIntervalMs)),
-        operatorInstructions: input.settings.reason,
-        monitorPrompt: input.settings.monitorPrompt,
-        monitorPromptUnchanged,
-        mandateCarriesContract: input.seat.mandateCarriesTickContract === true,
-      });
+    const { text, commit } = alarmPayload(input, verdict, proposalIssues, new Date(gathered.now).toISOString());
 
     /* The prompt above came off the settings row this check read, not out of
        anything the controller carries between checks or between seats: the row
@@ -1480,8 +1568,9 @@ async function check(
     const rotated = !current
       || current.seatEpoch !== input.seat.seatEpoch
       || current.conversationId !== input.seat.conversationId;
-    /* A prepared wake retains its original key and payload until settlement,
-       including across prompt changes and seat rotation.
+    /* A prepared wake retains its original key until settlement. Once admitted
+       to transport its payload is frozen; only a returned refusal with proven
+       absence permits rebuilding that alarm from current sources.
 
        What may withhold this project's next wake is one bounded fence, read
        here and by every surface that reports it (#1746): the outstanding
@@ -1499,13 +1588,7 @@ async function check(
        told about one line at a time. Anything the page bound left behind
        keeps its place and is offered again. Terminal children are recorded
        only as far as the wake names them (#1465). */
-    const commit = seatTickWakeCommitPlan(verdict, {
-      fingerprint: input.changeFingerprint,
-      eventsThrough: input.events.at(-1)?.seq ?? state.eventsThrough ?? 0,
-      terminalChildren,
-      noteShown,
-      bridgeReports: input.reports?.bridgeReports === true,
-    });
+
     /* The refusal circuit: attempts released one after another on the same
        permanent refusal. A seat that cannot take a wake is not sent another
        until something that could change that has happened. */

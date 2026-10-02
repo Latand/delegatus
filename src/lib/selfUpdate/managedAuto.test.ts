@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { RuntimeHostUnavailableError } from "@/lib/runtime/client";
 import type { ViewerDeploymentRequest, ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import { initialAuto, readAuto, writeAuto } from "./auto";
+import { runGit } from "./git";
 import { initialCheck } from "./checkState";
 import { LOST_AFTER_MS, readManagedRecord, writeManagedRecord, type ManagedRecord } from "./managed";
 import { SelfUpdateService, type ServiceDeps } from "./service";
@@ -47,6 +48,7 @@ function scenario(enabled = true) {
     describe: async (_repo: string, sha: string) => revision(sha),
     releaseTarget: () => release ? { revision: release } : null,
     prepareCheckRepo: async () => dir,
+    targetOnBranch: async () => true,
     hostHealth: async () => ({ pid: 102, generation: { revision: release ?? OLD } }),
     web: { pid: 101, port: 3000, startedAt: new Date(now).toISOString() },
     green: { read: async () => { greenReads += 1; return { state: green }; } },
@@ -419,6 +421,128 @@ test("disabling during the green read cannot publish a new launch hold", async (
   expect(readAuto(file)).toMatchObject({ enabled: false, drain: null });
   expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
   service.stop();
+});
+
+test.each([false, true])("a red unaccepted drain advances to green main with continuous custody (restart=%s)", async (restart) => {
+  const h = scenario();
+  const newer = "c".repeat(40);
+  const autoFile = join(h.dir, "auto.json");
+  const held = () => activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+  let ticks = 0;
+  h.deps.requestPipelineTick = () => { ticks++; };
+  h.setTurns(1);
+  let expectedHold: { id: string; since: string } | null = null;
+  h.deps.green = { read: async (_remote: string, _branch: string, target: string) => {
+    // Every asynchronous green read sees the original cohort's hold.
+    if (expectedHold) expect(held()).toMatchObject(expectedHold);
+    return { state: target === TARGET ? "red" : "green" };
+  } } as unknown as ServiceDeps["green"];
+  let service = h.service();
+  try {
+    await service.autoTick();
+    const original = readAuto(autoFile);
+    expect(original.managedPending).toBeNull();
+    h.advance(DRAIN_NOTICE_MS);
+    await service.autoTick();
+    const cohort = readAuto(autoFile).drain!;
+    expectedHold = { id: cohort.id, since: cohort.since };
+    expect(cohort.overranAt).not.toBeNull();
+    if (restart) {
+      service.stop();
+      h.advance(DRAIN_LEASE_MS + 1);
+      service = h.service();
+      await service.autoTick();
+      expect(held()).toMatchObject({ ...expectedHold, target: TARGET });
+    }
+    h.deps.check = async () => ({ ok: true, installed: revision(OLD), available: revision(newer), relation: "behind", ahead: 0, behind: 2, delta: null });
+    const unsubscribe = service.changes.on(() => {
+      expect(held()).toMatchObject({ id: cohort.id, since: cohort.since });
+    });
+    await service.check();
+    await Bun.sleep(0);
+    if (restart) {
+      unsubscribe();
+      service.stop();
+      h.advance(DRAIN_LEASE_MS + 1);
+      service = h.service();
+    }
+    await service.autoTick();
+    expect(readAuto(autoFile)).toMatchObject({ waitingSince: original.waitingSince, waitingTarget: newer,
+      drain: { ...cohort, target: revision(newer) }, managedPending: null });
+    expect(held()).toMatchObject({ id: cohort.id, target: newer, since: cohort.since });
+    expect(h.requests).toHaveLength(0);
+    h.deps.requestDeployment = async (body) => {
+      expect(held()).toMatchObject({ id: cohort.id, target: newer, since: cohort.since });
+      h.requests.push(body);
+      return { state: "accepted", deploymentId: "deployment-newer", revision: newer, replayed: false };
+    };
+    h.setTurns(0);
+    await service.autoTick();
+    h.advance(60_000);
+    await service.autoTick();
+    expect(h.requests).toHaveLength(1);
+    expect(h.requests[0]?.revision).toBe(newer);
+    expect(readAuto(autoFile).drain).toMatchObject({ id: cohort.id, since: cohort.since, admitted: true });
+    expect(ticks).toBe(0);
+    unsubscribe();
+  } finally { service.stop(); }
+});
+
+test.each(["red", "pending", "unknown"] as const)("a red drain retains its target when newer main is %s", async (state) => {
+  const h = scenario();
+  h.setGreen("red");
+  const service = h.service();
+  try {
+    await service.autoTick();
+    const original = readAuto(join(h.dir, "auto.json")).drain;
+    const newer = "c".repeat(40);
+    h.setGreen(state);
+    h.deps.check = async () => ({ ok: true, installed: revision(OLD), available: revision(newer), relation: "behind", ahead: 0, behind: 2, delta: null });
+    await service.check();
+    await Bun.sleep(0);
+    h.advance(60_000);
+    await service.autoTick();
+    expect(readAuto(join(h.dir, "auto.json")).drain).toEqual(original);
+    expect(h.requests).toHaveLength(0);
+  } finally { service.stop(); }
+});
+
+test.each(["switch-off", "main-moved", "red-refresh"] as const)("red target supersession rechecks %s after the candidate green wait", async (change) => {
+  const h = scenario();
+  const newer = "c".repeat(40);
+  let entered!: () => void;
+  const reading = new Promise<void>(resolve => { entered = resolve; });
+  let release!: () => void;
+  const paused = new Promise<void>(resolve => { release = resolve; });
+  let candidateReads = 0;
+  h.deps.green = { read: async (_remote: string, _branch: string, target: string) => {
+    if (target === TARGET) return { state: "red" };
+    if (++candidateReads === 2) {
+      entered();
+      await paused;
+      if (change === "red-refresh") return { state: "red" };
+    }
+    return { state: "green" };
+  } } as unknown as ServiceDeps["green"];
+  const service = h.service();
+  try {
+    await service.autoTick();
+    const original = readAuto(join(h.dir, "auto.json")).drain!;
+    h.deps.check = async () => ({ ok: true, installed: revision(OLD), available: revision(newer), relation: "behind", ahead: 0, behind: 2, delta: null });
+    await service.check();
+    await reading;
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.id).toBe(original.id);
+    if (change === "switch-off") await service.setAuto(false);
+    if (change === "main-moved") {
+      h.deps.check = async () => ({ ok: true, installed: revision(OLD), available: revision("d".repeat(40)), relation: "behind", ahead: 0, behind: 3, delta: null });
+      await service.check();
+    }
+    release();
+    await Bun.sleep(0);
+    const drain = readAuto(join(h.dir, "auto.json")).drain;
+    expect(drain).toEqual(change === "switch-off" ? null : original);
+    expect(h.requests).toHaveLength(0);
+  } finally { release(); service.stop(); }
 });
 
 test.each(["succeeded", "rolled-back", "failed"] as const)("the frozen drain target survives newer merges and releases after %s", async (phase) => {
@@ -918,4 +1042,250 @@ test("an interrupted unaccepted request waits for fresh green and quiet admissio
   expect(h.requests).toHaveLength(1);
   expect(h.requests[0]?.idempotencyKey).toBe(`self-update-${TARGET.slice(0, 12)}-saved-key`);
   service.stop();
+});
+
+
+test.each(["hot", "cold"] as const)("manual managed completion releases an unaccepted drain during %s recovery", async (recovery) => {
+  const cold = recovery === "cold";
+  const h = scenario();
+  h.setTurns(1);
+  let service = h.service();
+  let ticks = 0;
+  h.deps.requestPipelineTick = () => { ticks++; };
+  let hostRevision = OLD;
+  let answers = true;
+  h.deps.hostHealth = async () => answers ? { pid: 102, startIdentity: "fixture", hostEpoch: 1, generation: { revision: hostRevision } } : null;
+  const held = () => activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+  const auto = () => readAuto(join(h.dir, "auto.json"));
+  try {
+    await service.autoTick();
+    const id = held()!.id;
+    expect(await service.startUpdate("manual-update")).toEqual({ ok: true });
+    expect(auto().managedPending).toBeNull();
+    expect(auto().drain?.admitted).not.toBe(true);
+    h.finish("succeeded");
+    if (cold) {
+      service.stop();
+      h.advance(DRAIN_LEASE_MS + 1);
+      service = h.service();
+    }
+    // Web promotion alone and an unavailable host cannot release custody.
+    await service.snapshot();
+    expect(held()?.id).toBe(id);
+    hostRevision = TARGET;
+    answers = false;
+    await service.autoTick();
+    expect(held()?.id).toBe(id);
+    answers = true;
+    h.setRelease(null);
+    await service.snapshot();
+    expect(held()?.id).toBe(id);
+    h.setRelease(TARGET);
+    await service.autoTick();
+    expect(held()).toBeNull();
+    expect(auto()).toMatchObject({ drain: null, waitingSince: null, waitingTarget: null, quietSince: null, lastBlockers: null });
+    expect(ticks).toBe(1);
+    // The manual deployment completed the target; no automatic duplicate follows.
+    h.setTurns(0);
+    h.advance(60_000);
+    await service.autoTick();
+    expect(h.requests).toHaveLength(1);
+    expect(ticks).toBe(1);
+  } finally { service.stop(); }
+});
+
+test.each(["before-tick", "mode-wait", "probe-unavailable"] as const)("managed frozen target admission checks fresh main ancestry at %s", async (seam) => {
+  const h = scenario();
+  const service = h.service();
+  let allowed = true;
+  let ancestryReads = 0;
+  h.deps.targetOnBranch = async () => {
+    ancestryReads++;
+    if (seam === "probe-unavailable" && !allowed) throw new Error("remote unavailable");
+    return allowed;
+  };
+  try {
+    h.setTurns(1);
+    await service.autoTick();
+    const original = readAuto(join(h.dir, "auto.json")).drain!;
+    h.setTurns(0);
+    await service.autoTick();
+    h.advance(60_000);
+    if (seam === "mode-wait") h.setModeReadHook(async () => { allowed = false; });
+    else allowed = false;
+    await service.autoTick();
+    expect(h.requests).toHaveLength(0);
+    expect(ancestryReads).toBeGreaterThan(0);
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.id).toBe(original.id);
+    expect(readAuto(join(h.dir, "auto.json")).managedPending).toBeNull();
+    h.setModeReadHook(null);
+    allowed = true;
+    await service.autoTick();
+    h.advance(60_000);
+    await service.autoTick();
+    expect(h.requests).toHaveLength(1);
+    expect(h.requests[0]?.revision).toBe(TARGET);
+  } finally { service.stop(); }
+});
+
+
+test.each(["ancestor", "removed"] as const)("managed admission fetches real main ancestry for a frozen %s target", async (relation) => {
+  const rewrite = relation === "removed";
+  const h = scenario();
+  const remote = join(h.dir, "remote.git");
+  const work = join(h.dir, "work");
+  const repo = join(h.dir, "check.git");
+  const git = async (cwd: string, ...args: string[]) => {
+    const result = await runGit(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", ...args], cwd);
+    if (result.code !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  };
+  await git(h.dir, "init", "--bare", "--initial-branch=main", remote);
+  await git(h.dir, "init", "--initial-branch=main", work);
+  await git(work, "commit", "--allow-empty", "-m", "Initial fixture");
+  const base = await git(work, "rev-parse", "HEAD");
+  await git(work, "commit", "--allow-empty", "-m", "Frozen fixture");
+  const frozen = await git(work, "rev-parse", "HEAD");
+  await git(work, "push", remote, "HEAD:refs/heads/main");
+  await git(h.dir, "clone", "--bare", remote, repo);
+  const stateFile = join(h.dir, "state.json");
+  const state = JSON.parse(readFileSync(stateFile, "utf8"));
+  state.slice.available = revision(frozen);
+  writeFileSync(stateFile, JSON.stringify(state));
+  h.deps.prepareCheckRepo = async () => repo;
+  h.deps.targetOnBranch = async (checkout, target) => (await import("./git")).targetOnCurrentBranch(checkout, remote, "main", target);
+  let service = h.service();
+  try {
+    h.setTurns(1);
+    await service.autoTick();
+    const id = readAuto(join(h.dir, "auto.json")).drain!.id;
+    if (rewrite) await git(work, "checkout", "--detach", base);
+    await git(work, "commit", "--allow-empty", "-m", "Fresh main fixture");
+    const tip = await git(work, "rev-parse", "HEAD");
+    await git(work, "push", "--force", remote, "HEAD:refs/heads/main");
+    expect((await runGit(["merge-base", "--is-ancestor", frozen, tip], work)).code).toBe(rewrite ? 1 : 0);
+    // Cold recovery still sees old cached available evidence. Fresh ancestry must win.
+    service.stop();
+    service = h.service();
+    h.setTurns(0);
+    await service.autoTick();
+    h.advance(60_000);
+    await service.autoTick();
+    expect(h.requests).toHaveLength(rewrite ? 0 : 1);
+    if (rewrite) {
+      expect(readAuto(join(h.dir, "auto.json")).managedPending).toBeNull();
+      expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.id).toBe(id);
+      // Restoring main's ancestry admits the same frozen cohort exactly once.
+      await git(work, "push", "--force", remote, `${frozen}:refs/heads/main`);
+      await service.autoTick();
+      h.advance(60_000);
+      await service.autoTick();
+    }
+    expect(h.requests).toHaveLength(1);
+    expect(h.requests[0]?.revision).toBe(frozen);
+  } finally { service.stop(); }
+});
+
+
+test.each(["hot", "cold", "admitted-hot", "admitted-cold"] as const)("a successful manual newer target settles the frozen cohort during %s recovery", async (recovery) => {
+  const h = scenario();
+  const newer = "c".repeat(40);
+  let service = h.service();
+  let deployed = false;
+  let hostRevision = OLD;
+  let status: ViewerDeploymentStatus | null = null;
+  const held = () => activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+  const automaticRequest = h.deps.requestDeployment;
+  const automaticRead = h.deps.readDeployment;
+  h.deps.hostHealth = async () => ({ pid: 102, startIdentity: "fixture", hostEpoch: 1, generation: { revision: hostRevision } });
+  h.deps.check = async () => deployed
+    ? { ok: true, installed: revision(newer), available: null, relation: "equal", ahead: 0, behind: 0, delta: null }
+    : { ok: true, installed: revision(OLD), available: revision(newer), relation: "behind", ahead: 0, behind: 2, delta: null };
+  h.deps.requestDeployment = async body => {
+    if (body.revision === TARGET) return automaticRequest(body);
+    h.requests.push(body);
+    status = { deploymentId: "manual-newer", idempotencyKey: body.idempotencyKey, requestedRevision: newer, revision: newer,
+      phase: "admitted", terminal: false, candidate: null, previous: null,
+      mcpRuntime: { candidate: null, previous: null, publications: [], health: [] }, health: [], error: null,
+      owner: { pid: 102, startIdentity: null }, createdAt: new Date(h.deps.now()).toISOString(), updatedAt: new Date(h.deps.now()).toISOString(), revisionNumber: 1 };
+    return { state: "accepted", deploymentId: "manual-newer", revision: newer, replayed: false };
+  };
+  h.deps.readDeployment = async id => id === "deployment-1" ? automaticRead(id) : status;
+  try {
+    h.setTurns(recovery.startsWith("admitted-") ? 0 : 1);
+    await service.autoTick();
+    const id = held()!.id;
+    expect(held()!.target).toBe(TARGET);
+    if (recovery.startsWith("admitted-")) {
+      h.advance(60_000);
+      await service.autoTick();
+      h.setRelease(TARGET);
+      h.finish("failed", "host promotion failed");
+      await service.snapshot();
+      expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ enabled: false, managedPending: { target: { sha: TARGET } } });
+      expect(held()?.id).toBe(id);
+    }
+    h.advance(1_000);
+    await service.check();
+    expect(await service.startUpdate("manual-newer")).toEqual({ ok: true });
+    // Both processes can report the new revision before the deployment settles.
+    h.setRelease(newer);
+    hostRevision = newer;
+    await service.snapshot();
+    await service.autoTick();
+    expect(held()?.id).toBe(id);
+    expect(readManagedRecord(join(h.dir, "managed.json"))?.deploymentId).toBe("manual-newer");
+    status = { ...status!, phase: "succeeded", terminal: true, revisionNumber: 2 };
+    deployed = true;
+    hostRevision = OLD;
+    await service.refreshManaged();
+    await service.check();
+    if (recovery.endsWith("cold")) { service.stop(); service = h.service(); }
+    expect((await service.snapshot()).check.state).toBe("up-to-date");
+    expect(held()?.id).toBe(id); // Success alone cannot hide the old host.
+    const settledCheck = h.deps.check;
+    // Main can advance again while the newer manual release's host observation
+    // lags. The frozen ancestor must not replace the operator's current receipt.
+    h.deps.check = async () => ({ ok: true, installed: revision(newer), available: revision("d".repeat(40)), relation: "behind", ahead: 0, behind: 1, delta: null });
+    h.setTurns(0);
+    await service.check();
+    await Bun.sleep(0); // Let the check's queued automatic tick finish before advancing its clock.
+    await service.autoTick(); h.advance(60_000); await service.autoTick();
+    expect(h.requests).toHaveLength(recovery.startsWith("admitted-") ? 2 : 1);
+    expect(held()?.id).toBe(id);
+    h.deps.check = settledCheck;
+    await service.check();
+    await service.autoTick();
+    expect(readManagedRecord(join(h.dir, "managed.json"))?.deploymentId).toBe("manual-newer");
+    hostRevision = newer;
+    await service.snapshot();
+    await service.autoTick();
+    expect(held()).toBeNull();
+    expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ drain: null, managedPending: null, waitingTarget: null, waitingSince: null });
+    h.setTurns(0);
+    await service.autoTick();
+    expect(h.requests).toHaveLength(recovery.startsWith("admitted-") ? 2 : 1);
+  } finally { service.stop(); }
+});
+
+
+test("a successful operator receipt predating the cohort cannot release its new drain", async () => {
+  const h = scenario();
+  const unrelated = "c".repeat(40);
+  h.setRelease(unrelated);
+  h.setTurns(1);
+  writeManagedRecord(join(h.dir, "managed.json"), { deploymentId: "prior-manual", idempotencyKey: "prior-manual",
+    trigger: "operator", target: unrelated, targetShort: unrelated.slice(0, 7), targetVersion: null,
+    requestedAt: new Date(h.deps.now() - 60_000).toISOString(), observed: {}, lastStep: null,
+    finishedAt: new Date(h.deps.now() - 30_000).toISOString(), phase: "succeeded", error: null, servingProgress: null });
+  const service = h.service();
+  try {
+    await service.autoTick();
+    const id = activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())!.id;
+    const snapshot = await service.snapshot();
+    expect(snapshot.serving.web?.sha).toBe(unrelated);
+    expect(snapshot.serving.runtimeHost?.sha).toBe(unrelated);
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.id).toBe(id);
+    expect(h.requests).toHaveLength(0);
+  } finally { service.stop(); }
 });
