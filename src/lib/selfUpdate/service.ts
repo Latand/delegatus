@@ -362,14 +362,15 @@ export class SelfUpdateService {
     if (decision.mode !== "checkout" || !decision.record) return;
     const record = decision.record;
     const snapshot = await this.snapshot();
+    const observedHealthy = [snapshot.processes.web, snapshot.processes.runtimeHost]
+      .every((process) => process.state === "healthy" && process.lastHealthOk === true);
     const now = this.deps.now();
     const pending = this.auto.pending;
     if (this.auto.rollback) {
       const rollback = this.auto.rollback.target;
       const serves = (revision: Revision | null, target: string | null | undefined) => !!target && (revision?.sha === target || revision?.short === shortSha(target));
       const consistent = [rollback, this.auto.drain?.target.sha].some((target) => serves(snapshot.serving.web, target) && serves(snapshot.serving.runtimeHost, target));
-      if (record.web.state === "healthy" && record.runtimeHost.state === "healthy"
-        && consistent) {
+      if (observedHealthy && consistent) {
         this.auto = { ...this.auto, rollback: null, waitingSince: null, waitingTarget: null, lastBlockers: null };
         this.endDrain();
       }
@@ -439,7 +440,7 @@ export class SelfUpdateService {
       return;
     }
     const serves = (revision: Revision | null) => revision?.sha === target.sha || revision?.short === target.short;
-    if (serves(snapshot.serving.web) && serves(snapshot.serving.runtimeHost)) {
+    if (observedHealthy && serves(snapshot.serving.web) && serves(snapshot.serving.runtimeHost)) {
       if (this.auto.waitingSince) {
         this.endDrain();
         const rollback = this.auto.rollbackPointer;
@@ -559,18 +560,32 @@ export class SelfUpdateService {
     return now - Date.parse(this.auto.quietSince) >= 60_000;
   }
 
-  private finishManagedAuto(): void {
+  private finishManagedAuto(snapshot?: Snapshot): void {
     const pending = this.auto.managedPending;
     const record = this.managed;
     if (!pending || !record || managedActive(record)
       || record.idempotencyKey !== managedIdempotencyKey(pending.target.sha, pending.clientKey)) return;
     const failed = record.phase !== "succeeded";
+    if (failed) {
+      // A terminal failure can follow web promotion or a failed rollback.
+      // Disable future updates immediately, but keep the accepted transaction
+      // and its custody until a fresh observation establishes safe succession.
+      if (this.auto.enabled || !this.auto.off) {
+        this.auto = { ...this.auto, enabled: false, off: { at: new Date(this.deps.now()).toISOString(), target: record.target,
+          stage: "deploy", reason: record.error || (record.lost ? "deployment record was lost" : "deployment failed") } };
+        this.saveAuto();
+      }
+      const serves = (revision: Revision | null, target: string | null | undefined) => !!target && (revision?.sha === target || revision?.short === shortSha(target));
+      const healthy = snapshot && [snapshot.processes.web, snapshot.processes.runtimeHost]
+        .every((process) => process.state === "healthy" && process.lastHealthOk === true);
+      const consistent = snapshot && [pending.from ?? this.slice.installed?.sha, pending.target.sha]
+        .some((target) => serves(snapshot.serving.web, target) && serves(snapshot.serving.runtimeHost, target));
+      if (!healthy || !consistent) return;
+    }
     this.endDrain();
     this.auto = {
       ...this.auto, managedPending: null, waitingSince: null, waitingTarget: null,
       lastBlockers: null, quietSince: null, noticeAt: null,
-      ...(failed ? { enabled: false, off: { at: new Date(this.deps.now()).toISOString(), target: record.target,
-        stage: "deploy" as const, reason: record.error || (record.lost ? "deployment record was lost" : "deployment failed") } } : {}),
     };
     this.saveAuto();
   }
@@ -607,6 +622,7 @@ export class SelfUpdateService {
         this.managed = observeDeployment(record, accepted);
         writeManagedRecord(this.managedFile, this.managed);
         this.finishManagedAuto();
+        if (!managedActive(this.managed) && this.auto.managedPending) await this.snapshot();
         this.changes.emit();
         return;
       }
@@ -672,7 +688,7 @@ export class SelfUpdateService {
       this.beginAutoCustody(target);
       const clientKey = pending?.clientKey ?? randomUUID();
       if (!pending) {
-        this.auto = { ...this.auto, managedPending: { target, clientKey, at: new Date(this.deps.now()).toISOString() }, quietSince: null };
+        this.auto = { ...this.auto, managedPending: { target, clientKey, at: new Date(this.deps.now()).toISOString(), from: admissionSnapshot.serving.web?.sha ?? null }, quietSince: null };
         this.saveAuto();
       }
       const result = await this.deploy(target, clientKey, "auto");
@@ -1138,6 +1154,7 @@ export class SelfUpdateService {
       processes: { web: { ...stoppedProcess(), tail: [] }, runtimeHost: { ...stoppedProcess(), tail: [] } },
       busy: null,
     };
+    if (snapshot.mode === "managed") this.finishManagedAuto(snapshot);
     // Ordinary reads use the controller state after awaited deployment
     // refreshes. Receipt snapshots pass replayAuto to preserve their original
     // immutable response across later changes.
@@ -1182,8 +1199,8 @@ export class SelfUpdateService {
     });
     let host = fromRecord(record.runtimeHost, { socket: record.socket });
     if (host.state === "healthy") {
-      if (health && health.pid === host.pid) host = { ...host, lastHealthAt: at, lastHealthOk: true };
-      else if (healthError) host = { ...host, state: "failed", lastHealthAt: at, lastHealthOk: false, error: { kind: "message", text: healthError } };
+      if (health && health.pid === host.pid && health.startIdentity === record.runtimeHost.startIdentity) host = { ...host, lastHealthAt: at, lastHealthOk: true };
+      else host = { ...host, state: "failed", lastHealthAt: at, lastHealthOk: false, error: { kind: "message", text: healthError ?? (health ? "Runtime host health identity does not match the launcher" : "Runtime host health is unavailable") } };
     }
 
     /* Busy follows what the processes are, after the PID check: a "starting"

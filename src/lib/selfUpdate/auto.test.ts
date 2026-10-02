@@ -17,6 +17,8 @@ import { POST as postPresence } from "../../app/api/view/presence/route";
 import { listPresence, resetPresenceForTest } from "../view/presenceStore";
 import { statePath } from "../configDir";
 import { NextRequest } from "next/server";
+import { spawnSync } from "node:child_process";
+import { UpdateRunner } from "./steps";
 import { watchRestartRequests as watchOldRestartRequests } from "./__fixtures__/preAutoLauncher.mjs";
 
 const root = mkdtempSync("/var/tmp/self-update-auto-");
@@ -248,6 +250,149 @@ test("host fallback holds custody across recovery until web rollback is observed
   } finally { service.stop(); }
 });
 
+test.each(["failed", "missing", "wrong-pid", "wrong-identity", "web-away", "web-gone", "host-gone", "mixed"] as const)("real rollback snapshot retains custody with %s evidence across recovery", async (evidence) => {
+  const h = scenario();
+  const drain = { id: "rollback-drain", target: { sha: TARGET, short: TARGET.slice(0, 7), version: "1", date: "" }, since: new Date(h.deps.now()).toISOString(), overranAt: null, blockers: null, admitted: true };
+  writeAuto(join(h.dir, "auto.json"), { ...initialAuto(), enabled: false, drain, rollback: { target: OLD } });
+  writeDrain(join(h.dir, "auto-drain.json"), { id: drain.id, target: TARGET, since: drain.since, until: h.deps.now() + DRAIN_LEASE_MS, persistent: true });
+  let healthy = false;
+  let ticks = 0;
+  h.deps.requestPipelineTick = () => { ticks++; };
+  h.deps.hostHealth = async () => {
+    if (!healthy && evidence === "failed") throw new Error("host health unavailable");
+    if (!healthy && evidence === "missing") return null;
+    return { pid: !healthy && evidence === "wrong-pid" ? 999 : 102, startIdentity: !healthy && evidence === "wrong-identity" ? "another-host" : "host", hostEpoch: 1 };
+  };
+  h.deps.processAlive = (pid) => healthy || !(evidence === "web-gone" && pid === 101 || evidence === "host-gone" && pid === 102);
+  if (evidence === "web-away") h.deps.web = { ...h.deps.web, pid: 999 };
+  if (evidence === "mixed") h.record.web.revision = TARGET.slice(0, 7);
+  let service = new SelfUpdateService(h.deps); // Use checkoutPart, including fresh host RPC and PID checks.
+  const held = () => activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+  try {
+    for (let recovery = 0; recovery < 2; recovery++) {
+      await service.autoTick();
+      expect(held()?.id).toBe(drain.id);
+      expect(readAuto(join(h.dir, "auto.json")).rollback).not.toBeNull();
+      expect(ticks).toBe(0);
+      service.stop();
+      h.advance(DRAIN_LEASE_MS + 1);
+      service = new SelfUpdateService(h.deps);
+    }
+    healthy = true;
+    h.deps.web = { ...h.deps.web, pid: 101 };
+    h.record.web.revision = OLD.slice(0, 7);
+    await service.autoTick();
+    expect(held()).toBeNull();
+    expect(readAuto(join(h.dir, "auto.json")).rollback).toBeNull();
+    await service.autoTick();
+    expect(ticks).toBe(1);
+  } finally { service.stop(); }
+});
+
+test("real checkout runner deploys a frozen green ancestor after main advances during pre-build waiting", async () => {
+  const h = scenario();
+  const remote = join(h.dir, "remote");
+  const checkout = join(h.dir, "checkout");
+  mkdirSync(remote);
+  const git = (args: string[], cwd = remote) => {
+    const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  };
+  git(["init", "-q", "-b", "main"]);
+  const commit = (label: string) => {
+    writeFileSync(join(remote, "example.txt"), label);
+    git(["add", "example.txt"]);
+    git(["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-qm", label]);
+    return git(["rev-parse", "HEAD"]);
+  };
+  const old = commit("old");
+  const target = commit("candidate");
+  git(["clone", "-q", remote, checkout]);
+  git(["checkout", "-q", "--detach", old], checkout);
+  h.record.checkout = checkout;
+  h.record.web.revision = h.record.runtimeHost.revision = old.slice(0, 7);
+  const revision = (sha: string) => ({ sha, short: sha.slice(0, 7), version: "1", date: "" });
+  // A check already in flight delays the build while the original cohort runs.
+  writeFileSync(join(h.dir, "state.json"), JSON.stringify({ slice: { ...initialCheck(), installed: revision(old), available: revision(target), check: { ...idleCheck(), state: "checking" } }, update: null }));
+  h.deps.describe = async (_repo, sha) => revision(git(["rev-parse", sha], checkout));
+  h.deps.hostHealth = async () => ({ pid: 102, startIdentity: "host", hostEpoch: 1 });
+  let runner!: UpdateRunner;
+  const holds: string[] = [];
+  h.deps.createRunner = (config, publish, changed) => runner = new UpdateRunner(config, {
+    now: h.deps.now, memAvailableMb: () => 8192, exists: existsSync,
+    buildIdReadable: (dir) => existsSync(join(dir, ".next", "BUILD_ID")), publish,
+    revParse: async (ref, cwd) => git(["rev-parse", ref], cwd),
+    run: async (args, { cwd, onLine }) => {
+      holds.push(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.id ?? "released");
+      if (args[0] === "git") {
+        const argv = [...args.slice(1)];
+        if (argv[0] === "fetch") argv[2] = remote;
+        const result = spawnSync("git", argv, { cwd, encoding: "utf8" });
+        onLine(result.stderr);
+        return result.status ?? 1;
+      }
+      if (args.includes("build")) {
+        mkdirSync(join(cwd, ".next"));
+        writeFileSync(join(cwd, ".next", "BUILD_ID"), "fixture");
+      }
+      return 0;
+    },
+  }, changed);
+  h.setTurn(true);
+  let ticks = 0;
+  h.deps.requestPipelineTick = () => { ticks++; };
+  let finishCheck!: () => void;
+  let newer = target;
+  h.deps.check = async () => {
+    await new Promise<void>((resolve) => { finishCheck = resolve; });
+    return { ok: true, installed: revision(old), available: revision(newer), relation: "behind", ahead: 0, behind: 2, delta: null };
+  };
+  const service = new SelfUpdateService(h.deps);
+  const held = () => activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+  try {
+    const checking = service.check();
+    for (let i = 0; i < 100 && !finishCheck; i++) await Bun.sleep(1);
+    await service.autoTick();
+    const drain = held()!;
+    expect(drain.target).toBe(target);
+    expect(runner.state.state).toBe("idle");
+    newer = commit("newer-main");
+    finishCheck();
+    await checking;
+    for (let i = 0; i < 100 && runner.state.state !== "done" && runner.state.state !== "failed"; i++) await Bun.sleep(1);
+    expect(runner.state.state).toBe("done");
+    expect(runner.state.target).toBe(target);
+    expect(holds.length).toBeGreaterThan(3);
+    expect(holds.every((id) => id === drain.id)).toBe(true);
+    expect((await service.snapshot()).available?.sha).toBe(newer);
+    expect(h.pending()).toBeNull();
+    h.setTurn(false);
+    for (const role of ["web", "runtime-host"] as const) {
+      await service.autoTick();
+      h.advance(60_000);
+      await service.autoTick();
+      const pending = h.pending()!;
+      expect(pending.role).toBe(role);
+      expect(held()?.id).toBe(drain.id);
+      endRestartGate(restartGateFile(h.record.requestFile), JSON.parse(readFileSync(h.record.requestFile, "utf8")).autoGateId);
+      rmSync(h.record.requestFile);
+      h.record[role === "web" ? "web" : "runtimeHost"] = { ...h.record[role === "web" ? "web" : "runtimeHost"], revision: target.slice(0, 7), requestId: pending.requestId };
+      await service.autoTick();
+      expect(held()?.id).toBe(drain.id);
+    }
+    // Matching cached revisions alone cannot prove the succession completed.
+    h.deps.hostHealth = async () => { throw new Error("candidate host health unavailable"); };
+    await service.autoTick();
+    expect(held()?.id).toBe(drain.id);
+    expect(ticks).toBe(0);
+    h.deps.hostHealth = async () => ({ pid: 102, startIdentity: "host", hostEpoch: 1 });
+    await service.autoTick();
+    expect(held()).toBeNull();
+    expect(ticks).toBe(1);
+  } finally { service.stop(); }
+});
+
 function scenario() {
   const dir = mkdtempSync(join(root, "run-"));
   const record: LauncherRecord = {
@@ -268,7 +413,7 @@ function scenario() {
   const snapshot = (): Snapshot => ({
     mode: "checkout", unsupportedReason: null, available: null, check: idleCheck(), installed: revision(TARGET),
     serving: { web: revision(record.web.revision === TARGET.slice(0, 7) ? TARGET : OLD), runtimeHost: revision(record.runtimeHost.revision === TARGET.slice(0, 7) ? TARGET : OLD) },
-    update: idleUpdate(), processes: { web: { ...stoppedProcess(), state: record.web.state, tail: [] }, runtimeHost: { ...stoppedProcess(), state: record.runtimeHost.state, tail: [] } }, busy: null,
+    update: idleUpdate(), processes: { web: { ...stoppedProcess(), state: record.web.state, lastHealthOk: record.web.state === "healthy", tail: [] }, runtimeHost: { ...stoppedProcess(), state: record.runtimeHost.state, lastHealthOk: record.runtimeHost.state === "healthy", tail: [] } }, busy: null,
     meta: { branch: "main", remote: "https://github.com/example/project", checkout: record.checkout, pollMinutes: 15, serverTime: new Date(now).toISOString() },
   });
   const deps = {

@@ -45,7 +45,7 @@ export interface AutoState {
   rollback: { target: string | null } | null;
   pending: AutoPending | null;
   /** Written before asking the runtime host; replay uses the same key after a web restart. */
-  managedPending: { target: Revision; clientKey: string; at: string } | null;
+  managedPending: { target: Revision; clientKey: string; at: string; from?: string | null } | null;
   rollbackPointer: string | null;
   rollbackCaptured: boolean;
 }

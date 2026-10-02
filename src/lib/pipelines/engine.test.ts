@@ -1434,6 +1434,7 @@ test.each(["early", "drain-switch-off"] as const)("managed %s admission holds ac
     expect(requests).toBe(1);
     status = { ...status!, phase: "rolled-back", terminal: true, revisionNumber: 2 };
     await service.refreshManaged();
+    await service.snapshot();
     for (let i = 0; i < 2; i++) await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(1);
   } finally { service.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
@@ -1453,7 +1454,7 @@ test.each(["drain", "early-switch-off", "host-fallback"] as const)("a stage comp
   fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify({ slice: initialCheck(), update: null, autoRollbackCaptured: true }));
   const snapshot = (): Snapshot => ({ mode: "checkout", unsupportedReason: null, installed: rev(target), available: null, check: idleCheck(), update: idleUpdate(), busy: null,
     serving: { web: rev(record.web.revision === target.slice(0, 7) ? target : old), runtimeHost: rev(record.runtimeHost.revision === target.slice(0, 7) ? target : old) },
-    processes: { web: { ...stoppedProcess(), state: "healthy", tail: [] }, runtimeHost: { ...stoppedProcess(), state: "healthy", tail: [] } },
+    processes: { web: { ...stoppedProcess(), state: "healthy", lastHealthOk: true, tail: [] }, runtimeHost: { ...stoppedProcess(), state: "healthy", lastHealthOk: true, tail: [] } },
     meta: { branch: "main", remote: "https://github.com/example/project", checkout: null, pollMinutes: 15, serverTime: new Date(now).toISOString() } });
   const deps = { dir, now: () => now, env: {}, remote: "https://github.com/example/project", branch: "main", mode: async () => ({ mode: "checkout", record }),
     green: { read: async () => ({ state: "green" }) }, quiet: { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: loadPipelines, presence: () => [] },
