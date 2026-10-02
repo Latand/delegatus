@@ -937,9 +937,73 @@ test("pass commits a dirty stage and retry resets plus cleans", () => {
   };
   expect(commitPipelineStage(pipeline(), "build", true, exec)).toEqual({ ok: true, sha: "stage-sha" });
   expect(resetPipelineStage(pipeline(), exec)).toEqual({ ok: true, sha: "base" });
-  expect(calls).toContain("git add -A");
+  expect(calls).toContain("git reset --quiet HEAD -- :(top).artifacts/pipeline-stage-inputs");
+  expect(calls).toContain("git add -A -- . :(exclude,top).artifacts/pipeline-stage-inputs");
   expect(calls).toContain("git reset --hard base");
   expect(calls).toContain("git clean -fd");
+});
+
+function allowMarkdownArtifacts(box: ReturnType<typeof isolatedIdentityRepo>) {
+  fs.writeFileSync(path.join(box.repo, ".gitignore"), "!*/\n!*.md\n");
+  fs.mkdirSync(path.join(box.repo, ".artifacts", "pipeline-stage-inputs"), { recursive: true });
+  fs.writeFileSync(path.join(box.repo, ".artifacts", "pipeline-stage-inputs", ".gitignore"), "!*.md\n");
+  box.run("add", ".gitignore", ".artifacts/pipeline-stage-inputs/.gitignore");
+  box.run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "allow markdown files");
+}
+
+function stagePrivateHandoffs(box: ReturnType<typeof isolatedIdentityRepo>) {
+  const handoffs = path.join(box.repo, ".artifacts", "pipeline-stage-inputs");
+  const output = path.join(handoffs, "previous-output-digest.md");
+  const specification = path.join(handoffs, "specification-digest.md");
+  fs.writeFileSync(output, "previous stage output\n".repeat(2000));
+  fs.writeFileSync(specification, "private stage specification\n".repeat(2000));
+  box.run("add", "-A");
+  expect(box.run("diff", "--cached", "--name-only")).toContain(".artifacts/pipeline-stage-inputs/previous-output-digest.md");
+  return { output, specification };
+}
+
+test("read-write settlement removes pre-staged controller artifacts from the commit and keeps stage work", () => {
+  const box = isolatedIdentityRepo();
+  try {
+    allowMarkdownArtifacts(box);
+    const handoffs = stagePrivateHandoffs(box);
+    fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 2;\n");
+    box.run("add", "-A");
+
+    const subject = pipeline();
+    subject.worktreeDir = box.repo;
+    expect(commitPipelineStage(subject, "build", true, box.exec).ok).toBe(true);
+
+    expect(box.run("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").split("\n")).toEqual(["source.ts"]);
+    expect(box.run("diff", "--cached", "--name-only")).toBe("");
+    expect(fs.readFileSync(handoffs.output, "utf8")).toBe("previous stage output\n".repeat(2000));
+    expect(fs.readFileSync(handoffs.specification, "utf8")).toBe("private stage specification\n".repeat(2000));
+  } finally {
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
+});
+
+test("read-only settlement commits its declared output without pre-staged controller artifacts", () => {
+  const box = isolatedIdentityRepo();
+  try {
+    allowMarkdownArtifacts(box);
+    const handoffs = stagePrivateHandoffs(box);
+    fs.mkdirSync(path.join(box.repo, "reports"));
+    fs.writeFileSync(path.join(box.repo, "reports", "audit.md"), "audited\n");
+    box.run("add", "-A");
+
+    const subject = pipeline();
+    subject.worktreeDir = box.repo;
+    subject.lastPassedCommit = box.run("rev-parse", "HEAD");
+    expect(commitPipelineStage(subject, "audit", false, box.exec, ["reports/audit.md"]).ok).toBe(true);
+
+    expect(box.run("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").split("\n")).toEqual(["reports/audit.md"]);
+    expect(box.run("diff", "--cached", "--name-only")).toBe("");
+    expect(fs.readFileSync(handoffs.output, "utf8")).toBe("previous stage output\n".repeat(2000));
+    expect(fs.readFileSync(handoffs.specification, "utf8")).toBe("private stage specification\n".repeat(2000));
+  } finally {
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
 });
 
 test("read-only declared output commits with no host Git identity and leaves config untouched", () => {

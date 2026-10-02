@@ -10,7 +10,7 @@ import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifa
 
 import type { Pipeline } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
-import { CONTROLLER_ARTIFACT_PATHSPEC } from "./controllerArtifacts";
+import { CONTROLLER_ARTIFACT_DIRECTORY, CONTROLLER_ARTIFACT_PATHSPEC } from "./controllerArtifacts";
 
 export type PreservedProvisionRef = { ref: string; sha: string; unpublishedCommits: number };
 export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } | { ok: false; error: string }) & {
@@ -601,6 +601,12 @@ export function commitPipelineStage(
     const missing = changedOutputPaths.find((candidate) => !stagedPaths.has(candidate));
     if (missing) return { ok: false, error: `declared output ${missing} was not staged` };
   }
+  const unstageControllerArtifacts = exec(
+    "git",
+    ["reset", "--quiet", "HEAD", "--", `:(top)${CONTROLLER_ARTIFACT_DIRECTORY}`],
+    pipeline.worktreeDir,
+  );
+  if (unstageControllerArtifacts.code !== 0) return failure("unstaging controller pipeline artifacts", unstageControllerArtifacts);
   const commit = exec("git", ["commit", "-m", `pipeline(${pipeline.id}): complete ${stageId}`], pipeline.worktreeDir, controllerCommitIdentityEnv());
   if (commit.code !== 0) return failure("committing the passed stage", commit);
   const head = exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
