@@ -7,7 +7,7 @@ export const MAX_OUTPUT_CHARS = 32_000;
 /* `rankedFindings` is derived from `findings`, never read from the value being
    validated: an agent that writes it into its own fenced block is ignored, and
    a persisted record re-derives the identical array when it is loaded. */
-const ALLOWED_KEYS = new Set(["status", "findings", "rankedFindings", "confidence"]);
+const ALLOWED_KEYS = new Set(["status", "findings", "rankedFindings", "confidence", "blocked", "blockedReason"]);
 
 const SEVERITY_RANK = new Map<StageFindingSeverity | null, number>(
   [...STAGE_FINDING_SEVERITIES.map((severity, index) => [severity, index] as const), [null, STAGE_FINDING_SEVERITIES.length] as const],
@@ -105,6 +105,16 @@ export function stageVerdictFrom(
   if (Object.keys(record).some((key) => !ALLOWED_KEYS.has(key))) return null;
   if (record.status !== "pass" && record.status !== "fail" && record.status !== "needs_decision") return null;
   const verdict: StageVerdict = { status: record.status };
+  if (record.blocked !== undefined) {
+    if (typeof record.blocked !== "boolean") return null;
+    verdict.blocked = record.blocked;
+  }
+  if (record.blocked === true) {
+    if (record.status !== "fail" || typeof record.blockedReason !== "string") return null;
+    const reason = record.blockedReason.trim();
+    if (!reason || reason.length > MAX_STAGE_REPORT_SUMMARY_CHARS) return null;
+    verdict.blockedReason = reason;
+  } else if (record.blockedReason !== undefined) return null;
   if (record.findings !== undefined) {
     if (!Array.isArray(record.findings) || record.findings.length > MAX_FINDINGS) return null;
     const findings: StageFinding[] = [];
@@ -141,6 +151,8 @@ function completionVerdictFrom(value: unknown): StageVerdict | null {
     status: record.status,
     ...(Object.hasOwn(record, "findings") ? { findings: record.findings } : {}),
     ...(Object.hasOwn(record, "confidence") ? { confidence: record.confidence } : {}),
+    ...(Object.hasOwn(record, "blocked") ? { blocked: record.blocked } : {}),
+    ...(Object.hasOwn(record, "blockedReason") ? { blockedReason: record.blockedReason } : {}),
   });
 }
 
@@ -290,7 +302,7 @@ export function parseStageVerdict(text: string): ParsedStageVerdict | RejectedSt
   const candidate = finalVerdictCandidate(text);
   if ("failureReason" in candidate) return null;
   /* Stage directives may require their own completion evidence beside the
-     controller's three core fields. Persist only the bounded core verdict; the
+     controller's completion fields. Persist only the bounded core verdict; the
      stage-specific evidence remains in the canonical transcript. */
   const verdict = candidate.verdict;
   const prose = text.slice(0, candidate.index).trim();
@@ -313,13 +325,15 @@ export function parseStageVerdict(text: string): ParsedStageVerdict | RejectedSt
 }
 
 /** The completion a stage attempt reports for itself, as the MCP call carries
-    it (graph slice 2). Deliberately three fields: everything else on the
+    it (graph slice 2). The verdict includes explicit blocked state; everything else on the
     record — the head, the branch's pull request, the declared outputs — is
     read by the server, so nothing here can be claimed. */
 export type StageCompletionInput = {
   verdict: unknown;
   findings?: unknown;
   summary?: unknown;
+  blocked?: unknown;
+  blockedReason?: unknown;
 };
 
 export type StageCompletionRefusal = { error: string; code: StageCompletionRefusalCode };
@@ -370,8 +384,11 @@ export function normalizeStageCompletion(input: StageCompletionInput): Normalize
   /* The rendered `P1 — text` is the stored finding. Validate its full length
      before handing it to the shared normalizer so no accepted body loses text. */
   const rendered = rankStageFindings(findings).map(stageFindingText);
-  const verdict = stageVerdictFrom({ status, ...(rendered.length ? { findings: rendered } : {}) });
-  if (!verdict) return refusal("the reported verdict is not a valid stage verdict");
+  const verdict = stageVerdictFrom({ status, ...(rendered.length ? { findings: rendered } : {}),
+    ...(input.blocked !== undefined ? { blocked: input.blocked } : {}),
+    ...(input.blockedReason !== undefined ? { blockedReason: input.blockedReason } : {}),
+  });
+  if (!verdict) return refusal("the reported verdict is invalid: blocked must be boolean; blocked:true requires fail and a non-empty blockedReason of at most " + MAX_STAGE_REPORT_SUMMARY_CHARS + " characters; blockedReason requires blocked:true");
   const summary = typeof input.summary === "string" ? input.summary.trim().slice(0, MAX_STAGE_REPORT_SUMMARY_CHARS) : "";
   return { verdict, summary: summary || null };
 }

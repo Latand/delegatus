@@ -77,8 +77,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 36, and a v35 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(36);
+test("the default mandate is at version 37, and a v36 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(37);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -112,7 +112,8 @@ test("the default mandate is at version 36, and a v35 seat reads as stale", () =
   expect(orchestratorMandateStale(33)).toBe(true);
   expect(orchestratorMandateStale(34)).toBe(true);
   expect(orchestratorMandateStale(35)).toBe(true);
-  expect(orchestratorMandateStale(36)).toBe(false);
+  expect(orchestratorMandateStale(36)).toBe(true);
+  expect(orchestratorMandateStale(37)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -155,6 +156,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   34: "a8097e56de1afa912ce3a2f88aea81821aafe80a79d49c000979c3b9bb2ecde3",
   35: "65dbc413dbf6ee522833fc239d384dee3b483761a8ad045d1d39c32995a14cd4",
   36: "aac16d23d456acc35ad3e3b148ddb45e91178c0f9a2bb000314ab6e59d9b4806",
+  37: "354299e815ca8a1bf68cb465bfc935919bb543fdca02a4e1ba5af45e16663e81",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -749,7 +751,7 @@ test("the role table tells the seat to size lanes, lists every variant and names
   /* §3 (a): the fix stage's params select its row. */
   expect(table).toContain("- Fix stages (apply-fixes): fix findings/discoveries in spec; add checks.");
   expect(table).toContain("Never self-grade; fix discoveries and note out-of-spec");
-  expect(table).toContain("Fail only if blocked; name why");
+  expect(table).toContain("Fail only with blocked:true and blockedReason");
   /* Fixers repair discoveries within the spec; reviewers grade the result. */
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("proceeds to review as reviewer notes");
   expect(table).toContain("README, docs, public text: builder domain=docs.");

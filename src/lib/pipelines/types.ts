@@ -135,6 +135,10 @@ export type StageFinding = { severity: StageFindingSeverity | null; text: string
 
 export type StageVerdict = {
   status: StageVerdictStatus;
+  /** Explicit inability to proceed. Prose never classifies this state. */
+  blocked?: boolean;
+  /** Required when blocked is true; bounded independently of the output relay. */
+  blockedReason?: string;
   /** Findings in severity order, most severe first, each rendered as
       `<severity> — <text>` when it carries one. This is what every reader of
       a verdict shows, and what the fail edge relays. */

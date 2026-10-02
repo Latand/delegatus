@@ -355,6 +355,9 @@ test.each(["general", "frontend", "docs"])("%s fixers repair their own discoveri
   expect(fix.value.prompt).toContain("Fix every handed finding and anything you notice yourself within the pinned specification");
   expect(fix.value.prompt).toContain("Do not grade your own work");
   expect(fix.value.prompt).toContain("Return fail only when you are blocked");
+  expect(fix.value.prompt).toContain("Set blocked:true only when you cannot proceed");
+  expect(fix.value.prompt).toContain("blockedReason");
+  expect(fix.value.prompt).not.toContain("using Blocked: in the summary");
   expect(fix.value.prompt).toContain("Notes");
   expect(fix.value.prompt).not.toContain("Review your own diff before you finish");
   expect(fix.value.prompt).not.toContain("finish with fail so the orchestrator can re-plan");

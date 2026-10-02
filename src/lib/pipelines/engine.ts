@@ -3072,7 +3072,7 @@ function reportedStageVerdict(
   text: string,
   backgroundReportedAt: number | null | undefined,
   reportProse: string | null = null,
-): (ParsedStageVerdict & { completionText?: string }) | null {
+): ParsedStageVerdict | null {
   const report = attempt.report;
   if (!report) return null;
   /* A report filed while background work was still out is interim (#1441):
@@ -3083,9 +3083,6 @@ function reportedStageVerdict(
     output: report.verdict.status === "pass"
       ? reportedPassOutput(report.summary, text, reportProse)
       : (report.summary ?? fenced?.output ?? text.trim()).slice(0, MAX_OUTPUT_CHARS),
-    // The report owns the verdict and relay summary. A short summary does
-    // not erase a blocker the fixer stated in its final assistant prose.
-    completionText: [text, reportProse].filter(Boolean).join("\n"),
   };
 }
 
@@ -3095,7 +3092,7 @@ function settleStageVerdict(
   pipeline: Pipeline,
   stage: PipelineStage,
   attempt: PipelineStageAttempt,
-  parsed: NonNullable<ReturnType<typeof parseStageVerdict>> & { completionText?: string },
+  parsed: NonNullable<ReturnType<typeof parseStageVerdict>>,
   ports: PipelinePorts,
   persist: () => void,
 ): void {
@@ -3146,6 +3143,10 @@ function settleStageVerdict(
        and parks under `park`. After that last fix `advance` moves on or
        re-checks a terminal gate before completion (#2247); `stop-after-fix`
        waits in needs_review when the fix wrote a new head (#2187). */
+    if (parsed.verdict.blocked === true) {
+      park(pipeline, parsed.verdict.blockedReason!, attempt);
+      return;
+    }
     const routesAsFail = verdictRoutesAsFail(parsed);
     const decisionRoutedAsFail = routesAsFail && parsed.verdict.status === "needs_decision";
     if (
@@ -3175,34 +3176,15 @@ function fixerSelfFailCanGoToReview(
   pipeline: Pipeline,
   stage: PipelineStage,
   attempt: PipelineStageAttempt,
-  parsed: ParsedStageVerdict & { completionText?: string },
+  parsed: ParsedStageVerdict,
   ports: PipelinePorts,
 ): boolean {
   const definition = attemptStage(stage, attempt);
   const next = pipeline.stages.find((candidate) => candidate.id === stage.next);
-  if (parsed.verdict.status !== "fail" || !parsed.verdict.findings?.length
+  if (parsed.verdict.status !== "fail" || parsed.verdict.blocked === true
     || stage.kind !== "run" || attempt.effectiveRole.roleId !== "builder"
     || attempt.effectiveRole.access !== "read-write" || definition.role?.params?.mode !== "apply-fixes"
     || !next || !(next.kind === "review-loop" || next.effectiveRole.roleId === "reviewer")) return false;
-  // Reports have no blocked bit. Fix scaffolds request a Blocked: reason;
-  // also recognize ordinary blocker prose in legacy summaries. Findings are
-  // defect descriptions for the reviewer, so words like "tests fail to cover"
-  // in a finding cannot establish that the fixer is blocked.
-  const completion = [parsed.output, parsed.completionText]
-    .filter(Boolean)
-    .map((part) => stageVerdictProse(part!))
-    .join("\n");
-  // A base failure is historical only when its own paired statement says
-  // that check passed on the head. Another check passing cannot clear it.
-  const explicitlyBlocked = /\bblocked\s*:/i.test(completion);
-  const reason = explicitlyBlocked ? completion : completion
-    // Remove only the correlated historical result phrase. Keep the subject
-    // and all surrounding clauses so a neighboring blocker remains visible.
-    .replace(/\bfailed on (?:the )?base\b\s*(?:[,;]\s*)?(?:(?:and|but)\s+)?(?:(?:they|it|these tests|those tests)\s+)?passed on (?:the )?head\b/gi, "")
-    // Red/green evidence describes a resolved failure, not a present stop.
-    .replace(/\bfailed before (?:the )?fix\b\s*(?:[,;]\s*)?(?:and\s+)?passed (?:on (?:the )?head|after (?:the )?fix)\b/gi, "")
-    .replace(/\b(?:not blocked|no blockers?)\b/gi, "");
-  if (/\bblocked\s*:|\b(?:I am|we are|stage is|fixer is)\s+blocked\b|\b(?:cannot|can't|unable to)\s+(?:build|compile|run\b[^\n.]*\b(?:checks?|tests?)|fix\b[^\n.]*\b(?:handed|finding))|\b(?:handed finding|fix)\b[^\n.]*\bimpossible\b|\b(?:build|checks?|tests?)\b[^\n.]{0,100}\b(?:failed|failing|fail)\b/i.test(reason)) return false;
   const head = currentPipelineBranchHead(pipeline, ports.exec);
   return head.ok && head.sha !== pipeline.lastPassedCommit;
 }
@@ -4290,7 +4272,7 @@ async function tickRunStage(
   if (durable && durableTerminal) {
     const fenced = parsePipelineStageVerdict(durable.message!.text);
     const parsed = reportedStageVerdict(attempt, fenced, durable.message!.text, durable.backgroundReportedAt, durable.reportProse)
-      ?? (fenced ? { ...fenced, completionText: stageVerdictProse(durable.message!.text) } : null);
+      ?? fenced;
     if (parsed && (!hostUnavailablePastGrace || "verdict" in parsed)) {
       markVerdictRecoverySucceeded(attempt, ports.now(), durable.message!.ts);
       settleStageVerdict(pipeline, stage, attempt, parsed, ports, persist);
@@ -4403,7 +4385,7 @@ async function tickRunStage(
   }
   const fenced = parsePipelineStageVerdict(message.text);
   const parsed = reportedStageVerdict(attempt, fenced, message.text, durable?.backgroundReportedAt, durable?.reportProse)
-    ?? (fenced ? { ...fenced, completionText: stageVerdictProse(message.text) } : null);
+    ?? fenced;
   if (!parsed) {
     if (!canSpendRecoveryCheck()) return;
     recordVerdictRecoveryMiss(

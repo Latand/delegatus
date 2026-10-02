@@ -724,16 +724,18 @@ test.each([
     }
     fixture.h.setConversationActive(false);
     const shortSummary = "Committed partial fixes; remaining discovery listed";
+    const blocked = ["blocked build after commit", "blocked checks after commit", "impossible handed finding", "report prose blocked"].includes(label);
+    const blockFields = blocked ? { blocked: true, blockedReason: label } : {};
     if (label === "report prose blocked") {
       const lane = loadPipelines()[0]!;
       lane.runs[0]!.attempts[0]!.report = {
         seq: 1, at: fixture.h.ports.now(), actor: { kind: "agent", role: "builder", conversationId: "conversation_stage_1" },
-        verdict: { status: "fail", findings: [`P2 — ${label} in fix.txt:1`] }, summary: shortSummary,
+        verdict: { status: "fail", ...blockFields, findings: [`P2 — ${label} in fix.txt:1`] }, summary: shortSummary,
         provenance: { head: fixture.git(fixture.worktree, "rev-parse", "HEAD"), branch: lane.branch, uncommitted: [], pullRequest: null, outputs: [] }, calls: 1,
       };
       savePipelines([lane]);
     }
-    fixture.h.messages.set("/codex/stage-1.jsonl", { text: `${summary}\n\`\`\`json\n${JSON.stringify({ status: verdict, findings: [`P1 — ${label}`] })}\n\`\`\``, ts: Date.now() + 100_000_000 });
+    fixture.h.messages.set("/codex/stage-1.jsonl", { text: `${summary}\n\`\`\`json\n${JSON.stringify({ status: verdict, ...blockFields, findings: [`P1 — ${label}`] })}\n\`\`\``, ts: Date.now() + 100_000_000 });
     if (label === "report prose blocked") {
       const message = fixture.h.messages.get("/codex/stage-1.jsonl")!;
       fixture.h.durableTurns.set("/codex/stage-1.jsonl", { turn: "terminal", lastRecordAt: message.ts, message });
@@ -752,43 +754,47 @@ test.each([
 });
 
 test.each([
-  { label: "correlated historical red/green evidence", summary: "Regression tests failed on base and passed on head. No blockers.", finding: "another in-scope issue", expected: "review" },
-  { label: "test coverage finding", summary: "Handed findings fixed; checks passed.", finding: "Tests fail to cover cancellation in fix.txt:1", expected: "review" },
-  { label: "required tests still fail on head", summary: "Required integration tests still fail on head. I committed the partial fix.", finding: "unresolved integration failure", expected: "park" },
-  { label: "required tests are failing on head", summary: "Required integration tests are failing on head. TypeScript passed.", finding: "unresolved integration failure", expected: "park" },
-  { label: "explicit current failure after the fix", summary: "Blocked: integration tests failed before fix and still fail on head; TypeScript passed.", finding: "unresolved integration failure", expected: "park" },
-  { label: "current failure beside historical base evidence", summary: "Regression tests failed on base and passed on head, but cannot run required integration checks.", finding: "unresolved integration failure", expected: "park" },
-  { label: "current failure before historical base evidence", summary: "Cannot run required integration checks; regression tests failed on base and passed on head.", finding: "unresolved integration failure", expected: "park" },
-  { label: "current head failure before historical fix evidence", summary: "Integration tests fail on head; regression tests failed before fix and passed after fix.", finding: "unresolved integration failure", expected: "park" },
-].flatMap((scenario) => ["fenced verdict", "recorded report", "reported plus fenced completion"].map((settlement) => ({ ...scenario, settlement }))))("a fixer handles $label through a $settlement settlement", async ({ summary, finding, settlement, expected }) => {
-  const fixture = await realWorktreeLane("fixer-blocker-wording", [
+  { label: "structured blocker", commit: true, blocked: true, summary: "Partial repairs committed.", findings: ["P2 — discovery in fix.txt:1"], review: false },
+  { label: "plain fail", commit: true, blocked: undefined, summary: "Handed findings fixed.", findings: ["P2 — discovery in fix.txt:1"], review: true },
+  { label: "fail without findings", commit: true, blocked: false, summary: "Handed findings fixed.", findings: [], review: true },
+  { label: "no new head", commit: false, blocked: undefined, summary: "Could not finish handed work.", findings: ["P1 — remaining finding"], review: false },
+  { label: "prose never classifies", commit: true, blocked: false, summary: "Blocked: tests failed; cannot build. Quoted historical evidence.", findings: ["P2 — discovery in fix.txt:1"], review: true },
+  { label: "long output blocked", commit: true, blocked: true, summary: "Evidence.\n".repeat(5_000) + "Blocked: dependency unavailable.", findings: ["P2 — discovery in fix.txt:1"], review: false },
+  { label: "long output plain fail", commit: true, blocked: undefined, summary: "Evidence.\n".repeat(5_000) + "Blocked: quoted historical evidence.", findings: ["P2 — discovery in fix.txt:1"], review: true },
+].flatMap((scenario) => ["fenced verdict", "recorded report", "reported plus fenced completion"].map((settlement) => ({ ...scenario, settlement }))))("a fixer routes $label through $settlement using structured state", async ({ label, commit, blocked, summary, findings, review, settlement }) => {
+  const fixture = await realWorktreeLane("fixer-structured-blocker", [
     { id: "fix", kind: "run", role: { roleId: "builder", params: { mode: "apply-fixes" } }, prompt: "Fix", next: "review" },
     { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review {{prev.output}}", next: null },
   ]);
   try {
     const { h, git, worktree } = fixture;
-    fs.writeFileSync(path.join(worktree, "fix.txt"), "fixed\n");
-    git(worktree, "add", "fix.txt");
-    git(worktree, "commit", "-m", "fix handed findings");
+    if (commit) {
+      fs.writeFileSync(path.join(worktree, "fix.txt"), "fixed\n");
+      git(worktree, "add", "fix.txt");
+      git(worktree, "commit", "-m", "fix handed findings");
+    }
     const fixed = git(worktree, "rev-parse", "HEAD");
-    const findings = [`P2 — ${finding}`];
-    const lane = loadPipelines()[0]!;
-    if (settlement === "recorded report" || settlement === "reported plus fenced completion") {
-      lane.runs[0]!.attempts[0]!.report = {
-        seq: 1,
-        at: h.ports.now(),
-        actor: { kind: "agent", role: "builder", conversationId: "conversation_stage_1" },
-        verdict: { status: "fail", findings },
-        summary,
-        provenance: { head: fixed, branch: lane.branch, uncommitted: [], pullRequest: null, outputs: [] },
-        calls: 1,
-      };
-      savePipelines([lane]);
+    const blockedReason = "Required check service is unavailable";
+    const verdict = { status: "fail" as const, findings,
+      ...(blocked !== undefined ? { blocked } : {}), ...(blocked ? { blockedReason } : {}) };
+    if (settlement !== "fenced verdict") {
+      // Exercise the real report normalizer and the durable store. The report
+      // owns structured state even when the final fenced verdict disagrees.
+      const result = await engineModule.reportStageCompletion({
+        verdict: "fail", findings: findings.map((text) => ({ severity: "P2", text: text.slice(5) })),
+        summary: "Short relay summary", ...(blocked !== undefined ? { blocked } : {}), ...(blocked ? { blockedReason } : {}),
+      }, { kind: "agent", role: "builder", conversationId: "conversation_stage_1" }, h.ports);
+      expect(result.error).toBeUndefined();
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.report?.verdict).toMatchObject({
+        ...(blocked !== undefined ? { blocked } : {}), ...(blocked ? { blockedReason } : {}),
+      });
     }
     h.setConversationActive(false);
+    const fencedVerdict = settlement === "reported plus fenced completion"
+      ? { status: "fail", findings, blocked: !blocked, ...(!blocked ? { blockedReason: "Fenced state is superseded by report" } : {}) }
+      : verdict;
     const transcriptVerdict = settlement !== "recorded report"
-      ? `\n\`\`\`json\n${JSON.stringify({ status: "fail", findings })}\n\`\`\``
-      : "";
+      ? `\n\`\`\`json\n${JSON.stringify(fencedVerdict)}\n\`\`\`` : "";
     h.messages.set("/codex/stage-1.jsonl", { text: `${summary}${transcriptVerdict}`, ts: Date.now() + 100_000_000 });
     if (settlement !== "fenced verdict") {
       const message = h.messages.get("/codex/stage-1.jsonl")!;
@@ -797,19 +803,31 @@ test.each([
     await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
     await tickPipelines([], h.ports);
     const current = loadPipelines()[0]!;
-    if (expected === "park") {
+    const attempt = current.runs[0]!.attempts[0]!;
+    expect(attempt.verdict?.status).toBe("fail");
+    if (blocked !== undefined) expect(attempt.verdict?.blocked).toBe(blocked);
+    if (!review) {
       expect(current.state).toBe("needs_decision");
       expect(current.cursor?.stageId).toBe("fix");
       expect(current.lastPassedCommit).toBe(fixture.base);
-      expect(current.runs[0]!.attempts[0]!.output).toContain(summary.split(/[.;]/, 1)[0]!);
-      expect(current.cursor?.stageId).not.toBe("review");
+      expect(attempt.acceptedForReview).toBeUndefined();
+      if (blocked) {
+        expect(current.stateDetail).toContain(blockedReason);
+        expect(attempt.verdict?.blockedReason).toBe(blockedReason);
+      }
+      expect(h.spawnInputs).toHaveLength(1);
+      if (label === "long output blocked" && settlement === "fenced verdict") {
+        expect(attempt.output?.length).toBe(32_000);
+        expect(attempt.output).not.toContain("Blocked:");
+      }
       return;
     }
     expect(current.state).toBe("running");
     expect(current.cursor?.stageId).toBe("review");
     expect(current.lastPassedCommit).toBe(fixed);
+    expect(attempt.acceptedForReview).toBe(true);
     expect(current.cursor?.input).toContain("Fixer notes for the reviewer");
-    expect(current.cursor?.input).toContain(finding);
+    for (const finding of findings) expect(current.cursor?.input).toContain(finding.slice(5));
   } finally {
     savePipelines([]);
     fs.rmSync(fixture.root, { recursive: true, force: true });
@@ -883,7 +901,7 @@ test.each(["fenced verdict", "reported plus fenced completion"])("a fixer preser
         seq: 1,
         at: h.ports.now(),
         actor: { kind: "agent", role: "builder", conversationId: "conversation_stage_1" },
-        verdict: { status: "fail", findings: ["P2 — unresolved integration failure"] },
+        verdict: { status: "fail", blocked: true, blockedReason: "Required integration checks are unavailable", findings: ["P2 — unresolved integration failure"] },
         summary: "Blocked: required integration tests failed on base and still fail on head. TypeScript passed on head.",
         provenance: { head: git(worktree, "rev-parse", "HEAD"), branch: lane.branch, uncommitted: [], pullRequest: null, outputs: [] },
         calls: 1,
@@ -892,7 +910,7 @@ test.each(["fenced verdict", "reported plus fenced completion"])("a fixer preser
     }
     h.setConversationActive(false);
     const summary = "Blocked: required integration tests failed on base and still fail on head. TypeScript passed on head.";
-    const verdict = `\n\`\`\`json\n${JSON.stringify({ status: "fail", findings: ["P2 — unresolved integration failure"] })}\n\`\`\``;
+    const verdict = `\n\`\`\`json\n${JSON.stringify({ status: "fail", blocked: true, blockedReason: "Required integration checks are unavailable", findings: ["P2 — unresolved integration failure"] })}\n\`\`\``;
     h.messages.set("/codex/stage-1.jsonl", { text: `${summary}${verdict}`, ts: Date.now() + 100_000_000 });
     if (settlement === "reported plus fenced completion") {
       const message = h.messages.get("/codex/stage-1.jsonl")!;
@@ -924,7 +942,7 @@ test("a fenced fixer verdict keeps a blocker after the bounded relay output", as
     const summary = `${"Verification details recorded. ".repeat(1200)}Blocked: cannot run required integration checks.`;
     h.setConversationActive(false);
     h.messages.set("/codex/stage-1.jsonl", {
-      text: `${summary}\n\`\`\`json\n${JSON.stringify({ status: "fail", findings: ["P2 — unresolved integration failure"] })}\n\`\`\``,
+      text: `${summary}\n\`\`\`json\n${JSON.stringify({ status: "fail", blocked: true, blockedReason: "Required integration checks are unavailable", findings: ["P2 — unresolved integration failure"] })}\n\`\`\``,
       ts: Date.now() + 100_000_000,
     });
     await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);

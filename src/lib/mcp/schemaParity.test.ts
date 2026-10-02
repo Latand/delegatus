@@ -1053,6 +1053,8 @@ test("stage_report's field descriptions match the stage contract", async () => {
     const listed = await client.listTools();
     const tool = listed.tools.find((candidate) => candidate.name === "stage_report");
     const properties = tool?.inputSchema.properties as Record<string, { description?: string; items?: { properties?: Record<string, { description?: string }> } }> | undefined;
+    expect(properties?.blocked?.description).toContain("fixer cannot proceed");
+    expect(properties?.blockedReason?.description).toContain("independently of prose and output truncation");
     const verdict = properties?.verdict?.description ?? "";
     expect(verdict).not.toContain("retryable stage failure");
     expect(verdict).toContain("for a review, the findings that stand");

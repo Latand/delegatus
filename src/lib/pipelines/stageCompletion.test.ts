@@ -191,6 +191,31 @@ test("stage_report retries the same request after a pre-admission pipeline store
   expect(attemptsOf("build")[0]!.report).toMatchObject({ calls: 1, verdict: { status: "pass" } });
 });
 
+test("stage_report preserves structured blocked state through MCP and clears it on replacement", async () => {
+  const h = harness();
+  await started(h.ports, [stage("fix", "review"), stage("review", null)]);
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    reportStageCompletion: (request: StageCompletionRequest, actor: ReturnType<typeof agent>) => reportStageCompletion(request, actor, h.ports),
+    callerAttribution: () => ({ kind: "worker", conversationId: "conversation_stage_1", role: "builder" }),
+  } as never);
+  const service = createMcpToolService(bindings, new FileMcpReceiptStore(path.join(process.env.LLV_STATE_DIR!, "blocked-stage-report-receipts.json")));
+  expect(await service.callTool("stage_report", {
+    clientRequestId: "structured-blocker", verdict: "fail", blocked: true,
+    blockedReason: "Required check service is unavailable", summary: "Partial fix committed.",
+  })).toMatchObject({ ok: true });
+  expect(attemptsOf("fix")[0]!.report?.verdict).toEqual({
+    status: "fail", blocked: true, blockedReason: "Required check service is unavailable",
+  });
+  expect(await service.callTool("stage_report", {
+    clientRequestId: "invalid-blocker", verdict: "pass", blocked: true, blockedReason: "Contradictory",
+  })).toMatchObject({ ok: false });
+  expect(attemptsOf("fix")[0]!.report?.calls).toBe(1);
+  expect(await service.callTool("stage_report", {
+    clientRequestId: "blocker-resolved", verdict: "pass", summary: "All required checks passed.",
+  })).toMatchObject({ ok: true, replaced: true });
+  expect(attemptsOf("fix")[0]!.report?.verdict).toEqual({ status: "pass" });
+});
+
 test("terminal JSON with a bare severity cannot settle as a review finding", async () => {
   const h = harness();
   await reachedVerify(h, FIX_LOOP());
