@@ -147,6 +147,46 @@ function isVerdictRecovery(value: unknown): boolean {
   );
 }
 
+function isProviderCondition(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const condition = value as Record<string, unknown>;
+  return ["usage_limit", "transient", "auth_required", "other", "host_death", "turn_cut"].includes(String(condition.kind))
+    && isNullableString(condition.scope) && (condition.scope === null || String(condition.scope).length <= 64)
+    && isNullableString(condition.resetLabel) && (condition.resetLabel === null || String(condition.resetLabel).length <= 160)
+    && typeof condition.label === "string" && condition.label.length > 0 && condition.label.length <= 100;
+}
+
+/** Transcript evidence may use the filesystem's fractional millisecond mtime. */
+function isEvidenceTimestamp(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
+}
+
+function isProviderWait(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const wait = value as Record<string, unknown>;
+  const dated = (time: unknown) => typeof time === "string" && Number.isFinite(Date.parse(time));
+  return isProviderCondition(wait.condition) && typeof wait.text === "string" && wait.text.length <= 300
+    && isNullableString(wait.accountId) && isEvidenceTimestamp(wait.turnTs)
+    && Number.isSafeInteger(wait.tries) && Number(wait.tries) >= 0
+    && dated(wait.startedAt) && dated(wait.resumeAt)
+    && (wait.resetsAt === null || Number.isSafeInteger(wait.resetsAt) && Number(wait.resetsAt) > 0)
+    && (wait.actionAt === undefined || dated(wait.actionAt))
+    && (wait.capacityProbes === undefined || Number.isSafeInteger(wait.capacityProbes) && Number(wait.capacityProbes) >= 0)
+    && (wait.switchedAccountId === undefined || typeof wait.switchedAccountId === "string")
+    && (wait.failedAccounts === undefined || isStringList(wait.failedAccounts) && wait.failedAccounts.length <= 32);
+}
+
+function isProviderRecoveries(value: unknown): boolean {
+  if (value === undefined) return true;
+  return Array.isArray(value) && value.length <= 8 && value.every((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+    return typeof entry.at === "string" && Number.isFinite(Date.parse(entry.at))
+      && ["wait", "continue", "switch", "relaunch", "park"].includes(String(entry.action))
+      && isProviderCondition(entry.condition) && typeof entry.summary === "string" && entry.summary.length <= 2000;
+  });
+}
+
 function isAttempt(value: unknown, index: number): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const attempt = value as Record<string, unknown>;
@@ -174,11 +214,21 @@ function isAttempt(value: unknown, index: number): boolean {
         && limited.accountId.length > 0
         && (limited.engine === undefined || limited.engine === "claude" || limited.engine === "codex")
         && (limited.resetsAt === null || (Number.isSafeInteger(limited.resetsAt) && limited.resetsAt >= 0))
-        && (limited.limitedAt === undefined || limited.limitedAt === null || (Number.isSafeInteger(limited.limitedAt) && limited.limitedAt >= 0))
+        && (limited.limitedAt === undefined || limited.limitedAt === null || isEvidenceTimestamp(limited.limitedAt))
         && (limited.turnId === undefined || (typeof limited.turnId === "string" && limited.turnId.length > 0 && limited.turnId.length <= 100))
       ))
       && new Set(attempt.usageLimitedAccounts.map((limited) => `${limited.engine ?? ""}:${limited.accountId}`)).size === attempt.usageLimitedAccounts.length
     )) &&
+    (attempt.providerRecoveryBudget === undefined || (
+      attempt.providerRecoveryBudget !== null && typeof attempt.providerRecoveryBudget === "object"
+      && !Array.isArray(attempt.providerRecoveryBudget)
+      && Number.isSafeInteger((attempt.providerRecoveryBudget as Record<string, unknown>).tries)
+      && Number((attempt.providerRecoveryBudget as Record<string, unknown>).tries) >= 0
+      && typeof (attempt.providerRecoveryBudget as Record<string, unknown>).startedAt === "string"
+      && Number.isFinite(Date.parse((attempt.providerRecoveryBudget as Record<string, unknown>).startedAt as string))
+    )) &&
+    isProviderWait(attempt.providerWait) &&
+    isProviderRecoveries(attempt.providerRecoveries) &&
     isNullableString(attempt.flowId) &&
     (attempt.expectedReviewHeadSha === undefined || isNullableString(attempt.expectedReviewHeadSha)) &&
     (attempt.reviewHeadSha === undefined || isNullableString(attempt.reviewHeadSha)) &&
@@ -984,6 +1034,10 @@ function reviveLoadedPipeline(pipeline: Pipeline): Pipeline {
             ...(attempt.usageLimitedAccounts
               ? { usageLimitedAccounts: attempt.usageLimitedAccounts.map((limited) => ({ ...limited })) }
               : {}),
+            providerRecoveryBudget: attempt.providerRecoveryBudget ? { ...attempt.providerRecoveryBudget } : undefined,
+            providerWait: attempt.providerWait ? { ...attempt.providerWait, condition: { ...attempt.providerWait.condition },
+              ...(attempt.providerWait.failedAccounts ? { failedAccounts: [...attempt.providerWait.failedAccounts] } : {}) } : undefined,
+            providerRecoveries: attempt.providerRecoveries?.map((recovery) => ({ ...recovery, condition: { ...recovery.condition } })),
             flowId: attempt.flowId ?? null,
             expectedReviewHeadSha: attempt.expectedReviewHeadSha ?? null,
             reviewHeadSha: attempt.reviewHeadSha ?? null,

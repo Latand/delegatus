@@ -429,7 +429,7 @@ test("search_transcripts publishes its body-query, project, cursor, and bounded 
     expect(tool?.description).toContain("has this been solved before?");
     expect(tool?.description).toContain("conversation_messages");
     expect(tool?.description).toContain("byteOffset");
-    expect(tool?.inputSchema.required).toEqual(expect.arrayContaining(["clientRequestId", "query"]));
+    expect(tool?.inputSchema.required).toEqual(expect.arrayContaining(["query"]));
     expect(Object.keys(tool?.inputSchema.properties ?? {})).toEqual(expect.arrayContaining([
       "clientRequestId",
       "query",
