@@ -367,6 +367,28 @@ export type PipelineStageAttempt = {
       the engine the limit was hit on; account ids are unique only within an
       engine. Entries written before it was recorded omit it. */
   usageLimitedAccounts?: Array<{ accountId: string; engine?: FlowEngine; resetsAt: number | null; limitedAt?: number | null; turnId?: string }>;
+  /** Recovery expenditure survives condition changes and host relaunches. */
+  providerRecoveryBudget?: { tries: number; startedAt: string };
+  providerWait?: {
+    condition: import("./providerConditions").ProviderCondition;
+    text: string;
+    accountId: string | null;
+    turnTs: number;
+    tries: number;
+    startedAt: string;
+    resumeAt: string;
+    resetsAt: number | null;
+    actionAt?: string;
+    switchedAccountId?: string;
+    failedAccounts?: string[];
+    capacityProbes?: number;
+  };
+  providerRecoveries?: Array<{
+    at: string;
+    action: "wait" | "continue" | "switch" | "relaunch" | "park";
+    condition: import("./providerConditions").ProviderCondition;
+    summary: string;
+  }>;
   flowId: string | null;
   /** Clean pipeline SHA expected when the first reviewer launches. */
   expectedReviewHeadSha?: string | null;
