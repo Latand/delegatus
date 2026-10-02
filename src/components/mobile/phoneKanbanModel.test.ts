@@ -436,7 +436,7 @@ test("an operator-held open step uses shared needs-you motion in the phone queue
   expect(model.columns.assigned.needsYou).toBe(1);
   expect(phone.columns.assigned.needsYou).toBe(1);
   expect(phone.columns.assigned.pinned.map((item) => item.card.task?.id)).toEqual(["held-step"]);
-  expect(phone.columns.assigned.pinned[0]?.card.motion.key).toBe("needs-you");
+  expect(phone.columns.assigned.pinned[0]?.card.motion).toMatchObject({ key: "needs-you", reason: heldStep.steps![0]!.hold, since: heldStep.steps![0]!.hold!.since });
 });
 
 test("a pending move away from an operator hold uses the shared stopped motion", () => {

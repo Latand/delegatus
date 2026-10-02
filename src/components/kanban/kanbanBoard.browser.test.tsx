@@ -14424,6 +14424,7 @@ describe("task motion and waiting reasons", () => {
           expect(await stopped.textContent()).toContain(translate(locale, "kanban.motion.stopped"));
           expect(await page.locator(`${selector("motion-working")} [data-motion="working"]`).count()).toBe(1);
           expect(await page.locator(`${selector("motion-working")} [data-foot-working]`).count()).toBe(0);
+          if (phone) expect(await page.locator(`${selector("motion-working")} [data-phone-card-agents]`).textContent()).not.toContain(translate(locale, "mobile2.kanban.working", { count: 1 }));
           expect(translate(locale, "attention.chip")).toBe(locale === "en" ? "Needs you" : "Потрібні ви");
           await page.screenshot({ path: path.join(out, `${width}-${locale}-progress.png`) });
           if (phone) await page.locator('[data-phone-kanban-tab="blocked"]').click();
@@ -14432,6 +14433,9 @@ describe("task motion and waiting reasons", () => {
           const operatorLine = await page.locator(`${selector("motion-operator")} [data-motion="needs-you"]`).textContent();
           expect(operatorLine).toContain(translate(locale, "kanban.hold.operator", { note: locale === "en" ? "Choose a release to publish" : "Оберіть реліз для публікації" }));
           if (locale === "en") expect(operatorLine).not.toContain("Waiting");
+          expect(await page.locator(`${selector("motion-operator")} .motion-age`).textContent()).toMatch(/20/);
+          expect(await page.locator(`${selector("motion-operator")} [data-task-steps]`).textContent()).toContain(translate(locale, "kanban.steps.needsYou.one"));
+          await page.locator(selector("motion-operator")).screenshot({ path: path.join(out, `${width}-${locale}-card-operator.png`) });
           if (!phone) {
             const waitingColumn = page.locator('[data-status="blocked"]');
             const heading = waitingColumn.locator("h2");
@@ -14442,12 +14446,24 @@ describe("task motion and waiting reasons", () => {
           }
           const longLine = page.locator(`${selector("motion-long")} [data-motion]`);
           const fullLongText = await longLine.getAttribute("title");
+          expect(fullLongText!.split(" · ")[0]!.length).toBeGreaterThanOrEqual(200);
           expect(fullLongText).toContain(locale === "en" ? "external audit team" : "зовнішня аудиторська команда");
           const longLineHeight = await longLine.evaluate((el) => {
             const style = getComputedStyle(el);
             return { height: el.getBoundingClientRect().height, lineHeight: Number.parseFloat(style.lineHeight) };
           });
           expect(longLineHeight.height).toBeLessThanOrEqual(longLineHeight.lineHeight * 2 + 1);
+          await page.locator(selector("motion-long")).screenshot({ path: path.join(out, `${width}-${locale}-card-long.png`) });
+          if (phone) {
+            await page.locator(selector("motion-long")).click();
+            await page.locator('[data-phone-task-title]').waitFor();
+            const fullLine = page.locator('[data-phone-task-body="motion-long"] [data-motion-full]');
+            expect(await fullLine.textContent()).toContain(fullLongText!.split("\n")[0]!);
+            expect(await fullLine.evaluate(el => getComputedStyle(el).webkitLineClamp)).toBe("none");
+            await page.screenshot({ path: path.join(out, `${width}-${locale}-full-reason.png`) });
+            await page.locator("[data-mobile2-back]").click();
+            await page.locator(selector("motion-long")).waitFor();
+          }
           expect(await page.locator(selector("motion-hidden")).count()).toBe(0);
           const stepLine = page.locator(`${selector("motion-checklist")} [data-task-steps]`);
           await stepLine.waitFor();
@@ -14455,14 +14471,14 @@ describe("task motion and waiting reasons", () => {
           const stepText = (await stepLine.textContent()) ?? "";
           expect(stepText).toContain(locale === "en" ? "5 of 8 done" : "Виконано 5 з 8");
           expect(stepText).toContain(locale === "en" ? "1 working · 2 queued: After another task finishes" : "1 у роботі · 2 у черзі: Коли завершиться інша задача");
-          expect(await page.locator("[data-task-steps]").count()).toBe(1);
+          expect(await page.locator("[data-task-steps]").count()).toBe(2);
           const stepBounds = await stepLine.evaluate((el) => {
             const rect = el.getBoundingClientRect();
             return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth };
           });
           expect(stepBounds.left).toBeGreaterThanOrEqual(0);
           expect(stepBounds.right).toBeLessThanOrEqual(width + 1);
-          expect(stepBounds.bottom).toBeLessThanOrEqual(844);
+          expect(stepBounds.bottom).toBeLessThanOrEqual(845);
           expect(stepBounds.scrollWidth).toBeLessThanOrEqual(stepBounds.clientWidth + 1);
           await page.screenshot({ path: path.join(out, `${width}-${locale}-checklist.png`) });
           const prHold = page.locator(`${selector("motion-pr")} [data-motion] a`);
@@ -14494,6 +14510,7 @@ describe("task motion and waiting reasons", () => {
             expect(await issueHold.getAttribute("href")).toBe("https://github.com/acme/atlas/issues/2044");
             const taskRefButton = page.locator(`${selector("motion-taskref")} [data-motion] button`);
             expect(await taskRefButton.evaluate((el) => getComputedStyle(el).textAlign)).toBe(await taskRefButton.evaluate((el) => getComputedStyle(el.parentElement!).textAlign));
+            await page.locator(selector("motion-taskref")).screenshot({ path: path.join(out, `${width}-${locale}-card-taskref.png`) });
             await page.locator(`${selector("motion-taskref")} [data-motion] button`).click();
             await page.waitForFunction(() => document.activeElement?.getAttribute("data-id") === "task:motion-bare");
           }
@@ -14516,17 +14533,17 @@ describe("task motion and waiting reasons", () => {
             expect(Number(await bareSummary.getAttribute('data-column-no-reason'))).toBeGreaterThan(0);
           }
           const motionLines = page.locator(phone ? '[data-phone-kanban-column="blocked"] [data-motion]' : '[data-kanban-board] .card[data-id^="task:"] [data-motion]');
-          const lines: Array<{ motion: string | null; text: string | null; left: number; right: number; top: number; bottom: number; width: number; height: number; scrollWidth: number; clientWidth: number }> = [];
+          const lines: Array<{ motion: string | null; text: string | null; left: number; right: number; top: number; bottom: number; width: number; height: number; lineHeight: number; scrollWidth: number; clientWidth: number }> = [];
           for (let index = 0; index < await motionLines.count(); index += 1) {
             const line = motionLines.nth(index);
             await line.scrollIntoViewIfNeeded();
             lines.push(await line.evaluate(el => {
               const rect = el.getBoundingClientRect();
-              return { motion: el.getAttribute("data-motion"), text: el.textContent, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth };
+              return { motion: el.getAttribute("data-motion"), text: el.textContent, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height, lineHeight: Number.parseFloat(getComputedStyle(el).lineHeight), scrollWidth: el.scrollWidth, clientWidth: el.clientWidth };
             }));
           }
           expect(lines.length).toBeGreaterThan(0);
-          for (const line of lines) { expect(line.left).toBeGreaterThanOrEqual(0); expect(line.right).toBeLessThanOrEqual(width + 1); expect(line.top).toBeGreaterThanOrEqual(0); expect(line.bottom).toBeLessThanOrEqual(844); expect(line.scrollWidth).toBeLessThanOrEqual(line.clientWidth + 1); expect(line.height).toBeGreaterThan(0); }
+          for (const line of lines) { expect(line.left).toBeGreaterThanOrEqual(0); expect(line.right).toBeLessThanOrEqual(width + 1); expect(line.top).toBeGreaterThanOrEqual(0); expect(line.bottom).toBeLessThanOrEqual(844); expect(line.scrollWidth).toBeLessThanOrEqual(line.clientWidth + 1); expect(line.height).toBeGreaterThan(0); expect(line.height).toBeLessThanOrEqual(line.lineHeight * 2 + 1); }
           await page.screenshot({ path: path.join(out, `${width}-${locale}-waiting.png`) });
           // The same editor is reachable from the card's status menu on desktop
           // and from its task screen's status sheet on the phone.

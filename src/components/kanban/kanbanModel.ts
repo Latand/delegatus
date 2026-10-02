@@ -816,7 +816,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       onBoard: recorded.length,
       /* Agents of a hidden group keep working, and the header says so; a
          decision the operator hid is not counted as waiting on them. */
-      working: cards.reduce((sum, card) => sum + card.working, 0),
+      working: cards.filter((card) => card.motion.key === "working").length,
       needsYou: cards.filter((card) => card.motion.key === "needs-you" && !card.hide.hidden).length,
     },
   };

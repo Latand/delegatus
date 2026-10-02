@@ -52,3 +52,17 @@ test("running and operator-held checklist steps are summarized separately from w
   const asks = deriveTaskSteps([{ id: "ask", text: "Choose", state: "open", hold: { kind: "operator", note: "Choose a path", since: now, by: "agent" } }], []).summary;
   expect(asks).toMatchObject({ open: 1, needsYou: 1, working: 0, reasons: [] });
 });
+
+
+test("closed and cancelled references retain open reasons and dropped steps; completed work completes", () => {
+  const items = [
+    { id: "open", text: "Resolve remaining cause", state: "open" as const, ref: "lane", hold: { kind: "worker" as const, note: "After capacity frees", since: now, by: "agent" as const } },
+    { id: "dropped", text: "Skipped cause", state: "dropped" as const, ref: "lane" },
+  ];
+  for (const state of ["closed", "cancelled"]) {
+    const derived = deriveTaskSteps(items, [{ id: "lane", state }]);
+    expect(derived.steps.map(step => step.effectiveState)).toEqual(["open", "dropped"]);
+    expect(derived.summary).toMatchObject({ done: 0, open: 1, dropped: 1, reasons: [{ kind: "queued", note: "After capacity frees", count: 1 }] });
+  }
+  expect(deriveTaskSteps(items, [{ id: "lane", state: "completed" }]).summary).toMatchObject({ done: 1, open: 0, dropped: 1 });
+});

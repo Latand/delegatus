@@ -24,3 +24,14 @@ test("queued holds wait, an overdue postponement stops, and only paused active p
   expect(taskMotion({ ...facts, status: "inbox" }, NOW).key).toBe("not-started");
   expect(taskMotion({ ...facts, status: "done" }, NOW).key).toBe("done");
 });
+
+
+test("an open operator-held step carries its note and age into shared motion", () => {
+  const reason = hold("operator", { note: "Choose release A or B" });
+  const steps = [{ open: true, motion: "needs-you" as const, hold: reason }];
+  expect(taskMotion({ ...facts, steps }, NOW)).toMatchObject({ key: "needs-you", reason, since: reason.since });
+  expect(taskMotion({ ...facts, steps: [{ open: true, motion: "needs-you" }, ...steps] }, NOW).reason).toEqual(reason);
+  const taskReason = hold("operator", { note: "Choose the task plan" });
+  expect(taskMotion({ ...facts, hold: taskReason, steps }, NOW).reason).toEqual(taskReason);
+  expect(taskMotion({ ...facts, steps: [{ ...steps[0]!, open: false }] }, NOW).key).toBe("stopped");
+});

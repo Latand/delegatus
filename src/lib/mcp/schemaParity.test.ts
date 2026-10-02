@@ -952,7 +952,8 @@ test("task writes advertise hold reasons and the additive checklist with stoppin
       const hold = holdSchema.properties ? holdSchema : holdSchema.anyOf?.find(part => part.type === "object") ?? {};
       const stepsSchema = properties.steps as unknown as { items?: { properties?: Record<string, unknown> }; maxItems?: number; anyOf?: Array<{ type?: string; items?: { properties?: Record<string, unknown> }; maxItems?: number }> };
       const steps = stepsSchema.items ? stepsSchema : stepsSchema.anyOf?.find(part => part.type === "array") ?? {};
-      expect(hold.properties?.kind.enum).toContain("worker");
+      expect(hold.properties?.kind.type).toBe("string");
+      expect(hold.properties?.kind.enum).toBeUndefined();
       expect(hold.properties?.note.type).toBe("string");
       expect(hold.properties).not.toHaveProperty("by");
       expect(hold.properties).not.toHaveProperty("conversationId");

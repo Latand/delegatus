@@ -416,7 +416,8 @@ for (const lang of ["en", "uk"] as const) test(`Hide finished tasks keeps workin
     changed: () => {},
   };
   const view = mount(tasks, { ports, seat, files: [working], manual: [working] });
-  expect(cardEl(view.host, "w")?.querySelector(".foot-meta.working")?.textContent).toBe(tr("kanban.activityWorking", { count: 1 }));
+  expect(cardEl(view.host, "w")?.querySelector('[data-motion="working"]')?.textContent).toBe(tr("kanban.motion.workingN", { count: 1 }));
+  expect(cardEl(view.host, "w")?.querySelector(".foot-meta.working")).toBeNull();
   click(view.host.querySelector('[data-colmenu="done"]'));
   const item = menuItem(view.host, tr("kanban.hideFinished", { count: 3 }));
   expect(item?.querySelector(".why")?.textContent).toBe(tr("kanban.hideFinishedKeeps", { count: 1 }));
@@ -801,4 +802,17 @@ test("the status menu opens an inline reason editor and saves a Waiting hold", a
   await tick();
   expect(view.server.patches[0]!.body).toMatchObject({ status: "blocked", hold: { kind: "worker", note: "After another task finishes" } });
   expect(columnOf(view.host, "hold-edit")).toBe("blocked");
+});
+
+
+test("a step operator hold displays its note and age in the collapsed card in both locales", () => {
+  for (const locale of ["en", "uk"] as const) {
+    setLocale(locale);
+    const hold = { kind: "operator" as const, note: "Choose release A or B", since: new Date((NOW - 1200) * 1000).toISOString(), by: "agent" as const };
+    const { host } = mount([task("step-ask", "blocked", "Choose release", { steps: [{ id: "ask", text: "Choose", state: "open", hold }] })]);
+    const line = host.querySelector('[data-id="task:step-ask"] [data-motion="needs-you"]');
+    expect(line?.textContent).toContain(translate(locale, "kanban.hold.operator", { note: hold.note }));
+    expect(line?.querySelector(".motion-age")?.textContent).toContain(translate(locale, "time.agoMin", { n: 20 }));
+    expect(host.querySelector('[data-id="task:step-ask"] [data-task-steps]')?.textContent).toContain(translate(locale, "kanban.steps.needsYou.one"));
+  }
 });

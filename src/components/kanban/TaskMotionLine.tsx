@@ -6,7 +6,7 @@ import { fmtAgeSeconds } from "@/components/utils";
 
 /** The reason stays above the collapsed contents. A needs-you question has
     its own slot immediately below this line in the sibling card design. */
-export function TaskMotionLine({ motion, working, nowMs, plain = false, taskTitle, onOpenTask, referenceUrl }: { motion: TaskMotion; working: number; nowMs: number; plain?: boolean; taskTitle?: string; onOpenTask?: () => void; referenceUrl?: string | null }) {
+export function TaskMotionLine({ motion, working, nowMs, plain = false, full = false, taskTitle, onOpenTask, referenceUrl }: { motion: TaskMotion; working: number; nowMs: number; plain?: boolean; full?: boolean; taskTitle?: string; onOpenTask?: () => void; referenceUrl?: string | null }) {
   const { t, locale } = useLocale();
   if (motion.key === "not-started" || motion.key === "done") return null;
   const hold = typeof motion.reason === "object" ? motion.reason : null;
@@ -18,11 +18,14 @@ export function TaskMotionLine({ motion, working, nowMs, plain = false, taskTitl
   const refUrl = referenceUrl ?? (hold?.ref && /^https?:\/\//i.test(hold.ref) ? hold.ref : null);
   const age = motion.since ? fmtAgeSeconds(Math.max(0, (nowMs - Date.parse(motion.since)) / 1000)) : "";
   const fullText = [label, note, motion.due ? t("kanban.motion.due") : "", age, motion.holdStillSet ? t("kanban.motion.holdStillSet") : ""].filter(Boolean).join(" · ");
-  return <span className="motion-line block text-label leading-snug text-muted [overflow-wrap:anywhere]" data-motion={motion.key} title={hold ? `${fullText}\n${t(`kanban.hold.by.${hold.by}`)}` : undefined}>
-    {!plain && onOpenTask ? <button type="button" onClick={onOpenTask}>{label}</button> : !plain && refUrl ? <a href={refUrl} target="_blank" rel="noreferrer">{label}</a> : <span>{label}</span>}
+  const content = <>
+    <span>{label}</span>
     {note ? <span> · {note}</span> : null}
     {motion.due ? <span> · {t("kanban.motion.due")}</span> : null}
     {age ? <span className="motion-age"> · {age}</span> : null}
     {motion.holdStillSet ? <span className="motion-age"> · {t("kanban.motion.holdStillSet")}</span> : null}
+  </>;
+  return <span className="motion-line block text-label leading-snug text-muted [overflow-wrap:anywhere]" data-motion={motion.key} data-motion-full={full || undefined} title={hold ? `${fullText}\n${t(`kanban.hold.by.${hold.by}`)}` : undefined}>
+    {!plain && onOpenTask ? <button type="button" onClick={onOpenTask}>{content}</button> : !plain && refUrl ? <a href={refUrl} target="_blank" rel="noreferrer">{content}</a> : content}
   </span>;
 }

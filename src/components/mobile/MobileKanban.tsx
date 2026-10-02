@@ -331,13 +331,14 @@ function AgentsLine({ item, nowMs, remote }: { item: PhoneCard; nowMs: number; r
      so a remote card keeps the working count and the age and drops the word
      (the desktop card does the same). */
   const word = agents.conversations ? t("mobile2.kanban.agents", { count: agents.conversations }) : remote ? null : t("mobile2.kanban.noAgents");
-  const lead = Boolean(agents.working || word);
+  const showWorking = agents.working > 0 && item.card.motion.key !== "working";
+  const lead = Boolean(showWorking || word);
   if (!lead && agents.atMs <= 0) return null;
   return (
     <span data-phone-card-agents="" className="flex min-w-0 items-center gap-[5px] text-label tabular-nums text-muted">
-      {agents.working ? (
+      {showWorking ? (
         <>
-          <span className="inline-flex shrink-0 items-center gap-1 font-semibold text-success">
+          <span data-foot-working={agents.working} className="inline-flex shrink-0 items-center gap-1 font-semibold text-success">
             <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-success motion-safe:animate-pulse" />
             {t("mobile2.kanban.working", { count: agents.working })}
           </span>

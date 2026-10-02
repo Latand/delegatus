@@ -4195,7 +4195,7 @@ test("task placement bindings require atomic guards and classify field refusals 
   expect(result.unchanged).toBe(true);
 });
 
-test("MCP task writes preserve the bound conversation as hold provenance and ignore supplied provenance", async () => {
+test("MCP task writes normalize holds, preserve step operator reasons and server provenance", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "task-binding-hold-provenance-"));
   sandboxes.push(sandbox);
   const env: NodeJS.ProcessEnv = { ...process.env, LLV_STATE_DIR: path.join(sandbox, "state") };
@@ -4242,13 +4242,40 @@ test("MCP task writes preserve the bound conversation as hold provenance and ign
       hold: { kind: "worker", note: "Capacity is still full", by: "operator", since: "2001-01-01T00:00:00.000Z", conversationId: "conversation_spoofed" },
     });
     const read = await call("get_task", { clientRequestId: "hold-read-bound", taskId: created.taskId });
-    console.log(JSON.stringify({ createdTask, updatedTask: updated.task, readTask: read.task }));
+    const normalizedCreate = await call("create_task", {
+      clientRequestId: "hold-create-normalized", project: "fixture-project", text: "Normalize waiting reasons", full: true,
+      hold: { kind: "unknown-kind", note: "x".repeat(201) },
+      steps: [{ id: "long", text: "Wait", state: "open", hold: { kind: "unknown-kind", note: "x".repeat(201) } }],
+    });
+    const unknownUpdate = await call("update_task", {
+      clientRequestId: "hold-update-unknown", taskId: normalizedCreate.taskId, full: true,
+      hold: { kind: "unknown-kind", note: "z".repeat(201) },
+      steps: [{ id: "long", text: "Wait", state: "open", hold: { kind: "unknown-kind", note: "z".repeat(201) } }],
+    });
+    const normalizedUpdate = await call("update_task", {
+      clientRequestId: "hold-update-normalized", taskId: normalizedCreate.taskId, full: true,
+      hold: { kind: "worker", note: "y".repeat(201) },
+      steps: [{ id: "long", text: "Wait", state: "open", hold: { kind: "worker", note: "y".repeat(201) } }],
+    });
+    const operatorUpdate = await call("update_task", {
+      clientRequestId: "step-operator-update", taskId: normalizedCreate.taskId, full: true, hold: null,
+      steps: [{ id: "long", text: "Choose release", state: "open", hold: { kind: "operator", note: "Choose release A or B" } }],
+    });
+    const operatorRead = await call("get_task", { clientRequestId: "step-operator-read", taskId: normalizedCreate.taskId });
+    const statuses = [];
+    for (const status of ["inbox", "assigned", "blocked", "done"]) {
+      const changed = await call("update_task", { clientRequestId: "legacy-status-" + status, taskId: created.taskId, full: true, status });
+      statuses.push(changed.task.status);
+    }
+    console.log(JSON.stringify({ createdTask, updatedTask: updated.task, readTask: read.task,
+      normalizedCreate: normalizedCreate.task, unknownUpdate: unknownUpdate.task, normalizedUpdate: normalizedUpdate.task,
+      operatorUpdate: operatorUpdate.task, operatorRead: operatorRead.task, statuses }));
     } finally { await client.close(); await server.close(); }
   `], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
   const output = await new Response(child.stdout).text();
   const error = await new Response(child.stderr).text();
   expect([await child.exited, error]).toEqual([0, ""]);
-  const result = JSON.parse(output) as { createdTask: BoardTask; updatedTask: BoardTask; readTask: BoardTask };
+  const result = JSON.parse(output) as { createdTask: BoardTask; updatedTask: BoardTask; readTask: BoardTask; normalizedCreate: BoardTask; unknownUpdate: BoardTask; normalizedUpdate: BoardTask; operatorUpdate: BoardTask; operatorRead: BoardTask; statuses: string[] };
   expect(result.createdTask.hold).toMatchObject({ by: "agent", conversationId: "conversation_create_bound", note: "Waiting for capacity" });
   expect(result.updatedTask.hold).toMatchObject({ by: "agent", conversationId: "conversation_update_bound", note: "Capacity is still full" });
   expect(result.updatedTask.hold?.since).toBe(result.createdTask.hold?.since);
@@ -4257,6 +4284,14 @@ test("MCP task writes preserve the bound conversation as hold provenance and ign
   expect(result.createdTask.steps?.filter(step => step.state === "done")).toHaveLength(5);
   expect(result.createdTask.steps?.[5]?.hold).toMatchObject({ by: "agent", conversationId: "conversation_create_bound" });
   expect(result.readTask.steps).toEqual(result.updatedTask.steps);
+  for (const [task, kind, letter] of [[result.normalizedCreate, "unstated", "x"], [result.unknownUpdate, "unstated", "z"], [result.normalizedUpdate, "worker", "y"]] as const) {
+    expect(task.hold).toMatchObject({ kind, note: letter.repeat(200), by: "agent" });
+    expect(task.steps?.[0]?.hold).toMatchObject({ kind, note: letter.repeat(200), by: "agent" });
+  }
+  expect(result.normalizedUpdate.steps?.[0]?.hold?.since).toBe(result.normalizedCreate.steps?.[0]?.hold?.since);
+  expect(result.operatorRead.steps).toEqual(result.operatorUpdate.steps);
+  expect(result.operatorRead.steps?.[0]?.hold).toMatchObject({ kind: "operator", note: "Choose release A or B", since: result.normalizedCreate.steps?.[0]?.hold?.since });
+  expect(result.statuses).toEqual(["inbox", "assigned", "blocked", "done"]);
 });
 
 

@@ -1593,7 +1593,8 @@
 .kb .remote-unbound { padding: 4px 10px; }
 
 /* Task motion stays visible when card contents fold. */
-.motion-line { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.motion-line { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; max-height: 2lh; overflow: hidden; }
+.motion-line[data-motion-full] { display: block; -webkit-line-clamp: unset; max-height: none; overflow: visible; }
 .kb .card .motion-line { margin: 2px 0 6px; font-size: var(--text-label); line-height: 1.45; color: var(--color-muted); overflow-wrap: anywhere; }
 .kb .card .motion-line[data-motion="working"] { color: var(--color-success); }
 .kb .card .motion-line[data-motion="needs-you"] { color: var(--color-warning); }

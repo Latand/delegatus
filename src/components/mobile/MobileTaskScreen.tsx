@@ -1031,7 +1031,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                 </button></h1>
               )}
               {card ? <>
-                <TaskMotionLine motion={card.motion} working={card.working} nowMs={now * 1000} taskTitle={card.holdTarget?.title}
+                <TaskMotionLine motion={card.motion} working={card.working} nowMs={now * 1000} full taskTitle={card.holdTarget?.title}
                   onOpenTask={task?.hold?.kind === "task" && task.hold.ref ? () => nav.push({ kind: "task", id: task.hold!.ref! }) : undefined}
                   referenceUrl={task?.hold && ["pr", "issue"].includes(task.hold.kind)
                     ? taskLinks?.links.find(link => String(link.number) === task.hold!.ref && link.kind === task.hold!.kind)?.url

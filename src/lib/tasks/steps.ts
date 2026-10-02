@@ -38,7 +38,7 @@ export function deriveTaskSteps(steps: readonly TaskStep[] | undefined, pipeline
     if (pipeline?.state === "needs_decision") motion = "needs-you";
     else if (pipeline && ["running", "provisioning"].includes(pipeline.state)) motion = "working";
     else if (pipeline?.state === "paused") motion = "waiting";
-    else if (pipeline && ["completed", "closed"].includes(pipeline.state) && step.state !== "dropped") {
+    else if (pipeline?.state === "completed" && step.state !== "dropped") {
       effectiveState = "done";
       motion = "done";
     }
