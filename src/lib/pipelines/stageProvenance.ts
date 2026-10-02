@@ -1,4 +1,5 @@
 import type { ExecPort } from "@/lib/workflows/provision";
+import crypto from "node:crypto";
 
 import { pipelineWorktreeChanges } from "./git";
 import { pathIsDeclaredOutput } from "./stageAccess";
@@ -12,6 +13,13 @@ import type { Pipeline, PipelineStageProvenance } from "./types";
 const MAX_UNCOMMITTED_PATHS = 20;
 
 type PullRequest = NonNullable<PipelineStageProvenance["pullRequest"]>;
+
+/** Freeze the admitted lane, excluding observer records that this check writes.
+    Report sequence and conversation are fenced independently at settlement. */
+export function stageProvenanceFence(pipeline: Pipeline): string {
+  return crypto.createHash("sha256").update(JSON.stringify({ ...pipeline, stageReports: undefined,
+    runs: pipeline.runs.map((run) => ({ ...run, attempts: run.attempts.map((attempt) => ({ ...attempt, report: undefined })) })) })).digest("hex");
+}
 
 async function headOf(worktreeDir: string, exec: ExecPort): Promise<string | null> {
   const head = (await exec("git", ["rev-parse", "HEAD"], worktreeDir));
@@ -86,7 +94,8 @@ export async function collectStageProvenance(
   const outputs = await declaredOutputPresence(pipeline.worktreeDir, declaredOutputs, exec);
   const forge = await pullRequestOf(pipeline.worktreeDir, branch, exec);
   return {
-    state: head && changes.ok && outputs.every((output) => output.present !== null) && forge.pullRequestState !== "unknown" ? "complete" : "unknown",
+    state: checkedOut.code === 0 && checkedOut.stdout.trim() && head && changes.ok
+      && outputs.every((output) => output.present !== null) && forge.pullRequestState !== "unknown" ? "complete" : "unknown",
     head, branch, uncommitted: changes.ok ? changes.paths : null, ...forge, outputs,
   };
 }
@@ -99,17 +108,19 @@ export async function settlePendingStageProvenance(ports: Pick<import("./engine"
     if (report?.provenance.state !== "pending") continue;
     const abort = new AbortController();
     const currentLane = () => loadPipelines().find((item) => item.id === pipeline.id);
+    const matches = (current: Pipeline | undefined) => current !== undefined
+      && report.provenanceFence !== undefined && stageProvenanceFence(current) === report.provenanceFence;
     const revalidate = () => {
       const current = currentLane();
       const attempts = current?.runs.find((item) => item.stageId === run.stageId)?.attempts;
-      if (attempts?.find((item) => item.n === attempt.n)?.report?.seq !== report.seq
+      if (!matches(current) || attempts?.find((item) => item.n === attempt.n)?.report?.seq !== report.seq
         || attempts?.at(-1)?.n !== attempt.n || current?.cursor?.stageId !== run.stageId) abort.abort();
     };
     const watch = setInterval(revalidate, 50);
-    const exec: ExecPort = async (command, args, cwd, env) => {
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
       revalidate();
       if (abort.signal.aborted) return { code: null, stdout: "", stderr: "provenance superseded" };
-      return await ports.exec(command, args, cwd, env, { signal: abort.signal, timeoutMs: command === "gh" ? 10_000 : 5_000 });
+      return await ports.exec(command, args, cwd, env, { ...options, signal: abort.signal, timeoutMs: command === "gh" ? 10_000 : 5_000 });
     };
     let provenance: PipelineStageProvenance;
     try { provenance = await collectStageProvenance(pipeline, report.provenance.outputs.map((output) => output.path), exec); }
@@ -121,7 +132,7 @@ export async function settlePendingStageProvenance(ports: Pick<import("./engine"
       const current = pipelines.find((item) => item.id === pipeline.id);
       const candidate = current?.runs.find((item) => item.stageId === run.stageId)?.attempts.find((item) => item.n === attempt.n);
       if (!current || candidate?.conversationId !== attempt.conversationId || candidate.report?.seq !== report.seq) return;
-      if (current.runs.find((item) => item.stageId === run.stageId)?.attempts.at(-1)?.n !== attempt.n
+      if (!matches(current) || current.runs.find((item) => item.stageId === run.stageId)?.attempts.at(-1)?.n !== attempt.n
         || current.cursor?.stageId !== run.stageId) provenance = { ...report.provenance, state: "unknown", pullRequestState: "unknown" };
       candidate.report = { ...candidate.report, provenance };
       current.stageReports = current.stageReports?.map((entry) => entry.seq === report.seq

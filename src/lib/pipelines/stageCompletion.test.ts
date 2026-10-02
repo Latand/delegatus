@@ -13,7 +13,7 @@ process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-com
 const { createPipelineFromRequest, patchPipeline, reportStageCompletion, tickPipelines } = await import("./engine");
 const { settlePendingStageProvenance } = await import("./stageProvenance");
 const { registerPipelineTick } = await import("./controllerSignal");
-const { loadPipelines, savePipelines, withPipelineMutation } = await import("./store");
+const { loadPipelines, savePipelines, pipelineIdentity, withPipelineMutation } = await import("./store");
 const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
 const { createMcpToolService, FileMcpReceiptStore } = await import("@/lib/mcp/server");
 const { asStoredLegacyReviewLane } = await import("./fixtures/legacyReviewLane");
@@ -181,6 +181,54 @@ test("stage_report durably accepts pending provenance without waiting for the fo
   } finally { release(); await pendingReport; }
   await tickPipelines([], h.ports);
   expect(current().runs[0]!.attempts[0]!.report?.provenance).toMatchObject({ state: "complete", head: HEAD });
+});
+
+test.each(["control-before", "control-during", "delivery-before", "delivery-during", "worktree-during", "head-during", "branch-during"] as const)("deferred provenance fences %s against its durable admission", async (change) => {
+  const h = harness(); await started(h.ports, [stage("build", null)]);
+  const clock = "2026-01-01T00:00:00.000Z"; h.ports.now = () => clock;
+  await withPipelineMutation((pipelines, persist) => {
+    const lane = pipelines[0]!; lane.pausedAt = clock; lane.resumedAt = clock;
+    lane.delivery = { target: { repository: "provenance-repo", remote: "origin", branch: `refs/heads/${lane.branch}` },
+      disposition: "owner", publish: "enabled", active: true, ownerId: lane.id, epoch: 1, journal: [] };
+    persist();
+  });
+  await h.report(1, { verdict: "pass", summary: "Checked." });
+  const mutate = async () => {
+    if (change.startsWith("control")) {
+      await patchPipeline(current().id, { action: "pause" }, h.ports);
+      await patchPipeline(current().id, { action: "resume" }, h.ports);
+    } else await withPipelineMutation((pipelines, persist) => {
+      const lane = pipelines[0]!;
+      if (change.startsWith("delivery")) lane.delivery!.epoch++;
+      if (change.startsWith("worktree")) { lane.repoDir += "-replacement"; Object.assign(lane, pipelineIdentity(lane.id, lane.task, lane.repoDir)); }
+      if (change.startsWith("head")) lane.lastPassedCommit = "b".repeat(40);
+      if (change.startsWith("branch")) { lane.task += " replacement"; Object.assign(lane, pipelineIdentity(lane.id, lane.task, lane.repoDir)); }
+      persist();
+    });
+  };
+  let commands = 0, observedSignal: AbortSignal | undefined;
+  let entered!: () => void, release!: () => void;
+  const checking = new Promise<void>((resolve) => { entered = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const original = h.ports.exec;
+  h.ports.exec = async (command, args, cwd, env, options) => {
+    commands++;
+    if (command === "gh" && change.endsWith("during")) { observedSignal = options?.signal; entered(); await held; }
+    return await original(command, args, cwd, env, options);
+  };
+  const before = change.endsWith("before");
+  if (before) await mutate();
+  const observation = settlePendingStageProvenance(h.ports);
+  try {
+    if (!before) {
+      await checking; await mutate(); await Bun.sleep(75);
+      expect(observedSignal?.aborted).toBe(true);
+    }
+    release(); await observation;
+    if (before) expect(commands).toBe(0);
+    expect(attemptsOf("build")[0]!.report).toMatchObject({ verdict: { status: "pass" }, provenance: { state: "unknown", head: null, pullRequestState: "unknown" } });
+    expect(current().stageReports!.at(-1)).toMatchObject({ provenanceState: "unknown" });
+  } finally { release(); await observation; }
 });
 
 test("stage_report retries the same request after a pre-admission pipeline store busy refusal", async () => {

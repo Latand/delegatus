@@ -18,7 +18,7 @@ function execWith(replies: Record<string, Reply>): { exec: ExecPort; calls: stri
     calls.push([command, ...args, cwd]);
     const key = [command, ...args].join(" ");
     const match = Object.entries(replies).find(([prefix]) => key.startsWith(prefix));
-    return { code: 0, stdout: "", stderr: "", ...(match?.[1] ?? {}) } as ExecResult;
+    return { code: 0, stdout: command === "git" && args[0] === "branch" ? PIPELINE.branch : "", stderr: "", ...(match?.[1] ?? {}) } as ExecResult;
   };
   return { exec, calls };
 }
@@ -101,4 +101,10 @@ test("empty and whitespace forge answers remain unknown", async () => {
   }
   const { exec } = execWith({ "git status --porcelain": { stdout: "" }, "git rev-parse HEAD": { stdout: HEAD }, "gh pr list": { stdout: "[]" } });
   expect(await collectStageProvenance(PIPELINE, [], exec)).toMatchObject({ state: "complete", pullRequestState: "absent" });
+});
+
+test.each([{ code: 128, stdout: "" }, { code: 0, stdout: "" }, { code: 0, stdout: "  \n" }])("an unreadable checkout branch cannot produce complete provenance (%s)", async (branch) => {
+  const { exec } = execWith({ "git branch --show-current": branch,
+    "git rev-parse HEAD": { stdout: HEAD }, "gh pr list": { stdout: "[]" } });
+  expect(await collectStageProvenance(PIPELINE, [], exec)).toMatchObject({ state: "unknown", branch: PIPELINE.branch, pullRequestState: "absent" });
 });

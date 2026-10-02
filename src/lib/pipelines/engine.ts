@@ -95,7 +95,7 @@ import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntim
 import { launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { normalizeStageOutputPath } from "./stageAccess";
-import { settlePendingStageProvenance } from "./stageProvenance";
+import { settlePendingStageProvenance, stageProvenanceFence } from "./stageProvenance";
 import { graphDigest, isStageDigest, stageDigest } from "./stageDigest";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
@@ -9503,14 +9503,12 @@ async function backgroundWorkRefusal(target: StageCompletionTarget, ports: Pipel
  * record the graph already routed on.
  *
  * Provenance is never taken from the caller. The head, the branch's pull
- * request and the declared outputs are read by the server at the moment of the
- * call, so what the attempt shows is what the server observed. Those reads —
- * one of them the forge, over the network — are made BEFORE the record lease
- * is taken, the way creation resolves its base commit: a refused call never
- * reads git at all, and no forge latency is spent holding the lease the
- * controller tick needs. The attempt is resolved a second time under the
- * lease, and that read is the authority: an attempt that settled in between is
- * refused with nothing written.
+ * request and declared outputs are observed after durable acceptance. The
+ * report records pending fields and the admitted lane fence before returning.
+ * The controller runs the reads outside the lease and records complete or
+ * unknown against that fence. A refused call runs no Git command. The attempt
+ * is resolved again under the lease before acceptance; an attempt that settled
+ * in between is refused with nothing written.
  */
 export async function reportStageCompletion(
   request: StageCompletionRequest,
@@ -9535,14 +9533,6 @@ export async function reportStageCompletion(
     ? { ...preview, attempt: { ...preview.attempt, agentPath: previewed.recoveryPath } }
     : preview, ports);
   if (heldWork) return heldWork;
-  const previewStage = preview.pipeline.stages.find((candidate) => candidate.id === preview.stageId);
-  const provenance: import("./types").PipelineStageProvenance = {
-    state: "pending", head: null, branch: preview.pipeline.branch,
-    uncommitted: null, pullRequest: null, pullRequestState: "pending",
-    outputs: (previewStage ? attemptStage(previewStage, preview.attempt).outputs ?? [] : [])
-      .map((output) => ({ path: output, present: null })),
-  };
-
   return withPipelineMutation(async (pipelines, persist) => {
     const resolved = await resolveStageCompletionTarget(pipelines, conversationId, requestedStageId, ports);
     if ("refusal" in resolved) return resolved.refusal;
@@ -9559,6 +9549,12 @@ export async function reportStageCompletion(
     const prior = attempt.report ?? null;
     const entries = pipeline.stageReports ?? [];
     const seq = (entries.at(-1)?.seq ?? 0) + 1;
+    const stage = pipeline.stages.find((candidate) => candidate.id === stageId);
+    const provenance: import("./types").PipelineStageProvenance = {
+      state: "pending", head: null, branch: pipeline.branch,
+      uncommitted: null, pullRequest: null, pullRequestState: "pending",
+      outputs: (stage ? attemptStage(stage, attempt).outputs ?? [] : []).map((output) => ({ path: output, present: null })),
+    };
     const report: PipelineStageReport = {
       seq,
       at: ports.now(),
@@ -9566,6 +9562,7 @@ export async function reportStageCompletion(
       verdict: normalized.verdict,
       summary: normalized.summary,
       provenance,
+      provenanceFence: stageProvenanceFence(pipeline),
       calls: (prior?.calls ?? 0) + 1,
     };
     attempt.report = report;

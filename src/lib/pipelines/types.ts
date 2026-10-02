@@ -294,6 +294,8 @@ export type PipelineStageReport = {
   verdict: StageVerdict;
   summary: string | null;
   provenance: PipelineStageProvenance;
+  /** Exact admitted lane authority for the deferred observation. */
+  provenanceFence?: string;
   /** Accepted calls this attempt has made, replacements included. */
   calls: number;
 };

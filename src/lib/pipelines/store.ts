@@ -340,6 +340,7 @@ function isStageReport(value: unknown): boolean {
     && stageVerdictFrom(report.verdict, { allowLegacySeverityOnly: true }) !== null
     && isNullableString(report.summary)
     && isStageProvenance(report.provenance)
+    && (report.provenanceFence === undefined || (typeof report.provenanceFence === "string" && /^[0-9a-f]{64}$/.test(report.provenanceFence)))
     && Number.isSafeInteger(report.calls) && (report.calls as number) >= 1;
 }
 
