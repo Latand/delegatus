@@ -1149,17 +1149,23 @@ test("legacy publication admission processes bounded batches before provisioning
   expect(loadPipelines().some((pipeline) => pipeline.state === "needs_decision")).toBe(false);
 });
 
-test("a terminal failing verdict releases ownership and explicit takeover acknowledges that failure", async () => {
+test("a fail-park keeps delivery through retry and publishes the next pass without takeover", async () => {
   const h = harness();
-  const pipeline = await create(h.ports);
+  const box = publishHarness(h);
+  const pipeline = await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "fail")], h.ports);
-  expect(loadPipelines()[0]?.delivery).toMatchObject({ active: false, publish: "disabled", epoch: 1 });
-  const taken = await patchPipeline(pipeline.id, { action: "takeover", expectedOwner: pipeline.id, expectedEpoch: 1, reason: "retry the failed attempt" }, h.ports,
-    { kind: "agent", role: "builder", conversationId: "conversation_retry" });
-  expect(taken.pipeline?.delivery).toMatchObject({ active: true, publish: "enabled", epoch: 2 });
-  expect((await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports)).pipeline?.delivery?.active).toBe(true);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.delivery).toMatchObject({ active: true, publish: "enabled", ownerId: pipeline.id, epoch: 1 });
+  expect(parked.delivery!.journal.some((item) => item.kind === "release")).toBe(false);
+  expect((await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", publishedCommit: box.passedSha,
+    cursor: { stageId: "review", state: "pending" }, delivery: { active: true, epoch: 1 } });
+  expect(box.remote()).toBe(box.passedSha);
 });
 
 /** A review-loop stage in these fixtures stands for a lane stored before
@@ -11923,6 +11929,42 @@ const PUBLISH_STAGES = [
   { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, ["prompt"]: "review", next: null },
 ] as const;
 
+async function deliveryRefusalPark() {
+  const h = harness();
+  const box = publishHarness(h);
+  const pipeline = await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  // Reproduce an old fail-park's released claim before its retry passed.
+  const released = loadPipelines()[0]!;
+  released.delivery!.active = false;
+  released.delivery!.publish = "disabled";
+  savePipelines([released]);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "accepted output")], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked).toMatchObject({ state: "needs_decision", cursor: { stageId: "build", state: "committing" },
+    lastPassedCommit: box.passedSha });
+  expect(parked.stateDetail).toStartWith("publishing the passed stage: Viewer publication denied:");
+  return { h, box, pipeline: parked, id: pipeline.id };
+}
+
+test.each([false, true])("own-id takeover resumes a delivery-refusal park without rerunning the pass (publish first: %s)", async (publishFirst) => {
+  const { h, box, pipeline, id } = await deliveryRefusalPark();
+  const cursor = structuredClone(pipeline.cursor);
+  expect((await patchPipeline(id, { action: "takeover", expectedOwner: id, expectedEpoch: 1,
+    reason: "recover the lane's delivery" }, h.ports)).error).toBeUndefined();
+  if (publishFirst) expect((await patchPipeline(id, { action: "publish" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  const resumed = loadPipelines()[0]!;
+  expect(resumed).toMatchObject({ state: "running", cursor: { stageId: "review", state: "pending" },
+    publishedCommit: box.passedSha, delivery: { active: true, ownerId: id, epoch: 2 } });
+  expect(resumed.runs[0]!.attempts).toHaveLength(1);
+  expect(resumed.runs[0]!.attempts[0]).toMatchObject({ state: "passed", output: "accepted output", input: cursor!.input,
+    activatedBy: cursor!.activatedBy, verdict: { status: "pass" }, error: null });
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(box.order).toEqual(["commit", `push:${box.passedSha}`]);
+});
+
 async function interruptedPublication() {
   const h = harness();
   const box = publishHarness(h, { remoteReadFails: true });
@@ -11971,6 +12013,35 @@ test("a same-owner publication waits through another tick, then advances once se
   expect(advanced.runs[0]!.attempts).toHaveLength(1);
   expect(box.order.filter((item) => item === "commit")).toHaveLength(1);
   expect(box.order.some((item) => item.startsWith("push:"))).toBe(false);
+});
+
+test("a legacy HEAD-verification park waits for its in-flight publisher to settle", async () => {
+  const { h, box, pipeline } = await interruptedPublication();
+  const operation = pipeline.delivery!.operation!;
+  const detail = "the accepted head cannot be verified before completion: HEAD temporarily unavailable";
+  pipeline.state = "needs_decision";
+  pipeline.stateDetail = detail;
+  pipeline.runs[0]!.attempts[0]!.state = "needs_decision";
+  pipeline.runs[0]!.attempts[0]!.error = detail;
+  savePipelines([pipeline]);
+  box.setRemote(box.passedSha);
+  const descriptor = fs.openSync(operation.executor!.lock, "a");
+  try {
+    expect(spawnSync("flock", ["-n", "3"], { stdio: ["ignore", "pipe", "pipe", descriptor] }).status).toBe(0);
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: detail,
+      cursor: { stageId: "build", state: "committing" }, delivery: { operation: { id: operation.id, state: "running" } } });
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(box.order).toEqual(["commit"]);
+  } finally { fs.closeSync(descriptor); }
+  await tickPipelines([], h.ports);
+  const recovered = loadPipelines()[0]!;
+  expect(recovered).toMatchObject({ state: "running", publishedCommit: box.passedSha,
+    cursor: { stageId: "review", state: "pending" } });
+  expect(recovered.runs[0]!.attempts).toHaveLength(1);
+  expect(recovered.runs[0]!.attempts[0]!.state).toBe("passed");
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(box.order).toEqual(["commit"]);
 });
 
 test("a restarted engine reconciles an interrupted reservation from the remote without repeating stage work (#1939)", async () => {
@@ -12205,6 +12276,194 @@ test("a publication that cannot land parks the pass without losing the commit", 
   expect(parked.publishedCommit ?? null).toBeNull();
   expect(box.order).toEqual(["commit", "push-rejected"]);
   expect(h.flows.size).toBe(0);
+});
+
+test("retry-stage republishes a committing passed stage without rerunning its work", async () => {
+  const h = harness();
+  const box = publishHarness(h);
+  const pipeline = await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  box.setPushFails(true);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "accepted output")], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.cursor).toMatchObject({ stageId: "build", state: "committing" });
+  expect(parked.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+  const before = structuredClone(parked.runs[0]!.attempts[0]!);
+  box.setPushFails(false);
+  expect((await patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  const resumed = loadPipelines()[0]!;
+  expect(resumed.cursor).toMatchObject({ stageId: "review", state: "pending" });
+  expect(resumed.publishedCommit).toBe(box.passedSha);
+  expect(resumed.runs[0]!.attempts).toHaveLength(1);
+  expect(resumed.runs[0]!.attempts[0]).toMatchObject({ state: "passed", verdict: before.verdict, output: before.output,
+    agentPath: before.agentPath, input: before.input, activatedBy: before.activatedBy, error: null });
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(box.order).toEqual(["commit", "push-rejected", `push:${box.passedSha}`]);
+  expect(h.killedPanes).toHaveLength(0);
+});
+
+test.each(["retry-stage", "publish"] as const)("publication recovery keeps the accepted pass through a temporary worktree-head mismatch (%s)", async (action) => {
+  const h = harness();
+  const box = publishHarness(h);
+  const pipeline = await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  box.setPushFails(true);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  const moved = "8".repeat(40);
+  box.setLocalHead(moved);
+  await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports);
+  const waiting = loadPipelines()[0]!;
+  expect(waiting.state).toBe("needs_decision");
+  expect(waiting.stateDetail).toContain(`the worktree moved to ${moved}`);
+  expect(waiting.lastPassedCommit).toBe(box.passedSha);
+  box.setLocalHead(box.passedSha);
+  box.setPushFails(false);
+  expect((await patchPipeline(pipeline.id, { action }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  const resumed = loadPipelines()[0]!;
+  expect(resumed.cursor).toMatchObject({ stageId: "review", state: "pending" });
+  expect(resumed.publishedCommit).toBe(box.passedSha);
+  expect(resumed.runs[0]!.attempts).toHaveLength(1);
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(box.order).toEqual(["commit", "push-rejected", `push:${box.passedSha}`]);
+});
+
+test("a successful publish resumes a pass parked on a rejected publication", async () => {
+  const h = harness();
+  const box = publishHarness(h);
+  const pipeline = await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  box.setPushFails(true);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  box.setPushFails(false);
+  expect((await patchPipeline(pipeline.id, { action: "publish" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", publishedCommit: box.passedSha,
+    cursor: { stageId: "review", state: "pending" } });
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(box.order).toEqual(["commit", "push-rejected", `push:${box.passedSha}`]);
+});
+
+test.each([
+  ["retry-stage", "moved"],
+  ["publish", "moved"],
+  ["retry-stage", "unverifiable"],
+  ["publish", "unverifiable"],
+] as const)("legacy HEAD-verification parks resume the accepted attempt (%s, %s)", async (action, cause) => {
+  const h = harness();
+  const box = publishHarness(h);
+  const pipeline = await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  box.setPushFails(true);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "accepted output")], h.ports);
+
+  const exec = h.ports.exec;
+  if (cause === "moved") box.setLocalHead("8".repeat(40));
+  else h.ports.exec = (command, args, cwd) => args[0] === "rev-parse" && args[1] === "HEAD"
+    ? { code: 128, stdout: "", stderr: "HEAD temporarily unavailable" }
+    : exec(command, args, cwd);
+  expect((await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  const legacy = loadPipelines()[0]!;
+  expect(legacy.stateDetail).toStartWith(cause === "moved"
+    ? "the worktree moved to " : "the accepted head cannot be verified before completion:");
+  // The pinned base passed the accepted attempt to park(), overwriting its state.
+  legacy.runs[0]!.attempts[0]!.state = "needs_decision";
+  savePipelines([legacy]);
+  const before = structuredClone(loadPipelines()[0]!.runs[0]!.attempts[0]!);
+
+  h.ports.exec = exec;
+  box.setLocalHead(box.passedSha);
+  box.setPushFails(false);
+  expect((await patchPipeline(pipeline.id, { action, expectedStageId: "build", expectedAttempt: 1 }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  const resumed = loadPipelines()[0]!;
+  expect(resumed).toMatchObject({ state: "running", lastPassedCommit: box.passedSha,
+    publishedCommit: box.passedSha, cursor: { stageId: "review", state: "pending" } });
+  expect(resumed.runs[0]!.attempts).toHaveLength(1);
+  expect(resumed.runs[0]!.attempts[0]).toEqual({ ...before, state: "passed", error: null });
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(h.killedPanes).toHaveLength(0);
+  expect(box.order).toEqual(["commit", "push-rejected", `push:${box.passedSha}`]);
+});
+
+test("a pass whose commit failed still retries stage work before publishing", async () => {
+  const h = harness();
+  const box = publishHarness(h);
+  const pipeline = await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const exec = h.ports.exec;
+  h.ports.exec = (command, args, cwd) => args[0] === "commit"
+    ? { code: 1, stdout: "", stderr: "commit temporarily unavailable" }
+    : exec(command, args, cwd);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked).toMatchObject({ state: "needs_decision", lastPassedCommit: ORIGIN_MAIN_SHA,
+    cursor: { stageId: "build", state: "committing" } });
+  expect(parked.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+  h.ports.exec = exec;
+  expect((await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs).toHaveLength(2);
+  expect(box.order).toEqual([]);
+  await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ publishedCommit: box.passedSha,
+    cursor: { stageId: "review", state: "pending" } });
+  expect(box.order).toEqual(["commit", `push:${box.passedSha}`]);
+});
+
+test.each([false, true])("another lane's takeover keeps the old publication park fenced (legacy HEAD park: %s)", async (legacyHeadPark) => {
+  const { h, box, id } = await deliveryRefusalPark();
+  if (legacyHeadPark) {
+    const parked = loadPipelines()[0]!;
+    parked.stateDetail = `the worktree moved to ${"8".repeat(40)} after accepting ${box.passedSha}; commit and publish the current head before completing this stage`;
+    parked.runs[0]!.attempts[0]!.state = "needs_decision";
+    parked.runs[0]!.attempts[0]!.error = parked.stateDetail;
+    savePipelines([parked]);
+  }
+  expect((await patchPipeline(id, { action: "takeover", expectedOwner: id, expectedEpoch: 1,
+    reason: "recover the owner" }, h.ports)).error).toBeUndefined();
+  const target = loadPipelines()[0]!.delivery!.target;
+  const next = await createPipelineFromRequest({ task: "Successor", repoDir: "/repo", autoStart: false,
+    stages: RUN_STAGES as never, ...REMOTE_BRANCH, delivery: { branch: target.branch } }, h.ports);
+  expect(next.pipeline!.delivery).toMatchObject({ disposition: "comparison", ownerId: id, epoch: 2 });
+  expect((await patchPipeline(next.pipeline!.id, { action: "takeover", expectedOwner: id, expectedEpoch: 2,
+    reason: "select the successor" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  const old = loadPipelines().find((item) => item.id === id)!;
+  expect(old).toMatchObject({ state: "needs_decision", delivery: { active: false, publish: "disabled" },
+    cursor: { stageId: "build", state: "committing" } });
+  expect((await patchPipeline(id, { action: "publish" }, h.ports)).error).toContain(next.pipeline!.id);
+  expect(box.order).toEqual(["commit"]);
+  expect(h.spawnInputs).toHaveLength(1);
+});
+
+test.each([
+  ["budget spent: 2 findings left", "passed"],
+  ["the worktree needs a decision", "passed"],
+  ["budget spent: 2 findings left", "needs_decision"],
+  ["the worktree needs a decision", "needs_decision"],
+] as const)("takeover and publish preserve an unrelated park: %s (%s)", async (detail, attemptState) => {
+  const { h, id } = await deliveryRefusalPark();
+  const parked = loadPipelines()[0]!;
+  parked.stateDetail = detail;
+  parked.runs[0]!.attempts[0]!.state = attemptState;
+  parked.runs[0]!.attempts[0]!.error = detail;
+  savePipelines([parked]);
+  expect((await patchPipeline(id, { action: "takeover", expectedOwner: id, expectedEpoch: 1,
+    reason: "recover the delivery only" }, h.ports)).error).toBeUndefined();
+  expect((await patchPipeline(id, { action: "publish" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: detail,
+    delivery: { active: true, epoch: 2 }, cursor: { stageId: "build", state: "committing" } });
+  expect(h.spawnInputs).toHaveLength(1);
 });
 
 test("a pipeline whose repo has no origin keeps its producer head before review ingress", async () => {
