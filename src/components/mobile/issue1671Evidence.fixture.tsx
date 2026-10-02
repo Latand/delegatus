@@ -414,6 +414,7 @@ const ICONS_SCENE = new URLSearchParams(location.search).has("icons");
 const ASKS_SCENE = new URLSearchParams(location.search).has("asks");
 const asksSetting = { enabled: ASKS_SCENE };
 const asksLines: Array<{ conversationId: string; path: string; role: string | null; title: string; gist: string; minutesAgo: number }> = [];
+const STAGE_AGENT = new URLSearchParams(location.search).get("stage-agent");
 const KANBAN = new URLSearchParams(location.search).has("kanban") || OVERVIEW_SCENE || NEEDS_SCENE || ICONS_SCENE || ASKS_SCENE;
 const kanbanFiles: FileEntry[] = [];
 const kanbanLinks: { pipelines: Record<string, unknown>; tasks: Record<string, unknown> } = { pipelines: {}, tasks: {} };
@@ -484,6 +485,23 @@ if (KANBAN) {
   kanbanPipelines.push(kanbanLane("lane-decision", "Mobile data: stop repeated full-board downloads", ["t-data"], "needs_decision", [
     { id: "implement", state: "needs_decision", ago: 2_460 }, { id: "review", role: "reviewer" },
   ]));
+  if (STAGE_AGENT) {
+    const current = kanbanPipelines[0]!;
+    const oldPath = kanbanConversation("Earlier design attempt", "settled", 3_600);
+    const agentPath = current.runs[0]!.attempts[0]!.agentPath!;
+    const state = STAGE_AGENT as "running" | "passed" | "failed" | "needs_decision";
+    current.stages = [{ ...current.stages[0]!, id: "design", next: null }];
+    current.state = state === "passed" ? "completed" : state === "running" ? "running" : "needs_decision";
+    current.cursor = state === "passed" ? null : { stageId: "design", state: state === "running" ? "running" : "pending", input: null, activatedBy: null };
+    current.runs = [{ stageId: "design", attempts: [
+      { ...current.runs[0]!.attempts[0]!, n: 1, state: "failed", agentPath: oldPath, conversationId: idOf(oldPath) },
+      { ...current.runs[0]!.attempts[0]!, n: 2, state, agentPath, conversationId: idOf(agentPath), verdict: { status: state === "failed" ? "fail" : state === "needs_decision" ? "needs_decision" : "pass", findings: [] },
+        report: { seq: 1, at: iso(60), actor: { kind: "operator" }, calls: 1,
+          verdict: { status: state === "needs_decision" ? "needs_decision" : state === "failed" ? "fail" : "pass", findings: [] },
+          summary: "Which layout should we use?\nChoose the compact layout or keep the expanded layout.\nЯке компонування обрати? Компактне чи розгорнуте?", provenance: { head: null, branch: "fixture", uncommitted: [], pullRequest: null, outputs: [] } },
+      },
+    ] }];
+  }
   kanbanPipelines.push(kanbanLane("lane-paused", "Finish mobile traffic acceptance", ["t-data"], "paused", [{ id: "accept", state: "passed", ago: 5_400 }, { id: "review", role: "reviewer" }]));
   kanbanLinks.pipelines["lane-decision"] = { links: [], noPr: true };
   const buildPath = kanbanConversation("GitHub Copilot as a third engine · build", "settled", 900);
@@ -1072,6 +1090,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (SYNCED && url.pathname === "/api/links/agents") return serverFetch(url.pathname + url.search);
   if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/log/provenance" && AGENT_LABEL) return json((await deliveredAgentEvidence()).provenance);
+  if (STAGE_AGENT && ["/api/conversation-host", "/api/tmux", "/api/runtime/send"].includes(url.pathname) && method === "POST") {
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    if (typeof body.text === "string") evidence.sends.push(body);
+    return json({ ok: true, outcome: "resumed", receipt: { operationId: "stage-agent-send", idempotencyKey: body.idempotencyKey, conversationId: body.conversationId, kind: "send", status: "delivered", text: body.text, at: new Date().toISOString(), revision: 1 } });
+  }
   if (url.pathname === "/api/conversation-host" && method === "POST") {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     if (body.action === "permission") {

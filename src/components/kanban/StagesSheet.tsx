@@ -7,7 +7,7 @@ import { useLocale } from "@/lib/i18n";
 import type { PipelineAttemptState, PipelineStage, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 import { roleNameById } from "@/components/builderCopy";
-import { pipelineStateLabel, type StageChipState } from "@/components/pipelines/pipelineModel";
+import { pipelineStateLabel, stageAgentRowModel, type StageChipState } from "@/components/pipelines/pipelineModel";
 
 import type { KanbanPipeline } from "./kanbanModel";
 import { ChevronRight, CloseGlyph, CollapseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
@@ -351,6 +351,7 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
   const name = nameOf(stage.id);
   const view = views.get(stage.id);
   const latest = attempts.at(-1) ?? null;
+  const agent = stageAgentRowModel(pipeline, stage.id);
   const state: StageChipState = shown && shown !== latest ? chipState(shown.state) : view?.state ?? "pending";
   const word = graphStateWord(t, state);
   const roleId = stageRoleId(stage);
@@ -459,6 +460,10 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
       </div>
       {/* A stage that never ran says when it starts once, in its draft. */}
       {neverRan ? null : <div className="pane-sub">{bits}</div>}
+      {agent.question ? <p className="pane-note whitespace-pre-wrap break-words text-primary" data-stage-question={stage.id}>{agent.question}</p> : null}
+      {agent.target ? (
+        <button type="button" className="btn quiet" data-open-conversation={stage.id} onClick={() => props.onOpenRecorded({ path: agent.target!.agentPath, conversationId: agent.target!.conversationId })}>{t("pipelineStage.openAgent")}</button>
+      ) : null}
       {attempts.length > 1 ? (
         <div className="attempts" role="group" aria-label={t("kanban.stages.attempts")}>
           {/* Numbered among the stage's own attempts, as the graph numbers them;
