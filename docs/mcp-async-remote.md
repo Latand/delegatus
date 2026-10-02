@@ -16,14 +16,14 @@ Publication also retains its original admission fence. A durable control token c
 
 ## Measurement
 
-The audit's integration profile was rerun against main after the MCP answer-slimming merge and against this change. It uses the MCP SDK transport, loopback Viewer route handlers, 107 tasks, 27 pipelines, six attempts per stage and 1,000 transcript messages in private state. A deterministic external port delays each remote command by 1,200 ms. The baseline port blocks as the former production executor did; the candidate port yields while the controller checks remote state. Candidate concurrent reads run while a delayed provenance observation is in flight. Default attention still waits for the simulated browser arrival. These are controlled local measurements, not production percentiles. Generated private working-directory labels change the transcript size by 16 bytes: 1,232,550 in the baseline and 1,232,566 in the candidate.
+The audit's integration profile was rerun against main after the MCP answer-slimming merge and against this change. It uses the MCP SDK transport, loopback Viewer route handlers, 107 tasks, 27 pipelines, six attempts per stage and 1,000 transcript messages in private state. A deterministic external port delays each remote command by 1,200 ms. The baseline port blocks as the former production executor did; the candidate port yields while the controller checks remote state. Candidate concurrent reads run while a delayed provenance observation is in flight. Default attention still waits for the simulated browser arrival. These are controlled local measurements, not production percentiles. Generated private working-directory labels change the transcript size by 10 bytes: 1,232,550 in the baseline and 1,232,560 in the candidate.
 
 | MCP scenario | Before p95 / max | After p95 / max | Samples |
 | --- | ---: | ---: | ---: |
-| Remote review retry | 3621.77 / 3621.77 ms | 9.73 / 9.73 ms | 2 |
-| Stage report with delayed forge | 1226.26 / 1226.26 ms | 25.48 / 25.48 ms | 3 |
-| Pipeline read during forge check | 1222.48 / 1222.48 ms | 18.38 / 18.38 ms | 3 |
-| Attention, default arrival | 1256.62 / 1256.62 ms | 1257.47 / 1257.47 ms | 2 |
-| Attention, accepted-only | New option | 1.36 / 1.36 ms | 2 |
+| Remote review retry | 3621.77 / 3621.77 ms | 7.77 / 7.77 ms | 2 |
+| Stage report with delayed forge | 1226.26 / 1226.26 ms | 17.92 / 17.92 ms | 3 |
+| Pipeline read during forge check | 1222.48 / 1222.48 ms | 21.61 / 21.61 ms | 3 |
+| Attention, default arrival | 1256.62 / 1256.62 ms | 1274.60 / 1274.60 ms | 2 |
+| Attention, accepted-only | New option | 4.99 / 4.99 ms | 2 |
 
 The numeric record is [before-after.json](../evidence/mcp-async-remote/before-after.json). The request-path regressions first failed against the original synchronous implementation. Existing real-Git tests cover preserved history, exact publication SHA, inherited locks and cancellation. Deferred-work tests cover restart recovery, supersession, remote failure and receipt settlement. Tests use explicit files and isolated state; type checking, changed-file lint and the trusted-main publication gate accompany the change.
