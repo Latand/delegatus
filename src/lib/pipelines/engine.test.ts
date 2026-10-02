@@ -2633,6 +2633,38 @@ test("creation validates the 1–8 stage conversation graph and optional roles",
   ] as never }, ports)).error).toContain("role only accepts roleId");
 });
 
+test("a merger stage resolves through production role lookup during pipeline normalization", async () => {
+  const h = harness();
+  savePipelines([]);
+  const { pipelineRoleLookup } = await import("./roles");
+  h.ports.roleLookup = pipelineRoleLookup;
+  const stagePrompt = "Merge the reviewed batch";
+  const promptKey = "prompt";
+  const created = await createPipelineFromRequest({
+    task: "Merge reviewed pull requests",
+    repoDir: "/repo",
+    autoStart: false,
+    stages: [{
+      id: "merge",
+      kind: "run",
+      role: { roleId: "merger", params: { prs: "12@abcdef1" } },
+      [promptKey]: stagePrompt,
+      next: null,
+    }],
+  }, h.ports);
+  expect(created.pipeline?.stages[0]).toMatchObject({
+    role: { roleId: "merger", params: { prs: "12@abcdef1" } },
+    effectiveRole: {
+      roleId: "merger",
+      engine: "codex",
+      model: "gpt-6.1-sol",
+      effort: "high",
+      access: "read-write",
+      promptScaffold: expect.stringContaining("scripts/merge-batch.ts"),
+    },
+  });
+});
+
 test("review-loop onFail edges are rejected during creation and graph editing", async () => {
   const h = harness();
   savePipelines([]);

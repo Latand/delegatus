@@ -37,7 +37,8 @@ export type PipelineRoleId =
   | "architect"
   | "cleaner"
   | "prod-auditor"
-  | "deployer";
+  | "deployer"
+  | "merger";
 
 /**
  * Roles a pipeline stage may not use. Deployer demands an explicit
