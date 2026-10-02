@@ -117,10 +117,11 @@ export function useColumnDwell(rootRef: RefObject<HTMLElement | null>, options: 
         widenTimer = null;
         if (armed !== column || !present) return;
         const widen = may(column);
+        /* Read the old pose before removing the cue invalidates its styles. */
+        if (widen) layout.prepare();
         cancel();
         if (!widen) return;
         latched = column;
-        layout.prepare();
         optionsRef.current.widen(statusOf(column));
       }, DWELL_MS - elapsed);
     };

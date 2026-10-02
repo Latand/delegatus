@@ -1,0 +1,44 @@
+{
+  "viewport": {
+    "width": 1000,
+    "height": 900
+  },
+  "readings": [
+    {
+      "action": "widen",
+      "reading": {
+        "before": {
+          "width": 254,
+          "height": 137
+        },
+        "after": {
+          "width": 254,
+          "height": 137
+        }
+      },
+      "settled": {
+        "width": 480,
+        "active": false,
+        "promoted": 0
+      }
+    },
+    {
+      "action": "narrow",
+      "reading": {
+        "before": {
+          "width": 454,
+          "height": 129
+        },
+        "after": {
+          "width": 454,
+          "height": 129
+        }
+      },
+      "settled": {
+        "width": 280,
+        "active": false,
+        "promoted": 0
+      }
+    }
+  ]
+}

@@ -11160,7 +11160,53 @@ describe("the board scrolls on the compositor at a device pixel ratio of 1", () 
 });
 
 describe("column dwell smooth", () => {
-  browserTest("keyboard agent jumps animate each changed column width", async () => {
+  browserTest("scroll-mode width controls keep source wrapping until the fade", async () => {
+    const out = path.resolve(".artifacts/column-dwell-smooth/scroll-width");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, { width: 1000, height: 900 }, "light", "en", "no-preference");
+      try {
+        await context.addInitScript(() => localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })));
+        await page.reload();
+        if (await page.locator('[data-rail-hide]').count()) await page.locator('[data-rail-hide]').click();
+        await page.locator('[data-col-width="inbox"]').waitFor();
+        await page.mouse.move(700, 10);
+        await page.waitForTimeout(400);
+        expect(await page.locator(".board.scroll").count()).toBe(1);
+        for (const action of ["widen", "narrow"]) {
+          const reading = await page.evaluate(async () => {
+            const column = document.querySelector<HTMLElement>('.column[data-status="inbox"]')!;
+            const card = column.querySelector<HTMLElement>(".card")!;
+            const before = { width: card.offsetWidth, height: card.offsetHeight };
+            const wide = column.dataset.wide;
+            column.querySelector<HTMLButtonElement>("[data-col-width]")!.click();
+            await Promise.resolve();
+            while (column.dataset.wide === wide) await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+            return { before, after: { width: card.offsetWidth, height: card.offsetHeight } };
+          });
+          expect(reading.after).toEqual(reading.before);
+          await page.waitForTimeout(600);
+          const settled = await page.evaluate(() => {
+            const column = document.querySelector<HTMLElement>('.column[data-status="inbox"]')!;
+            return { width: column.offsetWidth, active: !!document.querySelector("[data-column-layout]"), promoted: document.querySelectorAll("[data-layout-animating]").length };
+          });
+          expect(settled.width).toBe(action === "widen" ? 480 : 280);
+          expect(settled.active).toBe(false);
+          expect(settled.promoted).toBe(0);
+          readings.push({ action, reading, settled });
+        }
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally {
+      await browser.close(); server.stop();
+      fs.writeFileSync("evidence/column-dwell-smooth/scroll-width.json", JSON.stringify({ viewport: { width: 1000, height: 900 }, readings }, null, 2) + "\n");
+    }
+  }, 60_000);
+
+  browserTest("keyboard agent jumps preserve navigation while column widths change", async () => {
     const out = path.resolve(".artifacts/column-dwell-smooth/keyboard");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
@@ -11180,28 +11226,40 @@ describe("column dwell smooth", () => {
         await page.locator('[data-open-agent-jump="conversation_search-ver-2"]').click();
         await page.waitForTimeout(450);
         await page.evaluate(() => {
-          const changes: { wide: string; delta: number; copies: number; animations: number }[] = [];
-          const widths = () => [...document.querySelectorAll<HTMLElement>(".board > .column")].map((node) => node.getBoundingClientRect().width);
-          let before: number[] = [];
+          const changes: { wide: string; delta: number; active: boolean; animations: number; scrolled: boolean; visible: boolean }[] = [];
+          const columns = [...document.querySelectorAll<HTMLElement>(".board > .column")];
+          const widths = () => columns.map((node) => node.getBoundingClientRect().width);
+          const bodies = [...document.querySelectorAll<HTMLElement>(".col-body, .kb-page")];
+          let before: number[] = [], beforeScroll: number[] = [];
           document.addEventListener("keydown", (event) => {
-            if (event.altKey && (event.code === "KeyJ" || event.code === "KeyK")) before = widths();
+            if (event.altKey && (event.code === "KeyJ" || event.code === "KeyK")) {
+              before = widths(); beforeScroll = bodies.map((node) => node.scrollTop);
+            }
           }, true);
           Object.assign(window, { keyboardWidthChanges: changes });
           new MutationObserver(() => {
-            // Sample after all mutation observers, before the browser can paint.
-            queueMicrotask(() => changes.push({ wide: document.querySelector<HTMLElement>('.column[data-wide="1"]')!.dataset.status!, delta: Math.max(...widths().map((width, i) => Math.abs(width - before[i]!))), copies: document.querySelectorAll(".kb-layout-copy").length, animations: document.getAnimations().filter((animation) => animation.effect?.getTiming().duration === 240).length }));
+            requestAnimationFrame(async () => {
+              const root = document.querySelector<HTMLElement>(".kb")!;
+              while (root.hasAttribute("data-column-layout") && root.dataset.columnLayout !== "running") await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+              const key = document.querySelector<HTMLElement>('[data-open-agent-jump][aria-current="true"]')!.dataset.openAgentJump!;
+              const reader = document.querySelector<HTMLElement>(`[data-kanban-reader="${key}"]`)!;
+              const rect = reader.getBoundingClientRect(), viewport = reader.closest(".col-body")!.getBoundingClientRect();
+              const tracks = getComputedStyle(document.querySelector(".board")!).gridTemplateColumns.split(" ").map(Number.parseFloat);
+              changes.push({ wide: document.querySelector<HTMLElement>('.column[data-wide="1"]')!.dataset.status!, delta: Math.max(...tracks.map((width, i) => Math.abs(width - before[i]!))), active: root.hasAttribute("data-column-layout"), animations: document.getAnimations().filter((animation) => animation.effect?.getTiming().duration === 240).length, scrolled: bodies.some((node, i) => node.scrollTop !== beforeScroll[i]), visible: rect.top < viewport.bottom && rect.bottom > viewport.top });
+            });
           }).observe(document.querySelector(".kb")!, { subtree: true, attributes: true, attributeFilter: ["data-wide"] });
         });
         for (const shortcut of ["Alt+j", "Alt+j", "Alt+j", "Alt+k"]) {
           await page.keyboard.press(shortcut);
           await page.waitForTimeout(450);
         }
-        const changes = await page.evaluate(() => (window as unknown as { keyboardWidthChanges: { wide: string; delta: number; copies: number; animations: number }[] }).keyboardWidthChanges);
+        const changes = await page.evaluate(() => (window as unknown as { keyboardWidthChanges: { wide: string; delta: number; active: boolean; animations: number; scrolled: boolean; visible: boolean }[] }).keyboardWidthChanges);
         expect(changes.map(({ wide }) => wide)).toEqual(["inbox", "assigned", "inbox"]);
         for (const change of changes) {
           expect(change.delta).toBeGreaterThan(1);
-          expect(change.copies).toBeGreaterThan(0);
-          expect(change.animations).toBeGreaterThan(0);
+          expect(change.visible).toBe(true);
+          if (change.active) expect(change.animations).toBeGreaterThan(0);
+          else expect(change.scrolled).toBe(true);
         }
         expect(await page.locator(".kb-layout-copy").count()).toBe(0);
         expect(pageErrors).toEqual([]);
@@ -11209,7 +11267,7 @@ describe("column dwell smooth", () => {
     } finally { await browser.close(); server.stop(); }
   }, 90_000);
 
-  browserTest("width snapshots preserve the visible scroll position of an open reader", async () => {
+  browserTest("width transforms preserve the visible scroll position of an open reader", async () => {
     const out = path.resolve(".artifacts/column-dwell-smooth/readers");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
@@ -11237,22 +11295,24 @@ describe("column dwell smooth", () => {
           await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
           const before = { top: feed.scrollTop, left: feed.scrollLeft };
           document.querySelector<HTMLButtonElement>('[data-col-width="inbox"]')!.click();
-          await Promise.resolve(); await Promise.resolve();
+          await Promise.resolve();
+              while (document.querySelector<HTMLElement>(".kb")?.dataset.columnLayout !== "running") await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
           for (const animation of document.getAnimations()) if (animation.effect?.getTiming().duration === 240) { animation.pause(); animation.currentTime = 40; }
           const copies = [...document.querySelectorAll<HTMLElement>(".kb-layout-copy [data-log-feed-scroller]")].map((node) => ({ top: node.scrollTop, left: node.scrollLeft }));
           return { before, live: { top: feed.scrollTop, left: feed.scrollLeft }, copies };
         });
         expect(scrolls.before).toEqual({ top: 150, left: 80 });
         expect(scrolls.live).toEqual(scrolls.before);
-        expect(scrolls.copies).toHaveLength(2);
+        expect(scrolls.copies).toHaveLength(0);
         for (const copy of scrolls.copies) expect(copy).toEqual(scrolls.before);
         const retargeted = await page.evaluate(async () => {
           document.querySelector<HTMLButtonElement>('[data-col-width="inbox"]')!.click();
-          await Promise.resolve(); await Promise.resolve();
+          await Promise.resolve();
+              while (document.querySelector<HTMLElement>(".kb")?.dataset.columnLayout !== "running") await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
           for (const animation of document.getAnimations()) if (animation.effect?.getTiming().duration === 240) { animation.pause(); animation.currentTime = 40; }
-          return [...document.querySelectorAll<HTMLElement>(".kb-layout-copy [data-log-feed-scroller]")].map((node) => ({ top: node.scrollTop, left: node.scrollLeft }));
+          return [...document.querySelectorAll<HTMLElement>(".column .card [data-log-feed-scroller]")].map((node) => ({ top: node.scrollTop, left: node.scrollLeft }));
         });
-        expect(retargeted).toHaveLength(3);
+        expect(retargeted).toHaveLength(1);
         for (const copy of retargeted) expect(copy).toEqual(scrolls.before);
         await page.evaluate(() => { document.querySelector<HTMLElement>(".column .card [data-log-feed-scroller]")!.scrollTop += 80; });
         await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
@@ -11263,7 +11323,7 @@ describe("column dwell smooth", () => {
     } finally { await browser.close(); server.stop(); }
   }, 90_000);
 
-  browserTest("interrupted width transitions preserve visible layers and actual scrolling reveals live cards", async () => {
+  browserTest("interrupted width transitions preserve visible geometry and actual scrolling reveals live cards", async () => {
     const out = path.resolve(".artifacts/column-dwell-smooth/interruptions");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
@@ -11285,7 +11345,8 @@ describe("column dwell smooth", () => {
           const continuity = await page.evaluate(async (status) => {
             const click = (column: string) => document.querySelector<HTMLButtonElement>(`[data-col-width="${column}"]`)!.click();
             const seek = async (at: number) => {
-              await Promise.resolve(); await Promise.resolve();
+              await Promise.resolve();
+              while (document.querySelector<HTMLElement>(".kb")?.dataset.columnLayout !== "running") await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
               for (const animation of document.getAnimations()) {
                 if (animation.effect?.getTiming().duration === 240) { animation.pause(); animation.currentTime = at; }
               }
@@ -11295,15 +11356,24 @@ describe("column dwell smooth", () => {
               const s = getComputedStyle(node);
               return { x: r.x, y: r.y, width: r.width, height: r.height, opacity: s.opacity, clip: s.clipPath };
             };
+            const initialWidth = geometry(document.querySelector<HTMLElement>('.column[data-status="inbox"]')!).width;
             click("inbox"); await seek(40);
-            const layers = [...document.querySelectorAll<HTMLElement>(".kb-layout-copy")];
+            const destinationWidth = parseFloat(getComputedStyle(document.querySelector(".board")!).gridTemplateColumns);
+            const layers = [...document.querySelectorAll<HTMLElement>('.board > .column, .board .col-head, .board .col-body > .card')].filter((node) => {
+              if (!node.matches(".card")) return true;
+              const box = node.getBoundingClientRect();
+              const view = node.closest(".col-body")!.getBoundingClientRect();
+              return box.top < Math.min(view.bottom, innerHeight) && box.bottom > Math.max(view.top, 0);
+            });
             const before = layers.map(geometry);
-            const frameBefore = geometry(document.querySelector<HTMLElement>(".kb-layout-frame")!);
+            const frameBefore = geometry(document.querySelector<HTMLElement>('.column[data-status="inbox"]')!);
             click(status); await seek(0);
-            const frameAfter = geometry(document.querySelector<HTMLElement>(".kb-layout-frame")!);
-            return { frameBefore, frameAfter, before, after: layers.map(geometry), retained: layers.every((node) => node.isConnected), copies: layers.length };
+            const frameAfter = geometry(document.querySelector<HTMLElement>('.column[data-status="inbox"]')!);
+            return { initialWidth, destinationWidth, frameBefore, frameAfter, before, after: layers.map(geometry), retained: layers.every((node) => node.isConnected), copies: layers.length };
           }, next);
           expect(continuity.copies).toBeGreaterThan(5);
+          expect(continuity.frameBefore.width).toBeGreaterThan(continuity.initialWidth + 1);
+          expect(continuity.frameBefore.width).toBeLessThan(continuity.destinationWidth - 1);
           expect(Math.abs(continuity.frameBefore.width - continuity.frameAfter.width)).toBeLessThanOrEqual(1);
           expect(Math.abs(continuity.frameBefore.x - continuity.frameAfter.x)).toBeLessThanOrEqual(1);
           expect(continuity.retained).toBe(true);
@@ -11335,10 +11405,12 @@ describe("column dwell smooth", () => {
           }
           await page.evaluate(async () => {
             document.querySelector<HTMLButtonElement>('[data-col-width="inbox"]')!.click();
-            await Promise.resolve(); await Promise.resolve();
+            await Promise.resolve();
+            while (document.querySelector<HTMLElement>(".kb")?.dataset.columnLayout !== "running") await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
             for (const animation of document.getAnimations()) if (animation.effect?.getTiming().duration === 240) { animation.pause(); animation.currentTime = 40; }
           });
-          expect(await page.locator(".kb-layout-copy").count()).toBeGreaterThan(0);
+          expect(await page.locator("[data-layout-animating]").count()).toBeGreaterThan(0);
+          expect(await page.locator(".kb-layout-copy").count()).toBe(0);
           const beforeScroll = await page.evaluate(() => document.querySelector<HTMLElement>('.column[data-status="assigned"] .col-body')!.scrollTop);
           if (how === "keyboard") {
             await page.evaluate(() => {
@@ -11375,6 +11447,145 @@ describe("column dwell smooth", () => {
       fs.writeFileSync("evidence/column-dwell-smooth/interruptions.json", JSON.stringify({ viewport: VIEWPORT, readings }, null, 2) + "\n");
     }
   }, 90_000);
+
+  browserTest("rapid retargets preserve visible glyphs between keyframes and after wrapping", async () => {
+    const out = path.resolve(".artifacts/column-dwell-smooth/glyphs");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, VIEWPORT, "light", "en", "no-preference");
+      try {
+        await context.addInitScript(() => localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })));
+        for (const phase of ["staging", 10, 20, 40, "after-wrap"] as const) {
+          await page.reload();
+          await page.locator('[data-col-width="inbox"]').waitFor();
+          if (await page.locator('[data-rail-hide]').count()) await page.locator('[data-rail-hide]').click();
+          await page.mouse.move(700, 10);
+          await page.waitForTimeout(350);
+          const sample = await page.evaluate(async (phase) => {
+            const root = document.querySelector<HTMLElement>(".kb")!;
+            const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+            const click = (status: string) => document.querySelector<HTMLButtonElement>(`[data-col-width="${status}"]`)!.click();
+            const rect = (node: HTMLElement, glyph = false) => {
+              const range = document.createRange(); range.selectNodeContents(node);
+              const box = glyph ? range.getBoundingClientRect() : node.getBoundingClientRect();
+              return { x: box.x, y: box.y, width: box.width, height: box.height, opacity: Number(getComputedStyle(node).opacity) };
+            };
+            click("inbox"); await Promise.resolve();
+            while (root.dataset.columnLayout !== (phase === "staging" ? "inverted" : "running")) await frame();
+            if (phase === "after-wrap") {
+              await new Promise<void>((resolve) => setTimeout(resolve, 140));
+              document.getAnimations().forEach((animation) => animation.pause());
+            } else if (typeof phase === "number") {
+              for (const animation of document.getAnimations()) if (animation.effect?.getTiming().duration === 240) { animation.pause(); animation.currentTime = phase; }
+            }
+            const layers = [...root.querySelectorAll<HTMLElement>(".board > .column, .board .col-head, .board .col-body > .card")].filter((node) => {
+              const box = node.getBoundingClientRect(), viewport = node.closest(".col-body")?.getBoundingClientRect();
+              return !viewport || (box.top < Math.min(viewport.bottom, innerHeight) && box.bottom > Math.max(viewport.top, 0));
+            });
+            const children = layers.filter((node) => node.matches(".card")).flatMap((node) => [...node.children].filter((child): child is HTMLElement => child instanceof HTMLElement && !child.matches(".label, .saving")));
+            const before = layers.map((node) => rect(node)), glyphBefore = children.map((node) => rect(node, true));
+            const target = phase === "staging" || phase === "after-wrap" ? "inbox" : phase === 40 ? "assigned" : "done";
+            click(target); await Promise.resolve();
+            // Observe the first inverse pose, before all text layers are promoted.
+            while (root.hasAttribute("data-column-layout") && root.dataset.columnLayout !== "inverted") await frame();
+            const after = layers.map((node) => rect(node)), glyphAfter = children.map((node) => rect(node, true));
+            return { phase, target, before, after, glyphBefore, glyphAfter };
+          }, phase);
+          let maxLayerDelta = 0, maxGlyphDelta = 0, visibleGlyphs = 0;
+          sample.before.forEach((before, i) => {
+            for (const key of ["x", "y", "width", "height"] as const) {
+              const delta = Math.abs(before[key] - sample.after[i]![key]);
+              maxLayerDelta = Math.max(maxLayerDelta, delta);
+              expect(delta, `${phase} layer ${i} ${key}`).toBeLessThanOrEqual(1);
+            }
+          });
+          sample.glyphBefore.forEach((before, i) => {
+            if (before.opacity <= 0.01 || !before.width) return;
+            visibleGlyphs++;
+            for (const key of ["x", "y", "width", "height"] as const) {
+              const delta = Math.abs(before[key] - sample.glyphAfter[i]![key]);
+              maxGlyphDelta = Math.max(maxGlyphDelta, delta);
+              expect(delta, `${phase} glyph ${i} ${key}`).toBeLessThanOrEqual(1);
+            }
+          });
+          expect(visibleGlyphs).toBeGreaterThan(0);
+          readings.push({ phase, target: sample.target, visibleGlyphs, maxLayerDelta, maxGlyphDelta });
+        }
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally {
+      await browser.close(); server.stop();
+      fs.writeFileSync("evidence/column-dwell-smooth/glyphs.json", JSON.stringify({ viewport: VIEWPORT, readings }, null, 2) + "\n");
+    }
+  }, 90_000);
+
+  browserTest("cards entering the viewport after wrapping reveal natural-size glyphs", async () => {
+    const out = path.resolve(".artifacts/column-dwell-smooth/entering");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, VIEWPORT, "light", "en", "no-preference");
+      try {
+        await context.addInitScript(() => localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })));
+        await page.reload();
+        await page.locator('[data-rail-hide]').click();
+        await page.mouse.move(700, 10);
+        await page.locator('[data-col-width="inbox"]').click();
+        await page.waitForTimeout(600);
+        const sample = await page.evaluate(async () => {
+          const column = document.querySelector<HTMLElement>('.column[data-status="assigned"]')!;
+          const body = column.querySelector<HTMLElement>(".col-body")!;
+          body.scrollTop = 0;
+          const cards = [...body.querySelectorAll<HTMLElement>(":scope > .card")];
+          // A real task title above the viewport boundary supplies enough
+          // wrapping difference for a deterministic entering-card regression.
+          const title = cards[0]!.querySelector<HTMLElement>(".title");
+          if (title) title.textContent = "Review release preparation and verify every pipeline result before publishing ".repeat(3);
+          const candidate = cards[Math.min(2, cards.length - 1)]!;
+          body.style.flex = "0 0 auto";
+          body.style.height = `${Math.min(innerHeight - body.getBoundingClientRect().top - 50, Math.max(200, candidate.getBoundingClientRect().top - body.getBoundingClientRect().top - 10))}px`;
+          const viewport = body.getBoundingClientRect();
+          const glyph = (card: HTMLElement) => {
+            const content = [...card.children].find((node) => !node.matches(".label, .saving"))!;
+            const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+            let text: Node | null;
+            while ((text = walker.nextNode())) if (text.textContent?.trim()) {
+              const range = document.createRange(); range.setStart(text, 0); range.setEnd(text, Math.min(2, text.textContent.length));
+              return range.getBoundingClientRect().height;
+            }
+            return 0;
+          };
+          const clipped = [...body.querySelectorAll<HTMLElement>(":scope > .card")].filter((node) => node.getBoundingClientRect().top >= viewport.bottom).map((node) => ({ node, height: glyph(node) }));
+          document.querySelector<HTMLButtonElement>('[data-col-width="inbox"]')!.click();
+          await Promise.resolve();
+          const root = document.querySelector<HTMLElement>(".kb")!;
+          while (column.dataset.wide !== "1" || column.style.width || root.dataset.columnLayout !== "running") await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          // The helper holds the newly wrapped source pose for one paint
+          // before creating its reveal effects on the following frame.
+          await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+          for (const animation of document.getAnimations()) {
+            const target = (animation.effect as KeyframeEffect).target;
+            if (target instanceof HTMLElement && target.hasAttribute("data-layout-animating")) {
+              animation.pause(); animation.currentTime = Number(animation.effect!.getTiming().duration) * 0.6;
+            }
+          }
+          const readings = clipped.filter(({ node }) => node.getBoundingClientRect().top < viewport.bottom).map(({ node, height }) => ({ before: height, after: glyph(node), contents: node.querySelectorAll('[data-layout-animating="content"]').length }));
+          return { readings, clipped: clipped.length, titleFound: !!title, viewport: { top: viewport.top, bottom: viewport.bottom }, boxes: cards.map((node) => ({ top: node.getBoundingClientRect().top, height: node.offsetHeight })), width: column.offsetWidth };
+        });
+        expect(sample.readings.length, JSON.stringify(sample)).toBeGreaterThan(0);
+        for (const reading of sample.readings) {
+          expect(reading.contents, JSON.stringify(sample)).toBeGreaterThan(0);
+          expect(Math.abs(reading.before - reading.after)).toBeLessThanOrEqual(1);
+        }
+        expect(pageErrors).toEqual([]);
+        fs.writeFileSync("evidence/column-dwell-smooth/entering.json", JSON.stringify({ viewport: VIEWPORT, readings: sample.readings }, null, 2) + "\n");
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 60_000);
 
   browserTest("moving hover widens at one second and cards FLIP smoothly at CPU x4", async () => {
     const out = path.resolve(".artifacts/column-dwell-smooth");
@@ -11419,10 +11630,10 @@ describe("column dwell smooth", () => {
             const board = document.querySelector<HTMLElement>('[data-board]')!;
             const body = document.querySelector<HTMLElement>('[data-board] .column[data-status="assigned"] .col-body')!;
             body.scrollTop = 60;
-            const samples: { at: number; gap: number; wide: string; animated: boolean; copied: boolean; left: number; width: number; height: number; scroll: number; neighbourLeft: number; neighbourWidth: number; neighbourHeight: number }[] = [];
+            const samples: { at: number; gap: number; wide: string; animated: boolean; active: boolean; scroll: number }[] = [];
             const marks: { name: string; at: number }[] = [];
-            const target = column.querySelector<HTMLElement>('.card[data-id]')!;
-            const neighbour = document.querySelector<HTMLElement>('[data-board] .column[data-status="assigned"] .card[data-id]')!;
+            let scroll = body.scrollTop;
+            body.addEventListener("scroll", () => { scroll = body.scrollTop; }, { passive: true });
             let previous = performance.now();
             let stopped = false;
             const hover = (event: PointerEvent) => {
@@ -11432,9 +11643,9 @@ describe("column dwell smooth", () => {
             };
             board.addEventListener("pointerover", hover);
             const tick = (now: number) => {
-              const box = target.getBoundingClientRect();
-              const beside = neighbour.getBoundingClientRect();
-              samples.push({ at: performance.timeOrigin + now, gap: now - previous, wide: column.dataset.wide!, copied: !!document.querySelector(".kb-layout-copy"), animated: [...board.querySelectorAll("[data-layout-animating]")].some((node) => node.getAnimations().some((animation) => animation.playState === "running" && animation.effect?.getTiming().duration === 240)), left: box.left, width: box.width, height: box.height, scroll: body.scrollTop, neighbourLeft: beside.left, neighbourWidth: beside.width, neighbourHeight: beside.height });
+              /* The timing probe must not force layout every frame. Geometry
+                 continuity is measured by the retarget case, and by the video. */
+              samples.push({ at: performance.timeOrigin + now, gap: now - previous, wide: column.dataset.wide!, active: !!document.querySelector("[data-column-layout]"), animated: document.querySelector<HTMLElement>(".kb")?.dataset.columnLayout === "running", scroll });
               previous = now;
               if (!stopped) requestAnimationFrame(tick);
             };
@@ -11453,18 +11664,24 @@ describe("column dwell smooth", () => {
           try { await page.waitForFunction(() => document.querySelector('[data-board] .column[data-status="inbox"][data-wide="1"]'), undefined, { timeout: 4000 }); }
           catch (error) { await page.screenshot({ path: path.join(out, "hover-failed.png") }); throw error; }
           await page.waitForTimeout(400);
+          await page.waitForFunction(() => !document.querySelector("[data-column-layout]"));
+          // Let the deferred board measurement finish before a still capture.
+          await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
           await page.screenshot({ path: path.join(out, `${locale}-${motion}-wide.png`) });
           await page.evaluate(() => (window as unknown as { dwellVideo: { mark(name: string): void } }).dwellVideo.mark("narrow"));
           await page.locator('[data-col-width="inbox"][data-col-width-action="narrow"]').click();
           await page.waitForTimeout(400);
+          await page.waitForFunction(() => !document.querySelector("[data-column-layout]"));
+          // Let the deferred board measurement finish before a still capture.
+          await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
           await page.screenshot({ path: path.join(out, `${locale}-${motion}-narrow.png`) });
           /* A just-narrowed column remains narrow under the same pointer. */
           await page.waitForTimeout(1100);
           expect(await page.locator('[data-board] .column[data-status="inbox"]').getAttribute("data-wide")).toBe("0");
           const measurement = await page.evaluate(() => {
-            const video = (window as unknown as { dwellVideo: { samples: { at: number; gap: number; wide: string; animated: boolean; copied: boolean; left: number; width: number; height: number; scroll: number; neighbourLeft: number; neighbourWidth: number; neighbourHeight: number }[]; marks: { name: string; at: number }[]; stop(): void } }).dwellVideo;
+            const video = (window as unknown as { dwellVideo: { samples: { at: number; gap: number; wide: string; animated: boolean; active: boolean; scroll: number }[]; marks: { name: string; at: number }[]; stop(): void } }).dwellVideo;
             video.stop();
-            const windows = video.samples.filter((sample, i) => sample.copied || video.samples[i - 1]?.copied);
+            const windows = video.samples.filter((sample, i) => sample.active || video.samples[i - 1]?.active || video.samples[i - 2]?.active);
             return { samples: video.samples, marks: video.marks, maxAnimationFrameMs: Math.max(0, ...windows.map((sample) => sample.gap)), animationFrames: windows.length, scrollValues: [...new Set(video.samples.map((sample) => sample.scroll))], copiesLeft: document.querySelectorAll('.kb-layout-copy').length };
           });
           if (record) {
@@ -11475,11 +11692,11 @@ describe("column dwell smooth", () => {
             const manifest = frames.map((frame, i) => `file '${i}.png'\noption framerate 1000\nduration ${Math.max(0.001, ((frames[i + 1]?.time ?? frame.time + 40) - frame.time) / 1000)}`).join("\n");
             fs.writeFileSync(path.join(frameDir, "frames.txt"), manifest + "\n");
             execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", path.join(frameDir, "frames.txt"), "-fps_mode", "passthrough", "-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0", path.resolve(videoPath)]);
-            const starts = measurement.samples.filter((sample, i) => sample.copied && !measurement.samples[i - 1]?.copied);
-            const ends = measurement.samples.filter((sample, i) => !sample.copied && measurement.samples[i - 1]?.copied);
+            const starts = measurement.samples.filter((sample, i) => sample.active && !measurement.samples[i - 1]?.active);
+            const ends = measurement.samples.filter((sample, i) => !sample.active && !measurement.samples[i - 1]?.active && measurement.samples[i - 2]?.active);
             const transitions = starts.map((sample, i) => ({ name: i === 0 ? "hover-widen" : "button-narrow", start: sample.at - sample.gap, end: ends[i]!.at }));
             expect(transitions).toHaveLength(2);
-            const frameWindows = transitions.map((transition) => ({ name: transition.name, frames: frames.flatMap((frame, i) => frame.time >= transition.start - 50 && frame.time <= transition.end + 50 ? [i] : []), maxCaptureFrameMs: Math.max(0, ...frames.flatMap((frame, i) => i > 0 && frame.time >= transition.start && frame.time <= transition.end ? [frame.time - frames[i - 1]!.time] : [])) }));
+            const frameWindows = transitions.map((transition) => ({ name: transition.name, maxRAFFrameMs: Math.max(0, ...measurement.samples.filter((sample) => sample.at >= transition.start && sample.at <= transition.end).map((sample) => sample.gap)), frames: frames.flatMap((frame, i) => frame.time >= transition.start - 50 && frame.time <= transition.end + 50 ? [i] : []), maxCaptureFrameMs: Math.max(0, ...frames.flatMap((frame, i) => i > 0 && frame.time >= transition.start && frame.time <= transition.end ? [frame.time - frames[i - 1]!.time] : [])) }));
             for (const window of frameWindows) {
               expect(window.frames.length).toBeGreaterThan(5);
               if (window.maxCaptureFrameMs > 50) timingFailures.push({ locale, motion, phase: window.name, milliseconds: window.maxCaptureFrameMs });
@@ -11489,12 +11706,6 @@ describe("column dwell smooth", () => {
             cases.push({ locale, motion, cpu, viewport: VIEWPORT, fixture, ...measurement, video: videoPath, frameCount: frames.length, frameWindows });
           } else cases.push({ locale, motion, cpu, viewport: VIEWPORT, fixture, ...measurement });
           if (measurement.maxAnimationFrameMs > 50) timingFailures.push({ locale, motion, phase: "activation-through-cleanup", milliseconds: measurement.maxAnimationFrameMs });
-          if (motion === "no-preference") {
-            const widths = measurement.samples.map((sample) => sample.width);
-            const positions = measurement.samples.map((sample) => sample.neighbourLeft);
-            expect(widths.some((width) => width > Math.min(...widths) + 15 && width < Math.max(...widths) - 15)).toBe(true);
-            expect(positions.some((left) => left > Math.min(...positions) + 15 && left < Math.max(...positions) - 15)).toBe(true);
-          }
           expect(measurement.copiesLeft).toBe(0);
           expect(measurement.scrollValues).toHaveLength(1);
           expect(motion === "reduce" ? measurement.animationFrames === 0 : measurement.animationFrames > 5).toBe(true);
@@ -11506,7 +11717,7 @@ describe("column dwell smooth", () => {
       }
     } finally {
       await browser.close(); server.stop();
-      fs.writeFileSync(`${evidenceDir}/frames.json`, JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", frameNumbering: "zero-based decoded video frames", cases, timingFailures }, null, 2) + "\n");
+      fs.writeFileSync(`${evidenceDir}/frames.json`, JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", frameNumbering: "zero-based decoded video frames", browser: browser.version(), cpuAffinity: process.platform === "linux" ? fs.readFileSync("/proc/self/status", "utf8").match(/^Cpus_allowed_list:\s*(.+)$/m)?.[1] ?? null : null, cases, timingFailures }, null, 2) + "\n");
     }
     expect(timingFailures).toEqual([]);
   }, 180_000);

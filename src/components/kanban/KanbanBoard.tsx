@@ -3183,7 +3183,8 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
 class CardFlights extends Component<{ placements: ReadonlyMap<string, TaskStatus>; rootRef: RefObject<HTMLElement | null> }, unknown, Map<string, DOMRect> | null> {
   getSnapshotBeforeUpdate(previous: { placements: ReadonlyMap<string, TaskStatus> }): Map<string, DOMRect> | null {
     const root = this.props.rootRef.current;
-    if (!root || previous.placements === this.props.placements) return null;
+    // Column transforms own the painted geometry until their cleanup.
+    if (!root || root.hasAttribute("data-column-layout") || previous.placements === this.props.placements) return null;
     let from: Map<string, DOMRect> | null = null;
     for (const [id, status] of this.props.placements) {
       const was = previous.placements.get(id);

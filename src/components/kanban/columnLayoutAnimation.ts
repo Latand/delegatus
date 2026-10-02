@@ -1,72 +1,73 @@
-/** Width changes lay out once. Visible cards FLIP into that layout while a
- * frozen copy of their old wrapping fades away, so text never flashes between
- * line breaks. Column frames do the same independently of their contents.
- * Only an impending interaction measures/clones; pointer moves do neither. */
+/** The real card keeps its old wrapping until its text has faded. Width and
+ * position use compositor transforms; wrapping is staged one column per frame
+ * while text is invisible. Counter-scales keep the glyphs at their own size.
+ * No DOM is copied and intentional navigation scrolling is never rewound. */
 export const COLUMN_LAYOUT_MS = 240;
+export const COLUMN_LAYOUT_END = "columnlayoutend";
 const EASING = "cubic-bezier(0.16, 1, 0.3, 1)";
 const COLUMN = ".board > .column[data-wide]";
-
+const FADE_MS = 80;
 interface Shot {
-  node: HTMLElement;
-  rect: DOMRect;
-  copy: HTMLElement | null;
-  frame: boolean;
-  viewport?: DOMRect;
-  layers?: { node: HTMLElement; first: Keyframe; left: number; top: number; width: number; height: number }[];
+  node: HTMLElement; column: HTMLElement; rect: DOMRect;
+  width: string; height: string; widthAsNumber: number; visible: boolean; opacity: number;
+  contents: { node: HTMLElement; opacity: number; scaleX: number; scaleY: number }[];
 }
-interface Snapshot {
-  key: string;
-  shots: Shot[];
-  scroll: { node: HTMLElement; top: number; left: number }[];
-  copyScroll: { node: HTMLElement; top: number; left: number }[];
-}
-
+interface Snapshot { key: string; shots: Shot[] }
+interface Pose { rect: DOMRect; next: DOMRect }
 const keyOf = (root: HTMLElement) => [...root.querySelectorAll<HTMLElement>(COLUMN)].map((node) => `${node.dataset.status}:${node.dataset.wide}`).join("|");
-
-interface ScrollOffset { index: number; top: number; left: number }
-function readScrollOffsets(node: HTMLElement): ScrollOffset[] {
-  return [node, ...node.querySelectorAll<HTMLElement>("*")].flatMap((element, index) => {
-    const top = element.scrollTop ?? 0;
-    const left = element.scrollLeft ?? 0;
-    return top || left ? [{ index, top, left }] : [];
-  });
-}
-
-function cloneWithScroll(node: HTMLElement, deep: boolean, scroll: Snapshot["copyScroll"], sourceScroll?: Snapshot["scroll"], offsets = deep ? readScrollOffsets(node) : []): HTMLElement {
-  const copy = node.cloneNode(deep) as HTMLElement;
-  if (offsets.length) {
-    const originals = sourceScroll ? [node, ...node.querySelectorAll<HTMLElement>("*")] : [];
-    const clones = [copy, ...copy.querySelectorAll<HTMLElement>("*")];
-    offsets.forEach(({ index, top, left }) => {
-      scroll.push({ node: clones[index]!, top, left });
-      sourceScroll?.push({ node: originals[index]!, top, left });
-    });
+const box = (left: number, top: number, width: number, height: number) => new window.DOMRect(left, top, width, height);
+/** The same ease as the compositor, for its inverse font-size keyframes. */
+function ease(t: number): number {
+  let u = t;
+  for (let i = 0; i < 6; i++) {
+    const x = 3 * (1 - u) ** 2 * u * 0.16 + 3 * (1 - u) * u ** 2 * 0.3 + u ** 3;
+    const dx = 3 * (1 - u) ** 2 * 0.16 + 6 * (1 - u) * u * (0.3 - 0.16) + 3 * u ** 2 * 0.7;
+    if (dx < 0.0001) break;
+    u = Math.max(0, Math.min(1, u - (x - t) / dx));
   }
-  return copy;
+  return 1 - (1 - u) ** 3;
 }
-
 export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): void; dispose(): void } {
   let pending: Snapshot | null = null;
   let expiry: ReturnType<typeof setTimeout> | null = null;
   let finishTimer: ReturnType<typeof setTimeout> | null = null;
-  let animations: Animation[] = [];
+  let wrapTimer: ReturnType<typeof setTimeout> | null = null;
   let paintFrame = 0;
-  let copies: HTMLElement[] = [];
-  let marked: HTMLElement[] = [];
-  const layers = new Map<HTMLElement, HTMLElement[]>();
+  let started = 0;
+  let active: Snapshot | null = null;
+  let released = false;
+  const animations = new Map<HTMLElement, Animation>();
+  const paintAnimations = new Set<Animation>();
+  let activeColumns: HTMLElement[] = [];
+  const marked = new Set<HTMLElement>();
+  const inlinePose = new Map<HTMLElement, { transform: string; opacity: string; origin: string }>();
+  const frozen = new Map<HTMLElement, { width: string; height: string; margin: string }>();
+  const contentBase = new Map<HTMLElement, string>();
+  let frozenGrid: { node: HTMLElement; template: string } | null = null;
+  const thawGrid = () => {
+    if (frozenGrid) frozenGrid.node.style.gridTemplateColumns = frozenGrid.template;
+    frozenGrid = null;
+  };
+
   const scrollPositions = new Map<HTMLElement, { top: number; left: number }>();
   const motion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
   const scrollContainers = () => {
     const nodes = new Set<HTMLElement>();
     for (const column of root.querySelectorAll<HTMLElement>(COLUMN)) {
-      const body = column.querySelector<HTMLElement>(".col-body");
-      if (body) nodes.add(body);
-      // Both internal wrappers and ancestors outside the board move its pixels.
+      for (const node of column.querySelectorAll<HTMLElement>(".col-body, [data-log-feed-scroller]")) nodes.add(node);
       for (let node: HTMLElement | null = column.parentElement; node; node = node.parentElement) nodes.add(node);
     }
     return nodes;
   };
-
+  const recordScroll = () => {
+    for (const node of scrollContainers()) scrollPositions.set(node, { top: node.scrollTop, left: node.scrollLeft });
+  };
+  const thaw = (node: HTMLElement) => {
+    const style = frozen.get(node);
+    if (!style) return;
+    node.style.width = style.width; node.style.height = style.height; node.style.marginRight = style.margin;
+    frozen.delete(node);
+  };
   const clearPending = () => {
     pending = null;
     if (expiry) clearTimeout(expiry);
@@ -76,244 +77,309 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     if (paintFrame) window.cancelAnimationFrame(paintFrame);
     paintFrame = 0;
     if (finishTimer) clearTimeout(finishTimer);
-    finishTimer = null;
+    if (wrapTimer) clearTimeout(wrapTimer);
+    finishTimer = wrapTimer = null;
   };
-  const finish = (retained = new Set<HTMLElement>()) => {
+  const clearAnimations = (keepPromotion = false) => {
+    animations.forEach((animation) => animation.cancel()); animations.clear();
+    if (!keepPromotion) { marked.forEach((node) => node.removeAttribute("data-layout-animating")); marked.clear(); }
+  };
+  const restoreInline = () => {
+    inlinePose.forEach((style, node) => { node.style.transform = style.transform; node.style.opacity = style.opacity; node.style.transformOrigin = style.origin; }); inlinePose.clear();
+  };
+  const finish = () => {
+    clearPending(); stopClock(); clearAnimations(); plans.length = 0;
+    restoreInline();
+    active = null; activeColumns = []; released = false;
+    if (!motion?.matches) paintAnimations.forEach((animation) => animation.play());
+    paintAnimations.clear();
+    thawGrid(); [...frozen.keys()].forEach(thaw); contentBase.clear(); scrollPositions.clear();
+    const wasActive = root.hasAttribute("data-column-layout");
+    root.removeAttribute("data-column-layout");
+    if (wasActive) root.dispatchEvent(new window.Event(COLUMN_LAYOUT_END));
+  };
+  const settle = () => {
+    // Every effect has reached its final pose. Release the temporary layers
+    // in bounded batches too; destroying all text layers stalled cleanup.
     stopClock();
-    animations.forEach((animation) => animation.cancel());
-    copies.forEach((copy) => { if (!retained.has(copy)) copy.remove(); });
-    marked.forEach((node) => node.removeAttribute("data-layout-animating"));
-    animations = []; copies = []; marked = [];
-    layers.clear();
-    scrollPositions.clear();
+    root.dataset.columnLayout = "settling";
+    const queue = [...marked];
+    const release = () => {
+      paintFrame = window.requestAnimationFrame(() => {
+        paintFrame = 0;
+        for (const node of queue.splice(0, 16)) {
+          animations.get(node)?.cancel(); animations.delete(node);
+          node.removeAttribute("data-layout-animating"); marked.delete(node);
+        }
+        if (queue.length) release();
+        else finish();
+      });
+    };
+    release();
+  };
+  const plans: { node: HTMLElement; frames: Keyframe[] | (() => Keyframe[]); first: Keyframe; duration: number; role: string; paused: boolean }[] = [];
+  const play = (node: HTMLElement, frames: Keyframe[] | (() => Keyframe[]), duration: number, role: string, paused = false, first?: Keyframe) => {
+    plans.push({ node, frames, first: first ?? (frames as Keyframe[])[0]!, duration, role, paused });
+  };
+  const flush = () => {
+    // Setting promotion and creating an effect alternately makes animate()
+    // resolve the preceding style write on every node. Promote in one batch.
+    for (const { node } of plans) animations.get(node)?.cancel();
+    for (const { node, role } of plans) { if (node.dataset.layoutAnimating !== role) node.dataset.layoutAnimating = role; marked.add(node); }
+    for (const { node, frames, duration, role, paused } of plans) {
+      const animation = node.animate(typeof frames === "function" ? frames() : frames, { duration, fill: "both", easing: role === "content" ? "linear" : EASING });
+      if (paused) animation.pause();
+      animations.set(node, animation);
+    }
+    plans.length = 0;
+  };
+  const inverse = (rect: DOMRect, next: DOMRect, parent?: Pose) => {
+    const px = parent ? parent.rect.width / parent.next.width : 1;
+    const py = parent ? parent.rect.height / parent.next.height : 1;
+    const dx = parent ? (rect.left - parent.rect.left) / px - (next.left - parent.next.left) : rect.left - next.left;
+    const dy = parent ? (rect.top - parent.rect.top) / py - (next.top - parent.next.top) : rect.top - next.top;
+    return { dx, dy, sx: rect.width / next.width / px, sy: rect.height / next.height / py, px, py };
+  };
+  const transform = (dx: number, dy: number, sx: number, sy: number) => `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`;
+  const contentFrames = (node: HTMLElement, startOpacity: number, sx: number, sy: number, ex: number, ey: number, px: number, py: number, reveal: boolean, parentEnd = 1, sourceX = 1, sourceY = 1, count = 13): Keyframe[] => {
+    const base = contentBase.get(node) ?? "";
+    return Array.from({ length: count }, (_, i) => {
+      const offset = i / Math.max(1, count - 1), q = ease(offset);
+      const x = (px + (parentEnd - px) * q) * (sx + (ex - sx) * q);
+      const y = (py + (1 - py) * q) * (sy + (ey - sy) * q);
+      const opacity = reveal ? ease(Math.min(1, offset * 2)) : startOpacity * (1 - ease(Math.min(1, offset * COLUMN_LAYOUT_MS / FADE_MS)));
+      return { offset, transform: `scale(${(sourceX + (1 - sourceX) * q) / x}, ${(sourceY + (1 - sourceY) * q) / y}) ${base}`.trim(), opacity };
+    });
+  };
+  const applyCard = (shot: Shot, next: DOMRect, parent: Pose, duration: number, reveal: boolean, endWidth = next.width, paused = false, parentEnd = 1) => {
+    const pose = inverse(shot.rect, next, parent);
+    const ex = endWidth / next.width;
+    const opacity = shot.visible ? shot.opacity : 0;
+    if (Math.abs(pose.dx) + Math.abs(pose.dy) + Math.abs(pose.sx - 1) + Math.abs(pose.sy - 1) + Math.abs(ex - 1) > 0.001 || opacity < 1) {
+      play(shot.node, [ { transform: transform(pose.dx, pose.dy, pose.sx, pose.sy), opacity }, { transform: transform(0, 0, ex, 1), opacity: 1 } ], duration, "card", paused);
+    }
+    for (const content of shot.contents) {
+      const { node } = content;
+      const frames = (count?: number) => contentFrames(node, content.opacity, pose.sx, pose.sy, ex, 1, pose.px, pose.py, reveal, parentEnd, reveal ? 1 : content.scaleX, reveal ? 1 : content.scaleY, count);
+      play(node, () => frames(), duration, "content", paused, frames(1)[0]);
+    }
+  };
+  const wrapColumns = (snapshot: Snapshot, columns: Map<HTMLElement, DOMRect>) => {
+    const queue = [...columns.keys()];
+    const nextColumn = () => {
+      const column = queue.shift();
+      if (!column || !active) return;
+      paintFrame = window.requestAnimationFrame(() => {
+        paintFrame = 0;
+        if (!column.isConnected) { nextColumn(); return; }
+        const columnRect = column.getBoundingClientRect();
+        const shots = snapshot.shots.filter((shot) => shot.column === column && shot.node !== column && shot.node.isConnected);
+        // Every painted pose is read before changing this column's wrapping.
+        const sources = shots.map((shot) => ({ ...shot, rect: shot.node.getBoundingClientRect() }));
+        const scroll = [...scrollContainers()].map((node) => ({ node, top: node.scrollTop, left: node.scrollLeft }));
+        animations.get(column)?.cancel();
+        thaw(column);
+        for (const shot of shots) {
+          animations.get(shot.node)?.cancel();
+          for (const { node } of shot.contents) animations.get(node)?.cancel();
+          thaw(shot.node);
+        }
+        // This preserves the viewport just observed, including navigation.
+        for (const { node, top, left } of scroll) { node.scrollTop = top; node.scrollLeft = left; }
+        recordScroll();
+        const finalColumn = column.getBoundingClientRect();
+        const viewport = column.querySelector(".col-body")?.getBoundingClientRect();
+        const destinations = sources.map((shot) => {
+          const visible = shot.node.getBoundingClientRect();
+          return { shot, next: box(visible.left, visible.top, visible.width, visible.height) };
+        }).filter(({ shot, next }) => shot.visible || (viewport && next.bottom > Math.max(viewport.top, 0) && next.top < Math.min(viewport.bottom, window.innerHeight)));
+        // Entering cards were clipped at capture, so their natural text styles
+        // have not needed promotion yet. Read their base before any inverse transform write.
+        for (const { shot } of destinations) for (const content of shot.contents) if (!contentBase.has(content.node)) {
+          const style = window.getComputedStyle(content.node);
+          content.opacity = Number(style.opacity || "1");
+          contentBase.set(content.node, style.transform === "none" ? "" : style.transform);
+        }
+        const duration = Math.max(1, COLUMN_LAYOUT_MS - (performance.now() - started));
+        const parent = { rect: columnRect, next: finalColumn };
+        const pose = inverse(columnRect, finalColumn);
+        play(column, [{ transform: transform(pose.dx, pose.dy, pose.sx, pose.sy) }, { transform: "none" }], duration, "frame");
+        for (const { shot, next } of destinations) applyCard(shot, next, parent, duration, true);
+        // Hold the read source pose for this paint. Constructing every effect
+        // in the same frame as wrapping made the frame miss its CPU budget.
+        const batch = plans.splice(0);
+        for (const { node, first, role } of batch) {
+          if (node.dataset.layoutAnimating !== role) node.dataset.layoutAnimating = role;
+          marked.add(node);
+          if (!inlinePose.has(node)) inlinePose.set(node, { transform: node.style.transform, opacity: node.style.opacity, origin: node.style.transformOrigin });
+          node.style.transformOrigin = "top left";
+          node.style.transform = String(first.transform);
+          if (first.opacity !== undefined) node.style.opacity = String(first.opacity);
+        }
+        paintFrame = window.requestAnimationFrame(() => {
+          paintFrame = 0;
+          const remaining = Math.max(1, COLUMN_LAYOUT_MS - (performance.now() - started));
+          batch.forEach((plan) => { plan.duration = remaining; });
+          plans.push(...batch); flush(); restoreInline();
+          nextColumn();
+        });
+      });
+    };
+    nextColumn();
+  };
+  const start = (snapshot: Snapshot) => {
+    const retargeting = active !== null;
+    clearAnimations(true); restoreInline();
+    root.dataset.columnLayout = "inverted";
+    thawGrid();
+    recordScroll();
+    let destinations = snapshot.shots.filter(({ node }) => node.isConnected).map((shot) => ({ shot, next: shot.node.getBoundingClientRect() }));
+    const board = root.querySelector<HTMLElement>(".board")!;
+    const tracks = window.getComputedStyle(board).gridTemplateColumns.split(" ").map(Number.parseFloat);
+    const flexWidths = new Map<HTMLElement, number>();
+    if (board.classList.contains("scroll")) {
+      // A frozen width holds wrapping; margins reserve the final flex slots,
+      // so thawing one column cannot move its neighbours during their FLIP.
+      const slots = destinations.filter(({ shot }) => shot.node === shot.column).map(({ shot, next }) => {
+        const style = window.getComputedStyle(shot.node);
+        const width = parseFloat(style.getPropertyValue("--kb-column-width")) || next.width;
+        flexWidths.set(shot.node, width);
+        return { node: shot.node, margin: width - next.width + (parseFloat(frozen.get(shot.node)?.margin || "0") || 0) };
+      });
+      for (const { node, margin } of slots) node.style.marginRight = `${margin}px`;
+      destinations = destinations.map(({ shot }) => ({ shot, next: shot.node.getBoundingClientRect() }));
+    }
+    const order = ["inbox", "assigned", "blocked", "done"];
+    const targetWidth = (node: HTMLElement) => flexWidths.get(node) || tracks[order.indexOf(node.dataset.status!)] || node.getBoundingClientRect().width;
+    const columns = new Map(destinations.filter(({ shot, next }) => shot.node === shot.column && Math.abs(shot.rect.left - next.left) + Math.abs(shot.rect.top - next.top) + Math.abs(shot.rect.width - targetWidth(shot.node)) + Math.abs(shot.rect.height - next.height) > 0.5).map(({ shot, next }) => [shot.node, next]));
+    const parents = new Map(snapshot.shots.filter(({ node, column }) => node === column).map((shot) => [shot.node, { rect: shot.rect, next: columns.get(shot.node)! }]));
+    for (const { shot, next } of destinations) {
+      if (!next.width || !next.height || !shot.visible) continue;
+      const parent = parents.get(shot.column);
+      if (!parent?.next?.width) { thaw(shot.node); continue; }
+      if (shot.node === shot.column) {
+        const pose = inverse(shot.rect, next);
+        play(shot.node, [{ transform: transform(pose.dx, pose.dy, pose.sx, pose.sy) }, { transform: transform(0, 0, targetWidth(shot.node) / next.width, 1) }], COLUMN_LAYOUT_MS, "frame", true);
+      } else {
+        applyCard(shot, next, parent, COLUMN_LAYOUT_MS, false, next.width, true, targetWidth(shot.column) / parent.next.width);
+      }
+    }
+    const initial = plans.splice(0);
+    for (const { node, first, role } of initial) {
+      if (role !== "content") { node.dataset.layoutAnimating = role; marked.add(node); }
+      // Before the first release, the frozen column already preserves the
+      // natural text pose. Identity transforms would create every text layer
+      // together instead of letting the promotion batches prepare them.
+      if (role === "content" && !retargeting) continue;
+      if (!inlinePose.has(node)) inlinePose.set(node, { transform: node.style.transform, opacity: node.style.opacity, origin: node.style.transformOrigin });
+      node.style.transformOrigin = "top left";
+      node.style.transform = String(first.transform);
+      if (first.opacity !== undefined) node.style.opacity = String(first.opacity);
+    }
+    active = snapshot; activeColumns = [...columns.keys()]; released = false;
+    // Text layers already own their raster before promoting the column.
+    // Construct effects from cached source styles, then release on the next frame.
+    plans.push(...initial); flush();
+    paintFrame = window.requestAnimationFrame(() => {
+      paintFrame = 0; restoreInline();
+      started = performance.now(); released = true; root.dataset.columnLayout = "running";
+      animations.forEach((animation) => animation.play());
+      wrapTimer = setTimeout(() => wrapColumns(snapshot, columns), FADE_MS);
+      finishTimer = setTimeout(settle, COLUMN_LAYOUT_MS);
+    });
   };
   const prepare = () => {
     clearPending();
     if (motion?.matches || typeof root.animate !== "function") { finish(); return; }
-    stopClock();
-    animations.forEach((animation) => animation.pause());
+    stopClock(); animations.forEach((animation) => animation.pause());
     const shots: Shot[] = [];
-    const copyScroll: Snapshot["copyScroll"] = [];
-    const contentScroll: Snapshot["scroll"] = [];
-    const columns = [...root.querySelectorAll<HTMLElement>(COLUMN)];
-    /* Read all geometry before any writes. Skip offscreen cards; their
-       content-visibility remains intact on a busy board. */
-    for (const column of columns) {
-      const body = column.querySelector<HTMLElement>(".col-body");
-      let viewport = body?.getBoundingClientRect();
-      const visibleFrame = layers.get(column)?.find((copy) => copy.matches(".kb-layout-frame"));
-      if (viewport && visibleFrame) {
-        const visible = visibleFrame.getBoundingClientRect();
-        const layout = column.getBoundingClientRect();
-        // The scroll box follows the painted frame, including on retarget.
-        viewport = new window.DOMRect(visible.left + viewport.left - layout.left, visible.top + viewport.top - layout.top, Math.max(0, visible.width - layout.width + viewport.width), Math.max(0, visible.height - layout.height + viewport.height));
-      }
+    for (const column of root.querySelectorAll<HTMLElement>(COLUMN)) {
+      const viewport = column.querySelector(".col-body")?.getBoundingClientRect();
       for (const node of [column, ...column.querySelectorAll<HTMLElement>(".col-head, .col-body > .card, .col-body > .divider, .col-body > .empty")]) {
-        const frame = node === column;
-        const previous = layers.get(node);
-        const surface = previous?.find((copy) => copy.matches(".kb-layout-frame, .kb-layout-shell"));
-        const rect = (surface ?? node).getBoundingClientRect();
+        const rect = node.getBoundingClientRect();
         if (!rect.width || !rect.height) continue;
-        if (previous?.length) {
-          for (const element of [node, ...node.querySelectorAll<HTMLElement>("*")]) {
-            const top = element.scrollTop ?? 0;
-            const left = element.scrollLeft ?? 0;
-            if (top || left) contentScroll.push({ node: element, top, left });
-          }
-          // Moving retained layers through a fragment can reset their feeds too.
-          for (const layer of previous) for (const element of [layer, ...layer.querySelectorAll<HTMLElement>("*")]) {
-            const top = element.scrollTop ?? 0;
-            const left = element.scrollLeft ?? 0;
-            if (top || left) copyScroll.push({ node: element, top, left });
-          }
-          shots.push({ node, rect, copy: null, frame, viewport, layers: previous.map((copy) => {
-            const style = window.getComputedStyle(copy);
-            return { node: copy, first: { transform: style.transform, opacity: style.opacity, clipPath: style.clipPath }, left: parseFloat(copy.style.left), top: parseFloat(copy.style.top), width: parseFloat(copy.style.width), height: parseFloat(copy.style.height) };
-          }) });
-          continue;
-        }
-        if (rect.right < 0 || rect.left > window.innerWidth || rect.bottom < 0 || rect.top > window.innerHeight || (!frame && !node.matches(".col-head") && viewport && (rect.bottom < viewport.top || rect.top > viewport.bottom))) {
-          shots.push({ node, rect, copy: null, frame, viewport });
-          continue;
-        }
-        const copy = cloneWithScroll(node, !frame, copyScroll, contentScroll);
-        if (frame) {
-          const style = window.getComputedStyle(node);
-          copy.style.background = style.background;
-          copy.style.border = style.border;
-          copy.style.borderRadius = style.borderRadius;
-        }
-        /* Copies never join selectors, focus order, accessibility or live
-           readers. They are disposable pixels during the transition. */
-        copy.removeAttribute("data-status");
-        copy.removeAttribute("data-wide");
-        copy.removeAttribute("data-dwell");
-        copy.removeAttribute("data-layout-animating");
-        for (const element of [copy, ...copy.querySelectorAll("*")]) {
-          element.removeAttribute("id");
-          element.removeAttribute("data-id");
-          element.removeAttribute("data-kanban-reader");
-        }
-        copy.setAttribute("aria-hidden", "true");
-        copy.inert = true;
-        copy.classList.add("kb-layout-copy");
-        if (frame) copy.classList.add("kb-layout-frame");
-        Object.assign(copy.style, { left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px` });
-        if (!frame && !node.matches(".col-head") && viewport) {
-          copy.style.clipPath = `inset(${Math.max(0, viewport.top - rect.top)}px ${Math.max(0, rect.right - viewport.right)}px ${Math.max(0, rect.bottom - viewport.bottom)}px ${Math.max(0, viewport.left - rect.left)}px)`;
-        }
-        shots.push({ node, rect, copy, frame, viewport });
+        const visible = node === column || node.matches(".col-head") || !(rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth || (viewport && (rect.bottom < viewport.top || rect.top > viewport.bottom)));
+        const style = window.getComputedStyle(node);
+        const contents = node.matches(".card, .col-head") ? [...node.children].filter((node): node is HTMLElement => node instanceof window.HTMLElement && !node.matches(".label, .saving, .spacer")) : [];
+        const scale = (transform: string) => {
+          const values = transform.match(/^matrix(3d)?\((.+)\)$/);
+          if (!values) return { x: 1, y: 1 };
+          const matrix = values[2]!.split(",").map(Number);
+          return { x: matrix[0] || 1, y: matrix[values[1] ? 5 : 3] || 1 };
+        };
+        const width = parseFloat(style.width) || rect.width, height = parseFloat(style.height) || rect.height;
+        const children = contents.map((node) => {
+          if (!active && !visible) return { node, opacity: 1, scaleX: 1, scaleY: 1 };
+          const current = window.getComputedStyle(node);
+          if (!contentBase.has(node)) contentBase.set(node, current.transform === "none" ? "" : current.transform);
+          if (!active) return { node, opacity: Number(current.opacity || "1"), scaleX: 1, scaleY: 1 };
+          const own = scale(current.transform), base = scale(contentBase.get(node)!);
+          return { node, opacity: Number(current.opacity || "1"), scaleX: active ? rect.width / width * own.x / base.x : 1, scaleY: active ? rect.height / height * own.y / base.y : 1 };
+        });
+        shots.push({ node, column, rect, visible, opacity: Number(style.opacity || "1"), widthAsNumber: width, width: style.width || `${rect.width}px`, height: style.height || `${rect.height}px`, contents: children });
       }
     }
-    const scroll = [...[...scrollContainers()].map((node) => ({ node, top: node.scrollTop, left: node.scrollLeft })), ...contentScroll];
-    const key = keyOf(root);
-    pending = { key, shots, scroll, copyScroll };
-    expiry = setTimeout(() => { clearPending(); finish(); }, 1000);
-    if (animations.length) {
-      /* A width/jump control may leave the layout unchanged. Release the
-         captured pose before its next paint instead of freezing that motion. */
-      paintFrame = window.requestAnimationFrame(() => {
-        paintFrame = 0;
-        if (!pending || pending.key !== keyOf(root)) return;
-        clearPending();
-        const remaining = Math.max(0, ...animations.map((animation) => COLUMN_LAYOUT_MS - Number(animation.currentTime ?? 0)));
-        animations.forEach((animation) => animation.play());
-        finishTimer = setTimeout(() => finish(), remaining);
-      });
+    recordScroll();
+    const board = root.querySelector<HTMLElement>(".board");
+    const grid = board && !board.classList.contains("scroll") && !board.classList.contains("tabs") ? window.getComputedStyle(board).gridTemplateColumns : null;
+    // These live indicators paint SVG strokes/shadows on the main thread.
+    // Their progress is held only while the column surfaces are moving.
+    for (const animation of root.getAnimations?.({ subtree: true }) ?? []) {
+      if (["kb-edge-flow", "kb-node-pulse", "pb-live"].includes((animation as CSSAnimation).animationName) && animation.playState === "running") {
+        paintAnimations.add(animation); animation.pause();
+      }
     }
+    // Hold the grid through React's commit, so its mutation observer need not
+    // force final layout in the same task. The next frame reads all targets.
+    if (board && grid && !frozenGrid) {
+      frozenGrid = { node: board, template: board.style.gridTemplateColumns };
+      board.style.gridTemplateColumns = grid;
+    }
+    // Source rects/styles are complete before any width/height write.
+    for (const shot of shots) if (shot.node === shot.column) {
+      if (!frozen.has(shot.node)) frozen.set(shot.node, { width: shot.node.style.width, height: shot.node.style.height, margin: shot.node.style.marginRight });
+      shot.node.style.width = shot.width;
+    }
+    pending = { key: keyOf(root), shots }; root.dataset.columnLayout = "pending";
+    expiry = setTimeout(finish, 1000);
+    paintFrame = window.requestAnimationFrame(() => {
+      paintFrame = 0;
+      if (!pending || pending.key !== keyOf(root)) return;
+      if (!released) {
+        if (active) { const snapshot = pending; clearPending(); start(snapshot); }
+        else {
+          // Give React its commit frame, then release an idle no-op control.
+          paintFrame = window.requestAnimationFrame(() => { paintFrame = 0; if (pending?.key === keyOf(root) && !active) finish(); });
+        }
+        return;
+      }
+      root.dataset.columnLayout = "running";
+      animations.forEach((animation) => animation.play());
+      const remaining = Math.max(1, COLUMN_LAYOUT_MS - Number(animations.values().next().value?.currentTime ?? 0));
+      if (active) wrapTimer = setTimeout(() => wrapColumns(active!, new Map(activeColumns.map((node) => [node, node.getBoundingClientRect()]))), Math.min(FADE_MS, remaining));
+      finishTimer = setTimeout(settle, remaining);
+    });
   };
   const observer = new window.MutationObserver(() => {
     if (!pending || pending.key === keyOf(root)) return;
-    const snapshot = pending;
-    clearPending();
-    if (motion?.matches) return finish();
-    /* Keep every currently painted text/surface layer at its exact pose while
-       the next layout is measured. Rebuilding from the live DOM here would
-       expose its already-completed wrapping and width. */
-    const retained = new Set<HTMLElement>();
-    for (const shot of snapshot.shots) for (const layer of shot.layers ?? []) {
-      Object.assign(layer.node.style, layer.first);
-      retained.add(layer.node);
+    const snapshot = pending; clearPending(); stopClock();
+    if (active) {
+      paintFrame = window.requestAnimationFrame(() => { paintFrame = 0; start(snapshot); });
+      return;
     }
-    finish(retained);
-    copies = [...retained];
-    /* Anchoring must not move a neighbouring card when its wrapping changes. */
-    for (const { node, top, left } of snapshot.scroll) { node.scrollTop = top; node.scrollLeft = left; }
-    /* Restoration scroll events arrive asynchronously. Remember the actual
-       (possibly clamped) positions, so only a subsequent movement interrupts. */
-    for (const node of new Set([...scrollContainers(), ...snapshot.scroll.map(({ node }) => node)])) scrollPositions.set(node, { top: node.scrollTop, left: node.scrollLeft });
-    const destinations = snapshot.shots.filter(({ node }) => node.isConnected).map((shot) => {
-      const style = shot.frame ? window.getComputedStyle(shot.node) : null;
-      return { ...shot, next: shot.node.getBoundingClientRect(), nextViewport: shot.node.closest(".col-body")?.getBoundingClientRect(), background: style?.background ?? "", border: style?.border ?? "", borderRadius: style?.borderRadius ?? "", scrollOffsets: shot.frame ? [] : readScrollOffsets(shot.node) };
-    });
-    const timing = { duration: COLUMN_LAYOUT_MS, easing: EASING, fill: "both" as const };
-    const page = root.querySelector<HTMLElement>(".kb-page");
-    if (page) { page.dataset.layoutAnimating = "page"; marked.push(page); }
-    const fragment = document.createDocumentFragment();
-    const plans: { node: HTMLElement; frames: Keyframe[] }[] = [];
-    for (const { node, rect, next, copy, frame, viewport, nextViewport, background, border, borderRadius, scrollOffsets, layers: previous } of destinations) {
-      if (!next.width || !next.height) continue;
-      if (!copy && !previous && (next.right < 0 || next.left > window.innerWidth || next.bottom < 0 || next.top > window.innerHeight)) continue;
-      const dx = rect.left - next.left;
-      const dy = rect.top - next.top;
-      const sx = rect.width / next.width;
-      const sy = rect.height / next.height;
-      if (!previous && Math.abs(dx) + Math.abs(dy) + Math.abs(rect.width - next.width) + Math.abs(rect.height - next.height) < 0.5) continue;
-      node.setAttribute("data-layout-animating", frame ? "frame" : "card");
-      marked.push(node);
-      const clip = (box: DOMRect, view: DOMRect | undefined, width: number, height: number, x = 1, y = 1) => `inset(${Math.max(0, (view?.top ?? box.top) - box.top) / y}px ${Math.max(0, width - box.width, box.left + width - (view?.right ?? box.left + width)) / x}px ${Math.max(0, height - box.height, box.top + height - (view?.bottom ?? box.top + height)) / y}px ${Math.max(0, (view?.left ?? box.left) - box.left) / x}px)`;
-      const addCopy = (copy: HTMLElement) => {
-        fragment.append(copy);
-        if (!retained.has(copy)) copies.push(copy);
-        layers.set(node, [...(layers.get(node) ?? []), copy]);
-      };
-      for (const layer of previous ?? []) {
-        const surface = layer.node.matches(".kb-layout-frame, .kb-layout-shell");
-        const shell = layer.node.matches(".kb-layout-shell");
-        addCopy(layer.node);
-        plans.push({ node: layer.node, frames: [layer.first, {
-          transform: `translate(${next.left - layer.left}px, ${next.top - layer.top}px)${surface ? ` scale(${next.width / layer.width}, ${next.height / layer.height})` : ""}`,
-          opacity: shell ? layer.first.opacity : 0,
-          clipPath: frame ? layer.first.clipPath : clip(next, nextViewport, surface ? next.width : layer.width, surface ? next.height : layer.height, surface ? next.width / layer.width : 1, surface ? next.height / layer.height : 1),
-        }] });
-      }
-      if (copy) {
-        if (!frame && !node.matches(".col-head")) {
-          /* Stretch only the card's surface. Text keeps its natural font size
-             and its captured wrapping while the two layouts crossfade. */
-          const shell = copy.cloneNode(false) as HTMLElement;
-          shell.classList.add("kb-layout-shell");
-          addCopy(shell);
-          plans.push({ node: shell, frames: [
-            { transform: "none", clipPath: clip(rect, viewport, rect.width, rect.height) },
-            { transform: `translate(${-dx}px, ${-dy}px) scale(${1 / sx}, ${1 / sy})`, clipPath: clip(next, nextViewport, next.width, next.height, 1 / sx, 1 / sy) },
-          ] });
-          Object.assign(copy.style, { background: "transparent", borderColor: "transparent", boxShadow: "none" });
-        }
-        addCopy(copy);
-        plans.push({ node: copy, frames: frame ? [
-          { transform: "none", opacity: 1 },
-          { transform: `translate(${-dx}px, ${-dy}px) scale(${1 / sx}, ${1 / sy})`, opacity: 0 },
-        ] : [
-          { transform: "none", clipPath: clip(rect, viewport, rect.width, rect.height), opacity: 1 },
-          { transform: `translate(${-dx}px, ${-dy}px)`, clipPath: clip(next, nextViewport, rect.width, rect.height), opacity: 0 },
-        ] });
-      }
-      if (frame) {
-        const destination = copy ? copy.cloneNode(false) as HTMLElement : document.createElement("div");
-        destination.className = "column kb-layout-copy kb-layout-frame";
-        destination.setAttribute("aria-hidden", "true");
-        destination.inert = true;
-        Object.assign(destination.style, { left: `${next.left}px`, top: `${next.top}px`, width: `${next.width}px`, height: `${next.height}px`, background, border, borderRadius });
-        addCopy(destination);
-        plans.push({ node: destination, frames: [
-          { transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`, opacity: 0 },
-          { transform: "none", opacity: 1 },
-        ] });
-      } else {
-        /* A destination snapshot stays outside the list's final clipping
-           edge while it moves. The real card keeps its semantics and its
-           FLIP geometry, underneath these two inert, opaque card surfaces. */
-        if (!node.matches(".col-head")) {
-          const destination = cloneWithScroll(node, true, snapshot.copyScroll, undefined, scrollOffsets);
-          destination.classList.add("kb-layout-copy", "kb-layout-destination");
-          destination.removeAttribute("data-layout-animating");
-          for (const element of [destination, ...destination.querySelectorAll("*")]) {
-            element.removeAttribute("id");
-            element.removeAttribute("data-id");
-            element.removeAttribute("data-kanban-reader");
-          }
-          destination.setAttribute("aria-hidden", "true");
-          destination.inert = true;
-          Object.assign(destination.style, { left: `${next.left}px`, top: `${next.top}px`, width: `${next.width}px`, height: `${next.height}px` });
-          if (copy || previous) Object.assign(destination.style, { background: "transparent", borderColor: "transparent", boxShadow: "none" });
-          addCopy(destination);
-          plans.push({ node: destination, frames: [
-            { transform: `translate(${dx}px, ${dy}px)`, clipPath: clip(rect, viewport, next.width, next.height), opacity: 0 },
-            { transform: "none", clipPath: clip(next, nextViewport, next.width, next.height), opacity: 1 },
-          ] });
-        }
-        plans.push({ node, frames: [
-          { transform: node.matches(".col-head") ? `translate(${dx}px, ${dy}px)` : `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`, opacity: 0 },
-          { transform: "none", opacity: node.matches(".col-head") ? 1 : 0 },
-        ] });
-      }
-    }
-    root.append(fragment);
-    /* Detached clones have no scroll range yet. Restore nested reader/feed
-       offsets only after both wrapping snapshots have their real viewport. */
-    for (const { node, top, left } of snapshot.copyScroll) { node.scrollTop = top; node.scrollLeft = left; }
-    animations = plans.map(({ node, frames }) => node.animate(frames, timing));
-    animations.forEach((animation) => animation.pause());
-    /* Finish the one-time wrapping and rasterization before the animation
-       clock starts. Its first painted frame is the captured old layout. */
-    paintFrame = window.requestAnimationFrame(() => {
+    // Hold source geometry while text layers are promoted in small batches.
+    // Promoting the column first rasterized every live glyph again before
+    // its children became separate compositor layers.
+    const contents = snapshot.shots.filter((shot) => shot.visible).flatMap((shot) => shot.contents.map(({ node }) => node));
+    const promote = () => {
       paintFrame = window.requestAnimationFrame(() => {
         paintFrame = 0;
-        animations.forEach((animation) => animation.play());
-        finishTimer = setTimeout(() => finish(), COLUMN_LAYOUT_MS);
+        for (const node of contents.splice(0, 12)) { node.dataset.layoutAnimating = "content"; marked.add(node); }
+        if (contents.length) promote();
+        else paintFrame = window.requestAnimationFrame(() => { paintFrame = 0; start(snapshot); });
       });
-    });
+    };
+    promote();
   });
   observer.observe(root, { subtree: true, attributes: true, attributeFilter: ["data-wide"] });
   const onClick = (event: Event) => {
@@ -335,13 +401,13 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
   root.addEventListener("pointerdown", onWork, true);
   root.addEventListener("focusin", onWork, true);
   document.addEventListener("keydown", onKey, true);
-  /* Scrolling during motion follows the operator immediately; viewport-fixed
-     snapshots must never linger over a list they have just scrolled. */
+  /* A scroll interaction reveals the current layout immediately. Restoration
+     events from our own width change leave the transition alone. */
   const interrupted = () => { clearPending(); finish(); };
   const onScroll = (event: Event) => {
     const target = event.target;
     const node = target === document ? document.scrollingElement as HTMLElement | null : target as HTMLElement | null;
-    if (!node || (!scrollContainers().has(node) && !(root.contains(node) && node.closest('[data-layout-animating="card"]')))) return;
+    if (!node || (!scrollContainers().has(node) && !(root.contains(node) && node.closest('[data-layout-animating]')))) return;
     const position = scrollPositions.get(node);
     if (position && position.top === node.scrollTop && position.left === node.scrollLeft) return;
     interrupted();
