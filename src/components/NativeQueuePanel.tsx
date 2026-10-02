@@ -19,6 +19,14 @@ import {
 } from "@/components/retainedQueueAdmissions";
 import type { NativeQueueMutation, NativeQueueSubmission } from "@/hooks/useNativeQueue";
 import type { TFunction } from "@/lib/i18n";
+import { stripTaskReferenceLines, taskReferencePrelude, taskReferencesFromText, type SelectedContextRef } from "@/lib/selection/selectedContext";
+
+import { TaskChipBadges } from "./orchestrator/TaskChipRow";
+
+function TaskQueueText({ text, selectedContext, fallback }: { text: string; selectedContext?: SelectedContextRef; fallback: string }) {
+  const tasks = selectedContext?.tasks ?? taskReferencesFromText(text);
+  return <><TaskChipBadges tasks={tasks} project={selectedContext?.project} /><span>{stripTaskReferenceLines(text) || fallback}</span></>;
+}
 
 /**
  * Codex's own queue, and the controls on it (#1629).
@@ -266,7 +274,7 @@ export function NativeQueuePanel({ view, error, thread, cardId, binding, unresol
             {pending.map((entry) => (
               <li key={entry.key} data-testid="native-queue-unresolved-row" data-key={entry.key} className="flex items-start gap-2">
                 <p className="min-w-0 flex-1 truncate text-ui text-primary">
-                  {entry.text || t("queue.unresolvedNoText", { count: entry.imageCount })}
+                  <TaskQueueText text={entry.text} fallback={t("queue.unresolvedNoText", { count: entry.imageCount })} />
                 </p>
                 {onReplay ? (
                   <button
@@ -296,7 +304,7 @@ export function NativeQueuePanel({ view, error, thread, cardId, binding, unresol
               <li key={entry.key} data-testid="native-queue-refused-row" data-key={entry.key} className="flex items-start gap-2">
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-ui text-primary">
-                    {entry.text || t("queue.unresolvedNoText", { count: entry.imageCount })}
+                    <TaskQueueText text={entry.text} fallback={t("queue.unresolvedNoText", { count: entry.imageCount })} />
                   </p>
                   <p className="truncate text-caption text-danger">{t("queue.refusedReason", { reason: entry.refused! })}</p>
                 </div>
@@ -337,10 +345,11 @@ export function NativeQueuePanel({ view, error, thread, cardId, binding, unresol
           <li key={row.entryId} data-testid="native-queue-row" data-entry={row.entryId} data-state={row.state} className="px-2 py-1.5">
             {editing === row.entryId ? (
               <div className="flex flex-col gap-1">
+                <TaskChipBadges tasks={row.selectedContext?.tasks ?? taskReferencesFromText(row.text)} project={row.selectedContext?.project} />
                 <textarea
                   ref={editRef}
                   data-testid="native-queue-edit-field"
-                  defaultValue={row.text}
+                  defaultValue={stripTaskReferenceLines(row.text)}
                   rows={2}
                   aria-label={t("queue.editAria")}
                   className="w-full resize-none rounded-control border border-border bg-base px-1.5 py-1 text-ui text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
@@ -368,7 +377,8 @@ export function NativeQueuePanel({ view, error, thread, cardId, binding, unresol
                         action: "update",
                         entryId: row.entryId,
                         expectedRevision: row.revision,
-                        text,
+                        text: [taskReferencePrelude(row.selectedContext?.tasks ?? taskReferencesFromText(row.text)), text].filter(Boolean).join("\n"),
+                        ...(row.selectedContext ? { selectedContext: row.selectedContext } : {}),
                         ...(row.images.length ? { images: [...row.images] } : {}),
                       });
                       if (saved) setEditing(null);
@@ -390,7 +400,7 @@ export function NativeQueuePanel({ view, error, thread, cardId, binding, unresol
             ) : (
               <div className="flex items-start gap-2">
                 <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-ui text-primary">
-                  {row.text || t("queue.noText", { count: row.imageCount })}
+                  <TaskQueueText text={row.text} selectedContext={row.selectedContext} fallback={t("queue.noText", { count: row.imageCount })} />
                 </p>
                 <RowControls
                   row={row}

@@ -3,6 +3,8 @@ import { Window as HappyWindow } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
+import { taskReferencePrelude } from "@/lib/selection/selectedContext";
+import { SeatDeputyChip, deputyAskLabel } from "../orchestrator/SeatDeputyChip";
 import { setLocale } from "@/lib/i18n";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 import type { RuntimeLiveTurnItem } from "@/lib/runtime/liveTurn";
@@ -39,6 +41,8 @@ class TestResizeObserver {
 
 Object.assign(globalThis, {
   ResizeObserver: TestResizeObserver,
+  requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
+  cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
   window: dom,
   document: dom.document,
   navigator: dom.navigator,
@@ -341,7 +345,8 @@ test("an ask the voice gateway wrote is its internal agent card, never the opera
   expect(head.dataset.deputyHeadAuthor).toBe("agent");
   expect(head.querySelector("[data-user-bubble]")).toBeNull();
   expect(head.textContent).toContain("internal");
-  expect(head.textContent).toContain("gateway");
+  expect(head.querySelector("[data-agent-role]")?.getAttribute("data-agent-role")).toBe("gateway");
+  expect(head.textContent).toContain("Gateway");
   expect(head.textContent).toContain("Add a task: reviewer for #2244");
   /* The operator's own ask keeps the operator's bubble. */
   const operator = mount([deputy()]).host;
@@ -456,3 +461,22 @@ test("a collapsed line names the parallel self: the full caption on the desktop,
   await settle();
   expect(phone.host.querySelector("[data-deputy-short]")?.textContent).toBe("Паралельне я");
 });
+
+
+for (const locale of ["en", "uk"] as const) {
+  test(`parallel task ask shows badges and clean operator words in ${locale}`, async () => {
+    setLocale(locale);
+    const referenced = deputy({ ask: { text: taskReferencePrelude([{ id: "task_parallel", title: "Fix __init__.py (#42)" }]) + "\nstart this one", images: 0, sender: null, origin: { kind: "operator" } } });
+    const { host } = mount([referenced]);
+    await settle();
+    const head = host.querySelector("[data-deputy-head]")!;
+    expect(head.textContent).not.toContain("task reference");
+    expect(head.textContent).toContain("start this one");
+    expect(head.querySelector('[data-task-badge="task_parallel"]')?.textContent).toContain("Fix __init__.py (#42)");
+    expect(deputyAskLabel(referenced)).toBe("start this one");
+    const chipHost = document.createElement("div"); document.body.append(chipHost);
+    const root = createRoot(chipHost); roots.add(root);
+    flushSync(() => { root.render(<SeatDeputyChip deputy={referenced} />); });
+    expect(chipHost.querySelector("button")!.title).toBe("start this one");
+  });
+}
