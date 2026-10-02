@@ -1404,6 +1404,24 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           { name: `raw entity quoted comment index ${form} ${quote}`, text: `&#160;x ${comment} ["${value}"]`, pass: false },
           { name: `raw entity quoted comment chained ${form} ${quote}`, text: `&#160;(x) ${comment} ("${value}", 1)`, pass: false },
         ])),
+      ...[host, origin, discovery].flatMap((value, form) =>
+        ["//", "/*"].flatMap((comment, kind) =>
+          ["", tick].flatMap((close, ending) =>
+            ["\u00a0", "\u200b"].map((prefix, boundary) => ({
+              name: `raw comment template callee ${form} ${kind} ${ending} ${boundary}`,
+              text: `${comment} ${tick} text ${prefix}f("${value}")${close}${kind === 1 ? " */" : ""}`,
+              pass: false,
+            }))))),
+      ...[host, origin, discovery].flatMap((value, form) =>
+        ["\u00a0", "\u200b", "\ufeff", "\u3000"].flatMap((space, boundary) => [
+          { name: `raw template group prefix ${form} ${boundary}`, text: `${tick}\u0024{${space} ("${value}")}${tick}`, pass: false },
+          { name: `raw template group suffix ${form} ${boundary}`, text: `${tick}\u0024{("${value}") ${space}}${tick}`, pass: false },
+        ])),
+      ...[host, origin, discovery].flatMap((value, form) =>
+        ["\u2028", "\u2029"].flatMap((line, boundary) => [
+          { name: `raw template group comment prefix ${form} ${boundary}`, text: `${tick}\u0024{//comment${line}("${value}")}${tick}`, pass: false },
+          { name: `raw template group comment suffix ${form} ${boundary}`, text: `${tick}\u0024{("${value}")//comment${line}}${tick}`, pass: false },
+        ])),
       { name: "quoted code", text: `export const relay = "${origin}";`, pass: true },
       { name: "repeated host", text: `${host}\n`.repeat(1000), pass: true },
       { name: "NUL metadata boundaries", text: `comment\0${host}\0`, pass: false },
@@ -2022,6 +2040,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
         || c.name.startsWith("raw entity comment ")
         || c.name.startsWith("raw entity quoted comment ")
         || c.name.startsWith("raw Unicode trivia ")
+        || c.name.startsWith("raw template group ")
         || (c.name.startsWith("raw comment ") && !c.text.includes("\n"))
         || (c.name.startsWith("raw trivia ") && !(c.pass && c.text.includes("\n")))
         || /^(?:raw (?:call|index|nested call|multi argument call) (?:prefix|suffix)|raw standalone (?:call|index))/.test(c.name))) {

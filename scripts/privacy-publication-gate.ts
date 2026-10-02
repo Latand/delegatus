@@ -198,7 +198,7 @@ function maskApprovedPublicValues(text: string): string {
     return undefined;
   }
   type OperandGroup = { attached: boolean; indexed?: boolean; parent?: OperandGroup };
-  const candidates: Array<{ start: number; end: number; allowed: boolean; opensComment: boolean; closesComment: boolean; sourceColonValue: boolean; propertyKey: boolean; sourceCommentTail: boolean; sourceOptionalCall: boolean; sourceOptionalIndex: boolean; group?: OperandGroup }> = [];
+  const candidates: Array<{ start: number; end: number; allowed: boolean; interpolatedLiteral: boolean; opensComment: boolean; closesComment: boolean; sourceColonValue: boolean; propertyKey: boolean; sourceCommentTail: boolean; sourceOptionalCall: boolean; sourceOptionalIndex: boolean; group?: OperandGroup }> = [];
   // Delimiters such as '=' or '(' inside a string do not end its URI.
   // Treat '#' in entities, member access or a private declaration as syntax.
   // Unclosed block comments and quoted tokens consume their remaining span once;
@@ -343,6 +343,16 @@ function maskApprovedPublicValues(text: string): string {
   let previousCommentStart = -1;
   let previousCommentCandidateEnd = 0;
   let openingCommentContentStart = -1;
+  function rawInterpolationGroups(segment: string, start: number): boolean {
+    // The raw template is opaque to the outer graph. Validate its expression's
+    // wrappers separately, leaving comment contents opaque in this pass too.
+    for (const token of segment.matchAll(/\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029]|[()]/g)) {
+      const index = start + token.index;
+      if (token[0] === "(" && index > 0 && !approvedRawOuterLeft.test(text[index - 1])) return false;
+      if (token[0] === ")" && index + 1 < text.length && !approvedRawOuterRight.test(text[index + 1])) return false;
+    }
+    return true;
+  }
   const marked = replaceApprovedPublicValues(text, (match: string, delimiter: string, offset: number) => {
     const index = candidates.length;
     const end = offset + match.length;
@@ -372,9 +382,14 @@ function maskApprovedPublicValues(text: string): string {
     const expressionOffset = quoted && !wholeLiteral && insideLiteral && literal?.[0][0] === "`"
       ? text.slice(literal.index, offset).lastIndexOf("${") : -1;
     const expressionStart = literal !== undefined && expressionOffset >= 0 ? literal.index + expressionOffset : -1;
+    const expressionPrefix = expressionStart >= 0 ? text.slice(expressionStart + 2, offset) : "";
+    const expressionSuffix = expressionStart >= 0
+      ? /^["'`](?:[\t\n\v\f\r )]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029])*\}/.exec(text.slice(end)) : null;
     const interpolatedLiteral = literal !== undefined && insideLiteral && literal[0][0] === "`" && expressionStart > literal.index
-      && /^(?:[\s(]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029])*$/.test(text.slice(expressionStart + 2, offset))
-      && /^["'`](?:[\s)]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029])*\}/.test(text.slice(end));
+      && /^(?:[\t\n\v\f\r (]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029])*$/.test(expressionPrefix)
+      && expressionSuffix !== null
+      && rawInterpolationGroups(expressionPrefix, expressionStart + 2)
+      && rawInterpolationGroups(expressionSuffix[0], end);
     // Unsupported expressions must not grant an exemption to a fragment.
     // A neighbouring '+' also covers typed operands that the projection
     // intentionally does not attempt to parse as a TypeScript expression.
@@ -430,7 +445,7 @@ function maskApprovedPublicValues(text: string): string {
       && end + 1 < text.length && !approvedPublicRightBoundary.test(text[end + 1]));
     // Bare operands (for example here-doc bodies) also inherit their enclosing
     // attachment; source quotes are not required to retain that ownership.
-    candidates.push({ start, end, opensComment, closesComment, sourceColonValue, propertyKey, sourceCommentTail, sourceOptionalCall, sourceOptionalIndex, group: operandGroups.at(-1),
+    candidates.push({ start, end, interpolatedLiteral, opensComment, closesComment, sourceColonValue, propertyKey, sourceCommentTail, sourceOptionalCall, sourceOptionalIndex, group: operandGroups.at(-1),
       allowed: approvedRawBoundaries(text, start, end) && !unclosedComment && (inComment || (!pendingAttachment && compoundDepth === undefined)) && (quoted
         ? text[end] === delimiter && !uriPrefix && !expressionFragment && (wholeLiteral || interpolatedLiteral || commentLiteral)
         : !continued && !insideLiteral && !uriPrefix) });
@@ -469,11 +484,15 @@ function maskApprovedPublicValues(text: string): string {
   const candidateRawGroups = new Map<(typeof candidates)[number], RawGroup>();
   let rawCommentCursor = 0;
   let rawCommentFrame: { end: number; depth: number; completed: Map<number, RawGroup> } | undefined;
-  function skipRawTrivia(before: number): number {
+  function skipRawTrivia(before: number): { before: number; unicode: boolean } {
     // Trivia belongs inside the raw callee span. Its Unicode bytes stay intact;
     // the callee's outer neighbours still use the strict ASCII boundary rules.
+    let unicode = false;
     for (;;) {
-      while (before >= 0 && /[\s\p{Default_Ignorable_Code_Point}]/u.test(text[before])) before -= 1;
+      while (before >= 0 && /[\s\p{Default_Ignorable_Code_Point}]/u.test(text[before])) {
+        unicode ||= text.charCodeAt(before) > 0x7f;
+        before -= 1;
+      }
       let commentStart = rawTriviaEnds.get(before);
       // A source-shaped block comment may also occur inside a prose/line
       // comment. Its closing bytes still separate a raw callee from its group.
@@ -486,22 +505,24 @@ function maskApprovedPublicValues(text: string): string {
           rawTriviaEnds.set(before, blockStart);
         }
       }
-      if (commentStart === undefined) return before;
+      if (commentStart === undefined) return { before, unicode };
       before = commentStart - 1;
     }
   }
-  function rawCalleeBefore(start: number): number {
-    let before = skipRawTrivia(start - 1);
+  function rawCalleeBefore(start: number): { before: number; unicode: boolean } {
+    const initial = skipRawTrivia(start - 1);
+    let { before, unicode } = initial;
     for (;;) {
       const end = before;
       while (before >= 0 && /[A-Za-z0-9_$?.]/.test(text[before])) before -= 1;
-      if (before === end) return before;
+      if (before === end) return { before, unicode };
       const member = /^[?.]$/.test(text[before + 1]);
       const previous = skipRawTrivia(before);
       // Trivia inside member access belongs to the callee too. An unrelated
       // preceding identifier remains outside this raw call/index envelope.
-      if (!member && text[previous] !== ".") return before;
-      before = previous;
+      if (!member && text[previous.before] !== ".") return { before, unicode };
+      unicode ||= previous.unicode;
+      before = previous.before;
     }
   }
   function advanceRawGroups(end: number): void {
@@ -524,15 +545,16 @@ function maskApprovedPublicValues(text: string): string {
       const character = text[rawCursor++];
       if (/[([{]/.test(character)) {
         const start = rawCursor - 1;
-        const before = /[([]/.test(character) ? rawCalleeBefore(start) : start - 1;
+        const calleeSpan = /[([]/.test(character) ? rawCalleeBefore(start) : { before: start - 1, unicode: false };
+        const { before } = calleeSpan;
         const completed = rawCommentFrame?.completed ?? completedRawGroups;
         const callee = completed.get(before);
-        const namedCallee = before < skipRawTrivia(start - 1);
+        const namedCallee = before < skipRawTrivia(start - 1).before;
         const unicodeCallee = before >= 0 && text.charCodeAt(before) > 0x7f && /[\p{L}\p{N}]/u.test(text[before]);
         // A standalone group keeps its own opening edge (for example an arrow
         // callback body). Calls/indexes retain their named or returned callee.
         const envelopeStart = callee?.envelopeStart ?? (namedCallee || unicodeCallee ? before + 1 : start);
-        rawGroups.push({ start, envelopeStart, attached: false, parent: rawGroups.at(-1) });
+        rawGroups.push({ start, envelopeStart, attached: calleeSpan.unicode, parent: rawGroups.at(-1) });
       } else if (/[)\]}]/.test(character)) {
         // Source-comment delimiters cannot close a surrounding code group or
         // become a returned callee after the comment. Their own groups still
@@ -542,7 +564,7 @@ function maskApprovedPublicValues(text: string): string {
         if (group) {
           group.end = rawCursor;
           (rawCommentFrame?.completed ?? completedRawGroups).set(rawCursor - 1, group);
-          group.attached = "([{".indexOf(text[group.start]) !== ")]}".indexOf(character);
+          group.attached ||= "([{".indexOf(text[group.start]) !== ")]}".indexOf(character);
         }
       }
     }
@@ -553,7 +575,7 @@ function maskApprovedPublicValues(text: string): string {
       const ownQuote = text[candidate.start - 1];
       const quotedValue = /^["'`]$/.test(ownQuote) && text[candidate.end] === ownQuote;
       const completeValue = containingRawQuote.start === candidate.start - 1 && containingRawQuote.end === candidate.end + 1;
-      const templateValue = containingRawQuote.quote === "`" && quotedValue;
+      const templateValue = containingRawQuote.quote === "`" && quotedValue && candidate.interpolatedLiteral;
       if ((!completeValue && !templateValue)
         || (containingRawQuote.start > 0 && !approvedRawOuterLeft.test(text[containingRawQuote.start - 1]))
         || (containingRawQuote.end < text.length && !approvedRawOuterRight.test(text[containingRawQuote.end]))) candidate.allowed = false;
