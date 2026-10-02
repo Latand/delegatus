@@ -426,7 +426,7 @@ against the code at `311e47fd1`.
 
 ## 11. As built
 
-The rendered evidence found three things beyond §3.1, each fixed and each red
+The rendered evidence found the following things beyond §3.1, each fixed and each red
 before its fix:
 
 - **The phone's seat Confirm builds its own provisional card.**
@@ -445,6 +445,31 @@ before its fix:
   transcript's row after it. The launch-owned bubble now renders above the chips
   in both states. `CONVERSATION_TAIL_ORDER` is unchanged; only the launch's own
   prompt is placed ahead of the chips.
+- **The create draft stays hidden while the seat read catches up.**
+  `useSeatConfirm.ts` keeps `submitting` set after an accepted POST until the
+  durable read (`refresh()`) answers. The earlier evidence captured a frame
+  where the create draft reappeared between the provisional card and that read;
+  holding `submitting` closes that window.
+- **The mandate survives retirement of the launch facts and a phone remount.**
+  `src/components/conversation/heldMandate.ts` holds the last mandate at module
+  level by conversation identity. `LogFeed` stores it while the launch facts
+  still carry the mandate and reads it through the same identity after those
+  facts retire, including when the phone focus view mounts a new feed.
+- **The held card occupies the record's own slot until provenance resolves it.**
+  `LogFeed.tsx` draws the held mandate before any first record arrives, then in
+  the first matching record's slot while delivery provenance is pending or its
+  fetch fails. Once provenance identifies the mandate, the transcript's card
+  takes over in that slot. The fallback is confined to an unfiltered,
+  uncropped transcript beginning. `heldMandateMatches` accepts the editor text,
+  the exact launch echo, and the composed and role-scaffolded delivery, including
+  its frozen role table, so a reply arriving first leaves the mandate in its card.
+- **An opened mandate keeps its state, displayed text and height at hand-over.**
+  The opened-section store in `heldMandate.ts` keeps both the section's open
+  state and its displayed text by conversation identity. `MandateCard.tsx`
+  restores them across the held and transcript card mounts. Text already being
+  read stays frozen until the section is reopened; the header's line count can
+  reflect the completed delivery while the opened body still shows its
+  provisional text.
 
 Evidence: `evidence/first-message/desktop.json` (24 frames: 1440 and 1280,
 light and dark, en and uk, cases p, s and f) and
@@ -454,8 +479,13 @@ focus view re-resolves the conversation when its path flips; the in-page
 hand-off (same node, no empty frame, no moved row) is asserted on desktop and in
 the DOM test.
 
-Left alone, and visible in the evidence: the create draft reappears for a frame
-between the provisional card and the server's seat read (the same with and
-without this change, possibly a fixture race), and the failure line's reason
-toggle is 15 px tall on the phone (it is a disclosure, not the failure's action,
-which is 44 px).
+Hand-over evidence: `evidence/first-message/desktop-handover.json` (16 frames
+at 1440) and `evidence/first-message/phone-handover.json` (16 frames at 390)
+cover Claude and Codex, answered and adopted paths, en and uk, light and dark.
+Each compares the opened card before hand-over, while held and after provenance
+resolves it: one card, unchanged top, height and displayed text, no mandate
+outside it, user bubble, raw JSON, danger styling or overflow. On the adopted
+path the launch chips move from below the card to below the reply.
+
+Left alone, and visible in the earlier evidence: the failure line's reason
+toggle is 15 px tall on the phone; the failure's action is 44 px.
