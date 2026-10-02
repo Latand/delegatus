@@ -158,7 +158,8 @@ export async function relayCall<T = unknown>(
     request.end(encoded ?? undefined);
   });
 }
-export async function discoverRelay(
+/** The service's descriptor as published, checked against the schema and nothing else. */
+export async function readRelayDescriptor(
   originInput: string,
 ): Promise<{ origin: string; descriptor: ExternalRelayDescriptor }> {
   const origin = await relayOrigin(originInput);
@@ -209,14 +210,31 @@ export async function discoverRelay(
   });
   const parsed = descriptorSchema.safeParse(descriptor);
   if (!parsed.success) throw new ExternalRelayError("malformed");
-  if (!parsed.data.versions.includes(1))
-    throw new ExternalRelayError("unsupported_version", 426);
-  const api = new URL(parsed.data.api_base);
+  return { origin, descriptor: parsed.data };
+}
+/**
+ * The refusals a descriptor's `api_base` earns against the origin it was read
+ * from. A service that advertises its own host over http:// is not offering a
+ * secure connection yet, which is a different thing from pointing elsewhere.
+ */
+export function checkApiBase(origin: string, apiBase: string): void {
+  const base = new URL(origin);
+  const api = new URL(apiBase);
+  if (api.protocol === "http:" && base.protocol === "https:" && api.host === base.host)
+    throw new ExternalRelayError("http_public");
   if (api.origin !== origin) throw new ExternalRelayError("cross_origin");
   if (!api.pathname.endsWith("/v1"))
     throw new ExternalRelayError("invalid_api_path");
   if (api.search || api.hash) throw new ExternalRelayError("invalid_address");
-  return { origin, descriptor: parsed.data };
+}
+export async function discoverRelay(
+  originInput: string,
+): Promise<{ origin: string; descriptor: ExternalRelayDescriptor }> {
+  const { origin, descriptor } = await readRelayDescriptor(originInput);
+  if (!descriptor.versions.includes(1))
+    throw new ExternalRelayError("unsupported_version", 426);
+  checkApiBase(origin, descriptor.api_base);
+  return { origin, descriptor };
 }
 /** Endpoint 6: the targets the service lists for this pairing now. A body
  * that fails the schema is `malformed`, so the caller keeps what it stored. */
