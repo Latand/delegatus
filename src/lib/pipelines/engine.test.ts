@@ -1479,6 +1479,52 @@ test.each([false, true])("automatic drain holds reserved custody with dead owner
   }
 });
 
+test("reserved activation rechecks update admission after waiting for the mutation lease", async () => {
+  const oldDrain = process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+  process.env.LLV_PIPELINE_ACTIVATION_DRAIN = "1";
+  const h = harness();
+  let reserveOnly = true;
+  let held = false;
+  let scanned!: () => void;
+  h.ports.drainHold = () => {
+    scanned?.();
+    return held || (reserveOnly && !!loadPipelines()[0]?.runs[0]?.attempts[0]?.activation)
+      ? { id: "hold", target: "a".repeat(40), since: "2026-01-01T00:00:00Z", until: 0, persistent: true } : null;
+  };
+  let release!: () => void;
+  let locking: Promise<void> | undefined;
+  let draining: Promise<void> | undefined;
+  try {
+    await create(h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    const before = structuredClone(loadPipelines()[0]!.runs[0]!.attempts[0]!);
+    reserveOnly = false;
+    const { withPipelineMutation } = await import("./store");
+    let entered!: () => void;
+    const acquired = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    locking = withPipelineMutation(async () => { entered(); await gate; });
+    await acquired;
+    const scanning = new Promise<void>(resolve => { scanned = resolve; });
+    draining = engineModule.drainStageActivations(h.ports);
+    await scanning;
+    held = true;
+    release(); await locking; await draining;
+    expect(h.spawnInputs).toHaveLength(0);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toEqual(before);
+    held = false;
+    await engineModule.drainStageActivations(h.ports);
+    await engineModule.drainStageActivations(h.ports);
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(h.spawnInputs[0]!.clientAttemptId).toBe(before.activation!.clientAttemptId);
+  } finally {
+    release?.(); await locking; await draining;
+    if (oldDrain === undefined) delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+    else process.env.LLV_PIPELINE_ACTIVATION_DRAIN = oldDrain;
+  }
+});
+
 test.each(["early", "drain-switch-off"] as const)("managed %s admission holds actual pipeline launches across recovery until terminal status", async (admission) => {
   const h = harness();
   savePipelines([]);

@@ -145,6 +145,9 @@ export interface SpawnCommandDependencies {
   /** Why a Copilot launch cannot start here (the CLI is missing), or null.
       Injected by tests; production probes the binary. */
   copilotBinaryGap?(): string | null;
+  /** In-process autonomous callers recheck their admission hold under the
+      account lock. Direct operator requests omit this callback. */
+  autonomousAdmissionHeld?(): boolean;
 }
 
 class RuntimeImageStorageError extends Error {}
@@ -963,6 +966,8 @@ export async function executeSpawnRequest(
       { holder: "spawn catalog snapshot", caller: "spawn" },
     );
     const begun = await withAccountMutationLockAsync(() => {
+      if (dependencies.autonomousAdmissionHeld?.()
+        && !(clientAttemptId && registry.spawnReceiptForClientAttempt(clientAttemptId))) return null;
       if (!existingAttempt && clientAttemptId) {
         /* The validation endpoint may have fenced this exact downstream key
            while an older request was between validation and reservation. Both
@@ -992,6 +997,7 @@ export async function executeSpawnRequest(
         existingAttempt?.accountPin ?? (body.accountId !== undefined),
       ));
     }, { holder: "spawn admission", caller: "spawn" });
+    if (!begun) return NextResponse.json({ error: "autonomous work is held for the automatic update", code: "AUTO_UPDATE_DRAIN" }, { status: 503 });
     if (begun.kind === "conflict") return NextResponse.json({ error: "spawn attempt conflicts with its original request" }, { status: 409 });
     if (begun.kind === "created" && requestedTelegram && !begun.receipt.launchProfile.mcpServers.includes("telegram")) {
       const reason = "telegram MCP grant was revoked during spawn admission";

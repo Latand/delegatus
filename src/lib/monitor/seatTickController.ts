@@ -1629,7 +1629,7 @@ async function check(
       console.error("[seat tick] card write failed", error instanceof Error ? error.name : "unknown");
     }
   }
-  try { const detail = await dependencies.maintenance?.launchIfDue(input); if (detail) maintenanceDetails.push(detail); }
+  try { const detail = !activeDrain() && await dependencies.maintenance?.launchIfDue(input); if (detail) maintenanceDetails.push(detail); }
   catch (error) { maintenanceDetails.push(`maintenance launch: ${redactMonitorText(error instanceof Error ? error.message : "failed")}`); }
   const record: SeatTickRunRecord = {
     schemaVersion: 1,

@@ -124,3 +124,36 @@ test("a catalog generation change cannot admit the previously selected home", as
   expect(await response.json()).toMatchObject({ error: "spawn account changed during admission" });
   expect(agentRegistry().spawnReceiptForClientAttempt(clientAttemptId)).toBeNull();
 });
+
+test("autonomous spawn rechecks update admission after account evidence, while manual and receipt replay remain allowed", async () => {
+  const cwd = statePath("autonomous-admission-cwd"); fs.mkdirSync(cwd, { recursive: true });
+  process.env.LLV_SPAWN_TRANSPORT = "structured"; process.env.LLV_STRUCTURED_HOSTS = "1";
+  process.env.LLV_RUNTIME_EVENTS = "1"; process.env.NEXT_PUBLIC_RUNTIME_UI = "1";
+  process.env.LLV_RUNTIME_HOST_SOCKET = statePath("fixture.sock");
+  let held = false, entered!: () => void, resume!: () => void;
+  const collecting = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { resume = resolve; });
+  const dependencies = structuredRouteDependencies(cwd) as SpawnCommandDependencies & { autonomousAdmissionHeld: () => boolean };
+  dependencies.autonomousAdmissionHeld = () => held;
+  dependencies.defer = () => {};
+  const nativeResolve = dependencies.resolveHealthySpawnAccount;
+  dependencies.resolveHealthySpawnAccount = async (...args) => { entered(); await gate; return nativeResolve(...args); };
+  const request = (id: string) => new NextRequest("http://127.0.0.1/api/spawn", {
+    method: "POST", headers: { origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", host: "127.0.0.1", "content-type": "application/json" },
+    body: JSON.stringify({ clientAttemptId: id, title: "Autonomous admission", engine: "claude", cwd, prompt: "inspect", mcpServers: [] }),
+  });
+  const id = `attempt_${crypto.randomUUID()}`;
+  const pending = executeSpawnRequest(request(id), dependencies);
+  await Promise.race([collecting, pending.then(async response => { throw new Error(`spawn returned before account evidence: ${response.status} ${JSON.stringify(await response.clone().json())}`); })]); held = true; resume();
+  const refused = await pending;
+  expect(refused.status).toBe(503); expect(await refused.json()).toMatchObject({ code: "AUTO_UPDATE_DRAIN" });
+  expect(agentRegistry().spawnReceiptForClientAttempt(id)).toBeNull();
+  held = false;
+  expect((await executeSpawnRequest(request(id), dependencies)).status).toBe(202);
+  const receipt = agentRegistry().spawnReceiptForClientAttempt(id)!;
+  held = true;
+  expect((await executeSpawnRequest(request(id), dependencies)).status).toBe(202);
+  expect(agentRegistry().spawnReceiptForClientAttempt(id)!.launchId).toBe(receipt.launchId);
+  const manual = structuredRouteDependencies(cwd); manual.defer = () => {};
+  expect((await executeSpawnRequest(request(`attempt_${crypto.randomUUID()}`), manual)).status).toBe(202);
+});

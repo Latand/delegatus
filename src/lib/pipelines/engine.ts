@@ -3629,6 +3629,8 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
           const pipeline = pipelines.find((item) => item.id === snapshot.id);
           const attempt = pipeline && runFor(pipeline, run.stageId)?.attempts.find((item) => item.n === original.n);
           if (!pipeline || !attempt?.activation || JSON.stringify(attempt.activation) !== JSON.stringify(reservation)) return null;
+          // The mutation lease may have waited while update admission closed.
+          if (reservation.phase === "reserved" && ports.drainHold?.()) return null;
           attempt.activation.owner = owner;
           if (reservation.phase !== "reserved") attempt.activation.replay = true;
           persist([pipeline]);

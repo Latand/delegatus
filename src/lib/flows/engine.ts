@@ -1332,13 +1332,20 @@ export async function tickFlow(
       return JSON.stringify(flow) !== before;
     }
     try {
-      const prepared = prepareReviewerLaunch(flow, round);
-      captureReviewHead(flow, round);
-      round.spawnStartedAt = isoNow();
-      const reservation = await withAccountMutationLockAsync(
-        () => reserveReviewerSpawn(flow, round, prepared.role, prepared.account.accountId),
+      const admission = await withAccountMutationLockAsync(
+        () => {
+          // Account admission may have queued before the update drain began.
+          // Defer before consuming account attempts or interruption markers.
+          if (flowAwaitingAdmission(flow) && activeDrain()) return null;
+          const prepared = prepareReviewerLaunch(flow, round);
+          captureReviewHead(flow, round);
+          round.spawnStartedAt = isoNow();
+          return { prepared, reservation: reserveReviewerSpawn(flow, round, prepared.role, prepared.account.accountId) };
+        },
         { holder: "reviewer spawn admission", caller: "reviewer spawn admission" },
       );
+      if (!admission) return JSON.stringify(flow) !== before;
+      const { prepared, reservation } = admission;
       round.launchLeaseUntil = new Date(Date.now() + REVIEWER_LAUNCH_LEASE_MS).toISOString();
       persistCheckpoint();
       /* launchReviewer persists again after spawning (for the ownership/orphan

@@ -1990,6 +1990,8 @@ test("open work with nobody seated raises the orchestrator card and wakes nothin
 
 test("a drain beginning during proposal preparation holds the fresh wake until release", async () => {
   const h = harness({});
+  let maintenanceLaunches = 0;
+  h.deps.maintenance = { reconcile: async () => null, launchIfDue: async () => { maintenanceLaunches++; return null; } };
   let entered!: () => void;
   let resume!: () => void;
   const preparing = new Promise<void>((resolve) => { entered = resolve; });
@@ -2002,10 +2004,12 @@ test("a drain beginning during proposal preparation holds the fresh wake until r
     resume();
     const held = await check;
     expect(h.sent).toHaveLength(0);
+    expect(maintenanceLaunches).toBe(0);
     expect(held?.delivery?.outcome).toBe("update-held");
     releaseDrain(drainFile(), "inflight-seat");
     await runSeatTickCheck(PROJECT, h.deps);
     expect(h.sent).toHaveLength(1);
+    expect(maintenanceLaunches).toBeGreaterThan(0);
     await runSeatTickCheck(PROJECT, h.deps);
     expect(h.sent).toHaveLength(1);
   } finally { resume(); releaseDrain(drainFile(), "inflight-seat"); }
