@@ -19,7 +19,9 @@ import { isAwaitingUser } from "@/hooks/useSwitchboardData";
 import { LaunchChips } from "./conversation/LaunchChips";
 import { MandateCard, MandateConversationContext } from "./feed/cards/MandateCard";
 import { FeedSkeleton } from "./skeletons";
-import { LiveTurnRows } from "./conversation/LiveTurnRows";
+import { mergeAssistantRows, useAssistantHandoff } from "./conversation/assistantRows";
+import type { RuntimeLiveTurnItem } from "@/lib/runtime/liveTurn";
+import { LiveTurnRows, liveTurnTail } from "./conversation/LiveTurnRows";
 import { FeedMessageRow, useOutboxRowActions, type CanonicalMessage } from "./conversation/OutboxBubbles";
 import { messageRowModel } from "./conversation/messageRow";
 import { publishRenderedMessageRows } from "./conversation/renderedRows";
@@ -89,9 +91,9 @@ type ConversationRow =
       canonical: CanonicalMessage | null;
       responseDurationMs?: number;
     }
-  | { kind: "item"; key: string; anchorKey?: string | null; item: FeedSnapshot["items"][number]["item"]; speakText?: string; speechIndex?: number; speakOffset?: number; speechId?: string; responseDurationMs?: number; resumes?: SeatResume }
+  | { kind: "item"; live?: RuntimeLiveTurnItem; key: string; anchorKey?: string | null; item: FeedSnapshot["items"][number]["item"]; speakText?: string; speechIndex?: number; speakOffset?: number; speechId?: string; responseDurationMs?: number; resumes?: SeatResume }
   | { kind: "launch"; key: "launch" }
-  | { kind: "delta"; key: "delta"; resumes?: SeatResume }
+  | { kind: "delta"; key: string; items: RuntimeLiveTurnItem[]; instant?: number | null; resumes?: SeatResume }
   /* A seat deputy's block (docs/design/ghost-seat.md §6.1): pinned at its
      head's position among the transcript rows, never part of the tail. */
   | { kind: "deputy"; key: string; deputy: SeatDeputyView };
@@ -1106,8 +1108,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     adoptCanonicalAssistantClaims(tailPath, memoryKey);
     publishCanonicalAssistantClaims(memoryKey, feed.items);
   }, [tailPath, memoryKey, feed.items]);
+  const assistantHandoff = useAssistantHandoff(memoryKey, runtimeLiveTurn, feed.items, assistantClaims);
   const visibleLiveTurnItems = useMemo(
-    () => visibleRuntimeLiveTurnItems(runtimeLiveTurn, feed.items, assistantClaims, runtimeTurn),
+    () => visibleRuntimeLiveTurnItems(runtimeLiveTurn, feed.items, assistantClaims, runtimeTurn).filter(item => item.tool || !item.text.trim()),
     [runtimeLiveTurn, feed.items, assistantClaims, runtimeTurn],
   );
   /* The status bar names the tool that is running NOW: a live tool row from the
@@ -1130,7 +1133,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     : transcriptWorking;
   /* Anything the window shows below the transcript. While it is present an
      empty transcript is not "no output" — it is a conversation mid-launch. */
-  const windowTail = visibleLiveTurnItems.length > 0 || pendingOutbox.length > 0 || Boolean(launch || mandateCard);
+  const windowTail = assistantHandoff.pending.length > 0 || visibleLiveTurnItems.length > 0 || pendingOutbox.length > 0 || Boolean(launch || mandateCard);
 
   /* Session-stable, like the transcript's own row keys: once a canonical row
      has answered for a submission it keeps that key for as long as this feed
@@ -1391,7 +1394,12 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       if (section === "launch") {
         if (memoryKey) rows.push(...pendingOutbox.filter(launchPrompt).flatMap(tailMessage));
         rows.push({ kind: "launch", key: "launch" });
-      } else if (section === "delta") rows.push({ kind: "delta", key: "delta" });
+      } else if (section === "delta") {
+        const tail = liveTurnTail(visibleLiveTurnItems);
+        if (tail.earlier) rows.push({ kind: "delta", key: "delta-earlier", items: [{ itemId: null, text: "", phase: "awaiting-echo", startedAt: null, completedAt: null, omittedItems: tail.earlier }] });
+        for (const [index, item] of tail.rows.entries()) rows.push({ kind: "delta", key: `delta:${item.itemId ?? index}`,
+          items: [item], instant: Date.parse(item.startedAt ?? item.completedAt ?? "") || null });
+      }
       else rows.push(...pendingOutbox.filter((entry) => !launchPrompt(entry)).flatMap(tailMessage));
     }
     /* A block splits the seat's own answer, so the first seat row after one
@@ -1410,12 +1418,25 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         if (row.kind === "item" || row.kind === "delta") rows[index] = { ...row, resumes: { ask } };
       }
     }
-    return rows;
+    const rowInstants = new Map<string, number | null>();
+    for (const entry of visibleItems) {
+      rowInstants.set(entry.key, transcriptInstant(entry.item));
+      if (entry.anchorKey) rowInstants.set(entry.anchorKey, transcriptInstant(entry.item));
+    }
+    return mergeAssistantRows(rows, assistantHandoff, ({ key, live }) => ({
+      kind: "item", key, anchorKey: key, live,
+      item: { kind: "prose", ts: live.startedAt ?? live.completedAt, text: live.text,
+        engine: file?.engine === "codex" ? "codex" : file?.engine === "copilot" ? "copilot" : "claude",
+        ...(live.itemId ? { sourceId: live.itemId } : {}) },
+    }), row => row.kind === "message"
+      ? row.entry?.at ?? rowInstants.get(row.anchorKey ?? row.key) ?? null
+      : row.kind === "delta" ? row.instant ?? null
+        : row.kind === "item" ? transcriptInstant(row.item) : null);
     /* `messageRowKey`/`answerFor` are read, not depended on: both are pure
        functions of the memos already named here. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleItems, visibleStartIndex, echoBindings, boundSubmissions, outbox, pendingOutbox, launch, memoryKey,
-    visibleLiveTurnItems.length, answerFor, provenanceLookup, withheldRecords, withheldNativeRecords, deputies, holdsMandate, heldMandate, firstMandateRecord, mandateCard]);
+    visibleLiveTurnItems, assistantHandoff, answerFor, provenanceLookup, withheldRecords, withheldNativeRecords, deputies, holdsMandate, heldMandate, firstMandateRecord, mandateCard]);
   /* What this feed is painting, so the composer's receipt stack knows which
      deliveries already have a row explaining them and stops repeating them.
      Read off the ROWS rather than off the queue, and including the rows the
@@ -1689,7 +1710,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                    never read as one. */
                 const lead = row.resumes ? <SeatSpeakerLine resumes={row.resumes} engine={file.engine} />
                   : deputies.some((deputy) => deputy.state !== "ended") ? <SeatSpeakerLine engine={file.engine} /> : null;
-                return <LiveTurnRows key="delta" items={visibleLiveTurnItems} lead={lead} />;
+                return <LiveTurnRows key={row.key} items={row.items} lead={lead} />;
               }
               if (row.kind === "deputy") return <DeputyBlock key={row.key} deputy={row.deputy} engine={file.engine} />;
               if (row.kind === "message") {
@@ -1728,7 +1749,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                 <div
                   key={row.key}
                   data-feed-key={anchorKey ?? undefined}
-                  data-feed-kind={item.kind}
+                  data-feed-kind={row.live ? undefined : item.kind}
+                  data-live-turn={row.live ? "" : undefined}
+                  data-live-turn-item-id={row.live?.itemId ?? undefined}
                   data-tts-answer-index={speechIndex}
                   data-tts-answer-id={speechId}
                   data-tts-offset={speakOffset}
@@ -1738,15 +1761,25 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                   className={compact ? "feed-cv" : undefined}
                 >
                   {resumes && !foldResumes ? <SeatSpeakerLine resumes={resumes} engine={file.engine} /> : null}
+                  {row.live?.omittedChars ? <div data-live-turn-omitted-chars className="my-1 text-caption text-muted">
+                    {t("feed.liveOmittedChars", { chars: row.live.omittedChars })}
+                  </div> : null}
                   <GalleryOwnerProvider value={item}>
                     {/* The first delivery keeps the launch's conversation identity;
                         later mandates in the same transcript have their own row. */}
                     <MandateConversationContext.Provider value={memoryKey && row.key !== "held-mandate"
                       && !(tail.linesStart <= 0 && !tail.hasMore && row.key === firstMandateEntry?.key)
                       ? `${memoryKey}\0${row.key}` : memoryKey}>
-                    <SpeechScope.Provider value={file.path}><FeedItem item={item} speakText={speakText} speakId={speechId} resumesAsk={foldResumes ? resumes.ask : undefined} /></SpeechScope.Provider>
+                    <SpeechScope.Provider value={file.path}>{item.kind === "raw" && item.processingError ? (
+                      <div role="alert" data-processing-error className="my-3 rounded-surface border border-danger/40 bg-danger-soft p-3 text-danger [overflow-wrap:anywhere]">
+                        <p className="font-semibold">{t("feed.processingFailed")}</p>
+                        <p className="mt-1 text-label">{t("feed.processingFailedRecord", { type: item.processingError.recordType, line: item.processingError.line })}</p>
+                        <p className="mt-1 whitespace-pre-wrap text-body">{item.processingError.message}</p>
+                      </div>
+                    ) : <FeedItem item={item} speakText={speakText} speakId={speechId} resumesAsk={foldResumes ? resumes.ask : undefined} />}</SpeechScope.Provider>
                     </MandateConversationContext.Provider>
                   </GalleryOwnerProvider>
+                  {row.live?.phase === "streaming" ? <span data-live-turn-caret="seat" className="inline-block h-3.5 w-1.5 animate-pulse rounded-[2px] bg-accent" aria-hidden /> : null}
                   {responseDurationMs !== undefined ? <ResponseDuration durationMs={responseDurationMs} /> : null}
                 </div>
               );

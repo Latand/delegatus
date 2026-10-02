@@ -4,6 +4,7 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
 import type { FileEntry } from "@/lib/types";
+import { enqueueOutbox, resetOutboxForTests } from "./conversation/outbox";
 import { setLocale } from "@/lib/i18n";
 import { appendRuntimeLiveTurnDelta, projectRuntimeLiveTurnItem, type RuntimeLiveTurn } from "@/lib/runtime/liveTurn";
 import { applyEvent, emptyStore, type RuntimeSession, type RuntimeEnvelope } from "@/components/runtime/runtimeModel";
@@ -36,6 +37,8 @@ class TestResizeObserver {
 
 Object.assign(globalThis, {
   ResizeObserver: TestResizeObserver,
+  requestAnimationFrame: (cb: FrameRequestCallback) => setTimeout(() => cb(Date.now()), 0),
+  cancelAnimationFrame: (id: number) => clearTimeout(id),
   window: dom,
   document: dom.document,
   navigator: dom.navigator,
@@ -167,6 +170,7 @@ const roots = new Set<Root>();
 beforeEach(() => {
   setLocale("en");
   dom.sessionStorage.clear();
+  resetOutboxForTests();
   resetCanonicalAssistantClaimsForTests();
   tailState.lines = [];
   sessionState.session = session;
@@ -203,7 +207,7 @@ const file: FileEntry = {
   conversationId: CONVERSATION_ID,
 } as FileEntry;
 
-function render(): { host: HTMLElement; root: Root } {
+function render(): { host: HTMLElement; root: Root; paint: () => void } {
   const host = dom.document.createElement("div");
   dom.document.body.append(host);
   const root = createRoot(host as unknown as HTMLElement);
@@ -222,7 +226,7 @@ function render(): { host: HTMLElement; root: Root } {
     );
   });
   paint();
-  return { host: host as unknown as HTMLElement, root };
+  return { host: host as unknown as HTMLElement, root, paint };
 }
 
 function liveRows(host: HTMLElement): string[] {
@@ -329,4 +333,50 @@ test("issue 1565: streamed old tools leave the tail when a later turn owns the t
   const { host } = render();
   expect(host.textContent).toContain("Later turn response");
   expect([...host.querySelectorAll("[data-live-turn-item-id]")].map(row => row.getAttribute("data-live-turn-item-id"))).toEqual(["current-command"]);
+});
+
+
+test("completed answer and reconnect retain the same DOM row until its delayed echo", () => {
+  const answer = "An answer that stays visible.";
+  const pending = { itemId: null, text: answer, phase: "streaming" as const, startedAt: AT(0), completedAt: null };
+  sessionState.session = { ...session, liveTurn: { turnId: "delayed-turn", text: answer, items: [pending] } };
+  const { host, paint } = render();
+  const row = host.querySelector("[data-live-turn]")!;
+  expect(row.textContent).toContain(answer);
+  sessionState.session = { ...session, turn: "idle", liveTurn: { turnId: "delayed-turn", text: answer,
+    items: [{ ...pending, itemId: "delayed-answer", phase: "awaiting-echo", completedAt: AT(1) }] } };
+  tailState.lines = [JSON.stringify({ type: "user", timestamp: AT(5), message: { content: "Next request" } })];
+  paint();
+  expect(host.querySelector("[data-live-turn]")).toBe(row);
+  sessionState.session = { ...session, turn: "unknown", liveTurn: null };
+  paint();
+  expect(host.querySelector("[data-live-turn]")).toBe(row);
+  tailState.lines = [...tailState.lines, JSON.stringify({ type: "assistant", uuid: "delayed-answer", timestamp: AT(1),
+    message: { content: [{ type: "text", text: answer }] } })];
+  paint();
+  expect(host.querySelector('[data-feed-source-id="delayed-answer"]')).toBe(row);
+  expect(host.querySelectorAll('[data-feed-source-id="delayed-answer"]')).toHaveLength(1);
+  expect(row.textContent).toContain(answer);
+  const following = host.querySelector('[data-feed-kind="user"]')!;
+  expect(row.compareDocumentPosition(following) & dom.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+
+test("composer follow-up stays after the answer while both echoes are pending", () => {
+  const answer = "Answer before follow-up";
+  sessionState.session = { ...session, liveTurn: { turnId: "before-follow-up", text: answer, items: [{
+    itemId: "before-follow-up", text: answer, phase: "awaiting-echo", startedAt: AT(0), completedAt: AT(1), omittedChars: 42,
+  }] } };
+  enqueueOutbox(CONVERSATION_ID, { id: "follow-up", text: "My next request", images: 0, at: Date.parse(AT(5)) });
+  const { host, paint } = render();
+  const row = host.querySelector("[data-live-turn]")!;
+  expect(row.querySelector("[data-live-turn-omitted-chars]")?.textContent).toContain("42");
+  const followUp = host.querySelector("[data-message-row]")!.closest("[data-feed-kind]")!;
+  expect(row.compareDocumentPosition(followUp) & dom.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  tailState.lines = [JSON.stringify({ type: "assistant", uuid: "before-follow-up", timestamp: AT(1),
+    message: { content: [{ type: "text", text: answer }] } })];
+  paint();
+  expect(host.querySelector('[data-feed-source-id="before-follow-up"]')).toBe(row);
+  expect(row.querySelector("[data-live-turn-omitted-chars]")).toBeNull();
+  expect(row.compareDocumentPosition(followUp) & dom.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
