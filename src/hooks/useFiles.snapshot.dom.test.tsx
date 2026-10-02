@@ -12,8 +12,9 @@ import { Window } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 
+let runtimeEnabled = false;
 mock.module("./runtimeBus", () => ({
-  isRuntimeUiEnabled: () => false,
+  isRuntimeUiEnabled: () => runtimeEnabled,
   getRuntimeBus: () => ({
     getState: () => ({ connection: "live" }),
     subscribe: () => () => {},
@@ -215,4 +216,46 @@ test("what a document certified is stored for the next one, and an unchanged ans
   persistFilesSnapshotForTests();
   expect(store.current()!.savedAt).toBe(savedAt);
   flushSync(() => root.unmount());
+});
+
+
+test("a visible board heartbeats through files HEAD even with live streaming, and stops on hiding or closing", async () => {
+  runtimeEnabled = true;
+  const originalInterval = globalThis.setInterval;
+  let heartbeat: (() => void) | undefined;
+  let hidden = false;
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => hidden ? "hidden" : "visible" });
+  const calls: { url: string; method: string }[] = [];
+  globalThis.setInterval = ((callback: () => void, ms: number) => {
+    if (ms === 15_000) heartbeat = callback;
+    return originalInterval(callback, ms === 15_000 ? 100_000 : ms);
+  }) as typeof setInterval;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(input), method: init?.method ?? "GET" });
+    return init?.method === "HEAD" ? new Response(null, { status: 204 }) : Response.json(BODY);
+  }) as typeof fetch;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host as unknown as Element);
+  function Board({ project }: { project?: string }) { useFiles(project); return null; }
+  try {
+    flushSync(() => root.render(<Board project="repo-open" />));
+    expect(calls.filter((call) => call.method === "HEAD")).toEqual([{ url: "/api/files?project=repo-open", method: "HEAD" }]);
+    heartbeat!();
+    expect(calls.filter((call) => call.method === "HEAD")).toHaveLength(2);
+    hidden = true;
+    heartbeat!();
+    expect(calls.filter((call) => call.method === "HEAD")).toHaveLength(2);
+    hidden = false;
+    document.dispatchEvent(new dom.Event("visibilitychange") as unknown as Event);
+    expect(calls.filter((call) => call.method === "HEAD")).toHaveLength(3);
+    flushSync(() => root.render(<Board />));
+    document.dispatchEvent(new dom.Event("visibilitychange") as unknown as Event);
+    expect(calls.filter((call) => call.method === "HEAD")).toHaveLength(3);
+  } finally {
+    flushSync(() => root.unmount());
+    globalThis.setInterval = originalInterval;
+    runtimeEnabled = false;
+    delete (document as unknown as { visibilityState?: string }).visibilityState;
+  }
 });

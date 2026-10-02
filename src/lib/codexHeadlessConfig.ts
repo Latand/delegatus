@@ -3,6 +3,7 @@ import {
   viewerMcpHttpCodexEntry,
   viewerMcpServerEntry,
   viewerMcpServerEnv,
+  VIEWER_SPAWN_CAPABILITY_ENV,
   type ViewerMcpTransport,
 } from "@/lib/agent/spawnPolicy";
 import { grantedMcpServers } from "@/lib/agent/mcpAllowlist";
@@ -103,6 +104,7 @@ export function headlessCodexThreadConfig(
   const granted = grantedPlugins(plugins);
   return {
     mcp_servers: Object.fromEntries(Object.entries(materializedServers).map(([name, server]) => {
+      const envVars = record(server)?.env_vars;
       const configuredApproval = record(server)?.default_tools_approval_mode;
       const approval = name === "viewer"
         ? "approve"
@@ -122,7 +124,17 @@ export function headlessCodexThreadConfig(
            there); it takes the shared endpoint's URL and the header that
            carries this agent's capability instead. */
         ...(name === "viewer" && viewerStdio
-          ? { env: { ...viewerMcpServerEnv(), ...record(record(server)?.env) } }
+          ? {
+            env: { ...viewerMcpServerEnv(), ...record(record(server)?.env) },
+            /* Codex filters the stdio child's environment. Forward the
+               app-server's current launch capability by name so the launcher
+               writes the receipt's liveness record, including after re-host.
+               The capability value stays out of persisted thread config. */
+            env_vars: [...new Set([
+              ...(Array.isArray(envVars) ? envVars : []),
+              VIEWER_SPAWN_CAPABILITY_ENV,
+            ])],
+          }
           : {}),
         ...(name === "viewer" && viewerOverHttp ? viewerMcpHttpCodexEntry() : {}),
         enabled: enabled.has(name),

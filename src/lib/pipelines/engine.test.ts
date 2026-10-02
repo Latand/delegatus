@@ -1,4 +1,5 @@
 import { afterAll, expect, spyOn, test } from "bun:test";
+import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -658,6 +659,98 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   return { root, origin, repo, base, h, git, id: created.pipeline.id, worktree: created.pipeline.worktreeDir };
 }
 
+test("a rebased builder reconciles accepted content and continues with fast-forward delivery", async () => {
+  const fixture = await realWorktreeLane("rebase-reconcile", [
+    { id: "brief", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Brief", next: "build" },
+    { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review", next: null },
+  ], undefined, false, true);
+  try {
+    const { git, h, id, repo, origin, worktree } = fixture;
+    h.setConversationActive(false);
+    fs.writeFileSync(path.join(worktree, ".gitignore"), "accepted-rule\n");
+    fs.writeFileSync(path.join(worktree, "brief.md"), "accepted brief\n");
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+    const accepted = loadPipelines().find((item) => item.id === id)!.lastPassedCommit;
+    const branch = loadPipelines().find((item) => item.id === id)!.branch;
+    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(accepted);
+    for (let n = 0; n < 4 && h.spawnInputs.length < 2; n += 1) await tickPipelines([], h.ports);
+    fs.writeFileSync(path.join(repo, "main.txt"), "new main\n");
+    fs.writeFileSync(path.join(repo, "asset.bin"), crypto.randomBytes(1_200_000));
+    git(repo, "add", "main.txt");
+    git(repo, "add", "asset.bin");
+    git(repo, "commit", "-m", "advance main");
+    git(repo, "push", "origin", "main");
+    git(worktree, "rebase", "origin/main");
+    fs.appendFileSync(path.join(worktree, ".gitignore"), "builder-rule\n");
+    fs.appendFileSync(path.join(worktree, "brief.md"), "builder elaboration\n");
+    fs.writeFileSync(path.join(worktree, "build.txt"), "builder content\n");
+    git(worktree, "add", ".gitignore", "brief.md", "build.txt");
+    git(worktree, "commit", "-m", "build after rebase");
+    const rebased = git(worktree, "rev-parse", "HEAD");
+    const tree = git(worktree, "rev-parse", "HEAD^{tree}");
+
+    await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
+
+    const current = loadPipelines().find((item) => item.id === id)!;
+    expect(current.state).toBe("running");
+    expect(current.cursor?.stageId).toBe("review");
+    const reconciled = current.lastPassedCommit;
+    expect(git(worktree, "rev-parse", `${reconciled}^{tree}`)).toBe(tree);
+    expect(git(worktree, "rev-list", "--parents", "-n", "1", reconciled)).toBe(`${reconciled} ${rebased} ${accepted}`);
+    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(reconciled);
+    expect(current.publishedCommit).toBe(reconciled);
+    for (let n = 0; n < 4 && h.spawnInputs.length < 3; n += 1) await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(3);
+    await tickPipelines([h.finish("/codex/stage-3.jsonl", "pass")], h.ports);
+    expect(loadPipelines().find((item) => item.id === id)!.state).toBe("completed");
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("rewritten builder history parks with the dropped accepted commit and preserves delivery", async () => {
+  const fixture = await realWorktreeLane("rebase-dropped", [
+    { id: "brief", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Brief", next: "build" },
+    { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: null },
+  ], undefined, false, true);
+  try {
+    const { git, h, id, repo, origin, worktree } = fixture;
+    h.setConversationActive(false);
+    fs.writeFileSync(path.join(worktree, "dropped.md"), "accepted content\n");
+    git(worktree, "add", "dropped.md");
+    git(worktree, "commit", "-m", "accepted requirement");
+    const dropped = git(worktree, "rev-parse", "HEAD");
+    fs.writeFileSync(path.join(worktree, "kept.md"), "kept content\n");
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+    const accepted = loadPipelines().find((item) => item.id === id)!.lastPassedCommit;
+    const branch = loadPipelines().find((item) => item.id === id)!.branch;
+    for (let n = 0; n < 4 && h.spawnInputs.length < 2; n += 1) await tickPipelines([], h.ports);
+    fs.writeFileSync(path.join(repo, "main.txt"), "new main\n");
+    git(repo, "add", "main.txt");
+    git(repo, "commit", "-m", "advance main");
+    git(repo, "push", "origin", "main");
+    git(worktree, "rebase", "--onto", "origin/main", dropped);
+    const rewritten = git(worktree, "rev-parse", "HEAD");
+
+    await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
+
+    const parked = loadPipelines().find((item) => item.id === id)!;
+    expect(parked.state).toBe("needs_decision");
+    expect(parked.stateDetail).toContain("dropped accepted commits");
+    expect(parked.stateDetail).toContain(dropped);
+    expect(parked.stateDetail).not.toContain(`dropped accepted commits: ${accepted}`);
+    expect(parked.lastPassedCommit).toBe(accepted);
+    expect(git(worktree, "rev-parse", "HEAD")).toBe(rewritten);
+    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(accepted);
+    expect(h.spawnInputs).toHaveLength(2);
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("an owner publishes a review-fix commit before the passing review starts", async () => {
   const fixture = await realWorktreeLane("owner-review-fix", [
     { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: "review" },
@@ -1104,6 +1197,88 @@ test("a new owner reviews the commit published after the producer turn ends", as
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+for (const pin of ["automatic", "explicit", "legacy-draft", "legacy-unknown", "legacy-auto-retry", "crash-before-apply"] as const) {
+  const pinned = pin === "explicit" || pin === "legacy-draft";
+  test(`successor provisioning records its backup and respects the caller's base pin (${pin})`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provision-published-"));
+    const repo = path.join(root, "repo");
+    const origin = path.join(root, "origin.git");
+    const { realExec } = await import("@/lib/workflows/provision");
+    const { realProvisionExec } = await import("./git");
+    const git = (cwd: string, ...args: string[]) => {
+      const result = realExec("git", args, cwd);
+      if (result.code !== 0) throw new Error(result.stderr || result.stdout);
+      return result.stdout.trim();
+    };
+    try {
+      fs.mkdirSync(repo);
+      git(repo, "init", "--initial-branch=main");
+      git(repo, "config", "user.name", "Fixture");
+      git(repo, "config", "user.email", "noreply");
+      git(repo, "config", "commit.gpgSign", "false");
+      git(repo, "commit", "--allow-empty", "-m", "pinned base");
+      const base = git(repo, "rev-parse", "HEAD");
+      git(root, "init", "--bare", "--initial-branch=main", origin);
+      git(repo, "remote", "add", "origin", origin);
+      git(repo, "push", "origin", "main");
+      git(repo, "checkout", "-b", "feature/provision");
+      git(repo, "commit", "--allow-empty", "-m", "published head");
+      git(repo, "push", "origin", "feature/provision");
+      const published = git(repo, "rev-parse", "HEAD");
+      git(repo, "commit", "--allow-empty", "-m", "unpublished leftover");
+      const leftover = git(repo, "rev-parse", "HEAD");
+      const h = harness();
+      h.ports.exec = realExec;
+      h.ports.provisionExec = realProvisionExec;
+      const created = await createPipelineFromRequest({
+        task: "Published successor", repoDir: repo, ...(pinned ? { baseRef: base } : {}),
+        ...(pin === "legacy-draft" ? { autoStart: false } : {}),
+        delivery: { branch: "refs/heads/feature/provision" },
+        stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: null }],
+      }, h.ports);
+      if (!created.pipeline) throw new Error(created.error);
+      if (pin === "legacy-draft") {
+        const legacy = loadPipelines().find((item) => item.id === created.pipeline!.id)!;
+        delete legacy.baseRefPinned;
+        savePipelines([legacy]);
+        expect(await patchPipeline(legacy.id, { action: "start" }, h.ports)).toMatchObject({ pipeline: { state: "provisioning" } });
+      }
+      if (pin === "legacy-unknown" || pin === "legacy-auto-retry") {
+        const legacy = loadPipelines().find((item) => item.id === created.pipeline!.id)!;
+        delete legacy.baseRefPinned;
+        legacy.baseBranch = "main";
+        legacy.baseRef = base;
+        legacy.lastPassedCommit = base;
+        legacy.stateDetail = pin === "legacy-auto-retry" ? "failed automatic checkout" : null;
+        if (pin === "legacy-auto-retry") legacy.state = "needs_decision";
+        savePipelines([legacy]);
+        if (pin === "legacy-auto-retry") {
+          expect(await patchPipeline(legacy.id, { action: "retry-stage" }, h.ports)).toMatchObject({ pipeline: { state: "provisioning" } });
+        }
+      }
+      if (pin === "crash-before-apply") {
+        const { provisionPipelineWorktreeAsync } = await import("./git");
+        const interrupted = await provisionPipelineWorktreeAsync({ ...created.pipeline, baseBranch: "main", baseRef: base }, realProvisionExec);
+        expect(interrupted).toMatchObject({ ok: true, sha: published, preservedLocalRef: { sha: leftover } });
+        // The checkout exists, but the controller did not persist its outcome.
+      }
+      await tickPipelines([], h.ports);
+      const lane = loadPipelines().find((item) => item.id === created.pipeline!.id)!;
+      expect(lane.state).toBe("running");
+      expect(git(lane.worktreeDir, "rev-parse", "HEAD")).toBe(pinned ? base : published);
+      expect(git(repo, "rev-parse", "HEAD")).toBe(leftover);
+      const backup = git(repo, "for-each-ref", "--format=%(refname)", "refs/backup/provision-unpublished");
+      expect(git(repo, "rev-parse", backup)).toBe(leftover);
+      expect(lane.stateDetail).toContain(backup);
+      expect(lane.delivery!.journal.some((entry) => entry.reason.includes(backup) && entry.reason.includes("1 unpublished commit"))).toBe(true);
+      expect(loadPipelines().find((item) => item.id === lane.id)!.baseRefPinned ?? false).toBe(pinned);
+    } finally {
+      savePipelines([]);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
 
 test("delivery creation clamps the second target lane and replays its original key before provisioning", async () => {
   const h = harness();
