@@ -2126,7 +2126,7 @@ Initial failures:
 
 ### src/lib/scanner/filesResponseWorker.test.ts
 
-**follow-up** — 6 pass, 2 fail. Scanner worker follow-up: neutral rapid/concurrent projection cases create two/four workers instead of one; retired-worker delta now passes. Repair pool lifetime/reuse without weakening assertions.
+**Resolved in this branch** — an isolated confirmation was 5 pass, 3 fail; after the test correction the file passes 8/8. Both worker-spawn assertions pass; the rapid/concurrent failures are ETag cardinality, because `systemHealth.storage.writes.freeBytes` changes in the response body and the ETag hashes that exact body. The retired-worker case's changed-file delta passes, while repeating the same catalog can produce a health-only delta. Tests now verify one worker and each exact-body ETag, and allow that health-only repeated delta while retaining the changed-file persisted-base assertions. No pool lifetime change is indicated.
 
 Initial failures:
 
