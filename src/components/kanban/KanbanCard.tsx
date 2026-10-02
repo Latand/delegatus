@@ -8,7 +8,7 @@ import { useLocale, type TFunction } from "@/lib/i18n";
 import { taskFinishWaitCount } from "@/lib/pipelines/taskFinish";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { GroupResurfaceReason } from "@/lib/tasks/groupHide";
-import type { TaskColor, TaskStatus, TaskHold } from "@/lib/tasks/types";
+import type { TaskStatus, TaskHold } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { workLinkUrl, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { EngineMark } from "@/components/EngineMark";

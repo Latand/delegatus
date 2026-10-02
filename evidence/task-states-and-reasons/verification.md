@@ -216,6 +216,9 @@ still be pending when the fix stage hands over.
 
 ## Search width floor follow-up
 
+The canvas measurements in this section were superseded by the DOM regression
+below: the earlier check passed while the Ukrainian placeholder was clipped.
+
 The project bar's search field now holds a 128 px minimum while reason chips
 share its row. This exceeds the 112 px acceptance floor and leaves 86 px for
 placeholder text after padding and borders: 58.7 px in English and 80.6 px in
@@ -243,3 +246,35 @@ model tests (including all thirteen malformed checklist shapes and the mixed
 array), three checklist tests and the browser case pass. TypeScript and
 `git diff --check` pass. ESLint has no diagnostics for the changed browser
 driver; CSS is ignored by the repository's ESLint configuration.
+
+## Rendered placeholder follow-up
+
+Merged current main, retaining its task-chip controls alongside task motion
+and the separate status-note line. The shared browser driver now puts the
+placeholder into the actual search input, compares `scrollWidth` with
+`clientWidth`, and restores the value without dispatching a search. With the
+previous 128 px floor this regression fails at 1440 in Ukrainian: 133 px of
+text versus 126 px of input space.
+
+Raised the search floor to 144 px when filters share the row. The complete
+shared case passes all 502 assertions at 1440/1280/1024/390 in en/uk. At 1440
+both locale inputs have equal client/scroll widths of 142 px; search remains
+at y=7.5..39.5 and all five chips at y=14.5..32.5 inside the 48 px bar.
+Filters stay below the bar at 1280/1024, with no document or chip-row sideways
+overflow. The driver's post-scroll bottom-edge check now uses the same 1 px
+rounding tolerance as its other bounds checks: fractional layout coordinates
+can extend 0.34 px past the viewport after whole-pixel scrolling.
+
+Opened the actual top-bar, Waiting and phone frames. The full Ukrainian
+placeholder is visible at 1440. The previously recorded 1024 Ukrainian
+placeholder clipping and attention-chip overlap remain outside this finding.
+The driver closes its contexts, browser and ephemeral server in finalizers.
+
+All 121 focused tests pass across checklist normalization/projection, checklist
+steps, status notes, board DOM, desktop task-chip integration and phone task
+screen files. TypeScript and `git diff --check` pass. The changed browser
+driver has no ESLint diagnostics; CSS is ignored by the repository config.
+The three merged component files have the same 76 pre-existing ESLint
+diagnostics as current main after removing an unused type import left by
+conflict resolution. The privacy scan with `--check-commits` passes using
+the scanner from a detached worktree of current main against this checkout.

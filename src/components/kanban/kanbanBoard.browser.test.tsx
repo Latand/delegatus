@@ -14837,10 +14837,13 @@ describe("task motion and waiting reasons", () => {
             const rect = bar.getBoundingClientRect();
             const input = bar.querySelector<HTMLInputElement>('[data-kanban-search]')!;
             const search = input.getBoundingClientRect();
-            const searchStyle = getComputedStyle(input);
-            const canvas = document.createElement('canvas');
-            const text = canvas.getContext('2d')!;
-            text.font = searchStyle.font;
+            // Measure the real input's text layout without dispatching a search.
+            // A detached canvas can undercount the rendered placeholder width.
+            const originalValue = input.value;
+            input.value = input.placeholder;
+            const placeholderClientWidth = input.clientWidth;
+            const placeholderScrollWidth = input.scrollWidth;
+            input.value = originalValue;
             const filters = bar.closest('[data-kanban-board]')!.querySelector('[data-reason-filters]') as HTMLElement;
             const filterRect = filters.getBoundingClientRect();
             return {
@@ -14854,9 +14857,7 @@ describe("task motion and waiting reasons", () => {
               lastFilterRight: filters.lastElementChild!.getBoundingClientRect().right,
               groupWidth: filters.parentElement!.getBoundingClientRect().width,
               searchWidth: search.width,
-              searchTextWidth: search.width - Number.parseFloat(searchStyle.paddingLeft) - Number.parseFloat(searchStyle.paddingRight)
-                - Number.parseFloat(searchStyle.borderLeftWidth) - Number.parseFloat(searchStyle.borderRightWidth),
-              placeholderWidth: text.measureText(input.placeholder).width,
+              placeholderClientWidth, placeholderScrollWidth,
               filterCount: filters.children.length,
               filtersClientWidth: filters.clientWidth, filtersScrollWidth: filters.scrollWidth,
             };
@@ -14868,7 +14869,7 @@ describe("task motion and waiting reasons", () => {
             expect(topbar.filtersTop).toBeGreaterThanOrEqual(topbar.top);
             if (width === 1440) {
               expect(topbar.searchWidth, JSON.stringify(topbar)).toBeGreaterThanOrEqual(112);
-              expect(topbar.searchTextWidth, JSON.stringify(topbar)).toBeGreaterThanOrEqual(topbar.placeholderWidth);
+              expect(topbar.placeholderScrollWidth, JSON.stringify(topbar)).toBeLessThanOrEqual(topbar.placeholderClientWidth);
               expect(topbar.belowBar, JSON.stringify(topbar)).toBeFalse();
               expect(topbar.filtersBottom).toBeLessThanOrEqual(topbar.bottom);
             } else {
@@ -15031,7 +15032,8 @@ describe("task motion and waiting reasons", () => {
             }));
           }
           expect(lines.length).toBeGreaterThan(0);
-          for (const line of lines) { expect(line.left).toBeGreaterThanOrEqual(0); expect(line.right).toBeLessThanOrEqual(width + 1); expect(line.top).toBeGreaterThanOrEqual(0); expect(line.bottom).toBeLessThanOrEqual(844); expect(line.scrollWidth).toBeLessThanOrEqual(line.clientWidth + 1); expect(line.height).toBeGreaterThan(0); expect(line.height).toBeLessThanOrEqual(line.lineHeight * 2 + 1); }
+          // Scrolling rounds to whole pixels while line rectangles retain fractions.
+          for (const line of lines) { expect(line.left).toBeGreaterThanOrEqual(0); expect(line.right).toBeLessThanOrEqual(width + 1); expect(line.top).toBeGreaterThanOrEqual(0); expect(line.bottom).toBeLessThanOrEqual(845); expect(line.scrollWidth).toBeLessThanOrEqual(line.clientWidth + 1); expect(line.height).toBeGreaterThan(0); expect(line.height).toBeLessThanOrEqual(line.lineHeight * 2 + 1); }
           await page.screenshot({ path: path.join(out, `${width}-${locale}-waiting.png`) });
           // The same editor is reachable from the card's status menu on desktop
           // and from its task screen's status sheet on the phone.
