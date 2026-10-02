@@ -1481,6 +1481,11 @@ text stamp from the same sender may fill a local `Untitled task`
 placeholder with real text. The receiving copy's details remain intact in that
 case, and a newer local text stamp keeps its text. No manual retitle or cursor
 reset is needed. Scans and retries retain the normal tombstone and size fences.
+Task wire v4 keeps the v3 row shape and advertises a new replay capability.
+An already-consumed v3 initiator observes the accepting install's v4 response
+and uses its existing upgrade path to rescan both directions once. Its saved
+peer version makes that replay durable across restart. Board membership stays
+available to every peer advertising v3 or newer.
 
 Per group, because the common collision is the operator dragging a card on one
 machine while an agent on the other flips its status; per-task LWW would drop

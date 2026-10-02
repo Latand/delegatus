@@ -123,7 +123,8 @@ const SEAT_NOISE = new URLSearchParams(location.search).get("seatnoise");
    Codex conversation on a structured host that can inject. `noinject` serves the same session without the
    capability. The driver flips the turn and publishes receipts through `evidence`. */
 const CONTEXT_MODE = new URLSearchParams(location.search).get("context-mode");
-const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE !== null || CONTEXT_MODE !== null;
+const RUNTIME_PERF = new URLSearchParams(location.search).get("runtime") === "perf";
+const STRUCTURED = RUNTIME_PERF || new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE !== null || CONTEXT_MODE !== null;
 const NEXT_ACCOUNT = new URLSearchParams(location.search).get("next") || "relief";
 
 /* With the deck asked for (#1795 below), the running conversation is the round
@@ -142,6 +143,15 @@ const files: FileEntry[] = [
     model: "fable-5-1", effort: "high",
     ...reviewerLineage,
     lastTurn: { startedAt: (now - 400) * 1_000, endedAt: null },
+    /* `?launch=1`: the running conversation waits on an answer, so the focus
+       view's own fallback (the most attention-worthy node) picks it over a
+       freshly launched agent, the way a real operator's open question does. */
+    ...(new URLSearchParams(location.search).has("launch") ? {
+      pendingQuestion: {
+        kind: "question", toolUseId: "toolu-launch-previous", transcriptPath: RUNNING_PATH, pid: 4_401, paneTarget: null, askedAt: iso(300),
+        questions: [{ question: "Which format?", header: "Format", multiSelect: false, options: [] }],
+      },
+    } : {}),
     ...(queueRecovery ? {
       activity: "idle", lastTurn: { startedAt: (now - 400) * 1_000, endedAt: (now - 20) * 1_000 },
       authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(20), terminalKind: "completed" },
@@ -262,6 +272,10 @@ let board = {
 
 const evidence = {
   presenceReplies: 0,
+  /* `?launch=1`: the spawn bodies the phone sent, and the switch that makes the scan carry the transcript. */
+  spawns: [] as Array<Record<string, unknown>>,
+  launchMaterialized: false,
+  materializeLaunch() { evidence.launchMaterialized = true; },
   /* docs/design/needs-attention.md: every dismissal the phone sent, and the
      switch that makes the agent's request arrive. */
   dismissals: [] as Array<Record<string, unknown>>,
@@ -325,7 +339,13 @@ class QuietEventSource {
   removeEventListener() {}
   close() {}
 }
-Object.assign(window, { EventSource: QuietEventSource });
+const NativeEventSource = window.EventSource;
+Object.assign(window, { EventSource: RUNTIME_PERF ? class extends QuietEventSource {
+  constructor(url: string) {
+    super();
+    if (new URL(url, location.origin).pathname === "/api/runtime/stream") return new NativeEventSource(url) as unknown as QuietEventSource;
+  }
+} : QuietEventSource });
 
 /** The account future launches use; a select moves it, as on the server. */
 let activeAccount = ACCOUNT;
@@ -414,6 +434,15 @@ const ICONS_SCENE = new URLSearchParams(location.search).has("icons");
 const ASKS_SCENE = new URLSearchParams(location.search).has("asks");
 const asksSetting = { enabled: ASKS_SCENE };
 const asksLines: Array<{ conversationId: string; path: string; role: string | null; title: string; gist: string; minutesAgo: number }> = [];
+/* `?launch=1`: the phone launches an agent from a draft. The spawn route answers a
+   structured receipt, and the scan swaps the launch window for the agent's
+   transcript once the driver asks (`evidence.materializeLaunch()`). The running
+   conversation stays live with a question pending, so it outranks the new agent,
+   which is what the focus view's own fallback would pick. */
+const LAUNCH_SCENE = new URLSearchParams(location.search).has("launch");
+const LAUNCH_ID = "launch-focus-1";
+const LAUNCH_CONVERSATION = "conversation_launched_agent";
+const LAUNCH_PATH = "/repo/launched-agent.jsonl";
 const KANBAN = new URLSearchParams(location.search).has("kanban") || OVERVIEW_SCENE || NEEDS_SCENE || ICONS_SCENE || ASKS_SCENE;
 const kanbanFiles: FileEntry[] = [];
 const kanbanLinks: { pipelines: Record<string, unknown>; tasks: Record<string, unknown> } = { pipelines: {}, tasks: {} };
@@ -1000,6 +1029,7 @@ const mergeSetting = { enabled: true };
 const bridgeSetting = { enabled: new URLSearchParams(location.search).get("bridge") !== "off" };
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
+  if (RUNTIME_PERF && url.pathname === "/api/runtime/snapshot") return serverFetch(input, init);
   const method = (init?.method ?? "GET").toUpperCase();
   if (url.pathname === "/api/view/presence" && method === "POST" && SELF_UPDATE_RELOAD) {
     evidence.presenceReplies += 1;
@@ -1159,6 +1189,19 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     return json({ marker, seatTickCheckMinutes: 10 });
   }
+  if (LAUNCH_SCENE && url.pathname === "/api/spawn") {
+    if (method === "POST") {
+      evidence.spawns.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+      return json({
+        ok: true, state: "path-pending", transport: "structured", launched: true, path: null,
+        launchId: LAUNCH_ID, conversationId: LAUNCH_CONVERSATION, initialMessage: "queued", target: null,
+      }, 202);
+    }
+    const supported = { supported: true, reason: null, formats: ["image/png"], maxImages: 2, maxRawBytesPerImage: 3_000_000, maxEncodedBytesPerRequest: 8_000_000 };
+    return json({ dirs: ["/repo"], cwd: "/repo", spawnTransport: "structured", imageInput: { claude: supported, codex: supported } });
+  }
+  if (LAUNCH_SCENE && url.pathname === "/api/accounts") return json({ claude: { active: "main", accounts: [] } });
+  if (LAUNCH_SCENE && url.pathname === "/api/roles") return json({}, 404);
   if (url.pathname === "/api/files" && OVERVIEW_SCENE) {
     return json({
       files: kanbanFiles, projectCatalog: Object.values(OVERVIEW_KEYS).map((project) => ({ project, conversations: kanbanFiles.filter((entry) => entry.project === project).length, smt: now - 20 })),
@@ -1170,6 +1213,15 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({
       files: kanbanFiles, projectCatalog: [{ project: PROJECT, conversations: kanbanFiles.length, smt: now - 20 }], flows: [], pipelines: kanbanPipelines,
       workflows: [], tasks: kanbanTasks, workLinks: kanbanLinks, systemHealth: { tmux: { status: "healthy" } },
+    });
+  }
+  if (url.pathname === "/api/files" && LAUNCH_SCENE && evidence.launchMaterialized) {
+    const launched = conversation(LAUNCH_PATH, "Launched agent", {
+      conversationId: LAUNCH_CONVERSATION, activity: "recent", mtime: now - 30, model: "haiku",
+    });
+    return json({
+      files: [...files, launched], projectCatalog: [{ project: PROJECT, conversations: files.length + 1, smt: now - 20 }], flows, pipelines,
+      workflows: [], tasks, systemHealth: { tmux: { status: "healthy" } },
     });
   }
   if (url.pathname === "/api/files") {
