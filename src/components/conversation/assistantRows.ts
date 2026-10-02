@@ -62,7 +62,7 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
       matches.forEach((match, index) => {
         claimedRows.add(match.key);
         // A structured answer can expand into several cards; each keeps a unique key.
-        bindings.set(match.key, bindings.get(match.key) ?? { key: `${entry.key}${index ? `:${index}` : ""}`, at: at(entry.live), order: entry.order });
+        bindings.set(match.key, bindings.get(match.key) ?? { key: `${entry.key}${index ? `:${index}` : ""}`, at: index ? transcriptInstant(match.item) ?? at(entry.live) : at(entry.live), order: entry.order });
       });
     } else if ((!entry.live.itemId || !claims.has(entry.live.itemId))
       && !(entry.live.phase === "streaming" && turn === "idle" && transcriptAt !== null
@@ -92,14 +92,15 @@ export function mergeAssistantRows<T extends { key: string; kind: string; item?:
   instantOf: (row: T) => number | null = row => row.instant ?? (row.item ? transcriptInstant(row.item) : null),
 ): T[] {
   const result: T[] = [];
-  const waiting = handoff.pending.map(answer => ({ row: makeRow(answer), at: at(answer.live), order: answer.order }));
+  const canonicalOrder = new Map(rows.map((row, index) => [row.key, index]));
+  const waiting: { row: T; at: number | null; order: number; canonicalIndex?: number }[] = handoff.pending.map(answer => ({ row: makeRow(answer), at: at(answer.live), order: answer.order }));
   for (const row of rows) {
     const binding = handoff.bindings.get(row.key);
-    if (binding) waiting.push({ row: { ...row, key: binding.key }, at: binding.at, order: binding.order });
+    if (binding) waiting.push({ row: { ...row, key: binding.key }, at: binding.at, order: binding.order, canonicalIndex: canonicalOrder.get(row.key) });
     else result.push(row);
   }
   waiting.sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity));
-  const placed = new Map<string, { at: number | null; order: number }>();
+  const placed = new Map<string, { at: number | null; order: number; canonicalIndex?: number }>();
   const orderOf = (row: T) => row.liveOrder ?? (row.item?.kind === "tool" ? handoff.liveOrder.get(row.item.id)
     : row.item?.kind === "cmd-group" ? Math.min(...row.item.ids.map(id => handoff.liveOrder.get(id) ?? Infinity))
       : row.item && source(row.item) ? handoff.liveOrder.get(source(row.item)!) : undefined);
@@ -108,11 +109,14 @@ export function mergeAssistantRows<T extends { key: string; kind: string; item?:
       const other = placed.get(row.key);
       const instant = (other ? other.at : instantOf(row)) ?? -Infinity;
       const order = other?.order ?? orderOf(row);
-      return instant > entry.at! || instant === entry.at && order !== undefined && order > entry.order;
+      if (instant !== entry.at) return instant > entry.at!;
+      const canonicalIndex = other?.canonicalIndex ?? canonicalOrder.get(row.key);
+      if (entry.canonicalIndex !== undefined && canonicalIndex !== undefined) return canonicalIndex > entry.canonicalIndex;
+      return order !== undefined && order > entry.order;
     });
     if (index < 0) result.push(entry.row);
     else result.splice(index, 0, entry.row);
-    placed.set(entry.row.key, { at: entry.at, order: entry.order });
+    placed.set(entry.row.key, { at: entry.at, order: entry.order, canonicalIndex: entry.canonicalIndex });
   }
   return result;
 }

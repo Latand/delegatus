@@ -1113,6 +1113,17 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     () => visibleRuntimeLiveTurnItems(runtimeLiveTurn, feed.items, assistantClaims, runtimeTurn).filter(item => item.tool || !item.text.trim()),
     [runtimeLiveTurn, feed.items, assistantClaims, runtimeTurn],
   );
+  const liveTail = useMemo(() => {
+    const ordered = [...assistantHandoff.pending.map(answer => answer.live), ...visibleLiveTurnItems].sort((a, b) => {
+      const time = Date.parse(a.startedAt ?? a.completedAt ?? "") - Date.parse(b.startedAt ?? b.completedAt ?? "");
+      if (Number.isFinite(time) && time) return time;
+      const order = (item: RuntimeLiveTurnItem) => item.itemId ? assistantHandoff.liveOrder.get(item.itemId) ?? Infinity
+        : assistantHandoff.pending.find(answer => answer.live === item)?.order ?? Infinity;
+      return order(a) - order(b);
+    });
+    const tail = liveTurnTail(ordered);
+    return { ...tail, handoff: { ...assistantHandoff, pending: assistantHandoff.pending.filter(answer => tail.rows.includes(answer.live)) } };
+  }, [assistantHandoff, visibleLiveTurnItems]);
   /* The status bar names the tool that is running NOW: a live tool row from the
      structured host (issue #1100) is newer than anything the transcript window
      shows, so it wins over the transcript's last row while it is still running.
@@ -1389,15 +1400,15 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     for (const section of orderedConversationTail({
       launch: Boolean(launch),
       outbox: Boolean(memoryKey && pendingOutbox.length),
-      delta: visibleLiveTurnItems.length > 0,
+      delta: visibleLiveTurnItems.length > 0 || liveTail.earlier > 0,
     })) {
       if (section === "launch") {
         if (memoryKey) rows.push(...pendingOutbox.filter(launchPrompt).flatMap(tailMessage));
         rows.push({ kind: "launch", key: "launch" });
       } else if (section === "delta") {
-        const tail = liveTurnTail(visibleLiveTurnItems);
+        const tail = liveTail;
         if (tail.earlier) rows.push({ kind: "delta", key: "delta-earlier", items: [{ itemId: null, text: "", phase: "awaiting-echo", startedAt: null, completedAt: null, omittedItems: tail.earlier }] });
-        for (const [index, item] of tail.rows.entries()) rows.push({ kind: "delta", key: `delta:${item.itemId ?? index}`,
+        for (const [index, item] of tail.rows.filter(item => item.tool || !item.text.trim()).entries()) rows.push({ kind: "delta", key: `delta:${item.itemId ?? index}`,
           items: [item], liveOrder: item.itemId ? assistantHandoff.liveOrder.get(item.itemId) : undefined, instant: Date.parse(item.startedAt ?? item.completedAt ?? "") || null });
       }
       else rows.push(...pendingOutbox.filter((entry) => !launchPrompt(entry)).flatMap(tailMessage));
@@ -1423,7 +1434,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       rowInstants.set(entry.key, transcriptInstant(entry.item));
       if (entry.anchorKey) rowInstants.set(entry.anchorKey, transcriptInstant(entry.item));
     }
-    return mergeAssistantRows(rows, assistantHandoff, ({ key, live }) => ({
+    return mergeAssistantRows(rows, liveTail.handoff, ({ key, live }) => ({
       kind: "item", key, anchorKey: key, live,
       item: { kind: "prose", ts: live.startedAt ?? live.completedAt, text: live.text,
         engine: file?.engine === "codex" ? "codex" : file?.engine === "copilot" ? "copilot" : "claude",
@@ -1436,7 +1447,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
        functions of the memos already named here. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleItems, visibleStartIndex, echoBindings, boundSubmissions, outbox, pendingOutbox, launch, memoryKey,
-    visibleLiveTurnItems, assistantHandoff, answerFor, provenanceLookup, withheldRecords, withheldNativeRecords, deputies, holdsMandate, heldMandate, firstMandateRecord, mandateCard]);
+    visibleLiveTurnItems, assistantHandoff, liveTail, answerFor, provenanceLookup, withheldRecords, withheldNativeRecords, deputies, holdsMandate, heldMandate, firstMandateRecord, mandateCard]);
   /* What this feed is painting, so the composer's receipt stack knows which
      deliveries already have a row explaining them and stops repeating them.
      Read off the ROWS rather than off the queue, and including the rows the

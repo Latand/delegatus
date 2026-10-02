@@ -404,3 +404,26 @@ test("an idle broker's stranded draft leaves the rendered feed once the transcri
   expect(host.querySelector("[data-live-turn]")).toBeNull();
   expect(host.querySelector("[data-live-turn-caret]")).toBeNull();
 });
+
+test("canonical text-tool-text fragments retain their source order at handoff", () => {
+  const record = { type: "assistant", uuid: "fragmented-answer", timestamp: AT(1), message: { content: [
+    { type: "text", text: "Before call" },
+    { type: "tool_use", id: "fragmented-tool", name: "Bash", input: { command: "pwd" } },
+    { type: "text", text: "After call" },
+  ] } };
+  sessionState.session = { ...session, liveTurn: projectRuntimeLiveTurnItem(null, "fragments", record, "completed", AT(1)) };
+  const { host, paint } = render();
+  tailState.lines = [JSON.stringify(record)];
+  paint();
+  expect([...host.querySelectorAll<HTMLElement>("[data-feed-kind]")].map(row => row.dataset.feedKind === "tool" ? "tool" : row.textContent?.includes("Before call") ? "before" : "after"))
+    .toEqual(["before", "tool", "after"]);
+});
+
+test("the shared live tail bounds prose and tools while retaining older replies", () => {
+  sessionState.session = { ...session, liveTurn: { turnId: "bounded", text: "Reply 39", items: Array.from({ length: 40 }, (_, i) => ({
+    itemId: `bounded-${i}`, text: `Reply ${i}`, phase: "awaiting-echo" as const, startedAt: AT(i), completedAt: AT(i),
+  })) } };
+  const { host } = render();
+  expect(host.querySelectorAll("[data-live-turn]")).toHaveLength(8);
+  expect(host.querySelector("[data-live-turn-earlier]")?.getAttribute("data-live-turn-earlier")).toBe("32");
+});
