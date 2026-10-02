@@ -16,6 +16,7 @@ function fixture(sequence: string[], deadline = "310s") {
     mkdirSync(join(root, dir));
   }
   copyFileSync(join(import.meta.dir, "audit-with-retry.sh"), join(root, "scripts/audit-with-retry.sh"));
+  copyFileSync(join(import.meta.dir, "supply-chain-check.ts"), join(root, "scripts/supply-chain-check.ts"));
   writeFileSync(join(root, "security/audit-allowlist.json"), JSON.stringify([
     { id: "GHSA-aaaa-bbbb-cccc", reason: "Synthetic test exception", expires: "2999-12-31" },
     { id: "CVE-2099-12345", reason: "Second synthetic test exception", expires: "2999-12-31" },
@@ -32,7 +33,7 @@ function fixture(sequence: string[], deadline = "310s") {
     writeFileSync(join(root, "bin", name), `#!/bin/bash\nset -eu\n${body}\n`);
     chmodSync(join(root, "bin", name), 0o755);
   };
-  shim("bun", 'if [[ "$1" == -e ]]; then exec "$AUDIT_TEST_BUN" "$@"; fi\nexec "$AUDIT_TEST_BUN" "$AUDIT_TEST_ROOT/fake.ts" "$@"');
+  shim("bun", 'if [[ "$1" == -e || "$1" == scripts/supply-chain-check.ts ]]; then exec "$AUDIT_TEST_BUN" "$@"; fi\nexec "$AUDIT_TEST_BUN" "$AUDIT_TEST_ROOT/fake.ts" "$@"');
   shim("sleep", 'echo "$1" >> "$AUDIT_TEST_ROOT/sleeps"\nexec /bin/sleep 0.001');
   // Exercise GNU timeout itself with a shorter deadline; record the production
   // arguments before substitution so the bounds are also part of the proof.
@@ -128,6 +129,33 @@ for (const statuses of [[503, 200], [503, 503, 503], [403]]) {
     } finally {
       await server.stop(true);
     }
+  });
+}
+
+for (const status of [408, 429, 500, 502, 503, 504]) {
+  test(`Bun 1.4 advisory HTTP ${status} retries as unavailable`, async () => {
+    const f = fixture([]);
+    writeFileSync(join(f.root, "fake.ts"), `console.error("bun audit v1.4.0 (fixture)"); console.error("error: POST https://registry.example/-/npm/v1/security/advisories/bulk - ${status}"); process.exit(1);`);
+    const result = await f.start().result();
+    expect(result.status).toBe(1);
+    expect(result.sleeps).toEqual(["5", "10"]);
+    expect(result.text).toContain("Advisory service unavailable after 3 attempts");
+  });
+}
+
+for (const diagnostic of [
+  "error: POST https://registry.example/-/npm/v1/security/advisories/bulk - 403",
+  "error: POST https://registry.example/another-endpoint - 503",
+  "error: POST https://registry.example/-/npm/v1/security/advisories/bulk - 503\nerror: invalid lockfile",
+  "high: error: POST https://registry.example/-/npm/v1/security/advisories/bulk - 503",
+]) {
+  test(`Bun 1.4 refuses non-transient or mixed diagnostics: ${JSON.stringify(diagnostic)}`, async () => {
+    const f = fixture([]);
+    writeFileSync(join(f.root, "fake.ts"), `console.error("bun audit v1.4.0 (fixture)"); console.error(${JSON.stringify(diagnostic)}); process.exit(1);`);
+    const result = await f.start().result();
+    expect(result.status).toBe(1);
+    expect(result.sleeps).toEqual([]);
+    expect(result.text).toContain("unrecognized error");
   });
 }
 
@@ -238,4 +266,13 @@ test("exhausted HTTP service errors are classified as unavailable", async () => 
   expect(result.calls).toHaveLength(3);
   expect(result.text).toContain("Advisory service unavailable after 3 attempts");
   expect(result.text).not.toContain("service unreachable");
+});
+
+test("Bun 1.4 HTTP retries require the complete endpoint diagnostic", async () => {
+  const f = fixture(["success"]);
+  writeFileSync(join(f.root, "fake.ts"), `console.error("error: POST https://registry.example.invalid/-/npm/v1/security/advisories/bulk - 503"); console.error("error: invalid lockfile"); process.exit(1);`);
+  const result = await f.start().result();
+  expect(result.status).toBe(1);
+  expect(result.sleeps).toEqual([]);
+  expect(result.text).toContain("unrecognized error");
 });

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
+import { renderToStaticMarkup } from "react-dom/server";
 import { Profiler } from "react";
 
 import { MAX_TTS_MESSAGE_LENGTH } from "@/lib/tts";
@@ -9,6 +10,12 @@ import { chunkSpeech, MAX_CHUNK_CHARS } from "@/lib/ttsChunks";
 
 import { SpeakButton } from "./SpeakButton";
 import { chunksCached, clearTtsCache, evictTtsAudio, voiceKey } from "./ttsSession";
+
+test("a scoped speech header server-renders before its client snapshot exists", () => {
+  const html = renderToStaticMarkup(<SpeakButton scope="ssr-speech-header" header />);
+  expect(html).toContain("<button");
+  expect(html).toContain("disabled");
+});
 
 const dom = new Window();
 Object.assign(globalThis, {

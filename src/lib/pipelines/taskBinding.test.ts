@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { launchMembershipInput } from "@/lib/tasks/launchMembership";
+import { ensureTaskMembership } from "@/lib/tasks/membership";
 
 import { adoptPipelineFallbackTask } from "./engine";
 import { buildPipeline } from "./store";
@@ -21,6 +22,63 @@ const spawnIdentity = {
   launchId: "launch-task-binding",
   conversationId: "conversation_task_binding",
 };
+
+test("a task-less pipeline keeps its first attempt's inherited task for later service stages", () => {
+  const pipeline = buildPipeline({ id: "inherited01", task: "Review existing work", taskIds: [], project: "viewer", repoDir: "/repo",
+    stages: [{ id: "run", kind: "run", prompt: "review", next: null, effectiveRole: role }], srcPath: null, srcConversationId: null, now: "now" });
+  pipeline.runs[0]!.attempts.push({ ...spawnIdentity, n: 1, state: "spawning", effectiveRole: role,
+    sessionId: null, agentPath: null, paneId: null, flowId: null, expectedReviewHeadSha: null, reviewHeadSha: null,
+    startedAt: "now", completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null });
+  const work = { ...task(), assignments: [{ ...spawnIdentity, path: null, panePid: null, state: "linked" as const, error: null, at: "now" }] };
+  const before = JSON.stringify(work);
+  expect(adoptPipelineFallbackTask(pipeline, [work])).toBe(true);
+  expect(pipeline.taskIds).toEqual([work.id]);
+  expect(JSON.stringify(work)).toBe(before);
+  expect(adoptPipelineFallbackTask(pipeline, [work])).toBe(false);
+  const later = launchMembershipInput({ engine: "codex", cwd: "/repo", origin: { kind: "container", container: "pipeline", containerId: pipeline.id } },
+    { launchId: "launch-fixer", conversationId: "conversation_fixer" }, () => pipeline.taskIds, () => "viewer");
+  expect(later.explicitTaskIds).toEqual([work.id]);
+});
+
+test("inherited pipeline tasks survive project aliases on reservation replay and later stages", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { resetProjectAliasesForTests } = await import("@/lib/projects/aliases");
+  const previous = process.env.LLV_STATE_DIR;
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-binding-alias-"));
+  process.env.LLV_STATE_DIR = state;
+  const project = "repo-0123456789abcdef0123456789abcdef";
+  fs.writeFileSync(path.join(state, "project-aliases.json"), JSON.stringify({ schemaVersion: 1, aliases: { "old-project": project }, displayNames: {} }));
+  resetProjectAliasesForTests();
+  try {
+    const pipeline = buildPipeline({ id: "aliaslane", task: "Review the work", taskIds: [], project, repoDir: "/repo",
+      stages: [{ id: "run", kind: "run", prompt: "review", next: null, effectiveRole: role }], srcPath: null, srcConversationId: null, now: "now" });
+    pipeline.runs[0]!.attempts.push({ ...spawnIdentity, n: 1, state: "spawning", effectiveRole: role,
+      sessionId: null, agentPath: null, paneId: null, flowId: null, expectedReviewHeadSha: null, reviewHeadSha: null,
+      startedAt: "now", completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null });
+    const owner = { conversationId: "conversation_owner", path: null, panePid: null, state: "linked" as const, error: null, at: "now" };
+    const boards = [{ ...task(), project: "old-project", assignments: [owner] }, { ...task(), id: "second-task", project, assignments: [owner] }];
+    const launch = { engine: "codex", cwd: "/repo", parentConversationId: owner.conversationId, origin: { kind: "container", container: "pipeline", containerId: pipeline.id } };
+    const input = (receipt: typeof spawnIdentity) => launchMembershipInput(launch, receipt, () => pipeline.taskIds, () => project);
+    const first = ensureTaskMembership(boards, input(spawnIdentity));
+    if (!first.ok) throw new Error(first.error);
+    expect(adoptPipelineFallbackTask(pipeline, first.tasks)).toBe(true);
+    for (const identity of [spawnIdentity, { launchId: "launch-next", conversationId: "conversation_next" }]) {
+      const result = ensureTaskMembership(first.tasks, input(identity));
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+      expect(result.created).toEqual([]);
+      expect(result.tasks.map(t => t.project)).toEqual(["old-project", project]);
+    }
+    const foreign = ensureTaskMembership([{ ...boards[0]!, project: "unrelated-project" }], { ...input(spawnIdentity), explicitTaskIds: [boards[0]!.id] });
+    expect(foreign).toMatchObject({ ok: false, status: 409 });
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    resetProjectAliasesForTests();
+    fs.rmSync(state, { recursive: true, force: true });
+  }
+});
 
 function task(): BoardTask {
   return {
