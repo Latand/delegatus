@@ -129,11 +129,48 @@ Its production worker migrates a private v4 fixture to v5, preserves message
 IDs, hashes and FTS rows, creates vocabulary/indexes, and restores complete
 ranked coverage. Failed worker exits are reported and later searches retry.
 
-## Real-corpus replay
+## Main-versus-PR baseline and acceptance
+
+The 2026-10-02 decision accepts PR #2397 as a measured improvement:
+**net improvement over main on the same replay; ≤8% strong-zero tracked as
+follow-up**. The named follow-up is
+[Strong-zero recall ≤8%](../design/smarter-search.md#follow-up-strong-zero-recall-8).
+The target remains unmet and is no longer a merge blocker.
+
+The independent paired replay measured main at `30f50035` and the published
+PR at `b8373b64`, using identical offline index copies and seeded inputs:
+1,000 queries with seed 20260926 and 300 search/open pairs with seed 7.
+Strong means coverage of at least 60% of retained units; strong-zero includes
+weak-only and zero results. Both sides preserve historical time,
+issuing-transcript exclusion and project scope. Only aggregates are published.
+
+| Metric | Main | PR |
+| --- | ---: | ---: |
+| Strong queries | 386 / 1,000 | 879 / 1,000 |
+| Weak-only queries | 1 / 1,000 | 53 / 1,000 |
+| Zero queries | 613 / 1,000 | 68 / 1,000 |
+| Strong-zero | 61.4% | 12.1% |
+| Opened transcript in top-6 | 34 / 300 | 42 / 300 |
+| Search latency p50 | 0.49 ms | 5.2 ms |
+| Search latency p95 | 1.39 ms | 16.4 ms |
+
+Recall improved on 545 queries with no recall regressions. Opened top-6 had
+14 wins and six losses: four two-word and two three-to-four-word queries,
+all without project scope. The aggregate top-6 gain coexists with those
+ranking losses. Searches are slower at both reported latency percentiles.
+This comparison establishes net improvement under the revised acceptance;
+it does not establish the ≤8% follow-up target.
+
+These are the independently measured revisions, rather than a new replay of
+the final merged tree. The later atomic phrase-frequency fix is preserved;
+its separate replay below reports 11.7% strong-zero and 43/300 opened top-6.
+The update stage merges current main and changes the documentation only.
+
+## Historical phrase-frequency replay
 
 The previous reported 2.6% strong-zero result used a one-word retry that
-changed the coverage denominator. It is invalid as evidence for the pinned
-8% acceptance threshold and is withdrawn.
+changed the coverage denominator. It is invalid as evidence for the 8%
+strong-zero target and is withdrawn.
 
 The latest phrase-frequency fix replay ran on 2026-10-02 against a separate
 scratch copy of the supplied consistent offline snapshot. Recorded calls were read from 479
@@ -151,11 +188,12 @@ exclusion fences. No query text or transcript content is published.
 | Revised strong-zero (weak or zero) | 117 | 11.7% |
 
 The unchanged 60% retained-unit coverage criterion gives **11.7% strong-zero,
-above the pinned 8% acceptance threshold**. This replay does not establish
-that acceptance gate. Among 300 recorded search/open pairs, opened-transcript
-top-6 count improves from 34 to 43 (11.3% to 14.3%), satisfying its baseline
-comparison. Query lengths are 174 one-word, 211 two-word, 309 three-to-four-word,
-242 five-to-seven-word and 64 longer queries.
+above the 8% follow-up target**. This replay does not establish that target;
+the 2026-10-02 decision replaces the former recall merge gate with the paired
+net-improvement acceptance above. Among 300 recorded search/open pairs,
+opened-transcript top-6 count improves from 34 to 43 (11.3% to 14.3%),
+satisfying its baseline comparison. Query lengths are 174 one-word,
+211 two-word, 309 three-to-four-word, 242 five-to-seven-word and 64 longer queries.
 
 Revised latency p50/p95/max is 5.60/17.01/38.54 ms; baseline p50/p95 is
 0.20/0.51 ms. On the already migrated private index, the first search takes
@@ -183,7 +221,7 @@ the merge base with commit checking on the final committed tree.
 No deployment is included. The fenced privacy-gate, board-maintenance and
 monitor areas and the repository instruction files remain untouched.
 
-## Atomic-unit frequency fix and remaining recall finding
+## Atomic-unit frequency fix and recall follow-up
 
 Relevance now measures an atomic phrase's document frequency with its complete
 FTS MATCH expression. The minimum frequency of its individual tokens was an
@@ -204,9 +242,11 @@ passes the 300 ms common-pair and 6 KiB fixture page gates. Common-pair library
 and packaged MCP medians are both 137 ms; peak RSS is 510,472 KiB (499 MiB).
 Library, route, HTTP and packaged MCP were exercised; UI was unchanged.
 
-The P1 recall finding remains open. The phrase-frequency fix improves
+The former P1 recall acceptance blocker becomes the named
+[Strong-zero recall ≤8%](../design/smarter-search.md#follow-up-strong-zero-recall-8)
+follow-up under the 2026-10-02 decision. The phrase-frequency fix improves
 strong-zero from 121 to 117 of the same 1,000 seeded queries and opened top-6
-from 42 to 43 of the same 300 pairs. It does not pass the pinned 8% recall gate.
+from 42 to 43 of the same 300 pairs. It does not reach the 8% follow-up target.
 No coverage threshold, project scope, historical time or issuing-transcript
 fence was relaxed, and ranking cannot change the corpus-wide strong count.
 
@@ -219,9 +259,30 @@ queries. That experiment is exploratory: it does not prove an impossibility
 bound for every permitted word form or change in common-unit filtering.
 Further recall work must establish a retrieval improvement within D1/D3 or
 return to design with these corpus constraints; the current fix does not
-claim the unmet acceptance criterion.
+claim the unmet follow-up target.
 
-A fresh read-only review of the full diff found no additional source defects;
-it retained the recall acceptance blocker. TypeScript, changed-file ESLint
-(zero errors, three existing warnings across the PR), and the privacy gate
-with commit checking pass. The merge rehearsal against current main is clean.
+The preceding read-only review of the full diff found no additional source
+defects; it retained the recall acceptance blocker under the former criterion.
+The 2026-10-02 decision supersedes that criterion as described above.
+TypeScript, changed-file ESLint (zero errors, three existing warnings across
+the PR), and the privacy gate with commit checking pass. The merge rehearsal
+against current main is clean.
+
+## Acceptance-update checks
+
+Current main was merged without conflicts. This update adds no product-source
+changes beyond that merge and preserves the atomic phrase-frequency fix.
+Six exact-path search/replay files pass 68 tests with isolated state and a
+private temporary root; the standalone migration case is skipped because this
+worktree has no built standalone artifact. TypeScript passes, and ESLint on
+all TypeScript files changed by the PR reports zero errors and three existing
+warnings. Heavy checks run through the machine's capped gate. The privacy publication
+gate passes against main with commit checking.
+
+The full seven-file run reports 97 passes, one skip and one failure at
+`src/lib/mcp/schemaParity.test.ts:700`: the pipeline fail-edge description
+assertion expects older wording. Both that assertion and the corresponding
+pipeline description are unchanged from current main; the PR only appends a
+search-order test in that file. This inherited pipeline mismatch is outside
+the search update's scope. Five search/bounded-numeric MCP schema checks pass
+separately; the remaining 25 schema cases are filtered out in that scoped run.

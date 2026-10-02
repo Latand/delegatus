@@ -469,11 +469,15 @@ Tests, run by path:
 1. On the synthetic bench: the relevance library median ≤ 300 ms on the
    "two common words" query; `newest` stays within 10% of today's cells.
 2. A 6-conversation relevance page for the fixture's common query is ≤ 6 KB.
-3. Before promotion, rerun this document's method on a fresh read-only copy
-   of the live index (the harness shape is described under *Method*): zero
-   rate (strong) ≤ 8% on a 1,000-query seeded sample, and the opened-transcript
-   top-6 count at least today's. Report both in the PR, with no query text
-   that names a client, account or path.
+3. Acceptance for PR #2397, per the 2026-10-02 decision: **net improvement
+   over main on the same replay; ≤8% strong-zero tracked as follow-up**.
+   Compare main and the PR on the same 1,000-query seeded sample and recorded
+   search/open pairs from a read-only offline index copy. Keep strong coverage
+   at 60% of retained units, with the historical time and issuing-transcript
+   exclusion fences unchanged. Report aggregate recall, opened-transcript
+   top-6 wins/losses and latency in the PR, without private query text.
+   The follow-up is [Strong-zero recall ≤8%](#follow-up-strong-zero-recall-8);
+   that target remains unmet and is no longer a merge blocker.
 4. For any unquoted query, the dialog still returns every row today's search
    returns, newest first, with the inflected matches placed by their time.
 5. A first request against a v4 index returns while migration and large index
@@ -490,6 +494,16 @@ Tests, run by path:
 | "make the search smarter" | conversations ranked by idf-weighted coverage, proximity and recency; the opened transcript lands in the top 6 in 181 of 296 cases (today 149) |
 | "maybe connect with graphs" | fragments inside a conversation are linked by what they cover (`fragments`, `matched`/`missing`); conversations sharing a fragment are linked by `alsoIn` |
 | "without a million pieces of information" | 6 conversations, ≤ 3 short fragments each: ≈ 3.9 KB p50 |
+
+## Follow-up: strong-zero recall ≤8%
+
+Reduce strong-zero to ≤8% on the same seeded replay while preserving D1/D3,
+60% retained-unit coverage, project scope, historical time and issuing-transcript
+exclusion. Compare recall and opened top-6 against main, including two-word
+and three-to-four-word queries without project scope, and report latency.
+The measured main-versus-PR baseline and the remaining gap are recorded in
+[the performance report](../performance/smarter-search.md#main-versus-pr-baseline-and-acceptance).
+This follow-up is separate from PR #2397's net-improvement acceptance.
 
 ## Deferred — not currently justified
 
