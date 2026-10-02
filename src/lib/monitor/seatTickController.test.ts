@@ -824,7 +824,8 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
       LLV_BUN_EXECUTABLE: process.execPath, LLV_TEST_CRASH_FLAG: crashFlag },
     stdio: ["pipe", "pipe", "pipe"],
   });
-  const pendingResponses = new Map<number, (message: any) => void>();
+  type McpResponse = { result: { serverInfo: { name: string }; isError: boolean; content: { text: string }[] } };
+  const pendingResponses = new Map<number, (message: McpResponse) => void>();
   let output = "";
   session.stdout.setEncoding("utf8");
   session.stdout.on("data", (chunk: string) => {
@@ -838,7 +839,7 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
       }
     }
   });
-  const call = (id: number, method: string) => new Promise<any>((resolve, reject) => {
+  const call = (id: number, method: string) => new Promise<McpResponse>((resolve, reject) => {
     const timeout = setTimeout(() => { pendingResponses.delete(id); reject(new Error(`MCP response ${id} timed out`)); }, 5_000);
     pendingResponses.set(id, (message) => { clearTimeout(timeout); resolve(message); });
     session.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params: { name: "check", arguments: {} } }) + "\n");
@@ -2109,6 +2110,153 @@ test("a check that outran its interval drops the next tick rather than queueing 
 
 const MONITOR_PROMPT = "before the items, check whether last night's digest actually sent";
 const PROMPT_HEADING = "Standing monitor note for this project";
+
+test("a wake drops a lane closed during gathering and carries the current monitor note", async () => {
+  const rig = harness({ pipelines: [...OPEN_LANE, { ...OPEN_LANE[0]!, id: "current-lane" }], state: OVERDUE, settings: promptSettings() });
+  const pipelines = rig.deps.sources!.pipelines;
+  const liveness = rig.deps.sources!.liveness;
+  rig.deps.sources!.liveness = async (request) => {
+    if (!request.project) return liveness(request);
+    rig.deps.sources!.pipelines = () => pipelines().map((lane) => lane.id === OPEN_LANE[0]!.id ? { ...lane, state: "closed", closedAt: new Date(NOW).toISOString() } : lane);
+    rig.deps.sources!.settings = () => ({ ...promptSettings(), monitorPrompt: "Watch the current release.", updatedAt: new Date(NOW).toISOString() });
+    return liveness(request);
+  };
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "wake" });
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.sent[0]!.text).not.toContain(OPEN_LANE[0]!.id);
+  expect(rig.sent[0]!.text).toContain("Watch the current release.");
+  expect(rig.sent[0]!.text).not.toContain(MONITOR_PROMPT);
+});
+
+for (const change of ["enabled", "interval"] as const) {
+  test(`a ${change} change during gathering refreshes gated pull-request evidence`, async () => {
+    const rig = harness({
+      pipelines: [{ ...OPEN_LANE[0]!, createdAt: new Date(NOW - 120 * MINUTE).toISOString(), branch: "topic-pr" }],
+      state: change === "enabled" ? OVERDUE : { lastWakeAt: new Date(NOW - 31 * MINUTE).toISOString() },
+      settings: { ...defaultSeatTickSettings(PROJECT), enabled: change !== "enabled" },
+      openPullRequests: [{ number: 1289, title: "Existing work", headRefName: "topic-pr",
+        createdAt: new Date(NOW - 90 * MINUTE).toISOString(), updatedAt: new Date(NOW - MINUTE).toISOString() }],
+    });
+    const liveness = rig.deps.sources!.liveness;
+    const pipelines = rig.deps.sources!.pipelines;
+    rig.deps.sources!.liveness = async (request) => {
+      if (request.project) {
+        rig.deps.sources!.pipelines = () => pipelines().map(lane => ({ ...lane, state: "completed" }));
+        rig.deps.sources!.settings = () => ({ ...defaultSeatTickSettings(PROJECT), wakeIntervalMinutes: change === "interval" ? 30 : 60 });
+      }
+      return liveness(request);
+    };
+    let reads = 0;
+    const openPullRequests = rig.deps.sources!.openPullRequests;
+    rig.deps.sources!.openPullRequests = async request => { reads++; return openPullRequests(request); };
+    expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "wake", reasons: ["unmerged-pr"] });
+    expect(reads).toBe(1);
+    expect(rig.sent[0]!.text).toContain("#1289");
+  });
+}
+
+test("a newly eligible failed PR read preserves its outage accounting", async () => {
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE,
+    settings: { ...defaultSeatTickSettings(PROJECT), enabled: false } });
+  const liveness = rig.deps.sources!.liveness;
+  const pipelines = rig.deps.sources!.pipelines;
+  rig.deps.sources!.liveness = async request => {
+    if (request.project) {
+      rig.deps.sources!.pipelines = () => pipelines().map(lane => ({ ...lane, state: "completed" }));
+      rig.deps.sources!.settings = () => defaultSeatTickSettings(PROJECT);
+    }
+    return liveness(request);
+  };
+  rig.deps.sources!.openPullRequests = async () => ({ ok: false, unavailable: "command-failed" });
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "error", delivery: null });
+  expect(rig.sent).toEqual([]);
+  expect(rig.written.at(-1)!.pullRequestGap).toMatchObject({ gap: "command-failed", attempts: 1 });
+});
+
+test("a second state change during PR refresh leaves the alarm unsent", async () => {
+  const rig = harness({ pipelines: [{ ...OPEN_LANE[0]!, branch: "topic-pr" }], state: OVERDUE,
+    settings: { ...defaultSeatTickSettings(PROJECT), enabled: false } });
+  const liveness = rig.deps.sources!.liveness;
+  const pipelines = rig.deps.sources!.pipelines;
+  rig.deps.sources!.liveness = async request => {
+    if (request.project) {
+      rig.deps.sources!.pipelines = () => pipelines().map(lane => ({ ...lane, state: "completed" }));
+      rig.deps.sources!.settings = () => defaultSeatTickSettings(PROJECT);
+    }
+    return liveness(request);
+  };
+  rig.deps.sources!.openPullRequests = async () => {
+    rig.deps.sources!.settings = () => ({ ...defaultSeatTickSettings(PROJECT), enabled: false });
+    return { ok: true, pullRequests: [] };
+  };
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "error", delivery: null });
+  expect(rig.sent).toEqual([]);
+  expect(rig.written.every(state => state.lastWakeAt === OVERDUE.lastWakeAt)).toBe(true);
+});
+
+test("an absent refused alarm refreshes its agenda and note under its original key", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "fresh-alarm-")), "state.json");
+  writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, stateFile);
+  const first = harness({ stateFile, pipelines: OPEN_LANE, state: OVERDUE, settings: promptSettings(), wakeState: "absent",
+    delivery: { ok: false, outcome: "failed", error: "temporarily unavailable", status: 503 } });
+  await runSeatTickCheck(PROJECT, first.deps);
+  const original = readSeatTickState(PROJECT, stateFile).outstandingWake!;
+  const next = harness({ stateFile, pipelines: [{ ...OPEN_LANE[0]!, id: "current-lane" }], wakeState: "absent", now: NOW + 5 * MINUTE,
+    settings: { ...promptSettings(), monitorPrompt: REPLACEMENT_PROMPT } });
+  await runSeatTickCheck(PROJECT, next.deps);
+  expect(next.sent).toHaveLength(1);
+  expect(next.sent[0]!.clientMessageId).toBe(original.clientMessageId);
+  expect(next.sent[0]!.text).not.toContain(OPEN_LANE[0]!.id);
+  expect(next.sent[0]!.text).toContain(REPLACEMENT_PROMPT);
+  expect(next.sent[0]!.text).not.toContain(MONITOR_PROMPT);
+  expect(readSeatTickState(PROJECT, stateFile).noteShown).toBe(seatTickNoteRevisionForTest(REPLACEMENT_PROMPT));
+});
+
+test("a refused alarm whose only lane settled is cleared unsent and credits nothing", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "settled-alarm-")), "state.json");
+  const initial = { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE, lastProposalAt: new Date(NOW).toISOString() };
+  writeSeatTickState(PROJECT, initial, stateFile);
+  const first = harness({ stateFile, pipelines: OPEN_LANE, wakeState: "absent",
+    delivery: { ok: false, outcome: "failed", error: "temporarily unavailable", status: 503 } });
+  await runSeatTickCheck(PROJECT, first.deps);
+  expect(readSeatTickState(PROJECT, stateFile).outstandingWake).not.toBeNull();
+  const next = harness({ stateFile, pipelines: [], wakeState: "absent", now: NOW + 5 * MINUTE });
+  expect(await runSeatTickCheck(PROJECT, next.deps)).toMatchObject({ verdict: "quiet" });
+  expect(next.sent).toEqual([]);
+  const settled = readSeatTickState(PROJECT, stateFile);
+  expect(settled).toMatchObject({ outstandingWake: null, lastWakeAt: initial.lastWakeAt, eventsThrough: 0 });
+  expect(settled.noteShown ?? null).toBeNull();
+});
+
+test("a wake retained by transport identifies its snapshot when delivery is delayed", async () => {
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE, delivery: HELD });
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent[0]!.text).toContain(`Snapshot at ${new Date(NOW).toISOString()}`);
+  expect(rig.sent[0]!.text).toContain("seat_tick_settings");
+  expect(rig.written.at(-1)!.outstandingWake!.text).toBe(rig.sent[0]!.text);
+});
+
+test("a proposal refreshes the monitor note after awaiting issue lookup", async () => {
+  const rig = harness({ settings: promptSettings() });
+  rig.deps.proposalIssues = async () => {
+    rig.deps.sources!.settings = () => ({ ...promptSettings(), monitorPrompt: REPLACEMENT_PROMPT });
+    return [];
+  };
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent[0]!.text).toContain(REPLACEMENT_PROMPT);
+  expect(rig.sent[0]!.text).not.toContain(MONITOR_PROMPT);
+});
+
+test("a slow proposal lookup preserves the oldest evidence timestamp", async () => {
+  const rig = harness({ settings: promptSettings() });
+  rig.deps.proposalIssues = async () => {
+    rig.deps.sources!.now = () => NOW + 10 * MINUTE;
+    return [];
+  };
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent[0]!.text).toContain(`Snapshot at ${new Date(NOW).toISOString()}`);
+  expect(rig.sent[0]!.text).not.toContain(`Snapshot at ${new Date(NOW + 10 * MINUTE).toISOString()}`);
+});
 
 test("every scheduler wake carries the operator instructions alongside the seat note", async () => {
   const instruction = "Handle incoming tasks by priority; stop when the inbox is empty.";
