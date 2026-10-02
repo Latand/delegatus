@@ -290,12 +290,47 @@ function removeDefaultIgnorables(text: string): string {
   return text.replaceAll(/\p{Default_Ignorable_Code_Point}/gu, "");
 }
 
-function decodeSensitiveText(text: string, preserveDefaultIgnorables: boolean): { error: boolean; text: string } {
-  const strip = preserveDefaultIgnorables ? (value: string): string => value : removeDefaultIgnorables;
+/** Keep source positions only for characters a decoding step leaves untouched. */
+function decodeWithOffsets(
+  text: string,
+  decode: (value: string) => string,
+  tokens: RegExp,
+  offsets?: number[],
+): string {
+  const decoded = decode(text);
+  if (!offsets || decoded === text) return decoded;
+  const nextOffsets: number[] = [];
+  let cursor = 0;
+  const mapped = text.replace(tokens, (token: string, index: number) => {
+    for (; cursor < index; cursor += 1) nextOffsets.push(offsets[cursor]);
+    const replacement = decode(token);
+    for (let i = 0; i < replacement.length; i += 1) {
+      nextOffsets.push(replacement === token ? offsets[index + i] : -1);
+    }
+    cursor = index + token.length;
+    return replacement;
+  });
+  for (; cursor < text.length; cursor += 1) nextOffsets.push(offsets[cursor]);
+  offsets.length = decoded.length;
+  // A decoder shape outside the mapped tokens still gets scanned in full,
+  // but cannot confer a RAW exemption without proven source correspondence.
+  for (let i = 0; i < decoded.length; i += 1) offsets[i] = mapped === decoded ? nextOffsets[i] : -1;
+  return decoded;
+}
+
+function decodeSensitiveText(text: string, preserveDefaultIgnorables: boolean, offsets?: number[]): { error: boolean; text: string } {
+  const strip = preserveDefaultIgnorables ? (value: string): string => value
+    : (value: string): string => decodeWithOffsets(value, removeDefaultIgnorables, /\p{Default_Ignorable_Code_Point}/gu, offsets);
   let decoded = strip(text);
   for (let pass = 0; pass < 16; pass += 1) {
     const next = strip(
-      decodeCommonMarkEscapes(decodeHtmlEntities(decodePercentEncoding(decoded))),
+      decodeWithOffsets(
+        decodeWithOffsets(
+          decodeWithOffsets(decoded, decodePercentEncoding, /(?:%[0-9a-f]{2})+/gi, offsets),
+          decodeHtmlEntities, /&[^&;\s]*;/g, offsets,
+        ),
+        decodeCommonMarkEscapes, /\\[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, offsets,
+      ),
     );
     if (next === decoded) return { error: false, text: decoded };
     decoded = next;
@@ -591,7 +626,7 @@ const quotedLocalPart = /"(?:[^"\\\r\n]|\\.)*"/;
 const dotAtomLocalPart = /\b[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+/;
 // These contextual code points belong to valid IDNA labels. Detection keeps
 // them; the unit exemption below depends only on its positive ASCII boundary.
-const idnaDomainLabel = String.raw`(?:[A-Z0-9\p{L}\p{M}\p{N}\p{Default_Ignorable_Code_Point}\u00B7\u0375\u05F3\u05F4\u30FB-]|\\x[0-9a-f]{2})+`;
+const idnaDomainLabel = String.raw`(?:[A-Z0-9\p{L}\p{M}\p{N}\p{Default_Ignorable_Code_Point}\u00B7\u0375\u05F3\u05F4\u0F0B\u30FB-]|\\x[0-9a-f]{2})+`;
 const idnaDomainSeparator = String.raw`[.\u3002\uFF0E\uFF61]`;
 const emailDomain = new RegExp(
   `(${idnaDomainLabel}(?:${idnaDomainSeparator}${idnaDomainLabel})+)`,
@@ -599,6 +634,14 @@ const emailDomain = new RegExp(
 );
 const emailAddressSource =
   `(${quotedLocalPart.source}|${dotAtomLocalPart.source})@${emailDomain.source}`;
+
+// Only complete RAW package-version tokens earn this exemption. Detection
+// keeps every view intact; source correspondence is checked per occurrence.
+const packageVersionSource = String.raw`[0-9]+(?:\.[0-9]+){1,3}(?:[-+][0-9A-Za-z.-]+)?`;
+const packageVersionBoundary = String.raw`(?=$|[\x09-\x0d "'\x60)\],;:])`;
+
+const rawPackageVersion = new RegExp(`${packageVersionSource}${packageVersionBoundary}`, "y");
+const packageVersionFollowing = /^[\x09-\x0d "'`)\],;:]$/;
 
 /* RFC 6761 reserves `.test` for exactly this and guarantees it can never
    resolve to anyone — the same reason `.invalid` is already skipped here.
@@ -627,10 +670,10 @@ const systemdUnitBoundary = /^[\x09-\x0d /"'`)\],;:]$/;
 
 type EmailTextView = {
   text: string;
-  source?: { text: string; offsets: number[] };
+  source?: { text: string; offsets: number[]; raw: { text: string; offsets: number[] } };
 };
 
-function markdownEmailView(decoded: string): EmailTextView {
+function markdownEmailView(decoded: string, raw: { text: string; offsets: number[] }): EmailTextView {
   const offsets: number[] = [];
   const visible = visibleMarkdownText(decoded, offsets);
   const parts: string[] = [];
@@ -645,13 +688,48 @@ function markdownEmailView(decoded: string): EmailTextView {
     start = match.index + match[0].length;
   }
   append(start, visible.length);
-  return { text: parts.join(""), source: { text: decoded, offsets: keptOffsets } };
+  return {
+    text: parts.join(""),
+    source: {
+      text: decoded, offsets: keptOffsets,
+      raw: { text: raw.text, offsets: keptOffsets.map((offset) => raw.offsets[offset]) },
+    },
+  };
 }
 
 function emailTextViews(text: string): EmailTextView[] {
-  const preserved = decodeSensitiveText(text, true).text;
-  const canonical = canonicalSensitiveText(text).text.replaceAll("\0", "\n");
-  return [{ text }, { text: preserved }, { text: canonical }, markdownEmailView(preserved), markdownEmailView(canonical)];
+  const views: EmailTextView[] = [{ text }];
+  for (const preserveDefaultIgnorables of [true, false]) {
+    const offsets = Array.from({ length: text.length }, (_, index) => index);
+    const decodedText = decodeSensitiveText(text, preserveDefaultIgnorables, offsets).text;
+    const decoded = preserveDefaultIgnorables ? decodedText : decodedText.replaceAll("\0", "\n");
+    const raw = { text, offsets };
+    views.push({ text: decoded, source: {
+      text: decoded, offsets: Array.from({ length: decoded.length }, (_, index) => index), raw,
+    } }, markdownEmailView(decoded, raw));
+  }
+  return views;
+}
+
+function isRawPackageVersion(text: string, domainStart: number, source?: EmailTextView["source"]): boolean {
+  const start = domainStart - 1; // Include the @: an encoded separator earns no exemption.
+  const rawStart = source ? source.raw.offsets[start] : start;
+  if (rawStart === undefined || rawStart < 0) return false;
+  const rawText = source ? source.raw.text : text;
+  if (rawText[rawStart] !== "@") return false;
+  rawPackageVersion.lastIndex = rawStart + 1;
+  const version = rawPackageVersion.exec(rawText)?.[0];
+  if (!version || version.endsWith(".")) return false;
+  const end = start + 1 + version.length;
+  if (text.slice(start, end) !== "@" + version) return false;
+  if (source) {
+    for (let i = start; i < end; i += 1) {
+      if (source.raw.offsets[i] !== rawStart + i - start) return false;
+    }
+  }
+  const following = text[end];
+  return following === undefined || packageVersionFollowing.test(following)
+    || (following === "." && (text[end + 1] === undefined || /^[\x09-\x0d ]$/.test(text[end + 1])));
 }
 
 /** Every mailbox in the text that reaches a person, in the order they appear. */
@@ -659,6 +737,7 @@ function* emailOccurrences(text: string, source?: EmailTextView["source"]): Gene
   const pattern = new RegExp(emailAddressSource, "giu");
   for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
     const following = text[pattern.lastIndex];
+    if (!match[1].startsWith('"') && isRawPackageVersion(text, pattern.lastIndex - match[2].length, source)) continue;
     // A quoted mailbox can contain another real address. Systemd names have
     // unquoted local parts, so that outer mailbox earns no unit exemption.
     if (!match[1].startsWith('"') && systemdUnitDomain.test(match[2])) {
