@@ -7,6 +7,7 @@ import type { FileEntry } from "@/lib/types";
 import { buildSchemeLayout, type SchemeLayout } from "@/components/scheme/layout";
 import { buildTaskBands } from "@/components/scheme/taskBands";
 import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
+import { buildPhoneKanban } from "@/components/mobile/phoneKanbanModel";
 
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { buildKanbanModel, cardHasLiveWork, holdsOnlyDrafts, KANBAN_STATUSES, summarizePipeline, taskReasonFiltersOfCard, workingStageConversations, type KanbanCard } from "./kanbanModel";
@@ -1243,4 +1244,67 @@ test("hidden provisioning work remains in the header but outside the visible col
   expect(board.totals.working).toBe(1);
   expect(board.columns.assigned.working).toBe(0);
   expect(board.columns.assigned.shown).toHaveLength(0);
+});
+
+test("operator-held steps retain attention across paused and running references", () => {
+  const hold = { kind: "operator" as const, note: "Choose release A or B", since: iso(NOW - 1200), by: "agent" as const };
+  for (const state of ["paused", "running"] as const) {
+    const entry = task("t910", "blocked", [], { steps: [{ id: "ask", text: "Choose release", state: "open", ref: "held-step", hold }] });
+    const lane = buildingLane("held-step", entry.id, { startedAt: iso(NOW - 600) });
+    lane.state = state;
+    lane.pausedAt = iso(NOW - 300);
+    const board = model([task("t909", "blocked"), entry], [], { pipelines: [lane] });
+    const card = board.columns.blocked.cards[0]!;
+    expect(card.task?.id).toBe(entry.id);
+    expect(card.motion).toMatchObject({ key: "needs-you", reason: hold, since: hold.since });
+    expect(card.stepSummary).toMatchObject({ open: 1, needsYou: 1, working: 0 });
+    expect(board.columns.blocked.needsYou).toBe(1);
+    expect(board.totals.needsYou).toBe(1);
+    const phone = buildPhoneKanban({ model: board, now: NOW });
+    expect(phone.columns.blocked.needsYou).toBe(1);
+    expect(phone.columns.blocked.pinned).toHaveLength(1);
+    expect(phone.columns.blocked.pinned[0]!.card.id).toBe(card.id);
+    expect(phone.columns.blocked.pinned[0]!.edge).toBe("warning");
+  }
+});
+
+test("terminal steps do not manufacture work while passed stages await publication", () => {
+  for (const state of ["done", "dropped", "open"] as const) {
+    const entry = task("t911", "done", [], { steps: [{ id: "publish", text: "Publish the fix", state, ref: "unpublished" }] });
+    const lane = buildingLane("unpublished", entry.id, { startedAt: iso(NOW - 600) });
+    lane.cursor!.state = "committing";
+    Object.assign(lane.runs[0]!.attempts[0]!, { state: "passed", verdict: "pass", completedAt: iso(NOW - 60) });
+    const board = model([entry], [], { pipelines: [lane], cardFilter: cardHasLiveWork });
+    const card = board.columns.done.cards[0]!;
+    expect(card.members).toHaveLength(0);
+    expect(card.pipelines[0]!.chips.map(chip => chip.state)).toEqual(["passed", "pending"]);
+    expect(card.motion.key).toBe(state === "open" ? "working" : "done");
+    expect(board.totals.working).toBe(state === "open" ? 1 : 0);
+    expect(board.columns.done.working).toBe(state === "open" ? 1 : 0);
+    expect(board.columns.done.shown).toHaveLength(state === "open" ? 1 : 0);
+    expect(card.stepSummary).toMatchObject({ open: state === "open" ? 1 : 0, working: state === "open" ? 1 : 0 });
+  }
+});
+
+test("known overdue task and step holds stay postponed; unknown reasons agree with counters", () => {
+  const hold = { kind: "postponed" as const, note: "After the acceptance window", since: iso(NOW - 1200), until: iso(NOW - 60), by: "operator" as const };
+  const rows = [
+    task("t912", "blocked", [], { hold }),
+    task("t913", "blocked", [], { steps: [{ id: "later", text: "Run the check", state: "open", hold }] }),
+    task("t914", "blocked"),
+    task("t915", "blocked", [], { hold: { ...hold, kind: "unstated" } }),
+    task("t916", "blocked", [], { steps: [{ id: "bare", text: "Run the check", state: "open" }] }),
+    task("t917", "blocked", [], { steps: [{ id: "unknown", text: "Run the check", state: "open", hold: { ...hold, kind: "unstated" } }] }),
+  ];
+  const board = model(rows, []);
+  for (const id of ["t912", "t913"]) {
+    const card = board.columns.blocked.cards.find(card => card.task?.id === id)!;
+    expect(card.motion).toMatchObject({ key: "stopped", reason: hold, due: true });
+    expect(taskReasonFiltersOfCard(card)).toEqual(["postponed"]);
+  }
+  expect(model(rows, [], { reasonFilter: "postponed" }).columns.blocked.shown.map(card => card.task?.id).sort()).toEqual(["t912", "t913"]);
+  const unknown = model(rows, [], { reasonFilter: "no-reason" }).columns.blocked;
+  expect(unknown.shown.map(card => card.task?.id).sort()).toEqual(["t914", "t915", "t916", "t917"]);
+  expect(unknown.noReason).toBe(unknown.shown.length);
+  expect(board.columns.blocked.noReason).toBe(4);
 });

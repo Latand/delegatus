@@ -30,7 +30,7 @@ export function taskMotion(facts: TaskMotionFacts, nowMs: number): TaskMotion {
   const needsYouSteps = facts.steps?.filter(step => step.open && step.motion === "needs-you") ?? [];
   const stepOperatorHold = needsYouSteps.find(step => step.hold?.kind === "operator")?.hold;
   if (facts.needsYou || hold?.kind === "operator" || needsYouSteps.length) return result("needs-you", hold?.kind === "operator" ? hold : stepOperatorHold ?? null);
-  if (facts.working > 0 || facts.inFlight || facts.pipelines.some(p => p.state === "provisioning") || facts.steps?.some(step => step.motion === "working")) return result("working");
+  if (facts.working > 0 || facts.inFlight || facts.pipelines.some(p => p.state === "provisioning") || facts.steps?.some(step => step.open && step.motion === "working")) return result("working");
   if (facts.status === "done") return result("done");
   const openStep = facts.steps?.find(step => step.open && step.hold);
   if (openStep?.hold) {

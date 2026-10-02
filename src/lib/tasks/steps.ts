@@ -35,12 +35,15 @@ export function deriveTaskSteps(steps: readonly TaskStep[] | undefined, pipeline
     let motion: DerivedTaskStep["motion"] = step.state === "done" ? "done" : step.state === "dropped" ? "stopped"
       : step.hold?.kind === "operator" ? "needs-you"
         : step.hold && step.hold.kind !== "unstated" && !holdDue ? "waiting" : "stopped";
-    if (pipeline?.state === "needs_decision") motion = "needs-you";
-    else if (pipeline && ["running", "provisioning"].includes(pipeline.state)) motion = "working";
-    else if (pipeline?.state === "paused") motion = "waiting";
-    else if (pipeline?.state === "completed" && step.state !== "dropped") {
-      effectiveState = "done";
-      motion = "done";
+    if (step.state === "open") {
+      if (pipeline?.state === "completed") {
+        effectiveState = "done";
+        motion = "done";
+      } else if (step.hold?.kind !== "operator") {
+        if (pipeline?.state === "needs_decision") motion = "needs-you";
+        else if (pipeline && ["running", "provisioning"].includes(pipeline.state)) motion = "working";
+        else if (pipeline?.state === "paused") motion = "waiting";
+      }
     }
     return { ...step, effectiveState, motion, ...(pipeline?.state === "paused" && pipeline.pausedAt ? { since: pipeline.pausedAt } : {}) };
   });
@@ -53,8 +56,8 @@ export function deriveTaskSteps(steps: readonly TaskStep[] | undefined, pipeline
   for (const step of open) {
     const hold = step.hold;
     if (step.motion === "working" || step.motion === "needs-you") continue;
-    const kind = step.motion === "stopped" ? "stopped"
-      : hold?.kind === "postponed" ? "postponed"
+    const kind = hold?.kind === "postponed" ? "postponed"
+      : step.motion === "stopped" ? "stopped"
         : hold && ["worker", "resource", "limit"].includes(hold.kind) ? "queued" : "waiting";
     const note = hold?.note?.trim() ?? "";
     const key = `${kind}\0${note}`;

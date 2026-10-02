@@ -1513,7 +1513,7 @@ if (SCENARIO === "task-motion") {
       ...Array.from({ length: 5 }, (_, index) => ({ id: `fixed-${index + 1}`, text: L(`Fixed cause ${index + 1}`, `Усунена причина ${index + 1}`), state: "done" as const })),
       ...Array.from({ length: 3 }, (_, index) => ({ id: `open-${index + 1}`, text: L(`Remaining cause ${index + 1}`, `Невирішена причина ${index + 1}`), state: "open" as const, ...(index === 0 ? { ref: "p-motion-checklist" } : {}), hold: { kind: "worker" as const, note: L("After another task finishes", "Коли завершиться інша задача"), since: iso(70 * MIN), by: "agent" as const } })),
     ] }),
-    task("motion-operator", "blocked", L("Choose the next release", "Обрати наступний реліз"), "", 20 * MIN, [], { steps: [{ id: "choose-release", text: L("Choose release", "Оберіть реліз"), state: "open", hold: { kind: "operator", note: L("Choose a release to publish", "Оберіть реліз для публікації"), since: iso(20 * MIN), by: "agent" } }] }),
+    task("motion-operator", "blocked", L("Choose the next release", "Обрати наступний реліз"), "", 20 * MIN, [], { steps: [{ id: "choose-release", text: L("Choose release", "Оберіть реліз"), state: "open", ref: "p-motion-operator", hold: { kind: "operator", note: L("Choose a release to publish", "Оберіть реліз для публікації"), since: iso(20 * MIN), by: "agent" } }] }),
     task("motion-long", "blocked", L("Migrate the legacy billing integration safely", "Безпечно перенести інтеграцію старих платежів"), "", 25 * MIN, [], { hold: { kind: "external", note: L("Waiting for the external audit team to finish its review of the migration plan and confirm that every legacy billing record has been reconciled before the cutover can proceed without risking customer invoices or payment history", "Очікуємо, поки зовнішня аудиторська команда завершить перевірку плану міграції та підтвердить звірку всіх старих платіжних записів, перш ніж продовжити перенесення без ризику для рахунків клієнтів та історії платежів").slice(0, 200), since: iso(25 * MIN), by: "agent" } }),
     task("motion-bare", "blocked", L("Review older work", "Переглянути давнішу роботу"), "", 120 * MIN),
     task("motion-due", "blocked", L("Run the postponed check", "Виконати відкладену перевірку"), "", 120 * MIN, [], { hold: { kind: "postponed", note: L("After green checks", "Після успішних перевірок"), since: iso(120 * MIN), until: iso(60 * MIN), by: "operator" } }),
@@ -1524,6 +1524,11 @@ if (SCENARIO === "task-motion") {
     [stage("implement", "builder", null)],
     [{ stageId: "implement", attempts: [attempt(1, "running", null)] }],
     { stageId: "implement", state: "running", input: null, activatedBy: null }));
+  pipelines.push(pipeline("p-motion-operator", L("Wait for release choice", "Дочекатися вибору релізу"), "motion-operator", "paused",
+    [stage("implement", "builder", null)],
+    [{ stageId: "implement", attempts: [attempt(1, "passed", null)] }],
+    { stageId: "implement", state: "committing", input: null, activatedBy: null },
+    { pausedAt: iso(10 * MIN), pausedState: "running" }));
 }
 
 /* `&empty=<status>` empties one column: its tasks move to Done, so the

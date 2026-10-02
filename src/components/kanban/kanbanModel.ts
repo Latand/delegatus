@@ -201,6 +201,11 @@ export interface KanbanColumn {
 
 export type TaskReasonFilter = "needs-you" | "queued" | "waiting" | "postponed" | "no-reason";
 
+function cardHasUnknownReason(card: KanbanCard): boolean {
+  return (card.motion.key === "stopped" && (!card.motion.reason || (typeof card.motion.reason === "object" && card.motion.reason.kind === "unstated")))
+    || Boolean(card.stepSummary?.reasons.some(reason => reason.kind === "stopped"));
+}
+
 export function taskReasonFiltersOfCard(card: KanbanCard): TaskReasonFilter[] {
   const reason = typeof card.motion.reason === "object" ? card.motion.reason : null;
   const filters = new Set<TaskReasonFilter>();
@@ -208,12 +213,11 @@ export function taskReasonFiltersOfCard(card: KanbanCard): TaskReasonFilter[] {
   if (reason?.kind === "worker" || reason?.kind === "resource" || reason?.kind === "limit") filters.add("queued");
   if (reason?.kind === "postponed") filters.add("postponed");
   if (card.motion.key === "waiting" && reason?.kind !== "postponed" && !["worker", "resource", "limit"].includes(reason?.kind ?? "")) filters.add("waiting");
-  if (card.motion.key === "stopped") filters.add("no-reason");
+  if (cardHasUnknownReason(card)) filters.add("no-reason");
   for (const stepReason of card.stepSummary?.reasons ?? []) {
     if (stepReason.kind === "queued") filters.add("queued");
     else if (stepReason.kind === "waiting") filters.add("waiting");
     else if (stepReason.kind === "postponed") filters.add("postponed");
-    else filters.add("no-reason");
   }
   return [...filters];
 }
@@ -788,7 +792,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       working: inColumn.filter(card => card.motion.key === "working").length,
       needsYou: inColumn.filter((card) => card.motion.key === "needs-you").length,
       stopped: inColumn.filter((card) => card.motion.key === "stopped").length,
-      noReason: inColumn.filter((card) => card.motion.key === "stopped" && (!card.motion.reason || (typeof card.motion.reason === "object" && card.motion.reason.kind === "unstated"))).length,
+      noReason: inColumn.filter(cardHasUnknownReason).length,
     } satisfies KanbanColumn];
   })) as Record<TaskStatus, KanbanColumn>;
 

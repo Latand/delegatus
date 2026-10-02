@@ -35,3 +35,10 @@ test("an open operator-held step carries its note and age into shared motion", (
   expect(taskMotion({ ...facts, hold: taskReason, steps }, NOW).reason).toEqual(taskReason);
   expect(taskMotion({ ...facts, steps: [{ ...steps[0]!, open: false }] }, NOW).key).toBe("stopped");
 });
+
+test("working step evidence must still be open", () => {
+  const step = { open: false, motion: "working" as const };
+  expect(taskMotion({ ...facts, status: "done", steps: [step] }, NOW).key).toBe("done");
+  expect(taskMotion({ ...facts, steps: [step] }, NOW).key).toBe("stopped");
+  expect(taskMotion({ ...facts, status: "done", steps: [{ ...step, open: true }] }, NOW).key).toBe("working");
+});

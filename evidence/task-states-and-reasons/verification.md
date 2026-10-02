@@ -23,8 +23,8 @@ Every test ran by file through `/var/tmp/llv-gate bun test`, with isolated
 `LLV_STATE_DIR` and a temporary root outside operator state.
 
 - `src/lib/tasks/taskSteps.test.ts`: 3 passed.
-- `src/lib/tasks/motion.test.ts`: 3 passed.
-- `src/components/kanban/kanbanModel.test.ts`: 50 passed.
+- `src/lib/tasks/motion.test.ts`: 4 passed.
+- `src/components/kanban/kanbanModel.test.ts`: 53 passed.
 - `src/components/kanban/KanbanEditing.dom.test.tsx`: 27 passed.
 - `src/components/mobile/phoneKanbanModel.test.ts`: 19 passed.
 - `src/components/mobile/MobileKanban.dom.test.tsx`: 14 passed. The footer
@@ -34,7 +34,7 @@ Every test ran by file through `/var/tmp/llv-gate bun test`, with isolated
 - `src/lib/tasks/taskHold.test.ts`: 4 passed.
 - `src/lib/mcp/schemaParity.test.ts`, task-write case: passed.
 - Shared `kanbanBoard.browser.test.tsx`, task-motion case: passed; four
-  viewport/locale combinations, 406 assertions. The driver closes contexts,
+  viewport/locale combinations, 416 assertions. The driver closes contexts,
   browser and its ephemeral-port fixture server in `finally`.
 - `bunx tsc --noEmit`: passed.
 - ESLint on changed TypeScript files: no introduced errors; baseline errors
@@ -78,9 +78,39 @@ The shared task-motion browser case again passed 406 assertions across
 the driver closed the browser and its fixture server. TypeScript, privacy
 with commit checking, and diff checks passed after the merge.
 
-A fresh read-only review of the full diff found no further issue in the nine
-pinned repros. Two additional checklist edge cases were traced statically
-for follow-up: paused/running pipeline references override an open operator
-hold's attention motion (`steps.ts:38-40`), and terminal steps can inherit
-working motion that the task projection accepts without checking whether
-they are open (`motion.ts:33`). These are Notes outside this fix round.
+## Completed step-reference acceptance
+
+The relayed production repros are now covered through
+`projectTaskWorkflows` → `buildTaskBands` → `buildKanbanModel` →
+`buildPhoneKanban`. New regressions failed before the changes and pass after:
+
+- An open operator-held step retains its note, original age, needs-you totals,
+  warning edge and phone pinning when its reference is paused or running.
+  The shared browser fixture includes the paused reference at both widths
+  in both locales. Existing non-operator reference tests remain green.
+- Done and dropped steps retain terminal motion when the referenced running
+  pipeline has a passed build, pending review and committing cursor while
+  publication is unavailable. They contribute no working totals or live
+  Overview cards. The same fixture with an open step still counts as work.
+- Overdue task and step postponements retain their known reasons and remain
+  reachable through Postponed, excluded from No reason. Bare and unstated
+  task/step waits remain included; filters and counters share one predicate.
+
+The latest by-file rerun has 451 passing tests and the single baseline
+schema-description failure documented under Notes. The production MCP
+transport suite passes all 88 tests with its temporary root under `/var/tmp`;
+the inherited stage scratch TMPDIR caused two stderr-only harness failures
+before that isolation. The finding-specific schema case also passes.
+
+The shared driver passes 416 assertions at 1440/390 in en/uk. All 30 current
+captures were inspected directly, including unclipped Waiting headers,
+operator warning edges and ages, two-line long reasons with full text on
+the phone task screen, left-aligned task references and one working count
+per card. Browser and fixture server closed in the driver's finalizer.
+
+TypeScript, privacy with commit checking and diff checks pass. ESLint matches
+current main at 93 errors/eight warnings by file, rule, severity and leading
+message, with no introduced diagnostics. The schema-description failure was
+also reproduced on current main. A fresh independent read-only review of
+the complete diff and all 30 captures found no remaining pinned defect.
+The status-note fence is preserved.

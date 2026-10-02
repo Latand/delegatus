@@ -14435,6 +14435,10 @@ describe("task motion and waiting reasons", () => {
           if (locale === "en") expect(operatorLine).not.toContain("Waiting");
           expect(await page.locator(`${selector("motion-operator")} .motion-age`).textContent()).toMatch(/20/);
           expect(await page.locator(`${selector("motion-operator")} [data-task-steps]`).textContent()).toContain(translate(locale, "kanban.steps.needsYou.one"));
+          if (phone) {
+            expect(await page.locator(selector("motion-operator")).getAttribute("data-edge")).toBe("warning");
+            expect(await page.locator('[data-phone-kanban-tab="blocked"] [data-phone-tab-needs]').textContent()).toContain("1");
+          }
           await page.locator(selector("motion-operator")).screenshot({ path: path.join(out, `${width}-${locale}-card-operator.png`) });
           if (!phone) {
             const waitingColumn = page.locator('[data-status="blocked"]');
@@ -14527,6 +14531,12 @@ describe("task motion and waiting reasons", () => {
             expect(await checklist.locator('[data-task-steps]').textContent()).toContain(locale === "en" ? "1 working · 2 queued" : "1 у роботі · 2 у черзі");
             expect(await page.locator('[data-column-no-reason]').getAttribute('data-column-no-reason')).toBe(beforeCount);
             await queuedFilter.click();
+            await page.locator('[data-reason-filter="postponed"]').click();
+            expect(await page.locator(selector("motion-due")).count()).toBe(1);
+            await page.locator('[data-reason-filter="no-reason"]').click();
+            expect(await page.locator(selector("motion-due")).count()).toBe(0);
+            expect(await page.locator(selector("motion-bare")).count()).toBe(1);
+            await page.locator('[data-reason-filter="no-reason"]').click();
             const stoppedSummary = page.locator('[data-status="assigned"] [data-column-stopped]');
             const bareSummary = page.locator('[data-status="blocked"] [data-column-no-reason]');
             expect(Number(await stoppedSummary.getAttribute('data-column-stopped'))).toBeGreaterThan(0);
