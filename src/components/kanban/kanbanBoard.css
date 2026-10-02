@@ -113,8 +113,10 @@
 .kb .bar[data-bar="project"] .bar-find .search { flex: 0 1 auto; max-width: none; min-width: 0; }
 /* Filters share the search row in a wide bar; below 1168 px of bar width the component
    puts them in their own wrapping row beneath the bar. */
-.kb .bar[data-bar="project"] .bar-find:has(.reason-filters) { flex-basis: 440px; max-width: 536px; flex-direction: row; align-items: center; gap: 8px; }
-.kb .bar[data-bar="project"] .bar-find:has(.reason-filters) .search { flex: 1 1 112px; }
+/* Keep the field's placeholder readable in both locales and include that
+   floor in the group's minimum, so its children cannot overlap later controls. */
+.kb .bar[data-bar="project"] .bar-find:has(.reason-filters) { flex-basis: 440px; max-width: 536px; min-width: min-content; flex-direction: row; align-items: center; gap: 8px; }
+.kb .bar[data-bar="project"] .bar-find:has(.reason-filters) .search { flex: 1 1 128px; min-width: 128px; }
 .kb .bar[data-bar="project"] .reason-filters { flex: 0 0 auto; max-width: calc(100% - 72px); }
 .kb .bar[data-bar="project"] .search input { width: 100%; }
 /* A bar under 768 px (a narrow desktop window) cannot hold the groups beside the island's

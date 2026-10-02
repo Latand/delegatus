@@ -14835,7 +14835,12 @@ describe("task motion and waiting reasons", () => {
           }
           const topbar = phone ? null : await page.locator('.bar[data-bar="project"]').evaluate((bar) => {
             const rect = bar.getBoundingClientRect();
-            const search = bar.querySelector('[data-kanban-search]')!.getBoundingClientRect();
+            const input = bar.querySelector<HTMLInputElement>('[data-kanban-search]')!;
+            const search = input.getBoundingClientRect();
+            const searchStyle = getComputedStyle(input);
+            const canvas = document.createElement('canvas');
+            const text = canvas.getContext('2d')!;
+            text.font = searchStyle.font;
             const filters = bar.closest('[data-kanban-board]')!.querySelector('[data-reason-filters]') as HTMLElement;
             const filterRect = filters.getBoundingClientRect();
             return {
@@ -14849,6 +14854,9 @@ describe("task motion and waiting reasons", () => {
               lastFilterRight: filters.lastElementChild!.getBoundingClientRect().right,
               groupWidth: filters.parentElement!.getBoundingClientRect().width,
               searchWidth: search.width,
+              searchTextWidth: search.width - Number.parseFloat(searchStyle.paddingLeft) - Number.parseFloat(searchStyle.paddingRight)
+                - Number.parseFloat(searchStyle.borderLeftWidth) - Number.parseFloat(searchStyle.borderRightWidth),
+              placeholderWidth: text.measureText(input.placeholder).width,
               filterCount: filters.children.length,
               filtersClientWidth: filters.clientWidth, filtersScrollWidth: filters.scrollWidth,
             };
@@ -14859,6 +14867,8 @@ describe("task motion and waiting reasons", () => {
             expect(topbar.searchBottom).toBeLessThanOrEqual(topbar.bottom);
             expect(topbar.filtersTop).toBeGreaterThanOrEqual(topbar.top);
             if (width === 1440) {
+              expect(topbar.searchWidth, JSON.stringify(topbar)).toBeGreaterThanOrEqual(112);
+              expect(topbar.searchTextWidth, JSON.stringify(topbar)).toBeGreaterThanOrEqual(topbar.placeholderWidth);
               expect(topbar.belowBar, JSON.stringify(topbar)).toBeFalse();
               expect(topbar.filtersBottom).toBeLessThanOrEqual(topbar.bottom);
             } else {

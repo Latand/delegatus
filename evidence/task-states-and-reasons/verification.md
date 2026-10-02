@@ -213,3 +213,33 @@ workflow runs this step in `trusted` before scanning the candidate. The direct
 trusted-main scan of the candidate with commit checking passes. This unrelated
 self-test issue stays outside the two fixes; hosted build/native checks may
 still be pending when the fix stage hands over.
+
+## Search width floor follow-up
+
+The project bar's search field now holds a 128 px minimum while reason chips
+share its row. This exceeds the 112 px acceptance floor and leaves 86 px for
+placeholder text after padding and borders: 58.7 px in English and 80.6 px in
+Ukrainian. The containing group includes its children's minimum widths so
+they cannot overlap the next control. The existing 1168 px bar-width threshold
+and all narrower layouts remain unchanged.
+
+The shared browser case now asserts `topbar.searchWidth >= 112` and that the
+placeholder fits the field's text area at 1440 in both languages. The new
+width assertion fails against the preceding CSS (110.23 px in English).
+With the fix, all 502 assertions pass at 1440/1280/1024/390 in English and
+Ukrainian. Search is 128 px in both 1440 cases; all five reason chips fit
+inside the 48 px bar. The filters remain beneath it at 1280/1024 without
+document or filter-group sideways overflow. Updated measurements are in
+`renders.json`.
+
+Opened the actual final top-bar, Waiting and phone frames in both languages;
+the full placeholders and adjacent controls are readable. The driver closes
+its browser, contexts and ephemeral server in its finalizer. The existing
+1024 Ukrainian attention-chip overlap and horizontally scrolled board columns
+remain outside this finding.
+
+Focused checks use isolated state through the memory-capped gate: 67 kanban
+model tests (including all thirteen malformed checklist shapes and the mixed
+array), three checklist tests and the browser case pass. TypeScript and
+`git diff --check` pass. ESLint has no diagnostics for the changed browser
+driver; CSS is ignored by the repository's ESLint configuration.
