@@ -443,7 +443,7 @@ test("the window follows only an https verify link on the relay's origin or its 
   const cases: { verify: string; navigates: boolean }[] = [
     { verify: "https://t.me/celestia_bot?start=pair-ABCD", navigates: true },
     { verify: `${CELESTIA}/pair?c=ABCD-EFGH`, navigates: true },
-    { verify: "http://chatmoderator.botfather.dev/pair", navigates: false },
+    { verify: `${CELESTIA.replace(/^https:/, "http:")}/pair`, navigates: false },
     { verify: "https://elsewhere.example/pair", navigates: false },
     { verify: "http://elsewhere.example/pair", navigates: false },
   ];
