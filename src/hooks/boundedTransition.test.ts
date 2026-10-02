@@ -90,3 +90,54 @@ test("disposing cancels the pending deadline", () => {
   h.publisher.dispose();
   expect(h.timers.size).toBe(0);
 });
+
+
+test("an urgent publish supersedes a background deadline and deferred callback", () => {
+  const h = harness();
+  h.publisher.publish(1);
+  const deadline = [...h.timers.values()][0]!.run;
+  h.publisher.publish(2, "urgent");
+  h.commit(2);
+  // A cancelled callback may already have been queued; neither it nor the
+  // interrupted background callback may put the old catalog back.
+  deadline();
+  h.deferred[0]!();
+  expect(h.timers.size).toBe(0);
+  expect(h.applied).toEqual([2]);
+});
+
+test("a new background publish after an urgent one gets its own deadline", () => {
+  const h = harness();
+  h.publisher.publish(1);
+  h.publisher.publish(2, "urgent");
+  h.commit(2);
+  h.publisher.publish(3);
+  expect(h.timers.size).toBe(1);
+  h.fire();
+  h.deferred[0]!();
+  expect(h.applied).toEqual([2, 3]);
+});
+
+
+for (let mask = 0; mask < 8; mask += 1) {
+  test(`publication order survives delayed callbacks for priority pattern ${mask}`, () => {
+    const h = harness();
+    for (let index = 0; index < 3; index += 1) {
+      h.publisher.publish(index + 1, mask & (1 << index) ? "urgent" : "background");
+    }
+    // Deferred callbacks can be delayed or restarted after urgent writes.
+    for (const run of [...h.deferred].reverse()) run();
+    if (h.timers.size) h.fire();
+    expect(h.applied.at(-1)).toBe(3);
+    h.commit(3);
+    expect(h.timers.size).toBe(0);
+  });
+}
+
+test("a deferred publication cannot run after disposal", () => {
+  const h = harness();
+  h.publisher.publish(1);
+  h.publisher.dispose();
+  h.deferred[0]!();
+  expect(h.applied).toEqual([]);
+});

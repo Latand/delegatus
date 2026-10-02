@@ -44,7 +44,7 @@ test("seat polls are silent while hidden and read once on return", async () => {
   globalThis.fetch = (async (input: string | URL | Request) => {
     reads.push(String(input));
     return new Response(JSON.stringify({ seat: null, pending: null, exists: true, all: [] }));
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   const host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -63,3 +63,78 @@ test("seat polls are silent while hidden and read once on return", async () => {
   await Bun.sleep(20);
   expect(reads.length).toBe(initial + 2);
 }, 20_000);
+
+
+test("unchanged seat polls render nothing; changed notes and failures still publish", async () => {
+  let renders = 0;
+  let fail = false;
+  let title = "Seat notes";
+  const refs = { conversationIds: ["seat-a"], paths: ["/sessions/seat-a.jsonl"], previous: { conversationIds: [], paths: [] } };
+  globalThis.fetch = (async () => {
+    if (fail) throw new Error("poll failed");
+    return new Response(JSON.stringify({ seat: null, pending: null, exists: true,
+      currentTask: { taskId: "seat-task", title, hasNotes: true }, all: refs }));
+  }) as unknown as typeof fetch;
+  function CountedProbe() {
+    // Test instrumentation counts renders, including abandoned ones.
+    // eslint-disable-next-line react-hooks/globals
+    renders += 1;
+    // Fail before a render loop can exhaust the host's memory.
+    if (renders > 30) throw new Error("seat render loop");
+    const seat = useOrchestratorSeat("project-a");
+    useSeatConversations(true);
+    return <span>{seat.status?.currentTask?.title}:{String(seat.failed)}</span>;
+  }
+  const host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  flushSync(() => root!.render(<CountedProbe />));
+  await Bun.sleep(30);
+  const initial = renders;
+  await Bun.sleep(SEAT_POLL_MS + 100);
+  expect(renders).toBe(initial);
+  title = "Updated notes";
+  document.dispatchEvent(new Event("visibilitychange"));
+  await Bun.sleep(30);
+  expect(host.textContent).toBe("Updated notes:false");
+  expect(renders).toBeGreaterThan(initial);
+  fail = true;
+  document.dispatchEvent(new Event("visibilitychange"));
+  await Bun.sleep(30);
+  expect(host.textContent).toBe("Updated notes:true");
+  const failedRenders = renders;
+  document.dispatchEvent(new Event("visibilitychange"));
+  await Bun.sleep(30);
+  expect(renders).toBe(failedRenders);
+  fail = false;
+  document.dispatchEvent(new Event("visibilitychange"));
+  await Bun.sleep(30);
+  expect(host.textContent).toBe("Updated notes:false");
+  refs.paths.push("/sessions/seat-b.jsonl");
+  document.dispatchEvent(new Event("visibilitychange"));
+  await Bun.sleep(30);
+  expect(renders).toBeGreaterThan(failedRenders);
+}, 10_000);
+
+
+test("enabling a reader adopts the cached seat references even when the poll is unchanged", async () => {
+  const refs = { conversationIds: ["seat-a"], paths: ["/sessions/seat-a.jsonl"], previous: { conversationIds: [], paths: [] } };
+  globalThis.fetch = (async () => new Response(JSON.stringify({ all: refs }))) as unknown as typeof fetch;
+  function Reader({ enabled, label }: { enabled: boolean; label: string }) {
+    const refs = useSeatConversations(enabled);
+    return <span data-reader={label}>{refs?.paths.join("|") ?? "unread"}</span>;
+  }
+  const host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  const render = (enabled: boolean) => flushSync(() => root!.render(<>
+    <Reader enabled label="first" />
+    <Reader enabled={enabled} label="later" />
+  </>));
+  render(false);
+  await Bun.sleep(30);
+  expect(host.querySelector('[data-reader="later"]')?.textContent).toBe("unread");
+  render(true);
+  await Bun.sleep(30);
+  expect(host.querySelector('[data-reader="later"]')?.textContent).toBe("/sessions/seat-a.jsonl");
+});

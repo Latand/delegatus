@@ -32,6 +32,7 @@ mock.module("./runtimeBus", () => ({
 
 const {
   applyPipelineSnapshot,
+  applySpawnedConversationSnapshot,
   filesApiUrl,
   resetFilesClientCacheForTests,
   revertPipelineSnapshot,
@@ -593,7 +594,7 @@ function StreamedProbe({ tick }: { tick: number }) {
   const data = useFiles();
   return (
     <div data-tick={tick}>
-      <b>{data.files[0]?.path ?? "empty"}</b>
+      <b>{data.files.map((file) => file.path).join("|")}</b>
       {Array.from({ length: 60 }, (_, index) => <Row key={`r${index}`} path={data.files[0]?.path ?? ""} />)}
     </div>
   );
@@ -635,6 +636,43 @@ test("a catalog update commits while a stream of urgent renders keeps interrupti
   } finally {
     clearInterval(stream);
     flushSync(() => { root.unmount(); });
+    host.remove();
+  }
+});
+
+
+test("an urgent spawned row survives a starved background deadline", async () => {
+  let generation = 0;
+  globalThis.fetch = mock(async () => new Response(JSON.stringify({
+    files: [{ path: `/sessions/generation-${generation}.jsonl` }],
+  }))) as unknown as typeof fetch;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  let tick = 0;
+  const render = () => root.render(<StreamedProbe tick={tick} />);
+  let stream: ReturnType<typeof setInterval> | undefined;
+  try {
+    flushSync(render);
+    for (let waited = 0; waited < 2_000 && host.querySelector("b")?.textContent !== "/sessions/generation-0.jsonl"; waited += 20) {
+      await Bun.sleep(20);
+    }
+    expect(host.querySelector("b")?.textContent).toBe("/sessions/generation-0.jsonl");
+    stream = setInterval(() => { tick += 1; flushSync(render); }, 5);
+    generation = 1;
+    window.dispatchEvent(new dom.Event(FLOWS_CHANGED_EVENT) as unknown as Event);
+    await Bun.sleep(60);
+    applySpawnedConversationSnapshot({ path: "/sessions/spawned.jsonl" } as FileEntry);
+    await Bun.sleep(20);
+    expect(host.querySelector("b")?.textContent).toContain("/sessions/spawned.jsonl");
+    const until = performance.now() + 1_200;
+    while (performance.now() < until) {
+      await Bun.sleep(20);
+      expect(host.querySelector("b")?.textContent).toContain("/sessions/spawned.jsonl");
+    }
+  } finally {
+    clearInterval(stream);
+    flushSync(() => root.unmount());
     host.remove();
   }
 });

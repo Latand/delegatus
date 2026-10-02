@@ -1327,7 +1327,7 @@ export function useFiles(project?: string | null, pinnedPath?: string | null): F
     };
     const unsubscribeCache = cache.subscribe((next, priority) => {
       if (priority === "urgent") {
-        if (alive) setData(currentStatus(next));
+        if (alive) publisher.publish(currentStatus(next), "urgent");
         return;
       }
       publishBackgroundData(next);

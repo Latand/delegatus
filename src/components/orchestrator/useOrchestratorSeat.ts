@@ -101,6 +101,10 @@ function listenForSeatVisibility(): void {
 
 /** Give every mount of `key` the answer, and keep it for the next one. */
 function publishSeat(key: string, next: ScopedRead): void {
+  const previous = answers.get(key);
+  // Polls parse fresh objects even when the seat has not moved. Keep the
+  // complete answer stable so its phone/board readers do no work for a tick.
+  if (previous && JSON.stringify(previous) === JSON.stringify(next)) return;
   answers.set(key, next);
   for (const listener of polls.get(key)?.listeners ?? []) listener(next);
 }
@@ -278,6 +282,7 @@ function loadSeatConversations(): void {
   seatConversationsPending = true;
   void fetchSeatConversations(poll.controller.signal)
     .then((answer) => {
+      if (JSON.stringify(seatConversations) === JSON.stringify(answer)) return;
       seatConversations = answer;
       for (const listener of seatConversationsListeners) listener(answer);
     })
@@ -291,6 +296,9 @@ function loadSeatConversations(): void {
 
 function joinSeatConversationsPoll(listener: (refs: SeatRefs | null) => void): () => void {
   seatConversationsListeners.add(listener);
+  // A reader may have been disabled while another surface filled the cache.
+  // Adopt that answer even if the revalidation has nothing new to publish.
+  listener(seatConversations);
   if (!seatConversationsPoll) {
     const onVisibility = () => {
       if (!documentHidden()) loadSeatConversations();

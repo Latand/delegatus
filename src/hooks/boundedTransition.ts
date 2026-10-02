@@ -21,7 +21,8 @@ interface BoundedPublisherOptions<T> {
 }
 
 export interface BoundedPublisher<T> {
-  publish: (value: T) => void;
+  /** Urgent catalog writes supersede every pending background publication. */
+  publish: (value: T, priority?: "background" | "urgent") => void;
   /** Call after every commit: a publish that landed in time needs no deadline. */
   settled: () => void;
   dispose: () => void;
@@ -49,9 +50,19 @@ export function createBoundedPublisher<T>(options: BoundedPublisherOptions<T>): 
     timer = null;
   };
   return {
-    publish(value) {
-      latest = { value };
-      defer(() => apply(value));
+    publish(value, priority = "background") {
+      const publication = { value };
+      latest = publication;
+      if (priority === "urgent") {
+        disarm();
+        apply(value);
+        return;
+      }
+      // React runs startTransition's callback immediately. The guard also
+      // fences a deferred callback that resumes after a newer publication.
+      defer(() => {
+        if (latest === publication) apply(value);
+      });
       if (timer === null) {
         timer = setTimer(() => {
           timer = null;

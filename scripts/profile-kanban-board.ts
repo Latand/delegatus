@@ -28,6 +28,10 @@
  * props that changed on them; `PROFILE_TRACE=1` adds a browser trace (layout,
  * style, paint, compositing) of the stream window; `PROFILE_CSS` injects rules
  * after load to switch a suspect off and read what that gives back.
+ * `PROFILE_WIDTH=390` measures the phone viewport. `PROFILE_LATENCY=1` adds
+ * three streaming rename/move rounds after a 40 s warm stream (override with
+ * `PROFILE_WARM_SECONDS`) and one quiet round. `PROFILE_FIXTURE` lets a pair
+ * of source trees use the same fixture and load while keeping their own code.
  *
  * Both halves run against whatever source tree they are pointed at, so a
  * before/after pair is one checkout apart and nothing else.
@@ -47,7 +51,9 @@ fs.mkdirSync(out, { recursive: true });
 
 /* The fixture, scaled up. The added corpus is entirely invented: numbered
    historical builders, their review rounds and their finished tasks. */
-let fixture = fs.readFileSync(path.join(repo, "src/components/kanban/issue1695Evidence.fixture.tsx"), "utf8");
+// Point both trees at the same fixture when comparing against a branch whose
+// fixture predates the streaming case; component imports still resolve in repo.
+let fixture = fs.readFileSync(process.env.PROFILE_FIXTURE ?? path.join(repo, "src/components/kanban/issue1695Evidence.fixture.tsx"), "utf8");
 fixture = fixture.replace('const PIPELINES = SCENARIO === "pipelines" || STAGES;', "const PIPELINES = true;");
 fixture = fixture.replace("let revision = 1;", `
 for (let i = 0; i < ${HISTORY}; i++) {
@@ -143,7 +149,8 @@ function selfMs(profile: CpuProfile, functionName: string): number {
 const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], executablePath: process.env.CHROME_BIN ?? "/usr/bin/google-chrome-stable" });
 const results: Record<string, unknown> = {};
 try {
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
+  const width = Number(process.env.PROFILE_WIDTH ?? 1440);
+  const page = await browser.newPage({ viewport: { width, height: width === 390 ? 844 : 900 }, deviceScaleFactor: 1 });
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.addInitScript(() => {
@@ -334,6 +341,7 @@ try {
       row.ms += event.dur / 1000;
       row.maxMs = Math.max(row.maxMs, event.dur / 1000);
     }
+    fs.writeFileSync(path.join(out, "stream-trace.json"), JSON.stringify({ traceEvents }));
     trace = Object.fromEntries(Object.entries(trace).filter(([, row]) => row.ms >= 20).sort((a, b) => b[1].ms - a[1].ms).slice(0, 30).map(([name, row]) => [name, { count: row.count, ms: Math.round(row.ms), maxMs: Math.round(row.maxMs) }]));
   }
   const streamRenders = await readRenders(Math.max(1, sent));
@@ -426,6 +434,72 @@ try {
     });
     const quiet = await stop();
     switches.push({ paintMs: Math.round(switched.paintMs), settleMs: Math.round(switched.settleMs), cards: switched.cards, longTasks: quiet.longTasks.length, longTaskMaxMs: Math.round(Math.max(0, ...quiet.longTasks.map((entry) => entry.ms))) });
+  }
+  // Optional freshness replay of the catalog edits found in the sustained
+  // stream UI check. Keep this in the shared driver, with the same real board.
+  if (process.env.PROFILE_LATENCY) {
+    await page.screenshot({ path: path.join(out, "before-edits.png") });
+    const latency = await page.evaluate(async ({ rate, warmSeconds }) => {
+      const w = window as unknown as {
+        profileCorpus: { liveIds: string[] };
+        runtimeEmit: (envelope: unknown) => void;
+        evidence: { storedTask: (id: string) => { status: string }; agentWritesTitle: (id: string, title: string) => void; setTaskStatus: (id: string, status: string) => void };
+      };
+      const ids = w.profileCorpus.liveIds;
+      // Continue above the earlier timing sample's event/revision sequence.
+      const heads = new Map(ids.map((id) => [id, 100_000]));
+      let seq = 100_000;
+      const emit = (count: number) => {
+        const id = ids[count % ids.length]!;
+        const revision = heads.get(id)! + 1;
+        heads.set(id, revision);
+        seq += 1;
+        w.runtimeEmit({ schemaVersion: 1, seq, eventId: `latency-${seq}`, scope: { type: "session", id }, revision, kind: "delta", occurredAt: new Date().toISOString(),
+          payload: { conversationId: id, turnId: "turn-1", text: `streamed fragment ${count} of the reply, a sentence long enough to count `.repeat(2) } });
+      };
+      const warmAt = performance.now();
+      let warmCount = 0;
+      while (performance.now() - warmAt < warmSeconds * 1000) {
+        const due = Math.floor((performance.now() - warmAt) / 1000 * rate);
+        while (warmCount < due) emit(warmCount++);
+        await new Promise((resolve) => setTimeout(resolve, 4));
+      }
+      const rounds = [];
+      for (const [streaming, round] of [[true, 1], [false, 2], [true, 3], [true, 4]] as const) {
+        const begin = performance.now();
+        const title = `Fresh title ${round}`;
+        const status = w.evidence.storedTask("t-pending").status === "blocked" ? "inbox" : "blocked";
+        let sentAt = -1, renameMs = -1, moveMs = -1, count = 0;
+        while (performance.now() - begin < 9000 && (renameMs < 0 || moveMs < 0 || performance.now() - begin < 1500)) {
+          const at = performance.now() - begin;
+          if (sentAt < 0 && at >= 1000) {
+            sentAt = at;
+            w.evidence.agentWritesTitle("t-export", title);
+            w.evidence.setTaskStatus("t-pending", status);
+          }
+          if (sentAt >= 0) {
+            if (renameMs < 0 && document.querySelector('.card[data-id="task:t-export"] .title')?.textContent?.includes(title)) renameMs = at - sentAt;
+            if (moveMs < 0 && document.querySelector('.card[data-id="task:t-pending"]')?.closest<HTMLElement>(".column")?.dataset.status === status) moveMs = at - sentAt;
+          }
+          if (streaming) {
+            const due = Math.floor(at / 1000 * rate);
+            while (count < due) emit(count++);
+          }
+          await new Promise((resolve) => setTimeout(resolve, 4));
+        }
+        rounds.push({ streaming, renameMs: Math.round(renameMs), moveMs: Math.round(moveMs), events: count });
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+      return { warmSeconds, rounds };
+    }, { rate: eventsPerSecond, warmSeconds: Number(process.env.PROFILE_WARM_SECONDS ?? 40) });
+    results.latency = latency;
+    for (const [status, id, frame] of [["assigned", "t-export", "rename-painted.png"], ["inbox", "t-pending", "move-painted.png"]] as const) {
+      const tab = page.locator(`.tabs-nav [data-tab="${status}"]`).first();
+      if (await tab.count()) await tab.click();
+      await page.locator(`.card[data-id="task:${id}"]`).scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(out, frame) });
+    }
+    await page.screenshot({ path: path.join(out, "after-edits.png") });
   }
   await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
   results.switch = { cpuRate, switches, medianPaintMs: switches.map((row) => row.paintMs).sort((a, b) => a - b)[Math.floor(switches.length / 2)] };
