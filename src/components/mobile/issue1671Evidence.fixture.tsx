@@ -142,6 +142,15 @@ const files: FileEntry[] = [
     model: "fable-5-1", effort: "high",
     ...reviewerLineage,
     lastTurn: { startedAt: (now - 400) * 1_000, endedAt: null },
+    /* `?launch=1`: the running conversation waits on an answer, so the focus
+       view's own fallback (the most attention-worthy node) picks it over a
+       freshly launched agent, the way a real operator's open question does. */
+    ...(new URLSearchParams(location.search).has("launch") ? {
+      pendingQuestion: {
+        kind: "question", toolUseId: "toolu-launch-previous", transcriptPath: RUNNING_PATH, pid: 4_401, paneTarget: null, askedAt: iso(300),
+        questions: [{ question: "Which format?", header: "Format", multiSelect: false, options: [] }],
+      },
+    } : {}),
     ...(queueRecovery ? {
       activity: "idle", lastTurn: { startedAt: (now - 400) * 1_000, endedAt: (now - 20) * 1_000 },
       authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(20), terminalKind: "completed" },
@@ -421,8 +430,8 @@ const asksLines: Array<{ conversationId: string; path: string; role: string | nu
 /* `?launch=1`: the phone launches an agent from a draft. The spawn route answers a
    structured receipt, and the scan swaps the launch window for the agent's
    transcript once the driver asks (`evidence.materializeLaunch()`). The running
-   conversation stays live and outranks the new agent, which is what the focus
-   view's own fallback would pick. */
+   conversation stays live with a question pending, so it outranks the new agent,
+   which is what the focus view's own fallback would pick. */
 const LAUNCH_SCENE = new URLSearchParams(location.search).has("launch");
 const LAUNCH_ID = "launch-focus-1";
 const LAUNCH_CONVERSATION = "conversation_launched_agent";
