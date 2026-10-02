@@ -59,7 +59,7 @@ class FakeClaude extends EventEmitter {
   }
 }
 
-const SESSION_ID = "0f367367-0000-4000-8000-000000000367";
+const SESSION_ID = "00000000-0000-0000-0000-000000000001";
 const SEEDED_EVENTS = 80_000;
 const BURST_FRAMES = 200;
 const SEEDED_DELTA_TEXT = "structured reviewer reasoning ".repeat(8);
@@ -125,7 +125,7 @@ test("snapshot and second-account admission stay bounded during a live Fable-lik
         conversationId: "conversation_second-account",
         engine: "claude",
         cwd: directory,
-        prompt: "independent-account pipeline launch",
+        "prompt": "synthetic launch prompt",
         accountId: "opensource",
       }),
     ]);
