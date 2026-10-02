@@ -450,3 +450,23 @@ test("graph reranks linked neighbours and Codex keywords within the eligible poo
   const keywords = pool.slice(0, 2).map(c => ({ ...c, sourceKind: "codex_memory", body: c.summary + "\n- socket, lifecycle" }));
   expect(graphScores(keywords).edges.keywords).toBe(1);
 });
+
+
+test("native Claude queued human provenance outranks the generic meta flag", () => {
+  const dir = root(), mp = path.join(dir, "memories.sqlite"), tp = path.join(dir, "transcripts.sqlite"), transcript = path.join(dir, "native.jsonl");
+  memoryDb(mp).close();
+  const origins = [{ origin: { kind: "human" } }, { origin: "human" }, { promptSource: "typed" }, { turnOrigin: "human" }, {}];
+  const records = origins.map((origin, i) => ({ ...origin, uuid: `event-${i}`, isMeta: true,
+    message: { role: "user", content: `Please inspect parser case ${i}.` } }));
+  const lines = records.map(r => JSON.stringify(r) + "\n");
+  fs.writeFileSync(transcript, lines.join(""));
+  const db = new Database(tp);
+  db.exec("CREATE TABLE transcript_files(path TEXT,engine TEXT,project TEXT); CREATE TABLE transcript_messages(transcript_path TEXT,message_index INTEGER,body TEXT,timestamp INTEGER,speaker TEXT,byte_offset INTEGER)");
+  db.query("INSERT INTO transcript_files VALUES (?,?,?)").run(transcript, "claude", "project-a");
+  let offset = 0;
+  records.forEach((r, i) => { db.query("INSERT INTO transcript_messages VALUES (?,?,?,?,?,?)").run(transcript, i, r.message.content, i, "user", offset); offset += Buffer.byteLength(lines[i]); });
+  db.close();
+  const result = collect(tp, mp);
+  expect(result.counts).toMatchObject({ messages: 5, machine: 1, eligible: 4, sampled: 4 });
+  expect(result.cases.map(c => c.prompt).sort()).toEqual(records.slice(0, 4).map(r => r.message.content));
+});

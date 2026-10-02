@@ -272,8 +272,13 @@ export function collect(transcripts: string, memories: string, limit = SAMPLE_LI
         const record = JSON.parse(Buffer.concat(chunks).toString("utf8"));
         const origin = message.engine === "codex" ? decodeCodexStructuredUserText(message.body.replace(/<image\b[^>]*>[\s\S]*?<\/image>/g, "").trimStart()).origin?.kind
           : origins.get(record.uuid);
-        message.machineOrigin = record.isMeta === true || record.promptSource === "system" || origin === "agent";
-        message.operatorOrigin = origin === "operator" || record.promptSource === "typed" || record.turnOrigin === "human";
+        const nativeHuman = (typeof record.origin === "string" ? record.origin : record.origin?.kind) === "human"
+          || record.promptSource === "typed" || record.turnOrigin === "human";
+        // Claude can journal queued human input as metadata. Native human
+        // provenance outranks that generic flag; authenticated agent delivery
+        // and the exact control-envelope exclusions still take precedence.
+        message.machineOrigin = origin === "agent" || (!nativeHuman && (record.isMeta === true || record.promptSource === "system"));
+        message.operatorOrigin = origin === "operator" || nativeHuman;
         message.eventId = record.uuid ?? hash(message.engine + ":" + message.timestamp + ":" + message.body);
       } catch { throw new Error("Indexed transcript provenance unavailable; collection refused"); }
       finally { if (fd !== undefined) fs.closeSync(fd); }
