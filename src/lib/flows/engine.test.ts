@@ -3284,7 +3284,7 @@ test.each(["pane", "headless"] as const)("$0 reviewer prefers tier-offering acco
   }
 }, 20_000);
 
-test("an OAuth race schedules bounded provider retries without spending review rounds", async () => {
+test.each(["finalOutput", "stderr"])("an OAuth race on %s schedules bounded provider retries without spending review rounds", async (channel) => {
   const startedAt = new Date().toISOString();
   const cwd = "/repo";
   const implementer = writeCodexEntry("retry-implementer.jsonl", { id: ["019f421e", "02e1", "73e0", "9b77", "bebde063f117"].join("-"), cwd }, Date.now() / 1_000);
@@ -3343,7 +3343,11 @@ test("an OAuth race schedules bounded provider retries without spending review r
       current.rounds[0]!.reviewerPid = 999_999_999;
       current.rounds[0]!.launchNotBefore = null;
       fs.mkdirSync(path.dirname(outputPathFor(flow.id, 1)), { recursive: true });
-      fs.writeFileSync(outputPathFor(flow.id, 1), race);
+      fs.writeFileSync(outputPathFor(flow.id, 1), channel === "finalOutput" ? race : "");
+      if (channel === "stderr") {
+        fs.writeFileSync(stdoutPathFor(flow.id, 1), "Initializing reviewer\n");
+        fs.writeFileSync(stderrPathFor(flow.id, 1), race);
+      }
       saveFlows([current]);
       await tickFlows([implementer]);
       const next = loadFlows()[0]!;

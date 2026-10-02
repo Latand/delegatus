@@ -13168,12 +13168,20 @@ test("a failed staged read-write startup keeps dirty work and automatically rela
   expect(stoppedLaunches).toEqual(["launch-staged"]);
   expect(claims).toEqual(["launch-staged"]);
   expect(loadPipelines()[0]!.state).toBe("running");
+  const { projectPipelineEvents } = await import("@/lib/lifecycle/projector");
+  const recoveryEvents = projectPipelineEvents(loadPipelines()).filter((event) =>
+    event.type === "stage_waiting" || event.type === "stage_relaunched");
+  expect(recoveryEvents.map((event) => event.type)).toEqual(["stage_waiting", "stage_relaunched"]);
+  expect(recoveryEvents.every((event) => event.summary.includes("failed startup"))).toBe(true);
+  const recoveryKeys = recoveryEvents.map((event) => event.key);
   h.advanceWallClock(5_000);
   await tickPipelines([], h.ports);
   expect(calls).toBe(2);
   expect(h.spawnInputs[0]!.prompt).toContain("failed startup");
   expect(h.spawnInputs[0]!.prompt).toContain("keeping uncommitted work");
   expect(h.calls.some((call) => /reset|clean/.test(call))).toBe(false);
+  expect(projectPipelineEvents(loadPipelines()).filter((event) =>
+    event.type === "stage_waiting" || event.type === "stage_relaunched").map((event) => event.key)).toEqual(recoveryKeys);
 });
 
 test("a failed receipt that staged a session still retries a read-only stage (#1678 review)", async () => {

@@ -1396,10 +1396,11 @@ export async function tickFlow(
             ? (await durableStageTurnEvidence(reviewerRoleFor(flow, round).engine, round.reviewerPath))?.terminalProviderMessage
             : null;
           // A standalone CLI failure is admissible; ordinary reviewer prose is not.
-          const standaloneRace = /^(?:Failed to refresh OAuth token[^\n]*|[^\n]*retry in a minute[^\n]*)$/i.test(raw.trim());
+          const standaloneRace = [status.stderr, status.finalOutput, status.stdout].find((output) =>
+            /^(?:Failed to refresh OAuth token[^\n]*|[^\n]*retry in a minute[^\n]*)$/i.test(output.trim()));
           const condition = terminal
             ? classifyProviderCondition(reviewerRoleFor(flow, round).engine, terminal.errorClass, terminal.text)
-            : standaloneRace ? classifyProviderCondition(reviewerRoleFor(flow, round).engine, "server_error", raw) : null;
+            : standaloneRace ? classifyProviderCondition(reviewerRoleFor(flow, round).engine, "server_error", standaloneRace) : null;
           if (condition?.kind === "transient") {
             if ((round.providerRetryCount ?? 0) < 3) retryHeadlessRound(flow, round, condition.label);
             else markNeedsDecision(flow, markRoundError(round, `reviewer cut by ${condition.label} after 3 retries`));

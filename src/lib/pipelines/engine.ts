@@ -5376,7 +5376,13 @@ async function deferRetiredLaunchRetry(
     && !(stagedTranscript !== null && ports.transcriptPresent?.(stagedTranscript) === false)) return "delivered";
   const claim = ports.claimSpawnRetry(receipt.launchId, `${pipeline.id}:${stage.id}:${receipt.launchId}`);
   if (claim !== "claimed") return "settled";
+  const startupCondition: ProviderCondition = { kind: "host_death", scope: null, resetLabel: null, label: "failed startup" };
+  const recoverySummary = `failed startup: ${redactBounded(failure, 300)}; keeping uncommitted work`;
   if (receipt.staged === true && attempt.effectiveRole.access === "read-write") {
+    const lastRecovery = attempt.providerRecoveries?.at(-1);
+    if (lastRecovery?.action !== "wait" || lastRecovery.condition.label !== startupCondition.label) {
+      recordProviderRecovery(attempt, "wait", startupCondition, `waiting after ${recoverySummary}`, now);
+    }
     const stopped = await ports.stopStageAgent({ stageId: stage.id, attempt: attempt.n,
       launchId: receipt.launchId, conversationId: attempt.conversationId ?? receipt.conversationId,
       agentPath: attempt.agentPath ?? receipt.stagedTranscript ?? receipt.transcript ?? null, paneId: attempt.paneId });
@@ -5403,6 +5409,9 @@ async function deferRetiredLaunchRetry(
     retiredAt: now,
   });
   attempt.retiredLaunches = retired.slice(-RETIRED_LAUNCH_LIMIT);
+  if (receipt.staged === true && attempt.effectiveRole.access === "read-write") {
+    recordProviderRecovery(attempt, "relaunch", startupCondition, `relaunching after ${recoverySummary}`, now);
+  }
   attempt.launchId = null;
   attempt.conversationId = null;
   attempt.sessionId = null;
@@ -5412,6 +5421,9 @@ async function deferRetiredLaunchRetry(
   attempt.error = null;
   setCursorState(pipeline, stage.id, "pending");
   syncControllerWaitStateDetail(pipeline, attempt, failure);
+  if (receipt.staged === true && attempt.effectiveRole.access === "read-write") {
+    pipeline.stateDetail = `waiting to relaunch after ${recoverySummary}; next try at ${attempt.controllerWait?.retryAfter ?? now}`;
+  }
   return "waiting";
 }
 
