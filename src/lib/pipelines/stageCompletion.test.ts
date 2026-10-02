@@ -4,10 +4,11 @@ import os from "node:os";
 import path from "node:path";
 
 import type { FileEntry } from "@/lib/types";
+import { realExec } from "@/lib/workflows/provision";
 
 /* Graph slice 2 (#1730): a stage attempt reports its own completion through one
-   MCP call. Every port is a mock and the state directory is private to this
-   file, so nothing here reaches a host, an account or the operator's registry. */
+   MCP call. Host and account ports are mocks. Artifact reads inspect only the
+   fixture index, and the state directory is private to this file. */
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-completion-"));
 const { createPipelineFromRequest, patchPipeline, reportStageCompletion, tickPipelines } = await import("./engine");
 const { settlePendingStageProvenance } = await import("./stageProvenance");
@@ -58,7 +59,8 @@ function harness() {
   let duringProvenance: (() => void) | null = null;
   let clock = 1_000_000;
   const ports: PipelinePorts = {
-    exec: async (command, rawArgs) => {
+    exec: async (command, rawArgs, cwd, env, options) => {
+      if (options?.stdoutEncoding === "latin1") return await realExec(command, rawArgs, cwd, env, options);
       execCalls.push([command, ...rawArgs].join(" "));
       if (command === "gh") {
         const race = duringProvenance; duringProvenance = null; race?.();
@@ -146,9 +148,9 @@ function harness() {
 const stage = (id: string, next: string | null, extra: Record<string, unknown> = {}) =>
   ({ id, kind: "run", role: { roleId: "builder" }, prompt: `Do ${id}`, next, ...extra });
 
-async function started(ports: PipelinePorts, stages: unknown[], publication: Pipeline["publication"] = "internal"): Promise<string> {
+async function started(ports: PipelinePorts, stages: unknown[], publication: Pipeline["publication"] = "internal", repoDir = "/repo"): Promise<string> {
   savePipelines([]);
-  const created = await createPipelineFromRequest({ task: "Graph slice 2", spec: "AC", publication, repoDir: "/repo", stages: stages as never, src: "/codex/creator.jsonl" }, ports);
+  const created = await createPipelineFromRequest({ task: "Graph slice 2", spec: "AC", publication, repoDir, stages: stages as never, src: "/codex/creator.jsonl" }, ports);
   if (!created.pipeline) throw new Error(created.error);
   /* A review-loop here stands for a lane stored before #2187, which still
      reviews through its embedded flow; creation now converts new ones. */
@@ -325,7 +327,8 @@ test("a brief written before stage_report survives a shorter closing message", a
 
 test("a long final brief is bounded in bytes with an explicit truncation marker", async () => {
   const h = harness();
-  await started(h.ports, [stage("brief", "build"), stage("build", null, { prompt: "{{prev.output}}" })]);
+  await started(h.ports, [stage("brief", "build"), stage("build", null, { prompt: "{{prev.output}}" })], "internal", path.join(process.env.LLV_STATE_DIR!, "long-relay-repo"));
+  fs.mkdirSync(current().worktreeDir, { recursive: true });
   await h.report(1, { verdict: "pass", summary: "Brief ready." });
   await tickPipelines([h.endTurn(1, `Start. ${"🙂".repeat(20_000)} End.`)], h.ports);
   const relay = attemptsOf("brief")[0]!.output!;
@@ -335,7 +338,11 @@ test("a long final brief is bounded in bytes with an explicit truncation marker"
   expect(relay).not.toContain("End.");
   expect(relay).not.toContain("�");
   await tickPipelines([], h.ports);
-  expect(h.spawnedPrompts.at(-1)).toContain(relay);
+  const prompt = h.spawnedPrompts.at(-1)!;
+  expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(32_000);
+  const file = prompt.match(/Full previous output file: (.+)\n/)?.[1];
+  expect(file).toBeDefined();
+  expect(fs.readFileSync(file!, "utf8")).toBe(relay);
 });
 
 test("a pass reported without a summary relays its prose without the fenced JSON verdict", async () => {
