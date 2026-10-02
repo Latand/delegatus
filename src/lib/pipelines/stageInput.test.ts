@@ -140,3 +140,39 @@ test("read-write settlement never stages or commits controller artifacts", () =>
   expect(prompt).toContain("Full previous output file:");
   expect(prompt).toContain("Full specification file:");
 });
+
+test.each([false, true])("settlement excludes controller artifacts despite repository inclusion rules (read-write=%s)", (allowCommit) => {
+  const repo = path.join(artifactState, `inclusion-rules-${allowCommit}`);
+  fs.mkdirSync(repo, { recursive: true });
+  const runGit = (...args: string[]) => {
+    const result = spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+    return result.stdout.trim();
+  };
+  runGit("init", "--initial-branch=main");
+  runGit("config", "user.email", "pipeline-test");
+  runGit("config", "user.name", "Pipeline Test");
+  runGit("config", "commit.gpgSign", "false");
+  fs.writeFileSync(path.join(repo, ".gitignore"), "!*/\n!*.md\n");
+  fs.writeFileSync(path.join(repo, "tracked.txt"), "base\n");
+  runGit("add", "tracked.txt", ".gitignore");
+  runGit("commit", "-m", "base");
+  const head = runGit("rev-parse", "HEAD");
+  const { pipeline, stage } = handoffFixture("Build {{prev.output}}", "Spec " + "s".repeat(40_000));
+  pipeline.worktreeDir = repo;
+  const previous = "Previous " + "p".repeat(40_000);
+  const prompt = composeStageInput(pipeline, stage, stage.effectiveRole, previous, repo);
+  const artifactDirectory = path.join(repo, ".artifacts", "pipeline-stage-inputs");
+
+  // Simulate a stage that changes the controller ignore file to re-include
+  // Markdown. The settlement path itself must remain authoritative.
+  fs.writeFileSync(path.join(artifactDirectory, ".gitignore"), "!*.md\n");
+  expect(runGit("status", "--porcelain")).toContain(".artifacts/");
+  const result = commitPipelineStage(pipeline, stage.id, allowCommit, realExec, [], head);
+
+  expect(result).toEqual({ ok: true, sha: head });
+  expect(runGit("rev-parse", "HEAD")).toBe(head);
+  expect(runGit("ls-files", "--", ".artifacts/pipeline-stage-inputs")).toBe("");
+  expect(prompt).toContain("Full previous output file:");
+  expect(prompt).toContain("Full specification file:");
+});

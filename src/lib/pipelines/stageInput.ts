@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
+import { CONTROLLER_ARTIFACT_DIRECTORY, prepareControllerArtifactDirectory } from "./controllerArtifacts";
 import { renderStagePrompt } from "./prompts";
 import type { EffectivePipelineRole, Pipeline, PipelineStage } from "./types";
 
@@ -26,7 +27,7 @@ export function composeStageInput(
   const artifacts: Array<{ label: string; file: string; text: string }> = [];
   const artifact = (label: string, text: string) => {
     const digest = crypto.createHash("sha256").update(text).digest("hex");
-    const file = path.resolve(worktreeDir, ".artifacts", "pipeline-stage-inputs", `${label.replaceAll(" ", "-")}-${digest}.md`);
+    const file = path.resolve(worktreeDir, CONTROLLER_ARTIFACT_DIRECTORY, `${label.replaceAll(" ", "-")}-${digest}.md`);
     const part = { label, file, text };
     artifacts.push(part);
     return part;
@@ -92,6 +93,7 @@ function excludeControllerArtifacts(worktreeDir: string): void {
   }
   const rule = "/.artifacts/pipeline-stage-inputs/";
   const existing = fs.existsSync(excludeFile) ? fs.readFileSync(excludeFile, "utf8") : "";
+  prepareControllerArtifactDirectory(worktreeDir);
   if (existing.split(/\r?\n/).includes(rule)) return;
   fs.mkdirSync(path.dirname(excludeFile), { recursive: true, mode: 0o700 });
   fs.appendFileSync(excludeFile, `${existing && !existing.endsWith("\n") ? "\n" : ""}${rule}\n`, { encoding: "utf8", mode: 0o600 });

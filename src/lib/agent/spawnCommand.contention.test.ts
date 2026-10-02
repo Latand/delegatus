@@ -97,6 +97,48 @@ test("spawn catalog resolution leaves admission available", async () => {
   });
 });
 
+test("an oversized structured spawn launches with its full prompt in a stable readable reference", async () => {
+  const cwd = statePath("large-spawn-cwd");
+  fs.mkdirSync(cwd, { recursive: true });
+  let deliveredPrompt = "";
+  const dependencies = structuredRouteDependencies(cwd);
+  dependencies.spawnStructuredConversation = async (input) => {
+    deliveredPrompt = input.prompt;
+    return {
+      ok: true,
+      target: null,
+      path: null,
+      effectivePermissionMode: input.spec.launchProfile?.permissionMode ?? "default",
+      launchId: input.receipt.launchId,
+      conversationId: input.receipt.conversationId,
+      launched: true,
+      retrySafe: false,
+      initialMessage: "delivered",
+      state: "settled",
+    };
+  };
+  const original = `Launch complete role brief\n${"界🙂".repeat(12_000)}`;
+  const clientAttemptId = `attempt_${crypto.randomUUID()}`;
+  const request = () => new NextRequest("http://127.0.0.1/api/spawn", {
+    method: "POST", headers: { origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", host: "127.0.0.1", "content-type": "application/json" },
+    body: JSON.stringify({ clientAttemptId, title: "Large structured launch", engine: "claude", cwd, prompt: original, mcpServers: [] }),
+  });
+
+  const first = await executeSpawnRequest(request(), dependencies);
+  expect(first.status).toBe(202);
+  expect(Buffer.byteLength(deliveredPrompt, "utf8")).toBeLessThanOrEqual(32_000);
+  const file = deliveredPrompt.match(/Full structured first message file: (.+)\n/)?.[1];
+  expect(file).toBeDefined();
+  expect(fs.readFileSync(file!, "utf8")).toContain(original);
+  const firstReference = deliveredPrompt;
+
+  // Replaying the same request takes the durable receipt path and retains the
+  // same request payload and content-addressed file reference.
+  await executeSpawnRequest(request(), dependencies);
+  expect(deliveredPrompt).toBe(firstReference);
+  expect(fs.readFileSync(file!, "utf8")).toContain(original);
+});
+
 test("a catalog generation change cannot admit the previously selected home", async () => {
   const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
   const cwd = statePath("changed-catalog-cwd");
