@@ -30,3 +30,36 @@ test("small first messages stay byte-identical", () => {
   const small = "Keep this complete first message inline.\n";
   expect(composeStructuredFirstMessage(small, root)).toBe(small);
 });
+
+test("recomposition repairs a digest-named first message whose contents changed", () => {
+  const cwd = path.join(root, "tampered");
+  fs.mkdirSync(cwd);
+  const original = "Original input.\n".repeat(3_000);
+  const reference = composeStructuredFirstMessage(original, cwd);
+  const file = reference.match(/Full structured first message file: (.+)\n/)?.[1];
+  if (!file) throw new Error("expected the oversized first message to have a file reference");
+  fs.writeFileSync(file, "modified after first composition");
+
+  composeStructuredFirstMessage(original, cwd);
+
+  expect(fs.readFileSync(file, "utf8")).toBe(original);
+});
+
+test.each(["artifact root", "handoff directory"] as const)("shared first-message composition rejects a symlinked %s", (linkAt) => {
+  const cwd = path.join(root, `symlinked-${linkAt.replaceAll(" ", "-")}`);
+  const publish = path.join(cwd, "publish");
+  fs.mkdirSync(publish, { recursive: true });
+  fs.writeFileSync(path.join(publish, "tracked.txt"), "keep me\n");
+  fs.mkdirSync(path.join(cwd, ".artifacts"), { recursive: true });
+  if (linkAt === "artifact root") {
+    fs.rmSync(path.join(cwd, ".artifacts"), { recursive: true });
+    fs.symlinkSync("publish", path.join(cwd, ".artifacts"), "dir");
+  } else {
+    fs.symlinkSync("../publish", path.join(cwd, ".artifacts", "pipeline-stage-inputs"), "dir");
+  }
+
+  expect(() => composeStructuredFirstMessage("private message\n".repeat(3_000), cwd))
+    .toThrow(/pipeline controller artifact path must be a real directory/);
+  expect(fs.readdirSync(publish).sort()).toEqual(["tracked.txt"]);
+  expect(fs.readFileSync(path.join(publish, "tracked.txt"), "utf8")).toBe("keep me\n");
+});

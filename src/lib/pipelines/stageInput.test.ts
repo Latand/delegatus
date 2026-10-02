@@ -126,6 +126,55 @@ test("controller artifacts stay outside read-only settlement in a repository wit
   expect(prompt).toContain("Full specification file:");
 });
 
+test.each(["artifact root", "handoff directory"] as const)("large stage inputs reject a symlinked %s before writes or settlement can publish through it", (linkAt) => {
+  const repo = path.join(artifactState, `symlinked-${linkAt.replaceAll(" ", "-")}`);
+  const publish = path.join(repo, "publish");
+  fs.mkdirSync(publish, { recursive: true });
+  fs.writeFileSync(path.join(publish, "tracked.txt"), "private repository content\n");
+  fs.writeFileSync(path.join(publish, "preserve.txt"), "content that must survive\n");
+  fs.writeFileSync(path.join(publish, ".gitignore"), "!*.md\n");
+  const runGit = (...args: string[]) => {
+    const result = spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+    return result.stdout.trim();
+  };
+  runGit("init", "--initial-branch=main");
+  runGit("config", "user.email", "pipeline-test");
+  runGit("config", "user.name", "Pipeline Test");
+  runGit("config", "commit.gpgSign", "false");
+  if (linkAt === "artifact root") {
+    fs.symlinkSync("publish", path.join(repo, ".artifacts"), "dir");
+  } else {
+    fs.mkdirSync(path.join(repo, ".artifacts"), { recursive: true });
+    fs.symlinkSync("../publish", path.join(repo, ".artifacts", "pipeline-stage-inputs"), "dir");
+  }
+  runGit("add", "-A");
+  runGit("commit", "-m", "base");
+  const head = runGit("rev-parse", "HEAD");
+
+  const { pipeline, stage } = handoffFixture("Build {{prev.output}}", "Spec " + "s".repeat(40_000));
+  pipeline.worktreeDir = repo;
+  expect(() => composeStageInput(pipeline, stage, stage.effectiveRole, "Previous " + "p".repeat(40_000), repo))
+    .toThrow(/pipeline controller artifact path must be a real directory/);
+  expect(fs.readdirSync(publish).sort()).toEqual([".gitignore", "preserve.txt", "tracked.txt"]);
+  expect(fs.readFileSync(path.join(publish, "tracked.txt"), "utf8")).toBe("private repository content\n");
+  expect(fs.readFileSync(path.join(publish, "preserve.txt"), "utf8")).toBe("content that must survive\n");
+
+  fs.mkdirSync(path.join(repo, "reports"));
+  fs.writeFileSync(path.join(repo, "reports", "result.md"), "declared stage result\n");
+  const settled = commitPipelineStage(pipeline, stage.id, linkAt === "artifact root", realExec, ["reports/result.md"], head);
+  if (linkAt === "artifact root") {
+    /* Git cannot safely apply the nested exclusion through a top-level
+       symlink. Refusal is safe: no alias contents are published or removed. */
+    expect(settled.ok).toBe(false);
+    expect(runGit("rev-parse", "HEAD")).toBe(head);
+  } else {
+    expect(settled).toMatchObject({ ok: true });
+    expect(runGit("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").split("\n")).toEqual(["reports/result.md"]);
+  }
+  expect(fs.readFileSync(path.join(publish, "preserve.txt"), "utf8")).toBe("content that must survive\n");
+});
+
 test("read-write settlement never stages or commits controller artifacts", () => {
   const { pipeline, stage } = handoffFixture("Build {{prev.output}}", "Spec " + "s".repeat(40_000));
   const previous = "Previous " + "p".repeat(40_000);

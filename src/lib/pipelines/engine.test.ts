@@ -9192,10 +9192,15 @@ test("a Claude session limit preserves dirty work, stage identity and review rou
     const targetRoot = path.join(root, "claude-target");
     fs.mkdirSync(sourceRoot);
     fs.mkdirSync(targetRoot);
+    /* safeHistoryCopy intentionally rejects peer-writable roots; keep this
+       fixture stable when the invoking shell has a permissive umask. */
+    fs.chmodSync(sourceRoot, 0o700);
+    fs.chmodSync(targetRoot, 0o700);
     const sourcePath = path.join(sourceRoot, `${sourceId}.jsonl`);
     const sourceFixture = limitInterruptedTranscript("claude-controller-session-limit", "You've hit your session limit · resets 2:30pm (Europe/Kyiv)");
     fs.writeFileSync(sourcePath, fs.readFileSync(sourceFixture, "utf8").trimEnd().split("\n")
       .map((line) => JSON.stringify({ ...JSON.parse(line), sessionId: sourceId })).join("\n") + "\n");
+    fs.chmodSync(sourcePath, 0o600);
     const fork = forkClaudeHistory({
       sourcePath, sourceRoot, targetRoot, destination: path.join(targetRoot, `${forkId}.jsonl`),
       sourceSessionId: sourceId, sessionId: forkId, operationId: "stage-limit-copy",
@@ -12097,8 +12102,13 @@ function publishHarness(h: ReturnType<typeof harness>, options: { origin?: boole
       order.push(`push:${localHead}`);
       return { code: 0, stdout: "", stderr: "" };
     }
-    if (args[0] === "reset" || args[0] === "clean") {
+    if ((args[0] === "reset" && args.includes("--hard")) || args[0] === "clean") {
       dirty = false;
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    if (args[0] === "reset" && args.includes("--quiet") && args.includes("--")) {
+      /* A path-scoped reset of controller artifacts must not erase the mock's
+         unrelated source edit from `status`. */
       return { code: 0, stdout: "", stderr: "" };
     }
     if (args[0] === "cat-file") return { code: history.includes(String(args[2]).replace("^{commit}", "")) ? 0 : 1, stdout: "", stderr: "" };

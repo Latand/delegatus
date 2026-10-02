@@ -16,15 +16,20 @@ export function composeStructuredFirstMessage(text: string, worktreeDir: string)
   const digest = crypto.createHash("sha256").update(text).digest("hex");
   const directory = prepareControllerArtifactDirectory(worktreeDir);
   const file = path.join(directory, `structured-first-message-${digest}.md`);
-  if (!fs.existsSync(file)) {
+  let matches = false;
+  try {
+    const existing = fs.lstatSync(file);
+    /* A digest in the name does not prove the file still contains the input.
+       Avoid following a replaced symlink and repair modified regular files. */
+    matches = existing.isFile() && !existing.isSymbolicLink() && fs.readFileSync(file, "utf8") === text;
+  } catch (error) {
+    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
+  }
+  if (!matches) {
     const temporary = path.join(directory, `.${crypto.randomUUID()}.tmp`);
     try {
       fs.writeFileSync(temporary, text, { encoding: "utf8", mode: 0o600, flag: "wx" });
-      try {
-        fs.renameSync(temporary, file);
-      } catch (error) {
-        if (!(error && typeof error === "object" && "code" in error && error.code === "EEXIST")) throw error;
-      }
+      fs.renameSync(temporary, file);
     } finally {
       fs.rmSync(temporary, { force: true });
     }
