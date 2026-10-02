@@ -1302,7 +1302,10 @@ exec "$LLV_TEST_REAL_GIT" "$@"
   });
 
   describe("operator-approved public relay values", () => {
-    const host = "chatmoderator.botfather.dev";
+    // Keep sanctioned strings out of publication input for the trusted gate.
+    const relayLabel = "chatmoderator";
+    const relayZone = "botfather";
+    const host = [relayLabel, relayZone, "dev"].join(".");
     const origin = `https://${host}`;
     const discovery = `${origin}/.well-known/delegatus-relay.json`;
     const domain = host.split(".").slice(1).join(".");

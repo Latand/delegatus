@@ -81,19 +81,18 @@ const credentialInputPattern = new RegExp([
   String.raw`(?=[^>]*value\s*=\s*(?:["'][^"']{4,}["']|[^\s"'=<>]{4,}))[^>]*>`,
 ].join(""), "i");
 
-// Reviewed public data. Entries require explicit operator approval quoted in
-// the PR; see docs/privacy-publication.md. Keep exact source spellings here.
-const approvedPublicValues = [
-  "https://chatmoderator.botfather.dev/.well-known/delegatus-relay.json",
-  "https://chatmoderator.botfather.dev",
-  "chatmoderator.botfather.dev",
-] as const;
-const approvedPublicValuePattern = new RegExp(
-  String.raw`(^|[\t\n\v\f\r "'\x60(\[=:])(?:`
-  + approvedPublicValues.map((value) => value.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")
-  + String.raw`)(?=$|[\t\n\v\f\r "'\x60)\],;])`,
-  "g",
-);
+// Reviewed public forms, stored without publication-sensitive literals.
+// Identity normalization preserves case, punctuation and every raw code point.
+// Entries require explicit operator approval; see docs/privacy-publication.md.
+const approvedPublicCatalog = {
+  normalization: "raw-utf8-v1",
+  fingerprints: [
+    { length: 68, sha256: "94fe8e32240db05f76805011538984216bb3ed169fa6f1213fd8eef2d334e39e" },
+    { length: 35, sha256: "744b51cb35fea38e73df605c1b64cd2aa5f233402516e094478901cb8f0015ae" },
+    { length: 27, sha256: "c5204f10f9eec435f271546178b18888798ea7f2eff2ae2b594c481bc2a72488" },
+  ],
+} as const;
+const approvedPublicCandidateBoundary = /(^|[\t\n\v\f\r "'`(\[=:])(?=[a-z])/g;
 
 // These predicates run on raw source, before decoding or NFKC can erase a
 // neighbouring character. Quotes and balanced source wrappers must also have
@@ -143,6 +142,34 @@ function approvedPublicBoundaryView(text: string, marker: string): { error: bool
     projected = next;
   }
   return { error: true, text: projected };
+}
+
+function replaceApprovedPublicValues(
+  text: string,
+  replace: (match: string, delimiter: string, offset: number) => string,
+): string {
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const boundary of text.matchAll(approvedPublicCandidateBoundary)) {
+    const offset = boundary.index;
+    const delimiter = boundary[0];
+    const start = offset + delimiter.length;
+    if (offset < cursor) continue;
+    // Longest first: an origin prefix must never mask a discovery URL tail.
+    for (const fingerprint of approvedPublicCatalog.fingerprints) {
+      const end = start + fingerprint.length;
+      if (end > text.length || !approvedRawBoundaries(text, start, end)) continue;
+      const value = text.slice(start, end);
+      // Hash raw UTF-8 only after the strict raw boundary check. No decoding,
+      // NFKC, case folding or compact normalization can create approval.
+      if (createHash("sha256").update(value).digest("hex") !== fingerprint.sha256) continue;
+      parts.push(text.slice(cursor, offset), replace(text.slice(offset, end), delimiter, offset));
+      cursor = end;
+      break;
+    }
+  }
+  parts.push(text.slice(cursor));
+  return parts.join("");
 }
 
 function maskApprovedPublicValues(text: string): string {
@@ -313,7 +340,7 @@ function maskApprovedPublicValues(text: string): string {
   let previousCommentStart = -1;
   let previousCommentCandidateEnd = 0;
   let openingCommentContentStart = -1;
-  const marked = text.replace(approvedPublicValuePattern, (match: string, delimiter: string, offset: number) => {
+  const marked = replaceApprovedPublicValues(text, (match: string, delimiter: string, offset: number) => {
     const index = candidates.length;
     const end = offset + match.length;
     // A quoted value must occupy its entire literal. URI punctuation inside

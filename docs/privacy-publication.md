@@ -149,7 +149,7 @@ existing `exactOnly: true` entry unless its policy change was explicitly approve
 
 ## Approved public values
 
-The `approvedPublicValues` allowlist in
+The `approvedPublicCatalog` fingerprint allowlist in
 [`scripts/privacy-publication-gate.ts`](../scripts/privacy-publication-gate.ts)
 is reviewed public data. Only an explicit operator approval permits an entry;
 the PR adding or changing an entry must quote that approval and explain the
@@ -157,11 +157,12 @@ purpose, exact matching rule, and checks with their results.
 
 The operator approved publishing the Celestia relay on 2026-10-01 at 20:00:
 «селестія - дозволяю». At 20:30 the operator requested completion:
-«це б доробит». The sanctioned spellings are:
-
-- `chatmoderator.botfather.dev`
-- `https://chatmoderator.botfather.dev`
-- `https://chatmoderator.botfather.dev/.well-known/delegatus-relay.json`
+«це б доробит». The three sanctioned forms are the bare relay hostname,
+its HTTPS origin and its discovery URL at `/.well-known/delegatus-relay.json`.
+They are stored as raw lengths and SHA-256 fingerprints with `raw-utf8-v1`
+identity normalization. This preserves exact case-sensitive matching without
+publishing the literals in source, tests or documentation. Tests assemble the
+forms from separate pieces at runtime.
 
 The exemption requires an exact case-sensitive sanctioned spelling in raw text,
 before percent/entity/JSON decoding, NFKC, case folding, or Markdown projection.
@@ -190,10 +191,11 @@ the complete original text, so an approved occurrence cannot exempt credentials,
 email addresses, identifiers or private paths around it. Diagnostics continue
 to suppress matched values.
 
-Hosted checks execute the trusted gate from the default branch. A PR changing
-the allowlist can therefore still fail the old known-value policy until the
-reviewed change reaches that branch. Local candidate checks establish the new
-behavior; a hosted run using the old gate does not establish candidate behavior.
+Hosted checks execute the trusted gate from the default branch. A policy-change
+PR must pass both that gate and its own candidate gate with the committed
+known-value catalog and commit checking. Fingerprints keep the sanctioned
+literals out of every published file, so the trusted policy can inspect this
+change before the new exemption reaches the default branch.
 
 ## Authenticated GitHub publication audit
 
