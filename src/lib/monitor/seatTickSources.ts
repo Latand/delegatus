@@ -2152,6 +2152,16 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
   };
 }
 
+/** The source read completed, but its evidence key moved again before the
+ * alarm could use it. Keep the refreshed gap available to the controller so
+ * canceling an unsent alarm does not erase a real source failure. */
+export class SeatTickEvidenceRefreshCanceledError extends Error {
+  constructor(readonly pullRequestGap: SeatTickSourceGap | null) {
+    super("Seat alarm sources changed while refreshing pull-request evidence; retry on the next tick");
+    this.name = "SeatTickEvidenceRefreshCanceledError";
+  }
+}
+
 /** The local gates and lane associations under which PR evidence was read.
  * A note edit needs no subprocess; eligibility or lane changes do.
  */
@@ -2181,7 +2191,7 @@ export async function refreshSeatTickEvidence(input: SeatTickCheckInput, sources
   fresh = refreshSeatTickInput({ ...fresh, pullRequests: evidence.pullRequests,
     pullRequestsUnavailable: evidence.unavailable, pullRequestEvidenceKey: key,
     state: { ...fresh.state, pullRequestGap: evidence.gap } }, sources);
-  if (pullRequestEvidenceKey(fresh, sources) !== key) throw new Error("Seat alarm sources changed while refreshing pull-request evidence; retry on the next tick");
+  if (pullRequestEvidenceKey(fresh, sources) !== key) throw new SeatTickEvidenceRefreshCanceledError(fresh.state.pullRequestGap);
   return fresh;
 }
 

@@ -2194,6 +2194,39 @@ test("a second state change during PR refresh leaves the alarm unsent", async ()
   expect(rig.written.every(state => state.lastWakeAt === OVERDUE.lastWakeAt)).toBe(true);
 });
 
+test("a canceled PR refresh keeps its outage run in durable state", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "canceled-pr-gap-")), "state.json");
+  const running = { ...OPEN_LANE[0]!, id: "running-lane" };
+  const rig = harness({ stateFile, pipelines: [...FINISHED_LANE, running], state: OVERDUE });
+  writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, stateFile);
+
+  let attempt = 1;
+  const pipelines = rig.deps.sources!.pipelines;
+  rig.deps.sources!.pipelines = () => {
+    /* Keep the running lane's attempt identity moving across every freshness
+       read, so each completed failure is canceled before it can be dispatched. */
+    attempt += 1;
+    return pipelines().map(lane => lane.id === running.id
+      ? { ...lane, runs: [{ stageId: "build", attempts: [{ n: attempt, state: "running", startedAt: new Date(NOW + attempt * MINUTE).toISOString() }] }] as never }
+      : lane);
+  };
+  rig.deps.sources!.openPullRequests = async () => ({ ok: false, unavailable: "command-failed" });
+
+  const first = await runSeatTickCheck(PROJECT, rig.deps);
+  const firstGap = readSeatTickState(PROJECT, stateFile).pullRequestGap;
+  expect(first).toMatchObject({ verdict: "error", delivery: null });
+  expect(rig.sent).toEqual([]);
+  expect(firstGap).toMatchObject({ gap: "command-failed", reported: false });
+  const since = firstGap!.since;
+
+  rig.deps.sources!.now = () => NOW + 65 * MINUTE;
+  const second = await runSeatTickCheck(PROJECT, rig.deps);
+  const secondGap = readSeatTickState(PROJECT, stateFile).pullRequestGap;
+  expect(second).toMatchObject({ verdict: "error", delivery: null });
+  expect(rig.sent).toEqual([]);
+  expect(secondGap).toMatchObject({ gap: "command-failed", reported: false, since });
+});
+
 test("an absent refused alarm refreshes its agenda and note under its original key", async () => {
   const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "fresh-alarm-")), "state.json");
   writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, stateFile);

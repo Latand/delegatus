@@ -43,6 +43,7 @@ import {
   refreshSeatTickEvidence,
   repoDirForProject,
   seatTickProjects,
+  SeatTickEvidenceRefreshCanceledError,
   type SeatTickSources,
   type SeatTickWakeEvidence,
   type SeatTickWakeState,
@@ -1244,6 +1245,34 @@ export async function runSeatTickCheck(
   try {
     return await check(canonical, policy, dependencies, appendRecord);
   } catch (error) {
+    let detail = `the check failed: ${redactMonitorText(error instanceof Error ? error.message : "unknown error")}`;
+    if (error instanceof SeatTickEvidenceRefreshCanceledError && error.pullRequestGap) {
+      const readState = dependencies.readState ?? readSeatTickState;
+      const writeState = dependencies.writeState ?? writeSeatTickState;
+      try {
+        /* Merge only the refreshed source gap into the latest row. Another
+           check may have advanced the rest of this project's state while this
+           alarm was being canceled. Accounting-backed rows use their revision
+           fence and retry a stale read once against the new row. */
+        for (let attempt = 0; ; attempt += 1) {
+          const fresh = readState(canonical);
+          const updated = { ...fresh, pullRequestGap: error.pullRequestGap };
+          if (!fresh.accounting) {
+            writeState(canonical, updated);
+            break;
+          }
+          try {
+            new SeatTickAccounting(fresh.accounting.filename, canonical).writeState(updated);
+            break;
+          } catch (writeError) {
+            if (attempt < 2 && writeError instanceof Error && writeError.message === "stale seat tick state") continue;
+            throw writeError;
+          }
+        }
+      } catch (writeError) {
+        detail += `; refreshed pull-request outage accounting could not be saved: ${redactMonitorText(writeError instanceof Error ? writeError.message : "unknown error")}`;
+      }
+    }
     const record: SeatTickRunRecord = {
       schemaVersion: 1,
       at: new Date().toISOString(),
@@ -1255,7 +1284,7 @@ export async function runSeatTickCheck(
       deferred: 0,
       eventsThrough: 0,
       delivery: null,
-      detail: `the check failed: ${redactMonitorText(error instanceof Error ? error.message : "unknown error")}`,
+      detail,
     };
     appendRecord(record);
     return record;
