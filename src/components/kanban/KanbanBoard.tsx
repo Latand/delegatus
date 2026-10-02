@@ -53,7 +53,7 @@ import { allCards, cardAnchors, cardOnScreen, conversationOwners, cssEscape, kan
 import { closeReader, foldReader, followPaths, openReader, ReaderMemory, type OpenReader } from "./readerMemory";
 import { ReaderPlacement, ReaderPortals, ReaderSlot, StopHostConfirm, type ReaderOwner, type ReaderStop, type ReaderView } from "./KanbanReaders";
 import { stagePanelKey } from "./KanbanCard";
-import { LAUNCH_HOLD_MS, launchClockMs } from "../launchedConversations";
+import { isLaunchedConversation, LAUNCH_HOLD_MS, launchClockMs } from "../launchedConversations";
 import { cycleOpenAgent, draftAgents, openAgents } from "./openAgents";
 import { OPEN_AGENTS_SHORTCUT, OpenAgentsList, OpenAgentsRail } from "./OpenAgentsRail";
 import { operationalAttempts } from "./pipelineGraph";
@@ -391,7 +391,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const unfoldedReaders = useMemo(() => new Set(openReaders.filter((reader) => !reader.folded).map((reader) => reader.key)), [openReaders]);
   const modelNow = Math.floor(props.now / 15) * 15;
   const model: KanbanModel = useMemo(
-    () => buildKanbanModel({ bands, tasks: effectiveTasks, pipelines, projection, files, flows: props.flows, statusOverrides: statuses, cardFilter: props.overview?.keep, seat: seatRefs, query, openReaders: unfoldedReaders, now: modelNow }),
+    () => buildKanbanModel({ bands, tasks: effectiveTasks, pipelines, projection, files, flows: props.flows, statusOverrides: statuses, cardFilter: props.overview?.keep, seat: seatRefs, query, openReaders: unfoldedReaders, launched: isLaunchedConversation, now: modelNow }),
     [bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, props.overview?.keep, seatRefs, query, unfoldedReaders, modelNow],
   );
   const cardsById = useMemo(() => {
@@ -1842,7 +1842,13 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (card && body) {
         const head = card.getBoundingClientRect().top;
         const view = body.getBoundingClientRect();
-        if (head < view.top || head > view.bottom - 40) card.scrollIntoView({ block: "start", inline: "nearest", behavior: "auto" });
+        /* An agent being read in the same column stays in the window: the launched card stands under it. */
+        const readingBeside = [...body.querySelectorAll<HTMLElement>("[data-kanban-reader]")].some((reader) => {
+          if (card.contains(reader)) return false;
+          const box = reader.getBoundingClientRect();
+          return box.bottom > view.top && box.top < view.bottom;
+        });
+        if (!readingBeside && (head < view.top || head > view.bottom - 40)) card.scrollIntoView({ block: "start", inline: "nearest", behavior: "auto" });
       } else target.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
     } else target.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
     if (slot && wanted.focusReader) slot.querySelector<HTMLElement>("[data-kanban-reader]")?.focus({ preventScroll: true });

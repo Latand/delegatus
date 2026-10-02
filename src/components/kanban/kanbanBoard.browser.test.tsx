@@ -14542,6 +14542,80 @@ describe("launch layout shift rendered evidence", () => {
     }
   }, 240_000);
 
+  /* A launch made while the operator reads another agent in Assigned: the draft opens beside that agent and
+     the launched card lands under it, so the agent being read neither moves nor leaves the window, when the
+     draft opens or when the launch hands off. */
+  browserTest("launching while an agent is read in Assigned keeps that agent in the window and shifts by less than 0.1 at 1440", async () => {
+    const out = path.resolve(".artifacts/launch-render-polish");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=launch-cls`, { width: 1440, height: 900 }, "light", "en", "no-preference", false);
+      try {
+        await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+        await installShiftObserver(page);
+        const seat = page.locator('[data-orchestrator-toggle][aria-pressed="true"]');
+        if (await seat.count()) await seat.click();
+        await page.waitForTimeout(600);
+        /* The agent the operator is reading: the first task card in Assigned, opened from its tile. */
+        const card = page.locator('.col-body[data-status="assigned"] .card[data-id^="task:"]').first();
+        const readId = await card.getAttribute("data-id");
+        await card.locator(".tile").first().click();
+        const readerOf = `.card[data-id="${readId}"] [data-kanban-reader]`;
+        await page.locator(readerOf).first().waitFor({ timeout: 10_000 });
+        await page.waitForTimeout(600);
+        await page.click('[data-bar-control][aria-label="Create"]');
+        await page.getByRole("menuitem", { name: "New conversation with an agent" }).click();
+        const prompt = page.locator('textarea[aria-label="First prompt text"]').first();
+        await prompt.waitFor({ timeout: 10_000 });
+        await page.selectOption('select[aria-label="Agent model"]', "haiku");
+        await page.selectOption('select[aria-label="Reasoning effort level"]', "low");
+        await prompt.fill("Read the README and tell me what this project does");
+        await page.waitForTimeout(800);
+        const sentAt = await page.evaluate((selector) => {
+          /* The share of the read agent's reader in the window, sampled from the send to the turn's end. */
+          const w = window as unknown as { __readerShare: number[] };
+          w.__readerShare = [];
+          const share = () => {
+            const box = document.querySelector<HTMLElement>(selector)?.getBoundingClientRect();
+            if (!box || !box.width || !box.height) return 0;
+            const width = Math.max(0, Math.min(box.right, window.innerWidth) - Math.max(box.left, 0));
+            const height = Math.max(0, Math.min(box.bottom, window.innerHeight) - Math.max(box.top, 0));
+            return (width * height) / (box.width * box.height);
+          };
+          w.__readerShare.push(share());
+          setInterval(() => w.__readerShare.push(share()), 50);
+          return performance.now();
+        }, readerOf);
+        await page.getByRole("button", { name: "Launch the agent" }).first().click();
+        await page.waitForTimeout(14_000);
+        const shifts = await collectShifts(page, sentAt);
+        const cls = Number(shifts.reduce((sum, entry) => sum + entry.value, 0).toFixed(4));
+        await page.screenshot({ path: path.join(out, `${label}-read-launch-desktop-1440.png`) });
+        const state = await page.evaluate(() => {
+          const shares = (window as unknown as { __readerShare: number[] }).__readerShare;
+          return { minShare: Number(Math.min(...shares).toFixed(3)), samples: shares.length };
+        });
+        const launchedBelow = await page.evaluate((id) => {
+          const cards = [...document.querySelectorAll<HTMLElement>('.col-body[data-status="assigned"] .card[data-id^="task:"]')];
+          const read = cards.findIndex((entry) => entry.dataset.id === id);
+          const launched = cards.findIndex((entry) => entry.dataset.id === "task:t-launch");
+          return { read, launched };
+        }, readId);
+        const reading = { viewport: "desktop-1440", cls, shifts: shifts.length, largest: [...shifts].sort((a, b) => b.value - a.value).slice(0, 8), readerShare: state, order: launchedBelow, pageErrors };
+        fs.mkdirSync("evidence/launch-render-polish", { recursive: true });
+        fs.writeFileSync(`evidence/launch-render-polish/read-launch-cls-${label}.json`, `${JSON.stringify({ label, limit: LAUNCH_CLS_LIMIT, readings: [reading] }, null, 2)}\n`);
+        expect(pageErrors, "page errors").toEqual([]);
+        if (label === "after") {
+          expect(state.minShare, "the agent being read stays in the window from the send to the turn's end").toBeGreaterThan(0.6);
+          expect(launchedBelow.launched, "the launched card stands right under the agent being read").toBe(launchedBelow.read + 1);
+          expect(cls, "cumulative layout shift of a launch made beside a read agent").toBeLessThan(LAUNCH_CLS_LIMIT);
+        }
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 240_000);
+
   /* Creating an orchestrator from the project's draft: the same clock as a launch (`?scenario=seat-create-cls`).
      The page is left alone from Confirm to the first rows of the seat's transcript, while the layout shifts
      and the composer's runtime pill are recorded. The pill must read the effort the draft chose from the first

@@ -4,11 +4,11 @@
   "readings": [
     {
       "viewport": "desktop-1440",
-      "cls": 0.0573,
-      "shifts": 4,
+      "cls": 0.0803,
+      "shifts": 6,
       "largest": [
         {
-          "at": 9091,
+          "at": 9069,
           "value": 0.0232,
           "sources": [
             "DIV.flex.min-h-0",
@@ -18,7 +18,7 @@
           "mandate": false
         },
         {
-          "at": 9153,
+          "at": 9114,
           "value": 0.0167,
           "sources": [
             "DIV.px-3.pb-3"
@@ -26,7 +26,27 @@
           "mandate": true
         },
         {
-          "at": 9169,
+          "at": 834,
+          "value": 0.0115,
+          "sources": [
+            "SECTION.column[assigned]",
+            "SECTION.column.strip[done]",
+            "SECTION.column.strip[blocked]"
+          ],
+          "mandate": false
+        },
+        {
+          "at": 871,
+          "value": 0.0115,
+          "sources": [
+            "SECTION.column[assigned]",
+            "SECTION.column.strip[blocked]",
+            "SECTION.column.strip[done]"
+          ],
+          "mandate": false
+        },
+        {
+          "at": 9130,
           "value": 0.0103,
           "sources": [
             "DIV.px-3.pb-3"
@@ -34,7 +54,7 @@
           "mandate": true
         },
         {
-          "at": 862,
+          "at": 904,
           "value": 0.0071,
           "sources": [
             "DIV.px-3.pb-3"
@@ -42,7 +62,7 @@
           "mandate": false
         }
       ],
-      "clsWithoutMandate": 0.0303,
+      "clsWithoutMandate": 0.0533,
       "chosen": "high",
       "pills": [
         "Opus 5.5 · High"
@@ -55,7 +75,7 @@
       "shifts": 3,
       "largest": [
         {
-          "at": 9169,
+          "at": 9138,
           "value": 0.0578,
           "sources": [
             "DIV.px-3.pb-3"
@@ -63,7 +83,7 @@
           "mandate": true
         },
         {
-          "at": 9204,
+          "at": 9160,
           "value": 0.0383,
           "sources": [
             "DIV.px-3.pb-3"
@@ -71,7 +91,7 @@
           "mandate": true
         },
         {
-          "at": 759,
+          "at": 770,
           "value": 0.0056,
           "sources": [
             "SPAN.max-w-[300px].text-body",

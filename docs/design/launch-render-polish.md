@@ -29,6 +29,13 @@ turn ends. Records: `evidence/launch-render-polish/cls-before.json` and `cls-aft
    read in Assigned it pushed that agent wholly below the window. With a reader open in a card in Assigned
    the draft stays in Inbox, beside it (`openReaders` in `kanbanModel.ts`); otherwise it stands at the top of
    Assigned as above.
+   The launch beside that agent writes its task into Assigned, where it would sort above the agent being read.
+   A card launched from this page with its reader open therefore lands directly under the last card the operator
+   is reading (`landUnderReading` in `kanbanModel.ts`), where the draft stood, and the hand-off's scroll leaves
+   the column alone while a reader stands beside it. Read at 1440: 0.285 before (the read agent out of the window),
+   0.061 after with the agent at least 91% in the window throughout
+   (`evidence/launch-render-polish/read-launch-cls-{before,after}.json`). The cards under the new card move down
+   by its head; the remainder is that.
 6. **The hand-off scrolled the column.** Opening the launched card's reader scrolled Assigned until the
    reader's foot was in view, which put the card's head (and the first-prompt title) under the column header.
    The hand-off now leaves the column where it is while the card's head is in view (`landing` in

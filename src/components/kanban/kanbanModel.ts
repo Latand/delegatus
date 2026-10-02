@@ -243,6 +243,10 @@ export interface KanbanModelInput {
       a reader fills the column, so a draft above it would push the agent the
       operator is reading out of the window. */
   openReaders?: ReadonlySet<string>;
+  /** Whether this page launched the conversation from an agent draft. With a
+      reader open on another card in Assigned, the launched card stands under
+      that card, where the draft stood, and does not push it out of the window. */
+  launched?: (file: FileEntry) => boolean;
   /** Epoch seconds. */
   now: number;
 }
@@ -326,6 +330,27 @@ function referenceIdentity(reference: { conversationId: string | null; path: str
     a task in Assigned, so the board draws it there from the first keystroke. */
 export function holdsOnlyDrafts(card: Pick<KanbanCard, "task" | "drafts" | "members" | "mirrors">): boolean {
   return !card.task && card.drafts.length > 0 && card.members.length === 0 && card.mirrors.length === 0;
+}
+
+/**
+ * A card launched from this page's draft, with its reader open, takes the
+ * place right under the last card the operator is reading in the column. The
+ * draft waited in Inbox beside that card; the launch writes a task that sorts
+ * above it, and the card being read would drop below the new card's reader and
+ * out of the window. Closing either reader lets the launched card sort as any
+ * other. Reorders `cards` in place.
+ */
+export function landUnderReading(cards: KanbanCard[], reading: ReadonlySet<string> | undefined, launched: ((file: FileEntry) => boolean) | undefined): void {
+  if (!reading?.size || !launched) return;
+  const held = (card: KanbanCard) => card.members.some((member) => reading.has(conversationIdentity(member.file)));
+  const landing = (card: KanbanCard) => held(card) && card.members.some((member) => launched(member.file));
+  let anchor = -1;
+  cards.forEach((card, index) => { if (held(card) && !landing(card)) anchor = index; });
+  if (anchor < 0) return;
+  const above = cards.slice(0, anchor + 1);
+  const moved = above.filter(landing);
+  if (!moved.length) return;
+  cards.splice(0, anchor + 1, ...above.filter((card) => !landing(card)), ...moved);
 }
 
 export function compareCards(a: KanbanCard, b: KanbanCard): number {
@@ -726,6 +751,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
   const unlinked = cards.filter((card) => !card.task).sort(compareCards);
   const columns = Object.fromEntries(KANBAN_STATUSES.map((status) => {
     const inColumn = recorded.filter((card) => card.status === status).sort(status === "inbox" ? compareInboxCards : compareCards);
+    if (status === "assigned") landUnderReading(inColumn, input.openReaders, input.launched);
     return [status, {
       status,
       cards: inColumn,

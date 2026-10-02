@@ -692,6 +692,33 @@ test("a draft stands in Assigned, unless a reader is open in a card there: then 
 });
 
 
+test("a launched card with its reader open lands under the agent being read, where its draft stood, instead of above it", () => {
+  const read = file(1, { mtime: NOW - 3_000 });
+  const launchedFile = file(2, { mtime: NOW - 1 });
+  const other = file(3, { mtime: NOW - 2_000 });
+  const tasks = [task("read", "assigned", [read.path]), task("launched", "assigned", [launchedFile.path]), task("other", "assigned", [other.path])];
+  const files = [read, launchedFile, other];
+  const base = layout(files);
+  const projection = projectTaskWorkflows([...tasks], [], [], files);
+  const bands = buildTaskBands(base, { tasks, projection, untitled: "Untitled task" });
+  const isLaunched = (entry: FileEntry) => entry.path === launchedFile.path;
+  const order = (openReaders: ReadonlySet<string>, launched?: (entry: FileEntry) => boolean) =>
+    buildKanbanModel({ bands, tasks, pipelines: [], projection, files, openReaders, launched, now: NOW })
+      .columns.assigned.cards.map((card) => card.task!.id);
+  const reading = new Set([conversationIdentity(read)]);
+  const both = new Set([conversationIdentity(read), conversationIdentity(launchedFile)]);
+  /* The newest agent work sorts first: without the rule the launched card stands above the card being read. */
+  expect(order(both)).toEqual(["launched", "other", "read"]);
+  expect(order(both, isLaunched)).toEqual(["other", "read", "launched"]);
+  /* Its reader not open yet, or no reader open on another card: it sorts as any card does. */
+  expect(order(reading, isLaunched)[0]).toBe("launched");
+  expect(order(new Set([conversationIdentity(launchedFile)]), isLaunched)[0]).toBe("launched");
+  /* A reader on a card the page did not launch is never moved. */
+  const otherBoth = new Set([conversationIdentity(read), conversationIdentity(other)]);
+  expect(order(otherBoth, isLaunched)).toEqual(order(otherBoth));
+});
+
+
 function reviewerActivityFixture() {
   const implementer = file(101, { lastAgentWorkAt: 1000 });
   const reviewer = file(102, { lastAgentWorkAt: 3000, parent: implementer.path });
